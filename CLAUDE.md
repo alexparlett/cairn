@@ -239,7 +239,11 @@ exists yet).
 ## Pointers
 
 - `docs/design/cairn.md` — the design spine: what Cairn is for, what it is not,
-  and the locked decisions D1-D5 that the architecture above implements.
+  and the locked decisions D1-D8 that the architecture above implements.
+- `docs/design/feature-inventory.md` — the full feature surface, tiered by risk,
+  with the out-of-scope list and its reasons. Intent, not as-built.
+- `docs/work/daily-loop/roadmap.md` — the build order to the D7 milestone: eight
+  packets, two filed and six as briefs.
 - `docs/qa-gate.md` — the QA layer contract and reviewer dispatch table.
 - `docs/CLAUDE.md` — the docs layer contract (tenses, promotion, teardown).
 - `docs/work/<packet>/` — in-flight packet dirs, created by `/feature-plan`, torn

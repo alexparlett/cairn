@@ -35,8 +35,28 @@ infrastructure built without a consumer gets the interface wrong.
   connects it, and the view re-renders visible rows from the model on every
   change regardless, so allowing this costs nothing. Rows that have left the
   window are final.
+
+  TRAP: the last sentence has nothing enforcing it. The assigner phase 01
+  shipped has no notion of a window and repaints rows at any depth, so a window
+  imposed *around* it cannot make a row final — a window would have to become
+  something the assigner itself owns. Not violated today, because the assigner
+  never drops a row; it is a constraint on phases 02 and 03, and it rides with
+  the R1.3 decision below.
 - R1.3 Work per commit is amortised constant; retained state is proportional to
   the number of simultaneously open lanes, never to the number of commits seen.
+
+  TRAP: the assigner phase 01 shipped does NOT meet this, in either clause, and
+  the requirement has not been renegotiated — do not read it as describing the
+  code. What it actually does: lane bookkeeping proper is one slot per open
+  lane, but it also retains every row it has emitted plus an index into them,
+  because R1.2's repaint cannot add a segment to a row it has dropped. Per-row
+  edge lists hold one segment per open lane, so retained segments grow as rows x
+  open lanes — measured at 361 segments per row and 5.4 GB for 500k rows across
+  200 branches, with no clock skew involved. Work per commit is amortised
+  constant only while parents arrive in order; a parent delivered early costs
+  O(span x segments in the span). Whether R1.3 is narrowed (with the real bounds
+  written down) or kept and the design changed is the user's decision, recorded
+  in `docs/work/history-graph/progress.md`.
 - R1.4 The assigner is **total over arrival order**: a commit whose lane was never
   reserved — the normal consequence of committer-date skew, per the evidence
   record — is placed, not rejected, and never mis-parented. Which placement

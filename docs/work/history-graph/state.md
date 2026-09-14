@@ -2,8 +2,20 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 01 landed on `feature/history-graph`. The lane assigner exists
-in `cairn-model`; nothing reads a repository yet.**
+**Status: phase 01 implemented on `feature/history-graph`, unmerged. The lane
+assigner exists in `cairn-model`; nothing reads a repository yet.**
+
+**Open for the user before phase 04, and TRAP-marked in the PRD: R1.3 and R1.2's
+finality sentence both describe an assigner other than the one that shipped.**
+The term that grows is not lane bookkeeping — that really is one slot per open
+lane — but the *retained edge lists*: every row stores one segment per open
+lane, so retained segments scale as rows x open lanes. Measured at 361 segments
+per row and 5.4 GB across 500k rows on a 200-branch history with no clock skew
+at all, which is the ordinary "show all branches" view rather than a
+pathological one. A parent delivered early additionally costs
+O(span x segments in the span), and overlapping spans compound. Phase 04's A7
+depends on how this is settled; phase 02 and 03 need the R1.2 answer to know
+whether the window is a concept the assigner owns.
 
 ## Locked decisions
 
@@ -56,7 +68,7 @@ one-line contract — so a later phase does not re-derive it from source.
 
 | Phase | Status | Gate | QA |
 | --- | --- | --- | --- |
-| 01 lane assignment | landed | `scripts/gate.sh` green | `/qa` run, fresh reviewers, findings closed |
+| 01 lane assignment | implemented | `scripts/gate.sh` green | see progress.md's phase 01 QA entry |
 | 02 history query | not started | — | — |
 | 03 worker boundary | not started | — | — |
 | 04 graph view | not started | — | — |

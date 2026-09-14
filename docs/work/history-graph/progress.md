@@ -3,6 +3,70 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-14 — phase 01 QA: four fresh agents, 19 raw findings, 14 confirmed
+
+Correction to the entry below, which said "see the entry below this one once
+`/qa` has run": this log is newest-first, so the QA record is here, above it.
+Second correction: that entry said lane bookkeeping is one slot per open lane
+and left the impression that retention is rows x constant. The term that
+actually grows is the retained *edge lists* — one segment per open lane on every
+row, so rows x open lanes. See the TRAPs now on R1.2 and R1.3 in the PRD.
+
+Agents, all spawned fresh, none the implementer: `qa-checklist` (verdict NOT
+READY, 10 findings), `test-coverage-auditor` (9 findings, 16 mutations applied
+and reverted), `responsiveness-reviewer` (7 findings, dispatched on the
+qa-checklist's judgement call that the assigner is "what runs per repository
+query" even though no UI crate changed). Adjudication went to two separate
+`qa-confirm` agents, never inline.
+
+**Confirmed and fixed here.** The whole-picture check the test suite was
+missing: what leaves the bottom of a row must be exactly what enters the top of
+the next, no lane carrying two lines at once. An edge count only bounds lines
+that leave a node, so a fabricated `Passing` or `IntoCommit` — a line drawn from
+nowhere — was invisible; four mutations that survived the original suite now
+fail. A second skew fixture across a busy span, because the first has one
+intermediate row and every lane below it occupied, so it could distinguish
+neither a partial repaint from a full one nor the free-lane rule from its
+degenerate case. A3's gate on a repainted segment now derives the rows entitled
+to be repainted from the walk order itself rather than trusting the flag the
+code under test set, with an in-order generated control that may not repaint any
+row at all. The duplicate-commit case pins its layout instead of only its row
+count. `state.md` no longer claims a QA pass that had not happened. The root
+`CLAUDE.md` and `cairn-model`'s crate doc no longer call the crate plain data
+now that a stateful algorithm lives there.
+
+**Dismissed, with reasons.** Packet-mode branch authority (the orchestrating
+prompt declared it explicitly, and the repository has no remote). "A2's doc
+comment is mis-attributed" — the named mutation does fail A2; what the auditor
+found was that a one-intermediate-row fixture cannot distinguish partial from
+full repaint, which is the coverage gap fixed above. Two of three "unreachable
+defensive branch" claims: the reversed-range guard prevents a panic and the
+`let ... else` on a missing entry is the non-panicking idiom the clippy floor
+mandates — unreachable today is not a defect when the alternative is a panic in
+a git client. "No cancellation in the assigner API" — under D3 the epoch belongs
+to `cairn-app`'s worker and R1.5 requires the assigner to stay pure, so a
+cancellation signal in `cairn-model` would be the defect. "The API forces a
+clone at the worker boundary" — D3 hands results across as owned values by
+design, and `GraphRow` is self-contained so a range copies without the graph.
+
+**Confirmed and NOT fixed, because it is the user's call.** R1.3 is unmet in
+both clauses and R1.2's "rows that have left the window are final" has nothing
+enforcing it. An agent may not rewrite a requirement in an in-flight PRD, so
+both carry a `TRAP:` marker naming what to trust instead — the sanctioned
+interim step — and the disposition is batched to the user. Nothing pins whatever
+bound replaces R1.3; that test cannot be written before the decision, because
+pinning today's behaviour would silently ratify the change.
+
+**One prescribed fix turned out to be impossible.** `free_lane_across` picks the
+lowest lane free across a span; the reuse-a-hole branch was found unwitnessed,
+and the prescribed fix was a fixture that exercises it. There isn't one:
+`free_slot` always fills the lowest hole, so at the row where a parent delivered
+early sits, lanes 0..its own are contiguously occupied, and a hole can only lie
+above it. Probing roughly 12,000 generated histories with 415 deep backward
+links produced zero reuses. Left as written — the lowest-free answer is the
+better one if it ever becomes reachable — and recorded here rather than papered
+over with a fixture that does not decide it.
+
 ## 2026-09-14 — phase 01: the lane assigner, in packet mode
 
 Built the total assigner in `cairn-model` (`graph.rs` for the vocabulary,

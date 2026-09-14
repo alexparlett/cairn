@@ -93,6 +93,30 @@ Consequence worth naming: this narrows the gitoxide bet to reads, where gitoxide
 is strongest, and removes the need for the backend spike this document previously
 carried as an open question.
 
+**The cost this decision creates, which the first draft understated.** Two
+implementations of git semantics now live in one application, and they can
+disagree. Three specific obligations follow, and they are requirements rather
+than observations:
+
+1. **Cache coherence is part of every mutation.** After a `git` subprocess writes,
+   the gix handle may hold a stale index, stale refs or stale packs. Every
+   operation in `ops/` states what it invalidates, and the worker boundary (D3)
+   enforces it. Get this wrong and the UI shows the pre-write state, which reads
+   to the user as "the operation failed".
+2. **Filters affect reads, not only writes.** `.gitattributes` smudge filters mean
+   the bytes in the object database are not what git would show. An LFS-tracked
+   file read through gix without filter support renders as a pointer file rather
+   than content. gix can do this — `gix-filter`, behind the `attributes` feature —
+   but it is a thing to wire up and verify, not something D1 grants for free.
+3. **Divergence on edge cases is a real defect class.** gix's status against git's
+   under sparse checkout, `core.fsmonitor`, or unusual attribute configuration.
+   The failure mode is that Cairn shows one answer and the user's next `git`
+   command acts on another.
+
+None of this reopens D1. It means the seam owes a cache-invalidation contract,
+which is the first thing the `git` backend phase must write down
+(`docs/work/credential-prompts/phase-01-git-backend.md`).
+
 ### D2 — Credentials are delegated to git entirely
 
 Cairn stores no credential, integrates no keychain, and implements no auth. Since

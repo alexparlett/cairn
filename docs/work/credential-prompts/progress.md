@@ -3,6 +3,18 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-14 — three open questions closed with the user
+
+Reviewing the packet's open questions closed the three that were genuinely the
+user's to take, before any code was written: minimum git version (2.30, a support
+policy), the channel's threat model (protects against other users, not same-user
+processes — accepted with the limit written down rather than papered over), and
+`zeroize` as an accepted dependency (hand-rolled zeroing can be optimised away,
+so doing it by hand would claim a protection it might not provide).
+
+Recorded as L9, L10 and L11. O4 and O5 remain, and both are settled by test or
+lookup in phase 03 rather than by decision.
+
 ## 2026-09-14 — packet planned
 
 Filed from the design decisions locked the same day (`docs/design/cairn.md` D1,

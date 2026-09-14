@@ -11,13 +11,14 @@ STEP 1  Load context via an Explore agent over crates/cairn-model/src/,
         docs/research/history-graph/gix-revwalk-ordering.md, and
         docs/prd/history-graph.md (requirement R1). Do not read the other
         planning docs directly.
-STEP 2  Decide O1, then implement.
+STEP 2  Implement. O1 was resolved before this phase: brainstorm.md L9 settles
+        that the total assigner is the floor, not one of two options, because any
+        bounded window can be exceeded by larger skew. Build the total assigner.
+        The window refinement is deferred and explicitly NOT in this phase.
 
-        DECIDE FIRST — O1, the placement strategy for a commit that arrives
-        before its child has reserved a lane. The evidence record lays out three
-        options and their costs. Pick one, record the choice and the reasoning in
-        brainstorm.md under "Resolved", and build to it. Do not build first and
-        justify after; the choice shapes the data structure.
+        Note L10 while building: R1.2 constrains lane INDICES only. Edge segments
+        may be repainted for rows inside the loaded window, which is what lets a
+        late-joining parent draw its connecting line.
 
         Deliverables:
         1. `cairn-model`: GraphRow, Lane, EdgeSegment. Plain data, no
@@ -57,10 +58,11 @@ STEP 6  Branch authority follows the declared mode. In user mode, commit explici
         explicitly declared packet mode only, commit directly onto integration
         with no per-phase PR. NEVER merge or PR to main.
 STEP 7  Final response: what shipped, what is deferred, exact follow-ups.
-STOPPING RULES: stop and ask the user if O1's options all prove wrong against
-real history; if the assigner cannot meet R1.3's complexity bound without a
-structure that breaks R1.2's stability; or if any deliverable seems to need a
-dependency in cairn-model. Otherwise do not stop for permission.
+STOPPING RULES: stop and ask the user if the total assigner cannot be made
+correct for real skewed history without the deferred window after all; if the
+assigner cannot meet R1.3's complexity bound without a structure that breaks
+R1.2's index stability; or if any deliverable seems to need a dependency in
+cairn-model. Otherwise do not stop for permission.
 ```
 
 ## QA brief
@@ -74,8 +76,11 @@ means the failure mode is fixtures too uniform to decide anything.
 - The skew fixture (A2) is the one that matters: confirm it actually exercises
   the out-of-order path, and is not passing because the parent happens to arrive
   in order anyway.
-- The stability property (A3) must compare full rows including edges, not just
-  lane indices. Edges are where an unstable assignment would show first.
+- The stability property (A3) is about lane INDICES (L10). Check the test asserts
+  index stability strictly, and that where an edge differs it differs only by
+  gaining a segment for a late-arriving parent — an edge changing for any other
+  reason is the instability A3 exists to catch, and a test that accepts all edge
+  changes would miss it.
 - Check the octopus and criss-cross fixtures assert *edge* correctness, not only
   lane counts. A wrong edge with a right lane count is the defect a lane-only
   assertion misses.

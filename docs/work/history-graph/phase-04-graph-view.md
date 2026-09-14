@@ -15,9 +15,12 @@ STEP 1  Load context via an Explore agent over crates/cairn-ui/src/,
         Do not read the other planning docs directly.
 STEP 2  Decide O4, then implement.
 
-        DECIDE — O4: how a late-joining edge (the consequence of O1) is drawn so
-        it reads as intentional rather than as a rendering bug. Look at real
-        skewed history before deciding.
+        DECIDE — O4: how a late-joining edge is drawn so it reads as intentional
+        rather than as a rendering bug. L10 already permits repainting the
+        connecting line through the intervening rows inside the loaded window, so
+        this is a visual question, not a structural one: how the repaint reads to
+        someone watching it happen mid-scroll. Look at real skewed history before
+        deciding.
 
         Deliverables:
         1. A virtualised graph view in `cairn-ui` over GraphRow: only visible

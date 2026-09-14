@@ -6,17 +6,20 @@ The cross-session cheat sheet. Every session updates this before ending.
 
 ## Locked decisions
 
-L1-L8 in `brainstorm.md`; the design-level frame is D3 and D4 in
-`docs/design/cairn.md`. The two that most constrain implementation:
+L1-L10 in `brainstorm.md`; the design-level frame is D3 and D4 in
+`docs/design/cairn.md`. The three that most constrain implementation:
 
 - Lanes are computed in `cairn-git` and travel as `cairn-model` values (L1).
 - The assigner must be correct when a parent arrives before its child (L3) —
   this is normal, not corruption. See the evidence record.
+- The total assigner is the floor, not an option (L9), and R1.2's stability
+  covers lane INDICES only, so edges may repaint inside the loaded window (L10).
 
 ## Open questions
 
-O1-O4 in `brainstorm.md`. O1 (placement strategy for out-of-order arrival) is
-phase 01's first decision and everything else in the packet depends on it.
+O2, O3 and O4 in `brainstorm.md`. O1 was closed by L9 — it turned out not to be a
+choice. O2 and O3 are measurements; O4 is now a visual question rather than a
+structural one, thanks to L10.
 
 ## New modules and interfaces introduced so far
 

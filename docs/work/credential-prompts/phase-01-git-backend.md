@@ -13,11 +13,10 @@ STEP 1  Load context via an Explore agent over crates/cairn-git/src/,
         docs/prd/credential-prompts.md (requirement R1), and
         docs/design/cairn.md decision D1. Do not read the other planning docs
         directly.
-STEP 2  Decide O1, then implement.
-
-        DECIDE — O1: the minimum git version Cairn requires. Justify it by the
-        features actually used, not by what is installed on the development
-        machine (2.55.0). Record it in brainstorm.md under "Resolved".
+STEP 2  Implement. O1 was resolved before this phase: the required minimum is
+        **git 2.30** (brainstorm.md L9). If you find Cairn needs a feature newer
+        than that, raising the floor is a support-policy change and belongs to the
+        user — stop and ask rather than bumping it.
 
         Deliverables:
         1. `cairn-git/src/ops/cli.rs`: a typed builder that constructs and runs a
@@ -34,13 +33,23 @@ STEP 2  Decide O1, then implement.
            never parse human-facing output where a machine-readable form exists.
         4. Errors as cairn-git::Error variants naming what the caller must
            handle, carrying git's stderr for diagnosis. Never a bare exit code.
-        5. Startup discovery: locate git, check the version against O1, fail
-           loudly with a message naming the required version. Never degrade
+        5. Startup discovery: locate git, check the version is at least 2.30,
+           fail loudly with a message naming the required version. Never degrade
            silently.
         6. THE GUARD for "every git invocation sets GIT_TERMINAL_PROMPT=0": the
            environment builder is the only construction path and always includes
            it. Land it in crates/cairn-guards/tests/invariants.rs with a matcher
            self-test, and add the invariant to CLAUDE.md in the same commit.
+        7. THE CACHE-INVALIDATION CONTRACT. D1 puts two implementations of git
+           semantics in one process, so a `git` subprocess write can leave the
+           gix handle holding a stale index, stale refs or stale packs. This
+           phase owes the written contract — what an operation declares it
+           invalidates, and where that declaration is honoured — in the ops
+           module docs. It costs little now and is very expensive to retrofit
+           once several operations exist. See docs/design/cairn.md D1, "The cost
+           this decision creates". Fetch in phase 03 is its first real test:
+           fetch changes remote refs, and the graph view must not keep showing
+           the pre-fetch ones.
 
         Invariants in play: only ops/ spawns a process; every invariant gets its
         twin in the same change; no panic on a reachable path — a missing git

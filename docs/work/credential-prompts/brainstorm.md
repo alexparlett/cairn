@@ -43,18 +43,48 @@ of the backend, and it is destructive — it needs `Confirmed` and the
 `destructive-ops-reviewer`, which is a different conversation from "can we
 authenticate at all".
 
+## Locked 2026-09-14, second pass
+
+Decided with the user when the packet's open questions were reviewed, before any
+code was written.
+
+**L9. Minimum git version is 2.30.** The technical floor is lower — the binding
+feature is porcelain v2 status at 2.11; `GIT_ASKPASS`, `GIT_TERMINAL_PROMPT` and
+`-z` are all far older. 2.30 is Debian bullseye's version, comfortably past
+everything Cairn uses, and anything older is on a distro whose Rust toolchain
+would struggle with a 2024-edition binary anyway. This is a support policy, so it
+belongs to the user and not to a phase. Rejected: 2.11 (a 2016 git, tested
+forever for no user) and 2.45 (excludes Debian bookworm at 2.39 for convenience
+Cairn has not earned). Closes O1.
+
+**L10. The channel is a unix socket in `$XDG_RUNTIME_DIR`, and its threat model is
+stated honestly: it protects against OTHER users, not against same-user
+processes.** 0700 directory, 0600 socket, not the Linux abstract namespace (which
+carries no permissions), single-use token handed to the helper via the
+environment rather than `argv` (L6). Same-user isolation is not achievable — a
+process running as the user can read our environment through `/proc` — and it is
+also not worth pursuing, because that same process could read
+`~/.git-credentials` or query the ssh-agent directly. Writing the limit down is
+the point: a threat model that overclaims is worse than one that is narrow.
+Rejected: `SO_PEERCRED` peer verification (raises the bar against a racing
+same-user process, but is defeatable by a determined one and buys complexity for
+a boundary that cannot hold) and an inherited pre-opened fd (cleaner in
+principle, but depends on git preserving inherited fds across askpass invocation,
+which is unverified). Closes O2.
+
+**L11. `zeroize` is added as a dependency for the secret type.** Hand-rolled
+zeroing can be optimised away, so a type doing it by hand would claim a
+protection it may not provide — worse than claiming nothing. `zeroize` is small,
+has no transitive dependencies, and documents the compiler-fence guarantee that
+makes the write actually happen. Per the dependency invariant this was the user's
+call, and it was taken deliberately. The dependency is added in phase 02, in the
+same commit as the code that uses it and the allowlist row in
+`crates/cairn-guards/tests/invariants.rs`. Rejected: hand-rolling, and dropping
+the zeroing requirement in favour of relying on the helper being a short-lived
+separate process. Closes O3.
+
 ## Open, for the phase that meets them
 
-- **O1 (phase 01).** The minimum `git` version Cairn requires. The evidence was
-  gathered against 2.55.0; the floor should be justified by the features actually
-  used, not by what happened to be installed.
-- **O2 (phase 02).** The helper/app channel. A unix domain socket in the user's
-  runtime directory with a per-operation single-use token is the candidate, but
-  the choice needs justifying: this channel carries plaintext secrets between two
-  processes and its permissions are the entire security story.
-- **O3 (phase 02).** Whether the secret type can zero on drop without a new
-  dependency. A dependency here is a user decision, and a hand-rolled version
-  that the optimiser removes is worse than none — decide with evidence.
 - **O4 (phase 03).** Precedence between `GIT_ASKPASS`, `core.askPass` and
   `SSH_ASKPASS`, and whether setting them can suppress a helper the user
   configured. Unverified in the evidence record and directly load-bearing for L7.

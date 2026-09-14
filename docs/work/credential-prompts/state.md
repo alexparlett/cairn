@@ -6,20 +6,26 @@ The cross-session cheat sheet. Every session updates this before ending.
 
 ## Locked decisions
 
-L1-L8 in `brainstorm.md`; the design-level frame is D1 and D2 in
-`docs/design/cairn.md`. The three that most constrain implementation:
+L1-L11 in `brainstorm.md`; the design-level frame is D1 and D2 in
+`docs/design/cairn.md`. The ones that most constrain implementation:
 
 - Cairn implements no authentication and stores no credential (L1).
 - The askpass helper is a separate binary because git's contract is a process:
   prompt on `argv`, secret on stdout (L2).
 - A user whose credential helper or ssh-agent already works must see no new
   dialog (L7) — and B4 is the regression test that protects it.
+- Minimum git is **2.30** (L9). Raising it is a support-policy change and the
+  user's call, not a phase's.
+- The channel protects against other users, NOT against same-user processes, and
+  says so in its own docs (L10). Do not widen that claim.
+- `zeroize` is an accepted dependency for the secret type (L11), added in phase 02
+  alongside its allowlist row.
 
 ## Open questions
 
-O1-O5 in `brainstorm.md`. O4 (askpass vs. credential-helper precedence) is the
-one that can invalidate L7, so phase 03 must settle it with a test rather than a
-reading.
+O4 and O5 in `brainstorm.md`; O1-O3 were closed by L9-L11. O4 (askpass vs.
+credential-helper precedence) is the one that can invalidate L7, so phase 03 must
+settle it with a test rather than a reading.
 
 ## New modules and interfaces introduced so far
 

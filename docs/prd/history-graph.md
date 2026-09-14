@@ -29,7 +29,12 @@ infrastructure built without a consumer gets the interface wrong.
 - R1.1 Given commits in newest-first order with their parent ids, the assigner
   emits one row per commit carrying its lane index and the edge segments crossing
   that row.
-- R1.2 Processing further commits never changes a lane already emitted.
+- R1.2 Processing further commits never changes a **lane index** already
+  emitted. Edge *segments* may be repainted for rows still inside the loaded
+  window: a late-joining parent (R1.4) has to be able to draw the line that
+  connects it, and the view re-renders visible rows from the model on every
+  change regardless, so allowing this costs nothing. Rows that have left the
+  window are final.
 - R1.3 Work per commit is amortised constant; retained state is proportional to
   the number of simultaneously open lanes, never to the number of commits seen.
 - R1.4 The assigner is **total over arrival order**: a commit whose lane was never
@@ -90,7 +95,7 @@ here and does not restate them.
 | --- | --- | --- |
 | A1 | Lane assignment produces the expected lanes and edges for a fixture set covering: linear history, a simple branch and merge, an octopus merge, criss-cross merges, and multiple roots | unit tests on the pure assigner |
 | A2 | Feeding the assigner a deliberately skewed history — a parent whose committer date is newer than its child's — produces rows for every commit, with every parent edge present | a named regression test built from the evidence record's finding 2 |
-| A3 | Emitted lanes are stable: assigning N commits then N more yields byte-identical rows for the first N | property test |
+| A3 | Lane indices for the first N commits are identical whether N or N+M commits were assigned; any edge that differs does so only by gaining a segment for a parent that arrived late | property test |
 | A4 | The history query returns correct rows for a fixture repository built by running real `git` commands, and honours its limit | integration test in `cairn-git` |
 | A5 | A cancelled query stops walking — observable, not asserted by comment | integration test |
 | A6 | No engine call is reachable from a render path | `responsiveness-reviewer`, plus the existing dependency-seal guards |

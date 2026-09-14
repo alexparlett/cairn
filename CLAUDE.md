@@ -21,7 +21,7 @@ names — never cite one as if it exists.
 | --- | --- |
 | `docs/` | `qa-gate.md` (QA contract), `design/` intent, `prd/` per-packet specs, `systems/` as-built, `work/` in-flight dirs, `research/` evidence (deferred work goes to GitHub issues; `backlog/` is the no-remote fallback) — findings promote research → brainstorm → design/prd → systems (contract: `docs/CLAUDE.md`) |
 | `crates/cairn-model/` | The vocabulary crossing the seam: `Oid`, `RefName`, `CommitSummary`, the `Confirmed` token. Plain data. Depends on nothing — not `gix`, not `freya`, not the other crates. |
-| `crates/cairn-git/` | The repository engine: gitoxide-backed reads and, under `src/ops/`, every write. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
+| `crates/cairn-git/` | The repository engine: gitoxide-backed reads, and under `src/ops/` every write (planned — only the confirmation-seal placeholder exists today), most of them delegating to the `git` binary per design decision D1. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
 | `crates/cairn-ui/` | Freya components. Render `cairn-model` values, report intent through `EventHandler` props. Must never depend on `gix` or `cairn-git`, and must never touch the filesystem. |
 | `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. |
 | `crates/cairn-guards/` | Test-only. The deterministic enforcement twins for the Invariants below; nothing depends on it. |
@@ -98,6 +98,11 @@ empty `gix_hash::Kind` once already)**. Read the vendored source under
   component, no `freya` type in the engine. That is what keeps the backend
   replaceable — the decision to bet on gitoxide is reversible exactly as long as
   this holds.
+- **Reads go through gitoxide; writes go through the `git` binary.** Decision D1
+  in `docs/design/cairn.md`: a mutation must run the user's hooks, filters and
+  credential helpers and honour their config, and gix runs none of them. Reads
+  never spawn a process — that is the whole reason the split pays. Consequence
+  for free: Cairn stores no credentials, because git's helpers do (D2).
 - **Every repository mutation lives in `cairn-git::ops`, and the destructive ones
   are sealed behind `cairn_model::Confirmed`.** The token's only constructor
   records the prompt text the user acknowledged, so a code path cannot reach a
@@ -105,8 +110,11 @@ empty `gix_hash::Kind` once already)**. Read the vendored source under
   the operation log can quote them afterwards.
 - **The UI thread is never allowed to wait on a repository.** `cairn-git` is
   synchronous and knows nothing about threads; `cairn-app` decides where the
-  blocking work runs and hands results back as values. A repository is somebody's
-  10-year monorepo: any design that assumes a query is fast is wrong.
+  blocking work runs and hands results back as values (decision D3: one
+  `gix::ThreadSafeRepository` per repository, a worker pool taking thread-local
+  handles, every request carrying an epoch so a superseded query is abandoned
+  rather than rendered). A repository is somebody's 10-year monorepo: any design
+  that assumes a query is fast is wrong.
 
 ## Invariants, YOU MUST keep these
 
@@ -175,6 +183,9 @@ the change that makes them load-bearing:
   `cairn-git/src/repository.rs`, not `cairn-git/src/core.rs`.
 - Errors are `thiserror` enums whose variants name what the CALLER must handle;
   never re-export a dependency's error type across the seam.
+- Keyboard shortcuts resolve through one accelerator table mapping a logical
+  action to a per-platform chord. Never a literal `Ctrl` inside a component — it
+  is the cheap half of keeping macOS reachable (decision D5).
 - Docs follow the anchor rule: cite stable paths, exported symbols, and pinned
   tests; never literal counts or line numbers that rot.
 
@@ -227,7 +238,8 @@ exists yet).
 
 ## Pointers
 
-- `docs/design/cairn.md` — the design spine: what Cairn is for and what it is not.
+- `docs/design/cairn.md` — the design spine: what Cairn is for, what it is not,
+  and the locked decisions D1-D5 that the architecture above implements.
 - `docs/qa-gate.md` — the QA layer contract and reviewer dispatch table.
 - `docs/CLAUDE.md` — the docs layer contract (tenses, promotion, teardown).
 - `docs/work/<packet>/` — in-flight packet dirs, created by `/feature-plan`, torn

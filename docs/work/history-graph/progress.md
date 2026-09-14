@@ -3,6 +3,56 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-14 — phase 01: the lane assigner, in packet mode
+
+Built the total assigner in `cairn-model` (`graph.rs` for the vocabulary,
+`lane_assignment.rs` for the algorithm) with the fixture set and the A1/A2/A3
+tests in `crates/cairn-model/tests/`. Committed directly onto
+`feature/history-graph`; the repository still has no remote, so nothing was
+pushed and no pull request was raised.
+
+**How R1.4 was answered.** A commit arriving with no lane reserved for it takes
+the leftmost free lane. When a child for it turns up later, the joining line is
+drawn *upward* through a lane that was free on every row in between, and every
+segment of that line is flagged `out_of_order`. That is the evidence record's
+candidate 1 plus the rendering rule it asked for: the line is complete rather
+than jumping, and phase 04 has the flag it needs to mark a link that runs
+backwards on screen.
+
+**A defect the generated histories caught.** The first cut indexed only commits
+that had arrived *without* a reservation, on the theory that those are the only
+ones that can gain a late child. False: a commit with two children can have one
+of them arrive before it and the other after, so a commit laid out in a reserved
+lane can still gain a child later. The random-skew property test found it
+(`c2`'s line to `c3` descended into a lane that never filled). The assigner now
+indexes every row it lays out.
+
+**The R1.3 tension, stated rather than hidden.** R1.3 asks for retained state
+proportional to open lanes, never to commits seen. R1.2's repaint asks the
+assigner to add segments to rows already emitted, which it can only do if it
+still holds them. The two cannot both be literally true, so the assigner keeps
+its rows and an index into them, and its doc comment says so: a caller bounds it
+by loading a window into one assigner, not by expecting the assigner to forget.
+Lane bookkeeping proper is still one slot per open lane. Flagged to the user.
+
+**Every fixture's stated mutation was verified by making it.** Each fixture test
+names the change to the assigner it would catch; each was applied and watched to
+fail. One claim was wrong and is now corrected: "the first parent takes a fresh
+lane instead of the commit's own" does *not* fail the linear fixture, because the
+leftmost free lane is the commit's own lane in a linear history. That exposed a
+genuinely untested rule — a branch keeping its lane when a lower one falls empty
+— which now has its own fixture.
+
+**Out-of-scope fix the gate forced.** `cairn-git`'s
+`discovers_this_repository_from_a_nested_path` asserted `git_dir().ends_with(".git")`,
+which is false in a linked worktree (`.git/worktrees/<name>`) — the checkout
+layout this repository's own workflow mandates. Pre-existing, unrelated to the
+assigner, and it fails the gate for every packet. Fixed in its own commit to
+assert the path *is* a git directory rather than what it is called.
+
+QA findings: see the entry below this one once `/qa` has run — dismissed
+findings are logged there with their reasons.
+
 ## 2026-09-14 — packet order settled; two gaps in this plan closed
 
 This packet goes first. The dependency is one-directional: credential-prompts

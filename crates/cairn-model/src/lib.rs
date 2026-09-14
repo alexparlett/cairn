@@ -5,9 +5,13 @@
 //! of how a repository is read and the engine stay ignorant of how it is drawn.
 
 mod confirm;
+mod graph;
+mod lane_assignment;
 mod oid;
 
 pub use confirm::Confirmed;
+pub use graph::{EdgeKind, EdgeSegment, GraphRow, Lane};
+pub use lane_assignment::LaneAssigner;
 pub use oid::{Oid, OidParseError};
 
 /// A commit as a list needs it: enough to draw a row, never the full object.

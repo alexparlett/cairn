@@ -9,13 +9,28 @@ STEP 1  Load context via an Explore agent over crates/cairn-app/src/,
         crates/cairn-git/src/, docs/prd/history-graph.md (requirement R3), and
         docs/design/cairn.md decision D3. Also read the gix threading model from
         the vendored source: ThreadSafeRepository and to_thread_local() in
-        gix-0.87.1/src/types.rs and src/repository/thread_safe.rs. Do not read
-        the other planning docs directly.
+        gix-0.87.1/src/types.rs and src/repository/thread_safe.rs.
+        ALSO READ docs/prd/credential-prompts.md requirement R4. You are not
+        building it — see STEP 2 for why you are reading it.
 STEP 2  Decide O3, then implement.
+
+        DESIGN AGAINST TWO CONSUMERS, BUILD ONE. This phase has exactly one
+        consumer available — the paged history query — and a boundary shaped only
+        by "walk some commits, return a page" will need widening later. The second
+        consumer is already specified: fetch, in
+        docs/prd/credential-prompts.md R4. It is a different shape — long-running,
+        network-bound, reporting progress, and blocking mid-operation on a UI
+        dialog for a credential. Read it, make sure the interface could accommodate
+        it, and say in state.md which parts of the design exist for it. Do NOT
+        build fetch or any part of it; that packet owns it. The point is only to
+        avoid an interface that is accidentally graph-shaped.
 
         DECIDE — O3: pool size, fixed or scaled with cores. A pool of one is a
         legitimate answer if the numbers say so; decide from a measurement, not
-        from a default, and record it.
+        from a default, and record it. Note the argument against core-scaling:
+        the work is I/O- and cache-bound, and gix already parallelises internally
+        via max-performance, so scaling with cores oversubscribes against
+        gitoxide's own threads.
 
         Deliverables:
         1. A repository worker pool in `cairn-app`: one
@@ -83,3 +98,9 @@ whether to accept it. Otherwise do not stop for permission.
 - Check what happens when a worker panics. A pool that silently loses a thread
   degrades into a hang, which is the failure mode this packet is supposed to
   prevent.
+- Ask whether the interface could carry fetch (credential-prompts R4): a
+  long-running operation that reports progress and blocks mid-flight on a UI
+  prompt. A request/response shape with no progress channel and no way to await a
+  UI answer is graph-shaped, and widening it later means touching every call site.
+  This is a design question, not a missing feature — do not treat an absent fetch
+  as a finding.

@@ -3,6 +3,27 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-14 — packet order settled; two gaps in this plan closed
+
+This packet goes first. The dependency is one-directional: credential-prompts
+phase 03 already defers to this packet's worker boundary, and its
+cache-invalidation contract names the graph view as the thing that proves it, so
+running that packet first would leave its own acceptance unobservable. This packet
+also exercises the gix read path, which is the half of D1 that was asserted from
+gitoxide's design goals rather than measured.
+
+Two gaps in the plan as filed, both closed:
+
+Nothing opened a repository. Phase 03 assumed one was open and phase 04 wired a
+view to it, but no phase called `Repository::discover`. Added as requirement R5
+and phase 04 deliverable 5, deliberately minimal — a command-line argument, not a
+picker, because the repository-manager shape is parked in the spine.
+
+Phase 03 would have over-fitted the worker boundary to paged queries. Fetch is
+already specified (credential-prompts R4) and is a different shape: long-running,
+progress-reporting, and blocking mid-operation on a UI prompt. Phase 03 now reads
+that requirement as a second known consumer while designing, without building it.
+
 ## 2026-09-14 — open questions reviewed with the user, two were badly framed
 
 Walking the packet's open questions with the user closed one and unblocked

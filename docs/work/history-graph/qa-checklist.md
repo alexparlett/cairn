@@ -1,7 +1,7 @@
 # QA checklist — history-graph
 
 Packet-specific acceptance beyond the repo-wide gate. The acceptance criteria
-A1-A8 live in `docs/prd/history-graph.md` and are NOT copied here — verify them
+A1-A9 live in `docs/prd/history-graph.md` and are NOT copied here — verify them
 there, against their pinned tests.
 
 ## Per-phase coverage of the PRD criteria
@@ -11,8 +11,8 @@ there, against their pinned tests.
 | 01 | A1, A2, A3 |
 | 02 | A4, A5 |
 | 03 | A6 (with 04) |
-| 04 | A6, A7 |
-| 05 | all of A1-A8, re-verified over the whole packet diff |
+| 04 | A6, A7, A8 |
+| 05 | all of A1-A9, re-verified over the whole packet diff |
 
 ## Packet-specific checks
 
@@ -32,3 +32,9 @@ Beyond the PRD, phase 05 confirms:
 - [ ] `docs/systems/history-graph.md` exists and describes only what was built.
 - [ ] The A7 measurement is recorded in `progress.md` with the repository it ran
       against and the numbers observed, not as "looks smooth".
+- [ ] R5 stayed minimal: a command-line argument and an error path, not the start
+      of a repository picker. R5.3 parks that decision deliberately, and a picker
+      landed here would pre-empt it by accident.
+- [ ] The worker boundary's design notes say which parts exist for fetch
+      (credential-prompts R4) rather than for the graph — phase 03's obligation,
+      and the thing that stops the next packet rewriting the interface.

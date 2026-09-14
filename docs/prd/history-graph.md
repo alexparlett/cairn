@@ -76,6 +76,20 @@ infrastructure built without a consumer gets the interface wrong.
 - R4.4 Selecting a row is keyboard reachable, and selection survives more rows
   arriving.
 
+### R5 — Something opens a repository
+
+The packet cannot render history without a repository, and nothing in Cairn opens
+one today. The minimum that unblocks it, deliberately not more:
+
+- R5.1 The app opens the repository containing the path given as its first
+  command-line argument, defaulting to the process working directory.
+- R5.2 A path that is not inside a repository fails with a message naming the
+  path, not a panic and not an empty window.
+- R5.3 Exactly one repository is open at a time. Choosing between tabs, a
+  sidebar and separate windows is parked in the spine's "Still open" and must
+  NOT be decided here — a command-line argument is chosen precisely because it
+  commits to nothing.
+
 ## Product rules
 
 - The graph is the default view when a repository opens.
@@ -100,9 +114,11 @@ here and does not restate them.
 | A5 | A cancelled query stops walking — observable, not asserted by comment | integration test |
 | A6 | No engine call is reachable from a render path | `responsiveness-reviewer`, plus the existing dependency-seal guards |
 | A7 | Scrolling a repository with at least 100k commits keeps frame time bounded and memory flat | a measured check, run by hand against a named real repository, with numbers recorded in `progress.md` |
-| A8 | `scripts/gate.sh` passes | the gate |
+| A8 | The app opens the repository named on the command line, defaults to the working directory, and fails with a clear message when given a path outside a repository | integration test over the argument handling, plus a manual run |
+| A9 | `scripts/gate.sh` passes | the gate |
 
-A7 is deliberately not automated. A frame-time assertion in CI would be flaky and
+A8 is the new one — R5 was missing from the first draft of this PRD, which
+specified a view with nothing to point it at. A7 is deliberately not automated. A frame-time assertion in CI would be flaky and
 would be disabled within a month; a recorded measurement against a named
 repository is honest about what it is.
 
@@ -110,4 +126,5 @@ repository is honest about what it is.
 
 Filed, not done: commit detail panes, diffs, blame, file history, search and
 filtering, graph-based operations (checkout, reset, cherry-pick from a row),
-multiple repositories open at once, and any mutation whatsoever.
+multiple repositories open at once, a repository picker or manager of any kind
+(R5.3), recent-repository history, and any mutation whatsoever.

@@ -33,7 +33,17 @@ STEP 2  Decide O4, then implement.
         4. Wiring in `cairn-app` from the worker pool to the view, including a
            visible loading state distinguishable from an empty repository, and
            paging as the user scrolls.
-        5. The A7 measurement: run against a named real repository of at least
+        5. OPENING A REPOSITORY (requirement R5). Nothing in Cairn does this yet;
+           the packet cannot render history without it. Do the minimum: open the
+           repository containing the first command-line argument, default to the
+           working directory, and fail with a message naming the path when it is
+           not inside a repository. `cairn_git::Repository::discover` already
+           exists — this is wiring, not new engine work.
+           Deliberately NOT a repository picker, a manager, tabs, or recent-repo
+           history. R5.3 parks that choice in the spine's "Still open"; a
+           command-line argument is chosen because it commits to nothing. If this
+           starts growing UI, you have left the packet.
+        6. The A7 measurement: run against a named real repository of at least
            100k commits, record the numbers and the repository in progress.md.
 
         Invariants in play: cairn-ui may not name gix or cairn_git — if the view
@@ -43,7 +53,8 @@ STEP 2  Decide O4, then implement.
         virtualisation.
 
         Out of scope: commit details, diffs, refs decoration, search, filtering,
-        context menus, and every mutation.
+        context menus, any repository picker or manager beyond R5's command-line
+        argument, and every mutation.
 STEP 3  Validate: scripts/gate.sh. Then orchestrate this phase's QA in this
         session: run /qa over the phase diff with responsiveness-reviewer and
         test-coverage-auditor spawned fresh, plus the qa-checklist.md items this
@@ -51,8 +62,8 @@ STEP 3  Validate: scripts/gate.sh. Then orchestrate this phase's QA in this
         agent (fresh), never this session inline; log dismissed findings with
         reasons in progress.md; fix confirmed findings in focused fixes;
         disputed findings go to the user.
-STEP 4  Acceptance: PRD criteria A6 and A7. A7 is a recorded measurement, not an
-        assertion — record what you actually observed, including if it is bad.
+STEP 4  Acceptance: PRD criteria A6, A7 and A8 (A8 is R5, opening a repository). A7 is a recorded measurement, not
+        an assertion — record what you actually observed, including if it is bad.
 STEP 5  Update state.md (symbol table, O4 resolved) and progress.md with the
         measurement. Save memory-worthy decisions.
 STEP 6  Branch authority follows the declared mode, as phase 01.
@@ -79,3 +90,7 @@ viewport. Otherwise do not stop for permission.
   30-commit test and breaks at page two. Test it across a page boundary.
 - Accessibility is in the product rules, not decoration: confirm keyboard
   reachability and that lane identity survives without colour.
+- R5 is the deliverable most likely to grow past its brief. Check it added an
+  argument and an error path, and not the beginnings of a repository manager —
+  R5.3 exists because that decision is parked, and a picker landed here would
+  pre-empt it by accident.

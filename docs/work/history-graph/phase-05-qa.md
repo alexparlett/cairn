@@ -18,13 +18,13 @@ STEP 2  Run the merge bar:
            gate-integrity-reviewer (phase 03 touched the enforcement layer).
            Adjudication goes to qa-confirm, spawned fresh.
         b. Run the ENTIRE qa-checklist.md.
-        c. Verify every PRD acceptance criterion A1-A8 against its pinned test.
+        c. Verify every PRD acceptance criterion A1-A9 against its pinned test.
            A criterion whose test you cannot point at is not met.
         d. AUDIT the per-phase dismissal log in progress.md. A dismissal whose
            reason no longer holds is a finding.
         e. Fix confirmed findings in focused commits.
 STEP 3  Validate: scripts/gate.sh, clean.
-STEP 4  Acceptance: A1-A8 all pass. This is the merge bar — everything after
+STEP 4  Acceptance: A1-A9 all pass. This is the merge bar — everything after
         this step is conditional on it.
 STEP 5  Offer teardown to the user (docs/CLAUDE.md): stamp
         docs/prd/history-graph.md `shipped`, verify docs/systems/history-graph.md

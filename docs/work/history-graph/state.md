@@ -38,6 +38,11 @@ one-line contract — so a later phase does not re-derive it from source.
 | 02 history query | not started | — | — |
 | 03 worker boundary | not started | — | — |
 | 04 graph view | not started | — | — |
+
+Phase 03 additionally owes design notes here saying which parts of the worker
+interface exist for fetch (`docs/prd/credential-prompts.md` R4) rather than for
+the graph. Phase 04 owes R5: opening a repository from a command-line argument,
+and nothing more than that.
 | 05 QA | not started | — | — |
 
 ## Environment notes

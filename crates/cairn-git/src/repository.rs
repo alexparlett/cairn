@@ -59,8 +59,17 @@ mod tests {
     #[test]
     fn discovers_this_repository_from_a_nested_path() {
         let repo = Repository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
-        assert!(repo.git_dir().ends_with(".git"));
-        assert!(repo.workdir().is_some());
+        // Not `ends_with(".git")`: a linked worktree — which is how this
+        // repository asks parallel work to be checked out — is backed by
+        // `.git/worktrees/<name>`, so the thing to assert is that the path is
+        // a git directory, not what it happens to be called.
+        assert!(
+            repo.git_dir().join("HEAD").is_file(),
+            "{} is not a git directory",
+            repo.git_dir().display()
+        );
+        let workdir = repo.workdir().unwrap();
+        assert!(workdir.join("crates/cairn-git/Cargo.toml").is_file());
     }
 
     #[test]

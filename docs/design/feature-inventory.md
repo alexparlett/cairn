@@ -199,6 +199,13 @@ staging packet meets it deliberately.
 
 Each with the reason, so the next person does not relitigate it.
 
+**Reviewed against real usage on 2026-09-14** and confirmed, with one change: the
+pull-request entry moved into scope as D9, because creating a PR turned out to be
+URL construction rather than API work, and one of the most-used commands in the
+reference client. Everything below survived that review. Treat the list as
+validated rather than asserted — reopening an entry wants new information, not a
+fresh opinion.
+
 | Not doing | Why |
 | --- | --- |
 | *Reviewing* pull requests, reading or filing issues | D9: panels need an API token and go stale. Note that *creating* a PR does not — it is a URL, and it is in scope (Tier 6½). |

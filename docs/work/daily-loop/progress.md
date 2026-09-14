@@ -3,6 +3,18 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-14 — out-of-scope list reviewed against real usage and confirmed
+
+Walked the remaining out-of-scope entries with the user after D9 moved one of them
+into scope. No further changes: platform panels, issues, CI status, repository
+creation, being an editor, git-flow, a tutorial, Windows, bisect and filter-repo
+all hold.
+
+Worth recording because it changes the list's status. These were my assertions
+from a design principle; they are now checked against what the user actually does
+in a day, which is how D6 and D9 were both found to be wrong. Reopening one should
+need new information rather than a fresh opinion.
+
 ## 2026-09-14 — forge links pulled into scope; the spine's line was wrong
 
 The user reported that "create pull request on origin" is one of their most-used

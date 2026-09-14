@@ -1,8 +1,10 @@
 //! The vocabulary that crosses Cairn's engine/UI boundary.
 //!
-//! Everything here is plain data: no `gix` types, no Freya types, no I/O. Both
-//! sides of the seam name these types, which is what lets the UI stay ignorant
-//! of how a repository is read and the engine stay ignorant of how it is drawn.
+//! Everything here is plain data — plus, in `lane_assignment`, the pure
+//! algorithm that computes some of it. No `gix` types, no Freya types, no I/O,
+//! no clock. Both sides of the seam name these types, which is what lets the UI
+//! stay ignorant of how a repository is read and the engine stay ignorant of
+//! how it is drawn.
 
 mod confirm;
 mod graph;

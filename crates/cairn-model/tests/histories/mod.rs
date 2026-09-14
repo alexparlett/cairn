@@ -137,6 +137,7 @@ fn connecting_lane(rows: &[GraphRow], top: usize, bottom: usize) -> Option<Lane>
 /// so a spurious line cannot hide behind a satisfied continuity check.
 pub fn assert_every_parent_edge_is_drawn(history: &History, rows: &[GraphRow]) {
     assert_eq!(rows.len(), history.len(), "one row per commit");
+    assert_the_picture_joins_up(rows);
     let row_of: HashMap<&str, usize> = rows
         .iter()
         .enumerate()
@@ -223,6 +224,60 @@ pub fn assert_rows_are_well_formed(rows: &[GraphRow]) {
     }
 }
 
+/// The picture has to join up: what leaves the bottom of one row is exactly
+/// what enters the top of the next, no lane carries two lines at once, and
+/// nothing enters the top of the very first row.
+///
+/// This is the check that makes a fabricated segment of ANY kind visible. An
+/// edge count alone only bounds the lines that leave a node, so a spurious
+/// `Passing` or `IntoCommit` — a line drawn from nowhere — slips past it; a
+/// line that appears without a matching line above it cannot.
+pub fn assert_the_picture_joins_up(rows: &[GraphRow]) {
+    let mut leaving_the_row_above: HashSet<usize> = HashSet::new();
+    for row in rows {
+        let mut entering: HashSet<usize> = HashSet::new();
+        for edge in &row.edges {
+            if edge.kind == EdgeKind::OutOfCommit {
+                continue;
+            }
+            assert!(
+                entering.insert(edge.from.index()),
+                "two lines enter row {} in lane {}\n{}",
+                label_of(&row.id),
+                edge.from.index(),
+                describe(rows).join("\n")
+            );
+        }
+        assert_eq!(
+            entering,
+            leaving_the_row_above,
+            "row {} is entered by lines that did not leave the row above it\n{}",
+            label_of(&row.id),
+            describe(rows).join("\n")
+        );
+
+        let mut passing_out: HashSet<usize> = HashSet::new();
+        let mut from_the_node: HashSet<usize> = HashSet::new();
+        for edge in &row.edges {
+            let (claimed, lane) = match edge.kind {
+                EdgeKind::IntoCommit => continue,
+                EdgeKind::Passing => (&mut passing_out, edge.to.index()),
+                EdgeKind::OutOfCommit => (&mut from_the_node, edge.to.index()),
+            };
+            assert!(
+                claimed.insert(lane),
+                "two lines of the same kind leave row {} in lane {}\n{}",
+                label_of(&row.id),
+                lane,
+                describe(rows).join("\n")
+            );
+        }
+        // A passing line and a line out of the node may share a lane: that is
+        // a branch merging into the line already descending it.
+        leaving_the_row_above = passing_out.union(&from_the_node).copied().collect();
+    }
+}
+
 /// A deterministic generator, so a property test is reproducible without a
 /// dependency. `cairn-model` depends on nothing, tests included.
 pub struct Rng(u64);
@@ -284,6 +339,29 @@ pub fn random_history(seed: u64, len: usize, skew: bool) -> History {
         }
     }
     commits
+}
+
+/// Every `(parent row, child row)` pair the walk delivers backwards: the
+/// parent handed over first and the child only later. Derived from the walk
+/// order alone, so a test can decide which rows are *entitled* to be repainted
+/// without asking the assigner what it flagged.
+pub fn links_delivered_backwards(history: &History) -> Vec<(usize, usize)> {
+    let position: HashMap<&str, usize> = history
+        .iter()
+        .enumerate()
+        .map(|(index, (id, _))| (id.as_str(), index))
+        .collect();
+    let mut links = Vec::new();
+    for (child, (_, parents)) in history.iter().enumerate() {
+        for parent in parents {
+            if let Some(&at) = position.get(parent.as_str())
+                && at < child
+            {
+                links.push((at, child));
+            }
+        }
+    }
+    links
 }
 
 /// True when the walk hands a commit over before something that lists it as a

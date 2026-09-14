@@ -15,7 +15,8 @@ mod histories;
 use cairn_model::LaneAssigner;
 use histories::{
     History, assert_every_parent_edge_is_drawn, assert_rows_are_well_formed, assign,
-    delivers_a_parent_before_its_child, describe, literal, random_history,
+    delivers_a_parent_before_its_child, describe, links_delivered_backwards, literal,
+    random_history,
 };
 
 fn linear() -> History {
@@ -81,6 +82,25 @@ fn skewed() -> History {
     ])
 }
 
+/// The same reversal as `skewed()`, but the parent is four rows above its
+/// child with two rows in between and lanes 0, 1 and 2 busy the whole way, so
+/// the lane the connecting line runs in is forced and visible. `skewed()` is
+/// too narrow to decide either: with one intermediate row a partial repaint
+/// looks like a full one, and with every lane below it occupied the free lane
+/// is also the widest lane.
+fn skewed_across_a_busy_span() -> History {
+    literal(&[
+        ("t0", &["a"]),
+        ("t1", &["b"]),
+        ("p", &["e"]),
+        ("a", &["f"]),
+        ("b", &["f"]),
+        ("c", &["p"]),
+        ("e", &[]),
+        ("f", &[]),
+    ])
+}
+
 fn corpus() -> Vec<(&'static str, History)> {
     vec![
         ("linear", linear()),
@@ -93,6 +113,7 @@ fn corpus() -> Vec<(&'static str, History)> {
             lane_outlives_the_one_to_its_left(),
         ),
         ("skewed", skewed()),
+        ("skewed across a busy span", skewed_across_a_busy_span()),
     ]
 }
 
@@ -273,6 +294,39 @@ fn skewed_history_places_every_commit_and_draws_every_parent_edge() {
     );
 }
 
+/// A2, at a width that can decide things `skewed()` cannot.
+///
+/// Caught by: running the connecting line down a lane that is already in use
+/// (lane 0, 1 or 2 all carry a line across this span, so the picture would no
+/// longer join up); or repainting only part of the span, which `skewed()`
+/// cannot see because it has a single intermediate row.
+#[test]
+fn a_line_to_a_parent_delivered_early_runs_down_a_lane_that_is_free_throughout() {
+    let history = skewed_across_a_busy_span();
+    assert_eq!(
+        links_delivered_backwards(&history),
+        [(2, 5)],
+        "the fixture must hand `p` over four rows before its child `c`"
+    );
+
+    let rows = assign(&history);
+    assert_eq!(
+        describe(&rows),
+        [
+            "t0 lane=0 [out 0>0]",
+            "t1 lane=1 [pass 0, out 1>1]",
+            "p lane=2 [pass 0, pass 1, out 2>2, out 2>3~]",
+            "a lane=0 [pass 1, pass 2, in 0>0, out 0>0, pass 3~]",
+            "b lane=1 [pass 0, pass 2, in 1>1, out 1>0, pass 3~]",
+            "c lane=1 [pass 0, pass 2, in 3>1~]",
+            "e lane=2 [pass 0, in 2>2]",
+            "f lane=0 [in 0>0]",
+        ]
+    );
+    assert_every_parent_edge_is_drawn(&history, &rows);
+    assert_rows_are_well_formed(&rows);
+}
+
 /// The same totality over generated histories: whatever order the walk uses,
 /// every commit is placed and every parent edge is drawable.
 #[test]
@@ -308,6 +362,9 @@ fn lane_indices_never_change_when_more_commits_are_assigned() {
     let mut cases = corpus();
     for seed in 1..40u64 {
         cases.push(("generated", random_history(seed, 20, true)));
+        // The control: a walk with nothing delivered backwards may not repaint
+        // a single row, however wide the graph gets. These reach lane 8.
+        cases.push(("generated in order", random_history(seed, 20, false)));
     }
 
     let mut saw_a_gained_segment = false;
@@ -335,12 +392,26 @@ fn lane_indices_never_change_when_more_commits_are_assigned() {
                     before.edges,
                     after.edges
                 );
+                let backwards = links_delivered_backwards(history);
                 for gained in &after.edges[before.edges.len()..] {
                     saw_a_gained_segment = true;
+                    // Derived from the walk, not from the flag the assigner
+                    // set: a row may only be repainted because it lies on the
+                    // span of a line to a parent the walk delivered early, and
+                    // only when that line's child is among the commits the
+                    // longer run added.
+                    let entitled = backwards.iter().any(|&(parent, child)| {
+                        parent <= index && index <= child && child >= prefix_len
+                    });
+                    assert!(
+                        entitled,
+                        "{name}: row {index} gained {gained:?}, but no parent delivered \
+                         early spans it. Backward links: {backwards:?}"
+                    );
                     assert!(
                         gained.out_of_order,
-                        "{name}: row {index} gained {gained:?}, which is not a segment for a \
-                         parent that arrived late"
+                        "{name}: row {index} gained {gained:?} unflagged, so a renderer \
+                         cannot tell the line runs backwards"
                     );
                 }
             }
@@ -395,7 +466,11 @@ fn malformed_input_is_placed_rather_than_rejected() {
     assert!(assign(&literal(&[])).is_empty());
 
     let repeated = literal(&[("a", &["b"]), ("b", &[]), ("b", &[])]);
-    assert_eq!(assign(&repeated).len(), 3);
+    assert_eq!(
+        describe(&assign(&repeated)),
+        ["a lane=0 [out 0>0]", "b lane=0 [in 0>0]", "b lane=0 []",],
+        "the second delivery of a commit gets its own row and draws nothing twice"
+    );
 
     let doubled_parent = literal(&[("a", &["b", "b"]), ("b", &[])]);
     let rows = assign(&doubled_parent);

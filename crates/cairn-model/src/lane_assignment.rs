@@ -83,10 +83,11 @@ impl LaneAssigner {
     pub fn push(&mut self, id: Oid, parents: Vec<Oid>) {
         let row_index = self.rows.len();
 
-        // Lanes already waiting for this commit. Reservations are deduplicated
-        // as they are made, so in a well-formed walk there is at most one — but
-        // a caller can hand the same id over twice and the assigner still has
-        // to place it rather than panic, so every match is consumed.
+        // Lanes already waiting for this commit. At most one can exist, and no
+        // caller can change that: a parent joins an existing reservation before
+        // it makes a new one, and every reservation is cleared when its commit
+        // arrives. Consuming all of them is a structural guard that keeps the
+        // code total if that ever stops holding, not a case to be produced.
         let reserved: Vec<usize> = self
             .lanes
             .iter()

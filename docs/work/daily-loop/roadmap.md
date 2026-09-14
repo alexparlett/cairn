@@ -111,6 +111,21 @@ the architecture has been saving up:
 Force push with `--force-with-lease` as the default and plain `--force` made hard
 to reach. Push and delete tags. Prune.
 
+**Also builds the forge links (D9), and they are not a footnote.** "Create pull
+request for this branch" is one of the most-used context-menu commands in Fork, so
+D7's milestone is not met without it. The group is one mechanism: read the branch
+and its upstream, read the remote URL, identify the forge, construct a URL, open
+it. No API token, no network call from Cairn. Siblings that come nearly free:
+open a commit / branch / tag / file in the browser, copy a permalink to a selected
+line, open a compare view between two refs.
+
+Design it **with** push rather than beside it: the action a user wants immediately
+after pushing a branch is the pull request, so push-and-create-PR as one gesture is
+the flow to get right. Keep the forge table as DATA so adding a forge is an entry;
+give an unrecognised remote **no menu item** rather than a guessed URL — github.com
+and gitlab.com are identifiable by hostname, self-hosted GitLab, Gitea and Forgejo
+are not.
+
 **Open:** O4 — whether pull defaults to merge or rebase, and how visible that
 choice is. It must not live only in config, where a user finds it by being
 surprised.
@@ -120,8 +135,10 @@ surprised.
 `destructive-ops-reviewer` will read hardest — "Force-push to origin/main?" does
 not say that someone else's three commits become unreachable.
 
-**Out:** creating or deleting repositories on a platform (out of scope, spine),
-pull requests, CI status.
+**Out:** creating or deleting repositories on a platform, *reviewing* pull
+requests, issues, and CI status — all API-token work, which D9 puts on the far side
+of the line. CI status specifically would make Cairn a credential holder and
+contradict D2.
 
 ## 7. branch-ops — brief
 

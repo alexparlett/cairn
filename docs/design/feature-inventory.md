@@ -140,6 +140,26 @@ reason it comes last here.
 | Git LFS | Comes free from D1 — `git` applies the filters. Needs verifying, not building. |
 | `git config` editing | |
 
+## Tier 6½ — Forge links
+
+One mechanism, several commands, and the whole group needs no API token and no
+network call from Cairn: read the branch and its upstream, read the remote URL,
+identify the forge, construct a URL, hand it to the system opener. Decision D9
+draws the line — links in, APIs out.
+
+| Feature | Note |
+| --- | --- |
+| **Create pull request for the current branch** | The command that caused D9. One of the most-used context-menu items in Fork, and the thing a user wants *immediately after pushing* — so it wants designing together with push, not bolted on beside it. |
+| Open commit / branch / tag in browser | |
+| Open file at a revision in browser | |
+| Copy permalink to a selected line | Same machinery; heavily used for sharing code with someone. |
+| Open compare view between two refs | |
+
+**The wrinkle:** github.com and gitlab.com are identifiable from the hostname;
+self-hosted GitLab, Gitea and Forgejo are not. The forge table is DATA, so adding
+one is an entry rather than code, and an unrecognised remote gets **no menu item**
+rather than a guessed URL and a 404.
+
 ## Tier 7 — Application shell
 
 | Feature | Note |
@@ -181,8 +201,9 @@ Each with the reason, so the next person does not relitigate it.
 
 | Not doing | Why |
 | --- | --- |
-| Pull requests, issues, CI status | `cairn.md`: not a platform client. A half-implemented GitHub panel is worse than a link. |
-| Creating / deleting repositories on a platform | Fork does this. It is platform API work, and the line above covers it. |
+| *Reviewing* pull requests, reading or filing issues | D9: panels need an API token and go stale. Note that *creating* a PR does not — it is a URL, and it is in scope (Tier 6½). |
+| CI status | D9: it needs a per-forge API token, which would make Cairn a credential holder. D2's premise is that it never is, so this is inconsistent with a decision already taken — not merely expensive. |
+| Creating / deleting repositories on a platform | Fork does this. Genuinely API work, so D9 puts it out. |
 | Being a text editor | `cairn.md`. D6 keeps conflict resolution *structured* precisely to stay on this side of the line. |
 | Git-flow | Fork has it. A lot of UI for a convention that has fallen out of fashion. |
 | A git tutorial | `cairn.md`: Cairn assumes the user knows what a rebase is. |

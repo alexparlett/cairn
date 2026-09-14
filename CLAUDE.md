@@ -239,7 +239,7 @@ exists yet).
 ## Pointers
 
 - `docs/design/cairn.md` — the design spine: what Cairn is for, what it is not,
-  and the locked decisions D1-D8 that the architecture above implements.
+  and the locked decisions D1-D9 that the architecture above implements.
 - `docs/design/feature-inventory.md` — the full feature surface, tiered by risk,
   with the out-of-scope list and its reasons. Intent, not as-built.
 - `docs/work/daily-loop/roadmap.md` — the build order to the D7 milestone: eight

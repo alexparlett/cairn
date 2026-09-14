@@ -2,7 +2,8 @@
 
 Reaches the bar set by decision **D7**: a version of Cairn you would use instead
 of Fork on an ordinary day. Graph, diff, stage by hunk and line, commit, branch,
-fetch/pull/push.
+fetch/pull/push, and the forge links (D9) — "create pull request for this branch"
+is among the most-used commands in Fork, so the bar is not met without it.
 
 A program rather than a packet — it spans eight packets, two of which are already
 filed. Program design lives in `docs/design/` (`cairn.md` for the decisions,

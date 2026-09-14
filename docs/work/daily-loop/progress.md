@@ -3,6 +3,27 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-14 — forge links pulled into scope; the spine's line was wrong
+
+The user reported that "create pull request on origin" is one of their most-used
+Fork context-menu commands. The spine had ruled the whole platform surface out on
+the grounds that a half-implemented GitHub panel is worse than a link — which
+conflated two unrelated things. Creating a pull request needs no API and no token;
+it is URL construction from the branch, its upstream and the remote URL.
+
+Recorded as D9, with the line redrawn mechanically: anything that is "open the
+correct forge URL" is in scope, anything needing an API token is out. That brings a
+family of siblings nearly free — open a commit, branch, tag or file in the browser,
+copy a permalink to a selected line, open a compare view.
+
+CI status stays out and now has a better reason than "expensive": it needs a
+per-forge token, which would make Cairn a credential holder, and D2's premise is
+that it never is. Inconsistent with a decision already taken, not just costly.
+
+Lands in packet 6 alongside push, because the pull request is what a user wants
+immediately after pushing a branch. New open question O6: how a self-hosted forge
+is identified, and whether push-and-create-PR is one action or two.
+
 ## 2026-09-14 — program planned from a feature analysis
 
 Inventoried the full feature surface against Fork's published feature list

@@ -12,7 +12,7 @@ fetch/pull/push. The bar is "would use this instead of Fork on an ordinary day".
 
 ## Locked decisions
 
-L1-L6 in `brainstorm.md`. The three that most constrain implementation:
+L1-L7 in `brainstorm.md`. The three that most constrain implementation:
 
 - **The diff model is patch-capable from its first commit (L2).** A display-shaped
   model makes line staging a rewrite. Packet 3 builds the patch emitter and its
@@ -24,7 +24,7 @@ L1-L6 in `brainstorm.md`. The three that most constrain implementation:
 
 ## Open questions
 
-O1-O5 in `brainstorm.md`, each assigned to the packet that meets it. O2
+O1-O6 in `brainstorm.md`, each assigned to the packet that meets it. O2
 (`gix-status` versus `git status --porcelain=v2`) is the one that could reach back
 into D1, because status is the most divergence-prone read there is.
 

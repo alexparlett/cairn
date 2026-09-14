@@ -40,6 +40,15 @@ it is slow, and "we chose gitoxide" is not a measurement. Every packet landing a
 Tier 0 or Tier 1 surface carries an acceptance criterion in the shape of
 `history-graph`'s A7: a named real repository, recorded numbers.
 
+**L7. Forge links are in the milestone; forge APIs are not.** Design decision D9.
+"Create pull request for this branch" is among the most-used Fork context-menu
+commands, so D7's bar is not met without it — and it costs no API token, because it
+is URL construction. It lands in packet 6 alongside push, since the PR is what a
+user wants immediately after pushing. Rejected: leaving the whole platform surface
+out, which was the spine's original position and conflated opening a link with
+shipping a panel. Also rejected: pulling CI status in on the same reasoning — it
+needs a token, which would make Cairn a credential holder and contradict D2.
+
 ## Open, for the packet that meets them
 
 - **O1 (diff-engine).** Side-by-side, unified, or both — and if both, whether the
@@ -57,3 +66,7 @@ Tier 0 or Tier 1 surface carries an acceptance criterion in the shape of
 - **O5 (worktrees).** Whether Cairn can create a worktree, or only manage existing
   ones. Creating means choosing a path, which is a UI surface; the guard against
   checking out an already-checked-out branch needs only the read side.
+- **O6 (remote-sync).** How a self-hosted forge is identified. A config key, a git
+  config convention, or a heuristic — and whether push-and-create-PR is one action
+  or two. The forge table being data rather than code is settled (L7); how Cairn
+  learns which entry applies to a given remote is not.

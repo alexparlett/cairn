@@ -31,8 +31,10 @@ The full surface, tiered by risk and with the out-of-scope list, is
 ## What Cairn is not
 
 - Not a git tutorial. It assumes the user knows what a rebase is.
-- Not a platform client. Pull requests, issues and CI live in a browser; a
-  half-implemented GitHub panel is worse than a link.
+- Not a platform client — but see D9, which draws that line more precisely than
+  this bullet originally did. Reviewing pull requests, reading issues and showing
+  CI status stay out. *Opening* the right forge URL is in, and is not the same
+  thing at all.
 - Not cross-platform-first. Linux is the target; macOS follows where Freya makes
   it free. Windows is not a goal and no design should be compromised for it.
 - Not an editor. Diffs are read-only, and conflict resolution is *structured*
@@ -247,6 +249,38 @@ worktrees offers that operation and then fails confusingly.
 
 Rejected: read-only awareness (avoids the worst failure, but leaves the workflow
 unserved) and ignoring them (actively unhelpful for the intended user).
+
+### D9 — Forge links are in scope; forge APIs are not
+
+The line is mechanical rather than a judgement call: **anything that is "open the
+correct forge URL" is in scope. Anything that needs an API token is out.**
+
+In: create a pull request for the current branch against its upstream default,
+open a commit / branch / tag / file in the browser, copy a permalink to a selected
+line, open a compare view between two refs. All of it is one mechanism — read the
+branch and its upstream, read the remote URL, identify the forge, construct a URL,
+hand it to the system opener. No token, no network call from Cairn, no state to
+keep in sync, and nothing to get out of date.
+
+Out: reviewing pull requests, reading or filing issues, CI status, and creating
+repositories on a platform.
+
+This revises the spine's original "not a platform client" bullet, which lumped the
+two together and said a half-implemented GitHub panel is worse than a link. That
+was right about panels and wrong about links. The correction came from the user
+reporting that "create pull request on origin" is one of their most-used Fork
+context-menu commands — which also means D7's milestone cannot be met without it.
+
+**CI status deserves its own reason for staying out**, because it is the most
+tempting thing on the far side of the line: it needs a per-forge API token, which
+would make Cairn a credential holder, and D2's whole premise is that it never is.
+The inconsistency is with a decision already taken, not merely with a scope
+preference — so "the PR link worked out fine" is not an argument for it.
+
+Cost accepted: a forge table that must be kept as DATA rather than code, so adding
+a forge is an entry. Self-hosted GitLab, Gitea and Forgejo cannot be identified
+from a hostname, so an unrecognised remote gets no menu item rather than a guessed
+URL and a 404.
 
 ## Still open
 

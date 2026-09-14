@@ -1,0 +1,15 @@
+# Packet worktrees live inside the repo dir but are separate checkouts.
+.claude/worktrees/
+
+# Local-only agent settings (the shared settings.json IS committed).
+.claude/settings.local.json
+
+# Cargo build output. Cargo.lock IS committed: cairn-app is a binary, so the
+# lockfile is part of what we ship and what CI reproduces.
+/target/
+**/*.rs.bk
+
+# Never commit secrets.
+.env
+.env.*
+!.env.example

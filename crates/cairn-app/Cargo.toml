@@ -1,0 +1,24 @@
+[package]
+name = "cairn-app"
+description = "The Cairn binary: owns the window, the worker threads, and the wiring between engine and UI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# Cairn ships as an application, not as crates. Nothing here is published, which
+# is also what lets the internal path dependencies carry no version requirement.
+publish = false
+
+[[bin]]
+name = "cairn"
+path = "src/main.rs"
+
+[dependencies]
+cairn-git.workspace = true
+cairn-model.workspace = true
+cairn-ui.workspace = true
+freya.workspace = true
+
+[lints]
+workspace = true

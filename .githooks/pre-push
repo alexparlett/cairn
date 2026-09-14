@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Deterministic floor at the push boundary. Kept to seconds; the full bar is
+# scripts/gate.sh. Bypass in a genuine emergency with git push --no-verify.
+#
+# It routes through scripts/gate.sh --step so the floor, the day loop, and CI
+# share one command implementation. If a step here grows too slow for the push
+# boundary, swap in a faster variant of the same check — never delete a step
+# without a replacement. `lint` and the test suites are deliberately absent:
+# they belong to the gate, not to a boundary that must stay in seconds.
+set -uo pipefail
+
+cd "$(git rev-parse --show-toplevel)" 2>/dev/null || exit 0
+
+fail=0
+
+echo "pre-push: format check"
+scripts/gate.sh --step format || fail=1
+
+echo "pre-push: typecheck"
+scripts/gate.sh --step typecheck || fail=1
+
+echo "pre-push: guards"
+scripts/gate.sh --step guards || fail=1
+
+if [ "$fail" -ne 0 ]; then
+  echo "pre-push: FLOOR FAILED (fix, or bypass with --no-verify in a genuine emergency)"
+fi
+exit $fail

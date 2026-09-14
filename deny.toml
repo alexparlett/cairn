@@ -1,0 +1,52 @@
+# Dependency policy, run as `scripts/gate.sh --step deps`. Adding a dependency is
+# a decision to surface to the user (CLAUDE.md, Invariants); this file is where
+# each decision is recorded, so the next person can see it was one.
+#
+# Every entry below states WHY. An exception with no reason is indistinguishable
+# from an exception nobody has looked at since.
+
+[advisories]
+yanked = "deny"
+ignore = [
+    # Unmaintained, reached through winit → sctk-adwaita → ab_glyph, i.e. the
+    # Wayland client-side decorations Freya draws with. No safe upgrade exists
+    # and the suggested replacement (skrifa) is a change inside winit, not one
+    # Cairn can make. Revisit when winit's dependency moves.
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained; transitive through winit's Wayland decorations, no upgrade path from here" },
+    # Unmaintained proc-macro reached through the Skia and Android stacks.
+    # Compile-time only: it emits no code into the shipped binary.
+    { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; build-time proc-macro under freya-skia, nothing of it ships" },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Cairn's own crates depend on each other by path and are never published, so
+# their version requirements are deliberately absent.
+allow-wildcard-paths = true
+
+[licenses]
+# Permissive only. Cairn ships as a binary, so a copyleft transitive dependency
+# is a licensing decision about the whole application, never a silent one.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "CC0-1.0",
+    "BSL-1.0",
+    # OSI-approved and permissive (BSD-style). Reached through
+    # image → ravif → rav1e → libfuzzer-sys.
+    "NCSA",
+]
+confidence-threshold = 0.9
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -1,0 +1,6 @@
+# The restriction lints in Cargo.toml's [workspace.lints.clippy] are about what
+# ships to users: a panic in a git client costs someone their working tree. In
+# test code an unwrap IS the assertion, so exempt tests rather than littering
+# allow attributes that would also cover production code in the same file.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

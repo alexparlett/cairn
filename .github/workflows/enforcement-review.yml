@@ -1,0 +1,94 @@
+# Advisory review. NOT a required check, and never becomes one: it owns no
+# invariant and the deterministic gate (ci.yml -> scripts/gate.sh) is the merge
+# bar. This agent covers what pins provably cannot: enforcement weakening the PR
+# body does not acknowledge, doc claims that outrun their twins, and the SOFT
+# INVARIANTS below — rules the repo deliberately does not enforce mechanically.
+# It posts INLINE comments only when it has findings — silence otherwise — and
+# skips cleanly when the CLAUDE_CODE_OAUTH_TOKEN secret is absent.
+#
+# The soft-invariants table below carries Cairn's review-only rules; each row is
+# there because no check can express it, so when one BECOMES checkable, move it
+# into crates/cairn-guards and delete the row. Add a CLAUDE_CODE_OAUTH_TOKEN
+# secret to turn this on; without it the job skips and nothing breaks.
+name: enforcement-review
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+concurrency:
+  group: enforcement-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-secret:
+    runs-on: ubuntu-latest
+    outputs:
+      has-api-key: ${{ steps.check.outputs.has-key }}
+    steps:
+      - id: check
+        run: |
+          if [ -z "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}" ]; then
+            echo "has-key=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-key=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  review:
+    needs: check-secret
+    if: needs.check-secret.outputs.has-api-key == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            You are the ADVISORY reviewer for this repo. Review the full diff
+            (gh pr diff ${{ github.event.pull_request.number }}) and the PR
+            body (gh pr view ${{ github.event.pull_request.number }}). Read
+            surrounding source files when the diff alone cannot settle a
+            question. Three concerns, in priority order:
+
+            A. ENFORCEMENT WEAKENING (when the diff touches guard configs,
+               lint configs, .github/workflows, scripts/gate.sh, .githooks,
+               .claude): does any change reduce
+               enforcement — a rule/roster entry removed or narrowed, a
+               ceiling raised, a lint demoted, a CI or hook contract
+               loosened — WITHOUT the PR body acknowledging that specific
+               weakening? Acknowledged, deliberate weakening is fine.
+
+            B. DOC-VS-TWIN DRIFT: does any changed doc, comment, or reason
+               string claim MORE than the check or test it names proves?
+
+            C. SOFT INVARIANTS — the rules table. These are deliberately NOT
+               mechanically enforced — this review owns them. Flag violations
+               in ANY changed code:
+
+               | # | Rule |
+               |---|------|
+               | 1 | The UI thread never waits on repository work. Blocking I/O, a history walk, or a `.read()` of engine results inside a component's `render` is a violation however it is routed; work belongs on a worker thread in `cairn-app` with results handed back as values. |
+               | 2 | A prompt passed to `Confirmed::by_user` states the real consequence — what is lost, how much of it, and whether it is recoverable. A vague or reassuring prompt defeats the whole seal, and no check can read English. |
+               | 3 | APIs of `freya` and `gix` are verified against the linked version, never memory-coded. Both are pre-1.0 and rename freely. |
+               | 4 | An unbounded list (history, file tree, diff hunks) is rendered virtualized. A repository is somebody's 10-year monorepo. |
+               | 5 | Docs cite stable anchors (paths, symbols, pinned tests) — never counts or line numbers that rot; a doc edit may not claim coverage its twin does not prove. |
+
+            Rules of engagement:
+            - Findings go as INLINE comments on the exact lines, via
+              mcp__github_inline_comment__create_inline_comment. One comment
+              per finding: name the rule (A, B, or C-<row>), quote the
+              evidence, and say what would resolve it.
+            - If you find NOTHING, post NOTHING. No summary comment, no LGTM,
+              no top-level comment ever. Silence is the pass signal.
+            - You are advisory. Do not request changes, do not approve, do not
+              edit files, do not run builds or tests.
+          claude_args: |
+            --max-turns 80
+            --allowedTools "Bash(gh pr diff:*),Bash(gh pr view:*),mcp__github_inline_comment__create_inline_comment"

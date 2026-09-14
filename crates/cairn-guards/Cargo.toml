@@ -1,0 +1,15 @@
+[package]
+name = "cairn-guards"
+description = "Mechanical enforcement twins for the invariants in CLAUDE.md. Test-only; nothing depends on it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+toml = "0.9"
+
+[lints]
+workspace = true

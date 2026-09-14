@@ -1,0 +1,41 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/alexparlett/cairn"
+
+[workspace.dependencies]
+cairn-model = { path = "crates/cairn-model" }
+cairn-git = { path = "crates/cairn-git" }
+cairn-ui = { path = "crates/cairn-ui" }
+
+freya = "0.5.0-rc.6"
+# Default features stay ON: gix's `default` carries the sha1 backend, without
+# which gix-hash compiles to an empty `Kind` enum and the whole tree fails to
+# build. The extras below are the surfaces a git client actually reads.
+gix = { version = "0.87.1", features = ["blame", "blob-diff", "revision", "status", "max-performance", "parallel"] }
+thiserror = "2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+print_stdout = "deny"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

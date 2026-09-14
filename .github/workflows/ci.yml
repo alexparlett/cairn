@@ -1,0 +1,92 @@
+# CI exposes each check in the local merge bar as a named step. Every step routes
+# through gate.sh's matching --step entry, so CI and local execution share the
+# same command implementation; `cairn-guards`' ci_runs_every_merge_bar_gate_step
+# test pins that correspondence mechanically. Once setup succeeds, later checks
+# still run after an earlier check fails, matching the local gate's aggregate
+# diagnostics — aggregate red-run coverage beats fail-fast for agent workflows.
+#
+# The feature/** push trigger is load-bearing, not convenience: packet phases in
+# packet mode commit DIRECTLY onto feature/<packet-slug> with no per-phase PR, so
+# without it a packet would run the gate once, at teardown.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main, 'feature/**']
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # Freya links against the system graphics and windowing stack. These are
+      # the Linux build inputs; a missing one shows up as a linker error deep in
+      # a dependency, so install them before the toolchain step.
+      - name: Install Linux build inputs
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential cmake pkg-config \
+            libgtk-3-dev libxdo-dev libssl-dev \
+            libglib2.0-dev libwayland-dev libxkbcommon-dev
+
+      - name: Set up toolchain
+        id: toolchain
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup component add rustfmt clippy
+          echo "version=$(rustc --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          # Exact key, no restore-keys: partial restores grow the cache
+          # unboundedly as the lockfile moves.
+          key: cargo-${{ runner.os }}-${{ steps.toolchain.outputs.version }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install cargo-deny
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: Check formatting
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: scripts/gate.sh --step format
+
+      - name: Lint
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: scripts/gate.sh --step lint
+
+      - name: Typecheck
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: scripts/gate.sh --step typecheck
+
+      - name: Check guard policy
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: scripts/gate.sh --step guards
+
+      - name: Check dependency policy
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: scripts/gate.sh --step deps
+
+      - name: Run full test suite
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: scripts/gate.sh --step test-full

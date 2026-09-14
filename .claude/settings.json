@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/ensure-hooks.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/qa-stop.sh",
+            "timeout": 30,
+            "statusMessage": "Debris gate: scanning added lines for debug debris and focused tests"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "deny": [
+      "Bash(gh pr merge)",
+      "Bash(gh pr merge *)",
+      "Bash(git merge)",
+      "Bash(git merge *)",
+      "Bash(git pull)",
+      "Bash(git pull origin *)",
+      "Bash(git push origin main*)",
+      "Bash(git push -u origin main*)",
+      "Bash(git push --set-upstream origin main*)",
+      "Bash(git push origin HEAD:main*)",
+      "Bash(git push origin HEAD:refs/heads/main*)",
+      "Bash(git push origin +main*)",
+      "Bash(git push --force*)",
+      "Bash(git push -f *)"
+    ]
+  }
+}

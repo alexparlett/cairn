@@ -65,6 +65,7 @@ fn app() -> impl IntoElement {
                                     held.extend(page);
                                     held.len()
                                 };
+                                reported.set(false);
                                 if complete || loaded >= ROWS_DRAWN {
                                     status.set(String::new());
                                 } else {

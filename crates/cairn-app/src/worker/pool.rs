@@ -80,7 +80,6 @@ pub fn open(path: impl AsRef<Path>) -> Result<(RepositoryHandle, Updates), OpenE
         wake: Arc::clone(&wake),
     };
     let worker_epochs = epochs.clone();
-    let worker_outbox = outbox.clone();
     let worker_wake = Arc::clone(&wake);
     let opening = path.clone();
 
@@ -90,9 +89,19 @@ pub fn open(path: impl AsRef<Path>) -> Result<(RepositoryHandle, Updates), OpenE
     std::thread::Builder::new()
         .name("cairn-repository".to_owned())
         .spawn(move || {
-            let _exit = WorkerExit {
-                outbox: Some(worker_outbox),
+            // ONE sender lives on this thread, and `exit` owns it. The work
+            // below borrows it. A second copy — a clone captured by this
+            // closure, say — would outlive `exit` by the ordinary drop rules
+            // and so still be alive when `WorkerExit::drop` wakes the UI task,
+            // which would then see an empty channel rather than a closed one
+            // and park with nothing coming. Keeping it to one makes that
+            // unrepresentable rather than a thing to get right.
+            let exit = WorkerExit {
+                outbox: Some(outbox),
                 wake: worker_wake,
+            };
+            let Some(outbox) = exit.outbox.as_ref() else {
+                return;
             };
             match SharedRepository::discover(&opening) {
                 Ok(shared) => serve(shared, incoming, outbox, worker_epochs),
@@ -233,7 +242,11 @@ struct Envelope {
     update: Update,
 }
 
-#[derive(Debug, Clone)]
+/// The one way anything reaches the window. Deliberately NOT `Clone`: exactly
+/// one lives on a worker thread, owned by its [`WorkerExit`], so there is no
+/// second sender to keep the channel open past the wake that announces the
+/// thread is gone.
+#[derive(Debug)]
 struct Outbox {
     updates: Sender<Envelope>,
     wake: Arc<Wake>,
@@ -296,7 +309,7 @@ impl Drop for WorkerExit {
 fn serve(
     shared: SharedRepository,
     jobs: Receiver<(Epoch, Request)>,
-    outbox: Outbox,
+    outbox: &Outbox,
     epochs: Epochs,
 ) {
     let repo = shared.to_worker();
@@ -659,6 +672,30 @@ mod tests {
             Err(TryRecvError::Disconnected) => {}
             other => panic!("a clean shutdown left {other:?} behind"),
         }
+    }
+
+    /// The stream must END after a failed open, not just report the failure.
+    ///
+    /// This pins the contract, and the contract alone: the bug behind it — a
+    /// second sender outliving the notice that the worker was gone — was a race
+    /// narrow enough that this test passed against the broken code too. What
+    /// decides that one is the type: [`Outbox`] is not `Clone`, so a second
+    /// sender on a worker thread cannot be written.
+    #[test]
+    fn a_failed_open_ends_the_stream_rather_than_leaving_it_open() {
+        let outside = std::env::temp_dir().join("cairn-not-a-repository");
+        let (_handle, mut updates) = match open(&outside) {
+            Ok(pair) => pair,
+            Err(error) => panic!("starting the worker: {error}"),
+        };
+        match block_on(updates.next()) {
+            Some(Update::Failed { .. }) => {}
+            other => panic!("expected the open to be reported, got {other:?}"),
+        }
+        assert!(
+            block_on(updates.next()).is_none(),
+            "the stream stayed open after the worker that failed to open had gone"
+        );
     }
 
     /// The hang this boundary exists to prevent, approached from the side that

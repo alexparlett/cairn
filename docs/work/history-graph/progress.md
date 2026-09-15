@@ -3,6 +3,40 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-15 — phase 02's four decisions, settled by the user
+
+**1. The live walk session (blocks phase 03, now unblocked).** Replay paging is
+O(page index x limit) and does not reach A7's size. Phase 03 will keep gitoxide's
+walk alive for the life of a scroll, making paging O(limit); phase 02's cursor
+demotes to the cold-restart path rather than being removed. This fits D3 exactly:
+the walk borrows the repository and is not `Send`, and the worker already owns
+its `to_thread_local()` handle for its whole lifetime, so the session never
+crosses a thread. Recorded as R2.5. Rejected: capping paging depth (concedes the
+packet's headline capability), and building the session as its own phase before
+03 (cleaner boundaries, but an unplanned phase for a design the worker has to
+carry anyway).
+
+**2. The assigner's blind spot — closed by 1, not carried.** Beyond
+`window + remembered` rows of skew the assigner cannot tell a parent already gone
+from one still to come. A live walk already holds the seen-set that answers it
+exactly, so the fix rides along with decision 1 instead of costing memory
+proportional to commits walked, which is the shape R1.3 was narrowed to avoid.
+
+**3. R1.3 reworded again, to the bound phase 02 measured.** Upward repaints run
+down lanes chosen by `free_lane_across`, which are not in the assigner's lane
+table, so "open lanes" never counted them: on a history with no branching at all,
+window 256 with one late parent per row gives 129 segments on one row and 24,768
+retained. R1.3 now reads `window x lanes in play across it`, naming both terms.
+Phase 02 was right to TRAP-mark rather than reword an in-flight requirement; the
+TRAP is now discharged and the PRD carries no TRAPs.
+
+**4. `Oid` becomes fixed-width.** Every id allocates today and the assigner's
+lane scan is an O(open lanes) string comparison per parent per row — the term
+behind a measured 12.6x gap between laying out 1 lane and 200. Done now, before
+phases 03 and 04 build on it, and while phases 01 and 02 are green and freshly
+reviewed so the blast radius is visible. The text form stays available at the
+edges, because that is what the UI and the `git` binary both speak.
+
 ## 2026-09-15 — phase 02: the history query, the assigner's window, and O2 measured
 
 Built in packet mode on `feature/history-graph`. Five deliverables: the bounded

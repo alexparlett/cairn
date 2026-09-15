@@ -37,24 +37,27 @@ infrastructure built without a consumer gets the interface wrong.
   window is final — which is enforceable precisely because the window belongs to
   the assigner (R1.3): it cannot repaint what it no longer holds.
 - R1.3 Retained state is proportional to **the window size times the number of
-  simultaneously open lanes**, never to the number of commits walked. The
+  lanes in play across it** — open lanes plus the lanes concurrent upward
+  repaints are running down — never to the number of commits walked. The
   assigner owns a bounded window of rows: it retains the rows inside it and an
   index into them, because R1.2's repaint cannot add a segment to a row it has
   dropped, and each retained row carries one segment per lane open across it.
   Work per commit is amortised constant while parents arrive in order; a parent
   delivered early costs O(span x segments in the span), bounded by the window.
 
-  TRAP: the bound above is not the worst case, and phase 02 measured why. A line
-  drawn back to a parent the walk delivered early runs down a lane chosen by the
-  assigner's `free_lane_across`, which is not in its lane table at all, so the
-  "open lanes" term does not count it. With overlapping such lines, per-row
-  segments are O(window) and retained state O(window squared) — on a history with
-  no branching whatsoever. Measured: window 256 with one late parent per row gives
-  129 segments on a single row, 130 lanes wide. Trust `window x (open lanes +
-  concurrent repaint lanes)` until the user rewords this; the numbers and the
-  decision are in `docs/work/history-graph/progress.md`'s phase 02 entry. Phase 02
-  built the window this clause asks for and it does meet the "never to the number
-  of commits walked" half, with one stated blind spot, also batched there.
+  The second term is not decoration. A line drawn back to a parent the walk
+  delivered early runs down a lane chosen by the assigner's `free_lane_across`,
+  which is not in its lane table, so an "open lanes" term alone does not count
+  it. With overlapping such lines, per-row segments are O(window) and retained
+  state O(window squared) — on a history with no branching whatsoever. Phase 02
+  measured window 256 with one late parent per row at 129 segments on a single
+  row, 130 lanes wide, 24,768 retained. Reworded 2026-09-15 to say so, after
+  phase 02 found the first wording understated its own worst case.
+
+  Known blind spot, accepted: beyond `window + remembered` rows of skew the
+  assigner cannot distinguish a parent already gone from one still to come.
+  Phase 03's live walk session closes this exactly — the walk already holds the
+  seen-set that answers it — so it is not being carried as a permanent gap.
 
   Narrowed, 2026-09-15, from "proportional to the number of simultaneously open
   lanes, never to the number of commits seen". Phase 01 measured the shipped
@@ -85,6 +88,22 @@ infrastructure built without a consumer gets the interface wrong.
   full commit objects, except where the summary genuinely needs the object.
 - R2.4 The query is cancellable: an abandoned query stops walking rather than
   running to completion and discarding its result.
+- R2.5 Paging within one scroll costs O(limit), not O(page index x limit).
+  Added 2026-09-15. Phase 02's cursor resumes by replaying the walk from pinned
+  tips — correct by construction, and the reason two pages of N equal one page
+  of 2N — but page *k* then walks *k x limit* commits: 1.29-2.1 s for one page at
+  depth 500k, and 54-87 minutes of CPU to page there at 100 rows a page. A7 is
+  unreachable through replay alone. The engine therefore keeps a walk alive for
+  the life of a scroll; R2.2's cursor remains the cold-restart path for when no
+  session exists. gitoxide's walk borrows the repository and is not `Send`, so
+  the session lives on the worker that owns that repository handle (R3.1) and
+  never crosses a thread. It must compose with R3.2's epochs: superseding a
+  request may not leave a half-consumed walk to be read by the next one.
+
+  NOT in scope, filed instead: random access by row offset. There is no total
+  row count (counting is a full walk) and no way to build a cursor from an
+  offset, so a scrollbar drag has no answer. Progressive loading is what Fork
+  and Sourcetree do here.
 
 ### R3 — Repository work runs on a worker pool
 

@@ -30,33 +30,31 @@ infrastructure built without a consumer gets the interface wrong.
   emits one row per commit carrying its lane index and the edge segments crossing
   that row.
 - R1.2 Processing further commits never changes a **lane index** already
-  emitted. Edge *segments* may be repainted for rows still inside the loaded
+  emitted. Edge *segments* may be repainted for rows still inside the assigner's
   window: a late-joining parent (R1.4) has to be able to draw the line that
   connects it, and the view re-renders visible rows from the model on every
-  change regardless, so allowing this costs nothing. Rows that have left the
-  window are final.
+  change regardless, so allowing this costs nothing. A row evicted from the
+  window is final — which is enforceable precisely because the window belongs to
+  the assigner (R1.3): it cannot repaint what it no longer holds.
+- R1.3 Retained state is proportional to **the window size times the number of
+  simultaneously open lanes**, never to the number of commits walked. The
+  assigner owns a bounded window of rows: it retains the rows inside it and an
+  index into them, because R1.2's repaint cannot add a segment to a row it has
+  dropped, and each retained row carries one segment per lane open across it.
+  Work per commit is amortised constant while parents arrive in order; a parent
+  delivered early costs O(span x segments in the span), bounded by the window.
 
-  TRAP: the last sentence has nothing enforcing it. The assigner phase 01
-  shipped has no notion of a window and repaints rows at any depth, so a window
-  imposed *around* it cannot make a row final — a window would have to become
-  something the assigner itself owns. Not violated today, because the assigner
-  never drops a row; it is a constraint on phases 02 and 03, and it rides with
-  the R1.3 decision below.
-- R1.3 Work per commit is amortised constant; retained state is proportional to
-  the number of simultaneously open lanes, never to the number of commits seen.
-
-  TRAP: the assigner phase 01 shipped does NOT meet this, in either clause, and
-  the requirement has not been renegotiated — do not read it as describing the
-  code. What it actually does: lane bookkeeping proper is one slot per open
-  lane, but it also retains every row it has emitted plus an index into them,
-  because R1.2's repaint cannot add a segment to a row it has dropped. Per-row
-  edge lists hold one segment per open lane, so retained segments grow as rows x
-  open lanes — measured at 361 segments per row and 5.4 GB for 500k rows across
-  200 branches, with no clock skew involved. Work per commit is amortised
-  constant only while parents arrive in order; a parent delivered early costs
-  O(span x segments in the span). Whether R1.3 is narrowed (with the real bounds
-  written down) or kept and the design changed is the user's decision, recorded
-  in `docs/work/history-graph/progress.md`.
+  Narrowed, 2026-09-15, from "proportional to the number of simultaneously open
+  lanes, never to the number of commits seen". Phase 01 measured the shipped
+  assigner at 361 segments per row and ~5.4 GB across 500k rows on a 200-branch
+  history with no clock skew at all — the ordinary "show all branches" view, not
+  a pathological one. The original wording was never achievable alongside R1.2's
+  repaint: an assigner that can add a segment to an already-emitted row must
+  still be holding it. A window is what makes both true at once, and it has to
+  live *inside* the assigner, because one imposed from outside cannot stop the
+  assigner reaching back past it. Phase 01's assigner is unbounded and is the
+  input to that work; **phase 02 owns the window**. Decision recorded in
+  `docs/work/history-graph/progress.md`.
 - R1.4 The assigner is **total over arrival order**: a commit whose lane was never
   reserved — the normal consequence of committer-date skew, per the evidence
   record — is placed, not rejected, and never mis-parented. Which placement

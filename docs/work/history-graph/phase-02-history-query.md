@@ -31,6 +31,22 @@ STEP 2  Measure O2, then implement.
            asserted by comment.
         4. Integration tests against a fixture repository built by running real
            git commands. A fake object database proves nothing about gitoxide.
+        5. THE ASSIGNER'S WINDOW (new scope, added 2026-09-15). Phase 01 shipped
+           an unbounded `LaneAssigner`: it retains every row it emits plus an
+           index into them, and each row carries one segment per open lane, so
+           retained state grows as rows x open lanes — measured at 361 segments
+           per row and ~5.4 GB across 500k rows on a 200-branch history with no
+           clock skew at all. R1.3 has been narrowed to match reality and R1.2's
+           finality sentence repaired; read both in `docs/prd/history-graph.md`
+           before designing. Give the assigner a bounded window it OWNS: a window
+           imposed from outside cannot stop it reaching back past the boundary,
+           which is exactly why R1.2's "rows that have left the window are final"
+           was previously unenforceable. Evicting a row makes it final; a parent
+           whose child has already been evicted opens its own lane and simply
+           does not draw the joining line, which L9 anticipated and L10 permits.
+           Pin the new bound with a test — phase 01 deliberately did not write
+           one, because writing it then would have ratified the change before the
+           user made it.
 
         Invariants in play: no gix type crosses the crate boundary; no panic on a
         reachable path; a new dependency is a user decision.

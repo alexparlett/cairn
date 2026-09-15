@@ -699,13 +699,17 @@ mod tests {
         );
     }
 
-    /// What laying a row out costs as more lanes stay open across it — the
-    /// comparison `Oid`'s representation was decided on.
+    /// What laying a row out costs as more lanes stay open across it.
     ///
-    /// Every parent is looked up by scanning the open lane slots, so a row in a
-    /// wide history pays that scan once per parent, and the cost of one
-    /// comparison is the whole question: a heap string compares by chasing a
-    /// pointer, a fixed-width id by comparing bytes already in the row.
+    /// Two terms grow with the lanes in play: a parent is found by scanning
+    /// the open lane slots, and every open lane puts a passing segment on
+    /// every row. This pins the SHAPE of that curve and the constant in front
+    /// of it. It cannot pin a before-and-after — it measures the one
+    /// representation that exists — so read a change in these numbers as
+    /// "layout got cheaper", never as "the scan was the term that mattered".
+    ///
+    /// Medians of three runs after a warm-up: the one-lane point is the
+    /// divisor for every ratio and the noisiest number in the table.
     ///
     /// Ignored by default: it is a measurement, and a timing assertion in the
     /// gate would be flaky within a week.
@@ -716,19 +720,26 @@ mod tests {
     #[ignore = "a measurement, not an assertion"]
     fn measures_layout_cost_against_lane_count() {
         const COMMITS: usize = 50_000;
+        const RUNS: usize = 3;
         let mut per_commit = Vec::new();
         for branches in [1usize, 2, 8, 32, 200] {
-            let history = wide_history(branches, COMMITS / branches);
-            let laid_out = history.len();
-            let started = std::time::Instant::now();
-            let rows = LaneAssigner::assign_all(history);
-            let elapsed = started.elapsed();
-            assert_eq!(rows.len(), laid_out, "a commit was lost");
-            let nanos = elapsed.as_secs_f64() * 1e9 / laid_out as f64;
-            per_commit.push((branches, nanos));
-            eprintln!(
-                "  {branches:>3} lanes\t{laid_out} commits in {elapsed:?}\t{nanos:.0} ns/commit"
-            );
+            let mut samples = Vec::new();
+            // Run 0 is the warm-up and is thrown away.
+            for run in 0..=RUNS {
+                let history = wide_history(branches, COMMITS / branches);
+                let laid_out = history.len();
+                let started = std::time::Instant::now();
+                let rows = LaneAssigner::assign_all(history);
+                let elapsed = started.elapsed();
+                assert_eq!(rows.len(), laid_out, "a commit was lost");
+                if run > 0 {
+                    samples.push(elapsed.as_secs_f64() * 1e9 / laid_out as f64);
+                }
+            }
+            samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let median = samples.get(samples.len() / 2).copied().unwrap_or(f64::NAN);
+            per_commit.push((branches, median));
+            eprintln!("  {branches:>3} lanes\t{median:.0} ns/commit (median of {RUNS})");
         }
         let base = per_commit.first().map_or(1.0, |&(_, nanos)| nanos);
         for (branches, nanos) in per_commit {

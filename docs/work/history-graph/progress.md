@@ -3,6 +3,169 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-15 — pinning phase 03's seams, and what is deliberately still open
+
+A fresh `test-coverage-auditor` went over phase 03 by executing mutations rather
+than reading, and found that every gap it could reach was at a seam BETWEEN two
+well-tested pieces. The session-level tests are strong on both sides of each
+seam; nothing crossed them. Closed here, tests-only apart from two comment
+fixes, each pin verified by applying the named mutation, watching it go red, and
+restoring.
+
+**The epoch was never pinned as the cancel signal at the call site.** `epoch.rs`
+proves `Superseded` flips; `cancelling_a_session_stops_the_walk_and_keeps_its_progress`
+proves `next_page` honours *a* cancel. Nothing proved `serve` hands the engine
+*the epoch* — swapping `epochs.watch(epoch)` for a fresh `CancelSignal` left
+22/22 `cairn-app` tests green, which is the weak form of R3.2 (answer discarded,
+walk still burning a core) restored in silence. The pool tests that look like
+coverage for this run on `inbox_only()`, which has no repository behind it, and
+decide the epoch filter alone. Now
+`superseding_a_request_stops_the_walk_that_is_serving_it` runs a real worker
+over the real repository and reads a superseded request's fate off the NEXT
+page, where its three possible fates differ: stopped mid-walk starts the next
+page again at the row the scroll opened on, never-picked-up carries on past the
+rows the previous scroll handed out, ran-to-completion returns nothing. Only the
+first is a stop, and only a cancel wired to the epoch produces it. Under the
+mutation, 40 rounds out of 40 ran to the end of the history.
+
+**And the first version of that test was flaky, which the review caught and the
+implementer did not.** It aimed a swept `sleep` at the walk it had to interrupt,
+which reads reasonably and is unusable: a walk of this 41-commit repository is
+microseconds long, and the `responsiveness-reviewer` measured 20 failures in 25
+runs with sixteen CPU burners against one failure in 130 idle runs. A test whose
+green depends on an idle machine is not a pin. The rewrite stops aiming at the
+walk and keeps the worker BUSY instead — one measured round trip to learn what
+an answer costs here, then a batch of 2,000 requests posted under a single epoch
+so the worker never returns to `recv`, then the supersession. What is left
+racing is the gap between two requests of the batch, and because that gap holds
+two syscalls it is not a sliver under load, so rounds are cheap and many and the
+failure is that EVERY one of forty saw a walk finish. 40/40 green under 24
+busy-loop processes; still 40-out-of-40 red under the mutation. The general
+lesson: when a test has to interrupt something, do not aim at the interval —
+make the interval long enough to be hit.
+
+**The worker-panic path tested the unit, never the wiring.**
+`a_panicking_worker_says_so_instead_of_disappearing` builds its own `WorkerExit`
+inside its own thread, so it decides that the guard works when something puts it
+there — not that `open` does. Deleting `WorkerExit` from `open`'s closure and
+ending it with `drop(outbox); worker_wake.signal();` keeps clean shutdown working
+and everything green, while a panic inside `serve` unwinds past the signal: the
+phase-03 deadlock, returned.
+`a_panic_inside_a_real_worker_is_announced_by_the_pool_that_opened_it` raises a
+real panic inside `serve` on a real worker. The injection point is the waker:
+the engine is written not to panic (`unwrap` and friends denied outside tests,
+and a commit it cannot read comes back as `Error::ReadCommit`), but
+`Wake::signal` calls the window's waker ON THE WORKER THREAD, so a waker that
+gives way once is a panic inside `serve`, raised by the very line that answers a
+request. The wait for the notice is bounded at ten seconds, because the failure
+being pinned is a park that never ends and a hung suite decides nothing.
+
+**`Outbox` being non-`Clone` was the whole of the one-sender fix (500f6eb) with
+nothing reading it.** The fix's own test admits in its doc comment that it
+passed against the broken code — the race is too narrow to see. The twin is now
+the compiler, at the strongest tier available short of changing shipping code:
+`OneSenderPerWorker` is implemented for `Outbox` by hand and for everything
+`Clone` by blanket impl, so the two overlap exactly when `Outbox` is `Clone` and
+an overlap is `error[E0119]`. Deriving `Clone` was verified to stop the test
+build. It is a test-tier artifact by choice — the gate compiles tests twice
+(`cargo clippy --all-targets` and the test run), so a `Clone` cannot reach it,
+though `cargo build` alone would still pass.
+
+What the compiler decides there is the `Clone`, not the rule, and the
+`qa-checklist` agent proved the difference by writing the bug back in:
+`Sender<Envelope>` is `Clone` and `Outbox`'s fields are visible throughout
+module `pool`, so `Outbox { updates: outgoing.clone(), .. }` beside the first
+compiles and leaves all 25 tests green. The residual is now STATED at the twin
+rather than implied, which is what the meta-invariant asks when a check cannot
+reach the whole rule. A guard over one module's struct literals would be a
+bigger instrument than the hole — but `qa-confirm` named a stronger tier that is
+neither, and it is a decision for the user rather than a fix to slip in here:
+give `Outbox` its own module with private fields and a constructor that creates
+the channel and hands back `(Outbox, Receiver<Envelope>)`, and a second sender
+into the same channel stops being writable at all from outside it.
+
+**Two comment fixes, and one claim that was simply false.** The note above
+`drop(shared)` in `serve` credited that line with a compile-tier guarantee it
+does not carry. Both halves re-checked by execution: moving `to_worker()` into
+the request loop DOES fail to compile, but with `error[E0597]: repo does not
+live long enough` — the `HistorySession<'_>` borrow held in `scroll` is what
+refuses it — while deleting `drop(shared)` alone leaves clippy `-D warnings`
+clean and every test green. The comment now says which line carries what, and
+`drop(shared)` is kept for the narrower thing it does do: a SECOND `to_worker()`
+beside the first, one no session borrows, is a use-after-move. The module
+header made the same wrong claim in its opening sentence ("per-request
+conversion compiles and passes every test"), which 2d0bdf6 had already made
+untrue; it is corrected in the same change. A duplicated doc-comment line is
+deleted.
+
+**What QA found, and what was done with it.** Three fresh agents —
+`qa-checklist`, `test-coverage-auditor` (told to audit by reading; a mutation
+harness had twice eaten a whole turn budget here) and `responsiveness-reviewer`
+— adjudicated by a fresh `qa-confirm`. Six findings, all acted on; none
+dismissed:
+
+- The flaky first version of the supersession test, above. Fixed by rewriting
+  it.
+- The non-`Clone` twin was described as sealing "one sender per worker thread"
+  when it seals the derive. Residual now stated at the twin and above.
+- The supersession test's comment listed three fates where there are four: a
+  request that FAILED also leaves the next page starting at the row the scroll
+  opened on, because `serve` drops a poisoned session and the cold restart goes
+  back to `HEAD`, and its `Update::Failed` is filtered out by epoch before
+  anyone sees it. Not a way for the broken version to pass — the mutation raises
+  no error — but the comment now says so.
+- The panic test's comment claimed the mutation parks the reader forever. It
+  does that only when the reader was ALREADY parked when the worker died;
+  otherwise the channel closes and the stream just ends. Measured: three times
+  in four the ten-second bound was spent in full, once it reported at once.
+  Both are red; the comment now names both.
+- And the panic test had a flake of its own, which the fix above is what made
+  legible: a first version asked for a page, waited for it, then checked whether
+  the waker had given way — but the worker SENDS the page before it signals, so
+  a reader that took the page in that window asked for another that nobody was
+  left to answer, and got `WorkerLost` where it wanted rows (once in 40 runs).
+  The loop now treats the answer and the notice as the same news, and the whole
+  of it — including everything that can park — runs on one thread the main
+  thread waits on with a bound. 150 idle runs and 40 at loadavg 36, all green.
+- A literal count ("the three tests that look like this one") against the anchor
+  rule. Removed.
+- The corrected `drop(shared)` comment named `E0597` alone, where a reader who
+  tries the mutation with `drop(shared)` still in place gets `E0382` for the
+  move as well. Both are now named, with which one is load-bearing.
+- The empty panic hook the test installs is process-global, and it was held
+  across the whole ask-again loop, so the loop's own failures would have been
+  silent. The restructure closes that differently and better: every failure on
+  the spawned thread comes back as a value rather than as a panic, and the main
+  thread restores the hook when the bounded wait returns, before it asserts
+  anything.
+
+One observation is recorded rather than closed: the `test-coverage-auditor` saw
+the panic test fail 3 times in 20 whole-suite runs against the PRE-rewrite file,
+spending the ten-second bound, and could not reproduce it against the file that
+landed. The likeliest mechanism is now the send-before-signal flake in the
+bullet above, found later and in the same test — a reader that takes the page
+before the signal asks for another, and against the pre-rewrite structure that
+second ask waited on a worker that was already dying, which is a ten-second
+bound spent for exactly the reason the bound exists to report. Contention is the
+other candidate and was certainly real: three agents and this session were
+running `cargo` against ONE target directory, one of them rebuilding half a
+gigabyte of dependencies, and that left a stale test binary whose baked
+`CARGO_MANIFEST_DIR` pointed at a deleted scratchpad copy — spuriously
+reddening every repository-opening test until `cargo clean -p cairn-app`.
+Neither was proven. If a ten-second bound is ever spent again, capture a stack
+during it rather than retrying; do not paper it over.
+
+**Held deliberately, so they are not lost:**
+
+- The cold-restart branch in `serve`, and "a superseded session keeps its
+  laid-out rows". Both are real gaps and both encode cursor and session
+  semantics that the paused design pass on the scroll/memory model may change.
+  Pinning them now would pin a decision that has not been made. They belong to
+  whatever phase closes that design pass.
+- `crates/cairn-app/src/main.rs`'s paging loop and `ROWS_DRAWN`, carried as
+  phase-04 debt: deciding them needs component tests, and `freya-testing`'s
+  headless runner is still planned rather than available.
+
 ## 2026-09-15 — correcting a claim I put in the PRD, and what phase 03 proved
 
 R1.3 carried a sentence saying phase 03's live walk session would close the

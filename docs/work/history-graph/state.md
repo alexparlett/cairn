@@ -132,7 +132,7 @@ contract — so a later phase does not re-derive it from source.
 | --- | --- | --- | --- |
 | 01 lane assignment | implemented | `scripts/gate.sh` green | see progress.md's phase 01 QA entry |
 | 02 history query | implemented | `scripts/gate.sh` green | four fresh agents, adjudicated by `qa-confirm`; see progress.md's newest entry |
-| 03 worker boundary | implemented | `scripts/gate.sh` green | four fresh agents, adjudicated by `qa-confirm`; see progress.md's newest entry |
+| 03 worker boundary | implemented | `scripts/gate.sh` green | four fresh agents, adjudicated by `qa-confirm`; then a mutation-executing coverage audit whose findings are closed — see progress.md's newest entry, which also names the two gaps held for the scroll/memory design pass |
 | 04 graph view | not started | — | — |
 | 05 QA | not started | — | — |
 

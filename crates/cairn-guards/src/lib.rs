@@ -192,6 +192,70 @@ pub fn code_only(source: &str) -> String {
     out
 }
 
+/// [`code_only`], with the CONTENTS of double-quoted strings blanked too.
+///
+/// `spawns_git` needs string literals, because `"git"` is how a subprocess
+/// names its program. A matcher looking for waiting primitives does not: a
+/// status line reading "waiting to receive" is prose that happens to live in a
+/// string, and a guard that reddens on it is a guard somebody switches off.
+/// Char literals are left alone — one character cannot hide an identifier, and
+/// blanking between apostrophes would eat lifetimes.
+pub fn code_without_strings(source: &str) -> String {
+    let code = code_only(source);
+    let bytes = code.as_bytes();
+    let mut out = String::with_capacity(code.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        // A raw string: r, some hashes, a quote. Ends at a quote followed by as
+        // many hashes.
+        let raw_hashes = if bytes[i] == b'r' {
+            let hashes = bytes[i + 1..].iter().take_while(|&&c| c == b'#').count();
+            (bytes.get(i + 1 + hashes) == Some(&b'"')).then_some(hashes)
+        } else {
+            None
+        };
+        if let Some(hashes) = raw_hashes {
+            out.push_str(&code[i..i + hashes + 2]);
+            i += hashes + 2;
+            while i < bytes.len() {
+                if bytes[i] == b'"'
+                    && bytes[i + 1..].iter().take_while(|&&c| c == b'#').count() >= hashes
+                {
+                    out.push_str(&code[i..i + hashes + 1]);
+                    i += hashes + 1;
+                    break;
+                }
+                out.push(if bytes[i] == b'\n' { '\n' } else { ' ' });
+                i += 1;
+            }
+            continue;
+        }
+        if bytes[i] == b'"' {
+            out.push('"');
+            i += 1;
+            while i < bytes.len() {
+                if bytes[i] == b'\\' {
+                    out.push_str("  ");
+                    i += 2;
+                    continue;
+                }
+                if bytes[i] == b'"' {
+                    out.push('"');
+                    i += 1;
+                    break;
+                }
+                out.push(if bytes[i] == b'\n' { '\n' } else { ' ' });
+                i += 1;
+            }
+            continue;
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
 /// 1-based line numbers where `source` names the crate `ident` as a path root
 /// or imports it, in code (not prose).
 ///
@@ -210,23 +274,115 @@ pub fn mentions_crate(source: &str, ident: &str) -> Vec<usize> {
 }
 
 fn line_has_ident(line: &str, ident: &str) -> bool {
-    let bytes = line.as_bytes();
+    !ident_offsets(line, ident).is_empty()
+}
+
+/// Byte offsets where `ident` appears in `text` with word boundaries either
+/// side. Offsets rather than lines, because a matcher may need to look at what
+/// FOLLOWS the identifier, and what follows can be on the next line.
+fn ident_offsets(text: &str, ident: &str) -> Vec<usize> {
+    let bytes = text.as_bytes();
+    let mut found = Vec::new();
     let mut from = 0;
-    while let Some(offset) = line[from..].find(ident) {
+    while let Some(offset) = text[from..].find(ident) {
         let start = from + offset;
         let end = start + ident.len();
         let before_ok = start == 0 || !is_ident_byte(bytes[start - 1]);
         let after_ok = end == bytes.len() || !is_ident_byte(bytes[end]);
         if before_ok && after_ok {
-            return true;
+            found.push(start);
         }
         from = end;
     }
-    false
+    found
+}
+
+/// The 1-based line `offset` falls on.
+fn line_at(text: &str, offset: usize) -> usize {
+    text[..offset].bytes().filter(|b| *b == b'\n').count() + 1
 }
 
 fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Identifiers whose presence means the code can wait for something.
+///
+/// Naming one is enough — you cannot alias what you have not first named, so
+/// `use std::sync::mpsc::Receiver as Rx` is caught on its import line even
+/// though every later use spells it `Rx`. That is the same trick the crate-seal
+/// matcher uses, and it is what makes the rule hold against a rename.
+const WAITING_IDENTS: &[&str] = &[
+    "Barrier",
+    "Condvar",
+    "JoinHandle",
+    "Mutex",
+    "Receiver",
+    "RwLock",
+    // The constructors, because a receiver can be held without ever naming its
+    // type: `let (tx, rx) = channel();` then `for update in rx {}` blocks, and
+    // spells nothing on the roster above. You cannot have a channel without
+    // building one.
+    "bounded",
+    "channel",
+    "sync_channel",
+    "unbounded",
+    "block_on",
+    "blocking_lock",
+    "blocking_recv",
+    "blocking_send",
+    "park",
+    "park_timeout",
+    "recv_deadline",
+    "recv_timeout",
+    "scope",
+    "select",
+    "sleep",
+    "wait_timeout",
+    "wait_while",
+];
+
+/// Methods that wait when called with NO arguments.
+///
+/// Separated from the list above because each has an innocent namesake that
+/// takes one: `Path::join("crates")` and `[..].join(", ")` are not waits, and a
+/// guard that could not tell them apart would be turned off within a week.
+const WAITING_NULLARY_CALLS: &[&str] = &["join", "lock", "recv", "wait"];
+
+/// 1-based line numbers where `source` waits for something, in code.
+///
+/// The invariant this serves is "the UI thread never waits on repository work".
+/// A render path has no legitimate reason to name any of these, so the matcher
+/// forbids the spellings rather than trying to decide what is being waited FOR
+/// — which is not decidable from source, and is where a weaker guard would let
+/// the rule rot.
+pub fn waits_on_work(source: &str) -> Vec<usize> {
+    let code = code_without_strings(source);
+    let mut lines = std::collections::BTreeSet::new();
+
+    for ident in WAITING_IDENTS {
+        for offset in ident_offsets(&code, ident) {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+    for name in WAITING_NULLARY_CALLS {
+        for offset in ident_offsets(&code, name) {
+            if takes_no_arguments(&code, offset + name.len()) {
+                lines.insert(line_at(&code, offset));
+            }
+        }
+    }
+    lines.into_iter().collect()
+}
+
+/// Whether what follows `at` is `()`, with any amount of whitespace — including
+/// newlines — inside and before it.
+fn takes_no_arguments(code: &str, at: usize) -> bool {
+    let mut rest = code[at..].trim_start().chars();
+    if rest.next() != Some('(') {
+        return false;
+    }
+    rest.as_str().trim_start().starts_with(')')
 }
 
 /// 1-based line numbers where `source` spawns a `git` subprocess, in code.
@@ -303,6 +459,112 @@ mod tests {
         assert!(mentions_crate("//! we do not use gix\n", "gix").is_empty());
         assert!(mentions_crate("let gixture = 1;", "gix").is_empty());
         assert!(mentions_crate("use my_gix::thing;", "gix").is_empty());
+    }
+
+    /// Every entry in both rosters, spelled out as a literal here rather than
+    /// looped over the roster itself. Looping would shrink with the roster and
+    /// stay green while the guard lost half its coverage; a fixed list means
+    /// deleting an entry turns this red, which is the only way a roster stays
+    /// honest.
+    #[test]
+    fn every_waiting_spelling_in_the_roster_is_matched() {
+        let spellings = [
+            ("Barrier", "let gate = Barrier::new(2);"),
+            ("Condvar", "let ready = Condvar::new();"),
+            ("JoinHandle", "let h: JoinHandle<()> = spawn(f);"),
+            ("Mutex", "let held = Mutex::new(1);"),
+            ("Receiver", "use std::sync::mpsc::Receiver;"),
+            ("RwLock", "let shared = RwLock::new(1);"),
+            ("bounded", "let (tx, rx) = bounded(8);"),
+            ("channel", "let (tx, rx) = std::sync::mpsc::channel();"),
+            ("sync_channel", "let (tx, rx) = sync_channel(1);"),
+            (
+                "unbounded",
+                "let (tx, rx) = crossbeam_channel::unbounded();",
+            ),
+            ("block_on", "futures::executor::block_on(fut);"),
+            ("blocking_lock", "let held = shared.blocking_lock();"),
+            ("blocking_recv", "let next = rx.blocking_recv();"),
+            ("blocking_send", "tx.blocking_send(v)?;"),
+            ("park", "std::thread::park();"),
+            ("park_timeout", "std::thread::park_timeout(d);"),
+            ("recv_deadline", "rx.recv_deadline(at)?;"),
+            ("recv_timeout", "rx.recv_timeout(d)?;"),
+            ("scope", "std::thread::scope(|s| s.spawn(f));"),
+            (
+                "select",
+                "crossbeam_channel::select! { recv(rx) -> v => {} }",
+            ),
+            ("sleep", "std::thread::sleep(d);"),
+            ("wait_timeout", "let (g, r) = cv.wait_timeout(g, d)?;"),
+            ("wait_while", "let g = cv.wait_while(g, |s| !s.ready)?;"),
+            ("join", "handle.join().unwrap();"),
+            ("lock", "let held = shared.lock();"),
+            ("recv", "let next = rx.recv();"),
+            ("wait", "let g = cv.wait();"),
+        ];
+        for (spelling, src) in spellings {
+            assert!(
+                !waits_on_work(src).is_empty(),
+                "`{spelling}` is no longer matched: {src:?}"
+            );
+        }
+        let covered: std::collections::BTreeSet<&str> =
+            spellings.iter().map(|(name, _)| *name).collect();
+        for entry in WAITING_IDENTS.iter().chain(WAITING_NULLARY_CALLS) {
+            assert!(
+                covered.contains(entry),
+                "`{entry}` was added to a roster without a line in this test"
+            );
+        }
+    }
+
+    #[test]
+    fn waits_on_work_catches_the_disguised_forms() {
+        for (label, src) in [
+            ("plain receive", "let next = rx.recv();"),
+            ("wrapped call", "let next = rx\n    .recv()\n    .ok();"),
+            ("spaced parens", "let next = rx.recv ();"),
+            ("newline inside the parens", "let next = rx.recv(\n);"),
+            ("aliased import", "use std::sync::mpsc::Receiver as Rx;"),
+            ("grouped import", "use std::sync::{Arc, Mutex};"),
+            ("qualified path", "let g = std::sync::Mutex::new(1);"),
+            (
+                "inferred receiver",
+                "let (tx, rx) = std::sync::mpsc::channel();",
+            ),
+            (
+                "iterating a receiver",
+                "let (tx, rx) = channel();\nfor u in rx {}",
+            ),
+            ("renamed sleep", "use std::thread::sleep as nap;"),
+        ] {
+            assert!(
+                !waits_on_work(src).is_empty(),
+                "missed the {label} form: {src:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn waits_on_work_ignores_prose_and_innocent_namesakes() {
+        assert!(waits_on_work("// rx.recv() is forbidden on this side\n").is_empty());
+        assert!(waits_on_work("//! nothing here may call join() either\n").is_empty());
+        assert!(waits_on_work("let p = root.join(\"crates\");").is_empty());
+        assert!(waits_on_work("let s = parts.join(\", \");").is_empty());
+        assert!(waits_on_work("let joined = 1; let received = 2;").is_empty());
+        assert!(waits_on_work("let v = signal.read(); v.write();").is_empty());
+        assert!(waits_on_work("use my_crate::Receivers;").is_empty());
+        // Prose inside a string literal is still prose. A status line a user
+        // reads must be free to say what the code is doing.
+        assert!(waits_on_work("status.set(\"waiting to receive a lock\");").is_empty());
+        assert!(waits_on_work("let hint = r#\"sleep until the Mutex frees\"#;").is_empty());
+    }
+
+    #[test]
+    fn waits_on_work_reports_the_line_the_wait_is_on() {
+        let src = "let a = 1;\nlet b = 2;\nlet c = rx.recv();\n";
+        assert_eq!(waits_on_work(src), vec![3]);
     }
 
     #[test]

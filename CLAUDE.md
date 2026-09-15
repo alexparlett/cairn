@@ -10,12 +10,14 @@ Testable form: `cairn-ui` compiles with neither `gix` nor `cairn-git` in its
 dependency graph, and nothing outside `cairn-git::ops` can mutate a repository.
 
 Status today: the workspace, the seam, the gate and the guard suite exist and are
-green; the application window opens and renders an empty history list. The first
-repository read exists — `cairn-git`'s bounded, resumable history query, feeding
-the lane assigner in `cairn-model` — but nothing is wired to the window yet, and
-no command mutates a repository. Entries marked (planned) below name the
-canonical home something WILL have so docs and implementation converge on the same
-names — never cite one as if it exists.
+green. The first repository read exists — `cairn-git`'s bounded, resumable history
+query, feeding the lane assigner in `cairn-model` — and it is now wired to the
+window through the worker boundary in `crates/cairn-app/src/worker/`, so the
+application opens the repository it is run in and lists its commits off the UI
+thread. The list is not virtualized and draws no lanes yet, and no command mutates
+a repository. Entries marked (planned) below name the canonical home something
+WILL have so docs and implementation converge on the same names — never cite one
+as if it exists.
 
 ## Repo map
 
@@ -113,10 +115,19 @@ empty `gix_hash::Kind` once already)**. Read the vendored source under
 - **The UI thread is never allowed to wait on a repository.** `cairn-git` is
   synchronous and knows nothing about threads; `cairn-app` decides where the
   blocking work runs and hands results back as values (decision D3: one
-  `gix::ThreadSafeRepository` per repository, a worker pool taking thread-local
-  handles, every request carrying an epoch so a superseded query is abandoned
-  rather than rendered). A repository is somebody's 10-year monorepo: any design
-  that assumes a query is fast is wrong.
+  `cairn_git::SharedRepository` — gitoxide's `ThreadSafeRepository` — per
+  repository, a worker taking its thread-local handle once, every request
+  carrying an epoch so a superseded query is abandoned rather than rendered). The
+  epoch IS the cancel signal the engine polls, so superseding a query stops its
+  walk rather than discarding its answer. A repository is somebody's 10-year
+  monorepo: any design that assumes a query is fast is wrong.
+- **A scroll keeps its walk open.** gitoxide's walk cannot be resumed from a
+  value, so a cursor resumes by replaying — which makes page *k* cost `k x limit`
+  and does not reach the sizes the history view promises. `cairn-git` therefore
+  offers a `HistorySession` that holds the walk for the life of a scroll, making
+  paging O(limit); it borrows the repository and is not `Send`, so it lives on
+  the worker that owns that handle and never crosses a thread. The cursor
+  remains, as the cold-restart path.
 
 ## Invariants, YOU MUST keep these
 
@@ -163,13 +174,30 @@ Project invariants:
 - **CI runs every merge-bar gate step.** Twin: `ci_runs_every_merge_bar_gate_step`
   compares `gate.sh`'s dispatch arms against the workflow, so a step added locally
   cannot quietly skip CI.
+- **The UI thread never waits on repository work.** `cairn-app` is partitioned by
+  FILE: `crates/cairn-app/src/worker/` runs repository work and may block; every
+  other file in the crate renders, and may name neither `cairn_git` nor any
+  waiting primitive — the types (`Receiver`, `Mutex`, `Condvar`, `JoinHandle`),
+  the channel constructors (`channel`, `unbounded`, ...), and the nullary waiting
+  calls (`recv()`, `join()`, `lock()`, `wait()`), plus `sleep`, `park`,
+  `block_on`. Naming the constructor is what catches a receiver held by
+  inference. Twin: `the_ui_thread_never_waits_on_repository_work`, matching
+  aliased imports and calls whose parentheses wrapped, ignoring string literals,
+  and asserting a nonzero file count per directory on BOTH sides.
+
+  **Residual obligations the guard structurally cannot express** — stated here
+  rather than implied, and owned by `responsiveness-reviewer`: a file partition
+  cannot decide which THREAD a function runs on, so the handful of `worker/`
+  functions the UI thread itself calls (`RepositoryHandle::submit`,
+  `Updates::next`, `Wake::poll`, all in `crates/cairn-app/src/worker/`) are
+  exempt from the matcher while running on the UI thread, and that they never
+  block is a review judgement. So is a busy poll loop over `try_recv` or
+  `spin_loop`, which names nothing. So is whether a page is small enough that the
+  work between yields is short, and whether a list is virtualized.
 
 Not yet mechanically pinned — state these when they come up, and add the twin with
 the change that makes them load-bearing:
 
-- The UI thread never blocks on repository work (today's twin is the absence of
-  any engine call in `cairn-ui` at all; when `cairn-app` grows real wiring, this
-  needs a real check). Review obligation meanwhile: `responsiveness-reviewer`.
 - No unbounded list renders without virtualization.
 
 ## Conventions

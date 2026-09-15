@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use cairn_guards::{code_only, mentions_crate, repo_root, rust_sources, spawns_git};
+use cairn_guards::{code_only, mentions_crate, repo_root, rust_sources, spawns_git, waits_on_work};
 
 /// Crates whose dependency list is pinned, and what each is allowed to name.
 /// A new crate with no row here fails `layer_dependencies_are_allowlisted`,
@@ -42,6 +42,16 @@ const PRODUCT_SOURCE_DIRS: &[&str] = &[
     "crates/cairn-ui/src",
     "crates/cairn-app/src",
 ];
+
+/// Everything that renders. Each of these is a render path end to end, and none
+/// of it may reach a repository or wait for one.
+const RENDER_SOURCE_DIRS: &[&str] = &["crates/cairn-ui/src", "crates/cairn-app/src"];
+
+/// The one exception inside those directories: where repository work runs, and
+/// therefore the only place waiting is allowed. It renders nothing, which is
+/// checked in the same guard — otherwise the two sets could overlap and the
+/// partition would say nothing.
+const WORKER_DIR: &str = "crates/cairn-app/src/worker";
 
 #[test]
 fn layer_dependencies_are_allowlisted() {
@@ -150,6 +160,79 @@ fn only_the_ops_module_mutates_a_repository() {
     assert!(
         scanned > 0,
         "the mutation guard scanned nothing; did the crates move?"
+    );
+}
+
+#[test]
+fn the_ui_thread_never_waits_on_repository_work() {
+    let worker = Path::new(WORKER_DIR);
+    let mut working = 0usize;
+
+    for dir in RENDER_SOURCE_DIRS {
+        let mut rendering = 0usize;
+        for (path, source) in rust_sources(dir) {
+            if path.starts_with(worker) {
+                working += 1;
+                // The worker side may wait, because it is not the UI thread.
+                // What it may not do is render: if a file could do both, the
+                // partition would stop meaning anything.
+                for ident in ["freya", "dioxus"] {
+                    let hits = mentions_crate(&source, ident);
+                    assert!(
+                        hits.is_empty(),
+                        "{}:{} names `{ident}` inside {WORKER_DIR}. That module is where \
+                         repository work blocks; a render path inside it would be a UI thread \
+                         waiting on a repository (CLAUDE.md, Invariants).",
+                        path.display(),
+                        hits[0]
+                    );
+                }
+                continue;
+            }
+
+            rendering += 1;
+            let hits = waits_on_work(&source);
+            assert!(
+                hits.is_empty(),
+                "{}:{} waits for something, and it is on a render path. Repository work goes \
+                 through {WORKER_DIR} and comes back as values; nothing outside it may block, \
+                 join, lock, receive or build a channel (CLAUDE.md, Invariants).",
+                path.display(),
+                hits[0]
+            );
+            // `cairn-ui` is sealed from the engine by its own roster in
+            // FORBIDDEN_IDENTS, which is one authority; this is the other half
+            // of the partition, and it is `cairn-app`'s alone.
+            if dir.starts_with("crates/cairn-app/") {
+                for ident in ["cairn_git", "gix"] {
+                    let hits = mentions_crate(&source, ident);
+                    assert!(
+                        hits.is_empty(),
+                        "{}:{} names `{ident}` on a render path. An engine call reachable from \
+                         a render is exactly what the worker boundary exists to prevent: ask \
+                         for it through a `worker::Request` instead (CLAUDE.md, Invariants; \
+                         PRD A6).",
+                        path.display(),
+                        hits[0]
+                    );
+                }
+            }
+        }
+        // Per directory, not in aggregate: a new render crate added to the
+        // roster but pointed at the wrong path would otherwise be covered by
+        // whichever directory still had files in it.
+        assert!(
+            rendering > 0,
+            "the responsiveness guard found no render files under {dir}. Every directory in \
+             RENDER_SOURCE_DIRS must contribute, or the guard is scanning less than it claims."
+        );
+    }
+
+    assert!(
+        working > 0,
+        "the responsiveness guard found no files under {WORKER_DIR}. Either the worker moved, \
+         in which case move this guard with it, or it is gone — and then every engine call in \
+         cairn-app is on a render path."
     );
 }
 

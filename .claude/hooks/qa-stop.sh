@@ -77,6 +77,17 @@ HITS=$(printf '%s\n' "$ADDED" | awk '
   index($0, "crates/cairn-git/") == 1 {
     if (/(^|[^A-Za-z0-9_])(freya|dioxus|cairn_ui)([^A-Za-z0-9_]|$)/) {
       print $0 " [cairn-git is sealed from the UI toolkit]" ; next }
+  }
+  # The worker partition, engine-reach half only. The waiting half needs to tell
+  # handle.join() from root.join("crates"), which is the guard suite matchers job,
+  # not awk with no parser.
+  index($0, "crates/cairn-app/") == 1 && index($0, "crates/cairn-app/src/worker/") != 1 {
+    if (/(^|[^A-Za-z0-9_])(gix|cairn_git)([^A-Za-z0-9_]|$)/) {
+      print $0 " [only crates/cairn-app/src/worker may reach the git engine]" ; next }
+  }
+  index($0, "crates/cairn-app/src/worker/") == 1 {
+    if (/(^|[^A-Za-z0-9_])(freya|dioxus)([^A-Za-z0-9_]|$)/) {
+      print $0 " [the worker module runs off the UI thread: it renders nothing]" ; next }
   }'
 )
 [ -z "$HITS" ] && exit 0

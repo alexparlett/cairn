@@ -217,6 +217,42 @@ fn commit_stamped(fixture: &Fixture, message: &str, seconds: i64) {
     );
 }
 
+/// Write a commit-graph file, so a walk can read parent ids and commit times
+/// without touching the object database at all.
+pub fn write_commit_graph(fixture: &Fixture) {
+    fixture.git(&["commit-graph", "write", "--reachable"]);
+    // Local config, because the engine reads the repository's own: the machine
+    // running this may have turned commit-graph use off globally.
+    fixture.git(&["config", "core.commitGraph", "true"]);
+    assert!(
+        fixture
+            .path()
+            .join(".git/objects/info/commit-graph")
+            .is_file(),
+        "git did not write a commit-graph file"
+    );
+}
+
+/// Delete the loose object backing each of `ids`, so that walking past them
+/// still works (from the commit-graph) but reading one fails.
+///
+/// Never pass a starting point: gitoxide reads the tips themselves out of the
+/// object database to seed the walk's queue (`gix-traverse`'s `add_to_queue`),
+/// and only the commits it reaches from there come from the commit-graph.
+///
+/// This is how "the replayed prefix is walked, never decoded" becomes something
+/// a test can see. A counter the query increments beside its own `object()`
+/// call proves only that *that* call site behaves; an object that is not there
+/// any more proves it about every call site at once.
+pub fn delete_objects(fixture: &Fixture, ids: &[String]) {
+    for id in ids {
+        let (dir, file) = id.split_at(2);
+        let path = fixture.path().join(".git/objects").join(dir).join(file);
+        std::fs::remove_file(&path)
+            .unwrap_or_else(|e| panic!("could not delete {}: {e}", path.display()));
+    }
+}
+
 /// A repository with `HEAD` on a branch that has no commits.
 pub fn unborn() -> Fixture {
     let path = fresh_directory("unborn");

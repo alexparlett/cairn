@@ -94,6 +94,15 @@ impl LaneAssigner {
 
     /// An assigner holding at most `window` rows. A window of zero is raised to
     /// one: the row being laid out has to exist while it is laid out.
+    ///
+    /// Widening is not free, and not linear. Drawing a line to a parent the
+    /// walk delivered early rescans every row of the span and every segment on
+    /// them, then adds a segment to each, so the cost of one such line grows
+    /// with the window and the spans grow with it too. Measured over 50k rows
+    /// with one late parent per ten commits and spans half the window wide:
+    /// 66 ms at 1024, 749 ms at 4096, 23.3 s at 16384. Widen it because a
+    /// repository's skew genuinely needs it, having measured, and never as a
+    /// precaution.
     pub fn with_window(window: usize) -> Self {
         Self {
             lanes: Vec::new(),
@@ -419,12 +428,23 @@ mod tests {
             let (rows, indexed, segments, widest) = retained(&bounded);
             assert!(rows <= window, "window overrun: {rows} rows held");
             assert!(indexed <= window, "index overrun: {indexed} commits held");
-            // One segment per lane open across the row, plus the one leaving
-            // the row's own node. Anything above that is a row holding more
-            // than the lanes crossing it can account for.
+            // The open-lanes half of R1.3, as an ABSOLUTE bound. Deriving the
+            // lane count from the retained rows would move with any defect that
+            // opened extra lanes, so it is pinned against the history's own
+            // width instead: this walk never has more than `branches` lines
+            // descending at once, so neither may the assigner.
             assert!(
-                segments <= rows * (widest + 1),
-                "retained {segments} segments over {rows} rows {widest} lanes wide"
+                bounded.lanes.len() <= branches,
+                "{} lanes open on a {branches}-branch history",
+                bounded.lanes.len()
+            );
+            assert!(
+                widest <= branches,
+                "a segment reached lane {widest} on a {branches}-branch history"
+            );
+            assert!(
+                segments <= rows * (branches + 1),
+                "retained {segments} segments over {rows} rows"
             );
             peak_rows = peak_rows.max(rows);
             peak_segments = peak_segments.max(segments);
@@ -486,10 +506,43 @@ mod tests {
             child_row.edges.iter().all(|edge| !edge.out_of_order),
             "a line was drawn back to a row the assigner no longer holds: {child_row:?}"
         );
-        assert_eq!(
-            evicted, finals[0],
-            "the row handed back changed after it was handed back"
+        // Nothing anywhere was repainted: the line would have had to start on
+        // `evicted`, and the assigner cannot reach it. (Asserting on `evicted`
+        // itself would decide nothing — the test owns that copy, and Rust's
+        // ownership rules already guarantee the assigner cannot touch it.)
+        assert!(
+            rows.iter()
+                .flat_map(|row| &row.edges)
+                .all(|edge| !edge.out_of_order),
+            "a backward line was drawn although its top end had left the window"
         );
+    }
+
+    /// `assign_all` now goes through a window, so it has to hand back the rows
+    /// the window made final as well as the ones left inside it. Every fixture
+    /// in the acceptance suite is shorter than [`LaneAssigner::DEFAULT_WINDOW`],
+    /// so without this the loss would be invisible: dropping the finalised rows
+    /// entirely would still pass every one of them.
+    #[test]
+    fn assign_all_returns_every_row_of_a_walk_longer_than_the_window() {
+        let length = LaneAssigner::DEFAULT_WINDOW + 500;
+        let commits: Vec<(Oid, Vec<Oid>)> = (0..length)
+            .map(|n| {
+                let parents = if n + 1 < length {
+                    vec![id(n + 1)]
+                } else {
+                    Vec::new()
+                };
+                (id(n), parents)
+            })
+            .collect();
+
+        let rows = LaneAssigner::assign_all(commits);
+        assert_eq!(rows.len(), length, "rows went missing past the window");
+        for (n, row) in rows.iter().enumerate() {
+            assert_eq!(row.id, id(n), "row {n} is out of walk order");
+            assert_eq!(row.lane.index(), 0, "a linear history left lane 0");
+        }
     }
 
     /// A window of zero would drop the row being laid out; it is raised to one.

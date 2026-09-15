@@ -582,3 +582,79 @@ fn bad_starting_points_are_errors_rather_than_empty_pages() {
         "no starting point produced a cursor"
     );
 }
+
+/// R2.3, made observable rather than self-reported.
+///
+/// `HistoryPage::decoded` is a counter the query increments beside its own
+/// object read, so it proves only that *that* call site behaves. This proves it
+/// about every call site at once: the commits the resumed page replays have had
+/// their objects deleted, and the repository has a commit-graph file, so the
+/// walk can still read their ids, parents and commit times. A page that decoded
+/// anything it merely walked past would fail to find the object.
+#[test]
+fn a_replayed_prefix_is_walked_but_never_decoded() {
+    let fixture = fixtures::braided(30);
+    fixtures::write_commit_graph(&fixture);
+    let expected = fixture.rev_list();
+    let page_size = 6;
+
+    // Page one, while every object is still readable, to get a cursor.
+    let first = read(&open(&fixture), &HistoryRequest::from_head(page_size));
+    assert_eq!(first.rows.len(), page_size);
+    let cursor = match first.cursor.clone() {
+        Some(cursor) => cursor,
+        None => panic!("six commits ended the history"),
+    };
+
+    // Everything page one returned except the tip, which gitoxide reads from
+    // the object database to seed the walk however the commit-graph is set up.
+    let unreadable = &expected[1..page_size];
+    fixtures::delete_objects(&fixture, unreadable);
+
+    // A second handle, so nothing survives in the object cache the first one
+    // filled. Resuming replays exactly the commits whose objects are now gone.
+    let repo = open(&fixture);
+    let second = read(&repo, &HistoryRequest::resume(cursor, page_size));
+    assert_eq!(second.walked, page_size * 2, "the prefix was not replayed");
+    assert_eq!(ids(&second), &expected[page_size..page_size * 2]);
+    assert_eq!(second.decoded, second.rows.len());
+
+    // The negative that stops this passing vacuously: those objects really are
+    // unreadable, so a page that decodes them fails.
+    match repo.history(&HistoryRequest::from_head(page_size), &CancelSignal::new()) {
+        Err(Error::ReadCommit { id, .. }) => {
+            assert!(unreadable.contains(&id), "failed on the wrong commit")
+        }
+        other => panic!("expected the deleted objects to be unreadable, got {other:?}"),
+    }
+}
+
+/// Cancellation has a second code path: the one-commit look-ahead that decides
+/// whether there is a next page. It is polled too, and deleting that check left
+/// every other test green.
+#[test]
+fn cancelling_exactly_at_the_page_boundary_is_still_a_cancellation() {
+    let fixture = fixtures::braided(20);
+    let repo = open(&fixture);
+    let limit = 5;
+    assert!(
+        fixture.rev_list().len() > limit + 1,
+        "the fixture is too short"
+    );
+
+    // The walk polls once per commit laid out, so the limit-th poll is the last
+    // one inside the loop and the next is the look-ahead.
+    let signal = StopAfter {
+        limit,
+        polls: Cell::new(0),
+    };
+    match repo.history(&HistoryRequest::from_head(limit), &signal) {
+        Err(Error::Cancelled { walked }) => assert_eq!(walked, limit),
+        other => panic!("expected a cancellation at the boundary, got {other:?}"),
+    }
+    assert_eq!(
+        signal.polls.get(),
+        limit + 1,
+        "the look-ahead was not polled"
+    );
+}

@@ -163,12 +163,14 @@ pub struct HistoryPage {
     /// The commits, newest first, each with the lane and edges that draw it.
     ///
     /// Lane indices are the same however the history was paged. Edges are not
-    /// quite: a line back to a parent the walk delivered early cannot be drawn
-    /// on a row that was already returned, so a row can gain a segment —
-    /// always flagged [`cairn_model::EdgeSegment::out_of_order`] — when a later
-    /// page covers the commit it joins to. A view that keeps rows across pages
-    /// should replace the ones a new page overlaps rather than assume they are
-    /// unchanged.
+    /// quite: a line back to a parent the walk delivered early is drawn by the
+    /// page that reaches the *child*, and its upper end lands on a row an
+    /// earlier page already returned. Pages never overlap, so that upper end is
+    /// computed during the replay and then dropped — a backward line spanning a
+    /// page boundary reaches the view as the lower half only, flagged
+    /// [`cairn_model::EdgeSegment::out_of_order`]. Reading the history in one
+    /// page draws it whole. Nothing here is wrong in the picture, but a view
+    /// must not assume a flagged segment has a visible other end.
     pub rows: Vec<HistoryRow>,
     /// Where the next page starts, or `None` because this page reached the end
     /// of the history. A request with a limit of zero reads nothing and always
@@ -459,7 +461,11 @@ mod tests {
         let page = repo
             .history(&HistoryRequest::from_head(3), &CancelSignal::new())
             .unwrap();
-        assert!(page.rows.len() <= 3, "the limit was not honoured");
+        assert_eq!(page.rows.len(), 3, "the limit was not honoured");
+        assert!(
+            page.cursor.is_some(),
+            "this repository has more than three commits"
+        );
         assert_eq!(
             page.decoded,
             page.rows.len(),

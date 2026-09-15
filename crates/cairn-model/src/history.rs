@@ -31,9 +31,13 @@ mod tests {
     use super::*;
     use crate::{EdgeSegment, Lane};
 
+    /// `id()` reads the commit half, and says so decisively: a row built with
+    /// two different ids would let an `id()` that read the graph half pass a
+    /// test where both halves agree.
     #[test]
-    fn a_row_names_one_commit_through_both_halves() {
+    fn a_row_takes_its_identity_from_the_commit() {
         let id = Oid::parse("0123456789abcdef0123456789abcdef01234567").unwrap();
+        let other = Oid::parse("fedcba9876543210fedcba9876543210fedcba98").unwrap();
         let row = HistoryRow {
             commit: CommitSummary {
                 id: id.clone(),
@@ -44,12 +48,16 @@ mod tests {
                 author_time: 0,
             },
             graph: GraphRow {
-                id: id.clone(),
+                id: other.clone(),
                 lane: Lane::new(0),
                 edges: vec![EdgeSegment::passing(Lane::new(0))],
             },
         };
-        assert_eq!(row.id(), &id);
-        assert_eq!(row.id(), &row.graph.id);
+        assert_eq!(
+            row.id(),
+            &id,
+            "the row took its identity from the graph half"
+        );
+        assert_ne!(row.id(), &other);
     }
 }

@@ -25,8 +25,9 @@ impl Repository {
     ///
     /// Opening installs a small object cache. Walking by committer date looks
     /// each commit up twice without one: measured over 50k commits of a
-    /// repository with no commit-graph file, 178 ms became 116 ms, and a cache
-    /// larger than [`Self::OBJECT_CACHE_BYTES`] bought nothing further
+    /// repository with no commit-graph file, the walk alone took 178 ms with no
+    /// cache and 116 ms with one, and a cache larger than
+    /// [`Self::OBJECT_CACHE_BYTES`] bought nothing further
     /// (`docs/work/history-graph/progress.md`, open question O2).
     pub fn discover(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = path.as_ref();

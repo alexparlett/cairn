@@ -139,14 +139,9 @@ impl LaneAssigner {
         self.rows.iter()
     }
 
-    /// How many rows the window currently holds.
-    pub fn retained_rows(&self) -> usize {
-        self.rows.len()
-    }
-
     /// How many rows have been laid out in total, including the ones the window
     /// has already made final.
-    pub fn rows_laid_out(&self) -> usize {
+    fn rows_laid_out(&self) -> usize {
         self.first_row + self.rows.len()
     }
 
@@ -441,7 +436,7 @@ mod tests {
             "the history never opened a second lane, so the bound decided nothing"
         );
         assert_eq!(
-            unbounded.retained_rows(),
+            unbounded.rows.len(),
             history.len(),
             "the control run must retain everything, or the bound proves nothing"
         );
@@ -503,9 +498,13 @@ mod tests {
         let mut assigner = LaneAssigner::with_window(0);
         assert_eq!(assigner.window(), 1);
         assert!(assigner.push(id(1), vec![id(2)]).is_none());
-        assert_eq!(assigner.retained_rows(), 1);
+        assert_eq!(assigner.rows().len(), 1);
         let evicted = assigner.push(id(2), vec![]).expect("row 0 is now final");
         assert_eq!(evicted.id, id(1));
-        assert_eq!(assigner.rows_laid_out(), 2);
+        assert_eq!(
+            assigner.rows().len(),
+            1,
+            "the window holds one row at a time"
+        );
     }
 }

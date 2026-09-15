@@ -15,7 +15,9 @@ mod fixtures;
 use std::cell::Cell;
 use std::collections::HashMap;
 
-use cairn_git::{Cancel, CancelSignal, Error, HistoryPage, HistoryRequest, Repository};
+use cairn_git::{
+    Cancel, CancelSignal, Error, HistoryOrder, HistoryPage, HistoryRequest, Repository,
+};
 use cairn_model::{EdgeSegment, HistoryRow};
 
 use fixtures::Fixture;
@@ -62,7 +64,7 @@ fn read(repo: &Repository, request: &HistoryRequest) -> HistoryPage {
 fn every_row_matches_what_git_reports() {
     let fixture = fixtures::braided(30);
     let repo = open(&fixture);
-    let expected = fixture.rev_list(&[]);
+    let expected = fixture.rev_list();
     assert!(
         expected.len() > 20,
         "the fixture is too small to decide much"
@@ -126,7 +128,7 @@ fn every_row_matches_what_git_reports() {
 fn a_limit_bounds_the_page_and_a_cursor_continues_it() {
     let fixture = fixtures::braided(30);
     let repo = open(&fixture);
-    let expected = fixture.rev_list(&[]);
+    let expected = fixture.rev_list();
 
     let page = read(&repo, &HistoryRequest::from_head(5));
     assert_eq!(page.rows.len(), 5, "the limit was not honoured");
@@ -228,7 +230,7 @@ fn two_pages_of_n_match_one_page_of_2n_including_lanes() {
 fn a_backward_line_across_a_page_boundary_is_a_gained_segment() {
     let fixture = fixtures::skewed();
     let repo = open(&fixture);
-    let expected = fixture.rev_list(&[]);
+    let expected = fixture.rev_list();
 
     let whole = read(&repo, &HistoryRequest::from_head(expected.len()));
     let first = read(&repo, &HistoryRequest::from_head(3));
@@ -298,7 +300,7 @@ impl Cancel for StopAfter {
 fn a_cancelled_query_stops_walking_and_says_where() {
     let fixture = fixtures::braided(40);
     let repo = open(&fixture);
-    let total = fixture.rev_list(&[]).len();
+    let total = fixture.rev_list().len();
     let stop_at = 6;
     assert!(
         total > stop_at * 3,
@@ -346,7 +348,7 @@ fn a_cancelled_query_stops_walking_and_says_where() {
 fn a_narrow_window_returns_every_commit() {
     let fixture = fixtures::braided(30);
     let repo = open(&fixture);
-    let expected = fixture.rev_list(&[]);
+    let expected = fixture.rev_list();
 
     let generous = read(&repo, &HistoryRequest::from_head(expected.len()));
     let narrow = read(
@@ -377,7 +379,7 @@ fn repaints(rows: &[HistoryRow]) -> usize {
 fn a_row_that_left_the_window_is_never_repainted() {
     let fixture = fixtures::skewed();
     let repo = open(&fixture);
-    let expected = fixture.rev_list(&[]);
+    let expected = fixture.rev_list();
     assert_eq!(expected.len(), 5, "the skew fixture changed shape");
 
     let held = read(
@@ -441,4 +443,142 @@ fn a_walk_can_start_from_named_commits() {
     let from_head = read(&repo, &HistoryRequest::from_head(10));
     let from_tip = read(&repo, &HistoryRequest::from_commits([tip], 10));
     assert_eq!(ids(&from_tip), ids(&from_head));
+}
+
+/// `HistoryOrder::GraphOrder` had no coverage at all, so the `BreadthFirst` arm
+/// could have returned a different commit set and the gate would have stayed
+/// green. It must reach the same commits as commit-time order — a different
+/// sequence is the whole point of it, a different *set* is a bug.
+#[test]
+fn graph_order_reaches_the_same_commits_as_commit_time_order() {
+    let fixture = fixtures::braided(30);
+    let repo = open(&fixture);
+    let expected = fixture.rev_list();
+
+    let by_time = read(
+        &repo,
+        &HistoryRequest::from_head(expected.len()).with_order(HistoryOrder::CommitTime),
+    );
+    let by_graph = read(
+        &repo,
+        &HistoryRequest::from_head(expected.len()).with_order(HistoryOrder::GraphOrder),
+    );
+
+    let mut from_git = expected.clone();
+    from_git.sort();
+    let mut theirs = ids(&by_graph);
+    theirs.sort();
+    assert_eq!(
+        theirs, from_git,
+        "graph order reached a different commit set"
+    );
+    assert_eq!(
+        theirs.len(),
+        by_graph.rows.len(),
+        "graph order repeated a commit"
+    );
+    assert_eq!(
+        ids(&by_time),
+        expected,
+        "commit-time order stopped matching git"
+    );
+    assert!(
+        by_graph.cursor.is_none(),
+        "the whole history left a cursor behind"
+    );
+}
+
+/// The cursor carries the order and the window, and resuming must not let
+/// either be changed underneath it — both decide lane numbering, so a page that
+/// silently switched would renumber lanes the caller has already drawn.
+#[test]
+fn resuming_ignores_an_order_or_window_the_cursor_did_not_come_from() {
+    let fixture = fixtures::braided(30);
+    let repo = open(&fixture);
+
+    let first = read(
+        &repo,
+        &HistoryRequest::from_head(6)
+            .with_order(HistoryOrder::CommitTime)
+            .with_window(4),
+    );
+    let cursor = match first.cursor.clone() {
+        Some(cursor) => cursor,
+        None => panic!("six commits ended the history"),
+    };
+
+    let plain = read(&repo, &HistoryRequest::resume(cursor.clone(), 6));
+    let meddled = read(
+        &repo,
+        &HistoryRequest::resume(cursor, 6)
+            .with_order(HistoryOrder::GraphOrder)
+            .with_window(1024),
+    );
+    assert_eq!(
+        (ids(&meddled), lanes(&meddled.rows)),
+        (ids(&plain), lanes(&plain.rows)),
+        "resuming honoured an order or window the cursor did not carry"
+    );
+}
+
+/// A limit of zero reads nothing — and must not claim the history ended, nor
+/// swallow the cursor it was given. `resume` consumes the cursor by value, so
+/// returning `None` here would leave a caller with no way to continue.
+#[test]
+fn a_limit_of_zero_reads_nothing_and_keeps_the_cursor() {
+    let fixture = fixtures::braided(20);
+    let repo = open(&fixture);
+
+    let first = read(&repo, &HistoryRequest::from_head(4));
+    let cursor = match first.cursor.clone() {
+        Some(cursor) => cursor,
+        None => panic!("four commits ended the history"),
+    };
+
+    let nothing = read(&repo, &HistoryRequest::resume(cursor.clone(), 0));
+    assert!(nothing.rows.is_empty(), "a zero limit returned rows");
+    assert_eq!(nothing.walked, 0, "a zero limit walked the repository");
+    assert_eq!(
+        nothing.cursor.as_ref(),
+        Some(&cursor),
+        "a zero limit lost the caller's place in the history"
+    );
+
+    let resumed = read(&repo, &HistoryRequest::resume(cursor, 4));
+    let again = match nothing.cursor {
+        Some(cursor) => read(&repo, &HistoryRequest::resume(cursor, 4)),
+        None => panic!("already asserted"),
+    };
+    assert_eq!(
+        ids(&again),
+        ids(&resumed),
+        "the returned cursor is not the one given"
+    );
+}
+
+/// Starting points a caller can get wrong, and the error each must produce
+/// rather than a panic or an empty page that looks like an empty repository.
+#[test]
+fn bad_starting_points_are_errors_rather_than_empty_pages() {
+    let fixture = fixtures::braided(10);
+    let repo = open(&fixture);
+
+    let absent = ok(
+        cairn_model::Oid::parse("0123456789abcdef0123456789abcdef01234567"),
+        "parsing a well-formed id that is not in the repository",
+    );
+    match repo.history(
+        &HistoryRequest::from_commits([absent], 5),
+        &CancelSignal::new(),
+    ) {
+        Err(Error::Walk { .. }) => {}
+        other => panic!("expected a walk failure for an unknown commit, got {other:?}"),
+    }
+
+    let empty = read(&repo, &HistoryRequest::from_commits([], 5));
+    assert!(empty.rows.is_empty(), "no starting point produced rows");
+    assert!(
+        empty.cursor.is_none(),
+        "no starting point produced a cursor"
+    );
 }

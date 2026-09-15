@@ -10,8 +10,10 @@ Testable form: `cairn-ui` compiles with neither `gix` nor `cairn-git` in its
 dependency graph, and nothing outside `cairn-git::ops` can mutate a repository.
 
 Status today: the workspace, the seam, the gate and the guard suite exist and are
-green; the application window opens and renders an empty history list. No git
-query or command is implemented yet. Entries marked (planned) below name the
+green; the application window opens and renders an empty history list. The first
+repository read exists — `cairn-git`'s bounded, resumable history query, feeding
+the lane assigner in `cairn-model` — but nothing is wired to the window yet, and
+no command mutates a repository. Entries marked (planned) below name the
 canonical home something WILL have so docs and implementation converge on the same
 names — never cite one as if it exists.
 

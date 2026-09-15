@@ -33,10 +33,11 @@ impl Fixture {
     }
 
     /// Every commit reachable from `HEAD`, newest first, as `git` orders them.
-    pub fn rev_list(&self, extra: &[&str]) -> Vec<String> {
-        let mut args = vec!["rev-list", "HEAD"];
-        args.extend_from_slice(extra);
-        self.git(&args).lines().map(str::to_owned).collect()
+    pub fn rev_list(&self) -> Vec<String> {
+        self.git(&["rev-list", "HEAD"])
+            .lines()
+            .map(str::to_owned)
+            .collect()
     }
 }
 

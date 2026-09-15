@@ -12,8 +12,6 @@
 //! [`HistoryPage::walked`] and [`HistoryPage::decoded`] report the difference,
 //! so the claim is something a test can check rather than a comment.
 
-use std::collections::VecDeque;
-
 use cairn_model::{CommitSummary, HistoryRow, LaneAssigner, Oid};
 
 use crate::{Cancel, Error, Repository};
@@ -37,11 +35,13 @@ pub enum HistoryOrder {
 impl Default for HistoryOrder {
     /// Commit time, because it is both the readable order and — once the
     /// repository carries the object cache [`Repository::discover`] installs —
-    /// the cheaper one end to end. Measured over 50k commits of a repository
-    /// with no commit-graph file: walking and laying out took 129 ms by commit
-    /// time against 196 ms in graph order, because graph order interleaves
-    /// branches and leaves far more lanes open per row. Open question O2,
-    /// `docs/work/history-graph/progress.md`.
+    /// the cheaper one end to end. Measured over the same 50k commits of a
+    /// repository with no commit-graph file: walking *and laying out* took
+    /// 129 ms by commit time against 196 ms in graph order, because graph order
+    /// interleaves branches and leaves far more lanes open per row. (Walking
+    /// alone is the other way round — 116 ms against 101 ms — which is why the
+    /// two numbers quoted here and on [`Repository::discover`] differ.) Open
+    /// question O2, `docs/work/history-graph/progress.md`.
     fn default() -> Self {
         Self::CommitTime
     }
@@ -60,13 +60,18 @@ impl HistoryOrder {
 
 /// Where a page of history picks up from.
 ///
-/// Opaque on purpose: it records the resolved starting points, the order, and
-/// how far the walk had got, and how it does that is free to change. Hand it
-/// back to [`HistoryRequest::resume`] and nothing else.
+/// Opaque on purpose: it records the resolved starting points, the order, the
+/// window, and how far the walk had got, and how it does that is free to
+/// change. Hand it back to [`HistoryRequest::resume`] and nothing else.
+///
+/// It carries the order and the window because both decide lane numbering, and
+/// a page that quietly changed either would renumber lanes the caller has
+/// already drawn — the one thing R1.2 does not allow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryCursor {
     tips: Vec<Oid>,
     order: HistoryOrder,
+    window: usize,
     /// Commits laid out by every page so far.
     walked: usize,
 }
@@ -106,15 +111,15 @@ impl HistoryRequest {
     }
 
     /// Continue where the page that produced `cursor` stopped. The cursor
-    /// carries the starting points and the order, so neither is asked for
-    /// again and neither can drift between pages.
+    /// carries the starting points, the order and the window, so none of them
+    /// is asked for again and none of them can drift between pages.
     pub fn resume(cursor: HistoryCursor, limit: usize) -> Self {
-        let order = cursor.order;
+        let (order, window) = (cursor.order, cursor.window);
         Self {
             start: Start::Resume(cursor),
             order,
             limit,
-            window: LaneAssigner::DEFAULT_WINDOW,
+            window,
         }
     }
 
@@ -140,14 +145,15 @@ impl HistoryRequest {
     /// How many rows the lane assigner holds before it makes them final. The
     /// default is [`LaneAssigner::DEFAULT_WINDOW`]; widen it for a repository
     /// whose committer dates are further out than that.
+    ///
+    /// Ignored when resuming, for the same reason [`Self::with_order`] is: the
+    /// window decides which parents can still be joined to their children, so
+    /// changing it mid-history would renumber lanes already drawn.
     pub fn with_window(mut self, window: usize) -> Self {
-        self.window = window;
+        if !matches!(self.start, Start::Resume(_)) {
+            self.window = window;
+        }
         self
-    }
-
-    /// The most rows this request can return.
-    pub fn limit(&self) -> usize {
-        self.limit
     }
 }
 
@@ -165,7 +171,9 @@ pub struct HistoryPage {
     /// unchanged.
     pub rows: Vec<HistoryRow>,
     /// Where the next page starts, or `None` because this page reached the end
-    /// of the history.
+    /// of the history. A request with a limit of zero reads nothing and always
+    /// hands back a cursor at the position it was given, since it learned
+    /// nothing about where the history ends.
     pub cursor: Option<HistoryCursor>,
     /// Commits laid out to produce this page, including the ones before its
     /// first row. Larger than `rows.len()` on a resumed page: resuming replays
@@ -202,7 +210,29 @@ fn read_page(
     request: &HistoryRequest,
     cancel: &impl Cancel,
 ) -> Result<HistoryPage, Error> {
-    let (tips, order, skip) = starting_points(repo, request)?;
+    let Resolved {
+        tips,
+        order,
+        window,
+        skip,
+    } = starting_points(repo, request)?;
+    if request.limit == 0 {
+        // Nothing to read, so nothing is walked and nothing is claimed about
+        // where the history ends. The cursor points at the same place the
+        // request came in at, because `resume` consumes the caller's copy and
+        // returning `None` would leave them no way back.
+        return Ok(HistoryPage {
+            rows: Vec::new(),
+            cursor: Some(HistoryCursor {
+                tips,
+                order,
+                window,
+                walked: skip,
+            }),
+            walked: 0,
+            decoded: 0,
+        });
+    }
     let target = skip.saturating_add(request.limit);
 
     let mut object_ids = Vec::with_capacity(tips.len());
@@ -218,13 +248,12 @@ fn read_page(
             source: Box::new(source),
         })?;
 
-    let mut assigner = LaneAssigner::with_window(request.window);
-    let mut summaries: VecDeque<CommitSummary> = VecDeque::new();
+    let mut assigner = LaneAssigner::with_window(window);
     let mut page = Page {
         rows: Vec::new(),
+        summaries: Vec::new(),
         next_row: 0,
         skip,
-        target,
     };
     let mut walked = 0usize;
     let mut decoded = 0usize;
@@ -247,24 +276,34 @@ fn read_page(
         for parent in info.parent_ids.iter() {
             parents.push(model_id(parent)?);
         }
-        if walked >= skip {
-            summaries.push_back(summary_of(&info, &id, &parents)?);
+        if walked >= skip && walked < target {
+            page.summaries.push(summary_of(&info, &id, &parents)?);
             decoded += 1;
         }
         walked += 1;
 
         if let Some(finalised) = assigner.push(id, parents) {
-            page.take(finalised, &mut summaries);
+            page.take(finalised);
         }
     }
     for row in assigner.into_rows() {
-        page.take(row, &mut summaries);
+        page.take(row);
     }
 
-    let cursor = if exhausted || request.limit == 0 {
+    let cursor = if exhausted {
         None
     } else {
-        next_cursor(&mut walk, tips, order, target, cancel, walked)?
+        next_cursor(
+            &mut walk,
+            HistoryCursor {
+                tips,
+                order,
+                window,
+                walked: target,
+            },
+            cancel,
+            walked,
+        )?
     };
 
     Ok(HistoryPage {
@@ -280,9 +319,7 @@ fn read_page(
 /// out for a page that turns out to be empty is a worse trade.
 fn next_cursor(
     walk: &mut gix::revision::Walk<'_>,
-    tips: Vec<Oid>,
-    order: HistoryOrder,
-    walked: usize,
+    next: HistoryCursor,
     cancel: &impl Cancel,
     so_far: usize,
 ) -> Result<Option<HistoryCursor>, Error> {
@@ -290,11 +327,7 @@ fn next_cursor(
         return Err(Error::Cancelled { walked: so_far });
     }
     match walk.next() {
-        Some(Ok(_)) => Ok(Some(HistoryCursor {
-            tips,
-            order,
-            walked,
-        })),
+        Some(Ok(_)) => Ok(Some(next)),
         Some(Err(source)) => Err(Error::Walk {
             source: Box::new(source),
         }),
@@ -305,41 +338,46 @@ fn next_cursor(
 /// The rows this page keeps, and where the assigner's output has got to.
 ///
 /// Rows leave the assigner in walk order — the ones the window made final
-/// first, then the ones still inside it — so counting them is enough to know
-/// which commit each one is, and the summaries queued for the page come off in
-/// the same order.
+/// first, then the ones still inside it — so counting them gives each row its
+/// position in the walk. `summaries` is indexed by that position rather than
+/// consumed in order, so a row and its commit are matched by where they sit,
+/// not by two sequences staying in step.
 struct Page {
     rows: Vec<HistoryRow>,
+    summaries: Vec<CommitSummary>,
     next_row: usize,
     skip: usize,
-    target: usize,
 }
 
 impl Page {
-    fn take(&mut self, graph: cairn_model::GraphRow, summaries: &mut VecDeque<CommitSummary>) {
+    fn take(&mut self, graph: cairn_model::GraphRow) {
         let position = self.next_row;
         self.next_row += 1;
-        if position < self.skip || position >= self.target {
-            return;
-        }
-        let Some(commit) = summaries.pop_front() else {
-            return;
+        let Some(offset) = position.checked_sub(self.skip) else {
+            return; // Before this page starts.
         };
-        debug_assert_eq!(
-            commit.id, graph.id,
-            "the summary queue and the assigner's rows fell out of step"
-        );
-        self.rows.push(HistoryRow { commit, graph });
+        let Some(commit) = self.summaries.get(offset) else {
+            return; // After it ends: the walk stopped at `target`.
+        };
+        self.rows.push(HistoryRow {
+            commit: commit.clone(),
+            graph,
+        });
     }
 }
 
-fn starting_points(
-    repo: &Repository,
-    request: &HistoryRequest,
-) -> Result<(Vec<Oid>, HistoryOrder, usize), Error> {
-    match &request.start {
-        Start::Resume(cursor) => Ok((cursor.tips.clone(), cursor.order, cursor.walked)),
-        Start::Commits(tips) => Ok((tips.clone(), request.order, 0)),
+/// Everything the request settles before the walk starts.
+struct Resolved {
+    tips: Vec<Oid>,
+    order: HistoryOrder,
+    window: usize,
+    skip: usize,
+}
+
+fn starting_points(repo: &Repository, request: &HistoryRequest) -> Result<Resolved, Error> {
+    let tips = match &request.start {
+        Start::Resume(cursor) => cursor.tips.clone(),
+        Start::Commits(tips) => tips.clone(),
         Start::Head => {
             let mut head = repo.inner().head().map_err(|source| Error::Walk {
                 source: Box::new(source),
@@ -352,9 +390,19 @@ fn starting_points(
                     path: repo.git_dir().to_owned(),
                 });
             };
-            Ok((vec![model_id(&id)?], request.order, 0))
+            vec![model_id(&id)?]
         }
-    }
+    };
+    let skip = match &request.start {
+        Start::Resume(cursor) => cursor.walked,
+        _ => 0,
+    };
+    Ok(Resolved {
+        tips,
+        order: request.order,
+        window: request.window,
+        skip,
+    })
 }
 
 fn object_id(oid: &Oid) -> Result<gix::hash::ObjectId, Error> {

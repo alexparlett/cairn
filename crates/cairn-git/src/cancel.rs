@@ -46,12 +46,6 @@ impl Cancel for CancelSignal {
     }
 }
 
-impl<T: Cancel + ?Sized> Cancel for &T {
-    fn is_cancelled(&self) -> bool {
-        (**self).is_cancelled()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

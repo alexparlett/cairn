@@ -171,6 +171,23 @@ mod tests {
         assert!(shared.git_dir().join("HEAD").is_file());
     }
 
+    /// The object cache is a property of the HANDLE, not of the shared store, so
+    /// every worker has to install its own — and `to_worker` is the only place
+    /// that can. Deleting that line costs 53% on a commit-time walk (open
+    /// question O2) and changes no observable answer, which is exactly the kind
+    /// of regression nothing would have caught.
+    #[test]
+    fn every_worker_handle_carries_the_object_cache() {
+        let shared = SharedRepository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
+        for _ in 0..2 {
+            let worker = shared.to_worker();
+            assert!(
+                worker.inner().objects.has_object_cache(),
+                "a worker handle was built without the object cache O2 measured"
+            );
+        }
+    }
+
     #[test]
     fn a_shared_repository_reports_a_non_repository_as_such() {
         let err = SharedRepository::discover("/").unwrap_err();

@@ -148,9 +148,18 @@ subject matter, 7 findings with its own measurements), `gate-integrity-reviewer`
 mutating the real tree) and `qa-checklist` (NOT READY, 7 findings). A fourth,
 `test-coverage-auditor`, **did not deliver**: it ran out of turns, was re-asked
 once, and then stalled without reporting — recorded rather than counted, because
-a reviewer that returns nothing is a delivery failure and not a clean bill. In
-its place the implementer ran the mutations itself and they are named where they
-appear below; the packet's final QA phase should treat this surface as
+a reviewer that returns nothing is a delivery failure and not a clean bill.
+
+Before it stalled the second time it did manage one line, and that line was
+worth having: moving `to_worker()` into the request loop — per-request
+conversion, the QA brief's named worry — was caught by NOTHING. It is caught by
+the compiler now. `serve` drops the shared handle after converting, so a second
+conversion is a use-after-move: a compile error, which is a stronger twin than
+any test could be. The object-cache install has a twin now too
+(`every_worker_handle_carries_the_object_cache`), since deleting it costs 53% on
+a commit-time walk and changed no answer any test was looking at. In its place
+the implementer ran the other mutations itself and they are named where they
+appear below; the packet's final QA phase should still treat this surface as
 un-audited by a fresh agent.
 
 *The one that mattered most was found by the gate itself.* `scripts/gate.sh`

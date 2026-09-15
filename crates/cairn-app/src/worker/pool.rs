@@ -313,6 +313,13 @@ fn serve(
     epochs: Epochs,
 ) {
     let repo = shared.to_worker();
+    // The conversion happens once, and this line is what makes that true rather
+    // than merely intended: moving `to_worker()` into the loop below — which
+    // compiles, passes every test, and silently rebuilds the object cache and
+    // the pack snapshot on every request — is a use-after-move once the shared
+    // handle is gone. A compile error is the strongest twin available for
+    // "exactly once, at the thread's start".
+    drop(shared);
     let mut scroll: Option<HistorySession<'_>> = None;
     let mut cursor: Option<HistoryCursor> = None;
 

@@ -168,8 +168,9 @@ and nothing more than that.
 - Commit explicit paths, never `git add -A`.
 - A new crate, dependency or invariant needs its row in
   `crates/cairn-guards/tests/invariants.rs` in the same commit, or the gate fails.
-- The repository has no remote yet. If one still does not exist when a phase ends,
-  say so in the final response instead of pretending a PR was raised.
+- The repository HAS a remote: `origin` is `git@github.com:alexparlett/cairn.git`,
+  and `feature/history-graph` is pushed to it. (This line used to say there was
+  none.) Merging is still the user's alone.
 - Work in a linked worktree (`.claude/worktrees/<packet>`). A linked worktree's
   git dir is `.git/worktrees/<name>`, not `.git` — phase 01 had to fix a
   `cairn-git` test that assumed otherwise. Assert that a path IS a git directory,

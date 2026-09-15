@@ -22,9 +22,15 @@ impl std::fmt::Debug for Repository {
 
 impl Repository {
     /// Open the repository containing `path`, walking upwards like `git` does.
+    ///
+    /// Opening installs a small object cache. Walking by committer date looks
+    /// each commit up twice without one: measured over 50k commits of a
+    /// repository with no commit-graph file, 178 ms became 116 ms, and a cache
+    /// larger than [`Self::OBJECT_CACHE_BYTES`] bought nothing further
+    /// (`docs/work/history-graph/progress.md`, open question O2).
     pub fn discover(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = path.as_ref();
-        let inner = gix::discover(path).map_err(|source| match source {
+        let mut inner = gix::discover(path).map_err(|source| match source {
             gix::discover::Error::Discover(_) => Error::NotARepository {
                 path: path.to_owned(),
             },
@@ -33,9 +39,14 @@ impl Repository {
                 source: Box::new(other),
             },
         })?;
+        inner.object_cache_size_if_unset(Self::OBJECT_CACHE_BYTES);
         let workdir = inner.workdir().map(Path::to_owned);
         Ok(Self { inner, workdir })
     }
+
+    /// How much memory one open repository spends on caching decoded objects.
+    /// Measured, not guessed: see [`Self::discover`].
+    pub const OBJECT_CACHE_BYTES: usize = 4 * 1024 * 1024;
 
     /// The `.git` directory backing this repository.
     pub fn git_dir(&self) -> &Path {

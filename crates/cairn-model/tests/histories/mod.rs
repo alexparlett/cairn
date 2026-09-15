@@ -40,18 +40,15 @@ pub fn oid(label: &str) -> Oid {
 }
 
 pub fn label_of(id: &Oid) -> String {
-    let mut bytes = Vec::new();
-    for pair in id.as_str().as_bytes().chunks(2) {
-        let byte = pair.iter().fold(0u8, |value, digit| {
-            let nibble = char::from(*digit).to_digit(16).unwrap_or(0) as u8;
-            value.wrapping_mul(16).wrapping_add(nibble)
-        });
-        if byte == 0 {
-            break; // The padding starts here: the label is over.
-        }
-        bytes.push(byte);
-    }
-    String::from_utf8_lossy(&bytes).into_owned()
+    // The label was hex-encoded and padded with zero bytes, so the padding is
+    // where the label ends.
+    let label: Vec<u8> = id
+        .as_bytes()
+        .iter()
+        .copied()
+        .take_while(|&byte| byte != 0)
+        .collect();
+    String::from_utf8_lossy(&label).into_owned()
 }
 
 pub fn assign(history: &History) -> Vec<GraphRow> {
@@ -138,10 +135,10 @@ fn connecting_lane(rows: &[GraphRow], top: usize, bottom: usize) -> Option<Lane>
 pub fn assert_every_parent_edge_is_drawn(history: &History, rows: &[GraphRow]) {
     assert_eq!(rows.len(), history.len(), "one row per commit");
     assert_the_picture_joins_up(rows);
-    let row_of: HashMap<&str, usize> = rows
+    let row_of: HashMap<Oid, usize> = rows
         .iter()
         .enumerate()
-        .map(|(index, row)| (row.id.as_str(), index))
+        .map(|(index, row)| (row.id, index))
         .collect();
     assert_eq!(
         row_of.len(),
@@ -151,10 +148,10 @@ pub fn assert_every_parent_edge_is_drawn(history: &History, rows: &[GraphRow]) {
 
     let mut links = 0usize;
     for (id, parents) in history {
-        let child = row_of[oid(id).as_str()];
+        let child = row_of[&oid(id)];
         for parent in distinct_parents(parents) {
             links += 1;
-            let Some(&ancestor) = row_of.get(oid(parent).as_str()) else {
+            let Some(&ancestor) = row_of.get(&oid(parent)) else {
                 continue; // A parent outside the walk: the line runs off the end.
             };
             assert_ne!(child, ancestor, "{id} cannot be its own parent");

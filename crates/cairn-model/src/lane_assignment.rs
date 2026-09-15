@@ -223,7 +223,7 @@ impl LaneAssigner {
             .lanes
             .iter()
             .enumerate()
-            .filter(|(_, slot)| slot.as_ref() == Some(&id))
+            .filter(|(_, slot)| **slot == Some(id))
             .map(|(lane, _)| lane)
             .collect();
 
@@ -250,20 +250,16 @@ impl LaneAssigner {
                 // A commit may name the same parent twice; one line is enough.
                 continue;
             }
-            placed.push(parent.clone());
+            placed.push(*parent);
 
-            if let Some(lane) = self
-                .lanes
-                .iter()
-                .position(|slot| slot.as_ref() == Some(parent))
-            {
+            if let Some(lane) = self.lanes.iter().position(|slot| *slot == Some(*parent)) {
                 // Another branch already reserved a lane for this parent: join
                 // it, rather than opening a second lane for the same commit.
                 edges.push(EdgeSegment::out_of_commit(Lane::new(own), Lane::new(lane)));
             } else if self.laid_out.contains_key(parent) {
                 // The parent is already on screen, above: connect once the row
                 // exists, because the connection repaints the rows in between.
-                late_parents.push(parent.clone());
+                late_parents.push(*parent);
             } else if self.gone_count.contains_key(parent) {
                 // The parent went past before this child arrived and its row
                 // has left the window. The joining line would have to start on
@@ -280,13 +276,13 @@ impl LaneAssigner {
                 } else {
                     self.free_slot()
                 };
-                self.lanes[lane] = Some(parent.clone());
+                self.lanes[lane] = Some(*parent);
                 edges.push(EdgeSegment::out_of_commit(Lane::new(own), Lane::new(lane)));
             }
         }
 
         self.rows.push_back(GraphRow {
-            id: id.clone(),
+            id,
             lane: Lane::new(own),
             edges,
         });
@@ -310,7 +306,7 @@ impl LaneAssigner {
         if self.laid_out.get(&row.id).map(|&(index, _)| index) == Some(self.first_row) {
             self.laid_out.remove(&row.id);
         }
-        self.remember_gone(row.id.clone());
+        self.remember_gone(row.id);
         self.first_row += 1;
         Some(row)
     }
@@ -318,7 +314,7 @@ impl LaneAssigner {
     /// Record that `id`'s row has left the window, forgetting the oldest such
     /// id once there are more than [`LaneAssigner::remembered`] of them.
     fn remember_gone(&mut self, id: Oid) {
-        *self.gone_count.entry(id.clone()).or_insert(0) += 1;
+        *self.gone_count.entry(id).or_insert(0) += 1;
         self.gone.push_back(id);
         while self.gone.len() > self.remembered() {
             let Some(oldest) = self.gone.pop_front() else {
@@ -486,8 +482,8 @@ mod tests {
         let mut peak_rows = 0;
         let mut peak_segments = 0;
         for (id, parents) in &history {
-            bounded.push(id.clone(), parents.clone());
-            unbounded.push(id.clone(), parents.clone());
+            bounded.push(*id, parents.clone());
+            unbounded.push(*id, parents.clone());
 
             let (rows, indexed, segments, widest) = retained(&bounded);
             assert!(rows <= window, "window overrun: {rows} rows held");
@@ -542,7 +538,7 @@ mod tests {
         let late = id(900);
         let child = id(901);
 
-        let first = assigner.push(late.clone(), vec![]);
+        let first = assigner.push(late, vec![]);
         assert!(
             first.is_none(),
             "nothing leaves the window on the first push"
@@ -560,7 +556,7 @@ mod tests {
 
         // The child turns up too late. It must still be laid out, and it must
         // not pretend to draw a line to a row that is gone.
-        assigner.push(child.clone(), vec![late.clone()]);
+        assigner.push(child, vec![late]);
         let rows: Vec<GraphRow> = assigner.rows().cloned().collect();
         let child_row = rows
             .iter()
@@ -615,7 +611,7 @@ mod tests {
             let history = skew_past_the_window(pairs, gap);
             let mut rows = Vec::new();
             for (id, parents) in &history {
-                if let Some(row) = assigner.push(id.clone(), parents.clone()) {
+                if let Some(row) = assigner.push(*id, parents.clone()) {
                     rows.push(row);
                 }
             }
@@ -701,5 +697,42 @@ mod tests {
             1,
             "the window holds one row at a time"
         );
+    }
+
+    /// What laying a row out costs as more lanes stay open across it — the
+    /// comparison `Oid`'s representation was decided on.
+    ///
+    /// Every parent is looked up by scanning the open lane slots, so a row in a
+    /// wide history pays that scan once per parent, and the cost of one
+    /// comparison is the whole question: a heap string compares by chasing a
+    /// pointer, a fixed-width id by comparing bytes already in the row.
+    ///
+    /// Ignored by default: it is a measurement, and a timing assertion in the
+    /// gate would be flaky within a week.
+    ///
+    /// `cargo test --release -p cairn-model --lib -- --ignored --nocapture
+    /// measures_layout_cost_against_lane_count`
+    #[test]
+    #[ignore = "a measurement, not an assertion"]
+    fn measures_layout_cost_against_lane_count() {
+        const COMMITS: usize = 50_000;
+        let mut per_commit = Vec::new();
+        for branches in [1usize, 2, 8, 32, 200] {
+            let history = wide_history(branches, COMMITS / branches);
+            let laid_out = history.len();
+            let started = std::time::Instant::now();
+            let rows = LaneAssigner::assign_all(history);
+            let elapsed = started.elapsed();
+            assert_eq!(rows.len(), laid_out, "a commit was lost");
+            let nanos = elapsed.as_secs_f64() * 1e9 / laid_out as f64;
+            per_commit.push((branches, nanos));
+            eprintln!(
+                "  {branches:>3} lanes\t{laid_out} commits in {elapsed:?}\t{nanos:.0} ns/commit"
+            );
+        }
+        let base = per_commit.first().map_or(1.0, |&(_, nanos)| nanos);
+        for (branches, nanos) in per_commit {
+            eprintln!("  {branches:>3} lanes\t{:.2}x one lane", nanos / base);
+        }
     }
 }

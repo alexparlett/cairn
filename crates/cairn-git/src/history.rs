@@ -408,16 +408,19 @@ fn starting_points(repo: &Repository, request: &HistoryRequest) -> Result<Resolv
 }
 
 fn object_id(oid: &Oid) -> Result<gix::hash::ObjectId, Error> {
-    gix::hash::ObjectId::from_hex(oid.as_str().as_bytes()).map_err(|source| Error::ReadCommit {
+    // Both sides hold the digest itself, so crossing the seam is a copy of
+    // twenty or thirty-two bytes rather than a round trip through hex.
+    gix::hash::ObjectId::try_from(oid.as_bytes()).map_err(|source| Error::ReadCommit {
         id: oid.to_string(),
         source: Box::new(source),
     })
 }
 
 fn model_id(id: &gix::hash::oid) -> Result<Oid, Error> {
-    let hex = id.to_hex().to_string();
-    Oid::parse(&hex).map_err(|source| Error::ReadCommit {
-        id: hex,
+    // The hex form is built only to name the commit in an error, which is a
+    // path this never takes for a digest gitoxide itself produced.
+    Oid::from_bytes(id.as_bytes()).map_err(|source| Error::ReadCommit {
+        id: id.to_hex().to_string(),
         source: Box::new(source),
     })
 }
@@ -439,7 +442,7 @@ fn summary_of(
     let author = commit.author().map_err(|e| read(Box::new(e)))?;
     let time = author.time().map_err(|e| read(Box::new(e)))?;
     Ok(CommitSummary {
-        id: id.clone(),
+        id: *id,
         parents: parents.to_vec(),
         summary: message.summary().into_owned().to_string(),
         author_name: author.name.to_string(),

@@ -16,7 +16,7 @@ pub use confirm::Confirmed;
 pub use graph::{EdgeKind, EdgeSegment, GraphRow, Lane};
 pub use history::HistoryRow;
 pub use lane_assignment::LaneAssigner;
-pub use oid::{Oid, OidParseError};
+pub use oid::{Oid, OidHex, OidParseError};
 
 /// A commit as a list needs it: enough to draw a row, never the full object.
 #[derive(Debug, Clone, PartialEq, Eq)]

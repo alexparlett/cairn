@@ -40,7 +40,7 @@ mod tests {
         let other = Oid::parse("fedcba9876543210fedcba9876543210fedcba98").unwrap();
         let row = HistoryRow {
             commit: CommitSummary {
-                id: id.clone(),
+                id,
                 parents: Vec::new(),
                 summary: "first".to_owned(),
                 author_name: "A".to_owned(),
@@ -48,7 +48,7 @@ mod tests {
                 author_time: 0,
             },
             graph: GraphRow {
-                id: other.clone(),
+                id: other,
                 lane: Lane::new(0),
                 edges: vec![EdgeSegment::passing(Lane::new(0))],
             },

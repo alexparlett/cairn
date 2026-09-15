@@ -439,22 +439,24 @@ fn assignment_is_deterministic() {
 }
 
 /// Feeding commits one at a time must match feeding them all at once, because
-/// `cairn-git` will stream them.
+/// `cairn-git` streams them. Rows arrive two ways — handed back as the window
+/// makes them final, and left inside the window at the end — and the two
+/// together have to be the whole walk, in order.
 #[test]
 fn pushing_one_at_a_time_matches_assigning_the_whole_walk() {
     for (name, history) in corpus() {
         let mut assigner = LaneAssigner::new();
+        let mut streamed = Vec::new();
         for (id, parents) in &history {
-            assigner.push(
+            if let Some(finalised) = assigner.push(
                 histories::oid(id),
                 parents.iter().map(|p| histories::oid(p)).collect(),
-            );
+            ) {
+                streamed.push(finalised);
+            }
         }
-        assert_eq!(
-            describe(assigner.rows()),
-            describe(&assign(&history)),
-            "{name}"
-        );
+        streamed.extend(assigner.into_rows());
+        assert_eq!(describe(&streamed), describe(&assign(&history)), "{name}");
     }
 }
 

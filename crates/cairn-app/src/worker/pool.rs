@@ -2,10 +2,11 @@
 //!
 //! Decision D3, made concrete: one [`SharedRepository`] per open repository,
 //! one worker thread per repository, and that thread calls `to_worker` exactly
-//! once — at its start, for its whole life. Per-request conversion compiles and
-//! passes every test while throwing away the object cache and the pack snapshot
-//! the split exists to keep, so [`serve`] is written to make the single call
-//! visible in one place.
+//! once — at its start, for its whole life. Per-request conversion throws away
+//! the object cache and the pack snapshot the split exists to keep, so [`serve`]
+//! is written so that the borrow checker refuses it rather than leaving a reader
+//! to notice — see the note above `drop(shared)` there for which line carries
+//! that and which does not.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -313,12 +314,23 @@ fn serve(
     epochs: Epochs,
 ) {
     let repo = shared.to_worker();
-    // The conversion happens once, and this line is what makes that true rather
-    // than merely intended: moving `to_worker()` into the loop below — which
-    // compiles, passes every test, and silently rebuilds the object cache and
-    // the pack snapshot on every request — is a use-after-move once the shared
-    // handle is gone. A compile error is the strongest twin available for
-    // "exactly once, at the thread's start".
+    // The conversion happens once, and the compiler is what makes that true
+    // rather than merely intended: moving `to_worker()` into the loop below —
+    // which would silently rebuild the object cache and the pack snapshot on
+    // every request — does not compile. Two errors stand in the way and only
+    // one of them is load-bearing: the move past `drop(shared)` is reported
+    // first (`error[E0382]`), and with that out of the way the borrow `scroll`
+    // holds still refuses it — a `HistorySession<'_>` borrows `repo` and
+    // outlives a turn of the loop, so `repo` may not be replaced while it lives
+    // (`error[E0597]: repo does not live long enough`). The second is the one
+    // that would still be there if this function were rearranged.
+    //
+    // `drop(shared)` is not that guarantee and must not be read as it —
+    // deleting this line leaves the crate compiling, clippy clean and every
+    // test green. What it does is narrower and still worth keeping: it says
+    // the shared handle has no further use on this thread, so a SECOND
+    // `to_worker()` next to the first — one that did not feed `scroll`, and
+    // that the borrow therefore would not catch — is a use-after-move.
     drop(shared);
     let mut scroll: Option<HistorySession<'_>> = None;
     let mut cursor: Option<HistoryCursor> = None;
@@ -421,7 +433,13 @@ mod tests {
             }
         }
         let waker = Waker::from(Arc::new(Unpark(std::thread::current())));
-        let mut cx = Context::from_waker(&waker);
+        woken_by(&waker, future)
+    }
+
+    /// [`block_on`] with the waker supplied, for the one test whose subject is
+    /// what happens when waking the window is itself what goes wrong.
+    fn woken_by<F: Future>(waker: &Waker, future: F) -> F::Output {
+        let mut cx = Context::from_waker(waker);
         let mut future = std::pin::pin!(future);
         loop {
             match future.as_mut().poll(&mut cx) {
@@ -509,6 +527,125 @@ mod tests {
             .iter()
             .any(|a| second.iter().any(|b| a.id() == b.id()));
         assert!(!repeated, "the second page repeated a row from the first");
+    }
+
+    /// The epoch reaches the ENGINE, not only the answer — D3's strong form, at
+    /// the one line that makes it true.
+    ///
+    /// `epoch.rs` decides that `Superseded` flips, and `cairn-git`'s
+    /// `cancelling_a_session_stops_the_walk_and_keeps_its_progress` decides
+    /// that `next_page` honours a cancel signal it is handed. Neither of them
+    /// sees the call site. Handing `next_page` a fresh `CancelSignal` instead
+    /// of `epochs.watch(epoch)` leaves every other test in this crate green
+    /// while a superseded walk runs to completion on a core and has its answer
+    /// thrown away — exactly the weak form the epoch exists to replace. The
+    /// tests that look like this one run on [`inbox_only`], which has no
+    /// repository behind it and so decides the epoch FILTER alone.
+    ///
+    /// What a superseded request DID is read off the next page, because that is
+    /// where its fates differ:
+    ///
+    /// - **stopped mid-walk** — its session is young, so the next page starts
+    ///   again at the row the scroll opened on;
+    /// - **never picked up**, superseded before the worker reached it — the
+    ///   previous scroll's session survives untouched, so the next page carries
+    ///   on past the rows that one already handed out;
+    /// - **ran to completion** — its session is exhausted, so the next page is
+    ///   empty.
+    ///
+    /// Only the first is a stop, and only a cancel signal wired to the epoch
+    /// can produce it — with one caveat worth stating rather than leaving to be
+    /// discovered: a request that FAILED would also leave the next page
+    /// starting at the row the scroll opened on, because `serve` drops a
+    /// poisoned session and the cold restart goes back to `HEAD`, and its
+    /// `Update::Failed` is filtered out by epoch before anyone sees it. That is
+    /// a fourth fate, not a way for the broken version to pass: the mutation
+    /// this test exists to catch raises no error. A repository that started
+    /// failing would redden every other test in this file first.
+    ///
+    /// Getting there means superseding a request while its walk is running, and
+    /// a walk of this repository is microseconds long — far too short to aim a
+    /// `sleep` at, which a first version of this test proved by failing 20 runs
+    /// in 25 on a loaded machine. So the worker is given a BATCH of requests
+    /// under one epoch instead. It works through them without ever returning to
+    /// `recv`, the batch outlasts the wait below by orders of magnitude on any
+    /// machine, and so the supersession lands inside a walk rather than inside a
+    /// park.
+    ///
+    /// What is left racing is the gap BETWEEN two requests of the batch — an
+    /// answer sent, a wake signalled, the next request received. That gap holds
+    /// two syscalls, so on a loaded machine it is not a sliver: measured under
+    /// sixteen CPU burners, roughly two rounds in three land in it. It is a
+    /// retry rather than a verdict, because landing there shows a request that
+    /// ran to completion, which is also what the broken version shows. Rounds
+    /// are therefore cheap and many, and the failure is that EVERY one of them
+    /// saw a walk finish after being superseded — which is what the broken
+    /// version does every time.
+    #[test]
+    fn superseding_a_request_stops_the_walk_that_is_serving_it() {
+        // Larger than this repository can ever answer, so every request below
+        // is one that would otherwise walk the whole history.
+        let whole_history = 1_000_000;
+        // Queued work, not a queued number: what matters is that the worker is
+        // still busy when the supersession arrives.
+        let batch = 2_000;
+        let (handle, mut updates) = cairn();
+
+        // One ordinary round trip. It names the row a scroll opens on, and it
+        // measures what an answer costs on THIS machine right now — everything
+        // below is scaled to that, because a fixed number of microseconds means
+        // nothing on a loaded one.
+        let started = Instant::now();
+        handle.submit(Request::OpenHistory { rows: 2 });
+        let opened_on = match block_on(updates.next()) {
+            Some(Update::Rows { rows, .. }) if !rows.is_empty() => *rows[0].id(),
+            other => panic!("expected the first page of a scroll, got {other:?}"),
+        };
+        let answer = started.elapsed();
+        let wait = (answer * 2).clamp(
+            std::time::Duration::from_millis(1),
+            std::time::Duration::from_millis(20),
+        );
+
+        let mut ran_on = 0usize;
+        let mut never_started = 0usize;
+        for _ in 0..40 {
+            // Posted under ONE epoch, which `submit` cannot do because it bumps
+            // per call — every request but the last would be superseded before
+            // it was picked up. The worker's own loop does not know the
+            // difference: same channel, same epoch test, same walk.
+            let epoch = handle.epochs.bump();
+            for _ in 0..batch {
+                let queued = handle.jobs.send((
+                    epoch,
+                    Request::OpenHistory {
+                        rows: whole_history,
+                    },
+                ));
+                assert!(queued.is_ok(), "the worker went away mid-batch");
+            }
+            std::thread::sleep(wait);
+            // Supersedes the whole batch: the one being walked stops, the rest
+            // are dropped unpicked.
+            handle.submit(Request::MoreHistory { rows: 2 });
+
+            match block_on(updates.next()) {
+                Some(Update::Rows { rows, .. }) => match rows.first() {
+                    Some(row) if row.id() == &opened_on => return,
+                    Some(_) => never_started += 1,
+                    None => ran_on += 1,
+                },
+                other => panic!("expected the next page, got {other:?}"),
+            }
+        }
+
+        panic!(
+            "no supersession ever stopped a walk: {ran_on} rounds ran to the end of the \
+             history anyway and {never_started} never started one, over a batch of {batch} \
+             requests superseded after {wait:?} (one answer took {answer:?}). A walk that \
+             finishes after being superseded means the engine was handed a cancel signal \
+             that is not the epoch — see `serve`."
+        );
     }
 
     /// The receiving half on its own, with no repository behind it: enough to
@@ -661,9 +798,129 @@ mod tests {
         }
     }
 
-    /// The negative for the test above: a clean exit raises no alarm. Without
-    /// The negative for the test above: a clean exit raises no alarm. Without
-    /// this, a notice sent unconditionally would also pass.
+    /// The same notice, through the wiring that has to install it.
+    ///
+    /// The test above builds its own [`WorkerExit`] on its own thread, so it
+    /// decides that the guard works when something puts it there — not that
+    /// [`open`] does. Deleting `WorkerExit` from `open`'s closure and ending
+    /// the closure with `drop(outbox); worker_wake.signal();` keeps clean
+    /// shutdown working and every other test in this crate green, while a panic
+    /// inside [`serve`] unwinds past that signal: no notice, and no wake for
+    /// whoever was already parked on the stream when the worker died. Measured
+    /// against that mutation, this test goes red both ways, and which one it
+    /// lands on is a race with the unwind — three times in four it spent the
+    /// whole ten seconds below, which is the phase-03 deadlock returned, and
+    /// once the reader had not yet parked and saw the stream simply end,
+    /// without ever being told why. Both are failures; only one of them hangs.
+    ///
+    /// The panic is raised where one is still reachable on a real worker. The
+    /// engine is written not to panic — `unwrap` and its friends are denied
+    /// outside tests, and a commit it cannot read comes back as an
+    /// `Error::ReadCommit` rather than as an unwind — but
+    /// `Wake::signal` calls the window's waker ON THE WORKER THREAD, so a waker
+    /// that gives way is a panic inside `serve`, raised by the very line that
+    /// answers a request. It gives way exactly once: a second panic while the
+    /// notice was being sent would abort the process instead of deciding
+    /// anything.
+    #[test]
+    fn a_panic_inside_a_real_worker_is_announced_by_the_pool_that_opened_it() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct GivesWayOnce {
+            waiting: std::thread::Thread,
+            spent: AtomicBool,
+        }
+
+        impl std::task::Wake for GivesWayOnce {
+            fn wake(self: Arc<Self>) {
+                self.wake_by_ref();
+            }
+
+            fn wake_by_ref(self: &Arc<Self>) {
+                // `spent` first, then the unpark, then the panic: the thread
+                // this reaches must already be able to see that the waker has
+                // given way, and it must be woken whether it does or not,
+                // because a test that hangs on its own waker decides nothing.
+                let first = !self.spent.swap(true, Ordering::SeqCst);
+                self.waiting.unpark();
+                if first {
+                    panic!("the window's waker gave way mid-answer");
+                }
+            }
+        }
+
+        let (handle, updates) = cairn();
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+
+        // Everything that can park runs over there, so the bound below bounds
+        // the whole test rather than one step of it — and a failure comes back
+        // as a value rather than as a panic the hook would silence.
+        let (told, verdict) = channel::<Result<String, String>>();
+        let asking = handle.clone();
+        std::thread::spawn(move || {
+            let mut updates = updates;
+            let fragile = Arc::new(GivesWayOnce {
+                waiting: std::thread::current(),
+                spent: AtomicBool::new(false),
+            });
+            let waker = Waker::from(Arc::clone(&fragile));
+            let mut asked = 0;
+
+            // Ask again until an answer's wake actually runs the waker: a
+            // signal that arrives before this thread has parked only latches,
+            // and latching raises nothing. Which arrives first once it does —
+            // the answer the worker died delivering or the notice of the death
+            // — is a race with the unwind, and both are the same news here.
+            let announced = loop {
+                if !fragile.spent.load(Ordering::SeqCst) {
+                    if asked >= 100 {
+                        break Err(format!("{asked} answers arrived without ever waking"));
+                    }
+                    asked += 1;
+                    asking.submit(Request::OpenHistory { rows: 1 });
+                }
+                match woken_by(&waker, updates.next()) {
+                    Some(Update::Rows { .. }) => {}
+                    Some(Update::WorkerLost { message }) => break Ok(message),
+                    other => {
+                        break Err(format!(
+                            "a worker that panicked inside `serve` announced {other:?}"
+                        ));
+                    }
+                }
+            };
+            let _ = told.send(
+                announced.and_then(|message| match block_on(updates.next()) {
+                    None => Ok(message),
+                    left => Err(format!(
+                        "the stream outlived the worker that panicked inside it: {left:?}"
+                    )),
+                }),
+            );
+        });
+
+        // A worker that dies without announcing itself parks whoever drives
+        // `Updates` forever, and that has to come back as a red test rather
+        // than as a suite that never finishes.
+        let waited = verdict.recv_timeout(std::time::Duration::from_secs(10));
+        std::panic::set_hook(previous);
+
+        match waited {
+            Ok(Ok(message)) => {
+                assert!(!message.is_empty(), "an empty notice tells nobody anything");
+            }
+            Ok(Err(why)) => panic!("{why}"),
+            Err(_) => panic!(
+                "ten seconds after a panic inside `serve`, the stream had neither announced \
+                 the worker nor ended: whoever drives `Updates` is parked with nothing coming"
+            ),
+        }
+        drop(handle);
+    }
+
+    /// The negative for the two tests above: a clean exit raises no alarm.
+    /// Without this, a notice sent unconditionally would also pass.
     #[test]
     fn a_worker_that_exits_cleanly_raises_no_alarm() {
         let (updates_tx, inbox) = channel::<Envelope>();
@@ -681,13 +938,55 @@ mod tests {
         }
     }
 
+    /// Implemented for [`Outbox`] by hand, and for everything `Clone` by
+    /// blanket impl — so the two overlap exactly when `Outbox` is `Clone`, and
+    /// an overlap is `error[E0119]`.
+    ///
+    /// That puts the strongest available tier under "one sender per worker
+    /// thread" — but it decides the `Clone`, not the rule. What it cannot say,
+    /// stated here rather than left implied: `Sender<Envelope>` is `Clone` and
+    /// `Outbox`'s fields are visible throughout this module, so a second sender
+    /// written by hand — `Outbox { updates: outgoing.clone(), .. }` beside the
+    /// first — still compiles and still passes every test here. That one is a
+    /// review obligation, and the reason to keep it a short one: the whole
+    /// point of the derive being absent is that nobody reaches for `.clone()`
+    /// and finds it there.
+    ///
+    /// Commit 500f6eb removed a second sender from the worker closure because a
+    /// copy outliving [`WorkerExit`] holds the update channel open past the wake
+    /// that announces the thread is gone, and the waiting task then sees an
+    /// empty channel rather than a closed one and parks forever. No test sees
+    /// that: the race is narrow enough that
+    /// [`a_failed_open_ends_the_stream_rather_than_leaving_it_open`] passed
+    /// against the broken code, and being not-`Clone` was the whole of the fix
+    /// with nothing reading it.
+    trait OneSenderPerWorker {}
+    impl OneSenderPerWorker for Outbox {}
+    impl<T: Clone> OneSenderPerWorker for T {}
+
+    /// The bound above, demanded of [`Outbox`]. The assertion is the
+    /// compilation, not the body: deriving `Clone` on `Outbox` makes the two
+    /// impls of [`OneSenderPerWorker`] overlap, and the test build stops with
+    /// "conflicting implementations of trait `OneSenderPerWorker` for type
+    /// `Outbox`" rather than this failing. Verified by deriving one. The gate
+    /// compiles tests twice over — `cargo clippy --all-targets` and the test
+    /// run — so a `Clone` cannot reach it, though `cargo build` alone would
+    /// still succeed.
+    #[test]
+    fn a_worker_thread_cannot_be_given_a_second_sender() {
+        fn one_sender_only<T: OneSenderPerWorker>() {}
+        one_sender_only::<Outbox>();
+    }
+
     /// The stream must END after a failed open, not just report the failure.
     ///
     /// This pins the contract, and the contract alone: the bug behind it — a
     /// second sender outliving the notice that the worker was gone — was a race
     /// narrow enough that this test passed against the broken code too. What
-    /// decides that one is the type: [`Outbox`] is not `Clone`, so a second
-    /// sender on a worker thread cannot be written.
+    /// decides that one is the type, and
+    /// [`a_worker_thread_cannot_be_given_a_second_sender`] is where the type is
+    /// held to it: [`Outbox`] is not `Clone`, so a second sender on a worker
+    /// thread cannot be written.
     #[test]
     fn a_failed_open_ends_the_stream_rather_than_leaving_it_open() {
         let outside = std::env::temp_dir().join("cairn-not-a-repository");

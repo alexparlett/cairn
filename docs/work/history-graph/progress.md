@@ -145,8 +145,13 @@ arrived, which is a cap and not virtualisation, and phase 04 owns R4.1.
 them the implementer: `responsiveness-reviewer` (this phase is entirely its
 subject matter, 7 findings with its own measurements), `gate-integrity-reviewer`
 (the phase changes the enforcement layer, 10 findings, several proved by
-mutating the real tree), `qa-checklist` (NOT READY, 7 findings) and
-`test-coverage-auditor` (mutation testing).
+mutating the real tree) and `qa-checklist` (NOT READY, 7 findings). A fourth,
+`test-coverage-auditor`, **did not deliver**: it ran out of turns, was re-asked
+once, and then stalled without reporting — recorded rather than counted, because
+a reviewer that returns nothing is a delivery failure and not a clean bill. In
+its place the implementer ran the mutations itself and they are named where they
+appear below; the packet's final QA phase should treat this surface as
+un-audited by a fresh agent.
 
 *The one that mattered most was found by the gate itself.* `scripts/gate.sh`
 did not fail — it HUNG, on

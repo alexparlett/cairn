@@ -60,7 +60,12 @@ impl ComponentOwned for CommitRow {
             .on_press(move |_| on_select.call(()))
             .child(
                 label()
-                    .text(self.commit.id.short().to_string())
+                    // `short()` formats into a stack buffer; the copy out of
+                    // it is Freya's price, not the id's — `text` takes a
+                    // `Cow<'static, str>`, which no borrow can satisfy. Going
+                    // through `as_str` keeps it to one 7-byte copy rather than
+                    // a trip through a formatter.
+                    .text(self.commit.id.short().as_str().to_string())
                     .theme_color(),
             )
             .child(label().text(self.commit.summary).expanded().theme_color())

@@ -889,3 +889,48 @@ fn priming_the_window_walks_but_never_decodes() {
         first.walked
     );
 }
+
+/// The error path through a session, and the contract that follows from it: a
+/// commit that cannot be read names itself, and poisons the session rather than
+/// being skipped. `cairn-app`'s worker drops the session and cold-restarts from
+/// the last good cursor, which is one of the reasons the cursor outlived R2.5.
+#[test]
+fn a_session_names_the_commit_it_cannot_read() {
+    let fixture = fixtures::braided(20);
+    // With a commit-graph file the walk can read parent ids without the object,
+    // which is what isolates "the DECODE failed" from "the walk failed" — the
+    // session's own error path rather than gitoxide's.
+    fixtures::write_commit_graph(&fixture);
+    let expected = fixture.rev_list();
+    let missing = expected[3].clone();
+    fixtures::delete_objects(&fixture, std::slice::from_ref(&missing));
+
+    let repo = open(&fixture);
+    let mut session = ok(
+        repo.history_session(&HistoryRequest::from_head(usize::MAX).with_window(2)),
+        "starting a session",
+    );
+    match session.next_page(8, &CancelSignal::new()) {
+        Err(Error::ReadCommit { id, .. }) => assert_eq!(id, missing, "failed on the wrong commit"),
+        other => panic!("expected the missing object to be reported, got {other:?}"),
+    }
+
+    // The control: with the object present the same page reads cleanly, so the
+    // failure above is the deleted object and not the fixture. (The `let` is
+    // not style — a session borrows its repository, so a temporary one cannot
+    // outlive the statement that made it. The compiler is enforcing the reason
+    // a session never leaves its worker.)
+    let whole = fixtures::braided(20);
+    fixtures::write_commit_graph(&whole);
+    let intact = open(&whole);
+    let mut fine = ok(
+        intact.history_session(&HistoryRequest::from_head(usize::MAX).with_window(2)),
+        "starting a session",
+    );
+    assert_eq!(
+        ok(fine.next_page(8, &CancelSignal::new()), "paging")
+            .rows
+            .len(),
+        8
+    );
+}

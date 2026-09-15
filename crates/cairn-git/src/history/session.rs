@@ -137,6 +137,13 @@ impl HistorySession<'_> {
     /// than when it is walked: priming the assigner's window costs a walk step
     /// per commit and no object at all, which matters most on the first page of
     /// a scroll and on a scroll that stops after one.
+    ///
+    /// **Any error other than [`Error::Cancelled`] poisons the session.** A
+    /// commit that cannot be read, or a walk that fails, can lose a row the
+    /// assigner had already made final, so the counts stop meaning what they
+    /// say. Drop the session and start another from the last good
+    /// [`Self::cursor`] — which is what `cairn-app`'s worker does, and is why
+    /// the cursor is worth keeping past R2.5.
     pub fn next_page(&mut self, limit: usize, cancel: &impl Cancel) -> Result<HistoryPage, Error> {
         let walked_before = self.walked;
         let decoded_before = self.decoded;

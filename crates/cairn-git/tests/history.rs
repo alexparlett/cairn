@@ -658,3 +658,234 @@ fn cancelling_exactly_at_the_page_boundary_is_still_a_cancellation() {
         "the look-ahead was not polled"
     );
 }
+
+// ── The live walk session (R2.5) ─────────────────────────────────────────────
+
+/// Page a session to the end, reporting every row and, per page, how many
+/// commits it walked against how many rows it returned.
+fn drain_session(
+    repo: &Repository,
+    request: &HistoryRequest,
+    page_size: usize,
+) -> (Vec<HistoryRow>, Vec<(usize, usize)>) {
+    let mut session = ok(repo.history_session(request), "starting a session");
+    let mut rows = Vec::new();
+    let mut cost = Vec::new();
+    loop {
+        let page = ok(session.next_page(page_size, &CancelSignal::new()), "paging");
+        cost.push((page.walked, page.rows.len()));
+        let done = page.cursor.is_none();
+        rows.extend(page.rows);
+        if done {
+            break;
+        }
+    }
+    (rows, cost)
+}
+
+/// R2.5's correctness half: keeping the walk alive must not change the answer.
+/// Same commits, same order, same lanes as the cursor path reading it in one go.
+#[test]
+fn a_session_returns_what_the_cursor_path_returns_row_for_row() {
+    let fixture = fixtures::braided(40);
+    let repo = open(&fixture);
+    let expected = fixture.rev_list();
+    let request = HistoryRequest::from_head(expected.len()).with_window(8);
+
+    let one_shot = read(&repo, &request);
+    let (rows, _) = drain_session(&repo, &request, 5);
+
+    assert_eq!(
+        ids_of(&rows),
+        expected,
+        "the session missed or added commits"
+    );
+    assert_eq!(
+        lanes(&rows),
+        lanes(&one_shot.rows),
+        "the same commits landed in different lanes"
+    );
+}
+
+/// R2.5's performance half, stated as something a test can decide: after the
+/// window is primed, a page walks what it returns and nothing more. The cursor
+/// path cannot pass this — page k there walks k x limit commits — so this is the
+/// requirement, not a restatement of the test above.
+#[test]
+fn paging_a_session_costs_the_page_and_not_the_pages_before_it() {
+    let fixture = fixtures::braided(60);
+    let repo = open(&fixture);
+    let window = 4;
+    let page_size = 5;
+    let request = HistoryRequest::from_head(usize::MAX).with_window(window);
+
+    let (rows, cost) = drain_session(&repo, &request, page_size);
+    assert!(
+        cost.len() >= 4,
+        "the fixture gave only {} pages to compare",
+        cost.len()
+    );
+
+    // No page after the first walks more than it was asked for, whatever its
+    // index — that is the O(limit) claim. Page one may walk more, because it
+    // primes the assigner's window as well as filling itself.
+    for (n, (walked, returned)) in cost.iter().enumerate().skip(1) {
+        assert!(
+            *walked <= page_size,
+            "page {n} walked {walked} commits for {returned} rows: {cost:?}"
+        );
+    }
+    assert!(
+        cost[0].0 <= page_size + window + 1,
+        "priming cost {} commits for a window of {window}",
+        cost[0].0
+    );
+
+    // And over the whole scroll every commit is walked exactly once, which is
+    // what separates a live walk from a replay: the cursor path's total grows
+    // with the square of the page count.
+    let total: usize = cost.iter().map(|(walked, _)| walked).sum();
+    assert_eq!(rows.len(), fixture.rev_list().len());
+    assert_eq!(
+        total,
+        rows.len(),
+        "the session walked {total} commits to return {} rows",
+        rows.len()
+    );
+
+    // The negative that makes this decisive: the same paging through the cursor
+    // path grows with the page index instead of staying flat.
+    let mut cursor = read(&repo, &HistoryRequest::from_head(page_size)).cursor;
+    let mut replayed = Vec::new();
+    for _ in 0..3 {
+        let Some(at) = cursor else { break };
+        let page = read(&repo, &HistoryRequest::resume(at, page_size));
+        replayed.push(page.walked);
+        cursor = page.cursor;
+    }
+    assert!(
+        replayed.windows(2).all(|pair| pair[1] > pair[0]),
+        "the cursor path was expected to grow with the page index, got {replayed:?}"
+    );
+}
+
+/// A5, for the session: superseding a scroll must STOP the walk, and must not
+/// throw away what it had. A cancellation that merely discarded the page would
+/// leave the next request re-walking from the start of the page.
+#[test]
+fn cancelling_a_session_stops_the_walk_and_keeps_its_progress() {
+    let fixture = fixtures::braided(40);
+    let repo = open(&fixture);
+    let request = HistoryRequest::from_head(usize::MAX).with_window(2);
+    let mut session = ok(repo.history_session(&request), "starting a session");
+
+    let stop_at = 7;
+    let signal = StopAfter {
+        limit: stop_at,
+        polls: Cell::new(0),
+    };
+    match session.next_page(1_000, &signal) {
+        Err(Error::Cancelled { walked }) => assert_eq!(
+            walked, stop_at,
+            "the walk ran past the cancellation instead of stopping at it"
+        ),
+        other => panic!("expected a cancellation, got {other:?}"),
+    }
+    assert_eq!(
+        signal.polls.get(),
+        stop_at + 1,
+        "the signal was not polled once per commit"
+    );
+
+    // Progress stayed in the session: the rows already laid out come straight
+    // back, so the next page walks fewer commits than it returns rows.
+    let resumed = ok(session.next_page(4, &CancelSignal::new()), "resuming");
+    assert_eq!(resumed.rows.len(), 4);
+    assert!(
+        resumed.walked < 4,
+        "resuming re-walked {} commits for 4 rows; the cancelled work was lost",
+        resumed.walked
+    );
+
+    // And the rows are still the right ones.
+    let expected = fixture.rev_list();
+    assert_eq!(ids_of(&resumed.rows), &expected[..4]);
+}
+
+/// The cold-restart path R2.5 keeps: a session that is gone hands back a cursor
+/// a fresh session picks up from, with no row repeated and none skipped.
+#[test]
+fn a_cursor_taken_from_a_session_restarts_it_where_it_stopped() {
+    let fixture = fixtures::braided(30);
+    let repo = open(&fixture);
+    let expected = fixture.rev_list();
+    let request = HistoryRequest::from_head(usize::MAX).with_window(4);
+
+    let mut warm = ok(repo.history_session(&request), "starting a session");
+    let first = ok(warm.next_page(6, &CancelSignal::new()), "paging");
+    let cursor = match first.cursor.clone() {
+        Some(cursor) => cursor,
+        None => panic!("six rows ended a thirty-commit history"),
+    };
+    assert_eq!(cursor.rows_behind(), 6);
+    drop(warm);
+
+    let mut cold = ok(
+        repo.history_session(&HistoryRequest::resume(cursor, 6)),
+        "restarting from the cursor",
+    );
+    let second = ok(cold.next_page(6, &CancelSignal::new()), "paging");
+
+    assert_eq!(ids_of(&first.rows), &expected[..6]);
+    assert_eq!(ids_of(&second.rows), &expected[6..12]);
+    assert!(
+        second.walked > second.decoded,
+        "the replayed prefix should cost walk steps, and it cost none"
+    );
+}
+
+/// R1.4 through the session: a history that hands a parent over before its own
+/// child still produces every commit exactly once.
+#[test]
+fn a_session_over_a_skewed_history_returns_every_commit() {
+    let fixture = fixtures::skewed();
+    let repo = open(&fixture);
+    let expected = fixture.rev_list();
+    let request = HistoryRequest::from_head(usize::MAX).with_window(2);
+
+    let (rows, _) = drain_session(&repo, &request, 2);
+    assert_eq!(ids_of(&rows), expected);
+}
+
+/// R2.3 through the session, where it bites hardest. Priming the assigner's
+/// window is the first page's cost, and it has to be a cost in WALK STEPS and
+/// not in object reads: on a cold pack cache each read is a seek, and a scroll
+/// that stops after one page would otherwise have paid for a window's worth of
+/// rows nobody ever asked for.
+#[test]
+fn priming_the_window_walks_but_never_decodes() {
+    let fixture = fixtures::braided(60);
+    let repo = open(&fixture);
+    let window = 20;
+    let page_size = 5;
+    let mut session = ok(
+        repo.history_session(&HistoryRequest::from_head(usize::MAX).with_window(window)),
+        "starting a session",
+    );
+
+    let first = ok(session.next_page(page_size, &CancelSignal::new()), "paging");
+    assert_eq!(first.rows.len(), page_size);
+    assert_eq!(
+        first.decoded, page_size,
+        "read {} commit objects to return {page_size} rows",
+        first.decoded
+    );
+    // The control: the window really was primed, so those extra commits were
+    // walked. Without this the assertion above would also pass on a session
+    // that never primed anything.
+    assert!(
+        first.walked >= page_size + window,
+        "walked only {} commits, so the window of {window} was never primed",
+        first.walked
+    );
+}

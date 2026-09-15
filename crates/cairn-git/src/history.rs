@@ -12,7 +12,11 @@
 //! [`HistoryPage::walked`] and [`HistoryPage::decoded`] report the difference,
 //! so the claim is something a test can check rather than a comment.
 
+mod session;
+
 use cairn_model::{CommitSummary, HistoryRow, LaneAssigner, Oid};
+
+pub use session::HistorySession;
 
 use crate::{Cancel, Error, Repository};
 
@@ -433,11 +437,42 @@ fn summary_of(
     id: &Oid,
     parents: &[Oid],
 ) -> Result<CommitSummary, Error> {
+    let commit = info.object().map_err(|source| Error::ReadCommit {
+        id: id.to_string(),
+        source: Box::new(source),
+    })?;
+    summary_from(&commit, id, parents)
+}
+
+/// The same read, reached from an id rather than from a walk step.
+///
+/// [`HistorySession`] needs this: it defers the object read until a row is
+/// about to be handed out, by which point the walk has moved on and the `Info`
+/// is gone. The id and the parent ids still came off the walk, which is what
+/// R2.3 is about.
+fn summary_of_commit(
+    repo: &gix::Repository,
+    id: &Oid,
+    parents: &[Oid],
+) -> Result<CommitSummary, Error> {
+    let commit = repo
+        .find_commit(object_id(id)?)
+        .map_err(|source| Error::ReadCommit {
+            id: id.to_string(),
+            source: Box::new(source),
+        })?;
+    summary_from(&commit, id, parents)
+}
+
+fn summary_from(
+    commit: &gix::Commit<'_>,
+    id: &Oid,
+    parents: &[Oid],
+) -> Result<CommitSummary, Error> {
     let read = |source: Box<dyn std::error::Error + Send + Sync>| Error::ReadCommit {
         id: id.to_string(),
         source,
     };
-    let commit = info.object().map_err(|e| read(Box::new(e)))?;
     let message = commit.message().map_err(|e| read(Box::new(e)))?;
     let author = commit.author().map_err(|e| read(Box::new(e)))?;
     let time = author.time().map_err(|e| read(Box::new(e)))?;

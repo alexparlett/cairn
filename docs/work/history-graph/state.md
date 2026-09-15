@@ -2,20 +2,41 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 01 implemented on `feature/history-graph`, unmerged. The lane
-assigner exists in `cairn-model`; nothing reads a repository yet.**
+**Status: phases 01 and 02 implemented on `feature/history-graph`, unmerged. The
+lane assigner is bounded and lives in `cairn-model`; `cairn-git` answers a
+bounded, resumable, cancellable history query against a real repository.**
+Correction to this line as phase 01 left it: R1.3 and R1.2's finality sentence
+are no longer TRAP-marked in the PRD — the user narrowed both on 2026-09-15 and
+phase 02 built the window they describe.
 
-**Open for the user before phase 04, and TRAP-marked in the PRD: R1.3 and R1.2's
-finality sentence both describe an assigner other than the one that shipped.**
-The term that grows is not lane bookkeeping — that really is one slot per open
-lane — but the *retained edge lists*: every row stores one segment per open
-lane, so retained segments scale as rows x open lanes. Measured at 361 segments
-per row and 5.4 GB across 500k rows on a 200-branch history with no clock skew
-at all, which is the ordinary "show all branches" view rather than a
-pathological one. A parent delivered early additionally costs
-O(span x segments in the span), and overlapping spans compound. Phase 04's A7
-depends on how this is settled; phase 02 and 03 need the R1.2 answer to know
-whether the window is a concept the assigner owns.
+**Open for the user before phase 03 designs the worker.** Four decisions, all
+raised by phase 02's QA and none of them an agent's to take. They are stated in
+full in `progress.md`'s newest entry; in one line each:
+
+- **Resumption does not scale to the size A7 names.** A page resumes by
+  replaying the walk, so page *k* walks *k x limit* commits: measured 258-420 ms
+  for one page at depth 100k and 1.29-2.1 s at 500k, and 54-87 minutes of CPU to
+  page sequentially to 500k at 100 rows a page. R2.2 is met; A7 is not reachable
+  through this API. The proposed cure keeps gitoxide's walk alive inside phase
+  03's worker as a session, demoting today's cursor to the cold-restart path —
+  which changes `cairn-git`'s public surface, so phase 03 must not start until
+  this is settled.
+- **The assigner's remaining blind spot.** A parent delivered more than
+  `window + remembered` rows before its child cannot be told from one still to
+  come without remembering every commit walked, which R1.3 forbids. Today's
+  answer is to remember ids far past the window; the exact answer would put a
+  walk-sized set in the read path — where gitoxide already keeps one.
+- **R1.3's bound is not the true worst case.** Upward repaints run down lanes
+  that are not in the assigner's lane table at all, so per-row segments are
+  O(window) and retained state O(window^2) on a history with no branching
+  whatsoever. Measured: window 256, one late parent per row, 129 segments on a
+  single row. The requirement's wording needs the user, not an agent.
+- **`Oid` is a `String`.** Every id allocates, and the assigner's lane scan is
+  an O(open lanes) string comparison per parent per row — the term behind a
+  measured 12.6x gap between a 1-lane and a 200-lane layout. A fixed-width `Oid`
+  is a `cairn-model` design change.
+
+Phase 04's A7 depends on the first of these.
 
 ## Locked decisions
 
@@ -30,12 +51,12 @@ L1-L10 in `brainstorm.md`; the design-level frame is D3 and D4 in
 
 ## Open questions
 
-O2, O3 and O4 in `brainstorm.md`. **O1 is resolved**: L9 settled it before phase
-01 started — a bounded reordering window can always be exceeded by larger skew,
-so the total assigner is the floor rather than one of two options. Phase 01 built
-that total assigner; the window refinement is deferred and unbuilt. O2 and O3 are
-measurements; O4 is now a visual question rather than a structural one, thanks to
-L10.
+O3 and O4 in `brainstorm.md`. **O1 is resolved**: L9 settled it before phase 01
+started — a bounded reordering window can always be exceeded by larger skew, so
+the total assigner is the floor rather than one of two options. Phase 01 built
+that total assigner and phase 02 bounded it. **O2 is resolved** by measurement in
+phase 02: see `progress.md`. O3 is a measurement; O4 is now a visual question
+rather than a structural one, thanks to L10.
 
 ### How phase 01 answered R1.4
 
@@ -50,8 +71,8 @@ reverse without comment.
 
 ## New modules and interfaces introduced so far
 
-None yet. As phases land, record here: the type or function, its crate, and the
-one-line contract — so a later phase does not re-derive it from source.
+As phases land, record here: the type or function, its crate, and the one-line
+contract — so a later phase does not re-derive it from source.
 
 | Symbol | Crate | Contract |
 | --- | --- | --- |
@@ -60,16 +81,28 @@ one-line contract — so a later phase does not re-derive it from source.
 | `EdgeSegment` | `cairn-model` | One piece of a connecting line clipped to one row: `from`/`to` lanes, `kind`, and `out_of_order` for a line joining a commit to a parent drawn above it. |
 | `GraphRow` | `cairn-model` | One commit's line: `id`, `lane`, and every segment crossing the row. Self-contained, so drawing row N needs only row N. |
 | `LaneAssigner` | `cairn-model` | Lays commits out in lanes from `(id, parent_ids)` in walk order. Pure: no gix, no I/O, no clock. |
-| `LaneAssigner::push` | `cairn-model` | Lay out one commit. Returns nothing: it may add segments to rows already emitted, so rows are read back, not collected. |
-| `LaneAssigner::rows` / `into_rows` | `cairn-model` | The rows so far. Lane numbers are final; edge lists may still grow. |
-| `LaneAssigner::assign_all` | `cairn-model` | Lay out a whole walk in one call. |
+| `LaneAssigner::push` | `cairn-model` | Lay out one commit. Returns the row this push pushed out of the window, if any — that row is final and the assigner no longer holds it. (Phase 01's entry said "returns nothing"; the window changed it.) |
+| `LaneAssigner::with_window` / `window` | `cairn-model` | An assigner holding at most `window` rows. Widening is superlinear — measured 66 ms at 1024, 749 ms at 4096, 23.3 s at 16384 over 50k skewed rows — so widen on measurement, never as a precaution. |
+| `LaneAssigner::DEFAULT_WINDOW` | `cairn-model` | 1024 rows. Sized against skew measured in ROWS; see the open decision above, because skew is naturally measured in time. |
+| `LaneAssigner::remembered` | `cairn-model` | How many commits past the window the assigner still recognises by id — 16 per row of window. Ids are cheap where rows are not, and recognising a parent that has already gone by is what stops a lane being reserved for a commit that can never arrive. |
+| `LaneAssigner::rows` / `into_rows` | `cairn-model` | The rows still inside the window, oldest first. Rows already made final are not here: `push` handed those back. |
+| `LaneAssigner::assign_all` | `cairn-model` | Lay out a whole walk in one call, returning every row — the ones the window made final and the ones left inside it. |
+| `HistoryRow` | `cairn-model` | One line of history: `commit: CommitSummary` + `graph: GraphRow`. `id()` reads the commit half. The pairing is made once, by whoever built the row. |
+| `Repository::history` | `cairn-git` | One page of history, laid out in lanes: `(&HistoryRequest, &impl Cancel) -> Result<HistoryPage, Error>`. Synchronous; the caller decides what thread it runs on. |
+| `HistoryRequest` | `cairn-git` | `from_head(limit)`, `from_commits(tips, limit)`, `resume(cursor, limit)`, `.with_order(..)`, `.with_window(..)`. The last two are ignored when resuming: both decide lane numbering, and the cursor carries what its own rows were laid out under. |
+| `HistoryOrder` | `cairn-git` | `CommitTime` (the default, by measurement — O2) or `GraphOrder`. Neither is topological; both can hand over a parent before its child. |
+| `HistoryCursor` | `cairn-git` | Opaque continuation: resolved tips, order, window, rows behind. Not tied to a repository, and does not shift when the repository gains commits, because it replays from pinned tips. |
+| `HistoryPage` | `cairn-git` | `rows`, `cursor`, `walked`, `decoded`. `walked` exceeds `rows.len()` on a resumed page because resuming replays; `decoded` never does, which is R2.3 made observable. |
+| `Cancel` / `CancelSignal` | `cairn-git` | A trait polled once per commit, and an `Arc<AtomicBool>` implementing it. A trait so a test can stop a walk at a chosen commit; `cairn-git` still knows nothing about threads. |
+| `Error::{Cancelled, UnbornHead, Walk, ReadCommit}` | `cairn-git` | Cancelled carries how far the walk got. ReadCommit names the commit, so a view can show the rest of the page. |
+| `Repository::OBJECT_CACHE_BYTES` | `cairn-git` | 4 MiB, installed by `discover`. Measured: a commit-time walk of 50k commits costs 178 ms without it and 116 ms with it; more bought nothing. |
 
 ## Validation status
 
 | Phase | Status | Gate | QA |
 | --- | --- | --- | --- |
 | 01 lane assignment | implemented | `scripts/gate.sh` green | see progress.md's phase 01 QA entry |
-| 02 history query | not started | — | — |
+| 02 history query | implemented | `scripts/gate.sh` green | four fresh agents, adjudicated by `qa-confirm`; see progress.md's newest entry |
 | 03 worker boundary | not started | — | — |
 | 04 graph view | not started | — | — |
 | 05 QA | not started | — | — |
@@ -78,6 +111,25 @@ Phase 03 additionally owes design notes here saying which parts of the worker
 interface exist for fetch (`docs/prd/credential-prompts.md` R4) rather than for
 the graph. Phase 04 owes R5: opening a repository from a command-line argument,
 and nothing more than that.
+
+**Constraints phase 02 hands phase 03**, beyond the open decisions above:
+
+- `Repository` holds a `gix::Repository`, which is a thread-local handle. There
+  is no `ThreadSafeRepository` route and no constructor from a shared one, so
+  **R3.1 cannot be met without new public surface in `cairn-git`**. Today N
+  workers would mean N `discover` calls: N object databases, N ref stores, N
+  object caches, N sets of pack-index mmaps.
+- gitoxide's own walk holds a `HashSet<ObjectId>` of every commit it visits
+  (`gix-traverse`'s `simple::Simple`), about 15 MB at 500k commits, and today's
+  replay rebuilds it per page.
+- A page decodes one commit object per row in its `limit`, not per visible row.
+  Keep `limit` to two or three screens: on a cold page cache each object read
+  can be a pack seek.
+- Cancellation discards the page rather than returning what it had. That is the
+  specified contract (R2.4, D3), so a worker that wants partial results must
+  debounce instead.
+- `HistoryRow` is plain data with no cheap-clone handle. Hand pages across as
+  owned values, and inside the view share rather than clone per render.
 
 ## Environment notes
 

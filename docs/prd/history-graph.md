@@ -44,6 +44,18 @@ infrastructure built without a consumer gets the interface wrong.
   Work per commit is amortised constant while parents arrive in order; a parent
   delivered early costs O(span x segments in the span), bounded by the window.
 
+  TRAP: the bound above is not the worst case, and phase 02 measured why. A line
+  drawn back to a parent the walk delivered early runs down a lane chosen by the
+  assigner's `free_lane_across`, which is not in its lane table at all, so the
+  "open lanes" term does not count it. With overlapping such lines, per-row
+  segments are O(window) and retained state O(window squared) — on a history with
+  no branching whatsoever. Measured: window 256 with one late parent per row gives
+  129 segments on a single row, 130 lanes wide. Trust `window x (open lanes +
+  concurrent repaint lanes)` until the user rewords this; the numbers and the
+  decision are in `docs/work/history-graph/progress.md`'s phase 02 entry. Phase 02
+  built the window this clause asks for and it does meet the "never to the number
+  of commits walked" half, with one stated blind spot, also batched there.
+
   Narrowed, 2026-09-15, from "proportional to the number of simultaneously open
   lanes, never to the number of commits seen". Phase 01 measured the shipped
   assigner at 361 segments per row and ~5.4 GB across 500k rows on a 200-branch

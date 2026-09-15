@@ -2,37 +2,36 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phases 01 and 02 implemented on `feature/history-graph`, unmerged. The
-lane assigner is bounded and lives in `cairn-model`; `cairn-git` answers a
-bounded, resumable, cancellable history query against a real repository.**
-Correction to this line as phase 01 left it: R1.3 and R1.2's finality sentence
-are no longer TRAP-marked in the PRD — the user narrowed both on 2026-09-15 and
-phase 02 built the window they describe.
+**Status: phases 01, 02 and 03 implemented on `feature/history-graph`, unmerged.
+The lane assigner is bounded and lives in `cairn-model`; `cairn-git` answers a
+bounded, resumable, cancellable history query and keeps a walk alive across a
+scroll; `cairn-app` runs both off the UI thread behind a boundary a guard now
+pins.** Correction to this line as phase 01 left it: R1.3 and R1.2's finality
+sentence are no longer TRAP-marked in the PRD — the user narrowed both on
+2026-09-15 and phase 02 built the window they describe.
 
-**Open for the user before phase 03 designs the worker.** Three decisions, all
-raised by phase 02's QA and none of them an agent's to take. They are stated in
-full in `progress.md`'s phase 02 decisions entry; in one line each. (The fourth,
-`Oid`'s representation, is settled and built — see below.)
+**Still open for the user.** Phase 02 raised three; the first is built, the other
+two stand, and phase 03 adds a correction to one of them.
 
-- **Resumption does not scale to the size A7 names.** A page resumes by
-  replaying the walk, so page *k* walks *k x limit* commits: measured 258-420 ms
-  for one page at depth 100k and 1.29-2.1 s at 500k, and 54-87 minutes of CPU to
-  page sequentially to 500k at 100 rows a page. R2.2 is met; A7 is not reachable
-  through this API. The proposed cure keeps gitoxide's walk alive inside phase
-  03's worker as a session, demoting today's cursor to the cold-restart path —
-  which changes `cairn-git`'s public surface, so phase 03 must not start until
-  this is settled.
-- **The assigner's remaining blind spot.** A parent delivered more than
-  `window + remembered` rows before its child cannot be told from one still to
-  come without remembering every commit walked, which R1.3 forbids. Today's
-  answer is to remember ids far past the window; the exact answer would put a
-  walk-sized set in the read path — where gitoxide already keeps one.
+- ~~**Resumption does not scale to the size A7 names.**~~ **Settled and built.**
+  R2.5's live walk session shipped in phase 03: `Repository::history_session`
+  holds gitoxide's walk for the life of a scroll, so paging costs O(limit). The
+  cursor survives as the cold-restart path.
+- **The assigner's remaining blind spot — still open, and the proposed cure does
+  not exist.** A parent delivered more than `window + remembered` rows before its
+  child cannot be told from one already gone. The decision of 2026-09-15 said the
+  live session closes this "exactly", because the walk already holds the seen-set
+  that answers it. **It does not, and cannot: gitoxide keeps that set inside the
+  `Box<dyn Iterator>` behind `gix::revision::Walk` and exposes no accessor**
+  (`gix-0.87.1/src/revision/walk.rs`, `iter_impl`). Holding it would mean keeping
+  a second walk-sized copy — the shape R1.3 exists to forbid. So the blind spot
+  is unchanged from phase 02, and the PRD's R1.3 note saying phase 03 closes it
+  is now wrong. The user's call, not an agent's.
 - **R1.3's bound is not the true worst case.** Upward repaints run down lanes
   that are not in the assigner's lane table at all, so per-row segments are
   O(window) and retained state O(window^2) on a history with no branching
   whatsoever. Measured: window 256, one late parent per row, 129 segments on a
   single row. The requirement's wording needs the user, not an agent.
-Phase 04's A7 depends on the first of these.
 
 **Settled and built: `Oid` is fixed-width.** The digest itself — 20 bytes or 32,
 plus the width — and `Copy`; text comes from `Oid::hex` / `Oid::short` as an
@@ -58,11 +57,16 @@ L1-L10 in `brainstorm.md`; the design-level frame is D3 and D4 in
 
 ## Open questions
 
-O3 and O4 in `brainstorm.md`. **O1 is resolved**: L9 settled it before phase 01
+O4 in `brainstorm.md`. **O1 is resolved**: L9 settled it before phase 01
 started — a bounded reordering window can always be exceeded by larger skew, so
 the total assigner is the floor rather than one of two options. Phase 01 built
 that total assigner and phase 02 bounded it. **O2 is resolved** by measurement in
-phase 02: see `progress.md`. O3 is a measurement; O4 is now a visual question
+phase 02. **O3 is resolved** by measurement in phase 03: one worker per open
+repository, `WORKERS_PER_REPOSITORY` in `crates/cairn-app/src/worker/pool.rs` —
+and note that the measurement contradicted the question's own premise, since
+concurrent walks scaled 7.9x on 8 threads rather than oversubscribing. The reason
+for one worker is structural (a live walk cannot be split across threads), not
+throughput. Numbers and caveats in `progress.md`. O4 is now a visual question
 rather than a structural one, thanks to L10.
 
 ### How phase 01 answered R1.4
@@ -105,7 +109,22 @@ contract — so a later phase does not re-derive it from source.
 | `Oid` | `cairn-model` | A git object id as the digest itself: 20 bytes (SHA-1) or 32 (SHA-256) plus the width that keeps them apart, `Copy`, no heap. Built by `Oid::parse` (hex, either case) or `Oid::from_bytes` (raw digest, which is how the engine crosses from gitoxide). `as_bytes` is the digest; comparing and hashing read bytes already in the row. |
 | `Oid::hex` / `Oid::short` | `cairn-model` | Text on demand, into an `OidHex` buffer the CALLER owns — not `&str` any more, because there is no string to borrow. `short()` is 7 characters and cannot panic on a short id. A component that must own its text (Freya's `label().text()` takes `Cow<'static, str>`) copies out with `.short().as_str().to_string()`. |
 | `OidHex` | `cairn-model` | Hex characters held inline, `Copy`, canonical (nothing past the length it reports). `as_str()` borrows from it, so it must outlive the borrow — `let s = oid.short().as_str();` is a compile error, by design. |
-| `Repository::OBJECT_CACHE_BYTES` | `cairn-git` | 4 MiB, installed by `discover`. Measured: a commit-time walk of 50k commits costs 178 ms without it and 116 ms with it; more bought nothing. |
+| `Repository::OBJECT_CACHE_BYTES` | `cairn-git` | 4 MiB, installed by every worker handle. Measured: a commit-time walk of 50k commits costs 178 ms without it and 116 ms with it; more bought nothing. |
+| `SharedRepository` | `cairn-git` | One open repository, shareable between threads: gitoxide's `ThreadSafeRepository` with the paths cached. `Send + Sync` — pinned by `a_shared_repository_can_cross_threads`, which is also the twin for gix's `parallel` feature staying on. |
+| `SharedRepository::to_worker` | `cairn-git` | One worker thread's `Repository`. **Call once per thread, at its start.** Per-request conversion compiles and passes every test while rebuilding the object cache and the pack snapshot each time; the cache is installed here because gitoxide keeps it on the handle, not on the store. |
+| `Repository::discover` | `cairn-git` | Unchanged signature, now `SharedRepository::discover(..).to_worker()`. The single-thread route, for tests and callers that will never hand the repository to a worker. |
+| `Repository::history_session` | `cairn-git` | `(&HistoryRequest) -> Result<HistorySession<'_>, Error>`. Opens a walk and keeps it. The request's limit is ignored; `next_page` carries it. Borrows the repository, so it cannot leave the thread that owns the handle. |
+| `HistorySession::next_page` | `cairn-git` | `(limit, &impl Cancel) -> Result<HistoryPage, Error>`, O(limit) after a one-off prime of `window` commits. **Cancellation keeps the session's progress** — the rows walked stay inside it, so the next call continues rather than re-walking, and no half-consumed walk is left behind. `decoded` never exceeds the rows returned: a commit object is read when its row is handed out, not when it is walked, so priming the window costs walk steps and no object reads. |
+| `HistorySession::cursor` | `cairn-git` | The cold-restart handle: a `HistoryCursor` standing where the session does. Hand it to `HistoryRequest::resume` when the session is gone; paging carries on at the replay cost the session exists to avoid. |
+| `HistorySession::{delivered, is_exhausted}` | `cairn-git` | What the session has handed out, and whether the history ran out and every row it produced has been handed on. |
+| `worker::open` | `cairn-app` | `(path) -> Result<(RepositoryHandle, Updates), OpenError>`. Starts the worker; **the worker opens the repository**, because discovering one reads the filesystem and the UI thread may not. A path outside a repository therefore arrives as an `Update::Failed`, and the only way this call fails is that the OS refused a thread. `open`, `Request` and `Update` are the only three names the module exports — the rest are reachable through this signature and cited below by file, which is what the anchor rule asks when a path does not resolve. |
+| `RepositoryHandle` (`crates/cairn-app/src/worker/pool.rs`) | `cairn-app` | What a component holds. Exactly one method — `submit(Request) -> Epoch` — which returns immediately, over an unbounded channel. It holds no receiving end of anything, so there is nothing on it to wait on. |
+| `Updates::next` (`crates/cairn-app/src/worker/pool.rs`) | `cairn-app` | `async fn() -> Option<Update>`. The one place a stale answer is dropped (R3.2); an update carrying no epoch — a worker dying — is never dropped. `None` means every worker has gone. |
+| `worker::Request` | `cairn-app` | `OpenHistory { rows }` starts a scroll and abandons any open walk; `MoreHistory { rows }` continues it, falling back to the cold cursor when no walk is open, so it is never an error. |
+| `worker::Update` | `cairn-app` | `Rows { rows, complete }`, `Failed { message }`, `WorkerLost { message }`. Only `cairn-model` vocabulary: an engine error crosses as the sentence it will be shown as. |
+| `Epochs` / `Superseded` (`crates/cairn-app/src/worker/epoch.rs`) | `cairn-app` | The epoch IS the cancel signal: `Superseded` implements `cairn_git::Cancel` as "is my epoch still current". Superseding stops the walk at the next commit rather than discarding a finished answer. |
+| `WORKERS_PER_REPOSITORY` | `cairn-app` | 1, by O3. A `const` assertion fails the build if it is raised, because the job channel has one consumer and the live walk lives on it — more workers need a routing decision, not a bigger number. |
+| `cairn_guards::waits_on_work` | `cairn-guards` | 1-based lines where source waits. Bare identifiers for the things you must name to alias; `join`/`lock`/`recv`/`wait` only when called with NO arguments, which is what tells `handle.join()` from `root.join("crates")`. Reads across newlines. |
 
 ## Validation status
 
@@ -113,7 +132,7 @@ contract — so a later phase does not re-derive it from source.
 | --- | --- | --- | --- |
 | 01 lane assignment | implemented | `scripts/gate.sh` green | see progress.md's phase 01 QA entry |
 | 02 history query | implemented | `scripts/gate.sh` green | four fresh agents, adjudicated by `qa-confirm`; see progress.md's newest entry |
-| 03 worker boundary | not started | — | — |
+| 03 worker boundary | implemented | `scripts/gate.sh` green | four fresh agents, adjudicated by `qa-confirm`; see progress.md's newest entry |
 | 04 graph view | not started | — | — |
 | 05 QA | not started | — | — |
 
@@ -123,21 +142,51 @@ clone each. It is inert today because nothing populates that vector, and it
 becomes the unbounded-list defect the moment the query is wired — raised by the
 `responsiveness-reviewer` during the `Oid` change, out of scope there.
 
-Phase 03 additionally owes design notes here saying which parts of the worker
-interface exist for fetch (`docs/prd/credential-prompts.md` R4) rather than for
-the graph. Phase 04 owes R5: opening a repository from a command-line argument,
-and nothing more than that.
+Phase 04 owes R5: opening a repository from a command-line argument, and nothing
+more than that. `main.rs` currently opens the process working directory, which is
+R5.1's default and none of the rest of R5.
 
-**Constraints phase 02 hands phase 03**, beyond the open decisions above:
+## Which parts of the worker interface exist for fetch
 
-- `Repository` holds a `gix::Repository`, which is a thread-local handle. There
-  is no `ThreadSafeRepository` route and no constructor from a shared one, so
-  **R3.1 cannot be met without new public surface in `cairn-git`**. Today N
-  workers would mean N `discover` calls: N object databases, N ref stores, N
-  object caches, N sets of pack-index mmaps.
+Phase 03 read `docs/prd/credential-prompts.md` R4 and shaped the boundary so a
+long-running, progress-reporting operation that blocks mid-flight on a UI dialog
+fits without every call site changing. **Nothing of fetch is built or stubbed.**
+Three properties are there for it rather than for the graph:
+
+1. **A request is answered by a stream, not a reply.** `worker::Update` is sent
+   by a worker as many times as it likes before a job ends, and `Updates::next`
+   is a loop over arrivals rather than a one-shot. The history job happens to
+   send one update per request. Progress reporting (R4.3) is therefore an added
+   `Update` variant and an added send — not a changed shape. No `Progress`
+   variant exists today on purpose: an unused variant is dead code the gate
+   rejects, and pre-building one would be abstracting for a hypothetical.
+2. **A worker runs ordinary blocking code, so asking the UI a question needs no
+   pool surface at all.** A job that must wait for a credential (R2.1, R2.5)
+   makes its own reply channel, sends an `Update` carrying the sending half, and
+   blocks on the receiving half — blocking a worker is what workers are for. The
+   thing that would have made this impossible is a pool that owned the
+   request/response cycle; this one does not.
+3. **Workers are pinned to a purpose, not fed from an anonymous queue.**
+   `WORKERS_PER_REPOSITORY` is 1 because a scroll's live walk lives on one
+   thread. Fetch gets its OWN worker rather than a slot in this queue — otherwise
+   a password prompt would stall the graph behind it — and O3's measurement says
+   a second worker costs the first almost nothing (7.9x scaling at 8 threads).
+
+What is NOT designed for fetch, and should not be assumed: `Request` and `Update`
+are one enum each per direction, so adding fetch adds variants to both. That is
+deliberate (a trait-object job cannot hold the live walk's borrow), and it is a
+two-file change, not a call-site sweep.
+
+**Constraints phase 02 handed phase 03** — the first is discharged, the rest stand:
+
+- ~~`Repository` has no `ThreadSafeRepository` route, so R3.1 needs new public
+  surface in `cairn-git`.~~ Built: `SharedRepository` + `to_worker`.
 - gitoxide's own walk holds a `HashSet<ObjectId>` of every commit it visits
-  (`gix-traverse`'s `simple::Simple`), about 15 MB at 500k commits, and today's
-  replay rebuilds it per page.
+  (`gix-traverse`'s `simple::Simple`), about 15 MB at 500k commits. A live
+  session now keeps exactly one of these for a whole scroll instead of rebuilding
+  it per page — which is a further reason the session pays, and also the memory
+  a long scroll costs. It is not exposed, which is why the assigner's blind spot
+  stays open.
 - A page decodes one commit object per row in its `limit`, not per visible row.
   Keep `limit` to two or three screens: on a cold page cache each object read
   can be a pack seek.
@@ -150,6 +199,46 @@ and nothing more than that.
   resolves and copies all of it: `limit` bounds commits walked, not tips. Free
   at 40 branches, 40,000 tip resolutions per page at a ref-heavy remote. Raised
   by the `responsiveness-reviewer` during the `Oid` change and not fixed there.
+
+**Constraints phase 03 hands phase 04:**
+
+- **The first page of a scroll costs `limit + window` commits, every later page
+  costs `limit`.** Rows are handed out only once the assigner has evicted them,
+  which is what makes them final. At the default window that is 1024 extra
+  commits once per scroll. Do not shrink `limit` to make the first page feel
+  faster; shrink the window, and measure.
+- **Ask for the next page, never for a row range.** `Request::MoreHistory`
+  continues the open walk. There is no total row count and no offset-to-cursor
+  route (filed, not built), so a scrollbar drag has no answer — progressive
+  loading is the model, as it is in Fork and Sourcetree.
+- **`main.rs` renders a bounded 256 rows and is not virtualised.** A cap is not
+  virtualisation. R4.1 is phase 04's, and the `ROWS_DRAWN`/`PAGE_ROWS` constants
+  and the `.take(ROWS_DRAWN)` in `app()` are what it replaces.
+- **Only `crates/cairn-app/src/worker/` may name `cairn_git` or wait.** A new
+  file in `cairn-app` that needs repository data asks for it through a
+  `worker::Request`; the guard fails the build otherwise, naming the line.
+- **Selection survives more rows arriving (R4.4) is not free.** Rows append to
+  one `Vec` and the placeholder selects by index, which holds only because rows
+  are appended and never renumbered. If phase 04 selects by index, say so; if it
+  selects by `Oid`, that is the safer reading.
+- **Every `submit` supersedes, and a superseded page delivers NOTHING.** That is
+  correct — the walk stops and its progress stays in the session — but it means
+  a scroll handler that submits on every tick cancels the in-flight page every
+  tick and the view receives no rows until the user stops moving. **Debounce.**
+  Raised by the `responsiveness-reviewer`; not a live defect today, because
+  exactly one request is ever outstanding.
+- **A live session's memory grows with rows SCROLLED, and is never released
+  while the app runs.** gitoxide's walk keeps a `HashSet<ObjectId>` of every
+  commit visited (about 20 MB at 500k rows) and the assigner keeps its window;
+  the worker holds the session until the next `OpenHistory` or a walk error.
+  A7 asks for memory flat in history LENGTH, which this is — but it is linear in
+  depth scrolled, and there is no idle drop. Measure it, and if it needs a cap,
+  that is a decision with the user.
+- **An engine error reaches the view as a sentence, not a type.**
+  `Update::Failed` carries a `String` already rendered from `cairn_git::Error`.
+  If phase 04 needs to branch on *which* failure it was — R5.2 wants a path named
+  and R4.3 wants loading distinguished from empty — that is a new `Update`
+  variant, decided there.
 
 ## Environment notes
 

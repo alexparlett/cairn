@@ -3,6 +3,170 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-15 — phase 03: the worker boundary, the live walk, and O3 measured
+
+Built in packet mode on `feature/history-graph`. Five deliverables: the
+`ThreadSafeRepository` route R3.1 needed (`cairn_git::SharedRepository`), the
+live walk session R2.5 called for (`cairn_git::HistorySession`), the worker and
+the epoch-carrying request/response channel (`crates/cairn-app/src/worker/`), the
+seam that hands rows to the view as values, and the guard that finally pins "the
+UI thread never waits on repository work".
+
+**The live walk session, and what it costs.** `Repository::history_session`
+opens gitoxide's walk and keeps it; `next_page` takes rows off it. Paging is
+O(limit) — pinned by
+`paging_a_session_costs_the_page_and_not_the_pages_before_it`, which asserts that
+no page after the first walks more commits than it returns AND that the whole
+scroll walks each commit exactly once, with the cursor path's growing cost as its
+negative control in the same test. The price is a one-off prime: rows are handed
+out only once the assigner has evicted them from its window, so the first page
+walks `limit + window` commits. At the default window that is 1024 extra commits
+once per scroll, about 2.4 ms at the 2.34 us/commit phase 02 measured — and in
+exchange a row is final when the view first sees it, so no repaint protocol is
+needed across the seam at all.
+
+**What happens to a live session when its request is superseded.** Nothing is
+thrown away. `next_page` returns `Error::Cancelled` but keeps every row it had
+already laid out inside the session, so the request that replaced it continues
+from there instead of re-walking; the walk is never left half-consumed for the
+next reader, which is what R2.5 asks. The worker drops a session only when the
+new request is a *different* walk (`Request::OpenHistory`, which is how a reload
+arrives) or when the walk itself failed — and in the failure case the cursor from
+the last good page survives, so the next request cold-restarts from it. Pinned by
+`cancelling_a_session_stops_the_walk_and_keeps_its_progress`: the walk stops at
+the commit the signal fires on, the signal is polled once per commit, and
+resuming returns four rows having walked fewer than four commits.
+
+**Epochs are the cancel signal, not a tag on the reply.** `Epochs::watch(epoch)`
+returns a `Superseded`, which implements `cairn_git::Cancel` as "is my epoch
+still the current one". Superseding therefore stops the walk at the next commit
+rather than letting it run to completion and discarding the answer — the weak
+version of R3.2, which looks identical from the window while it burns a core.
+The stale answer is dropped as well, by `Updates::next`, which is the one place
+that decides what reaches the view.
+
+**O3 is resolved, and the measurement contradicted the question's premise.**
+Harness: `measures_concurrent_walks_against_a_named_repository` in
+`crates/cairn-git/src/repository.rs`, `#[ignore]`d, driven by
+`CAIRN_BENCH_REPO`. Repository: a 200,001-commit history built with `git
+fast-import` (16 interleaved branches, periodic merges into the trunk, 196,625
+commits reachable from `HEAD`), **no commit-graph file**, 50,000 commits walked
+and laid out per thread, each thread taking its own handle from one
+`SharedRepository`. Release build, four runs, medians:
+
+| threads | slowest single walk | rows/s together | scaling |
+| --- | --- | --- | --- |
+| 1 | 179 ms | 279,000 | 1.0x |
+| 2 | 167 ms | 597,000 | 2.1x |
+| 4 | 171 ms | 1,184,000 | 4.2x |
+| 8 | 181 ms | 2,196,000 | 7.9x |
+
+The phase brief's argument against core-scaling — "the work is I/O- and
+cache-bound and gix already parallelises internally via `max-performance`, so
+scaling with cores oversubscribes against gitoxide's own threads" — **is not what
+this machine measures.** Throughput rose nearly linearly to 8 threads on 16
+cores, and the time for any one walk stayed flat within noise. Caveats worth
+keeping with the number: the page cache was warm and every thread walked *the
+same* 50,000 commits, so they shared it perfectly; a cold cache or divergent
+walks would scale worse. Read it as an upper bound on scaling, not a promise.
+
+**The pool is one worker per repository anyway, for a structural reason.** The
+live session borrows one worker's repository handle and stays on that thread for
+the life of a scroll, so a second worker cannot serve the *next page* of the same
+scroll — splitting a scroll across workers is not a tuning question, it is not
+expressible. And there is exactly one scroll, so a second worker would have
+nothing to do while holding its own 4 MiB object cache. `WORKERS_PER_REPOSITORY`
+records the decision and a `const` assertion fails the build if it is raised
+without the routing decision that would have to come with it. What the
+measurement changes is the *next* decision: a second kind of work should get its
+own worker, and the numbers say that will cost the first one almost nothing.
+
+**The guard, and the tier it sits at.** `cairn-app` is now partitioned.
+`crates/cairn-app/src/worker/` runs repository work and may block; every other
+file in the crate renders and may name neither `cairn_git` nor any waiting
+primitive. The sets are disjoint and the guard checks both directions, so a
+render path can neither reach a repository nor wait on one — which is PRD
+criterion A6 made mechanical rather than a reviewer's judgement. The type carries
+the first half: `RepositoryHandle` is what a component holds, it has exactly one
+method, and it holds no receiving end of anything, so there is nothing on it to
+wait on. Everything a type cannot say is the guard's:
+`the_ui_thread_never_waits_on_repository_work`, on the new `waits_on_work`
+matcher.
+
+The matcher forbids spellings rather than trying to decide what is being waited
+FOR, which is not decidable from source. Bare identifiers (`Receiver`, `Mutex`,
+`Condvar`, `JoinHandle`, `Barrier`, `RwLock`, `block_on`, `blocking_recv`,
+`park`, `sleep`, `scope`, `recv_timeout`, ...) catch aliases, because you cannot
+alias what you have not first named — `use std::sync::mpsc::Receiver as Rx` is
+caught on its import line. The four with innocent namesakes — `join`, `lock`,
+`recv`, `wait` — are matched only when called with NO arguments, which is what
+separates `handle.join()` from `root.join("crates")` and `parts.join(", ")`; the
+check reads across newlines, so wrapping the parentheses does not hide it.
+
+**It was proved red before it was believed green.** Five violating forms were
+written into the tree, watched to fail, and deleted:
+
+| what was written | what the guard said |
+| --- | --- |
+| `main.rs` takes a `&cairn_git::Repository` | `main.rs:119 names cairn_git on a render path` |
+| `main.rs` calls `rx.recv()` | `main.rs:119 waits for something, and it is on a render path` |
+| the same, aliased to `Rx` with the parentheses wrapped over two lines | same failure, same line |
+| `worker/pool.rs` returns an `impl freya::prelude::IntoElement` | `pool.rs:679 names freya inside crates/cairn-app/src/worker` |
+| the worker module moved out of the crate entirely | `found no files under crates/cairn-app/src/worker` |
+
+The last is the nonzero-count check the qa-gate design rules ask for, and it is
+asserted on BOTH sides of the partition. A sixth attempt — renaming `worker/` to
+`engine/` in place — also failed, because the module then counts as a render path
+and its own waiting trips the first rule.
+
+**What the interface carries for fetch, and what it does not.** Recorded in
+`state.md` in full. In short: a request is answered by a *stream* of updates
+rather than one reply, so progress reporting is an added variant and not a
+changed shape; a worker runs ordinary blocking code, so a job that must wait for
+a UI answer makes its own reply channel and blocks on it, needing no pool surface
+at all; and workers are pinned to a purpose, so fetch gets its own rather than
+stalling the graph behind a password prompt. No part of fetch is built or
+stubbed, and no `Progress` variant exists — an unused variant is dead code the
+gate would reject, and the point of reading R4 was to check the shape, not to
+pre-build it.
+
+**Two things deliberately NOT done, both recorded rather than silently skipped.**
+R1.3's "known blind spot" says phase 03's live session closes it, because the
+walk already holds the seen-set that tells a parent already gone from one still
+to come. It cannot: `gix::revision::Walk` keeps that set inside a
+`Box<dyn Iterator>` with no accessor (`gix-0.87.1/src/revision/walk.rs`, the
+`iter_impl` module), so the only way to have it is to keep a second copy — the
+walk-sized set R1.3 exists to forbid. The blind spot is therefore still open and
+is raised below. And the history list is still not virtualised: `main.rs` now
+loads and draws a bounded 256 rows rather than one component per row of whatever
+arrived, which is a cap and not virtualisation, and phase 04 owns R4.1.
+
+**Enforcement-layer parity, done in the same change.** `docs/qa-gate.md`'s
+dispatch table said the `responsiveness-reviewer` had no deterministic twin; it
+has one now, and the row says what the guard decides and what is left to
+judgement. `.claude/hooks/qa-stop.sh` gained the half of the partition a line
+scan can express — nothing outside `crates/cairn-app/src/worker/` names `gix` or
+`cairn_git`, and nothing inside it names `freya` — and deliberately does not try
+the waiting half, because telling `handle.join()` from `root.join("crates")`
+needs the matcher rather than awk with no parser.
+
+*Debris dismissal, per the qa-gate contract.* This change adds one `#[ignore]`d
+test and two `eprintln!` lines, all three of which `.claude/hooks/qa-stop.sh`
+classifies as blocking debris. They are O3's measurement harness and its output,
+reasoned in its doc comment, and they match the precedent set by phase 02's O2
+harness and the `Oid` benchmark. The hook's remedy text still names `tracing`, a
+crate this workspace does not depend on; that was escalated in the entry below
+and is not patched here.
+
+**The Freya side, for the record.** Delivery to the window is a push, not a
+poll: `worker/wake.rs` is a one-slot latch that a worker sets and the waiting
+task's `Waker` is woken from. The application root drives it from one `spawn`ed
+task, so the UI thread yields to its event loop between pages instead of holding
+it. No timer, and no async-runtime dependency — the alternative was `tokio` for
+its channels and timers, which is a dependency decision and was not taken. The
+one-task executor the tests use is hand-written on `std::task::Wake`, since this
+workspace forbids `unsafe` in tests too.
+
 ## 2026-09-15 — `Oid` made fixed-width, and its justification corrected
 
 Decision 4 from phase 02, built between phases in packet mode on

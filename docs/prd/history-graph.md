@@ -59,6 +59,15 @@ infrastructure built without a consumer gets the interface wrong.
   Phase 03's live walk session closes this exactly — the walk already holds the
   seen-set that answers it — so it is not being carried as a permanent gap.
 
+  TRAP: the sentence above is wrong and phase 03 did not close the blind spot.
+  gitoxide keeps the walk's seen-set inside the `Box<dyn Iterator>` behind
+  `gix::revision::Walk` and exposes no accessor for it
+  (`gix-0.87.1/src/revision/walk.rs`, module `iter_impl`), so reading it would
+  mean keeping a second walk-sized copy — the shape this requirement exists to
+  forbid. The blind spot stands exactly as phase 02 left it. Rewording an
+  in-flight requirement is the user's call, not an agent's, so it is marked here
+  rather than edited; see `docs/work/history-graph/state.md`.
+
   Narrowed, 2026-09-15, from "proportional to the number of simultaneously open
   lanes, never to the number of commits seen". Phase 01 measured the shipped
   assigner at 361 segments per row and ~5.4 GB across 500k rows on a 200-branch

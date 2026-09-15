@@ -3,6 +3,36 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-15 — correcting a claim I put in the PRD, and what phase 03 proved
+
+R1.3 carried a sentence saying phase 03's live walk session would close the
+assigner's skew blind spot "exactly", because the walk already holds the seen-set
+that answers it. I wrote that when settling phase 02's decision 2, from the
+reasonable-sounding assumption that a live walk would expose its own seen-set.
+
+It does not. gitoxide keeps that set inside the `Box<dyn Iterator>` behind
+`gix::revision::Walk` with no accessor (`gix-0.87.1/src/revision/walk.rs`, module
+`iter_impl`), so reaching it would mean keeping a second walk-sized copy — the
+exact shape R1.3 exists to forbid. Phase 03 found this while building against the
+claim, TRAP-marked it rather than silently rewording an in-flight requirement, and
+was right to. The clause is now corrected: the blind spot stands as phase 02 left
+it and is accepted for this packet.
+
+The lesson is not about gix. Decision 2 was settled on a mechanism nobody had
+read the source for, and it was settled in the same breath as decision 1, which
+was measured. A measured decision and an assumed one travelled together and were
+recorded with equal confidence.
+
+Phase 03 also contradicted the premise the plan handed it for O3. The phase doc
+argued against scaling the pool with cores because the work is I/O- and
+cache-bound and gix already parallelises internally, so extra threads would
+oversubscribe. Measured on a 200,001-commit repository with no commit-graph:
+eight concurrent walks scale 7.9x, near-linear. The pool is still one worker, but
+for a structural reason rather than the one the plan gave — a live walk borrows a
+single thread's handle and cannot be split, and there is exactly one scroll. What
+the measurement changes is the next decision: fetch can have its own worker for
+almost nothing, which is the opposite of what the plan implied.
+
 ## 2026-09-15 — phase 03: the worker boundary, the live walk, and O3 measured
 
 Built in packet mode on `feature/history-graph`. Five deliverables: the

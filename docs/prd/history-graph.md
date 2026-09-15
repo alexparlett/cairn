@@ -54,19 +54,18 @@ infrastructure built without a consumer gets the interface wrong.
   row, 130 lanes wide, 24,768 retained. Reworded 2026-09-15 to say so, after
   phase 02 found the first wording understated its own worst case.
 
-  Known blind spot, accepted: beyond `window + remembered` rows of skew the
-  assigner cannot distinguish a parent already gone from one still to come.
-  Phase 03's live walk session closes this exactly — the walk already holds the
-  seen-set that answers it — so it is not being carried as a permanent gap.
+  Known blind spot, carried and accepted for this packet: beyond
+  `window + remembered` rows of skew the assigner cannot distinguish a parent
+  already gone from one still to come.
 
-  TRAP: the sentence above is wrong and phase 03 did not close the blind spot.
-  gitoxide keeps the walk's seen-set inside the `Box<dyn Iterator>` behind
+  Corrected 2026-09-15. An earlier draft of this clause claimed phase 03's live
+  walk session would close the blind spot exactly, because the walk "already
+  holds the seen-set that answers it". That was wrong, and phase 03 proved it:
+  gitoxide keeps the seen-set inside the `Box<dyn Iterator>` behind
   `gix::revision::Walk` and exposes no accessor for it
   (`gix-0.87.1/src/revision/walk.rs`, module `iter_impl`), so reading it would
   mean keeping a second walk-sized copy — the shape this requirement exists to
-  forbid. The blind spot stands exactly as phase 02 left it. Rewording an
-  in-flight requirement is the user's call, not an agent's, so it is marked here
-  rather than edited; see `docs/work/history-graph/state.md`.
+  forbid. The blind spot stands exactly as phase 02 left it.
 
   Narrowed, 2026-09-15, from "proportional to the number of simultaneously open
   lanes, never to the number of commits seen". Phase 01 measured the shipped

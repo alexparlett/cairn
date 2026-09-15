@@ -3,6 +3,126 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-15 — `Oid` made fixed-width, and its justification corrected
+
+Decision 4 from phase 02, built between phases in packet mode on
+`feature/history-graph`. `cairn_model::Oid` is now the digest itself — `[u8; 32]`
+holding 20 bytes of SHA-1 or 32 of SHA-256, plus the width that tells the two
+apart — and it is `Copy`, 33 bytes, with `Option<Oid>` still 33 because the width
+supplies the niche. `Oid::from_bytes` is the new cheap boundary: `cairn-git`'s
+`model_id` copies gitoxide's digest instead of rendering hex and parsing it back,
+and `object_id` hands the digest straight to `ObjectId::try_from`. `as_str` is
+gone, because there is no string to borrow: `Oid::hex` and `Oid::short` format
+into an `OidHex` buffer the caller owns. `short()` no longer slices `[..7]`, so
+the panic that hazard carried is gone rather than moved.
+
+**The justification did not survive its own measurement, and that is the
+headline.** The decision was taken on the sentence "the assigner's lane scan is
+an O(open lanes) string comparison per parent per row — the term behind a
+measured 12.6x gap between laying out 1 lane and 200". If that were the term, the
+gap would have collapsed. It did not. A re-runnable harness now lives in the tree
+(`measures_layout_cost_against_lane_count`, `#[ignore]`d, medians of three after
+a warm-up), and running it against the OLD representation as well as the new one
+gives, per commit laid out, over 50,000 commits in release:
+
+| lanes open | `String` id | fixed-width id |
+| --- | --- | --- |
+| 1 | 261 ns | 247 ns |
+| 2 | 267 ns | 257 ns |
+| 8 | 336 ns | 312 ns |
+| 32 | 628 ns | 569 ns |
+| 200 | 2,128 ns | ~1,750 ns |
+
+The 200-lane point is the noisy one — eight paired runs gave 1,610-2,204 ns
+before and 1,250-1,941 ns after, apparently bimodal — so read it as a median,
+not a figure. **The ratio between 1 lane and 200 went from 8.2x to about 7x.**
+Two corrections follow. The 12.6x could not be reproduced at all: this harness
+measures 8.2x on the unchanged code, so the original number's method is
+unrecoverable and it should be treated as superseded. And the gap is not an id
+comparison: every open lane puts a passing segment on every row, built and pushed
+one at a time, so a 200-lane row constructs about 200 segments whatever an id
+costs to compare. Making the comparison cheaper shaved about 20% off the
+marginal cost per open lane per row — 9.4 ns to 7.6 ns and left the shape alone. **The attribution
+was wrong; the change still pays, on other grounds.**
+
+Those grounds, measured on the engine harness the same way — a 200,001-commit
+synthetic repository built with `git fast-import`, 16 interleaved branches,
+periodic merges, **no commit-graph file**, 50,000 commits walked from `HEAD`,
+release, medians of three:
+
+| order | object cache | walk only | walk + lane assignment |
+| --- | --- | --- | --- |
+| graph order, before | none | 96 ms | 208 ms |
+| graph order, after | none | 80 ms | 178 ms |
+| commit time, before | 4 MiB | 108 ms | 138 ms |
+| commit time, after | 4 MiB | 93 ms | 117 ms |
+
+The default path — commit time, 4 MiB — is about 15% cheaper end to end, 2.76 us
+per commit down to 2.34, and the walk-only column moves too because `model_id`
+no longer allocates twice per id. Retained state falls as well: an id costs 33
+inline bytes where it used to cost a 24-byte header plus a 40-byte heap block, so
+the assigner's `gone` deque is 540 KB flat instead of 393 KB plus 16,384 separate
+allocations. Nothing moved the wrong way: `CommitSummary` grew 128 to 144 bytes
+and `GraphRow` 56 to 72, against a 200-branch row's ~8.6 KB of segments.
+
+**QA: four fresh agents, 29 raw findings, adjudicated by a fresh `qa-confirm`.**
+Agents, none of them the implementer: `qa-checklist` (NOT READY, 7 findings),
+`test-coverage-auditor` (8 findings from 24 mutations run against a scratch copy),
+`responsiveness-reviewer` (5, with its own size and timing measurements) and a
+correctness/dead-code pass (9). Adjudication merged 5 duplicate ids, confirmed
+15, dismissed 7 and escalated 3.
+
+*Confirmed and fixed here.* The parser's tests could not tell the two halves of a
+hex pair apart — every invalid fixture was invalid in both — so either nibble
+check could be deleted and the suite stayed green; one mistyped character in a
+pasted SHA would have become a well-formed WRONG id. Pinned now at both halves of
+a pair and at the ends of the string, along with the lengths either side of each
+width (32, 39, 41, 63, 65) and the byte counts either side of each digest (19,
+21, 24, 31, 33) — `40 => Sha1` widened to `32..=40`, `64 => Sha256` widened to
+`n >= 64`, and `from_bytes` widened to accept 24 all survived before, and all die
+now. Cross-width ordering had no test, so the field order carrying the struct's
+own ordering claim was unpinned; swapping the fields now fails. `Display` and
+`Debug` for both types had no assertion at all. Two doc claims over-reached and
+were narrowed: `OidHex` does not let the history list render without allocating —
+Freya's `label().text()` takes `Cow<'static, str>`, so a component must own its
+copy — and the benchmark cannot compare two representations when only one exists.
+`commit_row.rs` now spells the copy `.short().as_str().to_string()`, since the
+change had quietly rerouted that line through a formatter. `OidHex` is canonical
+past its length, so a later `PartialEq` derive cannot tell two identical
+abbreviations apart; `as_bytes`'s unreachable fallback returns an empty digest,
+which fails at the boundary, rather than the whole buffer, which would look up
+the wrong object. The benchmark itself now warms up and takes medians, because
+its divisor was its noisiest point.
+
+*Dismissed, with reasons.* "The ignored benchmark's only assertion duplicates an
+existing test" — it is declared a measurement, not an assertion, and that
+assertion checks the harness rather than the code. "Two non-decisive assertions
+in the round-trip test" — `SHORT_HEX` is pinned by a literal elsewhere, so
+neither leaves a hole. "`Debug` output changed from `Oid("...")` to `Oid(...)`"
+— nothing parses it. "`OidParseError` should be `#[non_exhaustive]`" — both
+crates are `publish = false`, so an in-tree exhaustive match failing to compile
+is the stronger signal. Three inherited items were dismissed as out of scope and
+recorded in `state.md` instead of fixed: `cairn-app`'s unvirtualized list (inert
+until the query is wired, phase 04's), the unbounded tip set (phase 02 code this
+change only makes cheaper), and replay paging (already open decision 1).
+
+*Debris dismissal, per the qa-gate contract.* This change adds one `#[ignore]`d
+test and two `eprintln!` lines, all three of which `.claude/hooks/qa-stop.sh`
+classifies as blocking debris. They are the benchmark and its output, deliberate
+and reasoned in its doc comment, matching the precedent phase 02 set in
+`crates/cairn-git/src/history.rs` — which was never logged, so this entry logs
+both. The hook's own remedy text names `tracing`, a crate this workspace does not
+depend on; that is an enforcement-layer question, raised below rather than
+patched here.
+
+*Escalated to the user, not an agent's to take.* Cairn is SHA-1 only in practice:
+`cairn-model` accepts SHA-256 ids, but gix is built without its `sha256` feature,
+so a SHA-256 id fails at `object_id` — enabling the feature is a dependency
+decision. `OidHex` carries no `PartialEq`/`AsRef`/`Deref`, which is a seam-type
+trait-surface call better made with phase 04's call sites in hand. And the debris
+hook's remedy text names an absent crate while scanning only uncommitted lines,
+so the rule is unenforceable the moment work is committed.
+
 ## 2026-09-15 — phase 02's four decisions, settled by the user
 
 **1. The live walk session (blocks phase 03, now unblocked).** Replay paging is

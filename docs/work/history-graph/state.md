@@ -9,9 +9,10 @@ Correction to this line as phase 01 left it: R1.3 and R1.2's finality sentence
 are no longer TRAP-marked in the PRD — the user narrowed both on 2026-09-15 and
 phase 02 built the window they describe.
 
-**Open for the user before phase 03 designs the worker.** Four decisions, all
+**Open for the user before phase 03 designs the worker.** Three decisions, all
 raised by phase 02's QA and none of them an agent's to take. They are stated in
-full in `progress.md`'s newest entry; in one line each:
+full in `progress.md`'s phase 02 decisions entry; in one line each. (The fourth,
+`Oid`'s representation, is settled and built — see below.)
 
 - **Resumption does not scale to the size A7 names.** A page resumes by
   replaying the walk, so page *k* walks *k x limit* commits: measured 258-420 ms
@@ -31,12 +32,18 @@ full in `progress.md`'s newest entry; in one line each:
   O(window) and retained state O(window^2) on a history with no branching
   whatsoever. Measured: window 256, one late parent per row, 129 segments on a
   single row. The requirement's wording needs the user, not an agent.
-- **`Oid` is a `String`.** Every id allocates, and the assigner's lane scan is
-  an O(open lanes) string comparison per parent per row — the term behind a
-  measured 12.6x gap between a 1-lane and a 200-lane layout. A fixed-width `Oid`
-  is a `cairn-model` design change.
-
 Phase 04's A7 depends on the first of these.
+
+**Settled and built: `Oid` is fixed-width.** The digest itself — 20 bytes or 32,
+plus the width — and `Copy`; text comes from `Oid::hex` / `Oid::short` as an
+`OidHex` stack buffer. It bought about 15% off the query path end to end and
+about 18% off a 200-lane row, and no allocation per id. It did NOT do what its
+justification said: the 1-lane-to-200-lane ratio was 8.2x before and about 7x
+after, so the string comparison was never the term behind that gap. Correction
+to the line this file used to carry: the quoted 12.6x could not be reproduced,
+and the gap is dominated by per-row work proportional to open lanes — one
+passing segment built and pushed per open lane per row — which no id
+representation touches. See `progress.md`'s newest entry for both harnesses.
 
 ## Locked decisions
 
@@ -95,6 +102,9 @@ contract — so a later phase does not re-derive it from source.
 | `HistoryPage` | `cairn-git` | `rows`, `cursor`, `walked`, `decoded`. `walked` exceeds `rows.len()` on a resumed page because resuming replays; `decoded` never does, which is R2.3 made observable. |
 | `Cancel` / `CancelSignal` | `cairn-git` | A trait polled once per commit, and an `Arc<AtomicBool>` implementing it. A trait so a test can stop a walk at a chosen commit; `cairn-git` still knows nothing about threads. |
 | `Error::{Cancelled, UnbornHead, Walk, ReadCommit}` | `cairn-git` | Cancelled carries how far the walk got. ReadCommit names the commit, so a view can show the rest of the page. |
+| `Oid` | `cairn-model` | A git object id as the digest itself: 20 bytes (SHA-1) or 32 (SHA-256) plus the width that keeps them apart, `Copy`, no heap. Built by `Oid::parse` (hex, either case) or `Oid::from_bytes` (raw digest, which is how the engine crosses from gitoxide). `as_bytes` is the digest; comparing and hashing read bytes already in the row. |
+| `Oid::hex` / `Oid::short` | `cairn-model` | Text on demand, into an `OidHex` buffer the CALLER owns — not `&str` any more, because there is no string to borrow. `short()` is 7 characters and cannot panic on a short id. A component that must own its text (Freya's `label().text()` takes `Cow<'static, str>`) copies out with `.short().as_str().to_string()`. |
+| `OidHex` | `cairn-model` | Hex characters held inline, `Copy`, canonical (nothing past the length it reports). `as_str()` borrows from it, so it must outlive the borrow — `let s = oid.short().as_str();` is a compile error, by design. |
 | `Repository::OBJECT_CACHE_BYTES` | `cairn-git` | 4 MiB, installed by `discover`. Measured: a commit-time walk of 50k commits costs 178 ms without it and 116 ms with it; more bought nothing. |
 
 ## Validation status
@@ -106,6 +116,12 @@ contract — so a later phase does not re-derive it from source.
 | 03 worker boundary | not started | — | — |
 | 04 graph view | not started | — | — |
 | 05 QA | not started | — | — |
+
+Phase 04 owes the virtualization invariant a real twin: `cairn-app` builds one
+component per element of the whole commit vector, with a full `CommitSummary`
+clone each. It is inert today because nothing populates that vector, and it
+becomes the unbounded-list defect the moment the query is wired — raised by the
+`responsiveness-reviewer` during the `Oid` change, out of scope there.
 
 Phase 03 additionally owes design notes here saying which parts of the worker
 interface exist for fetch (`docs/prd/credential-prompts.md` R4) rather than for
@@ -130,6 +146,10 @@ and nothing more than that.
   debounce instead.
 - `HistoryRow` is plain data with no cheap-clone handle. Hand pages across as
   owned values, and inside the view share rather than clone per render.
+- `HistoryRequest::from_commits` takes an unbounded tip set, and every page
+  resolves and copies all of it: `limit` bounds commits walked, not tips. Free
+  at 40 branches, 40,000 tip resolutions per page at a ref-heavy remote. Raised
+  by the `responsiveness-reviewer` during the `Oid` change and not fixed there.
 
 ## Environment notes
 

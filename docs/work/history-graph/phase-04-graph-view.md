@@ -8,10 +8,20 @@ STEP 0  Pre-flight: read docs/work/history-graph/state.md and this file. Nothing
 STEP 1  Load context via an Explore agent over crates/cairn-ui/src/,
         crates/cairn-app/src/, and docs/prd/history-graph.md (requirement R4).
         REQUIRED: verify Freya's virtualisation and custom-painting APIs against
-        the vendored source at
-        ~/.cargo/registry/src/index.crates.io-*/freya-0.5.0-rc.6/ and
-        freya-components-0.5.0-rc.6/. Freya 0.5 is a release candidate on a
-        builder API; anything recalled from rsx! examples is the wrong API.
+        OUR FORK, which is what Cairn now builds against — the clone at
+        /home/alexparlett/Development/freya, or the pinned revision's checkout
+        under ~/.cargo/git/checkouts/. Do NOT read
+        ~/.cargo/registry/src/*/freya-0.5.0-rc.6/: the workspace no longer uses
+        the crates.io release. Freya is on a builder API; anything recalled from
+        rsx! examples is the wrong API.
+        IF FREYA IS THE LIMITATION, FIX IT IN THE FORK — do not hack around it in
+        Cairn. The workflow: add a `[patch."https://github.com/alexparlett/freya"]`
+        block at the foot of Cairn's root Cargo.toml pointing at the local clone,
+        make and test the fix there, then STOP and report it. Landing the fork
+        change, pushing it, and bumping Cairn's pinned rev is the user's call, and
+        a patch naming a local path must never be committed as the shipping
+        build. A hand-rolled viewport that exists to dodge a fork bug is the
+        outcome this rule is here to prevent.
         Do not read the other planning docs directly.
 STEP 2  Decide O4, then implement.
 

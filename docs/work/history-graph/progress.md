@@ -3,6 +3,46 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-15 — R1.3 narrowed, Freya moved to our fork, packet rebased on main
+
+Three integration decisions between phases 01 and 02, none of them phase 01's to
+make.
+
+**R1.3 is narrowed; the window moves inside the assigner.** Phase 01 measured the
+shipped assigner at 361 segments per row and ~5.4 GB across 500k rows on a
+200-branch history with no clock skew at all — the ordinary "show all branches"
+view. The user chose narrowing the requirement over changing the design. R1.3 now
+states the real bound (retained state is window x open lanes), and R1.2's
+"rows that have left the window are final" is repaired rather than deleted: it is
+enforceable exactly when the window belongs to the assigner, because an assigner
+cannot repaint a row it has evicted. A window imposed from outside never could.
+Phase 02 owns building it, and owes the test phase 01 deliberately did not write —
+writing it then would have ratified the change before the user made it. The
+rejected option was keeping R1.3 as written and computing passing segments at
+paint time, which buys O(open lanes) by giving up the self-contained row that
+phase 04's virtualised painting depends on.
+
+**Freya now comes from our fork**, github.com/alexparlett/freya, pinned at
+caa46f87 — the same revision the other Freya projects in this tree pin. The
+reason is a policy, not a version: a toolkit limitation gets fixed in the fork,
+never worked around in Cairn. `deny.toml` denied git sources outright, so it
+gained `allow-git` for that one source with its reason recorded. The fork's crates
+are numbered 0.5.0-rc.4 against crates.io's rc.6, but they carry the builder API
+Cairn is written against: `cairn-ui` and `cairn-app` compile unchanged. The
+in-flight workflow is strata's and is now in the root manifest's comment — patch
+the git source to a local clone while a fork fix is being written, never commit
+that patch as the shipping build. `phase-04-graph-view.md` and `state.md` both
+sent agents to the vendored rc.6 source and were corrected.
+
+**The packet was rebased onto main** at 7f9c648, which had moved four docs commits
+ahead during phase 01 and revised this packet's own plan: R5/A8 (opening a
+repository) added and A8 renumbered to A9, phase 03 told to design against fetch
+as a second consumer, and phase 03 declared parallelisable. Orchestration stays
+sequential regardless — phases share one branch, and the plan's parallelism is an
+optimisation while a collision on that branch is a correctness problem. One doc
+defect arrived with those commits and is fixed here: the phase-03 note had been
+inserted inside the validation-status table, splitting it above the `05` row.
+
 ## 2026-09-14 — phase 01 QA: four fresh agents, 19 raw findings, 14 confirmed
 
 Correction to the entry below, which said "see the entry below this one once

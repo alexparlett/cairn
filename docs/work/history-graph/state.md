@@ -72,18 +72,25 @@ one-line contract — so a later phase does not re-derive it from source.
 | 02 history query | not started | — | — |
 | 03 worker boundary | not started | — | — |
 | 04 graph view | not started | — | — |
+| 05 QA | not started | — | — |
 
 Phase 03 additionally owes design notes here saying which parts of the worker
 interface exist for fetch (`docs/prd/credential-prompts.md` R4) rather than for
 the graph. Phase 04 owes R5: opening a repository from a command-line argument,
 and nothing more than that.
-| 05 QA | not started | — | — |
 
 ## Environment notes
 
-- `freya` 0.5-rc and `gix` 0.87.1 are both pre-1.0. Verify every API against the
-  vendored source under `~/.cargo/registry/src/`, never from memory. Freya 0.5
-  uses a builder API; anything you remember from `rsx!` examples is the old one.
+- `freya` comes from OUR FORK (github.com/alexparlett/freya), pinned by commit in
+  the root `Cargo.toml` since 2026-09-15 — not from crates.io. Verify every Freya
+  API against the fork: the clone at `/home/alexparlett/Development/freya` or the
+  pinned rev under `~/.cargo/git/checkouts/`, never `~/.cargo/registry/src/`, and
+  never from memory. It uses a builder API; `rsx!` examples are the old one.
+  A Freya limitation gets FIXED IN THE FORK, not worked around in Cairn — patch
+  the git source to the local clone while the fix is in flight, and never commit
+  that patch as the shipping build.
+- `gix` 0.87.1 is pre-1.0 and still comes from crates.io. Verify its APIs against
+  the vendored source under `~/.cargo/registry/src/`, never from memory.
 - `scripts/gate.sh` is the bar. Never an ad-hoc `&&` chain, never piped through
   `tail` — that masks the exit code.
 - Commit explicit paths, never `git add -A`.

@@ -124,7 +124,7 @@ contract — so a later phase does not re-derive it from source.
 | `worker::Update` | `cairn-app` | `Rows { rows, complete }`, `Failed { message }`, `WorkerLost { message }`. Only `cairn-model` vocabulary: an engine error crosses as the sentence it will be shown as. |
 | `Epochs` / `Superseded` (`crates/cairn-app/src/worker/epoch.rs`) | `cairn-app` | The epoch IS the cancel signal: `Superseded` implements `cairn_git::Cancel` as "is my epoch still current". Superseding stops the walk at the next commit rather than discarding a finished answer. |
 | `WORKERS_PER_REPOSITORY` | `cairn-app` | 1, by O3. A `const` assertion fails the build if it is raised, because the job channel has one consumer and the live walk lives on it — more workers need a routing decision, not a bigger number. |
-| `cairn_guards::waits_on_work` | `cairn-guards` | 1-based lines where source waits. Bare identifiers for the things you must name to alias; `join`/`lock`/`recv`/`wait` only when called with NO arguments, which is what tells `handle.join()` from `root.join("crates")`. Reads across newlines. |
+| `cairn_guards::waits_on_work` | `cairn-guards` | 1-based lines where source waits or spins. Bare identifiers for the things you must name to alias — the types, the channel CONSTRUCTORS (a receiver can be held without naming one), and the spinning spellings (`try_recv`, `spin_loop`, ...); `join`/`lock`/`recv`/`wait` only when called with NO arguments, which is what tells `handle.join()` from `root.join("crates")`. Reads across newlines, ignores string literals. |
 
 ## Validation status
 
@@ -136,11 +136,17 @@ contract — so a later phase does not re-derive it from source.
 | 04 graph view | not started | — | — |
 | 05 QA | not started | — | — |
 
-Phase 04 owes the virtualization invariant a real twin: `cairn-app` builds one
-component per element of the whole commit vector, with a full `CommitSummary`
-clone each. It is inert today because nothing populates that vector, and it
-becomes the unbounded-list defect the moment the query is wired — raised by the
-`responsiveness-reviewer` during the `Oid` change, out of scope there.
+Phase 04 owes the virtualization invariant a real twin, and phase 03 is the
+change that made it live. `cairn-app` builds one component per element of the
+row vector with a full `CommitSummary` clone each — measured by the
+`responsiveness-reviewer` at roughly 1,300 allocations and 30 KB copied per
+render at the current cap — and it re-runs on every reactive change, including a
+selection click that alters one row. The correction to the line this file used
+to carry: it is no longer "inert because nothing populates that vector". The
+query is wired, the vector fills, and what keeps it bounded is a CAP
+(`ROWS_DRAWN`, 256) rather than virtualisation. Lifting the cap without
+virtualising is the defect arriving; the clone belongs inside a virtualised
+viewport's row builder, where one clone per VISIBLE row is fine.
 
 Phase 04 owes R5: opening a repository from a command-line argument, and nothing
 more than that. `main.rs` currently opens the process working directory, which is
@@ -187,12 +193,17 @@ two-file change, not a call-site sweep.
   it per page — which is a further reason the session pays, and also the memory
   a long scroll costs. It is not exposed, which is why the assigner's blind spot
   stays open.
-- A page decodes one commit object per row in its `limit`, not per visible row.
-  Keep `limit` to two or three screens: on a cold page cache each object read
-  can be a pack seek.
+- A `Repository::history` page decodes one commit object per row in its `limit`,
+  not per visible row. Keep `limit` to two or three screens: on a cold page
+  cache each object read can be a pack seek. (A `HistorySession` page decodes
+  one per row it HANDS OUT, which is the narrower promise — phase 03 changed
+  that half.)
 - Cancellation discards the page rather than returning what it had. That is the
   specified contract (R2.4, D3), so a worker that wants partial results must
-  debounce instead.
+  debounce instead. (A `HistorySession` keeps its progress instead of discarding
+  it — phase 03 changed that half too, and it is what lets a superseded scroll
+  resume rather than restart. The caller still gets no rows from the cancelled
+  call, so "debounce" is still the advice.)
 - `HistoryRow` is plain data with no cheap-clone handle. Hand pages across as
   owned values, and inside the view share rather than clone per render.
 - `HistoryRequest::from_commits` takes an unbounded tip set, and every page
@@ -202,11 +213,12 @@ two-file change, not a call-site sweep.
 
 **Constraints phase 03 hands phase 04:**
 
-- **The first page of a scroll costs `limit + window` commits, every later page
-  costs `limit`.** Rows are handed out only once the assigner has evicted them,
-  which is what makes them final. At the default window that is 1024 extra
-  commits once per scroll. Do not shrink `limit` to make the first page feel
-  faster; shrink the window, and measure.
+- **The first page of a scroll WALKS `limit + window` commits, every later page
+  walks `limit`, and neither decodes more commit objects than it returns rows.**
+  Rows are handed out only once the assigner has evicted them, which is what
+  makes them final. At the default window that is 1024 extra walk steps once per
+  scroll — steps, not object reads. Do not shrink `limit` to make the first page
+  feel faster; shrink the window, and measure.
 - **Ask for the next page, never for a row range.** `Request::MoreHistory`
   continues the open walk. There is no total row count and no offset-to-cursor
   route (filed, not built), so a scrollbar drag has no answer — progressive

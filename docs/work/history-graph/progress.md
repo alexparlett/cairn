@@ -141,6 +141,110 @@ is raised below. And the history list is still not virtualised: `main.rs` now
 loads and draws a bounded 256 rows rather than one component per row of whatever
 arrived, which is a cap and not virtualisation, and phase 04 owns R4.1.
 
+**QA: four fresh agents, adjudicated by a fresh `qa-confirm`.** Agents, none of
+them the implementer: `responsiveness-reviewer` (this phase is entirely its
+subject matter, 7 findings with its own measurements), `gate-integrity-reviewer`
+(the phase changes the enforcement layer, 10 findings, several proved by
+mutating the real tree), `qa-checklist` (NOT READY, 7 findings) and
+`test-coverage-auditor` (mutation testing).
+
+*The one that mattered most was found by the gate itself.* `scripts/gate.sh`
+did not fail — it HUNG, on
+`the_stream_ends_when_every_worker_has_gone`. `Updates::next` only ever noticed
+a closed channel through `try_recv`, and the only thing that woke a parked
+waiter was a send; a worker that exited *cleanly* sent nothing, so the UI task
+parked forever with nothing coming. That is precisely the hang this whole
+boundary exists to prevent, arrived at from the other side, and the panic path
+was fine only because it happens to send first. `WorkerExit` now carries the
+LAST sender and drops it *before* signalling, so the waiter wakes to a closed
+channel rather than an empty one. Pinned by
+`a_worker_ending_in_silence_still_wakes_the_waiting_task`.
+
+*Confirmed and fixed here.* Opening the repository ran on the UI thread, inside
+the first render — 131-140 us measured, bounded, but filesystem I/O before the
+first frame and structurally invisible to the guard, which partitions by file;
+`open` now spawns the thread first and discovers on it, and a path outside a
+repository arrives as an `Update::Failed`. The first page walked AND DECODED
+1,088 commit objects to deliver 64 rows, because no row leaves the assigner
+until its window is full; the session now reads a commit object when its row is
+handed out rather than when it is walked, so priming costs walk steps and no
+object reads, and a scroll abandoned after one page no longer pays for 1,024
+rows nobody asked for. A dead worker announced itself and was then immediately
+un-announced by a generic "stopped" line. `HistorySession::order()` and
+`window()` had no callers at all. The day loop could not see the phase's own
+tests: `--lib` skips bin targets and `cairn-app` is a binary, so all 21 worker
+tests ran in neither `--fast` nor pre-push.
+
+*Confirmed and fixed in the enforcement layer, which is where the review bit
+hardest.* Four of the guard's holes were proved by mutating the real tree, not
+argued: a render file could hold a receiver without ever naming one
+(`let (tx, rx) = channel(); for u in rx {}` matched nothing — the roster now
+carries the constructors); eight of eighteen roster entries could be deleted
+with the whole suite green (every entry now has a literal line in
+`every_waiting_spelling_in_the_roster_is_matched`, so deleting one turns it
+red); the nonzero file-count pin was aggregate rather than per-directory, so
+`cairn-ui` alone satisfied it; and `waits_on_work` scanned string literals, so a
+status line mentioning a lock would have reddened a render file — it now runs on
+`code_without_strings`. One hole the review only STATED was closed instead: a
+busy poll over `try_recv` or `spin_loop` costs the UI thread the same core a
+block would, and those spellings are now on the roster too — so on a render
+path they are checked rather than reviewed. Inside `worker/` they remain the
+reviewer's, and `CLAUDE.md` says which is which.
+
+*The finding with the longest reach was about honesty, not code.* The guard
+partitions by FILE, so it cannot decide which THREAD a function runs on: the few
+`worker/` functions the UI thread itself calls are exempt from the matcher while
+running on the UI thread, and a busy `try_recv` loop names nothing. The first
+draft of this change wrote a type-level tier into `CLAUDE.md` that nothing
+enforces, and narrowed the `responsiveness-reviewer`'s obligation in
+`docs/qa-gate.md` on the strength of a guard answering a narrower question —
+coverage moving backwards in the one change that was supposed to move it
+forwards. Both are rewritten: the invariant now states its residuals explicitly,
+per the meta-invariant, and the reviewer keeps "does this code block the UI
+thread?" in full.
+
+*Dismissed, with reasons.* "`WORKERS_PER_REPOSITORY`'s `const` assertion pins the
+constant rather than the behaviour — spawn from `for _ in 0..N` instead" — that
+loop does not compile at any count, because `incoming` is a single-consumer
+receiver moved into one closure and the compiler cannot know a loop runs once.
+The impossibility is the enforcement; the assertion is the sign that says so,
+and its comment now explains this. "The new guard duplicates
+`layers_never_name_the_crates_they_are_sealed_from` on `cairn-ui`" — accepted
+and narrowed rather than dismissed: the crate-naming half now applies to
+`crates/cairn-app/` only, one authority each. "`std::env::current_dir()` is a
+syscall on the render path" — one call in a `use_hook`, and R5's command-line
+argument replaces it in phase 04.
+
+*What the fresh `qa-confirm` confirmed after the first round of fixes, and what
+followed.* Five of twenty-four raw findings survived adjudication, four of them
+second-order — defects in the fixes or in the prose describing them, which is
+exactly what an adversarial pass is for. The worker thread held TWO senders into
+the update channel (one owned by the exit guard, one captured by the closure),
+and on the discover-FAILURE path the captured one outlived the guard, so the
+wake that announces "the worker is gone" could fire while the channel was still
+open and a task asking for a second update would park forever. A narrow race —
+the test written for it passed against the broken code too, and is kept as a
+contract pin with that said in its doc comment — so it is closed by the type
+instead: `Outbox` is no longer `Clone`, one sender lives on the thread, and the
+guard owns it. `worker/mod.rs`'s own doc still carried the sentence `CLAUDE.md`
+had just been corrected for, claiming the partition separates threads when it
+separates files. And `state.md` still described the unvirtualised list as "inert
+today because nothing populates that vector" — this is the change that
+populates it.
+
+*Adjudicated as dismissed, with the reasons recorded.* `std::env::current_dir()`
+on the render path is inside a `use_hook`, which runs once at mount rather than
+per render. The pre-push hook "missing" the worker tests was never a defect: it
+deliberately runs no test suite at all.
+
+*Recorded in `state.md` as constraints for phase 04 rather than fixed here.*
+Every `submit` supersedes and a superseded page delivers nothing, so a scroll
+handler that submits per tick would starve the view until the user stopped
+moving — debounce. A live session's memory is flat in history length but linear
+in rows scrolled, with no idle drop. And `main.rs` clones the visible model on
+every reactive change, which the 256-row cap bounds and virtualisation will
+replace.
+
 **Enforcement-layer parity, done in the same change.** `docs/qa-gate.md`'s
 dispatch table said the `responsiveness-reviewer` had no deterministic twin; it
 has one now, and the row says what the guard decides and what is left to

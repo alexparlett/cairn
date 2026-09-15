@@ -340,6 +340,14 @@ const WAITING_IDENTS: &[&str] = &[
     "sleep",
     "wait_timeout",
     "wait_while",
+    // These do not block, they spin — which costs a UI thread the same core for
+    // the same reason. A render path has no reason to name one; the module that
+    // bridges to the workers does, and is on the other side of the partition.
+    "spin_loop",
+    "try_iter",
+    "try_lock",
+    "try_recv",
+    "yield_now",
 ];
 
 /// Methods that wait when called with NO arguments.
@@ -498,6 +506,14 @@ mod tests {
             ("sleep", "std::thread::sleep(d);"),
             ("wait_timeout", "let (g, r) = cv.wait_timeout(g, d)?;"),
             ("wait_while", "let g = cv.wait_while(g, |s| !s.ready)?;"),
+            (
+                "spin_loop",
+                "while !done.load(Acquire) { std::hint::spin_loop(); }",
+            ),
+            ("try_iter", "for update in rx.try_iter() {}"),
+            ("try_lock", "if let Ok(g) = shared.try_lock() {}"),
+            ("try_recv", "while let Ok(u) = rx.try_recv() {}"),
+            ("yield_now", "std::thread::yield_now();"),
             ("join", "handle.join().unwrap();"),
             ("lock", "let held = shared.lock();"),
             ("recv", "let next = rx.recv();"),

@@ -44,9 +44,13 @@ use super::wake::{Wake, Woken};
 /// sharing this queue would stall the graph behind a password prompt.
 pub const WORKERS_PER_REPOSITORY: usize = 1;
 
-// Raising the number above is not enough to raise the number of workers: the
-// job channel has one consumer and the walk lives on it. This fails the build
-// rather than letting the constant and the code disagree silently.
+// Raising the number above is not enough to raise the number of workers, and
+// the compiler is the reason rather than this assertion: `incoming` is a
+// single-consumer receiver moved into one closure, so `for _ in
+// 0..WORKERS_PER_REPOSITORY { spawn(move || ...) }` does not compile at any
+// count — not even at one, because the compiler cannot know a loop runs once.
+// A second worker therefore needs a routing decision about which one owns the
+// live walk, not a bigger number. This assertion is the sign that says so.
 const _: () = assert!(
     WORKERS_PER_REPOSITORY == 1,
     "serve() owns one repository handle and one live walk per thread; more \

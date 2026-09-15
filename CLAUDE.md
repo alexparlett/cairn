@@ -191,9 +191,11 @@ Project invariants:
   functions the UI thread itself calls (`RepositoryHandle::submit`,
   `Updates::next`, `Wake::poll`, all in `crates/cairn-app/src/worker/`) are
   exempt from the matcher while running on the UI thread, and that they never
-  block is a review judgement. So is a busy poll loop over `try_recv` or
-  `spin_loop`, which names nothing. So is whether a page is small enough that the
-  work between yields is short, and whether a list is virtualized.
+  block is a review judgement. (The spinning spellings — `try_recv`, `try_iter`,
+  `try_lock`, `spin_loop`, `yield_now` — ARE on the roster, so a busy poll loop
+  on a render path is caught; one written inside `worker/` is not.) Also the
+  reviewer's: whether a page is small enough that the work between yields is
+  short, and whether a list is virtualized.
 
 Not yet mechanically pinned — state these when they come up, and add the twin with
 the change that makes them load-bearing:

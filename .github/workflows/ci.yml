@@ -29,11 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      # fetch-depth: 0 is load-bearing, not hygiene. cairn-git's engine tests open
-      # THIS checkout as a real repository (CLAUDE.md, Testing & verification), so
-      # actions/checkout's default depth of 1 hands them a one-commit history and
-      # a bounded-history test asserting a limit of 3 fails on CI while passing
-      # everywhere else.
+      # Full history: cairn-git's engine tests read this checkout as a repository.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0

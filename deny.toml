@@ -50,9 +50,5 @@ confidence-threshold = 0.9
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# Freya is consumed from our fork rather than crates.io: Cairn needs fixes that
-# land there first, and hacking around a toolkit limitation in Cairn instead of
-# fixing it upstream is the trade this exists to avoid. Pinned by commit in the
-# workspace manifest, so "a git source" is one reviewed revision, not a moving
-# branch.
+# Freya from our fork, where toolkit fixes land; pinned by commit in Cargo.toml.
 allow-git = ["https://github.com/alexparlett/freya"]

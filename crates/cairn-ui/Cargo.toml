@@ -12,11 +12,7 @@ publish = false
 
 [dependencies]
 cairn-model.workspace = true
-# `engine` re-exports `freya-engine` (Skia) so the graph column can be painted
-# rather than assembled out of rectangles: a bent line has to be a curve, and a
-# rect-per-segment row is a dozen laid-out elements where a canvas is one. It is
-# a feature of a dependency Cairn already has and pulls in no new crate —
-# `freya-engine` is already linked, this only lets us name its types.
+# `engine` exposes Skia for painting the graph column; no new crate.
 freya = { workspace = true, features = ["engine"] }
 
 [lints]

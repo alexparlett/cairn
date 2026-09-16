@@ -49,7 +49,7 @@ HITS=$(printf '%s\n' "$ADDED" | awk '
   /dbg![[:space:]]*[(\[{]/         { print $0 " [dbg! left in]" ; next }
   /todo![[:space:]]*[(\[{]/        { print $0 " [todo! left in]" ; next }
   /unimplemented![[:space:]]*[(\[{]/ { print $0 " [unimplemented! left in]" ; next }
-  /eprintln![[:space:]]*[(\[{]/    { print $0 " [eprintln! left in; use tracing]" ; next }
+  /eprintln![[:space:]]*[(\[{]/    { print $0 " [eprintln! left in; delete it, or return the failure through an error type]" ; next }
   /#\[[[:space:]]*ignore([[:space:]]*=|[[:space:]]*\])/ {
     print $0 " [ignored test left in]" ; next }
   /#!?\[[[:space:]]*allow[[:space:]]*\([[:space:]]*(dead_code|unused)/ {

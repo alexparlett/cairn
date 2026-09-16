@@ -26,7 +26,9 @@ Three things that has to mean in practice:
    anyone running several branches at once — or several agents — lives in them.
 
 The full surface, tiered by risk and with the out-of-scope list, is
-`docs/design/feature-inventory.md`.
+`docs/design/feature-inventory.md`. The interface itself — Fork's layout kept,
+each deviation tied to a decision here — is `docs/design/ui.md`, with mockups in
+`docs/design/mockups/`.
 
 ## What Cairn is not
 

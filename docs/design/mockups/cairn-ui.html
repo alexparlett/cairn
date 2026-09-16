@@ -1,0 +1,614 @@
+<title>Cairn Screens</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --pg-bg: #F3F4F7; --pg-fg: #1B1D22; --pg-muted: #5B6270; --pg-line: #D6D9E0; --pg-accent: #2F6FAF; --pg-note: #FFFFFF;
+    --sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Menlo, monospace;
+    /* The application's own world: dark-first, cool graphite with a blue bias. Fixed on purpose. */
+    --bg: #1B1D22; --surface: #23262D; --raised: #2C3038; --line: #353A44; --line-strong: #454B57;
+    --fg: #E6E8EC; --muted: #8B919C; --faint: #5E6470;
+    --accent: #6FA3D6; --accent-fg: #0F1620; --accent-dim: rgba(111,163,214,.16);
+    --add: #4FAE6E; --add-bg: rgba(79,174,110,.13); --del: #E06C6C; --del-bg: rgba(224,108,108,.13);
+    --danger: #E05A5A; --warn: #D9A441;
+    --l0: #6FA3D6; --l1: #D9A441; --l2: #B57BD6; --l3: #4FAE6E; --l4: #E08A5A; --l5: #62C2C2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --pg-bg: #121418; --pg-fg: #E6E8EC; --pg-muted: #8B919C; --pg-line: #2A2E36; --pg-accent: #6FA3D6; --pg-note: #1B1D22; }
+  }
+  :root[data-theme="dark"] { --pg-bg: #121418; --pg-fg: #E6E8EC; --pg-muted: #8B919C; --pg-line: #2A2E36; --pg-accent: #6FA3D6; --pg-note: #1B1D22; }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--pg-bg); color: var(--pg-fg); font-family: var(--sans); font-size: 15px; line-height: 1.5; }
+  .page { max-width: 1240px; margin: 0 auto; padding: 48px 24px 96px; }
+  .intro { max-width: 68ch; margin-bottom: 40px; }
+  .intro h1 { font-size: 34px; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 8px; text-wrap: balance; }
+  .intro p { margin: 0 0 12px; color: var(--pg-muted); }
+  .intro .kicker { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--pg-accent); font-weight: 600; margin-bottom: 12px; }
+  .legend { display: flex; gap: 20px; font-size: 13px; color: var(--pg-muted); }
+  .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+  .legend .k::before { background: var(--pg-muted); }
+  .legend .c::before { background: var(--pg-accent); }
+
+  .board { margin: 56px 0; }
+  .board-h { display: flex; align-items: baseline; gap: 16px; margin-bottom: 14px; }
+  .board-h h2 { font-size: 20px; font-weight: 600; margin: 0; }
+  .board-h p { margin: 0; color: var(--pg-muted); font-size: 14px; }
+  .frame-wrap { overflow-x: auto; border: 1px solid var(--pg-line); border-radius: 6px; background: var(--pg-line); }
+  .notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px 24px; margin-top: 16px; padding: 0; list-style: none; font-size: 14px; color: var(--pg-fg); }
+  .notes li { display: grid; grid-template-columns: 22px 1fr; gap: 10px; align-items: start; }
+  .notes .n { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; font-size: 12px; font-weight: 600; color: #fff; background: var(--pg-muted); }
+  .notes .n.c { background: var(--pg-accent); }
+  .notes b { font-weight: 600; }
+
+  /* ── Application chrome ─────────────────────────────────────────── */
+  .app { position: relative; width: 1120px; height: 720px; background: var(--bg); color: var(--fg); font-size: 13px; line-height: 1.4; display: grid; grid-template-rows: 34px 44px 30px 1fr; overflow: hidden; font-variant-numeric: tabular-nums; }
+  .app * { box-sizing: border-box; }
+  .title { display: flex; align-items: center; justify-content: space-between; padding: 0 12px; background: #16181D; color: var(--muted); font-size: 12px; border-bottom: 1px solid #0F1114; }
+  .title .mark { display: inline-flex; align-items: center; gap: 8px; color: var(--fg); font-weight: 500; }
+  .title .mark i { display: inline-block; width: 12px; height: 12px; background: linear-gradient(var(--fg) 0 2px, transparent 2px 4px, var(--fg) 4px 6px, transparent 6px 8px, var(--fg) 8px 10px, transparent 10px); opacity: .8; }
+  .title .wc { display: flex; gap: 14px; font-family: var(--mono); }
+  .toolbar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 0 10px; background: var(--surface); border-bottom: 1px solid var(--line); }
+  .tools { display: flex; gap: 2px; }
+  .tools.r { justify-content: flex-end; }
+  .tool { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 10px; border-radius: 4px; color: var(--muted); font-size: 11px; min-width: 56px; }
+  .tool svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .tool.on { color: var(--fg); }
+  .tool .badge { position: absolute; margin: -2px 0 0 26px; background: var(--accent); color: var(--accent-fg); font-size: 10px; font-weight: 600; padding: 0 5px; border-radius: 8px; }
+  .where { text-align: center; padding: 0 24px; line-height: 1.25; }
+  .where b { display: block; font-weight: 500; }
+  .where span { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+  .tabs { display: flex; align-items: stretch; background: var(--bg); border-bottom: 1px solid var(--line); padding-left: 4px; }
+  .tab { padding: 6px 16px; color: var(--muted); border-right: 1px solid var(--line); font-size: 12px; display: flex; align-items: center; gap: 8px; }
+  .tab.on { color: var(--fg); background: var(--surface); box-shadow: inset 0 -2px 0 var(--accent); }
+  .tab .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+  .body { display: grid; grid-template-columns: 224px 1fr; min-height: 0; }
+
+  .side { background: var(--surface); border-right: 1px solid var(--line); padding: 8px 0; overflow: hidden; font-size: 12.5px; }
+  .side .sec { padding: 10px 12px 3px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; display: flex; justify-content: space-between; }
+  .side .row { display: flex; align-items: center; gap: 8px; padding: 4px 12px 4px 14px; color: var(--fg); white-space: nowrap; overflow: hidden; }
+  .side .row.i1 { padding-left: 28px; } .side .row.i2 { padding-left: 42px; }
+  .side .row.on { background: var(--accent-dim); color: var(--fg); box-shadow: inset 2px 0 0 var(--accent); }
+  .side .row .cnt { margin-left: auto; color: var(--muted); font-family: var(--mono); font-size: 11.5px; }
+  .side .row.dim { color: var(--muted); }
+  .side .g { width: 12px; height: 12px; stroke: var(--muted); fill: none; stroke-width: 1.6; flex: none; }
+  .side .filter { margin: 6px 12px 4px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; color: var(--faint); font-size: 12px; }
+  .chip { font-size: 10px; padding: 1px 6px; border-radius: 3px; background: var(--raised); color: var(--muted); border: 1px solid var(--line-strong); white-space: nowrap; }
+  .chip.wt { color: var(--l5); border-color: rgba(98,194,194,.4); }
+
+  .main { display: grid; grid-template-rows: 1fr auto; min-height: 0; }
+  .list { overflow: hidden; }
+  .list .hd, .list .r { display: grid; grid-template-columns: 56px 1fr 150px 78px 96px; align-items: center; height: 28px; padding-right: 12px; }
+  .list .hd { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; border-bottom: 1px solid var(--line); height: 26px; }
+  .list .hd > div { padding-left: 8px; }
+  .list .r { border-bottom: 1px solid rgba(53,58,68,.45); }
+  .list .r.sel { background: var(--accent-dim); }
+  .list .r.stash { color: var(--muted); font-style: italic; }
+  .list .r > div { padding-left: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .list .r .g { padding: 0; height: 28px; }
+  .list .r .g svg { display: block; width: 56px; height: 28px; }
+  .list .r .id, .list .r .dt { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .list .r .au { color: var(--muted); }
+  .ref { display: inline-block; font-family: var(--mono); font-size: 11px; padding: 1px 6px; border-radius: 3px; margin-right: 6px; border: 1px solid; line-height: 1.5; vertical-align: 1px; }
+  .ref.head { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 500; }
+  .ref.local { color: var(--l1); border-color: rgba(217,164,65,.5); }
+  .ref.remote { color: var(--muted); border-color: var(--line-strong); }
+  .ref.tag { color: var(--l3); border-color: rgba(79,174,110,.5); }
+  .detail { border-top: 1px solid var(--line); background: var(--surface); height: 250px; display: grid; grid-template-rows: 30px 1fr; }
+  .dtabs { display: flex; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--line); align-items: flex-end; }
+  .dtabs span { padding: 6px 12px; color: var(--muted); font-size: 12px; }
+  .dtabs span.on { color: var(--fg); box-shadow: inset 0 -2px 0 var(--accent); }
+  .commit { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 24px; padding: 14px 16px; font-size: 12.5px; }
+  .commit .kv { display: grid; grid-template-columns: 78px 1fr; gap: 4px 10px; }
+  .commit .kv dt { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  .commit .kv dd { margin: 0; font-family: var(--mono); font-size: 12px; }
+  .commit .msg { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 10px; }
+  .commit .msg b { display: block; font-weight: 500; margin-bottom: 4px; }
+  .commit .msg p { margin: 0; color: var(--muted); max-width: 70ch; }
+  .files { grid-column: 1 / -1; display: flex; gap: 14px; font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+  .files i { font-style: normal; color: var(--add); }
+  .co { position: absolute; z-index: 5; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--pg-accent); color: #fff; font: 600 12px var(--sans); box-shadow: 0 0 0 3px rgba(0,0,0,.35); }
+  .co.k { background: #6B7280; }
+
+  /* ── Staging ─────────────────────────────────────────────────────── */
+  .stage { display: grid; grid-template-columns: 300px 1fr; min-height: 0; }
+  .trees { border-right: 1px solid var(--line); background: var(--surface); display: grid; grid-template-rows: 1fr 1fr; min-height: 0; }
+  .tree { overflow: hidden; }
+  .tree .th { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+  .btn { font: 500 12px var(--sans); padding: 3px 10px; border-radius: 4px; border: 1px solid var(--line-strong); background: var(--raised); color: var(--fg); }
+  .btn.p { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  .btn.d { background: var(--danger); color: #fff; border-color: var(--danger); }
+  .btn.q { background: transparent; }
+  .btn.dis { opacity: .45; }
+  .btn.sm { font-size: 11px; padding: 1px 8px; }
+  .tree .f { display: flex; align-items: center; gap: 8px; padding: 3px 12px 3px 24px; font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+  .tree .f.on { background: var(--accent-dim); box-shadow: inset 2px 0 0 var(--accent); }
+  .tree .f .s { width: 14px; text-align: center; font-weight: 600; font-family: var(--sans); font-size: 11px; }
+  .s.m { color: var(--warn); } .s.a { color: var(--add); } .s.d { color: var(--del); } .s.c { color: var(--danger); }
+  .tree .dir { padding: 3px 12px; color: var(--muted); font-size: 12px; }
+  .diffpane { display: grid; grid-template-rows: 32px 1fr auto; min-height: 0; }
+  .diffhd { display: flex; align-items: center; gap: 12px; padding: 0 14px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .diffhd .path { color: var(--fg); }
+  .diffhd .opts { margin-left: auto; display: flex; gap: 6px; font-family: var(--sans); }
+  .diff { overflow: hidden; font-family: var(--mono); font-size: 12px; line-height: 20px; }
+  .hunk { display: flex; align-items: center; gap: 10px; background: var(--raised); color: var(--muted); padding: 0 12px 0 0; height: 24px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .hunk .hh { padding-left: 12px; flex: 1; }
+  .ln { display: grid; grid-template-columns: 28px 40px 40px 1fr; }
+  .ln > span { padding: 0 8px; white-space: pre; }
+  .ln .n { color: var(--faint); text-align: right; }
+  .ln .cb { display: grid; place-items: center; padding: 0; }
+  .ln .cb i { width: 12px; height: 12px; border: 1px solid var(--line-strong); border-radius: 2px; }
+  .ln.a { background: var(--add-bg); } .ln.a .c::before { content: "+ "; color: var(--add); }
+  .ln.d { background: var(--del-bg); } .ln.d .c::before { content: "- "; color: var(--del); }
+  .ln.x .c::before { content: "  "; }
+  .ln.pick { background: rgba(111,163,214,.22); }
+  .ln.pick .cb i { background: var(--accent); border-color: var(--accent); }
+  .ln.pick.a .c::before { color: var(--fg); }
+  .commitbox { border-top: 1px solid var(--line); background: var(--surface); padding: 10px 14px; display: grid; gap: 8px; }
+  .commitbox .subj { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 6px 10px; font-size: 13px; }
+  .commitbox .subj .cnt { float: right; color: var(--faint); font-family: var(--mono); font-size: 11px; }
+  .commitbox .bodyt { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 6px 10px; color: var(--muted); font-size: 12.5px; min-height: 40px; }
+  .commitbox .foot { display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 12px; }
+  .commitbox .foot .btn { margin-left: auto; }
+  .cbx { display: inline-flex; align-items: center; gap: 6px; }
+  .cbx i { width: 12px; height: 12px; border: 1px solid var(--line-strong); border-radius: 2px; display: inline-block; }
+  .cbx i.on { background: var(--accent); border-color: var(--accent); }
+
+  /* ── Dialog + operation log ──────────────────────────────────────── */
+  .scrim { position: absolute; inset: 34px 0 0; background: rgba(10,12,15,.62); z-index: 3; }
+  .dialog { position: absolute; z-index: 4; left: 50%; top: 190px; transform: translateX(-50%); width: 560px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: 0 24px 60px rgba(0,0,0,.5); padding: 22px 24px 18px; }
+  .dialog h3 { margin: 0 0 14px; font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+  .dialog h3 i { width: 10px; height: 10px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 0 4px rgba(224,90,90,.2); }
+  .dialog dl { display: grid; grid-template-columns: 110px 1fr; gap: 8px 14px; margin: 0 0 14px; font-size: 13px; }
+  .dialog dt { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding-top: 2px; }
+  .dialog dd { margin: 0; }
+  .dialog dd code { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .dialog .no { color: var(--danger); font-weight: 600; }
+  .dialog .opt { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); font-size: 12.5px; margin-bottom: 14px; }
+  .dialog .opt small { display: block; color: var(--muted); }
+  .dialog .acts { display: flex; align-items: center; gap: 8px; }
+  .dialog .acts .fine { font-size: 11px; color: var(--faint); margin-right: auto; }
+  .oplog { position: absolute; z-index: 4; left: 224px; right: 0; bottom: 0; height: 168px; background: var(--surface); border-top: 1px solid var(--line-strong); box-shadow: 0 -12px 30px rgba(0,0,0,.35); }
+  .oplog .lh { display: flex; align-items: center; justify-content: space-between; padding: 6px 14px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--line); }
+  .op { display: grid; grid-template-columns: 62px 1fr; gap: 0 12px; padding: 6px 14px; border-bottom: 1px solid rgba(53,58,68,.45); font-size: 12.5px; }
+  .op .t { font-family: var(--mono); font-size: 11.5px; color: var(--faint); padding-top: 1px; }
+  .op q { display: block; color: var(--muted); font-size: 12px; quotes: "“" "”"; }
+  .op q::before { content: open-quote; } .op q::after { content: close-quote; }
+  .op .ack { color: var(--warn); font-size: 11px; }
+
+  /* ── Conflict ─────────────────────────────────────────────────────── */
+  .mergebar { display: flex; align-items: center; gap: 12px; padding: 0 14px; height: 36px; background: rgba(217,164,65,.10); border-bottom: 1px solid rgba(217,164,65,.35); font-size: 12.5px; }
+  .mergebar b { font-weight: 500; }
+  .mergebar .mono { font-family: var(--mono); font-size: 12px; }
+  .mergebar .sp { margin-left: auto; display: flex; gap: 6px; }
+  .three { display: grid; grid-template-columns: 1fr 1fr 1fr; min-height: 0; }
+  .col { border-right: 1px solid var(--line); overflow: hidden; display: grid; grid-template-rows: 26px 1fr; }
+  .col:last-child { border-right: 0; }
+  .col .ch { display: flex; align-items: center; gap: 8px; padding: 0 10px; background: var(--surface); border-bottom: 1px solid var(--line); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+  .col .ch .mono { text-transform: none; letter-spacing: 0; font-family: var(--mono); font-weight: 400; color: var(--fg); font-size: 12px; }
+  .col .ch .sw { width: 8px; height: 8px; border-radius: 2px; }
+  .code { font-family: var(--mono); font-size: 12px; line-height: 20px; }
+  .code .l { display: grid; grid-template-columns: 34px 1fr; }
+  .code .l span { padding: 0 8px; white-space: pre; overflow: hidden; }
+  .code .l .n { color: var(--faint); text-align: right; }
+  .code .l.ours { background: rgba(111,163,214,.14); } .code .l.theirs { background: rgba(217,164,65,.14); }
+  .code .l.res { background: rgba(79,174,110,.10); }
+  .code .l.gap { background: repeating-linear-gradient(-45deg, transparent 0 6px, rgba(255,255,255,.03) 6px 12px); }
+  .region { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: var(--raised); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 11.5px; color: var(--muted); }
+  .region b { color: var(--fg); font-weight: 500; margin-right: 4px; }
+  .conflicts { padding: 4px 0; }
+  .conflicts .th { padding: 8px 12px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+
+  /* ── Context menu, toast ─────────────────────────────────────────── */
+  .menu { position: absolute; z-index: 4; width: 262px; background: var(--raised); border: 1px solid var(--line-strong); border-radius: 6px; box-shadow: 0 14px 34px rgba(0,0,0,.45); padding: 4px; font-size: 12.5px; }
+  .menu .mi { display: flex; justify-content: space-between; align-items: center; padding: 5px 10px; border-radius: 4px; }
+  .menu .mi.on { background: var(--accent); color: var(--accent-fg); }
+  .menu .mi.dis { color: var(--faint); }
+  .menu .mi .k { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .menu .mi.on .k { color: var(--accent-fg); opacity: .8; }
+  .menu .mi.dis small { font-size: 11px; }
+  .menu hr { border: 0; border-top: 1px solid var(--line-strong); margin: 4px 6px; }
+  .menu .mh { padding: 4px 10px 2px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); font-weight: 600; }
+  .toast { position: absolute; z-index: 4; right: 16px; bottom: 16px; background: var(--raised); border: 1px solid var(--line-strong); border-radius: 6px; padding: 10px 12px; display: flex; align-items: center; gap: 12px; box-shadow: 0 14px 34px rgba(0,0,0,.45); font-size: 12.5px; }
+  .toast .ok { width: 8px; height: 8px; border-radius: 50%; background: var(--add); }
+  .toast .mono { font-family: var(--mono); font-size: 12px; }
+  .loading { display: flex; align-items: center; gap: 10px; padding: 8px 14px; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
+  .loading i { width: 90px; height: 4px; border-radius: 2px; background: linear-gradient(90deg, var(--accent) 0 40%, var(--line) 40%); }
+  @media (prefers-reduced-motion: no-preference) { .loading i { background-size: 200% 100%; animation: sweep 1.6s linear infinite; } }
+  @keyframes sweep { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+</style>
+
+<div class="page">
+  <div class="intro">
+    <div class="kicker">Cairn · UI design · example data</div>
+    <h1>Five screens, modelled on Fork</h1>
+    <p>What Fork gets right is kept: three regions, the graph as the front door, staging on one screen. What changes is driven by a decision already taken in <code>docs/design/cairn.md</code>, and each callout names it. Commits shown are Cairn's own log plus two invented feature commits.</p>
+    <div class="legend"><span class="k">Kept from Fork</span><span class="c">Cairn's own — names its decision</span></div>
+  </div>
+
+  <!-- ═══════════════ 1. HISTORY ═══════════════ -->
+  <section class="board">
+    <div class="board-h"><h2>History</h2><p>The view a repository opens to.</p></div>
+    <div class="frame-wrap">
+    <div class="app">
+      <div class="title"><span class="mark"><i></i>Cairn — cairn</span><span class="wc"><span>—</span><span>▢</span><span>✕</span></span></div>
+      <div class="toolbar">
+        <div class="tools">
+          <div class="tool on"><svg viewBox="0 0 24 24"><path d="M12 4v12M6 10l6 6 6-6"/><path d="M4 20h16"/></svg>Fetch<span class="badge">2</span></div>
+          <div class="tool on"><svg viewBox="0 0 24 24"><path d="M12 20V8M6 14l6 6 6-6"/><path d="M4 4h16"/></svg>Pull</div>
+          <div class="tool on"><svg viewBox="0 0 24 24"><path d="M12 4v12M6 10l6-6 6 6"/><path d="M4 20h16"/></svg>Push</div>
+          <div class="tool"><svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M4 10h16"/></svg>Stash</div>
+        </div>
+        <div class="where"><b>cairn</b><span>main · ~/Development/cairn</span></div>
+        <div class="tools r">
+          <div class="tool"><svg viewBox="0 0 24 24"><path d="M6 4v16M6 8c0 4 12 4 12 8v4"/><circle cx="18" cy="6" r="2"/></svg>Branch</div>
+          <div class="tool"><svg viewBox="0 0 24 24"><path d="M3 6h18v12H3zM3 10h18"/><path d="M7 14h4"/></svg>Worktree</div>
+          <div class="tool"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 9l3 3-3 3M12 15h5"/></svg>Terminal</div>
+          <div class="tool"><svg viewBox="0 0 24 24"><path d="M4 12h16M4 6h16M4 18h10"/></svg>Palette</div>
+        </div>
+      </div>
+      <div class="tabs"><div class="tab on">cairn <span class="dot" title="uncommitted changes"></span></div><div class="tab">freya</div><div class="tab">gitoxide</div></div>
+      <div class="body">
+        <div class="side">
+          <div class="row on"><svg class="g" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg>Local Changes<span class="cnt">3</span></div>
+          <div class="row"><svg class="g" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>All Commits</div>
+          <div class="filter">Filter refs</div>
+          <div class="sec">Branches</div>
+          <div class="row i1"><span class="ref head" style="margin:0">main</span></div>
+          <div class="row i1">feature/history-graph <span class="chip wt">worktree</span></div>
+          <div class="row i1">feature/credential-prompts <span class="chip wt">worktree</span></div>
+          <div class="sec">Remotes</div>
+          <div class="row i1 dim">origin</div>
+          <div class="row i2 dim">main</div>
+          <div class="row i2 dim">feature/history-graph</div>
+          <div class="sec">Tags</div>
+          <div class="row i1 dim">none yet</div>
+          <div class="sec">Stashes <span>1</span></div>
+          <div class="row i1 dim">stash@{0} wip: diff tokens</div>
+          <div class="sec">Worktrees <span>3</span></div>
+          <div class="row i1">main <span class="cnt">this window</span></div>
+          <div class="row i1 dim">history-graph</div>
+          <div class="row i1 dim">credential-prompts</div>
+        </div>
+        <div class="main">
+          <div class="list">
+            <div class="hd"><div></div><div>Description</div><div>Author</div><div>Commit</div><div>Date</div></div>
+            <div class="r"><div class="g"><svg viewBox="0 0 56 28"><path d="M32 14v14" stroke="var(--l1)" stroke-width="2"/><circle cx="32" cy="14" r="4" fill="var(--l1)"/></svg></div><div><span class="ref local">feature/history-graph</span><span class="ref remote">origin/feature/history-graph</span>git(history): bounded, cancellable revwalk with a cursor</div><div class="au">Alex Parlett</div><div class="id">a1f3c02</div><div class="dt">18:20</div></div>
+            <div class="r"><div class="g"><svg viewBox="0 0 56 28"><path d="M32 0v28" stroke="var(--l1)" stroke-width="2"/><circle cx="32" cy="14" r="4" fill="var(--l1)"/></svg></div><div>model(graph): lane assigner, total over arrival order</div><div class="au">Alex Parlett</div><div class="id">9c2e7b1</div><div class="dt">17:55</div></div>
+            <div class="r sel"><div class="g"><svg viewBox="0 0 56 28"><path d="M32 0C32 10 16 6 16 14" stroke="var(--l1)" stroke-width="2" fill="none"/><path d="M16 14v14" stroke="var(--l0)" stroke-width="2"/><circle cx="16" cy="14" r="4" fill="var(--l0)"/></svg></div><div><span class="ref head">main</span><span class="ref remote">origin/main</span>docs(design): stamp the out-of-scope list as reviewed against real usage</div><div class="au">Alex Parlett</div><div class="id">7f9c648</div><div class="dt">Sep 14</div></div>
+            <div class="r stash"><div class="g"><svg viewBox="0 0 56 28"><path d="M16 0v28" stroke="var(--l0)" stroke-width="2"/><circle cx="16" cy="14" r="4" fill="var(--bg)" stroke="var(--l0)" stroke-width="1.5" stroke-dasharray="2 2"/></svg></div><div>stash@{0} — wip: diff tokens</div><div class="au">Alex Parlett</div><div class="id"></div><div class="dt">Sep 14</div></div>
+            <div class="r"><div class="g"><svg viewBox="0 0 56 28"><path d="M16 0v28" stroke="var(--l0)" stroke-width="2"/><circle cx="16" cy="14" r="4" fill="var(--l0)"/></svg></div><div>docs(design): forge links are in scope (D9); the old line conflated two things</div><div class="au">Alex Parlett</div><div class="id">b8f5152</div><div class="dt">Sep 14</div></div>
+            <div class="r"><div class="g"><svg viewBox="0 0 56 28"><path d="M16 0v28" stroke="var(--l0)" stroke-width="2"/><circle cx="16" cy="14" r="4" fill="var(--l0)"/></svg></div><div>docs(design): inventory the feature surface, plan the daily-loop program</div><div class="au">Alex Parlett</div><div class="id">1391fb1</div><div class="dt">Sep 14</div></div>
+            <div class="r"><div class="g"><svg viewBox="0 0 56 28"><path d="M16 0v28" stroke="var(--l0)" stroke-width="2"/><circle cx="16" cy="14" r="4" fill="var(--l0)"/></svg></div><div>docs(design): order the packets, and close two gaps in the graph plan</div><div class="au">Alex Parlett</div><div class="id">3c1f0b3</div><div class="dt">Sep 14</div></div>
+            <div class="r"><div class="g"><svg viewBox="0 0 56 28"><path d="M16 0v28" stroke="var(--l0)" stroke-width="2"/><circle cx="16" cy="14" r="4" fill="var(--l0)"/></svg></div><div>docs(design): close four open questions, fix two I framed wrongly</div><div class="au">Alex Parlett</div><div class="id">43602a3</div><div class="dt">Sep 14</div></div>
+            <div class="r"><div class="g"><svg viewBox="0 0 56 28"><path d="M16 0v28" stroke="var(--l0)" stroke-width="2"/><circle cx="16" cy="14" r="4" fill="var(--l0)"/></svg></div><div>docs(design): lock decisions D1-D5 and file two packets</div><div class="au">Alex Parlett</div><div class="id">d23b4ff</div><div class="dt">Sep 14</div></div>
+            <div class="r"><div class="g"><svg viewBox="0 0 56 28"><path d="M16 0v14" stroke="var(--l0)" stroke-width="2"/><circle cx="16" cy="14" r="4" fill="var(--l0)"/></svg></div><div>chore(repo): adopt the agentic harness and scaffold the Cairn workspace</div><div class="au">Alex Parlett</div><div class="id">382d698</div><div class="dt">Sep 14</div></div>
+            <div class="loading"><i></i>Loading older commits — 9 of ~9 shown</div>
+          </div>
+          <div class="detail">
+            <div class="dtabs"><span class="on">Commit</span><span>Changes <small style="color:var(--faint)">8</small></span><span>File Tree</span></div>
+            <div class="commit">
+              <dl class="kv"><dt>Author</dt><dd>Alex Parlett · Sep 14 19:41</dd><dt>Commit</dt><dd>7f9c648</dd><dt>Parents</dt><dd>b8f5152</dd></dl>
+              <dl class="kv"><dt>Committer</dt><dd>Alex Parlett · Sep 14 19:41</dd><dt>Refs</dt><dd>main, origin/main</dd></dl>
+              <div class="msg"><b>docs(design): stamp the out-of-scope list as reviewed against real usage</b><p>Walked the remaining entries with the user after D9 moved the pull-request one into scope. Nothing else changed: platform panels, issues, CI status, repository creation, being an editor, git-flow …</p></div>
+              <div class="files">docs/design/feature-inventory.md <i>+8</i> docs/work/daily-loop/progress.md <i>+14</i></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <span class="co k" style="left:246px;top:60px">1</span>
+      <span class="co k" style="left:10px;top:120px">2</span>
+      <span class="co k" style="left:296px;top:205px">3</span>
+      <span class="co" style="left:200px;top:590px">4</span>
+      <span class="co" style="left:300px;top:395px">5</span>
+      <span class="co" style="left:1085px;top:60px">6</span>
+    </div>
+    </div>
+    <ol class="notes">
+      <li><span class="n">1</span><span><b>Toolbar verbs are the daily loop.</b> Fetch, Pull, Push, Stash on the left; repo and branch in the centre; Fork's Appearance / Workspace / Feedback replaced by Branch, Worktree, Terminal, Palette.</span></li>
+      <li><span class="n">2</span><span><b>Local Changes first, with its count.</b> The one number a person wants on opening.</span></li>
+      <li><span class="n">3</span><span><b>Stash inline in the commit list</b>, dashed at the commit it sits on, as Fork does it.</span></li>
+      <li><span class="n c">4</span><span><b>Worktrees are a sidebar section</b>, and branches held by one carry a chip — <b>D8</b>. A checkout of such a branch is refused rather than failed.</span></li>
+      <li><span class="n c">5</span><span><b>A loading state that cannot be mistaken for an empty repository</b> — <b>history-graph R4.3</b>. Rows arrive paged; the bar says what is still coming.</span></li>
+      <li><span class="n c">6</span><span><b>Linux chrome.</b> Client-side decorations, controls at the right, no traffic lights — <b>D5</b>. Every action here has a chord in the accelerator table.</span></li>
+    </ol>
+  </section>
+
+  <!-- ═══════════════ 2. LOCAL CHANGES ═══════════════ -->
+  <section class="board">
+    <div class="board-h"><h2>Local changes</h2><p>Stage by file, hunk and line on one screen.</p></div>
+    <div class="frame-wrap">
+    <div class="app">
+      <div class="title"><span class="mark"><i></i>Cairn — cairn</span><span class="wc"><span>—</span><span>▢</span><span>✕</span></span></div>
+      <div class="toolbar">
+        <div class="tools"><div class="tool on">Fetch</div><div class="tool on">Pull</div><div class="tool on">Push</div><div class="tool">Stash</div></div>
+        <div class="where"><b>cairn</b><span>main · 3 changed files</span></div>
+        <div class="tools r"><div class="tool">Branch</div><div class="tool">Worktree</div><div class="tool">Terminal</div><div class="tool">Palette</div></div>
+      </div>
+      <div class="tabs"><div class="tab on">cairn <span class="dot"></span></div><div class="tab">freya</div><div class="tab">gitoxide</div></div>
+      <div class="body">
+        <div class="side">
+          <div class="row on">Local Changes<span class="cnt">3</span></div>
+          <div class="row">All Commits</div>
+          <div class="sec">Branches</div>
+          <div class="row i1"><span class="ref head" style="margin:0">main</span></div>
+          <div class="row i1">feature/history-graph <span class="chip wt">worktree</span></div>
+          <div class="sec">Stashes <span>1</span></div>
+          <div class="row i1 dim">stash@{0} wip: diff tokens</div>
+        </div>
+        <div class="stage">
+          <div class="trees">
+            <div class="tree">
+              <div class="th">Unstaged <span>2 files</span><button class="btn sm">Stage all</button></div>
+              <div class="dir">crates/cairn-ui/src</div>
+              <div class="f on"><span class="s m">M</span>commit_row.rs</div>
+              <div class="dir">crates/cairn-app/src</div>
+              <div class="f"><span class="s m">M</span>main.rs</div>
+            </div>
+            <div class="tree" style="border-top:1px solid var(--line)">
+              <div class="th">Staged <span>1 file</span><button class="btn sm">Unstage all</button></div>
+              <div class="dir">crates/cairn-model/src</div>
+              <div class="f"><span class="s a">A</span>graph.rs</div>
+            </div>
+          </div>
+          <div class="diffpane">
+            <div class="diffhd"><span class="path">crates/cairn-ui/src/commit_row.rs</span><span>+9 −3</span><span class="opts"><button class="btn sm q">Unified</button><button class="btn sm q">Side by side</button><button class="btn sm q">Ignore whitespace</button></span></div>
+            <div class="diff">
+              <div class="hunk"><span class="hh">@@ -28,9 +28,12 @@ impl ComponentOwned for CommitRow</span><button class="btn sm">Stage hunk</button><button class="btn sm q">Discard hunk…</button></div>
+              <div class="ln x"><span class="cb"><i></i></span><span class="n">28</span><span class="n">28</span><span class="c">    fn render(self) -&gt; impl IntoElement {</span></div>
+              <div class="ln x"><span class="cb"><i></i></span><span class="n">29</span><span class="n">29</span><span class="c">        let on_select = self.on_select;</span></div>
+              <div class="ln d"><span class="cb"><i></i></span><span class="n">30</span><span class="n"></span><span class="c">        rect()</span></div>
+              <div class="ln d"><span class="cb"><i></i></span><span class="n">31</span><span class="n"></span><span class="c">            .horizontal()</span></div>
+              <div class="ln a pick"><span class="cb"><i></i></span><span class="n"></span><span class="n">30</span><span class="c">        let lane = self.row.lane;</span></div>
+              <div class="ln a pick"><span class="cb"><i></i></span><span class="n"></span><span class="n">31</span><span class="c">        rect()</span></div>
+              <div class="ln a pick"><span class="cb"><i></i></span><span class="n"></span><span class="n">32</span><span class="c">            .horizontal()</span></div>
+              <div class="ln a pick"><span class="cb"><i></i></span><span class="n"></span><span class="n">33</span><span class="c">            .child(LaneGutter::new(lane, self.row.edges.clone()))</span></div>
+              <div class="ln x"><span class="cb"><i></i></span><span class="n">32</span><span class="n">34</span><span class="c">            .width(Size::fill())</span></div>
+              <div class="ln x"><span class="cb"><i></i></span><span class="n">33</span><span class="n">35</span><span class="c">            .padding(Gaps::new(6., 10., 6., 10.))</span></div>
+              <div class="ln d"><span class="cb"><i></i></span><span class="n">34</span><span class="n"></span><span class="c">            .spacing(10.)</span></div>
+              <div class="ln a"><span class="cb"><i></i></span><span class="n"></span><span class="n">36</span><span class="c">            .spacing(8.)</span></div>
+              <div class="ln x"><span class="cb"><i></i></span><span class="n">35</span><span class="n">37</span><span class="c">            .maybe(self.selected, |el| el.background(theme.selection))</span></div>
+              <div class="hunk"><span class="hh">@@ -52,4 +55,8 @@ impl std::fmt::Debug for CommitRow</span><button class="btn sm">Stage hunk</button><button class="btn sm q">Discard hunk…</button></div>
+              <div class="ln x"><span class="cb"><i></i></span><span class="n">52</span><span class="n">55</span><span class="c">        f.debug_struct("CommitRow")</span></div>
+              <div class="ln a"><span class="cb"><i></i></span><span class="n"></span><span class="n">56</span><span class="c">            .field("lane", &amp;self.row.lane)</span></div>
+              <div class="ln x"><span class="cb"><i></i></span><span class="n">53</span><span class="n">57</span><span class="c">            .field("selected", &amp;self.selected)</span></div>
+            </div>
+            <div class="commitbox">
+              <div class="subj">ui(commit-row): draw the lane gutter from GraphRow <span class="cnt">46 / 72</span></div>
+              <div class="bodyt">The row now takes a GraphRow rather than a CommitSummary, so the gutter and the text come from the same value and cannot disagree.</div>
+              <div class="foot"><span class="cbx"><i></i>Amend</span><span class="cbx"><i class="on"></i>Sign-off</span><span style="color:var(--faint)">pre-commit hook will run</span><button class="btn p">Commit 1 file</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <span class="co k" style="left:214px;top:130px">1</span>
+      <span class="co k" style="left:1010px;top:160px">2</span>
+      <span class="co" style="left:514px;top:250px">3</span>
+      <span class="co" style="left:950px;top:640px">4</span>
+    </div>
+    </div>
+    <ol class="notes">
+      <li><span class="n">1</span><span><b>Unstaged over staged</b>, file trees, the diff of the selected file, and the commit box — one screen, no navigation. Fork's shape.</span></li>
+      <li><span class="n">2</span><span><b>Hunk actions live on the hunk header.</b> Stage is one click; Discard has an ellipsis because it opens the dialog on screen 3.</span></li>
+      <li><span class="n c">3</span><span><b>Line selection is a gutter of checkboxes</b>, so staging a hunk and staging four lines are visibly one mechanism. Both emit a patch for <code>git apply --cached</code> — which is why the diff model is patch-capable from its first commit (<b>daily-loop L2</b>).</span></li>
+      <li><span class="n c">4</span><span><b>"pre-commit hook will run."</b> Writes go through the <code>git</code> binary precisely so hooks fire (<b>D1</b>); the box says so rather than surprising anyone.</span></li>
+    </ol>
+  </section>
+
+  <!-- ═══════════════ 3. DISCARD ═══════════════ -->
+  <section class="board">
+    <div class="board-h"><h2>Discard</h2><p>The destructive dialog, and the log that quotes it afterwards.</p></div>
+    <div class="frame-wrap">
+    <div class="app">
+      <div class="title"><span class="mark"><i></i>Cairn — cairn</span><span class="wc"><span>—</span><span>▢</span><span>✕</span></span></div>
+      <div class="toolbar">
+        <div class="tools"><div class="tool on">Fetch</div><div class="tool on">Pull</div><div class="tool on">Push</div><div class="tool">Stash</div></div>
+        <div class="where"><b>cairn</b><span>main · 3 changed files</span></div>
+        <div class="tools r"><div class="tool">Branch</div><div class="tool">Worktree</div><div class="tool">Terminal</div><div class="tool">Palette</div></div>
+      </div>
+      <div class="tabs"><div class="tab on">cairn <span class="dot"></span></div><div class="tab">freya</div><div class="tab">gitoxide</div></div>
+      <div class="body">
+        <div class="side">
+          <div class="row on">Local Changes<span class="cnt">3</span></div>
+          <div class="row">All Commits</div>
+          <div class="sec">Branches</div>
+          <div class="row i1"><span class="ref head" style="margin:0">main</span></div>
+          <div class="row i1">feature/history-graph <span class="chip wt">worktree</span></div>
+        </div>
+        <div class="stage">
+          <div class="trees">
+            <div class="tree"><div class="th">Unstaged <span>2 files</span></div><div class="dir">crates/cairn-ui/src</div><div class="f on"><span class="s m">M</span>commit_row.rs</div><div class="dir">crates/cairn-app/src</div><div class="f on"><span class="s m">M</span>main.rs</div></div>
+            <div class="tree" style="border-top:1px solid var(--line)"><div class="th">Staged <span>1 file</span></div><div class="dir">crates/cairn-model/src</div><div class="f"><span class="s a">A</span>graph.rs</div></div>
+          </div>
+          <div class="diffpane"><div class="diffhd"><span class="path">2 files selected</span></div><div class="diff"></div></div>
+        </div>
+      </div>
+      <div class="scrim"></div>
+      <div class="dialog">
+        <h3><i></i>Discard changes in 2 files?</h3>
+        <dl>
+          <dt>What is lost</dt><dd>3 uncommitted changes — 41 lines added, 12 removed — in<br><code>crates/cairn-ui/src/commit_row.rs</code> and <code>crates/cairn-app/src/main.rs</code>.</dd>
+          <dt>How much</dt><dd>Everything you have done to those files since <code>7f9c648</code>, 2 hours ago.</dd>
+          <dt>Recoverable</dt><dd><span class="no">No.</span> These changes were never committed; nothing in git keeps a copy. The reflog does not help here.</dd>
+        </dl>
+        <div class="opt"><span class="cbx"><i class="on"></i></span><span>Stash them first, then discard<small>Recoverable later as <code>stash@{1}</code>. The only way back from a discard.</small></span></div>
+        <div class="acts"><span class="fine">This text is recorded in the operation log.</span><button class="btn q">Cancel</button><button class="btn d">Stash, then discard 3 changes</button></div>
+      </div>
+      <div class="oplog">
+        <div class="lh">Operation log<span>today</span></div>
+        <div class="op"><span class="t">18:20</span><span>Pushed <code>feature/history-graph</code> → origin, 2 commits</span></div>
+        <div class="op"><span class="t">17:55</span><span>Committed <code>9c2e7b1</code> model(graph): lane assigner, total over arrival order</span></div>
+        <div class="op"><span class="t">11:02</span><span>Deleted branch <code>fix/oid-parse</code> <span class="ack">· acknowledged</span><q>Delete fix/oid-parse? Its 1 unmerged commit becomes unreachable, recoverable from the reflog for 90 days.</q></span></div>
+      </div>
+      <span class="co" style="left:262px;top:200px">1</span>
+      <span class="co" style="left:262px;top:325px">2</span>
+      <span class="co" style="left:262px;top:390px">3</span>
+      <span class="co" style="left:560px;top:485px">4</span>
+      <span class="co" style="left:200px;top:565px">5</span>
+    </div>
+    </div>
+    <ol class="notes">
+      <li><span class="n c">1</span><span><b>What is lost, how much, recoverable — in that order</b>, in words, before the button. Spine pillar 3. Fork's dialog says "Are you sure?".</span></li>
+      <li><span class="n c">2</span><span><b>"Recoverable: No" is stated, not implied.</b> A discarded uncommitted edit is the one class of destruction the reflog does not cover (<b>feature-inventory, Recovery</b>).</span></li>
+      <li><span class="n c">3</span><span><b>Stash first</b> is offered as an option, on by default — the open auto-stash question (<b>daily-loop O3</b>) shown as UI rather than decided silently.</span></li>
+      <li><span class="n c">4</span><span><b>The button names the consequence.</b> Its text and the prompt above it are the string handed to <code>Confirmed::by_user</code>: what the user saw is what the type records.</span></li>
+      <li><span class="n c">5</span><span><b>The operation log quotes what was acknowledged.</b> <code>ops::Performed</code> already carries it; this is where a person reads it back.</span></li>
+    </ol>
+  </section>
+
+  <!-- ═══════════════ 4. CONFLICT ═══════════════ -->
+  <section class="board">
+    <div class="board-h"><h2>Conflict</h2><p>Three-way, region by region — and never an editor.</p></div>
+    <div class="frame-wrap">
+    <div class="app">
+      <div class="title"><span class="mark"><i></i>Cairn — cairn</span><span class="wc"><span>—</span><span>▢</span><span>✕</span></span></div>
+      <div class="toolbar">
+        <div class="tools"><div class="tool on">Fetch</div><div class="tool on">Pull</div><div class="tool">Push</div><div class="tool">Stash</div></div>
+        <div class="where"><b>cairn</b><span>main · merging</span></div>
+        <div class="tools r"><div class="tool">Branch</div><div class="tool">Worktree</div><div class="tool">Terminal</div><div class="tool">Palette</div></div>
+      </div>
+      <div class="mergebar"><b>Merging</b><span class="mono">feature/history-graph</span>into<span class="mono">main</span><span style="color:var(--muted)">·</span><span>conflict <b>1</b> of 2</span><span class="mono" style="color:var(--muted)">crates/cairn-ui/src/lib.rs</span><span class="sp"><button class="btn q">Edit in editor</button><button class="btn q">Abort merge…</button><button class="btn dis">Continue</button></span></div>
+      <div class="body">
+        <div class="side">
+          <div class="conflicts">
+            <div class="th">Conflicted <span style="float:right">2</span></div>
+            <div class="f on" style="display:flex;gap:8px;padding:3px 12px 3px 16px;font-family:var(--mono);font-size:12px;background:var(--accent-dim);box-shadow:inset 2px 0 0 var(--accent)"><span class="s c">!</span>cairn-ui/src/lib.rs</div>
+            <div class="f" style="display:flex;gap:8px;padding:3px 12px 3px 16px;font-family:var(--mono);font-size:12px"><span class="s c">!</span>cairn-app/src/main.rs</div>
+            <div class="th" style="margin-top:8px">Merged cleanly <span style="float:right">6</span></div>
+            <div class="f" style="display:flex;gap:8px;padding:3px 12px 3px 16px;font-family:var(--mono);font-size:12px;color:var(--muted)"><span class="s m">M</span>cairn-model/src/lib.rs</div>
+            <div class="f" style="display:flex;gap:8px;padding:3px 12px 3px 16px;font-family:var(--mono);font-size:12px;color:var(--muted)"><span class="s a">A</span>cairn-model/src/graph.rs</div>
+            <div class="f" style="display:flex;gap:8px;padding:3px 12px 3px 16px;font-family:var(--mono);font-size:12px;color:var(--muted)"><span class="s m">M</span>cairn-git/src/lib.rs</div>
+            <div class="f" style="display:flex;gap:8px;padding:3px 12px 3px 16px;font-family:var(--mono);font-size:12px;color:var(--muted)"><span class="s a">A</span>cairn-git/src/history.rs</div>
+          </div>
+        </div>
+        <div class="three">
+          <div class="col">
+            <div class="ch"><span class="sw" style="background:var(--l0)"></span>Ours <span class="mono">main</span></div>
+            <div class="code">
+              <div class="l"><span class="n">1</span><span>//! Cairn's component library.</span></div>
+              <div class="l"><span class="n">2</span><span></span></div>
+              <div class="l"><span class="n">3</span><span>mod commit_row;</span></div>
+              <div class="l ours"><span class="n">4</span><span>mod lane_gutter;</span></div>
+              <div class="l gap"><span class="n"></span><span></span></div>
+              <div class="l"><span class="n">5</span><span></span></div>
+              <div class="l"><span class="n">6</span><span>pub use commit_row::CommitRow;</span></div>
+              <div class="l ours"><span class="n">7</span><span>pub use lane_gutter::LaneGutter;</span></div>
+              <div class="l gap"><span class="n"></span><span></span></div>
+            </div>
+          </div>
+          <div class="col">
+            <div class="ch"><span class="sw" style="background:var(--add)"></span>Result</div>
+            <div class="code">
+              <div class="l"><span class="n">1</span><span>//! Cairn's component library.</span></div>
+              <div class="l"><span class="n">2</span><span></span></div>
+              <div class="l"><span class="n">3</span><span>mod commit_row;</span></div>
+              <div class="l res"><span class="n">4</span><span>mod lane_gutter;</span></div>
+              <div class="l res"><span class="n">5</span><span>mod graph_view;</span></div>
+              <div class="l"><span class="n">6</span><span></span></div>
+              <div class="l"><span class="n">7</span><span>pub use commit_row::CommitRow;</span></div>
+              <div class="l res"><span class="n">8</span><span>pub use lane_gutter::LaneGutter;</span></div>
+              <div class="l res"><span class="n">9</span><span>pub use graph_view::GraphView;</span></div>
+              <div class="region"><b>Region 1 of 2</b><button class="btn sm">Use ours</button><button class="btn sm">Use theirs</button><button class="btn sm p">Use both ✓</button><span style="margin-left:auto">Region 2 ↓</span></div>
+            </div>
+          </div>
+          <div class="col">
+            <div class="ch"><span class="sw" style="background:var(--l1)"></span>Theirs <span class="mono">feature/history-graph</span></div>
+            <div class="code">
+              <div class="l"><span class="n">1</span><span>//! Cairn's component library.</span></div>
+              <div class="l"><span class="n">2</span><span></span></div>
+              <div class="l"><span class="n">3</span><span>mod commit_row;</span></div>
+              <div class="l gap"><span class="n"></span><span></span></div>
+              <div class="l theirs"><span class="n">4</span><span>mod graph_view;</span></div>
+              <div class="l"><span class="n">5</span><span></span></div>
+              <div class="l"><span class="n">6</span><span>pub use commit_row::CommitRow;</span></div>
+              <div class="l gap"><span class="n"></span><span></span></div>
+              <div class="l theirs"><span class="n">7</span><span>pub use graph_view::GraphView;</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <span class="co" style="left:520px;top:100px">1</span>
+      <span class="co" style="left:400px;top:400px">2</span>
+      <span class="co" style="left:790px;top:82px">3</span>
+      <span class="co k" style="left:10px;top:140px">4</span>
+    </div>
+    </div>
+    <ol class="notes">
+      <li><span class="n c">1</span><span><b>Ours · Result · Theirs.</b> The result column is built from choices, not typed — <b>D6</b>. Structured resolution picks between existing alternatives; an editor accepts arbitrary text.</span></li>
+      <li><span class="n c">2</span><span><b>Per-region controls</b>: use ours, use theirs, use both. Fork resolves per file and opens a resolver for the rest; this makes the region the unit.</span></li>
+      <li><span class="n c">3</span><span><b>"Edit in editor" is the escape hatch</b> for the messy remainder, and Continue stays disabled until every region has a choice.</span></li>
+      <li><span class="n">4</span><span><b>Conflicted files first, cleanly merged files below</b>, so the work left is the first thing on screen.</span></li>
+    </ol>
+  </section>
+
+  <!-- ═══════════════ 5. WORKTREES + FORGE ═══════════════ -->
+  <section class="board">
+    <div class="board-h"><h2>Worktrees and forge links</h2><p>What no mainstream client does, and the most-used menu item.</p></div>
+    <div class="frame-wrap">
+    <div class="app">
+      <div class="title"><span class="mark"><i></i>Cairn — cairn</span><span class="wc"><span>—</span><span>▢</span><span>✕</span></span></div>
+      <div class="toolbar">
+        <div class="tools"><div class="tool on">Fetch</div><div class="tool on">Pull</div><div class="tool on">Push</div><div class="tool">Stash</div></div>
+        <div class="where"><b>cairn</b><span>main · ~/Development/cairn</span></div>
+        <div class="tools r"><div class="tool">Branch</div><div class="tool on">Worktree</div><div class="tool">Terminal</div><div class="tool">Palette</div></div>
+      </div>
+      <div class="tabs"><div class="tab on">cairn</div><div class="tab">freya</div><div class="tab">gitoxide</div></div>
+      <div class="body">
+        <div class="side">
+          <div class="row">Local Changes<span class="cnt">0</span></div>
+          <div class="row on">All Commits</div>
+          <div class="sec">Branches</div>
+          <div class="row i1"><span class="ref head" style="margin:0">main</span></div>
+          <div class="row i1" style="background:var(--raised)">feature/history-graph <span class="chip wt">worktree</span></div>
+          <div class="row i1">feature/credential-prompts <span class="chip wt">worktree</span></div>
+          <div class="row i1">fix/oid-parse</div>
+          <div class="sec">Worktrees <span>3</span></div>
+          <div class="row i1">main<span class="cnt">this window</span></div>
+          <div class="row i2 dim" style="font-family:var(--mono);font-size:11px">~/Development/cairn</div>
+          <div class="row i1">feature/history-graph</div>
+          <div class="row i2 dim" style="font-family:var(--mono);font-size:11px">…/.claude/worktrees/history-graph</div>
+          <div class="row i1">feature/credential-prompts</div>
+          <div class="row i2 dim" style="font-family:var(--mono);font-size:11px">…/.claude/worktrees/credential-prompts</div>
+          <div class="row i1 dim">+ Add worktree…</div>
+        </div>
+        <div class="main">
+          <div class="list">
+            <div class="hd"><div></div><div>Description</div><div>Author</div><div>Commit</div><div>Date</div></div>
+            <div class="r"><div class="g"><svg viewBox="0 0 56 28"><path d="M32 14v14" stroke="var(--l1)" stroke-width="2"/><circle cx="32" cy="14" r="4" fill="var(--l1)"/></svg></div><div><span class="ref local">feature/history-graph</span><span class="ref remote">origin/feature/history-graph</span>git(history): bounded, cancellable revwalk with a cursor</div><div class="au">Alex Parlett</div><div class="id">a1f3c02</div><div class="dt">18:20</div></div>
+            <div class="r"><div class="g"><svg viewBox="0 0 56 28"><path d="M32 0v28" stroke="var(--l1)" stroke-width="2"/><circle cx="32" cy="14" r="4" fill="var(--l1)"/></svg></div><div>model(graph): lane assigner, total over arrival order</div><div class="au">Alex Parlett</div><div class="id">9c2e7b1</div><div class="dt">17:55</div></div>
+            <div class="r"><div class="g"><svg viewBox="0 0 56 28"><path d="M32 0C32 10 16 6 16 14" stroke="var(--l1)" stroke-width="2" fill="none"/><path d="M16 14v14" stroke="var(--l0)" stroke-width="2"/><circle cx="16" cy="14" r="4" fill="var(--l0)"/></svg></div><div><span class="ref head">main</span><span class="ref remote">origin/main</span>docs(design): stamp the out-of-scope list as reviewed against real usage</div><div class="au">Alex Parlett</div><div class="id">7f9c648</div><div class="dt">Sep 14</div></div>
+            <div class="r"><div class="g"><svg viewBox="0 0 56 28"><path d="M16 0v28" stroke="var(--l0)" stroke-width="2"/><circle cx="16" cy="14" r="4" fill="var(--l0)"/></svg></div><div>docs(design): forge links are in scope (D9); the old line conflated two things</div><div class="au">Alex Parlett</div><div class="id">b8f5152</div><div class="dt">Sep 14</div></div>
+            <div class="r"><div class="g"><svg viewBox="0 0 56 28"><path d="M16 0v28" stroke="var(--l0)" stroke-width="2"/><circle cx="16" cy="14" r="4" fill="var(--l0)"/></svg></div><div>docs(design): inventory the feature surface, plan the daily-loop program</div><div class="au">Alex Parlett</div><div class="id">1391fb1</div><div class="dt">Sep 14</div></div>
+            <div class="r"><div class="g"><svg viewBox="0 0 56 28"><path d="M16 0v28" stroke="var(--l0)" stroke-width="2"/><circle cx="16" cy="14" r="4" fill="var(--l0)"/></svg></div><div>docs(design): order the packets, and close two gaps in the graph plan</div><div class="au">Alex Parlett</div><div class="id">3c1f0b3</div><div class="dt">Sep 14</div></div>
+            <div class="r"><div class="g"><svg viewBox="0 0 56 28"><path d="M16 0v14" stroke="var(--l0)" stroke-width="2"/><circle cx="16" cy="14" r="4" fill="var(--l0)"/></svg></div><div>chore(repo): adopt the agentic harness and scaffold the Cairn workspace</div><div class="au">Alex Parlett</div><div class="id">382d698</div><div class="dt">Sep 14</div></div>
+          </div>
+          <div class="detail"><div class="dtabs"><span class="on">Commit</span><span>Changes</span><span>File Tree</span></div><div class="commit"><dl class="kv"><dt>Author</dt><dd>Alex Parlett · 18:20</dd><dt>Commit</dt><dd>a1f3c02</dd></dl><dl class="kv"><dt>Refs</dt><dd>feature/history-graph, origin/feature/history-graph</dd></dl><div class="msg"><b>git(history): bounded, cancellable revwalk with a cursor</b></div></div></div>
+        </div>
+      </div>
+      <div class="menu" style="left:200px;top:200px">
+        <div class="mi dis">Checkout <small>held by worktree history-graph</small></div>
+        <div class="mi">Open worktree in new window</div>
+        <hr>
+        <div class="mh">origin · github.com/alexparlett/cairn</div>
+        <div class="mi on">Create pull request on origin… <span class="k">Ctrl+Shift+P</span></div>
+        <div class="mi">Open branch on GitHub</div>
+        <div class="mi">Copy branch link</div>
+        <hr>
+        <div class="mi">Rename…</div>
+        <div class="mi">Delete…</div>
+      </div>
+      <div class="toast"><span class="ok"></span><span>Pushed <span class="mono">feature/history-graph</span> → origin, 2 commits</span><button class="btn p sm">Create pull request</button></div>
+      <span class="co" style="left:196px;top:186px">1</span>
+      <span class="co" style="left:196px;top:290px">2</span>
+      <span class="co" style="left:10px;top:328px">3</span>
+      <span class="co" style="left:760px;top:660px">4</span>
+    </div>
+    </div>
+    <ol class="notes">
+      <li><span class="n c">1</span><span><b>Checkout is refused, and says why</b>: the branch is held by another worktree — <b>D8</b>. A client unaware of worktrees offers the operation and then fails confusingly.</span></li>
+      <li><span class="n c">2</span><span><b>Forge items under the remote they resolve against</b> — <b>D9</b>. URL construction only; no token, no API. An unrecognised forge gets no section rather than a guessed link.</span></li>
+      <li><span class="n c">3</span><span><b>Worktrees with their paths</b>, and "this window" marked. Adding one is here too, if <b>daily-loop O5</b> lands on create rather than manage-only.</span></li>
+      <li><span class="n c">4</span><span><b>Push, then the PR, as one gesture.</b> The toast offers the thing you want next — the reason forge links live in the <code>remote-sync</code> packet with push rather than beside it.</span></li>
+    </ol>
+  </section>
+</div>

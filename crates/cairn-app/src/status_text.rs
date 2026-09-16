@@ -1,4 +1,4 @@
-//! The sentences the window shows about the history.
+//! Status text for the history list.
 
 use crate::history_state::{Progress, Status};
 

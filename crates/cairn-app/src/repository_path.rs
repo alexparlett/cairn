@@ -1,4 +1,4 @@
-//! Which repository the window opens.
+//! The repository path to open, from the command line or working directory.
 
 use std::ffi::OsString;
 use std::path::PathBuf;

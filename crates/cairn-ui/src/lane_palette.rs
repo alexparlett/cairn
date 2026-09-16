@@ -1,4 +1,4 @@
-//! Which colour a lane's lines are drawn in.
+//! Lane colours.
 
 use cairn_model::Lane;
 use freya::prelude::Color;

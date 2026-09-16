@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 
-use cairn_git::ops::GitBinary;
+use cairn_git::ops::{GitBinary, GitEnvironment};
 use cairn_git::{Error, HistoryCursor, HistoryRequest, HistorySession, SharedRepository};
 
 use super::epoch::{Epoch, Epochs};
@@ -25,6 +25,14 @@ const _: () = assert!(
 /// so does a `git` that is missing or older than Cairn requires, checked first.
 /// Drive [`Updates`] from exactly one task.
 pub fn open(path: impl AsRef<Path>) -> Result<(RepositoryHandle, Updates), OpenError> {
+    open_with(path, GitEnvironment::new(|name| std::env::var_os(name)))
+}
+
+/// [`open`] with the environment `git` is searched on and run with; what a test hands in.
+pub(crate) fn open_with(
+    path: impl AsRef<Path>,
+    environment: GitEnvironment,
+) -> Result<(RepositoryHandle, Updates), OpenError> {
     let path = path.as_ref().to_owned();
 
     let (jobs, incoming) = channel::<(Epoch, Request)>();
@@ -56,7 +64,7 @@ pub fn open(path: impl AsRef<Path>) -> Result<(RepositoryHandle, Updates), OpenE
             // Once, before anything else: a missing or too-old git is reported with the
             // version Cairn needs, never worked around (D1). Off the UI thread, since
             // finding out means running `git --version`.
-            if let Err(error) = GitBinary::discover() {
+            if let Err(error) = GitBinary::discover_with(environment) {
                 outbox.send(
                     None,
                     Update::Failed {
@@ -367,6 +375,28 @@ mod tests {
             ),
             other => panic!("expected the open to be reported, got {other:?}"),
         }
+    }
+
+    /// A git that cannot be found is reported with the required version, and nothing follows:
+    /// the repository is not opened behind the refusal.
+    #[test]
+    fn a_missing_git_is_refused_naming_the_version_and_nothing_is_served() {
+        let (_handle, mut updates) =
+            match open_with(env!("CARGO_MANIFEST_DIR"), GitEnvironment::new(|_| None)) {
+                Ok(pair) => pair,
+                Err(error) => panic!("starting the worker: {error}"),
+            };
+        match block_on(updates.next()) {
+            Some(Update::Failed { message }) => {
+                assert!(message.contains("2.30.0"), "no required version: {message}");
+                assert!(message.contains("PATH is unset"), "no cause: {message}");
+            }
+            other => panic!("expected the refusal, got {other:?}"),
+        }
+        assert!(
+            block_on(updates.next()).is_none(),
+            "the worker went on to serve the repository after refusing git"
+        );
     }
 
     /// `open` succeeds for a path with no repository above it.

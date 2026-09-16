@@ -1,7 +1,4 @@
-//! The Cairn binary: the window, and the wiring between engine and view.
-//!
-//! The only crate where the two layers meet, and inside it only [`worker`] may
-//! name the engine.
+//! The Cairn binary.
 
 mod history_state;
 mod repository_path;
@@ -15,9 +12,6 @@ use freya::prelude::*;
 use history_state::{Progress, Status};
 use worker::{Request, Update};
 
-/// How many rows a page asks for. One commit object is decoded per row, each a
-/// possible pack seek on a cold cache, so this is a couple of screens rather
-/// than a comfortable margin.
 const PAGE_ROWS: usize = 64;
 
 fn main() {
@@ -27,25 +21,17 @@ fn main() {
 fn app() -> impl IntoElement {
     use_init_theme(dark_theme);
 
-    // The one copy of the history; everywhere else it is a handle. This scope
-    // never reads it — everything it decides comes from `progress` — so a page
-    // costs a title bar and a header, not a pass over the history.
+    // The one copy of the history; this scope must not read it, only `progress`.
     let mut rows = use_state(Vec::<HistoryRow>::new);
     let mut progress = use_state(Progress::opening);
-    // Identity, not index: an index means something else the moment rows arrive
-    // above it, and R4.4 asks selection to survive that.
     let selected = use_state(|| None::<RowId>);
 
-    // R5. Kept so the window can name it, including in R5.2's message when
-    // there is no repository there.
     let opened = use_hook(|| {
         repository_path::chosen(std::env::args_os(), repository_path::working_directory())
             .display()
             .to_string()
     });
 
-    // Opened once, and the answers driven from one task. The task awaits, so
-    // the event loop keeps running between pages.
     let repository = use_hook({
         let path = opened.clone();
         move || match worker::open(&path) {
@@ -58,9 +44,7 @@ fn app() -> impl IntoElement {
                                 rows: page,
                                 complete,
                             } => {
-                                // Counted before the rows are handed over:
-                                // afterwards walks the whole loaded history
-                                // again for every page.
+                                // Count before handing the rows over; afterwards it rereads the whole history.
                                 let widest = history_state::widest_lane(&page);
                                 let loaded = {
                                     let mut held = rows.write();
@@ -74,8 +58,7 @@ fn app() -> impl IntoElement {
                             }
                         }
                     }
-                    // Only if the worker did not already say something better:
-                    // a generic line would overwrite the named cause.
+                    // Only if the worker did not already name a cause.
                     progress
                         .write()
                         .stream_ended("the repository worker has stopped");
@@ -99,14 +82,10 @@ fn app() -> impl IntoElement {
         .theme_background()
         .child(title_bar(&opened, &counted))
         .child(HistoryHeader::new())
-        // R4.3: loading, empty and a failure that produced no row each get their
-        // own sentence, so a blank area never means any of the three.
         .child(match status_text::placeholder(&status, has_rows) {
             Some(message) => notice(message, &opened),
             None => history(rows, lanes, selected, progress, repository),
         })
-        // A failure after rows were drawn is a banner under them, not a
-        // replacement for them.
         .maybe(has_rows, |el| match &status {
             Status::Failed(message) => el.child(banner(message.clone())),
             _ => el,
@@ -121,9 +100,7 @@ fn history(
     repository: Option<worker::RepositoryHandle>,
 ) -> Element {
     HistoryList::new(rows, move |render: RowRender| {
-        // Matched exhaustively and with no wildcard (R6.2), so the row kind
-        // `refs-and-status` adds is a compile error here rather than a row
-        // silently not drawn. Pins A9's second clause.
+        // No wildcard arm: a new row kind must fail to compile here.
         match render.row.content {
             RowContent::Commit(commit) => CommitRow::new(commit, render.row.graph, render.lanes)
                 .selected(render.selected)
@@ -134,10 +111,8 @@ fn history(
     .selected(*selected.read())
     .on_select(move |id: RowId| selected.set(Some(id)))
     .on_reach_end(move |()| {
-        // The list asks every time a row near the end is visible; `wants_more`
-        // is the debounce, since every `submit` supersedes and asking twice
-        // throws away the page being built. `peek`, not `read`: subscribing the
-        // window to the progress it is about to write would loop it.
+        // `wants_more` debounces: every `submit` supersedes. `peek`, not `read`: reading here
+        // subscribes the window to the progress it writes, and loops.
         if !progress.peek().wants_more() {
             return;
         }
@@ -149,7 +124,6 @@ fn history(
     .into()
 }
 
-/// Which repository is open, and how much of it is here.
 fn title_bar(path: &str, counted: &str) -> Element {
     rect()
         .horizontal()
@@ -178,8 +152,6 @@ fn title_bar(path: &str, counted: &str) -> Element {
         .into()
 }
 
-/// What fills the list area when there is no list. The sentence is
-/// [`status_text::placeholder`]'s.
 fn notice(message: impl Into<String>, path: &str) -> Element {
     let message = message.into();
     rect()
@@ -198,8 +170,6 @@ fn notice(message: impl Into<String>, path: &str) -> Element {
         .into()
 }
 
-/// A failure after rows were already on screen: the rows stay, since a page that
-/// failed does not unsay the pages that worked.
 fn banner(message: String) -> Element {
     rect()
         .width(Size::fill())

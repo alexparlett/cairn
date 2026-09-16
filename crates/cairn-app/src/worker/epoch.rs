@@ -1,9 +1,4 @@
-//! Which request is the one that still matters.
-//!
-//! The epoch is not only a tag on the reply (R3.2) but the cancel signal the
-//! engine polls (R2.4), so superseding a request stops its walk rather than
-//! leaving it to burn a core — which is what makes R2.5's live session safe to
-//! keep across a supersession.
+//! Request epochs, which double as the engine's cancel signal.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -14,8 +9,7 @@ use cairn_git::Cancel;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Epoch(u64);
 
-/// The current epoch, shared by cloning: the UI side bumps it to supersede a
-/// request, the worker reads the same word to find its work unwanted.
+/// The current epoch, shared by cloning.
 #[derive(Debug, Clone, Default)]
 pub struct Epochs {
     current: Arc<AtomicU64>,
@@ -32,18 +26,15 @@ impl Epochs {
         Epoch(self.current.fetch_add(1, Ordering::AcqRel) + 1)
     }
 
-    /// The request that is still wanted.
     pub fn current(&self) -> Epoch {
         Epoch(self.current.load(Ordering::Acquire))
     }
 
-    /// Whether `epoch` is still the one being waited for.
     pub fn is_current(&self, epoch: Epoch) -> bool {
         !self.is_stopping() && self.current() == epoch
     }
 
-    /// Stops everything, for good. Without it a worker part-way through a
-    /// ten-year monorepo finishes the page before the window closes.
+    /// Stops everything, for good.
     pub fn stop(&self) {
         self.stopping.store(true, Ordering::Release);
     }
@@ -52,7 +43,6 @@ impl Epochs {
         self.stopping.load(Ordering::Acquire)
     }
 
-    /// The cancel signal for one request, in the engine's own vocabulary.
     pub fn watch(&self, mine: Epoch) -> Superseded {
         Superseded {
             mine,

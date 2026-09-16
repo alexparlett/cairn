@@ -1,17 +1,10 @@
-//! View state, graph width, and whether another page is worth asking for.
-//!
-//! A plain value, so R4.3 — a still-loading list and an empty repository looking
-//! identical — is decided by a test rather than a screenshot; which sentence
-//! each state shows is [`crate::status_text`]'s. It also keeps the window from
-//! reading the row vector to decide what to draw.
+//! View state for the history list.
 
 use cairn_model::HistoryRow;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
-    /// Being opened, or the first rows are on their way. Never rendered the same
-    /// as [`Status::Empty`] (R4.3), which is why this is an enum and not an
-    /// empty vector.
+    /// Being opened, or the first rows are on their way.
     Loading,
     /// Opened, with no commits to show.
     Empty,
@@ -20,7 +13,6 @@ pub enum Status {
     Failed(String),
 }
 
-/// Everything about the history except its rows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Progress {
     status: Status,
@@ -31,8 +23,7 @@ pub struct Progress {
 }
 
 impl Progress {
-    /// A request is already on its way, so it is loading and another would only
-    /// supersede this one.
+    /// Starts with a request already in flight.
     pub fn opening() -> Self {
         Self {
             status: Status::Loading,
@@ -47,14 +38,12 @@ impl Progress {
         &self.status
     }
 
-    /// The widest lane seen in any page so far. Only grows, so a row already
-    /// drawn never has to move.
+    /// The widest lane seen in any page so far; only grows.
     pub fn lanes(&self) -> usize {
         self.lanes
     }
 
-    /// How many rows have arrived, without reading the row vector — which would
-    /// subscribe the window to every page.
+    /// How many rows have arrived, without reading (and subscribing to) the row vector.
     pub fn loaded(&self) -> usize {
         self.loaded
     }
@@ -67,9 +56,7 @@ impl Progress {
         self.complete
     }
 
-    /// False while a page is in flight, while the history is complete, and after
-    /// a failure. The debounce the worker boundary needs: every `submit`
-    /// supersedes, so asking again throws away the page being built.
+    /// False while a page is in flight, while the history is complete, and after a failure.
     pub fn wants_more(&self) -> bool {
         !self.complete && !self.in_flight && !matches!(self.status, Status::Failed(_))
     }
@@ -78,16 +65,14 @@ impl Progress {
         self.in_flight = true;
     }
 
-    /// Folds in a page. `loaded` is the total rows held once the page has been
-    /// added, counted by the caller, which owns them.
+    /// `loaded` is the total rows held once the page has been added.
     pub fn received(&mut self, widest_lane: usize, complete: bool, loaded: usize) {
         self.in_flight = false;
         self.lanes = self.lanes.max(widest_lane);
         self.complete = complete;
         self.loaded = loaded;
         self.status = match (loaded, complete) {
-            // R4.3: a history that ran out with nothing in it is empty; one
-            // that has handed over nothing yet is still loading.
+            // Ran out with nothing in it: empty. Nothing handed over yet: still loading.
             (0, true) => Status::Empty,
             (0, false) => Status::Loading,
             _ => Status::Ready,
@@ -99,9 +84,7 @@ impl Progress {
         self.status = Status::Failed(message);
     }
 
-    /// The stream ended with nobody saying why. Only overwrites a status that is
-    /// not already a failure: replacing a named cause with a generic line loses
-    /// the only sentence that had one.
+    /// Does not overwrite an existing failure's message.
     pub fn stream_ended(&mut self, message: &str) {
         self.in_flight = false;
         if !matches!(self.status, Status::Failed(_)) {
@@ -110,9 +93,8 @@ impl Progress {
     }
 }
 
-/// How many lane columns `rows` needs. Every lane a row names counts, not just
-/// its own commit's: a passing line runs in a lane whose commit may be nowhere
-/// in this page, and a narrower column clips it.
+/// Counts every lane a segment names, not just node lanes: a passing line's commit
+/// may be on another page.
 pub fn widest_lane(rows: &[HistoryRow]) -> usize {
     rows.iter()
         .map(|row| {
@@ -157,8 +139,6 @@ mod tests {
         }
     }
 
-    /// R4.3: different values, so a view rendering them the same ignored a
-    /// distinction it was handed.
     #[test]
     fn loading_and_an_empty_repository_are_different_states() {
         let mut empty = Progress::opening();
@@ -190,8 +170,7 @@ mod tests {
         );
     }
 
-    /// Caught by: letting a second request go out over the first, which throws
-    /// away the page being built.
+    /// Caught by: a second request going out over the first.
     #[test]
     fn only_one_page_is_asked_for_at_a_time() {
         let mut progress = Progress::opening();
@@ -231,8 +210,6 @@ mod tests {
         assert!(!progress.wants_more());
     }
 
-    /// A failure after rows arrived is a banner, not a blank window, decided
-    /// without reading the row vector.
     #[test]
     fn a_failure_does_not_unsay_the_pages_that_worked() {
         let mut progress = Progress::opening();
@@ -246,7 +223,6 @@ mod tests {
         assert!(!never_started.has_rows());
     }
 
-    /// Caught by: overwriting a named cause with the generic line.
     #[test]
     fn the_stream_ending_does_not_overwrite_a_named_cause() {
         let mut named = Progress::opening();
@@ -278,8 +254,7 @@ mod tests {
         assert_eq!(progress.lanes(), 5, "the column narrowed under the reader");
     }
 
-    /// Caught by: measuring nodes only. An out-of-order line runs down a lane
-    /// chosen for being free, which no commit in the page need sit in.
+    /// Caught by: measuring nodes only.
     #[test]
     fn a_lane_only_a_passing_line_uses_still_gets_a_column() {
         let rows = vec![row(

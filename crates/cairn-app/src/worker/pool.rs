@@ -1,8 +1,4 @@
-//! The worker that owns a repository, and the two values that reach the view.
-//!
-//! D3: one [`SharedRepository`] per open repository, one worker thread for it,
-//! `to_worker` called once at the top of that thread. See
-//! `docs/systems/history-graph.md`, "The worker boundary".
+//! The repository worker pool.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -14,31 +10,17 @@ use super::epoch::{Epoch, Epochs};
 use super::request::{Request, Update};
 use super::wake::{Wake, Woken};
 
-/// One worker thread per open repository — not one per core.
-///
-/// Structural, not a throughput budget: R2.5's live walk borrows one thread's
-/// handle for the life of a scroll, and there is exactly one scroll, so a second
-/// worker would have nothing to do while holding an object cache. A second kind
-/// of work gets its own worker, which costs this one almost nothing — concurrent
-/// walks scale 2.1x, 4.2x and 7.9x at 2, 4 and 8 threads with single-walk time
-/// flat (`measures_concurrent_walks_against_a_named_repository`).
 pub const WORKERS_PER_REPOSITORY: usize = 1;
 
-// The sign, not the enforcement: `incoming` is a single-consumer receiver moved
-// into one closure, so a loop of workers does not compile at any count. A second
-// worker needs a routing decision about which one owns the live walk.
+// `incoming` is moved into one closure, so a second worker would not compile anyway.
 const _: () = assert!(
     WORKERS_PER_REPOSITORY == 1,
     "serve() owns one repository handle and one live walk per thread; more \
      workers per repository need a routing decision, not a bigger constant"
 );
 
-/// Starts the worker that will own the repository containing `path`, returning
-/// before anything touches a disk: opening happens on the worker, since
-/// discovering a repository walks up the filesystem reading config. A path
-/// outside a repository arrives as an [`Update::Failed`]; the only failure here
-/// is the operating system refusing a thread. Drive [`Updates`] from exactly one
-/// task.
+/// Returns before touching a disk; open failures arrive as [`Update::Failed`].
+/// Drive [`Updates`] from exactly one task.
 pub fn open(path: impl AsRef<Path>) -> Result<(RepositoryHandle, Updates), OpenError> {
     let path = path.as_ref().to_owned();
 
@@ -55,14 +37,12 @@ pub fn open(path: impl AsRef<Path>) -> Result<(RepositoryHandle, Updates), OpenE
     let worker_wake = Arc::clone(&wake);
     let opening = path.clone();
 
-    // Detached: joining is waiting. The thread ends when the last
-    // `RepositoryHandle` drops and its channel closes.
+    // Detached; ends when the last `RepositoryHandle` drops.
     std::thread::Builder::new()
         .name("cairn-repository".to_owned())
         .spawn(move || {
-            // One sender lives on this thread and `exit` owns it. A second copy
-            // would outlive `exit`, leaving the UI task an empty channel rather
-            // than a closed one when `WorkerExit::drop` wakes it.
+            // The only sender on this thread, owned by `exit`: a second copy would outlive it and
+            // leave the UI task an open, empty channel.
             let exit = WorkerExit {
                 outbox: Some(outbox),
                 wake: worker_wake,
@@ -73,8 +53,7 @@ pub fn open(path: impl AsRef<Path>) -> Result<(RepositoryHandle, Updates), OpenE
             match SharedRepository::discover(&opening) {
                 Ok(shared) => serve(shared, incoming, outbox, worker_epochs),
                 Err(source) => outbox.send(
-                    // No epoch: failing to open answers no request and must not
-                    // be filtered by one. The message names the path (R5.2).
+                    // No epoch: failing to open answers no request.
                     None,
                     Update::Failed {
                         message: source.to_string(),
@@ -102,10 +81,6 @@ pub fn open(path: impl AsRef<Path>) -> Result<(RepositoryHandle, Updates), OpenE
     ))
 }
 
-/// The view's only way to reach a repository. One method, returning
-/// immediately, and no receiving end of anything: the type-level half of "the UI
-/// thread never waits on repository work". The guard covers what a type cannot —
-/// that nobody reached past this type to a repository directly.
 #[derive(Debug, Clone)]
 pub struct RepositoryHandle {
     jobs: Sender<(Epoch, Request)>,
@@ -113,9 +88,7 @@ pub struct RepositoryHandle {
 }
 
 impl RepositoryHandle {
-    /// Asks for something, superseding whatever was in flight. The channel is
-    /// unbounded, so the send cannot block; the epoch returned is how a caller
-    /// recognises the answer to *this* request.
+    /// Supersedes whatever was in flight; never blocks.
     pub fn submit(&self, request: Request) -> Epoch {
         let epoch = self.epochs.bump();
         // A failed send means the worker is gone and has already said so.
@@ -124,8 +97,7 @@ impl RepositoryHandle {
     }
 }
 
-/// Everything the workers have to say, in arrival order. Driven from exactly
-/// one task; `next` is a future, so the UI thread yields between updates.
+/// Driven from exactly one task.
 #[derive(Debug)]
 pub struct Updates {
     inbox: Receiver<Envelope>,
@@ -135,8 +107,7 @@ pub struct Updates {
 
 impl Updates {
     /// The next update worth rendering, or `None` once every worker has gone.
-    /// Drops superseded updates (R3.2). An epochless update — a dying worker —
-    /// is kept.
+    /// Epochless updates are never dropped.
     pub async fn next(&mut self) -> Option<Update> {
         loop {
             match self.inbox.try_recv() {
@@ -160,16 +131,12 @@ impl Updates {
 }
 
 impl Drop for Updates {
-    /// Stops the walk where it stands rather than letting a worker finish a
-    /// page of somebody's ten-year monorepo first.
+    /// Stops any walk in progress.
     fn drop(&mut self) {
         self.epochs.stop();
     }
 }
 
-/// Why a repository could not be opened: display text and nothing else.
-/// Hand-written rather than wrapping `cairn_git::Error`, so the view needs none
-/// of the engine's vocabulary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenError {
     message: String,
@@ -183,17 +150,14 @@ impl std::fmt::Display for OpenError {
 
 impl std::error::Error for OpenError {}
 
-/// One update and the request it answers, or `None` for news about the worker
-/// itself.
+/// `epoch` is `None` for news about the worker itself.
 #[derive(Debug)]
 struct Envelope {
     epoch: Option<Epoch>,
     update: Update,
 }
 
-/// The one way anything reaches the window. Not `Clone`: exactly one lives on a
-/// worker thread, owned by its [`WorkerExit`], so no second sender keeps the
-/// channel open past the wake announcing the thread is gone.
+/// Not `Clone`: a second sender would hold the channel open past the exit wake.
 #[derive(Debug)]
 struct Outbox {
     updates: Sender<Envelope>,
@@ -208,9 +172,7 @@ impl Outbox {
     }
 }
 
-/// Announces a worker's death, however it died. A `Drop`, which unwinding runs,
-/// carrying the last sender into the update channel and dropping it before
-/// waking: closing a channel does not wake a task parked on [`Wake`].
+/// Announces a worker's death from `Drop`, so unwinding runs it.
 #[derive(Debug)]
 struct WorkerExit {
     outbox: Option<Outbox>,
@@ -231,16 +193,13 @@ impl Drop for WorkerExit {
                 },
             );
         }
-        // Order matters: close the channel, then wake. A task woken while a
-        // sender is still alive sees an empty channel and parks again.
+        // Close the channel, then wake: a task woken while a sender lives sees an empty
+        // channel and parks again.
         self.outbox = None;
         self.wake.signal();
     }
 }
 
-/// One worker's whole life. `to_worker` is called once, before the loop, and the
-/// walk borrowing it lives in this frame — which is how a scroll keeps
-/// gitoxide's walk open across requests without it ever being `Send`.
 fn serve(
     shared: SharedRepository,
     jobs: Receiver<(Epoch, Request)>,
@@ -248,13 +207,8 @@ fn serve(
     epochs: Epochs,
 ) {
     let repo = shared.to_worker();
-    // Once, and the borrow checker makes it true: `scroll` holds a
-    // `HistorySession<'_>` borrowing `repo` across a turn of the loop, so moving
-    // `to_worker()` into the loop fails with `error[E0597]`.
-    //
-    // `drop(shared)` is not that guarantee: deleting it leaves the crate
-    // compiling and every test green. It adds only that a second `to_worker()`
-    // beside the first, which no borrow would catch, becomes a use-after-move.
+    // Once, outside the loop: `scroll` borrows `repo` across turns, so moving this inside
+    // fails to compile. `drop(shared)` only turns a second `to_worker()` into a use-after-move.
     drop(shared);
     let mut scroll: Option<HistorySession<'_>> = None;
     let mut cursor: Option<HistoryCursor> = None;
@@ -269,8 +223,7 @@ fn serve(
 
         let rows = match request {
             Request::OpenHistory { rows } => {
-                // A different scroll: drop the open walk before building
-                // another.
+                // A different scroll: drop the open walk first.
                 scroll = None;
                 cursor = None;
                 rows
@@ -279,8 +232,7 @@ fn serve(
         };
 
         if scroll.is_none() {
-            // R2.5's cold-restart path: replay to where the last good page left
-            // off. `None` means the scroll has not started.
+            // Cold restart from the last good page; `None` means the scroll has not started.
             let request = match cursor.clone() {
                 Some(at) => HistoryRequest::resume(at, rows),
                 None => HistoryRequest::from_head(rows),
@@ -310,12 +262,10 @@ fn serve(
                 );
             }
             Err(Error::Cancelled { .. }) => {
-                // Superseded mid-page. The session keeps its laid-out rows, so
-                // the replacing request carries on from there. Nothing is sent.
+                // Superseded mid-page: the session keeps its rows. Nothing is sent.
             }
             Err(error) => {
-                // The walk's position is no longer trustworthy; the last good
-                // page's cursor is. Dropping the session cold-restarts there.
+                // Drop the session; the next request cold-restarts from the last good cursor.
                 scroll = None;
                 outbox.send(
                     Some(epoch),
@@ -328,9 +278,7 @@ fn serve(
     }
 }
 
-/// `Error::UnbornHead` is not a failure: an empty history crosses as a complete
-/// page of no rows, so the window says "no commits yet" rather than showing an
-/// error banner (R4.3). Every other failure crosses as display text.
+/// `Error::UnbornHead` becomes a complete, empty page rather than a failure.
 fn no_walk(error: Error) -> Update {
     match error {
         Error::UnbornHead { .. } => Update::Rows {
@@ -350,9 +298,7 @@ mod tests {
     use std::task::{Context, Poll, Waker};
     use std::time::Instant;
 
-    /// Drives a future on this thread: the tests need the boundary's contract,
-    /// not Freya's scheduler. On `std::task::Wake`: the workspace forbids
-    /// `unsafe`.
+    /// Drives a future on this thread. On `std::task::Wake`, since `unsafe` is forbidden.
     fn block_on<F: Future>(future: F) -> F::Output {
         struct Unpark(std::thread::Thread);
         impl std::task::Wake for Unpark {
@@ -364,8 +310,7 @@ mod tests {
         woken_by(&waker, future)
     }
 
-    /// [`block_on`] with the waker supplied, for the one test whose subject is
-    /// waking the window going wrong.
+    /// [`block_on`] with the waker supplied.
     fn woken_by<F: Future>(waker: &Waker, future: F) -> F::Output {
         let mut cx = Context::from_waker(waker);
         let mut future = std::pin::pin!(future);
@@ -385,8 +330,7 @@ mod tests {
         }
     }
 
-    /// R5.2: a path outside a repository fails with a message naming it, and
-    /// arrives as an update rather than an error from `open`.
+    /// Arrives as an update, not as an error from `open`.
     #[test]
     fn opening_a_path_outside_a_repository_is_reported_and_names_the_path() {
         let outside = std::env::temp_dir().join("cairn-not-a-repository");
@@ -403,8 +347,7 @@ mod tests {
         }
     }
 
-    /// Pinned by the one thing a test can see from here: `open` succeeds for a
-    /// path with no repository anywhere above it.
+    /// `open` succeeds for a path with no repository above it.
     #[test]
     fn opening_returns_before_the_repository_is_found() {
         let outside = std::env::temp_dir().join("cairn-not-a-repository");
@@ -414,10 +357,7 @@ mod tests {
         );
     }
 
-    /// Built with `std::fs`, not `git init`:
-    /// `only_the_ops_module_mutates_a_repository` scans this crate's test code
-    /// too. These four directories and two files are what `gix` discovers as a
-    /// repository whose `HEAD` points at a branch that does not exist yet.
+    /// Built with `std::fs`, not `git init`: the mutation guard scans this crate's tests too.
     struct UnbornRepository {
         path: PathBuf,
     }
@@ -451,9 +391,7 @@ mod tests {
         }
     }
 
-    /// The whole path, not the mapping alone. Caught by: deleting the arm from
-    /// the call site while `no_walk` stays correct, which turns a freshly
-    /// initialised repository back into a red error banner.
+    /// Caught by: deleting the unborn arm at the call site while `no_walk` stays correct.
     #[test]
     fn a_freshly_initialised_repository_reaches_the_view_as_an_empty_history() {
         let fixture = UnbornRepository::new("cairn-unborn-head");
@@ -473,8 +411,6 @@ mod tests {
         drop(handle);
     }
 
-    /// Empty, not broken: R4.3 cannot be drawn if an empty repository arrives as
-    /// an error sentence beside every other kind of failure.
     #[test]
     fn a_repository_with_no_commits_yet_arrives_as_an_empty_history() {
         let answer = no_walk(Error::UnbornHead {
@@ -490,8 +426,6 @@ mod tests {
         );
     }
 
-    /// Every other failure still arrives as the text it will be shown as,
-    /// including R5.2's.
     #[test]
     fn every_other_failure_to_open_a_walk_keeps_its_sentence() {
         let answer = no_walk(Error::NotARepository {
@@ -517,7 +451,6 @@ mod tests {
         drop(handle);
     }
 
-    /// R2.5 across the boundary: paging costs the page, not the pages before it.
     #[test]
     fn paging_continues_the_same_walk_rather_than_replaying_it() {
         let (handle, mut updates) = cairn();
@@ -540,35 +473,18 @@ mod tests {
         assert!(!repeated, "the second page repeated a row from the first");
     }
 
-    /// The epoch reaches the engine, not only the answer (D3). Caught by:
-    /// handing `next_page` a fresh `CancelSignal` instead of
-    /// `epochs.watch(epoch)`, which leaves every other test in this crate green
-    /// while a superseded walk runs to completion and has its answer thrown
-    /// away. `epoch.rs` decides that `Superseded` flips and `cairn-git`'s
-    /// `cancelling_a_session_stops_the_walk_and_keeps_its_progress` that
-    /// `next_page` honours a signal; neither sees this call site, and the
-    /// [`inbox_only`] tests decide the epoch filter alone.
-    ///
-    /// A superseded request's fate is read off the next page: stopped mid-walk
-    /// starts again at the row the scroll opened on; never picked up carries on
-    /// past the rows already handed out; ran to completion gives an empty page.
-    /// Only the first is a stop. A walk of this repository is microseconds long,
-    /// so the worker gets a batch under one epoch and the supersession lands
-    /// inside a walk rather than a park; the gap between two requests of the
-    /// batch still looks like completion, so a round landing there is a retry and
-    /// the failure is that every round saw one.
+    /// Caught by: handing `next_page` a fresh `CancelSignal` instead of `epochs.watch(epoch)`.
+    /// A supersession landing between two batched requests looks like completion, so a round
+    /// that sees one retries; the failure is every round seeing one.
     #[test]
     fn superseding_a_request_stops_the_walk_that_is_serving_it() {
-        // Larger than this repository can answer, so every request below would
-        // otherwise walk the whole history.
+        // Larger than this repository, so every request below would walk the whole history.
         let whole_history = 1_000_000;
-        // Queued work, not a queued number: the worker must still be busy when
-        // the supersession arrives.
+        // Queued work, so the worker is still busy when the supersession arrives.
         let batch = 2_000;
         let (handle, mut updates) = cairn();
 
-        // One ordinary round trip: names the row a scroll opens on, and measures
-        // what an answer costs on this machine. Everything below scales to it.
+        // One ordinary round trip, to name the opening row and time an answer on this machine.
         let started = Instant::now();
         handle.submit(Request::OpenHistory { rows: 2 });
         let opened_on = match block_on(updates.next()) {
@@ -584,8 +500,7 @@ mod tests {
         let mut ran_on = 0usize;
         let mut never_started = 0usize;
         for _ in 0..40 {
-            // Posted under one epoch, which `submit` cannot do: it bumps per
-            // call. The worker's loop cannot tell the difference.
+            // Posted under one epoch, which `submit` cannot do.
             let epoch = handle.epochs.bump();
             for _ in 0..batch {
                 let queued = handle.jobs.send((
@@ -597,8 +512,7 @@ mod tests {
                 assert!(queued.is_ok(), "the worker went away mid-batch");
             }
             std::thread::sleep(wait);
-            // Supersedes the whole batch: the one being walked stops, the rest
-            // are dropped unpicked.
+            // Supersedes the whole batch.
             handle.submit(Request::MoreHistory { rows: 2 });
 
             match block_on(updates.next()) {
@@ -620,8 +534,7 @@ mod tests {
         );
     }
 
-    /// The receiving half alone, with no repository behind it: enough to decide
-    /// what reaches the view, without racing a walk.
+    /// The receiving half alone, with no repository behind it.
     fn inbox_only() -> (Epochs, Outbox, Updates) {
         let (sender, inbox) = channel::<Envelope>();
         let wake = Wake::new();
@@ -641,8 +554,7 @@ mod tests {
         )
     }
 
-    /// R3.2, without racing a walk: the stale answer is posted by hand and then
-    /// superseded.
+    /// The stale answer is posted by hand, then superseded.
     #[test]
     fn an_answer_to_a_superseded_request_is_never_returned() {
         let (epochs, outbox, mut updates) = inbox_only();
@@ -671,7 +583,7 @@ mod tests {
         }
     }
 
-    /// The negative for the test above: without it, dropping everything passes.
+    /// The negative for the test above: dropping everything must fail it.
     #[test]
     fn an_answer_to_the_current_request_is_returned() {
         let (epochs, outbox, mut updates) = inbox_only();
@@ -688,7 +600,6 @@ mod tests {
         }
     }
 
-    /// News about a worker answers no request, so it survives a supersession.
     #[test]
     fn a_worker_dying_is_reported_whatever_the_epoch_is() {
         let (epochs, outbox, mut updates) = inbox_only();
@@ -708,8 +619,6 @@ mod tests {
         }
     }
 
-    /// Shutting down stops answers as well as walks: the epoch that was current
-    /// is not once the window is closing.
     #[test]
     fn nothing_is_rendered_once_the_pool_is_stopping() {
         let (epochs, outbox, mut updates) = inbox_only();
@@ -733,8 +642,7 @@ mod tests {
         }
     }
 
-    /// A worker that panics must announce itself, or the window waits forever.
-    /// The notice is a `Drop`, so this drives a real panic through one.
+    /// Drives a real panic through the `Drop` notice.
     #[test]
     fn a_panicking_worker_says_so_instead_of_disappearing() {
         let (updates_tx, inbox) = channel::<Envelope>();
@@ -766,19 +674,8 @@ mod tests {
         }
     }
 
-    /// The same notice through the wiring that installs it: the test above
-    /// places a [`WorkerExit`] by hand, deciding that the guard works and not
-    /// that [`open`] installs one. Caught by: deleting `WorkerExit` from
-    /// `open`'s closure and ending it with `drop(outbox); worker_wake.signal();`
-    /// — clean shutdown keeps working and every other test stays green while a
-    /// panic inside [`serve`] unwinds past that signal. This goes red two ways,
-    /// racing the unwind: the ten-second hang below, or a stream that ends
-    /// without saying why.
-    ///
-    /// `Wake::signal` calls the window's waker on the worker thread, so a waker
-    /// that gives way is a panic inside `serve` raised by the line answering a
-    /// request. It gives way exactly once: a second panic while the notice was
-    /// being sent would abort the process.
+    /// Caught by: `open` not installing a [`WorkerExit`] around [`serve`].
+    /// The waker panics exactly once; a second panic while sending the notice would abort.
     #[test]
     fn a_panic_inside_a_real_worker_is_announced_by_the_pool_that_opened_it() {
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -794,9 +691,7 @@ mod tests {
             }
 
             fn wake_by_ref(self: &Arc<Self>) {
-                // `spent` first, then the unpark, then the panic: the thread
-                // this reaches must see the waker gave way, and must be woken
-                // either way — a test hanging on its own waker decides nothing.
+                // `spent` first, then the unpark, then the panic: the waiting thread must be woken either way.
                 let first = !self.spent.swap(true, Ordering::SeqCst);
                 self.waiting.unpark();
                 if first {
@@ -809,8 +704,7 @@ mod tests {
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
 
-        // Everything that can park runs over there, so the bound below bounds the
-        // whole test, and a failure returns as a value the hook cannot silence.
+        // Everything that can park runs over there, so the timeout below bounds the whole test.
         let (told, verdict) = channel::<Result<String, String>>();
         let asking = handle.clone();
         std::thread::spawn(move || {
@@ -822,9 +716,7 @@ mod tests {
             let waker = Waker::from(Arc::clone(&fragile));
             let mut asked = 0;
 
-            // Ask again until an answer's wake runs the waker: a signal arriving
-            // before this thread parks only latches, and latching raises
-            // nothing.
+            // Ask until an answer's wake runs the waker: a signal before this thread parks only latches.
             let announced = loop {
                 if !fragile.spent.load(Ordering::SeqCst) {
                     if asked >= 100 {
@@ -853,8 +745,7 @@ mod tests {
             );
         });
 
-        // A worker dying unannounced parks whoever drives `Updates` forever;
-        // that must redden rather than hang the suite.
+        // Redden rather than hang the suite.
         let waited = verdict.recv_timeout(std::time::Duration::from_secs(10));
         std::panic::set_hook(previous);
 
@@ -871,8 +762,7 @@ mod tests {
         drop(handle);
     }
 
-    /// The negative for the two above: without it, a notice sent
-    /// unconditionally passes.
+    /// The negative for the two above.
     #[test]
     fn a_worker_that_exits_cleanly_raises_no_alarm() {
         let (updates_tx, inbox) = channel::<Envelope>();
@@ -890,27 +780,12 @@ mod tests {
         }
     }
 
-    /// Implemented for [`Outbox`] by hand and for everything `Clone` by blanket
-    /// impl, so the two overlap exactly when `Outbox` is `Clone` and an overlap
-    /// is `error[E0119]`.
-    ///
-    /// It decides the `Clone`, not the rule. Residual review obligation:
-    /// `Sender<Envelope>` is `Clone` and `Outbox`'s fields are visible
-    /// throughout this module, so a second sender written by hand compiles and
-    /// passes every test here. A copy outliving [`WorkerExit`] holds the update
-    /// channel open past the wake announcing the thread is gone and parks the
-    /// waiting task forever — no test sees that, the race being narrow enough
-    /// that [`a_failed_open_ends_the_stream_rather_than_leaving_it_open`] passed
-    /// against the broken code.
+    /// Overlaps the blanket impl, a compile error, exactly when `Outbox` is `Clone`.
     trait OneSenderPerWorker {}
     impl OneSenderPerWorker for Outbox {}
     impl<T: Clone> OneSenderPerWorker for T {}
 
-    /// The assertion is the compilation, not the body: deriving `Clone` on
-    /// [`Outbox`] makes the two [`OneSenderPerWorker`] impls overlap and the test
-    /// build stops rather than this failing. The gate compiles tests twice —
-    /// clippy and the test run — so a `Clone` cannot reach it, though
-    /// `cargo build` alone would still succeed.
+    /// Passes by compiling: deriving `Clone` on [`Outbox`] stops the test build.
     #[test]
     fn a_worker_thread_cannot_be_given_a_second_sender() {
         fn one_sender_only<T: OneSenderPerWorker>() {}
@@ -918,10 +793,6 @@ mod tests {
     }
 
     /// The stream must end after a failed open, not merely report the failure.
-    /// The contract alone: a second sender outliving the notice is a race narrow
-    /// enough that this passed against the broken code too. What decides that is
-    /// the type, held to it by
-    /// [`a_worker_thread_cannot_be_given_a_second_sender`].
     #[test]
     fn a_failed_open_ends_the_stream_rather_than_leaving_it_open() {
         let outside = std::env::temp_dir().join("cairn-not-a-repository");
@@ -939,9 +810,7 @@ mod tests {
         );
     }
 
-    /// The hang this boundary exists to prevent: a worker ending without sending
-    /// anything must still wake the parked task, since closing a channel does
-    /// not wake a `Wake`.
+    /// Closing a channel does not wake a `Wake`.
     #[test]
     fn a_worker_ending_in_silence_still_wakes_the_waiting_task() {
         let (_epochs, outbox, mut updates) = inbox_only();
@@ -957,7 +826,6 @@ mod tests {
         );
     }
 
-    /// `submit` returns whether or not a worker is listening.
     #[test]
     fn submitting_returns_immediately_even_with_nobody_serving() {
         let (jobs, incoming) = channel::<(Epoch, Request)>();

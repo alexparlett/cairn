@@ -1,12 +1,8 @@
-//! The sentences the window shows about the history, as values rather than
-//! inline in the render, so a test fails when two states are given the same
-//! words — the half of R4.3 a state machine leaves to a screenshot.
+//! The sentences the window shows about the history.
 
 use crate::history_state::{Progress, Status};
 
 /// What fills the list's place, or `None` when the list itself is what to draw.
-/// `has_rows` is why a failure can be either: one arriving after rows were drawn
-/// leaves them on screen and says so in a banner.
 pub fn placeholder(status: &Status, has_rows: bool) -> Option<String> {
     match status {
         Status::Loading => Some("Reading history…".to_owned()),
@@ -16,9 +12,7 @@ pub fn placeholder(status: &Status, has_rows: bool) -> Option<String> {
     }
 }
 
-/// How much of the history is loaded, as the title bar says it. An ellipsis
-/// while more is coming, since "2,540 commits" and "2,540 commits so far" are
-/// different claims; a history stopped by a failure gets none either.
+/// How much of the history is loaded, as the title bar says it.
 pub fn loaded_count(progress: &Progress) -> String {
     let loaded = progress.loaded();
     let noun = if loaded == 1 { "commit" } else { "commits" };
@@ -35,8 +29,7 @@ pub fn loaded_count(progress: &Progress) -> String {
 mod tests {
     use super::*;
 
-    /// Caught by: giving both states the same words. Checking only that each has
-    /// *a* sentence misses it.
+    /// Caught by: giving both states the same words.
     #[test]
     fn loading_and_an_empty_repository_do_not_say_the_same_thing() {
         let loading = placeholder(&Status::Loading, false);
@@ -50,8 +43,7 @@ mod tests {
         );
     }
 
-    /// The engine's own sentence: R5.2's message names the path, and rewriting
-    /// it here would lose that.
+    /// Caught by: rewriting the engine's sentence, which names the path.
     #[test]
     fn a_failure_with_nothing_loaded_shows_its_own_sentence() {
         let message = "no git repository at /tmp/nowhere";
@@ -61,7 +53,6 @@ mod tests {
         );
     }
 
-    /// A page that failed does not unsay the pages that worked.
     #[test]
     fn a_failure_with_rows_loaded_leaves_the_list_showing() {
         assert_eq!(
@@ -74,8 +65,7 @@ mod tests {
         assert_eq!(placeholder(&Status::Ready, true), None);
     }
 
-    /// Caught by: collapsing the arms into "show the list once anything has
-    /// arrived".
+    /// Caught by: showing the list once anything has arrived.
     #[test]
     fn loading_and_empty_are_placeholders_regardless_of_what_arrived_before() {
         assert!(placeholder(&Status::Loading, true).is_some());

@@ -158,6 +158,44 @@ fn a_limit_bounds_the_page_and_a_cursor_continues_it() {
     assert_eq!(seen, expected, "paging did not reproduce the whole history");
 }
 
+/// Caught by: resolving a cursor's starting points again when it is resumed.
+#[test]
+fn moving_a_ref_between_cold_pages_does_not_move_the_walk() {
+    let fixture = fixtures::braided(20);
+    let repo = open(&fixture);
+    let expected = fixture.rev_list();
+
+    let first = read(&repo, &HistoryRequest::from_head(5));
+    let Some(cursor) = first.cursor.clone() else {
+        panic!("the first page ended the history; raise the fixture size");
+    };
+
+    fixture.git(&["commit", "--quiet", "--allow-empty", "-m", "moved on"]);
+    fixture.git(&["branch", "--force", "side", "HEAD~3"]);
+    assert_ne!(
+        fixture.rev_list(),
+        expected,
+        "the ref did not move, so this decides nothing"
+    );
+
+    let rest = read(
+        &repo,
+        &HistoryRequest::resume(cursor.clone(), expected.len()),
+    );
+    assert_eq!(
+        [ids(&first), ids(&rest)].concat(),
+        expected,
+        "the second page walked from where the refs are now, not where the walk began"
+    );
+
+    let (rows, _) = drain_session(&repo, &HistoryRequest::resume(cursor, expected.len()), 4);
+    assert_eq!(
+        [ids(&first), ids_of(&rows)].concat(),
+        expected,
+        "a session resumed from the cursor walked from where the refs are now"
+    );
+}
+
 /// Lane indices identical; an edge may differ only where the split run has not yet seen its repaint.
 #[test]
 fn two_pages_of_n_match_one_page_of_2n_including_lanes() {

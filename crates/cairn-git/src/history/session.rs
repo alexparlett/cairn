@@ -15,7 +15,7 @@ pub struct HistorySession<'repo> {
     ready: VecDeque<HistoryRow>,
     /// Walked commits still inside the window, oldest first; the front is the next row to leave.
     pending: VecDeque<(Oid, Vec<Oid>)>,
-    tips: Vec<Oid>,
+    tips: super::Tips,
     order: HistoryOrder,
     window: usize,
     /// Rows earlier pages covered: laid out for lane numbering, never decoded or handed back.
@@ -56,7 +56,7 @@ impl Repository {
 
         let walk = self
             .inner()
-            .rev_walk(super::walk_tips(self.inner(), &tips)?)
+            .rev_walk(tips.iter().copied())
             .sorting(order.sorting())
             .all()
             .map_err(|source| Error::Walk {
@@ -114,7 +114,7 @@ impl HistorySession<'_> {
     /// Where a fresh query would start to continue this scroll.
     pub fn cursor(&self) -> HistoryCursor {
         HistoryCursor {
-            tips: self.tips.clone(),
+            tips: std::sync::Arc::clone(&self.tips),
             order: self.order,
             window: self.window,
             walked: self.skip + self.delivered,

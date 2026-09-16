@@ -2,6 +2,8 @@
 
 mod session;
 
+use std::sync::Arc;
+
 use cairn_model::{CommitSummary, HistoryRow, LaneAssigner, Oid, RowContent};
 
 pub use session::HistorySession;
@@ -35,10 +37,14 @@ impl HistoryOrder {
     }
 }
 
+/// Shared, so paging clones a pointer rather than the tip set.
+type Tips = Arc<[gix::hash::ObjectId]>;
+
 /// Opaque: hand it back to [`HistoryRequest::resume`] and nothing else.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryCursor {
-    tips: Vec<Oid>,
+    /// Resolved once, when the walk began; every page of it starts here, wherever refs are now.
+    tips: Tips,
     order: HistoryOrder,
     window: usize,
     walked: usize,
@@ -166,7 +172,7 @@ fn read_page(
 
     let mut walk = repo
         .inner()
-        .rev_walk(walk_tips(repo.inner(), &tips)?)
+        .rev_walk(tips.iter().copied())
         .sorting(order.sorting())
         .all()
         .map_err(|source| Error::Walk {
@@ -284,7 +290,7 @@ impl Page {
 }
 
 struct Resolved {
-    tips: Vec<Oid>,
+    tips: Tips,
     order: HistoryOrder,
     window: usize,
     skip: usize,
@@ -292,8 +298,8 @@ struct Resolved {
 
 fn starting_points(repo: &Repository, request: &HistoryRequest) -> Result<Resolved, Error> {
     let tips = match &request.start {
-        Start::Resume(cursor) => cursor.tips.clone(),
-        Start::Commits(tips) => tips.clone(),
+        Start::Resume(cursor) => Arc::clone(&cursor.tips),
+        Start::Commits(tips) => walk_tips(repo.inner(), tips)?,
         Start::Head => {
             let mut head = repo.inner().head().map_err(|source| Error::Walk {
                 source: Box::new(source),
@@ -306,7 +312,7 @@ fn starting_points(repo: &Repository, request: &HistoryRequest) -> Result<Resolv
                     path: repo.git_dir().to_owned(),
                 });
             };
-            vec![model_id(&id)?]
+            Arc::from([id.detach()])
         }
     };
     let skip = match &request.start {
@@ -322,7 +328,7 @@ fn starting_points(repo: &Repository, request: &HistoryRequest) -> Result<Resolv
 }
 
 /// An id of the other width is refused here: gix asserts rather than failing on one.
-fn walk_tips(repo: &gix::Repository, tips: &[Oid]) -> Result<Vec<gix::hash::ObjectId>, Error> {
+fn walk_tips(repo: &gix::Repository, tips: &[Oid]) -> Result<Tips, Error> {
     let format = repo.object_hash();
     let mut object_ids = Vec::with_capacity(tips.len());
     for tip in tips {
@@ -338,7 +344,7 @@ fn walk_tips(repo: &gix::Repository, tips: &[Oid]) -> Result<Vec<gix::hash::Obje
         }
         object_ids.push(id);
     }
-    Ok(object_ids)
+    Ok(object_ids.into())
 }
 
 fn object_id(oid: &Oid) -> Result<gix::hash::ObjectId, Error> {
@@ -443,6 +449,28 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Caught by: copying and converting every tip again on each page of a cold walk.
+    #[test]
+    fn resuming_reuses_the_cursors_resolved_tips() {
+        let repo = Repository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let page = repo
+            .history(&HistoryRequest::from_head(2), &CancelSignal::new())
+            .unwrap();
+        let cursor = page.cursor.unwrap();
+        let request = HistoryRequest::resume(cursor.clone(), 2);
+
+        let resolved = starting_points(&repo, &request).unwrap();
+        assert!(
+            std::sync::Arc::ptr_eq(&resolved.tips, &cursor.tips),
+            "the resumed page built its own copy of the tips"
+        );
+        let next = repo.history(&request, &CancelSignal::new()).unwrap();
+        assert!(
+            std::sync::Arc::ptr_eq(&next.cursor.unwrap().tips, &cursor.tips),
+            "the next cursor did not carry the same tips on"
+        );
     }
 
     /// Reporter. Env: `CAIRN_BENCH_REPO`, `CAIRN_BENCH_LIMIT`.

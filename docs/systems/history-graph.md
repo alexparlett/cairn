@@ -128,7 +128,12 @@ answer identically row for row (`a_session_returns_what_the_cursor_path_returns_
 - **`Repository::history(&HistoryRequest, &impl Cancel) -> Result<HistoryPage, Error>`** — the
   cold path. Bounded by a limit, resumable from an opaque `HistoryCursor` that
   replays from pinned tips. Correct, and O(page index x limit), so it is the
-  restart route rather than the scroll route.
+  restart route rather than the scroll route. **Tips are resolved once per walk,
+  not per page:** the first page turns `HEAD` or the given commits into object
+  ids, and the cursor carries that shared set on, so a resumed page neither
+  re-resolves nor copies it and a ref that moves between pages does not move the
+  walk (`moving_a_ref_between_cold_pages_does_not_move_the_walk`,
+  `resuming_reuses_the_cursors_resolved_tips`).
 - **`Repository::history_session(&HistoryRequest) -> Result<HistorySession<'_>, Error>`** — the
   scroll path. Holds the walk open, so `next_page(limit, &cancel)` is O(limit)
   after a one-off prime of `window` commits. Pinned by
@@ -397,11 +402,10 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
   over rows that are not commits, but the assigner's own output is not — whoever
   lays out the working-tree row meets that first.
 - **The view is `HEAD`'s ancestry, not the repository's.** `from_head`, not
-  `from_commits`, so nothing shows a branch that `HEAD` cannot reach. Worth
-  knowing before the tip set grows: `HistoryRequest::from_commits` takes an
-  unbounded one and the cold path resolves and copies all of it per page, so
-  `limit` bounds commits walked and not tips. Free at 40 branches; issue #13 at a
-  ref-heavy remote.
+  `from_commits`, so nothing shows a branch that `HEAD` cannot reach.
+  `HistoryRequest::from_commits` takes an unbounded tip set; it is resolved once
+  per walk, and a walk from thousands of tips costs what gitoxide's walk costs
+  to seed from them — measured by nothing yet.
 - **The first page of a scroll walks `window + limit` commits** before a single
   row can be delivered, because rows leave the assigner only once evicted. Those
   are walk steps, not object reads. Do not shrink the page to make it feel

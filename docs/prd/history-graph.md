@@ -172,7 +172,7 @@ here and does not restate them.
 | A6 | No engine call is reachable from a render path | `responsiveness-reviewer`, plus the existing dependency-seal guards |
 | A7 | Scrolling a repository with at least 100k commits keeps frame time bounded and memory flat | a measured check, run by hand against a named real repository, with numbers recorded in `progress.md` |
 | A8 | The app opens the repository named on the command line, defaults to the working directory, and fails with a clear message when given a path outside a repository | integration test over the argument handling, plus a manual run |
-| A9 | A row's content is expressible as something other than a commit, and every consumer matches on it rather than assuming one | unit test in `cairn-model`, plus the view's row component |
+| A9 | A row's content is expressible as something other than a commit, and every consumer matches on it rather than assuming one | unit test in `cairn-model`, plus the app's exhaustive render match in `cairn-app` |
 | A10 | `scripts/gate.sh` passes | the gate |
 
 A8 is the new one — R5 was missing from the first draft of this PRD, which

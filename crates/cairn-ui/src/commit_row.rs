@@ -101,8 +101,7 @@ impl ComponentOwned for CommitRow {
             )
             .child(
                 label()
-                    // `text` takes a `Cow<'static, str>`, so the abbreviation is copied.
-                    .text(self.commit.id.short().as_str().to_string())
+                    .text(self.commit.id.short())
                     .width(Size::px(ID_WIDTH))
                     .max_lines(1)
                     .font_size(ROW_FONT_SIZE)

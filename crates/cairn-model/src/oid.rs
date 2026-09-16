@@ -129,6 +129,51 @@ impl OidHex {
     }
 }
 
+impl PartialEq for OidHex {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for OidHex {}
+
+impl std::hash::Hash for OidHex {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+
+impl PartialEq<str> for OidHex {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for OidHex {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl AsRef<str> for OidHex {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl From<OidHex> for String {
+    fn from(hex: OidHex) -> Self {
+        hex.as_str().to_owned()
+    }
+}
+
+/// What a `'static` text sink such as a UI label takes.
+impl From<OidHex> for std::borrow::Cow<'static, str> {
+    fn from(hex: OidHex) -> Self {
+        Self::Owned(hex.into())
+    }
+}
+
 impl fmt::Display for OidHex {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
@@ -326,6 +371,55 @@ mod tests {
             OidParseError::BadByteCount(24).to_string(),
             "object id must be 20 or 32 bytes, got 24"
         );
+    }
+
+    /// Caught by: comparing buffers rather than the text, or the full id equalling its abbreviation.
+    #[test]
+    fn id_text_compares_by_its_digits() {
+        let a = Oid::parse(&format!("{}{}", "0123456", "f".repeat(33))).unwrap();
+        let b = Oid::parse(&format!("{}{}", "0123456", "0".repeat(33))).unwrap();
+        assert_eq!(a.short(), b.short(), "equal abbreviations compared unequal");
+        assert_ne!(a.hex(), b.hex());
+        assert_ne!(a.hex(), a.short(), "an id equalled its own abbreviation");
+
+        let sha1 = Oid::parse(SHA1).unwrap();
+        assert!(sha1.hex() == *SHA1);
+        assert!(sha1.hex() == SHA1);
+        assert!(sha1.short() == "0123456");
+        assert!(
+            sha1.short() != "012345",
+            "a prefix of the text compared equal"
+        );
+        assert!(sha1.hex() != SHA256);
+
+        use std::collections::HashSet;
+        let texts: HashSet<OidHex> = [a.short(), b.short(), a.hex(), b.hex()]
+            .into_iter()
+            .collect();
+        assert_eq!(texts.len(), 3, "equal text did not hash as one key");
+    }
+
+    #[test]
+    fn id_text_reads_as_a_str_wherever_one_is_taken() {
+        fn length(text: impl AsRef<str>) -> usize {
+            text.as_ref().len()
+        }
+        let sha256 = Oid::parse(SHA256).unwrap();
+        assert_eq!(length(sha256.hex()), 64);
+        assert_eq!(length(sha256.short()), 7);
+        assert_eq!(sha256.short().as_ref(), "0123456");
+    }
+
+    /// The owned forms a `'static` text sink takes, with no `.to_string()` at the call site.
+    #[test]
+    fn id_text_becomes_owned_text_without_a_detour() {
+        fn sink(text: impl Into<std::borrow::Cow<'static, str>>) -> String {
+            text.into().into_owned()
+        }
+        let sha1 = Oid::parse(SHA1).unwrap();
+        assert_eq!(sink(sha1.short()), "0123456");
+        assert_eq!(sink(sha1.hex()), SHA1);
+        assert_eq!(String::from(sha1.hex()), SHA1);
     }
 
     #[test]

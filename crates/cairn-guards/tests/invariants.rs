@@ -1,9 +1,9 @@
 //! The enforcement twins for the invariants in `CLAUDE.md`.
 //!
-//! One test per invariant, named for it. When you add an invariant to any
-//! CLAUDE.md, add its twin here in the SAME change; when you delete one, delete
-//! the twin. A failure message says what rule was broken and where, because the
-//! agent that trips a guard has to be able to fix it without reading the guard.
+//! One test per invariant, named for it. Adding an invariant to any CLAUDE.md
+//! adds its twin here in the same change; deleting one deletes the twin. A
+//! failure message says what rule was broken and where, so the agent that trips
+//! a guard can fix it without reading the guard.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -13,9 +13,9 @@ use cairn_guards::{
     rust_sources, spawns_git, waits_on_work,
 };
 
-/// Crates whose dependency list is pinned, and what each is allowed to name.
-/// A new crate with no row here fails `layer_dependencies_are_allowlisted`,
-/// which is the point: adding a layer is a decision, not a default.
+/// Crates whose dependency list is pinned. A new crate with no row here fails
+/// `layer_dependencies_are_allowlisted`: adding a layer is a decision, not a
+/// default.
 const DEPENDENCY_ALLOWLIST: &[(&str, &[&str])] = &[
     ("cairn-model", &[]),
     ("cairn-git", &["cairn-model", "gix", "thiserror"]),
@@ -37,8 +37,8 @@ const FORBIDDEN_IDENTS: &[(&str, &[&str])] = &[
     ("crates/cairn-git/src", &["freya", "dioxus", "cairn_ui"]),
 ];
 
-/// The product crates, for guards that must not scan the guard suite's own
-/// fixtures (which contain the very spellings they forbid).
+/// The product crates: the guard suite's own fixtures contain the spellings
+/// they forbid.
 const PRODUCT_SOURCE_DIRS: &[&str] = &[
     "crates/cairn-model/src",
     "crates/cairn-git/src",
@@ -46,33 +46,28 @@ const PRODUCT_SOURCE_DIRS: &[&str] = &[
     "crates/cairn-app/src",
 ];
 
-/// Everything that renders. Each of these is a render path end to end, and none
-/// of it may reach a repository or wait for one.
+/// Everything that renders; none of it may reach a repository or wait for one.
 const RENDER_SOURCE_DIRS: &[&str] = &["crates/cairn-ui/src", "crates/cairn-app/src"];
 
-/// The one exception inside those directories: where repository work runs, and
-/// therefore the only place waiting is allowed. It renders nothing, which is
-/// checked in the same guard — otherwise the two sets could overlap and the
-/// partition would say nothing.
+/// The one exception: where repository work runs, and so the only place waiting
+/// is allowed. That it renders nothing is checked in the same guard — otherwise
+/// the two sets could overlap and the partition would say nothing.
 const WORKER_DIR: &str = "crates/cairn-app/src/worker";
 
-/// What a file must not name to count as rendering nothing.
-///
-/// `cairn_ui` is on it because `cairn-app` is allowed to depend on it: without
-/// that row, a file under [`WORKER_DIR`] could `use cairn_ui::CommitRow` and
-/// return elements, and by sitting in that directory buy exemption from the
-/// waiting roster AND from the unbounded-view scan.
+/// What a file must not name to count as rendering nothing. `cairn_ui` is on it
+/// because `cairn-app` may depend on it: without that row a file under
+/// [`WORKER_DIR`] could return elements and buy exemption from both the waiting
+/// roster and the unbounded-view scan by sitting there.
 const RENDERING_IDENTS: &[&str] = &["freya", "dioxus", "cairn_ui"];
 
 /// `RENDER_SOURCE_DIRS` names every crate that renders, derived rather than
 /// trusted.
 ///
-/// The per-directory `rendering > 0` assertions in the two guards below catch a
-/// RENAMED directory. They cannot catch a DELETED row: drop
-/// `crates/cairn-app/src` from the roster and both guards quietly stop scanning
-/// the crate where the UI thread actually lives, with nothing red. So the roster
-/// is closed the way `DEPENDENCY_ALLOWLIST` is — against the manifests. A crate
-/// that declares `freya` draws, and a crate that draws is a render path.
+/// The per-directory `rendering > 0` assertions below catch a renamed directory;
+/// they cannot catch a deleted row, which would quietly stop both guards
+/// scanning the crate where the UI thread lives. So the roster is closed against
+/// the manifests: a crate that declares `freya` draws, and a crate that draws is
+/// a render path.
 #[test]
 fn every_crate_that_renders_is_on_the_render_roster() {
     let crates_dir = repo_root().join("crates");
@@ -247,9 +242,8 @@ fn the_ui_thread_never_waits_on_repository_work() {
         for (path, source) in rust_sources(dir) {
             if path.starts_with(worker) {
                 working += 1;
-                // The worker side may wait, because it is not the UI thread.
-                // What it may not do is render: if a file could do both, the
-                // partition would stop meaning anything.
+                // The worker side may wait; what it may not do is render. A file
+                // doing both would make the partition meaningless.
                 for ident in RENDERING_IDENTS {
                     let hits = mentions_crate(&source, ident);
                     assert!(
@@ -274,9 +268,8 @@ fn the_ui_thread_never_waits_on_repository_work() {
                 path.display(),
                 hits[0]
             );
-            // `cairn-ui` is sealed from the engine by its own roster in
-            // FORBIDDEN_IDENTS, which is one authority; this is the other half
-            // of the partition, and it is `cairn-app`'s alone.
+            // `cairn-ui` is sealed from the engine by FORBIDDEN_IDENTS; this
+            // half of the partition is `cairn-app`'s alone.
             if dir.starts_with("crates/cairn-app/") {
                 for ident in ["cairn_git", "gix"] {
                     let hits = mentions_crate(&source, ident);
@@ -292,9 +285,8 @@ fn the_ui_thread_never_waits_on_repository_work() {
                 }
             }
         }
-        // Per directory, not in aggregate: a new render crate added to the
-        // roster but pointed at the wrong path would otherwise be covered by
-        // whichever directory still had files in it.
+        // Per directory, not in aggregate: a roster row pointed at the wrong
+        // path would otherwise be covered by whichever directory had files.
         assert!(
             rendering > 0,
             "the responsiveness guard found no render files under {dir}. Every directory in \
@@ -322,8 +314,8 @@ fn a_history_sized_list_renders_through_a_virtualizing_view() {
                 continue;
             }
             rendering += 1;
-            // Strings blanked as well as comments: a file naming a view only
-            // inside an error message has not used one, in either direction.
+            // Strings blanked as well as comments: naming a view inside an error
+            // message is not using one, in either direction.
             let code = code_without_strings(&source);
 
             if let Some(line) = unbounded_view(&code) {
@@ -342,10 +334,9 @@ fn a_history_sized_list_renders_through_a_virtualizing_view() {
                 );
             }
 
-            // Test modules blanked for THIS half only: the prohibition above
-            // covers the whole file — naming the unbounded view in a test is
-            // still naming it — while a requirement met from a test module is
-            // not met.
+            // Test modules blanked for this half only: the prohibition above
+            // covers the whole file, while a requirement met from a test module
+            // is not met.
             let production = code_without_test_modules(&code);
             if !mentions_crate(&production, VIRTUALIZING_VIEW).is_empty()
                 && !mentions_crate(&production, "HistoryRow").is_empty()
@@ -353,8 +344,7 @@ fn a_history_sized_list_renders_through_a_virtualizing_view() {
                 virtualizes_the_history.push(path);
             }
         }
-        // Per directory, not in aggregate, for the reason the responsiveness
-        // guard gives above.
+        // Per directory, for the reason the responsiveness guard gives above.
         assert!(
             rendering > 0,
             "the virtualization guard found no render files under {dir}. Every directory in \
@@ -385,34 +375,26 @@ fn a_history_sized_list_renders_through_a_virtualizing_view() {
 /// The scroll view that lays out every child it is given.
 const UNBOUNDED_VIEW: &str = "ScrollView";
 
-/// The one that builds only what its viewport shows.
-///
-/// `ScrollView` is a prefix of neither: [`mentions_crate`] matches on word
-/// boundaries, so `VirtualScrollView` does not count as naming `ScrollView`.
+/// The one that builds only what its viewport shows. [`mentions_crate`] matches
+/// on word boundaries, so this does not count as naming `ScrollView`.
 const VIRTUALIZING_VIEW: &str = "VirtualScrollView";
 
-/// Render files allowed to name [`UNBOUNDED_VIEW`] anyway, and why.
-///
-/// **Empty on purpose.** A bounded panel — a commit message, a settings pane —
-/// can legitimately use the plain scroll view, and when one does, adding its row
-/// here is the review this rule exists to force. Leaving the roster empty is
-/// what makes that a decision rather than a default.
+/// Render files allowed to name [`UNBOUNDED_VIEW`] anyway, and why. Empty on
+/// purpose: a bounded panel may legitimately use the plain scroll view, and
+/// adding its row here is the review this rule exists to force.
 const UNBOUNDED_VIEW_EXCEPTIONS: &[(&str, &str)] = &[];
 
 /// The 1-based line where `code` names the unbounded scroll view, if it does.
-///
-/// Deliberately NOT a check for "renders a collection of rows": whether an
-/// iteration is over a history or over three tabs is not decidable from tokens.
-/// What IS decidable is which VIEW a file reaches for, and that is the
-/// regression worth catching — a list swapped to the unbounded view to dodge a
-/// layout problem.
+/// Not a check for "renders a collection of rows": whether an iteration is over
+/// a history or over three tabs is not decidable from tokens. Which view a file
+/// reaches for is.
 fn unbounded_view(code: &str) -> Option<usize> {
     mentions_crate(code, UNBOUNDED_VIEW).first().copied()
 }
 
-/// The roster's own self-test, in the shape `every_waiting_spelling_in_the_roster_is_matched`
-/// established: a matcher that has quietly stopped matching reports green while
-/// the coverage it names is gone.
+/// The roster's own self-test, as
+/// `every_waiting_spelling_in_the_roster_is_matched` established: a matcher that
+/// has quietly stopped matching reports green while its coverage is gone.
 #[test]
 fn the_unbounded_view_matcher_catches_the_shapes_it_claims() {
     let caught = [

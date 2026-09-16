@@ -308,5 +308,6 @@ exists yet).
 - `docs/CLAUDE.md` — the docs layer contract (tenses, promotion, teardown).
 - `docs/work/<packet>/` — in-flight packet dirs, created by `/feature-plan`, torn
   down when the work merges.
-- `docs/systems/` — as-built descriptions, written when a system exists (planned;
-  empty today, which is accurate).
+- `docs/systems/` — as-built descriptions, written when a system exists.
+  `history-graph.md` is the first: how the history view reads, lays out and
+  draws a repository today, with the twin that pins each rule.

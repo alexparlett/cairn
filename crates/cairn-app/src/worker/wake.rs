@@ -1,9 +1,8 @@
-//! Telling the UI thread that something arrived, without it having to ask.
+//! [`Wake`]: telling the UI thread that something arrived.
 //!
-//! A push rather than a timer, which would cost either a wake-up every frame or
-//! latency on every page: the worker sets a flag and wakes whatever task is
-//! parked on it, and that task is a future, so the UI thread yields to its
-//! event loop rather than blocking.
+//! A push, not a timer, which would cost a wake-up every frame or latency on
+//! every page. The parked task is a future, so the UI thread yields to its event
+//! loop rather than blocking.
 
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
@@ -25,8 +24,8 @@ impl Wake {
         Arc::new(Self::default())
     }
 
-    /// Something arrived. Safe to call when nobody is listening — the signal
-    /// latches, so a wake that races a `try_recv` is not lost.
+    /// Safe with nobody listening: the signal latches, so a wake racing a
+    /// `try_recv` is not lost.
     pub fn signal(&self) {
         let waker = {
             let mut state = self.locked();
@@ -49,10 +48,9 @@ impl Wake {
         }
     }
 
-    /// The guarded state, recovering from a poisoned lock: a panic while
-    /// holding it can leave a stale `bool` and a stale `Waker` and nothing
-    /// worse, while refusing to wake the UI again because a worker panicked is
-    /// precisely the hang this module prevents.
+    /// Recovers from a poisoned lock: a panic while holding it leaves a stale
+    /// `bool` and `Waker` and nothing worse, while refusing to wake the UI
+    /// because a worker panicked is precisely the hang this module prevents.
     fn locked(&self) -> std::sync::MutexGuard<'_, State> {
         match self.state.lock() {
             Ok(guard) => guard,
@@ -78,9 +76,9 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// Counts wakes, so a test can see one happen rather than infer it from a
-    /// future that finished. Built on `std::task::Wake`, because this workspace
-    /// forbids `unsafe`, tests included.
+    /// Counts wakes, so a test sees one rather than inferring it from a future
+    /// that finished. On `std::task::Wake`: the workspace forbids `unsafe`,
+    /// tests included.
     #[derive(Debug, Default)]
     struct Counter(AtomicUsize);
 

@@ -1,10 +1,9 @@
 //! Which request is the one that still matters.
 //!
-//! R3.2 asks that a stale response be dropped without rendering. That alone is
-//! the weak half — it looks identical from the window while the abandoned walk
-//! runs to completion and burns a core — so the epoch is not only a tag on the
-//! reply, it *is* the cancel signal the engine polls (R2.4), which is also what
-//! makes R2.5's live session safe to keep across a supersession.
+//! The epoch is not only a tag on the reply (R3.2) but the cancel signal the
+//! engine polls (R2.4), so superseding a request stops its walk rather than
+//! leaving it to burn a core — which is what makes R2.5's live session safe to
+//! keep across a supersession.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -15,10 +14,8 @@ use cairn_git::Cancel;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Epoch(u64);
 
-/// The current epoch, shared by the UI side and the workers.
-///
-/// Cloning shares it: the UI side bumps it to supersede a request, and the
-/// worker reads the same word to discover its work is no longer wanted.
+/// The current epoch, shared by cloning: the UI side bumps it to supersede a
+/// request, the worker reads the same word to find its work unwanted.
 #[derive(Debug, Clone, Default)]
 pub struct Epochs {
     current: Arc<AtomicU64>,
@@ -30,7 +27,7 @@ impl Epochs {
         Self::default()
     }
 
-    /// Supersede whatever is in flight, and name the request that replaces it.
+    /// Supersedes whatever is in flight and names its replacement.
     pub fn bump(&self) -> Epoch {
         Epoch(self.current.fetch_add(1, Ordering::AcqRel) + 1)
     }
@@ -45,8 +42,8 @@ impl Epochs {
         !self.is_stopping() && self.current() == epoch
     }
 
-    /// Stop everything, for good. Used when the window is closing: without it a
-    /// worker part-way through a ten-year monorepo would finish the page first.
+    /// Stops everything, for good. Without it a worker part-way through a
+    /// ten-year monorepo finishes the page before the window closes.
     pub fn stop(&self) {
         self.stopping.store(true, Ordering::Release);
     }
@@ -65,8 +62,7 @@ impl Epochs {
     }
 }
 
-/// "Is the request I am serving still the current one?", shaped as the
-/// [`Cancel`] the engine polls once per commit.
+/// The [`Cancel`] the engine polls once per commit.
 #[derive(Debug)]
 pub struct Superseded {
     mine: Epoch,

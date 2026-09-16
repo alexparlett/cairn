@@ -1,18 +1,12 @@
-//! The sentences the window shows about the history, as values.
-//!
-//! `history_state` decides that a loading list and an empty repository are
-//! different states; this decides that they are different sentences, which is
-//! the half of R4.3 a state machine alone leaves to a screenshot. As values
-//! rather than inline in the render, so a test fails when the two arms are
-//! given the same words.
+//! The sentences the window shows about the history, as values rather than
+//! inline in the render, so a test fails when two states are given the same
+//! words — the half of R4.3 a state machine leaves to a screenshot.
 
 use crate::history_state::{Progress, Status};
 
 /// What fills the list's place, or `None` when the list itself is what to draw.
-///
-/// `has_rows` is the reason a failure can be either: one that arrived after
-/// rows were drawn leaves them on screen and says so in a banner, while one
-/// that arrived before any rows did has nothing to leave.
+/// `has_rows` is why a failure can be either: one arriving after rows were drawn
+/// leaves them on screen and says so in a banner.
 pub fn placeholder(status: &Status, has_rows: bool) -> Option<String> {
     match status {
         Status::Loading => Some("Reading history…".to_owned()),
@@ -22,12 +16,9 @@ pub fn placeholder(status: &Status, has_rows: bool) -> Option<String> {
     }
 }
 
-/// How much of the history is loaded, as the title bar says it.
-///
-/// An ellipsis while more is coming, because "2,540 commits" and "2,540
-/// commits so far" are different claims and only one is true mid-scroll. A
-/// history that stopped because something failed gets none either; the banner
-/// says what happened.
+/// How much of the history is loaded, as the title bar says it. An ellipsis
+/// while more is coming, since "2,540 commits" and "2,540 commits so far" are
+/// different claims; a history stopped by a failure gets none either.
 pub fn loaded_count(progress: &Progress) -> String {
     let loaded = progress.loaded();
     let noun = if loaded == 1 { "commit" } else { "commits" };
@@ -44,9 +35,8 @@ pub fn loaded_count(progress: &Progress) -> String {
 mod tests {
     use super::*;
 
-    /// R4.3, as the reader meets it. A test that checked only that each state
-    /// has *a* sentence would miss the bug, so the assertion is that they are
-    /// DIFFERENT sentences and that neither is empty.
+    /// Caught by: giving both states the same words. Checking only that each has
+    /// *a* sentence misses it.
     #[test]
     fn loading_and_an_empty_repository_do_not_say_the_same_thing() {
         let loading = placeholder(&Status::Loading, false);
@@ -60,8 +50,8 @@ mod tests {
         );
     }
 
-    /// A failure that never produced a row shows the engine's own sentence:
-    /// R5.2's message names the path, and rewriting it here would lose that.
+    /// The engine's own sentence: R5.2's message names the path, and rewriting
+    /// it here would lose that.
     #[test]
     fn a_failure_with_nothing_loaded_shows_its_own_sentence() {
         let message = "no git repository at /tmp/nowhere";
@@ -71,8 +61,7 @@ mod tests {
         );
     }
 
-    /// A failure after rows arrived draws the rows, not a sentence in their
-    /// place: a page that failed does not unsay the pages that worked.
+    /// A page that failed does not unsay the pages that worked.
     #[test]
     fn a_failure_with_rows_loaded_leaves_the_list_showing() {
         assert_eq!(
@@ -85,8 +74,7 @@ mod tests {
         assert_eq!(placeholder(&Status::Ready, true), None);
     }
 
-    /// Loading and empty are placeholders whether or not rows were ever seen,
-    /// so the arms cannot be collapsed into "show the list once anything has
+    /// Caught by: collapsing the arms into "show the list once anything has
     /// arrived".
     #[test]
     fn loading_and_empty_are_placeholders_regardless_of_what_arrived_before() {
@@ -118,8 +106,7 @@ mod tests {
         );
     }
 
-    /// One commit is a commit. A count that says "1 commits" is the kind of
-    /// thing a reader notices and nobody ever fixes.
+    /// Caught by: "1 commits".
     #[test]
     fn the_count_agrees_with_itself_about_number() {
         let mut one = Progress::opening();

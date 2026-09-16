@@ -1,14 +1,10 @@
-//! Literal parent maps to lay out, and the checks every layout must satisfy.
-//!
-//! Labels are hex-encoded into object ids, so a failure message reads back to
-//! the label that produced it.
+//! Literal parent maps and the checks every layout must satisfy.
 
 use std::collections::{HashMap, HashSet};
 
 use cairn_model::{EdgeKind, GraphRow, Lane, LaneAssigner, Oid};
 
-/// `(commit label, parent labels)` in walk order, newest first unless a fixture
-/// is deliberately skewed.
+/// `(commit label, parent labels)` in walk order.
 pub type History = Vec<(String, Vec<String>)>;
 
 pub fn literal(rows: &[(&str, &[&str])]) -> History {
@@ -22,9 +18,7 @@ pub fn literal(rows: &[(&str, &[&str])]) -> History {
         .collect()
 }
 
-/// A label as an object id: its bytes in hex, padded to SHA-1 width, and
-/// reversible. `unwrap` is denied here — `clippy.toml`'s carve-out reaches
-/// `#[cfg(test)]` code only, which an integration test crate is not.
+/// A label as a reversible object id. `unwrap` is denied: this is not `#[cfg(test)]` code.
 pub fn oid(label: &str) -> Oid {
     let mut hex: String = label.bytes().map(|b| format!("{b:02x}")).collect();
     assert!(hex.len() <= 40, "label {label:?} is too long to encode");
@@ -96,8 +90,7 @@ fn distinct_parents(parents: &[String]) -> Vec<&String> {
     seen
 }
 
-/// The lane carrying a continuous line from row `top`'s node to row
-/// `bottom`'s, if one is drawn.
+/// The lane carrying a continuous line from row `top`'s node to row `bottom`'s.
 fn connecting_lane(rows: &[GraphRow], top: usize, bottom: usize) -> Option<Lane> {
     rows[top]
         .edges
@@ -119,9 +112,7 @@ fn connecting_lane(rows: &[GraphRow], top: usize, bottom: usize) -> Option<Lane>
         })
 }
 
-/// Every commit gets a row, every parent link is drawable end to end, and no
-/// line is drawn that is not a parent link. The last clause is what stops a
-/// spurious line hiding behind a satisfied continuity check.
+/// Every commit has a row, every parent link is drawn end to end, and no other line is.
 pub fn assert_every_parent_edge_is_drawn(history: &History, rows: &[GraphRow]) {
     assert_eq!(rows.len(), history.len(), "one row per commit");
     assert_the_picture_joins_up(rows);
@@ -212,8 +203,6 @@ pub fn assert_rows_are_well_formed(rows: &[GraphRow]) {
 
 /// What leaves the bottom of one row is exactly what enters the top of the
 /// next, no lane carries two lines at once, and nothing enters the first row.
-/// This is what makes a fabricated segment of any kind visible: an edge count
-/// bounds only the lines leaving a node, so a spurious `Passing` slips past.
 pub fn assert_the_picture_joins_up(rows: &[GraphRow]) {
     let mut leaving_the_row_above: HashSet<usize> = HashSet::new();
     for row in rows {
@@ -260,8 +249,6 @@ pub fn assert_the_picture_joins_up(rows: &[GraphRow]) {
     }
 }
 
-/// A deterministic generator: `cairn-model` takes no dependency, tests
-/// included.
 pub struct Rng(u64);
 
 impl Rng {
@@ -321,9 +308,7 @@ pub fn random_history(seed: u64, len: usize, skew: bool) -> History {
     commits
 }
 
-/// Every `(parent row, child row)` pair the walk delivers backwards, derived
-/// from walk order alone: which rows are *entitled* to a repaint, without
-/// asking the assigner what it flagged.
+/// Every `(parent row, child row)` pair the walk delivers backwards, from walk order alone.
 pub fn links_delivered_backwards(history: &History) -> Vec<(usize, usize)> {
     let position: HashMap<&str, usize> = history
         .iter()

@@ -1,40 +1,21 @@
-//! [`LaneAssigner`]: commits in walk order in, laid-out [`GraphRow`]s out. Pure
-//! — no repository, no clock, no I/O.
-//!
-//! Lane indices are final from emission; edge lists inside the window are not,
-//! since a parent arriving before its child adds an upward line flagged
-//! [`EdgeSegment::out_of_order`] and is placed, never rejected. A row
-//! [`LaneAssigner::push`] returns is final and forgotten; a line spanning more
-//! than the window is not drawn at all. Blind spot past `window + remembered`:
-//! `docs/systems/history-graph.md`, "The lane assigner".
+//! The lane assigner.
 
 use std::collections::{HashMap, VecDeque};
 
 use crate::{EdgeSegment, GraphRow, Lane, Oid};
 
-/// Lays commits out in lanes, one at a time, in walk order. Retained state is
-/// `window x open lanes` plus a fixed number of ids, never anything that grows
-/// with the walk (R1.3).
 #[derive(Debug)]
 pub struct LaneAssigner {
-    /// One slot per lane number. `Some(id)` is a line descending that lane
-    /// waiting for `id`. Slots are reused, never renumbered.
+    /// One slot per lane; `Some(id)` is a line descending that lane waiting for `id`.
     lanes: Vec<Option<Oid>>,
-    /// Where each commit still inside the window landed, by *absolute* row
-    /// number. Every retained row is indexed, not just lane-openers; the entry
-    /// goes when the row leaves the window, which is what makes it final.
+    /// Absolute row number and lane of every commit still inside the window.
     laid_out: HashMap<Oid, (usize, Lane)>,
-    /// Commits whose rows have left the window, oldest at the front, counted so
-    /// a walk repeating an id stays total. Answers "already laid out?": without
-    /// it a child naming a gone parent reserves a lane nothing ever frees,
-    /// painting a line down every row after it.
+    /// Ids whose rows have left the window, oldest first.
     gone: VecDeque<Oid>,
     gone_count: HashMap<Oid, usize>,
-    /// The most recent rows, oldest at the front. Never longer than `window`,
-    /// including mid-push: room is made before the new row goes in.
+    /// Never longer than `window`, even mid-push.
     rows: VecDeque<GraphRow>,
-    /// Absolute row number of `rows.front()`, keeping `laid_out` indices
-    /// meaningful after eviction.
+    /// Absolute row number of `rows.front()`.
     first_row: usize,
     window: usize,
 }
@@ -46,18 +27,13 @@ impl Default for LaneAssigner {
 }
 
 impl LaneAssigner {
-    /// A load budget, not a memory mitigation: skew is local, and Git Graph and
-    /// lazygit bound the same thing at 300 rows. Layout costs 264 B per row at
-    /// p99 (`docs/research/history-graph/scroll-memory-model.md`, Part D).
     pub const DEFAULT_WINDOW: usize = 1024;
 
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Holds at most `window` rows; zero is raised to one. Widening is not
-    /// linear — 66 ms at 1024, 749 ms at 4096, 23.3 s at 16384
-    /// (`docs/research/history-graph/scroll-memory-model.md`).
+    /// Zero is raised to one.
     pub fn with_window(window: usize) -> Self {
         Self {
             lanes: Vec::new(),
@@ -70,23 +46,18 @@ impl LaneAssigner {
         }
     }
 
-    /// How many rows this assigner holds before it starts making them final.
     pub fn window(&self) -> usize {
         self.window
     }
 
-    /// How many commits past the window are still recognised by id, so no lane
-    /// is reserved for one already gone. Ids are cheap — about 1 MB against
-    /// 9 MB of rows at the default window.
+    /// How many ids past the window are still recognised as already laid out.
     pub fn remembered(&self) -> usize {
         self.window.saturating_mul(Self::REMEMBERED_PER_ROW)
     }
 
     const REMEMBERED_PER_ROW: usize = 16;
 
-    /// Lays out every commit; `commits` yields `(id, parent_ids)` in walk
-    /// order. Returns every row in walk order, those the window made final
-    /// carrying whatever segments they had when they left.
+    /// Lays out a whole walk, returning every row, including those the window made final.
     pub fn assign_all<I>(commits: I) -> Vec<GraphRow>
     where
         I: IntoIterator<Item = (Oid, Vec<Oid>)>,
@@ -102,13 +73,11 @@ impl LaneAssigner {
         rows
     }
 
-    /// The rows still inside the window, oldest first; rows already made final
-    /// are not here.
+    /// The rows still inside the window, oldest first.
     pub fn rows(&self) -> impl ExactSizeIterator<Item = &GraphRow> {
         self.rows.iter()
     }
 
-    /// Total rows laid out, including those already made final.
     fn rows_laid_out(&self) -> usize {
         self.first_row + self.rows.len()
     }
@@ -118,17 +87,13 @@ impl LaneAssigner {
         self.rows.into()
     }
 
-    /// Lays out one commit; `parents` is in git's order, so `parents[0]` is the
-    /// first parent. Returns the row this push forced out of the window, final.
+    /// `parents` is in git's order. Returns the row this push forced out of the window.
     pub fn push(&mut self, id: Oid, parents: Vec<Oid>) -> Option<GraphRow> {
-        // Evict first: evicting after would leave the doomed row reachable for
-        // the repaint below, so the window would reach one row further back
-        // than it says.
+        // Evict first, or the repaint below reaches one row past the window.
         let finalised = self.evict_past_the_window();
         let row_index = self.rows_laid_out();
 
-        // At most one lane waits for a given commit; consuming all of them
-        // keeps this total if that ever stops holding.
+        // Consume every lane waiting for this commit, not just the first.
         let reserved: Vec<usize> = self
             .lanes
             .iter()
@@ -166,16 +131,12 @@ impl LaneAssigner {
                 // Another branch already reserved a lane for this parent.
                 edges.push(EdgeSegment::out_of_commit(Lane::new(own), Lane::new(lane)));
             } else if self.laid_out.contains_key(parent) {
-                // Already on screen above: connect once this row exists, since
-                // the line repaints the rows between.
+                // Already laid out above: connect once this row exists.
                 late_parents.push(*parent);
             } else if self.gone_count.contains_key(parent) {
-                // Gone before its child arrived: the line has nowhere to start,
-                // and no lane is reserved — the parent never comes round again
-                // and the reservation would descend forever.
+                // Already gone: a lane reserved for it would never be freed.
             } else {
-                // Still to come. The first parent needing a fresh lane takes
-                // this commit's own, keeping a linear history one lane wide.
+                // Still to come; the first parent takes this commit's own lane when it is free.
                 let lane = if self.lanes[own].is_none() {
                     own
                 } else {
@@ -198,8 +159,6 @@ impl LaneAssigner {
         finalised
     }
 
-    /// Drops the oldest row when the window is full, handing it back as final.
-    /// One push adds one row, so at most one leaves.
     fn evict_past_the_window(&mut self) -> Option<GraphRow> {
         if self.rows.len() < self.window {
             return None;
@@ -214,8 +173,7 @@ impl LaneAssigner {
         Some(row)
     }
 
-    /// Records `id` as gone, forgetting the oldest past
-    /// [`LaneAssigner::remembered`].
+    /// Records `id` as gone, forgetting the oldest past [`LaneAssigner::remembered`].
     fn remember_gone(&mut self, id: Oid) {
         *self.gone_count.entry(id).or_insert(0) += 1;
         self.gone.push_back(id);
@@ -250,9 +208,7 @@ impl LaneAssigner {
             .filter(|&offset| offset < self.rows.len())
     }
 
-    /// Draws the line up from `child_row` to a parent laid out earlier,
-    /// repainting the rows between. Their lane numbers are untouched; they only
-    /// gain segments.
+    /// Draws the line up to an earlier parent, repainting the rows between.
     fn connect_upward(&mut self, parent: &Oid, child_row: usize) {
         let Some(&(parent_row, parent_lane)) = self.laid_out.get(parent) else {
             return;
@@ -260,8 +216,6 @@ impl LaneAssigner {
         if parent_row >= child_row {
             return;
         }
-        // Both rows are inside the window; the guards keep this total rather
-        // than trusting it.
         let (Some(parent_offset), Some(child_offset)) =
             (self.offset_of(parent_row), self.offset_of(child_row))
         else {
@@ -286,8 +240,7 @@ impl LaneAssigner {
         }
     }
 
-    /// The lowest lane unoccupied on every row from offset `first` to `last`
-    /// inclusive.
+    /// The lowest lane free on every row from offset `first` to `last` inclusive.
     fn free_lane_across(&self, first: usize, last: usize) -> Lane {
         let mut taken: Vec<bool> = Vec::new();
         for row in self.rows.range(first..=last) {
@@ -321,8 +274,7 @@ mod tests {
         Oid::parse(&hex).unwrap()
     }
 
-    /// `branches` independent chains, interleaved, each commit naming the
-    /// previous of its own chain.
+    /// `branches` interleaved independent chains.
     fn wide_history(branches: usize, length: usize) -> Vec<(Oid, Vec<Oid>)> {
         let mut commits = Vec::new();
         for step in 0..length {
@@ -339,8 +291,6 @@ mod tests {
         commits
     }
 
-    /// What the assigner holds, in R1.3's terms. `gone`/`gone_count` are
-    /// included as the one structure bounded by a loop, not by construction.
     fn retained(assigner: &LaneAssigner) -> (usize, usize, usize, usize) {
         let segments: usize = assigner.rows.iter().map(|row| row.edges.len()).sum();
         let widest = assigner
@@ -363,8 +313,6 @@ mod tests {
         )
     }
 
-    /// Caught by: eviction stopping (R1.3). The unbounded control run is what
-    /// stops this passing on a history that never filled a window.
     #[test]
     fn retained_state_is_bounded_by_the_window_times_the_open_lanes() {
         let branches = 16;
@@ -383,8 +331,7 @@ mod tests {
             let (rows, indexed, segments, widest) = retained(&bounded);
             assert!(rows <= window, "window overrun: {rows} rows held");
             assert!(indexed <= window, "index overrun: {indexed} commits held");
-            // Pinned against the history's own width: a bound derived from the
-            // retained rows would move with the defect.
+            // Pinned to the history's width, not to anything derived from the retained rows.
             assert!(
                 bounded.lanes.len() <= branches,
                 "{} lanes open on a {branches}-branch history",
@@ -398,8 +345,6 @@ mod tests {
                 segments <= rows * (branches + 1),
                 "retained {segments} segments over {rows} rows"
             );
-            // Bounded by a loop, not construction. Both structures: they trim
-            // together and only one is the queue.
             assert!(
                 bounded.gone.len() <= bounded.remembered(),
                 "{} remembered ids past a limit of {}",
@@ -431,8 +376,7 @@ mod tests {
             history.len() > window * 8,
             "the history must dwarf the window"
         );
-        // Without this the bounds above hold vacuously and neutering
-        // `remember_gone`'s trim still passes.
+        // Proves the bounds above are not vacuous.
         assert_eq!(
             peak_remembered,
             bounded.remembered(),
@@ -445,11 +389,9 @@ mod tests {
         );
     }
 
-    /// R1.2's finality half: a row `push` hands back never changes.
     #[test]
     fn a_row_that_leaves_the_window_never_changes_again() {
-        // `late` at row 0, its child after the window has passed it: the
-        // joining line would repaint a row nobody holds.
+        // `late` at row 0; its child arrives after the window has passed it.
         let window = 4;
         let mut assigner = LaneAssigner::with_window(window);
         let late = id(900);
@@ -482,7 +424,7 @@ mod tests {
             child_row.edges.iter().all(|edge| !edge.out_of_order),
             "a line was drawn back to a row the assigner no longer holds: {child_row:?}"
         );
-        // Asserting on `evicted` would decide nothing: the test owns that copy.
+        // The test owns `evicted`; asserting on it would decide nothing.
         assert!(
             rows.iter()
                 .flat_map(|row| &row.edges)
@@ -491,8 +433,7 @@ mod tests {
         );
     }
 
-    /// `pairs` of parent-then-child separated by `gap` fillers, so the parent's
-    /// row has left a smaller window by the time the child arrives.
+    /// `pairs` of parent-then-child, `gap` fillers apart.
     fn skew_past_the_window(pairs: usize, gap: usize) -> Vec<(Oid, Vec<Oid>)> {
         let mut commits = Vec::new();
         for n in 0..pairs {
@@ -505,9 +446,6 @@ mod tests {
         commits
     }
 
-    /// Caught by: reserving a lane for a parent that has already left the
-    /// window (R1.3). One lane leaks per event, so what is pinned is that lanes
-    /// stay flat however long the walk.
     #[test]
     fn a_parent_that_went_past_before_its_child_does_not_leak_a_lane() {
         let window = 4;
@@ -545,8 +483,6 @@ mod tests {
         );
     }
 
-    /// Within the remembered ids the same history leaks nothing: remembering
-    /// makes the difference, not the shape of the history.
     #[test]
     fn a_parent_beyond_the_remembered_ids_is_the_only_case_that_cannot_be_told_apart() {
         let mut assigner = LaneAssigner::with_window(2);
@@ -562,9 +498,6 @@ mod tests {
         );
     }
 
-    /// The blind spot R1.3 accepts: a parent further back than `remembered()`
-    /// reserves a lane that never frees. Pins graceful degradation, not
-    /// closure — every commit placed, walk order kept, one leak per event.
     #[test]
     fn a_parent_beyond_the_remembered_ids_is_placed_anyway_and_costs_one_lane() {
         let window = 2;
@@ -578,8 +511,7 @@ mod tests {
         for (id, parents) in &history {
             rows.extend(assigner.push(*id, parents.clone()));
         }
-        // Read before draining: after `mem::take` the lanes are a fresh
-        // `Default` and decide nothing.
+        // Read before draining: `mem::take` leaves a fresh `Default`.
         let reserved = assigner.lanes.iter().filter(|slot| slot.is_some()).count();
         rows.extend(std::mem::take(&mut assigner).into_rows());
 
@@ -588,7 +520,7 @@ mod tests {
             history.len(),
             "a commit was dropped rather than placed"
         );
-        // R1.4: total over arrival order — placed, not rejected.
+        // Placed, not rejected.
         for ((walked, _), row) in history.iter().zip(&rows) {
             assert_eq!(*walked, row.id, "rows came back out of walk order");
         }
@@ -599,9 +531,6 @@ mod tests {
         );
     }
 
-    /// Caught by: `assign_all` dropping the rows the window made final. Every
-    /// acceptance fixture is shorter than [`LaneAssigner::DEFAULT_WINDOW`], so
-    /// all of them would still pass.
     #[test]
     fn assign_all_returns_every_row_of_a_walk_longer_than_the_window() {
         let length = LaneAssigner::DEFAULT_WINDOW + 500;
@@ -639,12 +568,6 @@ mod tests {
         );
     }
 
-    /// What laying a row out costs as more lanes stay open: a parent is found
-    /// by scanning lane slots, and every open lane adds a passing segment per
-    /// row. A measurement, not an assertion; it cannot say which term mattered.
-    ///
-    /// `cargo test --release -p cairn-model --lib -- --ignored --nocapture
-    /// measures_layout_cost_against_lane_count`
     #[test]
     #[ignore = "a measurement, not an assertion"]
     fn measures_layout_cost_against_lane_count() {

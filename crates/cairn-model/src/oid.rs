@@ -1,16 +1,11 @@
 use std::fmt;
 
-/// A git object id: 20 bytes of SHA-1 or 32 of SHA-256, never on the heap.
-///
-/// The width travels with the bytes, so a SHA-1 never equals the SHA-256 that
-/// zero-extends it. Hex is written on demand into a caller-owned [`OidHex`].
+/// A SHA-1 or SHA-256 object id; a SHA-1 never equals a zero-extended SHA-256.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Oid {
-    /// Left-aligned, zero past `width`, so the derived `Eq` reads only what was
-    /// written.
+    /// Left-aligned, zero past `width`, so the derived `Eq` reads only what was written.
     bytes: [u8; Oid::MAX_BYTES],
-    /// Declared after `bytes`: the derived `Ord` compares the digest first.
-    /// Twin: `ordering_compares_the_digest_before_the_width`.
+    /// Declared after `bytes` so the derived `Ord` compares the digest first.
     width: Width,
 }
 
@@ -78,10 +73,8 @@ impl Oid {
         Ok(Self { bytes, width })
     }
 
-    /// The digest, 20 bytes or 32.
     pub fn as_bytes(&self) -> &[u8] {
-        // Empty on the unreachable miss: the whole buffer would pass a SHA-1
-        // off as a SHA-256 and look up the wrong object.
+        // Empty on the unreachable miss: the whole buffer would pass a SHA-1 off as a SHA-256.
         self.bytes.get(..self.width as usize).unwrap_or_default()
     }
 
@@ -96,13 +89,10 @@ impl Oid {
     }
 }
 
-/// The hex text of an [`Oid`], held inline rather than on the heap.
-///
-/// [`OidHex::as_str`] borrows from this value; text outliving it must be copied.
+/// The hex text of an [`Oid`], held inline.
 #[derive(Clone, Copy)]
 pub struct OidHex {
-    /// Zero past `len`, so equal abbreviations hold equal buffers. Twin:
-    /// `an_abbreviation_leaves_nothing_behind_the_length_it_reports`.
+    /// Zero past `len`, so equal abbreviations hold equal buffers.
     digits: [u8; Oid::MAX_HEX],
     len: usize,
 }
@@ -122,8 +112,7 @@ impl OidHex {
             *low = hex_digit(byte);
             written += 2;
         }
-        // A byte is two characters, so an odd `wanted` overshoots by one: cut
-        // to it and blank the tail.
+        // An odd `wanted` overshoots by one digit: cut to it and blank the tail.
         let len = written.min(wanted).min(Oid::MAX_HEX);
         if let Some(tail) = digits.get_mut(len..) {
             tail.fill(0);
@@ -132,8 +121,7 @@ impl OidHex {
     }
 
     pub fn as_str(&self) -> &str {
-        // Empty rather than a panic on a user-reachable path. Twin proving it
-        // unreachable: `every_width_round_trips_through_hex`.
+        // Empty rather than a panic; unreachable.
         self.digits
             .get(..self.len)
             .and_then(|written| std::str::from_utf8(written).ok())
@@ -219,7 +207,6 @@ mod tests {
         assert_eq!(Oid::parse(&wide), Err(OidParseError::NotHex));
     }
 
-    /// Caught by: a length rule accepting a range rather than exactly 40 or 64.
     #[test]
     fn a_length_either_side_of_each_width_is_rejected() {
         for length in [32usize, 39, 41, 63, 65] {
@@ -233,8 +220,6 @@ mod tests {
         assert!(Oid::parse(&"a".repeat(64)).is_ok());
     }
 
-    /// Caught by: dropping either half of the hex-pair check, which an
-    /// all-invalid fixture cannot tell apart.
     #[test]
     fn a_single_bad_character_is_rejected_at_either_half_of_a_pair() {
         for index in [0usize, 1, 20, 21, 38, 39] {
@@ -251,7 +236,6 @@ mod tests {
         }
     }
 
-    /// Caught by: dropping the carried width.
     #[test]
     fn a_sha1_is_never_a_zero_padded_sha256() {
         let short = Oid::parse(&"ab".repeat(20)).unwrap();
@@ -302,7 +286,6 @@ mod tests {
         }
     }
 
-    /// The lane assigner keys on this ordering.
     #[test]
     fn ids_order_by_their_digest() {
         let low = Oid::parse(&format!("00{}", "ff".repeat(19))).unwrap();
@@ -311,8 +294,6 @@ mod tests {
         assert_eq!(low.cmp(&low), std::cmp::Ordering::Equal);
     }
 
-    /// Caught by: comparing the width before the digest. Only the field order
-    /// says otherwise.
     #[test]
     fn ordering_compares_the_digest_before_the_width() {
         let sha1 = Oid::parse(&"ff".repeat(20)).unwrap();
@@ -330,7 +311,6 @@ mod tests {
         );
     }
 
-    /// Caught by: a text form rendering nothing, which every other test tolerates.
     #[test]
     fn every_text_form_renders_the_id_it_names() {
         let sha256 = Oid::parse(SHA256).unwrap();
@@ -348,8 +328,6 @@ mod tests {
         );
     }
 
-    /// Caught by: leaving the eighth digit `short()` writes past the length
-    /// it reports.
     #[test]
     fn an_abbreviation_leaves_nothing_behind_the_length_it_reports() {
         let a = Oid::parse(&format!("{}{}", "0123456", "f".repeat(33))).unwrap();

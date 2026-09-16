@@ -1,12 +1,8 @@
 //! Lanes, edge segments and graph rows.
-//!
-//! Geometric vocabulary only: nothing here names genealogy, so a renderer draws
-//! a row without knowing what a line means.
 
 use crate::Oid;
 
-/// A vertical track, numbered from the left. Assigned once and never renumbered
-/// as more commits load, so it converts straight to an x position.
+/// A vertical track, numbered from the left.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Lane(usize);
 
@@ -15,7 +11,6 @@ impl Lane {
         Self(index)
     }
 
-    /// Dense from zero; a lane is drawn only on rows whose segments name it.
     pub fn index(self) -> usize {
         self.0
     }
@@ -31,16 +26,12 @@ pub enum EdgeKind {
     OutOfCommit,
 }
 
-/// One piece of a connecting line, clipped to a single row. Drawing a row needs
-/// that row alone, which is what a virtualised list requires.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EdgeSegment {
     pub from: Lane,
     pub to: Lane,
     pub kind: EdgeKind,
-    /// True when the line joins a commit to a parent drawn *above* it, which
-    /// date skew makes ordinary. Not a promise the other end is visible — see
-    /// `docs/systems/history-graph.md`.
+    /// True when the line joins a commit to a parent drawn *above* it.
     pub out_of_order: bool,
 }
 
@@ -83,10 +74,8 @@ impl EdgeSegment {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphRow {
     pub id: Oid,
-    /// The node's lane, fixed for the life of the row.
     pub lane: Lane,
-    /// Every line crossing this row. Order is deterministic for tests only;
-    /// read nothing into it.
+    /// Every line crossing this row, in no meaningful order.
     pub edges: Vec<EdgeSegment>,
 }
 

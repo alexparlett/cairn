@@ -1,7 +1,4 @@
 //! Commit, ref, graph and lane types shared by the engine and the UI.
-//!
-//! Plain data and pure functions: no `gix` or Freya types, no I/O, no clock.
-//! Twin: `layers_never_name_the_crates_they_are_sealed_from`.
 
 mod confirm;
 mod graph;
@@ -15,7 +12,6 @@ pub use history::{HistoryRow, RowContent, RowId};
 pub use lane_assignment::LaneAssigner;
 pub use oid::{Oid, OidHex, OidParseError};
 
-/// What a list row needs of a commit, never the full object.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitSummary {
     pub id: Oid,

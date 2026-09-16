@@ -547,7 +547,9 @@ Cairn's own shipped query produce on repositories that exist?
 `crates/cairn-git/src/history.rs`, driven by `CAIRN_BENCH_REPO`. It resolves
 **every ref** that peels to a commit — the default view shows all branches — and
 runs the real `Repository::history` over the whole history in one page, so the
-rows it measures are the rows the application would hold. Per row it counts edge
+rows it measures are the rows the application would hold. Tips are deduplicated,
+which is why the tip counts below are lower than the repositories' ref counts —
+several refs commonly point at the same commit. Per row it counts edge
 segments, distinct lanes occupied (the node's own lane plus both ends of every
 segment crossing it), retained bytes
 (`size_of::<GraphRow>()` = 72 B plus 24 B per segment, both read from the
@@ -577,7 +579,7 @@ In `HistoryOrder::CommitTime` — the default, and the order a history list is
 read in — every repository in the sample sits between 2 and 8 segments per row
 at p99, with a sample-wide maximum of 11:
 
-| Repository | commits | ref tips | segments/row mean / p50 / p95 / p99 / max | open lanes/row mean / p50 / p95 / p99 / max | highest lane no. |
+| Repository | commits | distinct commit tips | segments/row mean / p50 / p95 / p99 / max | open lanes/row mean / p50 / p95 / p99 / max | highest lane no. |
 | --- | --- | --- | --- | --- | --- |
 | freya | 2,896 | 84 | 3.12 / 3 / 7 / 8 / 11 | 2.12 / 2 / 6 / 7 / 9 | 8 |
 | strata | 1,081 | 166 | 3.25 / 3 / 5 / 7 / 9 | 2.15 / 2 / 4 / 5 / 7 | 6 |
@@ -695,8 +697,8 @@ fixed (`Oid` + `Lane` + `Vec` header) plus 24 B per `EdgeSegment`:
 The worst real repository in the sample retains **126 MB of layout for a
 500,000-commit history** — against the ~5.4 GB the packet reasoned from, a
 factor of 43. Using the mean rather than p99 halves it again. For contrast, the
-same extrapolation in `GraphOrder` on strata is 3.8 GB, which is the number the
-packet actually had.
+same extrapolation in `GraphOrder` on strata is 3,776.6 MB, which is the order of
+magnitude the packet actually had.
 
 For scale: Finding 5 measured `git log --graph` itself at 107-114 MiB peak RSS
 over a 200k-commit history, spent on the traversal rather than the render. On
@@ -707,9 +709,9 @@ times that size is the same order as what git spends walking.
 estimates.
 **Implies:** on real repositories in the default order, retained layout is not
 the thing that decides whether a history view fits in memory. Commit summaries —
-the author name, email and subject line per row, which are heap strings and are
-not counted here — are plausibly the larger half, and nothing in this record has
-measured them.
+the author name, email and subject line per row, plus a heap `Vec` of parent
+ids, none of which is counted here — may well cost more than the layout does,
+and nothing in this record has measured them.
 
 ### Finding 28 — the sample tops out at 2,896 commits, and that is its main weakness
 
@@ -736,9 +738,9 @@ unmeasured.
   are arithmetic, not a measurement, and the sample contains nothing above 3k
   commits.
 - **How much a history row costs in total.** Only `GraphRow` is counted.
-  `CommitSummary` carries three owned `String`s per row and is not measured here;
-  on this evidence it is the bigger of the two and the memory question may simply
-  move there.
+  `CommitSummary` carries three owned `String`s and a `Vec<Oid>` of parent ids
+  per row, none of it measured here. Whether it is the larger half is untested;
+  nothing in Part D rules out the memory question simply moving there.
 - **Whether the `LaneAssigner` window is the right mechanism, or the right size.**
   Part D prices what the window is holding. It does not evaluate the window: it
   neither confirms nor refutes the case for bounded retention, which Findings 7,

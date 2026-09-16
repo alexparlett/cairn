@@ -477,6 +477,82 @@ mod tests {
         drop(handle);
     }
 
+    /// Borrows this checkout's objects through `alternates`, so its `HEAD` can be broken and mended.
+    struct BorrowedRepository {
+        fixture: UnbornRepository,
+    }
+
+    impl BorrowedRepository {
+        fn new(name: &str) -> Self {
+            let fixture = UnbornRepository::new(name);
+            let checkout = match SharedRepository::discover(env!("CARGO_MANIFEST_DIR")) {
+                Ok(shared) => shared.git_dir().to_owned(),
+                Err(error) => panic!("opening the Cairn checkout: {error}"),
+            };
+            // A linked worktree keeps its objects in the common directory.
+            let common = match std::fs::read_to_string(checkout.join("commondir")) {
+                Ok(relative) => checkout.join(relative.trim()),
+                Err(_) => checkout,
+            };
+            let objects = match common.join("objects").canonicalize() {
+                Ok(objects) => objects,
+                Err(error) => panic!("finding the checkout's objects: {error}"),
+            };
+            let alternates = fixture.path.join(".git/objects/info/alternates");
+            if let Err(error) = std::fs::write(&alternates, format!("{}\n", objects.display())) {
+                panic!("writing {}: {error}", alternates.display());
+            }
+            Self { fixture }
+        }
+
+        fn point_main_at(&self, id: &str) {
+            let main = self.fixture.path.join(".git/refs/heads/main");
+            if let Err(error) = std::fs::write(&main, format!("{id}\n")) {
+                panic!("writing {}: {error}", main.display());
+            }
+        }
+    }
+
+    /// Caught by: a failure leaving the worker unable to answer the request after it.
+    #[test]
+    fn a_failed_request_is_answered_when_it_is_asked_again() {
+        let (checkout, mut checkout_updates) = cairn();
+        checkout.submit(Request::OpenHistory { rows: 3 });
+        let expected: Vec<String> = match block_on(checkout_updates.next()) {
+            Some(Update::Rows { rows, .. }) if rows.len() == 3 => {
+                rows.iter().map(|row| row.graph.id.to_string()).collect()
+            }
+            other => panic!("expected three rows of this checkout, got {other:?}"),
+        };
+
+        let fixture = BorrowedRepository::new("cairn-retried-request");
+        fixture.point_main_at(&"1".repeat(40));
+        let (handle, mut updates) = match open(&fixture.fixture.path) {
+            Ok(pair) => pair,
+            Err(error) => panic!("starting the worker: {error}"),
+        };
+
+        handle.submit(Request::OpenHistory { rows: 3 });
+        match block_on(updates.next()) {
+            Some(Update::Failed { .. }) => {}
+            other => panic!("expected a missing HEAD commit to fail, got {other:?}"),
+        }
+
+        fixture.point_main_at(&expected[0]);
+        handle.submit(Request::MoreHistory { rows: 3 });
+        match block_on(updates.next()) {
+            Some(Update::Rows { rows, .. }) => assert_eq!(
+                rows.iter()
+                    .map(|row| row.graph.id.to_string())
+                    .collect::<Vec<_>>(),
+                expected,
+                "the retry did not deliver the history from the top"
+            ),
+            other => panic!("expected the retry to deliver rows, got {other:?}"),
+        }
+        drop(handle);
+    }
+
     #[test]
     fn paging_continues_the_same_walk_rather_than_replaying_it() {
         let (handle, mut updates) = cairn();

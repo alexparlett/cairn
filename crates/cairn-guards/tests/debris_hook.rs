@@ -149,8 +149,17 @@ fn a_clean_branch_is_let_through() {
 #[test]
 fn uncommitted_debris_is_caught() {
     let scratch = Scratch::on_a_branch();
+    // A commit on the branch, so the branch scan also sees the uncommitted line.
+    scratch.write("src/other.rs", "pub fn clean() {}\n");
+    scratch.commit("clean on the branch");
     scratch.write("src/lib.rs", DBG_LINE);
-    assert!(blocks(&scratch.hook(), DBG_HIT));
+    let output = scratch.hook();
+    assert!(blocks(&output, DBG_HIT));
+    assert_eq!(
+        output.matches(DBG_HIT).count(),
+        1,
+        "a line both scans see was reported twice: {output:?}"
+    );
 }
 
 /// Caught by: scanning only the diff against `HEAD`.
@@ -259,5 +268,99 @@ fn a_nested_manifest_is_scanned_beside_a_root_one() {
     assert!(
         blocks(&committed, "cairn-ui is sealed from the git engine"),
         "a committed nested manifest was not scanned: {committed:?}"
+    );
+}
+
+/// Caught by: a token missing from the grep prefilter silently switching a rule off.
+#[test]
+fn every_rule_fires_through_the_prefilter_committed_or_not() {
+    let debris: &[(&str, &str, &str)] = &[
+        (
+            "src/conflict.rs",
+            concat!("<<<<", "<<< ours\n"),
+            "merge conflict marker",
+        ),
+        (
+            "src/theirs.rs",
+            concat!(">>>>", ">>> theirs\n"),
+            "merge conflict marker",
+        ),
+        (
+            "src/todo.rs",
+            concat!("fn a() { to", "do!() }\n"),
+            "todo! left in",
+        ),
+        (
+            "src/unfinished.rs",
+            concat!("fn b() { unimpl", "emented!() }\n"),
+            "unimplemented! left in",
+        ),
+        (
+            "src/dead.rs",
+            concat!("#[all", "ow(dead_code)]\nfn c() {}\n"),
+            "blanket allow(dead_code/unused)",
+        ),
+        (
+            "crates/cairn-ui/src/reach.rs",
+            "use gix::Repository;\n",
+            "cairn-ui is sealed from the git engine",
+        ),
+        (
+            "crates/cairn-model/src/draw.rs",
+            "use freya::prelude::*;\n",
+            "cairn-model is plain data",
+        ),
+        (
+            "crates/cairn-git/src/draw.rs",
+            "use cairn_ui::CommitRow;\n",
+            "cairn-git is sealed from the UI toolkit",
+        ),
+        (
+            "crates/cairn-app/src/reach.rs",
+            "use cairn_git::Repository;\n",
+            "only crates/cairn-app/src/worker may reach the git engine",
+        ),
+        (
+            "crates/cairn-app/src/worker/draw.rs",
+            "use freya::prelude::*;\n",
+            "the worker module runs off the UI thread",
+        ),
+    ];
+
+    let scratch = Scratch::on_a_branch();
+    for (file, text, _) in debris {
+        scratch.write(file, text);
+    }
+    for state in ["uncommitted", "committed"] {
+        if state == "committed" {
+            scratch.commit("debris");
+        }
+        let output = scratch.hook();
+        for (file, _, label) in debris {
+            assert!(
+                output.contains(&format!("{file}:")) && blocks(&output, label),
+                "the {state} {label:?} rule did not fire on {file}: {output:?}"
+            );
+        }
+    }
+}
+
+/// Caught by: taking the fork point from a stale local `main` instead of a newer `origin/main`.
+#[test]
+fn a_newer_origin_main_is_where_the_branch_is_measured_from() {
+    let scratch = Scratch::on_a_branch();
+    scratch.git(&["checkout", "--quiet", "main"]);
+    scratch.write("src/lib.rs", DBG_LINE);
+    scratch.commit("debris upstream");
+    scratch.git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    scratch.git(&["checkout", "--quiet", "feature"]);
+    scratch.git(&["branch", "--force", "main", "main~1"]);
+    scratch.git(&["merge", "--quiet", "--ff-only", "origin/main"]);
+    scratch.write("src/other.rs", "pub fn clean() {}\n");
+    scratch.commit("clean on the branch");
+    assert_eq!(
+        scratch.hook(),
+        "",
+        "debris already in origin/main was charged to the branch"
     );
 }

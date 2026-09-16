@@ -19,7 +19,9 @@ Codex mirror, so the Stop hook has exactly one copy and no parity obligation.
 
 `qa-stop.sh` scans the lines the working tree adds over `HEAD` and the lines
 the branch adds over where it left `main` (local or `origin/main`, whichever is
-newer), so debris survives a commit in its view. It stays in milliseconds by
+newer; if they have diverged, the local one), so debris survives a commit in its
+view. A repository with neither `main` nor `origin/main` gets the uncommitted
+scan only. It stays in milliseconds by
 dropping, with one `grep`, every line that carries none of the rules' tokens
 before `awk` sees it. `crates/cairn-guards/tests/debris_hook.rs` runs the hook
 against scratch repositories in the gate; change the two together.

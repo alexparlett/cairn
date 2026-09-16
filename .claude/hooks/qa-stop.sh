@@ -51,7 +51,9 @@ WORKTREE=$(
     done
   }
 )
-# The newest point this branch shares with main, local or remote.
+# The newest point this branch shares with main, local or remote. If the two
+# merge-bases are unrelated, the local one is kept: it may scan more, never less.
+# With neither ref, FORK stays empty and only WORKTREE is scanned.
 FORK=""
 if [ -n "$HEAD_SHA" ]; then
   for main in refs/heads/main refs/remotes/origin/main; do

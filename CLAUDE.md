@@ -165,17 +165,18 @@ Project invariants:
   imports and qualified paths, with the debris hook echoing the same rule in
   milliseconds.
 - **Outside `cairn-model`, a `RowContent` is read by naming every variant.** No
-  `_ =>` or catch-all binding arm in a match that names it, no `if let`,
-  `while let` or `let .. else` over it, no `matches!` over it, no glob import of
-  its variants: each compiles once a second kind of row exists and silently draws
-  nothing for it. Primary enforcement is the type (not `#[non_exhaustive]`, so an
+  `_ =>`, catch-all binding (`other`, `ref x`, `&_`) or `Some(_)`-beside-
+  `Some(RowContent::..)` arm in a match that names it, no `if let`, `while let`,
+  let-chain or `let .. else` over it, no `matches!` over it, and no `use` that
+  imports its variants or renames it: each compiles once a second kind of row
+  exists and silently draws nothing for it. Primary enforcement is the type (not `#[non_exhaustive]`, so an
   exhaustive match breaks when a variant lands); twin against the spellings that
   escape it: `every_view_of_a_row_names_every_kind_of_row`, over every crate but
   `cairn-model` and `cairn-guards`, with its matcher self-test
   `the_row_content_matcher_catches_the_shapes_it_claims`. Residual review
   obligation: the matcher reads spellings, so a helper that returns
-  `Option<&CommitSummary>` and is then read partially is `qa-checklist`'s to
-  catch.
+  `Option<&CommitSummary>` and is then read partially, or a `type` alias for
+  `RowContent`, is `qa-checklist`'s to catch.
 - **Only `cairn-git/src/ops/` mutates a repository**, whether through gitoxide or
   a `git` subprocess. Twin: `only_the_ops_module_mutates_a_repository`.
 - **Destructive operations take `cairn_model::Confirmed` by value, and the token

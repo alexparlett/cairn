@@ -476,8 +476,9 @@ fn takes_no_arguments(code: &str, at: usize) -> bool {
 const ROW_CONTENT: &str = "RowContent";
 
 /// 1-based lines where `source` reads a `RowContent` without naming every variant: a wildcard or
-/// catch-all arm in a match that names it, `if let`/`while let`/`let .. else` over it,
-/// `matches!` over it, or a glob import of its variants.
+/// catch-all arm in a match that names it (including `Some(_)` beside `Some(RowContent::..)`),
+/// `if let`/`while let`/let-chain/`let .. else` over it, `matches!` over it, or an import of
+/// its variants or of it under another name.
 pub fn reads_row_content_partially(source: &str) -> Vec<usize> {
     let code = code_without_strings(source);
     let bytes = code.as_bytes();
@@ -486,10 +487,16 @@ pub fn reads_row_content_partially(source: &str) -> Vec<usize> {
 
     for offset in ident_offsets(&code, ROW_CONTENT) {
         let rest = code[offset + ROW_CONTENT.len()..].trim_start();
-        if rest
+        let glob = rest
             .strip_prefix("::")
-            .is_some_and(|r| r.trim_start().starts_with('*'))
-        {
+            .is_some_and(|r| r.trim_start().starts_with('*'));
+        // Past this, a view can name a variant without spelling `RowContent`.
+        let renamed_or_split = in_use_statement(&code, offset)
+            && (rest.starts_with("::")
+                || rest
+                    .strip_prefix("as")
+                    .is_some_and(|r| r.starts_with(char::is_whitespace)));
+        if glob || renamed_or_split {
             lines.insert(line_at(&code, offset));
         }
     }
@@ -517,13 +524,14 @@ pub fn reads_row_content_partially(source: &str) -> Vec<usize> {
             continue;
         }
         let before = code[..offset].trim_end();
-        let conditional = ["if", "while"].iter().any(|keyword| {
-            before.ends_with(keyword)
-                && before[..before.len() - keyword.len()]
-                    .bytes()
-                    .next_back()
-                    .is_none_or(|b| !is_ident_byte(b))
-        });
+        let conditional = before.ends_with("&&")
+            || ["if", "while"].iter().any(|keyword| {
+                before.ends_with(keyword)
+                    && before[..before.len() - keyword.len()]
+                        .bytes()
+                        .next_back()
+                        .is_none_or(|b| !is_ident_byte(b))
+            });
         if conditional || has_else_before_semicolon(&code, assign + 1) {
             lines.insert(line_at(&code, offset));
         }
@@ -537,10 +545,23 @@ pub fn reads_row_content_partially(source: &str) -> Vec<usize> {
         if !arms.iter().any(|(_, pattern)| names_row_content(pattern)) {
             continue;
         }
+        let wrappers: BTreeSet<&str> = arms
+            .iter()
+            .flat_map(|(_, pattern)| split_depth_zero(strip_guard(pattern), b'|'))
+            .filter_map(|alternative| wrapped(alternative))
+            .filter(|(_, inner)| names_row_content(inner))
+            .map(|(head, _)| head)
+            .collect();
         for (at, pattern) in arms {
             if split_depth_zero(strip_guard(pattern), b'|')
                 .into_iter()
-                .any(is_catch_all)
+                .any(|alternative| {
+                    is_catch_all(alternative)
+                        || wrapped(alternative).is_some_and(|(head, inner)| {
+                            wrappers.contains(head)
+                                && split_depth_zero(inner, b',').into_iter().all(is_catch_all)
+                        })
+                })
             {
                 lines.insert(line_at(&code, at));
             }
@@ -548,6 +569,41 @@ pub fn reads_row_content_partially(source: &str) -> Vec<usize> {
     }
 
     lines.into_iter().collect()
+}
+
+/// Whether `offset` sits inside a `use` item: the keyword appears since the last `;`.
+fn in_use_statement(code: &str, offset: usize) -> bool {
+    let start = code[..offset].rfind(';').map_or(0, |at| at + 1);
+    !ident_offsets(&code[start..offset], "use").is_empty()
+}
+
+/// `Head(inner)` as (`Head`, `inner`), for a pattern that is one wrapper and nothing else.
+fn wrapped(alternative: &str) -> Option<(&str, &str)> {
+    let pattern = strip_reference(strip_attributes(alternative.trim()));
+    let open = pattern.find('(')?;
+    let head = pattern[..open].trim();
+    let is_path = !head.is_empty() && head.bytes().all(|b| is_ident_byte(b) || b == b':');
+    let end = balanced_end(pattern.as_bytes(), open);
+    (is_path && end == pattern.len()).then(|| (head, &pattern[open + 1..end - 1]))
+}
+
+fn strip_attributes(mut pattern: &str) -> &str {
+    while pattern.starts_with("#[") {
+        let end = balanced_end(pattern.as_bytes(), 1);
+        pattern = pattern[end..].trim_start();
+    }
+    pattern
+}
+
+/// `pattern` without a leading `&` or `&mut`.
+fn strip_reference(pattern: &str) -> &str {
+    match pattern.strip_prefix('&') {
+        Some(rest) => {
+            let rest = rest.trim_start();
+            rest.strip_prefix("mut ").map_or(rest, str::trim_start)
+        }
+        None => pattern,
+    }
 }
 
 fn skip_whitespace(bytes: &[u8], mut at: usize) -> usize {
@@ -618,10 +674,12 @@ fn has_else_before_semicolon(code: &str, from: usize) -> bool {
                 depth -= 1;
             }
             b';' if depth == 0 => return false,
+            // A let-else scrutinee cannot end in `}`, so an `else` after one belongs to an `if`.
             b'e' if depth == 0
                 && code[i..].starts_with("else")
                 && bytes.get(i + 4).is_none_or(|b| !is_ident_byte(*b))
-                && (i == 0 || !is_ident_byte(bytes[i - 1])) =>
+                && (i == 0 || !is_ident_byte(bytes[i - 1]))
+                && !code[..i].trim_end().ends_with('}') =>
             {
                 return true;
             }
@@ -750,11 +808,7 @@ fn split_depth_zero(text: &str, separator: u8) -> Vec<&str> {
 
 /// `_`, or a pattern that binds whatever it is given: `other`, `ref mut x`, `x @ _`.
 fn is_catch_all(alternative: &str) -> bool {
-    let mut pattern = alternative.trim();
-    while pattern.starts_with("#[") {
-        let end = balanced_end(pattern.as_bytes(), 1);
-        pattern = pattern[end..].trim_start();
-    }
+    let mut pattern = strip_reference(strip_attributes(alternative.trim()));
     if let Some((_, bound)) = pattern.split_once('@') {
         return is_catch_all(bound);
     }

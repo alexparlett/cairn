@@ -385,6 +385,50 @@ fn the_row_content_matcher_catches_the_shapes_it_claims() {
             "match content {\n    RowContent::Commit(c) => a(c),\n    #[allow(unreachable_patterns)]\n    _ => b(),\n}",
         ),
         ("glob import", "use cairn_model::RowContent::*;"),
+        (
+            "braced glob import",
+            "use cairn_model::RowContent::{self, *};",
+        ),
+        (
+            "variant import",
+            "use cairn_model::RowContent::Commit;\nif let Commit(c) = x {}",
+        ),
+        (
+            "grouped variant import",
+            "use cairn_model::{RowContent::Commit, RowId};",
+        ),
+        (
+            "aliased import",
+            "use cairn_model::RowContent as Row;\nif let Row::Commit(c) = x {}",
+        ),
+        (
+            "let chain",
+            "if ready && let RowContent::Commit(c) = &row.content {\n    draw(c);\n}",
+        ),
+        (
+            "ref binding",
+            "match c {\n    RowContent::Commit(x) => a(x),\n    ref other => b(other),\n}",
+        ),
+        (
+            "mut binding",
+            "match c {\n    RowContent::Commit(x) => a(x),\n    mut other => b(other),\n}",
+        ),
+        (
+            "underscore binding",
+            "match c {\n    RowContent::Commit(x) => a(x),\n    _rest => b(),\n}",
+        ),
+        (
+            "reference wildcard",
+            "match &row.content {\n    &RowContent::Commit(ref x) => a(x),\n    &_ => b(),\n}",
+        ),
+        (
+            "reference binding",
+            "match &row.content {\n    &RowContent::Commit(ref x) => a(x),\n    &other => b(other),\n}",
+        ),
+        (
+            "wrapped wildcard",
+            "match first {\n    Some(RowContent::Commit(c)) => a(c),\n    Some(_) => b(),\n    None => c(),\n}",
+        ),
     ];
     for (shape, source) in caught {
         assert!(
@@ -432,6 +476,26 @@ fn the_row_content_matcher_catches_the_shapes_it_claims() {
         (
             "a wildcard inside an arm body",
             "match content {\n    RowContent::Commit(c) => match c.x {\n        Some(y) => y,\n        _ => 0,\n    },\n}",
+        ),
+        (
+            "an if/else value in a typed let",
+            "let r: RowContent = if a { x } else { y };",
+        ),
+        (
+            "an if/else value in an irrefutable let",
+            "let RowContent::Commit(c) = if a { x } else { y };",
+        ),
+        (
+            "importing the type",
+            "use cairn_model::{HistoryRow, RowContent, RowId};\nuse cairn_model::RowContent;",
+        ),
+        (
+            "a wildcard over a wrapper the rows are not in",
+            "match read {\n    Ok(RowContent::Commit(c)) => a(c),\n    Err(_) => b(),\n}",
+        ),
+        (
+            "a let chain over something else",
+            "if ready && let Some(c) = x {}\nlet r = RowContent::Commit(c);",
         ),
         (
             "prose",

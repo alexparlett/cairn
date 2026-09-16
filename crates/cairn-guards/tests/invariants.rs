@@ -8,7 +8,10 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use cairn_guards::{code_only, mentions_crate, repo_root, rust_sources, spawns_git, waits_on_work};
+use cairn_guards::{
+    code_only, code_without_strings, mentions_crate, repo_root, rust_sources, spawns_git,
+    waits_on_work,
+};
 
 /// Crates whose dependency list is pinned, and what each is allowed to name.
 /// A new crate with no row here fails `layer_dependencies_are_allowlisted`,
@@ -247,7 +250,11 @@ fn a_history_sized_list_renders_through_a_virtualizing_view() {
             if path.starts_with(worker) {
                 continue;
             }
-            let code = code_only(&source);
+            // Strings blanked as well as comments: a file mentioning
+            // `VirtualScrollView` only inside an error message must not count
+            // as using one, and a file whose prose happens to say `ScrollView`
+            // in a message must not be accused of rendering into one.
+            let code = code_without_strings(&source);
             let names_rows = !mentions_crate(&code, "HistoryRow").is_empty();
             let virtualizes = !mentions_crate(&code, "VirtualScrollView").is_empty();
             if virtualizes {

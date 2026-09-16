@@ -827,6 +827,82 @@ fn is_catch_all(alternative: &str) -> bool {
     }
 }
 
+/// 1-based lines where `source` builds a `std::process::Command`: `Command::new`, however
+/// qualified, spaced or wrapped. Another type's `new` (`GitCommand::new`) is not matched.
+pub fn constructs_process_command(source: &str) -> Vec<usize> {
+    let code = code_without_strings(source);
+    let bytes = code.as_bytes();
+    let mut lines = BTreeSet::new();
+    for offset in ident_offsets(&code, "Command") {
+        let mut at = skip_whitespace(bytes, offset + "Command".len());
+        if !code[at..].starts_with("::") {
+            continue;
+        }
+        at = skip_whitespace(bytes, at + 2);
+        if code[at..].starts_with("new") && bytes.get(at + 3).is_none_or(|b| !is_ident_byte(*b)) {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+    lines.into_iter().collect()
+}
+
+/// Methods that put something into, or take something out of, a child process's environment.
+const ENVIRONMENT_METHODS: &[&str] = &["env", "envs", "env_clear", "env_remove"];
+
+/// 1-based lines where `source` calls one of [`ENVIRONMENT_METHODS`] as a method — `.env(`,
+/// however wrapped or spaced. `env!(..)` and `std::env::var_os(..)` are not method calls and
+/// are not matched; neither is a function merely named `env`.
+pub fn configures_process_environment(source: &str) -> Vec<usize> {
+    let code = code_without_strings(source);
+    let bytes = code.as_bytes();
+    let mut lines = BTreeSet::new();
+    for name in ENVIRONMENT_METHODS {
+        for offset in ident_offsets(&code, name) {
+            let before = code[..offset].trim_end();
+            let after = skip_whitespace(bytes, offset + name.len());
+            if before.ends_with('.') && bytes.get(after) == Some(&b'(') {
+                lines.insert(line_at(&code, offset));
+            }
+        }
+    }
+    lines.into_iter().collect()
+}
+
+/// Keywords a type name follows when it is being declared or implemented, not built.
+const DECLARING_KEYWORDS: &[&str] = &["struct", "impl", "for", "enum", "union", "trait"];
+
+/// 1-based lines where `source` builds a value of the struct `name` with a literal — `Name { .. }`
+/// or `Self { .. }`, including a struct update — as opposed to declaring it (`struct Name {`),
+/// implementing it (`impl Name {`, `impl T for Name {`) or naming it as a return type
+/// (`-> Self {`). A destructuring pattern `let Self { .. } = x` is read as a construction; the
+/// guard that uses this counts, so a false positive there fails loudly rather than silently.
+pub fn constructs_struct(source: &str, name: &str) -> Vec<usize> {
+    let code = code_without_strings(source);
+    let bytes = code.as_bytes();
+    let mut lines = BTreeSet::new();
+    for ident in [name, "Self"] {
+        for offset in ident_offsets(&code, ident) {
+            let after = skip_whitespace(bytes, offset + ident.len());
+            if bytes.get(after) != Some(&b'{') {
+                continue;
+            }
+            let before = code[..offset].trim_end();
+            let declares = before.ends_with("->")
+                || DECLARING_KEYWORDS.iter().any(|keyword| {
+                    before.ends_with(keyword)
+                        && before[..before.len() - keyword.len()]
+                            .bytes()
+                            .next_back()
+                            .is_none_or(|b| !is_ident_byte(b))
+                });
+            if !declares {
+                lines.insert(line_at(&code, offset));
+            }
+        }
+    }
+    lines.into_iter().collect()
+}
+
 /// 1-based lines where `source` spawns a `git` subprocess, matched on the literal program name.
 pub fn spawns_git(source: &str) -> Vec<usize> {
     let code = code_only(source);

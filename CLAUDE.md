@@ -179,6 +179,31 @@ Project invariants:
   `RowContent`, is `qa-checklist`'s to catch.
 - **Only `cairn-git/src/ops/` mutates a repository**, whether through gitoxide or
   a `git` subprocess. Twin: `only_the_ops_module_mutates_a_repository`.
+- **Every `git` subprocess runs with an environment Cairn built, and that
+  environment always sets `GIT_TERMINAL_PROMPT=0`.** A GUI has no terminal, so
+  git's own credential prompt would hang the window on nothing; and an
+  inherited environment carries whatever the launching shell had — a
+  `GIT_ASKPASS` meant for something else, a `GIT_DIR` pointing elsewhere.
+  Primary enforcement is construction: `cairn_git::ops::GitEnvironment` has one
+  constructor, which copies a spelled-out roster from the parent and then
+  applies its `ALWAYS` table, and `GitEnvironment::command` is the only place a
+  `std::process::Command` is built, clearing the inherited environment before
+  applying that one. Twin against erosion:
+  `every_git_invocation_disables_the_terminal_prompt` — no production file but
+  `crates/cairn-git/src/ops/environment.rs` and `ops/cli.rs` names `Command`;
+  only `environment.rs` builds one or calls an environment-setting method
+  (`env`, `envs`, `env_clear`, `env_remove`); it holds exactly one
+  `GitEnvironment` literal, calls `env_clear`, and its `ALWAYS` table carries
+  `("GIT_TERMINAL_PROMPT", "0")`. Matcher self-test:
+  `the_process_environment_matcher_catches_the_shapes_it_claims`. The VALUE is
+  pinned behaviourally in `cairn-git`: the builder's tests spell out the whole
+  variable set, and `crates/cairn-git/tests/git_binary.rs` runs a stub `git`
+  that prints what it was given. Residual review obligations: whether the
+  inherited roster is RIGHT — each entry is a deliberate leak of the user's
+  environment to git, and a missing one breaks a credential helper that
+  worked — is `destructive-ops-reviewer`'s; and the matcher reads spellings, so
+  a `Command` reached through a type alias or a wrapper crate is
+  `qa-checklist`'s to catch.
 - **Destructive operations take `cairn_model::Confirmed` by value, and the token
   carries the prompt the user saw.** Primary enforcement is the type: the field is
   private and there is exactly one constructor. Twin against erosion:

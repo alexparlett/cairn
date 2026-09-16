@@ -4,9 +4,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use cairn_guards::{
-    code_only, code_without_strings, code_without_test_modules, declared_dependencies,
-    mentions_crate, reads_row_content_partially, repo_root, rust_sources, spawns_git,
-    waits_on_work,
+    code_only, code_without_strings, code_without_test_modules, configures_process_environment,
+    constructs_process_command, constructs_struct, declared_dependencies, mentions_crate,
+    reads_row_content_partially, repo_root, rust_sources, spawns_git, waits_on_work,
 };
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
@@ -542,6 +542,185 @@ fn only_the_ops_module_mutates_a_repository() {
         scanned > 0,
         "the mutation guard scanned nothing; did the crates move?"
     );
+}
+
+/// Where a `git` process is built — the environment module, the only place a
+/// `std::process::Command` comes into being — and where it is run.
+const PROCESS_ENVIRONMENT_FILE: &str = "crates/cairn-git/src/ops/environment.rs";
+const PROCESS_SPAWN_FILE: &str = "crates/cairn-git/src/ops/cli.rs";
+const PROCESS_ENVIRONMENT_TYPE: &str = "GitEnvironment";
+
+/// Structural, not behavioural: the value is pinned by `cairn-git`'s own tests over the builder
+/// and over a stub `git` that prints its environment. This guard is against erosion of the ONE
+/// construction path those tests rely on.
+#[test]
+fn every_git_invocation_disables_the_terminal_prompt() {
+    let environment_file = Path::new(PROCESS_ENVIRONMENT_FILE);
+    let spawn_file = Path::new(PROCESS_SPAWN_FILE);
+    let mut environment_source = None;
+    let mut scanned = 0usize;
+
+    for dir in PRODUCT_SOURCE_DIRS {
+        for (path, source) in rust_sources(dir) {
+            scanned += 1;
+            if path == environment_file {
+                environment_source = Some(source);
+                continue;
+            }
+            let production = code_without_test_modules(&code_without_strings(&source));
+            if path != spawn_file {
+                let hits = mentions_crate(&production, "Command");
+                assert!(
+                    hits.is_empty(),
+                    "{}:{} names `Command`. A process is built only in {PROCESS_ENVIRONMENT_FILE} \
+                     and run only in {PROCESS_SPAWN_FILE}, so that every git invocation gets the \
+                     explicit environment with GIT_TERMINAL_PROMPT=0; nothing else may hold one.",
+                    path.display(),
+                    hits[0]
+                );
+            }
+            let hits = constructs_process_command(&production);
+            assert!(
+                hits.is_empty(),
+                "{}:{} builds a Command. Only {PROCESS_ENVIRONMENT_TYPE}::command in \
+                 {PROCESS_ENVIRONMENT_FILE} may: it is what clears the inherited environment and \
+                 applies the roster that sets GIT_TERMINAL_PROMPT=0.",
+                path.display(),
+                hits[0]
+            );
+            let hits = configures_process_environment(&production);
+            assert!(
+                hits.is_empty(),
+                "{}:{} sets a process environment variable directly. The roster in \
+                 {PROCESS_ENVIRONMENT_FILE} is the whole environment git sees; a variable set \
+                 beside it is one nobody enumerated.",
+                path.display(),
+                hits[0]
+            );
+        }
+    }
+    assert!(
+        scanned > 0,
+        "the terminal-prompt guard scanned nothing; did the crates move?"
+    );
+
+    let source = environment_source.unwrap_or_else(|| {
+        panic!("{PROCESS_ENVIRONMENT_FILE} is gone; the environment it builds is an invariant")
+    });
+    let production = code_without_test_modules(&code_without_strings(&source));
+    assert_eq!(
+        constructs_process_command(&production).len(),
+        1,
+        "{PROCESS_ENVIRONMENT_FILE} should build a Command in exactly one place; a second is a \
+         second way for a process to start without the explicit environment."
+    );
+    assert!(
+        !configures_process_environment(&production).is_empty()
+            && !mentions_crate(&production, "env_clear").is_empty(),
+        "{PROCESS_ENVIRONMENT_FILE} no longer clears the inherited environment before applying \
+         its own; whatever the launching shell had would reach git."
+    );
+    assert_eq!(
+        constructs_struct(&production, PROCESS_ENVIRONMENT_TYPE).len(),
+        1,
+        "{PROCESS_ENVIRONMENT_TYPE} should be built in exactly one place — the constructor that \
+         applies the ALWAYS table — so a second literal is a way to skip GIT_TERMINAL_PROMPT=0."
+    );
+    assert!(
+        code_only(&source).contains("(\"GIT_TERMINAL_PROMPT\", \"0\")"),
+        "{PROCESS_ENVIRONMENT_FILE}'s ALWAYS table no longer carries (\"GIT_TERMINAL_PROMPT\", \
+         \"0\"); without it a GUI with no terminal hangs on git's own prompt."
+    );
+    assert!(
+        mentions_crate(&production, "ALWAYS").len() >= 2,
+        "ALWAYS is declared in {PROCESS_ENVIRONMENT_FILE} but never consulted; the constructor \
+         must apply it."
+    );
+}
+
+#[test]
+fn the_process_environment_matcher_catches_the_shapes_it_claims() {
+    for (shape, source) in [
+        ("plain", "Command::new(p)"),
+        ("qualified", "std::process::Command::new(\"git\")"),
+        ("spaced", "Command :: new(p)"),
+        ("wrapped", "let c = Command::\n    new(p);"),
+    ] {
+        assert!(
+            !constructs_process_command(source).is_empty(),
+            "the command matcher missed the {shape} shape: {source:?}"
+        );
+    }
+    for (shape, source) in [
+        ("another type's new", "GitCommand::new(p, e)"),
+        ("a longer identifier", "MyCommand::new(p)"),
+        ("not a constructor", "Command::from(p)"),
+        ("prose", "// Command::new(\"git\") is forbidden\n"),
+        ("a string", "let s = \"Command::new\";"),
+    ] {
+        assert!(
+            constructs_process_command(source).is_empty(),
+            "the command matcher fired on the {shape} shape: {source:?}"
+        );
+    }
+
+    for (shape, source) in [
+        ("env", "cmd.env(k, v)"),
+        ("envs", "cmd.envs(map)"),
+        ("env_clear", "cmd.env_clear()"),
+        ("env_remove", "cmd.env_remove(k)"),
+        ("a wrapped chain", "cmd\n    .env_clear()\n    .envs(x);"),
+        ("spaced", "cmd . env (k, v)"),
+    ] {
+        assert!(
+            !configures_process_environment(source).is_empty(),
+            "the environment matcher missed the {shape} shape: {source:?}"
+        );
+    }
+    for (shape, source) in [
+        ("the env! macro", "env!(\"CARGO_MANIFEST_DIR\")"),
+        ("std::env", "std::env::var_os(name)"),
+        ("a method definition", "fn env(&self) -> &Env {}"),
+        ("a longer name", "self.environment(x)"),
+        ("prose", "// cmd.env(k, v)\n"),
+        ("a string", "let s = \".env(\";"),
+    ] {
+        assert!(
+            configures_process_environment(source).is_empty(),
+            "the environment matcher fired on the {shape} shape: {source:?}"
+        );
+    }
+    assert_eq!(
+        configures_process_environment("let a = 1;\nlet b = 2;\ncmd.env(k, v);\n"),
+        vec![3],
+        "the environment matcher reports the wrong line"
+    );
+
+    for (shape, source) in [
+        ("a Self literal", "Self { entries }"),
+        ("a named literal", "GitEnvironment { entries }"),
+        ("a multi-line literal", "Self {\n    entries,\n}"),
+        ("a struct update", "GitEnvironment { ..base }"),
+    ] {
+        assert!(
+            !constructs_struct(source, "GitEnvironment").is_empty(),
+            "the struct matcher missed the {shape} shape: {source:?}"
+        );
+    }
+    for (shape, source) in [
+        ("a declaration", "pub struct GitEnvironment {"),
+        ("an inherent impl", "impl GitEnvironment {"),
+        ("a trait impl", "impl PartialEq for GitEnvironment {"),
+        ("a return type", "fn new() -> Self {"),
+        ("a call", "GitEnvironment::new(f)"),
+        ("another type", "GitEnvironmentBuilder { x }"),
+        ("prose", "// Self { entries }\n"),
+    ] {
+        assert!(
+            constructs_struct(source, "GitEnvironment").is_empty(),
+            "the struct matcher fired on the {shape} shape: {source:?}"
+        );
+    }
 }
 
 #[test]

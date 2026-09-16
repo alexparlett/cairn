@@ -1,10 +1,9 @@
 //! Telling the UI thread that something arrived, without it having to ask.
 //!
-//! The alternative would be polling on a timer, which either costs a wake-up
-//! every frame or adds latency to every page. This is a push: the worker sets a
-//! flag and wakes whatever task is parked on it, and the task is a future, so
-//! the UI thread yields to its event loop instead of blocking. That is why
-//! nothing on the UI side of the boundary needs a channel it could wait on.
+//! A push rather than a timer, which would cost either a wake-up every frame or
+//! latency on every page: the worker sets a flag and wakes whatever task is
+//! parked on it, and that task is a future, so the UI thread yields to its
+//! event loop rather than blocking.
 
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
@@ -50,11 +49,10 @@ impl Wake {
         }
     }
 
-    /// The guarded state, recovering from a poisoned lock.
-    ///
-    /// A panic while holding this lock can leave behind a stale `bool` and a
-    /// stale `Waker` and nothing worse, and refusing to wake the UI again
-    /// because a worker panicked is precisely the hang this module prevents.
+    /// The guarded state, recovering from a poisoned lock: a panic while
+    /// holding it can leave a stale `bool` and a stale `Waker` and nothing
+    /// worse, while refusing to wake the UI again because a worker panicked is
+    /// precisely the hang this module prevents.
     fn locked(&self) -> std::sync::MutexGuard<'_, State> {
         match self.state.lock() {
             Ok(guard) => guard,
@@ -81,8 +79,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Counts wakes, so a test can see one happen rather than infer it from a
-    /// future that finished. Built on `std::task::Wake`, which is the safe way
-    /// to make a waker — this workspace forbids `unsafe`, tests included.
+    /// future that finished. Built on `std::task::Wake`, because this workspace
+    /// forbids `unsafe`, tests included.
     #[derive(Debug, Default)]
     struct Counter(AtomicUsize);
 

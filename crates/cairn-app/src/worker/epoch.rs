@@ -1,11 +1,9 @@
 //! Which request is the one that still matters.
 //!
-//! Requirement R3.2 asks that every request carry an epoch and that a stale
-//! response be dropped without rendering. Dropping the response is the weak
-//! half: it looks identical from the window while the abandoned walk runs to
-//! completion and burns a core. So the epoch is not only a tag on the reply —
-//! it *is* the cancel signal the engine polls. Superseding a request therefore
-//! stops its walk at the next commit, which is what R2.4 asks for and what
+//! R3.2 asks that a stale response be dropped without rendering. That alone is
+//! the weak half — it looks identical from the window while the abandoned walk
+//! runs to completion and burns a core — so the epoch is not only a tag on the
+//! reply, it *is* the cancel signal the engine polls (R2.4), which is also what
 //! makes R2.5's live session safe to keep across a supersession.
 
 use std::sync::Arc;
@@ -19,9 +17,8 @@ pub struct Epoch(u64);
 
 /// The current epoch, shared by the UI side and the workers.
 ///
-/// Cloning shares it: the UI side bumps it when it supersedes a request, and
-/// the worker reads the same word to discover that what it is doing is no
-/// longer wanted.
+/// Cloning shares it: the UI side bumps it to supersede a request, and the
+/// worker reads the same word to discover its work is no longer wanted.
 #[derive(Debug, Clone, Default)]
 pub struct Epochs {
     current: Arc<AtomicU64>,

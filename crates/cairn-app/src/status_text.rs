@@ -1,19 +1,18 @@
 //! The sentences the window shows about the history, as values.
 //!
-//! R4.3 is a rule about what a reader SEES: a list that is still loading must
-//! not look like a repository with no commits in it. `history_state` decides
-//! that those are different states; this decides that they are different
-//! sentences, which is the half a state machine alone leaves to a screenshot.
-//! Keeping it here rather than inline in the render is what lets a test fail
-//! when the two arms are given the same words.
+//! `history_state` decides that a loading list and an empty repository are
+//! different states; this decides that they are different sentences, which is
+//! the half of R4.3 a state machine alone leaves to a screenshot. As values
+//! rather than inline in the render, so a test fails when the two arms are
+//! given the same words.
 
 use crate::history_state::{Progress, Status};
 
 /// What fills the list's place, or `None` when the list itself is what to draw.
 ///
-/// `has_rows` is the reason a failure can be either: a page that failed after
-/// rows were drawn leaves the rows on screen and says so in a banner, while one
-/// that failed before any arrived has nothing to leave.
+/// `has_rows` is the reason a failure can be either: one that arrived after
+/// rows were drawn leaves them on screen and says so in a banner, while one
+/// that arrived before any rows did has nothing to leave.
 pub fn placeholder(status: &Status, has_rows: bool) -> Option<String> {
     match status {
         Status::Loading => Some("Reading history…".to_owned()),
@@ -25,10 +24,10 @@ pub fn placeholder(status: &Status, has_rows: bool) -> Option<String> {
 
 /// How much of the history is loaded, as the title bar says it.
 ///
-/// An ellipsis while more is coming, because "2,540 commits" and "2,540 commits
-/// so far" are different claims and only one of them is true mid-scroll. A
-/// history that stopped because something failed is not still coming, so it
-/// gets no ellipsis either — the banner says what happened.
+/// An ellipsis while more is coming, because "2,540 commits" and "2,540
+/// commits so far" are different claims and only one is true mid-scroll. A
+/// history that stopped because something failed gets none either; the banner
+/// says what happened.
 pub fn loaded_count(progress: &Progress) -> String {
     let loaded = progress.loaded();
     let noun = if loaded == 1 { "commit" } else { "commits" };
@@ -45,10 +44,9 @@ pub fn loaded_count(progress: &Progress) -> String {
 mod tests {
     use super::*;
 
-    /// R4.3, as the reader meets it. The bug this exists to prevent is that the
-    /// two states render the same, and a test that checked only that each state
-    /// has *a* sentence would not catch it — so the assertion is that they are
-    /// DIFFERENT sentences, and that neither is empty.
+    /// R4.3, as the reader meets it. A test that checked only that each state
+    /// has *a* sentence would miss the bug, so the assertion is that they are
+    /// DIFFERENT sentences and that neither is empty.
     #[test]
     fn loading_and_an_empty_repository_do_not_say_the_same_thing() {
         let loading = placeholder(&Status::Loading, false);
@@ -62,9 +60,8 @@ mod tests {
         );
     }
 
-    /// A failure that never produced a row shows the failure, and the engine's
-    /// sentence is passed through rather than replaced — R5.2's message names
-    /// the path, and rewriting it here would lose that.
+    /// A failure that never produced a row shows the engine's own sentence:
+    /// R5.2's message names the path, and rewriting it here would lose that.
     #[test]
     fn a_failure_with_nothing_loaded_shows_its_own_sentence() {
         let message = "no git repository at /tmp/nowhere";

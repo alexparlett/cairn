@@ -17,6 +17,15 @@ anything heavier would tax every iteration.
 Claude loads `.claude/settings.json`. Cairn runs Claude Code only; there is no
 Codex mirror, so the Stop hook has exactly one copy and no parity obligation.
 
+`qa-stop.sh` scans the lines the working tree adds over `HEAD` and the lines
+the branch adds over where it left `main` (local or `origin/main`, whichever is
+newer; if they have diverged, the local one), so debris survives a commit in its
+view. A repository with neither `main` nor `origin/main` gets the uncommitted
+scan only. It stays in milliseconds by
+dropping, with one `grep`, every line that carries none of the rules' tokens
+before `awk` sees it. `crates/cairn-guards/tests/debris_hook.rs` runs the hook
+against scratch repositories in the gate; change the two together.
+
 `qa-stop.sh`'s path-scoped rules restate the crate-layering seal from
 `CLAUDE.md`. They are an approximation — the scan skips comment lines rather than
 parsing Rust, so a sealed import hidden behind a trailing comment slips past. The

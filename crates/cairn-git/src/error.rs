@@ -1,10 +1,5 @@
 use std::path::PathBuf;
 
-/// Everything the engine can fail with, in the caller's vocabulary.
-///
-/// gitoxide's error types are deliberately not re-exported: a variant here is
-/// something the UI can act on, and adding one is a decision about what the UI
-/// must now handle.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("no git repository at {path}")]
@@ -13,6 +8,28 @@ pub enum Error {
     #[error("failed to open the repository at {path}: {source}")]
     Open {
         path: PathBuf,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// `walked` is how many commits were laid out before stopping.
+    #[error("the history query was cancelled after {walked} commits")]
+    Cancelled { walked: usize },
+
+    /// `HEAD` points at a branch with no commits yet.
+    #[error("the repository at {path} has no commits yet")]
+    UnbornHead { path: PathBuf },
+
+    /// Usually a corrupt or missing object.
+    #[error("failed to walk the history: {source}")]
+    Walk {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    #[error("failed to read commit {id}: {source}")]
+    ReadCommit {
+        id: String,
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },

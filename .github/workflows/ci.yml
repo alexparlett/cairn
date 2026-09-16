@@ -29,7 +29,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      # Full history: cairn-git's engine tests read this checkout as a repository.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # Freya links against the system graphics and windowing stack. These are
       # the Linux build inputs; a missing one shows up as a linker error deep in

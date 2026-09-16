@@ -1,18 +1,15 @@
-//! The enforcement twins for the invariants in `CLAUDE.md`.
-//!
-//! One test per invariant, named for it. When you add an invariant to any
-//! CLAUDE.md, add its twin here in the SAME change; when you delete one, delete
-//! the twin. A failure message says what rule was broken and where, because the
-//! agent that trips a guard has to be able to fix it without reading the guard.
+//! Invariant guards.
 
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use cairn_guards::{code_only, mentions_crate, repo_root, rust_sources, spawns_git};
+use cairn_guards::{
+    code_only, code_without_strings, code_without_test_modules, declared_dependencies,
+    mentions_crate, reads_row_content_partially, repo_root, rust_sources, spawns_git,
+    waits_on_work,
+};
 
-/// Crates whose dependency list is pinned, and what each is allowed to name.
-/// A new crate with no row here fails `layer_dependencies_are_allowlisted`,
-/// which is the point: adding a layer is a decision, not a default.
+/// Crates whose dependency list is pinned; a crate with no row here fails.
 const DEPENDENCY_ALLOWLIST: &[(&str, &[&str])] = &[
     ("cairn-model", &[]),
     ("cairn-git", &["cairn-model", "gix", "thiserror"]),
@@ -24,24 +21,91 @@ const DEPENDENCY_ALLOWLIST: &[(&str, &[&str])] = &[
     ("cairn-guards", &["toml"]),
 ];
 
-/// Crate source directory → crate identifiers it may never name in code.
-const FORBIDDEN_IDENTS: &[(&str, &[&str])] = &[
-    (
-        "crates/cairn-model/src",
-        &["gix", "freya", "cairn_git", "cairn_ui"],
-    ),
-    ("crates/cairn-ui/src", &["gix", "cairn_git"]),
-    ("crates/cairn-git/src", &["freya", "dioxus", "cairn_ui"]),
+/// What a crate may take as a dev-dependency beyond its [`DEPENDENCY_ALLOWLIST`] row.
+const TEST_ONLY_ALLOWLIST: &[(&str, &[&str])] = &[
+    ("cairn-ui", &["freya-testing"]),
+    ("cairn-app", &["freya-testing"]),
 ];
 
-/// The product crates, for guards that must not scan the guard suite's own
-/// fixtures (which contain the very spellings they forbid).
+/// Crate directory → crate identifiers it may never name in code, in `src/`, `tests/` or anywhere
+/// else under it.
+const FORBIDDEN_IDENTS: &[(&str, &[&str])] = &[
+    (
+        "crates/cairn-model",
+        &["gix", "freya", "cairn_git", "cairn_ui"],
+    ),
+    ("crates/cairn-ui", &["gix", "cairn_git"]),
+    ("crates/cairn-git", &["freya", "dioxus", "cairn_ui"]),
+];
+
+/// The product crates: the guard suite's own fixtures contain the spellings they forbid.
 const PRODUCT_SOURCE_DIRS: &[&str] = &[
     "crates/cairn-model/src",
     "crates/cairn-git/src",
     "crates/cairn-ui/src",
     "crates/cairn-app/src",
 ];
+
+const RENDER_SOURCE_DIRS: &[&str] = &["crates/cairn-ui/src", "crates/cairn-app/src"];
+
+/// Where repository work runs, and so the only place waiting is allowed.
+const WORKER_DIR: &str = "crates/cairn-app/src/worker";
+
+/// What a file must not name to count as rendering nothing. `cairn_ui` is here because
+/// `cairn-app` may depend on it.
+const RENDERING_IDENTS: &[&str] = &["freya", "dioxus", "cairn_ui"];
+
+/// Closes `RENDER_SOURCE_DIRS` against the manifests: a crate that declares `freya` must be on it.
+#[test]
+fn every_crate_that_renders_is_on_the_render_roster() {
+    let crates_dir = repo_root().join("crates");
+    let mut draws = BTreeSet::new();
+
+    let entries = std::fs::read_dir(&crates_dir)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", crates_dir.display()));
+    for entry in entries.filter_map(Result::ok) {
+        let manifest = entry.path().join("Cargo.toml");
+        if !manifest.is_file() {
+            continue;
+        }
+        let text = std::fs::read_to_string(&manifest)
+            .unwrap_or_else(|e| panic!("reading {}: {e}", manifest.display()));
+        let parsed: toml::Table = text
+            .parse()
+            .unwrap_or_else(|e| panic!("parsing {}: {e}", manifest.display()));
+        let declares_freya = declared_dependencies(&parsed).shipped.contains("freya");
+        if declares_freya {
+            let dir = entry.file_name().to_string_lossy().into_owned();
+            draws.insert(format!("crates/{dir}/src"));
+        }
+    }
+
+    assert!(
+        !draws.is_empty(),
+        "no crate under crates/ declares `freya`, so this check compared nothing. Either the \
+         toolkit changed — in which case change the rule here with it — or the manifest walk \
+         is looking in the wrong place."
+    );
+
+    for dir in &draws {
+        assert!(
+            RENDER_SOURCE_DIRS.contains(&dir.as_str()),
+            "`{dir}` belongs to a crate that declares `freya`, so it renders, but it is not in \
+             RENDER_SOURCE_DIRS. Both the waiting guard and the virtualization guard scan only \
+             what that roster names: a render crate missing from it is unguarded, silently. Add \
+             the row (CLAUDE.md, Invariants)."
+        );
+    }
+
+    for dir in RENDER_SOURCE_DIRS {
+        assert!(
+            draws.contains(*dir),
+            "RENDER_SOURCE_DIRS names `{dir}`, whose crate does not declare `freya`. A roster \
+             row that points at something which no longer renders is a rule nobody is keeping: \
+             remove it, or fix the path."
+        );
+    }
+}
 
 #[test]
 fn layer_dependencies_are_allowlisted() {
@@ -65,35 +129,33 @@ fn layer_dependencies_are_allowlisted() {
             .unwrap_or_default()
             .to_owned();
 
-        let allowed: BTreeSet<&str> = DEPENDENCY_ALLOWLIST
-            .iter()
-            .find(|(krate, _)| *krate == name)
-            .unwrap_or_else(|| {
-                panic!(
-                    "crate `{name}` has no row in DEPENDENCY_ALLOWLIST. Adding a layer is a \
-                     decision to surface to the user: add the row with its allowed deps."
-                )
-            })
-            .1
-            .iter()
-            .copied()
-            .collect();
-
-        let declared: BTreeSet<String> = parsed
-            .get("dependencies")
-            .and_then(toml::Value::as_table)
-            .map(|t| t.keys().cloned().collect())
-            .unwrap_or_default();
-
-        for dep in &declared {
-            assert!(
-                allowed.contains(dep.as_str()),
-                "{name} declares `{dep}`, which its allowlist in \
-                 crates/cairn-guards/tests/invariants.rs does not permit. Either the layering \
-                 changed (update CLAUDE.md and this list together) or the dependency is wrong."
-            );
-        }
+        assert!(
+            DEPENDENCY_ALLOWLIST.iter().any(|(krate, _)| *krate == name),
+            "crate `{name}` has no row in DEPENDENCY_ALLOWLIST. Adding a layer is a decision to \
+             surface to the user: add the row with its allowed deps."
+        );
+        let (shipped, test_only) = unpermitted_dependencies(&name, &parsed);
+        assert!(
+            shipped.is_empty(),
+            "{name} declares {shipped:?}, which its allowlist in \
+             crates/cairn-guards/tests/invariants.rs does not permit. Either the layering \
+             changed (update CLAUDE.md and this list together) or the dependency is wrong."
+        );
+        assert!(
+            test_only.is_empty(),
+            "{name} declares {test_only:?} as dev-dependencies, which neither its \
+             DEPENDENCY_ALLOWLIST nor its TEST_ONLY_ALLOWLIST row permits. A test-only \
+             dependency on a sealed crate is still a crossed seal."
+        );
         seen.insert(name);
+    }
+
+    for (krate, _) in TEST_ONLY_ALLOWLIST {
+        assert!(
+            seen.contains(*krate),
+            "TEST_ONLY_ALLOWLIST pins `{krate}`, but no such crate exists under crates/: remove \
+             the row or fix the path."
+        );
     }
 
     for (krate, _) in DEPENDENCY_ALLOWLIST {
@@ -104,6 +166,105 @@ fn layer_dependencies_are_allowlisted() {
         );
     }
     assert!(!seen.is_empty(), "no crates found under crates/");
+}
+
+/// (shipped, test-only) dependencies of crate `name` that its allowlist rows do not permit.
+fn unpermitted_dependencies(name: &str, manifest: &toml::Table) -> (Vec<String>, Vec<String>) {
+    let row = |list: &[(&str, &'static [&'static str])]| -> BTreeSet<&'static str> {
+        list.iter()
+            .filter(|(krate, _)| *krate == name)
+            .flat_map(|(_, deps)| deps.iter().copied())
+            .collect()
+    };
+    let shipped_allowed = row(DEPENDENCY_ALLOWLIST);
+    let test_only_allowed: BTreeSet<&str> = row(TEST_ONLY_ALLOWLIST)
+        .union(&shipped_allowed)
+        .copied()
+        .collect();
+
+    let declared = declared_dependencies(manifest);
+    let shipped = declared
+        .shipped
+        .into_iter()
+        .filter(|dep| !shipped_allowed.contains(dep.as_str()))
+        .collect();
+    let test_only = declared
+        .test_only
+        .into_iter()
+        .filter(|dep| !test_only_allowed.contains(dep.as_str()))
+        .collect();
+    (shipped, test_only)
+}
+
+#[test]
+fn the_allowlist_check_rejects_a_sealed_crate_in_every_dependency_table() {
+    let manifest = |table: &str, dep: &str| -> toml::Table {
+        format!("[package]\nname = \"cairn-ui\"\n[{table}]\n{dep} = \"1\"\n")
+            .parse()
+            .unwrap()
+    };
+    let none: Vec<String> = Vec::new();
+    let gix = vec!["gix".to_owned()];
+
+    assert_eq!(
+        unpermitted_dependencies("cairn-ui", &manifest("dependencies", "gix")),
+        (gix.clone(), none.clone())
+    );
+    assert_eq!(
+        unpermitted_dependencies("cairn-ui", &manifest("build-dependencies", "gix")),
+        (gix.clone(), none.clone())
+    );
+    assert_eq!(
+        unpermitted_dependencies("cairn-ui", &manifest("dev-dependencies", "gix")),
+        (none.clone(), gix.clone()),
+        "a test-only dependency on a sealed crate passed"
+    );
+    assert_eq!(
+        unpermitted_dependencies(
+            "cairn-ui",
+            &manifest("target.'cfg(unix)'.dev-dependencies", "gix")
+        ),
+        (none.clone(), gix),
+        "a target-scoped dev-dependency on a sealed crate passed"
+    );
+
+    assert_eq!(
+        unpermitted_dependencies("cairn-ui", &manifest("dev-dependencies", "freya-testing")),
+        (none.clone(), none.clone())
+    );
+    assert_eq!(
+        unpermitted_dependencies("cairn-ui", &manifest("dependencies", "freya-testing")),
+        (vec!["freya-testing".to_owned()], none.clone()),
+        "a test-only allowance let the crate ship the dependency"
+    );
+    assert_eq!(
+        unpermitted_dependencies("cairn-ui", &manifest("dev-dependencies", "freya")),
+        (none.clone(), none),
+        "a dependency the crate may ship was refused as a dev-dependency"
+    );
+}
+
+#[test]
+fn the_seal_scan_reads_tests_as_well_as_src() {
+    for (dir, _) in FORBIDDEN_IDENTS {
+        let scanned = rust_sources(dir);
+        for part in ["src", "tests"] {
+            let under = Path::new(dir).join(part);
+            if part == "src" || repo_root().join(&under).is_dir() {
+                assert!(
+                    scanned.iter().any(|(path, _)| path.starts_with(&under)),
+                    "the seal scan of {dir} read nothing under {}",
+                    under.display()
+                );
+            }
+        }
+    }
+    assert!(
+        FORBIDDEN_IDENTS
+            .iter()
+            .any(|(dir, _)| repo_root().join(dir).join("tests").is_dir()),
+        "no sealed crate has a tests/ directory, so nothing here proves tests/ is read"
+    );
 }
 
 #[test]
@@ -122,6 +283,236 @@ fn layers_never_name_the_crates_they_are_sealed_from() {
                 );
             }
         }
+    }
+}
+
+/// Crates that may read `RowContent` however they like: its owner, and this suite's fixtures.
+const ROW_CONTENT_EXEMPT: &[&str] = &["cairn-model", "cairn-guards"];
+
+#[test]
+fn every_view_of_a_row_names_every_kind_of_row() {
+    let crates_dir = repo_root().join("crates");
+    let entries = std::fs::read_dir(&crates_dir)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", crates_dir.display()));
+    let mut crates: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().join("Cargo.toml").is_file())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    crates.sort();
+
+    for exempt in ROW_CONTENT_EXEMPT {
+        assert!(
+            crates.iter().any(|krate| krate == exempt),
+            "ROW_CONTENT_EXEMPT names `{exempt}`, which is not a crate under crates/: remove the \
+             row or fix it."
+        );
+    }
+
+    let mut readers = 0usize;
+    for krate in crates
+        .iter()
+        .filter(|krate| !ROW_CONTENT_EXEMPT.contains(&krate.as_str()))
+    {
+        for (path, source) in rust_sources(format!("crates/{krate}")) {
+            if !mentions_crate(&source, "RowContent").is_empty() {
+                readers += 1;
+            }
+            let hits = reads_row_content_partially(&source);
+            assert!(
+                hits.is_empty(),
+                "{}:{} reads a `RowContent` through a wildcard arm, a catch-all binding, `if let`, \
+                 `let .. else` or `matches!`. Once there is a second kind of row that compiles and \
+                 silently draws nothing for it: match every variant by name (CLAUDE.md, \
+                 Invariants).",
+                path.display(),
+                hits[0]
+            );
+        }
+    }
+    assert!(
+        readers > 0,
+        "no file outside {ROW_CONTENT_EXEMPT:?} names `RowContent`, so this guard checked \
+         nothing. If rows are read some other way now, move the guard with them."
+    );
+}
+
+#[test]
+fn the_row_content_matcher_catches_the_shapes_it_claims() {
+    let caught = [
+        (
+            "wildcard arm",
+            "match row.content {\n    RowContent::Commit(c) => draw(c),\n    _ => {}\n}",
+        ),
+        (
+            "guarded wildcard",
+            "match &row.content {\n    RowContent::Commit(c) => a(c),\n    _ if x => b(),\n}",
+        ),
+        (
+            "catch-all binding",
+            "match content {\n    RowContent::Commit(c) => a(c),\n    other => b(other),\n}",
+        ),
+        (
+            "bound wildcard",
+            "match content {\n    RowContent::Commit(c) => a(c),\n    rest @ _ => b(rest),\n}",
+        ),
+        (
+            "wildcard in an or-pattern",
+            "match content {\n    RowContent::Commit(c) | _ => a(),\n}",
+        ),
+        (
+            "braced arm before the wildcard",
+            "match content {\n    RowContent::Commit(c) => { a(c); }\n    _ => (),\n}",
+        ),
+        (
+            "if let",
+            "if let RowContent::Commit(commit) = &row.content {\n    draw(commit);\n}",
+        ),
+        (
+            "nested if let",
+            "if let Some(RowContent::Commit(c)) = rows.first().map(|r| &r.content) {}",
+        ),
+        ("while let", "while let RowContent::Commit(c) = next() {}"),
+        (
+            "let else",
+            "let RowContent::Commit(commit) = row.content else {\n    return;\n};",
+        ),
+        (
+            "matches!",
+            "let is_commit = matches!(row.content, RowContent::Commit(_));",
+        ),
+        (
+            "spaced matches!",
+            "assert!(matches! (\n    content,\n    RowContent::Commit(..)\n));",
+        ),
+        (
+            "attributed wildcard",
+            "match content {\n    RowContent::Commit(c) => a(c),\n    #[allow(unreachable_patterns)]\n    _ => b(),\n}",
+        ),
+        ("glob import", "use cairn_model::RowContent::*;"),
+        (
+            "braced glob import",
+            "use cairn_model::RowContent::{self, *};",
+        ),
+        (
+            "variant import",
+            "use cairn_model::RowContent::Commit;\nif let Commit(c) = x {}",
+        ),
+        (
+            "grouped variant import",
+            "use cairn_model::{RowContent::Commit, RowId};",
+        ),
+        (
+            "aliased import",
+            "use cairn_model::RowContent as Row;\nif let Row::Commit(c) = x {}",
+        ),
+        (
+            "let chain",
+            "if ready && let RowContent::Commit(c) = &row.content {\n    draw(c);\n}",
+        ),
+        (
+            "ref binding",
+            "match c {\n    RowContent::Commit(x) => a(x),\n    ref other => b(other),\n}",
+        ),
+        (
+            "mut binding",
+            "match c {\n    RowContent::Commit(x) => a(x),\n    mut other => b(other),\n}",
+        ),
+        (
+            "underscore binding",
+            "match c {\n    RowContent::Commit(x) => a(x),\n    _rest => b(),\n}",
+        ),
+        (
+            "reference wildcard",
+            "match &row.content {\n    &RowContent::Commit(ref x) => a(x),\n    &_ => b(),\n}",
+        ),
+        (
+            "reference binding",
+            "match &row.content {\n    &RowContent::Commit(ref x) => a(x),\n    &other => b(other),\n}",
+        ),
+        (
+            "wrapped wildcard",
+            "match first {\n    Some(RowContent::Commit(c)) => a(c),\n    Some(_) => b(),\n    None => c(),\n}",
+        ),
+    ];
+    for (shape, source) in caught {
+        assert!(
+            !reads_row_content_partially(source).is_empty(),
+            "the row-content matcher missed the {shape} shape: {source:?}"
+        );
+    }
+    assert_eq!(
+        reads_row_content_partially(
+            "let a = 1;\nmatch c {\n    RowContent::Commit(c) => a(c),\n    _ => {}\n}"
+        ),
+        vec![4],
+        "the matcher reported the wrong line"
+    );
+
+    let ignored = [
+        (
+            "exhaustive match",
+            "match &row.content {\n    RowContent::Commit(commit) => draw(commit),\n}",
+        ),
+        (
+            "irrefutable let",
+            "let RowContent::Commit(commit) = render.row.content;",
+        ),
+        (
+            "building a row",
+            "let row = HistoryRow { content: RowContent::Commit(c), graph };",
+        ),
+        (
+            "a wildcard inside a variant",
+            "match content {\n    RowContent::Commit(_) => a(),\n}",
+        ),
+        (
+            "a wildcard over something else",
+            "match id {\n    Some(x) => a(x),\n    _ => b(),\n}\nlet c = RowContent::Commit(s);",
+        ),
+        (
+            "if let over something else",
+            "if let Some(c) = x {}\nlet r = RowContent::Commit(c);",
+        ),
+        (
+            "matches! over something else",
+            "matches!(x, Some(_)); let r = RowContent::Commit(c);",
+        ),
+        (
+            "a wildcard inside an arm body",
+            "match content {\n    RowContent::Commit(c) => match c.x {\n        Some(y) => y,\n        _ => 0,\n    },\n}",
+        ),
+        (
+            "an if/else value in a typed let",
+            "let r: RowContent = if a { x } else { y };",
+        ),
+        (
+            "an if/else value in an irrefutable let",
+            "let RowContent::Commit(c) = if a { x } else { y };",
+        ),
+        (
+            "importing the type",
+            "use cairn_model::{HistoryRow, RowContent, RowId};\nuse cairn_model::RowContent;",
+        ),
+        (
+            "a wildcard over a wrapper the rows are not in",
+            "match read {\n    Ok(RowContent::Commit(c)) => a(c),\n    Err(_) => b(),\n}",
+        ),
+        (
+            "a let chain over something else",
+            "if ready && let Some(c) = x {}\nlet r = RowContent::Commit(c);",
+        ),
+        (
+            "prose",
+            "// if let RowContent::Commit(c) = x, or `_ =>`\nlet s = \"matches!(c, RowContent::Commit(_))\";",
+        ),
+    ];
+    for (shape, source) in ignored {
+        assert_eq!(
+            reads_row_content_partially(source),
+            Vec::<usize>::new(),
+            "the row-content matcher fired on the {shape} shape: {source:?}"
+        );
     }
 }
 
@@ -151,6 +542,189 @@ fn only_the_ops_module_mutates_a_repository() {
         scanned > 0,
         "the mutation guard scanned nothing; did the crates move?"
     );
+}
+
+#[test]
+fn the_ui_thread_never_waits_on_repository_work() {
+    let worker = Path::new(WORKER_DIR);
+    let mut working = 0usize;
+
+    for dir in RENDER_SOURCE_DIRS {
+        let mut rendering = 0usize;
+        for (path, source) in rust_sources(dir) {
+            if path.starts_with(worker) {
+                working += 1;
+                // The worker side may wait, but must not render.
+                for ident in RENDERING_IDENTS {
+                    let hits = mentions_crate(&source, ident);
+                    assert!(
+                        hits.is_empty(),
+                        "{}:{} names `{ident}` inside {WORKER_DIR}. That module is where \
+                         repository work blocks; a render path inside it would be a UI thread \
+                         waiting on a repository (CLAUDE.md, Invariants).",
+                        path.display(),
+                        hits[0]
+                    );
+                }
+                continue;
+            }
+
+            rendering += 1;
+            let hits = waits_on_work(&source);
+            assert!(
+                hits.is_empty(),
+                "{}:{} waits for something, and it is on a render path. Repository work goes \
+                 through {WORKER_DIR} and comes back as values; nothing outside it may block, \
+                 join, lock, receive or build a channel (CLAUDE.md, Invariants).",
+                path.display(),
+                hits[0]
+            );
+            // `cairn-ui` is covered by `FORBIDDEN_IDENTS`; this half is `cairn-app`'s alone.
+            if dir.starts_with("crates/cairn-app/") {
+                for ident in ["cairn_git", "gix"] {
+                    let hits = mentions_crate(&source, ident);
+                    assert!(
+                        hits.is_empty(),
+                        "{}:{} names `{ident}` on a render path. An engine call reachable from \
+                         a render is exactly what the worker boundary exists to prevent: ask \
+                         for it through a `worker::Request` instead (CLAUDE.md, Invariants; \
+                         PRD A6).",
+                        path.display(),
+                        hits[0]
+                    );
+                }
+            }
+        }
+        // Per directory, not in aggregate: a wrong roster path would otherwise pass.
+        assert!(
+            rendering > 0,
+            "the responsiveness guard found no render files under {dir}. Every directory in \
+             RENDER_SOURCE_DIRS must contribute, or the guard is scanning less than it claims."
+        );
+    }
+
+    assert!(
+        working > 0,
+        "the responsiveness guard found no files under {WORKER_DIR}. Either the worker moved, \
+         in which case move this guard with it, or it is gone — and then every engine call in \
+         cairn-app is on a render path."
+    );
+}
+
+#[test]
+fn a_history_sized_list_renders_through_a_virtualizing_view() {
+    let worker = Path::new(WORKER_DIR);
+    let mut virtualizes_the_history = Vec::new();
+
+    for dir in RENDER_SOURCE_DIRS {
+        let mut rendering = 0usize;
+        for (path, source) in rust_sources(dir) {
+            if path.starts_with(worker) {
+                continue;
+            }
+            rendering += 1;
+            // Strings blanked too: naming a view inside a message is not using one.
+            let code = code_without_strings(&source);
+
+            if let Some(line) = unbounded_view(&code) {
+                let excused = UNBOUNDED_VIEW_EXCEPTIONS
+                    .iter()
+                    .any(|(excused, _)| Path::new(excused) == path);
+                assert!(
+                    excused,
+                    "{}:{line} names `{UNBOUNDED_VIEW}`, which lays out every child whether it \
+                     is on screen or not. A history is however long somebody's repository is, so \
+                     Cairn's lists use `{VIRTUALIZING_VIEW}` (CLAUDE.md, Invariants; PRD R4.1). \
+                     A BOUNDED panel may legitimately want the plain one — if this is that, add \
+                     the file and the reason to UNBOUNDED_VIEW_EXCEPTIONS in this file, which is \
+                     the review the rule exists to force.",
+                    path.display(),
+                );
+            }
+
+            // Test modules blanked for this half only.
+            let production = code_without_test_modules(&code);
+            if !mentions_crate(&production, VIRTUALIZING_VIEW).is_empty()
+                && !mentions_crate(&production, "HistoryRow").is_empty()
+            {
+                virtualizes_the_history.push(path);
+            }
+        }
+        // Per directory, as above.
+        assert!(
+            rendering > 0,
+            "the virtualization guard found no render files under {dir}. Every directory in \
+             RENDER_SOURCE_DIRS must contribute, or the guard is scanning less than it claims."
+        );
+    }
+
+    assert!(
+        !virtualizes_the_history.is_empty(),
+        "no file under {RENDER_SOURCE_DIRS:?} uses `{VIRTUALIZING_VIEW}` over `HistoryRow`s. \
+         The history list is the one unbounded list Cairn renders and it is virtualized \
+         (`crates/cairn-ui/src/history_list.rs`); restore that call site, or — if the list \
+         genuinely moved — move this guard with it."
+    );
+
+    for (excused, _) in UNBOUNDED_VIEW_EXCEPTIONS {
+        assert!(
+            RENDER_SOURCE_DIRS
+                .iter()
+                .flat_map(rust_sources)
+                .any(|(path, _)| path == Path::new(excused)),
+            "UNBOUNDED_VIEW_EXCEPTIONS excuses `{excused}`, which does not exist. A dead \
+             exception is a hole nobody can see: delete the row or fix the path."
+        );
+    }
+}
+
+/// The scroll view that lays out every child it is given.
+const UNBOUNDED_VIEW: &str = "ScrollView";
+
+/// The one that builds only what its viewport shows. [`mentions_crate`] matches
+/// on word boundaries, so this does not count as naming `ScrollView`.
+const VIRTUALIZING_VIEW: &str = "VirtualScrollView";
+
+/// Render files allowed to name [`UNBOUNDED_VIEW`] anyway, and why. Empty on purpose.
+const UNBOUNDED_VIEW_EXCEPTIONS: &[(&str, &str)] = &[];
+
+/// The 1-based line where `code` names the unbounded scroll view, if it does.
+fn unbounded_view(code: &str) -> Option<usize> {
+    mentions_crate(code, UNBOUNDED_VIEW).first().copied()
+}
+
+#[test]
+fn the_unbounded_view_matcher_catches_the_shapes_it_claims() {
+    let caught = [
+        "ScrollView::new()",
+        "ScrollView::new_controlled(controller)",
+        "use freya::prelude::ScrollView;",
+        "use freya::prelude::ScrollView as Plain;",
+        "freya::components::scrollviews::ScrollView::new()",
+        "let view:\n    ScrollView = todo();",
+    ];
+    for source in caught {
+        assert!(
+            unbounded_view(&code_without_strings(source)).is_some(),
+            "the unbounded-view matcher missed {source:?}"
+        );
+    }
+
+    let ignored = [
+        "VirtualScrollView::new_with_data_controlled(data, build_row, controller)",
+        "use freya::prelude::VirtualScrollView;",
+        "let hint = \"ScrollView\";",
+        "// a plain ScrollView would lay out every child",
+        "MyScrollViewThing::new()",
+        "scroll_view()",
+    ];
+    for source in ignored {
+        assert_eq!(
+            unbounded_view(&code_without_strings(source)),
+            None,
+            "the unbounded-view matcher fired on {source:?}"
+        );
+    }
 }
 
 #[test]

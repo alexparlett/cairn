@@ -165,6 +165,15 @@ Every request carries an epoch so a superseded query can be abandoned rather tha
 rendered. That is the part that is painful to retrofit, and it is what
 `responsiveness-reviewer`'s cancellation check exists to protect.
 
+As built by the `history-graph` packet, the pool is **one** worker per
+repository (`WORKERS_PER_REPOSITORY`, with a `const` assertion that fails the
+build if it is raised). The reason is structural rather than a throughput
+finding: a scroll keeps one gitoxide walk alive, that walk borrows the
+repository and is not `Send`, so it lives on the thread that owns the handle.
+The epoch also turned out to be the cancel signal itself, not just a discard
+filter — superseding a request stops its walk. Measurement and the rest of the
+as-built: `docs/systems/history-graph.md`.
+
 ### D4 — Graph lanes are assigned incrementally, in the engine
 
 Walk newest-first; keep a vector of active lanes, each holding the commit id it is
@@ -177,6 +186,15 @@ Amortised constant work per commit, state proportional to the number of open
 lanes rather than to history length, and — because the walk is newest-first —
 appending more commits never renumbers a lane already emitted. That stability is
 what lets rows stream into a virtualised list.
+
+The `history-graph` packet narrowed the middle clause in practice: the assigner
+owns a bounded window of rows so that a line to a late-arriving parent has
+something to repaint, which makes retained state proportional to that window
+times the lanes across it. Measurement put the real cost far below what the
+packet first feared, and lane *width* on real repositories at single digits.
+Spec: `docs/prd/history-graph.md` R1 (shipped, frozen). Evidence:
+`docs/research/history-graph/scroll-memory-model.md`. As built:
+`docs/systems/history-graph.md`.
 
 It belongs in `cairn-git`, not `cairn-ui`: the lane is part of the answer, so it
 is `cairn-model` vocabulary. A component that computed lanes would need the whole

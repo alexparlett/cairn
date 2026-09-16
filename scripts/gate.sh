@@ -20,7 +20,7 @@ LINT_CMD="cargo clippy --workspace --all-targets --all-features -- -D warnings"
 TYPECHECK_CMD="cargo check --workspace --all-targets --all-features"
 GUARDS_CMD="cargo test -p cairn-guards"                    # the invariant twins
 DEPS_CMD="cargo deny check advisories bans sources licenses"
-TEST_FAST_CMD="cargo test --workspace --lib"               # unit tests only
+TEST_FAST_CMD="cargo test --workspace --lib --bins"        # --bins: cairn-app is a binary
 TEST_FULL_CMD="cargo test --workspace --all-targets"
 
 FAST=0

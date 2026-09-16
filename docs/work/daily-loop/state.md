@@ -32,7 +32,7 @@ into D1, because status is the most divergence-prone read there is.
 
 | # | Packet | Status |
 | --- | --- | --- |
-| 1 | `history-graph` | filed — `docs/work/history-graph/`, runs first |
+| 1 | `history-graph` | **shipped** — PRD frozen, as-built in `docs/systems/history-graph.md`; work dir torn down |
 | 2 | `credential-prompts` | filed — `docs/work/credential-prompts/` |
 | 3 | `diff-engine` | brief in `roadmap.md` |
 | 4 | `refs-and-status` | brief in `roadmap.md` |

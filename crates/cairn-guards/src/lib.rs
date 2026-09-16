@@ -1,16 +1,9 @@
-//! Matchers and repository walking for Cairn's invariant guards.
-//!
-//! The assertions themselves live in `tests/invariants.rs`; this crate holds
-//! the pieces they are built from so each matcher can be proven, in its own
-//! unit test, to fire on the DISGUISED forms of what it forbids — an aliased
-//! import, a fully-qualified path, a wrapped line. A matcher that only catches
-//! the obvious spelling reports green while the invariant rots.
+//! Matchers and repository walking for the invariant guards.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-/// The workspace root, resolved from this crate's manifest rather than the
-/// process working directory so the guards run the same under `cargo test`,
-/// the gate, and CI.
+/// Resolved from this crate's manifest, not the process working directory.
 pub fn repo_root() -> PathBuf {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     match manifest_dir.ancestors().nth(2) {
@@ -22,10 +15,7 @@ pub fn repo_root() -> PathBuf {
     }
 }
 
-/// Every `.rs` file under `dir`, as (path relative to the repo root, source).
-///
-/// Panics when the walk finds nothing: a guard pointed at a directory that was
-/// renamed must fail, not pass forever over an empty set.
+/// Every `.rs` file under `dir`, as (path relative to the repo root, source). Panics on an empty walk.
 pub fn rust_sources(dir: impl AsRef<Path>) -> Vec<(PathBuf, String)> {
     let root = repo_root();
     let dir = root.join(dir.as_ref());
@@ -65,11 +55,48 @@ fn collect_rust(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// `source` with comments blanked out, line structure preserved.
-///
-/// Guards match against this view so prose that NAMES a forbidden thing (this
-/// file does it constantly) is not a violation, while string literals — which
-/// is how a subprocess names `git` — still are.
+/// The crates a manifest declares, by package name (a `package = ".."` rename is seen through).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct DeclaredDependencies {
+    /// `[dependencies]` and `[build-dependencies]`, including `[target.*]` tables.
+    pub shipped: BTreeSet<String>,
+    /// `[dev-dependencies]`, including `[target.*]` tables.
+    pub test_only: BTreeSet<String>,
+}
+
+pub fn declared_dependencies(manifest: &toml::Table) -> DeclaredDependencies {
+    let mut declared = DeclaredDependencies::default();
+    let mut scopes = vec![manifest];
+    if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+        scopes.extend(targets.values().filter_map(toml::Value::as_table));
+    }
+    for scope in scopes {
+        for (table, test_only) in [
+            ("dependencies", false),
+            ("build-dependencies", false),
+            ("dev-dependencies", true),
+        ] {
+            let Some(entries) = scope.get(table).and_then(toml::Value::as_table) else {
+                continue;
+            };
+            for (key, spec) in entries {
+                let name = spec
+                    .get("package")
+                    .and_then(toml::Value::as_str)
+                    .unwrap_or(key)
+                    .to_owned();
+                if test_only {
+                    declared.test_only.insert(name);
+                } else {
+                    declared.shipped.insert(name);
+                }
+            }
+        }
+    }
+    declared
+}
+
+/// `source` with comments blanked, line structure preserved; string literals are kept.
 pub fn code_only(source: &str) -> String {
     #[derive(Clone, Copy)]
     enum Mode {
@@ -192,12 +219,152 @@ pub fn code_only(source: &str) -> String {
     out
 }
 
-/// 1-based line numbers where `source` names the crate `ident` as a path root
-/// or imports it, in code (not prose).
-///
-/// Catches `use gix::x`, `use gix as g`, `gix::open`, `::gix::open`,
-/// `<crate>::gix` re-exports, and spacing variants — anything where the
-/// identifier appears with word boundaries outside a comment.
+/// [`code_only`], with the contents of double-quoted strings blanked too. Char literals
+/// are stepped over exactly, so `'"'` does not open a string.
+pub fn code_without_strings(source: &str) -> String {
+    let code = code_only(source);
+    let bytes = code.as_bytes();
+    let mut out = String::with_capacity(code.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        // A raw string: r, hashes, quote. Ends at a quote plus as many hashes.
+        let raw_hashes = if bytes[i] == b'r' {
+            let hashes = bytes[i + 1..].iter().take_while(|&&c| c == b'#').count();
+            (bytes.get(i + 1 + hashes) == Some(&b'"')).then_some(hashes)
+        } else {
+            None
+        };
+        if let Some(hashes) = raw_hashes {
+            out.push_str(&code[i..i + hashes + 2]);
+            i += hashes + 2;
+            while i < bytes.len() {
+                if bytes[i] == b'"'
+                    && bytes[i + 1..].iter().take_while(|&&c| c == b'#').count() >= hashes
+                {
+                    out.push_str(&code[i..i + hashes + 1]);
+                    i += hashes + 1;
+                    break;
+                }
+                out.push(if bytes[i] == b'\n' { '\n' } else { ' ' });
+                i += 1;
+            }
+            continue;
+        }
+        if bytes[i] == b'"' {
+            out.push('"');
+            i += 1;
+            while i < bytes.len() {
+                if bytes[i] == b'\\' {
+                    out.push_str("  ");
+                    i += 2;
+                    continue;
+                }
+                if bytes[i] == b'"' {
+                    out.push('"');
+                    i += 1;
+                    break;
+                }
+                out.push(if bytes[i] == b'\n' { '\n' } else { ' ' });
+                i += 1;
+            }
+            continue;
+        }
+        // A lifetime reaches neither arm: `char_literal_end` returns `None` and
+        // the apostrophe is emitted as itself.
+        if bytes[i] == b'\''
+            && let Some(end) = char_literal_end(bytes, i)
+        {
+            out.push('\'');
+            for _ in i + 1..end {
+                out.push(' ');
+            }
+            out.push('\'');
+            i = end + 1;
+            continue;
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+/// The closing apostrophe of the char literal starting at `open`, or `None` for a lifetime.
+fn char_literal_end(bytes: &[u8], open: usize) -> Option<usize> {
+    let after = open + 1;
+    if bytes.get(after) == Some(&b'\\') {
+        // `'\''`: the escaped apostrophe is not the closing one.
+        let mut end = after + 2;
+        while bytes.get(end).is_some_and(|c| *c != b'\'' && *c != b'\n') {
+            end += 1;
+        }
+        return (bytes.get(end) == Some(&b'\'')).then_some(end);
+    }
+    // One character, possibly several bytes: step over UTF-8 continuations.
+    let mut end = after + 1;
+    while bytes
+        .get(end)
+        .is_some_and(|c| c & 0b1100_0000 == 0b1000_0000)
+    {
+        end += 1;
+    }
+    (bytes.get(end) == Some(&b'\'')).then_some(end)
+}
+
+/// [`code_without_strings`] output with `#[cfg(test)]` modules blanked, line numbers kept.
+/// Brace counting is sound only on [`code_without_strings`] output.
+pub fn code_without_test_modules(code: &str) -> String {
+    const MARKER: &[u8] = b"#[cfg(test)]";
+    let bytes = code.as_bytes();
+    let mut out: Vec<u8> = bytes.to_vec();
+    let mut i = 0;
+
+    while i + MARKER.len() <= bytes.len() {
+        if &bytes[i..i + MARKER.len()] != MARKER {
+            i += 1;
+            continue;
+        }
+        // The module's opening brace; a `;` first (`mod tests;`) means there is nothing to blank.
+        let mut open = i + MARKER.len();
+        while open < bytes.len() && bytes[open] != b'{' && bytes[open] != b';' {
+            open += 1;
+        }
+        if bytes.get(open) != Some(&b'{') {
+            i += MARKER.len();
+            continue;
+        }
+
+        let mut depth = 0usize;
+        let mut end = open;
+        while end < bytes.len() {
+            match bytes[end] {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            end += 1;
+        }
+        // An unbalanced file ends the blanking at its end rather than panicking.
+        let end = end.min(bytes.len().saturating_sub(1));
+
+        for byte in &mut out[i..=end] {
+            if *byte != b'\n' {
+                *byte = b' ';
+            }
+        }
+        i = end + 1;
+    }
+
+    String::from_utf8(out).unwrap_or_default()
+}
+
+/// 1-based lines where `source` names the crate `ident` as a path root or import, in code,
+/// including aliases, `::ident` and re-exports.
 pub fn mentions_crate(source: &str, ident: &str) -> Vec<usize> {
     let code = code_only(source);
     let mut hits = Vec::new();
@@ -210,30 +377,457 @@ pub fn mentions_crate(source: &str, ident: &str) -> Vec<usize> {
 }
 
 fn line_has_ident(line: &str, ident: &str) -> bool {
-    let bytes = line.as_bytes();
+    !ident_offsets(line, ident).is_empty()
+}
+
+/// Byte offsets where `ident` appears in `text` with word boundaries either side.
+fn ident_offsets(text: &str, ident: &str) -> Vec<usize> {
+    let bytes = text.as_bytes();
+    let mut found = Vec::new();
     let mut from = 0;
-    while let Some(offset) = line[from..].find(ident) {
+    while let Some(offset) = text[from..].find(ident) {
         let start = from + offset;
         let end = start + ident.len();
         let before_ok = start == 0 || !is_ident_byte(bytes[start - 1]);
         let after_ok = end == bytes.len() || !is_ident_byte(bytes[end]);
         if before_ok && after_ok {
-            return true;
+            found.push(start);
         }
         from = end;
     }
-    false
+    found
+}
+
+/// The 1-based line `offset` falls on.
+fn line_at(text: &str, offset: usize) -> usize {
+    text[..offset].bytes().filter(|b| *b == b'\n').count() + 1
 }
 
 fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-/// 1-based line numbers where `source` spawns a `git` subprocess, in code.
-///
-/// Matches the `Command` spelling and its aliases by looking for the literal
-/// program name rather than the constructor, so `process::Command::new("git")`,
-/// `Command::new("git")` and `cmd("git")` helpers all land.
+/// Identifiers whose presence means the code can wait; an alias is caught on its import line.
+const WAITING_IDENTS: &[&str] = &[
+    "Barrier",
+    "Condvar",
+    "JoinHandle",
+    "Mutex",
+    "Receiver",
+    "RwLock",
+    // Constructors: `for update in rx {}` blocks without naming anything above.
+    "bounded",
+    "channel",
+    "sync_channel",
+    "unbounded",
+    "block_on",
+    "blocking_lock",
+    "blocking_recv",
+    "blocking_send",
+    "park",
+    "park_timeout",
+    "recv_deadline",
+    "recv_timeout",
+    "scope",
+    "select",
+    "sleep",
+    "wait_timeout",
+    "wait_while",
+    // These spin rather than block.
+    "spin_loop",
+    "try_iter",
+    "try_lock",
+    "try_recv",
+    "yield_now",
+];
+
+/// Methods that wait when called with no arguments; each has an innocent one-argument namesake.
+const WAITING_NULLARY_CALLS: &[&str] = &["join", "lock", "recv", "wait"];
+
+/// 1-based lines where `source` names a way to wait, in code.
+pub fn waits_on_work(source: &str) -> Vec<usize> {
+    let code = code_without_strings(source);
+    let mut lines = std::collections::BTreeSet::new();
+
+    for ident in WAITING_IDENTS {
+        for offset in ident_offsets(&code, ident) {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+    for name in WAITING_NULLARY_CALLS {
+        for offset in ident_offsets(&code, name) {
+            if takes_no_arguments(&code, offset + name.len()) {
+                lines.insert(line_at(&code, offset));
+            }
+        }
+    }
+    lines.into_iter().collect()
+}
+
+/// Whether what follows `at` is `()`, allowing whitespace and newlines.
+fn takes_no_arguments(code: &str, at: usize) -> bool {
+    let mut rest = code[at..].trim_start().chars();
+    if rest.next() != Some('(') {
+        return false;
+    }
+    rest.as_str().trim_start().starts_with(')')
+}
+
+const ROW_CONTENT: &str = "RowContent";
+
+/// 1-based lines where `source` reads a `RowContent` without naming every variant: a wildcard or
+/// catch-all arm in a match that names it (including `Some(_)` beside `Some(RowContent::..)`),
+/// `if let`/`while let`/let-chain/`let .. else` over it, `matches!` over it, or an import of
+/// its variants or of it under another name.
+pub fn reads_row_content_partially(source: &str) -> Vec<usize> {
+    let code = code_without_strings(source);
+    let bytes = code.as_bytes();
+    let names_row_content = |text: &str| !ident_offsets(text, ROW_CONTENT).is_empty();
+    let mut lines = BTreeSet::new();
+
+    for offset in ident_offsets(&code, ROW_CONTENT) {
+        let rest = code[offset + ROW_CONTENT.len()..].trim_start();
+        let glob = rest
+            .strip_prefix("::")
+            .is_some_and(|r| r.trim_start().starts_with('*'));
+        // Past this, a view can name a variant without spelling `RowContent`.
+        let renamed_or_split = in_use_statement(&code, offset)
+            && (rest.starts_with("::")
+                || rest
+                    .strip_prefix("as")
+                    .is_some_and(|r| r.starts_with(char::is_whitespace)));
+        if glob || renamed_or_split {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+
+    for offset in ident_offsets(&code, "matches") {
+        let mut at = skip_whitespace(bytes, offset + "matches".len());
+        if bytes.get(at) != Some(&b'!') {
+            continue;
+        }
+        at = skip_whitespace(bytes, at + 1);
+        if !matches!(bytes.get(at), Some(b'(' | b'[' | b'{')) {
+            continue;
+        }
+        let end = balanced_end(bytes, at);
+        if names_row_content(&code[at..end]) {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+
+    for offset in ident_offsets(&code, "let") {
+        let Some(assign) = depth_zero_assignment(bytes, offset + "let".len()) else {
+            continue;
+        };
+        if !names_row_content(&code[offset..assign]) {
+            continue;
+        }
+        let before = code[..offset].trim_end();
+        let conditional = before.ends_with("&&")
+            || ["if", "while"].iter().any(|keyword| {
+                before.ends_with(keyword)
+                    && before[..before.len() - keyword.len()]
+                        .bytes()
+                        .next_back()
+                        .is_none_or(|b| !is_ident_byte(b))
+            });
+        if conditional || has_else_before_semicolon(&code, assign + 1) {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+
+    for offset in ident_offsets(&code, "match") {
+        let Some(open) = match_arms_open(bytes, offset + "match".len()) else {
+            continue;
+        };
+        let arms = match_arm_patterns(&code, open);
+        if !arms.iter().any(|(_, pattern)| names_row_content(pattern)) {
+            continue;
+        }
+        let wrappers: BTreeSet<&str> = arms
+            .iter()
+            .flat_map(|(_, pattern)| split_depth_zero(strip_guard(pattern), b'|'))
+            .filter_map(|alternative| wrapped(alternative))
+            .filter(|(_, inner)| names_row_content(inner))
+            .map(|(head, _)| head)
+            .collect();
+        for (at, pattern) in arms {
+            if split_depth_zero(strip_guard(pattern), b'|')
+                .into_iter()
+                .any(|alternative| {
+                    is_catch_all(alternative)
+                        || wrapped(alternative).is_some_and(|(head, inner)| {
+                            wrappers.contains(head)
+                                && split_depth_zero(inner, b',').into_iter().all(is_catch_all)
+                        })
+                })
+            {
+                lines.insert(line_at(&code, at));
+            }
+        }
+    }
+
+    lines.into_iter().collect()
+}
+
+/// Whether `offset` sits inside a `use` item: the keyword appears since the last `;`.
+fn in_use_statement(code: &str, offset: usize) -> bool {
+    let start = code[..offset].rfind(';').map_or(0, |at| at + 1);
+    !ident_offsets(&code[start..offset], "use").is_empty()
+}
+
+/// `Head(inner)` as (`Head`, `inner`), for a pattern that is one wrapper and nothing else.
+fn wrapped(alternative: &str) -> Option<(&str, &str)> {
+    let pattern = strip_reference(strip_attributes(alternative.trim()));
+    let open = pattern.find('(')?;
+    let head = pattern[..open].trim();
+    let is_path = !head.is_empty() && head.bytes().all(|b| is_ident_byte(b) || b == b':');
+    let end = balanced_end(pattern.as_bytes(), open);
+    (is_path && end == pattern.len()).then(|| (head, &pattern[open + 1..end - 1]))
+}
+
+fn strip_attributes(mut pattern: &str) -> &str {
+    while pattern.starts_with("#[") {
+        let end = balanced_end(pattern.as_bytes(), 1);
+        pattern = pattern[end..].trim_start();
+    }
+    pattern
+}
+
+/// `pattern` without a leading `&` or `&mut`.
+fn strip_reference(pattern: &str) -> &str {
+    match pattern.strip_prefix('&') {
+        Some(rest) => {
+            let rest = rest.trim_start();
+            rest.strip_prefix("mut ").map_or(rest, str::trim_start)
+        }
+        None => pattern,
+    }
+}
+
+fn skip_whitespace(bytes: &[u8], mut at: usize) -> usize {
+    while bytes.get(at).is_some_and(u8::is_ascii_whitespace) {
+        at += 1;
+    }
+    at
+}
+
+/// One past the bracket that closes the one at `open`, or the end of `bytes`.
+fn balanced_end(bytes: &[u8], open: usize) -> usize {
+    let mut depth = 0usize;
+    for (i, b) in bytes.iter().enumerate().skip(open) {
+        match b {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return i + 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    bytes.len()
+}
+
+/// The `=` of a `let` starting at `from`: not `==`, `=>`, `!=`, `<=` or `>=`, and outside brackets.
+fn depth_zero_assignment(bytes: &[u8], from: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for i in from..bytes.len() {
+        match bytes[i] {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => {
+                if depth == 0 {
+                    return None;
+                }
+                depth -= 1;
+            }
+            b';' if depth == 0 => return None,
+            b'=' if depth == 0 => {
+                let next = bytes.get(i + 1).copied();
+                let prev = i.checked_sub(1).map(|p| bytes[p]);
+                if !matches!(next, Some(b'=' | b'>'))
+                    && !matches!(prev, Some(b'=' | b'!' | b'<' | b'>'))
+                {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Whether an `else` keyword comes before the statement's `;`, outside brackets.
+fn has_else_before_semicolon(code: &str, from: usize) -> bool {
+    let bytes = code.as_bytes();
+    let mut depth = 0usize;
+    let mut i = from;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => {
+                if depth == 0 {
+                    return false;
+                }
+                depth -= 1;
+            }
+            b';' if depth == 0 => return false,
+            // A let-else scrutinee cannot end in `}`, so an `else` after one belongs to an `if`.
+            b'e' if depth == 0
+                && code[i..].starts_with("else")
+                && bytes.get(i + 4).is_none_or(|b| !is_ident_byte(*b))
+                && (i == 0 || !is_ident_byte(bytes[i - 1]))
+                && !code[..i].trim_end().ends_with('}') =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+/// The `{` opening a match's arms: the first one outside the scrutinee's brackets.
+fn match_arms_open(bytes: &[u8], from: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, b) in bytes.iter().enumerate().skip(from) {
+        match b {
+            b'{' if depth == 0 => return Some(i),
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth = depth.checked_sub(1)?,
+            b';' | b'}' if depth == 0 => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// (offset, pattern text) of each arm of the match whose arms open at `open`.
+fn match_arm_patterns(code: &str, open: usize) -> Vec<(usize, &str)> {
+    let bytes = code.as_bytes();
+    let mut arms = Vec::new();
+    let mut i = open + 1;
+    loop {
+        i = skip_whitespace(bytes, i);
+        if i >= bytes.len() || bytes[i] == b'}' {
+            return arms;
+        }
+        let start = i;
+        let mut depth = 0usize;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => {
+                    if depth == 0 {
+                        return arms;
+                    }
+                    depth -= 1;
+                }
+                b'=' if depth == 0 && bytes.get(i + 1) == Some(&b'>') => break,
+                _ => {}
+            }
+            i += 1;
+        }
+        if i >= bytes.len() {
+            return arms;
+        }
+        arms.push((start, &code[start..i]));
+
+        i = skip_whitespace(bytes, i + 2);
+        if bytes.get(i) == Some(&b'{') {
+            i = skip_whitespace(bytes, balanced_end(bytes, i));
+            if bytes.get(i) == Some(&b',') {
+                i += 1;
+            }
+            continue;
+        }
+        let mut depth = 0usize;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth -= 1;
+                }
+                b',' if depth == 0 => {
+                    i += 1;
+                    break;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+    }
+}
+
+/// `pattern` without a trailing `if` guard.
+fn strip_guard(pattern: &str) -> &str {
+    let bytes = pattern.as_bytes();
+    let mut depth = 0usize;
+    for i in 0..bytes.len() {
+        match bytes[i] {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            b'i' if depth == 0
+                && pattern[i..].starts_with("if")
+                && bytes.get(i + 2).is_none_or(|b| !is_ident_byte(*b))
+                && (i == 0 || !is_ident_byte(bytes[i - 1])) =>
+            {
+                return &pattern[..i];
+            }
+            _ => {}
+        }
+    }
+    pattern
+}
+
+fn split_depth_zero(text: &str, separator: u8) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0;
+    for i in 0..bytes.len() {
+        match bytes[i] {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            b if b == separator && depth == 0 => {
+                parts.push(&text[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&text[start..]);
+    parts
+}
+
+/// `_`, or a pattern that binds whatever it is given: `other`, `ref mut x`, `x @ _`.
+fn is_catch_all(alternative: &str) -> bool {
+    let mut pattern = strip_reference(strip_attributes(alternative.trim()));
+    if let Some((_, bound)) = pattern.split_once('@') {
+        return is_catch_all(bound);
+    }
+    for modifier in ["ref ", "mut "] {
+        if let Some(rest) = pattern.strip_prefix(modifier) {
+            pattern = rest.trim_start();
+        }
+    }
+    let mut chars = pattern.chars();
+    match chars.next() {
+        Some('_') if pattern.len() == 1 => true,
+        Some(first) if first == '_' || first.is_ascii_lowercase() => {
+            chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        }
+        _ => false,
+    }
+}
+
+/// 1-based lines where `source` spawns a `git` subprocess, matched on the literal program name.
 pub fn spawns_git(source: &str) -> Vec<usize> {
     let code = code_only(source);
     code.lines()
@@ -305,6 +899,187 @@ mod tests {
         assert!(mentions_crate("use my_gix::thing;", "gix").is_empty());
     }
 
+    /// Spelled out, not looped over the roster: a loop would shrink with the roster.
+    #[test]
+    fn every_waiting_spelling_in_the_roster_is_matched() {
+        let spellings = [
+            ("Barrier", "let gate = Barrier::new(2);"),
+            ("Condvar", "let ready = Condvar::new();"),
+            ("JoinHandle", "let h: JoinHandle<()> = spawn(f);"),
+            ("Mutex", "let held = Mutex::new(1);"),
+            ("Receiver", "use std::sync::mpsc::Receiver;"),
+            ("RwLock", "let shared = RwLock::new(1);"),
+            ("bounded", "let (tx, rx) = bounded(8);"),
+            ("channel", "let (tx, rx) = std::sync::mpsc::channel();"),
+            ("sync_channel", "let (tx, rx) = sync_channel(1);"),
+            (
+                "unbounded",
+                "let (tx, rx) = crossbeam_channel::unbounded();",
+            ),
+            ("block_on", "futures::executor::block_on(fut);"),
+            ("blocking_lock", "let held = shared.blocking_lock();"),
+            ("blocking_recv", "let next = rx.blocking_recv();"),
+            ("blocking_send", "tx.blocking_send(v)?;"),
+            ("park", "std::thread::park();"),
+            ("park_timeout", "std::thread::park_timeout(d);"),
+            ("recv_deadline", "rx.recv_deadline(at)?;"),
+            ("recv_timeout", "rx.recv_timeout(d)?;"),
+            ("scope", "std::thread::scope(|s| s.spawn(f));"),
+            (
+                "select",
+                "crossbeam_channel::select! { recv(rx) -> v => {} }",
+            ),
+            ("sleep", "std::thread::sleep(d);"),
+            ("wait_timeout", "let (g, r) = cv.wait_timeout(g, d)?;"),
+            ("wait_while", "let g = cv.wait_while(g, |s| !s.ready)?;"),
+            (
+                "spin_loop",
+                "while !done.load(Acquire) { std::hint::spin_loop(); }",
+            ),
+            ("try_iter", "for update in rx.try_iter() {}"),
+            ("try_lock", "if let Ok(g) = shared.try_lock() {}"),
+            ("try_recv", "while let Ok(u) = rx.try_recv() {}"),
+            ("yield_now", "std::thread::yield_now();"),
+            ("join", "handle.join().unwrap();"),
+            ("lock", "let held = shared.lock();"),
+            ("recv", "let next = rx.recv();"),
+            ("wait", "let g = cv.wait();"),
+        ];
+        for (spelling, src) in spellings {
+            assert!(
+                !waits_on_work(src).is_empty(),
+                "`{spelling}` is no longer matched: {src:?}"
+            );
+        }
+        let covered: std::collections::BTreeSet<&str> =
+            spellings.iter().map(|(name, _)| *name).collect();
+        for entry in WAITING_IDENTS.iter().chain(WAITING_NULLARY_CALLS) {
+            assert!(
+                covered.contains(entry),
+                "`{entry}` was added to a roster without a line in this test"
+            );
+        }
+    }
+
+    #[test]
+    fn waits_on_work_catches_the_disguised_forms() {
+        for (label, src) in [
+            ("plain receive", "let next = rx.recv();"),
+            ("wrapped call", "let next = rx\n    .recv()\n    .ok();"),
+            ("spaced parens", "let next = rx.recv ();"),
+            ("newline inside the parens", "let next = rx.recv(\n);"),
+            ("aliased import", "use std::sync::mpsc::Receiver as Rx;"),
+            ("grouped import", "use std::sync::{Arc, Mutex};"),
+            ("qualified path", "let g = std::sync::Mutex::new(1);"),
+            (
+                "inferred receiver",
+                "let (tx, rx) = std::sync::mpsc::channel();",
+            ),
+            (
+                "iterating a receiver",
+                "let (tx, rx) = channel();\nfor u in rx {}",
+            ),
+            ("renamed sleep", "use std::thread::sleep as nap;"),
+        ] {
+            assert!(
+                !waits_on_work(src).is_empty(),
+                "missed the {label} form: {src:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn waits_on_work_ignores_prose_and_innocent_namesakes() {
+        assert!(waits_on_work("// rx.recv() is forbidden on this side\n").is_empty());
+        assert!(waits_on_work("//! nothing here may call join() either\n").is_empty());
+        assert!(waits_on_work("let p = root.join(\"crates\");").is_empty());
+        assert!(waits_on_work("let s = parts.join(\", \");").is_empty());
+        assert!(waits_on_work("let joined = 1; let received = 2;").is_empty());
+        assert!(waits_on_work("let v = signal.read(); v.write();").is_empty());
+        assert!(waits_on_work("use my_crate::Receivers;").is_empty());
+        // Prose inside a string literal is still prose.
+        assert!(waits_on_work("status.set(\"waiting to receive a lock\");").is_empty());
+        assert!(waits_on_work("let hint = r#\"sleep until the Mutex frees\"#;").is_empty());
+    }
+
+    /// Caught by: a quote inside a char literal blanking the rest of the file.
+    #[test]
+    fn a_quote_inside_a_char_literal_does_not_blank_the_rest_of_the_file() {
+        for quote in ["'\"'", "b'\"'", "'\\\"'"] {
+            let src = format!("fn q() -> char {{ {quote} }}\nlet c = rx.recv();\n");
+            assert_eq!(
+                waits_on_work(&src),
+                vec![2],
+                "{quote} blanked the code after it"
+            );
+            assert_eq!(
+                mentions_crate(&code_without_strings(&src), "rx"),
+                vec![2],
+                "{quote} hid an identifier after it"
+            );
+        }
+    }
+
+    /// Caught by: blanking from one lifetime's apostrophe to the next.
+    #[test]
+    fn a_lifetime_is_not_mistaken_for_a_char_literal() {
+        let src = "fn f<'a, 'b>(x: &'a str, y: &'b Mutex) { let _ = x.recv(); }";
+        assert_eq!(
+            waits_on_work(src),
+            vec![1],
+            "a lifetime pair blanked the code between them"
+        );
+        // The escaped-apostrophe literal closes on the third apostrophe.
+        let src = "let tick = '\\''; let _ = rx.recv();";
+        assert_eq!(waits_on_work(src), vec![1]);
+    }
+
+    #[test]
+    fn a_test_module_is_not_part_of_what_a_file_does() {
+        let src = "\
+use freya::prelude::*;
+fn render() -> Element {
+    hand_rolled_viewport()
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn it() {
+        let _ = VirtualScrollView::new();
+        let nested = || { 1 };
+    }
+}
+";
+        let code = code_without_test_modules(&code_without_strings(src));
+        assert!(
+            mentions_crate(&code, "VirtualScrollView").is_empty(),
+            "a token inside a test module counted as something the file does"
+        );
+        assert_eq!(
+            mentions_crate(&code, "freya"),
+            vec![1],
+            "blanking the test module moved or lost the production lines"
+        );
+
+        // The same token in production is still seen.
+        let production = code_without_test_modules(&code_without_strings(
+            "fn render() { VirtualScrollView::new(); }\n#[cfg(test)]\nmod tests { fn t() {} }\n",
+        ));
+        assert_eq!(mentions_crate(&production, "VirtualScrollView"), vec![1]);
+
+        // A `#[cfg(test)]` with no body blanks nothing after it.
+        let no_body = code_without_test_modules(&code_without_strings(
+            "#[cfg(test)]\nmod tests;\nfn render() { VirtualScrollView::new(); }\n",
+        ));
+        assert_eq!(mentions_crate(&no_body, "VirtualScrollView"), vec![3]);
+    }
+
+    #[test]
+    fn waits_on_work_reports_the_line_the_wait_is_on() {
+        let src = "let a = 1;\nlet b = 2;\nlet c = rx.recv();\n";
+        assert_eq!(waits_on_work(src), vec![3]);
+    }
+
     #[test]
     fn spawns_git_catches_qualified_and_aliased_constructors() {
         for src in [
@@ -321,6 +1096,46 @@ mod tests {
     fn spawns_git_ignores_prose_and_unrelated_strings() {
         assert!(spawns_git("// Command::new(\"git\") is forbidden\n").is_empty());
         assert!(spawns_git("let msg = \"git is not installed\";").is_empty());
+    }
+
+    fn parsed(manifest: &str) -> toml::Table {
+        manifest.parse().unwrap()
+    }
+
+    fn names(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    #[test]
+    fn every_dependency_table_is_read_and_test_only_ones_are_told_apart() {
+        let declared = declared_dependencies(&parsed(
+            "[package]\nname = \"x\"\n\
+             [dependencies]\nfreya = \"1\"\n\
+             [build-dependencies]\ncc = \"1\"\n\
+             [dev-dependencies]\ngix = \"1\"\n\
+             [target.'cfg(unix)'.dependencies]\nlibc = \"1\"\n\
+             [target.'cfg(unix)'.dev-dependencies]\ncairn-git = { path = \"../cairn-git\" }\n",
+        ));
+        assert_eq!(declared.shipped, names(&["cc", "freya", "libc"]));
+        assert_eq!(declared.test_only, names(&["cairn-git", "gix"]));
+    }
+
+    #[test]
+    fn a_renamed_dependency_is_declared_under_its_package_name() {
+        let declared = declared_dependencies(&parsed(
+            "[dev-dependencies]\nbackend = { package = \"gix\", version = \"1\" }\n\
+             [dependencies]\nengine = { workspace = true, package = \"cairn-git\" }\n",
+        ));
+        assert_eq!(declared.test_only, names(&["gix"]));
+        assert_eq!(declared.shipped, names(&["cairn-git"]));
+    }
+
+    #[test]
+    fn a_manifest_with_no_dependencies_declares_none() {
+        assert_eq!(
+            declared_dependencies(&parsed("[package]\nname = \"x\"\n")),
+            DeclaredDependencies::default()
+        );
     }
 
     #[test]

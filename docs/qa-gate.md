@@ -9,7 +9,7 @@ that can catch its class of defect.
 
 | Layer | What | When | Blocks? |
 | --- | --- | --- | --- |
-| Instant debris gate | `.claude/hooks/qa-stop.sh`: added-line scan for debug debris, focused/ignored tests, conflict markers, and the crate-layering seal | end of every agent turn | yes |
+| Instant debris gate | `.claude/hooks/qa-stop.sh`: added-line scan for debug debris, focused/ignored tests, conflict markers, and the crate-layering seal — over uncommitted lines AND lines committed on the branch but not yet in `main`, so committed debris stays in view until it is fixed. Committed lines skip two rules a kept measurement reporter legitimately trips (`eprintln!`, `#[ignore = "reason"]`); a bare `#[ignore]` is flagged in both. Behaviour pinned by `crates/cairn-guards/tests/debris_hook.rs`, which runs the hook against scratch repositories | end of every agent turn | yes |
 | Pre-push floor | `.githooks/pre-push`: `cargo fmt --check`, `cargo check`, the guard suite | before every push | yes |
 | Day loop | `scripts/gate.sh --fast`: format, lint, guards, fast tests (no network-dependent checks: the day loop must work offline) | while iterating | no |
 | **Pre-merge gate** | `scripts/gate.sh`: format, lint, typecheck, guards, dependency policy, full test suite | **before any merge to main; the merge bar** | **yes** |
@@ -64,7 +64,7 @@ every raw finding; it adjudicates (confirm/dismiss/escalate), it never re-review
 | The enforcement layer itself: guard checks, hooks, anything under `scripts/`, CI workflows, reviewer/skill definitions, `.claude/`, `.githooks/`, `crates/cairn-guards/`, this file | `gate-integrity-reviewer` | direct guard-rule tests where they exist; the rest is this review |
 | Docs (any tense) — creation, moves, claims about code or plans | `qa-checklist` (its docs tier: tense discipline per `docs/CLAUDE.md` — intent never stated as built, `systems/` describes only current code, PRDs stamped at teardown, anchors resolve) | review |
 | Anything under `crates/cairn-git/src/ops/`, or any new call site that reaches one | `destructive-ops-reviewer` | `destructive_operations_are_sealed_behind_the_confirmation_token` and `only_the_ops_module_mutates_a_repository` pin the seal; whether the prompt is HONEST is the review |
-| `crates/cairn-ui/`, `crates/cairn-app/`, or anything that changes what runs per frame or per repository query | `responsiveness-reviewer` | none yet — the dependency seal keeps the engine out of `cairn-ui`, but nothing pins where work runs once `cairn-app` wires it up |
+| `crates/cairn-ui/`, `crates/cairn-app/`, or anything that changes what runs per frame or per repository query | `responsiveness-reviewer` | `the_ui_thread_never_waits_on_repository_work` pins which FILES may reach a repository or name a waiting primitive — only `crates/cairn-app/src/worker/` — and the debris hook echoes its engine-reach half. It cannot decide which THREAD a function runs on, so "does this code block the UI thread?" stays the reviewer's question in full, including for the `worker/` functions the UI thread calls; so do a busy poll loop and page size. Virtualization is now PARTLY pinned: `a_history_sized_list_renders_through_a_virtualizing_view` decides which scroll view a render file reaches for (no plain `ScrollView` outside its empty exceptions roster; some file must use `VirtualScrollView` over `HistoryRow`s), and `only_a_viewport_of_rows_is_built_however_long_the_history` renders `HistoryList` headlessly and pins that it builds one viewport of rows, at the top and scrolled deep, at 1,000 and 100,000 rows, which leaves the reviewer what neither can express — whether an iteration is over a history at all, and whether per-frame work grows with scroll depth while the built-row count stays flat |
 
 Future reviewers: name them here as (planned) when you know a surface will need
 one, so packets converge on the same name — and add each WITH the packet that
@@ -85,8 +85,12 @@ reason no longer holds is a finding), and is the merge bar before the packet PR.
 
 ## Enforcement-layer parity
 
-`.claude/hooks/qa-stop.sh` restates the crate-layering seal that
+`.claude/hooks/qa-stop.sh` restates the crate-layering seal, and the half of the
+worker partition that a line scan can express (nothing outside
+`crates/cairn-app/src/worker/` names `gix` or `cairn_git`), both of which
 `crates/cairn-guards/tests/invariants.rs` owns. The guard suite is the authority;
-the hook is a millisecond echo with a coarser matcher. Change one, change the
-other in the same commit — a `gate-integrity-reviewer` obligation, since no check
-compares the two.
+the hook is a millisecond echo with a coarser matcher, and it deliberately does
+NOT try to echo the waiting-primitive half — telling `handle.join()` from
+`root.join("crates")` needs the matcher, not awk. Change one, change the other in
+the same commit — a `gate-integrity-reviewer` obligation, since no check compares
+the two.

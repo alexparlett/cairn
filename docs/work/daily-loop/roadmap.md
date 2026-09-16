@@ -7,7 +7,7 @@ nuance that run must not lose.
 
 | # | Packet | Status | Depends on |
 | --- | --- | --- | --- |
-| 1 | `history-graph` | **filed**, runs first | — |
+| 1 | `history-graph` | **shipped** | — |
 | 2 | `credential-prompts` | **filed** | 1 |
 | 3 | `diff-engine` | brief only | 1 |
 | 4 | `refs-and-status` | brief only | 1 |
@@ -21,12 +21,14 @@ each other. The critical path to D7 is 1 → 2 → 3 → 5, with 4 needed before
 
 ---
 
-## 1. history-graph — filed
+## 1. history-graph — shipped
 
-`docs/prd/history-graph.md`. Lands repository opening (R5), the worker boundary
-(D3), the lane assigner (D4) and the virtualised graph view. Runs first: the
-dependency on `credential-prompts` is one-directional, and this packet exercises
-the gix read path that D1 rests on.
+`docs/prd/history-graph.md` (frozen). Landed repository opening (R5), the worker
+boundary (D3), the lane assigner (D4) and the virtualised graph view. It ran
+first because the dependency on `credential-prompts` is one-directional and it
+exercises the gix read path that D1 rests on — which held: D1's read path is
+proven, and packets 3, 4 and 5 inherit the worker boundary rather than building
+one. As built: `docs/systems/history-graph.md`.
 
 ## 2. credential-prompts — filed
 
@@ -66,7 +68,11 @@ staging of any kind.
 status (changed, staged, untracked, ignored, conflicted). Ref decoration on the
 graph — the thing that makes the graph readable rather than a list of hashes.
 Stashes shown inline in the commit list, the way Fork does it, rather than in a
-side panel.
+side panel. The graph walks every ref by default — branches, remotes and tags —
+as Fork's "All Commits" view does. Today the application walks from `HEAD` only
+(`HistoryRequest::from_head` in `crates/cairn-app/src/worker/pool.rs`), so a
+branch not reachable from the checkout never appears; this packet switches it to
+`HistoryRequest::from_commits` over the enumerated refs.
 
 **Open:** O2 — `gix-status` or `git status --porcelain=v2`. D1 says reads use gix,
 but status is unusually exposed to `core.fsmonitor`, sparse checkout and

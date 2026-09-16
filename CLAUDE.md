@@ -10,17 +10,23 @@ Testable form: `cairn-ui` compiles with neither `gix` nor `cairn-git` in its
 dependency graph, and nothing outside `cairn-git::ops` can mutate a repository.
 
 Status today: the workspace, the seam, the gate and the guard suite exist and are
-green; the application window opens and renders an empty history list. No git
-query or command is implemented yet. Entries marked (planned) below name the
-canonical home something WILL have so docs and implementation converge on the same
-names — never cite one as if it exists.
+green. The first repository read exists — `cairn-git`'s bounded, resumable history
+query, feeding the lane assigner in `cairn-model` — and it is wired to the window
+through the worker boundary in `crates/cairn-app/src/worker/`. The application
+opens the repository named on its command line (or the working directory), draws
+its history as a virtualized graph with lanes, edges and four columns, pages as
+you scroll, and does all of it off the UI thread. No command mutates a
+repository, and there is no repository picker: one repository, named on the
+command line. Entries marked (planned) below name the canonical home something
+WILL have so docs and implementation converge on the same names — never cite one
+as if it exists.
 
 ## Repo map
 
 | Path | What lives there |
 | --- | --- |
 | `docs/` | `qa-gate.md` (QA contract), `design/` intent, `prd/` per-packet specs, `systems/` as-built, `work/` in-flight dirs, `research/` evidence (deferred work goes to GitHub issues; `backlog/` is the no-remote fallback) — findings promote research → brainstorm → design/prd → systems (contract: `docs/CLAUDE.md`) |
-| `crates/cairn-model/` | The vocabulary crossing the seam: `Oid`, `RefName`, `CommitSummary`, the `Confirmed` token. Plain data. Depends on nothing — not `gix`, not `freya`, not the other crates. |
+| `crates/cairn-model/` | The vocabulary crossing the seam: `Oid`, `RefName`, `CommitSummary`, the `Confirmed` token. Plain data, plus the pure layout algorithm that produces some of it (`LaneAssigner`). Depends on nothing — not `gix`, not `freya`, not the other crates. |
 | `crates/cairn-git/` | The repository engine: gitoxide-backed reads, and under `src/ops/` every write (planned — only the confirmation-seal placeholder exists today), most of them delegating to the `git` binary per design decision D1. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
 | `crates/cairn-ui/` | Freya components. Render `cairn-model` values, report intent through `EventHandler` props. Must never depend on `gix` or `cairn-git`, and must never touch the filesystem. |
 | `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. |
@@ -111,10 +117,19 @@ empty `gix_hash::Kind` once already)**. Read the vendored source under
 - **The UI thread is never allowed to wait on a repository.** `cairn-git` is
   synchronous and knows nothing about threads; `cairn-app` decides where the
   blocking work runs and hands results back as values (decision D3: one
-  `gix::ThreadSafeRepository` per repository, a worker pool taking thread-local
-  handles, every request carrying an epoch so a superseded query is abandoned
-  rather than rendered). A repository is somebody's 10-year monorepo: any design
-  that assumes a query is fast is wrong.
+  `cairn_git::SharedRepository` — gitoxide's `ThreadSafeRepository` — per
+  repository, a worker taking its thread-local handle once, every request
+  carrying an epoch so a superseded query is abandoned rather than rendered). The
+  epoch IS the cancel signal the engine polls, so superseding a query stops its
+  walk rather than discarding its answer. A repository is somebody's 10-year
+  monorepo: any design that assumes a query is fast is wrong.
+- **A scroll keeps its walk open.** gitoxide's walk cannot be resumed from a
+  value, so a cursor resumes by replaying — which makes page *k* cost `k x limit`
+  and does not reach the sizes the history view promises. `cairn-git` therefore
+  offers a `HistorySession` that holds the walk for the life of a scroll, making
+  paging O(limit); it borrows the repository and is not `Send`, so it lives on
+  the worker that owns that handle and never crosses a thread. The cursor
+  remains, as the cold-restart path.
 
 ## Invariants, YOU MUST keep these
 
@@ -138,12 +153,30 @@ Project invariants:
 
 - **Each crate depends only on its allowlist.** Twin: `layer_dependencies_are_allowlisted`
   in `crates/cairn-guards/tests/invariants.rs`. A crate with no row there fails,
-  so adding a layer cannot happen by accident.
+  so adding a layer cannot happen by accident. Every dependency table counts —
+  `[dependencies]`, `[build-dependencies]`, `[dev-dependencies]` and their
+  `[target.*]` forms, renames seen through — and a dev-dependency beyond the
+  crate's row needs its own `TEST_ONLY_ALLOWLIST` row (`freya-testing` in
+  `cairn-ui` and `cairn-app`).
 - **`cairn-ui` and `cairn-model` never name `gix` or `cairn_git`; `cairn-git`
   never names `freya` or `cairn_ui`.** Manifests alone would miss a re-export, so
   the twin reads source: `layers_never_name_the_crates_they_are_sealed_from`,
-  matching aliased imports and qualified paths, with the debris hook echoing the
-  same rule in milliseconds.
+  over the whole crate directory (`src/` and `tests/` alike), matching aliased
+  imports and qualified paths, with the debris hook echoing the same rule in
+  milliseconds.
+- **Outside `cairn-model`, a `RowContent` is read by naming every variant.** No
+  `_ =>`, catch-all binding (`other`, `ref x`, `&_`) or `Some(_)`-beside-
+  `Some(RowContent::..)` arm in a match that names it, no `if let`, `while let`,
+  let-chain or `let .. else` over it, no `matches!` over it, and no `use` that
+  imports its variants or renames it: each compiles once a second kind of row
+  exists and silently draws nothing for it. Primary enforcement is the type (not `#[non_exhaustive]`, so an
+  exhaustive match breaks when a variant lands); twin against the spellings that
+  escape it: `every_view_of_a_row_names_every_kind_of_row`, over every crate but
+  `cairn-model` and `cairn-guards`, with its matcher self-test
+  `the_row_content_matcher_catches_the_shapes_it_claims`. Residual review
+  obligation: the matcher reads spellings, so a helper that returns
+  `Option<&CommitSummary>` and is then read partially, or a `type` alias for
+  `RowContent`, is `qa-checklist`'s to catch.
 - **Only `cairn-git/src/ops/` mutates a repository**, whether through gitoxide or
   a `git` subprocess. Twin: `only_the_ops_module_mutates_a_repository`.
 - **Destructive operations take `cairn_model::Confirmed` by value, and the token
@@ -161,14 +194,80 @@ Project invariants:
 - **CI runs every merge-bar gate step.** Twin: `ci_runs_every_merge_bar_gate_step`
   compares `gate.sh`'s dispatch arms against the workflow, so a step added locally
   cannot quietly skip CI.
+- **The UI thread never waits on repository work.** `cairn-app` is partitioned by
+  FILE: `crates/cairn-app/src/worker/` runs repository work and may block; every
+  other file in the crate renders, and may name neither `cairn_git` nor any
+  waiting primitive — the types (`Receiver`, `Mutex`, `Condvar`, `JoinHandle`),
+  the channel constructors (`channel`, `unbounded`, ...), and the nullary waiting
+  calls (`recv()`, `join()`, `lock()`, `wait()`), plus `sleep`, `park`,
+  `block_on`. Naming the constructor is what catches a receiver held by
+  inference. Twin: `the_ui_thread_never_waits_on_repository_work`, matching
+  aliased imports and calls whose parentheses wrapped, ignoring string literals,
+  and asserting a nonzero file count per directory on BOTH sides.
 
-Not yet mechanically pinned — state these when they come up, and add the twin with
-the change that makes them load-bearing:
+  **Residual obligations the guard structurally cannot express** — stated here
+  rather than implied, and owned by `responsiveness-reviewer`: a file partition
+  cannot decide which THREAD a function runs on, so the handful of `worker/`
+  functions the UI thread itself calls (`RepositoryHandle::submit`, through the
+  closure `RepositoryHandle::into_submitter` builds,
+  `Updates::next`, `Wake::poll`, all in `crates/cairn-app/src/worker/`) are
+  exempt from the matcher while running on the UI thread, and that they never
+  block is a review judgement. (The spinning spellings — `try_recv`, `try_iter`,
+  `try_lock`, `spin_loop`, `yield_now` — ARE on the roster, so a busy poll loop
+  on a render path is caught; one written inside `worker/` is not.) The matcher is
+  also FILE-scoped, which is what "naming the constructor" buys and all it buys:
+  a receiver constructed inside `worker/` and handed OUT, then iterated on a
+  render path — `for update in rx {}`, `rx.into_iter()`, or a blocking method
+  with a project-specific name — names no rostered spelling and is not caught.
+  `crates/cairn-app/src/main.rs` holds exactly such a value today; that it is
+  awaited rather than iterated is a review judgement, not a guarded fact. Also
+  the reviewer's: whether a page is small enough that the work between yields is
+  short, and whether a list is virtualized.
 
-- The UI thread never blocks on repository work (today's twin is the absence of
-  any engine call in `cairn-ui` at all; when `cairn-app` grows real wiring, this
-  needs a real check). Review obligation meanwhile: `responsiveness-reviewer`.
-- No unbounded list renders without virtualization.
+- **No unbounded list renders without virtualization.** A history is however long
+  somebody's repository is, so a view that builds one element per row of it is
+  unbounded work per frame. Twin:
+  `a_history_sized_list_renders_through_a_virtualizing_view`. What it decides,
+  stated at the strength it actually holds: **no file on a render path may name
+  `ScrollView`** — the view that lays out every child — except through an
+  explicit exceptions roster that is empty today, and **some render file must use
+  `VirtualScrollView` over `HistoryRow`s**. So swapping the list for the
+  unbounded view, adding a second unbounded one anywhere, and deleting the
+  virtualized one all fail; the roster is what turns a bounded panel's
+  legitimate `ScrollView` into a review rather than a silent precedent.
+
+  **Residual obligations the guard structurally cannot express**, stated rather
+  than implied and owned by `responsiveness-reviewer` (whose dispatch row in
+  `docs/qa-gate.md` names this twin):
+
+  - *Whether a given iteration is over a history at all.* Tokens cannot tell an
+    iteration over a repository's commits from one over three tabs, so the guard
+    does not pretend to: it checks which VIEW a file reaches for, not what is put
+    in it. A hand-rolled viewport that never names either view is the reviewer's
+    to catch, and so is a `VirtualScrollView` handed a TRUNCATED length — the
+    positive arm decides that the virtualizing view and `HistoryRow` meet in one
+    production file, not that it is given the whole history.
+  - *Which unbounded views an exception excuses.* The roster is keyed by FILE
+    and the matcher reports only the first hit, so excusing one file excuses
+    every plain `ScrollView` in it, then and later. Empty today; if a row is
+    ever added, reviewing what else that file grows is the reviewer's.
+  - *Whether work bounded by the VIEWPORT is bounded by the history anyway.*
+    `cairn_ui::HistoryList`'s `index_of` keeps a cursor hint and falls back to
+    `rows.iter().position(..)` when it misses — a scan of every loaded row,
+    inside the key handler, on the UI thread. It is the correctness fallback by
+    design and unreachable while rows only append; the row that arrives ABOVE
+    another is what enters it, which is what the working-tree row will do. Named
+    here rather than left implicit, because a token scan cannot tell this
+    iteration from any other.
+
+  Whether the virtualizing view really builds only what its viewport shows is
+  pinned by a second, behavioural twin:
+  `only_a_viewport_of_rows_is_built_however_long_the_history`
+  (`crates/cairn-ui/tests/history_list.rs`) renders `HistoryList` headlessly over
+  1,000 and 100,000 rows and requires one viewport's worth of rows, the same at
+  the top and scrolled deep at both lengths. It counts rows built, not work done:
+  whether per-frame work grows with scroll depth while that count stays flat stays
+  `responsiveness-reviewer`'s.
 
 ## Conventions
 
@@ -220,8 +319,9 @@ Layers, cheapest boundary first (full contract: `docs/qa-gate.md`):
 Engine tests run against real repositories, not mocks: `cairn-git` opens the Cairn
 checkout itself in its unit tests, and fixture repositories are built by running
 real git operations. A fake object database proves nothing about gitoxide.
-Component tests use `freya-testing`'s headless runner (planned; no component test
-exists yet).
+Component tests use `freya-testing`'s headless runner (a dev-dependency, from the
+same fork and rev as `freya`): `crates/cairn-ui/tests/` for components, and
+`crates/cairn-app/src/window.rs` for the window drawn from each view state.
 
 ## Working style by model capability
 
@@ -250,5 +350,6 @@ exists yet).
 - `docs/CLAUDE.md` — the docs layer contract (tenses, promotion, teardown).
 - `docs/work/<packet>/` — in-flight packet dirs, created by `/feature-plan`, torn
   down when the work merges.
-- `docs/systems/` — as-built descriptions, written when a system exists (planned;
-  empty today, which is accurate).
+- `docs/systems/` — as-built descriptions, written when a system exists.
+  `history-graph.md` is the first: how the history view reads, lays out and
+  draws a repository today, with the twin that pins each rule.

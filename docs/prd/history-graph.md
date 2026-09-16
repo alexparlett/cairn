@@ -1,12 +1,20 @@
 ---
-status: in-flight
+status: shipped
 packet: history-graph
 opened: 2026-09-14
+shipped: 2026-09-16
 ---
 
 # PRD — History graph
 
-The authoritative spec for the `history-graph` packet while it is in flight.
+**Shipped. Frozen — what this packet committed to, as it was committed to.** For
+how the history graph actually works now, read `docs/systems/history-graph.md`;
+that is the living truth and this is not. Requirements R1-R6 and acceptance
+criteria A1-A10 were all met, each against a test that decides it, with A7 the
+one qualified pass: its 100k half was measured against a synthetic row vector
+because no repository that size was available, and the one limitation it found is
+issue #4. Nothing below was descoped.
+
 Design frame: `docs/design/cairn.md`, decisions **D3** (worker pool) and **D4**
 (incremental lane assignment). Evidence:
 `docs/research/history-graph/gix-revwalk-ordering.md`.
@@ -27,16 +35,34 @@ infrastructure built without a consumer gets the interface wrong.
 ### R1 — Lane assignment is incremental and stable
 
 - R1.1 Given commits in newest-first order with their parent ids, the assigner
-  emits one row per commit carrying its lane index and the edge segments crossing
-  that row.
+  emits one **row** per commit carrying its lane index and the edge segments
+  crossing that row. A row is the unit the view renders, and is not by definition
+  a commit — see R6.
 - R1.2 Processing further commits never changes a **lane index** already
-  emitted. Edge *segments* may be repainted for rows still inside the loaded
-  window: a late-joining parent (R1.4) has to be able to draw the line that
-  connects it, and the view re-renders visible rows from the model on every
-  change regardless, so allowing this costs nothing. Rows that have left the
-  window are final.
-- R1.3 Work per commit is amortised constant; retained state is proportional to
-  the number of simultaneously open lanes, never to the number of commits seen.
+  emitted. Edge *segments* may be repainted for any row the assigner still holds:
+  a late-joining parent (R1.4) has to be able to draw the line that connects it,
+  and the view re-renders visible rows from the model on every change regardless,
+  so allowing this costs nothing.
+- R1.3 The assigner owns a bounded window. It holds at most `window` rows plus an
+  index into them, so retained state is proportional to that window times the
+  lanes in play across it, never to the number of commits walked. Work per commit
+  is amortised constant while parents arrive in order; a parent delivered early
+  costs O(span x segments in the span), bounded by the window.
+
+  The window is a **load budget**, not a memory mitigation — sized like the
+  clients that ship one (Git Graph and lazygit both load 300 and page 100), not
+  derived from a worst case. Measured cost on real repositories in the order
+  Cairn actually walks is 264 B per row at p99 on the widest of seven, which is
+  ~126-250 MB extrapolated to 500k commits. The much larger figures this
+  requirement once carried were an artefact of breadth-first arrival order in a
+  fixture whose branches never merged, not a property of any repository. Evidence
+  and method: `docs/research/history-graph/scroll-memory-model.md` Part D.
+
+  Known blind spot, carried and accepted for this packet: beyond
+  `window + remembered` rows of skew the assigner cannot distinguish a parent
+  already gone from one still to come. It fires on 0-0.2% of rows in the default
+  order and is not closable from gitoxide's walk, which keeps its seen-set behind
+  a boxed iterator with no accessor.
 - R1.4 The assigner is **total over arrival order**: a commit whose lane was never
   reserved — the normal consequence of committer-date skew, per the evidence
   record — is placed, not rejected, and never mis-parented. Which placement
@@ -55,6 +81,22 @@ infrastructure built without a consumer gets the interface wrong.
   full commit objects, except where the summary genuinely needs the object.
 - R2.4 The query is cancellable: an abandoned query stops walking rather than
   running to completion and discarding its result.
+- R2.5 Paging within one scroll costs O(limit), not O(page index x limit).
+  Added 2026-09-15. Phase 02's cursor resumes by replaying the walk from pinned
+  tips — correct by construction, and the reason two pages of N equal one page
+  of 2N — but page *k* then walks *k x limit* commits: 1.29-2.1 s for one page at
+  depth 500k, and 54-87 minutes of CPU to page there at 100 rows a page. A7 is
+  unreachable through replay alone. The engine therefore keeps a walk alive for
+  the life of a scroll; R2.2's cursor remains the cold-restart path for when no
+  session exists. gitoxide's walk borrows the repository and is not `Send`, so
+  the session lives on the worker that owns that repository handle (R3.1) and
+  never crosses a thread. It must compose with R3.2's epochs: superseding a
+  request may not leave a half-consumed walk to be read by the next one.
+
+  NOT in scope, filed instead — issue #5: random access by row offset. There is no total
+  row count (counting is a full walk) and no way to build a cursor from an
+  offset, so a scrollbar drag has no answer. Progressive loading is what Fork
+  and Sourcetree do here.
 
 ### R3 — Repository work runs on a worker pool
 
@@ -90,6 +132,29 @@ one today. The minimum that unblocks it, deliberately not more:
   NOT be decided here — a command-line argument is chosen precisely because it
   commits to nothing.
 
+### R6 — A row is a list entry, not by definition a commit
+
+Added 2026-09-16, before the view was built, because this is the one shape that
+is expensive to change once consumers exist.
+
+- R6.1 The history is a sequence of rows. Every row carries its lane and edge
+  segments (R1.1) plus a **stable identity**: what selection survives on, and what
+  a detail pane is opened from.
+- R6.2 A row's content is a commit in this packet, and the type admits content
+  that is not one. The working-tree row that Sourcetree shows above the first
+  commit sits *in* the graph — it occupies a lane and lines pass it — so it is
+  laid out by the engine, not decorated by the view. `refs-and-status` adds that
+  variant; this packet emits only commits. Deciding it now costs one enum;
+  deciding it after the view, the worker and the app wiring consume rows costs
+  all three.
+- R6.3 Decoration a row may later carry — ref labels, ahead/behind counts,
+  whether the commit is on the checked-out branch — is added as **fields** by the
+  packets that own them. Fields are additive and keep every consumer compiling,
+  so none of them are reserved here.
+- R6.4 Rows are not required to be one-to-one with commits. Collapsing merges
+  (Fork's remedy for a wide graph, measured taking 21 lanes to 3) removes rows
+  without removing commits, so the engine emits rows, not commits.
+
 ## Product rules
 
 - The graph is the default view when a repository opens.
@@ -102,8 +167,9 @@ one today. The minimum that unblocks it, deliberately not more:
 
 ## Acceptance criteria
 
-The single authoritative copy. `docs/work/history-graph/qa-checklist.md` points
-here and does not restate them.
+The single authoritative copy while this packet was in flight — the work
+directory's qa-checklist pointed here rather than restating them, and was
+deleted with the rest of that directory at teardown.
 
 | # | Criterion | Pinned by |
 | --- | --- | --- |
@@ -115,7 +181,8 @@ here and does not restate them.
 | A6 | No engine call is reachable from a render path | `responsiveness-reviewer`, plus the existing dependency-seal guards |
 | A7 | Scrolling a repository with at least 100k commits keeps frame time bounded and memory flat | a measured check, run by hand against a named real repository, with numbers recorded in `progress.md` |
 | A8 | The app opens the repository named on the command line, defaults to the working directory, and fails with a clear message when given a path outside a repository | integration test over the argument handling, plus a manual run |
-| A9 | `scripts/gate.sh` passes | the gate |
+| A9 | A row's content is expressible as something other than a commit, and every consumer matches on it rather than assuming one | unit test in `cairn-model`, plus the app's exhaustive render match in `cairn-app` |
+| A10 | `scripts/gate.sh` passes | the gate |
 
 A8 is the new one — R5 was missing from the first draft of this PRD, which
 specified a view with nothing to point it at. A7 is deliberately not automated. A frame-time assertion in CI would be flaky and
@@ -124,7 +191,14 @@ repository is honest about what it is.
 
 ## Out of scope
 
-Filed, not done: commit detail panes, diffs, blame, file history, search and
-filtering, graph-based operations (checkout, reset, cherry-pick from a row),
-multiple repositories open at once, a repository picker or manager of any kind
-(R5.3), recent-repository history, and any mutation whatsoever.
+Out, and recorded elsewhere rather than dropped — each of these has a permanent
+home, named here because "filed" on its own has already meant two different
+things in this packet: commit detail panes, blame, file history and commit search
+are rows in `docs/design/feature-inventory.md`; diffs, graph-based operations
+(checkout, reset, cherry-pick from a row) and every other mutation are packets
+3-8 of `docs/work/daily-loop/roadmap.md`; multiple repositories open at once and a
+repository picker or manager of any kind (R5.3) are "Repository manager shape" in
+the spine's "Still open"; recent-repository history is a feature-inventory row.
+Three pieces of graph filtering and navigation are GitHub issues in their own
+right: #1 (collapse merges), #2 (filter, exclude and focus by ref) and #3 (jump to
+a commit by hash).

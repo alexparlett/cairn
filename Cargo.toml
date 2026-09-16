@@ -21,8 +21,9 @@ freya = { git = "https://github.com/alexparlett/freya", rev = "caa46f8715744cb4f
 freya-testing = { git = "https://github.com/alexparlett/freya", rev = "caa46f8715744cb4fdb2d36304e2b1bbeb4acdb0" }
 # Default features stay ON: gix's `default` carries the sha1 backend, without
 # which gix-hash compiles to an empty `Kind` enum and the whole tree fails to
-# build. The extras below are the surfaces a git client actually reads.
-gix = { version = "0.87.1", features = ["blame", "blob-diff", "revision", "status", "max-performance", "parallel"] }
+# build. The extras below are the surfaces a git client actually reads; `sha256`
+# is what lets gix open a repository made with `--object-format=sha256`.
+gix = { version = "0.87.1", features = ["blame", "blob-diff", "revision", "status", "max-performance", "parallel", "sha256"] }
 thiserror = "2"
 
 [workspace.lints.rust]

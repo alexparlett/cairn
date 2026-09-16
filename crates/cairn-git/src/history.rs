@@ -164,13 +164,9 @@ fn read_page(
     }
     let target = skip.saturating_add(request.limit);
 
-    let mut object_ids = Vec::with_capacity(tips.len());
-    for tip in &tips {
-        object_ids.push(object_id(tip)?);
-    }
     let mut walk = repo
         .inner()
-        .rev_walk(object_ids)
+        .rev_walk(walk_tips(repo.inner(), &tips)?)
         .sorting(order.sorting())
         .all()
         .map_err(|source| Error::Walk {
@@ -323,6 +319,26 @@ fn starting_points(repo: &Repository, request: &HistoryRequest) -> Result<Resolv
         window: request.window,
         skip,
     })
+}
+
+/// An id of the other width is refused here: gix asserts rather than failing on one.
+fn walk_tips(repo: &gix::Repository, tips: &[Oid]) -> Result<Vec<gix::hash::ObjectId>, Error> {
+    let format = repo.object_hash();
+    let mut object_ids = Vec::with_capacity(tips.len());
+    for tip in tips {
+        let id = object_id(tip)?;
+        if id.kind() != format {
+            return Err(Error::Walk {
+                source: format!(
+                    "{tip} is a {} id, but this repository names objects by {format}",
+                    id.kind()
+                )
+                .into(),
+            });
+        }
+        object_ids.push(id);
+    }
+    Ok(object_ids)
 }
 
 fn object_id(oid: &Oid) -> Result<gix::hash::ObjectId, Error> {

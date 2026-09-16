@@ -84,9 +84,20 @@ const EPOCH: i64 = 1_500_000_000;
 /// Committer dates rise along every parent link. `steps` counts ordinary commits;
 /// the merges are extra, so read expectations back from `git`.
 pub fn braided(steps: usize) -> Fixture {
-    let path = fresh_directory("braided");
+    braided_in("sha1", steps)
+}
+
+/// [`braided`], in a repository whose objects are named by `object_format` (`sha1` or `sha256`).
+pub fn braided_in(object_format: &str, steps: usize) -> Fixture {
+    let path = fresh_directory(&format!("braided-{object_format}"));
     let fixture = Fixture { path };
-    fixture.git(&["init", "--quiet", "--initial-branch=main", "."]);
+    fixture.git(&[
+        "init",
+        "--quiet",
+        "--initial-branch=main",
+        &format!("--object-format={object_format}"),
+        ".",
+    ]);
 
     let mut clock = EPOCH;
     commit_at(&fixture, &mut clock, "root");

@@ -419,6 +419,53 @@ fn a_walk_can_start_from_named_commits() {
     assert_eq!(ids(&from_tip), ids(&from_head));
 }
 
+#[test]
+fn a_sha256_repository_reads_like_any_other() {
+    let fixture = fixtures::braided_in("sha256", 20);
+    assert_eq!(
+        fixture.git(&["rev-parse", "--show-object-format"]).trim(),
+        "sha256",
+        "the fixture is not a SHA-256 repository"
+    );
+    let expected = fixture.rev_list();
+    assert!(expected.iter().all(|id| id.len() == 64));
+    let repo = open(&fixture);
+
+    let whole = read(&repo, &HistoryRequest::from_head(expected.len() + 1));
+    assert_eq!(ids(&whole), expected, "the walk diverged from git's");
+
+    let (rows, _) = drain_session(&repo, &HistoryRequest::from_head(expected.len()), 7);
+    assert_eq!(ids_of(&rows), expected, "the session diverged from git's");
+
+    let first = read(&repo, &HistoryRequest::from_head(5));
+    let Some(cursor) = first.cursor.clone() else {
+        panic!("a partial page left no cursor");
+    };
+    let rest = read(&repo, &HistoryRequest::resume(cursor, expected.len()));
+    assert_eq!(
+        [ids(&first), ids(&rest)].concat(),
+        expected,
+        "a SHA-256 cursor did not continue the walk"
+    );
+
+    // Engine to model and back: a 32-byte id named as a starting point.
+    let tip = ok(cairn_model::Oid::parse(&expected[0]), "parsing HEAD");
+    let from_tip = read(&repo, &HistoryRequest::from_commits([tip], 10));
+    assert_eq!(ids(&from_tip), expected[..10]);
+    assert_eq!(commit_of(&from_tip.rows[0]).id, tip);
+
+    let narrower = ok(
+        cairn_model::Oid::parse("0123456789abcdef0123456789abcdef01234567"),
+        "parsing a well-formed SHA-1 id",
+    );
+    match repo.history_session(&HistoryRequest::from_commits([narrower], 5)) {
+        Err(Error::Walk { .. }) => {}
+        other => {
+            panic!("expected a walk failure for a SHA-1 id in a SHA-256 repository, got {other:?}")
+        }
+    }
+}
+
 /// Caught by: the `BreadthFirst` arm reaching a different set of commits.
 #[test]
 fn graph_order_reaches_the_same_commits_as_commit_time_order() {
@@ -537,6 +584,20 @@ fn bad_starting_points_are_errors_rather_than_empty_pages() {
     ) {
         Err(Error::Walk { .. }) => {}
         other => panic!("expected a walk failure for an unknown commit, got {other:?}"),
+    }
+
+    let wider = ok(
+        cairn_model::Oid::parse(&"0123456789abcdef".repeat(4)),
+        "parsing a well-formed SHA-256 id",
+    );
+    match repo.history(
+        &HistoryRequest::from_commits([wider], 5),
+        &CancelSignal::new(),
+    ) {
+        Err(Error::Walk { .. }) => {}
+        other => {
+            panic!("expected a walk failure for a SHA-256 id in a SHA-1 repository, got {other:?}")
+        }
     }
 
     let empty = read(&repo, &HistoryRequest::from_commits([], 5));

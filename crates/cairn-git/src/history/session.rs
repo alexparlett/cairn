@@ -54,13 +54,9 @@ impl Repository {
             skip,
         } = starting_points(self, request)?;
 
-        let mut object_ids = Vec::with_capacity(tips.len());
-        for tip in &tips {
-            object_ids.push(super::object_id(tip)?);
-        }
         let walk = self
             .inner()
-            .rev_walk(object_ids)
+            .rev_walk(super::walk_tips(self.inner(), &tips)?)
             .sorting(order.sorting())
             .all()
             .map_err(|source| Error::Walk {

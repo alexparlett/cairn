@@ -135,6 +135,14 @@ answer identically row for row (`a_session_returns_what_the_cursor_path_returns_
   `paging_a_session_costs_the_page_and_not_the_pages_before_it`. It borrows the
   repository and is not `Send`, so it lives on the worker that owns that handle.
 
+**SHA-1 and SHA-256 repositories both read.** `Oid` holds either width, and gix
+is built with its `sha256` feature, so a repository made with
+`git init --object-format=sha256` walks, pages and resumes like any other
+(`a_sha256_repository_reads_like_any_other`, against a real SHA-256 fixture —
+which also fails if the feature is dropped). A starting point of the other width
+is `Error::Walk`, refused before it reaches gix, which asserts on a mismatched id
+rather than failing (`bad_starting_points_are_errors_rather_than_empty_pages`).
+
 **A merely-walked commit is never decoded.** `HistoryPage.decoded` never exceeds
 the rows returned. Made observable rather than asserted: the fixture writes a
 commit-graph and deletes the loose objects of the commits a resumed page

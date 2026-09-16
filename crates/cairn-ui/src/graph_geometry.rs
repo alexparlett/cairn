@@ -1,14 +1,7 @@
-//! Where one row's lines go, as pure arithmetic.
-//!
-//! Free of Freya and Skia, so a line in the wrong lane is decided by a unit test
-//! rather than a screenshot. Row-local logical pixels: `x` grows rightwards from
-//! the graph column's left edge, `y` downwards from the row's top edge, and
-//! every row is [`ROW_HEIGHT`] tall (L7).
+//! Row geometry, in row-local logical pixels with `y` growing downwards.
 
 use cairn_model::{EdgeKind, EdgeSegment, GraphRow, Lane};
 
-/// Uniform by L7: variable heights plus virtualisation need a measurement cache
-/// and jitter the scrollbar.
 pub const ROW_HEIGHT: f32 = 26.0;
 
 /// Distance between the centres of neighbouring lanes, in logical pixels.
@@ -19,15 +12,10 @@ pub const NODE_RADIUS: f32 = 4.0;
 
 pub const STROKE_WIDTH: f32 = 1.8;
 
-/// 24 lanes is 336 px, past the widest real history measured — single-digit lane
-/// counts over every ref of seven repositories
-/// (`docs/research/history-graph/scroll-memory-model.md`). Past the cap is lossy,
-/// by [`lane_x`], rather than a column wider than the text beside it.
+/// Lanes past this share the last column.
 pub const MAX_DRAWN_LANES: usize = 24;
 
-// Lane separation, checked by the COMPILER: a lane must be wider than the widest
-// thing drawn in it, or two lanes' ink overlaps and lane identity stops
-// surviving a monochrome screenshot.
+// A lane must be wider than the widest thing drawn in it.
 const _: () = assert!(
     LANE_WIDTH >= 2.0 * NODE_RADIUS,
     "a lane is narrower than the node it holds: two lanes' nodes would overlap, \
@@ -40,16 +28,13 @@ const _: () = assert!(
 
 pub type Point = (f32, f32);
 
-/// One line to stroke across a row. `colour_lane` is not always either
-/// endpoint's lane: a line that changes lane keeps the colour of the track it
-/// runs in, so one connection is one colour down its whole length.
+/// `colour_lane` is not always an endpoint's lane: a line keeps the colour of the track it runs in.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Stroke {
     pub from: Point,
     pub to: Point,
     pub colour_lane: Lane,
-    /// True exactly for a line joining a commit to a parent drawn *above* it
-    /// (O4).
+    /// True for a line joining a commit to a parent drawn *above* it.
     pub dashed: bool,
 }
 
@@ -57,7 +42,7 @@ pub struct Stroke {
 pub enum Node {
     /// At most one parent: a filled dot.
     Dot,
-    /// A merge. A shape, not a colour: colour may never carry meaning alone.
+    /// A merge.
     Ring,
 }
 
@@ -69,19 +54,16 @@ pub struct RowGeometry {
     pub node: Node,
 }
 
-/// Width of the graph column holding `lanes` lanes: at least one lane, never
-/// more than [`MAX_DRAWN_LANES`].
+/// Width of the graph column: at least one lane, at most [`MAX_DRAWN_LANES`].
 pub fn graph_width(lanes: usize) -> f32 {
     drawn_lanes(lanes) as f32 * LANE_WIDTH
 }
 
-/// How many lanes are actually given a column.
 pub fn drawn_lanes(lanes: usize) -> usize {
     lanes.clamp(1, MAX_DRAWN_LANES)
 }
 
-/// Centre of `lane`'s column. Lanes past [`MAX_DRAWN_LANES`] share the last one
-/// rather than being drawn off the edge of the window.
+/// Centre of `lane`'s column; lanes past [`MAX_DRAWN_LANES`] share the last one.
 pub fn lane_x(lane: Lane) -> f32 {
     let index = lane.index().min(MAX_DRAWN_LANES - 1);
     (index as f32 + 0.5) * LANE_WIDTH
@@ -92,8 +74,7 @@ pub fn row_middle() -> f32 {
     ROW_HEIGHT / 2.0
 }
 
-/// `parents` decides the node shape and nothing else; the lines come from the
-/// row's own segments.
+/// `parents` decides the node shape only; the lines come from the row's segments.
 pub fn row_geometry(row: &GraphRow, parents: usize) -> RowGeometry {
     let middle = row_middle();
     let strokes = row.edges.iter().map(|edge| stroke(edge, middle)).collect();
@@ -106,7 +87,7 @@ pub fn row_geometry(row: &GraphRow, parents: usize) -> RowGeometry {
     }
 }
 
-/// The colour lane is the end that is not the node — see [`Stroke`].
+/// The colour lane is the end that is not the node.
 fn stroke(edge: &EdgeSegment, middle: f32) -> Stroke {
     let top = |lane: Lane| (lane_x(lane), 0.0);
     let bottom = |lane: Lane| (lane_x(lane), ROW_HEIGHT);
@@ -146,9 +127,7 @@ mod tests {
         }
     }
 
-    /// Separation measured against the ink, not the spacing that produced it: a
-    /// gap compared to a fraction of `LANE_WIDTH` holds for every `LANE_WIDTH`,
-    /// including one where every dot swallows its neighbours.
+    /// Measured against the ink, not the spacing, so `LANE_WIDTH` cannot decide its own test.
     #[test]
     fn every_lane_below_the_cap_has_a_column_wider_than_what_is_drawn_in_it() {
         let ink = (2.0 * NODE_RADIUS).max(STROKE_WIDTH);
@@ -165,7 +144,6 @@ mod tests {
         assert_eq!(seen.len(), MAX_DRAWN_LANES);
     }
 
-    /// The cap is lossy rather than drawing off the edge of the window.
     #[test]
     fn lanes_past_the_cap_share_the_last_column() {
         let last = lane_x(Lane::new(MAX_DRAWN_LANES - 1));
@@ -174,7 +152,6 @@ mod tests {
         assert_eq!(graph_width(10_000), MAX_DRAWN_LANES as f32 * LANE_WIDTH);
     }
 
-    /// A linear history still draws a track.
     #[test]
     fn the_graph_column_is_never_zero_wide() {
         assert_eq!(graph_width(0), LANE_WIDTH);
@@ -182,7 +159,6 @@ mod tests {
         assert_eq!(graph_width(3), 3.0 * LANE_WIDTH);
     }
 
-    /// A track crossing many rows is continuous top to bottom.
     #[test]
     fn a_passing_line_spans_the_whole_row_in_its_own_lane() {
         let geometry = row_geometry(&row(0, vec![EdgeSegment::passing(Lane::new(2))]), 1);
@@ -193,7 +169,6 @@ mod tests {
         assert!(!stroke.dashed);
     }
 
-    /// A line arriving from above and one leaving below join without a gap.
     #[test]
     fn lines_touching_a_commit_meet_at_its_node() {
         let geometry = row_geometry(
@@ -221,7 +196,6 @@ mod tests {
         assert_eq!(out.to, (lane_x(Lane::new(3)), ROW_HEIGHT));
     }
 
-    /// One connection is one colour down its whole length.
     #[test]
     fn a_bending_line_takes_its_colour_from_the_track_not_the_node() {
         let geometry = row_geometry(
@@ -238,10 +212,7 @@ mod tests {
         assert_eq!(geometry.strokes[1].colour_lane, Lane::new(5));
     }
 
-    /// O4: dashing is the only thing that changes. Every segment kind, not just
-    /// the one leaving the commit — the assigner marks all three
-    /// (`LaneAssigner::connect_upward`), and dashing only the first draws one
-    /// dashed row then a solid line, which reads as two connections.
+    /// Caught by: dashing only the segment leaving the commit.
     #[test]
     fn an_out_of_order_line_is_dashed_along_its_whole_length() {
         let pieces = [
@@ -271,7 +242,6 @@ mod tests {
         }
     }
 
-    /// Shape, so a monochrome screenshot still says which commits are merges.
     #[test]
     fn a_merge_is_a_different_shape_not_a_different_colour() {
         assert_eq!(row_geometry(&row(0, Vec::new()), 0).node, Node::Dot);
@@ -280,7 +250,6 @@ mod tests {
         assert_eq!(row_geometry(&row(0, Vec::new()), 7).node, Node::Ring);
     }
 
-    /// A row draws every segment it carries and invents none.
     #[test]
     fn a_row_draws_exactly_the_segments_it_carries() {
         let edges = vec![

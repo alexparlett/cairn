@@ -1,6 +1,4 @@
-//! One commit's line, in four columns: graph and subject, author, abbreviated
-//! commit id, date. A date on every row rather than date groups, since a group
-//! header is a variable-height row and L7 rules that out.
+//! One commit's row in the history list.
 
 use cairn_model::{CommitSummary, GraphRow};
 use freya::prelude::*;
@@ -18,8 +16,7 @@ pub const ROW_PADDING: f32 = 10.0;
 
 const ROW_FONT_SIZE: f32 = 13.0;
 
-/// Presentation only: no handler, so equal content compares equal and Freya
-/// skips re-rendering. Selection belongs to [`crate::HistoryList`].
+/// No handler, so equal content compares equal and Freya skips re-rendering.
 #[derive(Debug, PartialEq, Clone)]
 pub struct CommitRow {
     commit: CommitSummary,
@@ -30,8 +27,7 @@ pub struct CommitRow {
 }
 
 impl CommitRow {
-    /// `lanes` is the graph column's width for the whole list, not for this
-    /// row: every row reserves the same width or the subjects do not line up.
+    /// `lanes` is the graph column's width for the whole list, not for this row.
     pub fn new(commit: CommitSummary, graph: GraphRow, lanes: usize) -> Self {
         Self {
             commit,
@@ -63,8 +59,7 @@ impl ComponentOwned for CommitRow {
 
         rect()
             .horizontal()
-            // `Size::flex` only shares out leftover space under `Content::Flex`;
-            // without it the first column takes everything.
+            // `Size::flex` only shares out leftover space under `Content::Flex`.
             .content(Content::Flex)
             .width(Size::fill())
             .height(Size::px(ROW_HEIGHT))
@@ -106,8 +101,7 @@ impl ComponentOwned for CommitRow {
             )
             .child(
                 label()
-                    // `text` takes a `Cow<'static, str>`, which no borrow can
-                    // satisfy; `as_str` keeps this to one 7-byte copy.
+                    // `text` takes a `Cow<'static, str>`, so the abbreviation is copied.
                     .text(self.commit.id.short().as_str().to_string())
                     .width(Size::px(ID_WIDTH))
                     .max_lines(1)
@@ -129,7 +123,6 @@ impl ComponentOwned for CommitRow {
     }
 }
 
-/// The column headings, sized by the same constants the rows use.
 #[derive(Debug, PartialEq, Clone)]
 pub struct HistoryHeader {
     key: DiffKey,
@@ -185,7 +178,6 @@ impl ComponentOwned for HistoryHeader {
             .child(heading("Graph and subject", Size::flex(1.)))
             .child(heading("Author", Size::px(AUTHOR_WIDTH)))
             .child(heading("Commit", Size::px(ID_WIDTH)))
-            // UTC, not the reader's clock — see `date_text`.
             .child(heading("Date (UTC)", Size::px(DATE_WIDTH)))
     }
 

@@ -1,16 +1,4 @@
-//! The graph column of one row, painted.
-//!
-//! [`crate::graph_geometry`] decides where a line goes; this file only turns
-//! those numbers into Skia calls. One canvas per row, not a rect per segment: a
-//! rect cannot draw a curve.
-//!
-//! A `Canvas`'s render callback compares equal to every other callback
-//! (`RenderCallback`'s `PartialEq` is unconditionally true in the pinned Freya
-//! revision), so a canvas whose drawing changed while its layout did not is not
-//! repainted. What a caller must keep true so that cannot matter: every row
-//! element is keyed by its `RowId`, and what a row draws is a function of the
-//! row alone — never of selection, focus or hover, which live on the
-//! surrounding `rect`.
+//! The painted graph column of one row.
 
 use cairn_model::GraphRow;
 use freya::engine::prelude::{Paint, PaintStyle, PathBuilder, PathEffect, SkColor};
@@ -21,15 +9,16 @@ use crate::graph_geometry::{
 };
 use crate::lane_palette::lane_colour;
 
-/// Painted length and gap of an out-of-order line (O4).
+/// Painted length and gap of an out-of-order line.
 const DASH: [f32; 2] = [4.0, 3.0];
 
 const RING_WIDTH: f32 = 2.0;
 
-/// The graph column for one row, `lanes` columns wide.
 pub(crate) fn graph_cell(row: &GraphRow, parents: usize, lanes: usize) -> Canvas {
     let geometry = graph_geometry::row_geometry(row, parents);
 
+    // `RenderCallback` always compares equal: a changed drawing with an unchanged layout
+    // is not repainted, so what the canvas draws must depend on `row` alone.
     canvas(RenderCallback::new(move |context| {
         paint_row(context.canvas, &geometry);
     }))
@@ -75,8 +64,6 @@ fn paint_stroke(canvas: &freya::engine::prelude::Canvas, paint: &mut Paint, stro
         return;
     }
 
-    // A curve, not a right angle: a right angle reads as a different kind of
-    // connection.
     let middle = (stroke.from.1 + stroke.to.1) / 2.0;
     let mut path = PathBuilder::new();
     path.move_to(stroke.from)
@@ -97,9 +84,7 @@ mod tests {
         }
     }
 
-    /// Paints one row onto an offscreen Skia surface and reports, per pixel of
-    /// `column`, whether anything was drawn. Two decisions no arithmetic test
-    /// can reach: whether a dashed stroke is dashed, whether a merge is a ring.
+    /// Paints one row offscreen and reports, per pixel of `column`, whether anything was drawn.
     fn painted_column(row: &GraphRow, parents: usize, column: f32) -> Vec<bool> {
         let width = graph_geometry::graph_width(4).ceil() as i32;
         let height = ROW_HEIGHT.ceil() as i32;
@@ -120,8 +105,7 @@ mod tests {
         let x = column.round() as usize;
         (0..height as usize)
             .map(|y| {
-                // Anti-aliasing puts partial coverage either side of a line, so
-                // "painted" is any non-zero alpha rather than a full one.
+                // Anti-aliasing leaves partial coverage, so any non-zero alpha counts as painted.
                 let alpha = pixels.get(y * stride + x * 4 + 3).copied().unwrap_or(0);
                 alpha > 0
             })
@@ -136,8 +120,7 @@ mod tests {
         }
     }
 
-    /// Caught by: deleting the dash branch in `paint_stroke`, which makes the
-    /// two identical and which no geometry test can see (O4).
+    /// Caught by: deleting the dash branch in `paint_stroke`.
     #[test]
     fn an_out_of_order_line_is_actually_drawn_with_gaps() {
         let lane = Lane::new(1);
@@ -165,8 +148,6 @@ mod tests {
         );
     }
 
-    /// Caught by: painting the ring filled, leaving colour as the only thing
-    /// telling a merge from an ordinary commit (R4.2).
     #[test]
     fn a_merge_is_drawn_hollow_and_an_ordinary_commit_solid() {
         let node = row(0, Vec::new());

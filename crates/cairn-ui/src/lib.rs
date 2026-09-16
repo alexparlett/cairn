@@ -1,8 +1,4 @@
 //! Cairn's component library.
-//!
-//! Components render [`cairn_model`] values and emit intent through
-//! `EventHandler` props; they never open a repository, touch the filesystem or
-//! block. Twin: `layers_never_name_the_crates_they_are_sealed_from`.
 
 mod commit_row;
 mod date_text;

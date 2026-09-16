@@ -1,35 +1,19 @@
-//! The history list: virtualised, keyed by row identity, keyboard reachable.
-//!
-//! `VirtualScrollView` builds a row per viewport item and no other, so a frame's
-//! work follows the window height, not the history length; `len()` is the only
-//! per-render read proportional to the list. Twin:
-//! `a_history_sized_list_renders_through_a_virtualizing_view`. Rows are keyed by
-//! `RowId`, never by position: a positional key leaves a reused viewport slot
-//! painting the graph of the row that was there (see `graph_cell`).
-//!
-//! `on_reach_end` fires repeatedly by design (see `asks_for_more`); whether it
-//! becomes a request is the caller's policy.
+//! The virtualised history list.
 
 use cairn_model::{HistoryRow, RowId};
 use freya::prelude::*;
 
 use crate::graph_geometry::ROW_HEIGHT;
 
-/// How many rows from the end the list asks for more: roughly a screen at a
-/// typical window height.
 pub const PREFETCH_ROWS: usize = 24;
 
-/// Every row in the last [`PREFETCH_ROWS`] asks, not only the boundary one: a
-/// single trigger row skipped by a fast scroll is a list that quietly stops
-/// loading.
+/// Every row in the last [`PREFETCH_ROWS`] asks, not only the boundary one, which a fast scroll can skip.
 fn asks_for_more(index: usize, length: usize) -> bool {
     index + PREFETCH_ROWS >= length
 }
 
 const PAGE_JUMP: usize = 10;
 
-/// The row is handed over whole: matching on its `RowContent` is the caller's
-/// obligation (A9).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RowRender {
     pub row: HistoryRow,
@@ -49,8 +33,6 @@ pub struct HistoryList {
 }
 
 impl HistoryList {
-    /// `rows` is a handle, not a vector: a page arriving rebuilds the visible
-    /// rows, and nothing copies the history to get it on screen.
     pub fn new(rows: State<Vec<HistoryRow>>, row: impl Fn(RowRender) -> Element + 'static) -> Self {
         Self {
             rows,
@@ -63,7 +45,6 @@ impl HistoryList {
         }
     }
 
-    /// One number for the whole list, or the subjects do not line up.
     pub fn lanes(mut self, lanes: usize) -> Self {
         self.lanes = lanes;
         self
@@ -88,9 +69,7 @@ impl HistoryList {
     }
 }
 
-// Hand-written: `EventHandler` and `Callback` compare unequal to everything, so
-// a derive re-renders the list on every render of its parent. They close over
-// handles whose identity never changes.
+// Hand-written: `EventHandler` and `Callback` never compare equal, and their identity is stable.
 impl PartialEq for HistoryList {
     fn eq(&self, other: &Self) -> bool {
         self.rows == other.rows
@@ -115,14 +94,12 @@ impl KeyExt for HistoryList {
     }
 }
 
-/// Carried where `VirtualScrollView` can compare it: data captured inside the
-/// builder closure is invisible to diffing.
+/// Data captured inside the builder closure is invisible to `VirtualScrollView`'s diffing.
 #[derive(Clone)]
 struct ListData {
     rows: State<Vec<HistoryRow>>,
     lanes: usize,
     selected: Option<RowId>,
-    /// How many rows are loaded; decides whether a row asks for more.
     length: usize,
     row: Callback<RowRender, Element>,
     on_select: EventHandler<RowId>,
@@ -146,12 +123,10 @@ impl Component for HistoryList {
         let list_id = use_a11y();
         let focus = use_focus(list_id);
         let controller = use_scroll_controller(ScrollConfig::default);
-        // A hint, not the truth: checked against the row at that index, so a
-        // stale one costs a scan and never a wrong answer.
+        // A hint, checked against the row at that index before use.
         let cursor = use_state(|| 0usize);
 
-        // Reading the length subscribes this component to the row vector, so a
-        // page arriving re-renders the list though its props did not change.
+        // Reading the length subscribes this component to the row vector.
         let length = self.rows.read().len();
 
         let data = ListData {
@@ -172,13 +147,9 @@ impl Component for HistoryList {
             .expanded()
             .a11y_id(list_id)
             .a11y_focusable(true)
-            // Focused when the window opens: reachable only behind a mouse
-            // click is not keyboard reachable (R4.4).
             .a11y_auto_focus(true)
             .a11y_role(AccessibilityRole::List)
             .on_key_down(self.keyboard(cursor, controller))
-            // Only for keyboard focus: a reader who arrived by clicking can
-            // already see where they are.
             .maybe(focus() == Focus::Keyboard, |el| {
                 el.border(Border::new().fill(border).width(1.))
             })
@@ -198,8 +169,7 @@ impl Component for HistoryList {
 }
 
 impl HistoryList {
-    /// R4.4's keyboard half. Every other key is left alone, so a shortcut this
-    /// list does not own still reaches what does.
+    /// Keys the list does not own are left unhandled.
     fn keyboard(
         &self,
         mut cursor: State<usize>,
@@ -210,9 +180,7 @@ impl HistoryList {
         let on_select = self.on_select.clone();
 
         move |e: Event<KeyboardEventData>| {
-            // The read guard is dropped before anything is called out to: a
-            // handler that reloaded the list would re-enter this borrow and
-            // panic on the UI thread.
+            // Drop the read guard before calling out: a handler that reloads the list would panic.
             let moved = {
                 let held = rows.read();
                 let Some(last) = held.len().checked_sub(1) else {
@@ -231,16 +199,13 @@ impl HistoryList {
             e.stop_propagation();
             cursor.set(next);
             on_select.call(id);
-            // The selected row usually has no element yet, so a virtualised
-            // list reveals by offset: index times the uniform row height.
+            // The selected row usually has no element yet, so reveal by offset.
             controller.scroll_to_offset(next as f32 * ROW_HEIGHT, ROW_HEIGHT, Direction::Vertical);
         }
     }
 }
 
-/// Where `key` moves a selection at `current`, in a list whose last row is
-/// `last`; `None` for a key this list does not own. A free function so R4.4's
-/// arithmetic is decidable outside a closure over a reactive handle.
+/// Where `key` moves a selection at `current`; `None` for a key this list does not own.
 fn moved_to(key: &Key, current: Option<usize>, last: usize) -> Option<usize> {
     // Nothing selected yet: every key this list owns starts at the top.
     let from = |step: fn(usize, usize) -> usize| current.map_or(0, |at| step(at, last));
@@ -256,13 +221,10 @@ fn moved_to(key: &Key, current: Option<usize>, last: usize) -> Option<usize> {
     }
 }
 
-/// Called by `VirtualScrollView` for the items inside its viewport and nothing
-/// else.
 fn build_row(item: VirtualItem, data: &ListData) -> Element {
     let rows = data.rows.read();
     let Some(row) = rows.get(item.index) else {
-        // Told length and read vector can disagree for one frame; an empty row
-        // of the right height keeps the geometry honest.
+        // Length and vector can disagree for one frame; draw an empty row of the right height.
         return rect()
             .width(Size::fill())
             .height(Size::px(item.size))
@@ -284,6 +246,7 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
     });
 
     rect()
+        // Keyed by identity: a positional key lets a reused slot paint the previous row's graph.
         .key(id)
         .width(Size::fill())
         .height(Size::px(item.size))
@@ -299,9 +262,7 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
         .into()
 }
 
-/// Where `id` sits in `rows`, checking `hint` first. The scan behind the hint is
-/// what keeps the answer correct when a row arrived above or the list was
-/// reloaded.
+/// Where `id` sits in `rows`, checking `hint` first.
 fn index_of(rows: &[HistoryRow], id: RowId, hint: usize) -> Option<usize> {
     if rows.get(hint).is_some_and(|row| row.id() == id) {
         return Some(hint);
@@ -360,7 +321,6 @@ mod tests {
         assert_eq!(index_of(&rows, RowId::Commit(oid(0)), 7), Some(0));
     }
 
-    /// Gone reports gone, not the row now sitting where it used to.
     #[test]
     fn a_row_that_is_not_there_is_not_found() {
         let rows = history(4);
@@ -368,8 +328,6 @@ mod tests {
         assert_eq!(index_of(&[], RowId::Commit(oid(0)), 0), None);
     }
 
-    /// R4.4 across a page boundary. A 30-commit fixture cannot decide this: it
-    /// never has a second page.
     #[test]
     fn a_selection_survives_a_page_arriving_under_it() {
         let first_page = history(64);
@@ -387,9 +345,7 @@ mod tests {
         assert!(both_pages.len() > 64, "the second page did not arrive");
     }
 
-    /// A row arriving above — what the working-tree row will do — moves every
-    /// index below it. The hint is wrong here, so this decides the fallback
-    /// scan.
+    /// The hint is wrong here, so this decides the fallback scan.
     #[test]
     fn a_selection_survives_a_row_arriving_above_it() {
         let before = history(8);
@@ -407,8 +363,7 @@ mod tests {
         assert_eq!(both.len(), 9, "the row above did not arrive");
     }
 
-    /// Caught by: the arrows swapped, `End` going to the top, a page jump of
-    /// one.
+    /// Caught by: swapped arrows, `End` going to the top, a page jump of one.
     #[test]
     fn every_key_the_list_owns_moves_the_selection_its_own_way() {
         let last = 99;
@@ -437,8 +392,7 @@ mod tests {
             "Home and End go to the same place"
         );
 
-        // More than a row, less than the list: a jump of 1 or of `last` fails
-        // here.
+        // More than a row, less than the list: a jump of 1 or of `last` fails here.
         let page_down = moved_to(&Key::Named(NamedKey::PageDown), Some(50), last);
         let page_up = moved_to(&Key::Named(NamedKey::PageUp), Some(50), last);
         assert_eq!(page_down, Some(50 + PAGE_JUMP));
@@ -447,8 +401,6 @@ mod tests {
         assert!(page_up < Some(49) && page_up > Some(0));
     }
 
-    /// Caught by: running past the last row, or wrapping to the bottom on
-    /// `ArrowUp`.
     #[test]
     fn the_selection_stops_at_both_ends_rather_than_running_off_or_wrapping() {
         let last = 5;
@@ -476,7 +428,6 @@ mod tests {
         );
     }
 
-    /// A keyboard-only reader must be able to select a first row at all.
     #[test]
     fn the_first_key_press_selects_something() {
         for key in [
@@ -495,7 +446,6 @@ mod tests {
         assert_eq!(moved_to(&Key::Named(NamedKey::End), None, 99), Some(99));
     }
 
-    /// Left alone rather than swallowed, so another shortcut still reaches it.
     #[test]
     fn a_key_the_list_does_not_own_moves_nothing() {
         assert_eq!(moved_to(&Key::Named(NamedKey::Tab), Some(3), 99), None);
@@ -503,8 +453,7 @@ mod tests {
         assert_eq!(moved_to(&Key::Character("j".into()), Some(3), 99), None);
     }
 
-    /// Caught by: asking at the end, a visible stall; or asking from only one
-    /// boundary row.
+    /// Caught by: asking only at the end, or only from one boundary row.
     #[test]
     fn the_last_screen_of_rows_asks_for_more_and_the_rest_do_not() {
         let length = 1_000;

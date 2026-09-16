@@ -1,11 +1,6 @@
 //! The date column's text.
-//!
-//! UTC, and the column is labelled `Date (UTC)`: `CommitSummary` carries the
-//! author time's seconds but not the offset, and the reader's local time needs
-//! a timezone database — a dependency, so a user decision.
 
-/// `author_time` as `YYYY-MM-DD HH:MM` in UTC. Total over every `i64`: no
-/// timestamp a repository can hold, corrupt included, can panic.
+/// `author_time` as `YYYY-MM-DD HH:MM` in UTC. Total over every `i64`.
 pub fn utc_minutes(author_time: i64) -> String {
     let days = author_time.div_euclid(SECONDS_PER_DAY);
     let second_of_day = author_time.rem_euclid(SECONDS_PER_DAY);
@@ -18,8 +13,7 @@ pub fn utc_minutes(author_time: i64) -> String {
 
 const SECONDS_PER_DAY: i64 = 86_400;
 
-/// `(year, month, day)` for days since 1970-01-01, proleptic Gregorian. Howard
-/// Hinnant's `civil_from_days`, transcribed.
+/// `(year, month, day)` for days since 1970-01-01: Hinnant's `civil_from_days`.
 fn civil_from_days(days: i64) -> (i64, i64, i64) {
     // Epoch shifted to 0000-03-01, so a leap day lands at the end of a cycle
     // and every month before it has a fixed length.
@@ -45,8 +39,7 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
 mod tests {
     use super::*;
 
-    /// Reference values from `date -u -d @<seconds>`, not from this
-    /// implementation.
+    /// Reference values from `date -u -d @<seconds>`.
     #[test]
     fn matches_the_system_date_at_known_instants() {
         assert_eq!(utc_minutes(0), "1970-01-01 00:00");
@@ -60,29 +53,23 @@ mod tests {
         assert_eq!(utc_minutes(951_782_400), "2000-02-29 00:00");
     }
 
-    /// An imported history, or a wrong clock.
     #[test]
     fn times_before_the_epoch_go_backwards_rather_than_wrapping() {
         assert_eq!(utc_minutes(-1), "1969-12-31 23:59");
         assert_eq!(utc_minutes(-86_400), "1969-12-31 00:00");
     }
 
-    /// A corrupt timestamp must not take the window down; what it renders as
-    /// does not matter.
     #[test]
     fn the_extremes_of_the_type_render_rather_than_panicking() {
         let low = utc_minutes(i64::MIN);
         let high = utc_minutes(i64::MAX);
         assert!(!low.is_empty());
         assert!(!high.is_empty());
-        // Wider than the column: the boundary the fixed-width test below does
-        // not claim to cover.
+        // Wider than the column; the fixed-width test below does not cover this.
         assert!(high.len() > "1970-01-01 00:00".len());
     }
 
-    /// Scoped to four-digit years, as the name says: `{year:04}` pads but does
-    /// not truncate, so a timestamp near the ends of `i64` renders a twelve-digit
-    /// year and is wider. Deliberately unfixed — the column clips.
+    /// Four-digit years only: `{year:04}` pads but does not truncate.
     #[test]
     fn the_rendering_is_fixed_width_for_every_year_a_repository_holds() {
         for seconds in [0, 1_700_000_000, -86_400, 951_782_400] {

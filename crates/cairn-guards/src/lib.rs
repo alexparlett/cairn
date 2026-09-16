@@ -1,14 +1,8 @@
-//! Matchers and repository walking for Cairn's invariant guards.
-//!
-//! The assertions live in `tests/invariants.rs`. Every matcher here carries a
-//! unit test proving it fires on the disguised forms of what it forbids: one
-//! that catches only the obvious spelling reports green while the invariant
-//! rots.
+//! Matchers and repository walking for the invariant guards.
 
 use std::path::{Path, PathBuf};
 
-/// Resolved from this crate's manifest, not the process working directory, so
-/// the guards run the same under `cargo test`, the gate and CI.
+/// Resolved from this crate's manifest, not the process working directory.
 pub fn repo_root() -> PathBuf {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     match manifest_dir.ancestors().nth(2) {
@@ -20,9 +14,7 @@ pub fn repo_root() -> PathBuf {
     }
 }
 
-/// Every `.rs` file under `dir`, as (path relative to the repo root, source).
-/// Panics on an empty walk: a guard pointed at a renamed directory must fail,
-/// not pass forever over an empty set.
+/// Every `.rs` file under `dir`, as (path relative to the repo root, source). Panics on an empty walk.
 pub fn rust_sources(dir: impl AsRef<Path>) -> Vec<(PathBuf, String)> {
     let root = repo_root();
     let dir = root.join(dir.as_ref());
@@ -62,9 +54,7 @@ fn collect_rust(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// `source` with comments blanked out, line structure preserved, so prose that
-/// names a forbidden thing is not a violation while string literals — how a
-/// subprocess names `git` — still are.
+/// `source` with comments blanked, line structure preserved; string literals are kept.
 pub fn code_only(source: &str) -> String {
     #[derive(Clone, Copy)]
     enum Mode {
@@ -187,14 +177,8 @@ pub fn code_only(source: &str) -> String {
     out
 }
 
-/// [`code_only`], with the contents of double-quoted strings blanked too.
-///
-/// `spawns_git` needs string literals; a waiting-primitive matcher does not, and
-/// one that reddens on a status line reading "waiting to receive" gets switched
-/// off. Char literals are recognised and stepped over: `'"'` is legal, and a
-/// scanner misreading its quote as a string start blanks the rest of the file,
-/// taking every guard built on this dark with it. Recognition is exact rather
-/// than a forward search for a closing apostrophe — see `char_literal_end`.
+/// [`code_only`], with the contents of double-quoted strings blanked too. Char literals
+/// are stepped over exactly, so `'"'` does not open a string.
 pub fn code_without_strings(source: &str) -> String {
     let code = code_only(source);
     let bytes = code.as_bytes();
@@ -263,10 +247,7 @@ pub fn code_without_strings(source: &str) -> String {
     out
 }
 
-/// The closing apostrophe of the char literal starting at `open`, or `None` when
-/// that apostrophe opens a lifetime. Exact by construction: a char literal is an
-/// apostrophe, then an escape or exactly one character, then the apostrophe;
-/// anything else is a lifetime, so `&'a str` is left alone.
+/// The closing apostrophe of the char literal starting at `open`, or `None` for a lifetime.
 fn char_literal_end(bytes: &[u8], open: usize) -> Option<usize> {
     let after = open + 1;
     if bytes.get(after) == Some(&b'\\') {
@@ -288,15 +269,8 @@ fn char_literal_end(bytes: &[u8], open: usize) -> Option<usize> {
     (bytes.get(end) == Some(&b'\'')).then_some(end)
 }
 
-/// [`code_without_strings`] output with `#[cfg(test)]` modules blanked, for the
-/// checks that ask what a file does rather than what it must not do: a
-/// requirement satisfied from a test module is not satisfied, and "production
-/// switched to a hand-rolled viewport while a test still names the virtualizing
-/// view" passes a whole-file token search.
-///
-/// Brace counting is honest only because it runs on [`code_without_strings`]
-/// output, where every brace left is a real one. Line numbers are preserved,
-/// because callers report them.
+/// [`code_without_strings`] output with `#[cfg(test)]` modules blanked, line numbers kept.
+/// Brace counting is sound only on [`code_without_strings`] output.
 pub fn code_without_test_modules(code: &str) -> String {
     const MARKER: &[u8] = b"#[cfg(test)]";
     let bytes = code.as_bytes();
@@ -308,9 +282,7 @@ pub fn code_without_test_modules(code: &str) -> String {
             i += 1;
             continue;
         }
-        // The module's opening brace, if there is a block at all:
-        // `#[cfg(test)] mod tests;` declares no body, so a `;` first means there
-        // is nothing to blank.
+        // The module's opening brace; a `;` first (`mod tests;`) means there is nothing to blank.
         let mut open = i + MARKER.len();
         while open < bytes.len() && bytes[open] != b'{' && bytes[open] != b';' {
             open += 1;
@@ -335,8 +307,7 @@ pub fn code_without_test_modules(code: &str) -> String {
             }
             end += 1;
         }
-        // An unbalanced file ends the blanking at its end rather than panicking;
-        // the compiler has a better complaint about the braces.
+        // An unbalanced file ends the blanking at its end rather than panicking.
         let end = end.min(bytes.len().saturating_sub(1));
 
         for byte in &mut out[i..=end] {
@@ -350,10 +321,8 @@ pub fn code_without_test_modules(code: &str) -> String {
     String::from_utf8(out).unwrap_or_default()
 }
 
-/// 1-based line numbers where `source` names the crate `ident` as a path root or
-/// imports it, in code. Catches `use gix as g`, `::gix::open`, `<crate>::gix`
-/// re-exports and spacing variants — anything with word boundaries outside a
-/// comment.
+/// 1-based lines where `source` names the crate `ident` as a path root or import, in code,
+/// including aliases, `::ident` and re-exports.
 pub fn mentions_crate(source: &str, ident: &str) -> Vec<usize> {
     let code = code_only(source);
     let mut hits = Vec::new();
@@ -369,9 +338,7 @@ fn line_has_ident(line: &str, ident: &str) -> bool {
     !ident_offsets(line, ident).is_empty()
 }
 
-/// Byte offsets where `ident` appears in `text` with word boundaries either
-/// side. Offsets, not lines, because what follows an identifier may be on the
-/// next line.
+/// Byte offsets where `ident` appears in `text` with word boundaries either side.
 fn ident_offsets(text: &str, ident: &str) -> Vec<usize> {
     let bytes = text.as_bytes();
     let mut found = Vec::new();
@@ -398,9 +365,7 @@ fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-/// Identifiers whose presence means the code can wait. Naming one is enough —
-/// you cannot alias what you have not first named, so
-/// `use std::sync::mpsc::Receiver as Rx` is caught on its import line.
+/// Identifiers whose presence means the code can wait; an alias is caught on its import line.
 const WAITING_IDENTS: &[&str] = &[
     "Barrier",
     "Condvar",
@@ -408,8 +373,7 @@ const WAITING_IDENTS: &[&str] = &[
     "Mutex",
     "Receiver",
     "RwLock",
-    // The constructors: `let (tx, rx) = channel();` then `for update in rx {}`
-    // blocks while spelling nothing on the roster above.
+    // Constructors: `for update in rx {}` blocks without naming anything above.
     "bounded",
     "channel",
     "sync_channel",
@@ -427,7 +391,7 @@ const WAITING_IDENTS: &[&str] = &[
     "sleep",
     "wait_timeout",
     "wait_while",
-    // These spin rather than block, which costs a UI thread the same core.
+    // These spin rather than block.
     "spin_loop",
     "try_iter",
     "try_lock",
@@ -435,14 +399,10 @@ const WAITING_IDENTS: &[&str] = &[
     "yield_now",
 ];
 
-/// Methods that wait when called with no arguments. Separate from the list
-/// above because each has an innocent namesake that takes one:
-/// `Path::join("crates")` is not a wait.
+/// Methods that wait when called with no arguments; each has an innocent one-argument namesake.
 const WAITING_NULLARY_CALLS: &[&str] = &["join", "lock", "recv", "wait"];
 
-/// 1-based line numbers where `source` waits for something, in code. Forbids the
-/// spellings rather than deciding what is being waited for, which is not
-/// decidable from source.
+/// 1-based lines where `source` names a way to wait, in code.
 pub fn waits_on_work(source: &str) -> Vec<usize> {
     let code = code_without_strings(source);
     let mut lines = std::collections::BTreeSet::new();
@@ -462,8 +422,7 @@ pub fn waits_on_work(source: &str) -> Vec<usize> {
     lines.into_iter().collect()
 }
 
-/// Whether what follows `at` is `()`, with any amount of whitespace — including
-/// newlines — inside and before it.
+/// Whether what follows `at` is `()`, allowing whitespace and newlines.
 fn takes_no_arguments(code: &str, at: usize) -> bool {
     let mut rest = code[at..].trim_start().chars();
     if rest.next() != Some('(') {
@@ -472,9 +431,7 @@ fn takes_no_arguments(code: &str, at: usize) -> bool {
     rest.as_str().trim_start().starts_with(')')
 }
 
-/// 1-based line numbers where `source` spawns a `git` subprocess, in code.
-/// Matches the literal program name rather than the constructor, so
-/// `process::Command::new("git")` and `cmd("git")` helpers both land.
+/// 1-based lines where `source` spawns a `git` subprocess, matched on the literal program name.
 pub fn spawns_git(source: &str) -> Vec<usize> {
     let code = code_only(source);
     code.lines()
@@ -546,9 +503,7 @@ mod tests {
         assert!(mentions_crate("use my_gix::thing;", "gix").is_empty());
     }
 
-    /// Every entry in both rosters, spelled out rather than looped over the
-    /// roster itself: a loop shrinks with the roster and stays green while the
-    /// guard loses half its coverage.
+    /// Spelled out, not looped over the roster: a loop would shrink with the roster.
     #[test]
     fn every_waiting_spelling_in_the_roster_is_matched() {
         let spellings = [
@@ -651,9 +606,7 @@ mod tests {
         assert!(waits_on_work("let hint = r#\"sleep until the Mutex frees\"#;").is_empty());
     }
 
-    /// The fail-quiet case: a char literal holding a double quote must not open
-    /// a blanking run that eats the rest of the file, or a guard built on
-    /// [`code_without_strings`] reports green over source it never read.
+    /// Caught by: a quote inside a char literal blanking the rest of the file.
     #[test]
     fn a_quote_inside_a_char_literal_does_not_blank_the_rest_of_the_file() {
         for quote in ["'\"'", "b'\"'", "'\\\"'"] {
@@ -671,8 +624,7 @@ mod tests {
         }
     }
 
-    /// The other direction: blanking from one apostrophe to the next eats the
-    /// code between two lifetimes.
+    /// Caught by: blanking from one lifetime's apostrophe to the next.
     #[test]
     fn a_lifetime_is_not_mistaken_for_a_char_literal() {
         let src = "fn f<'a, 'b>(x: &'a str, y: &'b Mutex) { let _ = x.recv(); }";
@@ -686,8 +638,6 @@ mod tests {
         assert_eq!(waits_on_work(src), vec![1]);
     }
 
-    /// A requirement met from a test module is not met. Both directions, and the
-    /// line numbers callers report must survive the blanking.
     #[test]
     fn a_test_module_is_not_part_of_what_a_file_does() {
         let src = "\
@@ -715,8 +665,7 @@ mod tests {
             "blanking the test module moved or lost the production lines"
         );
 
-        // The same token in production is still seen: the blanking is scoped,
-        // not a way to turn the check off.
+        // The same token in production is still seen.
         let production = code_without_test_modules(&code_without_strings(
             "fn render() { VirtualScrollView::new(); }\n#[cfg(test)]\nmod tests { fn t() {} }\n",
         ));

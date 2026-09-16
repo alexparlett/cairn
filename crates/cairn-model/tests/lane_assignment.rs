@@ -1,12 +1,9 @@
 //! Acceptance tests for the lane assigner (`docs/prd/history-graph.md`, R1).
 //!
-//! A1 is the fixture table below, each fixture pinned to its exact lanes *and*
-//! edges: a lane-count-only assertion would pass on a layout that drew the
-//! wrong lines. A2 is `skewed_history_...`, A3 `lane_indices_never_change_...`.
-//!
-//! Every test names, in its doc comment, the change to the assigner it would
-//! catch, and each was checked by making that change and watching the test
-//! fail.
+//! A1 is the fixture table below, pinned to exact lanes *and* edges: a
+//! lane-count assertion passes on a layout that drew the wrong lines. A2 is
+//! `skewed_history_...`, A3 `lane_indices_never_change_...`. Every test names
+//! the change to the assigner it catches.
 
 mod histories;
 
@@ -50,8 +47,7 @@ fn criss_cross() -> History {
     ])
 }
 
-/// `b` is reserved in lane 1 while lane 0 has already fallen empty. A branch
-/// must not hop left into the gap.
+/// `b` sits in lane 1 with lane 0 already empty: a branch must not hop left.
 fn lane_outlives_the_one_to_its_left() -> History {
     literal(&[
         ("t1", &["a"]),
@@ -66,11 +62,9 @@ fn multiple_roots() -> History {
     literal(&[("a2", &["a1"]), ("b2", &["b1"]), ("a1", &[]), ("b1", &[])])
 }
 
-/// The walk hands `p` over at row 0 and its child `c` only at row 2 — a parent
-/// before its child, which is what committer-date sorting does to rebased or
-/// imported history (`docs/research/history-graph/gix-revwalk-ordering.md`,
-/// finding 2). `t` sits between them so the connecting line has a row to be
-/// repainted onto.
+/// `p` at row 0, its child `c` at row 2 — what committer-date sorting does to
+/// rebased history (`docs/research/history-graph/gix-revwalk-ordering.md`,
+/// finding 2). `t` between them gives the line a row to repaint.
 fn skewed() -> History {
     literal(&[
         ("p", &["base"]),
@@ -80,11 +74,9 @@ fn skewed() -> History {
     ])
 }
 
-/// The same reversal as `skewed()`, but four rows apart with lanes 0, 1 and 2
-/// busy the whole way, so the lane the connecting line runs in is forced and
-/// visible. `skewed()` is too narrow to decide either: with one intermediate
-/// row a partial repaint looks like a full one, and the free lane is also the
-/// widest lane.
+/// The same reversal four rows apart, lanes 0, 1 and 2 busy throughout, so the
+/// connecting line's lane is forced. `skewed()` decides neither: a partial
+/// repaint looks like a full one there, and its free lane is also the widest.
 fn skewed_across_a_busy_span() -> History {
     literal(&[
         ("t0", &["a"]),
@@ -116,9 +108,8 @@ fn corpus() -> Vec<(&'static str, History)> {
 
 // --- A1: lanes and edges for the fixture set -------------------------------
 
-/// Caught by: not freeing a commit's lane when the commit arrives. The first
-/// parent could never continue in it, and linear history would walk right, one
-/// lane per commit.
+/// Caught by: not freeing a commit's lane on arrival — linear history would
+/// walk right, one lane per commit.
 #[test]
 fn linear_history_stays_in_one_lane() {
     let history = linear();
@@ -135,10 +126,8 @@ fn linear_history_stays_in_one_lane() {
     assert_rows_are_well_formed(&rows);
 }
 
-/// Caught by: dropping the deduplication of parent reservations. `b`'s parent
-/// `base` already has lane 0 reserved by `a`; without the check `b` opens a
-/// second lane for the same commit and `base` is drawn with two incoming lines
-/// instead of one converging merge.
+/// Caught by: dropping the deduplication of parent reservations — `base` gets
+/// two incoming lines rather than one converging merge.
 #[test]
 fn a_branch_and_merge_opens_one_lane_and_closes_it() {
     let history = branch_and_merge();
@@ -156,10 +145,9 @@ fn a_branch_and_merge_opens_one_lane_and_closes_it() {
     assert_rows_are_well_formed(&rows);
 }
 
-/// Caught by: handling only the first two parents of a merge, or dropping the
-/// deduplication of parent reservations. The third segment `out 0>2` vanishes
-/// and `p3` never gets lane 2 — which a lane-count assertion on `o` alone would
-/// miss, since `o` still occupies exactly one lane.
+/// Caught by: handling only a merge's first two parents, or dropping the
+/// deduplication of parent reservations. A lane-count assertion on `o` misses
+/// both: `o` still occupies exactly one lane.
 #[test]
 fn an_octopus_merge_draws_a_line_to_every_parent() {
     let history = octopus_merge();
@@ -178,10 +166,8 @@ fn an_octopus_merge_draws_a_line_to_every_parent() {
     assert_rows_are_well_formed(&rows);
 }
 
-/// Caught by: letting a commit with no reserved lane take a lane that is still
-/// open. `m2` arrives while lanes 0 and 1 carry `a` and `b`; taking lane 0
-/// would draw it on top of the line descending to `a`, with the fixture's lane
-/// count still right.
+/// Caught by: letting a commit with no reservation take a lane still in use —
+/// `m2` would draw over the line descending to `a`, lane count still right.
 #[test]
 fn criss_cross_merges_keep_both_shared_parents_on_one_lane_each() {
     let history = criss_cross();
@@ -200,9 +186,8 @@ fn criss_cross_merges_keep_both_shared_parents_on_one_lane_each() {
     assert_rows_are_well_formed(&rows);
 }
 
-/// Caught by: rejecting or skipping a commit that arrives with no lane
-/// reserved for it. `b2` is the second root's tip, so it would lose its row
-/// entirely.
+/// Caught by: skipping a commit that arrives with no lane reserved — `b2`, the
+/// second root's tip, would lose its row.
 #[test]
 fn multiple_roots_each_get_their_own_lane() {
     let history = multiple_roots();
@@ -220,10 +205,9 @@ fn multiple_roots_each_get_their_own_lane() {
     assert_rows_are_well_formed(&rows);
 }
 
-/// Caught by: choosing the lowest free lane for a commit's first parent instead
-/// of the commit's own lane — `b` sits in lane 1 with lane 0 free, so its parent
-/// `c` would jump left and the branch would appear to change track for no
-/// reason. This test is the only one that fails on that change.
+/// Caught by: giving a commit's first parent the lowest free lane rather than
+/// the commit's own — `c` jumps left out of lane 1. The only test that fails on
+/// that change.
 #[test]
 fn a_branch_keeps_its_lane_when_the_one_to_its_left_falls_empty() {
     let history = lane_outlives_the_one_to_its_left();
@@ -244,13 +228,10 @@ fn a_branch_keeps_its_lane_when_the_one_to_its_left_falls_empty() {
 
 // --- A2: the skew regression ------------------------------------------------
 
-/// A2. The walk delivers `p` before its child `c`; every commit still gets a
-/// row and every parent edge is drawn, end to end.
-///
 /// Caught by: reserving a lane for an already-laid-out parent instead of
-/// connecting upward (the `c`→`p` line descends into a lane that never fills);
-/// or connecting upward without repainting the rows in between, which drops
-/// `t`'s `pass 2~` and breaks the line across the row it has to cross.
+/// connecting upward (A2 — the `c`→`p` line descends into a lane that never
+/// fills); or connecting upward without repainting the rows between, which
+/// drops `t`'s `pass 2~`.
 #[test]
 fn skewed_history_places_every_commit_and_draws_every_parent_edge() {
     let history = skewed();
@@ -286,12 +267,9 @@ fn skewed_history_places_every_commit_and_draws_every_parent_edge() {
     );
 }
 
-/// A2, at a width that can decide things `skewed()` cannot.
-///
-/// Caught by: running the connecting line down a lane already in use (lanes 0,
-/// 1 and 2 all carry a line across this span, so the picture stops joining up);
-/// or repainting only part of the span, which `skewed()`'s single intermediate
-/// row cannot see.
+/// Caught by: running the connecting line down a lane already in use, or
+/// repainting only part of the span — neither of which `skewed()`'s single
+/// intermediate row can see.
 #[test]
 fn a_line_to_a_parent_delivered_early_runs_down_a_lane_that_is_free_throughout() {
     let history = skewed_across_a_busy_span();
@@ -319,8 +297,7 @@ fn a_line_to_a_parent_delivered_early_runs_down_a_lane_that_is_free_throughout()
     assert_rows_are_well_formed(&rows);
 }
 
-/// The same totality over generated histories: whatever order the walk uses,
-/// every commit is placed and every parent edge is drawable.
+/// The same totality over generated histories, in any walk order.
 #[test]
 fn generated_skewed_histories_are_all_placed_and_all_connected() {
     let mut saw_skew = false;
@@ -341,20 +318,17 @@ fn generated_skewed_histories_are_all_placed_and_all_connected() {
 
 // --- A3: stability ----------------------------------------------------------
 
-/// A3. Laying out the first N commits and laying out N+M agree on the first N
-/// rows' lane indices exactly, and an edge list may only grow, by segments of a
-/// line to a parent already on screen — the one thing R1.2 permits.
-///
-/// Caught by: renumbering or compacting lanes as commits arrive (a lane index
-/// moves), or drawing the late-joining line by rewriting existing segments
-/// rather than adding new ones (the prefix check fails).
+/// A3: N commits and N+M agree on the first N lane indices exactly, and an edge
+/// list may only grow, by segments of a line to a parent already on screen —
+/// the one thing R1.2 permits. Caught by: renumbering lanes as commits arrive,
+/// or drawing the late-joining line by rewriting existing segments.
 #[test]
 fn lane_indices_never_change_when_more_commits_are_assigned() {
     let mut cases = corpus();
     for seed in 1..40u64 {
         cases.push(("generated", random_history(seed, 20, true)));
-        // The control: a walk with nothing delivered backwards may not repaint
-        // a single row, however wide the graph gets. These reach lane 8.
+        // Control: with nothing delivered backwards, no row may be repainted
+        // however wide the graph. These reach lane 8.
         cases.push(("generated in order", random_history(seed, 20, false)));
     }
 
@@ -386,10 +360,9 @@ fn lane_indices_never_change_when_more_commits_are_assigned() {
                 let backwards = links_delivered_backwards(history);
                 for gained in &after.edges[before.edges.len()..] {
                     saw_a_gained_segment = true;
-                    // Derived from the walk, not from the flag the assigner
-                    // set: a row may be repainted only where it lies on the
-                    // span of a line to a parent the walk delivered early, and
-                    // only when that line's child is one the longer run added.
+                    // Derived from the walk, not from the assigner's own flag:
+                    // a row may be repainted only on the span of a line to an
+                    // early-delivered parent whose child the longer run added.
                     let entitled = backwards.iter().any(|&(parent, child)| {
                         parent <= index && index <= child && child >= prefix_len
                     });
@@ -415,8 +388,7 @@ fn lane_indices_never_change_when_more_commits_are_assigned() {
 
 // --- R1.5 and arrival-order defences ---------------------------------------
 
-/// The assigner is a function of its input alone: same commits in, same rows
-/// out, every time.
+/// A function of its input alone: same commits in, same rows out.
 #[test]
 fn assignment_is_deterministic() {
     for (name, history) in corpus() {
@@ -428,10 +400,9 @@ fn assignment_is_deterministic() {
     }
 }
 
-/// Feeding commits one at a time must match feeding them all at once, because
-/// `cairn-git` streams them. Rows arrive two ways — handed back as the window
-/// makes them final, and left inside it at the end — and together they have to
-/// be the whole walk, in order.
+/// Streaming one at a time matches feeding them all at once. Rows arrive two
+/// ways — handed back as the window makes them final, and left inside it at the
+/// end — and together they must be the whole walk, in order.
 #[test]
 fn pushing_one_at_a_time_matches_assigning_the_whole_walk() {
     for (name, history) in corpus() {
@@ -450,9 +421,8 @@ fn pushing_one_at_a_time_matches_assigning_the_whole_walk() {
     }
 }
 
-/// Input a repository can really produce and a naive assigner would trip over:
-/// an empty walk, a commit repeated, the same parent named twice, and a parent
-/// not in the walk at all. None of these may panic.
+/// Input a repository can really produce: an empty walk, a repeated commit, a
+/// parent named twice, a parent not in the walk. None may panic.
 #[test]
 fn malformed_input_is_placed_rather_than_rejected() {
     assert!(assign(&literal(&[])).is_empty());

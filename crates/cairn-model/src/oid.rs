@@ -1,28 +1,20 @@
 use std::fmt;
 
-/// A git object id: the hash itself, fixed width, never on the heap.
+/// A git object id: 20 bytes of SHA-1 or 32 of SHA-256, never on the heap.
 ///
-/// The raw digest rather than a re-export of `gix`'s `ObjectId`, because the UI
-/// must be able to name a commit without linking the engine.
-///
-/// Both widths git defines are held: 20 bytes of SHA-1 or 32 of SHA-256. The
-/// width travels with the bytes, so a SHA-1 is never mistaken for a SHA-256
-/// whose tail happens to be zero, and the two never compare equal.
-///
-/// Text is produced on demand into a stack buffer the caller owns
-/// ([`Oid::hex`], [`Oid::short`]), so naming an id costs no allocation; drawing
-/// one still copies out of that buffer — see [`OidHex`].
+/// The width travels with the bytes, so a SHA-1 never equals the SHA-256 that
+/// zero-extends it. Hex is written on demand into a caller-owned [`OidHex`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Oid {
-    /// The digest, left-aligned. Everything past `width` is zero, so the
-    /// derived byte comparison reads only what was written.
+    /// Left-aligned, zero past `width`, so the derived `Eq` reads only what was
+    /// written.
     bytes: [u8; Oid::MAX_BYTES],
-    /// Which of git's two hashes this is. Declared after the bytes so that
-    /// comparison reads the digest first and the width second.
+    /// Declared after `bytes`: the derived `Ord` compares the digest first.
+    /// Twin: `ordering_compares_the_digest_before_the_width`.
     width: Width,
 }
 
-/// The widths git defines, as the number of bytes in the digest.
+/// Digest width; the discriminant is the byte count `as_bytes` slices by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Width {
     Sha1 = 20,
@@ -31,9 +23,7 @@ enum Width {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OidParseError {
-    /// Git object ids are 40 hex characters (SHA-1) or 64 (SHA-256).
     BadLength(usize),
-    /// A digest, as raw bytes, is 20 (SHA-1) or 32 (SHA-256) of them.
     BadByteCount(usize),
     NotHex,
 }
@@ -51,15 +41,11 @@ impl fmt::Display for OidParseError {
 impl std::error::Error for OidParseError {}
 
 impl Oid {
-    /// The widest digest an `Oid` holds, in bytes: SHA-256.
     const MAX_BYTES: usize = 32;
-    /// The widest digest an `Oid` prints as, in hex characters.
     const MAX_HEX: usize = Self::MAX_BYTES * 2;
-    /// How many hex characters [`Oid::short`] shows.
     const SHORT_HEX: usize = 7;
 
-    /// Parse hex text, in either case: 40 characters for SHA-1, 64 for
-    /// SHA-256. Anything else is rejected rather than truncated.
+    /// Parses 40 or 64 hex characters, in either case.
     pub fn parse(hex: &str) -> Result<Self, OidParseError> {
         let width = match hex.len() {
             40 => Width::Sha1,
@@ -68,8 +54,7 @@ impl Oid {
         };
         let mut bytes = [0u8; Self::MAX_BYTES];
         for (byte, pair) in bytes.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
-            // `chunks_exact(2)` always yields pairs; the arm keeps the match
-            // total without an index that could panic.
+            // `chunks_exact(2)` always yields pairs; the arm avoids indexing.
             let [high, low] = pair else {
                 return Err(OidParseError::NotHex);
             };
@@ -78,8 +63,7 @@ impl Oid {
         Ok(Self { bytes, width })
     }
 
-    /// Take a digest as git itself stores it: 20 bytes or 32. This is the
-    /// boundary the engine uses — raw bytes never go via hex to cross the seam.
+    /// Takes a digest as git stores it: 20 bytes or 32.
     pub fn from_bytes(digest: &[u8]) -> Result<Self, OidParseError> {
         let width = match digest.len() {
             20 => Width::Sha1,
@@ -94,22 +78,19 @@ impl Oid {
         Ok(Self { bytes, width })
     }
 
-    /// The digest as git stores it: 20 bytes for SHA-1, 32 for SHA-256.
+    /// The digest, 20 bytes or 32.
     pub fn as_bytes(&self) -> &[u8] {
-        // The slice always exists: `width` is one of two values, both inside
-        // the array. Empty is the fail-safe fallback — handing back the whole
-        // buffer would pass a SHA-1 off as a SHA-256 and look up the wrong
-        // object.
+        // Empty on the unreachable miss: the whole buffer would pass a SHA-1
+        // off as a SHA-256 and look up the wrong object.
         self.bytes.get(..self.width as usize).unwrap_or_default()
     }
 
-    /// The full lowercase hex form, written into a buffer the caller owns.
+    /// The full hex form, lowercase.
     pub fn hex(&self) -> OidHex {
         OidHex::of(self.as_bytes(), Self::MAX_HEX)
     }
 
-    /// The abbreviation a UI shows in a list. Not guaranteed unique in the
-    /// repository; never use it to look an object back up.
+    /// A 7-character abbreviation. Not unique; never look an object up by it.
     pub fn short(&self) -> OidHex {
         OidHex::of(self.as_bytes(), Self::SHORT_HEX)
     }
@@ -117,20 +98,17 @@ impl Oid {
 
 /// The hex text of an [`Oid`], held inline rather than on the heap.
 ///
-/// Returned by [`Oid::hex`] and [`Oid::short`]. The digits live in the caller's
-/// own frame, and [`OidHex::as_str`] borrows from that buffer for as long as it
-/// is held; a caller needing the text to outlive the frame copies it out.
+/// [`OidHex::as_str`] borrows from this value; text outliving it must be copied.
 #[derive(Clone, Copy)]
 pub struct OidHex {
-    /// The characters, zero past `len`, so the buffer is canonical: a future
-    /// `PartialEq` or `Hash` over it cannot tell two identical abbreviations
-    /// apart by what an earlier write left behind.
+    /// Zero past `len`, so equal abbreviations hold equal buffers. Twin:
+    /// `an_abbreviation_leaves_nothing_behind_the_length_it_reports`.
     digits: [u8; Oid::MAX_HEX],
     len: usize,
 }
 
 impl OidHex {
-    /// Write `digest` out as hex, stopping once `wanted` characters exist.
+    /// Writes `digest` as hex, stopping once `wanted` characters exist.
     fn of(digest: &[u8], wanted: usize) -> Self {
         let mut digits = [0u8; Oid::MAX_HEX];
         let mut written = 0usize;
@@ -138,16 +116,14 @@ impl OidHex {
             if written >= wanted {
                 break;
             }
-            // `chunks_exact_mut(2)` always yields pairs; the arm keeps the
-            // match total without an index that could panic.
+            // `chunks_exact_mut(2)` always yields pairs; the arm avoids indexing.
             let [high, low] = pair else { break };
             *high = hex_digit(byte >> 4);
             *low = hex_digit(byte);
             written += 2;
         }
-        // A byte is two characters, so an odd `wanted` leaves one written past
-        // it. Cut to what was asked for and blank the rest, rather than carry a
-        // digit nothing reports.
+        // A byte is two characters, so an odd `wanted` overshoots by one: cut
+        // to it and blank the tail.
         let len = written.min(wanted).min(Oid::MAX_HEX);
         if let Some(tail) = digits.get_mut(len..) {
             tail.fill(0);
@@ -155,12 +131,9 @@ impl OidHex {
         Self { digits, len }
     }
 
-    /// The characters, borrowed from this buffer.
     pub fn as_str(&self) -> &str {
-        // Neither step can fail: every byte written is an ASCII hex digit and
-        // `len` never passes what was written. The fallback is here because a
-        // git client may not panic on a path a user can reach; that it is never
-        // the answer is pinned by `every_width_round_trips_through_hex`.
+        // Empty rather than a panic on a user-reachable path. Twin proving it
+        // unreachable: `every_width_round_trips_through_hex`.
         self.digits
             .get(..self.len)
             .and_then(|written| std::str::from_utf8(written).ok())
@@ -192,7 +165,7 @@ impl fmt::Debug for Oid {
     }
 }
 
-/// One hex character for the low four bits of `value`, lowercase.
+/// The lowercase hex character for the low four bits of `value`.
 const fn hex_digit(value: u8) -> u8 {
     match value & 0x0f {
         digit @ 0..=9 => b'0' + digit,
@@ -240,16 +213,13 @@ mod tests {
             Oid::parse(&"a".repeat(41)),
             Err(OidParseError::BadLength(41))
         );
-        // A 40-BYTE string that is not 40 characters: the hex check rejects
-        // it, not the length check.
+        // 40 bytes but not 40 characters: the hex check rejects it, not length.
         let wide = "é".repeat(20);
         assert_eq!(wide.len(), 40);
         assert_eq!(Oid::parse(&wide), Err(OidParseError::NotHex));
     }
 
-    /// Caught by: a length rule that accepts a RANGE ending at 40 or beginning
-    /// at 64 — it passes a fixture of 3 and 41 while silently zero-padding a
-    /// short id or truncating a long one.
+    /// Caught by: a length rule accepting a range rather than exactly 40 or 64.
     #[test]
     fn a_length_either_side_of_each_width_is_rejected() {
         for length in [32usize, 39, 41, 63, 65] {
@@ -263,10 +233,8 @@ mod tests {
         assert!(Oid::parse(&"a".repeat(64)).is_ok());
     }
 
-    /// One mistyped character in an otherwise valid id. Caught by: dropping
-    /// either half of the hex-pair check — a fixture where EVERY character is
-    /// invalid cannot tell the two halves apart, so this one puts the bad
-    /// character on each side of the pair in turn.
+    /// Caught by: dropping either half of the hex-pair check, which an
+    /// all-invalid fixture cannot tell apart.
     #[test]
     fn a_single_bad_character_is_rejected_at_either_half_of_a_pair() {
         for index in [0usize, 1, 20, 21, 38, 39] {
@@ -283,8 +251,7 @@ mod tests {
         }
     }
 
-    /// Caught by: dropping the carried width. A SHA-1 and the SHA-256 whose
-    /// first twenty bytes match it and whose tail is zero are different ids.
+    /// Caught by: dropping the carried width.
     #[test]
     fn a_sha1_is_never_a_zero_padded_sha256() {
         let short = Oid::parse(&"ab".repeat(20)).unwrap();
@@ -293,16 +260,12 @@ mod tests {
         assert_ne!(short.hex().as_str(), long.hex().as_str());
         assert_eq!(short.hex().as_str().len(), 40);
         assert_eq!(long.hex().as_str().len(), 64);
-        // ... and both stand as separate keys where the assigner indexes
-        // commits by id. This follows from `Eq`, not `Hash` — a hash collision
-        // is legal — so it pins the map, not the hasher.
+        // Separate map keys follows from `Eq`, not `Hash`: collisions are legal.
         use std::collections::HashSet;
         let both: HashSet<Oid> = [short, long].into_iter().collect();
         assert_eq!(both.len(), 2);
     }
 
-    /// Both directions of the byte boundary, at both widths: the path the
-    /// engine uses, which never goes near hex.
     #[test]
     fn raw_digests_cross_in_both_directions() {
         for hex in [SHA1, SHA256] {
@@ -311,8 +274,7 @@ mod tests {
             assert_eq!(parsed, from_bytes);
             assert_eq!(from_bytes.hex().as_str(), hex);
         }
-        // The whole band between the two widths is rejected, not just the byte
-        // after SHA-1: accepting 24 would take a digest and drop four bytes.
+        // The whole band is rejected: accepting 24 would drop four bytes.
         for count in [0usize, 19, 21, 24, 31, 33] {
             assert_eq!(
                 Oid::from_bytes(&vec![0u8; count]),
@@ -322,9 +284,7 @@ mod tests {
         }
     }
 
-    /// The twin for `as_str`'s fallback: every byte of every width, at both
-    /// lengths `Oid` produces, comes back as readable hex, so the fallback is
-    /// never the answer.
+    /// Pins `as_str`'s empty fallback as unreachable at either width.
     #[test]
     fn every_width_round_trips_through_hex() {
         for width in [20usize, 32] {
@@ -342,8 +302,7 @@ mod tests {
         }
     }
 
-    /// The lane assigner runs on ordering and hashing, so they must be total
-    /// and agree with the text form rather than with the padding.
+    /// The lane assigner keys on this ordering.
     #[test]
     fn ids_order_by_their_digest() {
         let low = Oid::parse(&format!("00{}", "ff".repeat(19))).unwrap();
@@ -352,9 +311,8 @@ mod tests {
         assert_eq!(low.cmp(&low), std::cmp::Ordering::Equal);
     }
 
-    /// Caught by: comparing the width before the digest — every SHA-1 would
-    /// sort before every SHA-256 whatever their bytes, and the order would stop
-    /// agreeing with the text. Nothing but the field order says this.
+    /// Caught by: comparing the width before the digest. Only the field order
+    /// says otherwise.
     #[test]
     fn ordering_compares_the_digest_before_the_width() {
         let sha1 = Oid::parse(&"ff".repeat(20)).unwrap();
@@ -372,9 +330,7 @@ mod tests {
         );
     }
 
-    /// Each text form pinned to its own output — `Display` for errors and logs,
-    /// `Debug` for a failed assertion. Caught by: either rendering nothing at
-    /// all, which every other test would tolerate.
+    /// Caught by: a text form rendering nothing, which every other test tolerates.
     #[test]
     fn every_text_form_renders_the_id_it_names() {
         let sha256 = Oid::parse(SHA256).unwrap();
@@ -392,9 +348,8 @@ mod tests {
         );
     }
 
-    /// Caught by: leaving a digit past the reported length. `short()` writes
-    /// whole pairs and then cuts to seven, so two abbreviations that read the
-    /// same would otherwise differ by an eighth digit nobody can see.
+    /// Caught by: leaving the eighth digit `short()` writes past the length
+    /// it reports.
     #[test]
     fn an_abbreviation_leaves_nothing_behind_the_length_it_reports() {
         let a = Oid::parse(&format!("{}{}", "0123456", "f".repeat(33))).unwrap();

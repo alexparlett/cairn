@@ -1,63 +1,38 @@
-//! A history list as something that draws one needs it.
+//! Row content, row identity, and the pairing of the two with a graph row.
 //!
-//! [`crate::graph`] knows nothing about commits and [`CommitSummary`] knows
-//! nothing about drawing; a list needs both for the same entry, and pairing
-//! them by index at the call site is how the two halves drift apart.
-//!
-//! A row is a **list entry**, not by definition a commit
-//! (`docs/prd/history-graph.md`, R6): the working-tree row occupies a lane and
-//! has lines pass it, so it is laid out like any other. That variant belongs to
-//! `refs-and-status`; this packet emits only commits.
+//! A row is a list entry, not by definition a commit (R6): the working-tree row
+//! lays out like any other. That variant belongs to `refs-and-status`; this
+//! packet emits only commits.
 
 use crate::{CommitSummary, GraphRow, Oid};
 
-/// What a row is *about*.
-///
-/// A consumer reads a row by matching here, so the entry that is not a commit
-/// arrives as a variant rather than as a nullable commit or a flag.
-///
-/// Deliberately **not** `#[non_exhaustive]`: a wildcard arm in a view is a row
-/// silently not drawn, and R6.2 puts the cost of the next variant on whoever
-/// adds it. Added FIELDS are additive by R6.3; only a new kind of row breaks a
-/// match.
+/// What a row is about. Deliberately not `#[non_exhaustive]`: a wildcard arm is
+/// a row silently not drawn, so R6.2 puts the cost of a new variant on whoever
+/// adds it. New fields stay additive (R6.3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RowContent {
-    /// A commit, summarised as a list needs it.
     Commit(CommitSummary),
-    /// Stand-in for content that is not a commit, compiled only into this
-    /// crate's own tests.
-    ///
-    /// It exists so A9 is decidable before the real non-commit row is written:
-    /// without it, collapsing `RowContent` back into a `commit: CommitSummary`
-    /// field would leave the suite green. Invisible to every other crate, so it
-    /// cannot become the shape `refs-and-status` is forced to adopt.
+    /// Test-only stand-in making A9 decidable: without it, collapsing
+    /// `RowContent` into a `commit: CommitSummary` field would leave the suite
+    /// green. Invisible to every other crate.
     #[cfg(test)]
     NotACommit,
 }
 
-/// A row's stable identity: what a selection survives on, and what a detail
-/// pane is opened from (R6.1).
-///
-/// Not an [`Oid`], and not an index: an index moves when rows arrive above it,
-/// and an id assumes every row is a commit, which the working-tree row is not.
-/// So identity is a sum in step with [`RowContent`]. Deliberately NOT ordered —
-/// that one kind of row sorts before another is not a fact the model knows.
+/// A row's stable identity, survived by a selection and opened from by a detail
+/// pane (R6.1). Not an index (it moves as rows arrive above) and not an
+/// [`Oid`] (the working-tree row has none). Deliberately not ordered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RowId {
-    /// A commit row, identified by the commit.
     Commit(Oid),
-    /// The identity of [`RowContent::NotACommit`] — see there. Test-only, and
-    /// carries no `Oid`, which is what makes "identity does not assume an id"
-    /// something a test can decide.
+    /// Test-only, and carries no `Oid` — what makes "identity does not assume
+    /// an id" decidable.
     #[cfg(test)]
     NotACommit,
 }
 
-/// One line of history: what the row is about, and where its node and lines sit.
-///
-/// Nothing structurally enforces that the two halves describe the same entry,
-/// so the pairing is made once, by whoever built the row, and read back through
-/// [`HistoryRow::id`].
+/// One line of history. Nothing enforces that the two halves describe the same
+/// entry; the builder pairs them once and [`HistoryRow::id`] reads it back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryRow {
     pub content: RowContent,
@@ -65,8 +40,8 @@ pub struct HistoryRow {
 }
 
 impl HistoryRow {
-    /// This row's identity, derived from its content rather than stored beside
-    /// it: two fields that must agree are two fields that can disagree.
+    /// Derived from `content`, never stored beside it: two fields that must
+    /// agree can disagree.
     pub fn id(&self) -> RowId {
         match &self.content {
             RowContent::Commit(commit) => RowId::Commit(commit.id),
@@ -100,8 +75,8 @@ mod tests {
         }
     }
 
-    /// Caught by: reading the identity off the graph half. The row is built
-    /// with a different id in each half, so agreeing halves cannot hide it.
+    /// Caught by: reading the identity off the graph half; the halves carry
+    /// different ids.
     #[test]
     fn a_row_takes_its_identity_from_its_content() {
         let id = Oid::parse("0123456789abcdef0123456789abcdef01234567").unwrap();
@@ -118,14 +93,9 @@ mod tests {
         assert_ne!(row.id(), RowId::Commit(other));
     }
 
-    /// A9's first half: a row can be about something that is not a commit, and
-    /// its identity then holds no `Oid`.
-    ///
-    /// Caught by: collapsing the shape back to
-    /// `HistoryRow { commit: CommitSummary, graph }` — there is then nowhere to
-    /// put this row and nowhere for its identity to come from. A9's second half
-    /// (consumers match rather than assume) is carried by the exhaustive matches
-    /// at the call sites, not here.
+    /// Caught by: collapsing the shape to `HistoryRow { commit, graph }`, which
+    /// leaves nowhere to put this row. A9's second half — consumers match
+    /// rather than assume — is carried by the call sites, not here.
     #[test]
     fn a_row_can_be_about_something_that_is_not_a_commit() {
         let row = HistoryRow {
@@ -139,8 +109,7 @@ mod tests {
             !matches!(id, RowId::Commit(_)),
             "identity assumed the row was a commit"
         );
-        // Identity is per row kind, not per `Oid`: equal to itself, unequal to
-        // a commit row, which is all a selection needs of it.
+        // Identity is per row kind, not per `Oid`.
         assert_eq!(id, row.id());
         assert_ne!(
             id,
@@ -154,11 +123,9 @@ mod tests {
         );
     }
 
-    /// Pins a shape, not a result: a row is read only by matching on its
-    /// content, exhaustively and without a wildcard. Caught by: `RowContent`
-    /// becoming a bare commit field — this stops compiling. `cairn-app` writes
-    /// the one-arm form of the same match, so a real second variant is a compile
-    /// error there rather than a row silently not drawn.
+    /// Pins a shape, not a result. Caught by: `RowContent` becoming a bare
+    /// commit field, which stops this compiling. `cairn-app` writes the same
+    /// match without a wildcard.
     #[test]
     fn a_consumer_reads_a_row_by_matching_on_its_content() {
         let id = Oid::parse("0123456789abcdef0123456789abcdef01234567").unwrap();

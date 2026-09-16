@@ -1,8 +1,7 @@
-//! The vocabulary that crosses Cairn's engine/UI boundary.
+//! Commit, ref, graph and lane types shared by the engine and the UI.
 //!
-//! Plain data, plus the pure layout algorithm in `lane_assignment`. No `gix`
-//! types, no Freya types, no I/O, no clock — which is what lets each side of
-//! the seam stay ignorant of the other.
+//! Plain data and pure functions: no `gix` or Freya types, no I/O, no clock.
+//! Twin: `layers_never_name_the_crates_they_are_sealed_from`.
 
 mod confirm;
 mod graph;
@@ -16,7 +15,7 @@ pub use history::{HistoryRow, RowContent, RowId};
 pub use lane_assignment::LaneAssigner;
 pub use oid::{Oid, OidHex, OidParseError};
 
-/// A commit as a list needs it: enough to draw a row, never the full object.
+/// What a list row needs of a commit, never the full object.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitSummary {
     pub id: Oid,
@@ -24,7 +23,7 @@ pub struct CommitSummary {
     pub summary: String,
     pub author_name: String,
     pub author_email: String,
-    /// Seconds since the Unix epoch, as recorded in the commit.
+    /// Seconds since the Unix epoch.
     pub author_time: i64,
 }
 
@@ -41,7 +40,7 @@ impl RefName {
         &self.0
     }
 
-    /// The part a human reads: `refs/heads/main` renders as `main`.
+    /// `refs/heads/main` becomes `main`; an unknown namespace is left whole.
     pub fn shorthand(&self) -> &str {
         for prefix in ["refs/heads/", "refs/remotes/", "refs/tags/"] {
             if let Some(rest) = self.0.strip_prefix(prefix) {

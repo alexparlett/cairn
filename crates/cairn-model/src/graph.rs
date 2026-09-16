@@ -1,17 +1,12 @@
-//! The shape of a history graph, as something that draws it needs it.
+//! Lanes, edge segments and graph rows.
 //!
-//! A *row* is one commit's line in the list. A *lane* is a vertical track the
-//! connecting lines run in, numbered from the left. An *edge segment* is one
-//! piece of line crossing one row. The vocabulary is geometric only: nothing
-//! here names genealogy, so a renderer draws a row without knowing what the
-//! line means.
+//! Geometric vocabulary only: nothing here names genealogy, so a renderer draws
+//! a row without knowing what a line means.
 
 use crate::Oid;
 
-/// A vertical track in the graph, numbered from the left starting at zero.
-///
-/// Assigned once and never renumbered, however many more commits are loaded
-/// afterwards, so it is safe to turn straight into an x position.
+/// A vertical track, numbered from the left. Assigned once and never renumbered
+/// as more commits load, so it converts straight to an x position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Lane(usize);
 
@@ -20,51 +15,36 @@ impl Lane {
         Self(index)
     }
 
-    /// How many lanes in from the left this one sits. Lane numbers are dense
-    /// from zero, but a lane is only drawn on a row where a segment names it.
+    /// Dense from zero; a lane is drawn only on rows whose segments name it.
     pub fn index(self) -> usize {
         self.0
     }
 }
 
-/// What a segment touches in the row it crosses: the whole geometric
-/// vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EdgeKind {
-    /// Crosses the row untouched: top edge to bottom edge, in one lane.
+    /// Top edge to bottom edge, in one lane.
     Passing,
-    /// Arrives from the row above and stops at this row's commit: top edge in
-    /// lane `from` to the node in lane `to`.
+    /// Top edge in `from` to this row's node in `to`.
     IntoCommit,
-    /// Leaves this row's commit and continues below: the node in lane `from`
-    /// to the bottom edge in lane `to`.
+    /// This row's node in `from` to the bottom edge in `to`.
     OutOfCommit,
 }
 
-/// One piece of a connecting line, clipped to a single row.
-///
-/// Rows are self-contained on purpose: drawing row 400 needs row 400 and
-/// nothing else, which is what makes a virtualised list possible.
+/// One piece of a connecting line, clipped to a single row. Drawing a row needs
+/// that row alone, which is what a virtualised list requires.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EdgeSegment {
-    /// Lane the line occupies where it meets the top edge of the row, or where
-    /// it leaves this row's commit.
     pub from: Lane,
-    /// Lane the line occupies where it meets the bottom edge of the row, or
-    /// where it reaches this row's commit.
     pub to: Lane,
     pub kind: EdgeKind,
-    /// True when this segment's line joins a commit to a parent drawn *above*
-    /// it: the walk handed the parent over first, which committer-date skew
-    /// makes ordinary. Geometry is unchanged; the flag is so a renderer can
-    /// mark the reversal rather than silently drawing time running backwards.
-    /// A flagged segment is not a promise that the line's other end is
-    /// visible — see `docs/systems/history-graph.md`.
+    /// True when the line joins a commit to a parent drawn *above* it, which
+    /// date skew makes ordinary. Not a promise the other end is visible — see
+    /// `docs/systems/history-graph.md`.
     pub out_of_order: bool,
 }
 
 impl EdgeSegment {
-    /// A line crossing the row untouched, in a single lane.
     pub fn passing(lane: Lane) -> Self {
         Self {
             from: lane,
@@ -92,8 +72,6 @@ impl EdgeSegment {
         }
     }
 
-    /// The same segment, flagged as part of a line that runs backwards on
-    /// screen. See [`EdgeSegment::out_of_order`].
     pub fn marked_out_of_order(self) -> Self {
         Self {
             out_of_order: true,
@@ -102,15 +80,13 @@ impl EdgeSegment {
     }
 }
 
-/// One commit's line in the history graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphRow {
     pub id: Oid,
-    /// Lane the commit's node sits in. Fixed for the life of the row.
+    /// The node's lane, fixed for the life of the row.
     pub lane: Lane,
-    /// Every line crossing this row, including those that begin or end at its
-    /// commit. Draw all of them; read nothing into their order, which is
-    /// deterministic only so that tests can pin it.
+    /// Every line crossing this row. Order is deterministic for tests only;
+    /// read nothing into it.
     pub edges: Vec<EdgeSegment>,
 }
 

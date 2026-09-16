@@ -1,16 +1,14 @@
 //! Literal parent maps to lay out, and the checks every layout must satisfy.
 //!
-//! A history here is a list of `(commit, parents)` in the order a walk would
-//! hand them over — the assigner never sees a repository, so neither do its
-//! tests. Labels are hex-encoded into object ids, so a failure message reads
-//! back to the label that produced it.
+//! Labels are hex-encoded into object ids, so a failure message reads back to
+//! the label that produced it.
 
 use std::collections::{HashMap, HashSet};
 
 use cairn_model::{EdgeKind, GraphRow, Lane, LaneAssigner, Oid};
 
-/// `(commit label, parent labels)` in walk order — newest first, except where
-/// a fixture is deliberately skewed.
+/// `(commit label, parent labels)` in walk order, newest first unless a fixture
+/// is deliberately skewed.
 pub type History = Vec<(String, Vec<String>)>;
 
 pub fn literal(rows: &[(&str, &[&str])]) -> History {
@@ -24,12 +22,9 @@ pub fn literal(rows: &[(&str, &[&str])]) -> History {
         .collect()
 }
 
-/// A label as an object id: the label's bytes in hex, padded out to SHA-1
-/// width. Reversible, so failures name the commit a human wrote down.
-///
-/// `unwrap` is denied here — `clippy.toml`'s carve-out reaches `#[cfg(test)]`
-/// code only, which an integration test crate is not — so the failure path
-/// names what went wrong instead.
+/// A label as an object id: its bytes in hex, padded to SHA-1 width, and
+/// reversible. `unwrap` is denied here — `clippy.toml`'s carve-out reaches
+/// `#[cfg(test)]` code only, which an integration test crate is not.
 pub fn oid(label: &str) -> Oid {
     let mut hex: String = label.bytes().map(|b| format!("{b:02x}")).collect();
     assert!(hex.len() <= 40, "label {label:?} is too long to encode");
@@ -40,8 +35,7 @@ pub fn oid(label: &str) -> Oid {
 }
 
 pub fn label_of(id: &Oid) -> String {
-    // The label was hex-encoded and padded with zero bytes, so the padding is
-    // where the label ends.
+    // Zero padding is where the label ends.
     let label: Vec<u8> = id
         .as_bytes()
         .iter()
@@ -59,9 +53,8 @@ pub fn assign(history: &History) -> Vec<GraphRow> {
     )
 }
 
-/// One readable line per row: the commit, its lane, and every segment crossing
-/// it. `pass 2` is a line crossing lane 2, `in 1>0` runs from the top edge in
-/// lane 1 to the node in lane 0, `out 0>1` from the node to the bottom edge,
+/// One line per row. `pass 2` crosses lane 2, `in 1>0` runs from the top edge
+/// in lane 1 to the node in lane 0, `out 0>1` from the node to the bottom edge,
 /// and a trailing `~` marks a segment flagged out of order.
 pub fn describe(rows: &[GraphRow]) -> Vec<String> {
     rows.iter()
@@ -103,8 +96,8 @@ fn distinct_parents(parents: &[String]) -> Vec<&String> {
     seen
 }
 
-/// The lane carrying a continuous line from the node on row `top` to the node
-/// on row `bottom`, if one is drawn at all.
+/// The lane carrying a continuous line from row `top`'s node to row
+/// `bottom`'s, if one is drawn.
 fn connecting_lane(rows: &[GraphRow], top: usize, bottom: usize) -> Option<Lane> {
     rows[top]
         .edges
@@ -126,12 +119,9 @@ fn connecting_lane(rows: &[GraphRow], top: usize, bottom: usize) -> Option<Lane>
         })
 }
 
-/// Every commit gets a row, every parent link is a line a renderer can draw end
-/// to end, and no line is drawn that is not a parent link.
-///
-/// The second half is what stops extra edges passing: segments leaving a node
-/// must equal the parent links, so a spurious line cannot hide behind a
-/// satisfied continuity check.
+/// Every commit gets a row, every parent link is drawable end to end, and no
+/// line is drawn that is not a parent link. The last clause is what stops a
+/// spurious line hiding behind a satisfied continuity check.
 pub fn assert_every_parent_edge_is_drawn(history: &History, rows: &[GraphRow]) {
     assert_eq!(rows.len(), history.len(), "one row per commit");
     assert_the_picture_joins_up(rows);
@@ -177,9 +167,8 @@ pub fn assert_every_parent_edge_is_drawn(history: &History, rows: &[GraphRow]) {
     );
 }
 
-/// The structural contract of a row: lane numbering is dense from zero, a
-/// passing line stays in its lane, a line into the row ends at the row's node
-/// and a line out of it starts there.
+/// Lane numbering is dense from zero, a passing line stays in its lane, a line
+/// into the row ends at its node and a line out of it starts there.
 pub fn assert_rows_are_well_formed(rows: &[GraphRow]) {
     if rows.is_empty() {
         return;
@@ -221,13 +210,10 @@ pub fn assert_rows_are_well_formed(rows: &[GraphRow]) {
     }
 }
 
-/// The picture has to join up: what leaves the bottom of one row is exactly
-/// what enters the top of the next, no lane carries two lines at once, and
-/// nothing enters the top of the very first row.
-///
-/// This is what makes a fabricated segment of ANY kind visible. An edge count
-/// bounds only the lines leaving a node, so a spurious `Passing` or
-/// `IntoCommit` slips past it; a line with no matching line above it cannot.
+/// What leaves the bottom of one row is exactly what enters the top of the
+/// next, no lane carries two lines at once, and nothing enters the first row.
+/// This is what makes a fabricated segment of any kind visible: an edge count
+/// bounds only the lines leaving a node, so a spurious `Passing` slips past.
 pub fn assert_the_picture_joins_up(rows: &[GraphRow]) {
     let mut leaving_the_row_above: HashSet<usize> = HashSet::new();
     for row in rows {
@@ -268,14 +254,14 @@ pub fn assert_the_picture_joins_up(rows: &[GraphRow]) {
                 describe(rows).join("\n")
             );
         }
-        // A passing line and a line out of the node may share a lane: that is
-        // a branch merging into the line already descending it.
+        // A passing line and a line out of the node share a lane when a branch
+        // merges into the line already descending it.
         leaving_the_row_above = passing_out.union(&from_the_node).copied().collect();
     }
 }
 
-/// A deterministic generator, so a property test is reproducible without a
-/// dependency: `cairn-model` depends on nothing, tests included.
+/// A deterministic generator: `cairn-model` takes no dependency, tests
+/// included.
 pub struct Rng(u64);
 
 impl Rng {
@@ -284,7 +270,7 @@ impl Rng {
     }
 
     fn next(&mut self) -> u64 {
-        // xorshift64*, chosen because it is five lines and needs no crate.
+        // xorshift64*.
         let mut x = self.0;
         x ^= x >> 12;
         x ^= x << 25;
@@ -302,11 +288,9 @@ impl Rng {
     }
 }
 
-/// A random history of `len` commits. Commit `i` is newer than commit `j` for
-/// `i < j` and parents are always older, so index order is a valid walk. With
-/// `skew`, adjacent swaps then scramble that order, which is what committer-date
-/// sorting does to a rebased or imported history: some parents arrive before
-/// their children.
+/// A random history of `len` commits. Commit `i` is newer than `j` for `i < j`
+/// and parents are always older, so index order is a valid walk. `skew` then
+/// swaps adjacent entries, so some parents arrive before their children.
 pub fn random_history(seed: u64, len: usize, skew: bool) -> History {
     let mut rng = Rng::new(seed);
     let mut commits: Vec<(String, Vec<String>)> = Vec::with_capacity(len);
@@ -337,9 +321,9 @@ pub fn random_history(seed: u64, len: usize, skew: bool) -> History {
     commits
 }
 
-/// Every `(parent row, child row)` pair the walk delivers backwards. Derived
-/// from the walk order alone, so a test can decide which rows are *entitled* to
-/// be repainted without asking the assigner what it flagged.
+/// Every `(parent row, child row)` pair the walk delivers backwards, derived
+/// from walk order alone: which rows are *entitled* to a repaint, without
+/// asking the assigner what it flagged.
 pub fn links_delivered_backwards(history: &History) -> Vec<(usize, usize)> {
     let position: HashMap<&str, usize> = history
         .iter()
@@ -359,8 +343,7 @@ pub fn links_delivered_backwards(history: &History) -> Vec<(usize, usize)> {
     links
 }
 
-/// True when the walk hands a commit over before something that lists it as a
-/// parent — the case the assigner has to be total over.
+/// True when the walk hands a commit over before one of its children.
 pub fn delivers_a_parent_before_its_child(history: &History) -> bool {
     let position: HashMap<&str, usize> = history
         .iter()

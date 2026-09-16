@@ -68,7 +68,11 @@ staging of any kind.
 status (changed, staged, untracked, ignored, conflicted). Ref decoration on the
 graph — the thing that makes the graph readable rather than a list of hashes.
 Stashes shown inline in the commit list, the way Fork does it, rather than in a
-side panel.
+side panel. The graph walks every ref by default — branches, remotes and tags —
+as Fork's "All Commits" view does. Today the application walks from `HEAD` only
+(`HistoryRequest::from_head` in `crates/cairn-app/src/worker/pool.rs`), so a
+branch not reachable from the checkout never appears; this packet switches it to
+`HistoryRequest::from_commits` over the enumerated refs.
 
 **Open:** O2 — `gix-status` or `git status --porcelain=v2`. D1 says reads use gix,
 but status is unusually exposed to `core.fsmonitor`, sparse checkout and

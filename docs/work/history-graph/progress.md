@@ -45,6 +45,16 @@ default —
 harness in `GraphOrder` reports 86.9% of rows out of order and 132 lanes, which is
 why the default order is the one the view is designed against.
 
+Two more repositories, same harness, same default order: `strata` (1,081 rows,
+166 ref tips) and `hyprland` (535 rows) both report **0 out-of-order rows**, with
+6 and 1 lanes at their widest. In `GraphOrder` the same two report 84.4% and
+80.9%. So across three real repositories the default order produces 0-0.17% —
+inside the PRD's stated range at its bottom end — and the dashed line is
+something a reader will rarely meet. That is an argument FOR making it
+unobtrusive and self-explanatory rather than loud: a marker seen once a year has
+to read on its own, and a marker seen constantly would not be worth a distinct
+treatment at all.
+
 ## A7 — measured, and the 100k target was NOT reachable on this machine
 
 Stated plainly because a fabricated number would be worse than a recorded

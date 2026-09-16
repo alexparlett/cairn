@@ -1,10 +1,6 @@
-//! One commit's line in the history list, in four columns.
-//!
-//! The graph and the subject share the first column — the graph is where the
-//! subject starts, so indenting the text by the lane is what makes a branch
-//! legible as a branch — then author, abbreviated commit id, and date. A date
-//! on every row rather than date groups: a group header is a variable-height
-//! row, which L7 rules out.
+//! One commit's line, in four columns: graph and subject, author, abbreviated
+//! commit id, date. A date on every row rather than date groups, since a group
+//! header is a variable-height row and L7 rules that out.
 
 use cairn_model::{CommitSummary, GraphRow};
 use freya::prelude::*;
@@ -13,25 +9,17 @@ use crate::date_text;
 use crate::graph_cell::graph_cell;
 use crate::graph_geometry::ROW_HEIGHT;
 
-/// Width of the author column.
 pub const AUTHOR_WIDTH: f32 = 150.0;
-/// Width of the abbreviated commit id column.
 pub const ID_WIDTH: f32 = 72.0;
-/// Width of the date column. Sized for `YYYY-MM-DD HH:MM`.
+/// Sized for `YYYY-MM-DD HH:MM`.
 pub const DATE_WIDTH: f32 = 132.0;
-/// Gap between the columns.
 pub const COLUMN_GAP: f32 = 10.0;
-/// Space either side of the row's contents.
 pub const ROW_PADDING: f32 = 10.0;
 
-/// Font size of everything in a row: one size, because a row is one line.
 const ROW_FONT_SIZE: f32 = 13.0;
 
-/// One row of the history list.
-///
-/// Presentation only: it reports nothing and holds no handler, so two rows with
-/// the same content compare equal and Freya can skip re-rendering an unchanged
-/// one. Selecting is [`crate::HistoryList`]'s business — it owns the keyboard.
+/// Presentation only: no handler, so equal content compares equal and Freya
+/// skips re-rendering. Selection belongs to [`crate::HistoryList`].
 #[derive(Debug, PartialEq, Clone)]
 pub struct CommitRow {
     commit: CommitSummary,
@@ -42,10 +30,8 @@ pub struct CommitRow {
 }
 
 impl CommitRow {
-    /// A row for `commit`, drawing `graph` in a column `lanes` lanes wide.
-    ///
-    /// `lanes` is the width of the graph column for the WHOLE list, not for this
-    /// row: every row reserves the same width, or the subjects do not line up.
+    /// `lanes` is the graph column's width for the whole list, not for this
+    /// row: every row reserves the same width or the subjects do not line up.
     pub fn new(commit: CommitSummary, graph: GraphRow, lanes: usize) -> Self {
         Self {
             commit,
@@ -121,8 +107,7 @@ impl ComponentOwned for CommitRow {
             .child(
                 label()
                     // `text` takes a `Cow<'static, str>`, which no borrow can
-                    // satisfy; `as_str` keeps this to one 7-byte copy rather
-                    // than a trip through a formatter.
+                    // satisfy; `as_str` keeps this to one 7-byte copy.
                     .text(self.commit.id.short().as_str().to_string())
                     .width(Size::px(ID_WIDTH))
                     .max_lines(1)
@@ -144,10 +129,7 @@ impl ComponentOwned for CommitRow {
     }
 }
 
-/// The column headings above the list.
-///
-/// Its columns are the same constants the rows use, so a heading cannot drift
-/// away from what it heads.
+/// The column headings, sized by the same constants the rows use.
 #[derive(Debug, PartialEq, Clone)]
 pub struct HistoryHeader {
     key: DiffKey,
@@ -203,7 +185,7 @@ impl ComponentOwned for HistoryHeader {
             .child(heading("Graph and subject", Size::flex(1.)))
             .child(heading("Author", Size::px(AUTHOR_WIDTH)))
             .child(heading("Commit", Size::px(ID_WIDTH)))
-            // UTC, not the reader's clock, and named for it — see `date_text`.
+            // UTC, not the reader's clock — see `date_text`.
             .child(heading("Date (UTC)", Size::px(DATE_WIDTH)))
     }
 

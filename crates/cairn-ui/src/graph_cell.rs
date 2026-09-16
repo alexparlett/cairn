@@ -1,23 +1,16 @@
 //! The graph column of one row, painted.
 //!
-//! Where a line goes is decided in [`crate::graph_geometry`]; this file only
-//! turns those numbers into Skia calls, with no decision of its own. One canvas
-//! per row rather than a rect per segment: a canvas is one element whatever the
-//! row holds, a rect per segment is up to a dozen laid out every frame, and a
-//! rect cannot draw a curve at all.
+//! [`crate::graph_geometry`] decides where a line goes; this file only turns
+//! those numbers into Skia calls. One canvas per row, not a rect per segment: a
+//! rect cannot draw a curve.
 //!
-//! **What a caller must keep true.** A `Canvas`'s render callback compares
-//! equal to every other callback (`RenderCallback`'s `PartialEq` is
-//! unconditionally true in the pinned Freya revision), so a canvas whose
-//! DRAWING changed while its LAYOUT did not is not repainted. Two things keep
-//! that from mattering here, and both are load-bearing:
-//!
-//! 1. Every row element is keyed by its `RowId`, so a row arriving at a
-//!    viewport slot during a scroll replaces the one that was there rather than
-//!    inheriting its painting.
-//! 2. What a row draws is a function of the row alone, and a row reaching a
-//!    view is final. Nothing here is a function of selection, focus or hover —
-//!    those live on the surrounding `rect`, which does diff on style.
+//! A `Canvas`'s render callback compares equal to every other callback
+//! (`RenderCallback`'s `PartialEq` is unconditionally true in the pinned Freya
+//! revision), so a canvas whose drawing changed while its layout did not is not
+//! repainted. What a caller must keep true so that cannot matter: every row
+//! element is keyed by its `RowId`, and what a row draws is a function of the
+//! row alone — never of selection, focus or hover, which live on the
+//! surrounding `rect`.
 
 use cairn_model::GraphRow;
 use freya::engine::prelude::{Paint, PaintStyle, PathBuilder, PathEffect, SkColor};
@@ -28,10 +21,9 @@ use crate::graph_geometry::{
 };
 use crate::lane_palette::lane_colour;
 
-/// Painted length and gap of an out-of-order line (decision O4).
+/// Painted length and gap of an out-of-order line (O4).
 const DASH: [f32; 2] = [4.0, 3.0];
 
-/// Stroke width of a merge commit's ring.
 const RING_WIDTH: f32 = 2.0;
 
 /// The graph column for one row, `lanes` columns wide.
@@ -83,8 +75,8 @@ fn paint_stroke(canvas: &freya::engine::prelude::Canvas, paint: &mut Paint, stro
         return;
     }
 
-    // A curve rather than a right angle: the eye follows a curve across a
-    // crowded graph, and a right angle reads as a different kind of connection.
+    // A curve, not a right angle: a right angle reads as a different kind of
+    // connection.
     let middle = (stroke.from.1 + stroke.to.1) / 2.0;
     let mut path = PathBuilder::new();
     path.move_to(stroke.from)
@@ -105,13 +97,9 @@ mod tests {
         }
     }
 
-    /// Paint one row onto an offscreen Skia surface and return, for each pixel
-    /// of `column`, whether anything was drawn there.
-    ///
-    /// Two decisions no arithmetic test can reach — whether a dashed stroke is
-    /// actually dashed, whether a merge is actually a ring — are what "colour
-    /// never carries meaning alone" comes down to on screen. Both are decided
-    /// here against real pixels, on the Skia `freya` already links.
+    /// Paints one row onto an offscreen Skia surface and reports, per pixel of
+    /// `column`, whether anything was drawn. Two decisions no arithmetic test
+    /// can reach: whether a dashed stroke is dashed, whether a merge is a ring.
     fn painted_column(row: &GraphRow, parents: usize, column: f32) -> Vec<bool> {
         let width = graph_geometry::graph_width(4).ceil() as i32;
         let height = ROW_HEIGHT.ceil() as i32;
@@ -148,9 +136,8 @@ mod tests {
         }
     }
 
-    /// O4, in pixels: a solid line covers its column top to bottom, a dashed one
-    /// leaves gaps. Deleting the dash branch in `paint_stroke` makes these two
-    /// identical — the mutation no geometry test can see.
+    /// Caught by: deleting the dash branch in `paint_stroke`, which makes the
+    /// two identical and which no geometry test can see (O4).
     #[test]
     fn an_out_of_order_line_is_actually_drawn_with_gaps() {
         let lane = Lane::new(1);
@@ -178,9 +165,8 @@ mod tests {
         );
     }
 
-    /// R4.2's shape arm, in pixels: a merge is a RING and an ordinary commit a
-    /// DOT, so the difference survives a monochrome screenshot. Painting the
-    /// ring filled would make the difference colour-only.
+    /// Caught by: painting the ring filled, leaving colour as the only thing
+    /// telling a merge from an ordinary commit (R4.2).
     #[test]
     fn a_merge_is_drawn_hollow_and_an_ordinary_commit_solid() {
         let node = row(0, Vec::new());

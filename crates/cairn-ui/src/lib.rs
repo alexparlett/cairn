@@ -1,9 +1,8 @@
 //! Cairn's component library.
 //!
-//! Components here render [`cairn_model`] values and emit intent through
-//! `EventHandler` props. They never open a repository, touch the filesystem, or
-//! block, and the guard suite pins that. Wiring a component to the engine is
-//! `cairn-app`'s job; `docs/systems/history-graph.md` describes the view.
+//! Components render [`cairn_model`] values and emit intent through
+//! `EventHandler` props; they never open a repository, touch the filesystem or
+//! block. Twin: `layers_never_name_the_crates_they_are_sealed_from`.
 
 mod commit_row;
 mod date_text;

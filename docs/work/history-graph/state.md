@@ -171,7 +171,7 @@ contract — so a later phase does not re-derive it from source.
 | `cairn_app::status_text` | `cairn-app` | `placeholder(&Status, has_rows) -> Option<String>` and `loaded_count(&Progress)`. R4.3 lives here: that loading and an empty repository are different SENTENCES is a thing a test decides, not a screenshot. |
 | `cairn_app::repository_path::chosen` | `cairn-app` | R5.1, as a pure function over the process arguments INCLUDING the program name — dropping it is part of the rule, so it sits where the tests can reach it. Later arguments are ignored (R5.3). Deliberately not a picker. |
 | `worker::RepositoryHandle` (re-exported) | `cairn-app` | Now named by the view, because the window holds one across renders and passes it to the function that builds the list. Safe to name: one method, returns immediately, carries no receiving end of anything. |
-| `a_history_sized_list_renders_through_a_virtualizing_view` | `cairn-guards` | The twin for "no unbounded list renders without virtualization". Fails when a render file builds `children` from a collection of `HistoryRow`s, or puts them in a plain `ScrollView`, without naming `VirtualScrollView` — and when nothing names `VirtualScrollView` at all. |
+| `a_history_sized_list_renders_through_a_virtualizing_view` | `cairn-guards` | The twin for "no unbounded list renders without virtualization", REBUILT by 186d68e around what a token scan can decide — this row used to describe the first version, whose `children` half matched zero lines because Cairn writes `.child(`. It now fails when any render file names `ScrollView` at all (exceptions roster empty by design) and when no render file uses `VirtualScrollView` over `HistoryRow`s. Phase 05 verified all three regression shapes fire. |
 
 ## Validation status
 

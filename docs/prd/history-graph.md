@@ -85,7 +85,7 @@ infrastructure built without a consumer gets the interface wrong.
   never crosses a thread. It must compose with R3.2's epochs: superseding a
   request may not leave a half-consumed walk to be read by the next one.
 
-  NOT in scope, filed instead: random access by row offset. There is no total
+  NOT in scope, filed instead — issue #5: random access by row offset. There is no total
   row count (counting is a full walk) and no way to build a cursor from an
   offset, so a scrollbar drag has no answer. Progressive loading is what Fork
   and Sourcetree do here.

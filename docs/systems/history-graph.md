@@ -161,6 +161,12 @@ of row is a compile error there rather than a row silently not drawn.
   converting to the reader's local time needs a timezone database, which is a
   dependency decision nobody has taken. `date_text::utc_minutes` is Hinnant's
   `civil_from_days`, total over every `i64`.
+
+  The column is also **not monotonic**, and that is not a defect: the walk is
+  ordered by COMMITTER time and the column shows AUTHOR time, which is the same
+  pairing `git log` itself uses and the same one every client surveyed shows. A
+  rebased or cherry-picked commit therefore sits below a row with an earlier
+  date. Recorded because nothing else records it.
 - **Lanes are columns; colour is an aid.** `graph_geometry` is pure arithmetic —
   `ROW_HEIGHT` 26 (uniform), `LANE_WIDTH` 14, `MAX_DRAWN_LANES` 24, beyond which
   lanes share the last column. Lane separation is tested against the INK

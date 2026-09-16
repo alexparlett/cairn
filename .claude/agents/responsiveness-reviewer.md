@@ -17,9 +17,20 @@ What is already pinned, so do not re-litigate it: `cairn-ui` cannot depend on
 `crates/cairn-guards/tests/invariants.rs`, echoed by the Stop hook). Run
 `scripts/gate.sh --step guards` first and treat red as CRITICAL. That seal means
 a component cannot call the engine directly — it does NOT mean `cairn-app` puts
-the work somewhere sensible, and that gap is yours. `CLAUDE.md` lists this
-invariant among the ones not yet mechanically pinned; you are its enforcement
-until it is.
+the work somewhere sensible, and that gap is yours.
+
+Two more twins now exist, and they narrow your job without ending it:
+`the_ui_thread_never_waits_on_repository_work` decides which FILES may reach a
+repository or name a waiting primitive (only `crates/cairn-app/src/worker/`), and
+`a_history_sized_list_renders_through_a_virtualizing_view` decides which scroll
+view a render file reaches for. Neither can decide which THREAD a function runs
+on, whether an iteration is over a history at all, or whether the virtualizing
+view really builds only its viewport. Those three are yours, in full, and
+`docs/qa-gate.md`'s dispatch row states them as such. In particular the
+`worker/` functions the UI thread itself calls — `RepositoryHandle::submit`,
+`Updates::next`, `Wake::poll` — are exempt from the guard's matcher by
+construction, so whether they block is a judgement you must actually make rather
+than assume from a green guard.
 
 ## Scope gate, run this FIRST
 
@@ -37,10 +48,14 @@ CRITICAL, each one a finding on its own:
    `join()`/`recv()` on a worker's channel from a handler, or a `std::fs` call in
    a render path. Name the specific call and the thread it runs on.
 2. **Unbounded list without virtualization.** History, file trees, diff hunks and
-   blame lines are unbounded. A `.children(items.iter().map(...))` over anything
-   repository-sized is a finding; `VirtualScrollView` with a `length` is the
-   shape that is not. Judgment: a branch list of 40 is fine, a branch list built
-   from a remote with 40,000 refs is not — say which case the code is in.
+   blame lines are unbounded. `VirtualScrollView` with a `length` is the shape
+   that is not a finding. The twin already fails a render file that names the
+   plain `ScrollView`, so what is left for you is the shape it cannot see: a
+   HAND-ROLLED viewport that names neither view and builds one child per row —
+   in this codebase that reads as `.child(` in a loop or a `map` over a
+   repository-sized collection, not `.children(...)`, which Cairn never writes.
+   Judgment: a branch list of 40 is fine, a branch list built from a remote with
+   40,000 refs is not — say which case the code is in.
 3. **Whole-history data cloned or allocated per frame.** `render` runs on every
    reactive change. A `.clone()` of a `Vec<CommitSummary>`, a re-sort, a re-filter
    or a re-parse there costs the frame budget every time anything nearby changes.

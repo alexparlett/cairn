@@ -195,8 +195,14 @@ Project invariants:
   exempt from the matcher while running on the UI thread, and that they never
   block is a review judgement. (The spinning spellings — `try_recv`, `try_iter`,
   `try_lock`, `spin_loop`, `yield_now` — ARE on the roster, so a busy poll loop
-  on a render path is caught; one written inside `worker/` is not.) Also the
-  reviewer's: whether a page is small enough that the work between yields is
+  on a render path is caught; one written inside `worker/` is not.) The matcher is
+  also FILE-scoped, which is what "naming the constructor" buys and all it buys:
+  a receiver constructed inside `worker/` and handed OUT, then iterated on a
+  render path — `for update in rx {}`, `rx.into_iter()`, or a blocking method
+  with a project-specific name — names no rostered spelling and is not caught.
+  `crates/cairn-app/src/main.rs` holds exactly such a value today; that it is
+  awaited rather than iterated is a review judgement, not a guarded fact. Also
+  the reviewer's: whether a page is small enough that the work between yields is
   short, and whether a list is virtualized.
 
 - **No unbounded list renders without virtualization.** A history is however long
@@ -219,7 +225,21 @@ Project invariants:
     iteration over a repository's commits from one over three tabs, so the guard
     does not pretend to: it checks which VIEW a file reaches for, not what is put
     in it. A hand-rolled viewport that never names either view is the reviewer's
-    to catch.
+    to catch, and so is a `VirtualScrollView` handed a TRUNCATED length — the
+    positive arm decides that the virtualizing view and `HistoryRow` meet in one
+    production file, not that it is given the whole history.
+  - *Which unbounded views an exception excuses.* The roster is keyed by FILE
+    and the matcher reports only the first hit, so excusing one file excuses
+    every plain `ScrollView` in it, then and later. Empty today; if a row is
+    ever added, reviewing what else that file grows is the reviewer's.
+  - *Whether work bounded by the VIEWPORT is bounded by the history anyway.*
+    `cairn_ui::HistoryList`'s `index_of` keeps a cursor hint and falls back to
+    `rows.iter().position(..)` when it misses — a scan of every loaded row,
+    inside the key handler, on the UI thread. It is the correctness fallback by
+    design and unreachable while rows only append; the row that arrives ABOVE
+    another is what enters it, which is what the working-tree row will do. Named
+    here rather than left implicit, because a token scan cannot tell this
+    iteration from any other.
   - *Whether the virtualizing view really builds only what its viewport shows.*
     That is a property of Freya, not of Cairn's source. It was measured once, by
     an instrumented build that counted builder invocations per render at 1,000

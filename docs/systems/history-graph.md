@@ -87,7 +87,8 @@ still recognises ids for a further 16 per row of window. `LaneAssigner`'s public
 `remembered()` reports the total; the 16 is the private `REMEMBERED_PER_ROW` in
 `crates/cairn-model/src/lane_assignment.rs`. Recognising a parent that has
 already gone by is what stops a lane being reserved for a commit that can never
-arrive.
+arrive. Widening the window is not linear in cost: as measured when the window
+was chosen, 66 ms at 1024, 749 ms at 4096 and 23.3 s at 16384.
 
 **The blind spot, carried deliberately.** Beyond `window + remembered` rows of
 skew the assigner cannot tell a parent already gone from one still to come. It
@@ -150,7 +151,10 @@ cancelled cold query reports how far it got and discards the page; a cancelled
 
 Order is `HistoryOrder::CommitTime` by default, chosen by measurement; neither
 it nor `GraphOrder` is topological, which is why the assigner must be total over
-arrival order.
+arrival order. The measurement (`measures_both_orders_against_a_named_repository`,
+`#[ignore]`d): walking *and laying out* 50k commits took 129 ms in commit-time
+order against 196 ms in graph order, which leaves far more lanes open per row.
+Walking alone is the other way round.
 
 ## The worker boundary (`cairn-app`)
 
@@ -190,10 +194,22 @@ FILE, and it is a guard, not a convention — see below.
   task is woken. That ordering is the point: reversed, a worker that panicked
   would leave `Updates::next` parked forever on a latch nobody will ever set
   again, and the window would sit on "Loading" for the life of the process.
-  Five tests in `crates/cairn-app/src/worker/pool.rs` cover it.
+  Five tests in `crates/cairn-app/src/worker/pool.rs` cover it. `Outbox` is not
+  `Clone`, held there by `a_worker_thread_cannot_be_given_a_second_sender`, which
+  fails to compile if `Clone` is derived. What that cannot decide, and is a
+  review obligation: `Sender<Envelope>` is `Clone` and `Outbox`'s fields are
+  visible throughout `pool.rs`, so a second sender written by hand compiles and
+  passes every test. A copy outliving `WorkerExit` holds the update channel open
+  past the wake and parks the waiting task forever; the race is narrow enough
+  that `a_failed_open_ends_the_stream_rather_than_leaving_it_open` passed against
+  such a change.
 - `WORKERS_PER_REPOSITORY` is 1: the live walk lives on one thread, and a `const`
   assertion fails the build if it is raised, because more workers need a routing
-  decision and not a bigger number.
+  decision and not a bigger number. A second kind of work gets its own worker,
+  which costs this one almost nothing: measured by
+  `measures_concurrent_walks_against_a_named_repository` (`#[ignore]`d),
+  concurrent walks scale 2.1x, 4.2x and 7.9x at 2, 4 and 8 threads with
+  single-walk time flat.
 - **The boundary is shaped for a second consumer, and none of it is stubbed.** A
   request is answered by a STREAM of `Update`s rather than by one reply; a worker
   runs ordinary blocking code, so a job that must wait on a UI answer makes its

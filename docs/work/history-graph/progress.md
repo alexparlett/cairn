@@ -191,6 +191,19 @@ affordance beyond the title bar's ellipsis; and the component tests that need
 `freya-testing` — the paging call chain and R4.3/R5.2's *rendering* (the decision
 of WHICH sentence is now tested; that the sentence reaches the window is not).
 
+**One reviewer was dispatched and had not reported when the phase closed.**
+`gate-integrity-reviewer` was sent over the guard change (its dispatch row in
+`docs/qa-gate.md` matches any diff touching `crates/cairn-guards/`) and produced
+nothing before the phase ended, after one re-ask. So the guard's own review is
+OUTSTANDING, not done: phase 05 should re-run it over
+`a_history_sized_list_renders_through_a_virtualizing_view` and the `const _`
+assertions in `graph_geometry`. What the implementing session did instead of a
+review — stated as the weaker thing it is — was verify three mutations by hand:
+swapping `VirtualScrollView` for `ScrollView`, building `children` per row in
+`main.rs`, and narrowing `LANE_WIDTH` below the node diameter. All three fail,
+the first two as guard failures naming the file and the rule, the third as a
+compile error.
+
 **Needs the user, batched:** whether a transient page failure should be
 retryable (today one failed page ends paging for the session, which is deliberate
 and tested but has no way back); and whether to add `freya-testing` as a

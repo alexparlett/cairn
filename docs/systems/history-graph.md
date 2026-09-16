@@ -221,7 +221,20 @@ FILE, and it is a guard, not a convention — see below.
 Every `submit` supersedes, and a superseded page delivers nothing — so the
 caller must debounce. `Progress::wants_more()`
 (`crates/cairn-app/src/history_state.rs`) is that debounce: it is false while a
-page is in flight, while the history is complete, and after a failure.
+page is in flight, while the history is complete, and once the update stream has
+ended (no worker is left to answer).
+
+**A failed page is retried on the next approach to the end.** A failure leaves
+`wants_more()` true, so the next time a row near the end comes into view the
+page is asked for again; `worker::serve` dropped the live session on the error
+but kept the cursor, so that request cold-restarts from the last good page. The
+failure stays on screen — a banner under the rows — until a page arrives. It
+cannot loop: `on_reach_end` fires on a row's visibility CHANGING, and a failure
+changes nothing that is visible at the end of the list, so each retry needs the
+reader to scroll. Pinned by
+`a_failed_page_is_asked_for_again_on_the_next_approach_to_the_end`
+(`crates/cairn-app/src/window.rs`), and by
+`a_stream_that_has_ended_stops_asking_for_good` for the worker-gone case.
 
 ## The view (`cairn-ui`)
 
@@ -338,7 +351,8 @@ measured width, so it needs a system font). `crates/cairn-app/src/window.rs`
 renders the window from each `Progress` state — the placeholder sentence in the
 list's place, the late-failure banner, the count, a clicked row's highlight,
 the lane count reaching the rows — and pins that scrolling to the end submits
-one `MoreHistory` per page, not one per row that comes into view.
+one `MoreHistory` per page, not one per row that comes into view, and that a
+failed page is asked for again when the reader comes back to the end.
 `RepositoryHandle::into_submitter`, the callback it is given in the running
 app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
 
@@ -360,16 +374,6 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
   (counting is a full walk) and no way to build a cursor from an offset, so a
   scrollbar drag has no answer; progressive loading is the model, as it is in
   Fork and Sourcetree. Tracked as issue #5.
-- **A failed page ends paging, and the layer that ends it is the view.** The
-  engine side already recovers: `worker::serve` drops the live session on a
-  non-`Cancelled` error but KEEPS the cursor, so the next request would cold-
-  restart from where it stopped. What stops there being a next request is
-  `Progress::wants_more()` (`crates/cairn-app/src/history_state.rs`), which is
-  false forever once `Status::Failed` — deliberate, so a broken repository is
-  not hit in a loop, and pinned by
-  `a_failure_stops_asking_and_keeps_its_sentence`. The consequence is that there
-  is no way back short of reopening even though the recovery path exists.
-  Whether it should be retryable is issue #8.
 - **`GraphRow` still keys a row by `Oid`.** `RowContent` and `RowId` are total
   over rows that are not commits, but the assigner's own output is not — whoever
   lays out the working-tree row meets that first.

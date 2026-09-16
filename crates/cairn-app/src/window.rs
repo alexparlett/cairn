@@ -450,4 +450,58 @@ mod tests {
             "the end of the page that arrived did not ask for the next"
         );
     }
+
+    #[test]
+    fn a_failed_page_is_asked_for_again_on_the_next_approach_to_the_end() {
+        let first = 200;
+        let (mut test, fixture, submitted) =
+            launch((0..first).map(row).collect(), received(first, false));
+        let scroll = |test: &mut TestingRunner, rows: f64| {
+            test.scroll((100., 200.), (0., -(rows * ROW_HEIGHT as f64)));
+        };
+
+        scroll(&mut test, first as f64);
+        assert_eq!(submitted.borrow().len(), 1);
+
+        let (mut rows, mut progress) = (fixture.rows, fixture.progress);
+        progress
+            .write()
+            .failed("failed to read commit abc".to_owned());
+        test.sync_and_update();
+        assert_eq!(
+            submitted.borrow().len(),
+            1,
+            "a failure asked again by itself, which loops a broken repository"
+        );
+        assert!(
+            texts(&test)
+                .iter()
+                .any(|text| text == "failed to read commit abc"),
+            "the failure was not shown"
+        );
+
+        scroll(&mut test, -(first as f64));
+        scroll(&mut test, first as f64);
+        assert_eq!(
+            submitted.borrow().len(),
+            2,
+            "coming back to the end after a failed page did not ask for it again"
+        );
+
+        rows.write().extend((first..first * 2).map(row));
+        progress.write().received(1, false, first * 2);
+        test.sync_and_update();
+        scroll(&mut test, first as f64);
+        let shown = texts(&test);
+        assert!(
+            shown
+                .iter()
+                .any(|text| text == &format!("commit {}", first * 2 - 1)),
+            "the retried page's rows were not drawn: {shown:?}"
+        );
+        assert!(
+            !shown.iter().any(|text| text == "failed to read commit abc"),
+            "the failure stayed up after the retry worked"
+        );
+    }
 }

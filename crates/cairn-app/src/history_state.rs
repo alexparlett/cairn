@@ -19,6 +19,8 @@ pub struct Progress {
     lanes: usize,
     complete: bool,
     in_flight: bool,
+    /// No worker is left to answer.
+    ended: bool,
     loaded: usize,
 }
 
@@ -30,6 +32,7 @@ impl Progress {
             lanes: 1,
             complete: false,
             in_flight: true,
+            ended: false,
             loaded: 0,
         }
     }
@@ -56,9 +59,11 @@ impl Progress {
         self.complete
     }
 
-    /// False while a page is in flight, while the history is complete, and after a failure.
+    /// False while a page is in flight, while the history is complete, and once the stream has
+    /// ended. A failed page is asked for again: only the list's next visibility change calls
+    /// this, so a failure cannot loop.
     pub fn wants_more(&self) -> bool {
-        !self.complete && !self.in_flight && !matches!(self.status, Status::Failed(_))
+        !self.complete && !self.in_flight && !self.ended
     }
 
     pub fn asked(&mut self) {
@@ -87,6 +92,7 @@ impl Progress {
     /// Does not overwrite an existing failure's message.
     pub fn stream_ended(&mut self, message: &str) {
         self.in_flight = false;
+        self.ended = true;
         if !matches!(self.status, Status::Failed(_)) {
             self.status = Status::Failed(message.to_owned());
         }
@@ -198,16 +204,44 @@ mod tests {
         );
     }
 
-    /// Caught by: asking on, which loops a broken repository forever.
+    /// Caught by: a transient failure ending the scroll for the session.
     #[test]
-    fn a_failure_stops_asking_and_keeps_its_sentence() {
+    fn a_failed_page_is_asked_for_again_and_keeps_its_sentence_until_rows_arrive() {
         let mut progress = Progress::opening();
-        progress.failed("no git repository at /tmp/nowhere".to_owned());
+        progress.received(1, false, 40);
+        progress.failed("failed to read commit abc".to_owned());
         assert_eq!(
             progress.status(),
-            &Status::Failed("no git repository at /tmp/nowhere".to_owned())
+            &Status::Failed("failed to read commit abc".to_owned())
         );
-        assert!(!progress.wants_more());
+        assert!(progress.wants_more(), "a failed page can never be retried");
+
+        progress.asked();
+        assert!(!progress.wants_more(), "a retry went out over a retry");
+        assert_eq!(
+            progress.status(),
+            &Status::Failed("failed to read commit abc".to_owned()),
+            "asking again unsaid the failure before anything worked"
+        );
+
+        progress.received(1, false, 80);
+        assert_eq!(progress.status(), &Status::Ready);
+        assert!(progress.wants_more());
+    }
+
+    /// Caught by: asking a worker that has gone, which can never answer.
+    #[test]
+    fn a_stream_that_has_ended_stops_asking_for_good() {
+        let mut named = Progress::opening();
+        named.received(1, false, 40);
+        named.failed("the repository worker stopped unexpectedly".to_owned());
+        named.stream_ended("the repository worker has stopped");
+        assert!(!named.wants_more());
+
+        let mut silent = Progress::opening();
+        silent.received(1, false, 40);
+        silent.stream_ended("the repository worker has stopped");
+        assert!(!silent.wants_more());
     }
 
     #[test]

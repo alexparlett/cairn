@@ -3,6 +3,131 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-16 — phase 05: the packet QA, and what five fresh agents found in the whole
+
+The merge bar, run over `git diff main...HEAD` as one diff rather than four.
+Five fresh agents, none of them an implementer: `qa-checklist`,
+`test-coverage-auditor` (told to audit by reading), `responsiveness-reviewer`
+and `gate-integrity-reviewer` in parallel, adjudicated by a fresh `qa-confirm`.
+32 raw findings, 16 confirmed after merging two duplicate pairs. `scripts/gate.sh`
+is green as one command: format, lint, typecheck, guards, deps, test-full,
+`gate: PASS`, exit 0.
+
+**A1-A10 all met.** Each verified against a test that decides it, not against
+prose — the table is in this phase's final report and the pins are named in
+`docs/systems/history-graph.md`. A7 remains the honest shortfall it was: the
+100k half ran against a synthetic row vector because no repository that size
+exists on this machine, and the record says so in its own words rather than
+implying otherwise. That was checked, not assumed.
+
+**The integration trace, which is what this phase existed for.** One commit
+followed from gix's walk entry through `LaneAssigner`, `HistorySession::place`,
+`Update::Rows`, `HistoryList`'s viewport builder and into `CommitRow`. Nothing
+loses meaning in transit: id, parents, subject, author name and email and the
+author timestamp arrive as the engine read them, and the lane and segments
+arrive as the assigner emitted them. Two things the trace surfaced and neither
+was a defect — `place()`'s silent row drop is genuinely unreachable (`skip` is
+fixed at construction and `next_row` and `walked` start together, so position
+*p* always faces commit *p*'s entry), and the `Date (UTC)` column is not
+monotonic because the walk orders by COMMITTER time while the column shows
+AUTHOR time, which is `git log`'s own pairing. The second was recorded in the
+as-built doc, since nothing recorded it before.
+
+**The guards were proven by violation, not by reading.** All four fire:
+`cairn-ui` naming `gix`, `cairn-ui` declaring `cairn-git` in its manifest, a
+`recv()` added to `main.rs`, the list swapped to `ScrollView`, a SECOND plain
+`ScrollView` added elsewhere, and the virtualizing view deleted — six mutations,
+six failures with the right message.
+
+**Confirmed and fixed here.** The enforcement layer had four holes of its own,
+all in the fail-QUIET direction, and the packet introduced three of them. A char
+literal holding a double quote opened a blanking run in `code_without_strings`
+that ate the rest of the file, so BOTH new twins went dark for it, silently,
+with the docstring asserting the opposite. The worker directory's exemption was
+compensated only against `freya` and `dioxus`, so a file there could render
+through `cairn_ui` and buy exemption from three checks at once. The
+virtualization twin's positive arm could still be satisfied from a
+`#[cfg(test)]` module — the unfixed half of the CRITICAL that forced the rebuild
+— which a new `code_without_test_modules` closes. And `RENDER_SOURCE_DIRS`
+caught a renamed directory but not a deleted row, so it is closed against the
+manifests now, the way `DEPENDENCY_ALLOWLIST` is.
+
+On the model side, `retained()` measured everything the window bounds by
+CONSTRUCTION and nothing the trim bounds by a LOOP: neutering `remember_gone`'s
+`while` left retained id memory growing one `Oid` per commit walked with all 38
+tests green, which is R1.3's memory clause deciding nothing. Pinned now, with
+the peak asserted to actually reach the limit so it cannot hold vacuously. The
+blind-spot test was also named for an arm it never reached — every fixture sat
+inside `remembered()` — so the beyond-remembered case has its own test,
+characterising how it DEGRADES rather than claiming it is closed: every commit
+placed, walk order kept, one leaked reservation per event and not one per row.
+
+Docs: `.claude/agents/responsiveness-reviewer.md` was the fourth document in a
+set where three moved together, still instructing its reviewer from the "not yet
+mechanically pinned" section this packet deleted and anchoring on `.children(`,
+which Cairn never writes. Four residuals that were load-bearing and implied are
+now stated, per the meta-invariant. And `date_text`'s fixed-width test claimed a
+property false at the ends of `i64`; its name now says which years it decides.
+
+**Dismissed, with the reason** (adjudicated by a fresh `qa-confirm`, not by this
+session):
+
+- *`std::env::current_dir()` on the render path.* One non-blocking syscall in a
+  `use_hook` that runs once at mount, with no path traversal and no repository
+  access — discovery is on the worker, which is what the invariant is about.
+- *The cold-restart replay walking 200,000 commits.* On the worker, cancellation
+  polled per commit, and unreachable today because `Progress::wants_more`
+  returns false forever after a failure.
+- *`DEFAULT_WINDOW` making the first page walk ~1088 commits.* By design and
+  documented; it runs on the worker behind a loading state, and R1.2's finality
+  guarantee is what buys it.
+- *`PartialEq for HistoryList` deep-comparing the history per diff.* Resolved
+  against the fork rather than guessed: `State<T>`'s `PartialEq` is `T: 'static`
+  with a `ptr_eq` body, so it compares handles.
+- *The rebuild dropping the `children` check.* That half matched zero lines —
+  Cairn writes `.child(` — so no real coverage was lost, and the residual it
+  leaves is stated.
+- *`place()`'s silent row drop* and *the guard messages' wording*, both above.
+
+**The dismissal-log audit, which this phase owed.** Three dismissals kept their
+conclusion but lost a reason, and are corrected here rather than in the entries
+that made them, per `docs/CLAUDE.md`:
+
+- Phase 01 dismissed packet-mode branch authority partly because "the repository
+  has no remote". It has one; `origin` is `git@github.com:alexparlett/cairn.git`.
+  The conclusion stands on the explicit declaration, which was the other half.
+- Phase 03 dismissed `current_dir()` on two reasons, the second being that "R5's
+  command-line argument replaces it in phase 04". It did not — the call is still
+  at `crates/cairn-app/src/repository_path.rs`. The dismissal survives on its
+  first reason alone, re-verified above.
+- Phase 03 dismissed the pre-push hook's missing worker tests because "it
+  deliberately runs no test suite at all". It runs `--step guards`, which is
+  `cargo test -p cairn-guards`. The accurate reason is that the guard twins are
+  in by design and the PRODUCT suites are out, so adding worker tests would
+  change the hook's stated design rather than fix an omission.
+
+Two "filed" claims had nothing behind them, which is the same class of defect in
+a living doc: R2.5's "NOT in scope, filed instead" and phase 04's "capping or
+windowing the retained vector ... is filed, not built". Both are filed now —
+**#4** for the retained rows and **#5** for random access by row offset — and
+R2.5 names its issue. This entry is the record for the second; the entry above
+is not retro-edited.
+
+**Filed as follow-up, not built:** nothing new beyond #4 and #5. The residuals
+the guards cannot express are stated in `CLAUDE.md` and owned by
+`responsiveness-reviewer`, which is where they belong rather than in an issue.
+
+**Needs the user, batched and unchanged from phase 04 except the last:**
+whether a transient page failure should be retryable; whether to add
+`freya-testing`, which is what a twin for "only visible rows are built" and
+every component test needs — and which is also the only route to testing
+`crates/cairn-ui/src/commit_row.rs`, whose 208 lines have no test and whose
+header/row column mismatch is undetectable today; and the debris hook's remedy
+text at `.claude/hooks/qa-stop.sh`, which tells the next agent to "use tracing",
+a crate this workspace does not depend on. That last one was escalated in phase
+02's entry and again in phase 03's and has never been closed: the two available
+fixes are a dependency decision or a rewording, and both are the user's.
+
 ## 2026-09-16 — phase 04: the graph view, and what A7 could actually be measured against
 
 The packet is visible. `cairn-ui` draws a virtualised list of `HistoryRow`s with

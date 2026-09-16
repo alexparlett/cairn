@@ -2,21 +2,35 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phases 01-04 implemented on `feature/history-graph`, unmerged. The
-packet is visible.** The lane assigner is bounded and lives in `cairn-model`;
+**Status: phases 01-05 complete on `feature/history-graph`, unmerged. The packet
+is at its merge bar and READY; teardown and the packet PR to `main` are the
+user's, and no agent merges either.** The lane assigner is bounded and lives in `cairn-model`;
 `cairn-git` answers a bounded, resumable, cancellable history query and keeps a
 walk alive across a scroll; `cairn-app` runs both off the UI thread behind a
 boundary a guard pins; and `cairn-ui` draws the result as a virtualised graph
 with lanes, edges, four columns and keyboard selection, over the repository named
-on the command line. Only phase 05 (QA) is left.
+on the command line. Phase 05 ran the merge bar over the whole diff: five fresh
+agents, 16 confirmed findings fixed, A1-A10 each verified against a test that
+decides it, all four guards proven by violation, and `scripts/gate.sh` green as
+one command. `docs/systems/history-graph.md` is written.
 
 Corrections this line has collected: R1.3 and R1.2's finality sentence are no
 longer TRAP-marked in the PRD — the user narrowed both on 2026-09-15 and phase 02
 built the window they describe.
 
 **Still open for the user.** Phase 02 raised three; the first is built, the other
-two stand, phase 03 adds a correction to one of them, and R6's QA raises one
-more.
+two stand, phase 03 adds a correction to one of them, R6's QA raises one more,
+and phase 05 adds two — `crates/cairn-ui/src/commit_row.rs` has no test and
+cannot get a meaningful one without the `freya-testing` decision (its four-column
+header/row mismatch is undetectable today), and `.claude/hooks/qa-stop.sh`'s
+remedy text names `tracing`, a crate this workspace does not depend on, which is
+either a dependency decision or a rewording. That hook line was escalated in
+phase 02's progress entry and again in phase 03's and has never been closed.
+
+Two things that were claimed filed and were not now are: **issue #4** (bound or
+evict the retained history rows — the one measured limitation of A7) and
+**issue #5** (what the scrollbar does without random access by row offset,
+which is what R2.5 puts out of scope).
 
 - **Nothing stops a wildcard arm over `RowContent`, and A9's "pinned by" column
   names a component that should not name it.** Raised by `qa-checklist` and the
@@ -181,7 +195,7 @@ contract — so a later phase does not re-derive it from source.
 | 02 history query | implemented | `scripts/gate.sh` green | four fresh agents, adjudicated by `qa-confirm`; see progress.md's newest entry |
 | 03 worker boundary | implemented | `scripts/gate.sh` green | four fresh agents, adjudicated by `qa-confirm`; then a mutation-executing coverage audit whose findings are closed — see progress.md's newest entry, which also names the two gaps held for the scroll/memory design pass |
 | 04 graph view | implemented | `scripts/gate.sh` green | four fresh agents (`qa-checklist`, `responsiveness-reviewer`, `test-coverage-auditor`), adjudicated by a fresh `qa-confirm`; 18 of 26 findings confirmed, fixed or filed — see progress.md's newest entry |
-| 05 QA | not started | — | — |
+| 05 QA | complete | `scripts/gate.sh` green as one command: format, lint, typecheck, guards, deps, test-full, `gate: PASS` | five fresh agents (`qa-checklist`, `test-coverage-auditor`, `responsiveness-reviewer`, `gate-integrity-reviewer`), adjudicated by a fresh `qa-confirm`; 16 of 32 confirmed, all fixed — see progress.md's newest entry |
 
 **Both of phase 04's debts are paid; this paragraph replaces what it used to
 say.** The virtualization invariant now has its twin —

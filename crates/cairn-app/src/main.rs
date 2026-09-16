@@ -8,6 +8,7 @@
 
 mod history_state;
 mod repository_path;
+mod status_text;
 mod worker;
 
 use cairn_model::{HistoryRow, RowContent, RowId};
@@ -34,7 +35,8 @@ fn app() -> impl IntoElement {
     // The one copy of the history. Everywhere else it is a handle: the list
     // reads it and the item builder reads it, and nothing copies it to draw.
     // The window itself never reads it — everything the window decides comes
-    // from `progress`, so a page arriving re-renders the list and not this.
+    // from `progress` — so what a page costs this scope is one re-render of a
+    // title bar and a header, not a pass over the history.
     let mut rows = use_state(Vec::<HistoryRow>::new);
     let mut progress = use_state(Progress::opening);
     // Selection is held as the row's own identity, not its index: an index
@@ -46,12 +48,9 @@ fn app() -> impl IntoElement {
     // working directory. Resolved once, and kept so the window can name it —
     // including in the message R5.2 asks for when there is no repository there.
     let opened = use_hook(|| {
-        repository_path::chosen(
-            std::env::args_os().skip(1),
-            repository_path::working_directory(),
-        )
-        .display()
-        .to_string()
+        repository_path::chosen(std::env::args_os(), repository_path::working_directory())
+            .display()
+            .to_string()
     });
 
     // Open the repository once, and drive the worker's answers from one task.
@@ -106,7 +105,7 @@ fn app() -> impl IntoElement {
     let status = progress.read().status().clone();
     let lanes = progress.read().lanes();
     let has_rows = progress.read().has_rows();
-    let counted = count(&progress.read());
+    let counted = status_text::loaded_count(&progress.read());
 
     rect()
         .expanded()
@@ -115,14 +114,11 @@ fn app() -> impl IntoElement {
         .child(HistoryHeader::new())
         // R4.3: loading, empty and a failure that never produced a row each get
         // their own sentence in the list's place. The reader is never shown a
-        // blank area that could mean any of the three.
-        .child(match &status {
-            Status::Loading => notice("Reading history…", &opened),
-            Status::Empty => notice("No commits yet.", &opened),
-            Status::Failed(message) if !has_rows => notice(message.clone(), &opened),
-            Status::Failed(_) | Status::Ready => {
-                history(rows, lanes, selected, progress, repository)
-            }
+        // blank area that could mean any of the three, and WHICH sentence is
+        // decided in `status_text` so a test can tell two of them apart.
+        .child(match status_text::placeholder(&status, has_rows) {
+            Some(message) => notice(message, &opened),
+            None => history(rows, lanes, selected, progress, repository),
         })
         // A failure that arrived after rows were already drawn is a banner
         // under them, not a replacement for them.
@@ -177,20 +173,6 @@ fn history(
     .into()
 }
 
-/// How much of the history is loaded, as the title bar says it.
-///
-/// An ellipsis while more is coming, because "2,896 commits" and "2,896 commits
-/// so far" are different claims and only one of them is true mid-scroll.
-fn count(progress: &Progress) -> String {
-    let loaded = progress.loaded();
-    let noun = if loaded == 1 { "commit" } else { "commits" };
-    if progress.complete() {
-        format!("{loaded} {noun}")
-    } else {
-        format!("{loaded} {noun}…")
-    }
-}
-
 /// The window's own line: which repository is open, and how much of it is here.
 fn title_bar(path: &str, counted: &str) -> Element {
     rect()
@@ -220,8 +202,9 @@ fn title_bar(path: &str, counted: &str) -> Element {
         .into()
 }
 
-/// What fills the list area when there is no list to show. Always names the
-/// repository, which is half of what R5.2 asks of a failure.
+/// What fills the list area when there is no list to show. The sentence is
+/// [`status_text::placeholder`]'s; this only puts it on screen, under the
+/// repository it is about.
 fn notice(message: impl Into<String>, path: &str) -> Element {
     let message = message.into();
     rect()

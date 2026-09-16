@@ -8,9 +8,13 @@
 //! It is a plain value, deliberately: the bug R4.3 exists to prevent — a
 //! still-loading list and an empty repository looking identical — is a bug in a
 //! state machine, and a state machine that is a value can be decided by a test
-//! instead of by a screenshot. It also means the window never reads the row
-//! vector to decide what to draw, so a page arriving re-renders the list and
-//! not the whole window.
+//! instead of by a screenshot. Which SENTENCE each state is shown as is decided
+//! in [`crate::status_text`], for the same reason.
+//!
+//! It also means the window never reads the row vector to decide what to draw.
+//! The window still re-renders when a page arrives — it reads this value, and
+//! this value changes — but what that costs is a title bar and a header, not a
+//! pass over the history.
 
 use cairn_model::HistoryRow;
 

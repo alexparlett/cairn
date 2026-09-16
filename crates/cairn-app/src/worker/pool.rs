@@ -511,6 +511,73 @@ mod tests {
         );
     }
 
+    /// A repository with no commits yet, built on disk rather than described.
+    ///
+    /// Written with `std::fs` and not by running `git init`, because
+    /// `only_the_ops_module_mutates_a_repository` scans this crate's test code
+    /// too: every repository mutation lives in `cairn-git/src/ops`, and a
+    /// fixture spawning `git` here would be a hole in that. These four
+    /// directories and two files are what `gix` discovers as a repository whose
+    /// `HEAD` points at a branch that does not exist yet.
+    struct UnbornRepository {
+        path: PathBuf,
+    }
+
+    impl UnbornRepository {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(name);
+            let _ = std::fs::remove_dir_all(&path);
+            let dot = path.join(".git");
+            for inside in ["objects/info", "objects/pack", "refs/heads", "refs/tags"] {
+                if let Err(error) = std::fs::create_dir_all(dot.join(inside)) {
+                    panic!("building {}: {error}", dot.join(inside).display());
+                }
+            }
+            if let Err(error) = std::fs::write(dot.join("HEAD"), "ref: refs/heads/main\n") {
+                panic!("writing HEAD: {error}");
+            }
+            if let Err(error) = std::fs::write(
+                dot.join("config"),
+                "[core]\n\trepositoryformatversion = 0\n\tbare = false\n",
+            ) {
+                panic!("writing config: {error}");
+            }
+            Self { path }
+        }
+    }
+
+    impl Drop for UnbornRepository {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    /// The whole path, not the mapping alone: a real repository with no commits
+    /// in it, through `serve`, arrives at the view as an empty COMPLETE page.
+    ///
+    /// This is the test that fails if the arm is deleted from the call site
+    /// while `no_walk` itself stays correct — which is the mutation that turns
+    /// a freshly initialised repository back into a red error banner, and the
+    /// exact failure R4.3 exists to prevent.
+    #[test]
+    fn a_freshly_initialised_repository_reaches_the_view_as_an_empty_history() {
+        let fixture = UnbornRepository::new("cairn-unborn-head");
+        let (handle, mut updates) = match open(&fixture.path) {
+            Ok(pair) => pair,
+            Err(error) => panic!("starting the worker: {error}"),
+        };
+        handle.submit(Request::OpenHistory { rows: 8 });
+
+        match block_on(updates.next()) {
+            Some(Update::Rows { rows, complete }) => {
+                assert!(rows.is_empty(), "an unborn HEAD produced rows: {rows:?}");
+                assert!(complete, "an empty history said more was coming");
+            }
+            other => panic!("expected an empty complete page, got {other:?}"),
+        }
+        drop(handle);
+    }
+
     /// A repository with no commits yet is EMPTY, not broken. The view has to
     /// be able to tell an empty repository from one still loading (R4.3), and
     /// it cannot if an empty one arrives as an error sentence beside every

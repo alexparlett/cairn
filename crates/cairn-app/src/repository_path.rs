@@ -17,17 +17,23 @@ use std::path::PathBuf;
 
 /// The repository to open.
 ///
-/// `arguments` is the process arguments **without** the program name.
-/// Everything after the first is ignored: one repository is open at a time
-/// (R5.3), so a second path is not a second window, and guessing what it might
-/// have meant is how a picker starts.
+/// `arguments` is the process arguments **as the process receives them**,
+/// program name and all: dropping it is part of the rule, so it is inside the
+/// function the tests decide rather than at the one call site they cannot
+/// reach. A caller that skipped it first would open whichever repository
+/// contains the Cairn binary — which, run from a checkout, looks like it
+/// worked.
+///
+/// Everything after the first real argument is ignored: one repository is open
+/// at a time (R5.3), so a second path is not a second window, and guessing what
+/// it might have meant is how a picker starts.
 pub fn chosen(
     arguments: impl IntoIterator<Item = OsString>,
     working_directory: PathBuf,
 ) -> PathBuf {
     arguments
         .into_iter()
-        .next()
+        .nth(1)
         .filter(|argument| !argument.is_empty())
         .map_or(working_directory, PathBuf::from)
 }
@@ -45,8 +51,31 @@ pub fn working_directory() -> PathBuf {
 mod tests {
     use super::*;
 
+    /// Process arguments as `std::env::args_os` yields them: program name
+    /// first. Every case below goes through this, so a `chosen` that forgot to
+    /// drop it fails all of them rather than none.
     fn args(list: &[&str]) -> Vec<OsString> {
-        list.iter().map(OsString::from).collect()
+        std::iter::once(OsString::from("/usr/bin/cairn"))
+            .chain(list.iter().map(OsString::from))
+            .collect()
+    }
+
+    /// The program name is not a path. Pinned on its own because it is the one
+    /// part of the rule that used to live at the call site, where nothing could
+    /// decide it: a `chosen` that took the argument list whole and read its
+    /// first entry would open the repository containing the Cairn binary and
+    /// look, from a checkout, exactly like it had worked.
+    #[test]
+    fn the_program_name_is_not_the_repository() {
+        assert_eq!(
+            chosen(args(&[]), PathBuf::from("/home/someone/project")),
+            PathBuf::from("/home/someone/project"),
+            "the program name was taken for a path"
+        );
+        assert_eq!(
+            chosen(args(&["/srv/repo"]), PathBuf::from("/elsewhere")),
+            PathBuf::from("/srv/repo")
+        );
     }
 
     /// R5.1's default. No argument means the directory Cairn was started in,

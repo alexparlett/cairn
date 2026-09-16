@@ -247,11 +247,13 @@ above another neither moves the selection nor rebuilds the rows below it.
 
 `RowContent` is read by matching, with no wildcard arm — `crates/cairn-app/src/window.rs`
 is the consumer, and because the enum is not `#[non_exhaustive]` the next kind
-of row is a compile error there rather than a row silently not drawn. That holds
-today for a reason narrower than it looks: with one visible variant, a `_ =>`
-arm is `unreachable_patterns` under `-D warnings`. The second variant makes both
-`_ =>` and `if let RowContent::Commit(..)` legal again, and nothing then stops
-either. Issue #9.
+of row is a compile error there rather than a row silently not drawn. The
+spellings that would compile anyway once a second variant exists — a `_ =>` or
+catch-all binding arm, `if let`, `while let`, `let .. else`, `matches!`, a glob
+import — are rejected outside `cairn-model` by
+`every_view_of_a_row_names_every_kind_of_row`
+(`crates/cairn-guards/tests/invariants.rs`), whose matcher
+`cairn_guards::reads_row_content_partially` carries its own self-test.
 
 - **Columns** (Fork's four): graph and subject share the first, then author,
   abbreviated id, and `Date (UTC)`. The date column is labelled UTC because
@@ -308,16 +310,18 @@ either. Issue #9.
 | --- | --- |
 | `cairn-ui` and `cairn-model` never name `gix` or `cairn_git` | `layers_never_name_the_crates_they_are_sealed_from` |
 | Each crate depends only on its allowlist | `layer_dependencies_are_allowlisted` |
+| A `RowContent` is read by naming every variant | `every_view_of_a_row_names_every_kind_of_row` |
 | Only `crates/cairn-app/src/worker/` reaches a repository or waits | `the_ui_thread_never_waits_on_repository_work` |
 | The history list renders through a virtualizing view | `a_history_sized_list_renders_through_a_virtualizing_view` |
 | That view builds one viewport of rows at 1,000 and at 100,000 | `only_a_viewport_of_rows_is_built_however_long_the_history` |
 
-The first four live in `crates/cairn-guards/tests/invariants.rs`; the last is a
-headless component test in `crates/cairn-ui/tests/history_list.rs`. The three that scan
+The first five live in `crates/cairn-guards/tests/invariants.rs`; the last is a
+headless component test in `crates/cairn-ui/tests/history_list.rs`. The four that scan
 SOURCE each assert a nonzero scanned-file count per directory, so a renamed
-directory reddens rather than passing on an empty walk — the two new twins
-inline, and `layers_never_name_the_crates_they_are_sealed_from` through
-`cairn_guards::rust_sources`. The seal scan reads each sealed crate's whole
+directory reddens rather than passing on an empty walk — the waiting and
+virtualization twins inline, and the seal and row-content twins through
+`cairn_guards::rust_sources`; the row-content twin also requires that some
+scanned file names `RowContent` at all. The seal scan reads each sealed crate's whole
 directory, so `tests/` is held to the same seal as `src/`
 (`the_seal_scan_reads_tests_as_well_as_src`). `layer_dependencies_are_allowlisted`
 scans no source at all: it walks `crates/*/Cargo.toml`, reads every dependency
@@ -329,9 +333,10 @@ asserts it saw a nonzero number of CRATES, and additionally fails when an
 allowlist row names a crate that does not exist, which is the same "cannot pass
 on an empty walk" property in the shape that file set allows.
 
-Three matchers stand behind them — `cairn_guards::waits_on_work`,
+Four matchers stand behind them — `cairn_guards::waits_on_work`,
 `cairn_guards::mentions_crate` (the sealed-crate check, and the worker half of
-the waiting check), and the unbounded-view matcher — and each carries a
+the waiting check), `cairn_guards::reads_row_content_partially`, and the
+unbounded-view matcher — and each carries a
 self-test over synthetic sources, because a matcher that has quietly stopped
 matching reports green while the coverage it names is gone.
 

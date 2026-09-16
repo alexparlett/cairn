@@ -5,7 +5,8 @@ use std::path::Path;
 
 use cairn_guards::{
     code_only, code_without_strings, code_without_test_modules, declared_dependencies,
-    mentions_crate, repo_root, rust_sources, spawns_git, waits_on_work,
+    mentions_crate, reads_row_content_partially, repo_root, rust_sources, spawns_git,
+    waits_on_work,
 };
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
@@ -277,6 +278,172 @@ fn layers_never_name_the_crates_they_are_sealed_from() {
                 );
             }
         }
+    }
+}
+
+/// Crates that may read `RowContent` however they like: its owner, and this suite's fixtures.
+const ROW_CONTENT_EXEMPT: &[&str] = &["cairn-model", "cairn-guards"];
+
+#[test]
+fn every_view_of_a_row_names_every_kind_of_row() {
+    let crates_dir = repo_root().join("crates");
+    let entries = std::fs::read_dir(&crates_dir)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", crates_dir.display()));
+    let mut crates: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().join("Cargo.toml").is_file())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    crates.sort();
+
+    for exempt in ROW_CONTENT_EXEMPT {
+        assert!(
+            crates.iter().any(|krate| krate == exempt),
+            "ROW_CONTENT_EXEMPT names `{exempt}`, which is not a crate under crates/: remove the \
+             row or fix it."
+        );
+    }
+
+    let mut readers = 0usize;
+    for krate in crates
+        .iter()
+        .filter(|krate| !ROW_CONTENT_EXEMPT.contains(&krate.as_str()))
+    {
+        for (path, source) in rust_sources(format!("crates/{krate}")) {
+            if !mentions_crate(&source, "RowContent").is_empty() {
+                readers += 1;
+            }
+            let hits = reads_row_content_partially(&source);
+            assert!(
+                hits.is_empty(),
+                "{}:{} reads a `RowContent` through a wildcard arm, a catch-all binding, `if let`, \
+                 `let .. else` or `matches!`. Once there is a second kind of row that compiles and \
+                 silently draws nothing for it: match every variant by name (CLAUDE.md, \
+                 Invariants).",
+                path.display(),
+                hits[0]
+            );
+        }
+    }
+    assert!(
+        readers > 0,
+        "no file outside {ROW_CONTENT_EXEMPT:?} names `RowContent`, so this guard checked \
+         nothing. If rows are read some other way now, move the guard with them."
+    );
+}
+
+#[test]
+fn the_row_content_matcher_catches_the_shapes_it_claims() {
+    let caught = [
+        (
+            "wildcard arm",
+            "match row.content {\n    RowContent::Commit(c) => draw(c),\n    _ => {}\n}",
+        ),
+        (
+            "guarded wildcard",
+            "match &row.content {\n    RowContent::Commit(c) => a(c),\n    _ if x => b(),\n}",
+        ),
+        (
+            "catch-all binding",
+            "match content {\n    RowContent::Commit(c) => a(c),\n    other => b(other),\n}",
+        ),
+        (
+            "bound wildcard",
+            "match content {\n    RowContent::Commit(c) => a(c),\n    rest @ _ => b(rest),\n}",
+        ),
+        (
+            "wildcard in an or-pattern",
+            "match content {\n    RowContent::Commit(c) | _ => a(),\n}",
+        ),
+        (
+            "braced arm before the wildcard",
+            "match content {\n    RowContent::Commit(c) => { a(c); }\n    _ => (),\n}",
+        ),
+        (
+            "if let",
+            "if let RowContent::Commit(commit) = &row.content {\n    draw(commit);\n}",
+        ),
+        (
+            "nested if let",
+            "if let Some(RowContent::Commit(c)) = rows.first().map(|r| &r.content) {}",
+        ),
+        ("while let", "while let RowContent::Commit(c) = next() {}"),
+        (
+            "let else",
+            "let RowContent::Commit(commit) = row.content else {\n    return;\n};",
+        ),
+        (
+            "matches!",
+            "let is_commit = matches!(row.content, RowContent::Commit(_));",
+        ),
+        (
+            "spaced matches!",
+            "assert!(matches! (\n    content,\n    RowContent::Commit(..)\n));",
+        ),
+        (
+            "attributed wildcard",
+            "match content {\n    RowContent::Commit(c) => a(c),\n    #[allow(unreachable_patterns)]\n    _ => b(),\n}",
+        ),
+        ("glob import", "use cairn_model::RowContent::*;"),
+    ];
+    for (shape, source) in caught {
+        assert!(
+            !reads_row_content_partially(source).is_empty(),
+            "the row-content matcher missed the {shape} shape: {source:?}"
+        );
+    }
+    assert_eq!(
+        reads_row_content_partially(
+            "let a = 1;\nmatch c {\n    RowContent::Commit(c) => a(c),\n    _ => {}\n}"
+        ),
+        vec![4],
+        "the matcher reported the wrong line"
+    );
+
+    let ignored = [
+        (
+            "exhaustive match",
+            "match &row.content {\n    RowContent::Commit(commit) => draw(commit),\n}",
+        ),
+        (
+            "irrefutable let",
+            "let RowContent::Commit(commit) = render.row.content;",
+        ),
+        (
+            "building a row",
+            "let row = HistoryRow { content: RowContent::Commit(c), graph };",
+        ),
+        (
+            "a wildcard inside a variant",
+            "match content {\n    RowContent::Commit(_) => a(),\n}",
+        ),
+        (
+            "a wildcard over something else",
+            "match id {\n    Some(x) => a(x),\n    _ => b(),\n}\nlet c = RowContent::Commit(s);",
+        ),
+        (
+            "if let over something else",
+            "if let Some(c) = x {}\nlet r = RowContent::Commit(c);",
+        ),
+        (
+            "matches! over something else",
+            "matches!(x, Some(_)); let r = RowContent::Commit(c);",
+        ),
+        (
+            "a wildcard inside an arm body",
+            "match content {\n    RowContent::Commit(c) => match c.x {\n        Some(y) => y,\n        _ => 0,\n    },\n}",
+        ),
+        (
+            "prose",
+            "// if let RowContent::Commit(c) = x, or `_ =>`\nlet s = \"matches!(c, RowContent::Commit(_))\";",
+        ),
+    ];
+    for (shape, source) in ignored {
+        assert_eq!(
+            reads_row_content_partially(source),
+            Vec::<usize>::new(),
+            "the row-content matcher fired on the {shape} shape: {source:?}"
+        );
     }
 }
 

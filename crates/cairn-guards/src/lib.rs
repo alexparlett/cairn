@@ -473,6 +473,306 @@ fn takes_no_arguments(code: &str, at: usize) -> bool {
     rest.as_str().trim_start().starts_with(')')
 }
 
+const ROW_CONTENT: &str = "RowContent";
+
+/// 1-based lines where `source` reads a `RowContent` without naming every variant: a wildcard or
+/// catch-all arm in a match that names it, `if let`/`while let`/`let .. else` over it,
+/// `matches!` over it, or a glob import of its variants.
+pub fn reads_row_content_partially(source: &str) -> Vec<usize> {
+    let code = code_without_strings(source);
+    let bytes = code.as_bytes();
+    let names_row_content = |text: &str| !ident_offsets(text, ROW_CONTENT).is_empty();
+    let mut lines = BTreeSet::new();
+
+    for offset in ident_offsets(&code, ROW_CONTENT) {
+        let rest = code[offset + ROW_CONTENT.len()..].trim_start();
+        if rest
+            .strip_prefix("::")
+            .is_some_and(|r| r.trim_start().starts_with('*'))
+        {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+
+    for offset in ident_offsets(&code, "matches") {
+        let mut at = skip_whitespace(bytes, offset + "matches".len());
+        if bytes.get(at) != Some(&b'!') {
+            continue;
+        }
+        at = skip_whitespace(bytes, at + 1);
+        if !matches!(bytes.get(at), Some(b'(' | b'[' | b'{')) {
+            continue;
+        }
+        let end = balanced_end(bytes, at);
+        if names_row_content(&code[at..end]) {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+
+    for offset in ident_offsets(&code, "let") {
+        let Some(assign) = depth_zero_assignment(bytes, offset + "let".len()) else {
+            continue;
+        };
+        if !names_row_content(&code[offset..assign]) {
+            continue;
+        }
+        let before = code[..offset].trim_end();
+        let conditional = ["if", "while"].iter().any(|keyword| {
+            before.ends_with(keyword)
+                && before[..before.len() - keyword.len()]
+                    .bytes()
+                    .next_back()
+                    .is_none_or(|b| !is_ident_byte(b))
+        });
+        if conditional || has_else_before_semicolon(&code, assign + 1) {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+
+    for offset in ident_offsets(&code, "match") {
+        let Some(open) = match_arms_open(bytes, offset + "match".len()) else {
+            continue;
+        };
+        let arms = match_arm_patterns(&code, open);
+        if !arms.iter().any(|(_, pattern)| names_row_content(pattern)) {
+            continue;
+        }
+        for (at, pattern) in arms {
+            if split_depth_zero(strip_guard(pattern), b'|')
+                .into_iter()
+                .any(is_catch_all)
+            {
+                lines.insert(line_at(&code, at));
+            }
+        }
+    }
+
+    lines.into_iter().collect()
+}
+
+fn skip_whitespace(bytes: &[u8], mut at: usize) -> usize {
+    while bytes.get(at).is_some_and(u8::is_ascii_whitespace) {
+        at += 1;
+    }
+    at
+}
+
+/// One past the bracket that closes the one at `open`, or the end of `bytes`.
+fn balanced_end(bytes: &[u8], open: usize) -> usize {
+    let mut depth = 0usize;
+    for (i, b) in bytes.iter().enumerate().skip(open) {
+        match b {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return i + 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    bytes.len()
+}
+
+/// The `=` of a `let` starting at `from`: not `==`, `=>`, `!=`, `<=` or `>=`, and outside brackets.
+fn depth_zero_assignment(bytes: &[u8], from: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for i in from..bytes.len() {
+        match bytes[i] {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => {
+                if depth == 0 {
+                    return None;
+                }
+                depth -= 1;
+            }
+            b';' if depth == 0 => return None,
+            b'=' if depth == 0 => {
+                let next = bytes.get(i + 1).copied();
+                let prev = i.checked_sub(1).map(|p| bytes[p]);
+                if !matches!(next, Some(b'=' | b'>'))
+                    && !matches!(prev, Some(b'=' | b'!' | b'<' | b'>'))
+                {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Whether an `else` keyword comes before the statement's `;`, outside brackets.
+fn has_else_before_semicolon(code: &str, from: usize) -> bool {
+    let bytes = code.as_bytes();
+    let mut depth = 0usize;
+    let mut i = from;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => {
+                if depth == 0 {
+                    return false;
+                }
+                depth -= 1;
+            }
+            b';' if depth == 0 => return false,
+            b'e' if depth == 0
+                && code[i..].starts_with("else")
+                && bytes.get(i + 4).is_none_or(|b| !is_ident_byte(*b))
+                && (i == 0 || !is_ident_byte(bytes[i - 1])) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+/// The `{` opening a match's arms: the first one outside the scrutinee's brackets.
+fn match_arms_open(bytes: &[u8], from: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, b) in bytes.iter().enumerate().skip(from) {
+        match b {
+            b'{' if depth == 0 => return Some(i),
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth = depth.checked_sub(1)?,
+            b';' | b'}' if depth == 0 => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// (offset, pattern text) of each arm of the match whose arms open at `open`.
+fn match_arm_patterns(code: &str, open: usize) -> Vec<(usize, &str)> {
+    let bytes = code.as_bytes();
+    let mut arms = Vec::new();
+    let mut i = open + 1;
+    loop {
+        i = skip_whitespace(bytes, i);
+        if i >= bytes.len() || bytes[i] == b'}' {
+            return arms;
+        }
+        let start = i;
+        let mut depth = 0usize;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => {
+                    if depth == 0 {
+                        return arms;
+                    }
+                    depth -= 1;
+                }
+                b'=' if depth == 0 && bytes.get(i + 1) == Some(&b'>') => break,
+                _ => {}
+            }
+            i += 1;
+        }
+        if i >= bytes.len() {
+            return arms;
+        }
+        arms.push((start, &code[start..i]));
+
+        i = skip_whitespace(bytes, i + 2);
+        if bytes.get(i) == Some(&b'{') {
+            i = skip_whitespace(bytes, balanced_end(bytes, i));
+            if bytes.get(i) == Some(&b',') {
+                i += 1;
+            }
+            continue;
+        }
+        let mut depth = 0usize;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth -= 1;
+                }
+                b',' if depth == 0 => {
+                    i += 1;
+                    break;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+    }
+}
+
+/// `pattern` without a trailing `if` guard.
+fn strip_guard(pattern: &str) -> &str {
+    let bytes = pattern.as_bytes();
+    let mut depth = 0usize;
+    for i in 0..bytes.len() {
+        match bytes[i] {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            b'i' if depth == 0
+                && pattern[i..].starts_with("if")
+                && bytes.get(i + 2).is_none_or(|b| !is_ident_byte(*b))
+                && (i == 0 || !is_ident_byte(bytes[i - 1])) =>
+            {
+                return &pattern[..i];
+            }
+            _ => {}
+        }
+    }
+    pattern
+}
+
+fn split_depth_zero(text: &str, separator: u8) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0;
+    for i in 0..bytes.len() {
+        match bytes[i] {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            b if b == separator && depth == 0 => {
+                parts.push(&text[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&text[start..]);
+    parts
+}
+
+/// `_`, or a pattern that binds whatever it is given: `other`, `ref mut x`, `x @ _`.
+fn is_catch_all(alternative: &str) -> bool {
+    let mut pattern = alternative.trim();
+    while pattern.starts_with("#[") {
+        let end = balanced_end(pattern.as_bytes(), 1);
+        pattern = pattern[end..].trim_start();
+    }
+    if let Some((_, bound)) = pattern.split_once('@') {
+        return is_catch_all(bound);
+    }
+    for modifier in ["ref ", "mut "] {
+        if let Some(rest) = pattern.strip_prefix(modifier) {
+            pattern = rest.trim_start();
+        }
+    }
+    let mut chars = pattern.chars();
+    match chars.next() {
+        Some('_') if pattern.len() == 1 => true,
+        Some(first) if first == '_' || first.is_ascii_lowercase() => {
+            chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        }
+        _ => false,
+    }
+}
+
 /// 1-based lines where `source` spawns a `git` subprocess, matched on the literal program name.
 pub fn spawns_git(source: &str) -> Vec<usize> {
     let code = code_only(source);

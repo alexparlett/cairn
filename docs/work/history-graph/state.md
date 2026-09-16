@@ -2,13 +2,17 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phases 01, 02 and 03 implemented on `feature/history-graph`, unmerged.
-The lane assigner is bounded and lives in `cairn-model`; `cairn-git` answers a
-bounded, resumable, cancellable history query and keeps a walk alive across a
-scroll; `cairn-app` runs both off the UI thread behind a boundary a guard now
-pins.** Correction to this line as phase 01 left it: R1.3 and R1.2's finality
-sentence are no longer TRAP-marked in the PRD — the user narrowed both on
-2026-09-15 and phase 02 built the window they describe.
+**Status: phases 01-04 implemented on `feature/history-graph`, unmerged. The
+packet is visible.** The lane assigner is bounded and lives in `cairn-model`;
+`cairn-git` answers a bounded, resumable, cancellable history query and keeps a
+walk alive across a scroll; `cairn-app` runs both off the UI thread behind a
+boundary a guard pins; and `cairn-ui` draws the result as a virtualised graph
+with lanes, edges, four columns and keyboard selection, over the repository named
+on the command line. Only phase 05 (QA) is left.
+
+Corrections this line has collected: R1.3 and R1.2's finality sentence are no
+longer TRAP-marked in the PRD — the user narrowed both on 2026-09-15 and phase 02
+built the window they describe.
 
 **Still open for the user.** Phase 02 raised three; the first is built, the other
 two stand, phase 03 adds a correction to one of them, and R6's QA raises one
@@ -75,7 +79,20 @@ L1-L10 in `brainstorm.md`; the design-level frame is D3 and D4 in
 
 ## Open questions
 
-O4 in `brainstorm.md`. **O1 is resolved**: L9 settled it before phase 01
+**O4 is resolved** by phase 04, and the question turned out to be smaller than it
+was framed as: an out-of-order line is drawn **dashed along its whole length, in
+the lane's own colour, with its geometry unchanged**. Dash rather than colour,
+because the product rules say colour never carries meaning alone and a dash
+survives a monochrome screenshot and every colour-vision deficiency; geometry
+unchanged, because the connection is not a different KIND of connection, only its
+ancestry runs the other way. The correction to the question itself: **a view
+never observes the repaint O4 was about.** `HistorySession::next_page` hands out
+only rows the assigner has already evicted, and `connect_upward` repaints only
+rows still inside the window, so an out-of-order line is complete before its rows
+are delivered. Evidence: 5 rows of 2,896 (0.173%) in the default order over every
+ref of `/home/alexparlett/Development/freya` — see `progress.md`.
+
+**O1 is resolved**: L9 settled it before phase 01
 started — a bounded reordering window can always be exceeded by larger skew, so
 the total assigner is the floor rather than one of two options. Phase 01 built
 that total assigner and phase 02 bounded it. **O2 is resolved** by measurement in
@@ -84,8 +101,7 @@ repository, `WORKERS_PER_REPOSITORY` in `crates/cairn-app/src/worker/pool.rs` �
 and note that the measurement contradicted the question's own premise, since
 concurrent walks scaled 7.9x on 8 threads rather than oversubscribing. The reason
 for one worker is structural (a live walk cannot be split across threads), not
-throughput. Numbers and caveats in `progress.md`. O4 is now a visual question
-rather than a structural one, thanks to L10.
+throughput. Numbers and caveats in `progress.md`.
 
 ### How phase 01 answered R1.4
 
@@ -145,6 +161,17 @@ contract — so a later phase does not re-derive it from source.
 | `Epochs` / `Superseded` (`crates/cairn-app/src/worker/epoch.rs`) | `cairn-app` | The epoch IS the cancel signal: `Superseded` implements `cairn_git::Cancel` as "is my epoch still current". Superseding stops the walk at the next commit rather than discarding a finished answer. |
 | `WORKERS_PER_REPOSITORY` | `cairn-app` | 1, by O3. A `const` assertion fails the build if it is raised, because the job channel has one consumer and the live walk lives on it — more workers need a routing decision, not a bigger number. |
 | `cairn_guards::waits_on_work` | `cairn-guards` | 1-based lines where source waits or spins. Bare identifiers for the things you must name to alias — the types, the channel CONSTRUCTORS (a receiver can be held without naming one), and the spinning spellings (`try_recv`, `spin_loop`, ...); `join`/`lock`/`recv`/`wait` only when called with NO arguments, which is what tells `handle.join()` from `root.join("crates")`. Reads across newlines, ignores string literals. |
+| `HistoryList` | `cairn-ui` | The virtualised history list: `new(rows: State<Vec<HistoryRow>>, row)` plus `.lanes()`, `.selected()`, `.on_select()`, `.on_reach_end()`. Takes the rows as a HANDLE and a per-row builder, so nothing copies the history to draw it and the caller keeps the obligation to match on `RowContent`. Owns the scroll controller, the focus and the keyboard. |
+| `RowRender` | `cairn-ui` | What `HistoryList` hands its builder for one row: the `HistoryRow`, whether it is selected, and how many lane columns the whole list reserves. One clone per VISIBLE row, which is the sanctioned place for one. |
+| `cairn_ui::PREFETCH_ROWS` | `cairn-ui` | 24. Every row within this many of the end asks for the next page when it becomes visible — every one of them, not a single trigger row, because one trigger row is a list that quietly stops loading on a tall window. So `on_reach_end` fires repeatedly BY DESIGN and the caller must debounce. |
+| `CommitRow` / `HistoryHeader` | `cairn-ui` | One commit's line and the headings above it, in Fork's four columns: graph and subject share the first, then author, abbreviated id, date. `CommitRow` holds no event handler, so two rows with the same content compare equal and an unchanged one is not re-rendered. |
+| `cairn_ui::graph_geometry` | `cairn-ui` | Pure arithmetic: `row_geometry(&GraphRow, parents) -> RowGeometry` in row-local coordinates, plus `ROW_HEIGHT` (26, uniform by L7), `LANE_WIDTH`, `MAX_DRAWN_LANES` (24, beyond which lanes share the last column) and `graph_width(lanes)`. Free of Freya and Skia, so where a line goes is decided by a unit test. |
+| `cairn_ui::lane_palette::lane_colour` | `cairn-ui` | Lane → colour, cycling eight Okabe-Ito hues. Colour is an AID: lane identity is the COLUMN, which is why the geometry test asserts column separation against the ink and this file's test pins the palette against Okabe-Ito's published values. |
+| `cairn_app::history_state::Progress` | `cairn-app` | Everything about the history except its rows: `status()` (`Loading`/`Empty`/`Ready`/`Failed`), `lanes()`, `loaded()`, `has_rows()`, `complete()`, and `wants_more()` — which is the debounce the worker boundary needs, because every `submit` supersedes. Folded by `received(widest_lane, complete, loaded)` / `failed(..)` / `stream_ended(..)`. |
+| `cairn_app::status_text` | `cairn-app` | `placeholder(&Status, has_rows) -> Option<String>` and `loaded_count(&Progress)`. R4.3 lives here: that loading and an empty repository are different SENTENCES is a thing a test decides, not a screenshot. |
+| `cairn_app::repository_path::chosen` | `cairn-app` | R5.1, as a pure function over the process arguments INCLUDING the program name — dropping it is part of the rule, so it sits where the tests can reach it. Later arguments are ignored (R5.3). Deliberately not a picker. |
+| `worker::RepositoryHandle` (re-exported) | `cairn-app` | Now named by the view, because the window holds one across renders and passes it to the function that builds the list. Safe to name: one method, returns immediately, carries no receiving end of anything. |
+| `a_history_sized_list_renders_through_a_virtualizing_view` | `cairn-guards` | The twin for "no unbounded list renders without virtualization". Fails when a render file builds `children` from a collection of `HistoryRow`s, or puts them in a plain `ScrollView`, without naming `VirtualScrollView` — and when nothing names `VirtualScrollView` at all. |
 
 ## Validation status
 
@@ -153,24 +180,27 @@ contract — so a later phase does not re-derive it from source.
 | 01 lane assignment | implemented | `scripts/gate.sh` green | see progress.md's phase 01 QA entry |
 | 02 history query | implemented | `scripts/gate.sh` green | four fresh agents, adjudicated by `qa-confirm`; see progress.md's newest entry |
 | 03 worker boundary | implemented | `scripts/gate.sh` green | four fresh agents, adjudicated by `qa-confirm`; then a mutation-executing coverage audit whose findings are closed — see progress.md's newest entry, which also names the two gaps held for the scroll/memory design pass |
-| 04 graph view | not started | — | — |
+| 04 graph view | implemented | `scripts/gate.sh` green | four fresh agents (`qa-checklist`, `responsiveness-reviewer`, `test-coverage-auditor`), adjudicated by a fresh `qa-confirm`; 18 of 26 findings confirmed, fixed or filed — see progress.md's newest entry |
 | 05 QA | not started | — | — |
 
-Phase 04 owes the virtualization invariant a real twin, and phase 03 is the
-change that made it live. `cairn-app` builds one component per element of the
-row vector with a full `CommitSummary` clone each — measured by the
-`responsiveness-reviewer` at roughly 1,300 allocations and 30 KB copied per
-render at the current cap — and it re-runs on every reactive change, including a
-selection click that alters one row. The correction to the line this file used
-to carry: it is no longer "inert because nothing populates that vector". The
-query is wired, the vector fills, and what keeps it bounded is a CAP
-(`ROWS_DRAWN`, 256) rather than virtualisation. Lifting the cap without
-virtualising is the defect arriving; the clone belongs inside a virtualised
-viewport's row builder, where one clone per VISIBLE row is fine.
+**Both of phase 04's debts are paid; this paragraph replaces what it used to
+say.** The virtualization invariant now has its twin —
+`a_history_sized_list_renders_through_a_virtualizing_view` in
+`crates/cairn-guards/tests/invariants.rs`, promoted out of CLAUDE.md's "not yet
+mechanically pinned" list by the change that made it load-bearing — and
+`ROWS_DRAWN` is gone: the list is a `VirtualScrollView` keyed by `RowId`, and the
+`CommitSummary` clone that used to happen per row of the whole vector now happens
+once per VISIBLE row inside the viewport's builder, which is where it belongs.
+Measured: 34-35 rows built per render at 1,000 rows, and the same 34-35 at
+100,000. The residual the guard cannot express — that the toolkit really builds
+only visible items — is stated in `CLAUDE.md` and owned by
+`responsiveness-reviewer`.
 
-Phase 04 owes R5: opening a repository from a command-line argument, and nothing
-more than that. `main.rs` currently opens the process working directory, which is
-R5.1's default and none of the rest of R5.
+R5 is built and kept to its brief: `repository_path::chosen` takes the first
+command-line argument or the working directory, and there is no picker, manager,
+tab or recent list. A path outside a repository reaches the window as the
+sentence "no git repository at <path>", filling the list's place rather than
+leaving it blank.
 
 ## Which parts of the worker interface exist for fetch
 
@@ -231,7 +261,8 @@ two-file change, not a call-site sweep.
   at 40 branches, 40,000 tip resolutions per page at a ref-heavy remote. Raised
   by the `responsiveness-reviewer` during the `Oid` change and not fixed there.
 
-**Constraints phase 03 hands phase 04:**
+**Constraints phase 03 handed phase 04** — phase 04 has landed, so the ones it
+DISCHARGED say so in place; the rest still hold for whoever comes next:
 
 - **The first page of a scroll WALKS `limit + window` commits, every later page
   walks `limit`, and neither decodes more commit objects than it returns rows.**
@@ -243,9 +274,10 @@ two-file change, not a call-site sweep.
   continues the open walk. There is no total row count and no offset-to-cursor
   route (filed, not built), so a scrollbar drag has no answer — progressive
   loading is the model, as it is in Fork and Sourcetree.
-- **`main.rs` renders a bounded 256 rows and is not virtualised.** A cap is not
-  virtualisation. R4.1 is phase 04's, and the `ROWS_DRAWN`/`PAGE_ROWS` constants
-  and the `.take(ROWS_DRAWN)` in `app()` are what it replaces.
+- ~~**`main.rs` renders a bounded 256 rows and is not virtualised.**~~
+  **Discharged.** `ROWS_DRAWN` and the `.take(..)` are gone; the list is
+  `cairn_ui::HistoryList` over a `VirtualScrollView`, keyed by `RowId`, and the
+  invariant has a guard twin. `PAGE_ROWS` (64) remains, as the size of a page.
 - **Only `crates/cairn-app/src/worker/` may name `cairn_git` or wait.** A new
   file in `cairn-app` that needs repository data asks for it through a
   `worker::Request`; the guard fails the build otherwise, naming the line.
@@ -255,10 +287,14 @@ two-file change, not a call-site sweep.
   reconciliation: `main.rs` holds `Option<RowId>` and compares identities, and
   the rendered list is keyed by `RowId` rather than by position, so a row
   arriving ABOVE another — which is exactly what the working-tree row does —
-  neither moves the selection nor makes Freya rebuild every row below it. What
-  is still positional is the `ROWS_DRAWN` cap, which virtualisation (R4.1) owns.
-  Phase 04 keeps the identity and adds keyboard reach; nothing tests either yet,
-  because `cairn-app` has no component-test harness.
+  neither moves the selection nor makes Freya rebuild every row below it.
+  **Phase 04 kept the identity and added keyboard reach** — arrow keys,
+  `PageUp`/`PageDown`, `Home` and `End`, with the list auto-focused so a reader
+  with no mouse can select at all. The arithmetic is a pure `moved_to` and is
+  tested; what still has no test is the WIRING of it (that `on_select` is called,
+  that the row is revealed, that `RowRender.selected` reaches the row), because
+  `cairn-app` still has no component-test harness — see the `freya-testing`
+  decision held for the user.
 - **The working-tree row will need a lane without an `Oid`, and `GraphRow.id`
   is one.** R6 made a row's CONTENT and IDENTITY total over non-commits;
   `cairn_model::GraphRow` — the assigner's own output — still keys a row by

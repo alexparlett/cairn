@@ -3,6 +3,182 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-16 — phase 04: the graph view, and what A7 could actually be measured against
+
+The packet is visible. `cairn-ui` draws a virtualised list of `HistoryRow`s with
+lanes, edges and Fork's four columns; `cairn-app` opens the repository named on
+the command line and pages as the reader scrolls. `scripts/gate.sh` is green and
+the phase ran `/qa` with four fresh agents.
+
+**O4 is decided, and the question turned out to be smaller than it looked.**
+An out-of-order line — one joining a commit to a parent drawn *above* it — is
+**dashed along its whole length, in the lane's own colour, with its geometry
+unchanged**. Dash rather than colour because the product rules say colour never
+carries meaning alone, and a dash survives a monochrome screenshot and every
+colour-vision deficiency; geometry unchanged because the connection is not a
+different KIND of connection, only its ancestry runs the other way, and giving it
+a different shape would say something untrue.
+
+The correction to O4's own framing: **the view never sees the repaint the
+question was about.** L10 permits the assigner to repaint edges inside its
+window, and phase 04 expected to have to make that repaint read as intentional
+mid-scroll. It cannot happen through the session path: `HistorySession::next_page`
+hands out only rows the assigner has already EVICTED, and `connect_upward` can
+only repaint rows still inside the window, so by the time a row reaches a view
+its out-of-order segments are already on it. O4 is therefore a static legibility
+question, not a question about motion.
+
+Evidence it was decided against, rather than guessed: the layout harness
+(`measures_layout_over_every_ref_of_a_named_repository`) run over every ref of
+`/home/alexparlett/Development/freya`, 2,896 rows, in the order Cairn walks by
+default —
+
+```
+  CommitTime: 2896 rows, walked 2896, in 15.1ms
+    segments/row : mean 3.12  p50 3  p95 7  p99 8  max 11
+    open lanes/row: mean 2.12  p50 2  p95 6  p99 7  max 9
+    out-of-order: 5 rows (0.173%), 5 segments
+    highest lane number used: 8
+```
+
+0.173% matches the PRD's "0-0.2% of rows in the default order" exactly. The same
+harness in `GraphOrder` reports 86.9% of rows out of order and 132 lanes, which is
+why the default order is the one the view is designed against.
+
+## A7 — measured, and the 100k target was NOT reachable on this machine
+
+Stated plainly because a fabricated number would be worse than a recorded
+shortfall: **no repository with 100k commits exists on this machine.** Every git
+repository under `/home/alexparlett`, `/usr/src` and `/opt` was enumerated; the
+largest is `/home/alexparlett/Development/freya` at **2,540 commits from `HEAD`**
+(2,896 across all refs). So A7's named-repository half was run against that, and
+the "at least 100k" half was run against a synthetic row vector instead, with the
+difference stated below rather than blurred.
+
+**Against the real repository** — `/home/alexparlett/Development/freya`, 2,540
+commits, release build, paged to completion with the `End` key:
+
+| | |
+| --- | --- |
+| rows loaded | 2,540 (title bar reports `2540 commits`, no ellipsis — complete) |
+| RSS at first page (64 rows) | 192.1 MB |
+| RSS at full history (2,540 rows) | 196.2 MB |
+| growth | +4.0 MB for 2,476 rows ≈ 1.6 KB/row, which includes gitoxide's walk seen-set and the assigner's window, not only the rows |
+
+**Against a synthetic history** — a throwaway instrumented build (reverted, not
+committed) that filled the row vector with N generated rows and counted
+`build_row` invocations per render. This measures the VIEW's half of A7 and makes
+no claim about a repository:
+
+| rows in the list | rows built per render | renders | CPU for 60 `PageDown`s | RSS |
+| --- | --- | --- | --- | --- |
+| 1,000 | 34-35 steady, 119 on a viewport jump | 15 | 0.17 s | 152.3 MB |
+| 10,000 | — | — | 0.18 s | 157.6 MB |
+| 100,000 | 34-35 steady, 119 on a viewport jump | 15 | 0.18 s | 216.6 MB |
+
+**What that decides.** Row construction per render is *identical* at 1,000 and at
+100,000 rows — same steady count, same jump count, same number of renders — so
+R4.1's "only visible rows are rendered" is measured rather than inferred from a
+component's name, which is what the phase's QA brief asked for. Frame cost is
+flat in list length: the same 60 scroll jumps cost 0.17-0.18 s of CPU at every
+size, about 3 ms per jump.
+
+**What it does not decide, and the caveat A7's wording hides.** Memory is flat in
+*history length* — a 100k-commit repository costs nothing until it is scrolled —
+but it is **linear in rows SCROLLED**: 1,000 → 100,000 rows added 64 MB, about
+660 bytes per retained row, and nothing evicts. At a million rows scrolled that
+is ~660 MB. Phase 03's state.md already flagged this shape; phase 04 has now put
+a number on it. Capping or windowing the retained vector is a decision for the
+user, and it is filed, not built.
+
+Also not measured: frame time from inside the renderer. Freya's performance
+overlay exists only in debug builds and its toggle could not be driven through
+synthetic input in this session, so the frame-cost figure above is CPU consumed
+per scroll gesture, not a per-frame histogram.
+
+## What QA found, and what was done about it
+
+Four fresh agents: `qa-checklist`, `responsiveness-reviewer`,
+`test-coverage-auditor`, adjudicated by a fresh `qa-confirm`. 18 of 26 raw
+findings confirmed. Fixed in this phase:
+
+- **The lane-separation test was a tautology.** `every_lane_below_the_cap_has_its_own_column`
+  compared the gap between columns to `LANE_WIDTH / 2` — the same constant that
+  produced the gap — so it was true for every positive `LANE_WIDTH`. The auditor
+  demonstrated it by setting `LANE_WIDTH = 1.0` and watching 22/22 stay green
+  with `NODE_RADIUS = 4.0`, i.e. every dot swallowing both neighbours. It now
+  compares against the INK (`2 * NODE_RADIUS`, `STROKE_WIDTH`), and that mutation
+  fails two tests. This was the test carrying R4.2's "lane identity survives a
+  monochrome screenshot".
+- **The keyboard half of R4.4 had no test at all.** The arithmetic is now a pure
+  `moved_to(key, current, last)` with both arrow directions asserted distinct,
+  `Home`/`End` distinct, the page jump bounded above one row and below the list,
+  both end clamps, the nothing-selected case, and a key the list does not own.
+  Verified against mutations: `End => Some(0)` and `PAGE_JUMP = 1` both now fail.
+- **`no_walk`'s call site was unpinned**, so restoring `Update::Failed` at the
+  call site left every test green while a fresh `git init` repository showed a
+  red error instead of "No commits yet." — the exact R4.3 bug. There is now an
+  end-to-end test through `serve` against an unborn `HEAD`, with the repository
+  built by `std::fs` rather than by running `git init`, because
+  `only_the_ops_module_mutates_a_repository` scans this crate's test code too.
+- **O4 was tested for one `EdgeKind`.** The assigner marks all three pieces of an
+  out-of-order line; a rule that dashed only `OutOfCommit` would draw one dashed
+  row and then a solid line. All three kinds are asserted now.
+- **The virtualization invariant got its twin**,
+  `a_history_sized_list_renders_through_a_virtualizing_view`, which fails when a
+  render file builds `children` from a collection of `HistoryRow`s or puts them
+  in a plain `ScrollView` without naming `VirtualScrollView`, and when nothing
+  names `VirtualScrollView` at all. Verified by swapping the view for
+  `ScrollView::new_controlled` and watching it fail. The residual — that the
+  toolkit really builds only visible items — is stated in `CLAUDE.md` as a review
+  obligation and answered today by the measurement above.
+- Smaller: the selection's prepend case (a row arriving ABOVE the selection,
+  which is what the working-tree row will do) is now tested; the program name is
+  dropped inside `repository_path::chosen` so the whole of R5.1 is under test
+  rather than one line of it sitting at an untested call site; the status →
+  sentence mapping moved to `status_text` so R4.3's *rendering* decision is
+  decided by a test and not by a screenshot; the palette is pinned against
+  Okabe-Ito's published values so the colour-vision claim is decided by
+  something; and the keyboard handler drops its read guard before calling out,
+  because a future handler that reloaded the list would otherwise re-enter the
+  borrow and panic on the UI thread.
+
+**Dismissed, with the reason** (adjudicated by `qa-confirm`, not by the
+implementer):
+
+- *"No reachable cancellation path for a superseded request."* The premise is
+  right and the defect does not follow: one-request-at-a-time is deliberate and
+  tested, the epoch wiring is pinned end to end by
+  `superseding_a_request_stops_the_walk_that_is_serving_it`, and a second cancel
+  path IS reachable — closing the window drops `Updates` and calls `stop()`.
+- *"`index_of`'s fallback scan runs on the UI thread."* Not entered today: rows
+  only append and the cursor is written on every selection path. It is the
+  correctness fallback by design. Filed against the packet that prepends a row.
+- *"`f32` scroll offsets lose row resolution past ~645,000 rows."* The threshold
+  is wrong by about 16x. At that index the `f32` ulp is 2 px and rows are 26 px
+  apart; collisions need an offset of 2^28, about 10.3 million rows — which at
+  660 bytes a row is ~6.8 GB of retained rows, unreachable before the vector is.
+- *"A9's second clause has no twin."* A `_ =>` arm over a single-variant enum is
+  `unreachable_patterns`, which `-D warnings` already denies. The residual — a
+  wildcard added in the same change that adds variant two — is real and is filed
+  against that packet.
+- *Progress.md entries said to be stale.* `docs/CLAUDE.md` forbids retro-editing
+  a historical record; the obligation was a new entry, which this is.
+
+**Filed as follow-up, not built:** the first page's size against the viewport
+(filling a 4K window costs three serial round-trips at `PAGE_ROWS = 64`); hoisting
+the constant dash `PathEffect` and the `PathBuilder` out of the per-repaint path;
+windowing or capping the retained row vector; a mid-scroll "fetching a page"
+affordance beyond the title bar's ellipsis; and the component tests that need
+`freya-testing` — the paging call chain, `graph_cell`'s painting, and R4.3/R5.2's
+rendering.
+
+**Needs the user, batched:** whether a transient page failure should be
+retryable (today one failed page ends paging for the session, which is deliberate
+and tested but has no way back); and whether to add `freya-testing` as a
+dev-dependency, which is what a mechanical twin for "only visible rows are built"
+and every other component test would need.
+
 ## 2026-09-16 — R6: a row is a list entry, not by definition a commit
 
 `HistoryRow { commit: CommitSummary, graph: GraphRow }` made every row a commit

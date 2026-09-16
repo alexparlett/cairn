@@ -175,13 +175,21 @@ implementer):
 - *Progress.md entries said to be stale.* `docs/CLAUDE.md` forbids retro-editing
   a historical record; the obligation was a new entry, which this is.
 
+- **`graph_cell` had no test, and two of its decisions were reachable by no
+  arithmetic test**: whether a dashed stroke is actually dashed, and whether a
+  merge is actually hollow. Both are what "colour never carries meaning alone"
+  comes down to on screen. The auditor filed this against a `freya-testing`
+  dependency; it did not need one — Skia is already linked, so the row is painted
+  onto an offscreen raster surface and the pixels read back. Verified against
+  both mutations: removing the dash and filling the ring each fail a test.
+
 **Filed as follow-up, not built:** the first page's size against the viewport
 (filling a 4K window costs three serial round-trips at `PAGE_ROWS = 64`); hoisting
 the constant dash `PathEffect` and the `PathBuilder` out of the per-repaint path;
 windowing or capping the retained row vector; a mid-scroll "fetching a page"
 affordance beyond the title bar's ellipsis; and the component tests that need
-`freya-testing` — the paging call chain, `graph_cell`'s painting, and R4.3/R5.2's
-rendering.
+`freya-testing` — the paging call chain and R4.3/R5.2's *rendering* (the decision
+of WHICH sentence is now tested; that the sentence reaches the window is not).
 
 **Needs the user, batched:** whether a transient page failure should be
 retryable (today one failed page ends paging for the session, which is deliberate

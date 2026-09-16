@@ -22,8 +22,8 @@ use super::wake::{Wake, Woken};
 ///
 /// **O3, decided by measurement, and the measurement did not say what the
 /// packet expected.** The harness is
-/// `measures_concurrent_walks_against_a_named_repository` in `cairn-git`; the
-/// numbers and their caveats are in `docs/work/history-graph/progress.md`.
+/// `measures_concurrent_walks_against_a_named_repository` in `cairn-git`, which
+/// is `#[ignore]`d and re-runnable; the numbers below are what it reported.
 /// Concurrent walks of one repository scale nearly linearly — 2.1x, 4.2x and
 /// 7.9x the rows per second at 2, 4 and 8 threads, with the time for any single
 /// walk flat within noise — so "gix already parallelises internally, more

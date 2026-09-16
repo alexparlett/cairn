@@ -111,8 +111,9 @@ impl Repository {
     /// each commit up twice without one: measured over 50k commits of a
     /// repository with no commit-graph file, the walk alone took 178 ms with no
     /// cache and 116 ms with one, and a cache larger than
-    /// [`Self::OBJECT_CACHE_BYTES`] bought nothing further
-    /// (`docs/work/history-graph/progress.md`, open question O2).
+    /// [`Self::OBJECT_CACHE_BYTES`] bought nothing further. Measured for the
+    /// `history-graph` packet's open question O2; the surviving record is
+    /// `docs/systems/history-graph.md`, "The worker boundary".
     pub fn discover(path: impl AsRef<Path>) -> Result<Self, Error> {
         Ok(SharedRepository::discover(path)?.to_worker())
     }

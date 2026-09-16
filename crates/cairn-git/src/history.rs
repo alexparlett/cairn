@@ -44,8 +44,9 @@ impl Default for HistoryOrder {
     /// 129 ms by commit time against 196 ms in graph order, because graph order
     /// interleaves branches and leaves far more lanes open per row. (Walking
     /// alone is the other way round — 116 ms against 101 ms — which is why the
-    /// two numbers quoted here and on [`Repository::discover`] differ.) Open
-    /// question O2, `docs/work/history-graph/progress.md`.
+    /// two numbers quoted here and on [`Repository::discover`] differ.)
+    /// Measured for the `history-graph` packet's open question O2; the
+    /// surviving record is `docs/systems/history-graph.md`.
     fn default() -> Self {
         Self::CommitTime
     }

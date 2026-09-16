@@ -1,12 +1,20 @@
 ---
-status: in-flight
+status: shipped
 packet: history-graph
 opened: 2026-09-14
+shipped: 2026-09-16
 ---
 
 # PRD — History graph
 
-The authoritative spec for the `history-graph` packet while it is in flight.
+**Shipped. Frozen — what this packet committed to, as it was committed to.** For
+how the history graph actually works now, read `docs/systems/history-graph.md`;
+that is the living truth and this is not. Requirements R1-R6 and acceptance
+criteria A1-A10 were all met, each against a test that decides it, with A7 the
+one qualified pass: its 100k half was measured against a synthetic row vector
+because no repository that size was available, and the one limitation it found is
+issue #4. Nothing below was descoped.
+
 Design frame: `docs/design/cairn.md`, decisions **D3** (worker pool) and **D4**
 (incremental lane assignment). Evidence:
 `docs/research/history-graph/gix-revwalk-ordering.md`.
@@ -159,8 +167,9 @@ is expensive to change once consumers exist.
 
 ## Acceptance criteria
 
-The single authoritative copy. `docs/work/history-graph/qa-checklist.md` points
-here and does not restate them.
+The single authoritative copy while this packet was in flight — the work
+directory's qa-checklist pointed here rather than restating them, and was
+deleted with the rest of that directory at teardown.
 
 | # | Criterion | Pinned by |
 | --- | --- | --- |
@@ -182,7 +191,14 @@ repository is honest about what it is.
 
 ## Out of scope
 
-Filed, not done: commit detail panes, diffs, blame, file history, search and
-filtering, graph-based operations (checkout, reset, cherry-pick from a row),
-multiple repositories open at once, a repository picker or manager of any kind
-(R5.3), recent-repository history, and any mutation whatsoever.
+Out, and recorded elsewhere rather than dropped — each of these has a permanent
+home, named here because "filed" on its own has already meant two different
+things in this packet: commit detail panes, blame, file history and commit search
+are rows in `docs/design/feature-inventory.md`; diffs, graph-based operations
+(checkout, reset, cherry-pick from a row) and every other mutation are packets
+3-8 of `docs/work/daily-loop/roadmap.md`; multiple repositories open at once and a
+repository picker or manager of any kind (R5.3) are "Repository manager shape" in
+the spine's "Still open"; recent-repository history is a feature-inventory row.
+Three pieces of graph filtering and navigation are GitHub issues in their own
+right: #1 (collapse merges), #2 (filter, exclude and focus by ref) and #3 (jump to
+a commit by hash).

@@ -33,7 +33,10 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
 
 1. **Invariants** (any code change): the Invariants block in root CLAUDE.md, item
    by item, against the touched files. A new prose rule with no enforcement twin
-   in the same change is a finding.
+   in the same change is a finding. The allowlist and seal guards read neither
+   `[dev-dependencies]` nor `crates/*/tests/`: check those by hand for a sealed
+   crate (`gix`, `cairn-git` under `cairn-ui` or `cairn-model`; `freya`,
+   `cairn-ui` under `cairn-git`).
 2. **Architecture boundaries** (changes crossing a boundary named in CLAUDE.md's
    Architecture section): the owning side writes, the other side reads; no layer
    bypassed. Dispatch pointer: the matching domain reviewer from

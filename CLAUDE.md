@@ -153,7 +153,11 @@ Project invariants:
 
 - **Each crate depends only on its allowlist.** Twin: `layer_dependencies_are_allowlisted`
   in `crates/cairn-guards/tests/invariants.rs`. A crate with no row there fails,
-  so adding a layer cannot happen by accident.
+  so adding a layer cannot happen by accident. **Residual obligation:** the guard
+  reads `[dependencies]` only, and the seal scan below walks `crates/*/src` only,
+  so a `[dev-dependencies]` table (`freya-testing` in `cairn-ui` and `cairn-app`)
+  and the code under `crates/*/tests/` are neither allowlisted nor seal-scanned —
+  a test-only dependency on a sealed crate is `qa-checklist`'s to catch.
 - **`cairn-ui` and `cairn-model` never name `gix` or `cairn_git`; `cairn-git`
   never names `freya` or `cairn_ui`.** Manifests alone would miss a re-export, so
   the twin reads source: `layers_never_name_the_crates_they_are_sealed_from`,
@@ -190,7 +194,8 @@ Project invariants:
   **Residual obligations the guard structurally cannot express** — stated here
   rather than implied, and owned by `responsiveness-reviewer`: a file partition
   cannot decide which THREAD a function runs on, so the handful of `worker/`
-  functions the UI thread itself calls (`RepositoryHandle::submit`,
+  functions the UI thread itself calls (`RepositoryHandle::submit`, through the
+  closure `RepositoryHandle::into_submitter` builds,
   `Updates::next`, `Wake::poll`, all in `crates/cairn-app/src/worker/`) are
   exempt from the matcher while running on the UI thread, and that they never
   block is a review judgement. (The spinning spellings — `try_recv`, `try_iter`,
@@ -240,15 +245,15 @@ Project invariants:
     another is what enters it, which is what the working-tree row will do. Named
     here rather than left implicit, because a token scan cannot tell this
     iteration from any other.
-  - *Whether the virtualizing view really builds only what its viewport shows.*
-    That is a property of Freya, not of Cairn's source. It was measured once, by
-    an instrumented build that counted builder invocations per render at 1,000
-    and at 100,000 rows and found them identical — a **one-off, not a repeatable
-    check**: the instrumentation was reverted, and re-deciding it means
-    re-instrumenting. The numbers and the method are recorded in the
-    `history-graph` packet's progress log and graduate to `docs/systems/` when it
-    lands. Pinning it mechanically needs a `freya-testing` headless component
-    test, and `freya-testing` is a dependency addition, which is a user decision.
+
+  Whether the virtualizing view really builds only what its viewport shows is
+  pinned by a second, behavioural twin:
+  `only_a_viewport_of_rows_is_built_however_long_the_history`
+  (`crates/cairn-ui/tests/history_list.rs`) renders `HistoryList` headlessly over
+  1,000 and 100,000 rows and requires one viewport's worth of rows, the same at
+  the top and scrolled deep at both lengths. It counts rows built, not work done:
+  whether per-frame work grows with scroll depth while that count stays flat stays
+  `responsiveness-reviewer`'s.
 
 ## Conventions
 
@@ -300,8 +305,9 @@ Layers, cheapest boundary first (full contract: `docs/qa-gate.md`):
 Engine tests run against real repositories, not mocks: `cairn-git` opens the Cairn
 checkout itself in its unit tests, and fixture repositories are built by running
 real git operations. A fake object database proves nothing about gitoxide.
-Component tests use `freya-testing`'s headless runner (planned; no component test
-exists yet).
+Component tests use `freya-testing`'s headless runner (a dev-dependency, from the
+same fork and rev as `freya`): `crates/cairn-ui/tests/` for components, and
+`crates/cairn-app/src/window.rs` for the window drawn from each view state.
 
 ## Working style by model capability
 

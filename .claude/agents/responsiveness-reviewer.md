@@ -19,15 +19,20 @@ What is already pinned, so do not re-litigate it: `cairn-ui` cannot depend on
 a component cannot call the engine directly — it does NOT mean `cairn-app` puts
 the work somewhere sensible, and that gap is yours.
 
-Two more twins now exist, and they narrow your job without ending it:
+Three more twins now exist, and they narrow your job without ending it:
 `the_ui_thread_never_waits_on_repository_work` decides which FILES may reach a
 repository or name a waiting primitive (only `crates/cairn-app/src/worker/`), and
 `a_history_sized_list_renders_through_a_virtualizing_view` decides which scroll
-view a render file reaches for. Neither can decide which THREAD a function runs
-on, whether an iteration is over a history at all, or whether the virtualizing
-view really builds only its viewport. Those three are yours, in full, and
+view a render file reaches for; `only_a_viewport_of_rows_is_built_however_long_the_history`
+renders `HistoryList` headlessly and pins that it builds one viewport of rows, at
+the top and scrolled deep, at 1,000 and 100,000 rows. None of them can decide
+which THREAD a function runs on, whether an iteration is over a history at all,
+or whether per-frame work grows with scroll depth while the built-row count stays
+flat (a per-index item size walks every row above the viewport). Those three are
+yours, in full, and
 `docs/qa-gate.md`'s dispatch row states them as such. In particular the
-`worker/` functions the UI thread itself calls — `RepositoryHandle::submit`,
+`worker/` functions the UI thread itself calls — `RepositoryHandle::submit` (and
+the closure `RepositoryHandle::into_submitter` wraps it in),
 `Updates::next`, `Wake::poll` — are exempt from the guard's matcher by
 construction, so whether they block is a judgement you must actually make rather
 than assume from a green guard.

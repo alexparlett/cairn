@@ -4,8 +4,7 @@ How Cairn draws a repository's history today. As-built: everything here is code
 that exists. Behaviour is pinned by a test named beside it; the paragraphs that
 report a MEASUREMENT say so in their own words, because a measurement is not a
 test — `measures_layout_over_every_ref_of_a_named_repository` is an `#[ignore]`d
-reporter, the virtualization figure came from an instrumented build that was
-reverted, and "Known limits" is description rather than anything pinned. Intent
+reporter, and "Known limits" is description rather than anything pinned. Intent
 for this surface lives in `docs/design/cairn.md` (decisions D3 and D4) and the
 commitment it was built against in `docs/prd/history-graph.md` (shipped, frozen).
 
@@ -233,7 +232,7 @@ the viewport rather than by the history; the only per-render read proportional
 to the history is its `len()`. The list is keyed by `RowId`, so a row arriving
 above another neither moves the selection nor rebuilds the rows below it.
 
-`RowContent` is read by matching, with no wildcard arm — `crates/cairn-app/src/main.rs`
+`RowContent` is read by matching, with no wildcard arm — `crates/cairn-app/src/window.rs`
 is the consumer, and because the enum is not `#[non_exhaustive]` the next kind
 of row is a compile error there rather than a row silently not drawn. That holds
 today for a reason narrower than it looks: with one visible variant, a `_ =>`
@@ -298,8 +297,10 @@ either. Issue #9.
 | Each crate depends only on its allowlist | `layer_dependencies_are_allowlisted` |
 | Only `crates/cairn-app/src/worker/` reaches a repository or waits | `the_ui_thread_never_waits_on_repository_work` |
 | The history list renders through a virtualizing view | `a_history_sized_list_renders_through_a_virtualizing_view` |
+| That view builds one viewport of rows at 1,000 and at 100,000 | `only_a_viewport_of_rows_is_built_however_long_the_history` |
 
-All four live in `crates/cairn-guards/tests/invariants.rs`. The three that scan
+The first four live in `crates/cairn-guards/tests/invariants.rs`; the last is a
+headless component test in `crates/cairn-ui/tests/history_list.rs`. The three that scan
 SOURCE each assert a nonzero scanned-file count per directory, so a renamed
 directory reddens rather than passing on an empty walk — the two new twins
 inline, and `layers_never_name_the_crates_they_are_sealed_from` through
@@ -318,15 +319,28 @@ matching reports green while the coverage it names is gone.
 **What the guards structurally cannot decide**, owned by
 `responsiveness-reviewer` (`docs/qa-gate.md`): which THREAD a function runs on,
 so the `worker/` functions the UI thread itself calls are exempt from the
-matcher; whether an iteration is over a history at all; and whether the
-virtualizing view really builds only its viewport.
+matcher; whether an iteration is over a history at all; and whether per-frame
+work grows with scroll depth while the number of rows built stays flat, which
+the component test below counts rows and so cannot see.
 
-That last one was measured once, and the measurement is not repeatable without
-re-instrumenting: a throwaway build (reverted, never committed) counted builder
-invocations per render and found 34-35 rows built per render at 1,000 rows and
-the same 34-35 at 100,000, with 60 scroll jumps costing 0.17-0.18 s of CPU at
-every size. Pinning it mechanically needs a `freya-testing` headless component
-test, which is a dependency addition and therefore a user decision. Issue #6.
+**Component tests** render through `freya-testing` (a dev-dependency, same fork
+and rev as `freya`). `crates/cairn-ui/tests/history_list.rs` covers the list's
+wiring: rows built per viewport (at the top and scrolled deep), click and key
+selection reported through `on_select`, a click taking keyboard focus, the
+keyboard-focus outline, the selection following its `RowId` when rows arrive
+below and above it, a selection moved off screen being revealed in either
+direction, and `on_reach_end` firing once the last screen of rows comes into
+view but not when visible rows re-render. `crates/cairn-ui/tests/commit_row.rs`
+pins each column's width and order, every heading lining up with its column,
+the graph column widening with the lane count, the selected row's highlight,
+and that the date and short id fit their columns at the rows' font size (a
+measured width, so it needs a system font). `crates/cairn-app/src/window.rs`
+renders the window from each `Progress` state — the placeholder sentence in the
+list's place, the late-failure banner, the count, a clicked row's highlight,
+the lane count reaching the rows — and pins that scrolling to the end submits
+one `MoreHistory` per page, not one per row that comes into view.
+`RepositoryHandle::into_submitter`, the callback it is given in the running
+app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
 
 ## Known limits of what was built
 
@@ -356,12 +370,6 @@ test, which is a dependency addition and therefore a user decision. Issue #6.
   `a_failure_stops_asking_and_keeps_its_sentence`. The consequence is that there
   is no way back short of reopening even though the recovery path exists.
   Whether it should be retryable is issue #8.
-- **The `HistoryList` keyboard arithmetic is tested; its wiring is not.** That
-  `on_select` is called, that the row is revealed, and that `RowRender.selected`
-  reaches the row all need a component-test harness that does not exist yet —
-  the same one issue #6 is about. `crates/cairn-ui/src/commit_row.rs` has no
-  test at all for the same reason, so a mismatch between its four columns and
-  its header's four would not be caught.
 - **`GraphRow` still keys a row by `Oid`.** `RowContent` and `RowId` are total
   over rows that are not commits, but the assigner's own output is not — whoever
   lays out the working-tree row meets that first.

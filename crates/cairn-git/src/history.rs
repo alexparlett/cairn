@@ -1,16 +1,12 @@
 //! Reading a page of history and laying it out.
 //!
-//! The query is bounded by construction: it takes a limit and, to continue,
-//! a [`HistoryCursor`] from the page before it. There is deliberately no call
-//! that walks to the root — a repository is somebody's ten-year monorepo, and
-//! an unbounded read of one is a hang wearing a function signature.
-//!
-//! Parent ids come from the walk itself, never from a decoded commit object.
-//! The object is read only for the rows the page actually returns, and only
-//! because the summary line and the author genuinely live in it;
-//! `Info::object()` is documented as expensive and is treated that way.
-//! [`HistoryPage::walked`] and [`HistoryPage::decoded`] report the difference,
-//! so the claim is something a test can check rather than a comment.
+//! The query is bounded by construction — a limit, and a [`HistoryCursor`] to
+//! continue from; there is deliberately no call that walks to the root. Parent
+//! ids come from the walk itself, never from a decoded object, and the object is
+//! read only for the rows a page returns, because the summary line and the
+//! author live nowhere else. [`HistoryPage::walked`] and
+//! [`HistoryPage::decoded`] report the difference, so a test can check it.
+//! Shape and rationale: `docs/systems/history-graph.md`.
 
 mod session;
 
@@ -22,31 +18,25 @@ use crate::{Cancel, Error, Repository};
 
 /// The order commits come back in.
 ///
-/// Neither order is topological — gitoxide has no `--topo-order` equivalent —
-/// so either can hand over a parent before its child when committer dates are
+/// Neither is topological — gitoxide has no `--topo-order` equivalent — so
+/// either can hand over a parent before its child when committer dates are
 /// skewed. The lane assigner is total over that, by design.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HistoryOrder {
-    /// Newest committer date first, across everything queued. What a history
-    /// list wants: the order a human reads the log in.
+    /// Newest committer date first: the order a human reads the log in.
     CommitTime,
-    /// The order the commit graph mentions them in — cheaper, because nothing
-    /// has to be sorted, but branches interleave in a way a reader will not
-    /// recognise as chronology.
+    /// The order the commit graph mentions them in — nothing is sorted, but
+    /// branches interleave in a way a reader will not read as chronology.
     GraphOrder,
 }
 
 impl Default for HistoryOrder {
-    /// Commit time, because it is both the readable order and — once the
-    /// repository carries the object cache [`Repository::discover`] installs —
-    /// the cheaper one end to end. Measured over the same 50k commits of a
-    /// repository with no commit-graph file: walking *and laying out* took
-    /// 129 ms by commit time against 196 ms in graph order, because graph order
-    /// interleaves branches and leaves far more lanes open per row. (Walking
-    /// alone is the other way round — 116 ms against 101 ms — which is why the
-    /// two numbers quoted here and on [`Repository::discover`] differ.)
-    /// Measured for the `history-graph` packet's open question O2; the
-    /// surviving record is `docs/systems/history-graph.md`.
+    /// Commit time: the readable order, and — with the object cache
+    /// [`Repository::discover`] installs — the cheaper one end to end. Walking
+    /// *and laying out* 50k commits took 129 ms by commit time against 196 ms in
+    /// graph order, which leaves far more lanes open per row. (Walking alone is
+    /// the other way round, which is why [`Repository::discover`] quotes
+    /// different numbers.) Record: `docs/systems/history-graph.md`.
     fn default() -> Self {
         Self::CommitTime
     }
@@ -65,13 +55,10 @@ impl HistoryOrder {
 
 /// Where a page of history picks up from.
 ///
-/// Opaque on purpose: it records the resolved starting points, the order, the
-/// window, and how far the walk had got, and how it does that is free to
-/// change. Hand it back to [`HistoryRequest::resume`] and nothing else.
-///
-/// It carries the order and the window because both decide lane numbering, and
-/// a page that quietly changed either would renumber lanes the caller has
-/// already drawn — the one thing R1.2 does not allow.
+/// Opaque on purpose: hand it back to [`HistoryRequest::resume`] and nothing
+/// else. It carries the order and the window as well as the position, because
+/// both decide lane numbering and a page that changed either would renumber
+/// lanes the caller has already drawn (R1.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryCursor {
     tips: Vec<Oid>,
@@ -117,7 +104,7 @@ impl HistoryRequest {
 
     /// Continue where the page that produced `cursor` stopped. The cursor
     /// carries the starting points, the order and the window, so none of them
-    /// is asked for again and none of them can drift between pages.
+    /// can drift between pages.
     pub fn resume(cursor: HistoryCursor, limit: usize) -> Self {
         let (order, window) = (cursor.order, cursor.window);
         Self {
@@ -137,9 +124,8 @@ impl HistoryRequest {
         }
     }
 
-    /// Order the walk differently. Ignored when resuming: the cursor's order is
-    /// what its rows were laid out in, and changing it mid-history would
-    /// renumber lanes the caller has already drawn.
+    /// Order the walk differently. Ignored when resuming: changing the order
+    /// mid-history would renumber lanes the caller has already drawn.
     pub fn with_order(mut self, order: HistoryOrder) -> Self {
         if !matches!(self.start, Start::Resume(_)) {
             self.order = order;
@@ -147,13 +133,13 @@ impl HistoryRequest {
         self
     }
 
-    /// How many rows the lane assigner holds before it makes them final. The
-    /// default is [`LaneAssigner::DEFAULT_WINDOW`]; widen it for a repository
-    /// whose committer dates are further out than that.
+    /// How many rows the lane assigner holds before it makes them final; the
+    /// default is [`LaneAssigner::DEFAULT_WINDOW`]. Widen it for a repository
+    /// whose committer dates are skewed further than that, but not casually:
+    /// the window is primed before the first row can be delivered.
     ///
-    /// Ignored when resuming, for the same reason [`Self::with_order`] is: the
-    /// window decides which parents can still be joined to their children, so
-    /// changing it mid-history would renumber lanes already drawn.
+    /// Ignored when resuming, like [`Self::with_order`]: the window decides
+    /// which parents can still be joined to their children.
     pub fn with_window(mut self, window: usize) -> Self {
         if !matches!(self.start, Start::Resume(_)) {
             self.window = window;
@@ -167,24 +153,21 @@ impl HistoryRequest {
 pub struct HistoryPage {
     /// The commits, newest first, each with the lane and edges that draw it.
     ///
-    /// Lane indices are the same however the history was paged. Edges are not
-    /// quite: a line back to a parent the walk delivered early is drawn by the
-    /// page that reaches the *child*, and its upper end lands on a row an
-    /// earlier page already returned. Pages never overlap, so that upper end is
-    /// computed during the replay and then dropped — a backward line spanning a
-    /// page boundary reaches the view as the lower half only, flagged
+    /// Lane indices are the same however the history was paged; edges are not
+    /// quite. A backward line — a parent drawn above its child — is drawn by the
+    /// page that reaches the *child*, so when its upper end lands on a row an
+    /// earlier page returned, that half is computed during the replay and then
+    /// dropped: such a line reaches the view as its lower half only, flagged
     /// [`cairn_model::EdgeSegment::out_of_order`]. Reading the history in one
-    /// page draws it whole. Nothing here is wrong in the picture, but a view
-    /// must not assume a flagged segment has a visible other end.
+    /// page draws it whole. **A view must not assume a flagged segment has a
+    /// visible other end.**
     pub rows: Vec<HistoryRow>,
     /// Where the next page starts, or `None` because this page reached the end
-    /// of the history. A request with a limit of zero reads nothing and always
-    /// hands back a cursor at the position it was given, since it learned
-    /// nothing about where the history ends.
+    /// of the history. A limit of zero reads nothing and hands back a cursor at
+    /// the position it was given: it learned nothing about where the end is.
     pub cursor: Option<HistoryCursor>,
     /// Commits laid out to produce this page, including the ones before its
-    /// first row. Larger than `rows.len()` on a resumed page: resuming replays
-    /// the walk that led here.
+    /// first row — larger than `rows.len()` on a resumed page, which replays.
     pub walked: usize,
     /// Commit objects actually read. One per returned row and not one more —
     /// the replayed prefix costs a walk step each, never an object.
@@ -195,14 +178,13 @@ impl Repository {
     /// Read one page of history, laid out in lanes.
     ///
     /// `cancel` is polled once per commit visited; when it fires the walk stops
-    /// and [`Error::Cancelled`] says how far it had got. Pass a
-    /// [`crate::CancelSignal`] that is never set for a query nobody will
-    /// abandon.
+    /// and [`Error::Cancelled`] says how far it had got.
     ///
-    /// Resuming replays the walk from the same starting points and skips what
-    /// earlier pages covered, so two pages of `n` describe the same commits in
-    /// the same lanes as one page of `2n`. The cost is that page `k` walks
-    /// `k x n` commits; it decodes only the `n` it returns.
+    /// Resuming replays the walk and skips what earlier pages covered, so two
+    /// pages of `n` describe the same commits in the same lanes as one page of
+    /// `2n`. Page `k` therefore walks `k x n` commits, decoding only the `n` it
+    /// returns: this is the cold-restart route, not the scroll route — see
+    /// [`Repository::history_session`].
     pub fn history(
         &self,
         request: &HistoryRequest,
@@ -224,10 +206,8 @@ fn read_page(
         skip,
     } = starting_points(repo, request)?;
     if request.limit == 0 {
-        // Nothing to read, so nothing is walked and nothing is claimed about
-        // where the history ends. The cursor points at the same place the
-        // request came in at, because `resume` consumes the caller's copy and
-        // returning `None` would leave them no way back.
+        // The cursor points where the request came in: `resume` consumes the
+        // caller's copy, so `None` would leave them no way back.
         return Ok(HistoryPage {
             rows: Vec::new(),
             cursor: Some(HistoryCursor {
@@ -321,9 +301,9 @@ fn read_page(
     })
 }
 
-/// Whether anything remains after `target`, and therefore whether there is a
-/// next page at all. Costs one walk step and no object read; a cursor handed
-/// out for a page that turns out to be empty is a worse trade.
+/// Whether anything remains after `target`, and so whether there is a next page
+/// at all. One walk step, no object read — cheaper than handing out a cursor
+/// for a page that turns out to be empty.
 fn next_cursor(
     walk: &mut gix::revision::Walk<'_>,
     next: HistoryCursor,
@@ -344,11 +324,9 @@ fn next_cursor(
 
 /// The rows this page keeps, and where the assigner's output has got to.
 ///
-/// Rows leave the assigner in walk order — the ones the window made final
-/// first, then the ones still inside it — so counting them gives each row its
+/// Rows leave the assigner in walk order, so counting them gives each row its
 /// position in the walk. `summaries` is indexed by that position rather than
-/// consumed in order, so a row and its commit are matched by where they sit,
-/// not by two sequences staying in step.
+/// consumed in order, so a row and its commit are matched by where they sit.
 struct Page {
     rows: Vec<HistoryRow>,
     summaries: Vec<CommitSummary>,
@@ -413,8 +391,8 @@ fn starting_points(repo: &Repository, request: &HistoryRequest) -> Result<Resolv
 }
 
 fn object_id(oid: &Oid) -> Result<gix::hash::ObjectId, Error> {
-    // Both sides hold the digest itself, so crossing the seam is a copy of
-    // twenty or thirty-two bytes rather than a round trip through hex.
+    // Both sides hold the digest, so crossing the seam copies bytes rather
+    // than round-tripping through hex.
     gix::hash::ObjectId::try_from(oid.as_bytes()).map_err(|source| Error::ReadCommit {
         id: oid.to_string(),
         source: Box::new(source),
@@ -422,17 +400,17 @@ fn object_id(oid: &Oid) -> Result<gix::hash::ObjectId, Error> {
 }
 
 fn model_id(id: &gix::hash::oid) -> Result<Oid, Error> {
-    // The hex form is built only to name the commit in an error, which is a
-    // path this never takes for a digest gitoxide itself produced.
+    // The hex form is built only to name the commit in an error, a path a
+    // digest gitoxide produced never takes.
     Oid::from_bytes(id.as_bytes()).map_err(|source| Error::ReadCommit {
         id: id.to_hex().to_string(),
         source: Box::new(source),
     })
 }
 
-/// The one place a commit object is read. Everything a layout needs — the id
-/// and the parent ids — came off the walk; the summary line and the author do
-/// not exist outside the object, which is the exception R2.3 allows.
+/// The one place a commit object is read: the id and the parent ids came off
+/// the walk, and only the summary line and the author need the object, which is
+/// the exception R2.3 allows.
 fn summary_of(
     info: &gix::revision::walk::Info<'_>,
     id: &Oid,
@@ -447,10 +425,8 @@ fn summary_of(
 
 /// The same read, reached from an id rather than from a walk step.
 ///
-/// [`HistorySession`] needs this: it defers the object read until a row is
-/// about to be handed out, by which point the walk has moved on and the `Info`
-/// is gone. The id and the parent ids still came off the walk, which is what
-/// R2.3 is about.
+/// [`HistorySession`] defers the object read until a row is handed out, by which
+/// point the walk has moved on and the `Info` is gone.
 fn summary_of_commit(
     repo: &gix::Repository,
     id: &Oid,
@@ -516,10 +492,8 @@ mod tests {
                 cairn_model::RowId::Commit(row.graph.id),
                 "the two halves named different commits"
             );
-            // This packet emits commit rows and nothing else (R6.2), so a row
-            // of any other kind here is the query going wrong, not a case to
-            // handle — and this match is what will say so when the variant
-            // `refs-and-status` owns arrives.
+            // An exhaustive match, so the variant `refs-and-status` adds is a
+            // compile error here rather than a row silently mishandled.
             match &row.content {
                 RowContent::Commit(commit) => {
                     assert!(!commit.summary.is_empty(), "a commit with no summary");
@@ -528,11 +502,9 @@ mod tests {
         }
     }
 
-    /// Open question O2: gitoxide's docs say `ByCommitTime` "benefits greatly"
-    /// from an object cache, implying the unaccelerated path looks each commit
-    /// up twice. This is the harness that measured it — ignored by default
-    /// because it needs a repository worth measuring, and because a timing
-    /// assertion in the gate would be flaky within a week.
+    /// Reporter, not a test: prints what each order costs at each object-cache
+    /// size, which is where [`HistoryOrder::default`]'s figures come from. A
+    /// timing assertion in the gate would be flaky within a week.
     ///
     /// `CAIRN_BENCH_REPO=<path> CAIRN_BENCH_LIMIT=<n> cargo test -p cairn-git
     /// --lib -- --ignored --nocapture measures_both_orders`
@@ -586,17 +558,11 @@ mod tests {
         }
     }
 
-    /// What Cairn's own layout actually costs on a real repository.
-    ///
-    /// Phase 01 measured the assigner on a synthetic 200-branch fixture and
-    /// reported 361 edge segments per row. That number bounded nothing real
-    /// unless Cairn's own query reproduces it, so this harness runs the real
-    /// [`Repository::history`] over **every ref** of a named repository — the
-    /// default view — and reports the distribution of segments, concurrently
-    /// open lanes and retained bytes per row, plus how often the out-of-order
-    /// path fires. Ignored by default because it needs a repository worth
-    /// measuring and asserts nothing: it is evidence, and the evidence lives in
-    /// `docs/research/history-graph/scroll-memory-model.md`.
+    /// Reporter, not a test: runs the real [`Repository::history`] over **every
+    /// ref** of a named repository and prints the distribution of segments, open
+    /// lanes and retained bytes per row, plus how often the out-of-order path
+    /// fires. What it found is in `docs/systems/history-graph.md`; the evidence
+    /// is `docs/research/history-graph/scroll-memory-model.md`, Part D.
     ///
     /// `CAIRN_BENCH_REPO=<path> cargo test -p cairn-git --release --lib --
     /// --ignored --nocapture measures_layout`
@@ -638,11 +604,9 @@ mod tests {
         }
     }
 
-    /// Every ref that peels to a commit, which is what the default view walks.
-    ///
-    /// Peeling happens inside the iterator because it holds the packed-refs
-    /// buffer; refs that peel to something other than a commit — a tag on a
-    /// blob, a broken ref — are dropped rather than failing the run.
+    /// Every ref that peels to a commit. Peeling happens inside the iterator
+    /// because it holds the packed-refs buffer; a ref that peels to anything
+    /// else — a tag on a blob, a broken ref — is dropped rather than failing.
     fn every_ref_tip(repo: &Repository) -> Vec<Oid> {
         let inner = repo.inner();
         let platform = inner.references().unwrap();
@@ -667,7 +631,8 @@ mod tests {
     }
 
     /// Segments, open lanes and retained bytes per row, and what they
-    /// extrapolate to.
+    /// extrapolate to. Bytes come from `edges.len()` while a `GraphRow` retains
+    /// `edges.capacity()`, so real retained layout is up to about twice this.
     fn report_layout(page: &HistoryPage) {
         let mut segments = Vec::with_capacity(page.rows.len());
         let mut open_lanes = Vec::with_capacity(page.rows.len());
@@ -684,8 +649,8 @@ mod tests {
                     + graph.edges.len() * size_of::<cairn_model::EdgeSegment>(),
             );
 
-            // A lane is open on this row if anything occupies it there: the
-            // commit's own node, or either end of a segment crossing it.
+            // A lane is open here if anything occupies it: the commit's node,
+            // or either end of a segment crossing the row.
             let mut lanes = vec![graph.lane.index()];
             for edge in &graph.edges {
                 for lane in [edge.from.index(), edge.to.index()] {

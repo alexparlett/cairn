@@ -2,17 +2,13 @@ use std::path::{Path, PathBuf};
 
 use crate::Error;
 
-/// An open repository that threads can share.
+/// An open repository that threads can share (design decision D3).
 ///
-/// This is gitoxide's threading model made explicit (design decision D3). The
-/// expensive parts of an open repository — the object database, the pack
-/// indices it has mapped, the parsed configuration — live here once and are
-/// shared; the per-thread parts (an object cache, an inflate buffer, the
-/// snapshot of which packs are visible) come from [`Self::to_worker`], once per
-/// worker thread. N workers therefore cost one set of pack mmaps, not N.
+/// The expensive parts — object database, mapped pack indices, parsed config —
+/// live here once; the per-thread parts come from [`Self::to_worker`], so N
+/// workers cost one set of pack mmaps, not N.
 ///
-/// `SharedRepository` is `Send + Sync`; [`Repository`] is deliberately not
-/// `Sync`, so the compiler stops a handle being used from two threads at once.
+/// `Send + Sync`, where [`Repository`] is deliberately not `Sync`.
 pub struct SharedRepository {
     inner: gix::ThreadSafeRepository,
     git_dir: PathBuf,
@@ -51,13 +47,10 @@ impl SharedRepository {
     /// One worker thread's handle on this repository.
     ///
     /// **Call this once per worker, at the thread's start, and keep the result
-    /// for the thread's whole life.** Calling it per request compiles, passes
-    /// every test, and throws away the object cache and the pack snapshot that
-    /// are the entire reason for the split: gitoxide builds both fresh for each
-    /// handle (`gix::ThreadSafeRepository::to_thread_local` clones the store but
-    /// makes a new `gix_odb` handle, and the object cache is a property of the
-    /// handle, not of the store). The cache [`Repository::OBJECT_CACHE_BYTES`]
-    /// describes is installed here for exactly that reason.
+    /// for the thread's whole life.** Calling it per request compiles and passes
+    /// every test while rebuilding the object cache and the pack snapshot that
+    /// are the reason for the split — gitoxide makes both fresh per handle. The
+    /// cache [`Repository::OBJECT_CACHE_BYTES`] describes is installed here.
     pub fn to_worker(&self) -> Repository {
         let mut inner = self.inner.to_thread_local();
         inner.object_cache_size_if_unset(Repository::OBJECT_CACHE_BYTES);
@@ -80,11 +73,9 @@ impl SharedRepository {
 
 /// One thread's handle on a repository.
 ///
-/// Holds the gitoxide handle privately. Borrow it inside this crate with
-/// [`Repository::inner`]; it is not part of the public surface.
-///
 /// Not `Sync`, and not to be shared: a thread that wants to read a repository
-/// takes its own handle from a [`SharedRepository`].
+/// takes its own handle from a [`SharedRepository`]. The gitoxide handle is
+/// private; borrow it inside this crate with [`Repository::inner`].
 pub struct Repository {
     inner: gix::Repository,
     workdir: Option<PathBuf>,
@@ -103,23 +94,20 @@ impl Repository {
     /// Open the repository containing `path` for use on this thread alone.
     ///
     /// The single-threaded route, kept for tests and for callers that will
-    /// never hand the repository to a worker. Anything that reads from more
-    /// than one thread opens a [`SharedRepository`] instead, because this
-    /// constructor maps its own object database.
+    /// never hand the repository to a worker; it maps its own object database,
+    /// so anything reading from more than one thread opens a
+    /// [`SharedRepository`] instead.
     ///
-    /// Opening installs a small object cache. Walking by committer date looks
-    /// each commit up twice without one: measured over 50k commits of a
-    /// repository with no commit-graph file, the walk alone took 178 ms with no
-    /// cache and 116 ms with one, and a cache larger than
-    /// [`Self::OBJECT_CACHE_BYTES`] bought nothing further. Measured for the
-    /// `history-graph` packet's open question O2; the surviving record is
-    /// `docs/systems/history-graph.md`, "The worker boundary".
+    /// Opening installs a small object cache, which a committer-date walk needs:
+    /// over 50k commits the walk took 178 ms without it and 116 ms with it, and
+    /// more than [`Self::OBJECT_CACHE_BYTES`] bought nothing
+    /// (`docs/systems/history-graph.md`, "The worker boundary").
     pub fn discover(path: impl AsRef<Path>) -> Result<Self, Error> {
         Ok(SharedRepository::discover(path)?.to_worker())
     }
 
     /// How much memory one open repository spends on caching decoded objects.
-    /// Measured, not guessed: see [`Self::discover`].
+    /// Measured: see [`Self::discover`].
     pub const OBJECT_CACHE_BYTES: usize = 4 * 1024 * 1024;
 
     /// The `.git` directory backing this repository.
@@ -144,10 +132,9 @@ mod tests {
     #[test]
     fn discovers_this_repository_from_a_nested_path() {
         let repo = Repository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
-        // Not `ends_with(".git")`: a linked worktree — which is how this
-        // repository asks parallel work to be checked out — is backed by
-        // `.git/worktrees/<name>`, so the thing to assert is that the path is
-        // a git directory, not what it happens to be called.
+        // Not `ends_with(".git")`: a linked worktree is backed by
+        // `.git/worktrees/<name>`, so assert the path IS a git directory rather
+        // than what it is called.
         assert!(
             repo.git_dir().join("HEAD").is_file(),
             "{} is not a git directory",
@@ -173,10 +160,9 @@ mod tests {
     }
 
     /// The object cache is a property of the HANDLE, not of the shared store, so
-    /// every worker has to install its own — and `to_worker` is the only place
-    /// that can. Deleting that line costs 53% on a commit-time walk (open
-    /// question O2) and changes no observable answer, which is exactly the kind
-    /// of regression nothing would have caught.
+    /// `to_worker` is the only place that can install it. Deleting that line
+    /// costs 53% on a commit-time walk and changes no observable answer, so
+    /// nothing else would catch it.
     #[test]
     fn every_worker_handle_carries_the_object_cache() {
         let shared = SharedRepository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
@@ -195,13 +181,10 @@ mod tests {
         assert!(matches!(err, Error::NotARepository { .. }), "got {err:?}");
     }
 
-    /// **Open question O3: how many workers should one repository have?**
-    ///
-    /// Walks the same repository from 1, 2, 4 and 8 threads, each taking its own
-    /// handle from one [`SharedRepository`], and reports what each walk cost and
-    /// what the group achieved together. Ignored by default: it needs a
-    /// repository worth measuring, and a timing assertion in the gate would be
-    /// flaky within a week.
+    /// Reporter, not a test: walks the same repository from 1, 2, 4 and 8
+    /// threads, each with its own handle from one [`SharedRepository`], and
+    /// prints what each walk cost and what the group achieved together. Asserts
+    /// nothing about timing, which in the gate would be flaky within a week.
     ///
     /// `CAIRN_BENCH_REPO=<path> CAIRN_BENCH_LIMIT=<n> cargo test -p cairn-git
     /// --release --lib -- --ignored --nocapture measures_concurrent_walks`
@@ -265,12 +248,10 @@ mod tests {
         }
     }
 
-    /// The whole worker-pool design rests on this: a `SharedRepository` crosses
-    /// to a worker thread, a `Repository` never does. gitoxide only makes
-    /// `ThreadSafeRepository` `Send + Sync` when its `parallel` feature is on,
-    /// so this is also the twin for that feature staying enabled — dropping it
-    /// makes this a compile error rather than a silent single-threading of the
-    /// object database.
+    /// A `SharedRepository` crosses to a worker thread; a `Repository` never
+    /// does. Also the twin for gix's `parallel` feature staying on — it is what
+    /// makes `ThreadSafeRepository` `Send + Sync`, so dropping the feature fails
+    /// here rather than silently single-threading the object database.
     #[test]
     fn a_shared_repository_can_cross_threads() {
         fn assert_send_sync<T: Send + Sync>() {}

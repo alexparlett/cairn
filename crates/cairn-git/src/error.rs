@@ -3,7 +3,7 @@ use std::path::PathBuf;
 /// Everything the engine can fail with, in the caller's vocabulary.
 ///
 /// gitoxide's error types are deliberately not re-exported: a variant here is
-/// something the UI can act on, and adding one is a decision about what the UI
+/// something the UI can act on, so adding one is a decision about what the UI
 /// must now handle.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -18,8 +18,7 @@ pub enum Error {
     },
 
     /// The query was abandoned. `walked` is how many commits it had laid out
-    /// when it stopped — the caller discards the work, and a test can see that
-    /// the walk really did stop short.
+    /// when it stopped; the caller discards the page.
     #[error("the history query was cancelled after {walked} commits")]
     Cancelled { walked: usize },
 

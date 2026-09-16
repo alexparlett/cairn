@@ -1,10 +1,8 @@
 //! Repositories built by running real `git`.
 //!
-//! A fake object database proves nothing about gitoxide: the whole question
-//! these tests answer is whether the engine reads what `git` wrote, in the
-//! order `git` reports it. So every fixture here is made by the binary, with
-//! its own configuration isolated from the machine's, and every expectation is
-//! read back out of `git` rather than written down by hand.
+//! A fake object database proves nothing about gitoxide, so every fixture is
+//! made by the binary, with its configuration isolated from the machine's, and
+//! every expectation is read back out of `git` rather than written down.
 //!
 //! `unwrap` is unavailable here — `clippy.toml`'s carve-out only reaches
 //! `#[cfg(test)]` code, and an integration test crate is not that — so failure
@@ -25,9 +23,8 @@ impl Fixture {
         &self.path
     }
 
-    /// Run `git` inside the fixture and return its stdout. Any failure is the
-    /// test's failure: a fixture that half-built would make every assertion
-    /// after it meaningless.
+    /// Run `git` inside the fixture and return its stdout. Any failure panics:
+    /// a fixture that half-built makes every assertion after it meaningless.
     pub fn git(&self, args: &[&str]) -> String {
         run(&self.path, args, None)
     }
@@ -52,9 +49,9 @@ fn run(dir: &Path, args: &[&str], at: Option<i64>) -> String {
     command
         .current_dir(dir)
         .args(args)
-        // The machine's own git configuration must not reach the fixture: a
-        // global `commit.gpgsign` or a template directory would make these
-        // tests pass or fail depending on whose laptop they run on.
+        // The machine's git configuration must not reach the fixture: a global
+        // `commit.gpgsign` or template directory would make these tests pass or
+        // fail depending on whose laptop they run on.
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_AUTHOR_NAME", "A U Thor")
@@ -99,17 +96,14 @@ const EPOCH: i64 = 1_500_000_000;
 
 /// A repository whose committer dates rise strictly along every parent link.
 ///
-/// That is what lets these tests compare an ordering against `git`'s at all:
-/// with monotone dates, pure commit-time order and `git`'s reverse-chronological
-/// order are the same sequence, so a divergence is gitoxide's, not a
-/// disagreement about what "newest first" means. Deliberately not the skew
-/// case — that one is the assigner's, and it is pinned in `cairn-model`.
+/// That is what lets a test compare an ordering against `git`'s: with monotone
+/// dates, commit-time order and `git`'s reverse-chronological order are the same
+/// sequence, so a divergence is gitoxide's. Deliberately not the skew case —
+/// that is [`skewed`], and the assigner's own is pinned in `cairn-model`.
 ///
-/// The shape: a trunk, a side branch that lives across several trunk commits,
-/// and merges back into the trunk, repeated. `steps` is how many ordinary
-/// commits to make; the merges are extra, so the history is a little longer
-/// than `steps` and every expectation is read back from `git` rather than
-/// counted from here.
+/// Shape: a trunk and a side branch that merges back, repeated. `steps` counts
+/// ordinary commits and the merges are extra, so read every expectation back
+/// from `git` rather than counting from `steps`.
 pub fn braided(steps: usize) -> Fixture {
     let path = fresh_directory("braided");
     let fixture = Fixture { path };
@@ -141,7 +135,7 @@ fn commit_at(fixture: &Fixture, clock: &mut i64, message: &str) {
 }
 
 /// Merge `side` into the trunk. A no-op when there is nothing to merge, which
-/// `git` reports as success without making a commit.
+/// `git` reports as success without a commit.
 fn merge_side(fixture: &Fixture, clock: &mut i64) {
     fixture.git(&["checkout", "--quiet", "main"]);
     *clock += 60;
@@ -162,14 +156,12 @@ fn merge_side(fixture: &Fixture, clock: &mut i64) {
 
 /// A repository a newest-first walk hands a parent over before its own child.
 ///
-/// A single chain can never do that — the walk only ever holds one commit at a
-/// time, so it emits the chain in order however the dates are stamped. It takes
-/// a *fork*: `shared` is the parent of both branches, and because `stale` on the
-/// side branch is stamped older than `shared`, the walk reaches `shared` through
-/// the trunk and emits it before it ever gets to `stale`. Real `git` produces
-/// exactly this every time somebody rebases, imports a history, or has a clock a
-/// few minutes out (`docs/research/history-graph/gix-revwalk-ordering.md`,
-/// finding 2).
+/// It takes a *fork*, not a chain: a chain is emitted in order however the dates
+/// are stamped. `shared` is the parent of both branches, and because `stale` is
+/// stamped older than `shared`, the walk reaches `shared` through the trunk and
+/// emits it before `stale`. Real `git` produces this whenever somebody rebases,
+/// imports a history, or has a clock a few minutes out
+/// (`docs/research/history-graph/gix-revwalk-ordering.md`, finding 2).
 ///
 /// Shape and stamps, seconds past [`EPOCH`]:
 ///
@@ -233,17 +225,14 @@ pub fn write_commit_graph(fixture: &Fixture) {
     );
 }
 
-/// Delete the loose object backing each of `ids`, so that walking past them
-/// still works (from the commit-graph) but reading one fails.
+/// Delete the loose object backing each of `ids`, so walking past them still
+/// works (from the commit-graph) but reading one FAILS. That is how "the
+/// replayed prefix is walked, never decoded" becomes something a test can see:
+/// a counter proves one call site, a missing object proves every call site.
 ///
-/// Never pass a starting point: gitoxide reads the tips themselves out of the
-/// object database to seed the walk's queue (`gix-traverse`'s `add_to_queue`),
-/// and only the commits it reaches from there come from the commit-graph.
-///
-/// This is how "the replayed prefix is walked, never decoded" becomes something
-/// a test can see. A counter the query increments beside its own `object()`
-/// call proves only that *that* call site behaves; an object that is not there
-/// any more proves it about every call site at once.
+/// **Never pass a starting point:** gitoxide reads the tips out of the object
+/// database to seed the walk's queue (`gix-traverse`'s `add_to_queue`); only
+/// what it reaches from there comes from the commit-graph.
 pub fn delete_objects(fixture: &Fixture, ids: &[String]) {
     for id in ids {
         let (dir, file) = id.split_at(2);

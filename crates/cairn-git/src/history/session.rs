@@ -1,18 +1,14 @@
 //! A walk kept alive for the length of a scroll.
 //!
-//! [`Repository::history`] resumes by replaying: page *k* walks `k x limit`
-//! commits, which is correct by construction and is why two pages of `n`
-//! describe the same commits as one page of `2n` — but it does not reach the
-//! sizes the packet promises (measured 1.29-2.1 s for one page at depth 500k,
-//! and 54-87 minutes of CPU to page there at 100 rows a page). A
-//! [`HistorySession`] holds gitoxide's walk open instead, so every page after
-//! the first costs O(limit). That is requirement R2.5; the cursor is not
-//! deleted, it becomes the cold-restart path for when no session exists.
+//! [`Repository::history`] resumes by replaying, so page *k* walks `k x limit`
+//! commits: measured at depth 500k that is 1.29-2.1 s for one page, and 54-87
+//! minutes of CPU to page there at 100 rows a page. A [`HistorySession`] holds
+//! gitoxide's walk open instead, so every page after the first costs O(limit)
+//! (R2.5); the cursor stays as the cold-restart path.
 //!
-//! The session cannot be moved between threads and does not try: gitoxide's
-//! `Walk` borrows the repository, so the session borrows one too, and the
-//! worker that owns a repository handle for its whole life is exactly the place
-//! such a borrow can live (design decision D3).
+//! gitoxide's `Walk` borrows the repository, so a session does too and cannot
+//! be moved between threads — it lives on the worker that owns the handle
+//! (decision D3).
 
 use std::collections::VecDeque;
 
@@ -23,11 +19,10 @@ use crate::{Cancel, Error, Repository};
 
 /// A walk held open across pages.
 ///
-/// Rows are handed out only once the lane assigner has made them final — once
-/// they have left its window and can no longer be repainted (R1.2). The cost of
-/// that is a one-off prime of `window` commits at the start of a scroll; the
-/// benefit is that a row never changes after the view has drawn it, so no
-/// repaint protocol is needed between here and the view.
+/// Rows are handed out only once the lane assigner has made them final and can
+/// no longer repaint them (R1.2). That costs a one-off prime of `window`
+/// commits at the start of a scroll, and buys a view that needs no repaint
+/// protocol.
 pub struct HistorySession<'repo> {
     walk: gix::revision::Walk<'repo>,
     assigner: LaneAssigner,
@@ -37,10 +32,9 @@ pub struct HistorySession<'repo> {
     /// window, oldest first. A row leaving the assigner is always the oldest one
     /// it held, so the front of this queue is always that row's commit.
     ///
-    /// Ids, not summaries: the commit object is read when the row is handed
-    /// out, not when it is walked. That is the difference between a first page
-    /// of 64 rows reading 64 objects and reading 1,088 — one per commit the
-    /// window is primed with, most of which a scroll that stops never asks for.
+    /// Ids, not summaries: the object is read when the row is handed out, not
+    /// when it is walked — a first page of 64 rows reads 64 objects rather than
+    /// 1,088, most of which a scroll that stops never asks for.
     pending: VecDeque<(Oid, Vec<Oid>)>,
     tips: Vec<Oid>,
     order: HistoryOrder,
@@ -76,13 +70,12 @@ impl std::fmt::Debug for HistorySession<'_> {
 impl Repository {
     /// Open a walk and keep it open, so paging through it costs O(limit).
     ///
-    /// The session borrows this repository, which is what stops it being sent
-    /// to another thread. Start one from [`HistoryRequest::resume`] to pick up
-    /// where a cold cursor left off: the replayed prefix is walked once, when
-    /// the session first needs it, and never again.
+    /// The session borrows this repository, which is what stops it being sent to
+    /// another thread. Start one from [`HistoryRequest::resume`] to pick up where
+    /// a cold cursor left off; the replayed prefix is walked once and no more.
     ///
-    /// The request's limit is not used — [`HistorySession::next_page`] carries
-    /// it, because a scroll changes how much it asks for as the window resizes.
+    /// The request's limit is ignored — [`HistorySession::next_page`] carries it,
+    /// because a scroll changes how much it asks for as the window resizes.
     pub fn history_session(&self, request: &HistoryRequest) -> Result<HistorySession<'_>, Error> {
         let Resolved {
             tips,
@@ -126,24 +119,17 @@ impl HistorySession<'_> {
     /// The next `limit` rows, or fewer when the history ran out.
     ///
     /// `cancel` is polled once per commit visited. When it fires, **the work
-    /// already done stays in the session**: the rows walked so far are held,
-    /// not discarded, so a superseded request leaves no half-consumed walk for
-    /// the next one to read (R2.5). The error says how many commits *this call*
-    /// had walked, and the next call carries on from there.
+    /// already done stays in the session** (R2.5): the error says how many
+    /// commits *this call* walked, and the next call carries on from there.
     ///
-    /// The returned [`HistoryPage::walked`] and [`HistoryPage::decoded`] count
-    /// this call only. `decoded` equals the rows returned and never exceeds
-    /// them, because a commit object is read when its row is handed out rather
-    /// than when it is walked: priming the assigner's window costs a walk step
-    /// per commit and no object at all, which matters most on the first page of
-    /// a scroll and on a scroll that stops after one.
+    /// [`HistoryPage::walked`] and [`HistoryPage::decoded`] count this call only.
+    /// `decoded` equals the rows returned and never exceeds them: priming the
+    /// window costs a walk step per commit and no object read at all.
     ///
-    /// **Any error other than [`Error::Cancelled`] poisons the session.** A
-    /// commit that cannot be read, or a walk that fails, can lose a row the
-    /// assigner had already made final, so the counts stop meaning what they
-    /// say. Drop the session and start another from the last good
-    /// [`Self::cursor`] — which is what `cairn-app`'s worker does, and is why
-    /// the cursor is worth keeping past R2.5.
+    /// **Any error other than [`Error::Cancelled`] poisons the session** — it can
+    /// lose a row the assigner had already made final, so the counts stop meaning
+    /// what they say. Drop the session and start another from the last good
+    /// [`Self::cursor`], which is what `cairn-app`'s worker does.
     pub fn next_page(&mut self, limit: usize, cancel: &impl Cancel) -> Result<HistoryPage, Error> {
         let walked_before = self.walked;
         let decoded_before = self.decoded;
@@ -172,9 +158,9 @@ impl HistorySession<'_> {
 
     /// Where a fresh query would have to start to continue this scroll.
     ///
-    /// The cold-restart path: hand this to [`HistoryRequest::resume`] when the
-    /// session is gone — the repository was reopened, the worker was replaced —
-    /// and paging carries on, at the replay cost this session exists to avoid.
+    /// The cold-restart path: hand it to [`HistoryRequest::resume`] when the
+    /// session is gone, and paging carries on at the replay cost this session
+    /// exists to avoid.
     pub fn cursor(&self) -> HistoryCursor {
         HistoryCursor {
             tips: self.tips.clone(),
@@ -199,8 +185,8 @@ impl HistorySession<'_> {
     fn pull(&mut self) -> Result<(), Error> {
         let Some(next) = self.walk.next() else {
             self.exhausted = true;
-            // The window is holding rows that no later commit can now repaint,
-            // because no later commit is coming. They are final; hand them on.
+            // No later commit is coming, so the rows still in the window can
+            // no longer be repainted. They are final; hand them on.
             let rest = std::mem::take(&mut self.assigner).into_rows();
             for graph in rest {
                 self.place(graph)?;
@@ -227,25 +213,23 @@ impl HistorySession<'_> {
         Ok(())
     }
 
-    /// Read the commit for a row the assigner has made final, and pair the two
-    /// — unless the row belongs to the prefix an earlier page already covered.
-    ///
-    /// This is the one place a commit object is read, and it happens per row
-    /// HANDED OUT rather than per commit walked.
+    /// Read the commit for a row the assigner has made final and pair the two,
+    /// unless the row belongs to the prefix an earlier page covered. The one
+    /// place a session reads an object, and it is per row HANDED OUT rather than
+    /// per commit walked.
     fn place(&mut self, graph: GraphRow) -> Result<(), Error> {
         let position = self.next_row;
         self.next_row += 1;
         if position < self.skip {
-            // Replayed to get the lanes right; not this session's to hand out,
-            // and deliberately never read from the object database.
+            // Replayed to get the lanes right; deliberately never read from
+            // the object database.
             return Ok(());
         }
         let Some((id, parents)) = self.pending.pop_front() else {
             // Unreachable: an id is pushed for every commit walked past the
-            // prefix, and rows leave the assigner in walk order, so the front of
-            // the queue is this row's commit. Dropping the row is the safe
-            // reading of an impossible state — a panic here would cost a user
-            // their window.
+            // prefix and rows leave the assigner in walk order. Dropping the row
+            // is the safe reading of it — a panic here costs a user their
+            // window.
             return Ok(());
         };
         let commit = super::summary_of_commit(self.walk.repo, &id, &parents)?;
@@ -264,8 +248,8 @@ mod tests {
     use crate::{CancelSignal, SharedRepository};
     use std::cell::Cell;
 
-    /// A cancel signal that fires after a chosen number of polls, so a test can
-    /// stop a walk at a known commit rather than by racing it.
+    /// Fires after a chosen number of polls, so a test stops a walk at a known
+    /// commit rather than by racing it.
     struct StopsAfter {
         polls: Cell<usize>,
         limit: usize,
@@ -326,9 +310,8 @@ mod tests {
 
         assert_eq!(first.rows.len(), 2);
         assert_eq!(second.rows.len(), 2);
-        // The point of the whole session: the second page does not replay the
-        // first. With a window of 2, priming costs 2 extra commits on page one
-        // and nothing afterwards.
+        // The point of the session: page two does not replay page one. With a
+        // window of 2, priming costs 2 extra commits on page one only.
         assert_eq!(
             second.walked, 2,
             "page two walked {} commits; it should walk only what it returns",
@@ -386,9 +369,8 @@ mod tests {
             !head.rows.iter().any(|r| r.id() == next.rows[0].id()),
             "the cold restart repeated a row the first session had handed out"
         );
-        // Nothing is read from the object database except the rows handed out:
-        // not the replayed prefix, and not the commits the window is primed
-        // with. The walk pays a step for each of those and no object read.
+        // Nothing is decoded but the rows handed out — not the replayed prefix,
+        // not the primed window; each of those costs a walk step only.
         assert_eq!(
             next.decoded,
             next.rows.len(),

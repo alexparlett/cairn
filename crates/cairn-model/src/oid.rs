@@ -2,28 +2,23 @@ use std::fmt;
 
 /// A git object id: the hash itself, fixed width, never on the heap.
 ///
-/// Cairn keeps ids as the raw digest rather than re-exporting `gix`'s
-/// `ObjectId`: the UI must be able to name a commit without linking the engine,
-/// and plain bytes need no dependency to hold. Comparing two ids compares
-/// bytes that are already wherever the id is — a lane scan asking "is this the
-/// commit I am waiting for?" never chases a pointer and never allocates.
+/// The raw digest rather than a re-export of `gix`'s `ObjectId`, because the UI
+/// must be able to name a commit without linking the engine.
 ///
 /// Both widths git defines are held: 20 bytes of SHA-1 or 32 of SHA-256. The
 /// width travels with the bytes, so a SHA-1 is never mistaken for a SHA-256
 /// whose tail happens to be zero, and the two never compare equal.
 ///
 /// Text is produced on demand into a stack buffer the caller owns
-/// ([`Oid::hex`], [`Oid::short`]), so naming an id in a comparison, a log line
-/// or an error costs no allocation. Drawing one still does: a component has to
-/// hand its toolkit an owned string, so the abbreviation in a list row is
-/// copied out of the buffer — see [`OidHex`].
+/// ([`Oid::hex`], [`Oid::short`]), so naming an id costs no allocation; drawing
+/// one still copies out of that buffer — see [`OidHex`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Oid {
     /// The digest, left-aligned. Everything past `width` is zero, so the
     /// derived byte comparison reads only what was written.
     bytes: [u8; Oid::MAX_BYTES],
-    /// Which of git's two hashes this is. Ordered after the bytes so that
-    /// comparison is a byte comparison first and a discriminant second.
+    /// Which of git's two hashes this is. Declared after the bytes so that
+    /// comparison reads the digest first and the width second.
     width: Width,
 }
 
@@ -73,7 +68,7 @@ impl Oid {
         };
         let mut bytes = [0u8; Self::MAX_BYTES];
         for (byte, pair) in bytes.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
-            // `chunks_exact(2)` yields pairs; the fallback keeps the match
+            // `chunks_exact(2)` always yields pairs; the arm keeps the match
             // total without an index that could panic.
             let [high, low] = pair else {
                 return Err(OidParseError::NotHex);
@@ -83,11 +78,8 @@ impl Oid {
         Ok(Self { bytes, width })
     }
 
-    /// Take a digest as git itself stores it: 20 bytes or 32.
-    ///
-    /// This is the cheap boundary. A caller holding raw hash bytes — which is
-    /// what a repository hands over — never has to render them to hex and read
-    /// them back to cross the seam.
+    /// Take a digest as git itself stores it: 20 bytes or 32. This is the
+    /// boundary the engine uses — raw bytes never go via hex to cross the seam.
     pub fn from_bytes(digest: &[u8]) -> Result<Self, OidParseError> {
         let width = match digest.len() {
             20 => Width::Sha1,
@@ -104,10 +96,9 @@ impl Oid {
 
     /// The digest as git stores it: 20 bytes for SHA-1, 32 for SHA-256.
     pub fn as_bytes(&self) -> &[u8] {
-        // `width` is one of two values, both inside the array, so the slice
-        // always exists. The empty fallback is the fail-safe one: a caller
-        // handed no digest reports an error, where a caller handed the whole
-        // buffer would take a SHA-1 for a SHA-256 and look up the wrong
+        // The slice always exists: `width` is one of two values, both inside
+        // the array. Empty is the fail-safe fallback — handing back the whole
+        // buffer would pass a SHA-1 off as a SHA-256 and look up the wrong
         // object.
         self.bytes.get(..self.width as usize).unwrap_or_default()
     }
@@ -126,18 +117,14 @@ impl Oid {
 
 /// The hex text of an [`Oid`], held inline rather than on the heap.
 ///
-/// Returned by [`Oid::hex`] and [`Oid::short`]. The digits live in the
-/// caller's own frame, so naming a commit in text costs no allocation and
-/// [`OidHex::as_str`] borrows from the buffer for as long as it is held. A
-/// caller that needs the text to outlive the frame — a component handing
-/// Freya's `label().text()` its `Cow<'static, str>`, for instance — copies it
-/// out; the buffer saves the allocation everywhere the borrow suffices, which
-/// is every comparison, log line and error in the engine.
+/// Returned by [`Oid::hex`] and [`Oid::short`]. The digits live in the caller's
+/// own frame, and [`OidHex::as_str`] borrows from that buffer for as long as it
+/// is held; a caller needing the text to outlive the frame copies it out.
 #[derive(Clone, Copy)]
 pub struct OidHex {
-    /// The characters, zero past `len` — so the buffer is the same for the
-    /// same text, and a future `PartialEq` or `Hash` over it cannot tell two
-    /// identical abbreviations apart by what an earlier write left behind.
+    /// The characters, zero past `len`, so the buffer is canonical: a future
+    /// `PartialEq` or `Hash` over it cannot tell two identical abbreviations
+    /// apart by what an earlier write left behind.
     digits: [u8; Oid::MAX_HEX],
     len: usize,
 }
@@ -151,16 +138,16 @@ impl OidHex {
             if written >= wanted {
                 break;
             }
-            // `chunks_exact_mut(2)` yields pairs; the fallback keeps the match
-            // total without an index that could panic.
+            // `chunks_exact_mut(2)` always yields pairs; the arm keeps the
+            // match total without an index that could panic.
             let [high, low] = pair else { break };
             *high = hex_digit(byte >> 4);
             *low = hex_digit(byte);
             written += 2;
         }
-        // A byte is two characters, so an odd `wanted` leaves one character
-        // written past it. Cut the length to what was asked for and blank the
-        // rest, rather than carrying a digit nothing reports.
+        // A byte is two characters, so an odd `wanted` leaves one written past
+        // it. Cut to what was asked for and blank the rest, rather than carry a
+        // digit nothing reports.
         let len = written.min(wanted).min(Oid::MAX_HEX);
         if let Some(tail) = digits.get_mut(len..) {
             tail.fill(0);
@@ -170,10 +157,10 @@ impl OidHex {
 
     /// The characters, borrowed from this buffer.
     pub fn as_str(&self) -> &str {
-        // Every byte written is an ASCII hex digit and `len` never passes what
-        // was written, so neither step can fail. The fallback is here because
-        // a git client may not panic on a path a user can reach, and it is
-        // pinned by `every_width_round_trips_through_hex`.
+        // Neither step can fail: every byte written is an ASCII hex digit and
+        // `len` never passes what was written. The fallback is here because a
+        // git client may not panic on a path a user can reach; that it is never
+        // the answer is pinned by `every_width_round_trips_through_hex`.
         self.digits
             .get(..self.len)
             .and_then(|written| std::str::from_utf8(written).ok())
@@ -253,17 +240,16 @@ mod tests {
             Oid::parse(&"a".repeat(41)),
             Err(OidParseError::BadLength(41))
         );
-        // A 40-BYTE string that is not 40 characters: the hex check is what
-        // rejects it, not the length check.
+        // A 40-BYTE string that is not 40 characters: the hex check rejects
+        // it, not the length check.
         let wide = "é".repeat(20);
         assert_eq!(wide.len(), 40);
         assert_eq!(Oid::parse(&wide), Err(OidParseError::NotHex));
     }
 
-    /// The length gate decides at the two widths' own edges, not far from
-    /// them: a rule that accepted a RANGE ending at 40 or beginning at 64
-    /// would pass a fixture of 3 and 41 while silently zero-padding a short
-    /// id or truncating a long one.
+    /// Caught by: a length rule that accepts a RANGE ending at 40 or beginning
+    /// at 64 — it passes a fixture of 3 and 41 while silently zero-padding a
+    /// short id or truncating a long one.
     #[test]
     fn a_length_either_side_of_each_width_is_rejected() {
         for length in [32usize, 39, 41, 63, 65] {
@@ -277,11 +263,10 @@ mod tests {
         assert!(Oid::parse(&"a".repeat(64)).is_ok());
     }
 
-    /// One mistyped character in an otherwise valid id — the way a human
-    /// actually produces a bad one. A fixture where EVERY character is
-    /// invalid cannot tell the two halves of a hex pair apart, so either half
-    /// of the check could be dropped and still look tested; these two put the
-    /// bad character on each side of the pair in turn.
+    /// One mistyped character in an otherwise valid id. Caught by: dropping
+    /// either half of the hex-pair check — a fixture where EVERY character is
+    /// invalid cannot tell the two halves apart, so this one puts the bad
+    /// character on each side of the pair in turn.
     #[test]
     fn a_single_bad_character_is_rejected_at_either_half_of_a_pair() {
         for index in [0usize, 1, 20, 21, 38, 39] {
@@ -298,10 +283,8 @@ mod tests {
         }
     }
 
-    /// The width is carried, not inferred from the bytes: a SHA-1 and the
-    /// SHA-256 whose first twenty bytes match it and whose tail is zero are
-    /// different ids, and a fixed-width representation that dropped the width
-    /// would fail exactly here.
+    /// Caught by: dropping the carried width. A SHA-1 and the SHA-256 whose
+    /// first twenty bytes match it and whose tail is zero are different ids.
     #[test]
     fn a_sha1_is_never_a_zero_padded_sha256() {
         let short = Oid::parse(&"ab".repeat(20)).unwrap();
@@ -311,15 +294,15 @@ mod tests {
         assert_eq!(short.hex().as_str().len(), 40);
         assert_eq!(long.hex().as_str().len(), 64);
         // ... and both stand as separate keys where the assigner indexes
-        // commits by id. (This follows from `Eq` rather than from `Hash` — a
-        // hash collision is legal — so it pins the map, not the hasher.)
+        // commits by id. This follows from `Eq`, not `Hash` — a hash collision
+        // is legal — so it pins the map, not the hasher.
         use std::collections::HashSet;
         let both: HashSet<Oid> = [short, long].into_iter().collect();
         assert_eq!(both.len(), 2);
     }
 
-    /// Both directions of the byte boundary, at both widths — this is the path
-    /// the engine uses, and it never goes near hex.
+    /// Both directions of the byte boundary, at both widths: the path the
+    /// engine uses, which never goes near hex.
     #[test]
     fn raw_digests_cross_in_both_directions() {
         for hex in [SHA1, SHA256] {
@@ -328,9 +311,8 @@ mod tests {
             assert_eq!(parsed, from_bytes);
             assert_eq!(from_bytes.hex().as_str(), hex);
         }
-        // The whole band between the two widths is rejected, not just the
-        // byte after SHA-1: accepting 24 would take a digest and drop four
-        // bytes of it.
+        // The whole band between the two widths is rejected, not just the byte
+        // after SHA-1: accepting 24 would take a digest and drop four bytes.
         for count in [0usize, 19, 21, 24, 31, 33] {
             assert_eq!(
                 Oid::from_bytes(&vec![0u8; count]),
@@ -340,9 +322,9 @@ mod tests {
         }
     }
 
-    /// `as_str` has a fallback for a state construction forbids; this is what
-    /// says the fallback is never the answer. Every byte of every width, at
-    /// both lengths `Oid` produces, has to come back as readable hex.
+    /// The twin for `as_str`'s fallback: every byte of every width, at both
+    /// lengths `Oid` produces, comes back as readable hex, so the fallback is
+    /// never the answer.
     #[test]
     fn every_width_round_trips_through_hex() {
         for width in [20usize, 32] {
@@ -360,8 +342,8 @@ mod tests {
         }
     }
 
-    /// Ordering and hashing are what the lane assigner runs on, so they must be
-    /// total and agree with the text form rather than with the padding.
+    /// The lane assigner runs on ordering and hashing, so they must be total
+    /// and agree with the text form rather than with the padding.
     #[test]
     fn ids_order_by_their_digest() {
         let low = Oid::parse(&format!("00{}", "ff".repeat(19))).unwrap();
@@ -370,10 +352,9 @@ mod tests {
         assert_eq!(low.cmp(&low), std::cmp::Ordering::Equal);
     }
 
-    /// Ordering reads the digest BEFORE the width, which is what the field
-    /// order says and nothing else checks: comparing the width first would
-    /// put every SHA-1 before every SHA-256 whatever their bytes, so the
-    /// order would stop agreeing with the text.
+    /// Caught by: comparing the width before the digest — every SHA-1 would
+    /// sort before every SHA-256 whatever their bytes, and the order would stop
+    /// agreeing with the text. Nothing but the field order says this.
     #[test]
     fn ordering_compares_the_digest_before_the_width() {
         let sha1 = Oid::parse(&"ff".repeat(20)).unwrap();
@@ -391,10 +372,9 @@ mod tests {
         );
     }
 
-    /// The text forms, each pinned to its own output: `Display` is what an
-    /// error message and the engine's logs carry, and `Debug` is what a failed
-    /// assertion prints. Without this, either could render nothing at all and
-    /// every other test would still pass.
+    /// Each text form pinned to its own output — `Display` for errors and logs,
+    /// `Debug` for a failed assertion. Caught by: either rendering nothing at
+    /// all, which every other test would tolerate.
     #[test]
     fn every_text_form_renders_the_id_it_names() {
         let sha256 = Oid::parse(SHA256).unwrap();
@@ -412,10 +392,9 @@ mod tests {
         );
     }
 
-    /// The buffer is canonical: nothing is left past the length it reports, so
-    /// two abbreviations that read the same ARE the same bytes. `short()`
-    /// writes whole pairs and then cuts to seven, so this is the case that
-    /// would otherwise carry an eighth digit nobody can see.
+    /// Caught by: leaving a digit past the reported length. `short()` writes
+    /// whole pairs and then cuts to seven, so two abbreviations that read the
+    /// same would otherwise differ by an eighth digit nobody can see.
     #[test]
     fn an_abbreviation_leaves_nothing_behind_the_length_it_reports() {
         let a = Oid::parse(&format!("{}{}", "0123456", "f".repeat(33))).unwrap();

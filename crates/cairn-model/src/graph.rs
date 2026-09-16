@@ -2,17 +2,16 @@
 //!
 //! A *row* is one commit's line in the list. A *lane* is a vertical track the
 //! connecting lines run in, numbered from the left. An *edge segment* is one
-//! piece of line crossing one row. Nothing here knows what a commit is: given
-//! these values a renderer can draw the graph having never seen git.
+//! piece of line crossing one row. The vocabulary is geometric only: nothing
+//! here names genealogy, so a renderer draws a row without knowing what the
+//! line means.
 
 use crate::Oid;
 
 /// A vertical track in the graph, numbered from the left starting at zero.
 ///
-/// A lane number is assigned once and never renumbered, however many more
-/// commits are loaded afterwards, so it is safe to turn straight into an x
-/// position. Copy because it is a `usize` wearing a name — passing it by
-/// reference would cost more than copying it.
+/// Assigned once and never renumbered, however many more commits are loaded
+/// afterwards, so it is safe to turn straight into an x position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Lane(usize);
 
@@ -22,35 +21,29 @@ impl Lane {
     }
 
     /// How many lanes in from the left this one sits. Lane numbers are dense
-    /// from zero but a number is not a promise that the lane is occupied on
-    /// any given row: a lane is only drawn where a segment names it.
+    /// from zero, but a lane is only drawn on a row where a segment names it.
     pub fn index(self) -> usize {
         self.0
     }
 }
 
-/// What a segment touches in the row it crosses.
-///
-/// The three cases are the whole geometric vocabulary: a line either passes a
-/// row by, ends at its commit, or starts at its commit. Genealogy is not in
-/// here — which end is the parent is a question for the commit data, not for
-/// the drawing.
+/// What a segment touches in the row it crosses: the whole geometric
+/// vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EdgeKind {
-    /// Crosses the row without touching its commit: draw a straight line from
-    /// the top edge to the bottom edge, in one lane.
+    /// Crosses the row untouched: top edge to bottom edge, in one lane.
     Passing,
-    /// Arrives from the row above and stops at this row's commit: draw from
-    /// the top edge in lane `from` to the node in lane `to`.
+    /// Arrives from the row above and stops at this row's commit: top edge in
+    /// lane `from` to the node in lane `to`.
     IntoCommit,
-    /// Leaves this row's commit and continues below: draw from the node in
-    /// lane `from` to the bottom edge in lane `to`.
+    /// Leaves this row's commit and continues below: the node in lane `from`
+    /// to the bottom edge in lane `to`.
     OutOfCommit,
 }
 
 /// One piece of a connecting line, clipped to a single row.
 ///
-/// Rows are self-contained on purpose: to draw row 400 you need row 400 and
+/// Rows are self-contained on purpose: drawing row 400 needs row 400 and
 /// nothing else, which is what makes a virtualised list possible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EdgeSegment {
@@ -61,17 +54,17 @@ pub struct EdgeSegment {
     /// where it reaches this row's commit.
     pub to: Lane,
     pub kind: EdgeKind,
-    /// True when the line this segment belongs to joins a commit to a parent
-    /// drawn *above* it instead of below: the walk handed Cairn the parent
-    /// first, which committer-date skew makes ordinary. The geometry is
-    /// unchanged and the line is complete; the flag exists so a renderer can
+    /// True when this segment's line joins a commit to a parent drawn *above*
+    /// it: the walk handed the parent over first, which committer-date skew
+    /// makes ordinary. Geometry is unchanged; the flag is so a renderer can
     /// mark the reversal rather than silently drawing time running backwards.
+    /// A flagged segment is not a promise that the line's other end is
+    /// visible — see `docs/systems/history-graph.md`.
     pub out_of_order: bool,
 }
 
 impl EdgeSegment {
-    /// A line crossing the row untouched. It stays in one lane because lanes
-    /// are never renumbered.
+    /// A line crossing the row untouched, in a single lane.
     pub fn passing(lane: Lane) -> Self {
         Self {
             from: lane,
@@ -116,8 +109,8 @@ pub struct GraphRow {
     /// Lane the commit's node sits in. Fixed for the life of the row.
     pub lane: Lane,
     /// Every line crossing this row, including those that begin or end at its
-    /// commit. A renderer draws all of them and should not read anything into
-    /// their order; the order is deterministic only so that tests can pin it.
+    /// commit. Draw all of them; read nothing into their order, which is
+    /// deterministic only so that tests can pin it.
     pub edges: Vec<EdgeSegment>,
 }
 

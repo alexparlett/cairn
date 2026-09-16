@@ -1,9 +1,9 @@
 //! Literal parent maps to lay out, and the checks every layout must satisfy.
 //!
-//! The assigner never sees a repository, so neither do its tests: a history
-//! here is a list of `(commit, parents)` in the order a walk would hand them
-//! over. Labels are turned into object ids by hex-encoding them, so a failure
-//! message can be read back to the label that produced it.
+//! A history here is a list of `(commit, parents)` in the order a walk would
+//! hand them over — the assigner never sees a repository, so neither do its
+//! tests. Labels are hex-encoded into object ids, so a failure message reads
+//! back to the label that produced it.
 
 use std::collections::{HashMap, HashSet};
 
@@ -27,9 +27,9 @@ pub fn literal(rows: &[(&str, &[&str])]) -> History {
 /// A label as an object id: the label's bytes in hex, padded out to SHA-1
 /// width. Reversible, so failures name the commit a human wrote down.
 ///
-/// `unwrap` is unavailable here — `clippy.toml`'s carve-out only reaches
-/// `#[cfg(test)]` code, and an integration test crate is not that — so the
-/// failure path names what went wrong instead.
+/// `unwrap` is denied here — `clippy.toml`'s carve-out reaches `#[cfg(test)]`
+/// code only, which an integration test crate is not — so the failure path
+/// names what went wrong instead.
 pub fn oid(label: &str) -> Oid {
     let mut hex: String = label.bytes().map(|b| format!("{b:02x}")).collect();
     assert!(hex.len() <= 40, "label {label:?} is too long to encode");
@@ -126,12 +126,12 @@ fn connecting_lane(rows: &[GraphRow], top: usize, bottom: usize) -> Option<Lane>
         })
 }
 
-/// Every commit gets a row, every parent link is a line a renderer can
-/// actually draw end to end, and no line is drawn that is not a parent link.
+/// Every commit gets a row, every parent link is a line a renderer can draw end
+/// to end, and no line is drawn that is not a parent link.
 ///
-/// The second half is what stops a layout passing by drawing extra edges: the
-/// count of segments leaving a node has to equal the number of parent links,
-/// so a spurious line cannot hide behind a satisfied continuity check.
+/// The second half is what stops extra edges passing: segments leaving a node
+/// must equal the parent links, so a spurious line cannot hide behind a
+/// satisfied continuity check.
 pub fn assert_every_parent_edge_is_drawn(history: &History, rows: &[GraphRow]) {
     assert_eq!(rows.len(), history.len(), "one row per commit");
     assert_the_picture_joins_up(rows);
@@ -225,10 +225,9 @@ pub fn assert_rows_are_well_formed(rows: &[GraphRow]) {
 /// what enters the top of the next, no lane carries two lines at once, and
 /// nothing enters the top of the very first row.
 ///
-/// This is the check that makes a fabricated segment of ANY kind visible. An
-/// edge count alone only bounds the lines that leave a node, so a spurious
-/// `Passing` or `IntoCommit` — a line drawn from nowhere — slips past it; a
-/// line that appears without a matching line above it cannot.
+/// This is what makes a fabricated segment of ANY kind visible. An edge count
+/// bounds only the lines leaving a node, so a spurious `Passing` or
+/// `IntoCommit` slips past it; a line with no matching line above it cannot.
 pub fn assert_the_picture_joins_up(rows: &[GraphRow]) {
     let mut leaving_the_row_above: HashSet<usize> = HashSet::new();
     for row in rows {
@@ -276,7 +275,7 @@ pub fn assert_the_picture_joins_up(rows: &[GraphRow]) {
 }
 
 /// A deterministic generator, so a property test is reproducible without a
-/// dependency. `cairn-model` depends on nothing, tests included.
+/// dependency: `cairn-model` depends on nothing, tests included.
 pub struct Rng(u64);
 
 impl Rng {
@@ -304,10 +303,10 @@ impl Rng {
 }
 
 /// A random history of `len` commits. Commit `i` is newer than commit `j` for
-/// `i < j`, and parents are always older, so index order is a valid walk. When
-/// `skew` is set the walk order is then scrambled by adjacent swaps, which is
-/// exactly what committer-date sorting does to a rebased or imported history:
-/// it hands some parents over before their children.
+/// `i < j` and parents are always older, so index order is a valid walk. With
+/// `skew`, adjacent swaps then scramble that order, which is what committer-date
+/// sorting does to a rebased or imported history: some parents arrive before
+/// their children.
 pub fn random_history(seed: u64, len: usize, skew: bool) -> History {
     let mut rng = Rng::new(seed);
     let mut commits: Vec<(String, Vec<String>)> = Vec::with_capacity(len);
@@ -338,10 +337,9 @@ pub fn random_history(seed: u64, len: usize, skew: bool) -> History {
     commits
 }
 
-/// Every `(parent row, child row)` pair the walk delivers backwards: the
-/// parent handed over first and the child only later. Derived from the walk
-/// order alone, so a test can decide which rows are *entitled* to be repainted
-/// without asking the assigner what it flagged.
+/// Every `(parent row, child row)` pair the walk delivers backwards. Derived
+/// from the walk order alone, so a test can decide which rows are *entitled* to
+/// be repainted without asking the assigner what it flagged.
 pub fn links_delivered_backwards(history: &History) -> Vec<(usize, usize)> {
     let position: HashMap<&str, usize> = history
         .iter()

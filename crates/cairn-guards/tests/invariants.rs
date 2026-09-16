@@ -61,8 +61,7 @@ const WORKER_DIR: &str = "crates/cairn-app/src/worker";
 /// `cairn_ui` is on it because `cairn-app` is allowed to depend on it: without
 /// that row, a file under [`WORKER_DIR`] could `use cairn_ui::CommitRow` and
 /// return elements, and by sitting in that directory buy exemption from the
-/// waiting roster AND from the unbounded-view scan. The exemption has to cost
-/// something, and this is the price: a worker file renders nothing at all.
+/// waiting roster AND from the unbounded-view scan.
 const RENDERING_IDENTS: &[&str] = &["freya", "dioxus", "cairn_ui"];
 
 /// `RENDER_SOURCE_DIRS` names every crate that renders, derived rather than
@@ -343,12 +342,10 @@ fn a_history_sized_list_renders_through_a_virtualizing_view() {
                 );
             }
 
-            // Test modules blanked for THIS half only. The prohibition above
+            // Test modules blanked for THIS half only: the prohibition above
             // covers the whole file — naming the unbounded view in a test is
-            // still naming it — but a requirement met from a test module is not
-            // met: "production switched to a hand-rolled viewport while a test
-            // still names the virtualizing one" is the regression that passed
-            // green against the first version of this guard.
+            // still naming it — while a requirement met from a test module is
+            // not met.
             let production = code_without_test_modules(&code);
             if !mentions_crate(&production, VIRTUALIZING_VIEW).is_empty()
                 && !mentions_crate(&production, "HistoryRow").is_empty()
@@ -357,8 +354,7 @@ fn a_history_sized_list_renders_through_a_virtualizing_view() {
             }
         }
         // Per directory, not in aggregate, for the reason the responsiveness
-        // guard gives above: a roster pointed at a renamed directory would
-        // otherwise be covered by whichever one still had files in it.
+        // guard gives above.
         assert!(
             rendering > 0,
             "the virtualization guard found no render files under {dir}. Every directory in \
@@ -406,9 +402,8 @@ const UNBOUNDED_VIEW_EXCEPTIONS: &[(&str, &str)] = &[];
 /// The 1-based line where `code` names the unbounded scroll view, if it does.
 ///
 /// Deliberately NOT a check for "renders a collection of rows": whether an
-/// iteration is over a history or over three tabs is not decidable from tokens,
-/// and a matcher that pretended otherwise would report a rule it had not
-/// checked. What IS decidable is which VIEW a file reaches for, and that is the
+/// iteration is over a history or over three tabs is not decidable from tokens.
+/// What IS decidable is which VIEW a file reaches for, and that is the
 /// regression worth catching — a list swapped to the unbounded view to dodge a
 /// layout problem.
 fn unbounded_view(code: &str) -> Option<usize> {

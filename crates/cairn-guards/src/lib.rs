@@ -1,10 +1,9 @@
 //! Matchers and repository walking for Cairn's invariant guards.
 //!
-//! The assertions themselves live in `tests/invariants.rs`; this crate holds
-//! the pieces they are built from so each matcher can be proven, in its own
-//! unit test, to fire on the DISGUISED forms of what it forbids — an aliased
-//! import, a fully-qualified path, a wrapped line. A matcher that only catches
-//! the obvious spelling reports green while the invariant rots.
+//! The assertions live in `tests/invariants.rs`; this crate holds the pieces
+//! they are built from, each with a unit test proving it fires on the DISGUISED
+//! forms of what it forbids. A matcher that only catches the obvious spelling
+//! reports green while the invariant rots.
 
 use std::path::{Path, PathBuf};
 
@@ -198,15 +197,11 @@ pub fn code_only(source: &str) -> String {
 /// names its program. A matcher looking for waiting primitives does not: a
 /// status line reading "waiting to receive" is prose that happens to live in a
 /// string, and a guard that reddens on it is a guard somebody switches off.
-/// Char literals are RECOGNISED and stepped over, contents blanked. Not because
-/// one character could hide an identifier — it cannot — but because `'"'` is a
-/// legal char literal, and a scanner that does not know that reads its quote as
-/// the start of a string and blanks everything up to the next `"` in the file.
-/// That is the fail-quiet direction: both guards built on this go dark for the
-/// whole file, silently. Recognition is exact rather than a forward search for a
-/// closing apostrophe, because `&'a str, b: &'b u8` would satisfy a search and a
-/// lifetime is not a literal: after the apostrophe, either an escape or exactly
-/// one character must be followed by the closing apostrophe.
+/// Char literals are RECOGNISED and stepped over, contents blanked: `'"'` is a
+/// legal char literal, and a scanner that misreads its quote as the start of a
+/// string blanks everything up to the next `"` in the file, taking both guards
+/// built on this dark for the whole file. Recognition is exact rather than a
+/// forward search for a closing apostrophe; `char_literal_end` states the rule.
 pub fn code_without_strings(source: &str) -> String {
     let code = code_only(source);
     let bytes = code.as_bytes();
@@ -310,8 +305,7 @@ fn char_literal_end(bytes: &[u8], open: usize) -> Option<usize> {
 /// For the checks that ask what a file DOES rather than what it must not do. A
 /// requirement satisfied from a test module is not satisfied: "production
 /// switched to a hand-rolled viewport while a test still names the virtualizing
-/// view" is exactly the regression the virtualization twin exists to catch, and
-/// it passes green against a whole-file token search.
+/// view" passes green against a whole-file token search.
 ///
 /// Brace counting is honest here only because it runs on
 /// [`code_without_strings`] output, where comments, string literals and char
@@ -425,8 +419,7 @@ fn is_ident_byte(b: u8) -> bool {
 ///
 /// Naming one is enough — you cannot alias what you have not first named, so
 /// `use std::sync::mpsc::Receiver as Rx` is caught on its import line even
-/// though every later use spells it `Rx`. That is the same trick the crate-seal
-/// matcher uses, and it is what makes the rule hold against a rename.
+/// though every later use spells it `Rx`.
 const WAITING_IDENTS: &[&str] = &[
     "Barrier",
     "Condvar",
@@ -455,9 +448,8 @@ const WAITING_IDENTS: &[&str] = &[
     "sleep",
     "wait_timeout",
     "wait_while",
-    // These do not block, they spin — which costs a UI thread the same core for
-    // the same reason. A render path has no reason to name one; the module that
-    // bridges to the workers does, and is on the other side of the partition.
+    // These do not block, they spin — which costs a UI thread the same core.
+    // Only the worker module has reason to name one, and it is exempt.
     "spin_loop",
     "try_iter",
     "try_lock",
@@ -468,17 +460,15 @@ const WAITING_IDENTS: &[&str] = &[
 /// Methods that wait when called with NO arguments.
 ///
 /// Separated from the list above because each has an innocent namesake that
-/// takes one: `Path::join("crates")` and `[..].join(", ")` are not waits, and a
-/// guard that could not tell them apart would be turned off within a week.
+/// takes one: `Path::join("crates")` and `[..].join(", ")` are not waits.
 const WAITING_NULLARY_CALLS: &[&str] = &["join", "lock", "recv", "wait"];
 
 /// 1-based line numbers where `source` waits for something, in code.
 ///
 /// The invariant this serves is "the UI thread never waits on repository work".
 /// A render path has no legitimate reason to name any of these, so the matcher
-/// forbids the spellings rather than trying to decide what is being waited FOR
-/// — which is not decidable from source, and is where a weaker guard would let
-/// the rule rot.
+/// forbids the spellings rather than trying to decide what is being waited FOR,
+/// which is not decidable from source.
 pub fn waits_on_work(source: &str) -> Vec<usize> {
     let code = code_without_strings(source);
     let mut lines = std::collections::BTreeSet::new();
@@ -585,10 +575,9 @@ mod tests {
     }
 
     /// Every entry in both rosters, spelled out as a literal here rather than
-    /// looped over the roster itself. Looping would shrink with the roster and
-    /// stay green while the guard lost half its coverage; a fixed list means
-    /// deleting an entry turns this red, which is the only way a roster stays
-    /// honest.
+    /// looped over the roster itself: looping would shrink with the roster and
+    /// stay green while the guard lost half its coverage. A fixed list means
+    /// deleting an entry turns this red.
     #[test]
     fn every_waiting_spelling_in_the_roster_is_matched() {
         let spellings = [
@@ -692,11 +681,10 @@ mod tests {
         assert!(waits_on_work("let hint = r#\"sleep until the Mutex frees\"#;").is_empty());
     }
 
-    /// The fail-QUIET case, which is the one worth a test of its own: a char
-    /// literal holding a double quote used to open a blanking run that ate the
-    /// rest of the file, so a guard built on [`code_without_strings`] reported
-    /// green over source it had not read. Every form of it, and a lifetime
-    /// beside each, because the fix must not blank a lifetime instead.
+    /// The fail-QUIET case: a char literal holding a double quote must not open
+    /// a blanking run that eats the rest of the file, or a guard built on
+    /// [`code_without_strings`] reports green over source it never read. Every
+    /// form of it, and a lifetime beside each, which must not be blanked.
     #[test]
     fn a_quote_inside_a_char_literal_does_not_blank_the_rest_of_the_file() {
         for quote in ["'\"'", "b'\"'", "'\\\"'"] {

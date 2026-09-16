@@ -14,7 +14,7 @@ const HEIGHT: f32 = 520.;
 fn oid(n: usize) -> Oid {
     let mut bytes = [0u8; 20];
     bytes[12..20].copy_from_slice(&(n as u64).to_be_bytes());
-    Oid::from_bytes(&bytes).unwrap()
+    Oid::from_bytes(&bytes).unwrap_or_else(|_| unreachable!("20 bytes is a SHA-1"))
 }
 
 fn row(n: usize) -> HistoryRow {

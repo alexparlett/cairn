@@ -333,7 +333,7 @@ mod tests {
         );
 
         scroll_to_end(&mut test, first);
-        assert_eq!(submitted.borrow().as_slice(), &[more.clone()]);
+        assert_eq!(submitted.borrow().as_slice(), std::slice::from_ref(&more));
 
         // Clicks select rows, which re-renders every one in view.
         for n in 0..5 {

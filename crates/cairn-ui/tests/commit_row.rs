@@ -12,7 +12,7 @@ const HEX: &str = "0123456789abcdef0123456789abcdef01234567";
 const WHEN: i64 = 1_710_000_300;
 
 fn commit() -> (CommitSummary, GraphRow) {
-    let id = Oid::parse(HEX).unwrap();
+    let id = Oid::parse(HEX).unwrap_or_else(|_| unreachable!("40 hex digits is a SHA-1"));
     (
         CommitSummary {
             id,

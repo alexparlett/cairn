@@ -246,7 +246,9 @@ cannot loop: `on_reach_end` fires on a row's visibility CHANGING, and a failure
 changes nothing that is visible at the end of the list, so each retry needs the
 reader to scroll. Pinned by
 `a_failed_page_is_asked_for_again_on_the_next_approach_to_the_end`
-(`crates/cairn-app/src/window.rs`), and by
+(`crates/cairn-app/src/window.rs`), by
+`a_failed_request_is_answered_when_it_is_asked_again`
+(`crates/cairn-app/src/worker/pool.rs`) for the worker recovering, and by
 `a_stream_that_has_ended_stops_asking_for_good` for the worker-gone case.
 
 ## The view (`cairn-ui`)

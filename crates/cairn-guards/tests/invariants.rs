@@ -9,8 +9,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use cairn_guards::{
-    code_only, code_without_strings, mentions_crate, repo_root, rust_sources, spawns_git,
-    waits_on_work,
+    code_only, code_without_strings, code_without_test_modules, mentions_crate, repo_root,
+    rust_sources, spawns_git, waits_on_work,
 };
 
 /// Crates whose dependency list is pinned, and what each is allowed to name.
@@ -55,6 +55,78 @@ const RENDER_SOURCE_DIRS: &[&str] = &["crates/cairn-ui/src", "crates/cairn-app/s
 /// checked in the same guard — otherwise the two sets could overlap and the
 /// partition would say nothing.
 const WORKER_DIR: &str = "crates/cairn-app/src/worker";
+
+/// What a file must not name to count as rendering nothing.
+///
+/// `cairn_ui` is on it because `cairn-app` is allowed to depend on it: without
+/// that row, a file under [`WORKER_DIR`] could `use cairn_ui::CommitRow` and
+/// return elements, and by sitting in that directory buy exemption from the
+/// waiting roster AND from the unbounded-view scan. The exemption has to cost
+/// something, and this is the price: a worker file renders nothing at all.
+const RENDERING_IDENTS: &[&str] = &["freya", "dioxus", "cairn_ui"];
+
+/// `RENDER_SOURCE_DIRS` names every crate that renders, derived rather than
+/// trusted.
+///
+/// The per-directory `rendering > 0` assertions in the two guards below catch a
+/// RENAMED directory. They cannot catch a DELETED row: drop
+/// `crates/cairn-app/src` from the roster and both guards quietly stop scanning
+/// the crate where the UI thread actually lives, with nothing red. So the roster
+/// is closed the way `DEPENDENCY_ALLOWLIST` is — against the manifests. A crate
+/// that declares `freya` draws, and a crate that draws is a render path.
+#[test]
+fn every_crate_that_renders_is_on_the_render_roster() {
+    let crates_dir = repo_root().join("crates");
+    let mut draws = BTreeSet::new();
+
+    let entries = std::fs::read_dir(&crates_dir)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", crates_dir.display()));
+    for entry in entries.filter_map(Result::ok) {
+        let manifest = entry.path().join("Cargo.toml");
+        if !manifest.is_file() {
+            continue;
+        }
+        let text = std::fs::read_to_string(&manifest)
+            .unwrap_or_else(|e| panic!("reading {}: {e}", manifest.display()));
+        let parsed: toml::Table = text
+            .parse()
+            .unwrap_or_else(|e| panic!("parsing {}: {e}", manifest.display()));
+        let declares_freya = parsed
+            .get("dependencies")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|t| t.contains_key("freya"));
+        if declares_freya {
+            let dir = entry.file_name().to_string_lossy().into_owned();
+            draws.insert(format!("crates/{dir}/src"));
+        }
+    }
+
+    assert!(
+        !draws.is_empty(),
+        "no crate under crates/ declares `freya`, so this check compared nothing. Either the \
+         toolkit changed — in which case change the rule here with it — or the manifest walk \
+         is looking in the wrong place."
+    );
+
+    for dir in &draws {
+        assert!(
+            RENDER_SOURCE_DIRS.contains(&dir.as_str()),
+            "`{dir}` belongs to a crate that declares `freya`, so it renders, but it is not in \
+             RENDER_SOURCE_DIRS. Both the waiting guard and the virtualization guard scan only \
+             what that roster names: a render crate missing from it is unguarded, silently. Add \
+             the row (CLAUDE.md, Invariants)."
+        );
+    }
+
+    for dir in RENDER_SOURCE_DIRS {
+        assert!(
+            draws.contains(*dir),
+            "RENDER_SOURCE_DIRS names `{dir}`, whose crate does not declare `freya`. A roster \
+             row that points at something which no longer renders is a rule nobody is keeping: \
+             remove it, or fix the path."
+        );
+    }
+}
 
 #[test]
 fn layer_dependencies_are_allowlisted() {
@@ -179,7 +251,7 @@ fn the_ui_thread_never_waits_on_repository_work() {
                 // The worker side may wait, because it is not the UI thread.
                 // What it may not do is render: if a file could do both, the
                 // partition would stop meaning anything.
-                for ident in ["freya", "dioxus"] {
+                for ident in RENDERING_IDENTS {
                     let hits = mentions_crate(&source, ident);
                     assert!(
                         hits.is_empty(),
@@ -271,8 +343,15 @@ fn a_history_sized_list_renders_through_a_virtualizing_view() {
                 );
             }
 
-            if !mentions_crate(&code, VIRTUALIZING_VIEW).is_empty()
-                && !mentions_crate(&code, "HistoryRow").is_empty()
+            // Test modules blanked for THIS half only. The prohibition above
+            // covers the whole file — naming the unbounded view in a test is
+            // still naming it — but a requirement met from a test module is not
+            // met: "production switched to a hand-rolled viewport while a test
+            // still names the virtualizing one" is the regression that passed
+            // green against the first version of this guard.
+            let production = code_without_test_modules(&code);
+            if !mentions_crate(&production, VIRTUALIZING_VIEW).is_empty()
+                && !mentions_crate(&production, "HistoryRow").is_empty()
             {
                 virtualizes_the_history.push(path);
             }

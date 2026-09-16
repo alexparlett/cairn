@@ -198,8 +198,15 @@ pub fn code_only(source: &str) -> String {
 /// names its program. A matcher looking for waiting primitives does not: a
 /// status line reading "waiting to receive" is prose that happens to live in a
 /// string, and a guard that reddens on it is a guard somebody switches off.
-/// Char literals are left alone — one character cannot hide an identifier, and
-/// blanking between apostrophes would eat lifetimes.
+/// Char literals are RECOGNISED and stepped over, contents blanked. Not because
+/// one character could hide an identifier — it cannot — but because `'"'` is a
+/// legal char literal, and a scanner that does not know that reads its quote as
+/// the start of a string and blanks everything up to the next `"` in the file.
+/// That is the fail-quiet direction: both guards built on this go dark for the
+/// whole file, silently. Recognition is exact rather than a forward search for a
+/// closing apostrophe, because `&'a str, b: &'b u8` would satisfy a search and a
+/// lifetime is not a literal: after the apostrophe, either an escape or exactly
+/// one character must be followed by the closing apostrophe.
 pub fn code_without_strings(source: &str) -> String {
     let code = code_only(source);
     let bytes = code.as_bytes();
@@ -250,10 +257,114 @@ pub fn code_without_strings(source: &str) -> String {
             }
             continue;
         }
+        if bytes[i] == b'\'' {
+            if let Some(end) = char_literal_end(bytes, i) {
+                out.push('\'');
+                for _ in i + 1..end {
+                    out.push(' ');
+                }
+                out.push('\'');
+                i = end + 1;
+                continue;
+            }
+            // A lifetime, not a literal. Emit the apostrophe and carry on.
+        }
         out.push(bytes[i] as char);
         i += 1;
     }
     out
+}
+
+/// The index of the closing apostrophe of the char literal starting at `open`,
+/// or `None` when that apostrophe opens a lifetime instead.
+///
+/// Exact by construction: a char literal is an apostrophe, then either a
+/// backslash escape or exactly one character, then the closing apostrophe.
+/// Anything else is a lifetime, so `&'a str` is left alone.
+fn char_literal_end(bytes: &[u8], open: usize) -> Option<usize> {
+    let after = open + 1;
+    if bytes.get(after) == Some(&b'\\') {
+        // `'\''` is the case that makes a naive "next apostrophe" search wrong
+        // in the other direction: the escaped one is not the closing one.
+        let mut end = after + 2;
+        while bytes.get(end).is_some_and(|c| *c != b'\'' && *c != b'\n') {
+            end += 1;
+        }
+        return (bytes.get(end) == Some(&b'\'')).then_some(end);
+    }
+    // One character, which may be several bytes: step over the continuation
+    // bytes of a UTF-8 sequence.
+    let mut end = after + 1;
+    while bytes.get(end).is_some_and(|c| c & 0b1100_0000 == 0b1000_0000) {
+        end += 1;
+    }
+    (bytes.get(end) == Some(&b'\'')).then_some(end)
+}
+
+/// [`code_without_strings`] output with `#[cfg(test)]` modules blanked.
+///
+/// For the checks that ask what a file DOES rather than what it must not do. A
+/// requirement satisfied from a test module is not satisfied: "production
+/// switched to a hand-rolled viewport while a test still names the virtualizing
+/// view" is exactly the regression the virtualization twin exists to catch, and
+/// it passes green against a whole-file token search.
+///
+/// Brace counting is honest here only because it runs on
+/// [`code_without_strings`] output, where comments, string literals and char
+/// literals have already been blanked — so every brace left is a real one. Line
+/// numbers are preserved, because callers report them.
+pub fn code_without_test_modules(code: &str) -> String {
+    const MARKER: &[u8] = b"#[cfg(test)]";
+    let bytes = code.as_bytes();
+    let mut out: Vec<u8> = bytes.to_vec();
+    let mut i = 0;
+
+    while i + MARKER.len() <= bytes.len() {
+        if &bytes[i..i + MARKER.len()] != MARKER {
+            i += 1;
+            continue;
+        }
+        // The module's opening brace, if this attribute introduces a block at
+        // all: `#[cfg(test)] mod tests;` and `#[cfg(test)] use x;` declare no
+        // body, so a `;` first means there is nothing to blank.
+        let mut open = i + MARKER.len();
+        while open < bytes.len() && bytes[open] != b'{' && bytes[open] != b';' {
+            open += 1;
+        }
+        if bytes.get(open) != Some(&b'{') {
+            i += MARKER.len();
+            continue;
+        }
+
+        let mut depth = 0usize;
+        let mut end = open;
+        while end < bytes.len() {
+            match bytes[end] {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            end += 1;
+        }
+        // An unbalanced file ends the blanking at its end rather than panicking:
+        // the guard reports on what it could read, and the compiler has a much
+        // better complaint about the braces.
+        let end = end.min(bytes.len().saturating_sub(1));
+
+        for byte in &mut out[i..=end] {
+            if *byte != b'\n' {
+                *byte = b' ';
+            }
+        }
+        i = end + 1;
+    }
+
+    String::from_utf8(out).unwrap_or_default()
 }
 
 /// 1-based line numbers where `source` names the crate `ident` as a path root
@@ -575,6 +686,87 @@ mod tests {
         // reads must be free to say what the code is doing.
         assert!(waits_on_work("status.set(\"waiting to receive a lock\");").is_empty());
         assert!(waits_on_work("let hint = r#\"sleep until the Mutex frees\"#;").is_empty());
+    }
+
+    /// The fail-QUIET case, which is the one worth a test of its own: a char
+    /// literal holding a double quote used to open a blanking run that ate the
+    /// rest of the file, so a guard built on [`code_without_strings`] reported
+    /// green over source it had not read. Every form of it, and a lifetime
+    /// beside each, because the fix must not blank a lifetime instead.
+    #[test]
+    fn a_quote_inside_a_char_literal_does_not_blank_the_rest_of_the_file() {
+        for quote in ["'\"'", "b'\"'", "'\\\"'"] {
+            let src = format!("fn q() -> char {{ {quote} }}\nlet c = rx.recv();\n");
+            assert_eq!(
+                waits_on_work(&src),
+                vec![2],
+                "{quote} blanked the code after it"
+            );
+            assert_eq!(
+                mentions_crate(&code_without_strings(&src), "rx"),
+                vec![2],
+                "{quote} hid an identifier after it"
+            );
+        }
+    }
+
+    /// The other direction: a lifetime is not a literal, and blanking from one
+    /// apostrophe to the next would eat the code between two of them.
+    #[test]
+    fn a_lifetime_is_not_mistaken_for_a_char_literal() {
+        let src = "fn f<'a, 'b>(x: &'a str, y: &'b Mutex) { let _ = x.recv(); }";
+        assert_eq!(
+            waits_on_work(src),
+            vec![1],
+            "a lifetime pair blanked the code between them"
+        );
+        // And the escaped-apostrophe literal, whose closing quote is the third
+        // apostrophe rather than the second.
+        let src = "let tick = '\\''; let _ = rx.recv();";
+        assert_eq!(waits_on_work(src), vec![1]);
+    }
+
+    /// A requirement met from a test module is not met. Both directions, and
+    /// the line numbers the callers report must survive the blanking.
+    #[test]
+    fn a_test_module_is_not_part_of_what_a_file_does() {
+        let src = "\
+use freya::prelude::*;
+fn render() -> Element {
+    hand_rolled_viewport()
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn it() {
+        let _ = VirtualScrollView::new();
+        let nested = || { 1 };
+    }
+}
+";
+        let code = code_without_test_modules(&code_without_strings(src));
+        assert!(
+            mentions_crate(&code, "VirtualScrollView").is_empty(),
+            "a token inside a test module counted as something the file does"
+        );
+        assert_eq!(
+            mentions_crate(&code, "freya"),
+            vec![1],
+            "blanking the test module moved or lost the production lines"
+        );
+
+        // The same token in production is still seen, so the blanking is
+        // scoped rather than a way to turn the check off.
+        let production = code_without_test_modules(&code_without_strings(
+            "fn render() { VirtualScrollView::new(); }\n#[cfg(test)]\nmod tests { fn t() {} }\n",
+        ));
+        assert_eq!(mentions_crate(&production, "VirtualScrollView"), vec![1]);
+
+        // A `#[cfg(test)]` with no body blanks nothing after it.
+        let no_body = code_without_test_modules(&code_without_strings(
+            "#[cfg(test)]\nmod tests;\nfn render() { VirtualScrollView::new(); }\n",
+        ));
+        assert_eq!(mentions_crate(&no_body, "VirtualScrollView"), vec![3]);
     }
 
     #[test]

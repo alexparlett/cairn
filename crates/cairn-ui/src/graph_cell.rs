@@ -99,3 +99,124 @@ fn paint_stroke(canvas: &freya::engine::prelude::Canvas, paint: &mut Paint, stro
         .cubic_to((stroke.from.0, middle), (stroke.to.0, middle), stroke.to);
     canvas.draw_path(&path.detach(), paint);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cairn_model::{EdgeSegment, Lane, Oid};
+    use freya::engine::prelude::{ImageInfo, raster_n32_premul};
+
+    fn oid() -> Oid {
+        match Oid::from_bytes(&[7u8; 20]) {
+            Ok(id) => id,
+            Err(_) => unreachable!("20 bytes is a SHA-1"),
+        }
+    }
+
+    /// Paint one row onto an offscreen Skia surface and return, for each pixel
+    /// of `column`, whether anything was drawn there.
+    ///
+    /// The rest of this file is a transcription of `graph_geometry`, and a
+    /// transcription still has two decisions in it that no arithmetic test can
+    /// reach: whether a dashed stroke is actually dashed, and whether a merge is
+    /// actually a ring. Both are what the product rule "colour never carries
+    /// meaning alone" comes down to on screen, so both are decided here, against
+    /// real pixels, using the Skia already linked into this crate.
+    fn painted_column(row: &GraphRow, parents: usize, column: f32) -> Vec<bool> {
+        let width = graph_geometry::graph_width(4).ceil() as i32;
+        let height = ROW_HEIGHT.ceil() as i32;
+        let Some(mut surface) = raster_n32_premul((width, height)) else {
+            panic!("no raster surface");
+        };
+        let geometry = graph_geometry::row_geometry(row, parents);
+        paint_row(surface.canvas(), &geometry);
+
+        let info = ImageInfo::new_n32_premul((width, height), None);
+        let stride = info.min_row_bytes();
+        let mut pixels = vec![0u8; stride * height as usize];
+        assert!(
+            surface.read_pixels(&info, &mut pixels, stride, (0, 0)),
+            "could not read the painted pixels back"
+        );
+
+        let x = column.round() as usize;
+        (0..height as usize)
+            .map(|y| {
+                // Anti-aliasing puts partial coverage either side of a line, so
+                // "painted" is any non-zero alpha rather than a full one.
+                let alpha = pixels.get(y * stride + x * 4 + 3).copied().unwrap_or(0);
+                alpha > 0
+            })
+            .collect()
+    }
+
+    fn row(lane: usize, edges: Vec<EdgeSegment>) -> GraphRow {
+        GraphRow {
+            id: oid(),
+            lane: Lane::new(lane),
+            edges,
+        }
+    }
+
+    /// O4, in pixels. A solid line covers its column top to bottom; a dashed one
+    /// leaves gaps in the same column. Deleting the dash branch in
+    /// `paint_stroke` makes these two identical, which is the mutation no
+    /// geometry test can see.
+    #[test]
+    fn an_out_of_order_line_is_actually_drawn_with_gaps() {
+        let lane = Lane::new(1);
+        let column = graph_geometry::lane_x(lane);
+
+        let solid = painted_column(&row(0, vec![EdgeSegment::passing(lane)]), 1, column);
+        let dashed = painted_column(
+            &row(0, vec![EdgeSegment::passing(lane).marked_out_of_order()]),
+            1,
+            column,
+        );
+
+        assert!(
+            solid.iter().all(|painted| *painted),
+            "a solid line left gaps in its own column: {solid:?}"
+        );
+        assert!(
+            dashed.iter().any(|painted| !*painted),
+            "a dashed line was painted solid: the dash is what marks a line \
+             running backwards, and it is the only thing that does"
+        );
+        assert!(
+            dashed.iter().any(|painted| *painted),
+            "a dashed line was not painted at all"
+        );
+    }
+
+    /// R4.2's shape arm, in pixels. A merge is a RING and an ordinary commit is
+    /// a DOT, so the difference survives a monochrome screenshot; painting the
+    /// ring filled would make the difference colour-only, which the product
+    /// rules forbid.
+    #[test]
+    fn a_merge_is_drawn_hollow_and_an_ordinary_commit_solid() {
+        let node = row(0, Vec::new());
+        let column = graph_geometry::lane_x(Lane::new(0));
+        let middle = graph_geometry::row_middle().round() as usize;
+
+        let dot = painted_column(&node, 1, column);
+        let ring = painted_column(&node, 2, column);
+
+        assert_eq!(
+            dot.get(middle),
+            Some(&true),
+            "an ordinary commit's node was not painted at its own centre"
+        );
+        assert_eq!(
+            ring.get(middle),
+            Some(&false),
+            "a merge was painted filled: the only thing telling it from an \
+             ordinary commit would then be colour"
+        );
+        // A ring is still a node: it is painted somewhere in its column.
+        assert!(
+            ring.iter().any(|painted| *painted),
+            "a merge was not painted at all"
+        );
+    }
+}

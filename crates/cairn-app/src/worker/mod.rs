@@ -55,8 +55,14 @@ mod pool;
 mod request;
 mod wake;
 
-// Only what the view names. `RepositoryHandle`, `Updates` and `OpenError`
-// reach it through `open`'s signature and are never spelled out there — a
-// binary has no external callers, so an unnameable type is not a gap.
-pub use pool::open;
+// Only what the view names. `Updates` and `OpenError` reach it through `open`'s
+// signature and are never spelled out there — a binary has no external callers,
+// so an unnameable type is not a gap.
+//
+// `RepositoryHandle` IS spelled out, because the view holds one across renders
+// and hands it to the function that builds the list, which needs it in a
+// signature. It is the safe half of the boundary to name: it has one method,
+// that method returns immediately, and it carries no receiving end of anything,
+// so there is nothing on it to wait on.
+pub use pool::{RepositoryHandle, open};
 pub use request::{Request, Update};

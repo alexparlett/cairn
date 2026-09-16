@@ -365,12 +365,7 @@ fn serve(
             match repo.history_session(&request) {
                 Ok(session) => scroll = Some(session),
                 Err(error) => {
-                    outbox.send(
-                        Some(epoch),
-                        Update::Failed {
-                            message: error.to_string(),
-                        },
-                    );
+                    outbox.send(Some(epoch), no_walk(error));
                     continue;
                 }
             }
@@ -414,9 +409,31 @@ fn serve(
     }
 }
 
+/// What a failure to OPEN a scroll's walk means to the view.
+///
+/// One case is not a failure at all. A repository whose `HEAD` has no commits
+/// yet has a history to show and it is empty — `Error::UnbornHead` says so in
+/// its own documentation — so it crosses the boundary as a complete page of no
+/// rows. That is what lets the window say "no commits yet" instead of showing
+/// an error banner for a repository that is not broken, and it is the
+/// distinction R4.3 asks the view to be able to draw. Every other failure
+/// crosses as the sentence it will be shown as.
+fn no_walk(error: Error) -> Update {
+    match error {
+        Error::UnbornHead { .. } => Update::Rows {
+            rows: Vec::new(),
+            complete: true,
+        },
+        other => Update::Failed {
+            message: other.to_string(),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use std::task::{Context, Poll, Waker};
     use std::time::Instant;
 
@@ -492,6 +509,41 @@ mod tests {
             open(&outside).is_ok(),
             "open() decided there was no repository, so it looked — on the caller's thread"
         );
+    }
+
+    /// A repository with no commits yet is EMPTY, not broken. The view has to
+    /// be able to tell an empty repository from one still loading (R4.3), and
+    /// it cannot if an empty one arrives as an error sentence beside every
+    /// other kind of failure.
+    #[test]
+    fn a_repository_with_no_commits_yet_arrives_as_an_empty_history() {
+        let answer = no_walk(Error::UnbornHead {
+            path: PathBuf::from("/tmp/fresh"),
+        });
+        assert_eq!(
+            answer,
+            Update::Rows {
+                rows: Vec::new(),
+                complete: true
+            },
+            "an unborn HEAD was reported as a failure"
+        );
+    }
+
+    /// And every other failure still says what went wrong, in the sentence it
+    /// will be shown as — including the one R5.2 is about.
+    #[test]
+    fn every_other_failure_to_open_a_walk_keeps_its_sentence() {
+        let answer = no_walk(Error::NotARepository {
+            path: PathBuf::from("/tmp/nowhere"),
+        });
+        match answer {
+            Update::Failed { message } => assert!(
+                message.contains("/tmp/nowhere"),
+                "the message does not name the path: {message}"
+            ),
+            other => panic!("expected a failure, got {other:?}"),
+        }
     }
 
     #[test]

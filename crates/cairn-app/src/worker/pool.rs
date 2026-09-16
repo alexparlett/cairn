@@ -5,6 +5,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 
+use cairn_git::ops::GitBinary;
 use cairn_git::{Error, HistoryCursor, HistoryRequest, HistorySession, SharedRepository};
 
 use super::epoch::{Epoch, Epochs};
@@ -20,7 +21,8 @@ const _: () = assert!(
      workers per repository need a routing decision, not a bigger constant"
 );
 
-/// Returns before touching a disk; open failures arrive as [`Update::Failed`].
+/// Returns before touching a disk; open failures arrive as [`Update::Failed`], and
+/// so does a `git` that is missing or older than Cairn requires, checked first.
 /// Drive [`Updates`] from exactly one task.
 pub fn open(path: impl AsRef<Path>) -> Result<(RepositoryHandle, Updates), OpenError> {
     let path = path.as_ref().to_owned();
@@ -51,6 +53,18 @@ pub fn open(path: impl AsRef<Path>) -> Result<(RepositoryHandle, Updates), OpenE
             let Some(outbox) = exit.outbox.as_ref() else {
                 return;
             };
+            // Once, before anything else: a missing or too-old git is reported with the
+            // version Cairn needs, never worked around (D1). Off the UI thread, since
+            // finding out means running `git --version`.
+            if let Err(error) = GitBinary::discover() {
+                outbox.send(
+                    None,
+                    Update::Failed {
+                        message: error.to_string(),
+                    },
+                );
+                return;
+            }
             match SharedRepository::discover(&opening) {
                 Ok(shared) => serve(shared, incoming, outbox, worker_epochs),
                 Err(source) => outbox.send(

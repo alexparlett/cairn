@@ -1,7 +1,10 @@
 //! Headless component tests for `CommitRow` and `HistoryHeader`.
 
 use cairn_model::{CommitSummary, EdgeSegment, GraphRow, Lane, Oid};
-use cairn_ui::{AUTHOR_WIDTH, CommitRow, DATE_WIDTH, HistoryHeader, ID_WIDTH};
+use cairn_ui::{
+    AUTHOR_WIDTH, CommitRow, DATE_WIDTH, HistoryHeader, ID_WIDTH, ROW_FONT_SIZE, ROW_HEIGHT,
+    graph_width,
+};
 use freya::prelude::*;
 use freya_testing::TestingRunner;
 
@@ -30,12 +33,37 @@ fn commit() -> (CommitSummary, GraphRow) {
     )
 }
 
+const WIDTH: f32 = 900.;
+const DATE: &str = "2024-03-09 16:05";
+
+#[derive(Clone, Copy)]
+struct Setup {
+    lanes: usize,
+}
+
+/// The header, an unselected row, then a selected one.
 fn app() -> impl IntoElement {
+    let Setup { lanes } = use_consume::<Setup>();
     let (commit, graph) = commit();
+    let mut second = commit.clone();
+    second.summary = format!("selected {SUBJECT}");
     rect()
         .width(Size::fill())
         .child(HistoryHeader::new())
-        .child(CommitRow::new(commit, graph, 3))
+        .child(CommitRow::new(commit, graph.clone(), lanes))
+        .child(CommitRow::new(second, graph, lanes).selected(true))
+}
+
+/// How wide `text` is at the rows' font size, laid out on its own.
+fn measured(text: &'static str) -> f32 {
+    let (mut test, ()) = TestingRunner::new(
+        move || label().text(text).font_size(ROW_FONT_SIZE).max_lines(1),
+        (WIDTH, 200.).into(),
+        |_| {},
+        1.,
+    );
+    test.sync_and_update();
+    column(&test, text).1
 }
 
 /// `(left, width)` of the label reading exactly `text`.
@@ -51,10 +79,21 @@ fn column(test: &TestingRunner, text: &str) -> (f32, f32) {
     .unwrap_or_else(|| panic!("no label reads {text:?}"))
 }
 
-fn launch() -> TestingRunner {
-    let (mut test, ()) = TestingRunner::new(app, (900., 200.).into(), |_| {}, 1.);
+fn launch_with(lanes: usize) -> TestingRunner {
+    let (mut test, ()) = TestingRunner::new(
+        app,
+        (WIDTH, 200.).into(),
+        move |runner| {
+            runner.provide_root_context(|| Setup { lanes });
+        },
+        1.,
+    );
     test.sync_and_update();
     test
+}
+
+fn launch() -> TestingRunner {
+    launch_with(3)
 }
 
 #[test]
@@ -64,7 +103,7 @@ fn each_value_is_drawn_in_its_own_column_at_its_own_width() {
     let subject = column(&test, SUBJECT);
     let author = column(&test, AUTHOR);
     let id = column(&test, &HEX[..7]);
-    let date = column(&test, "2024-03-09 16:05");
+    let date = column(&test, DATE);
 
     assert_eq!(author.1, AUTHOR_WIDTH, "the author column");
     assert_eq!(id.1, ID_WIDTH, "the commit column");
@@ -84,7 +123,7 @@ fn every_heading_sits_over_its_column() {
     for (heading, value) in [
         ("Author", AUTHOR),
         ("Commit", &HEX[..7]),
-        ("Date (UTC)", "2024-03-09 16:05"),
+        ("Date (UTC)", DATE),
     ] {
         assert_eq!(
             column(&test, heading),
@@ -100,4 +139,54 @@ fn every_heading_sits_over_its_column() {
         subject.0 + subject.1,
         "the subject column and its heading end in different places"
     );
+}
+
+#[test]
+fn the_graph_column_widens_with_the_lanes_it_is_given() {
+    let narrow = column(&launch_with(1), SUBJECT);
+    let wide = column(&launch_with(5), SUBJECT);
+    assert_eq!(
+        wide.0 - narrow.0,
+        graph_width(5) - graph_width(1),
+        "the subject did not move over by the extra lanes"
+    );
+}
+
+#[test]
+fn a_selected_row_is_drawn_differently_from_an_unselected_one() {
+    let test = launch();
+    let full_rows = test.find_many(|node, element| {
+        let area = node.layout().area;
+        Rect::try_downcast(element)
+            .filter(|_| area.width() == WIDTH && area.height() == ROW_HEIGHT)
+            .map(|rect| (area.min_y(), rect.style.background))
+    });
+    let background_at = |row: f32| {
+        full_rows
+            .iter()
+            .find(|(y, _)| *y == row * ROW_HEIGHT)
+            .map(|(_, background)| background.clone())
+            .unwrap_or_else(|| panic!("no row at {row}: {full_rows:?}"))
+    };
+
+    assert_ne!(
+        background_at(1.),
+        background_at(2.),
+        "the selected row looks like the unselected one"
+    );
+}
+
+#[test]
+fn the_date_and_the_short_id_fit_their_columns() {
+    for (text, width, name) in [(DATE, DATE_WIDTH, "date"), (&HEX[..7], ID_WIDTH, "commit")] {
+        let needed = measured(text);
+        assert!(
+            needed > 0.,
+            "no font drew {text:?}, so nothing was measured"
+        );
+        assert!(
+            needed <= width,
+            "the {name} column is {width}px but {text:?} needs {needed}px"
+        );
+    }
 }

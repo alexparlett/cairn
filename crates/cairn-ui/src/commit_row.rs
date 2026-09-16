@@ -14,7 +14,7 @@ pub const DATE_WIDTH: f32 = 132.0;
 pub const COLUMN_GAP: f32 = 10.0;
 pub const ROW_PADDING: f32 = 10.0;
 
-const ROW_FONT_SIZE: f32 = 13.0;
+pub const ROW_FONT_SIZE: f32 = 13.0;
 
 /// No handler, so equal content compares equal and Freya skips re-rendering.
 #[derive(Debug, PartialEq, Clone)]

@@ -2,14 +2,8 @@
 //!
 //! Components here render [`cairn_model`] values and emit intent through
 //! `EventHandler` props. They never open a repository, touch the filesystem, or
-//! block: the crate does not depend on `cairn-git` and the guard suite pins
-//! that. Wiring a component to the engine is `cairn-app`'s job.
-//!
-//! The history view is split so that the part which can be *wrong* is testable
-//! without a window: [`graph_geometry`] is pure arithmetic with unit tests,
-//! [`lane_palette`] is a table, `graph_cell` is a transcription of the first
-//! two into Skia calls, and [`HistoryList`] owns virtualisation, selection and
-//! the keyboard.
+//! block, and the guard suite pins that. Wiring a component to the engine is
+//! `cairn-app`'s job; `docs/systems/history-graph.md` describes the view.
 
 mod commit_row;
 mod date_text;

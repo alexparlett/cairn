@@ -1,18 +1,14 @@
 //! Which colour a lane's lines are drawn in.
 //!
-//! Colour here is an aid, never the information. The product rule for this
-//! packet is that lane identity must survive a monochrome screenshot and a
-//! colour-vision deficiency, and it does for a reason that has nothing to do
-//! with this file: a lane's identity is its COLUMN, and every lane has a column
-//! of its own (`crate::graph_geometry`). Colour only makes two lines easier to
-//! follow past each other when they are on screen together in colour.
+//! Colour is an aid, never the information: a lane's identity is its COLUMN
+//! (`crate::graph_geometry`), so lane identity survives a monochrome screenshot
+//! without this file. Colour only makes two lines easier to follow past each
+//! other.
 //!
-//! The palette is the Okabe–Ito qualitative set — minus its black, which is
-//! invisible on a dark ground, plus a neutral grey to bring it back to eight.
-//! Okabe–Ito was chosen for exactly this job: its members stay distinguishable
-//! under protanopia, deuteranopia and tritanopia. It is short on purpose —
-//! cycling eight hues past each other reads better than twenty nearly-identical
-//! ones, and the column, not the hue, is what says which lane a line is in.
+//! The eight hues are the Okabe–Ito qualitative set — less its black, invisible
+//! on a dark ground, plus a neutral grey — chosen because its members stay
+//! distinguishable under protanopia, deuteranopia and tritanopia. Short on
+//! purpose: eight cycling hues read better than twenty near-identical ones.
 
 use cairn_model::Lane;
 use freya::prelude::Color;
@@ -31,9 +27,8 @@ const LANE_COLOURS: &[(u8, u8, u8)] = &[
 
 /// The colour lines in `lane` are drawn in.
 pub fn lane_colour(lane: Lane) -> Color {
-    // Indexing is total: the modulus is the slice's own length, and the slice
-    // is a non-empty constant, so there is no absent case to handle and no
-    // panicking access to explain away.
+    // Total: the modulus is the slice's own length and the slice is a non-empty
+    // constant, so the `None` arm below is unreachable rather than a real case.
     let index = lane.index() % LANE_COLOURS.len();
     match LANE_COLOURS.get(index) {
         Some(&rgb) => Color::from(rgb),
@@ -50,8 +45,8 @@ pub fn palette_len() -> usize {
 mod tests {
     use super::*;
 
-    /// Neighbouring lanes never share a hue, which is the only thing colour is
-    /// asked to do here: tell two lines apart where they run side by side.
+    /// Neighbouring lanes never share a hue — the only thing colour is asked to
+    /// do here.
     #[test]
     fn neighbouring_lanes_differ_in_colour() {
         for index in 0..palette_len() * 3 {
@@ -61,8 +56,7 @@ mod tests {
         }
     }
 
-    /// The palette cycles rather than running out, so a history wider than the
-    /// palette still draws every lane.
+    /// A history wider than the palette still draws every lane.
     #[test]
     fn the_palette_cycles_instead_of_running_out() {
         assert_eq!(
@@ -87,12 +81,10 @@ mod tests {
         }
     }
 
-    /// The colour-vision claim in the module doc is a claim about THESE values,
-    /// and nothing else in the file decides it: eight distinct, cycling,
-    /// non-adjacent blues would pass every other test here while quietly
-    /// undoing the only reason this particular table was chosen. So the table
-    /// is pinned against Okabe–Ito's published RGB values, and changing it is a
-    /// decision someone has to make rather than a retune that slips through.
+    /// The module doc's colour-vision claim is a claim about THESE values, and
+    /// nothing else here decides it: eight distinct, cycling, non-adjacent blues
+    /// would pass every other test while undoing the reason for this table. So
+    /// it is pinned against Okabe–Ito's published RGB values.
     #[test]
     fn the_palette_is_the_okabe_ito_set_less_black_plus_a_neutral() {
         // Okabe & Ito, "Color Universal Design" (2008), the seven non-black

@@ -1,30 +1,23 @@
 //! The graph column of one row, painted.
 //!
-//! Everything about *where* a line goes is decided in
-//! [`crate::graph_geometry`]; this file only turns those numbers into Skia
-//! calls. Keeping the split means the arithmetic is unit-tested and the part
-//! that needs a window is a straight transcription with no decisions in it.
+//! Where a line goes is decided in [`crate::graph_geometry`]; this file only
+//! turns those numbers into Skia calls, with no decision of its own. One canvas
+//! per row rather than a rect per segment: a canvas is one element whatever the
+//! row holds, a rect per segment is up to a dozen laid out every frame, and a
+//! rect cannot draw a curve at all.
 //!
-//! **Why one canvas per row and not a rect per segment.** A canvas is one
-//! element whatever the row holds; a rect per segment is up to a dozen per row
-//! at the p99 measured on a real repository, laid out by torin every frame, and
-//! it cannot draw a curve at all. A bent line drawn as a right angle reads as a
-//! different kind of connection.
+//! **What a caller must keep true.** A `Canvas`'s render callback compares
+//! equal to every other callback (`RenderCallback`'s `PartialEq` is
+//! unconditionally true in the pinned Freya revision), so a canvas whose
+//! DRAWING changed while its LAYOUT did not is not repainted. Two things keep
+//! that from mattering here, and both are load-bearing:
 //!
-//! **What a caller must keep true.** A `Canvas`'s render callback is compared
-//! equal to every other callback (`RenderCallback`'s `PartialEq` returns true
-//! unconditionally, in the pinned Freya revision), so a canvas whose DRAWING
-//! changed while its LAYOUT did not is not repainted. Two things keep that from
-//! mattering here, and both are load-bearing:
-//!
-//! 1. Every row element is keyed by its `RowId`, so the row that arrives at a
-//!    given place in the viewport during a scroll replaces the one that was
-//!    there rather than inheriting its painting.
+//! 1. Every row element is keyed by its `RowId`, so a row arriving at a
+//!    viewport slot during a scroll replaces the one that was there rather than
+//!    inheriting its painting.
 //! 2. What a row draws is a function of the row alone, and a row reaching a
-//!    view is final: `cairn-git` hands out only rows its lane assigner has
-//!    already evicted, so the edge repainting R1.2 permits happens entirely
-//!    before delivery. Nothing here is a function of selection, focus or
-//!    hover — those live on the surrounding `rect`, which does diff on style.
+//!    view is final. Nothing here is a function of selection, focus or hover —
+//!    those live on the surrounding `rect`, which does diff on style.
 
 use cairn_model::GraphRow;
 use freya::engine::prelude::{Paint, PaintStyle, PathBuilder, PathEffect, SkColor};
@@ -90,9 +83,8 @@ fn paint_stroke(canvas: &freya::engine::prelude::Canvas, paint: &mut Paint, stro
         return;
     }
 
-    // A line that changes lane is drawn as a curve rather than a right angle:
-    // the eye follows a curve across a crowded graph, and a right angle reads
-    // as a different kind of connection rather than the same line moving over.
+    // A curve rather than a right angle: the eye follows a curve across a
+    // crowded graph, and a right angle reads as a different kind of connection.
     let middle = (stroke.from.1 + stroke.to.1) / 2.0;
     let mut path = PathBuilder::new();
     path.move_to(stroke.from)
@@ -116,12 +108,10 @@ mod tests {
     /// Paint one row onto an offscreen Skia surface and return, for each pixel
     /// of `column`, whether anything was drawn there.
     ///
-    /// The rest of this file is a transcription of `graph_geometry`, and a
-    /// transcription still has two decisions in it that no arithmetic test can
-    /// reach: whether a dashed stroke is actually dashed, and whether a merge is
-    /// actually a ring. Both are what the product rule "colour never carries
-    /// meaning alone" comes down to on screen, so both are decided here, against
-    /// real pixels, using the Skia already linked into this crate.
+    /// Two decisions no arithmetic test can reach — whether a dashed stroke is
+    /// actually dashed, whether a merge is actually a ring — are what "colour
+    /// never carries meaning alone" comes down to on screen. Both are decided
+    /// here against real pixels, on the Skia `freya` already links.
     fn painted_column(row: &GraphRow, parents: usize, column: f32) -> Vec<bool> {
         let width = graph_geometry::graph_width(4).ceil() as i32;
         let height = ROW_HEIGHT.ceil() as i32;
@@ -158,10 +148,9 @@ mod tests {
         }
     }
 
-    /// O4, in pixels. A solid line covers its column top to bottom; a dashed one
-    /// leaves gaps in the same column. Deleting the dash branch in
-    /// `paint_stroke` makes these two identical, which is the mutation no
-    /// geometry test can see.
+    /// O4, in pixels: a solid line covers its column top to bottom, a dashed one
+    /// leaves gaps. Deleting the dash branch in `paint_stroke` makes these two
+    /// identical — the mutation no geometry test can see.
     #[test]
     fn an_out_of_order_line_is_actually_drawn_with_gaps() {
         let lane = Lane::new(1);
@@ -189,10 +178,9 @@ mod tests {
         );
     }
 
-    /// R4.2's shape arm, in pixels. A merge is a RING and an ordinary commit is
-    /// a DOT, so the difference survives a monochrome screenshot; painting the
-    /// ring filled would make the difference colour-only, which the product
-    /// rules forbid.
+    /// R4.2's shape arm, in pixels: a merge is a RING and an ordinary commit a
+    /// DOT, so the difference survives a monochrome screenshot. Painting the
+    /// ring filled would make the difference colour-only.
     #[test]
     fn a_merge_is_drawn_hollow_and_an_ordinary_commit_solid() {
         let node = row(0, Vec::new());

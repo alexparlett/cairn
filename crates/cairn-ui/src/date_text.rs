@@ -1,26 +1,16 @@
 //! Turning a commit's timestamp into the text of the date column.
 //!
-//! **UTC, and the column says so.** A commit records its author time as seconds
-//! since the epoch plus the offset the author was at; `CommitSummary` carries
-//! the seconds and not the offset, and converting to the *reader's* local time
-//! needs a timezone database, which is a dependency and therefore a decision
-//! for the user rather than a default taken here. Rendering UTC and labelling
-//! the column `Date (UTC)` is the honest version of what this can do today; a
-//! column headed `Date` showing something that is not the reader's date is the
-//! dishonest one.
-//!
-//! The civil-date arithmetic is Howard Hinnant's `civil_from_days`, which is
-//! exact for every day the proleptic Gregorian calendar covers and needs no
-//! table. Written out rather than pulled in: it is a dozen lines of arithmetic
-//! against a dependency in a tree whose rule is that adding one is a decision.
+//! **UTC, and the column says so.** `CommitSummary` carries the author time's
+//! seconds and not the author's offset, and converting to the *reader's* local
+//! time needs a timezone database — a dependency, and so a user decision. So
+//! the column renders UTC and is labelled `Date (UTC)`.
 
 /// `author_time` as `YYYY-MM-DD HH:MM` in UTC.
 ///
 /// Total over every `i64`: times before the epoch land on the proleptic
-/// Gregorian calendar, and the extremes of the type cannot overflow because the
-/// seconds are divided down to a day count before anything is added to them. So
-/// no timestamp a repository can hold — including a corrupt one — produces a
-/// panic on a path a user can reach.
+/// Gregorian calendar, and the seconds are divided down to a day count before
+/// anything is added to them, so the extremes of the type cannot overflow. No
+/// timestamp a repository can hold, corrupt included, can panic.
 pub fn utc_minutes(author_time: i64) -> String {
     let days = author_time.div_euclid(SECONDS_PER_DAY);
     let second_of_day = author_time.rem_euclid(SECONDS_PER_DAY);
@@ -60,8 +50,8 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
 mod tests {
     use super::*;
 
-    /// Reference values taken from `date -u -d @<seconds>`, not from this
-    /// implementation: a test written from the code it tests decides nothing.
+    /// Reference values from `date -u -d @<seconds>`, not from this
+    /// implementation: a test written from its subject decides nothing.
     #[test]
     fn matches_the_system_date_at_known_instants() {
         assert_eq!(utc_minutes(0), "1970-01-01 00:00");
@@ -70,45 +60,40 @@ mod tests {
     }
 
     /// A leap day in a year divisible by 400 — the case a naive rule gets
-    /// wrong, and the reason this is Hinnant's algorithm and not four lines of
-    /// division.
+    /// wrong, and the reason this is Hinnant's algorithm.
     #[test]
     fn handles_the_four_hundred_year_leap_day() {
         assert_eq!(utc_minutes(951_782_400), "2000-02-29 00:00");
     }
 
-    /// A commit can carry a timestamp before the epoch — an imported history,
-    /// or a wrong clock. It renders as a date rather than as nonsense.
+    /// A commit can carry a timestamp before the epoch: an imported history, or
+    /// a wrong clock.
     #[test]
     fn times_before_the_epoch_go_backwards_rather_than_wrapping() {
         assert_eq!(utc_minutes(-1), "1969-12-31 23:59");
         assert_eq!(utc_minutes(-86_400), "1969-12-31 00:00");
     }
 
-    /// The extremes of the type do not panic. A repository with a corrupt or
-    /// hostile timestamp must not be able to take the window down; what it
-    /// renders as is unimportant, that it renders at all is not.
+    /// A corrupt or hostile timestamp must not be able to take the window down.
+    /// What it renders as is unimportant; that it renders at all is not.
     #[test]
     fn the_extremes_of_the_type_render_rather_than_panicking() {
         let low = utc_minutes(i64::MIN);
         let high = utc_minutes(i64::MAX);
         assert!(!low.is_empty());
         assert!(!high.is_empty());
-        // And they are WIDER than the column, which is the boundary the
-        // fixed-width test above deliberately does not claim to cover.
+        // And WIDER than the column — the boundary the fixed-width test below
+        // deliberately does not claim to cover.
         assert!(high.len() > "1970-01-01 00:00".len());
     }
 
-    /// Every field below the year is zero-padded, so the column is a column
-    /// rather than a ragged edge that moves as the hour or the month changes
-    /// digits.
+    /// Every field below the year is zero-padded, so the column stays a column
+    /// rather than a ragged edge as the hour or the month changes digits.
     ///
     /// Scoped to four-digit years on purpose, and the name says so: `{year:04}`
-    /// pads but does not truncate, so a timestamp near the ends of `i64`
-    /// renders a twelve-digit year and is wider than this. That is not worth
-    /// fixing — the column clips, and no repository holds such a commit — but a
-    /// test called `the_rendering_is_fixed_width` would have claimed a property
-    /// that is false and passed only because its fixture avoided the case.
+    /// pads but does not truncate, so a timestamp near the ends of `i64` renders
+    /// a twelve-digit year and is wider than this. Unfixed deliberately — the
+    /// column clips — but a name claiming fixed width would have been false.
     #[test]
     fn the_rendering_is_fixed_width_for_every_year_a_repository_holds() {
         for seconds in [0, 1_700_000_000, -86_400, 951_782_400] {

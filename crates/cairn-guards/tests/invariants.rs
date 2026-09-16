@@ -5,8 +5,9 @@ use std::path::Path;
 
 use cairn_guards::{
     code_only, code_without_strings, code_without_test_modules, configures_process_environment,
-    constructs_process_command, constructs_struct, declared_dependencies, mentions_crate,
-    reads_row_content_partially, repo_root, rust_sources, spawns_git, waits_on_work,
+    constructs_named_struct, constructs_process_command, constructs_struct, declared_dependencies,
+    implements_type, mentions_crate, reads_row_content_partially, repo_root, rust_sources,
+    spawns_git, waits_on_work,
 };
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
@@ -544,20 +545,20 @@ fn only_the_ops_module_mutates_a_repository() {
     );
 }
 
-/// Where a `git` process is built — the environment module, the only place a
-/// `std::process::Command` comes into being — and where it is run.
+/// Where a `git` process is built: the environment module, the only place a
+/// `std::process::Command` comes into being, and the only production file that may name it.
 const PROCESS_ENVIRONMENT_FILE: &str = "crates/cairn-git/src/ops/environment.rs";
-const PROCESS_SPAWN_FILE: &str = "crates/cairn-git/src/ops/cli.rs";
 const PROCESS_ENVIRONMENT_TYPE: &str = "GitEnvironment";
 
 /// Structural, not behavioural: the value is pinned by `cairn-git`'s own tests over the builder
 /// and over a stub `git` that prints its environment. This guard is against erosion of the ONE
-/// construction path those tests rely on.
+/// construction path those tests rely on. Scope: the product crates' `src/` (test modules
+/// blanked); a test fixture may spawn what it likes.
 #[test]
 fn every_git_invocation_disables_the_terminal_prompt() {
     let environment_file = Path::new(PROCESS_ENVIRONMENT_FILE);
-    let spawn_file = Path::new(PROCESS_SPAWN_FILE);
     let mut environment_source = None;
+    let mut literals_elsewhere = 0usize;
     let mut scanned = 0usize;
 
     for dir in PRODUCT_SOURCE_DIRS {
@@ -568,17 +569,16 @@ fn every_git_invocation_disables_the_terminal_prompt() {
                 continue;
             }
             let production = code_without_test_modules(&code_without_strings(&source));
-            if path != spawn_file {
-                let hits = mentions_crate(&production, "Command");
-                assert!(
-                    hits.is_empty(),
-                    "{}:{} names `Command`. A process is built only in {PROCESS_ENVIRONMENT_FILE} \
-                     and run only in {PROCESS_SPAWN_FILE}, so that every git invocation gets the \
-                     explicit environment with GIT_TERMINAL_PROMPT=0; nothing else may hold one.",
-                    path.display(),
-                    hits[0]
-                );
-            }
+            let hits = mentions_crate(&production, "Command");
+            assert!(
+                hits.is_empty(),
+                "{}:{} names `Command`. A process is built only in {PROCESS_ENVIRONMENT_FILE}, \
+                 by {PROCESS_ENVIRONMENT_TYPE}::command, so that every git invocation gets the \
+                 explicit environment with GIT_TERMINAL_PROMPT=0; nothing else may name, hold or \
+                 alias the type.",
+                path.display(),
+                hits[0]
+            );
             let hits = constructs_process_command(&production);
             assert!(
                 hits.is_empty(),
@@ -597,12 +597,35 @@ fn every_git_invocation_disables_the_terminal_prompt() {
                 path.display(),
                 hits[0]
             );
+            // Private fields are visible to a descendant module, so the literal is looked for
+            // everywhere, not just in the file that declares the type — and so is an impl block,
+            // which is where a `Self { .. }` for it could be written.
+            let hits = constructs_named_struct(&production, PROCESS_ENVIRONMENT_TYPE);
+            assert!(
+                hits.is_empty(),
+                "{}:{} builds a {PROCESS_ENVIRONMENT_TYPE} literal outside \
+                 {PROCESS_ENVIRONMENT_FILE}; a second literal is a way to hand \
+                 {PROCESS_ENVIRONMENT_TYPE}::command an environment that skips the ALWAYS table.",
+                path.display(),
+                hits[0]
+            );
+            let hits = implements_type(&production, PROCESS_ENVIRONMENT_TYPE);
+            assert!(
+                hits.is_empty(),
+                "{}:{} implements {PROCESS_ENVIRONMENT_TYPE} outside {PROCESS_ENVIRONMENT_FILE}; \
+                 an impl block is where a `Self {{ .. }}` literal for it can be written, and every \
+                 way to build one belongs in the file the guard counts.",
+                path.display(),
+                hits[0]
+            );
+            literals_elsewhere += hits.len();
         }
     }
     assert!(
         scanned > 0,
         "the terminal-prompt guard scanned nothing; did the crates move?"
     );
+    assert_eq!(literals_elsewhere, 0);
 
     let source = environment_source.unwrap_or_else(|| {
         panic!("{PROCESS_ENVIRONMENT_FILE} is gone; the environment it builds is an invariant")
@@ -615,10 +638,11 @@ fn every_git_invocation_disables_the_terminal_prompt() {
          second way for a process to start without the explicit environment."
     );
     assert!(
-        !configures_process_environment(&production).is_empty()
-            && !mentions_crate(&production, "env_clear").is_empty(),
-        "{PROCESS_ENVIRONMENT_FILE} no longer clears the inherited environment before applying \
-         its own; whatever the launching shell had would reach git."
+        !mentions_crate(&production, "env_clear").is_empty()
+            && !mentions_crate(&production, "envs").is_empty(),
+        "{PROCESS_ENVIRONMENT_FILE} no longer both clears the inherited environment (env_clear) \
+         and applies its own (envs); one without the other hands git either the launching \
+         shell's variables or none."
     );
     assert_eq!(
         constructs_struct(&production, PROCESS_ENVIRONMENT_TYPE).len(),
@@ -627,7 +651,23 @@ fn every_git_invocation_disables_the_terminal_prompt() {
          applies the ALWAYS table — so a second literal is a way to skip GIT_TERMINAL_PROMPT=0."
     );
     assert!(
-        code_only(&source).contains("(\"GIT_TERMINAL_PROMPT\", \"0\")"),
+        !production.contains("mut self") && !production.contains("&mut Self"),
+        "{PROCESS_ENVIRONMENT_FILE} gained a method that mutates a built \
+         {PROCESS_ENVIRONMENT_TYPE}; an entry removed after construction is an entry the \
+         constructor's tests never see."
+    );
+
+    // The tuple must sit inside the ALWAYS table itself, not merely somewhere in the file.
+    let with_strings = code_only(&source);
+    let always = with_strings
+        .find("const ALWAYS")
+        .map(|at| &with_strings[at..])
+        .and_then(|rest| rest.find("];").map(|end| &rest[..end]))
+        .unwrap_or_else(|| {
+            panic!("{PROCESS_ENVIRONMENT_FILE} no longer declares a `const ALWAYS` table")
+        });
+    assert!(
+        always.contains("(\"GIT_TERMINAL_PROMPT\", \"0\")"),
         "{PROCESS_ENVIRONMENT_FILE}'s ALWAYS table no longer carries (\"GIT_TERMINAL_PROMPT\", \
          \"0\"); without it a GUI with no terminal hangs on git's own prompt."
     );
@@ -707,11 +747,25 @@ fn the_process_environment_matcher_catches_the_shapes_it_claims() {
             "the struct matcher missed the {shape} shape: {source:?}"
         );
     }
+    assert_eq!(
+        constructs_struct("let (a, b) = (Self { x }, Self { x });", "GitEnvironment").len(),
+        2,
+        "the struct matcher counts lines, not literals"
+    );
     for (shape, source) in [
         ("a declaration", "pub struct GitEnvironment {"),
         ("an inherent impl", "impl GitEnvironment {"),
         ("a trait impl", "impl PartialEq for GitEnvironment {"),
         ("a return type", "fn new() -> Self {"),
+        ("a reference return type", "fn get(&self) -> &Self {"),
+        (
+            "a mutable reference return type",
+            "fn get(&mut self) -> &mut Self {",
+        ),
+        (
+            "a lifetime-bound return type",
+            "fn get<'a>(&'a self) -> &'a GitEnvironment {",
+        ),
         ("a call", "GitEnvironment::new(f)"),
         ("another type", "GitEnvironmentBuilder { x }"),
         ("prose", "// Self { entries }\n"),
@@ -719,6 +773,40 @@ fn the_process_environment_matcher_catches_the_shapes_it_claims() {
         assert!(
             constructs_struct(source, "GitEnvironment").is_empty(),
             "the struct matcher fired on the {shape} shape: {source:?}"
+        );
+    }
+    assert_eq!(
+        constructs_named_struct("Self { x }; GitEnvironment { x }", "GitEnvironment"),
+        vec![1],
+        "the named matcher should see the named literal and not `Self`"
+    );
+
+    for (shape, source) in [
+        ("an inherent impl", "impl GitEnvironment {"),
+        ("a trait impl", "impl Clone for GitEnvironment {"),
+        (
+            "a wrapped trait impl",
+            "impl Clone\n    for GitEnvironment\n{",
+        ),
+    ] {
+        assert!(
+            !implements_type(source, "GitEnvironment").is_empty(),
+            "the impl matcher missed the {shape} shape: {source:?}"
+        );
+    }
+    for (shape, source) in [
+        ("a literal", "GitEnvironment { x }"),
+        ("a parameter", "fn f(e: GitEnvironment) {}"),
+        (
+            "a type argument",
+            "impl<'a> From<&'a GitEnvironment> for X {",
+        ),
+        ("a longer name", "impl GitEnvironmentBuilder {"),
+        ("prose", "// impl GitEnvironment {\n"),
+    ] {
+        assert!(
+            implements_type(source, "GitEnvironment").is_empty(),
+            "the impl matcher fired on the {shape} shape: {source:?}"
         );
     }
 }

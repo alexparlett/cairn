@@ -871,23 +871,78 @@ pub fn configures_process_environment(source: &str) -> Vec<usize> {
 /// Keywords a type name follows when it is being declared or implemented, not built.
 const DECLARING_KEYWORDS: &[&str] = &["struct", "impl", "for", "enum", "union", "trait"];
 
-/// 1-based lines where `source` builds a value of the struct `name` with a literal — `Name { .. }`
-/// or `Self { .. }`, including a struct update — as opposed to declaring it (`struct Name {`),
-/// implementing it (`impl Name {`, `impl T for Name {`) or naming it as a return type
-/// (`-> Self {`). A destructuring pattern `let Self { .. } = x` is read as a construction; the
-/// guard that uses this counts, so a false positive there fails loudly rather than silently.
+/// The 1-based line of every literal in `source` that builds a value of the struct `name` —
+/// `Name { .. }` or `Self { .. }`, including a struct update — one entry PER LITERAL, so two on
+/// a line are two. Not matched: declaring it (`struct Name {`), implementing it (`impl Name {`,
+/// `impl T for Name {`) or naming it as a return type (`-> Self {`). A destructuring pattern
+/// `let Self { .. } = x` is read as a construction; the guard that uses this counts, so a false
+/// positive there fails loudly rather than silently.
 pub fn constructs_struct(source: &str, name: &str) -> Vec<usize> {
+    struct_literals(source, &[name, "Self"])
+}
+
+/// [`constructs_struct`] without the `Self { .. }` spelling: for a file that does not implement
+/// the type, where `Self` means something else. Pair it with [`implements_type`].
+pub fn constructs_named_struct(source: &str, name: &str) -> Vec<usize> {
+    struct_literals(source, &[name])
+}
+
+/// 1-based lines where `source` opens an `impl` block for the type `name` — `impl Name {` or
+/// `impl T for Name {` — which is where a `Self { .. }` literal for it can be written.
+pub fn implements_type(source: &str, name: &str) -> Vec<usize> {
+    let code = code_without_strings(source);
+    let mut lines = BTreeSet::new();
+    for offset in ident_offsets(&code, name) {
+        let before = code[..offset].trim_end();
+        let implementing = ["impl", "for"].iter().any(|keyword| {
+            before.ends_with(keyword)
+                && before[..before.len() - keyword.len()]
+                    .bytes()
+                    .next_back()
+                    .is_none_or(|b| !is_ident_byte(b))
+        });
+        if implementing {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+    lines.into_iter().collect()
+}
+
+/// Whether `before` ends in `->`, allowing a reference, `mut` and a lifetime between it and the
+/// type: `-> &'a mut Name {` is a function body opening, not a literal.
+fn is_return_type_position(before: &str) -> bool {
+    let mut head = before;
+    loop {
+        let trimmed = head.trim_end();
+        let next = trimmed
+            .strip_suffix('&')
+            .or_else(|| trimmed.strip_suffix("mut"))
+            .or_else(|| {
+                let start = trimmed.rfind('\'')?;
+                trimmed[start + 1..]
+                    .bytes()
+                    .all(is_ident_byte)
+                    .then(|| &trimmed[..start])
+            });
+        match next {
+            Some(shorter) if shorter.len() < head.len() => head = shorter,
+            _ => return trimmed.ends_with("->"),
+        }
+    }
+}
+
+fn struct_literals(source: &str, idents: &[&str]) -> Vec<usize> {
     let code = code_without_strings(source);
     let bytes = code.as_bytes();
-    let mut lines = BTreeSet::new();
-    for ident in [name, "Self"] {
+    let mut literals = Vec::new();
+    for ident in idents {
         for offset in ident_offsets(&code, ident) {
             let after = skip_whitespace(bytes, offset + ident.len());
             if bytes.get(after) != Some(&b'{') {
                 continue;
             }
             let before = code[..offset].trim_end();
-            let declares = before.ends_with("->")
+            let declares = is_return_type_position(before)
                 || DECLARING_KEYWORDS.iter().any(|keyword| {
                     before.ends_with(keyword)
                         && before[..before.len() - keyword.len()]
@@ -896,11 +951,12 @@ pub fn constructs_struct(source: &str, name: &str) -> Vec<usize> {
                             .is_none_or(|b| !is_ident_byte(b))
                 });
             if !declares {
-                lines.insert(line_at(&code, offset));
+                literals.push(line_at(&code, offset));
             }
         }
     }
-    lines.into_iter().collect()
+    literals.sort_unstable();
+    literals
 }
 
 /// 1-based lines where `source` spawns a `git` subprocess, matched on the literal program name.

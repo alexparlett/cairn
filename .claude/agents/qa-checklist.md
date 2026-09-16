@@ -56,7 +56,11 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
    new call site reaching one): the operation takes `cairn_model::Confirmed` by
    value, the prompt text handed to `Confirmed::by_user` names the actual
    consequence (what is lost, how much, whether it is recoverable), and nothing
-   constructs the token outside a user acknowledgement path. Dispatch pointer:
+   constructs the token outside a user acknowledgement path. Also: no
+   `std::process::Command` reached through a spelling the terminal-prompt guard
+   cannot read — a `type` alias for it, a wrapper crate that spawns, a macro
+   that expands to one — anywhere but `crates/cairn-git/src/ops/environment.rs`;
+   the guard matches the identifier, so those are yours. Dispatch pointer:
    `destructive-ops-reviewer`.
 8. **Responsiveness** (any diff in `crates/cairn-ui/` or `crates/cairn-app/`, or
    anything changing what runs per frame or per query): no repository work on the

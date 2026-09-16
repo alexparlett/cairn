@@ -27,7 +27,7 @@ as if it exists.
 | --- | --- |
 | `docs/` | `qa-gate.md` (QA contract), `design/` intent, `prd/` per-packet specs, `systems/` as-built, `work/` in-flight dirs, `research/` evidence (deferred work goes to GitHub issues; `backlog/` is the no-remote fallback) — findings promote research → brainstorm → design/prd → systems (contract: `docs/CLAUDE.md`) |
 | `crates/cairn-model/` | The vocabulary crossing the seam: `Oid`, `RefName`, `CommitSummary`, the `Confirmed` token. Plain data, plus the pure layout algorithm that produces some of it (`LaneAssigner`). Depends on nothing — not `gix`, not `freya`, not the other crates. |
-| `crates/cairn-git/` | The repository engine: gitoxide-backed reads, and under `src/ops/` every write (planned — only the confirmation-seal placeholder exists today), most of them delegating to the `git` binary per design decision D1. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
+| `crates/cairn-git/` | The repository engine: gitoxide-backed reads, and under `src/ops/` every write, delegating to the `git` binary per design decision D1. Today `ops/` holds the subprocess backend — `GitBinary` (startup discovery and the 2.30 floor), `GitEnvironment` (the explicitly built environment, the only place a process is built) and the crate-private runner — plus the confirmation-seal placeholder; no operation mutates a repository yet. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
 | `crates/cairn-ui/` | Freya components. Render `cairn-model` values, report intent through `EventHandler` props. Must never depend on `gix` or `cairn-git`, and must never touch the filesystem. |
 | `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. |
 | `crates/cairn-guards/` | Test-only. The deterministic enforcement twins for the Invariants below; nothing depends on it. |
@@ -186,24 +186,29 @@ Project invariants:
   `GIT_ASKPASS` meant for something else, a `GIT_DIR` pointing elsewhere.
   Primary enforcement is construction: `cairn_git::ops::GitEnvironment` has one
   constructor, which copies a spelled-out roster from the parent and then
-  applies its `ALWAYS` table, and `GitEnvironment::command` is the only place a
+  applies its `ALWAYS` table; `GitEnvironment::command` is the only place a
   `std::process::Command` is built, clearing the inherited environment before
-  applying that one. Twin against erosion:
-  `every_git_invocation_disables_the_terminal_prompt` — no production file but
-  `crates/cairn-git/src/ops/environment.rs` and `ops/cli.rs` names `Command`;
-  only `environment.rs` builds one or calls an environment-setting method
-  (`env`, `envs`, `env_clear`, `env_remove`); it holds exactly one
-  `GitEnvironment` literal, calls `env_clear`, and its `ALWAYS` table carries
+  applying that one; and the runner that takes it is crate-private, so nothing
+  outside `ops` can run a raw verb. Twin against erosion:
+  `every_git_invocation_disables_the_terminal_prompt`, over the product crates'
+  `src/` with test modules blanked (a test fixture may spawn what it likes) —
+  no production file but `crates/cairn-git/src/ops/environment.rs` names
+  `Command` (so an alias is caught on its import line), builds one, calls an
+  environment-setting method (`env`, `envs`, `env_clear`, `env_remove`), writes
+  a `GitEnvironment { .. }` literal or opens an `impl` block for the type; that
+  file builds exactly one `Command` and one `GitEnvironment` literal, calls
+  both `env_clear` and `envs`, has no `&mut self` method, and its `ALWAYS`
+  table — the table itself, not the file — carries
   `("GIT_TERMINAL_PROMPT", "0")`. Matcher self-test:
   `the_process_environment_matcher_catches_the_shapes_it_claims`. The VALUE is
   pinned behaviourally in `cairn-git`: the builder's tests spell out the whole
-  variable set, and `crates/cairn-git/tests/git_binary.rs` runs a stub `git`
-  that prints what it was given. Residual review obligations: whether the
-  inherited roster is RIGHT — each entry is a deliberate leak of the user's
-  environment to git, and a missing one breaks a credential helper that
-  worked — is `destructive-ops-reviewer`'s; and the matcher reads spellings, so
-  a `Command` reached through a type alias or a wrapper crate is
-  `qa-checklist`'s to catch.
+  variable set, and `ops/cli.rs`'s stub tests run a `git` that prints what it
+  was given. Residual review obligations: whether the inherited roster is
+  RIGHT — each entry is a deliberate leak of the user's environment to git,
+  and a missing one breaks a credential helper that worked — is
+  `destructive-ops-reviewer`'s (its check 9); and the matcher reads
+  identifiers, so a `Command` reached through a `type` alias, a wrapper crate
+  or a macro is `qa-checklist`'s to catch (its item 7).
 - **Destructive operations take `cairn_model::Confirmed` by value, and the token
   carries the prompt the user saw.** Primary enforcement is the type: the field is
   private and there is exactly one constructor. Twin against erosion:

@@ -20,7 +20,9 @@ yourself entirely on the half no check can reach — whether the English handed 
 
 Apply `docs/qa-gate.md`'s Review diff scope rule. If nothing under
 `crates/cairn-git/src/ops/` changed and no changed file constructs a `Confirmed`
-or calls into `ops`, report "out of scope" and STOP.
+or calls into `ops`, report "out of scope" and STOP. A change to the `git`
+subprocess environment (`crates/cairn-git/src/ops/environment.rs`) IS in scope
+even when no operation changed: check 9 owns it.
 
 ## Checks
 
@@ -63,6 +65,16 @@ WARNING tier:
 8. **Operation not recorded.** A destructive operation whose `Performed` record
    omits the acknowledged prompt, so the operation log cannot later show the user
    what they agreed to.
+9. **The environment roster is wrong.** `GitEnvironment`'s `INHERITED` table in
+   `crates/cairn-git/src/ops/environment.rs` is the whole environment every
+   `git` sees; the guard pins that it is the ONLY environment, not that it is
+   the right one. For each entry added: is it something git, a credential
+   helper, ssh or a hook needs, with the reason beside it? For each entry
+   removed, or never present: does its absence break a setup that works in the
+   user's shell — a keyring helper without its session bus, an agent without its
+   socket, a corporate CA bundle? A `GIT_*` variable inherited is a finding on
+   its own: an override the launching shell set is exactly what the roster
+   exists to keep out. Evidence: quote the entry and the reason.
 
 Distinguish what the diff CHANGED from what it inherited: pre-existing debt next
 to the change is a note, not a blocking finding. If a check here duplicates a

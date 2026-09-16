@@ -471,6 +471,17 @@ mod tests {
             std::sync::Arc::ptr_eq(&next.cursor.unwrap().tips, &cursor.tips),
             "the next cursor did not carry the same tips on"
         );
+
+        let mut session = repo.history_session(&request).unwrap();
+        assert!(
+            std::sync::Arc::ptr_eq(&session.cursor().tips, &cursor.tips),
+            "a session resumed from the cursor built its own copy of the tips"
+        );
+        let paged = session.next_page(2, &CancelSignal::new()).unwrap();
+        assert!(
+            std::sync::Arc::ptr_eq(&paged.cursor.unwrap().tips, &cursor.tips),
+            "a session's page did not carry the same tips on"
+        );
     }
 
     /// Reporter. Env: `CAIRN_BENCH_REPO`, `CAIRN_BENCH_LIMIT`.

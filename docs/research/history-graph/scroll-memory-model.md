@@ -565,13 +565,21 @@ CAIRN_BENCH_REPO=<path> cargo test -p cairn-git --release --lib -- \
   --ignored --nocapture measures_layout
 ```
 
-Repositories measured, all local, all real, none shallow except `hyprland`:
+Repositories measured, all local, all real, none shallow:
 `freya` (2,896 commits, 91 refs), `strata` (1,081 commits, 176 refs — the most
 branch-dense in the sample), `cairn` itself (43 commits, 4 refs), `hyprland`
 (535 commits, 20 refs), `dungeon-siege-reborn` (71, 3), `nct6687d` (168, 7), and
 the bare clone cargo keeps at
-`~/.cargo/git/db/freya-23bd2b0bd50361d3` (2,540 commits, 4 refs). None carries a
-commit-graph file.
+`~/.cargo/git/db/freya-23bd2b0bd50361d3` (2,540 commits, 4 refs).
+
+Corrected 2026-09-16 after QA: an earlier draft of this paragraph said none of
+these carries a commit-graph file and that `hyprland` was shallow. Both were
+wrong. `freya`, `strata` and `hyprland` each carry a split commit-graph chain
+under `.git/objects/info/commit-graphs/`, written before these measurements, and
+`hyprland` is a full 535-commit clone. Neither error changes a layout
+distribution — a commit-graph accelerates lookup, it does not change which lanes
+are open — but Findings 1-5 treat the file as load-bearing for *walk cost*, so a
+reader would otherwise draw a wrong inference about these numbers.
 
 ### Finding 24 — phase 01's 361 segments per row does not reproduce on any real repository, in the order Cairn actually walks
 
@@ -607,7 +615,10 @@ counted; `git 2.55.0`) against Cairn's open lanes per row:
 | dungeon-siege-reborn | 2 / 2 | 2 / 2 |
 | cairn | 1 / 1 | 1 / 1 |
 
-Cairn is within two lanes of git on every repository, in both directions. The two
+Cairn is never wider than git, and matches it within four lanes at the extreme
+(freya: git p99 11 / max 13 against Cairn 7 / 9) and within two everywhere else.
+Corrected 2026-09-16 after QA, which caught the original "within two lanes on
+every repository" being contradicted by the first row of this very table. The two
 counts are not identical by construction — git's is read off the commit rows only
 and ignores the `/` and `\` continuation rows, while Cairn's counts every lane
 any segment on the row touches — so the agreement is about magnitude, and the
@@ -695,8 +706,20 @@ fixed (`Oid` + `Lane` + `Vec` header) plus 24 B per `EdgeSegment`:
 | cairn | 118.9 | 120 | 1.1 MB | 11.4 MB | 57.2 MB |
 
 The worst real repository in the sample retains **126 MB of layout for a
-500,000-commit history** — against the ~5.4 GB the packet reasoned from, a
-factor of 43. Using the mean rather than p99 halves it again. For contrast, the
+500,000-commit history**, against roughly 3.8 GB for the same extrapolation in
+`GraphOrder` on strata — a factor of about 30, and the order of magnitude the
+packet actually reasoned from. Using the mean rather than p99 halves it again.
+
+Two corrections from QA, 2026-09-16. The packet's inherited "~5.4 GB" is quoted
+in four places and derived in none: 361 segments at 24 B is 8,736 B per row,
+which is 4.37 GB across 500k rows, not 5.4. This record compares against its own
+measured `GraphOrder` figure instead, and the multiplier is ~30x rather than the
+43x an earlier draft claimed. Separately, every byte figure here is computed from
+`edges.len()`, while a `GraphRow` retains `edges.capacity()` — the assigner grows
+these vectors by pushing, so capacity is the next power of two and a repaint
+pushes more later. **Real retained layout is up to about twice the figures in
+this table**: call it 126-250 MB at 500k, not 126 MB. The conclusion is unmoved;
+the honest number is the larger one. For contrast, the
 same extrapolation in `GraphOrder` on strata is 3,776.6 MB, which is the order of
 magnitude the packet actually had.
 

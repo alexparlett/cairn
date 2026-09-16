@@ -34,9 +34,13 @@ STEP 2  Measure O2, then implement.
         5. THE ASSIGNER'S WINDOW (new scope, added 2026-09-15). Phase 01 shipped
            an unbounded `LaneAssigner`: it retains every row it emits plus an
            index into them, and each row carries one segment per open lane, so
-           retained state grows as rows x open lanes — measured at 361 segments
-           per row and ~5.4 GB across 500k rows on a 200-branch history with no
-           clock skew at all. R1.3 has been narrowed to match reality and R1.2's
+           retained state grows as rows x open lanes. CORRECTED 2026-09-16: the
+           361-segments-per-row figure this step originally cited was an artefact
+           of breadth-first arrival order in a fixture whose branches never
+           merged. Measured on seven real repositories in the default
+           `CommitTime` order the p99 is 8 segments per row. The window is a load
+           budget, not a memory mitigation — see
+           `docs/research/history-graph/scroll-memory-model.md` Part D. R1.3 has been narrowed to match reality and R1.2's
            finality sentence repaired; read both in `docs/prd/history-graph.md`
            before designing. Give the assigner a bounded window it OWNS: a window
            imposed from outside cannot stop it reaching back past the boundary,

@@ -103,13 +103,21 @@ impl Default for LaneAssigner {
 impl LaneAssigner {
     /// How many rows [`LaneAssigner::new`] keeps.
     ///
-    /// Committer-date skew is local: a rebase, an import or a clock a few
-    /// minutes out reorders neighbours, not halves of a history. A thousand
-    /// rows is far wider than any skew observed in the evidence record, and it
-    /// bounds what a busy history retains to megabytes rather than gigabytes —
-    /// a 200-branch history measured at 361 segments per row costs about 9 MB
-    /// here against 5.4 GB unbounded across 500k rows. A caller that knows its
-    /// repository better sets its own with [`LaneAssigner::with_window`].
+    /// This is a **load budget**, not a memory mitigation. Committer-date skew
+    /// is local: a rebase, an import or a clock a few minutes out reorders
+    /// neighbours, not halves of a history, so a thousand rows is far wider than
+    /// any skew in the evidence record. Mature clients bound the same thing at a
+    /// similar scale — Git Graph and lazygit both load 300 rows and page 100.
+    ///
+    /// It is deliberately NOT derived from a worst case. Measured on seven real
+    /// repositories in the default commit-time order, layout costs 264 B per row
+    /// at p99 on the widest of them; the far larger figures an earlier version of
+    /// this comment cited came from breadth-first arrival order over a fixture
+    /// whose branches never merged. See
+    /// `docs/research/history-graph/scroll-memory-model.md` Part D.
+    ///
+    /// A caller that knows its repository better sets its own with
+    /// [`LaneAssigner::with_window`].
     pub const DEFAULT_WINDOW: usize = 1024;
 
     pub fn new() -> Self {

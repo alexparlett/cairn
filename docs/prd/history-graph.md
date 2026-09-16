@@ -27,57 +27,34 @@ infrastructure built without a consumer gets the interface wrong.
 ### R1 — Lane assignment is incremental and stable
 
 - R1.1 Given commits in newest-first order with their parent ids, the assigner
-  emits one row per commit carrying its lane index and the edge segments crossing
-  that row.
+  emits one **row** per commit carrying its lane index and the edge segments
+  crossing that row. A row is the unit the view renders, and is not by definition
+  a commit — see R6.
 - R1.2 Processing further commits never changes a **lane index** already
-  emitted. Edge *segments* may be repainted for rows still inside the assigner's
-  window: a late-joining parent (R1.4) has to be able to draw the line that
-  connects it, and the view re-renders visible rows from the model on every
-  change regardless, so allowing this costs nothing. A row evicted from the
-  window is final — which is enforceable precisely because the window belongs to
-  the assigner (R1.3): it cannot repaint what it no longer holds.
-- R1.3 Retained state is proportional to **the window size times the number of
-  lanes in play across it** — open lanes plus the lanes concurrent upward
-  repaints are running down — never to the number of commits walked. The
-  assigner owns a bounded window of rows: it retains the rows inside it and an
-  index into them, because R1.2's repaint cannot add a segment to a row it has
-  dropped, and each retained row carries one segment per lane open across it.
-  Work per commit is amortised constant while parents arrive in order; a parent
-  delivered early costs O(span x segments in the span), bounded by the window.
+  emitted. Edge *segments* may be repainted for any row the assigner still holds:
+  a late-joining parent (R1.4) has to be able to draw the line that connects it,
+  and the view re-renders visible rows from the model on every change regardless,
+  so allowing this costs nothing.
+- R1.3 The assigner owns a bounded window. It holds at most `window` rows plus an
+  index into them, so retained state is proportional to that window times the
+  lanes in play across it, never to the number of commits walked. Work per commit
+  is amortised constant while parents arrive in order; a parent delivered early
+  costs O(span x segments in the span), bounded by the window.
 
-  The second term is not decoration. A line drawn back to a parent the walk
-  delivered early runs down a lane chosen by the assigner's `free_lane_across`,
-  which is not in its lane table, so an "open lanes" term alone does not count
-  it. With overlapping such lines, per-row segments are O(window) and retained
-  state O(window squared) — on a history with no branching whatsoever. Phase 02
-  measured window 256 with one late parent per row at 129 segments on a single
-  row, 130 lanes wide, 24,768 retained. Reworded 2026-09-15 to say so, after
-  phase 02 found the first wording understated its own worst case.
+  The window is a **load budget**, not a memory mitigation — sized like the
+  clients that ship one (Git Graph and lazygit both load 300 and page 100), not
+  derived from a worst case. Measured cost on real repositories in the order
+  Cairn actually walks is 264 B per row at p99 on the widest of seven, which is
+  ~126-250 MB extrapolated to 500k commits. The much larger figures this
+  requirement once carried were an artefact of breadth-first arrival order in a
+  fixture whose branches never merged, not a property of any repository. Evidence
+  and method: `docs/research/history-graph/scroll-memory-model.md` Part D.
 
   Known blind spot, carried and accepted for this packet: beyond
   `window + remembered` rows of skew the assigner cannot distinguish a parent
-  already gone from one still to come.
-
-  Corrected 2026-09-15. An earlier draft of this clause claimed phase 03's live
-  walk session would close the blind spot exactly, because the walk "already
-  holds the seen-set that answers it". That was wrong, and phase 03 proved it:
-  gitoxide keeps the seen-set inside the `Box<dyn Iterator>` behind
-  `gix::revision::Walk` and exposes no accessor for it
-  (`gix-0.87.1/src/revision/walk.rs`, module `iter_impl`), so reading it would
-  mean keeping a second walk-sized copy — the shape this requirement exists to
-  forbid. The blind spot stands exactly as phase 02 left it.
-
-  Narrowed, 2026-09-15, from "proportional to the number of simultaneously open
-  lanes, never to the number of commits seen". Phase 01 measured the shipped
-  assigner at 361 segments per row and ~5.4 GB across 500k rows on a 200-branch
-  history with no clock skew at all — the ordinary "show all branches" view, not
-  a pathological one. The original wording was never achievable alongside R1.2's
-  repaint: an assigner that can add a segment to an already-emitted row must
-  still be holding it. A window is what makes both true at once, and it has to
-  live *inside* the assigner, because one imposed from outside cannot stop the
-  assigner reaching back past it. Phase 01's assigner is unbounded and is the
-  input to that work; **phase 02 owns the window**. Decision recorded in
-  `docs/work/history-graph/progress.md`.
+  already gone from one still to come. It fires on 0-0.2% of rows in the default
+  order and is not closable from gitoxide's walk, which keeps its seen-set behind
+  a boxed iterator with no accessor.
 - R1.4 The assigner is **total over arrival order**: a commit whose lane was never
   reserved — the normal consequence of committer-date skew, per the evidence
   record — is placed, not rejected, and never mis-parented. Which placement
@@ -147,6 +124,29 @@ one today. The minimum that unblocks it, deliberately not more:
   NOT be decided here — a command-line argument is chosen precisely because it
   commits to nothing.
 
+### R6 — A row is a list entry, not by definition a commit
+
+Added 2026-09-16, before the view was built, because this is the one shape that
+is expensive to change once consumers exist.
+
+- R6.1 The history is a sequence of rows. Every row carries its lane and edge
+  segments (R1.1) plus a **stable identity**: what selection survives on, and what
+  a detail pane is opened from.
+- R6.2 A row's content is a commit in this packet, and the type admits content
+  that is not one. The working-tree row that Sourcetree shows above the first
+  commit sits *in* the graph — it occupies a lane and lines pass it — so it is
+  laid out by the engine, not decorated by the view. `refs-and-status` adds that
+  variant; this packet emits only commits. Deciding it now costs one enum;
+  deciding it after the view, the worker and the app wiring consume rows costs
+  all three.
+- R6.3 Decoration a row may later carry — ref labels, ahead/behind counts,
+  whether the commit is on the checked-out branch — is added as **fields** by the
+  packets that own them. Fields are additive and keep every consumer compiling,
+  so none of them are reserved here.
+- R6.4 Rows are not required to be one-to-one with commits. Collapsing merges
+  (Fork's remedy for a wide graph, measured taking 21 lanes to 3) removes rows
+  without removing commits, so the engine emits rows, not commits.
+
 ## Product rules
 
 - The graph is the default view when a repository opens.
@@ -172,7 +172,8 @@ here and does not restate them.
 | A6 | No engine call is reachable from a render path | `responsiveness-reviewer`, plus the existing dependency-seal guards |
 | A7 | Scrolling a repository with at least 100k commits keeps frame time bounded and memory flat | a measured check, run by hand against a named real repository, with numbers recorded in `progress.md` |
 | A8 | The app opens the repository named on the command line, defaults to the working directory, and fails with a clear message when given a path outside a repository | integration test over the argument handling, plus a manual run |
-| A9 | `scripts/gate.sh` passes | the gate |
+| A9 | A row's content is expressible as something other than a commit, and every consumer matches on it rather than assuming one | unit test in `cairn-model`, plus the view's row component |
+| A10 | `scripts/gate.sh` passes | the gate |
 
 A8 is the new one — R5 was missing from the first draft of this PRD, which
 specified a view with nothing to point it at. A7 is deliberately not automated. A frame-time assertion in CI would be flaky and

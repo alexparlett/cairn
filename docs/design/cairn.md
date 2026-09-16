@@ -176,6 +176,14 @@ lanes rather than to history length, and â€” because the walk is newest-first â€
 appending more commits never renumbers a lane already emitted. That stability is
 what lets rows stream into a virtualised list.
 
+The `history-graph` packet narrowed the middle clause in practice: the assigner
+owns a bounded window of rows so that a line to a late-arriving parent has
+something to repaint, which makes retained state proportional to that window
+times the lanes across it. Measurement put the real cost far below what the
+packet first feared, and lane *width* on real repositories at single digits.
+Spec: `docs/prd/history-graph.md` R1. Evidence:
+`docs/research/history-graph/scroll-memory-model.md`.
+
 It belongs in `cairn-git`, not `cairn-ui`: the lane is part of the answer, so it
 is `cairn-model` vocabulary. A component that computed lanes would need the whole
 history in memory, which is the failure this design exists to avoid.

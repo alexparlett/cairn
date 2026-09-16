@@ -11,11 +11,13 @@ dependency graph, and nothing outside `cairn-git::ops` can mutate a repository.
 
 Status today: the workspace, the seam, the gate and the guard suite exist and are
 green. The first repository read exists — `cairn-git`'s bounded, resumable history
-query, feeding the lane assigner in `cairn-model` — and it is now wired to the
-window through the worker boundary in `crates/cairn-app/src/worker/`, so the
-application opens the repository it is run in and lists its commits off the UI
-thread. The list is not virtualized and draws no lanes yet, and no command mutates
-a repository. Entries marked (planned) below name the canonical home something
+query, feeding the lane assigner in `cairn-model` — and it is wired to the window
+through the worker boundary in `crates/cairn-app/src/worker/`. The application
+opens the repository named on its command line (or the working directory), draws
+its history as a virtualized graph with lanes, edges and four columns, pages as
+you scroll, and does all of it off the UI thread. No command mutates a
+repository, and there is no repository picker: one repository, named on the
+command line. Entries marked (planned) below name the canonical home something
 WILL have so docs and implementation converge on the same names — never cite one
 as if it exists.
 
@@ -197,10 +199,22 @@ Project invariants:
   reviewer's: whether a page is small enough that the work between yields is
   short, and whether a list is virtualized.
 
-Not yet mechanically pinned — state these when they come up, and add the twin with
-the change that makes them load-bearing:
+- **No unbounded list renders without virtualization.** A history is however long
+  somebody's repository is, so a view that builds one element per row of it is
+  unbounded work per frame. Twin: `a_history_sized_list_renders_through_a_virtualizing_view`,
+  which forbids a render file from building `children` out of a collection of
+  `HistoryRow`s, or putting them in a plain `ScrollView`, unless it names
+  `VirtualScrollView` — and fails if nothing names it at all, so the view cannot
+  be swapped for the unbounded one by accident.
 
-- No unbounded list renders without virtualization.
+  **Residual obligation the guard structurally cannot express**, stated rather
+  than implied and owned by `responsiveness-reviewer`: that the virtualizing view
+  really does build only the items inside its viewport is a property of Freya,
+  not of Cairn's source. It is checked today by a recorded measurement — see the
+  phase-04 entry in `docs/work/history-graph/progress.md`, which counted builder
+  invocations per render at 1,000 and at 100,000 rows and found them identical.
+  Pinning that mechanically needs a `freya-testing` headless component test, and
+  `freya-testing` is a dependency addition, which is a user decision.
 
 ## Conventions
 

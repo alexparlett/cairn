@@ -237,6 +237,74 @@ fn the_ui_thread_never_waits_on_repository_work() {
 }
 
 #[test]
+fn a_history_sized_list_renders_through_a_virtualizing_view() {
+    let worker = Path::new(WORKER_DIR);
+    let mut rendering_rows = 0usize;
+    let mut virtualizing = 0usize;
+
+    for dir in RENDER_SOURCE_DIRS {
+        for (path, source) in rust_sources(dir) {
+            if path.starts_with(worker) {
+                continue;
+            }
+            let code = code_only(&source);
+            let names_rows = !mentions_crate(&code, "HistoryRow").is_empty();
+            let virtualizes = !mentions_crate(&code, "VirtualScrollView").is_empty();
+            if virtualizes {
+                virtualizing += 1;
+            }
+            if !names_rows {
+                continue;
+            }
+            rendering_rows += 1;
+
+            // Building one element per entry of a history-sized collection is
+            // the shape this forbids. `children` is how a list of elements is
+            // handed to a container, so a file that names both the rows and
+            // that call is rendering the history — and must be doing it through
+            // a view that builds only what is visible.
+            let builds_children = mentions_crate(&code, "children");
+            assert!(
+                builds_children.is_empty() || virtualizes,
+                "{}:{} builds children from a collection that holds `HistoryRow`s, and does not \
+                 name `VirtualScrollView`. A history is however long somebody's repository is; \
+                 rendering one element per row of it is the unbounded list this invariant \
+                 forbids (CLAUDE.md, Invariants; PRD R4.1).",
+                path.display(),
+                builds_children[0]
+            );
+
+            // Swapping the virtualizing view for the plain one is the other
+            // half of the same regression, and it would leave `children`
+            // unmentioned because `ScrollView` takes its children the same way
+            // a `rect` does.
+            let plain = mentions_crate(&code, "ScrollView");
+            assert!(
+                plain.is_empty() || virtualizes,
+                "{}:{} puts `HistoryRow`s in a `ScrollView`, which lays out every child whether \
+                 it is on screen or not. The history list uses `VirtualScrollView` (CLAUDE.md, \
+                 Invariants; PRD R4.1).",
+                path.display(),
+                plain[0]
+            );
+        }
+    }
+
+    assert!(
+        rendering_rows > 0,
+        "no file under {RENDER_SOURCE_DIRS:?} names `HistoryRow`. Either the history view moved, \
+         in which case move this guard with it, or nothing renders history any more and this \
+         guard is checking an empty set."
+    );
+    assert!(
+        virtualizing > 0,
+        "nothing under {RENDER_SOURCE_DIRS:?} names `VirtualScrollView`. The history list is the \
+         one unbounded list Cairn renders, and it is virtualized; if that changed, it changed by \
+         accident."
+    );
+}
+
+#[test]
 fn destructive_operations_are_sealed_behind_the_confirmation_token() {
     let (_, confirm) = rust_sources("crates/cairn-model/src")
         .into_iter()

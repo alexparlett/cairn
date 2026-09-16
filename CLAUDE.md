@@ -153,16 +153,17 @@ Project invariants:
 
 - **Each crate depends only on its allowlist.** Twin: `layer_dependencies_are_allowlisted`
   in `crates/cairn-guards/tests/invariants.rs`. A crate with no row there fails,
-  so adding a layer cannot happen by accident. **Residual obligation:** the guard
-  reads `[dependencies]` only, and the seal scan below walks `crates/*/src` only,
-  so a `[dev-dependencies]` table (`freya-testing` in `cairn-ui` and `cairn-app`)
-  and the code under `crates/*/tests/` are neither allowlisted nor seal-scanned —
-  a test-only dependency on a sealed crate is `qa-checklist`'s to catch.
+  so adding a layer cannot happen by accident. Every dependency table counts —
+  `[dependencies]`, `[build-dependencies]`, `[dev-dependencies]` and their
+  `[target.*]` forms, renames seen through — and a dev-dependency beyond the
+  crate's row needs its own `TEST_ONLY_ALLOWLIST` row (`freya-testing` in
+  `cairn-ui` and `cairn-app`).
 - **`cairn-ui` and `cairn-model` never name `gix` or `cairn_git`; `cairn-git`
   never names `freya` or `cairn_ui`.** Manifests alone would miss a re-export, so
   the twin reads source: `layers_never_name_the_crates_they_are_sealed_from`,
-  matching aliased imports and qualified paths, with the debris hook echoing the
-  same rule in milliseconds.
+  over the whole crate directory (`src/` and `tests/` alike), matching aliased
+  imports and qualified paths, with the debris hook echoing the same rule in
+  milliseconds.
 - **Only `cairn-git/src/ops/` mutates a repository**, whether through gitoxide or
   a `git` subprocess. Twin: `only_the_ops_module_mutates_a_repository`.
 - **Destructive operations take `cairn_model::Confirmed` by value, and the token

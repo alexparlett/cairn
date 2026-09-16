@@ -317,11 +317,17 @@ headless component test in `crates/cairn-ui/tests/history_list.rs`. The three th
 SOURCE each assert a nonzero scanned-file count per directory, so a renamed
 directory reddens rather than passing on an empty walk — the two new twins
 inline, and `layers_never_name_the_crates_they_are_sealed_from` through
-`cairn_guards::rust_sources`. `layer_dependencies_are_allowlisted` scans no
-source at all: it walks `crates/*/Cargo.toml`, asserts it saw a nonzero number
-of CRATES, and additionally fails when an allowlist row names a crate that does
-not exist, which is the same "cannot pass on an empty walk" property in the
-shape that file set allows.
+`cairn_guards::rust_sources`. The seal scan reads each sealed crate's whole
+directory, so `tests/` is held to the same seal as `src/`
+(`the_seal_scan_reads_tests_as_well_as_src`). `layer_dependencies_are_allowlisted`
+scans no source at all: it walks `crates/*/Cargo.toml`, reads every dependency
+table through `cairn_guards::declared_dependencies` — dev, build and
+`[target.*]` tables included, so `freya-testing` needs its `TEST_ONLY_ALLOWLIST`
+row and a test-only `gix` under `cairn-ui` fails
+(`the_allowlist_check_rejects_a_sealed_crate_in_every_dependency_table`) —
+asserts it saw a nonzero number of CRATES, and additionally fails when an
+allowlist row names a crate that does not exist, which is the same "cannot pass
+on an empty walk" property in the shape that file set allows.
 
 Three matchers stand behind them — `cairn_guards::waits_on_work`,
 `cairn_guards::mentions_crate` (the sealed-crate check, and the worker half of

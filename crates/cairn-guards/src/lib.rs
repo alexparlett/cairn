@@ -1,5 +1,6 @@
 //! Matchers and repository walking for the invariant guards.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// Resolved from this crate's manifest, not the process working directory.
@@ -52,6 +53,47 @@ fn collect_rust(dir: &Path, out: &mut Vec<PathBuf>) {
             out.push(path);
         }
     }
+}
+
+/// The crates a manifest declares, by package name (a `package = ".."` rename is seen through).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct DeclaredDependencies {
+    /// `[dependencies]` and `[build-dependencies]`, including `[target.*]` tables.
+    pub shipped: BTreeSet<String>,
+    /// `[dev-dependencies]`, including `[target.*]` tables.
+    pub test_only: BTreeSet<String>,
+}
+
+pub fn declared_dependencies(manifest: &toml::Table) -> DeclaredDependencies {
+    let mut declared = DeclaredDependencies::default();
+    let mut scopes = vec![manifest];
+    if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+        scopes.extend(targets.values().filter_map(toml::Value::as_table));
+    }
+    for scope in scopes {
+        for (table, test_only) in [
+            ("dependencies", false),
+            ("build-dependencies", false),
+            ("dev-dependencies", true),
+        ] {
+            let Some(entries) = scope.get(table).and_then(toml::Value::as_table) else {
+                continue;
+            };
+            for (key, spec) in entries {
+                let name = spec
+                    .get("package")
+                    .and_then(toml::Value::as_str)
+                    .unwrap_or(key)
+                    .to_owned();
+                if test_only {
+                    declared.test_only.insert(name);
+                } else {
+                    declared.shipped.insert(name);
+                }
+            }
+        }
+    }
+    declared
 }
 
 /// `source` with comments blanked, line structure preserved; string literals are kept.
@@ -700,6 +742,46 @@ mod tests {
     fn spawns_git_ignores_prose_and_unrelated_strings() {
         assert!(spawns_git("// Command::new(\"git\") is forbidden\n").is_empty());
         assert!(spawns_git("let msg = \"git is not installed\";").is_empty());
+    }
+
+    fn parsed(manifest: &str) -> toml::Table {
+        manifest.parse().unwrap()
+    }
+
+    fn names(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    #[test]
+    fn every_dependency_table_is_read_and_test_only_ones_are_told_apart() {
+        let declared = declared_dependencies(&parsed(
+            "[package]\nname = \"x\"\n\
+             [dependencies]\nfreya = \"1\"\n\
+             [build-dependencies]\ncc = \"1\"\n\
+             [dev-dependencies]\ngix = \"1\"\n\
+             [target.'cfg(unix)'.dependencies]\nlibc = \"1\"\n\
+             [target.'cfg(unix)'.dev-dependencies]\ncairn-git = { path = \"../cairn-git\" }\n",
+        ));
+        assert_eq!(declared.shipped, names(&["cc", "freya", "libc"]));
+        assert_eq!(declared.test_only, names(&["cairn-git", "gix"]));
+    }
+
+    #[test]
+    fn a_renamed_dependency_is_declared_under_its_package_name() {
+        let declared = declared_dependencies(&parsed(
+            "[dev-dependencies]\nbackend = { package = \"gix\", version = \"1\" }\n\
+             [dependencies]\nengine = { workspace = true, package = \"cairn-git\" }\n",
+        ));
+        assert_eq!(declared.test_only, names(&["gix"]));
+        assert_eq!(declared.shipped, names(&["cairn-git"]));
+    }
+
+    #[test]
+    fn a_manifest_with_no_dependencies_declares_none() {
+        assert_eq!(
+            declared_dependencies(&parsed("[package]\nname = \"x\"\n")),
+            DeclaredDependencies::default()
+        );
     }
 
     #[test]

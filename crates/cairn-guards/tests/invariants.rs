@@ -4,8 +4,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use cairn_guards::{
-    code_only, code_without_strings, code_without_test_modules, mentions_crate, repo_root,
-    rust_sources, spawns_git, waits_on_work,
+    code_only, code_without_strings, code_without_test_modules, declared_dependencies,
+    mentions_crate, repo_root, rust_sources, spawns_git, waits_on_work,
 };
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
@@ -20,14 +20,21 @@ const DEPENDENCY_ALLOWLIST: &[(&str, &[&str])] = &[
     ("cairn-guards", &["toml"]),
 ];
 
-/// Crate source directory → crate identifiers it may never name in code.
+/// What a crate may take as a dev-dependency beyond its [`DEPENDENCY_ALLOWLIST`] row.
+const TEST_ONLY_ALLOWLIST: &[(&str, &[&str])] = &[
+    ("cairn-ui", &["freya-testing"]),
+    ("cairn-app", &["freya-testing"]),
+];
+
+/// Crate directory → crate identifiers it may never name in code, in `src/`, `tests/` or anywhere
+/// else under it.
 const FORBIDDEN_IDENTS: &[(&str, &[&str])] = &[
     (
-        "crates/cairn-model/src",
+        "crates/cairn-model",
         &["gix", "freya", "cairn_git", "cairn_ui"],
     ),
-    ("crates/cairn-ui/src", &["gix", "cairn_git"]),
-    ("crates/cairn-git/src", &["freya", "dioxus", "cairn_ui"]),
+    ("crates/cairn-ui", &["gix", "cairn_git"]),
+    ("crates/cairn-git", &["freya", "dioxus", "cairn_ui"]),
 ];
 
 /// The product crates: the guard suite's own fixtures contain the spellings they forbid.
@@ -65,10 +72,7 @@ fn every_crate_that_renders_is_on_the_render_roster() {
         let parsed: toml::Table = text
             .parse()
             .unwrap_or_else(|e| panic!("parsing {}: {e}", manifest.display()));
-        let declares_freya = parsed
-            .get("dependencies")
-            .and_then(toml::Value::as_table)
-            .is_some_and(|t| t.contains_key("freya"));
+        let declares_freya = declared_dependencies(&parsed).shipped.contains("freya");
         if declares_freya {
             let dir = entry.file_name().to_string_lossy().into_owned();
             draws.insert(format!("crates/{dir}/src"));
@@ -124,35 +128,33 @@ fn layer_dependencies_are_allowlisted() {
             .unwrap_or_default()
             .to_owned();
 
-        let allowed: BTreeSet<&str> = DEPENDENCY_ALLOWLIST
-            .iter()
-            .find(|(krate, _)| *krate == name)
-            .unwrap_or_else(|| {
-                panic!(
-                    "crate `{name}` has no row in DEPENDENCY_ALLOWLIST. Adding a layer is a \
-                     decision to surface to the user: add the row with its allowed deps."
-                )
-            })
-            .1
-            .iter()
-            .copied()
-            .collect();
-
-        let declared: BTreeSet<String> = parsed
-            .get("dependencies")
-            .and_then(toml::Value::as_table)
-            .map(|t| t.keys().cloned().collect())
-            .unwrap_or_default();
-
-        for dep in &declared {
-            assert!(
-                allowed.contains(dep.as_str()),
-                "{name} declares `{dep}`, which its allowlist in \
-                 crates/cairn-guards/tests/invariants.rs does not permit. Either the layering \
-                 changed (update CLAUDE.md and this list together) or the dependency is wrong."
-            );
-        }
+        assert!(
+            DEPENDENCY_ALLOWLIST.iter().any(|(krate, _)| *krate == name),
+            "crate `{name}` has no row in DEPENDENCY_ALLOWLIST. Adding a layer is a decision to \
+             surface to the user: add the row with its allowed deps."
+        );
+        let (shipped, test_only) = unpermitted_dependencies(&name, &parsed);
+        assert!(
+            shipped.is_empty(),
+            "{name} declares {shipped:?}, which its allowlist in \
+             crates/cairn-guards/tests/invariants.rs does not permit. Either the layering \
+             changed (update CLAUDE.md and this list together) or the dependency is wrong."
+        );
+        assert!(
+            test_only.is_empty(),
+            "{name} declares {test_only:?} as dev-dependencies, which neither its \
+             DEPENDENCY_ALLOWLIST nor its TEST_ONLY_ALLOWLIST row permits. A test-only \
+             dependency on a sealed crate is still a crossed seal."
+        );
         seen.insert(name);
+    }
+
+    for (krate, _) in TEST_ONLY_ALLOWLIST {
+        assert!(
+            seen.contains(*krate),
+            "TEST_ONLY_ALLOWLIST pins `{krate}`, but no such crate exists under crates/: remove \
+             the row or fix the path."
+        );
     }
 
     for (krate, _) in DEPENDENCY_ALLOWLIST {
@@ -163,6 +165,100 @@ fn layer_dependencies_are_allowlisted() {
         );
     }
     assert!(!seen.is_empty(), "no crates found under crates/");
+}
+
+/// (shipped, test-only) dependencies of crate `name` that its allowlist rows do not permit.
+fn unpermitted_dependencies(name: &str, manifest: &toml::Table) -> (Vec<String>, Vec<String>) {
+    let row = |list: &[(&str, &'static [&'static str])]| -> BTreeSet<&'static str> {
+        list.iter()
+            .filter(|(krate, _)| *krate == name)
+            .flat_map(|(_, deps)| deps.iter().copied())
+            .collect()
+    };
+    let shipped_allowed = row(DEPENDENCY_ALLOWLIST);
+    let test_only_allowed: BTreeSet<&str> = row(TEST_ONLY_ALLOWLIST)
+        .union(&shipped_allowed)
+        .copied()
+        .collect();
+
+    let declared = declared_dependencies(manifest);
+    let shipped = declared
+        .shipped
+        .into_iter()
+        .filter(|dep| !shipped_allowed.contains(dep.as_str()))
+        .collect();
+    let test_only = declared
+        .test_only
+        .into_iter()
+        .filter(|dep| !test_only_allowed.contains(dep.as_str()))
+        .collect();
+    (shipped, test_only)
+}
+
+#[test]
+fn the_allowlist_check_rejects_a_sealed_crate_in_every_dependency_table() {
+    let manifest = |table: &str, dep: &str| -> toml::Table {
+        format!("[package]\nname = \"cairn-ui\"\n[{table}]\n{dep} = \"1\"\n")
+            .parse()
+            .unwrap()
+    };
+    let none: Vec<String> = Vec::new();
+    let gix = vec!["gix".to_owned()];
+
+    assert_eq!(
+        unpermitted_dependencies("cairn-ui", &manifest("dependencies", "gix")),
+        (gix.clone(), none.clone())
+    );
+    assert_eq!(
+        unpermitted_dependencies("cairn-ui", &manifest("build-dependencies", "gix")),
+        (gix.clone(), none.clone())
+    );
+    assert_eq!(
+        unpermitted_dependencies("cairn-ui", &manifest("dev-dependencies", "gix")),
+        (none.clone(), gix.clone()),
+        "a test-only dependency on a sealed crate passed"
+    );
+    assert_eq!(
+        unpermitted_dependencies(
+            "cairn-ui",
+            &manifest("target.'cfg(unix)'.dev-dependencies", "gix")
+        ),
+        (none.clone(), gix),
+        "a target-scoped dev-dependency on a sealed crate passed"
+    );
+
+    assert_eq!(
+        unpermitted_dependencies("cairn-ui", &manifest("dev-dependencies", "freya-testing")),
+        (none.clone(), none.clone())
+    );
+    assert_eq!(
+        unpermitted_dependencies("cairn-ui", &manifest("dependencies", "freya-testing")),
+        (vec!["freya-testing".to_owned()], none),
+        "a test-only allowance let the crate ship the dependency"
+    );
+}
+
+#[test]
+fn the_seal_scan_reads_tests_as_well_as_src() {
+    for (dir, _) in FORBIDDEN_IDENTS {
+        let scanned = rust_sources(dir);
+        for part in ["src", "tests"] {
+            let under = Path::new(dir).join(part);
+            if part == "src" || repo_root().join(&under).is_dir() {
+                assert!(
+                    scanned.iter().any(|(path, _)| path.starts_with(&under)),
+                    "the seal scan of {dir} read nothing under {}",
+                    under.display()
+                );
+            }
+        }
+    }
+    assert!(
+        FORBIDDEN_IDENTS
+            .iter()
+            .any(|(dir, _)| repo_root().join(dir).join("tests").is_dir()),
+        "no sealed crate has a tests/ directory, so nothing here proves tests/ is read"
+    );
 }
 
 #[test]

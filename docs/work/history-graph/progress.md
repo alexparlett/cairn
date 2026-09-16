@@ -47,6 +47,46 @@ the lane assigner's vocabulary, out of R6's scope, and the first thing whoever
 lays out the working-tree row will have to face. Recorded in `state.md` rather
 than fixed here.
 
+**QA over this change.** Fresh `qa-checklist`, `test-coverage-auditor` (audit by
+reading, not by building a mutation harness) and `responsiveness-reviewer`;
+adjudication by a fresh `qa-confirm`. Six findings confirmed, seven dismissed,
+one escalated to the user.
+
+Fixed here: the rendered list was still keyed by the enumerate index while
+selection had moved to identity — zero cost while rows only append, and exactly
+wrong the day the working-tree row is PREPENDED, so `main.rs` now keys by
+`RowId` (`KeyExt::key` takes anything hashable, verified in the fork at
+`crates/freya-core/src/elements/extensions.rs`). `state.md`'s claim that nothing
+in the view depends on position was false while `.key(i)` stood, and is
+rewritten to say what is and is not positional. Two assertions in the A9 test
+re-read values the test's own helper had just constructed — no shipping code
+between them — and are gone; the docstrings that oversold what the two shape
+tests decide now say they pin a shape at compile time. `RowId` no longer derives
+`PartialOrd`/`Ord`: nothing orders it, and an ordering would assert that one
+kind of row sorts before another, which the model does not know.
+
+Dismissed, with reasons: **the initial selection changing from "row 0
+highlighted" to "nothing selected"** — index `0` was an artifact of the
+placeholder `usize`, no requirement pins an initial selection, and it is phase
+04's UX call. **"Storing `RowId::Commit(row.graph.id)` instead of the
+content-derived id would leave the suite green"** — it would not: the property
+is pinned on the real code path three times, by
+`a_row_takes_its_identity_from_its_content` (halves deliberately disagreeing)
+and by the two `row.id() == RowId::Commit(row.graph.id)` assertions that run
+against real repositories. **"`state.md` says R4.4's premise is settled but
+nothing tests it"** — the entry already assigns the untested half forward, and
+the inaccurate clause in it was the one fixed above. **A stale assert message
+saying "a different commit"** — every row this query emits IS a commit, so it
+still reports accurately. **The per-render `CommitSummary` clones and the
+unvirtualised 256-row cap** — inherited, identical before and after this change,
+and R4.1's. **`progress.md` overstating A9** — the entry scopes itself in its own
+body.
+
+Escalated, and named under "Still open for the user" in `state.md`: nothing
+stops a wildcard arm over `RowContent` once a second variant exists, and A9's
+"pinned by" column names a `cairn-ui` row component that does not and should not
+name `RowContent`.
+
 Consumers updated: `cairn-git/src/history.rs` and `src/history/session.rs`
 (construction), `cairn-git/tests/history.rs` (two helpers that match rather than
 reach), `cairn-app/src/main.rs` (renders by matching on content, selects by

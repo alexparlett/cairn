@@ -118,29 +118,28 @@ fn app() -> impl IntoElement {
         .child(
             rect()
                 .expanded()
-                .children(
-                    rows.read()
-                        .iter()
-                        .take(ROWS_DRAWN)
-                        .enumerate()
-                        .map(|(i, row)| {
-                            // A row is a list entry, not by definition a commit
-                            // (R6.2): what to draw is decided by matching its
-                            // content. The row kind `refs-and-status` adds
-                            // turns this into a compile error here, which is
-                            // the point — a view must choose what it draws for
-                            // a row that is not a commit, not silently draw
-                            // nothing.
-                            let id = row.id();
-                            match &row.content {
-                                RowContent::Commit(commit) => CommitRow::new(
-                                    commit.clone(),
-                                    EventHandler::new(move |()| selected.set(Some(id))),
-                                )
-                                .selected(*selected.read() == Some(id))
-                                .key(i),
-                            }
-                        }),
-                ),
+                .children(rows.read().iter().take(ROWS_DRAWN).map(|row| {
+                    // A row is a list entry, not by definition a commit
+                    // (R6.2): what to draw is decided by matching its
+                    // content. The row kind `refs-and-status` adds turns
+                    // this into a compile error here, which is the point —
+                    // a view must choose what it draws for a row that is
+                    // not a commit, not silently draw nothing.
+                    let id = row.id();
+                    match &row.content {
+                        RowContent::Commit(commit) => CommitRow::new(
+                            commit.clone(),
+                            EventHandler::new(move |()| selected.set(Some(id))),
+                        )
+                        .selected(*selected.read() == Some(id))
+                        // Keyed by identity, not by position: the
+                        // working-tree row goes ABOVE the first commit, and
+                        // a positional key would make its arrival look like
+                        // every row below it changing. `key` takes anything
+                        // hashable and scopes it to the element type
+                        // (freya-core `KeyExt::key`).
+                        .key(id),
+                    }
+                })),
         )
 }

@@ -50,9 +50,11 @@ pub enum RowContent {
 /// and an id assumes every row is a commit — the working-tree row has no object
 /// id at all. So identity is a sum in step with [`RowContent`]: each kind of row
 /// says what identifies it, and a holder of one only needs it to compare equal
-/// to itself. `Copy` and hashable because a view holds one per selection, not
-/// one per row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// to itself. `Copy` because a view holds one per selection and passes it into
+/// an event handler; `Hash` because a keyed list reconciles rows by it. NOT
+/// ordered: an ordering would assert that one kind of row sorts before another,
+/// which is not a fact the model knows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RowId {
     /// A commit row, identified by the commit.
     Commit(Oid),
@@ -130,27 +132,25 @@ mod tests {
         assert_ne!(row.id(), RowId::Commit(other));
     }
 
-    /// A9. A row's content is expressible as something that is not a commit,
-    /// and such a row is a whole row: it carries lane and edges like any other,
-    /// and it has an identity — one that holds no `Oid`, because the row it
-    /// stands in for (the working tree) will not have one.
+    /// A9's first half. A row's content is expressible as something that is not
+    /// a commit — pinned by construction, since a row of that kind can be built
+    /// here at all and carries a `GraphRow` like any other — and such a row has
+    /// an identity, which is the part `id()` actually decides: one that holds no
+    /// `Oid`, because the row it stands in for (the working tree) will not have
+    /// one.
     ///
     /// This is the test that fails if the shape collapses back to
     /// `HistoryRow { commit: CommitSummary, graph }`: there is nowhere to put
-    /// this row at all, and nowhere for its identity to come from.
+    /// this row at all, and nowhere for its identity to come from. It does not
+    /// reach a consumer — no other crate ever sees this variant — so A9's second
+    /// half, that consumers match rather than assume, is carried by the
+    /// exhaustive matches at those call sites and not by this test.
     #[test]
     fn a_row_can_be_about_something_that_is_not_a_commit() {
         let row = HistoryRow {
             content: RowContent::NotACommit,
             graph: graph(Oid::parse("0123456789abcdef0123456789abcdef01234567").unwrap()),
         };
-
-        assert_eq!(
-            row.graph.lane,
-            Lane::new(0),
-            "a non-commit row lost its lane"
-        );
-        assert_eq!(row.graph.edges.len(), 1, "a non-commit row lost its edges");
 
         let id = row.id();
         assert_eq!(id, RowId::NotACommit);
@@ -174,10 +174,14 @@ mod tests {
         );
     }
 
-    /// Reading a row means deciding what it is. A consumer that matches without
-    /// a wildcard is the shape R6.2 asks for — this is that match, written the
-    /// way `cairn-app` writes it, and it would stop compiling if `RowContent`
-    /// were replaced by a bare commit field.
+    /// Pins a shape, not a result: a row can be read only by matching on its
+    /// content, exhaustively and without a wildcard. It stops compiling if
+    /// `RowContent` becomes a bare commit field.
+    ///
+    /// `cairn-app` writes the one-arm form of this match, because the second
+    /// variant is test-only — this is what that match becomes when a real
+    /// variant lands, and the reason landing one is a compile error at every
+    /// consumer rather than a row silently not drawn.
     #[test]
     fn a_consumer_reads_a_row_by_matching_on_its_content() {
         let id = Oid::parse("0123456789abcdef0123456789abcdef01234567").unwrap();

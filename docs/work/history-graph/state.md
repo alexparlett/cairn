@@ -11,8 +11,26 @@ sentence are no longer TRAP-marked in the PRD — the user narrowed both on
 2026-09-15 and phase 02 built the window they describe.
 
 **Still open for the user.** Phase 02 raised three; the first is built, the other
-two stand, and phase 03 adds a correction to one of them.
+two stand, phase 03 adds a correction to one of them, and R6's QA raises one
+more.
 
+- **Nothing stops a wildcard arm over `RowContent`, and A9's "pinned by" column
+  names a component that should not name it.** Raised by `qa-checklist` and the
+  `test-coverage-auditor` over the R6 change, confirmed by `qa-confirm` as the
+  user's call, two halves. (a) A `_ =>` arm over `RowContent` is a hard error
+  today only because a single-variant enum makes it `unreachable_patterns` under
+  `-D warnings`; the moment `refs-and-status` lands variant two, both `_ =>` and
+  `if let RowContent::Commit(..)` become legal and silently undraw a row — which
+  is the exact failure the enum exists to prevent. Does "no wildcard over
+  `RowContent`" become a CLAUDE.md invariant with a source-scanning guard twin
+  in `crates/cairn-guards/tests/invariants.rs`, or a review obligation with a
+  named owner in `docs/qa-gate.md`? Either is a user decision, not an agent's.
+  (b) A9 says it is pinned by "unit test in `cairn-model`, plus the view's row
+  component", and `cairn_ui::CommitRow` takes a `CommitSummary` and never names
+  `HistoryRow` or `RowContent` — deliberately, because a component draws one
+  kind of thing. The match lives in `cairn-app`'s render instead. Proposed
+  amendment to the PRD, for the user to approve: "unit test in `cairn-model`,
+  plus the app's exhaustive render match in `cairn-app/src/main.rs`".
 - ~~**Resumption does not scale to the size A7 names.**~~ **Settled and built.**
   R2.5's live walk session shipped in phase 03: `Repository::history_session`
   holds gitoxide's walk for the life of a scroll, so paging costs O(limit). The
@@ -100,7 +118,7 @@ contract — so a later phase does not re-derive it from source.
 | `LaneAssigner::assign_all` | `cairn-model` | Lay out a whole walk in one call, returning every row — the ones the window made final and the ones left inside it. |
 | `HistoryRow` | `cairn-model` | One line of history: `content: RowContent` + `graph: GraphRow`. `id()` derives the row's identity from its content rather than storing it beside it. The pairing of the two halves is made once, by whoever built the row. (Phase 01's entry said `commit: CommitSummary`; R6 made a row a list entry, not by definition a commit.) |
 | `RowContent` | `cairn-model` | What a row is *about*: `Commit(CommitSummary)` today, and the seat the working-tree row takes when `refs-and-status` adds it. Read by matching, never by reaching for a commit field. Deliberately not `#[non_exhaustive]` — the next row kind should stop a view compiling, not be silently undrawn. |
-| `RowId` | `cairn-model` | A row's stable identity: what selection survives on and what a detail pane opens from. `RowId::Commit(Oid)` today; a sum rather than an `Oid` because the working-tree row has no object id, and not an index because an index means something else once rows arrive above it. `Copy`, `Hash`, `Ord`. |
+| `RowId` | `cairn-model` | A row's stable identity: what selection survives on and what a detail pane opens from. `RowId::Commit(Oid)` today; a sum rather than an `Oid` because the working-tree row has no object id, and not an index because an index means something else once rows arrive above it. `Copy` (a view holds one per selection) and `Hash` (a keyed list reconciles rows by it); deliberately NOT ordered. |
 | `Repository::history` | `cairn-git` | One page of history, laid out in lanes: `(&HistoryRequest, &impl Cancel) -> Result<HistoryPage, Error>`. Synchronous; the caller decides what thread it runs on. |
 | `HistoryRequest` | `cairn-git` | `from_head(limit)`, `from_commits(tips, limit)`, `resume(cursor, limit)`, `.with_order(..)`, `.with_window(..)`. The last two are ignored when resuming: both decide lane numbering, and the cursor carries what its own rows were laid out under. |
 | `HistoryOrder` | `cairn-git` | `CommitTime` (the default, by measurement — O2) or `GraphOrder`. Neither is topological; both can hand over a parent before its child. |
@@ -233,9 +251,14 @@ two-file change, not a call-site sweep.
   `worker::Request`; the guard fails the build otherwise, naming the line.
 - **Selection survives more rows arriving (R4.4) is not free.** Rows append to
   one `Vec` and the placeholder selected by index, which held only because rows
-  are appended and never renumbered. Settled by R6: `main.rs` now holds
-  `Option<RowId>` and compares identities, so nothing in the view depends on a
-  row's position any more. Phase 04 keeps that and adds keyboard reach.
+  are appended and never renumbered. Settled by R6 for selection AND for list
+  reconciliation: `main.rs` holds `Option<RowId>` and compares identities, and
+  the rendered list is keyed by `RowId` rather than by position, so a row
+  arriving ABOVE another — which is exactly what the working-tree row does —
+  neither moves the selection nor makes Freya rebuild every row below it. What
+  is still positional is the `ROWS_DRAWN` cap, which virtualisation (R4.1) owns.
+  Phase 04 keeps the identity and adds keyboard reach; nothing tests either yet,
+  because `cairn-app` has no component-test harness.
 - **The working-tree row will need a lane without an `Oid`, and `GraphRow.id`
   is one.** R6 made a row's CONTENT and IDENTITY total over non-commits;
   `cairn_model::GraphRow` — the assigner's own output — still keys a row by

@@ -1,10 +1,4 @@
 //! Repositories built by running real `git`.
-//!
-//! A fake object database proves nothing about gitoxide, so every fixture is
-//! made by the binary with its configuration isolated, and every expectation is
-//! read back out of `git`. `unwrap` is unavailable here — `clippy.toml`'s
-//! carve-out reaches `#[cfg(test)]` only, and an integration test crate is not
-//! that.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -21,8 +15,7 @@ impl Fixture {
         &self.path
     }
 
-    /// Runs `git` in the fixture and returns stdout. Any failure panics: a
-    /// half-built fixture makes every assertion after it meaningless.
+    /// Runs `git` in the fixture and returns stdout. Panics on failure.
     pub fn git(&self, args: &[&str]) -> String {
         run(&self.path, args, None)
     }
@@ -47,8 +40,7 @@ fn run(dir: &Path, args: &[&str], at: Option<i64>) -> String {
     command
         .current_dir(dir)
         .args(args)
-        // The machine's git config must not reach the fixture: a global
-        // `commit.gpgsign` would make these pass or fail per laptop.
+        // Isolate from the machine's git config, e.g. a global `commit.gpgsign`.
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_AUTHOR_NAME", "A U Thor")
@@ -87,14 +79,10 @@ fn fresh_directory(name: &str) -> PathBuf {
     path
 }
 
-/// Fixed, so a test that prints a date prints the same one tomorrow.
 const EPOCH: i64 = 1_500_000_000;
 
-/// A repository whose committer dates rise along every parent link, so
-/// commit-time and `git`'s reverse-chronological order are one sequence and a
-/// divergence is gitoxide's; the skew case is [`skewed`]. A trunk and a side
-/// branch merging back, repeated: `steps` counts ordinary commits and the merges
-/// are extra, so read every expectation back from `git`.
+/// Committer dates rise along every parent link. `steps` counts ordinary commits;
+/// the merges are extra, so read expectations back from `git`.
 pub fn braided(steps: usize) -> Fixture {
     let path = fresh_directory("braided");
     let fixture = Fixture { path };
@@ -125,8 +113,7 @@ fn commit_at(fixture: &Fixture, clock: &mut i64, message: &str) {
     );
 }
 
-/// Merges `side` into the trunk; a no-op when there is nothing to merge, which
-/// `git` reports as success without a commit.
+/// A no-op when there is nothing to merge.
 fn merge_side(fixture: &Fixture, clock: &mut i64) {
     fixture.git(&["checkout", "--quiet", "main"]);
     *clock += 60;
@@ -145,14 +132,8 @@ fn merge_side(fixture: &Fixture, clock: &mut i64) {
     );
 }
 
-/// A repository whose newest-first walk hands a parent over before its child.
-///
-/// A *fork*, not a chain: a chain is emitted in order however the dates are
-/// stamped. `stale` is stamped older than `shared`, so the walk reaches `shared`
-/// through the trunk and emits it first — what `git` produces whenever somebody
-/// rebases or has a clock a few minutes out
-/// (`docs/research/history-graph/gix-revwalk-ordering.md`, finding 2). Stamps
-/// are seconds past [`EPOCH`]:
+/// A repository whose newest-first walk hands a parent over before its child. A fork,
+/// not a chain: a chain is emitted in order however it is stamped. Stamps are seconds past [`EPOCH`]:
 ///
 /// ```text
 ///   merge  9500   parents: recent, stale
@@ -162,8 +143,7 @@ fn merge_side(fixture: &Fixture, clock: &mut i64) {
 ///   base   1000
 /// ```
 ///
-/// so commit time orders them `merge, recent, shared, stale, base`, and
-/// `shared` sits two rows above the child it belongs to.
+/// so commit time orders them `merge, recent, shared, stale, base`.
 pub fn skewed() -> Fixture {
     let path = fresh_directory("skewed");
     let fixture = Fixture { path };
@@ -198,8 +178,7 @@ fn commit_stamped(fixture: &Fixture, message: &str, seconds: i64) {
     );
 }
 
-/// Writes a commit-graph file, so a walk reads parent ids and commit times
-/// without touching the object database.
+/// Writes a commit-graph file, so a walk reads parent ids without the object database.
 pub fn write_commit_graph(fixture: &Fixture) {
     fixture.git(&["commit-graph", "write", "--reachable"]);
     // Local config: the machine may have turned commit-graph use off globally.
@@ -213,12 +192,8 @@ pub fn write_commit_graph(fixture: &Fixture) {
     );
 }
 
-/// Deletes the loose object backing each of `ids`: walking past them still works
-/// from the commit-graph, but reading one fails. A counter proves one call site;
-/// a missing object proves every call site.
-///
-/// Never pass a starting point: gitoxide reads the tips out of the object
-/// database to seed the walk's queue (`gix-traverse`'s `add_to_queue`).
+/// Deletes the loose object behind each of `ids`. Never pass a starting point:
+/// gitoxide reads the tips from the object database to seed the walk.
 pub fn delete_objects(fixture: &Fixture, ids: &[String]) {
     for id in ids {
         let (dir, file) = id.split_at(2);
@@ -228,7 +203,6 @@ pub fn delete_objects(fixture: &Fixture, ids: &[String]) {
     }
 }
 
-/// A repository with `HEAD` on a branch that has no commits.
 pub fn unborn() -> Fixture {
     let path = fresh_directory("unborn");
     let fixture = Fixture { path };

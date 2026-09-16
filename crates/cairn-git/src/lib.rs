@@ -1,7 +1,4 @@
-//! Cairn's repository engine: repository handles, history queries, and `ops`.
-//!
-//! `gix` types never appear in a public signature. Nothing here spawns threads
-//! or assumes an async runtime; callers decide where the blocking work runs.
+//! Cairn's repository engine.
 
 mod cancel;
 mod error;

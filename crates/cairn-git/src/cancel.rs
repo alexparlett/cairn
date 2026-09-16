@@ -1,11 +1,8 @@
-//! [`Cancel`] and [`CancelSignal`]: stopping a query in progress. The engine
-//! polls; the caller owns the signal and decides what sets it.
+//! Query cancellation.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// A trait rather than a concrete flag, so a test can count polls and stop the
-/// walk at a chosen commit rather than by racing it.
 pub trait Cancel {
     /// Called once per commit visited. Returning `true` abandons the query.
     fn is_cancelled(&self) -> bool;
@@ -20,8 +17,7 @@ impl CancelSignal {
         Self::default()
     }
 
-    /// Stops every query holding this signal. Idempotent, and it cannot be
-    /// unset.
+    /// Stops every query holding this signal. It cannot be unset.
     pub fn cancel(&self) {
         self.0.store(true, Ordering::Release);
     }

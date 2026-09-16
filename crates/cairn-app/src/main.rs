@@ -10,7 +10,7 @@ mod worker;
 
 use std::path::PathBuf;
 
-use cairn_model::HistoryRow;
+use cairn_model::{HistoryRow, RowContent, RowId};
 use cairn_ui::CommitRow;
 use freya::prelude::*;
 
@@ -43,7 +43,11 @@ fn app() -> impl IntoElement {
     // Whether a worker has already explained itself, so the generic "stopped"
     // line cannot overwrite a message that named a cause.
     let mut reported = use_state(|| false);
-    let mut selected = use_state(|| 0usize);
+    // Selection is held as the row's own identity, not its index: an index
+    // means something different the moment rows arrive above it, and R4.4 asks
+    // selection to survive exactly that. Nothing is selected until someone
+    // selects something.
+    let mut selected = use_state(|| None::<RowId>);
 
     // Open the repository once, and drive the worker's answers from one task.
     // The task awaits, so the event loop keeps running between pages; nothing
@@ -120,12 +124,22 @@ fn app() -> impl IntoElement {
                         .take(ROWS_DRAWN)
                         .enumerate()
                         .map(|(i, row)| {
-                            CommitRow::new(
-                                row.commit.clone(),
-                                EventHandler::new(move |()| selected.set(i)),
-                            )
-                            .selected(i == *selected.read())
-                            .key(i)
+                            // A row is a list entry, not by definition a commit
+                            // (R6.2): what to draw is decided by matching its
+                            // content. The row kind `refs-and-status` adds
+                            // turns this into a compile error here, which is
+                            // the point — a view must choose what it draws for
+                            // a row that is not a commit, not silently draw
+                            // nothing.
+                            let id = row.id();
+                            match &row.content {
+                                RowContent::Commit(commit) => CommitRow::new(
+                                    commit.clone(),
+                                    EventHandler::new(move |()| selected.set(Some(id))),
+                                )
+                                .selected(*selected.read() == Some(id))
+                                .key(i),
+                            }
                         }),
                 ),
         )

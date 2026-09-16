@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use cairn_git::{
     Cancel, CancelSignal, Error, HistoryOrder, HistoryPage, HistoryRequest, Repository,
 };
-use cairn_model::{EdgeSegment, HistoryRow};
+use cairn_model::{CommitSummary, EdgeSegment, HistoryRow, RowContent, RowId};
 
 use fixtures::Fixture;
 
@@ -33,17 +33,37 @@ fn open(fixture: &Fixture) -> Repository {
     ok(Repository::discover(fixture.path()), "opening the fixture")
 }
 
+/// The commit id a row is identified by, as hex, for comparison with what `git`
+/// printed.
+///
+/// A row is a list entry, not by definition a commit (R6.2), so reading one
+/// means deciding what it is. This packet's query emits commit rows and nothing
+/// else, so any other kind here is the query going wrong — and this match is
+/// what will say so, at compile time, when `refs-and-status` adds its variant.
+fn hex_id(row: &HistoryRow) -> String {
+    match row.id() {
+        RowId::Commit(id) => id.to_string(),
+    }
+}
+
+/// The commit a row carries, on the same terms as [`hex_id`].
+fn commit_of(row: &HistoryRow) -> &CommitSummary {
+    match &row.content {
+        RowContent::Commit(commit) => commit,
+    }
+}
+
 fn ids(page: &HistoryPage) -> Vec<String> {
-    page.rows.iter().map(|row| row.id().to_string()).collect()
+    page.rows.iter().map(hex_id).collect()
 }
 
 fn ids_of(rows: &[HistoryRow]) -> Vec<String> {
-    rows.iter().map(|row| row.id().to_string()).collect()
+    rows.iter().map(hex_id).collect()
 }
 
 fn lanes(rows: &[HistoryRow]) -> Vec<(String, usize)> {
     rows.iter()
-        .map(|row| (row.id().to_string(), row.graph.lane.index()))
+        .map(|row| (hex_id(row), row.graph.lane.index()))
         .collect()
 }
 
@@ -99,25 +119,26 @@ fn every_row_matches_what_git_reports() {
     }
 
     for row in &page.rows {
-        let id = row.id().to_string();
-        let mine: Vec<String> = row.commit.parents.iter().map(ToString::to_string).collect();
+        let id = hex_id(row);
+        let commit = commit_of(row);
+        let mine: Vec<String> = commit.parents.iter().map(ToString::to_string).collect();
         assert_eq!(Some(&mine), parents_of.get(&id), "parents of {id}");
 
         let expected_text = match text_of.get(&id) {
             Some(fields) => fields,
             None => panic!("git did not report {id} at all"),
         };
-        assert_eq!(row.commit.summary, expected_text[1], "summary of {id}");
-        assert_eq!(row.commit.author_name, expected_text[2], "author of {id}");
-        assert_eq!(row.commit.author_email, expected_text[3], "email of {id}");
+        assert_eq!(commit.summary, expected_text[1], "summary of {id}");
+        assert_eq!(commit.author_name, expected_text[2], "author of {id}");
+        assert_eq!(commit.author_email, expected_text[3], "email of {id}");
         assert_eq!(
-            row.commit.author_time.to_string(),
+            commit.author_time.to_string(),
             expected_text[4],
             "author time of {id}"
         );
         assert_eq!(
             row.id(),
-            &row.graph.id,
+            RowId::Commit(row.graph.id),
             "the two halves named different commits"
         );
     }
@@ -188,7 +209,7 @@ fn two_pages_of_n_match_one_page_of_2n_including_lanes() {
 
     for (index, (apart, together)) in split.iter().zip(&whole.rows).enumerate() {
         assert_eq!(
-            apart.commit, together.commit,
+            apart.content, together.content,
             "row {index} is a different commit"
         );
         assert!(

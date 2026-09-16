@@ -3,6 +3,57 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-16 — R6: a row is a list entry, not by definition a commit
+
+`HistoryRow { commit: CommitSummary, graph: GraphRow }` made every row a commit
+by construction. It is now `HistoryRow { content: RowContent, graph: GraphRow }`,
+with `RowContent::Commit(CommitSummary)` the only variant this packet emits, and
+`HistoryRow::id() -> RowId` (`RowId::Commit(Oid)`) as the stable identity R6.1
+asks for. `refs-and-status` owns the working-tree variant and its fields;
+nothing here invents them, and R6.3's decoration is still added as fields, not
+reserved now.
+
+**Why a sum and not a nullable commit.** A row that is not a commit is not a
+commit with missing parts — it is a different kind of entry that still occupies
+a lane and still has lines passing it. Making the *content* the sum keeps the
+graph half untouched: the working-tree row is laid out by the engine like any
+other row.
+
+**`RowContent` is deliberately not `#[non_exhaustive]`.** A wildcard arm in a
+view is a row silently not drawn; a compile error is a decision someone has to
+make, in the places that must choose what to render. That is the cost R6.2 says
+is worth paying now rather than later, so it is paid loudly.
+
+**Identity is a sum too, and derived rather than stored.** `RowId` is not an
+`Oid` (the working-tree row has none) and not an index (an index means something
+different the moment rows arrive above it). `id()` computes it from content, so
+there is no second field that can disagree with the first. `cairn-app` now holds
+`Option<RowId>` for the selection instead of a `usize`, which is R4.4's premise
+settled early and for free.
+
+**A9 is pinned by a test-only variant, and that is a deliberate call.**
+`RowContent::NotACommit` and `RowId::NotACommit` exist under `#[cfg(test)]` in
+`cairn-model` only. Without them A9 could not be decided today: every test would
+build a commit row, and collapsing the enum back into a `commit:` field would
+leave the suite green. With them,
+`a_row_can_be_about_something_that_is_not_a_commit` builds a non-commit row,
+checks it keeps its lane and edges, and reads an identity off it that carries no
+`Oid` — none of which compiles against a commit-only struct. They are invisible
+to every other crate (integration tests and all three consumers see exactly one
+variant), so they cannot become the shape `refs-and-status` inherits.
+
+**What R6 did NOT touch, on purpose.** `GraphRow.id` is still an `Oid`: it is
+the lane assigner's vocabulary, out of R6's scope, and the first thing whoever
+lays out the working-tree row will have to face. Recorded in `state.md` rather
+than fixed here.
+
+Consumers updated: `cairn-git/src/history.rs` and `src/history/session.rs`
+(construction), `cairn-git/tests/history.rs` (two helpers that match rather than
+reach), `cairn-app/src/main.rs` (renders by matching on content, selects by
+identity) and `cairn-app/src/worker/pool.rs` (`id()` returns a value now).
+`cairn-ui` was untouched: `CommitRow` renders a `CommitSummary` and never named
+a row, which is what "a component draws one kind of thing" should look like.
+
 ## 2026-09-15 — pinning phase 03's seams, and what is deliberately still open
 
 A fresh `test-coverage-auditor` went over phase 03 by executing mutations rather

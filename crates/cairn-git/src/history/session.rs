@@ -16,7 +16,7 @@
 
 use std::collections::VecDeque;
 
-use cairn_model::{GraphRow, HistoryRow, LaneAssigner, Oid};
+use cairn_model::{GraphRow, HistoryRow, LaneAssigner, Oid, RowContent};
 
 use super::{HistoryCursor, HistoryOrder, HistoryPage, HistoryRequest, Resolved, starting_points};
 use crate::{Cancel, Error, Repository};
@@ -250,7 +250,10 @@ impl HistorySession<'_> {
         };
         let commit = super::summary_of_commit(self.walk.repo, &id, &parents)?;
         self.decoded += 1;
-        self.ready.push_back(HistoryRow { commit, graph });
+        self.ready.push_back(HistoryRow {
+            content: RowContent::Commit(commit),
+            graph,
+        });
         Ok(())
     }
 }

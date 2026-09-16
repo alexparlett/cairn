@@ -14,7 +14,7 @@ mod oid;
 
 pub use confirm::Confirmed;
 pub use graph::{EdgeKind, EdgeSegment, GraphRow, Lane};
-pub use history::HistoryRow;
+pub use history::{HistoryRow, RowContent, RowId};
 pub use lane_assignment::LaneAssigner;
 pub use oid::{Oid, OidHex, OidParseError};
 

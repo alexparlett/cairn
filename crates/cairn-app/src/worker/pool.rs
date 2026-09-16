@@ -598,7 +598,7 @@ mod tests {
         let started = Instant::now();
         handle.submit(Request::OpenHistory { rows: 2 });
         let opened_on = match block_on(updates.next()) {
-            Some(Update::Rows { rows, .. }) if !rows.is_empty() => *rows[0].id(),
+            Some(Update::Rows { rows, .. }) if !rows.is_empty() => rows[0].id(),
             other => panic!("expected the first page of a scroll, got {other:?}"),
         };
         let answer = started.elapsed();
@@ -631,7 +631,7 @@ mod tests {
 
             match block_on(updates.next()) {
                 Some(Update::Rows { rows, .. }) => match rows.first() {
-                    Some(row) if row.id() == &opened_on => return,
+                    Some(row) if row.id() == opened_on => return,
                     Some(_) => never_started += 1,
                     None => ran_on += 1,
                 },

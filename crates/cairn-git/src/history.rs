@@ -14,7 +14,7 @@
 
 mod session;
 
-use cairn_model::{CommitSummary, HistoryRow, LaneAssigner, Oid};
+use cairn_model::{CommitSummary, HistoryRow, LaneAssigner, Oid, RowContent};
 
 pub use session::HistorySession;
 
@@ -366,7 +366,7 @@ impl Page {
             return; // After it ends: the walk stopped at `target`.
         };
         self.rows.push(HistoryRow {
-            commit: commit.clone(),
+            content: RowContent::Commit(commit.clone()),
             graph,
         });
     }
@@ -512,10 +512,18 @@ mod tests {
         for row in &page.rows {
             assert_eq!(
                 row.id(),
-                &row.graph.id,
+                cairn_model::RowId::Commit(row.graph.id),
                 "the two halves named different commits"
             );
-            assert!(!row.commit.summary.is_empty(), "a commit with no summary");
+            // This packet emits commit rows and nothing else (R6.2), so a row
+            // of any other kind here is the query going wrong, not a case to
+            // handle — and this match is what will say so when the variant
+            // `refs-and-status` owns arrives.
+            match &row.content {
+                RowContent::Commit(commit) => {
+                    assert!(!commit.summary.is_empty(), "a commit with no summary");
+                }
+            }
         }
     }
 

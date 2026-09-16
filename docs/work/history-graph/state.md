@@ -98,7 +98,9 @@ contract — so a later phase does not re-derive it from source.
 | `LaneAssigner::remembered` | `cairn-model` | How many commits past the window the assigner still recognises by id — 16 per row of window. Ids are cheap where rows are not, and recognising a parent that has already gone by is what stops a lane being reserved for a commit that can never arrive. |
 | `LaneAssigner::rows` / `into_rows` | `cairn-model` | The rows still inside the window, oldest first. Rows already made final are not here: `push` handed those back. |
 | `LaneAssigner::assign_all` | `cairn-model` | Lay out a whole walk in one call, returning every row — the ones the window made final and the ones left inside it. |
-| `HistoryRow` | `cairn-model` | One line of history: `commit: CommitSummary` + `graph: GraphRow`. `id()` reads the commit half. The pairing is made once, by whoever built the row. |
+| `HistoryRow` | `cairn-model` | One line of history: `content: RowContent` + `graph: GraphRow`. `id()` derives the row's identity from its content rather than storing it beside it. The pairing of the two halves is made once, by whoever built the row. (Phase 01's entry said `commit: CommitSummary`; R6 made a row a list entry, not by definition a commit.) |
+| `RowContent` | `cairn-model` | What a row is *about*: `Commit(CommitSummary)` today, and the seat the working-tree row takes when `refs-and-status` adds it. Read by matching, never by reaching for a commit field. Deliberately not `#[non_exhaustive]` — the next row kind should stop a view compiling, not be silently undrawn. |
+| `RowId` | `cairn-model` | A row's stable identity: what selection survives on and what a detail pane opens from. `RowId::Commit(Oid)` today; a sum rather than an `Oid` because the working-tree row has no object id, and not an index because an index means something else once rows arrive above it. `Copy`, `Hash`, `Ord`. |
 | `Repository::history` | `cairn-git` | One page of history, laid out in lanes: `(&HistoryRequest, &impl Cancel) -> Result<HistoryPage, Error>`. Synchronous; the caller decides what thread it runs on. |
 | `HistoryRequest` | `cairn-git` | `from_head(limit)`, `from_commits(tips, limit)`, `resume(cursor, limit)`, `.with_order(..)`, `.with_window(..)`. The last two are ignored when resuming: both decide lane numbering, and the cursor carries what its own rows were laid out under. |
 | `HistoryOrder` | `cairn-git` | `CommitTime` (the default, by measurement — O2) or `GraphOrder`. Neither is topological; both can hand over a parent before its child. |
@@ -230,9 +232,15 @@ two-file change, not a call-site sweep.
   file in `cairn-app` that needs repository data asks for it through a
   `worker::Request`; the guard fails the build otherwise, naming the line.
 - **Selection survives more rows arriving (R4.4) is not free.** Rows append to
-  one `Vec` and the placeholder selects by index, which holds only because rows
-  are appended and never renumbered. If phase 04 selects by index, say so; if it
-  selects by `Oid`, that is the safer reading.
+  one `Vec` and the placeholder selected by index, which held only because rows
+  are appended and never renumbered. Settled by R6: `main.rs` now holds
+  `Option<RowId>` and compares identities, so nothing in the view depends on a
+  row's position any more. Phase 04 keeps that and adds keyboard reach.
+- **The working-tree row will need a lane without an `Oid`, and `GraphRow.id`
+  is one.** R6 made a row's CONTENT and IDENTITY total over non-commits;
+  `cairn_model::GraphRow` — the assigner's own output — still keys a row by
+  `Oid`, deliberately untouched here because it is the assigner's vocabulary and
+  out of R6's scope. Whoever lays out the working-tree row meets that first.
 - **Every `submit` supersedes, and a superseded page delivers NOTHING.** That is
   correct — the walk stops and its progress stays in the session — but it means
   a scroll handler that submits on every tick cancels the in-flight page every

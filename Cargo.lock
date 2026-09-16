@@ -240,7 +240,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -715,6 +715,7 @@ dependencies = [
  "cairn-model",
  "cairn-ui",
  "freya",
+ "freya-testing",
 ]
 
 [[package]]
@@ -743,6 +744,7 @@ version = "0.1.0"
 dependencies = [
  "cairn-model",
  "freya",
+ "freya-testing",
 ]
 
 [[package]]
@@ -1608,6 +1610,21 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "freya-testing"
+version = "0.5.0-rc.4"
+source = "git+https://github.com/alexparlett/freya?rev=caa46f8715744cb4fdb2d36304e2b1bbeb4acdb0#caa46f8715744cb4fdb2d36304e2b1bbeb4acdb0"
+dependencies = [
+ "accesskit",
+ "freya-clipboard",
+ "freya-components",
+ "freya-core",
+ "freya-engine",
+ "futures-channel",
+ "ragnarok",
+ "torin",
 ]
 
 [[package]]
@@ -3974,7 +3991,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

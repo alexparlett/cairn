@@ -15,5 +15,8 @@ cairn-model.workspace = true
 # `engine` exposes Skia for painting the graph column; no new crate.
 freya = { workspace = true, features = ["engine"] }
 
+[dev-dependencies]
+freya-testing.workspace = true
+
 [lints]
 workspace = true

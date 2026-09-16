@@ -1,7 +1,7 @@
 # QA checklist — history-graph
 
 Packet-specific acceptance beyond the repo-wide gate. The acceptance criteria
-A1-A9 live in `docs/prd/history-graph.md` and are NOT copied here — verify them
+A1-A10 live in `docs/prd/history-graph.md` and are NOT copied here — verify them
 there, against their pinned tests.
 
 ## Per-phase coverage of the PRD criteria
@@ -11,8 +11,12 @@ there, against their pinned tests.
 | 01 | A1, A2, A3 |
 | 02 | A4, A5 |
 | 03 | A6 (with 04) |
-| 04 | A6, A7, A8 |
-| 05 | all of A1-A9, re-verified over the whole packet diff |
+| 04 | A6, A7, A8, A9's consumer half (the view reads a row by matching on its content) |
+| 05 | all of A1-A10, re-verified over the whole packet diff |
+
+A9's model half — a row's content is expressible as something other than a
+commit — landed with R6 between phases 03 and 04, pinned in `cairn-model`. A10
+is the gate itself, so every phase carries it.
 
 ## Packet-specific checks
 

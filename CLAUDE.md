@@ -242,6 +242,8 @@ exists yet).
   and the locked decisions D1-D9 that the architecture above implements.
 - `docs/design/feature-inventory.md` — the full feature surface, tiered by risk,
   with the out-of-scope list and its reasons. Intent, not as-built.
+- `docs/design/ui.md` — the UI design: Fork's layout model kept, every deviation
+  named with its decision; mockups in `docs/design/mockups/cairn-ui.html`.
 - `docs/work/daily-loop/roadmap.md` — the build order to the D7 milestone: eight
   packets, two filed and six as briefs.
 - `docs/qa-gate.md` — the QA layer contract and reviewer dispatch table.

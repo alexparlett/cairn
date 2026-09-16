@@ -194,6 +194,14 @@ FILE, and it is a guard, not a convention — see below.
 - `WORKERS_PER_REPOSITORY` is 1: the live walk lives on one thread, and a `const`
   assertion fails the build if it is raised, because more workers need a routing
   decision and not a bigger number.
+- **The boundary is shaped for a second consumer, and none of it is stubbed.** A
+  request is answered by a STREAM of `Update`s rather than by one reply; a worker
+  runs ordinary blocking code, so a job that must wait on a UI answer makes its
+  own reply channel and blocks on it; and workers are pinned to a purpose rather
+  than fed from an anonymous queue. Those three are what fetch
+  (`docs/prd/credential-prompts.md` R4) needs — long-running, progress-reporting,
+  and blocking mid-flight on a credential dialog — so adding it is a new `Update`
+  variant and its own worker rather than a change at every call site.
 
 Every `submit` supersedes, and a superseded page delivers nothing — so the
 caller must debounce. `Progress::wants_more()`

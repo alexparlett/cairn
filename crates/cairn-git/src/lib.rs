@@ -1,11 +1,7 @@
-//! Cairn's repository engine.
+//! Cairn's repository engine: repository handles, history queries, and `ops`.
 //!
-//! Every read and every mutation of a repository happens here, behind functions
-//! that speak [`cairn_model`] types. `gix` types never appear in a public
-//! signature, which is what keeps the backend replaceable.
-//!
-//! Nothing here spawns threads or assumes an async runtime: callers decide
-//! where the blocking work runs.
+//! `gix` types never appear in a public signature. Nothing here spawns threads
+//! or assumes an async runtime; callers decide where the blocking work runs.
 
 mod cancel;
 mod error;

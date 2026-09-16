@@ -1,12 +1,10 @@
 //! Repositories built by running real `git`.
 //!
 //! A fake object database proves nothing about gitoxide, so every fixture is
-//! made by the binary, with its configuration isolated from the machine's, and
-//! every expectation is read back out of `git` rather than written down.
-//!
-//! `unwrap` is unavailable here — `clippy.toml`'s carve-out only reaches
-//! `#[cfg(test)]` code, and an integration test crate is not that — so failure
-//! paths name what went wrong instead.
+//! made by the binary with its configuration isolated, and every expectation is
+//! read back out of `git`. `unwrap` is unavailable here — `clippy.toml`'s
+//! carve-out reaches `#[cfg(test)]` only, and an integration test crate is not
+//! that.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -23,8 +21,8 @@ impl Fixture {
         &self.path
     }
 
-    /// Run `git` inside the fixture and return its stdout. Any failure panics:
-    /// a fixture that half-built makes every assertion after it meaningless.
+    /// Runs `git` in the fixture and returns stdout. Any failure panics: a
+    /// half-built fixture makes every assertion after it meaningless.
     pub fn git(&self, args: &[&str]) -> String {
         run(&self.path, args, None)
     }
@@ -49,9 +47,8 @@ fn run(dir: &Path, args: &[&str], at: Option<i64>) -> String {
     command
         .current_dir(dir)
         .args(args)
-        // The machine's git configuration must not reach the fixture: a global
-        // `commit.gpgsign` or template directory would make these tests pass or
-        // fail depending on whose laptop they run on.
+        // The machine's git config must not reach the fixture: a global
+        // `commit.gpgsign` would make these pass or fail per laptop.
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_AUTHOR_NAME", "A U Thor")
@@ -90,20 +87,14 @@ fn fresh_directory(name: &str) -> PathBuf {
     path
 }
 
-/// The clock every fixture commits against. Fixed, so a test that prints a
-/// date prints the same one tomorrow.
+/// Fixed, so a test that prints a date prints the same one tomorrow.
 const EPOCH: i64 = 1_500_000_000;
 
-/// A repository whose committer dates rise strictly along every parent link.
-///
-/// That is what lets a test compare an ordering against `git`'s: with monotone
-/// dates, commit-time order and `git`'s reverse-chronological order are the same
-/// sequence, so a divergence is gitoxide's. Deliberately not the skew case —
-/// that is [`skewed`], and the assigner's own is pinned in `cairn-model`.
-///
-/// Shape: a trunk and a side branch that merges back, repeated. `steps` counts
-/// ordinary commits and the merges are extra, so read every expectation back
-/// from `git` rather than counting from `steps`.
+/// A repository whose committer dates rise along every parent link, so
+/// commit-time and `git`'s reverse-chronological order are one sequence and a
+/// divergence is gitoxide's; the skew case is [`skewed`]. A trunk and a side
+/// branch merging back, repeated: `steps` counts ordinary commits and the merges
+/// are extra, so read every expectation back from `git`.
 pub fn braided(steps: usize) -> Fixture {
     let path = fresh_directory("braided");
     let fixture = Fixture { path };
@@ -134,7 +125,7 @@ fn commit_at(fixture: &Fixture, clock: &mut i64, message: &str) {
     );
 }
 
-/// Merge `side` into the trunk. A no-op when there is nothing to merge, which
+/// Merges `side` into the trunk; a no-op when there is nothing to merge, which
 /// `git` reports as success without a commit.
 fn merge_side(fixture: &Fixture, clock: &mut i64) {
     fixture.git(&["checkout", "--quiet", "main"]);
@@ -154,16 +145,14 @@ fn merge_side(fixture: &Fixture, clock: &mut i64) {
     );
 }
 
-/// A repository a newest-first walk hands a parent over before its own child.
+/// A repository whose newest-first walk hands a parent over before its child.
 ///
-/// It takes a *fork*, not a chain: a chain is emitted in order however the dates
-/// are stamped. `shared` is the parent of both branches, and because `stale` is
-/// stamped older than `shared`, the walk reaches `shared` through the trunk and
-/// emits it before `stale`. Real `git` produces this whenever somebody rebases,
-/// imports a history, or has a clock a few minutes out
-/// (`docs/research/history-graph/gix-revwalk-ordering.md`, finding 2).
-///
-/// Shape and stamps, seconds past [`EPOCH`]:
+/// A *fork*, not a chain: a chain is emitted in order however the dates are
+/// stamped. `stale` is stamped older than `shared`, so the walk reaches `shared`
+/// through the trunk and emits it first — what `git` produces whenever somebody
+/// rebases or has a clock a few minutes out
+/// (`docs/research/history-graph/gix-revwalk-ordering.md`, finding 2). Stamps
+/// are seconds past [`EPOCH`]:
 ///
 /// ```text
 ///   merge  9500   parents: recent, stale
@@ -173,7 +162,7 @@ fn merge_side(fixture: &Fixture, clock: &mut i64) {
 ///   base   1000
 /// ```
 ///
-/// so commit time orders them `merge, recent, shared, stale, base` — and
+/// so commit time orders them `merge, recent, shared, stale, base`, and
 /// `shared` sits two rows above the child it belongs to.
 pub fn skewed() -> Fixture {
     let path = fresh_directory("skewed");
@@ -209,12 +198,11 @@ fn commit_stamped(fixture: &Fixture, message: &str, seconds: i64) {
     );
 }
 
-/// Write a commit-graph file, so a walk can read parent ids and commit times
-/// without touching the object database at all.
+/// Writes a commit-graph file, so a walk reads parent ids and commit times
+/// without touching the object database.
 pub fn write_commit_graph(fixture: &Fixture) {
     fixture.git(&["commit-graph", "write", "--reachable"]);
-    // Local config, because the engine reads the repository's own: the machine
-    // running this may have turned commit-graph use off globally.
+    // Local config: the machine may have turned commit-graph use off globally.
     fixture.git(&["config", "core.commitGraph", "true"]);
     assert!(
         fixture
@@ -225,14 +213,12 @@ pub fn write_commit_graph(fixture: &Fixture) {
     );
 }
 
-/// Delete the loose object backing each of `ids`, so walking past them still
-/// works (from the commit-graph) but reading one FAILS. That is how "the
-/// replayed prefix is walked, never decoded" becomes something a test can see:
-/// a counter proves one call site, a missing object proves every call site.
+/// Deletes the loose object backing each of `ids`: walking past them still works
+/// from the commit-graph, but reading one fails. A counter proves one call site;
+/// a missing object proves every call site.
 ///
-/// **Never pass a starting point:** gitoxide reads the tips out of the object
-/// database to seed the walk's queue (`gix-traverse`'s `add_to_queue`); only
-/// what it reaches from there comes from the commit-graph.
+/// Never pass a starting point: gitoxide reads the tips out of the object
+/// database to seed the walk's queue (`gix-traverse`'s `add_to_queue`).
 pub fn delete_objects(fixture: &Fixture, ids: &[String]) {
     for id in ids {
         let (dir, file) = id.split_at(2);

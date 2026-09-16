@@ -3,12 +3,10 @@
 //! `a_limit_bounds_the_page_and_a_cursor_continues_it`; A5 is
 //! `a_cancelled_query_stops_walking_and_says_where`.
 //!
-//! Every expectation is read back out of the `git` binary: the question is
-//! whether Cairn shows what `git` would show, not whether gitoxide agrees with
-//! itself.
-//!
-//! `unwrap` is unavailable here — `clippy.toml`'s carve-out only reaches
-//! `#[cfg(test)]` code, and an integration test crate is not that.
+//! Every expectation is read back out of the `git` binary: the question is what
+//! `git` would show, not whether gitoxide agrees with itself. `unwrap` is
+//! unavailable here — `clippy.toml`'s carve-out reaches `#[cfg(test)]` only,
+//! and an integration test crate is not that.
 
 mod fixtures;
 
@@ -33,11 +31,8 @@ fn open(fixture: &Fixture) -> Repository {
     ok(Repository::discover(fixture.path()), "opening the fixture")
 }
 
-/// The commit id a row is identified by, as hex, for comparison with what `git`
-/// printed.
-///
-/// A row is a list entry, not by definition a commit (R6.2). The match is
-/// exhaustive, so the variant `refs-and-status` adds is a compile error here.
+/// The commit id a row is identified by, as hex. The match is exhaustive, so
+/// the variant `refs-and-status` adds is a compile error here (R6.2).
 fn hex_id(row: &HistoryRow) -> String {
     match row.id() {
         RowId::Commit(id) => id.to_string(),
@@ -72,12 +67,9 @@ fn read(repo: &Repository, request: &HistoryRequest) -> HistoryPage {
     )
 }
 
-/// A4. Same commits, same order, same parents, same text as `git`.
-///
-/// The fixture's committer dates rise along every parent link, so `git`'s
-/// reverse-chronological order and a pure commit-time walk are the same
-/// sequence — without that, a divergence would only mean the two disagree about
-/// "newest first".
+/// A4: same commits, order, parents and text as `git`. The fixture's dates rise
+/// along every parent link, so without that a divergence would only mean the two
+/// disagree about "newest first".
 #[test]
 fn every_row_matches_what_git_reports() {
     let fixture = fixtures::braided(30);
@@ -142,7 +134,7 @@ fn every_row_matches_what_git_reports() {
     }
 }
 
-/// A4's second half: the limit is a limit, and the cursor gets you the rest.
+/// A4's second half: the limit bounds, the cursor continues.
 #[test]
 fn a_limit_bounds_the_page_and_a_cursor_continues_it() {
     let fixture = fixtures::braided(30);
@@ -179,9 +171,9 @@ fn a_limit_bounds_the_page_and_a_cursor_continues_it() {
     assert_eq!(seen, expected, "paging did not reproduce the whole history");
 }
 
-/// Splitting a page must not change the picture. Lane indices are identical; an
-/// edge may differ only by the split run not yet having seen the commit that
-/// repaints it, which is R1.2's licence.
+/// Splitting a page must not change the picture: lane indices identical, an edge
+/// differing only where the split run has not yet seen the commit that repaints
+/// it (R1.2).
 #[test]
 fn two_pages_of_n_match_one_page_of_2n_including_lanes() {
     let fixture = fixtures::braided(40);
@@ -224,8 +216,8 @@ fn two_pages_of_n_match_one_page_of_2n_including_lanes() {
         }
     }
 
-    // The replay is what costs: the second page walks past everything the
-    // first one covered, and reads not one of those commits.
+    // The replay costs: page two walks past everything page one covered and
+    // reads none of it.
     assert_eq!(
         second.walked,
         n * 2,
@@ -239,11 +231,10 @@ fn two_pages_of_n_match_one_page_of_2n_including_lanes() {
     assert_eq!(first.walked, n, "the first page walked past its limit");
 }
 
-/// The case the braided fixture cannot produce: a backward line whose two ends
-/// fall in different pages. The row the line *leaves* is returned before the row
-/// it arrives at is read, so that segment is missing from the split run and
-/// present in the whole one — a gained segment, flagged, which is what R1.2
-/// allows and what a view re-rendering a row it already has must expect.
+/// A backward line whose ends fall in different pages, which the braided fixture
+/// cannot produce. The segment is missing from the split run and present in the
+/// whole one — R1.2's gained segment, which a view re-rendering a row must
+/// expect.
 #[test]
 fn a_backward_line_across_a_page_boundary_is_a_gained_segment() {
     let fixture = fixtures::skewed();
@@ -293,8 +284,8 @@ fn a_backward_line_across_a_page_boundary_is_a_gained_segment() {
     }
 }
 
-/// Counts how often it is asked, and says stop once it has been asked enough,
-/// so the assertion is about WHERE the walk stopped rather than about timing.
+/// Stops after a fixed number of polls, so the assertion is about where the walk
+/// stopped rather than about timing.
 #[derive(Debug, Default)]
 struct StopAfter {
     limit: usize,
@@ -309,8 +300,7 @@ impl Cancel for StopAfter {
     }
 }
 
-/// A5. A cancelled query stops walking — observable, because the walk is asked
-/// for a fixed number of commits and reports how many it laid out.
+/// A5: a cancelled query stops walking, and reports how many it laid out.
 #[test]
 fn a_cancelled_query_stops_walking_and_says_where() {
     let fixture = fixtures::braided(40);
@@ -355,9 +345,9 @@ fn a_cancelled_query_stops_walking_and_says_where() {
     }
 }
 
-/// The window makes rows final; it must never make them disappear. A window of
-/// one hands every row over the moment the next arrives, and the page must
-/// still have all of them, in order, with the same lanes.
+/// The window makes rows final, never absent: at a window of one every row is
+/// handed over as the next arrives, and the page must still hold all of them, in
+/// order, in the same lanes.
 #[test]
 fn a_narrow_window_returns_every_commit() {
     let fixture = fixtures::braided(30);
@@ -385,9 +375,9 @@ fn repaints(rows: &[HistoryRow]) -> usize {
         .count()
 }
 
-/// R1.2's finality clause, end to end: a line back to a parent the walk
-/// delivered early is drawn while that parent's row is still held, and absent
-/// once the window has made it final. The commit is never lost either way.
+/// R1.2's finality clause end to end: the line back to an early-delivered parent
+/// is drawn while that row is held and absent once the window has made it final.
+/// The commit is never lost either way.
 #[test]
 fn a_row_that_left_the_window_is_never_repainted() {
     let fixture = fixtures::skewed();
@@ -430,8 +420,8 @@ fn a_row_that_left_the_window_is_never_repainted() {
     );
 }
 
-/// The engine's half of R5.2: a repository with no commits has an empty
-/// history, and saying so is not the same as panicking.
+/// R5.2's engine half: a repository with no commits has an empty history, and
+/// saying so is not panicking.
 #[test]
 fn a_repository_with_no_commits_is_reported_rather_than_panicking() {
     let fixture = fixtures::unborn();
@@ -444,8 +434,8 @@ fn a_repository_with_no_commits_is_reported_rather_than_panicking() {
     }
 }
 
-/// Starting from named commits rather than `HEAD`, which is how a view that
-/// shows every branch will ask.
+/// Starting from named commits rather than `HEAD`, as an all-branches view
+/// will ask.
 #[test]
 fn a_walk_can_start_from_named_commits() {
     let fixture = fixtures::braided(20);
@@ -458,8 +448,8 @@ fn a_walk_can_start_from_named_commits() {
     assert_eq!(ids(&from_tip), ids(&from_head));
 }
 
-/// The `BreadthFirst` arm must reach the same commits as commit-time order: a
-/// different sequence is the point of it, a different *set* is a bug.
+/// The `BreadthFirst` arm reaches the same commits as commit-time order: a
+/// different sequence is the point, a different *set* is a bug.
 #[test]
 fn graph_order_reaches_the_same_commits_as_commit_time_order() {
     let fixture = fixtures::braided(30);
@@ -499,9 +489,8 @@ fn graph_order_reaches_the_same_commits_as_commit_time_order() {
     );
 }
 
-/// Resuming must not let the order or the window be changed underneath the
-/// cursor: both decide lane numbering, so a page that switched either would
-/// renumber lanes the caller has already drawn.
+/// Resuming must not let the order or the window change under the cursor: both
+/// decide lane numbering.
 #[test]
 fn resuming_ignores_an_order_or_window_the_cursor_did_not_come_from() {
     let fixture = fixtures::braided(30);
@@ -532,9 +521,8 @@ fn resuming_ignores_an_order_or_window_the_cursor_did_not_come_from() {
     );
 }
 
-/// A limit of zero reads nothing, and must not claim the history ended nor
-/// swallow the cursor it was given: `resume` takes the cursor by value, so
-/// `None` would leave the caller no way to continue.
+/// A limit of zero reads nothing and must neither claim the history ended nor
+/// swallow the cursor: `resume` takes it by value, so `None` leaves no way on.
 #[test]
 fn a_limit_of_zero_reads_nothing_and_keeps_the_cursor() {
     let fixture = fixtures::braided(20);
@@ -568,7 +556,7 @@ fn a_limit_of_zero_reads_nothing_and_keeps_the_cursor() {
 }
 
 /// Starting points a caller can get wrong, and the error each must produce
-/// rather than a panic or an empty page that looks like an empty repository.
+/// rather than a panic or an empty-looking page.
 #[test]
 fn bad_starting_points_are_errors_rather_than_empty_pages() {
     let fixture = fixtures::braided(10);
@@ -594,12 +582,10 @@ fn bad_starting_points_are_errors_rather_than_empty_pages() {
     );
 }
 
-/// R2.3, made observable rather than self-reported.
-///
-/// `HistoryPage::decoded` is a counter beside one object read, so it proves only
-/// that call site. Here the replayed commits' objects are DELETED and a
-/// commit-graph file supplies their ids, parents and times, so any call site
-/// that decoded something it merely walked past fails to find the object.
+/// R2.3, observable rather than self-reported. `HistoryPage::decoded` is a
+/// counter beside one object read, so it proves only that call site; here the
+/// replayed commits' objects are deleted and a commit-graph supplies their ids,
+/// so any call site that decoded what it merely walked past fails.
 #[test]
 fn a_replayed_prefix_is_walked_but_never_decoded() {
     let fixture = fixtures::braided(30);
@@ -615,13 +601,13 @@ fn a_replayed_prefix_is_walked_but_never_decoded() {
         None => panic!("six commits ended the history"),
     };
 
-    // Everything page one returned except the tip, which gitoxide reads from
-    // the object database to seed the walk whatever the commit-graph says.
+    // All of page one but the tip, which gitoxide reads from the object
+    // database to seed the walk whatever the commit-graph says.
     let unreadable = &expected[1..page_size];
     fixtures::delete_objects(&fixture, unreadable);
 
-    // A second handle, so the first one's object cache cannot serve the
-    // deleted commits. Resuming replays exactly those.
+    // A second handle: the first one's object cache would serve the deleted
+    // commits.
     let repo = open(&fixture);
     let second = read(&repo, &HistoryRequest::resume(cursor, page_size));
     assert_eq!(second.walked, page_size * 2, "the prefix was not replayed");
@@ -629,7 +615,7 @@ fn a_replayed_prefix_is_walked_but_never_decoded() {
     assert_eq!(second.decoded, second.rows.len());
 
     // The negative that stops this passing vacuously: those objects really are
-    // unreadable, so a page that decodes them fails.
+    // unreadable.
     match repo.history(&HistoryRequest::from_head(page_size), &CancelSignal::new()) {
         Err(Error::ReadCommit { id, .. }) => {
             assert!(unreadable.contains(&id), "failed on the wrong commit")
@@ -638,8 +624,8 @@ fn a_replayed_prefix_is_walked_but_never_decoded() {
     }
 }
 
-/// Cancellation's second code path: the one-commit look-ahead that decides
-/// whether there is a next page. Deleting its poll left every other test green.
+/// Cancellation's second code path: the one-commit look-ahead. Deleting its poll
+/// left every other test green.
 #[test]
 fn cancelling_exactly_at_the_page_boundary_is_still_a_cancellation() {
     let fixture = fixtures::braided(20);
@@ -650,8 +636,7 @@ fn cancelling_exactly_at_the_page_boundary_is_still_a_cancellation() {
         "the fixture is too short"
     );
 
-    // The limit-th poll is the last inside the loop; the next is the
-    // look-ahead.
+    // The limit-th poll is the last inside the loop; the next is the look-ahead.
     let signal = StopAfter {
         limit,
         polls: Cell::new(0),
@@ -669,8 +654,8 @@ fn cancelling_exactly_at_the_page_boundary_is_still_a_cancellation() {
 
 // ── The live walk session (R2.5) ─────────────────────────────────────────────
 
-/// Page a session to the end, reporting every row and, per page, how many
-/// commits it walked against how many rows it returned.
+/// Pages a session to the end, reporting every row and, per page, commits walked
+/// against rows returned.
 fn drain_session(
     repo: &Repository,
     request: &HistoryRequest,
@@ -691,8 +676,8 @@ fn drain_session(
     (rows, cost)
 }
 
-/// R2.5's correctness half: keeping the walk alive must not change the answer —
-/// same commits, order and lanes as the cursor path reading it in one go.
+/// R2.5's correctness half: the live walk gives the same commits, order and
+/// lanes as the cursor path reading it in one go.
 #[test]
 fn a_session_returns_what_the_cursor_path_returns_row_for_row() {
     let fixture = fixtures::braided(40);
@@ -715,9 +700,8 @@ fn a_session_returns_what_the_cursor_path_returns_row_for_row() {
     );
 }
 
-/// R2.5's performance half: after the window is primed, a page walks what it
-/// returns and nothing more. The cursor path cannot pass this — page k there
-/// walks k x limit commits — so it is the requirement, not a restatement.
+/// R2.5's performance half: past the priming, a page walks what it returns and
+/// no more. The cursor path cannot pass this — page k there walks k x limit.
 #[test]
 fn paging_a_session_costs_the_page_and_not_the_pages_before_it() {
     let fixture = fixtures::braided(60);
@@ -733,8 +717,8 @@ fn paging_a_session_costs_the_page_and_not_the_pages_before_it() {
         cost.len()
     );
 
-    // The O(limit) claim: no page after the first walks more than it asked
-    // for, whatever its index. Page one also primes the window.
+    // O(limit): no page after the first walks more than it asked for, whatever
+    // its index. Page one also primes the window.
     for (n, (walked, returned)) in cost.iter().enumerate().skip(1) {
         assert!(
             *walked <= page_size,
@@ -747,8 +731,8 @@ fn paging_a_session_costs_the_page_and_not_the_pages_before_it() {
         cost[0].0
     );
 
-    // Over the whole scroll every commit is walked exactly once; the cursor
-    // path's total grows with the square of the page count.
+    // Every commit is walked once over the scroll; the cursor path's total grows
+    // with the square of the page count.
     let total: usize = cost.iter().map(|(walked, _)| walked).sum();
     assert_eq!(rows.len(), fixture.rev_list().len());
     assert_eq!(
@@ -758,8 +742,8 @@ fn paging_a_session_costs_the_page_and_not_the_pages_before_it() {
         rows.len()
     );
 
-    // The negative that makes this decisive: the cursor path grows with the
-    // page index instead of staying flat.
+    // The negative that makes this decisive: the cursor path grows with the page
+    // index instead of staying flat.
     let mut cursor = read(&repo, &HistoryRequest::from_head(page_size)).cursor;
     let mut replayed = Vec::new();
     for _ in 0..3 {
@@ -774,9 +758,8 @@ fn paging_a_session_costs_the_page_and_not_the_pages_before_it() {
     );
 }
 
-/// A5, for the session: superseding a scroll must STOP the walk and keep what
-/// it had. A cancellation that discarded the page would leave the next request
-/// re-walking it.
+/// A5 for the session: superseding a scroll stops the walk and keeps what it
+/// had, so the next request does not re-walk it.
 #[test]
 fn cancelling_a_session_stops_the_walk_and_keeps_its_progress() {
     let fixture = fixtures::braided(40);
@@ -802,8 +785,7 @@ fn cancelling_a_session_stops_the_walk_and_keeps_its_progress() {
         "the signal was not polled once per commit"
     );
 
-    // Progress stayed in the session: the next page walks fewer commits than
-    // it returns rows.
+    // Progress stayed: the next page walks fewer commits than it returns rows.
     let resumed = ok(session.next_page(4, &CancelSignal::new()), "resuming");
     assert_eq!(resumed.rows.len(), 4);
     assert!(
@@ -817,8 +799,8 @@ fn cancelling_a_session_stops_the_walk_and_keeps_its_progress() {
     assert_eq!(ids_of(&resumed.rows), &expected[..4]);
 }
 
-/// The cold-restart path R2.5 keeps: a cursor from a dead session restarts it
-/// with no row repeated and none skipped.
+/// R2.5's cold-restart path: a cursor from a dead session repeats no row and
+/// skips none.
 #[test]
 fn a_cursor_taken_from_a_session_restarts_it_where_it_stopped() {
     let fixture = fixtures::braided(30);
@@ -849,8 +831,8 @@ fn a_cursor_taken_from_a_session_restarts_it_where_it_stopped() {
     );
 }
 
-/// R1.4 through the session: a history that hands a parent over before its own
-/// child still produces every commit exactly once.
+/// R1.4 through the session: a parent handed over before its child still
+/// produces every commit exactly once.
 #[test]
 fn a_session_over_a_skewed_history_returns_every_commit() {
     let fixture = fixtures::skewed();
@@ -862,10 +844,9 @@ fn a_session_over_a_skewed_history_returns_every_commit() {
     assert_eq!(ids_of(&rows), expected);
 }
 
-/// R2.3 through the session, where it bites hardest: priming the window is the
-/// first page's cost, and it must be paid in WALK STEPS and not object reads —
-/// on a cold pack cache each read is a seek, for rows a scroll that stops after
-/// one page never asked for.
+/// R2.3 through the session: priming the window is the first page's cost and
+/// must be paid in walk steps, not object reads — each read is a seek on a cold
+/// pack cache, for rows a scroll that stops never asked for.
 #[test]
 fn priming_the_window_walks_but_never_decodes() {
     let fixture = fixtures::braided(60);
@@ -884,8 +865,8 @@ fn priming_the_window_walks_but_never_decodes() {
         "read {} commit objects to return {page_size} rows",
         first.decoded
     );
-    // The control: without it the assertion above would also pass on a session
-    // that never primed anything.
+    // Without this the assertion above passes on a session that primed
+    // nothing.
     assert!(
         first.walked >= page_size + window,
         "walked only {} commits, so the window of {window} was never primed",
@@ -893,14 +874,14 @@ fn priming_the_window_walks_but_never_decodes() {
     );
 }
 
-/// The error path through a session: a commit that cannot be read names itself
-/// and poisons the session rather than being skipped. `cairn-app`'s worker then
-/// drops the session and cold-restarts from the last good cursor.
+/// A commit that cannot be read names itself and poisons the session rather than
+/// being skipped; `cairn-app`'s worker then cold-restarts from the last good
+/// cursor.
 #[test]
 fn a_session_names_the_commit_it_cannot_read() {
     let fixture = fixtures::braided(20);
-    // With a commit-graph file the walk reads parent ids without the object,
-    // which isolates "the DECODE failed" from "the walk failed".
+    // With a commit-graph the walk reads parent ids without the object, which
+    // isolates "the decode failed" from "the walk failed".
     fixtures::write_commit_graph(&fixture);
     let expected = fixture.rev_list();
     let missing = expected[3].clone();
@@ -917,9 +898,8 @@ fn a_session_names_the_commit_it_cannot_read() {
     }
 
     // The control: with the object present the same page reads cleanly, so the
-    // failure above is the deleted object and not the fixture. (The `let` is not
-    // style: a session borrows its repository, so a temporary one cannot outlive
-    // the statement that made it.)
+    // failure above is the deleted object, not the fixture. The `let` is not
+    // style: a session borrows its repository.
     let whole = fixtures::braided(20);
     fixtures::write_commit_graph(&whole);
     let intact = open(&whole);

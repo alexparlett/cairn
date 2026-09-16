@@ -7,7 +7,15 @@
 //! that carries git's own diagnostic.
 //!
 //! Standard input is always closed. Together with `GIT_TERMINAL_PROMPT=0` that
-//! is what makes "git is waiting for something nobody will type" impossible.
+//! is what stops `git` itself from waiting for something nobody will type. It
+//! does not reach `ssh`, which prompts on `/dev/tty` directly — a host-key
+//! confirmation or a key passphrase from a Cairn launched in a terminal lands
+//! on that terminal; closing that path is `SSH_ASKPASS_REQUIRE=force`, which
+//! arrives with the askpass helper.
+//!
+//! Everything here is `pub(crate)`: the crate's public surface is named
+//! operations, never a raw invocation, so a caller outside `ops` cannot run a
+//! verb the confirmation seal does not know about.
 
 use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
@@ -19,7 +27,7 @@ use crate::{Error, Repository};
 
 /// One invocation, built up and then run once with [`GitCommand::run`].
 #[derive(Debug)]
-pub struct GitCommand<'a> {
+pub(crate) struct GitCommand<'a> {
     program: &'a Path,
     environment: &'a GitEnvironment,
     arguments: Vec<OsString>,
@@ -36,26 +44,40 @@ impl<'a> GitCommand<'a> {
         }
     }
 
-    pub fn arg(mut self, argument: impl AsRef<OsStr>) -> Self {
+    pub(crate) fn arg(mut self, argument: impl AsRef<OsStr>) -> Self {
         self.arguments.push(argument.as_ref().to_owned());
         self
     }
 
-    pub fn args(mut self, arguments: impl IntoIterator<Item = impl AsRef<OsStr>>) -> Self {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the first operation to run a verb is fetch, in the next phase"
+        )
+    )]
+    pub(crate) fn args(mut self, arguments: impl IntoIterator<Item = impl AsRef<OsStr>>) -> Self {
         self.arguments
             .extend(arguments.into_iter().map(|a| a.as_ref().to_owned()));
         self
     }
 
     /// Runs inside `repo`: its working tree, or the git directory of a bare one.
-    pub fn in_repository(mut self, repo: &Repository) -> Self {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the first operation to run a verb is fetch, in the next phase"
+        )
+    )]
+    pub(crate) fn in_repository(mut self, repo: &Repository) -> Self {
         self.directory = Some(repo.workdir().unwrap_or(repo.git_dir()).to_owned());
         self
     }
 
     /// Runs to completion. A non-zero exit is [`Error::GitFailed`], with what git
     /// wrote to stderr; a process that never started is [`Error::GitNotStarted`].
-    pub fn run(self) -> Result<Output, Error> {
+    pub(crate) fn run(self) -> Result<Output, Error> {
         let mut command = self.environment.command(self.program);
         command
             .args(&self.arguments)
@@ -97,29 +119,50 @@ fn describe(arguments: &[OsString]) -> String {
 
 /// What a successful invocation wrote.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Output {
+pub(crate) struct Output {
     stdout: Vec<u8>,
     stderr: String,
 }
 
 impl Output {
     /// Bytes, because paths are bytes: decode at the point that knows the format.
-    pub fn stdout(&self) -> &[u8] {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the first operation to run a verb is fetch, in the next phase"
+        )
+    )]
+    pub(crate) fn stdout(&self) -> &[u8] {
         &self.stdout
     }
 
     /// Lossily decoded; git's stderr is prose for a person, never parsed.
-    pub fn stderr(&self) -> &str {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the first operation to run a verb is fetch, in the next phase"
+        )
+    )]
+    pub(crate) fn stderr(&self) -> &str {
         &self.stderr
     }
 
-    pub fn stdout_text(&self) -> Cow<'_, str> {
+    pub(crate) fn stdout_text(&self) -> Cow<'_, str> {
         String::from_utf8_lossy(&self.stdout)
     }
 
     /// The records of `-z` output: git ends each with NUL, so the terminator is
     /// stripped rather than read as an empty record after the last one.
-    pub fn records(&self) -> impl Iterator<Item = &[u8]> {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the first operation to run a verb is fetch, in the next phase"
+        )
+    )]
+    pub(crate) fn records(&self) -> impl Iterator<Item = &[u8]> {
         let body = self.stdout.strip_suffix(b"\0").unwrap_or(&self.stdout);
         body.split(|byte| *byte == 0)
             .filter(move |_| !body.is_empty())
@@ -155,11 +198,133 @@ mod tests {
         let output = output(b"only");
         let records: Vec<&[u8]> = output.records().collect();
         assert_eq!(records, [b"only".as_slice()]);
+        assert_eq!(output.stdout(), b"only");
     }
 
     #[test]
     fn arguments_are_described_as_typed() {
         let arguments = [OsString::from("fetch"), OsString::from("--prune")];
         assert_eq!(describe(&arguments), "fetch --prune");
+    }
+}
+
+/// Against a stub `git` that reports what it was given. Inside the crate because the
+/// runner is `pub(crate)`: nothing outside `ops` may run a raw invocation.
+#[cfg(all(test, unix))]
+mod stub_tests {
+    use std::collections::BTreeMap;
+    use std::ffi::OsString;
+
+    use super::super::stub_git::{StubGit, discover_retrying};
+    use crate::Repository;
+
+    /// What `/bin/sh` itself adds to a child's environment; not ours and not git's.
+    const SHELL_OWN: &[&str] = &["PWD", "OLDPWD", "SHLVL", "_"];
+
+    /// Answers `--version`, then runs `rest` for anything else.
+    fn stub(rest: &str) -> StubGit {
+        StubGit::with_git(&format!(
+            "if [ \"$1\" = --version ]; then echo 'git version 2.30.0'; exit 0; fi\n{rest}"
+        ))
+    }
+
+    /// PRD B1 end to end: what the child actually sees is the built environment and
+    /// nothing from this process. The test process is full of `CARGO_*` variables,
+    /// which is what makes a leak visible.
+    #[test]
+    fn the_child_sees_the_built_environment_and_nothing_inherited() {
+        let stub = stub("exec /usr/bin/env");
+        let environment = stub.environment_with(|name| match name {
+            "HOME" => Some(OsString::from("/nonexistent/home-from-cairn")),
+            _ => None,
+        });
+        let expected: BTreeMap<String, String> = environment
+            .variables()
+            .map(|(name, value)| (name.to_owned(), value.to_string_lossy().into_owned()))
+            .collect();
+        let git = discover_retrying(environment).unwrap();
+        let output = git.command().arg("print-environment").run().unwrap();
+        let seen: BTreeMap<String, String> = output
+            .stdout_text()
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+            .collect();
+
+        for (name, value) in &expected {
+            assert_eq!(
+                seen.get(name),
+                Some(value),
+                "{name} did not reach git as built"
+            );
+        }
+        let leaked: Vec<&String> = seen
+            .keys()
+            .filter(|name| !expected.contains_key(*name) && !SHELL_OWN.contains(&name.as_str()))
+            .collect();
+        assert!(leaked.is_empty(), "inherited by git: {leaked:?}");
+        assert!(
+            !seen.keys().any(|name| name.starts_with("CARGO_")),
+            "cargo's variables reached git: {:?}",
+            seen.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            seen.get("GIT_TERMINAL_PROMPT").map(String::as_str),
+            Some("0")
+        );
+        assert_eq!(
+            seen.get("HOME").map(String::as_str),
+            Some("/nonexistent/home-from-cairn"),
+            "HOME must be the value the builder chose, not this process's"
+        );
+    }
+
+    #[test]
+    fn arguments_arrive_in_order_and_nul_records_split() {
+        let stub = stub("printf '%s\\0%s\\0' \"$1\" \"$2\"");
+        let git = discover_retrying(stub.environment()).unwrap();
+        let output = git
+            .command()
+            .args(["rev-parse", "--show-toplevel"])
+            .run()
+            .unwrap();
+        let records: Vec<&[u8]> = output.records().collect();
+        assert_eq!(
+            records,
+            [b"rev-parse".as_slice(), b"--show-toplevel".as_slice()]
+        );
+        assert_eq!(output.stderr(), "");
+    }
+
+    /// `pwd` is a shell builtin, so the stub needs nothing on its PATH.
+    #[test]
+    fn a_command_runs_in_the_repository_it_is_asked_to() {
+        let stub = stub("pwd");
+        let git = discover_retrying(stub.environment()).unwrap();
+        let repo = Repository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let expected = std::fs::canonicalize(repo.workdir().unwrap()).unwrap();
+
+        let output = git.command().in_repository(&repo).run().unwrap();
+        let ran_in = std::fs::canonicalize(output.stdout_text().trim()).unwrap();
+        assert_eq!(ran_in, expected);
+
+        // Without `in_repository`, the process runs wherever this one does.
+        let output = git.command().run().unwrap();
+        let ran_in = std::fs::canonicalize(output.stdout_text().trim()).unwrap();
+        assert_eq!(
+            ran_in,
+            std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap()
+        );
+    }
+
+    /// Caught by: `Stdio::null()` becoming `inherit()`, which is how a git waiting on a
+    /// pipe nobody writes to would come back. Linux only: it reads `/proc`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn standard_input_is_closed_not_inherited() {
+        let stub = stub("PATH=/usr/bin:/bin readlink /proc/$$/fd/0");
+        let git = discover_retrying(stub.environment()).unwrap();
+        let output = git.command().run().unwrap();
+        assert_eq!(output.stdout_text().trim(), "/dev/null");
     }
 }

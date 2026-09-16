@@ -3,9 +3,10 @@
 //! Nothing here depends on the machine's git: each case builds its own `git`
 //! script in a fresh directory and hands that directory to the backend as the
 //! whole `PATH`, so "absent" is an empty directory and "too old" is a script.
+//! The runner itself is `pub(crate)`, so what a found `git` is then handed is
+//! tested inside the crate (`ops/cli.rs`), with a copy of this stub helper.
 #![cfg(unix)]
 
-use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -278,90 +279,24 @@ fn the_installed_git_is_discovered_from_the_process_environment() {
     assert!(git.path().is_file());
 }
 
-/// The environment stub `git` sees, as `NAME=value` pairs it printed.
-fn environment_seen_by(stub: &StubPath, environment: GitEnvironment) -> BTreeMap<String, String> {
-    let git = discover_retrying(environment)
-        .unwrap_or_else(|e| panic!("discovering the stub in {}: {e}", stub.directory.display()));
-    let output = git
-        .command()
-        .arg("print-environment")
-        .run()
-        .unwrap_or_else(|e| panic!("running the stub: {e}"));
-    output
-        .stdout_text()
-        .lines()
-        .filter_map(|line| line.split_once('='))
-        .map(|(name, value)| (name.to_owned(), value.to_owned()))
-        .inspect(|(name, _)| assert!(!name.is_empty(), "{}", stub.directory.display()))
-        .collect()
-}
-
-/// What `/bin/sh` itself adds to a child's environment; not ours and not git's.
-const SHELL_OWN: &[&str] = &["PWD", "OLDPWD", "SHLVL", "_"];
-
-/// PRD B1 end to end: what the child actually sees is the built environment and
-/// nothing from this process. The test process is full of `CARGO_*` variables,
-/// which is what makes a leak visible.
+/// A stub whose interpreter does not exist fails at `exec`, before git could run.
 #[test]
-fn the_child_sees_the_built_environment_and_nothing_inherited() {
-    let stub = StubPath::with_git(
-        "if [ \"$1\" = --version ]; then echo 'git version 2.30.0'; exit 0; fi\n\
-         exec /usr/bin/env",
-    );
-    let environment = stub.environment_with(|name| match name {
-        "HOME" => Some(OsString::from("/nonexistent/home-from-cairn")),
-        _ => None,
-    });
-    let expected: BTreeMap<String, String> = environment
-        .variables()
-        .map(|(name, value)| (name.to_owned(), value.to_string_lossy().into_owned()))
-        .collect();
-    let seen = environment_seen_by(&stub, environment);
-
-    for (name, value) in &expected {
-        assert_eq!(
-            seen.get(name),
-            Some(value),
-            "{name} did not reach git as built"
-        );
+fn a_git_that_cannot_be_started_names_the_program_and_the_cause() {
+    let stub = StubPath::empty();
+    let git = stub.git_path();
+    std::fs::write(&git, "#!/nonexistent/interpreter\n").unwrap();
+    std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let error = failure(stub.discover(), "unstartable git");
+    match &error {
+        Error::GitNotStarted { program, source } => {
+            assert_eq!(program, &git);
+            assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+        }
+        other => panic!("expected GitNotStarted, got {other:?}"),
     }
-    let leaked: Vec<&String> = seen
-        .keys()
-        .filter(|name| !expected.contains_key(*name) && !SHELL_OWN.contains(&name.as_str()))
-        .collect();
-    assert!(leaked.is_empty(), "inherited by git: {leaked:?}");
+    let message = error.to_string();
     assert!(
-        !seen.keys().any(|name| name.starts_with("CARGO_")),
-        "cargo's variables reached git: {:?}",
-        seen.keys().collect::<Vec<_>>()
+        message.contains(&git.display().to_string()) && message.contains("could not start"),
+        "{message}"
     );
-    assert_eq!(
-        seen.get("GIT_TERMINAL_PROMPT").map(String::as_str),
-        Some("0")
-    );
-    assert_eq!(
-        seen.get("HOME").map(String::as_str),
-        Some("/nonexistent/home-from-cairn"),
-        "HOME must be the value the builder chose, not this process's"
-    );
-}
-
-#[test]
-fn a_command_runs_in_the_directory_it_is_asked_to() {
-    let stub = StubPath::with_git(
-        "if [ \"$1\" = --version ]; then echo 'git version 2.30.0'; exit 0; fi\n\
-         printf '%s\\0%s\\0' \"$1\" \"$2\"",
-    );
-    let git = stub.discover().unwrap();
-    let output = git
-        .command()
-        .args(["rev-parse", "--show-toplevel"])
-        .run()
-        .unwrap();
-    let records: Vec<&[u8]> = output.records().collect();
-    assert_eq!(
-        records,
-        [b"rev-parse".as_slice(), b"--show-toplevel".as_slice()]
-    );
-    assert_eq!(output.stderr(), "");
 }

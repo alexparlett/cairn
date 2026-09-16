@@ -28,6 +28,15 @@ const ALWAYS: &[(&str, &str)] = &[
 /// something `git`, or a program it runs on the user's behalf, needs to find
 /// the user's own setup: a credential helper or ssh-agent that already works
 /// must keep working.
+///
+/// Deliberately NOT here, and never will be without a decision: every `GIT_*`
+/// variable (`GIT_DIR` would redirect the write, `GIT_CONFIG_GLOBAL` would swap
+/// the user's configuration out, `GIT_ASKPASS` may be meant for something
+/// else), which includes `GIT_SSH_COMMAND` and `GIT_SSH` — a user who sets
+/// those in a shell rather than in `core.sshCommand` will find Cairn ignores
+/// them, and that is the cost of never inheriting a git override. Proxy, CA
+/// bundle, Kerberos, display and signing variables are open questions for the
+/// user, not omissions.
 const INHERITED: &[&str] = &[
     // Credential helpers, `ssh`, LFS filters and hooks are found on it.
     "PATH",
@@ -37,11 +46,20 @@ const INHERITED: &[&str] = &[
     "XDG_CONFIG_HOME",
     // The `credential-cache` helper keeps its socket under it.
     "XDG_CACHE_HOME",
+    // The session bus, which `git-credential-libsecret` (and every other
+    // Secret Service helper) needs to reach the keyring; the user the product
+    // rule protects most is the one whose keyring already works.
+    "DBUS_SESSION_BUS_ADDRESS",
+    // Where the session bus falls back to (`$XDG_RUNTIME_DIR/bus`) when the
+    // address is unset, and where Cairn's own askpass socket will live.
+    "XDG_RUNTIME_DIR",
     // The running ssh-agent; without it every key asks for its passphrase.
     "SSH_AUTH_SOCK",
     // Where git writes its temporary files.
     "TMPDIR",
-    // git's diagnostics reach the user in their own language.
+    // git's diagnostics reach the user in their own language; gettext reads
+    // LANGUAGE first, then LC_ALL, LC_MESSAGES, LANG.
+    "LANGUAGE",
     "LANG",
     "LC_ALL",
     "LC_MESSAGES",
@@ -111,9 +129,11 @@ mod tests {
         assert_eq!(
             names(&environment),
             [
+                "DBUS_SESSION_BUS_ADDRESS",
                 "GIT_TERMINAL_PROMPT",
                 "HOME",
                 "LANG",
+                "LANGUAGE",
                 "LC_ALL",
                 "LC_MESSAGES",
                 "PATH",
@@ -121,6 +141,7 @@ mod tests {
                 "TMPDIR",
                 "XDG_CACHE_HOME",
                 "XDG_CONFIG_HOME",
+                "XDG_RUNTIME_DIR",
             ]
         );
         assert_eq!(environment.get("HOME"), Some(OsStr::new("parent-HOME")));
@@ -143,8 +164,10 @@ mod tests {
         assert_eq!(
             asked,
             [
+                "DBUS_SESSION_BUS_ADDRESS",
                 "HOME",
                 "LANG",
+                "LANGUAGE",
                 "LC_ALL",
                 "LC_MESSAGES",
                 "PATH",
@@ -152,6 +175,7 @@ mod tests {
                 "TMPDIR",
                 "XDG_CACHE_HOME",
                 "XDG_CONFIG_HOME",
+                "XDG_RUNTIME_DIR",
             ]
         );
         for poison in [
@@ -160,7 +184,9 @@ mod tests {
             "GIT_WORK_TREE",
             "GIT_CONFIG_GLOBAL",
             "GIT_SSH_COMMAND",
+            "GIT_SSH",
             "SSH_ASKPASS",
+            "DISPLAY",
             "LD_PRELOAD",
         ] {
             assert!(

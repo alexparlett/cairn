@@ -24,13 +24,15 @@
 //!   built from a spelled-out roster, never inherited wholesale, and it always
 //!   sets `GIT_TERMINAL_PROMPT=0`. It is also the only place a
 //!   `std::process::Command` is built, so no process exists without it.
-//! - [`GitCommand`] adds the arguments and runs the process with standard
-//!   input closed, then hands back an [`Output`] or an [`Error`].
+//! - `GitCommand` (crate-private, like `Output`) adds the arguments and runs
+//!   the process with standard input closed. Nothing outside `ops` can run a
+//!   raw verb: the public surface is named operations, so the confirmation
+//!   seal cannot be routed around through the runner.
 //!
 //! # Output policy
 //!
 //! Where git offers a machine-readable form, use it and nothing else: `-z` for
-//! anything that lists paths ([`Output::records`] splits it), `--porcelain=v2`
+//! anything that lists paths (`Output::records` splits it), `--porcelain=v2`
 //! for status, `--format` with explicit field separators for log-like output.
 //! Human-facing output — `git status` without `--porcelain`, `git fetch`'s
 //! progress lines — is never parsed on a path where a machine-readable form
@@ -44,7 +46,10 @@
 //! [`Error::GitVersionUnreadable`] at startup, [`Error::GitNotStarted`] when
 //! the process could not be launched, and [`Error::GitFailed`] when git ran
 //! and exited non-zero — carrying the arguments, the exit status and git's own
-//! stderr, so "git failed" is never the whole message.
+//! stderr, so "git failed" is never the whole message. Because stderr is never
+//! matched on, an outcome a caller must tell apart from "git failed" — a
+//! credential prompt the user cancelled, say — has to come from a channel of
+//! its own (the askpass helper's), never from reading git's prose.
 //!
 //! # The cache-invalidation contract
 //!
@@ -56,9 +61,11 @@
 //! each flag means, checked against gix 0.87.1 as linked:
 //!
 //! - **`refs`** — a ref moved, appeared or vanished. gix re-reads loose refs on
-//!   every lookup and reloads `packed-refs` when its modification time changes,
-//!   so a fresh lookup is fresh. What is NOT fresh is anything that resolved a
-//!   ref earlier and kept the answer: an open [`crate::HistorySession`] and its
+//!   every lookup and reloads `packed-refs` when its modification time changes
+//!   (a rewrite inside the same timestamp tick as the previous read is the
+//!   residual it cannot see, as for the index below), so a fresh lookup is
+//!   fresh. What is NOT fresh is anything that resolved a ref earlier and kept
+//!   the answer: an open [`crate::HistorySession`] and its
 //!   [`crate::HistoryCursor`] hold the tips they started from. Honouring `refs`
 //!   means dropping the open session and cursor and querying the history again
 //!   from `HEAD`; a page from the old walk must not be appended to a view of
@@ -73,11 +80,12 @@
 //! - **`objects`** — new objects arrived or packs were rewritten. gix's object
 //!   store refreshes its view of the pack directory when a lookup misses after
 //!   every known index is loaded (`RefreshMode::AfterAllIndicesLoaded`, the
-//!   default Cairn keeps), so new objects are found on demand and a repacked
-//!   store is reloaded when a pack goes missing. Honouring `objects` requires
-//!   nothing of a handle today; the declaration exists so that an operation
-//!   which writes objects says so, and so a future change to the refresh mode
-//!   knows what it would break.
+//!   default Cairn keeps), so new objects are found on demand. A pack deleted
+//!   by a repack stays readable through its existing mapping until that same
+//!   lookup-miss refresh unloads it, so a stale pack is a wasted mapping, not
+//!   a wrong answer. Honouring `objects` requires nothing of a handle today;
+//!   the declaration exists so that an operation which writes objects says so,
+//!   and so a future change to the refresh mode knows what it would break.
 //! - **`working_tree`** — files on disk changed. Nothing in gix caches the
 //!   working tree; honouring it means re-running a status or diff query.
 //!
@@ -90,11 +98,13 @@
 mod binary;
 mod cli;
 mod environment;
+#[cfg(all(test, unix))]
+mod stub_git;
 
 use cairn_model::Confirmed;
 
 pub use binary::{GitBinary, GitVersion};
-pub use cli::{GitCommand, Output};
+pub(crate) use cli::GitCommand;
 pub use environment::GitEnvironment;
 
 use crate::Repository;
@@ -163,25 +173,50 @@ impl Invalidated {
 
 /// A mutation that has been performed, for the operation log the UI shows and
 /// for the worker that must honour what it invalidated.
+///
+/// The fields are private so that a record carrying an acknowledged prompt can
+/// only be built from a [`Confirmed`] token: the log quotes what the user
+/// agreed to, and no operation can write that quote by hand.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Performed {
-    pub description: String,
-    /// The prompt the user acknowledged, when the operation needed one.
-    pub acknowledged: Option<String>,
-    pub invalidated: Invalidated,
+    description: String,
+    acknowledged: Option<String>,
+    invalidated: Invalidated,
 }
 
 impl Performed {
+    /// A mutation that needed no confirmation.
+    pub(crate) fn new(description: impl Into<String>, invalidated: Invalidated) -> Self {
+        Self {
+            description: description.into(),
+            acknowledged: None,
+            invalidated,
+        }
+    }
+
+    /// A destructive mutation: the prompt is taken from the token, never typed.
     pub(crate) fn destructive(
         description: impl Into<String>,
         confirmed: &Confirmed,
         invalidated: Invalidated,
     ) -> Self {
         Self {
-            description: description.into(),
             acknowledged: Some(confirmed.acknowledged().to_owned()),
-            invalidated,
+            ..Self::new(description, invalidated)
         }
+    }
+
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+
+    /// The prompt the user acknowledged, when the operation needed one.
+    pub fn acknowledged(&self) -> Option<&str> {
+        self.acknowledged.as_deref()
+    }
+
+    pub fn invalidated(&self) -> Invalidated {
+        self.invalidated
     }
 }
 
@@ -204,12 +239,35 @@ mod tests {
     fn a_destructive_operation_records_what_the_user_agreed_to() {
         let repo = Repository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
         let performed = describe_destructive(&repo, Confirmed::by_user("Discard 3 local commits?"));
+        assert_eq!(performed.acknowledged(), Some("Discard 3 local commits?"));
         assert_eq!(
-            performed.acknowledged.as_deref(),
-            Some("Discard 3 local commits?")
+            performed.description(),
+            format!("no-op against {}", repo.git_dir().display())
         );
-        assert_eq!(performed.invalidated, Invalidated::NOTHING);
-        assert!(!performed.invalidated.anything());
+        assert_eq!(performed.invalidated(), Invalidated::NOTHING);
+        assert!(!performed.invalidated().anything());
+    }
+
+    #[test]
+    fn an_unconfirmed_operation_carries_no_prompt() {
+        let performed = Performed::new("fetched origin", Invalidated::refs());
+        assert_eq!(performed.acknowledged(), None);
+        assert_eq!(performed.description(), "fetched origin");
+        assert!(performed.invalidated().refs);
+    }
+
+    /// Caught by: dropping any one flag from `anything`'s disjunction.
+    #[test]
+    fn every_single_flag_counts_as_something() {
+        for single in [
+            Invalidated::refs(),
+            Invalidated::index(),
+            Invalidated::objects(),
+            Invalidated::working_tree(),
+        ] {
+            assert!(single.anything(), "{single:?}");
+            assert_eq!(single.and(Invalidated::NOTHING), single);
+        }
     }
 
     #[test]

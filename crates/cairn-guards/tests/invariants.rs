@@ -234,8 +234,13 @@ fn the_allowlist_check_rejects_a_sealed_crate_in_every_dependency_table() {
     );
     assert_eq!(
         unpermitted_dependencies("cairn-ui", &manifest("dependencies", "freya-testing")),
-        (vec!["freya-testing".to_owned()], none),
+        (vec!["freya-testing".to_owned()], none.clone()),
         "a test-only allowance let the crate ship the dependency"
+    );
+    assert_eq!(
+        unpermitted_dependencies("cairn-ui", &manifest("dev-dependencies", "freya")),
+        (none.clone(), none),
+        "a dependency the crate may ship was refused as a dev-dependency"
     );
 }
 

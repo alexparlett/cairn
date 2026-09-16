@@ -384,6 +384,11 @@ mod tests {
 
         let sha1 = Oid::parse(SHA1).unwrap();
         assert!(sha1.hex() == *SHA1);
+        assert!(
+            sha1.short() != *"012345",
+            "a prefix compared equal as a str"
+        );
+        assert!(sha1.hex() != *SHA256);
         assert!(sha1.hex() == SHA1);
         assert!(sha1.short() == "0123456");
         assert!(

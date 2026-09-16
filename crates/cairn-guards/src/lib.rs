@@ -257,17 +257,18 @@ pub fn code_without_strings(source: &str) -> String {
             }
             continue;
         }
-        if bytes[i] == b'\'' {
-            if let Some(end) = char_literal_end(bytes, i) {
-                out.push('\'');
-                for _ in i + 1..end {
-                    out.push(' ');
-                }
-                out.push('\'');
-                i = end + 1;
-                continue;
+        // A lifetime reaches neither arm: `char_literal_end` returns `None`,
+        // and the apostrophe falls through to be emitted as itself.
+        if bytes[i] == b'\''
+            && let Some(end) = char_literal_end(bytes, i)
+        {
+            out.push('\'');
+            for _ in i + 1..end {
+                out.push(' ');
             }
-            // A lifetime, not a literal. Emit the apostrophe and carry on.
+            out.push('\'');
+            i = end + 1;
+            continue;
         }
         out.push(bytes[i] as char);
         i += 1;
@@ -295,7 +296,10 @@ fn char_literal_end(bytes: &[u8], open: usize) -> Option<usize> {
     // One character, which may be several bytes: step over the continuation
     // bytes of a UTF-8 sequence.
     let mut end = after + 1;
-    while bytes.get(end).is_some_and(|c| c & 0b1100_0000 == 0b1000_0000) {
+    while bytes
+        .get(end)
+        .is_some_and(|c| c & 0b1100_0000 == 0b1000_0000)
+    {
         end += 1;
     }
     (bytes.get(end) == Some(&b'\'')).then_some(end)

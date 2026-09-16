@@ -451,6 +451,13 @@ mod tests {
     }
 
     /// The whole of what the assigner holds, in the terms R1.3 states it in.
+    ///
+    /// `gone`/`gone_count` are in here because they are the one structure that
+    /// is NOT bounded by construction: `rows` and `laid_out` cannot exceed the
+    /// window because eviction is what makes room for a push, but the remembered
+    /// ids are trimmed by a loop that could simply stop running. Measuring only
+    /// the rows would leave "never anything that grows with the number of
+    /// commits walked" decided by nothing.
     fn retained(assigner: &LaneAssigner) -> (usize, usize, usize, usize) {
         let segments: usize = assigner.rows.iter().map(|row| row.edges.len()).sum();
         let widest = assigner
@@ -489,6 +496,7 @@ mod tests {
         let mut unbounded = LaneAssigner::with_window(usize::MAX);
         let mut peak_rows = 0;
         let mut peak_segments = 0;
+        let mut peak_remembered = 0;
         for (id, parents) in &history {
             bounded.push(*id, parents.clone());
             unbounded.push(*id, parents.clone());
@@ -514,6 +522,22 @@ mod tests {
                 segments <= rows * (branches + 1),
                 "retained {segments} segments over {rows} rows"
             );
+            // The remembered ids, which are the half of R1.3 that is bounded by
+            // a loop rather than by construction. Both structures, because they
+            // are trimmed together and only one of them is the queue.
+            assert!(
+                bounded.gone.len() <= bounded.remembered(),
+                "{} remembered ids past a limit of {}",
+                bounded.gone.len(),
+                bounded.remembered()
+            );
+            assert!(
+                bounded.gone_count.len() <= bounded.remembered(),
+                "{} counted ids past a limit of {}",
+                bounded.gone_count.len(),
+                bounded.remembered()
+            );
+            peak_remembered = peak_remembered.max(bounded.gone.len());
             peak_rows = peak_rows.max(rows);
             peak_segments = peak_segments.max(segments);
         }
@@ -531,6 +555,19 @@ mod tests {
         assert!(
             history.len() > window * 8,
             "the history must dwarf the window"
+        );
+        // Without this the two assertions above hold vacuously on a history
+        // that never evicted enough ids to reach the limit, and neutering the
+        // trim in `remember_gone` would still pass.
+        assert_eq!(
+            peak_remembered,
+            bounded.remembered(),
+            "the remembered-id limit was never actually reached, so the bound on it decided \
+             nothing"
+        );
+        assert!(
+            history.len() > bounded.remembered(),
+            "the history must outlast the remembered ids, or nothing is ever forgotten"
         );
     }
 
@@ -661,6 +698,55 @@ mod tests {
             assigner.lanes.iter().all(Option::is_none),
             "a lane was left reserved for a commit that had already gone: {:?}",
             assigner.lanes
+        );
+    }
+
+    /// The arm the test above is NAMED for, which it did not reach: a parent
+    /// delivered further back than `remembered()`.
+    ///
+    /// This is the blind spot R1.3 carries and accepts — the assigner cannot
+    /// tell that parent from one still to come, so it reserves a lane for a
+    /// commit that will never arrive. What is pinned here is not that the
+    /// blind spot is closed (it is not, and it is not closable from gitoxide's
+    /// walk) but that it degrades GRACEFULLY: every commit is still placed,
+    /// every row still carries its own lane, and the cost is bounded by the
+    /// number of such events rather than compounding. A blind spot nobody
+    /// characterised is a blind spot that can quietly become a panic.
+    #[test]
+    fn a_parent_beyond_the_remembered_ids_is_placed_anyway_and_costs_one_lane() {
+        let window = 2;
+        let mut assigner = LaneAssigner::with_window(window);
+        let events = 3;
+        // `remembered()` is 32 at this window, so a gap of 40 fillers per pair
+        // puts every parent beyond it — the opposite of the case above.
+        let gap = assigner.remembered() + 8;
+        let history = skew_past_the_window(events, gap);
+
+        let mut rows = Vec::new();
+        for (id, parents) in &history {
+            rows.extend(assigner.push(*id, parents.clone()));
+        }
+        // Read BEFORE draining: `into_rows` consumes the assigner, and reading
+        // the lanes off what `mem::take` left behind would be reading a fresh
+        // `Default` and asserting nothing.
+        let reserved = assigner.lanes.iter().filter(|slot| slot.is_some()).count();
+        rows.extend(std::mem::take(&mut assigner).into_rows());
+
+        assert_eq!(
+            rows.len(),
+            history.len(),
+            "a commit was dropped rather than placed"
+        );
+        // R1.4 holds even here: total over arrival order means placed, not
+        // rejected, whatever the skew.
+        for ((walked, _), row) in history.iter().zip(&rows) {
+            assert_eq!(*walked, row.id, "rows came back out of walk order");
+        }
+        // And the cost is one leaked reservation per event, not one per row —
+        // which is what makes it a blind spot rather than an unbounded leak.
+        assert!(
+            reserved <= events,
+            "{reserved} lanes reserved after {events} unrecognised parents: the leak compounds"
         );
     }
 

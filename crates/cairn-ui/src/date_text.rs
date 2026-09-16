@@ -94,12 +94,23 @@ mod tests {
         let high = utc_minutes(i64::MAX);
         assert!(!low.is_empty());
         assert!(!high.is_empty());
+        // And they are WIDER than the column, which is the boundary the
+        // fixed-width test above deliberately does not claim to cover.
+        assert!(high.len() > "1970-01-01 00:00".len());
     }
 
-    /// Every field is fixed width, so the column is a column rather than a
-    /// ragged edge that moves as the year or hour changes digits.
+    /// Every field below the year is zero-padded, so the column is a column
+    /// rather than a ragged edge that moves as the hour or the month changes
+    /// digits.
+    ///
+    /// Scoped to four-digit years on purpose, and the name says so: `{year:04}`
+    /// pads but does not truncate, so a timestamp near the ends of `i64`
+    /// renders a twelve-digit year and is wider than this. That is not worth
+    /// fixing — the column clips, and no repository holds such a commit — but a
+    /// test called `the_rendering_is_fixed_width` would have claimed a property
+    /// that is false and passed only because its fixture avoided the case.
     #[test]
-    fn the_rendering_is_fixed_width() {
+    fn the_rendering_is_fixed_width_for_every_year_a_repository_holds() {
         for seconds in [0, 1_700_000_000, -86_400, 951_782_400] {
             assert_eq!(
                 utc_minutes(seconds).len(),

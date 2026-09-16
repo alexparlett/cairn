@@ -576,4 +576,170 @@ mod tests {
             }
         }
     }
+
+    /// What Cairn's own layout actually costs on a real repository.
+    ///
+    /// Phase 01 measured the assigner on a synthetic 200-branch fixture and
+    /// reported 361 edge segments per row. That number bounded nothing real
+    /// unless Cairn's own query reproduces it, so this harness runs the real
+    /// [`Repository::history`] over **every ref** of a named repository — the
+    /// default view — and reports the distribution of segments, concurrently
+    /// open lanes and retained bytes per row, plus how often the out-of-order
+    /// path fires. Ignored by default because it needs a repository worth
+    /// measuring and asserts nothing: it is evidence, and the evidence lives in
+    /// `docs/research/history-graph/scroll-memory-model.md`.
+    ///
+    /// `CAIRN_BENCH_REPO=<path> cargo test -p cairn-git --release --lib --
+    /// --ignored --nocapture measures_layout`
+    #[test]
+    #[ignore = "needs a repository named by CAIRN_BENCH_REPO"]
+    fn measures_layout_over_every_ref_of_a_named_repository() {
+        let path = std::env::var("CAIRN_BENCH_REPO").expect("set CAIRN_BENCH_REPO");
+        let limit: usize = std::env::var("CAIRN_BENCH_LIMIT")
+            .ok()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(1_000_000);
+        let repo = Repository::discover(&path).unwrap();
+        let tips = every_ref_tip(&repo);
+        eprintln!(
+            "repository {path}: {} commit-bearing ref tips, limit {limit}, \
+             GraphRow {} B fixed + EdgeSegment {} B each",
+            tips.len(),
+            size_of::<cairn_model::GraphRow>(),
+            size_of::<cairn_model::EdgeSegment>(),
+        );
+        assert!(!tips.is_empty(), "no ref resolved to a commit");
+
+        for order in [HistoryOrder::CommitTime, HistoryOrder::GraphOrder] {
+            let request = HistoryRequest::from_commits(tips.clone(), limit).with_order(order);
+            let started = Instant::now();
+            let page = repo.history(&request, &CancelSignal::new()).unwrap();
+            let elapsed = started.elapsed();
+            eprintln!(
+                "\n  {order:?}: {} rows, walked {}, in {elapsed:?}{}",
+                page.rows.len(),
+                page.walked,
+                if page.cursor.is_some() {
+                    " (LIMIT REACHED — history longer than the limit)"
+                } else {
+                    ""
+                },
+            );
+            report_layout(&page);
+        }
+    }
+
+    /// Every ref that peels to a commit, which is what the default view walks.
+    ///
+    /// Peeling happens inside the iterator because it holds the packed-refs
+    /// buffer; refs that peel to something other than a commit — a tag on a
+    /// blob, a broken ref — are dropped rather than failing the run.
+    fn every_ref_tip(repo: &Repository) -> Vec<Oid> {
+        let inner = repo.inner();
+        let platform = inner.references().unwrap();
+        let peeled: Vec<gix::hash::ObjectId> = platform
+            .all()
+            .unwrap()
+            .peeled()
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|reference| reference.id().detach())
+            .collect();
+        let mut tips = Vec::new();
+        for id in peeled {
+            let Ok(object) = inner.find_object(id) else {
+                continue;
+            };
+            if object.kind == gix::object::Kind::Commit && !tips.contains(&id) {
+                tips.push(id);
+            }
+        }
+        tips.iter().map(|id| model_id(id).unwrap()).collect()
+    }
+
+    /// Segments, open lanes and retained bytes per row, and what they
+    /// extrapolate to.
+    fn report_layout(page: &HistoryPage) {
+        let mut segments = Vec::with_capacity(page.rows.len());
+        let mut open_lanes = Vec::with_capacity(page.rows.len());
+        let mut bytes = Vec::with_capacity(page.rows.len());
+        let mut out_of_order_rows = 0usize;
+        let mut out_of_order_segments = 0usize;
+        let mut widest_lane = 0usize;
+
+        for row in &page.rows {
+            let graph = &row.graph;
+            segments.push(graph.edges.len());
+            bytes.push(
+                size_of::<cairn_model::GraphRow>()
+                    + graph.edges.len() * size_of::<cairn_model::EdgeSegment>(),
+            );
+
+            // A lane is open on this row if anything occupies it there: the
+            // commit's own node, or either end of a segment crossing it.
+            let mut lanes = vec![graph.lane.index()];
+            for edge in &graph.edges {
+                for lane in [edge.from.index(), edge.to.index()] {
+                    if !lanes.contains(&lane) {
+                        lanes.push(lane);
+                    }
+                    widest_lane = widest_lane.max(lane);
+                }
+            }
+            open_lanes.push(lanes.len());
+
+            let flagged = graph.edges.iter().filter(|e| e.out_of_order).count();
+            out_of_order_segments += flagged;
+            if flagged > 0 {
+                out_of_order_rows += 1;
+            }
+        }
+
+        describe("segments/row ", &mut segments);
+        describe("open lanes/row", &mut open_lanes);
+        describe("bytes/row     ", &mut bytes);
+
+        let rows = page.rows.len().max(1);
+        eprintln!(
+            "    out-of-order: {out_of_order_rows} rows ({:.3}%), {out_of_order_segments} segments",
+            100.0 * out_of_order_rows as f64 / rows as f64,
+        );
+        eprintln!("    highest lane number used: {widest_lane}");
+
+        let p99 = percentile(&bytes, 0.99);
+        for commits in [10_000usize, 100_000, 500_000] {
+            let total = p99 * commits;
+            eprintln!(
+                "    at p99 {p99} B/row x {commits} commits = {:.1} MB retained layout",
+                total as f64 / (1024.0 * 1024.0),
+            );
+        }
+    }
+
+    fn describe(label: &str, values: &mut [usize]) {
+        if values.is_empty() {
+            eprintln!("    {label}: no rows");
+            return;
+        }
+        values.sort_unstable();
+        let sum: usize = values.iter().sum();
+        eprintln!(
+            "    {label}: mean {:.2}  p50 {}  p95 {}  p99 {}  max {}",
+            sum as f64 / values.len() as f64,
+            percentile(values, 0.50),
+            percentile(values, 0.95),
+            percentile(values, 0.99),
+            values.last().copied().unwrap_or(0),
+        );
+    }
+
+    /// Nearest-rank percentile over an already-sorted slice.
+    fn percentile(sorted: &[usize], fraction: f64) -> usize {
+        if sorted.is_empty() {
+            return 0;
+        }
+        let last = sorted.len() - 1;
+        let index = ((last as f64) * fraction).round() as usize;
+        sorted.get(index.min(last)).copied().unwrap_or(0)
+    }
 }

@@ -201,20 +201,34 @@ Project invariants:
 
 - **No unbounded list renders without virtualization.** A history is however long
   somebody's repository is, so a view that builds one element per row of it is
-  unbounded work per frame. Twin: `a_history_sized_list_renders_through_a_virtualizing_view`,
-  which forbids a render file from building `children` out of a collection of
-  `HistoryRow`s, or putting them in a plain `ScrollView`, unless it names
-  `VirtualScrollView` — and fails if nothing names it at all, so the view cannot
-  be swapped for the unbounded one by accident.
+  unbounded work per frame. Twin:
+  `a_history_sized_list_renders_through_a_virtualizing_view`. What it decides,
+  stated at the strength it actually holds: **no file on a render path may name
+  `ScrollView`** — the view that lays out every child — except through an
+  explicit exceptions roster that is empty today, and **some render file must use
+  `VirtualScrollView` over `HistoryRow`s**. So swapping the list for the
+  unbounded view, adding a second unbounded one anywhere, and deleting the
+  virtualized one all fail; the roster is what turns a bounded panel's
+  legitimate `ScrollView` into a review rather than a silent precedent.
 
-  **Residual obligation the guard structurally cannot express**, stated rather
-  than implied and owned by `responsiveness-reviewer`: that the virtualizing view
-  really does build only the items inside its viewport is a property of Freya,
-  not of Cairn's source. It is checked today by a recorded measurement — see the
-  phase-04 entry in `docs/work/history-graph/progress.md`, which counted builder
-  invocations per render at 1,000 and at 100,000 rows and found them identical.
-  Pinning that mechanically needs a `freya-testing` headless component test, and
-  `freya-testing` is a dependency addition, which is a user decision.
+  **Residual obligations the guard structurally cannot express**, stated rather
+  than implied and owned by `responsiveness-reviewer` (whose dispatch row in
+  `docs/qa-gate.md` names this twin):
+
+  - *Whether a given iteration is over a history at all.* Tokens cannot tell an
+    iteration over a repository's commits from one over three tabs, so the guard
+    does not pretend to: it checks which VIEW a file reaches for, not what is put
+    in it. A hand-rolled viewport that never names either view is the reviewer's
+    to catch.
+  - *Whether the virtualizing view really builds only what its viewport shows.*
+    That is a property of Freya, not of Cairn's source. It was measured once, by
+    an instrumented build that counted builder invocations per render at 1,000
+    and at 100,000 rows and found them identical — a **one-off, not a repeatable
+    check**: the instrumentation was reverted, and re-deciding it means
+    re-instrumenting. The numbers and the method are recorded in the
+    `history-graph` packet's progress log and graduate to `docs/systems/` when it
+    lands. Pinning it mechanically needs a `freya-testing` headless component
+    test, and `freya-testing` is a dependency addition, which is a user decision.
 
 ## Conventions
 

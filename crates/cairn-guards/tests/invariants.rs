@@ -242,73 +242,135 @@ fn the_ui_thread_never_waits_on_repository_work() {
 #[test]
 fn a_history_sized_list_renders_through_a_virtualizing_view() {
     let worker = Path::new(WORKER_DIR);
-    let mut rendering_rows = 0usize;
-    let mut virtualizing = 0usize;
+    let mut virtualizes_the_history = Vec::new();
 
     for dir in RENDER_SOURCE_DIRS {
+        let mut rendering = 0usize;
         for (path, source) in rust_sources(dir) {
             if path.starts_with(worker) {
                 continue;
             }
-            // Strings blanked as well as comments: a file mentioning
-            // `VirtualScrollView` only inside an error message must not count
-            // as using one, and a file whose prose happens to say `ScrollView`
-            // in a message must not be accused of rendering into one.
+            rendering += 1;
+            // Strings blanked as well as comments: a file naming a view only
+            // inside an error message has not used one, in either direction.
             let code = code_without_strings(&source);
-            let names_rows = !mentions_crate(&code, "HistoryRow").is_empty();
-            let virtualizes = !mentions_crate(&code, "VirtualScrollView").is_empty();
-            if virtualizes {
-                virtualizing += 1;
-            }
-            if !names_rows {
-                continue;
-            }
-            rendering_rows += 1;
 
-            // Building one element per entry of a history-sized collection is
-            // the shape this forbids. `children` is how a list of elements is
-            // handed to a container, so a file that names both the rows and
-            // that call is rendering the history — and must be doing it through
-            // a view that builds only what is visible.
-            let builds_children = mentions_crate(&code, "children");
-            assert!(
-                builds_children.is_empty() || virtualizes,
-                "{}:{} builds children from a collection that holds `HistoryRow`s, and does not \
-                 name `VirtualScrollView`. A history is however long somebody's repository is; \
-                 rendering one element per row of it is the unbounded list this invariant \
-                 forbids (CLAUDE.md, Invariants; PRD R4.1).",
-                path.display(),
-                builds_children[0]
-            );
+            if let Some(line) = unbounded_view(&code) {
+                let excused = UNBOUNDED_VIEW_EXCEPTIONS
+                    .iter()
+                    .any(|(excused, _)| Path::new(excused) == path);
+                assert!(
+                    excused,
+                    "{}:{line} names `{UNBOUNDED_VIEW}`, which lays out every child whether it \
+                     is on screen or not. A history is however long somebody's repository is, so \
+                     Cairn's lists use `{VIRTUALIZING_VIEW}` (CLAUDE.md, Invariants; PRD R4.1). \
+                     A BOUNDED panel may legitimately want the plain one — if this is that, add \
+                     the file and the reason to UNBOUNDED_VIEW_EXCEPTIONS in this file, which is \
+                     the review the rule exists to force.",
+                    path.display(),
+                );
+            }
 
-            // Swapping the virtualizing view for the plain one is the other
-            // half of the same regression, and it would leave `children`
-            // unmentioned because `ScrollView` takes its children the same way
-            // a `rect` does.
-            let plain = mentions_crate(&code, "ScrollView");
-            assert!(
-                plain.is_empty() || virtualizes,
-                "{}:{} puts `HistoryRow`s in a `ScrollView`, which lays out every child whether \
-                 it is on screen or not. The history list uses `VirtualScrollView` (CLAUDE.md, \
-                 Invariants; PRD R4.1).",
-                path.display(),
-                plain[0]
-            );
+            if !mentions_crate(&code, VIRTUALIZING_VIEW).is_empty()
+                && !mentions_crate(&code, "HistoryRow").is_empty()
+            {
+                virtualizes_the_history.push(path);
+            }
         }
+        // Per directory, not in aggregate, for the reason the responsiveness
+        // guard gives above: a roster pointed at a renamed directory would
+        // otherwise be covered by whichever one still had files in it.
+        assert!(
+            rendering > 0,
+            "the virtualization guard found no render files under {dir}. Every directory in \
+             RENDER_SOURCE_DIRS must contribute, or the guard is scanning less than it claims."
+        );
     }
 
     assert!(
-        rendering_rows > 0,
-        "no file under {RENDER_SOURCE_DIRS:?} names `HistoryRow`. Either the history view moved, \
-         in which case move this guard with it, or nothing renders history any more and this \
-         guard is checking an empty set."
+        !virtualizes_the_history.is_empty(),
+        "no file under {RENDER_SOURCE_DIRS:?} uses `{VIRTUALIZING_VIEW}` over `HistoryRow`s. \
+         The history list is the one unbounded list Cairn renders and it is virtualized \
+         (`crates/cairn-ui/src/history_list.rs`); restore that call site, or — if the list \
+         genuinely moved — move this guard with it."
     );
-    assert!(
-        virtualizing > 0,
-        "nothing under {RENDER_SOURCE_DIRS:?} names `VirtualScrollView`. The history list is the \
-         one unbounded list Cairn renders, and it is virtualized; if that changed, it changed by \
-         accident."
-    );
+
+    for (excused, _) in UNBOUNDED_VIEW_EXCEPTIONS {
+        assert!(
+            RENDER_SOURCE_DIRS
+                .iter()
+                .flat_map(rust_sources)
+                .any(|(path, _)| path == Path::new(excused)),
+            "UNBOUNDED_VIEW_EXCEPTIONS excuses `{excused}`, which does not exist. A dead \
+             exception is a hole nobody can see: delete the row or fix the path."
+        );
+    }
+}
+
+/// The scroll view that lays out every child it is given.
+const UNBOUNDED_VIEW: &str = "ScrollView";
+
+/// The one that builds only what its viewport shows.
+///
+/// `ScrollView` is a prefix of neither: [`mentions_crate`] matches on word
+/// boundaries, so `VirtualScrollView` does not count as naming `ScrollView`.
+const VIRTUALIZING_VIEW: &str = "VirtualScrollView";
+
+/// Render files allowed to name [`UNBOUNDED_VIEW`] anyway, and why.
+///
+/// **Empty on purpose.** A bounded panel — a commit message, a settings pane —
+/// can legitimately use the plain scroll view, and when one does, adding its row
+/// here is the review this rule exists to force. Leaving the roster empty is
+/// what makes that a decision rather than a default.
+const UNBOUNDED_VIEW_EXCEPTIONS: &[(&str, &str)] = &[];
+
+/// The 1-based line where `code` names the unbounded scroll view, if it does.
+///
+/// Deliberately NOT a check for "renders a collection of rows": whether an
+/// iteration is over a history or over three tabs is not decidable from tokens,
+/// and a matcher that pretended otherwise would report a rule it had not
+/// checked. What IS decidable is which VIEW a file reaches for, and that is the
+/// regression worth catching — a list swapped to the unbounded view to dodge a
+/// layout problem.
+fn unbounded_view(code: &str) -> Option<usize> {
+    mentions_crate(code, UNBOUNDED_VIEW).first().copied()
+}
+
+/// The roster's own self-test, in the shape `every_waiting_spelling_in_the_roster_is_matched`
+/// established: a matcher that has quietly stopped matching reports green while
+/// the coverage it names is gone.
+#[test]
+fn the_unbounded_view_matcher_catches_the_shapes_it_claims() {
+    let caught = [
+        "ScrollView::new()",
+        "ScrollView::new_controlled(controller)",
+        "use freya::prelude::ScrollView;",
+        "use freya::prelude::ScrollView as Plain;",
+        "freya::components::scrollviews::ScrollView::new()",
+        "let view:\n    ScrollView = todo();",
+    ];
+    for source in caught {
+        assert!(
+            unbounded_view(&code_without_strings(source)).is_some(),
+            "the unbounded-view matcher missed {source:?}"
+        );
+    }
+
+    let ignored = [
+        "VirtualScrollView::new_with_data_controlled(data, build_row, controller)",
+        "use freya::prelude::VirtualScrollView;",
+        "let hint = \"ScrollView\";",
+        "// a plain ScrollView would lay out every child",
+        "MyScrollViewThing::new()",
+        "scroll_view()",
+    ];
+    for source in ignored {
+        assert_eq!(
+            unbounded_view(&code_without_strings(source)),
+            None,
+            "the unbounded-view matcher fired on {source:?}"
+        );
+    }
 }
 
 #[test]

@@ -191,18 +191,49 @@ affordance beyond the title bar's ellipsis; and the component tests that need
 `freya-testing` — the paging call chain and R4.3/R5.2's *rendering* (the decision
 of WHICH sentence is now tested; that the sentence reaches the window is not).
 
-**One reviewer was dispatched and had not reported when the phase closed.**
-`gate-integrity-reviewer` was sent over the guard change (its dispatch row in
-`docs/qa-gate.md` matches any diff touching `crates/cairn-guards/`) and produced
-nothing before the phase ended, after one re-ask. So the guard's own review is
-OUTSTANDING, not done: phase 05 should re-run it over
-`a_history_sized_list_renders_through_a_virtualizing_view` and the `const _`
-assertions in `graph_geometry`. What the implementing session did instead of a
-review — stated as the weaker thing it is — was verify three mutations by hand:
-swapping `VirtualScrollView` for `ScrollView`, building `children` per row in
-`main.rs`, and narrowing `LANE_WIDTH` below the node diameter. All three fail,
-the first two as guard failures naming the file and the rule, the third as a
-compile error.
+**A fifth agent, `gate-integrity-reviewer`, reviewed the guard itself — and the
+first version of it was mostly inert.** Correction to what this entry said an
+hour earlier, when that reviewer had not yet delivered: it did, after a re-ask,
+and its two CRITICALs were right.
+
+- The guard forbade a render file from building `children` out of `HistoryRow`s.
+  **`children` appears nowhere in either render crate** — Cairn writes `.child(`
+  exclusively, twenty times over — so that half matched zero lines and the
+  mutation the implementing session used to "verify" it (`.children(...)`) was
+  not this codebase's idiom. The session had verified a shape the code does not
+  write.
+- The remaining half exempted a whole file on any mention of
+  `VirtualScrollView`, so the regression "production switched to the unbounded
+  view while a test module still names the virtualizing one" passed green.
+
+The guard was rebuilt around what a token scan can actually DECIDE, which is
+which VIEW a file reaches for rather than what is put in it: **no render file may
+name `ScrollView` at all**, except through an exceptions roster that is empty and
+whose emptiness is the review a bounded panel's legitimate use would have to
+pass; and **some render file must use `VirtualScrollView` over `HistoryRow`s**.
+That version fails on all three regression shapes, verified: the list swapped to
+`ScrollView`, a second plain `ScrollView` added in `main.rs` — which the first
+version missed entirely — and the virtualizing view deleted. The token roster now
+has its own self-test over synthetic sources, in the shape
+`every_waiting_spelling_in_the_roster_is_matched` established, because the
+inert-matcher failure is exactly what that pattern exists to prevent.
+
+Also from that review, and acted on: `CLAUDE.md` described the guard as a
+semantic check it was not, and now states what it decides at the strength it
+holds plus the two residuals a scan cannot reach; `docs/qa-gate.md`'s
+`responsiveness-reviewer` row now names the twin rather than leaving
+virtualization wholly the reviewer's, so the three places that state its
+ownership agree; and the A7 measurement is now described as the one-off
+instrumented build it was, rather than as a repeatable check, at a path that
+does not rot when the packet tears down.
+
+**Not adjudicated by `qa-confirm`, and that is a gap phase 05 owns.** The other
+three reviewers' findings went to a fresh `qa-confirm`; these arrived after it
+had run, and were acted on directly because the load-bearing ones are checkable
+facts rather than judgements — `grep -rn children crates/cairn-ui/src
+crates/cairn-app/src` returns nothing, and the three mutations were run. The
+findings that ARE judgements (the message wording, whether the exceptions roster
+is the right mechanism) have had no adversarial pass.
 
 **Needs the user, batched:** whether a transient page failure should be
 retryable (today one failed page ends paging for the session, which is deliberate

@@ -190,7 +190,11 @@ FILE, and it is a guard, not a convention — see below.
   repository**, because discovering one reads the filesystem. A path outside a
   repository therefore arrives as an `Update::Failed` naming the path, not as a
   panic and not as an empty window
-  (`opening_a_path_outside_a_repository_is_reported_and_names_the_path`).
+  (`opening_a_path_outside_a_repository_is_reported_and_names_the_path`). Before
+  it looks for the repository at all it looks for `git`, on the same thread and
+  for the same reason (running `git --version` is work): a missing or too-old
+  `git` arrives the same way, naming the version Cairn needs, and nothing is
+  served behind it (`a_missing_git_is_refused_naming_the_version_and_nothing_is_served`).
 - `RepositoryHandle::submit(Request) -> Epoch` returns immediately over an
   unbounded channel and holds no receiving end of anything.
 - `Updates::next()` is an `async fn`: it `try_recv`s and otherwise parks on

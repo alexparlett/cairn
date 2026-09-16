@@ -20,5 +20,8 @@ cairn-model.workspace = true
 cairn-ui.workspace = true
 freya.workspace = true
 
+[dev-dependencies]
+freya-testing.workspace = true
+
 [lints]
 workspace = true

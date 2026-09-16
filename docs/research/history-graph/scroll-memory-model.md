@@ -529,3 +529,229 @@ affordable is not a smaller window — it is a cheaper way back, and this record
 found only two candidates for that: a commit-graph (Finding 2, optional) and
 anchoring resumption on an `Oid` near the target rather than an offset
 (Findings 9, 23).
+
+## Part D — Cairn's own assigner, measured on real repositories
+
+Added 2026-09-16, after Parts A-C. Parts A-C measured `git` and read other
+clients; nothing in them measured Cairn. Phase 01 measured Cairn's
+`LaneAssigner` on a *synthetic* 200-branch fixture and reported **361 edge
+segments per row**, ~8.5 KB per row and ~5.4 GB across 500k rows — the figure
+that drove the packet's whole retention analysis, and that
+`docs/prd/history-graph.md`, `docs/work/history-graph/phase-02-history-query.md`
+and the `LaneAssigner::DEFAULT_WINDOW` doc comment all still cite. Part D asks
+the one question that settles whether it bounded anything real: what does
+Cairn's own shipped query produce on repositories that exist?
+
+**Method.** An `#[ignore]`d harness,
+`measures_layout_over_every_ref_of_a_named_repository` in
+`crates/cairn-git/src/history.rs`, driven by `CAIRN_BENCH_REPO`. It resolves
+**every ref** that peels to a commit — the default view shows all branches — and
+runs the real `Repository::history` over the whole history in one page, so the
+rows it measures are the rows the application would hold. Per row it counts edge
+segments, distinct lanes occupied (the node's own lane plus both ends of every
+segment crossing it), retained bytes
+(`size_of::<GraphRow>()` = 72 B plus 24 B per segment, both read from the
+compiler at run time, not assumed) and whether any segment is flagged
+`out_of_order`. Release build. Both orders are run: `HistoryOrder::CommitTime`,
+which is the default and what a history list uses, and `HistoryOrder::GraphOrder`
+for contrast.
+
+Re-run:
+
+```
+CAIRN_BENCH_REPO=<path> cargo test -p cairn-git --release --lib -- \
+  --ignored --nocapture measures_layout
+```
+
+Repositories measured, all local, all real, none shallow except `hyprland`:
+`freya` (2,896 commits, 91 refs), `strata` (1,081 commits, 176 refs — the most
+branch-dense in the sample), `cairn` itself (43 commits, 4 refs), `hyprland`
+(535 commits, 20 refs), `dungeon-siege-reborn` (71, 3), `nct6687d` (168, 7), and
+the bare clone cargo keeps at
+`~/.cargo/git/db/freya-23bd2b0bd50361d3` (2,540 commits, 4 refs). None carries a
+commit-graph file.
+
+### Finding 24 — phase 01's 361 segments per row does not reproduce on any real repository, in the order Cairn actually walks
+
+In `HistoryOrder::CommitTime` — the default, and the order a history list is
+read in — every repository in the sample sits between 2 and 8 segments per row
+at p99, with a sample-wide maximum of 11:
+
+| Repository | commits | ref tips | segments/row mean / p50 / p95 / p99 / max | open lanes/row mean / p50 / p95 / p99 / max | highest lane no. |
+| --- | --- | --- | --- | --- | --- |
+| freya | 2,896 | 84 | 3.12 / 3 / 7 / 8 / 11 | 2.12 / 2 / 6 / 7 / 9 | 8 |
+| strata | 1,081 | 166 | 3.25 / 3 / 5 / 7 / 9 | 2.15 / 2 / 4 / 5 / 7 | 6 |
+| nct6687d | 168 | 5 | 3.02 / 3 / 5 / 6 / 6 | 2.03 / 2 / 4 / 5 / 5 | 4 |
+| freya (cargo bare clone) | 2,540 | 4 | 2.37 / 2 / 3 / 4 / 5 | 1.36 / 1 / 2 / 3 / 3 | 2 |
+| dungeon-siege-reborn | 71 | 1 | 2.18 / 2 / 3 / 3 / 4 | 1.20 / 1 / 2 / 2 / 2 | 1 |
+| hyprland | 535 | 12 | 1.98 / 2 / 2 / 2 / 2 | 1.01 / 1 / 1 / 2 / 2 | 1 |
+| cairn | 43 | 2 | 1.95 / 2 / 2 / 2 / 2 | 1.00 / 1 / 1 / 1 / 1 | 0 |
+
+The widest real repository measured is **8 segments per row at p99 against phase
+01's 361** — a factor of 45.
+
+The independent check that this is not an artefact of the harness is `git`
+itself. Counting concurrent lanes in `git log --all --graph` output over the same
+seven repositories (graph column of each commit row, `*` and `|` characters
+counted; `git 2.55.0`) against Cairn's open lanes per row:
+
+| Repository | `git --all --graph` p99 / max | Cairn CommitTime p99 / max |
+| --- | --- | --- |
+| freya | 11 / 13 | 7 / 9 |
+| strata | 4 / 5 | 5 / 7 |
+| nct6687d | 3 / 4 | 5 / 5 |
+| freya (cargo bare clone) | 3 / 3 | 3 / 3 |
+| hyprland | 2 / 2 | 2 / 2 |
+| dungeon-siege-reborn | 2 / 2 | 2 / 2 |
+| cairn | 1 / 1 | 1 / 1 |
+
+Cairn is within two lanes of git on every repository, in both directions. The two
+counts are not identical by construction — git's is read off the commit rows only
+and ignores the `/` and `\` continuation rows, while Cairn's counts every lane
+any segment on the row touches — so the agreement is about magnitude, and the
+magnitude agrees. **Cairn's graph is not wider than git's on these
+repositories.**
+
+**Confidence:** measured here, against the shipped `Repository::history` and the
+shipped `LaneAssigner`, on seven real repositories.
+**Implies:** the 361 figure describes the phase 01 fixture and nothing else. Any
+conclusion whose load-bearing input was "361 segments per row" — including the
+~5.4 GB-across-500k-rows framing — is measuring a synthetic artefact.
+
+### Finding 25 — the out-of-order path is nearly inert in commit-time order, and dominant in graph order
+
+The mechanism by which Cairn's graph could genuinely be wider than git's is the
+one `gix-revwalk-ordering.md` describes: gix has no `--topo-order`, so a parent
+can be delivered before its child, and the assigner opens a lane of its own for
+it. Measured, as the percentage of returned rows carrying at least one
+`out_of_order` segment:
+
+| Repository | CommitTime | GraphOrder |
+| --- | --- | --- |
+| freya | 0.173% (5 rows, 5 segments) | 86.9% (2,517 rows, 39,919 segments) |
+| strata | 0.000% | 84.4% (912 rows, 66,774 segments) |
+| freya (cargo bare clone) | 0.197% (5 rows) | 33.2% (842 rows) |
+| nct6687d | 0.000% | 98.2% (165 rows) |
+| hyprland | 0.000% | 80.9% (433 rows) |
+| dungeon-siege-reborn | 0.000% | 25.4% (18 rows) |
+| cairn | 0.000% | 97.7% (42 rows) |
+
+In the order Cairn ships, committer-date skew fires on at most 1 row in 500, and
+on four of the seven repositories not at all. `GraphOrder` is `BreadthFirst`,
+which interleaves tips deliberately, so it hits the path on most rows by
+construction.
+
+**Confidence:** measured here.
+**Implies:** the widening mechanism the packet was designed around is real, but
+in the default order it is a rounding error. It is worth keeping the assigner
+total over it — it costs nothing and the alternative is a wrong graph — but it
+does not justify a memory budget.
+
+### Finding 26 — the 361-shaped number is a property of arrival order, not of a repository
+
+Running the same repositories in `HistoryOrder::GraphOrder` reproduces phase 01's
+magnitude on the branch-dense one:
+
+| Repository | segments/row mean / p50 / p95 / p99 / max | bytes/row mean / p99 | highest lane no. |
+| --- | --- | --- | --- |
+| strata | 117.42 / 62 / 323 / **327** / 329 | 2,890 / 7,920 | 345 |
+| freya | 37.03 / 14 / 116 / 130 / 133 | 961 / 3,192 | 132 |
+| nct6687d | 19.63 / 22 / 27 / 27 / 29 | 543 / 720 | 27 |
+| hyprland | 6.04 / 6 / 11 / 11 / 11 | 217 / 336 | 9 |
+| freya (cargo bare clone) | 3.43 / 2 / 8 / 11 / 16 | 154 / 336 | 14 |
+| cairn | 3.19 / 3 / 4 / 4 / 4 | 148 / 168 | 2 |
+| dungeon-siege-reborn | 2.63 / 2 / 5 / 5 / 5 | 135 / 192 | 3 |
+
+`strata` — 166 commit-bearing ref tips — reaches **327 segments per row at p99**
+in graph order against **7** in commit-time order, on exactly the same commits,
+the same refs and the same assigner. A 47x swing with the repository held
+constant. Phase 01's 361 is inside that range, and phase 01's fixture had 200
+branches against strata's 166.
+
+**Confidence:** measured here; the two orders differ in nothing but
+`gix::revision::walk::Sorting`.
+**Implies:** 361 was never a statement about repository shape. It is what
+happens when many tips are queued and drained breadth-first, which is what a
+synthetic fixture produces and what `GraphOrder` produces — and which the
+default order does not. The corollary is a real constraint on the design pass:
+exposing `GraphOrder` as a user-visible option re-opens the memory question for
+any repository with a lot of refs.
+
+### Finding 27 — retained layout on real repositories is tens of megabytes at 500k rows, not gigabytes
+
+Bytes per row, and what the measured p99 extrapolates to. `GraphRow` is 72 B
+fixed (`Oid` + `Lane` + `Vec` header) plus 24 B per `EdgeSegment`:
+
+| Repository (CommitTime) | bytes/row mean | bytes/row p99 | 10k commits | 100k | 500k |
+| --- | --- | --- | --- | --- | --- |
+| freya | 147.0 | 264 | 2.5 MB | 25.2 MB | 125.9 MB |
+| strata | 150.0 | 240 | 2.3 MB | 22.9 MB | 114.4 MB |
+| nct6687d | 144.4 | 216 | 2.1 MB | 20.6 MB | 103.0 MB |
+| freya (cargo bare clone) | 128.8 | 168 | 1.6 MB | 16.0 MB | 80.1 MB |
+| dungeon-siege-reborn | 124.4 | 144 | 1.4 MB | 13.7 MB | 68.7 MB |
+| hyprland | 119.6 | 120 | 1.1 MB | 11.4 MB | 57.2 MB |
+| cairn | 118.9 | 120 | 1.1 MB | 11.4 MB | 57.2 MB |
+
+The worst real repository in the sample retains **126 MB of layout for a
+500,000-commit history** — against the ~5.4 GB the packet reasoned from, a
+factor of 43. Using the mean rather than p99 halves it again. For contrast, the
+same extrapolation in `GraphOrder` on strata is 3.8 GB, which is the number the
+packet actually had.
+
+For scale: Finding 5 measured `git log --graph` itself at 107-114 MiB peak RSS
+over a 200k-commit history, spent on the traversal rather than the render. On
+this evidence Cairn's *entire retained layout* for a history two and a half
+times that size is the same order as what git spends walking.
+
+**Confidence:** measured here; the byte figures are `size_of` at run time, not
+estimates.
+**Implies:** on real repositories in the default order, retained layout is not
+the thing that decides whether a history view fits in memory. Commit summaries —
+the author name, email and subject line per row, which are heap strings and are
+not counted here — are plausibly the larger half, and nothing in this record has
+measured them.
+
+### Finding 28 — the sample tops out at 2,896 commits, and that is its main weakness
+
+Every git repository on this machine was enumerated (`find` over `$HOME` to depth
+6, plus `~/.cargo/git/db`, `~/.cargo/git/checkouts` and
+`~/.cargo/registry/src`). **No repository with more than 50,000 commits exists
+locally**; the largest is `freya` at 2,896, and the two most branch-dense are
+`strata` (176 refs) and `freya` (91 refs). Nothing was cloned for this
+measurement.
+
+**Confidence:** exhaustive over this machine; says nothing about repositories
+elsewhere.
+**Implies:** Findings 24-27 pin the *shape* — lanes open per row is driven by how
+many branch tips are live at a given depth, not by how long the history is — but
+the extrapolations in Finding 27 assume the measured p99 holds as history
+lengthens, and no measurement here tests that. A 500k-commit repository with
+thousands of live refs is the case that could still be wide, and it remains
+unmeasured.
+
+### What Part D does NOT settle
+
+- **Whether a large, branch-dense repository stays this narrow.** Finding 28. The
+  extrapolations multiply a p99 measured over at most 2,896 rows by 500,000. They
+  are arithmetic, not a measurement, and the sample contains nothing above 3k
+  commits.
+- **How much a history row costs in total.** Only `GraphRow` is counted.
+  `CommitSummary` carries three owned `String`s per row and is not measured here;
+  on this evidence it is the bigger of the two and the memory question may simply
+  move there.
+- **Whether the `LaneAssigner` window is the right mechanism, or the right size.**
+  Part D prices what the window is holding. It does not evaluate the window: it
+  neither confirms nor refutes the case for bounded retention, which Findings 7,
+  11 and 15 leave open on other grounds entirely.
+- **What the numbers would be without the window.** Every measurement here ran at
+  `LaneAssigner::DEFAULT_WINDOW`, so a row that left the window kept whatever
+  segments it had. In commit-time order that truncates almost nothing (Finding 25
+  puts out-of-order repaint at under 0.2% of rows), but in graph order it makes
+  Finding 26's figures a floor rather than a total.
+- **Whether `GraphOrder` should be reachable by a user.** Finding 26 prices it;
+  the decision is the design pass's.
+- **What still cites 361.** `docs/prd/history-graph.md`,
+  `docs/work/history-graph/phase-02-history-query.md` and the doc comment on
+  `LaneAssigner::DEFAULT_WINDOW` all quote the phase 01 figure as the
+  justification for the 1024-row window. Part D is evidence, not a decision;
+  correcting those living statements belongs to the design pass that reads it.

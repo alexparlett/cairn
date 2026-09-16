@@ -23,6 +23,27 @@ const REPORTER: &str = concat!(
 );
 const BARE_IGNORE: &str = concat!("#[test]\n#[ign", "ore]\nfn skipped() {}\n");
 
+/// Git environment a caller can leak in: a pre-push hook in a linked worktree exports `GIT_DIR`.
+const INHERITED_GIT_VARS: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_NAMESPACE",
+    "GIT_PREFIX",
+];
+
+/// `command` with every inherited repository-selecting variable removed.
+fn isolated(command: &mut Command) -> &mut Command {
+    for var in INHERITED_GIT_VARS {
+        command.env_remove(var);
+    }
+    command
+}
+
 struct Scratch {
     path: PathBuf,
 }
@@ -50,7 +71,7 @@ impl Scratch {
     }
 
     fn git(&self, args: &[&str]) {
-        let status = Command::new("git")
+        let status = isolated(&mut Command::new("git"))
             .current_dir(&self.path)
             .args(args)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -91,7 +112,7 @@ impl Drop for Scratch {
 }
 
 fn run_hook(project: &Path) -> String {
-    let child = Command::new("bash")
+    let child = isolated(&mut Command::new("bash"))
         .arg(repo_root().join(".claude/hooks/qa-stop.sh"))
         .env("CLAUDE_PROJECT_DIR", project)
         .stdin(Stdio::piped())
@@ -192,5 +213,51 @@ fn a_committed_reporter_passes_but_a_new_one_is_questioned() {
     assert!(
         blocks(&scratch.hook(), "ignored test left in"),
         "a committed ignore attribute with no reason was let through"
+    );
+}
+
+/// Caught by: a scratch command obeying an inherited `GIT_DIR` and writing to the real repository.
+#[test]
+fn scratch_commands_ignore_an_inherited_repository() {
+    let scratch = Scratch::on_a_branch();
+    let decoy = Scratch::on_a_branch();
+    let mut command = Command::new("git");
+    command
+        .env("GIT_DIR", decoy.path.join(".git"))
+        .env("GIT_WORK_TREE", &decoy.path);
+    let output = isolated(&mut command)
+        .current_dir(&scratch.path)
+        .args(["rev-parse", "--absolute-git-dir"])
+        .output();
+    let output = ok(output, "running git");
+    let git_dir = ok(String::from_utf8(output.stdout), "reading git's output");
+    assert_eq!(
+        Path::new(git_dir.trim()),
+        ok(
+            scratch.path.join(".git").canonicalize(),
+            "resolving the scratch git dir"
+        ),
+        "an inherited GIT_DIR chose the repository"
+    );
+}
+
+/// Caught by: an unquoted `*.toml` pathspec globbing to the root manifests only.
+#[test]
+fn a_nested_manifest_is_scanned_beside_a_root_one() {
+    let scratch = Scratch::on_a_branch();
+    scratch.write("Cargo.toml", "[workspace]\n");
+    scratch.commit("root manifest");
+    let sealed = "[dependencies]\ngix = \"1\"\n";
+    scratch.write("crates/cairn-ui/Cargo.toml", sealed);
+    let uncommitted = scratch.hook();
+    assert!(
+        blocks(&uncommitted, "cairn-ui is sealed from the git engine"),
+        "an uncommitted nested manifest was not scanned: {uncommitted:?}"
+    );
+    scratch.commit("sealed dependency");
+    let committed = scratch.hook();
+    assert!(
+        blocks(&committed, "cairn-ui is sealed from the git engine"),
+        "a committed nested manifest was not scanned: {committed:?}"
     );
 }

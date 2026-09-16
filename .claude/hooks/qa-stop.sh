@@ -11,6 +11,9 @@
 # crates to the layering seal from CLAUDE.md at the cheapest possible boundary —
 # they are a fast echo of the cairn-guards suite, not a replacement for it.
 set -uo pipefail
+# No pathname expansion: FILE_PATHSPECS is split unquoted, and `*.toml` would
+# otherwise glob to the root manifests and never reach crates/*/Cargo.toml.
+set -f
 
 INPUT="$(cat 2>/dev/null || true)"
 # Loop guard: if we already blocked this turn, let the stop through.

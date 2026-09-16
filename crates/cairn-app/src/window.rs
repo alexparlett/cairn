@@ -142,12 +142,19 @@ mod tests {
     use cairn_model::{CommitSummary, EdgeSegment, GraphRow, Lane, Oid};
     use freya_testing::TestingRunner;
 
+    use cairn_ui::{COLUMN_GAP, ROW_PADDING, graph_width};
+
     use super::*;
+    use crate::history_state;
 
     const HEIGHT: f32 = 600.;
     const PATH: &str = "/home/ada/engine";
 
     fn row(n: usize) -> HistoryRow {
+        row_in_lane(n, 0)
+    }
+
+    fn row_in_lane(n: usize, lane: usize) -> HistoryRow {
         let mut bytes = [0u8; 20];
         bytes[12..20].copy_from_slice(&(n as u64).to_be_bytes());
         let id = Oid::from_bytes(&bytes).unwrap();
@@ -162,8 +169,8 @@ mod tests {
             }),
             graph: GraphRow {
                 id,
-                lane: Lane::new(0),
-                edges: vec![EdgeSegment::passing(Lane::new(0))],
+                lane: Lane::new(lane),
+                edges: vec![EdgeSegment::passing(Lane::new(lane))],
             },
         }
     }
@@ -251,59 +258,90 @@ mod tests {
 
     #[test]
     fn every_view_state_puts_its_own_sentence_in_the_window() {
-        let cases: [(&str, Vec<HistoryRow>, Progress, &[&str]); 5] = [
+        type Case = (
+            &'static str,
+            Vec<HistoryRow>,
+            Progress,
+            &'static [&'static str],
+            &'static [&'static str],
+        );
+        // (state, rows, progress, under the headings, anywhere in the window)
+        let cases: [Case; 5] = [
             (
                 "loading",
                 Vec::new(),
                 Progress::opening(),
                 &["Reading history…", PATH],
+                &[],
             ),
             (
                 "empty",
                 Vec::new(),
                 received(0, true),
-                &["No commits yet.", "0 commits"],
+                &["No commits yet.", PATH],
+                &["0 commits"],
             ),
             (
                 "failed before any rows",
                 Vec::new(),
                 failed(0, "no git repository at /home/ada/engine"),
                 &["no git repository at /home/ada/engine", PATH],
+                &[],
             ),
             (
                 "failed after rows",
                 (0..3).map(row).collect(),
                 failed(3, "failed to read commit abc"),
-                &["failed to read commit abc", "commit 0", "3 commits"],
+                &["failed to read commit abc", "commit 0"],
+                &["3 commits"],
             ),
             (
                 "ready",
                 (0..3).map(row).collect(),
                 received(3, false),
-                &["commit 0", "commit 2", "3 commits…"],
+                &["commit 0", "commit 2"],
+                &["3 commits…"],
             ),
         ];
 
-        for (state, rows, progress, sentences) in cases {
+        for (state, rows, progress, below, anywhere) in cases {
             let (test, _, _) = launch(rows, progress);
-            let shown = texts(&test);
-            for sentence in sentences {
+            let (below_headings, everywhere) = (body(&test), texts(&test));
+            for sentence in below {
                 assert!(
-                    shown.iter().any(|text| text == sentence),
-                    "the {state} window does not show {sentence:?}; it shows {shown:?}"
+                    below_headings.iter().any(|text| text == sentence),
+                    "the {state} window does not show {sentence:?} in the list's place; \
+                     it shows {below_headings:?}"
+                );
+            }
+            for sentence in anywhere {
+                assert!(
+                    everywhere.iter().any(|text| text == sentence),
+                    "the {state} window does not show {sentence:?}; it shows {everywhere:?}"
                 );
             }
         }
     }
 
     #[test]
+    fn a_failure_with_nothing_loaded_is_said_once() {
+        let message = "no git repository at /home/ada/engine";
+        let (test, _, _) = launch(Vec::new(), failed(0, message));
+        assert_eq!(
+            texts(&test).iter().filter(|text| *text == message).count(),
+            1,
+            "the failure was shown as both the placeholder and a banner"
+        );
+    }
+
+    #[test]
     fn a_placeholder_replaces_the_list_and_rows_replace_the_placeholder() {
-        let (loading, _, _) = launch(Vec::new(), Progress::opening());
+        let (loading, _, _) = launch((0..3).map(row).collect(), Progress::opening());
         assert!(
             !texts(&loading)
                 .iter()
                 .any(|text| text.starts_with("commit ")),
-            "a loading window drew rows"
+            "a loading window drew the rows it was holding"
         );
 
         let (ready, _, _) = launch((0..3).map(row).collect(), received(3, true));
@@ -314,6 +352,64 @@ mod tests {
                 "a ready window still says {placeholder:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_graph_column_is_as_wide_as_the_widest_lane_seen() {
+        let page: Vec<HistoryRow> = (0..3).map(|n| row_in_lane(n, 4)).collect();
+        let mut progress = Progress::opening();
+        progress.received(history_state::widest_lane(&page), true, page.len());
+        let (test, _, _) = launch(page, progress);
+
+        let subject_left = test
+            .find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == "commit 0")
+                    .map(|_| node.layout().area.min_x())
+            })
+            .unwrap();
+        assert_eq!(
+            subject_left,
+            ROW_PADDING + graph_width(5) + COLUMN_GAP,
+            "the rows were not drawn with the lanes the history needs"
+        );
+    }
+
+    #[test]
+    fn a_clicked_row_is_drawn_as_selected() {
+        let (mut test, _, _) = launch((0..10).map(row).collect(), received(10, true));
+        let top = |test: &TestingRunner, text: &str| {
+            test.find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == text)
+                    .map(|_| node.layout().area.min_y())
+            })
+            .unwrap()
+        };
+        let backgrounds = |test: &TestingRunner, y: f32| {
+            test.find_many(|node, element| {
+                let area = node.layout().area;
+                Rect::try_downcast(element)
+                    .filter(|_| {
+                        area.min_y() <= y && y < area.max_y() && area.height() == ROW_HEIGHT
+                    })
+                    .map(|rect| rect.style.background)
+            })
+        };
+
+        let (second, third) = (top(&test, "commit 2"), top(&test, "commit 3"));
+        assert!(
+            !backgrounds(&test, second).is_empty(),
+            "no row found under its subject"
+        );
+        assert_eq!(backgrounds(&test, second), backgrounds(&test, third));
+
+        test.click_cursor((100., second as f64 + 5.));
+        assert_ne!(
+            backgrounds(&test, second),
+            backgrounds(&test, third),
+            "the clicked row looks like the one below it"
+        );
     }
 
     #[test]
@@ -335,10 +431,7 @@ mod tests {
         scroll_to_end(&mut test, first);
         assert_eq!(submitted.borrow().as_slice(), std::slice::from_ref(&more));
 
-        // Clicks select rows, which re-renders every one in view.
-        for n in 0..5 {
-            test.click_cursor((100., 200. + n as f64 * ROW_HEIGHT as f64));
-        }
+        test.scroll((100., 200.), (0., first as f64 * ROW_HEIGHT as f64));
         scroll_to_end(&mut test, first);
         assert_eq!(
             submitted.borrow().len(),

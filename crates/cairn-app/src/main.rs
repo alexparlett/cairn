@@ -6,8 +6,6 @@ mod status_text;
 mod window;
 mod worker;
 
-use std::rc::Rc;
-
 use cairn_model::{HistoryRow, RowId};
 use freya::prelude::*;
 
@@ -74,11 +72,7 @@ fn app() -> impl IntoElement {
         }
     });
 
-    let submit = repository.map(|handle: worker::RepositoryHandle| -> Rc<dyn Fn(Request)> {
-        Rc::new(move |request| {
-            handle.submit(request);
-        })
-    });
+    let submit = repository.map(worker::RepositoryHandle::into_submitter);
 
     window::window(&opened, rows, progress, selected, submit)
 }

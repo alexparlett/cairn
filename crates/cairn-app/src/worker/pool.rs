@@ -1,6 +1,7 @@
 //! The repository worker pool.
 
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 
@@ -94,6 +95,13 @@ impl RepositoryHandle {
         // A failed send means the worker is gone and has already said so.
         let _ = self.jobs.send((epoch, request));
         epoch
+    }
+
+    /// [`Self::submit`] as the plain callback the window takes.
+    pub fn into_submitter(self) -> Rc<dyn Fn(Request)> {
+        Rc::new(move |request| {
+            self.submit(request);
+        })
     }
 }
 
@@ -438,6 +446,24 @@ mod tests {
             ),
             other => panic!("expected a failure, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_request_through_the_submitter_is_answered_with_rows() {
+        let (handle, mut updates) = cairn();
+        let before = updates.epochs.current();
+        let submit = handle.into_submitter();
+        submit(Request::OpenHistory { rows: 2 });
+        // Checked first: waiting for rows that were never asked for would hang.
+        assert!(
+            updates.epochs.current() > before,
+            "the submitter did not submit"
+        );
+        match block_on(updates.next()) {
+            Some(Update::Rows { rows, .. }) => assert_eq!(rows.len(), 2),
+            other => panic!("expected rows, got {other:?}"),
+        }
+        drop(submit);
     }
 
     #[test]

@@ -7,11 +7,12 @@
 //! of its own (`crate::graph_geometry`). Colour only makes two lines easier to
 //! follow past each other when they are on screen together in colour.
 //!
-//! The palette is the Okabe–Ito qualitative set, which was chosen for exactly
-//! this: its members stay distinguishable under protanopia, deuteranopia and
-//! tritanopia. It is short on purpose — cycling eight hues past each other
-//! reads better than twenty nearly-identical ones, and the column, not the hue,
-//! is what says which lane a line is in.
+//! The palette is the Okabe–Ito qualitative set — minus its black, which is
+//! invisible on a dark ground, plus a neutral grey to bring it back to eight.
+//! Okabe–Ito was chosen for exactly this job: its members stay distinguishable
+//! under protanopia, deuteranopia and tritanopia. It is short on purpose —
+//! cycling eight hues past each other reads better than twenty nearly-identical
+//! ones, and the column, not the hue, is what says which lane a line is in.
 
 use cairn_model::Lane;
 use freya::prelude::Color;
@@ -84,5 +85,43 @@ mod tests {
                 "{colour:?} appears twice in the lane palette"
             );
         }
+    }
+
+    /// The colour-vision claim in the module doc is a claim about THESE values,
+    /// and nothing else in the file decides it: eight distinct, cycling,
+    /// non-adjacent blues would pass every other test here while quietly
+    /// undoing the only reason this particular table was chosen. So the table
+    /// is pinned against Okabe–Ito's published RGB values, and changing it is a
+    /// decision someone has to make rather than a retune that slips through.
+    #[test]
+    fn the_palette_is_the_okabe_ito_set_less_black_plus_a_neutral() {
+        // Okabe & Ito, "Color Universal Design" (2008), the seven non-black
+        // members, in any order.
+        let okabe_ito = [
+            (230, 159, 0),   // orange
+            (86, 180, 233),  // sky blue
+            (0, 158, 115),   // bluish green
+            (240, 228, 66),  // yellow
+            (0, 114, 178),   // blue
+            (213, 94, 0),    // vermillion
+            (204, 121, 167), // reddish purple
+        ];
+        for member in okabe_ito {
+            assert!(
+                LANE_COLOURS.contains(&member),
+                "{member:?} is an Okabe–Ito colour the lane palette dropped"
+            );
+        }
+        assert_eq!(
+            LANE_COLOURS.len(),
+            okabe_ito.len() + 1,
+            "the palette is the Okabe–Ito set plus exactly one neutral"
+        );
+        assert!(
+            LANE_COLOURS
+                .iter()
+                .any(|&(r, g, b)| r == g && g == b && r > 0),
+            "the eighth entry is meant to be a neutral grey"
+        );
     }
 }

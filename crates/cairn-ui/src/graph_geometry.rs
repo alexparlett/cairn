@@ -40,6 +40,21 @@ pub const STROKE_WIDTH: f32 = 1.8;
 /// column wider than the text it sits beside.
 pub const MAX_DRAWN_LANES: usize = 24;
 
+// The same property the lane-separation test decides, stated about the constants
+// themselves and checked by the COMPILER rather than by a test: a lane has to be
+// wider than the widest thing drawn in it, or two lanes' ink overlaps and lane
+// identity stops surviving a monochrome screenshot. Retuning any of the three
+// numbers above past that point does not compile.
+const _: () = assert!(
+    LANE_WIDTH >= 2.0 * NODE_RADIUS,
+    "a lane is narrower than the node it holds: two lanes' nodes would overlap, \
+     and a lane's identity is its column"
+);
+const _: () = assert!(
+    LANE_WIDTH > STROKE_WIDTH,
+    "a lane is narrower than the line that runs down it"
+);
+
 /// A point in row-local coordinates.
 pub type Point = (f32, f32);
 
@@ -170,20 +185,25 @@ mod tests {
 
     /// The property the product rules actually ask for: lane identity must
     /// survive a monochrome screenshot. It survives because a lane's POSITION
-    /// is its identity — every lane has its own column, and no two share one
-    /// until the drawn-lane cap.
+    /// is its identity — so the separation between columns has to be measured
+    /// against the INK that sits in them, not against the spacing that produced
+    /// it. Comparing the gap to a fraction of `LANE_WIDTH` would be true for
+    /// every positive `LANE_WIDTH`, including one narrow enough for every dot
+    /// to swallow its neighbours.
     #[test]
-    fn every_lane_below_the_cap_has_its_own_column() {
+    fn every_lane_below_the_cap_has_a_column_wider_than_what_is_drawn_in_it() {
+        let ink = (2.0 * NODE_RADIUS).max(STROKE_WIDTH);
         let mut seen: Vec<f32> = Vec::new();
         for index in 0..MAX_DRAWN_LANES {
             let x = lane_x(Lane::new(index));
             assert!(
-                seen.iter()
-                    .all(|other| (other - x).abs() > LANE_WIDTH / 2.0),
-                "lane {index} at x={x} is not a column of its own: {seen:?}"
+                seen.iter().all(|other| (other - x).abs() >= ink),
+                "lane {index} at x={x} is closer than {ink} px — the width of what \
+                 is drawn in a lane — to another lane: {seen:?}"
             );
             seen.push(x);
         }
+        assert_eq!(seen.len(), MAX_DRAWN_LANES);
     }
 
     /// The cap is lossy, and says so out loud rather than drawing off the edge
@@ -268,22 +288,39 @@ mod tests {
     /// dashing is the only thing that changes. Its geometry stays identical to
     /// any other line, because the connection is not a different KIND of
     /// connection — only its ancestry runs the other way.
+    ///
+    /// Every segment KIND, not just the one that leaves the commit. An
+    /// out-of-order connection spans the rows between parent and child, and the
+    /// assigner marks all three pieces of it (`LaneAssigner::connect_upward`);
+    /// a rule that dashed only the first would draw one dashed row and then a
+    /// solid line, which reads as two different connections.
     #[test]
-    fn an_out_of_order_line_is_dashed_and_otherwise_identical() {
-        let plain = EdgeSegment::out_of_commit(Lane::new(0), Lane::new(2));
-        let marked = plain.marked_out_of_order();
+    fn an_out_of_order_line_is_dashed_along_its_whole_length() {
+        let pieces = [
+            EdgeSegment::out_of_commit(Lane::new(0), Lane::new(2)),
+            EdgeSegment::passing(Lane::new(2)),
+            EdgeSegment::into_commit(Lane::new(2), Lane::new(1)),
+        ];
 
-        let ordinary = row_geometry(&row(0, vec![plain]), 1).strokes[0];
-        let late = row_geometry(&row(0, vec![marked]), 1).strokes[0];
+        for plain in pieces {
+            let marked = plain.marked_out_of_order();
+            let ordinary = row_geometry(&row(0, vec![plain]), 1).strokes[0];
+            let late = row_geometry(&row(0, vec![marked]), 1).strokes[0];
 
-        assert!(!ordinary.dashed);
-        assert!(
-            late.dashed,
-            "an out-of-order line was drawn as an ordinary one"
-        );
-        assert_eq!(late.from, ordinary.from);
-        assert_eq!(late.to, ordinary.to);
-        assert_eq!(late.colour_lane, ordinary.colour_lane);
+            assert!(
+                !ordinary.dashed,
+                "{:?} was dashed without being marked",
+                plain.kind
+            );
+            assert!(
+                late.dashed,
+                "an out-of-order {:?} segment was drawn as an ordinary one",
+                plain.kind
+            );
+            assert_eq!(late.from, ordinary.from);
+            assert_eq!(late.to, ordinary.to);
+            assert_eq!(late.colour_lane, ordinary.colour_lane);
+        }
     }
 
     /// Merges are told apart by SHAPE. A monochrome screenshot still says which

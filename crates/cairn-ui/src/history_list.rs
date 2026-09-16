@@ -255,37 +255,59 @@ impl HistoryList {
         let on_select = self.on_select.clone();
 
         move |e: Event<KeyboardEventData>| {
-            let held = rows.read();
-            let Some(last) = held.len().checked_sub(1) else {
-                return;
+            // The read guard is taken, used and DROPPED before anything is
+            // called out to. `on_select` today only writes the selection, but a
+            // handler that reloaded the list in response would re-enter this
+            // borrow and panic on the UI thread, and this workspace forbids a
+            // panic on a path a user can reach.
+            let moved = {
+                let held = rows.read();
+                let Some(last) = held.len().checked_sub(1) else {
+                    return;
+                };
+                let current = selected.and_then(|id| index_of(&held, id, *cursor.peek()));
+                let Some(next) = moved_to(&e.key, current, last) else {
+                    return;
+                };
+                held.get(next).map(|row| (next, row.id()))
             };
-            let current = selected.and_then(|id| index_of(&held, id, *cursor.peek()));
-
-            let next = match e.key {
-                Key::Named(NamedKey::ArrowDown) => current.map_or(0, |at| (at + 1).min(last)),
-                Key::Named(NamedKey::ArrowUp) => current.map_or(0, |at| at.saturating_sub(1)),
-                Key::Named(NamedKey::PageDown) => {
-                    current.map_or(0, |at| (at + PAGE_JUMP).min(last))
-                }
-                Key::Named(NamedKey::PageUp) => {
-                    current.map_or(0, |at| at.saturating_sub(PAGE_JUMP))
-                }
-                Key::Named(NamedKey::Home) => 0,
-                Key::Named(NamedKey::End) => last,
-                _ => return,
+            let Some((next, id)) = moved else {
+                return;
             };
 
             e.stop_propagation();
             cursor.set(next);
-            if let Some(row) = held.get(next) {
-                on_select.call(row.id());
-            }
+            on_select.call(id);
             // The row being selected usually does not exist as an element yet,
             // so it has no rectangle to reveal against; a virtualised list
             // reveals by OFFSET instead, which for a uniform row height is the
             // index times the height.
             controller.scroll_to_offset(next as f32 * ROW_HEIGHT, ROW_HEIGHT, Direction::Vertical);
         }
+    }
+}
+
+/// Where `key` moves a selection currently at `current`, in a list whose last
+/// row is `last`. `None` for a key this list does not own, so a shortcut
+/// belonging to something else still reaches it.
+///
+/// Pulled out of the handler because it is the whole of R4.4's arithmetic and
+/// the whole of what can be wrong about it: an inverted arrow, an `End` that
+/// goes to the top, a page jump that does not clamp. None of that is decidable
+/// from inside a closure over a reactive handle.
+fn moved_to(key: &Key, current: Option<usize>, last: usize) -> Option<usize> {
+    // Nothing selected yet: every key this list owns starts at the top, which
+    // is where a reader's eye already is.
+    let from = |step: fn(usize, usize) -> usize| current.map_or(0, |at| step(at, last));
+
+    match key {
+        Key::Named(NamedKey::ArrowDown) => Some(from(|at, last| (at + 1).min(last))),
+        Key::Named(NamedKey::ArrowUp) => Some(from(|at, _| at.saturating_sub(1))),
+        Key::Named(NamedKey::PageDown) => Some(from(|at, last| (at + PAGE_JUMP).min(last))),
+        Key::Named(NamedKey::PageUp) => Some(from(|at, _| at.saturating_sub(PAGE_JUMP))),
+        Key::Named(NamedKey::Home) => Some(0),
+        Key::Named(NamedKey::End) => Some(last),
+        _ => None,
     }
 }
 
@@ -428,6 +450,131 @@ mod tests {
             "the selection moved when the second page arrived"
         );
         assert!(both_pages.len() > 64, "the second page did not arrive");
+    }
+
+    /// The case the module doc calls the one that bites, and the reason
+    /// selection is an identity rather than an index: a row arriving ABOVE the
+    /// selection — which is exactly what the working-tree row will do — moves
+    /// every index below it, and the selection must follow the row rather than
+    /// the number. The hint kept from before the arrival is now wrong, which is
+    /// what makes this decide the fallback scan and not just the hint.
+    #[test]
+    fn a_selection_survives_a_row_arriving_above_it() {
+        let before = history(8);
+        let chosen = RowId::Commit(oid(5));
+        assert_eq!(index_of(&before, chosen, 5), Some(5));
+
+        let mut both = history(1);
+        both.extend(before);
+
+        assert_eq!(
+            index_of(&both, chosen, 5),
+            Some(6),
+            "the selection stayed on the index instead of following the row"
+        );
+        assert_eq!(both.len(), 9, "the row above did not arrive");
+    }
+
+    /// R4.4's arithmetic, one arm at a time and in both directions. The
+    /// mutations this kills are the ones a screenshot would not: the arrows
+    /// swapped, `End` going to the top, a page jump of one.
+    #[test]
+    fn every_key_the_list_owns_moves_the_selection_its_own_way() {
+        let last = 99;
+        let down = Key::Named(NamedKey::ArrowDown);
+        let up = Key::Named(NamedKey::ArrowUp);
+
+        assert_eq!(moved_to(&down, Some(10), last), Some(11));
+        assert_eq!(moved_to(&up, Some(10), last), Some(9));
+        assert_ne!(
+            moved_to(&down, Some(10), last),
+            moved_to(&up, Some(10), last),
+            "the arrow keys move the selection the same way"
+        );
+
+        assert_eq!(
+            moved_to(&Key::Named(NamedKey::Home), Some(50), last),
+            Some(0)
+        );
+        assert_eq!(
+            moved_to(&Key::Named(NamedKey::End), Some(50), last),
+            Some(last)
+        );
+        assert_ne!(
+            moved_to(&Key::Named(NamedKey::End), Some(50), last),
+            moved_to(&Key::Named(NamedKey::Home), Some(50), last),
+            "Home and End go to the same place"
+        );
+
+        // A page is more than a row and less than the list, in both
+        // directions — which is what a page jump of 1 or of `last` would fail.
+        let page_down = moved_to(&Key::Named(NamedKey::PageDown), Some(50), last);
+        let page_up = moved_to(&Key::Named(NamedKey::PageUp), Some(50), last);
+        assert_eq!(page_down, Some(50 + PAGE_JUMP));
+        assert_eq!(page_up, Some(50 - PAGE_JUMP));
+        assert!(page_down > Some(51) && page_down < Some(last));
+        assert!(page_up < Some(49) && page_up > Some(0));
+    }
+
+    /// Neither end of the list can be walked off. A selection that ran past the
+    /// last row would index nothing and select nothing; one that wrapped to the
+    /// bottom on `ArrowUp` would be a reader losing their place.
+    #[test]
+    fn the_selection_stops_at_both_ends_rather_than_running_off_or_wrapping() {
+        let last = 5;
+        assert_eq!(
+            moved_to(&Key::Named(NamedKey::ArrowDown), Some(last), last),
+            Some(last)
+        );
+        assert_eq!(
+            moved_to(&Key::Named(NamedKey::ArrowUp), Some(0), last),
+            Some(0)
+        );
+        assert_eq!(
+            moved_to(&Key::Named(NamedKey::PageDown), Some(last), last),
+            Some(last)
+        );
+        assert_eq!(
+            moved_to(&Key::Named(NamedKey::PageUp), Some(0), last),
+            Some(0)
+        );
+        // A one-row list is the degenerate case of both.
+        assert_eq!(moved_to(&Key::Named(NamedKey::End), Some(0), 0), Some(0));
+        assert_eq!(
+            moved_to(&Key::Named(NamedKey::ArrowDown), Some(0), 0),
+            Some(0)
+        );
+    }
+
+    /// With nothing selected, every key this list owns selects something rather
+    /// than doing nothing: a reader who has only a keyboard must be able to
+    /// select a first row at all, which is the first word of "keyboard
+    /// reachable".
+    #[test]
+    fn the_first_key_press_selects_something() {
+        for key in [
+            NamedKey::ArrowDown,
+            NamedKey::ArrowUp,
+            NamedKey::PageDown,
+            NamedKey::PageUp,
+            NamedKey::Home,
+        ] {
+            assert_eq!(
+                moved_to(&Key::Named(key), None, 99),
+                Some(0),
+                "{key:?} left a keyboard-only reader with nothing selected"
+            );
+        }
+        assert_eq!(moved_to(&Key::Named(NamedKey::End), None, 99), Some(99));
+    }
+
+    /// A key the list does not own is left alone, so a shortcut belonging to
+    /// something else still reaches it rather than being swallowed here.
+    #[test]
+    fn a_key_the_list_does_not_own_moves_nothing() {
+        assert_eq!(moved_to(&Key::Named(NamedKey::Tab), Some(3), 99), None);
+        assert_eq!(moved_to(&Key::Named(NamedKey::Escape), Some(3), 99), None);
+        assert_eq!(moved_to(&Key::Character("j".into()), Some(3), 99), None);
     }
 
     /// Rows ask for more a screen before the end, not AT the end: asking only

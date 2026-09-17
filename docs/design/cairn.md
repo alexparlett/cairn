@@ -130,8 +130,9 @@ than observations:
    command acts on another.
 
 None of this reopens D1. It means the seam owes a cache-invalidation contract,
-which is the first thing the `git` backend phase must write down
-(`docs/work/credential-prompts/phase-01-git-backend.md`).
+which the `git` backend wrote down first: the `ops` module docs in
+`crates/cairn-git/src/ops/mod.rs` (`Invalidated`, per flag, checked against
+the linked gix), summarised in `docs/systems/credentials.md`.
 
 ### D2 — Credentials are delegated to git entirely
 
@@ -150,7 +151,29 @@ round-trips the prompt to the running UI, and sets `SSH_ASKPASS` with
 
 This makes "Cairn never handles a secret" nearly literal: the value exists only
 inside the helper process and on git's stdin, never in application state.
-Packet: `docs/prd/credential-prompts.md`.
+Packet: `docs/prd/credential-prompts.md` (shipped, frozen).
+
+As built by the `credential-prompts` packet: the backend, the helper, its
+channel and fetch exist as described, with one refinement — the secret does
+pass through the application once, as a value the dialog hands the worker
+thread, which writes it to the helper's socket and drops it; the guard
+`no_credential_value_is_logged_printed_serialised_or_stored` is what keeps
+that passage from becoming state. Everything else — the environment roster,
+the threat model, what a cancel can leave — is in `docs/systems/credentials.md`.
+
+**Cairn's helper is the askpass while Cairn runs git** (decided 2026-09-17,
+issue #22). A user who has set `GIT_ASKPASS`, `SSH_ASKPASS` or `core.askPass`
+for something else finds it replaced by Cairn's helper for the duration of a
+Cairn-run `git`: the environment is built, never inherited (L5), and a prompt
+must reach the running window rather than a program with no window to reach.
+This is a decision, not collateral. What it does not touch: `credential.helper`
+and the ssh-agent, which git consults before it ever asks (L7), so a setup that
+answers without prompting keeps answering. Rejected for now: honouring the
+user's askpass over Cairn's dialog, because a program chosen for a terminal
+may itself expect one, and a fetch that hangs on it is the failure this whole
+decision exists to prevent. The way back in, when someone needs it, is an
+"auth provider" setting that lets the user pick their own askpass program over
+Cairn's dialog explicitly — issue #22 holds that setting.
 
 ### D3 — A worker pool per repository, not a thread per repository
 

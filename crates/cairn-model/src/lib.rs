@@ -1,16 +1,24 @@
 //! Commit, ref, graph and lane types shared by the engine and the UI.
 
+mod askpass;
 mod confirm;
 mod graph;
 mod history;
 mod lane_assignment;
 mod oid;
+mod prompt;
+mod remote;
+mod secret;
 
+pub use askpass::{AskpassToken, HELPER_PROGRAM, SOCKET_VARIABLE, TOKEN_VARIABLE};
 pub use confirm::Confirmed;
 pub use graph::{EdgeKind, EdgeSegment, GraphRow, Lane};
 pub use history::{HistoryRow, RowContent, RowId};
 pub use lane_assignment::LaneAssigner;
 pub use oid::{Oid, OidHex, OidParseError};
+pub use prompt::{PromptKind, prompt_subject};
+pub use remote::RemoteSummary;
+pub use secret::Secret;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitSummary {

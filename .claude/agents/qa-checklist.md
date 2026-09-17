@@ -56,7 +56,11 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
    new call site reaching one): the operation takes `cairn_model::Confirmed` by
    value, the prompt text handed to `Confirmed::by_user` names the actual
    consequence (what is lost, how much, whether it is recoverable), and nothing
-   constructs the token outside a user acknowledgement path. Dispatch pointer:
+   constructs the token outside a user acknowledgement path. Also: no
+   `std::process::Command` reached through a spelling the terminal-prompt guard
+   cannot read — a `type` alias for it, a wrapper crate that spawns, a macro
+   that expands to one — anywhere but `crates/cairn-git/src/ops/environment.rs`;
+   the guard matches the identifier, so those are yours. Dispatch pointer:
    `destructive-ops-reviewer`.
 8. **Responsiveness** (any diff in `crates/cairn-ui/` or `crates/cairn-app/`, or
    anything changing what runs per frame or per query): no repository work on the
@@ -66,6 +70,20 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
 9. **Seam discipline** (any diff in `crates/cairn-model/`): a new boundary type
    earns its place — it is the UI's vocabulary, not a leaked `gix` shape and not
    a struct that exists only to pass through. Its tests live in the same commit.
+10. **Credentials** (any diff naming `cairn_model::Secret` or `expose_secret`,
+    anything under `crates/cairn-askpass/`, any new type holding a secret): the
+    guard `no_credential_value_is_logged_printed_serialised_or_stored` reads
+    spellings, so what it cannot see is yours — a generic wrapper (`Holder<T>`)
+    instantiated with `Secret` at a use site rather than in its declaration, a
+    hand-written `Debug` on such a wrapper, the bytes hoisted into a local
+    inside a `SECRET_READERS` file and then rendered (`let b =
+    s.expose_secret(); format!("{b:?}")`), and a prompt text (which IS
+    rendered) that could carry a secret. Also: the helper's
+    linked surface (`cargo tree -p cairn-askpass`) is code that runs in a process
+    holding a plaintext secret — a logging framework or any crate beyond
+    `cairn-model` and `zeroize` is a finding — and no `#[allow]`/`#[expect]`
+    lets an `unwrap`/`expect` through on a path that holds one, since the panic
+    message would print the value.
 
 ## Review dispatch
 

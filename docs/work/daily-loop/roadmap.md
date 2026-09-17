@@ -8,7 +8,7 @@ nuance that run must not lose.
 | # | Packet | Status | Depends on |
 | --- | --- | --- | --- |
 | 1 | `history-graph` | **shipped** | — |
-| 2 | `credential-prompts` | **filed** | 1 |
+| 2 | `credential-prompts` | **shipped** | 1 |
 | 3 | `diff-engine` | brief only | 1 |
 | 4 | `refs-and-status` | brief only | 1 |
 | 5 | `staging-and-commit` | brief only | 2, 3, 4 |
@@ -30,12 +30,14 @@ exercises the gix read path that D1 rests on — which held: D1's read path is
 proven, and packets 3, 4 and 5 inherit the worker boundary rather than building
 one. As built: `docs/systems/history-graph.md`.
 
-## 2. credential-prompts — filed
+## 2. credential-prompts — shipped
 
-`docs/prd/credential-prompts.md`. Lands the `git` subprocess backend (D1), the
-askpass helper (D2) and fetch. **Load-bearing for packet 5**, not merely early:
-staging calls `git apply --cached` through this backend. It also owes the
-cache-invalidation contract that D1 created.
+`docs/prd/credential-prompts.md` (frozen). Landed the `git` subprocess backend
+(D1), the askpass helper (D2) and fetch, with the cache-invalidation contract
+that D1 created written into the `ops` module docs. **Load-bearing for packet
+5**, not merely early: staging calls `git apply --cached` through this backend.
+Left for packet 6 by name: push (issue #16), the remote picker (#23), and the
+fetch-under-prune policy (#17). As built: `docs/systems/credentials.md`.
 
 ## 3. diff-engine — brief
 

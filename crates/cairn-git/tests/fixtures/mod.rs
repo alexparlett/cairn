@@ -1,4 +1,7 @@
-//! Repositories built by running real `git`.
+//! Repositories built by running real `git`. Shared by every integration test
+//! binary, so it holds only what each of them uses; a builder one test file
+//! alone needs lives in that file, since an unused item here is a warning in
+//! every other binary.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -35,7 +38,8 @@ impl Drop for Fixture {
     }
 }
 
-fn run(dir: &Path, args: &[&str], at: Option<i64>) -> String {
+/// Runs `git` in `dir`, isolated from the machine's configuration, dated `at`.
+pub fn run(dir: &Path, args: &[&str], at: Option<i64>) -> String {
     let mut command = Command::new("git");
     command
         .current_dir(dir)
@@ -79,7 +83,7 @@ fn fresh_directory(name: &str) -> PathBuf {
     path
 }
 
-const EPOCH: i64 = 1_500_000_000;
+pub const EPOCH: i64 = 1_500_000_000;
 
 /// Committer dates rise along every parent link. `steps` counts ordinary commits;
 /// the merges are extra, so read expectations back from `git`.
@@ -141,77 +145,6 @@ fn merge_side(fixture: &Fixture, clock: &mut i64) {
         ],
         Some(*clock),
     );
-}
-
-/// A repository whose newest-first walk hands a parent over before its child. A fork,
-/// not a chain: a chain is emitted in order however it is stamped. Stamps are seconds past [`EPOCH`]:
-///
-/// ```text
-///   merge  9500   parents: recent, stale
-///   recent 9000   parent: shared        (trunk)
-///   shared 8000   parent: base
-///   stale  2000   parent: shared        (side branch)
-///   base   1000
-/// ```
-///
-/// so commit time orders them `merge, recent, shared, stale, base`.
-pub fn skewed() -> Fixture {
-    let path = fresh_directory("skewed");
-    let fixture = Fixture { path };
-    fixture.git(&["init", "--quiet", "--initial-branch=main", "."]);
-    commit_stamped(&fixture, "base", EPOCH + 1000);
-    commit_stamped(&fixture, "shared", EPOCH + 8000);
-    commit_stamped(&fixture, "recent", EPOCH + 9000);
-    fixture.git(&["checkout", "--quiet", "-b", "side", "HEAD~1"]);
-    commit_stamped(&fixture, "stale", EPOCH + 2000);
-    fixture.git(&["checkout", "--quiet", "main"]);
-    run(
-        fixture.path(),
-        &[
-            "merge",
-            "--quiet",
-            "--no-ff",
-            "--no-edit",
-            "-m",
-            "merge",
-            "side",
-        ],
-        Some(EPOCH + 9500),
-    );
-    fixture
-}
-
-fn commit_stamped(fixture: &Fixture, message: &str, seconds: i64) {
-    run(
-        fixture.path(),
-        &["commit", "--quiet", "--allow-empty", "-m", message],
-        Some(seconds),
-    );
-}
-
-/// Writes a commit-graph file, so a walk reads parent ids without the object database.
-pub fn write_commit_graph(fixture: &Fixture) {
-    fixture.git(&["commit-graph", "write", "--reachable"]);
-    // Local config: the machine may have turned commit-graph use off globally.
-    fixture.git(&["config", "core.commitGraph", "true"]);
-    assert!(
-        fixture
-            .path()
-            .join(".git/objects/info/commit-graph")
-            .is_file(),
-        "git did not write a commit-graph file"
-    );
-}
-
-/// Deletes the loose object behind each of `ids`. Never pass a starting point:
-/// gitoxide reads the tips from the object database to seed the walk.
-pub fn delete_objects(fixture: &Fixture, ids: &[String]) {
-    for id in ids {
-        let (dir, file) = id.split_at(2);
-        let path = fixture.path().join(".git/objects").join(dir).join(file);
-        std::fs::remove_file(&path)
-            .unwrap_or_else(|e| panic!("could not delete {}: {e}", path.display()));
-    }
 }
 
 pub fn unborn() -> Fixture {

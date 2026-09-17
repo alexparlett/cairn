@@ -105,7 +105,6 @@ pub fn code_only(source: &str) -> String {
         BlockComment(usize),
         Str,
         RawStr(usize),
-        Char,
     }
 
     let bytes = source.as_bytes();
@@ -133,11 +132,20 @@ pub fn code_only(source: &str) -> String {
                     out.push('"');
                     i += 1;
                 }
-                (b'\'', _) => {
-                    mode = Mode::Char;
-                    out.push('\'');
-                    i += 1;
-                }
+                // A char literal is kept whole; a lifetime's apostrophe is just an
+                // apostrophe. Treating every apostrophe as opening a literal once
+                // blanked a file from a `&'static str` to the next `'` inside a
+                // string, and every matcher after that point saw nothing.
+                (b'\'', _) => match char_literal_end(bytes, i) {
+                    Some(end) => {
+                        out.push_str(&source[i..=end]);
+                        i = end + 1;
+                    }
+                    None => {
+                        out.push('\'');
+                        i += 1;
+                    }
+                },
                 (b'r', Some(b'"' | b'#')) => {
                     let hashes = bytes[i + 1..].iter().take_while(|&&c| c == b'#').count();
                     if bytes.get(i + 1 + hashes) == Some(&b'"') {
@@ -183,12 +191,7 @@ pub fn code_only(source: &str) -> String {
                     i += 1;
                 }
             },
-            Mode::Str | Mode::Char => {
-                let closer = if matches!(mode, Mode::Str) {
-                    b'"'
-                } else {
-                    b'\''
-                };
+            Mode::Str => {
                 if b == b'\\' {
                     out.push('\\');
                     if let Some(n) = next {
@@ -196,7 +199,7 @@ pub fn code_only(source: &str) -> String {
                     }
                     i += 2;
                 } else {
-                    if b == closer {
+                    if b == b'"' {
                         mode = Mode::Code;
                     }
                     out.push(b as char);
@@ -256,7 +259,13 @@ pub fn code_without_strings(source: &str) -> String {
             i += 1;
             while i < bytes.len() {
                 if bytes[i] == b'\\' {
-                    out.push_str("  ");
+                    // An escaped newline continues the string; the line count must not drop.
+                    out.push(' ');
+                    out.push(if bytes.get(i + 1) == Some(&b'\n') {
+                        '\n'
+                    } else {
+                        ' '
+                    });
                     i += 2;
                     continue;
                 }
@@ -827,6 +836,471 @@ fn is_catch_all(alternative: &str) -> bool {
     }
 }
 
+/// 1-based lines where `source` builds a `std::process::Command`: `Command::new`, however
+/// qualified, spaced or wrapped. Another type's `new` (`GitCommand::new`) is not matched.
+pub fn constructs_process_command(source: &str) -> Vec<usize> {
+    let code = code_without_strings(source);
+    let bytes = code.as_bytes();
+    let mut lines = BTreeSet::new();
+    for offset in ident_offsets(&code, "Command") {
+        let mut at = skip_whitespace(bytes, offset + "Command".len());
+        if !code[at..].starts_with("::") {
+            continue;
+        }
+        at = skip_whitespace(bytes, at + 2);
+        if code[at..].starts_with("new") && bytes.get(at + 3).is_none_or(|b| !is_ident_byte(*b)) {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+    lines.into_iter().collect()
+}
+
+/// Methods that put something into, or take something out of, a child process's environment.
+const ENVIRONMENT_METHODS: &[&str] = &["env", "envs", "env_clear", "env_remove"];
+
+/// 1-based lines where `source` calls one of [`ENVIRONMENT_METHODS`] as a method — `.env(`,
+/// however wrapped or spaced. `env!(..)` and `std::env::var_os(..)` are not method calls and
+/// are not matched; neither is a function merely named `env`.
+pub fn configures_process_environment(source: &str) -> Vec<usize> {
+    let code = code_without_strings(source);
+    let bytes = code.as_bytes();
+    let mut lines = BTreeSet::new();
+    for name in ENVIRONMENT_METHODS {
+        for offset in ident_offsets(&code, name) {
+            let before = code[..offset].trim_end();
+            let after = skip_whitespace(bytes, offset + name.len());
+            if before.ends_with('.') && bytes.get(after) == Some(&b'(') {
+                lines.insert(line_at(&code, offset));
+            }
+        }
+    }
+    lines.into_iter().collect()
+}
+
+/// Keywords a type name follows when it is being declared or implemented, not built.
+const DECLARING_KEYWORDS: &[&str] = &["struct", "impl", "for", "enum", "union", "trait"];
+
+/// The 1-based line of every literal in `source` that builds a value of the struct `name` —
+/// `Name { .. }` or `Self { .. }`, including a struct update — one entry PER LITERAL, so two on
+/// a line are two. Not matched: declaring it (`struct Name {`), implementing it (`impl Name {`,
+/// `impl T for Name {`) or naming it as a return type (`-> Self {`). A destructuring pattern
+/// `let Self { .. } = x` is read as a construction; the guard that uses this counts, so a false
+/// positive there fails loudly rather than silently.
+pub fn constructs_struct(source: &str, name: &str) -> Vec<usize> {
+    struct_literals(source, &[name, "Self"])
+}
+
+/// [`constructs_struct`] without the `Self { .. }` spelling: for a file that does not implement
+/// the type, where `Self` means something else. Pair it with [`implements_type`].
+pub fn constructs_named_struct(source: &str, name: &str) -> Vec<usize> {
+    struct_literals(source, &[name])
+}
+
+/// 1-based lines where `source` opens an `impl` block for the type `name` — `impl Name {` or
+/// `impl T for Name {` — which is where a `Self { .. }` literal for it can be written.
+pub fn implements_type(source: &str, name: &str) -> Vec<usize> {
+    let code = code_without_strings(source);
+    let mut lines = BTreeSet::new();
+    for offset in ident_offsets(&code, name) {
+        let before = code[..offset].trim_end();
+        let implementing = ["impl", "for"].iter().any(|keyword| {
+            before.ends_with(keyword)
+                && before[..before.len() - keyword.len()]
+                    .bytes()
+                    .next_back()
+                    .is_none_or(|b| !is_ident_byte(b))
+        });
+        if implementing {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+    lines.into_iter().collect()
+}
+
+/// Whether `before` ends in `->`, allowing a reference, `mut` and a lifetime between it and the
+/// type: `-> &'a mut Name {` is a function body opening, not a literal.
+fn is_return_type_position(before: &str) -> bool {
+    let mut head = before;
+    loop {
+        let trimmed = head.trim_end();
+        let next = trimmed
+            .strip_suffix('&')
+            .or_else(|| trimmed.strip_suffix("mut"))
+            .or_else(|| {
+                let start = trimmed.rfind('\'')?;
+                trimmed[start + 1..]
+                    .bytes()
+                    .all(is_ident_byte)
+                    .then(|| &trimmed[..start])
+            });
+        match next {
+            Some(shorter) if shorter.len() < head.len() => head = shorter,
+            _ => return trimmed.ends_with("->"),
+        }
+    }
+}
+
+fn struct_literals(source: &str, idents: &[&str]) -> Vec<usize> {
+    let code = code_without_strings(source);
+    let bytes = code.as_bytes();
+    let mut literals = Vec::new();
+    for ident in idents {
+        for offset in ident_offsets(&code, ident) {
+            let after = skip_whitespace(bytes, offset + ident.len());
+            if bytes.get(after) != Some(&b'{') {
+                continue;
+            }
+            let before = code[..offset].trim_end();
+            let declares = is_return_type_position(before)
+                || DECLARING_KEYWORDS.iter().any(|keyword| {
+                    before.ends_with(keyword)
+                        && before[..before.len() - keyword.len()]
+                            .bytes()
+                            .next_back()
+                            .is_none_or(|b| !is_ident_byte(b))
+                });
+            if !declares {
+                literals.push(line_at(&code, offset));
+            }
+        }
+    }
+    literals.sort_unstable();
+    literals
+}
+
+/// Keywords that open a type declaration.
+const TYPE_KEYWORDS: &[&str] = &["struct", "enum"];
+
+/// A `struct` or `enum` declared in a source: its name, the keyword, the 1-based line of the
+/// keyword, and the text of its body (fields or variants).
+#[derive(Debug, PartialEq, Eq)]
+pub struct TypeDeclaration {
+    pub name: String,
+    pub keyword: &'static str,
+    pub line: usize,
+    pub body: String,
+}
+
+/// Every `struct` and `enum` declared in `source`, with the text between its braces (or
+/// parentheses, for a tuple struct). A unit struct has an empty body.
+pub fn type_declarations(source: &str) -> Vec<TypeDeclaration> {
+    let code = code_without_strings(source);
+    let bytes = code.as_bytes();
+    let mut found = Vec::new();
+    for keyword in TYPE_KEYWORDS {
+        for offset in ident_offsets(&code, keyword) {
+            // `struct` inside a `use` or as a field name would be odd Rust; a `struct` keyword is
+            // followed by the type's name, which is what is read here.
+            let name_start = skip_whitespace(bytes, offset + keyword.len());
+            let name_end = (name_start..bytes.len())
+                .find(|&i| !is_ident_byte(bytes[i]))
+                .unwrap_or(bytes.len());
+            if name_end == name_start {
+                continue;
+            }
+            let name = code[name_start..name_end].to_owned();
+            // Past generics and a where clause, to the body. A `(` after `where` is a bound
+            // (`F: Fn(u8) -> u8`), not a tuple body; only a `{` can follow a where clause.
+            let mut at = name_end;
+            let mut depth = 0usize;
+            let mut in_where = false;
+            let body = loop {
+                match bytes.get(at) {
+                    None => break String::new(),
+                    Some(b'<') => depth += 1,
+                    Some(b'>') => depth = depth.saturating_sub(1),
+                    Some(b';') if depth == 0 => break String::new(),
+                    Some(b'{') if depth == 0 => {
+                        let end = balanced_end(bytes, at);
+                        break code[at + 1..end.saturating_sub(1).max(at + 1)].to_owned();
+                    }
+                    Some(b'(') if depth == 0 && !in_where => {
+                        let end = balanced_end(bytes, at);
+                        break code[at + 1..end.saturating_sub(1).max(at + 1)].to_owned();
+                    }
+                    Some(b'(') if depth == 0 => {
+                        at = balanced_end(bytes, at);
+                        continue;
+                    }
+                    Some(b'w')
+                        if depth == 0
+                            && code[at..].starts_with("where")
+                            && bytes.get(at + 5).is_none_or(|b| !is_ident_byte(*b))
+                            && !is_ident_byte(bytes[at - 1]) =>
+                    {
+                        in_where = true;
+                    }
+                    _ => {}
+                }
+                at += 1;
+            };
+            found.push(TypeDeclaration {
+                name,
+                keyword,
+                line: line_at(&code, offset),
+                body,
+            });
+        }
+    }
+    found.sort_by_key(|declaration| declaration.line);
+    found
+}
+
+/// Names of every `struct` and `enum` in `source` whose body names any of `idents` — a type
+/// that holds one of them in a field or a variant, directly.
+pub fn types_containing(source: &str, idents: &[&str]) -> Vec<String> {
+    type_declarations(source)
+        .into_iter()
+        .filter(|declaration| {
+            idents
+                .iter()
+                .any(|ident| !ident_offsets(&declaration.body, ident).is_empty())
+        })
+        .map(|declaration| declaration.name)
+        .collect()
+}
+
+/// 1-based lines of every `struct` (not `enum`) in `source` with a field naming one of `idents`.
+pub fn structs_with_a_field_naming(source: &str, idents: &[&str]) -> Vec<usize> {
+    type_declarations(source)
+        .into_iter()
+        .filter(|declaration| declaration.keyword == "struct")
+        .filter(|declaration| {
+            idents
+                .iter()
+                .any(|ident| !ident_offsets(&declaration.body, ident).is_empty())
+        })
+        .map(|declaration| declaration.line)
+        .collect()
+}
+
+/// 1-based lines where `source` gives the type `name` one of `traits`: a `#[derive(..)]` on its
+/// declaration naming the trait (however the path is spelled — `serde::Serialize` counts as
+/// `Serialize`), or an `impl Trait for Name` block, generics and paths included.
+pub fn derives_or_implements(source: &str, name: &str, traits: &[&str]) -> Vec<usize> {
+    let code = code_without_strings(source);
+    let bytes = code.as_bytes();
+    let mut lines = BTreeSet::new();
+    let last_segment = |path: &str| -> String {
+        let path = path.trim();
+        let without_generics = path.split('<').next().unwrap_or(path);
+        without_generics
+            .rsplit("::")
+            .next()
+            .unwrap_or(without_generics)
+            .trim()
+            .to_owned()
+    };
+
+    for offset in ident_offsets(&code, "derive") {
+        let open = skip_whitespace(bytes, offset + "derive".len());
+        if bytes.get(open) != Some(&b'(') || !code[..offset].trim_end().ends_with("#[") {
+            continue;
+        }
+        let end = balanced_end(bytes, open);
+        let derived: Vec<String> = code[open + 1..end.saturating_sub(1)]
+            .split(',')
+            .map(last_segment)
+            .collect();
+        if !derived.iter().any(|d| traits.contains(&d.as_str())) {
+            continue;
+        }
+        // The declaration this attribute decorates: the next `struct`/`enum` keyword, past the
+        // attribute's own `]` and any further attributes.
+        let mut at = skip_whitespace(bytes, end);
+        if bytes.get(at) == Some(&b']') {
+            at += 1;
+        }
+        let declared = loop {
+            at = skip_whitespace(bytes, at);
+            if bytes.get(at) == Some(&b'#') {
+                let attribute_open = skip_whitespace(bytes, at + 1);
+                at = balanced_end(bytes, attribute_open);
+                continue;
+            }
+            let word_end = (at..bytes.len())
+                .find(|&i| !is_ident_byte(bytes[i]))
+                .unwrap_or(bytes.len());
+            let word = &code[at..word_end];
+            if TYPE_KEYWORDS.contains(&word) {
+                let name_start = skip_whitespace(bytes, word_end);
+                let name_end = (name_start..bytes.len())
+                    .find(|&i| !is_ident_byte(bytes[i]))
+                    .unwrap_or(bytes.len());
+                break Some(&code[name_start..name_end]);
+            }
+            if word.is_empty() || word_end == bytes.len() {
+                break None;
+            }
+            // `pub`, `pub(crate)`, ...
+            at = word_end;
+            if bytes.get(skip_whitespace(bytes, at)) == Some(&b'(') {
+                at = balanced_end(bytes, skip_whitespace(bytes, at));
+            }
+        };
+        if declared == Some(name) {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+
+    for offset in ident_offsets(&code, "impl") {
+        let Some(open) = code[offset..].find('{') else {
+            continue;
+        };
+        let header = &code[offset + "impl".len()..offset + open];
+        // Generic parameters on the impl itself: `impl<T: Bound> ...`.
+        let header = match header.trim_start().strip_prefix('<') {
+            Some(_) => {
+                let start = header.find('<').unwrap_or(0);
+                let end = balanced_angle_end(header.as_bytes(), start);
+                &header[end..]
+            }
+            None => header,
+        };
+        let Some((trait_path, for_type)) = header.split_once(" for ") else {
+            continue;
+        };
+        let implemented = last_segment(trait_path);
+        // The target's own name: past a reference, a lifetime and any path prefix
+        // (`impl Debug for self::Held` names `Held`).
+        let target = for_type.trim().trim_start_matches('&').trim_start();
+        let target = match target.strip_prefix('\'') {
+            Some(rest) => rest.trim_start_matches(is_ident_char).trim_start(),
+            None => target,
+        };
+        let target_name = last_segment(target);
+        let target_name = target_name
+            .split(|c: char| !is_ident_char(c))
+            .next()
+            .unwrap_or("");
+        if traits.contains(&implemented.as_str()) && target_name == name {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+    lines.into_iter().collect()
+}
+
+fn is_ident_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+/// 1-based lines where `source` gives the type `name` another name: `use path::Name as Other`
+/// (in any `use` tree) or `type Other = path::Name;` / `type Other<..> = Name<..>;`. Past
+/// either, code can hold the type without spelling its name, which is what a name-keyed guard
+/// reads.
+pub fn renames_type(source: &str, name: &str) -> Vec<usize> {
+    let code = code_without_strings(source);
+    let bytes = code.as_bytes();
+    let mut lines = BTreeSet::new();
+    for offset in ident_offsets(&code, name) {
+        let after = skip_whitespace(bytes, offset + name.len());
+        let aliased = code[after..].starts_with("as")
+            && bytes.get(after + 2).is_some_and(u8::is_ascii_whitespace)
+            && in_use_statement(&code, offset);
+        if aliased {
+            lines.insert(line_at(&code, offset));
+            continue;
+        }
+        // `type X = ..Name..;` — the statement starts with `type` and has `=` before this name.
+        let start = code[..offset].rfind(';').map_or(0, |at| at + 1);
+        let statement = &code[start..offset];
+        let is_type_item = ident_offsets(statement, "type").first().is_some_and(|at| {
+            statement[..*at].trim().is_empty()
+                || statement[..*at].trim_end().ends_with("pub")
+                || statement[..*at].trim_end().ends_with(')')
+        });
+        if is_type_item && statement.contains('=') {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+    lines.into_iter().collect()
+}
+
+/// One past the `>` closing the `<` at `open`.
+fn balanced_angle_end(bytes: &[u8], open: usize) -> usize {
+    let mut depth = 0usize;
+    for (i, b) in bytes.iter().enumerate().skip(open) {
+        match b {
+            b'<' => depth += 1,
+            b'>' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return i + 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    bytes.len()
+}
+
+/// Macros that render their arguments: into a string, a stream, a panic message or a log
+/// event. Bare names, so `tracing::info!` and `log::info!` match on `info`.
+const RENDERING_MACROS: &[&str] = &[
+    "format",
+    "format_args",
+    "log",
+    "print",
+    "println",
+    "eprint",
+    "eprintln",
+    "write",
+    "writeln",
+    "panic",
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "debug_assert",
+    "debug_assert_eq",
+    "debug_assert_ne",
+    "unreachable",
+    "todo",
+    "unimplemented",
+    "dbg",
+    "trace",
+    "debug",
+    "info",
+    "warn",
+    "error",
+    "event",
+    "span",
+    "trace_span",
+    "debug_span",
+    "info_span",
+    "warn_span",
+    "error_span",
+];
+
+/// 1-based lines where `source` invokes one of [`RENDERING_MACROS`] with an argument list that
+/// names any of `idents` — `format!("{:?}", holder)`, `tracing::info!(pw = s.expose_secret())`,
+/// `assert_eq!(secret.expose_secret(), x)`, however wrapped.
+pub fn renders_in_a_macro(source: &str, idents: &[&str]) -> Vec<usize> {
+    let code = code_without_strings(source);
+    let bytes = code.as_bytes();
+    let mut lines = BTreeSet::new();
+    for name in RENDERING_MACROS {
+        for offset in ident_offsets(&code, name) {
+            let bang = skip_whitespace(bytes, offset + name.len());
+            if bytes.get(bang) != Some(&b'!') {
+                continue;
+            }
+            let open = skip_whitespace(bytes, bang + 1);
+            if !matches!(bytes.get(open), Some(b'(' | b'[' | b'{')) {
+                continue;
+            }
+            let end = balanced_end(bytes, open);
+            let arguments = &code[open..end];
+            if idents
+                .iter()
+                .any(|ident| !ident_offsets(arguments, ident).is_empty())
+            {
+                lines.insert(line_at(&code, offset));
+            }
+        }
+    }
+    lines.into_iter().collect()
+}
+
 /// 1-based lines where `source` spawns a `git` subprocess, matched on the literal program name.
 pub fn spawns_git(source: &str) -> Vec<usize> {
     let code = code_only(source);
@@ -1032,6 +1506,35 @@ mod tests {
         // The escaped-apostrophe literal closes on the third apostrophe.
         let src = "let tick = '\\''; let _ = rx.recv();";
         assert_eq!(waits_on_work(src), vec![1]);
+    }
+
+    /// Caught by: `code_only` opening a char literal on a lifetime's apostrophe, then closing
+    /// it on an apostrophe inside a later string, after which `//` in that string reads as a
+    /// comment and the rest of the file is blanked.
+    #[test]
+    fn a_lifetime_before_a_string_with_an_apostrophe_and_a_slash_pair_hides_nothing_after() {
+        let src = "fn f(x: &'static str) {}\nlet t = \"Password for 'https://h/x': \";\nlet _ = rx.recv();\n";
+        assert_eq!(
+            waits_on_work(src),
+            vec![3],
+            "the code after the string was blanked"
+        );
+        assert!(
+            code_without_strings(src).contains("recv"),
+            "{:?}",
+            code_without_strings(src)
+        );
+    }
+
+    /// Caught by: replacing a `\\`+newline continuation with two spaces, which loses a line.
+    #[test]
+    fn a_string_continued_over_a_line_keeps_the_line_count() {
+        let src = "let s = \"one \\\n    two\";\nlet _ = rx.recv();\n";
+        assert_eq!(
+            code_without_strings(src).lines().count(),
+            src.lines().count()
+        );
+        assert_eq!(waits_on_work(src), vec![3]);
     }
 
     #[test]

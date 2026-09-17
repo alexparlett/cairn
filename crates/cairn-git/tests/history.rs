@@ -256,7 +256,7 @@ fn two_pages_of_n_match_one_page_of_2n_including_lanes() {
 /// The braided fixture cannot put a backward line's ends in different pages.
 #[test]
 fn a_backward_line_across_a_page_boundary_is_a_gained_segment() {
-    let fixture = fixtures::skewed();
+    let fixture = skewed();
     let repo = open(&fixture);
     let expected = fixture.rev_list();
 
@@ -393,7 +393,7 @@ fn repaints(rows: &[HistoryRow]) -> usize {
 /// Caught by: repainting a row the window has already made final.
 #[test]
 fn a_row_that_left_the_window_is_never_repainted() {
-    let fixture = fixtures::skewed();
+    let fixture = skewed();
     let repo = open(&fixture);
     let expected = fixture.rev_list();
     assert_eq!(expected.len(), 5, "the skew fixture changed shape");
@@ -650,7 +650,7 @@ fn bad_starting_points_are_errors_rather_than_empty_pages() {
 #[test]
 fn a_replayed_prefix_is_walked_but_never_decoded() {
     let fixture = fixtures::braided(30);
-    fixtures::write_commit_graph(&fixture);
+    write_commit_graph(&fixture);
     let expected = fixture.rev_list();
     let page_size = 6;
 
@@ -664,7 +664,7 @@ fn a_replayed_prefix_is_walked_but_never_decoded() {
 
     // All of page one but the tip, which gitoxide reads from the object database regardless.
     let unreadable = &expected[1..page_size];
-    fixtures::delete_objects(&fixture, unreadable);
+    delete_objects(&fixture, unreadable);
 
     // A second handle: the first one's object cache would serve the deleted commits.
     let repo = open(&fixture);
@@ -877,7 +877,7 @@ fn a_cursor_taken_from_a_session_restarts_it_where_it_stopped() {
 
 #[test]
 fn a_session_over_a_skewed_history_returns_every_commit() {
-    let fixture = fixtures::skewed();
+    let fixture = skewed();
     let repo = open(&fixture);
     let expected = fixture.rev_list();
     let request = HistoryRequest::from_head(usize::MAX).with_window(2);
@@ -917,10 +917,10 @@ fn priming_the_window_walks_but_never_decodes() {
 fn a_session_names_the_commit_it_cannot_read() {
     let fixture = fixtures::braided(20);
     // With a commit-graph the walk reads parent ids without the object.
-    fixtures::write_commit_graph(&fixture);
+    write_commit_graph(&fixture);
     let expected = fixture.rev_list();
     let missing = expected[3].clone();
-    fixtures::delete_objects(&fixture, std::slice::from_ref(&missing));
+    delete_objects(&fixture, std::slice::from_ref(&missing));
 
     let repo = open(&fixture);
     let mut session = ok(
@@ -935,7 +935,7 @@ fn a_session_names_the_commit_it_cannot_read() {
     // The control: with the object present the same page reads cleanly.
     // The `let` binding is needed: a session borrows its repository.
     let whole = fixtures::braided(20);
-    fixtures::write_commit_graph(&whole);
+    write_commit_graph(&whole);
     let intact = open(&whole);
     let mut fine = ok(
         intact.history_session(&HistoryRequest::from_head(usize::MAX).with_window(2)),
@@ -947,4 +947,75 @@ fn a_session_names_the_commit_it_cannot_read() {
             .len(),
         8
     );
+}
+
+// Builders only this file uses; the shared ones are in `fixtures`.
+
+/// A repository whose newest-first walk hands a parent over before its child. A fork,
+/// not a chain: a chain is emitted in order however it is stamped. Stamps are seconds past [`EPOCH`]:
+///
+/// ```text
+///   merge  9500   parents: recent, stale
+///   recent 9000   parent: shared        (trunk)
+///   shared 8000   parent: base
+///   stale  2000   parent: shared        (side branch)
+///   base   1000
+/// ```
+///
+/// so commit time orders them `merge, recent, shared, stale, base`.
+fn skewed() -> Fixture {
+    let fixture = fixtures::unborn();
+    commit_stamped(&fixture, "base", fixtures::EPOCH + 1000);
+    commit_stamped(&fixture, "shared", fixtures::EPOCH + 8000);
+    commit_stamped(&fixture, "recent", fixtures::EPOCH + 9000);
+    fixture.git(&["checkout", "--quiet", "-b", "side", "HEAD~1"]);
+    commit_stamped(&fixture, "stale", fixtures::EPOCH + 2000);
+    fixture.git(&["checkout", "--quiet", "main"]);
+    fixtures::run(
+        fixture.path(),
+        &[
+            "merge",
+            "--quiet",
+            "--no-ff",
+            "--no-edit",
+            "-m",
+            "merge",
+            "side",
+        ],
+        Some(fixtures::EPOCH + 9500),
+    );
+    fixture
+}
+
+fn commit_stamped(fixture: &Fixture, message: &str, seconds: i64) {
+    fixtures::run(
+        fixture.path(),
+        &["commit", "--quiet", "--allow-empty", "-m", message],
+        Some(seconds),
+    );
+}
+
+/// Writes a commit-graph file, so a walk reads parent ids without the object database.
+fn write_commit_graph(fixture: &Fixture) {
+    fixture.git(&["commit-graph", "write", "--reachable"]);
+    // Local config: the machine may have turned commit-graph use off globally.
+    fixture.git(&["config", "core.commitGraph", "true"]);
+    assert!(
+        fixture
+            .path()
+            .join(".git/objects/info/commit-graph")
+            .is_file(),
+        "git did not write a commit-graph file"
+    );
+}
+
+/// Deletes the loose object behind each of `ids`. Never pass a starting point:
+/// gitoxide reads the tips from the object database to seed the walk.
+fn delete_objects(fixture: &Fixture, ids: &[String]) {
+    for id in ids {
+        let (dir, file) = id.split_at(2);
+        let path = fixture.path().join(".git/objects").join(dir).join(file);
+        std::fs::remove_file(&path)
+            .unwrap_or_else(|e| panic!("could not delete {}: {e}", path.display()));
+    }
 }

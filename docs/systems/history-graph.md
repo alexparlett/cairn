@@ -190,7 +190,11 @@ FILE, and it is a guard, not a convention — see below.
   repository**, because discovering one reads the filesystem. A path outside a
   repository therefore arrives as an `Update::Failed` naming the path, not as a
   panic and not as an empty window
-  (`opening_a_path_outside_a_repository_is_reported_and_names_the_path`).
+  (`opening_a_path_outside_a_repository_is_reported_and_names_the_path`). Before
+  it looks for the repository at all it looks for `git`, on the same thread and
+  for the same reason (running `git --version` is work): a missing or too-old
+  `git` arrives the same way, naming the version Cairn needs, and nothing is
+  served behind it (`a_missing_git_is_refused_naming_the_version_and_nothing_is_served`).
 - `RepositoryHandle::submit(Request) -> Epoch` returns immediately over an
   unbounded channel and holds no receiving end of anything.
 - `Updates::next()` is an `async fn`: it `try_recv`s and otherwise parks on
@@ -206,15 +210,30 @@ FILE, and it is a guard, not a convention — see below.
   task is woken. That ordering is the point: reversed, a worker that panicked
   would leave `Updates::next` parked forever on a latch nobody will ever set
   again, and the window would sit on "Loading" for the life of the process.
-  Five tests in `crates/cairn-app/src/worker/pool.rs` cover it. `Outbox` is not
+  The `WorkerExit` tests in `crates/cairn-app/src/worker/pool.rs` cover it
+  (`a_panicking_worker_says_so_instead_of_disappearing`,
+  `a_panic_inside_a_real_worker_is_announced_by_the_pool_that_opened_it`,
+  `a_worker_that_exits_cleanly_raises_no_alarm`,
+  `a_failed_open_ends_the_stream_rather_than_leaving_it_open`,
+  `a_worker_ending_in_silence_still_wakes_the_waiting_task`). `Outbox` is not
   `Clone`, held there by `a_worker_thread_cannot_be_given_a_second_sender`, which
-  fails to compile if `Clone` is derived. What that cannot decide, and is a
-  review obligation: `Sender<Envelope>` is `Clone` and `Outbox`'s fields are
-  visible throughout `pool.rs`, so a second sender written by hand compiles and
-  passes every test. A copy outliving `WorkerExit` holds the update channel open
-  past the wake and parks the waiting task forever; the race is narrow enough
-  that `a_failed_open_ends_the_stream_rather_than_leaving_it_open` passed against
-  such a change.
+  fails to compile if `Clone` is derived. And every `Outbox` closes its sender
+  and then wakes when it is DROPPED, from whatever thread and with or without a
+  `WorkerExit` around it (`an_outbox_dropped_anywhere_ends_the_stream`): that
+  is what makes "the last sender closing wakes the task" hold by construction
+  rather than by each path remembering to. It did not always — the two extra
+  outboxes `open_with` makes for the operations and acceptor threads were
+  captured by the repository thread's closure, and on an early exit (no usable
+  `git`, no repository at the path) were dropped after the `WorkerExit` had
+  signalled, with no wake of their own; a task parked between the two never
+  woke, which is issue #21's intermittent hang of
+  `a_missing_git_is_refused_naming_the_version_and_nothing_is_served`. What the
+  type still cannot decide, and stays a review obligation: `Sender<Envelope>`
+  is `Clone` and `Outbox`'s fields are visible throughout `pool.rs`, so a bare
+  sender copied out by hand compiles, and one held past every `Outbox` keeps
+  the stream open with nothing coming. Every wait in the worker's tests is
+  bounded (`fetch_tests::WAIT`, in `block_on` and `woken_by`), so a hang of
+  that shape is a red test with a name.
 - `WORKERS_PER_REPOSITORY` is 1: the live walk lives on one thread, and a `const`
   assertion fails the build if it is raised, because more workers need a routing
   decision and not a bigger number. A second kind of work gets its own worker,
@@ -226,13 +245,17 @@ FILE, and it is a guard, not a convention — see below.
   request is answered by a STREAM of `Update`s rather than by one reply; a worker
   runs ordinary blocking code, so a job that must wait on a UI answer makes its
   own reply channel and blocks on it; and workers are pinned to a purpose rather
-  than fed from an anonymous queue. Those three are what fetch
-  (`docs/prd/credential-prompts.md` R4) needs — long-running, progress-reporting,
-  and blocking mid-flight on a credential dialog — so adding it is a new `Update`
-  variant and its own worker rather than a change at every call site.
+  than fed from an anonymous queue. Fetch (`docs/prd/credential-prompts.md`
+  R4) is the second consumer, and landed as exactly that: its own thread
+  (`worker/operations.rs`), its own `Update` variants, and requests that carry
+  no epoch so a scroll and a fetch cannot supersede each other; the credential
+  dialog is a third thread (`worker/askpass.rs`) blocking on the window's
+  reply. How it honours `Invalidated::refs` is the OpenHistory path above — a
+  finished fetch makes the window ask for the history again from `HEAD`. The
+  as-built description is `docs/systems/credentials.md`.
 
-Every `submit` supersedes, and a superseded page delivers nothing — so the
-caller must debounce. `Progress::wants_more()`
+Every `submit` of a QUERY supersedes (an operation carries no epoch), and a
+superseded page delivers nothing — so the caller must debounce. `Progress::wants_more()`
 (`crates/cairn-app/src/history_state.rs`) is that debounce: it is false while a
 page is in flight, while the history is complete, and once the update stream has
 ended (no worker is left to answer).

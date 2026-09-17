@@ -74,7 +74,7 @@ BRANCH=""
 scan() {
   # Every rule below needs one of these tokens; grep drops the rest far faster than awk.
   printf '%s\n' "$2" |
-    LC_ALL=C grep -E '<<<<<<<|>>>>>>>|!|ignore|allow|gix|freya|dioxus|cairn_git|cairn_ui' |
+    LC_ALL=C grep -E '<<<<<<<|>>>>>>>|!|ignore|allow|gix|freya|dioxus|cairn_git|cairn_ui|cairn_askpass|tracing|log' |
     awk -v strict="$1" '
   # Universal debris.
   /^[^:]*:<<<<<<< /               { print $0 " [merge conflict marker]" ; next }
@@ -113,9 +113,15 @@ scan() {
     if (/(^|[^A-Za-z0-9_])(freya|dioxus|cairn_ui)([^A-Za-z0-9_]|$)/) {
       print $0 " [cairn-git is sealed from the UI toolkit]" ; next }
   }
-  # Engine reach only; waiting primitives are left to the guard suite.
+  # The helper runs in a process holding a plaintext secret: no engine, no
+  # toolkit, and no logging framework.
+  index($0, "crates/cairn-askpass/") == 1 {
+    if (/(^|[^A-Za-z0-9_])(gix|freya|dioxus|cairn_git|cairn_ui|tracing|log)([^A-Za-z0-9_]|$)/) {
+      print $0 " [cairn-askpass holds a plaintext secret: no engine, toolkit or logging crate]" ; next }
+  }
+  # Engine and askpass-channel reach only; waiting primitives are left to the guard suite.
   index($0, "crates/cairn-app/") == 1 && index($0, "crates/cairn-app/src/worker/") != 1 {
-    if (/(^|[^A-Za-z0-9_])(gix|cairn_git)([^A-Za-z0-9_]|$)/) {
+    if (/(^|[^A-Za-z0-9_])(gix|cairn_git|cairn_askpass)([^A-Za-z0-9_]|$)/) {
       print $0 " [only crates/cairn-app/src/worker may reach the git engine]" ; next }
   }
   index($0, "crates/cairn-app/src/worker/") == 1 {

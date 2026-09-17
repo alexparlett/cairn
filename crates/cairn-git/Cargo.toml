@@ -13,7 +13,13 @@ publish = false
 [dependencies]
 cairn-model.workspace = true
 gix.workspace = true
+nix.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# The engine's fetch tests answer a real askpass channel from a test thread; the
+# engine itself never links the helper (its allowlist row has no such entry).
+cairn-askpass.workspace = true
 
 [lints]
 workspace = true

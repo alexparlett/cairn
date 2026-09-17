@@ -3,6 +3,84 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-17 — phase 04: packet QA, the merge bar
+
+Packet mode. Five reviewers spawned fresh and in parallel over the WHOLE packet
+diff `main...HEAD` — `qa-checklist`, `destructive-ops-reviewer`,
+`responsiveness-reviewer`, `gate-integrity-reviewer`, `test-coverage-auditor`
+(three hit their turn limit and were resumed to a full report). All 34 raw
+findings went to a fresh `qa-confirm`: 19 confirmed, 12 dismissed, 3 escalated,
+with two duplicate pairs merged.
+
+Secret-in-history check, first because it is the one that cannot be fixed later:
+`git log -p main..HEAD` scanned for credential, key and token values, plus a
+sweep for private-key blocks, provider token prefixes and literals assigned to
+secret-shaped names, and a review of every path ever touched. **Nothing was ever
+committed.** Every fixture generates its credentials per run.
+
+Guards seen red, each by violating it and reverting: dropping the
+`GIT_TERMINAL_PROMPT` tuple failed
+`every_git_invocation_disables_the_terminal_prompt`; deriving `Debug` on
+`worker::Reply` failed `no_credential_value_is_logged_printed_serialised_or_stored`;
+spawning `git` from `refs.rs` failed `only_the_ops_module_mutates_a_repository`.
+
+Fixed in focused commits:
+
+- `fix(app)`: a Cancel pressed before the repository thread dequeued the fetch
+  landed on `Stage::Idle` and was discarded, so the fetch the user had already
+  cancelled ran to completion. A cancel with nothing armed now parks in its own
+  stage that the next `arm` claims.
+- `fix(app)`: the failure banner took the first line of `Error::GitFailed`,
+  which for a fetch is a progress redraw, not the reason; it now prefers git's
+  own `fatal:`/`error:` diagnostics.
+- `fix(ui)`: the host-key dialog said nothing about accepting being permanent,
+  though a yes writes the key to `known_hosts` for good.
+- `fix(guards)`: `PRODUCT_SOURCE_DIRS` was the one hand-maintained roster with no
+  closure test, so a crate added later would sit outside both the mutation and
+  terminal-prompt guards while they went on passing; also dropped an assertion
+  that could not fail and corrected a self-test message that inverted what the
+  struct matcher counts.
+- `test(git)`: every refusal test refused the FIRST prompt, so git never had a
+  credential rejected — the one case its own machinery retries. B5 now answers
+  the username and refuses the password.
+
+Dismissed, with reasons (from `qa-confirm`):
+
+- "Teardown obligations not discharged" — teardown is not this phase; it is the
+  orchestrator's step after the merge bar.
+- "Two `Debug` impls render git's prompt text" — they render the QUESTION; a
+  `Secret` has no `Debug` and cannot be derived into one, so no answer reaches
+  them.
+- "The failure-message path is unasserted for secrets" — it is, twice:
+  `fetch.rs` runs `no_secret_in(&error.to_string(), ..)` on both refusal tests,
+  and that string is exactly what the banner renders.
+- The per-byte `format!` in the token, files without an in-file test module, one
+  `current_exe()` readlink at startup, `HistoryList::index_of`'s scan (unchanged
+  by this packet), roster growth being "a code edit", and `GitEnvironment`'s
+  derived `Debug` carrying the askpass token (authorisation, not a credential,
+  and formatted nowhere on a shipping path) — each filed by its own reviewer as
+  a note, and each judged not a defect.
+
+Confirmed but NOT fixed here, because each is an architecture or policy change
+rather than a QA repair — carried to teardown as issues: the progress-line
+volume on a large fetch, the synchronous history clear on a refresh, the two
+unbounded `ref_tips` walks per fetch, the retained stderr and the parked reader
+thread per cancel, `Performed` being built and discarded, the 64 KiB request
+truncation, the un-zeroed toolkit buffers behind the dialog, the hook/guard
+seal lists having no comparator, B6's `argv` arm having no behavioural test, and
+`fetch_tests`'s deadline-free waits.
+
+Dismissal audit over the whole packet: every earlier dismissal still holds. The
+one that deferred a question — phase 02's "`cargo run -p cairn-app` does not
+build the helper", left to phase 03 — was discharged: the app degrades with a
+message naming the build command, `credentials.md` has a section on it, and the
+root `CLAUDE.md` says so beside the run command. Verified by building
+`-p cairn-app` with the helper deleted.
+
+O1-O5 all answered and recorded; O4's addendum shows L7 holds by git's own
+precedence, not by accident, so the stopping rule did not trigger.
+`docs/systems/credentials.md` exists and names push only as not built.
+
 ## 2026-09-17 — phase 03 QA adjudicated and fixed
 
 Reviewers spawned fresh over `b48b5a5...HEAD` (packet context `main...HEAD`):

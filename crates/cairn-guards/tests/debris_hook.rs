@@ -321,6 +321,11 @@ fn every_rule_fires_through_the_prefilter_committed_or_not() {
             "only crates/cairn-app/src/worker may reach the git engine",
         ),
         (
+            "crates/cairn-app/src/accept.rs",
+            "use cairn_askpass::Channel;\n",
+            "only crates/cairn-app/src/worker may reach the git engine",
+        ),
+        (
             "crates/cairn-askpass/src/leak.rs",
             "use tracing::info;\n",
             "cairn-askpass holds a plaintext secret",

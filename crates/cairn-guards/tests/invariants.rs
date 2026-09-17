@@ -896,8 +896,9 @@ fn the_ui_thread_never_waits_on_repository_work() {
                 hits[0]
             );
             // `cairn-ui` is covered by `FORBIDDEN_IDENTS`; this half is `cairn-app`'s alone.
+            // `cairn_askpass` too: its `accept` blocks, and only the worker may hold it.
             if dir.starts_with("crates/cairn-app/") {
-                for ident in ["cairn_git", "gix"] {
+                for ident in ["cairn_git", "gix", "cairn_askpass"] {
                     let hits = mentions_crate(&source, ident);
                     assert!(
                         hits.is_empty(),

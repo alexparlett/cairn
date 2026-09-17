@@ -105,7 +105,6 @@ pub fn code_only(source: &str) -> String {
         BlockComment(usize),
         Str,
         RawStr(usize),
-        Char,
     }
 
     let bytes = source.as_bytes();
@@ -133,11 +132,20 @@ pub fn code_only(source: &str) -> String {
                     out.push('"');
                     i += 1;
                 }
-                (b'\'', _) => {
-                    mode = Mode::Char;
-                    out.push('\'');
-                    i += 1;
-                }
+                // A char literal is kept whole; a lifetime's apostrophe is just an
+                // apostrophe. Treating every apostrophe as opening a literal once
+                // blanked a file from a `&'static str` to the next `'` inside a
+                // string, and every matcher after that point saw nothing.
+                (b'\'', _) => match char_literal_end(bytes, i) {
+                    Some(end) => {
+                        out.push_str(&source[i..=end]);
+                        i = end + 1;
+                    }
+                    None => {
+                        out.push('\'');
+                        i += 1;
+                    }
+                },
                 (b'r', Some(b'"' | b'#')) => {
                     let hashes = bytes[i + 1..].iter().take_while(|&&c| c == b'#').count();
                     if bytes.get(i + 1 + hashes) == Some(&b'"') {
@@ -183,12 +191,7 @@ pub fn code_only(source: &str) -> String {
                     i += 1;
                 }
             },
-            Mode::Str | Mode::Char => {
-                let closer = if matches!(mode, Mode::Str) {
-                    b'"'
-                } else {
-                    b'\''
-                };
+            Mode::Str => {
                 if b == b'\\' {
                     out.push('\\');
                     if let Some(n) = next {
@@ -196,7 +199,7 @@ pub fn code_only(source: &str) -> String {
                     }
                     i += 2;
                 } else {
-                    if b == closer {
+                    if b == b'"' {
                         mode = Mode::Code;
                     }
                     out.push(b as char);
@@ -256,7 +259,13 @@ pub fn code_without_strings(source: &str) -> String {
             i += 1;
             while i < bytes.len() {
                 if bytes[i] == b'\\' {
-                    out.push_str("  ");
+                    // An escaped newline continues the string; the line count must not drop.
+                    out.push(' ');
+                    out.push(if bytes.get(i + 1) == Some(&b'\n') {
+                        '\n'
+                    } else {
+                        ' '
+                    });
                     i += 2;
                     continue;
                 }
@@ -1497,6 +1506,35 @@ mod tests {
         // The escaped-apostrophe literal closes on the third apostrophe.
         let src = "let tick = '\\''; let _ = rx.recv();";
         assert_eq!(waits_on_work(src), vec![1]);
+    }
+
+    /// Caught by: `code_only` opening a char literal on a lifetime's apostrophe, then closing
+    /// it on an apostrophe inside a later string, after which `//` in that string reads as a
+    /// comment and the rest of the file is blanked.
+    #[test]
+    fn a_lifetime_before_a_string_with_an_apostrophe_and_a_slash_pair_hides_nothing_after() {
+        let src = "fn f(x: &'static str) {}\nlet t = \"Password for 'https://h/x': \";\nlet _ = rx.recv();\n";
+        assert_eq!(
+            waits_on_work(src),
+            vec![3],
+            "the code after the string was blanked"
+        );
+        assert!(
+            code_without_strings(src).contains("recv"),
+            "{:?}",
+            code_without_strings(src)
+        );
+    }
+
+    /// Caught by: replacing a `\\`+newline continuation with two spaces, which loses a line.
+    #[test]
+    fn a_string_continued_over_a_line_keeps_the_line_count() {
+        let src = "let s = \"one \\\n    two\";\nlet _ = rx.recv();\n";
+        assert_eq!(
+            code_without_strings(src).lines().count(),
+            src.lines().count()
+        );
+        assert_eq!(waits_on_work(src), vec![3]);
     }
 
     #[test]

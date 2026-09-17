@@ -162,7 +162,8 @@ Project invariants:
   `[dependencies]`, `[build-dependencies]`, `[dev-dependencies]` and their
   `[target.*]` forms, renames seen through — and a dev-dependency beyond the
   crate's row needs its own `TEST_ONLY_ALLOWLIST` row (`freya-testing` in
-  `cairn-ui` and `cairn-app`).
+  `cairn-ui` and `cairn-app`; `cairn-askpass` in `cairn-git`, whose fetch tests
+  answer a real channel).
 - **`cairn-ui` and `cairn-model` never name `gix` or `cairn_git`; `cairn-git`
   never names `freya` or `cairn_ui`.** Manifests alone would miss a re-export, so
   the twin reads source: `layers_never_name_the_crates_they_are_sealed_from`,
@@ -241,8 +242,9 @@ Project invariants:
   around the accessor); no `struct` or `enum` that holds a `Secret` —
   directly or through another such type, in `src/` or `tests/` — derives or
   hand-implements `Debug`, `Display`, `Clone`, `Copy`, `Serialize`,
-  `Deserialize`, `Encode` or `Decode`; nothing renames the type (`use .. as`,
-  a `type` alias); no `struct` outside the `SECRET_HOLDERS` roster (empty on
+  `Deserialize`, `Encode` or `Decode`; nothing renames `Secret` itself
+  (`use .. as`, a `type` alias) — an alias of a type that HOLDS one is not
+  followed, and is the review's; no `struct` outside the `SECRET_HOLDERS` roster (empty on
   purpose: a secret is passed by value and consumed once, never kept) has a
   field holding one or holding a type that does; and in production code
   `expose_secret` is named only in the `SECRET_READERS` roster (the type, the
@@ -275,8 +277,8 @@ Project invariants:
   cannot quietly skip CI.
 - **The UI thread never waits on repository work.** `cairn-app` is partitioned by
   FILE: `crates/cairn-app/src/worker/` runs repository work and may block; every
-  other file in the crate renders, and may name neither `cairn_git` nor any
-  waiting primitive — the types (`Receiver`, `Mutex`, `Condvar`, `JoinHandle`),
+  other file in the crate renders, and may name neither `cairn_git`, `gix` nor
+  `cairn_askpass` (whose `accept` blocks) nor any waiting primitive — the types (`Receiver`, `Mutex`, `Condvar`, `JoinHandle`),
   the channel constructors (`channel`, `unbounded`, ...), and the nullary waiting
   calls (`recv()`, `join()`, `lock()`, `wait()`), plus `sleep`, `park`,
   `block_on`. Naming the constructor is what catches a receiver held by

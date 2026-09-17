@@ -551,6 +551,41 @@ mod tests {
         assert_eq!(patch.as_bytes(), b"");
     }
 
+    /// Caught by: taking both path lines from the same side, which points the patch at one
+    /// file and applies it to the other. Every other golden test here uses a file whose two
+    /// paths are equal, so only a rename with content can see it.
+    #[test]
+    fn a_rename_with_an_edit_names_the_old_side_and_the_new_side_apart() {
+        let file = ChangedFile {
+            status: ChangeStatus::Renamed(crate::Similarity::from_percent(75)),
+            old_path: RepoPath::from("r.txt"),
+            new_path: RepoPath::from("r2.txt"),
+            old_mode: Some(FileMode::Regular),
+            new_mode: Some(FileMode::Regular),
+            old_id: None,
+            new_id: None,
+        };
+        let text = TextDiff::new(
+            split_lines(b"a\nb\nc\n"),
+            split_lines(b"a\nB\nc\n"),
+            vec![change((1, 1), (1, 1))],
+        );
+        assert_eq!(
+            patch_text(&file, &text, &Selection::with_every_change(&text)),
+            "diff --git a/r.txt b/r2.txt\n\
+             similarity index 75%\n\
+             rename from r.txt\n\
+             rename to r2.txt\n\
+             --- a/r.txt\n\
+             +++ b/r2.txt\n\
+             @@ -1,3 +1,3 @@\n\
+             \x20a\n\
+             -b\n\
+             +B\n\
+             \x20c\n"
+        );
+    }
+
     /// A change that is not in the lines still has to be staged, so it still gets headers.
     #[test]
     fn a_rename_and_a_mode_change_are_headers_with_no_hunks() {

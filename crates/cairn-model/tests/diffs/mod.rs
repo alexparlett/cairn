@@ -1,6 +1,7 @@
 //! Fixture diffs, an independent oracle for what a selection means, and a seeded chooser.
 //!
-//! `unwrap` and `expect` are denied here: this is not `#[cfg(test)]` code.
+//! `unwrap` and `expect` are denied here: `clippy.toml`'s test exemption reaches code inside
+//! a `#[test]` function, and these are helpers this crate's tests call.
 
 use cairn_model::{
     ChangeStatus, ChangedFile, ChangedRange, DiffLine, FileMode, LineNumber, LineSpan, Oid,
@@ -339,6 +340,18 @@ pub fn corpus() -> Vec<Fixture> {
             b"a\nb\nc\nLAST",
         ),
         Fixture::modified("CRLF content", b"a\r\nb\r\nc\r\n", b"a\r\nB\r\nc\r\n"),
+        Fixture::modified(
+            "CRLF content with no final newline",
+            b"a\r\nb\r\nc\r",
+            b"a\r\nB\r\nc\r",
+        ),
+        Fixture::modified(
+            "blank lines around a change",
+            b"a\n\n\nb\n\n\nc\n",
+            b"a\n\n\nB\n\n\nc\n",
+        ),
+        Fixture::modified("a blank line added", b"a\nb\nc\n", b"a\n\nb\nc\n"),
+        Fixture::modified("a blank line removed", b"a\n\nb\nc\n", b"a\nb\nc\n"),
         Fixture::modified(
             "adjacent hunks four lines apart",
             b"a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\n",

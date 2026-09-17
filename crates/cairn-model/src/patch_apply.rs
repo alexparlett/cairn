@@ -607,6 +607,22 @@ mod tests {
         );
     }
 
+    /// An empty range names the line BEFORE it, so `-5,0` inserts after line 5 and not
+    /// after line 4. Caught by: subtracting one from an empty range's start, which every
+    /// `-0,0` case survives because zero saturates.
+    #[test]
+    fn an_insertion_in_the_middle_lands_after_the_line_its_header_names() {
+        let patch = b"@@ -5,0 +6,2 @@\n+X\n+Y\n";
+        assert_eq!(
+            apply_patch(b"a\nb\nc\nd\ne\nf\ng\nh\n", patch),
+            Ok(b"a\nb\nc\nd\ne\nX\nY\nf\ng\nh\n".to_vec())
+        );
+        assert_eq!(
+            apply_patch_in_reverse(b"a\nb\nc\nd\ne\nX\nY\nf\ng\nh\n", patch),
+            Ok(b"a\nb\nc\nd\ne\nf\ng\nh\n".to_vec())
+        );
+    }
+
     #[test]
     fn a_deleted_file_takes_every_line() {
         let patch = b"@@ -1,2 +0,0 @@\n-x\n-y\n";

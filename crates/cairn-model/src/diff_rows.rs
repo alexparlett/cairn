@@ -614,10 +614,18 @@ mod tests {
             rows.len() > 2 * count as usize,
             "a change every other line makes more rows than there are changes"
         );
+        // Both bounds matter. The second alone would pass an index holding one entry per
+        // row, because a change every other line makes fewer rows than four per change.
         assert!(
-            rows.index_size() <= 4 * count as usize,
-            "the index grew past a fixed number of entries per change: {} entries for {count} \
-             changes",
+            rows.index_size() < rows.len(),
+            "the index held an entry per row: {} entries for {} rows",
+            rows.index_size(),
+            rows.len()
+        );
+        assert!(
+            rows.index_size() <= 2 * count as usize + 2,
+            "the index grew past two entries per change plus the hunk's own: {} entries for \
+             {count} changes",
             rows.index_size()
         );
 

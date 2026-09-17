@@ -11,8 +11,8 @@
 mod diffs;
 
 use cairn_model::{
-    Context, LineNumber, Patch, Selection, SideBySideRow, SideBySideRows, TextDiff, UnifiedRow,
-    UnifiedRows, apply_patch, apply_patch_in_reverse, emit_patch,
+    Context, Hunks, LineNumber, PATCH_CONTEXT, Patch, Selection, SideBySideRow, SideBySideRows,
+    TextDiff, UnifiedRow, UnifiedRows, apply_patch, apply_patch_in_reverse, emit_patch,
 };
 
 use diffs::{Fixture, corpus, expected_lines, expected_result, is_a_well_formed_file};
@@ -147,12 +147,22 @@ fn a_selection_and_its_patch_are_the_same_in_every_view() {
             for context in every_context() {
                 let unified = UnifiedRows::new(&text, context);
                 let side = SideBySideRows::new(&text, context);
-                // Build the views before asking again, so a projection that left state
-                // behind would be seen.
+                // A side-by-side view pairs a change's removed and added lines where a
+                // unified view lists them, so its row count is smaller exactly when some
+                // change has lines on both sides. Caught by: pairing with `min` or with a
+                // sum, either of which loses or doubles a row.
+                let pairs = text
+                    .changes()
+                    .iter()
+                    .any(|change| !change.removed.is_empty() && !change.added.is_empty());
+                assert!(
+                    unified.len() >= side.len(),
+                    "{name} at {context:?}: pairing grew"
+                );
                 assert_eq!(
-                    unified.hunks().is_empty(),
-                    side.hunks().is_empty(),
-                    "{name} at {context:?}: the two views disagreed about having hunks"
+                    unified.len() > side.len(),
+                    pairs,
+                    "{name} at {context:?}: the two views' row counts do not follow the pairing"
                 );
                 assert_eq!(
                     emit_patch(&file, &text, selection),
@@ -163,6 +173,111 @@ fn a_selection_and_its_patch_are_the_same_in_every_view() {
             patches.push(first);
         }
         assert_eq!(patches.len(), 3);
+    }
+}
+
+/// C4's other half, stated independently. Asserting `emit_patch(x) == emit_patch(x)` cannot
+/// fail — the emitter is pure and no view can reach its arguments — so the claim that the
+/// patch does not follow the view needs a construction that does not come from the emitter:
+/// these exact bytes, and a context count taken from `PATCH_CONTEXT` rather than from
+/// whatever the views were built at.
+///
+/// Caught by: a changed `PATCH_CONTEXT`, a recount, a header, or an emitter that read a
+/// context from anywhere.
+#[test]
+fn the_patch_of_a_known_selection_is_these_exact_bytes() {
+    let old = b"a\nb\nc\nd\ne\nf\ng\nh\ni\n";
+    let new = b"a\nb\nc\nd\nE\nf\ng\nh\ni\n";
+    let text = diffs::text_of(old, new);
+    let file = Fixture::modified("one edit with context either side", old, new).file;
+    let patch = emit_patch(&file, &text, &Selection::with_every_change(&text));
+
+    assert_eq!(
+        patch.text(),
+        "diff --git a/f.txt b/f.txt\n\
+         --- a/f.txt\n\
+         +++ b/f.txt\n\
+         @@ -2,7 +2,7 @@\n\
+         \x20b\n\x20c\n\x20d\n\
+         -e\n\
+         +E\n\
+         \x20f\n\x20g\n\x20h\n"
+    );
+
+    let context_lines = patch
+        .text()
+        .lines()
+        .filter(|line| line.starts_with(' '))
+        .count();
+    assert_eq!(
+        context_lines,
+        2 * PATCH_CONTEXT as usize,
+        "the patch did not carry PATCH_CONTEXT lines either side of its change"
+    );
+}
+
+/// The shape each fixture is supposed to have, pinning the fixture module's own line
+/// differ. The round trips cannot see it: `diffs::expected_result` reads the same changed
+/// ranges the emitter reads, so a coarser but still valid edit script would agree with
+/// itself everywhere and quietly stop exercising hunk grouping.
+///
+/// `(fixture name, changed ranges, hunks at a context of three)`.
+const EXPECTED_SHAPES: &[(&str, usize, usize)] = &[
+    ("one line in the middle", 1, 1),
+    ("a hunk at the first line", 1, 1),
+    ("a hunk at the last line", 1, 1),
+    ("a one line file", 1, 1),
+    ("an empty file gaining content", 1, 1),
+    ("a file losing all its content", 1, 1),
+    ("an old side with no final newline", 1, 1),
+    ("a new side with no final newline", 1, 1),
+    ("neither side with a final newline", 1, 1),
+    ("a last line edited where neither side ends", 1, 1),
+    ("CRLF content", 1, 1),
+    ("CRLF content with no final newline", 1, 1),
+    ("blank lines around a change", 1, 1),
+    ("a blank line added", 1, 1),
+    ("a blank line removed", 1, 1),
+    ("adjacent hunks four lines apart", 2, 1),
+    ("hunks far enough apart to separate", 2, 2),
+    ("an insertion and a removal in one file", 2, 2),
+    ("more lines added than removed", 1, 1),
+    ("more lines removed than added", 1, 1),
+    ("a new file", 1, 1),
+    ("a new file that never ends", 1, 1),
+    ("a new empty file", 0, 0),
+    ("a deleted file", 1, 1),
+    ("a deleted empty file", 0, 0),
+    ("a rename with no edit", 0, 0),
+    ("a rename with edits", 1, 1),
+    ("a mode change with no edit", 0, 0),
+    ("a mode change with an edit", 1, 1),
+];
+
+#[test]
+fn every_fixture_has_the_shape_it_was_written_to_have() {
+    let corpus = corpus();
+    assert_eq!(
+        corpus.len(),
+        EXPECTED_SHAPES.len(),
+        "a fixture was added or removed without its expected shape"
+    );
+    for fixture in corpus {
+        let Fixture { name, text, .. } = fixture;
+        let Some((_, changes, hunks)) = EXPECTED_SHAPES.iter().find(|(known, _, _)| *known == name)
+        else {
+            panic!("the fixture {name:?} has no expected shape");
+        };
+        assert_eq!(
+            text.changes().len(),
+            *changes,
+            "{name}: the fixture differ produced a different number of changed ranges"
+        );
+        assert_eq!(
+            Hunks::of(&text, Context::lines(3)).len(),
+            *hunks,
+            "{name}: the fixture no longer groups into the hunks it was written for"
+        );
     }
 }
 

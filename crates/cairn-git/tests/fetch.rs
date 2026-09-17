@@ -428,6 +428,61 @@ fn cancelling_a_fetch_that_is_waiting_on_a_prompt_kills_git_and_leaves_nothing_b
     );
 }
 
+// ── Pruning ─────────────────────────────────────────────────────────────────
+
+/// Issue #17: `ops::fetch` takes no `Confirmed` on the claim that it deletes
+/// nothing, and `--no-prune --no-prune-tags` is what keeps that true under a
+/// user's `fetch.prune` / `fetch.pruneTags` (and their `remote.<name>.*`
+/// forms). A stale remote-tracking ref and a purely local tag survive Cairn's
+/// fetch; the control then runs plain `git fetch` under the same configuration
+/// and both go — so the refs survived because of the arguments, not because
+/// the configuration was not being read. The remote is a local path: nothing
+/// here is about credentials, and the channel refuses anything asked.
+#[test]
+fn a_fetch_never_prunes_however_the_repository_is_configured() {
+    let source = fixtures::braided(4);
+    let serving = Serving::serving(refusing());
+    let local = with_origin(&source.path().display().to_string());
+    local.git(&["fetch", "--quiet", "origin"]);
+    let tip = fetched_main(&local);
+    local.git(&["update-ref", "refs/remotes/origin/gone", &tip]);
+    local.git(&["tag", "local-only", &tip]);
+    for setting in [
+        "fetch.prune",
+        "fetch.pruneTags",
+        "remote.origin.prune",
+        "remote.origin.pruneTags",
+    ] {
+        local.git(&["config", setting, "true"]);
+    }
+    let stale = || {
+        local.git(&[
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/remotes/origin/gone",
+            "refs/tags/local-only",
+        ])
+    };
+    assert_eq!(stale(), "refs/remotes/origin/gone\nrefs/tags/local-only\n");
+
+    let (outcome, _) = fetch_origin(&serving, &local, local.path(), None);
+    outcome.unwrap_or_else(|e| panic!("the fetch failed: {e}"));
+    assert_eq!(
+        stale(),
+        "refs/remotes/origin/gone\nrefs/tags/local-only\n",
+        "Cairn's fetch deleted a ref under the user's prune configuration"
+    );
+    assert_eq!(serving.prompts(), Vec::<String>::new());
+
+    // The control: plain git, same repository, same configuration.
+    local.git(&["fetch", "--quiet", "origin"]);
+    assert_eq!(
+        stale(),
+        "",
+        "plain git did not prune here, so the assertion above decided nothing"
+    );
+}
+
 // ── SSH ─────────────────────────────────────────────────────────────────────
 
 /// PRD B3 over ssh: the key's passphrase is asked once, through the helper,

@@ -144,8 +144,8 @@ never enters `cairn-git` and never enters application state.
   `core.askPass` and the environment is never inherited; `credential.helper`
   and the agent, which L7 protects, are untouched.
 - **`ops::fetch`** (`crates/cairn-git/src/ops/fetch.rs`). `fetch(&git, &repo,
-  remote, token)` starts `git fetch --progress --end-of-options <remote>` and
-  returns a `FetchInProgress`; `finish(progress)` streams each redraw of git's
+  remote, token)` starts `git fetch --progress --no-prune --no-prune-tags
+  --end-of-options <remote>` and returns a `FetchInProgress`; `finish(progress)` streams each redraw of git's
   progress meter to the callback and yields a `Performed` declaring `refs` and
   `objects` invalid; `canceller()` is a `Send` handle that kills the process
   from any thread, after which `finish` reports `Error::GitCancelled`. **Not
@@ -162,10 +162,24 @@ never enters `cairn-git` and never enters application state.
   (`a_kill_after_a_clean_exit_reports_the_success`); the kill is `SIGKILL`,
   which git cannot clean its lock files up after — see the module docs for
   what a cancel mid ref-update can leave, and issue #19 for the `SIGTERM`
-  question. What "not destructive" assumes (tracking-only refspecs, reflogs
-  on) is stated in the module docs too: a `+refs/heads/*:refs/heads/*`
-  refspec, a `--mirror` clone or `fetch.prune` make a plain fetch move or
-  delete local refs, and that policy question is issue #17, not decided here.
+  question. "Not destructive" is kept true against the user's configuration
+  by the two `--no-prune` flags: `fetch.prune`, `fetch.pruneTags` and their
+  `remote.<name>.*` forms would have a plain fetch delete remote-tracking refs
+  and even local tags, and Cairn's never does — a user who set them gets
+  stale refs left standing rather than removed without a word, and pruning
+  as a named operation is issue #17's remainder. Pinned by
+  `a_fetch_never_prunes_however_the_repository_is_configured`
+  (`tests/fetch.rs`, with plain git as the control that the configuration
+  would have pruned) and, for the arguments themselves,
+  `the_arguments_forbid_pruning_and_end_the_options_before_the_remote` (which
+  is the only pin on `--no-prune-tags`: git prunes tags only when pruning at
+  all, so `--no-prune` alone decides the behaviour and the second flag is
+  belt and braces, as the module docs say). What the flags cannot cover,
+  stated in the module docs and left on issue #17, is a configured refspec
+  that overwrites a local ref: a destination under `refs/heads/*` (a
+  `--mirror` clone, or a bare repository taking the remote's branches as its
+  own, where there is no reflog by default), or a forced tag refspec in any
+  clone, since git never reflogs a tag. The operation inspects no refspec.
 - **The cache-invalidation contract** (`crates/cairn-git/src/ops/mod.rs`,
   module docs; `ops::Invalidated`, `ops::Performed`). D1 puts two
   implementations of git semantics in one process, so after a `git` subprocess

@@ -138,11 +138,13 @@ never enters `cairn-git` and never enters application state.
   `an_authorised_invocation_carries_its_token_and_only_that_one`).
   `SSH_ASKPASS_REQUIRE=force` needs OpenSSH 8.4 (2020-09); on an older one the
   variable is ignored and a passphrase goes to the terminal Cairn was launched
-  from, or fails closed without one (O5 addendum). Accepted collateral of L5:
-  a `GIT_ASKPASS`, `SSH_ASKPASS` or `core.askPass` the user set for something
-  else is replaced while Cairn runs git, since `GIT_ASKPASS` outranks
-  `core.askPass` and the environment is never inherited; `credential.helper`
-  and the agent, which L7 protects, are untouched.
+  from, or fails closed without one (O5 addendum). By decision D2 (amended
+  2026-09-17, issue #22): a `GIT_ASKPASS`, `SSH_ASKPASS` or `core.askPass`
+  the user set for something else is replaced while Cairn runs git, since
+  `GIT_ASKPASS` outranks `core.askPass` and the environment is never
+  inherited; `credential.helper` and the agent, which L7 protects, are
+  untouched. An "auth provider" setting letting the user pick their own
+  askpass program over Cairn's dialog is the future on issue #22.
 - **`ops::fetch`** (`crates/cairn-git/src/ops/fetch.rs`). `fetch(&git, &repo,
   remote, token)` starts `git fetch --progress --no-prune-tags
   --end-of-options <remote>` and returns a `FetchInProgress`; `finish(progress)` streams each redraw of git's
@@ -550,7 +552,8 @@ must not reopen by accident, each with the reason that locked it.
   and all pinned by `the_environment_is_exactly_the_deliberate_entries`. Still
   open on #18: `DISPLAY`/`WAYLAND_DISPLAY`, `GNUPGHOME`, and pinning
   `GIT_EDITOR` to fail closed when a verb that opens an editor lands. Issue
-  #22 is whether a user-set askpass program is an exception.
+  #22 decided a user-set askpass program is not an exception (D2, amended),
+  and holds the future setting that would make one.
 - **L6** A secret never travels on `argv` (`/proc` makes it world-readable);
   the socket and token reach the helper through its environment.
 - **L7** A working setup is not degraded — a user with libsecret, osxkeychain

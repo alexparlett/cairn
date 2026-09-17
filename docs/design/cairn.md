@@ -161,6 +161,20 @@ thread, which writes it to the helper's socket and drops it; the guard
 that passage from becoming state. Everything else — the environment roster,
 the threat model, what a cancel can leave — is in `docs/systems/credentials.md`.
 
+**Cairn's helper is the askpass while Cairn runs git** (decided 2026-09-17,
+issue #22). A user who has set `GIT_ASKPASS`, `SSH_ASKPASS` or `core.askPass`
+for something else finds it replaced by Cairn's helper for the duration of a
+Cairn-run `git`: the environment is built, never inherited (L5), and a prompt
+must reach the running window rather than a program with no window to reach.
+This is a decision, not collateral. What it does not touch: `credential.helper`
+and the ssh-agent, which git consults before it ever asks (L7), so a setup that
+answers without prompting keeps answering. Rejected for now: honouring the
+user's askpass over Cairn's dialog, because a program chosen for a terminal
+may itself expect one, and a fetch that hangs on it is the failure this whole
+decision exists to prevent. The way back in, when someone needs it, is an
+"auth provider" setting that lets the user pick their own askpass program over
+Cairn's dialog explicitly — issue #22 holds that setting.
+
 ### D3 — A worker pool per repository, not a thread per repository
 
 `gix::Repository` is not `Send`; gitoxide's model is a `ThreadSafeRepository`

@@ -657,27 +657,40 @@ mod stub_tests {
         assert_eq!(seen.len(), 1);
     }
 
+    /// A stub that hangs in a `sleep` child — or, where the system has no `sleep`, exits
+    /// silently with a status no kill produces, before saying anything.
+    const HANGING: &str = "PATH=/usr/bin:/bin; command -v sleep >/dev/null || exit 99; \
+                           echo 'hanging' >&2; sleep 30";
+
     /// PRD R4.3, the cancel half: a kill from another thread ends the wait promptly, the
     /// outcome says cancelled rather than failed, and the child is reaped, not orphaned.
     #[test]
     fn a_kill_from_another_thread_ends_a_hung_invocation_and_reaps_it() {
         // No `exec`: `sleep` is a child that inherits the pipe and outlives the killed shell,
-        // the way `ssh` or the askpass helper outlives a killed git.
-        let stub = stub("echo 'hanging' >&2; sleep 30");
+        // the way `ssh` or the askpass helper outlives a killed git. The stub's PATH is its
+        // own directory alone, so `sleep` is named through the system's — and checked for
+        // BEFORE the stub says it is hanging: a stub dying of `sleep: not found` after that
+        // line races the kill, and was killed first on most machines, so the test decided
+        // nothing. Here such a stub exits without a word, and the kill never fires.
+        let stub = stub(HANGING);
         let git = discover_retrying(stub.environment()).unwrap();
         let running = git.command().arg("fetch").stream().unwrap();
         let pid = running.id();
         let killer = running.killer();
+        let mut seen = Vec::new();
         let (hung, hung_seen) = std::sync::mpsc::channel::<()>();
         let killing = std::thread::spawn(move || {
-            // Kill once the child has said something, so it was really running.
-            hung_seen.recv().unwrap();
-            killer.kill();
+            // Kill once the child has said something, so it was really running; a stub that
+            // exited before saying so ends this without a kill, and `finish` reports it.
+            if hung_seen.recv().is_ok() {
+                killer.kill();
+            }
         });
 
         let started = std::time::Instant::now();
         let error = running
             .finish(|line| {
+                seen.push(line.to_owned());
                 if line == "hanging" {
                     let _ = hung.send(());
                 }
@@ -691,6 +704,12 @@ mod stub_tests {
         assert!(
             matches!(&error, crate::Error::GitCancelled { arguments } if arguments == "fetch"),
             "a killed process reported {error:?}"
+        );
+        assert_eq!(
+            seen,
+            ["hanging"],
+            "the stub said more than it hung on: it was dying by itself, so the kill above \
+             decided nothing"
         );
         killing.join().unwrap();
         assert!(
@@ -729,16 +748,23 @@ mod stub_tests {
     }
 
     /// The negative for the test above: a kill that ends a running process is a cancel.
+    /// The same stub, killed only once it has said it is hanging, so a stub that died
+    /// on its own is reported as the failure it was rather than mistaken for a kill.
     #[test]
     fn a_kill_that_ends_the_process_is_reported_as_cancelled() {
-        let stub = stub("exec sleep 30");
+        let stub = stub(HANGING);
         let git = discover_retrying(stub.environment()).unwrap();
         let running = git.command().arg("fetch").stream().unwrap();
-        running.killer().kill();
-        assert!(matches!(
-            running.finish(|_| {}),
-            Err(crate::Error::GitCancelled { .. })
-        ));
+        let killer = running.killer();
+        let outcome = running.finish(|line| {
+            if line == "hanging" {
+                killer.kill();
+            }
+        });
+        assert!(
+            matches!(outcome, Err(crate::Error::GitCancelled { .. })),
+            "{outcome:?}"
+        );
     }
 
     /// Caught by: `Stdio::null()` becoming `inherit()`, which is how a git waiting on a

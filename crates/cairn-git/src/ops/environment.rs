@@ -75,10 +75,13 @@ const INHERITED: &[&str] = &[
     // Where git writes its temporary files.
     "TMPDIR",
     // git's diagnostics reach the user in their own language; gettext reads
-    // LANGUAGE first, then LC_ALL, LC_MESSAGES, LANG.
+    // LANGUAGE first, then LC_ALL, LC_MESSAGES, LANG — and LC_CTYPE decides the
+    // output charset, so a user who sets only that one still gets their
+    // non-ASCII path names and messages intact.
     "LANGUAGE",
     "LANG",
     "LC_ALL",
+    "LC_CTYPE",
     "LC_MESSAGES",
 ];
 
@@ -178,6 +181,7 @@ mod tests {
                 "LANG",
                 "LANGUAGE",
                 "LC_ALL",
+                "LC_CTYPE",
                 "LC_MESSAGES",
                 "PATH",
                 "SSH_ASKPASS",
@@ -264,6 +268,7 @@ mod tests {
                 "LANG",
                 "LANGUAGE",
                 "LC_ALL",
+                "LC_CTYPE",
                 "LC_MESSAGES",
                 "PATH",
                 "SSH_AUTH_SOCK",

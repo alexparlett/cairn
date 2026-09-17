@@ -98,8 +98,10 @@
 //! Where it is honoured: the repository worker in `cairn-app` (decision D3),
 //! which owns the handle, the open session and the cursor, and is the only
 //! place a `Performed` arrives. [`fetch`] is the first operation to reach it:
-//! it declares `refs` and `objects`, and the worker answers by dropping its
-//! open walk and querying the history again from `HEAD`, so the graph stops
+//! it declares `refs` and `objects`; the worker's operations thread compares
+//! the ref tips before and after and tells the window whether anything moved,
+//! and the window asks for the history again from `HEAD`, which the
+//! repository thread answers by dropping its open walk — so the graph stops
 //! showing the pre-fetch refs.
 
 mod askpass;

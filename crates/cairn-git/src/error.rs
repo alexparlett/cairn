@@ -88,10 +88,9 @@ pub enum Error {
     #[error("git {arguments} was cancelled")]
     GitCancelled { arguments: String },
 
-    /// The remotes could not be read from the repository's configuration.
-    #[error("failed to read the remotes of the repository at {path}: {source}")]
-    Remotes {
-        path: PathBuf,
+    /// Reading the refs to see whether an operation moved any failed.
+    #[error("failed to read the refs of the repository: {source}")]
+    Refs {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },

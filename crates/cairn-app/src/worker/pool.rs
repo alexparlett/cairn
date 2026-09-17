@@ -428,15 +428,12 @@ fn serve(
             }
             Request::MoreHistory { rows } => rows,
             Request::ListRemotes => {
-                match repo.remotes() {
-                    Ok(remotes) => outbox.send(None, Update::Remotes { remotes }),
-                    Err(error) => outbox.send(
-                        None,
-                        Update::Failed {
-                            message: error.to_string(),
-                        },
-                    ),
-                }
+                outbox.send(
+                    None,
+                    Update::Remotes {
+                        remotes: repo.remotes(),
+                    },
+                );
                 continue;
             }
             Request::Fetch { remote } => {

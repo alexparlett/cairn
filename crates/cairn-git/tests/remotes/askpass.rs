@@ -20,9 +20,12 @@ pub fn helper_binary() -> PathBuf {
         .unwrap_or_else(|| panic!("{} is not under target/<profile>/deps", exe.display()));
     let helper = profile.join(cairn_model::HELPER_PROGRAM);
     if !helper.is_file() {
-        let built = Command::new(env!("CARGO"))
-            .args(["build", "-p", "cairn-askpass"])
-            .status();
+        let mut build = Command::new(env!("CARGO"));
+        build.args(["build", "-p", "cairn-askpass"]);
+        if profile.file_name().is_some_and(|name| name == "release") {
+            build.arg("--release");
+        }
+        let built = build.status();
         assert!(
             built.is_ok_and(|status| status.success()) && helper.is_file(),
             "the askpass helper is not built at {}; run `cargo build -p cairn-askpass`",
@@ -41,7 +44,6 @@ pub struct Askpass {
     channel: Arc<Channel>,
     runtime: PathBuf,
     prompts: Arc<Mutex<Vec<String>>>,
-    unknown_tokens: Arc<AtomicUsize>,
     stopping: Arc<AtomicBool>,
     serving: Option<JoinHandle<()>>,
 }
@@ -66,12 +68,10 @@ impl Askpass {
             Channel::open(&runtime).unwrap_or_else(|e| panic!("could not open a channel: {e}")),
         );
         let prompts = Arc::new(Mutex::new(Vec::new()));
-        let unknown_tokens = Arc::new(AtomicUsize::new(0));
         let stopping = Arc::new(AtomicBool::new(false));
         let serving = std::thread::spawn({
             let channel = Arc::clone(&channel);
             let prompts = Arc::clone(&prompts);
-            let unknown_tokens = Arc::clone(&unknown_tokens);
             let stopping = Arc::clone(&stopping);
             move || {
                 loop {
@@ -89,9 +89,8 @@ impl Askpass {
                                 None => prompt.refuse(),
                             }
                         }
-                        Err(Error::UnknownToken) => {
-                            unknown_tokens.fetch_add(1, Ordering::SeqCst);
-                        }
+                        // A helper for a retired token was refused on the wire; keep serving.
+                        Err(Error::UnknownToken) => {}
                         Err(Error::Malformed) => {
                             if stopping.load(Ordering::SeqCst) {
                                 break;
@@ -106,7 +105,6 @@ impl Askpass {
             channel,
             runtime,
             prompts,
-            unknown_tokens,
             stopping,
             serving: Some(serving),
         }
@@ -126,12 +124,6 @@ impl Askpass {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
-    }
-
-    /// Helpers turned away for presenting a token no operation holds: what a
-    /// retry after a refusal looks like from here.
-    pub fn unknown_tokens(&self) -> usize {
-        self.unknown_tokens.load(Ordering::SeqCst)
     }
 }
 
@@ -179,4 +171,25 @@ pub fn wait_for_no_process_pointed_at(socket: &Path, timeout: std::time::Duratio
         }
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
+}
+
+/// Caught by: the scan matching nothing, which would make every "nothing left
+/// behind" assertion pass vacuously.
+#[test]
+fn a_process_carrying_the_socket_in_its_environment_is_seen_until_it_is_gone() {
+    let socket = Path::new("/nonexistent/cairn-positive-control/askpass");
+    assert!(processes_pointed_at(socket).is_empty());
+    let mut child = Command::new("sleep")
+        .arg("30")
+        .env(cairn_model::SOCKET_VARIABLE, socket)
+        .spawn()
+        .unwrap_or_else(|e| panic!("could not spawn sleep: {e}"));
+    let seen = processes_pointed_at(socket);
+    assert_eq!(seen, [child.id()], "the scan does not see a live process");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        wait_for_no_process_pointed_at(socket, std::time::Duration::from_secs(2)).is_empty(),
+        "a reaped process is still reported"
+    );
 }

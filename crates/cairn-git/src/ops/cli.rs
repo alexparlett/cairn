@@ -240,20 +240,22 @@ impl Running {
                 })?,
         };
         let stderr = everything.trim_end().to_owned();
+        // A clean exit is a clean exit whatever the flag says: a kill that landed after
+        // it changed nothing, and reporting "cancelled" would hide refs that moved.
+        if status.success() {
+            return Ok(Output {
+                stdout: Vec::new(),
+                stderr,
+            });
+        }
         if self.cancelled.load(Ordering::Acquire) {
             return Err(Error::GitCancelled {
                 arguments: std::mem::take(&mut self.arguments),
             });
         }
-        if !status.success() {
-            return Err(Error::GitFailed {
-                arguments: std::mem::take(&mut self.arguments),
-                status,
-                stderr,
-            });
-        }
-        Ok(Output {
-            stdout: Vec::new(),
+        Err(Error::GitFailed {
+            arguments: std::mem::take(&mut self.arguments),
+            status,
             stderr,
         })
     }
@@ -304,7 +306,8 @@ fn report(line: &str, progress: &mut impl FnMut(&str)) {
 
 /// Kills the process a [`Running`] is waiting on, from another thread. The
 /// process is still reaped by [`Running::finish`], which then reports
-/// [`Error::GitCancelled`]; a kill after the exit is a no-op.
+/// [`Error::GitCancelled`]; a kill after a clean exit changes nothing, and
+/// the exit is reported as the success it was.
 #[derive(Debug, Clone)]
 pub(crate) struct ProcessKill {
     child: Arc<Mutex<Child>>,
@@ -312,10 +315,15 @@ pub(crate) struct ProcessKill {
 }
 
 impl ProcessKill {
-    /// `SIGKILL`, not a request: git may be inside `ssh` or a credential
-    /// helper, and a fetch has nothing to save. What it leaves behind is
-    /// nothing a `reflog` cannot show, and git's own lock files are removed by
-    /// the next invocation.
+    /// `SIGKILL`, which is what `std` can send. git cleans its lock files up
+    /// on `SIGTERM`, not on `SIGKILL`: a kill that lands while git is updating
+    /// refs can leave a `*.lock` beside a ref (or `packed-refs.lock`), and every
+    /// later update of that ref fails with "another git process seems to be
+    /// running" until the file is removed by hand. A kill while git waits on
+    /// the network or a prompt — the common case — leaves at most a partial
+    /// pack under `objects/pack/tmp_*`, which `gc` reaps. Sending `SIGTERM`
+    /// first needs a signalling dependency, which is the user's decision
+    /// (credential-prompts phase 03 report).
     pub(crate) fn kill(&self) {
         // Flagged first, so a `finish` that observes the exit sees why.
         self.cancelled.store(true, Ordering::Release);
@@ -679,17 +687,41 @@ mod stub_tests {
         );
     }
 
-    /// A kill after the exit changes nothing; the outcome is the process's own.
+    /// A kill after a clean exit changes nothing: the outcome is the success it was, so
+    /// the refs it moved are not hidden behind "cancelled". The exit is observed (the
+    /// process is a zombie, exited but not yet reaped) before the kill is sent.
+    #[cfg(target_os = "linux")]
     #[test]
-    fn a_kill_after_the_exit_is_a_no_op() {
-        let stub = stub("exit 0");
+    fn a_kill_after_a_clean_exit_reports_the_success() {
+        let stub = stub("echo done >&2; exit 0");
         let git = discover_retrying(stub.environment()).unwrap();
         let running = git.command().arg("fetch").stream().unwrap();
+        let pid = running.id();
         let killer = running.killer();
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        let started = std::time::Instant::now();
+        loop {
+            let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+            if stat.contains(") Z ") {
+                break;
+            }
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(10),
+                "the stub never exited"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         killer.kill();
-        // The flag was set, so this is reported as cancelled even though the exit was clean:
-        // the caller asked for a cancel, and got one, whichever came first.
+        let output = running.finish(|_| {}).unwrap();
+        assert_eq!(output.stderr(), "done");
+    }
+
+    /// The negative for the test above: a kill that ends a running process is a cancel.
+    #[test]
+    fn a_kill_that_ends_the_process_is_reported_as_cancelled() {
+        let stub = stub("exec sleep 30");
+        let git = discover_retrying(stub.environment()).unwrap();
+        let running = git.command().arg("fetch").stream().unwrap();
+        running.killer().kill();
         assert!(matches!(
             running.finish(|_| {}),
             Err(crate::Error::GitCancelled { .. })

@@ -4,6 +4,7 @@ mod cancel;
 mod error;
 mod history;
 pub mod ops;
+mod refs;
 mod remotes;
 mod repository;
 

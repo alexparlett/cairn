@@ -536,3 +536,31 @@ fn a_connection_that_is_not_a_helper_is_refused_and_serving_continues() {
     assert_eq!(output.stdout, format!("{secret}\n").into_bytes());
     served.join().unwrap();
 }
+
+/// The deterministic form of the oversized case: the whole request is written
+/// and the writing half shut BEFORE the channel accepts, so the bytes past the
+/// channel's limit are already queued in the socket. Without the drain, the
+/// channel closed with them unread, which reset the connection and lost the
+/// helper its answer. Uses the helper's own `ask` in-process.
+#[test]
+fn an_oversized_request_already_queued_still_gets_its_answer() {
+    let runtime = RuntimeDir::new();
+    let channel = shared(&runtime);
+    let operation = channel.begin().unwrap();
+    let token = operation.token().clone();
+    let socket = channel.socket_path().to_owned();
+    let secret = generated_secret();
+    let asking = std::thread::spawn(move || {
+        let huge = vec![b'P'; 100 * 1024];
+        cairn_askpass::ask(&socket, &token, &huge)
+    });
+    // Long enough for the helper thread to write everything and shut its half.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let prompt = channel.accept().unwrap();
+    prompt.answer(&Secret::from_string(secret.clone())).unwrap();
+    let answer = asking
+        .join()
+        .unwrap()
+        .unwrap_or_else(|refusal| panic!("refused: {refusal}"));
+    assert_eq!(answer.expose_secret(), secret.as_bytes());
+}

@@ -25,6 +25,12 @@ use super::pool::{Replier, RepositoryHandle, Updates, open_with};
 use super::request::{Request, Update};
 use super::startup::Startup;
 
+/// How long one wait on the boundary may take before the test is called hung
+/// (issue #21): generous, since the fetch tests run real `git` against loopback
+/// remotes, but finite, so a hang is a red test with a name rather than a
+/// stalled suite.
+pub(super) const WAIT: Duration = Duration::from_secs(60);
+
 /// Drives a future on this thread. On `std::task::Wake`, since `unsafe` is forbidden.
 pub(super) fn block_on<F: Future>(future: F) -> F::Output {
     struct Unpark(std::thread::Thread);
@@ -37,14 +43,23 @@ pub(super) fn block_on<F: Future>(future: F) -> F::Output {
     woken_by(&waker, future)
 }
 
-/// [`block_on`] with the waker supplied.
+/// [`block_on`] with the waker supplied. Panics after [`WAIT`] with nothing ready.
 pub(super) fn woken_by<F: Future>(waker: &Waker, future: F) -> F::Output {
     let mut cx = Context::from_waker(waker);
     let mut future = std::pin::pin!(future);
+    let deadline = Instant::now() + WAIT;
     loop {
         match future.as_mut().poll(&mut cx) {
             Poll::Ready(value) => return value,
-            Poll::Pending => std::thread::park(),
+            Poll::Pending => {
+                let now = Instant::now();
+                assert!(
+                    now < deadline,
+                    "nothing arrived on the boundary in {WAIT:?}: whatever should have sent or \
+                     woken is parked, or the stream was left open"
+                );
+                std::thread::park_timeout(deadline - now);
+            }
         }
     }
 }

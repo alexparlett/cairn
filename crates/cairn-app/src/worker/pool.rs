@@ -68,15 +68,15 @@ pub(super) fn open_with(
 
     // One sender per thread, so the stream ends when the last thread does.
     let outbox = Outbox {
-        updates: outgoing.clone(),
+        updates: Some(outgoing.clone()),
         wake: Arc::clone(&wake),
     };
     let operations_outbox = Outbox {
-        updates: outgoing.clone(),
+        updates: Some(outgoing.clone()),
         wake: Arc::clone(&wake),
     };
     let acceptor_outbox = Outbox {
-        updates: outgoing,
+        updates: Some(outgoing),
         wake: Arc::clone(&wake),
     };
     let worker_epochs = epochs.clone();
@@ -206,6 +206,8 @@ impl Threads {
             if let Err(error) = started {
                 // Nothing accepts, so no prompt can be answered: say so on the fetch that needs one.
                 prompting = Err(format!("the askpass thread could not be started: {error}"));
+                // And nothing will leave a loop it never entered: a stop is not to wait for it.
+                stop.acknowledge();
             }
             stop
         });
@@ -373,17 +375,51 @@ pub(super) struct Envelope {
 }
 
 /// Not `Clone`: a second sender would hold the channel open past the exit wake.
+///
+/// Closing one wakes the task driving [`Updates`], whichever thread drops it and
+/// however it got there: the stream ends when the LAST sender closes, and a
+/// sender that closed silently while the task was parked would leave it parked
+/// for good. That is what happened on the worker's early exits — an outbox
+/// captured by the repository thread's closure outlived the [`WorkerExit`] that
+/// had already signalled, and was dropped after it with no wake of its own
+/// (`an_outbox_dropped_anywhere_ends_the_stream`).
 #[derive(Debug)]
 pub(super) struct Outbox {
-    updates: Sender<Envelope>,
+    /// `None` only inside `drop`, so the channel is closed before the wake.
+    updates: Option<Sender<Envelope>>,
     wake: Arc<Wake>,
 }
 
 impl Outbox {
     pub(super) fn send(&self, epoch: Option<Epoch>, update: Update) {
-        if self.updates.send(Envelope { epoch, update }).is_ok() {
+        if let Some(updates) = &self.updates
+            && updates.send(Envelope { epoch, update }).is_ok()
+        {
             self.wake.signal();
         }
+    }
+
+    /// One with its receiving end handed back bare, for a test of one thread
+    /// alone; drop the receiver for a stream nobody drives.
+    #[cfg(test)]
+    pub(super) fn watched() -> (Self, Receiver<Envelope>) {
+        let (updates, inbox) = channel::<Envelope>();
+        (
+            Self {
+                updates: Some(updates),
+                wake: Wake::new(),
+            },
+            inbox,
+        )
+    }
+}
+
+impl Drop for Outbox {
+    /// Close the channel, then wake: a task woken while a sender lives sees an
+    /// empty channel and parks again, so the order is the whole point.
+    fn drop(&mut self) {
+        self.updates = None;
+        self.wake.signal();
     }
 }
 
@@ -408,8 +444,8 @@ impl Drop for WorkerExit {
                 },
             );
         }
-        // Close the channel, then wake: a task woken while a sender lives sees an empty
-        // channel and parks again.
+        // Dropping the outbox closes the channel and then wakes; the wake here is for a
+        // worker whose outbox was already taken.
         self.outbox = None;
         self.wake.signal();
     }
@@ -535,7 +571,7 @@ fn no_walk(error: Error) -> Update {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use std::task::Waker;
+    use std::task::{Context, Poll, Waker};
     use std::time::Instant;
 
     use crate::worker::fetch_tests::{UnbornRepository, block_on, woken_by};
@@ -842,7 +878,7 @@ mod tests {
         let wake = Wake::new();
         let epochs = Epochs::new();
         let outbox = Outbox {
-            updates: sender,
+            updates: Some(sender),
             wake: Arc::clone(&wake),
         };
         (
@@ -950,7 +986,7 @@ mod tests {
         let (updates_tx, inbox) = channel::<Envelope>();
         let wake = Wake::new();
         let outbox = Outbox {
-            updates: updates_tx,
+            updates: Some(updates_tx),
             wake: Arc::clone(&wake),
         };
 
@@ -1071,7 +1107,7 @@ mod tests {
         let wake = Wake::new();
         drop(WorkerExit {
             outbox: Some(Outbox {
-                updates: updates_tx,
+                updates: Some(updates_tx),
                 wake: Arc::clone(&wake),
             }),
             wake,
@@ -1125,6 +1161,44 @@ mod tests {
         assert!(
             block_on(updates.next()).is_none(),
             "the stream did not end when its last sender went"
+        );
+    }
+
+    /// Issue #21, the mechanism: on the worker's early exits (`git` missing, no repository)
+    /// two outboxes were dropped as closure captures AFTER the `WorkerExit` had signalled,
+    /// so a task parked between the two never woke. The outbox itself must wake on drop,
+    /// with no `WorkerExit` around it. Single-threaded on purpose: the task is parked
+    /// (one poll, `Pending`) BEFORE the drop, so the old code fails on the wake count
+    /// every time rather than only when the scheduler let the driver park first.
+    #[test]
+    fn an_outbox_dropped_anywhere_ends_the_stream() {
+        struct Woke(std::sync::atomic::AtomicUsize);
+        impl std::task::Wake for Woke {
+            fn wake(self: Arc<Self>) {
+                self.wake_by_ref();
+            }
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let (_epochs, outbox, mut updates) = inbox_only();
+        let woke = Arc::new(Woke(std::sync::atomic::AtomicUsize::new(0)));
+        let waker = Waker::from(Arc::clone(&woke));
+        let mut cx = Context::from_waker(&waker);
+        let mut next = std::pin::pin!(updates.next());
+        assert!(
+            next.as_mut().poll(&mut cx).is_pending(),
+            "an empty stream with a live sender was ready"
+        );
+        drop(outbox);
+        assert_eq!(
+            woke.0.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the last outbox closed without waking the task parked on the stream"
+        );
+        assert!(
+            matches!(next.as_mut().poll(&mut cx), Poll::Ready(None)),
+            "woken, the task did not see the stream end"
         );
     }
 

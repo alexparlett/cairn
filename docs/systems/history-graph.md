@@ -210,15 +210,30 @@ FILE, and it is a guard, not a convention — see below.
   task is woken. That ordering is the point: reversed, a worker that panicked
   would leave `Updates::next` parked forever on a latch nobody will ever set
   again, and the window would sit on "Loading" for the life of the process.
-  Five tests in `crates/cairn-app/src/worker/pool.rs` cover it. `Outbox` is not
+  The `WorkerExit` tests in `crates/cairn-app/src/worker/pool.rs` cover it
+  (`a_panicking_worker_says_so_instead_of_disappearing`,
+  `a_panic_inside_a_real_worker_is_announced_by_the_pool_that_opened_it`,
+  `a_worker_that_exits_cleanly_raises_no_alarm`,
+  `a_failed_open_ends_the_stream_rather_than_leaving_it_open`,
+  `a_worker_ending_in_silence_still_wakes_the_waiting_task`). `Outbox` is not
   `Clone`, held there by `a_worker_thread_cannot_be_given_a_second_sender`, which
-  fails to compile if `Clone` is derived. What that cannot decide, and is a
-  review obligation: `Sender<Envelope>` is `Clone` and `Outbox`'s fields are
-  visible throughout `pool.rs`, so a second sender written by hand compiles and
-  passes every test. A copy outliving `WorkerExit` holds the update channel open
-  past the wake and parks the waiting task forever; the race is narrow enough
-  that `a_failed_open_ends_the_stream_rather_than_leaving_it_open` passed against
-  such a change.
+  fails to compile if `Clone` is derived. And every `Outbox` closes its sender
+  and then wakes when it is DROPPED, from whatever thread and with or without a
+  `WorkerExit` around it (`an_outbox_dropped_anywhere_ends_the_stream`): that
+  is what makes "the last sender closing wakes the task" hold by construction
+  rather than by each path remembering to. It did not always — the two extra
+  outboxes `open_with` makes for the operations and acceptor threads were
+  captured by the repository thread's closure, and on an early exit (no usable
+  `git`, no repository at the path) were dropped after the `WorkerExit` had
+  signalled, with no wake of their own; a task parked between the two never
+  woke, which is issue #21's intermittent hang of
+  `a_missing_git_is_refused_naming_the_version_and_nothing_is_served`. What the
+  type still cannot decide, and stays a review obligation: `Sender<Envelope>`
+  is `Clone` and `Outbox`'s fields are visible throughout `pool.rs`, so a bare
+  sender copied out by hand compiles, and one held past every `Outbox` keeps
+  the stream open with nothing coming. Every wait in the worker's tests is
+  bounded (`fetch_tests::WAIT`, in `block_on` and `woken_by`), so a hang of
+  that shape is a red test with a name.
 - `WORKERS_PER_REPOSITORY` is 1: the live walk lives on one thread, and a `const`
   assertion fails the build if it is raised, because more workers need a routing
   decision and not a bigger number. A second kind of work gets its own worker,

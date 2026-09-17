@@ -237,7 +237,21 @@ never enters `cairn-git` and never enters application state.
   repository thread kills any fetch, closes the operations queue and wakes the
   acceptor by connecting to its own socket (the one thing that returns a
   blocking `accept`), on a clean exit and on unwinding alike; a prompt still
-  waiting is refused. Pinned by `crates/cairn-app/src/worker/fetch_tests.rs`
+  waiting is refused. The wake is retried until the acceptor acknowledges it
+  has left its loop, or until `STOP_DEADLINE` passes when it cannot — it is
+  held on the window's answer to a prompt until that answering end goes, and
+  acknowledges on the way out, never on the way in — so a connection that
+  fails to land does not leave the thread blocked with nothing coming
+  (`AcceptorStop::stop`, `askpass.rs`; pinned by
+  `a_stop_returns_only_once_the_acceptor_has_left_its_loop`,
+  `a_stop_gives_up_on_an_acceptor_held_by_a_prompt_and_is_acknowledged_once_it_leaves`
+  and
+  `a_stop_is_visible_from_a_clone_and_gives_up_on_a_socket_nobody_listens_on`).
+  Stated rather than pinned, since a thread that fails to spawn cannot be
+  injected: when the acceptor thread cannot be started, `Threads::start`
+  acknowledges the stop itself, so a shutdown does not wait the deadline on
+  a loop nobody entered — a review obligation for whoever touches that arm.
+  Pinned by `crates/cairn-app/src/worker/fetch_tests.rs`
   against real git and the built helper, with a loopback remote that answers
   `401` to everything:
   `a_fetch_reports_progress_finishes_and_the_history_reloads_from_the_new_refs`

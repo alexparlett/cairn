@@ -416,7 +416,11 @@ fn an_oversized_prompt_is_bounded_rather_than_hung() {
     // Past the channel's 64 KiB, under the kernel's 128 KiB ceiling for one argument.
     let huge = "P".repeat(100 * 1024);
     let output = run_against(&channel, operation.token(), &huge);
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "the helper failed on an oversized prompt: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert_eq!(output.stdout, format!("{secret}\n").into_bytes());
     let seen = served.join().unwrap();
     assert!(

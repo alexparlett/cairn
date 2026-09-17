@@ -31,6 +31,11 @@ const SOCKET_MODE: u32 = 0o600;
 /// The socket's file name inside its directory.
 const SOCKET_NAME: &str = "askpass";
 
+/// How much of an over-long request is read and discarded past
+/// [`REQUEST_LIMIT`] so the helper's write completes: well past the kernel's
+/// ceiling for one argument, which is what bounds a prompt.
+const REQUEST_DRAIN: u64 = 4 * 1024 * 1024;
+
 /// What can go wrong on the application's side.
 #[derive(Debug)]
 pub enum Error {
@@ -205,6 +210,12 @@ impl Channel {
             .map_err(|source| Error::Accept { source })?;
         let request = protocol::read_request((&stream).take(REQUEST_LIMIT))
             .map_err(|source| Error::Accept { source })?;
+        // A request longer than the limit is cut there, but the helper may still be
+        // writing the rest. Closing with unread bytes in the socket resets the
+        // connection, and the helper then loses the answer it was owed; so the rest
+        // is read and discarded, up to a bound a real argv cannot exceed, before
+        // anything is written back.
+        let _ = io::copy(&mut (&stream).take(REQUEST_DRAIN), &mut io::sink());
         let Ok(request) = request else {
             let _ = protocol::write_refusal(&mut stream);
             return Err(Error::Malformed);

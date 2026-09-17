@@ -428,6 +428,50 @@ fn cancelling_a_fetch_that_is_waiting_on_a_prompt_kills_git_and_leaves_nothing_b
     );
 }
 
+// ── Ref tips ────────────────────────────────────────────────────────────────
+
+/// What the worker compares before and after a fetch: every ref's id as git
+/// wrote it, gaining an entry when a ref is made and changing when one moves.
+/// Over a fixture, since the Cairn checkout's own refs are whatever the
+/// machine (or a CI checkout, detached with no branch) has.
+#[test]
+fn ref_tips_follow_the_refs_git_writes() {
+    let fixture = fixtures::braided(3);
+    let repo = Repository::discover(fixture.path()).unwrap_or_else(|e| panic!("{e}"));
+    let git_says = |reference: &str| fixture.git(&["rev-parse", reference]).trim().to_owned();
+    let tip_of = |reference: &str| {
+        repo.ref_tips()
+            .unwrap_or_else(|e| panic!("{e}"))
+            .iter()
+            .find(|(name, _)| name.as_str() == reference)
+            .map(|(_, oid)| oid.to_string())
+    };
+
+    assert_eq!(tip_of("refs/heads/main"), Some(git_says("refs/heads/main")));
+    assert_eq!(tip_of("refs/heads/side"), Some(git_says("refs/heads/side")));
+    assert_eq!(tip_of("refs/tags/marker"), None);
+
+    fixture.git(&["tag", "marker", "refs/heads/side"]);
+    assert_eq!(
+        tip_of("refs/tags/marker"),
+        Some(git_says("refs/heads/side")),
+        "a ref git made is not in the tips"
+    );
+
+    let before = tip_of("refs/heads/side");
+    fixture.git(&["update-ref", "refs/heads/side", "refs/heads/main"]);
+    assert_eq!(
+        tip_of("refs/heads/side"),
+        Some(git_says("refs/heads/main")),
+        "a ref git moved kept its old tip"
+    );
+    assert_ne!(
+        tip_of("refs/heads/side"),
+        before,
+        "the move changed nothing"
+    );
+}
+
 // ── Pruning ─────────────────────────────────────────────────────────────────
 
 /// Issue #17: `ops::fetch` takes no `Confirmed` on the claim that it deletes

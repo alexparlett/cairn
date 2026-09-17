@@ -202,7 +202,10 @@ never enters `cairn-git` and never enters application state.
   a URL listed without one; what the window's fetch button names
   (`the_default_is_first_a_password_is_left_out_and_a_missing_url_is_none`).
   **`Repository::ref_tips`** (`src/refs.rs`) is every ref's id as the handle
-  sees it now, compared before and after a fetch.
+  sees it now, compared before and after a fetch; that it follows what git
+  writes — a ref made, a ref moved — is `ref_tips_follow_the_refs_git_writes`
+  in `tests/fetch.rs`, over a fixture, since a CI checkout is detached with
+  no local branch and its own refs decide nothing.
 - **The dialog** (`crates/cairn-ui/src/credential_prompt.rs`,
   `CredentialPrompt`). Names the remote the running operation was asked for,
   states what is wanted from where, and shows the prompt exactly as git or ssh

@@ -37,14 +37,18 @@ impl Repository {
 mod tests {
     use super::*;
 
+    /// Against whatever refs this checkout has — a CI checkout is detached with no
+    /// local branch, only remote-tracking refs — so nothing here names a branch. That
+    /// the tips follow the refs git writes is `ref_tips_follow_the_refs_git_writes` in
+    /// `tests/fetch.rs`, over a fixture built with real git.
     #[test]
-    fn this_checkout_has_a_head_branch_tip_that_changes_when_the_ref_does() {
+    fn this_checkout_has_ref_tips_and_two_reads_agree() {
         let repo = Repository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
         let tips = repo.ref_tips().unwrap();
+        assert!(!tips.is_empty(), "a checkout with no refs at all");
         assert!(
-            tips.keys()
-                .any(|name| name.as_str().starts_with("refs/heads/")),
-            "no branch among {:?}",
+            tips.keys().all(|name| name.as_str().starts_with("refs/")),
+            "a tip outside refs/: {:?}",
             tips.keys().collect::<Vec<_>>()
         );
         let again = repo.ref_tips().unwrap();

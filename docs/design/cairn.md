@@ -130,8 +130,9 @@ than observations:
    command acts on another.
 
 None of this reopens D1. It means the seam owes a cache-invalidation contract,
-which is the first thing the `git` backend phase must write down
-(`docs/work/credential-prompts/phase-01-git-backend.md`).
+which the `git` backend wrote down first: the `ops` module docs in
+`crates/cairn-git/src/ops/mod.rs` (`Invalidated`, per flag, checked against
+the linked gix), summarised in `docs/systems/credentials.md`.
 
 ### D2 — Credentials are delegated to git entirely
 
@@ -150,7 +151,15 @@ round-trips the prompt to the running UI, and sets `SSH_ASKPASS` with
 
 This makes "Cairn never handles a secret" nearly literal: the value exists only
 inside the helper process and on git's stdin, never in application state.
-Packet: `docs/prd/credential-prompts.md`.
+Packet: `docs/prd/credential-prompts.md` (shipped, frozen).
+
+As built by the `credential-prompts` packet: the backend, the helper, its
+channel and fetch exist as described, with one refinement — the secret does
+pass through the application once, as a value the dialog hands the worker
+thread, which writes it to the helper's socket and drops it; the guard
+`no_credential_value_is_logged_printed_serialised_or_stored` is what keeps
+that passage from becoming state. Everything else — the environment roster,
+the threat model, what a cancel can leave — is in `docs/systems/credentials.md`.
 
 ### D3 — A worker pool per repository, not a thread per repository
 

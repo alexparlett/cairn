@@ -2,11 +2,13 @@
 
 How Cairn asks a user for a secret today, and what it does not do. As-built:
 everything here is code that exists, with the test that pins each behaviour
-named beside it. The commitment it is being built against is
-`docs/prd/credential-prompts.md` (in flight); the decisions are D1 and D2 in
-`docs/design/cairn.md` and L1-L11 in the packet's `brainstorm.md`; the evidence
-is `docs/research/credential-prompts/git-credential-delegation.md`, whose
-2026-09-17 addenda settle the two questions the design left open (O4, O5).
+named beside it. The commitment it was built against is
+`docs/prd/credential-prompts.md` (shipped, frozen); the decisions are D1 and D2
+in `docs/design/cairn.md` and the packet's locked decisions L1-L11, kept under
+"Decisions the packet locked" below now that its work directory is gone; the
+evidence is `docs/research/credential-prompts/git-credential-delegation.md`,
+whose 2026-09-17 addenda settle the two questions the design left open (O4,
+O5) and record what `zeroize` actually does on drop.
 
 **What works end to end today: fetch.** The window offers "Fetch <remote>" for
 the repository's default remote; the fetch runs on its own thread, its progress
@@ -107,7 +109,8 @@ never enters `cairn-git` and never enters application state.
   says in its name what safe code can observe. What safe code cannot
   observe — that the freed bytes are zero — rests on reading `zeroize`'s
   `Vec` impl (it zeroes the length, clears, then zeroes the spare capacity,
-  through volatile writes); the packet's `progress.md` records that reading.
+  through volatile writes); the evidence record's third addendum records that
+  reading.
 - **`cairn_model::AskpassToken`** and the variable names `SOCKET_VARIABLE`,
   `TOKEN_VARIABLE`, `HELPER_PROGRAM` (`crates/cairn-model/src/askpass.rs`):
   the contract the helper and the environment builder share without seeing
@@ -158,11 +161,27 @@ never enters `cairn-git` and never enters application state.
   reported as the success it was even when a cancel raced it
   (`a_kill_after_a_clean_exit_reports_the_success`); the kill is `SIGKILL`,
   which git cannot clean its lock files up after — see the module docs for
-  what a cancel mid ref-update can leave, and the phase 03 report for the
-  `SIGTERM` question. What "not destructive" assumes (tracking-only refspecs,
-  reflogs on) is stated in the module docs too: a `+refs/heads/*:refs/heads/*`
+  what a cancel mid ref-update can leave, and issue #19 for the `SIGTERM`
+  question. What "not destructive" assumes (tracking-only refspecs, reflogs
+  on) is stated in the module docs too: a `+refs/heads/*:refs/heads/*`
   refspec, a `--mirror` clone or `fetch.prune` make a plain fetch move or
-  delete local refs, and that policy question is escalated, not decided.
+  delete local refs, and that policy question is issue #17, not decided here.
+- **The cache-invalidation contract** (`crates/cairn-git/src/ops/mod.rs`,
+  module docs; `ops::Invalidated`, `ops::Performed`). D1 puts two
+  implementations of git semantics in one process, so after a `git` subprocess
+  writes, the gitoxide handle the worker holds may be looking at a repository
+  that no longer exists. Every operation therefore declares what it
+  invalidated — `refs`, `index`, `objects`, `working_tree` — on the
+  `Performed` it returns, and the module docs state, per flag and checked
+  against gix 0.87.1 as linked, what a worker must do to honour it and the
+  same-timestamp-tick residual gix cannot see. Fetch declares `refs` and
+  `objects`. What the worker does with a declaration today is narrower than
+  the contract: it decides whether to reload the history by comparing
+  `ref_tips` before and after, and reads nothing else off the `Performed`
+  (issue #25). Pinned by `every_single_flag_counts_as_something`,
+  `declarations_combine_without_losing_a_flag`,
+  `a_destructive_operation_records_what_the_user_agreed_to` and
+  `an_unconfirmed_operation_carries_no_prompt`.
 - **`Repository::remotes`** (`crates/cairn-git/src/remotes.rs`). The
   configured remotes as `cairn_model::RemoteSummary`, the default first, read
   through gitoxide, a password embedded in a URL left out and a remote without
@@ -175,7 +194,10 @@ never enters `cairn-git` and never enters application state.
   states what is wanted from where, and shows the prompt exactly as git or ssh
   gave it — the URL in it is the one being authenticated against. A username
   is typed in the open, a password or passphrase masked, and ssh's host-key
-  check is a question with "Yes, connect" and no text field, answered `yes`.
+  check is a question with "Yes, connect" and no text field, answered `yes` —
+  beside a sentence (`ACCEPTING_IS_PERMANENT`) saying that accepting writes
+  the key to `known_hosts` and ssh will not ask about that host again, since
+  the question itself does not say what a yes costs.
   Cancel, Escape and a press outside all decline. Pinned by
   `crates/cairn-ui/tests/credential_prompt.rs`
   (`a_password_prompt_names_the_remote_and_the_url_and_masks_what_is_typed`,
@@ -229,8 +251,12 @@ never enters `cairn-git` and never enters application state.
 - **The window** (`crates/cairn-app/src/window.rs`, `session.rs`, `main.rs`,
   `fetch_state.rs`). A "Fetch <remote>" button for the default remote, gone
   from the press itself (`FetchStatus::Starting`) and "Cancel" until the fetch
-  ends; a one-line banner with git's latest progress or the outcome (a
-  failure's first line); and the dialog whenever a `PromptView` is set,
+  ends; a one-line banner with git's latest progress or the outcome — for a
+  failure, git's first `fatal:` line, else its first `error:` line, else the
+  message's first line, because a fetch's stderr is progress first and the
+  reason after it (`status_text::why_it_failed`, pinned by
+  `a_failure_says_why_it_failed_and_not_how_far_git_got`); and the dialog
+  whenever a `PromptView` is set,
   answered through the worker's `Replier` callback and taken down.
   `session::apply` is where an `Update` becomes view state: a fetch that moved
   a ref clears the rows, resets the progress and asks for the history from
@@ -284,7 +310,7 @@ The ssh cases skip where `sshd` cannot run, with the reason on stderr —
 which `cargo test` hides for a passing test, so under the gate a skip reads
 `ok`. Where the fixture is REQUIRED, `CAIRN_REQUIRE_SSH_FIXTURE` set in the
 environment turns the skip into a failure; CI does not set it yet, and
-whether it should provision `sshd` is the user's decision.
+whether it should provision `sshd` is issue #20.
 
 ## Building the helper
 
@@ -314,11 +340,12 @@ the safe direction.
 
 ## Not here, and known limits
 
-Not in the packet at all: push, clone, submodule credentials, proxies, GPG
-signing, and any Cairn-owned credential storage, which D2 rules out
-permanently. Not built: remembering anything between fetches (D2), a remote
-picker (the button fetches the default remote), and a fetch of more than one
-remote at a time.
+Not in the packet at all: push (issue #16), clone, submodule credentials,
+proxies (issue #18 decides the environment roster), GPG signing, and any
+Cairn-owned credential storage, which D2 rules out permanently. Not built:
+remembering anything between fetches (D2), a remote picker (the button
+fetches the default remote; issue #23), and a fetch of more than one remote
+at a time.
 
 Known limits, described rather than pinned:
 
@@ -326,21 +353,142 @@ Known limits, described rather than pinned:
   and the `State<String>` behind it — until the dialog closes, and nothing
   zeroes those. The `String` handed out of the dialog is moved into the
   `Secret`, so from there on the value is in one zeroed buffer; before it, the
-  toolkit's. A zeroing password editor is a Freya change, not a Cairn one.
+  toolkit's. A zeroing password editor is a Freya change, not a Cairn one
+  (tracked with the other hygiene leftovers in issue #26).
 - The helper has no read timeout: it waits as long as the user takes, and a
   Cairn that dies closes the socket, which ends the wait.
 - `$XDG_RUNTIME_DIR` is required, so a session without one (macOS today) gets
   no channel and named failures rather than a fallback directory, a policy for
-  the user to set.
+  the user to set (issue #24).
 - A cancel kills `git` (`SIGKILL`) and returns; its children (`ssh`, the
   helper) end on their own when the dialog's refusal releases them or their
   pipes break. The runner's reader thread lives until then. A kill that lands
   while git is updating refs can leave a `*.lock` git will not clean up, and
   later fetches of that ref fail until it is removed by hand; `SIGTERM` first
-  needs a dependency, which is the user's call.
+  needs a dependency, which is the user's call (issue #19).
 - On process exit (the window closing) the socket directory under
   `$XDG_RUNTIME_DIR` is left behind if the threads did not get to unwind: a
   runtime directory is a tmpfs cleared at logout, and the names are per pid
-  and random, so nothing collides. Not probed with a display this phase.
+  and random, so nothing collides. Not probed with a display (issue #27).
 - A stalled network is only interrupted by the cancel; nothing times a fetch
   out.
+- What a large fetch costs the window — one update per progress redraw, a
+  synchronous clear of the rows on a refresh, two whole-ref walks per fetch —
+  is bounded by nothing yet (issue #25).
+
+## Decisions the packet locked
+
+The packet's brainstorm and progress log were deleted at teardown (git has
+them); these are the decisions from them that a later change on this backend
+must not reopen by accident, each with the reason that locked it.
+
+- **L1** Cairn implements no authentication and stores no credential; the
+  user's `credential.helper` and ssh-agent already do (D2). Rejected: a Cairn
+  keychain integration — a second place for secrets to leak that breaks a
+  setup that already works.
+- **L2** The askpass helper is a separate binary, because git's contract is a
+  process (prompt on `argv`, secret on stdout); the upside is that the secret
+  never enters the main process's address space.
+- **L3** `GIT_TERMINAL_PROMPT=0` on every invocation: the difference between
+  "authentication failed" and "the app froze".
+- **L4** The subprocess backend and the helper landed together: a helper with
+  no verb to serve is untestable.
+- **L5** The environment handed to `git` is built explicitly, never inherited
+  wholesale; every passed variable is a deliberate entry with its reason
+  beside it in `environment.rs`. Rejected: passing the parent environment
+  through and overriding a few keys. Issue #18 decides the entries the packet
+  left undecided (proxies, CA bundles, Kerberos, display, GnuPG, `GIT_EDITOR`);
+  issue #22 whether a user-set askpass program is an exception.
+- **L6** A secret never travels on `argv` (`/proc` makes it world-readable);
+  the socket and token reach the helper through its environment.
+- **L7** A working setup is not degraded — a user with libsecret, osxkeychain
+  or a loaded agent sees no new dialog — and B4 is the regression test that
+  protects it, resting on git's own precedence (O4 addendum), not a Cairn
+  workaround.
+- **L8** Push is not in this packet: destructive, needs `Confirmed` and the
+  `destructive-ops-reviewer` (issue #16).
+- **L9** Minimum git is 2.30 (`GitVersion::MINIMUM`): Debian bullseye's, a
+  support policy and so the user's to raise. Rejected: 2.11 (the technical
+  floor, tested forever for no user) and 2.45 (excludes bookworm).
+- **L10** The channel is a unix socket under `$XDG_RUNTIME_DIR`, `0700`
+  directory and `0600` socket, not the abstract namespace, and its threat
+  model is stated at the strength it holds: other users, not same-user
+  processes. Rejected: `SO_PEERCRED` (defeatable by a determined same-user
+  process, complexity for a boundary that cannot hold) and an inherited
+  descriptor (depends on git preserving fds across the askpass invocation,
+  unverified).
+- **L11** `zeroize` is the accepted dependency for the secret type, because
+  hand-rolled zeroing can be optimised away and a type doing it by hand would
+  claim a protection it may not provide.
+
+Taken inside the phases, none reopening the above:
+
+- The token is scoped to one git invocation, not one ask: an HTTPS credential
+  is two asks with one environment, and the token dies when the `Operation`
+  drops or a prompt under it is refused.
+- `Secret` and `zeroize` live in `cairn-model`, because the secret crosses
+  from the dialog to the worker, which is what that crate is for; the
+  alternative had a render crate depending on a crate that opens sockets.
+- The helper crate is a library and a binary so both ends of one wire format
+  cannot drift; it has no `thiserror`, keeping the linked surface at
+  `cairn-model` and `zeroize`. Its tokens are 32 bytes of `/dev/urandom` as
+  hex rather than a `rand` dependency.
+- `Askpass` is a required input to `GitEnvironment::new`, with the socket
+  optional, so nothing ever falls back to a tty; a Cairn with no channel fails
+  every prompt closed. `GitEnvironment::new` takes a lookup closure rather than
+  reading the process environment, because `std::env::set_var` is `unsafe` in
+  the 2024 edition and `unsafe` is forbidden, so a test could set nothing.
+- Locale variables are inherited because git's stderr is shown verbatim;
+  proxy variables are not (issue #18).
+- The startup check refuses to open a repository with no usable `git` rather
+  than carrying on read-only: a Cairn that cannot say why its write buttons
+  are missing is the silent degradation D1 forbids.
+- `Invalidated` lives in `cairn-git::ops`, not `cairn-model`: only the worker
+  reads it, and it describes the engine's own caches.
+- Three threads per repository (repository, operations, acceptor): a fetch
+  blocked on the helper blocked on the acceptor would deadlock on one thread.
+  Operations carry no epoch.
+- The secret crosses the worker boundary as `worker::Reply` over its own
+  channel, handed out as a bare `Rc<dyn Fn(Reply)>` so no struct holds it;
+  named `Reply` because the credential guard reads spellings and the
+  channel's `Error::Answer` made a type named `Answer` a container.
+- The dialog hands out a `String`, not a `Secret`: an `EventHandler<Secret>`
+  field would make the component a guarded holder.
+- A missing helper or runtime directory is a reason, not a refusal: fetch
+  still runs wherever a helper or agent answers (L7), and a failure says why
+  nothing could have asked.
+- The helper has no read timeout, and `$XDG_RUNTIME_DIR` has no fallback
+  (issue #24).
+
+## Lessons for the next change on this backend
+
+Things the packet learned the expensive way, kept here because the only other
+record was the deleted progress log.
+
+- Test fixtures must generate their credentials, never contain them; the
+  packet's history was scanned at the merge bar and nothing was ever
+  committed.
+- The stub-`git` tests (`crates/cairn-git/tests/git_binary.rs`,
+  `crates/cairn-git/src/ops/stub_git.rs`) retry on `ETXTBSY`: a fork in a
+  parallel test inherits a still-open write descriptor to a stub for
+  microseconds. The stub exists twice because the runner is crate-private.
+- A test that mutates a committed file to see a guard go red must snapshot
+  the file and restore by copy: `git checkout <file>` restores the INDEX
+  version and silently discards uncommitted work.
+- `cargo test --workspace --all-targets` never runs doctests; the gate's
+  `test-doc` step does, and stable `rustdoc` checks that a `compile_fail`
+  block fails, not why, so each such block in `secret.rs` differs from a
+  passing twin by exactly one line.
+- Tests in `cairn-app/src` may not name `Command` (the terminal-prompt guard
+  scans the crate's `src/`, test modules included), so fixtures there are
+  `std::fs` repositories and a loopback `TcpListener`; tests that need a real
+  remote live in `crates/cairn-git/tests/`.
+- `ssh` reads its per-user configuration from the passwd home directory,
+  never `$HOME`, so the ssh fixture hands its configuration over through
+  `core.sshCommand`, and `sshd` must be invoked by absolute path.
+- The credential guard reads spellings and errs toward catching: a struct
+  field naming a type that names `Secret` is a holder wherever it is, and a
+  type sharing its name with a variant of another type is caught too. Name
+  new secret-carrying types distinctly.
+- Clippy's `allow-expect-in-tests` does not cover helper functions in
+  `tests/*.rs` outside a `#[test]` fn.

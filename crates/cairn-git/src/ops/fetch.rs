@@ -14,7 +14,7 @@
 //! reflog), or `fetch.prune` / `fetch.pruneTags`, which delete refs and even
 //! purely local tags. This operation runs `git fetch` exactly as the shell
 //! would and inspects none of that; whether such a configuration should make
-//! it ask first is a product decision escalated in the phase 03 report, not
+//! it ask first is a product decision left to the user (issue #17), not
 //! taken here. Push, the next operation on this backend, is the one that
 //! needs the token whatever the configuration (L8).
 //!

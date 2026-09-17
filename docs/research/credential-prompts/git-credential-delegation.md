@@ -159,3 +159,27 @@ askpass only if `DISPLAY` is set — which Cairn's environment does not carry �
 so it fails closed instead. Cairn does not check the OpenSSH version; 8.4 is
 older than every git 2.30 distribution Cairn supports (L9: Debian bullseye
 ships 8.4), so this is recorded rather than enforced.
+
+## Addendum, 2026-09-17: what `zeroize` does on drop, read from the vendored source
+
+Phase 02 of the packet; moved here from the packet's progress log at teardown
+because `docs/systems/credentials.md` cites it as the reading that the drop
+half of B7 rests on. Verified against `zeroize-1.9.0/src/lib.rs` as linked:
+
+- `Zeroizing<Z>::drop` calls `Z::zeroize`.
+- `impl Zeroize for Vec<Z>` zeroes the initialised elements through
+  `volatile_set` (`ptr::write_volatile` per element, then an
+  `optimization_barrier`), calls `clear()`, then zeroes the spare capacity the
+  same way — so the whole allocation is scrubbed, not just the length. It
+  documents that it cannot scrub what an earlier REALLOCATION left behind.
+
+Consequences taken: `cairn_model::Secret` has exactly one field, a
+`Zeroizing<Vec<u8>>`, and both constructors move a buffer in without copying
+(`a_secret_promises_to_zero_zeroes_on_request_and_holds_the_only_copy` pins the
+pointer identity and that `Secret: ZeroizeOnDrop`). The helper reads the socket
+into a buffer sized to the response limit up front and drains the status line
+in place, so its allocations are the ones zeroed, and it writes the answer and
+its newline to stdout as one write from a zeroed buffer (two writes would park
+a newline-free secret in std's line buffer, which nothing zeroes). What safe
+code cannot observe — that the freed bytes are zero — rests on this reading,
+not on a test: reading freed memory is `unsafe`, and `unsafe` is forbidden.

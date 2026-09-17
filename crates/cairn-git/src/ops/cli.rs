@@ -332,7 +332,7 @@ impl ProcessKill {
     /// the network or a prompt — the common case — leaves at most a partial
     /// pack under `objects/pack/tmp_*`, which `gc` reaps. Sending `SIGTERM`
     /// first needs a signalling dependency, which is the user's decision
-    /// (credential-prompts phase 03 report).
+    /// (issue #19).
     pub(crate) fn kill(&self) {
         // Flagged first, so a `finish` that observes the exit sees why.
         self.cancelled.store(true, Ordering::Release);

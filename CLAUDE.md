@@ -19,9 +19,7 @@ you scroll, and does all of it off the UI thread. It can fetch its default
 remote — the one `git` verb built so far, with git's own progress, a cancel,
 and a credential dialog fed by the askpass helper (`docs/systems/credentials.md`).
 Nothing else mutates a repository, and there is no repository picker: one
-repository, named on the command line. Entries marked (planned) below name the canonical home something
-WILL have so docs and implementation converge on the same names — never cite one
-as if it exists.
+repository, named on the command line.
 
 ## Repo map
 
@@ -430,11 +428,13 @@ same fork and rev as `freya`): `crates/cairn-ui/tests/` for components, and
 - `docs/design/ui.md` — the UI design: Fork's layout model kept, every deviation
   named with its decision; mockups in `docs/design/mockups/cairn-ui.html`.
 - `docs/work/daily-loop/roadmap.md` — the build order to the D7 milestone: eight
-  packets, two filed and six as briefs.
+  packets, two shipped and six as briefs.
 - `docs/qa-gate.md` — the QA layer contract and reviewer dispatch table.
 - `docs/CLAUDE.md` — the docs layer contract (tenses, promotion, teardown).
 - `docs/work/<packet>/` — in-flight packet dirs, created by `/feature-plan`, torn
   down when the work merges.
 - `docs/systems/` — as-built descriptions, written when a system exists.
-  `history-graph.md` is the first: how the history view reads, lays out and
-  draws a repository today, with the twin that pins each rule.
+  `history-graph.md`: how the history view reads, lays out and draws a
+  repository today, with the twin that pins each rule. `credentials.md`: the
+  `git` subprocess backend, the askpass helper and its channel, fetch end to
+  end, and the decisions the packet locked.

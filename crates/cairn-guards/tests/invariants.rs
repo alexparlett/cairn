@@ -12,7 +12,7 @@ use cairn_guards::{
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
 const DEPENDENCY_ALLOWLIST: &[(&str, &[&str])] = &[
-    ("cairn-model", &[]),
+    ("cairn-model", &["zeroize"]),
     ("cairn-git", &["cairn-model", "gix", "thiserror"]),
     ("cairn-ui", &["cairn-model", "freya"]),
     (

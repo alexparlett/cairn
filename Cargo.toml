@@ -25,6 +25,9 @@ freya-testing = { git = "https://github.com/alexparlett/freya", rev = "caa46f871
 # is what lets gix open a repository made with `--object-format=sha256`.
 gix = { version = "0.87.1", features = ["blame", "blob-diff", "revision", "status", "max-performance", "parallel", "sha256"] }
 thiserror = "2"
+# Zeroes credential buffers on drop with writes the compiler may not remove
+# (credential-prompts L11). `alloc` is the `Vec` impl; nothing else is used.
+zeroize = { version = "1.9", default-features = false, features = ["alloc"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

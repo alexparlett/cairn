@@ -11,6 +11,9 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+# The one dependency (decision L11 of credential-prompts): volatile zeroing
+# of a credential on drop, which a hand-rolled loop cannot promise.
+zeroize.workspace = true
 
 [lints]
 workspace = true

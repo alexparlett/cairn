@@ -21,7 +21,9 @@ TYPECHECK_CMD="cargo check --workspace --all-targets --all-features"
 GUARDS_CMD="cargo test -p cairn-guards"                    # the invariant twins
 DEPS_CMD="cargo deny check advisories bans sources licenses"
 TEST_FAST_CMD="cargo test --workspace --lib --bins"        # --bins: cairn-app is a binary
-TEST_FULL_CMD="cargo test --workspace --all-targets"
+# --all-targets never runs doctests, and cairn-model's compile-fail pins on the
+# secret type ARE doctests; the second command is what makes them decide anything.
+TEST_FULL_CMD="cargo test --workspace --all-targets && cargo test --workspace --doc"
 
 FAST=0
 SELECTED_STEP=""

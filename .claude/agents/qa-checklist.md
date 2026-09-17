@@ -70,6 +70,18 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
 9. **Seam discipline** (any diff in `crates/cairn-model/`): a new boundary type
    earns its place — it is the UI's vocabulary, not a leaked `gix` shape and not
    a struct that exists only to pass through. Its tests live in the same commit.
+10. **Credentials** (any diff naming `cairn_model::Secret` or `expose_secret`,
+    anything under `crates/cairn-askpass/`, any new type holding a secret): the
+    guard `no_credential_value_is_logged_printed_serialised_or_stored` reads
+    spellings, so what it cannot see is yours — a `type` alias for `Secret`, a
+    generic wrapper (`Holder<T>`) instantiated with it at a use site rather than
+    in its declaration, a hand-written `Debug` on such a wrapper, and a prompt
+    text (which IS rendered) that could carry a secret. Also: the helper's
+    linked surface (`cargo tree -p cairn-askpass`) is code that runs in a process
+    holding a plaintext secret — a logging framework or any crate beyond
+    `cairn-model` and `zeroize` is a finding — and no `#[allow]`/`#[expect]`
+    lets an `unwrap`/`expect` through on a path that holds one, since the panic
+    message would print the value.
 
 ## Review dispatch
 

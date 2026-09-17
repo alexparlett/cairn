@@ -3,6 +3,96 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-17 — phase 02: the askpass helper, its channel and the secret type landed
+
+Packet mode, committed directly to `feature/credential-prompts` in four commits
+(model, askpass, git, guards) plus docs. Full gate PASS, including the doctest
+run the gate now makes. QA adjudication is the entry above this one.
+
+Decisions taken in-phase, none reopening a locked decision:
+
+- **The token is scoped to one operation, not one ask.** L10 says "single-use
+  token". An HTTPS credential is two asks (`Username for`, then `Password for`),
+  each a fresh helper process with the same environment, so a token consumed by
+  the first ask would fail every HTTPS credential. "Single use" is implemented
+  as: one token per git invocation, issued when the operation begins, dead when
+  the `Operation` drops or the moment a prompt under it is refused — so a
+  cancel cannot be followed by git asking again (R2.5). Written in the crate
+  docs and pinned by `one_operation_answers_more_than_one_prompt` and
+  `a_refused_prompt_fails_closed_and_retires_the_token`. Flagged for the user
+  as an interpretation, not a stopping rule.
+- **`Secret` lives in `cairn-model`, and so does `zeroize`.** The secret
+  crosses from the UI (the dialog, phase 03) to the worker, which is exactly
+  what `cairn-model` is for; the alternative — the helper crate as the UI's
+  dependency — would have a render crate depend on a crate that opens sockets.
+  The repo-map row now reads "depends on nothing but `zeroize`".
+- **The helper crate is a library and a binary.** Both ends of one wire format
+  in one crate, so they cannot drift; the binary links `cairn-model` and
+  `zeroize` only (`cargo tree -p cairn-askpass`). No `thiserror` in the helper —
+  its error types are hand-written to keep the linked surface at two crates.
+- **`Askpass` is a required input to `GitEnvironment::new`**, with the socket
+  optional. There is no environment without a helper named, so nothing ever
+  falls back to a tty; a Cairn with no channel fails every prompt closed. The
+  token is applied by `command()`, per invocation, because it is the
+  invocation's property — and the terminal-prompt guard's "exactly one
+  `Self {..}` literal" rule is what moved `Askpass` into `ops/askpass.rs`.
+- **The app opens no channel yet.** `worker::open` names the helper beside the
+  executable and passes no socket; phase 03 opens the channel on the worker
+  thread before discovering git and passes `channel.socket_path()` in. Stated
+  in `docs/systems/credentials.md` under "Not yet".
+- **`$XDG_RUNTIME_DIR` is required, with no fallback.** L10 names it; a
+  fallback directory (macOS has no runtime dir) is a policy for the user.
+- **No read timeout in the helper.** A user takes as long as they take; a
+  Cairn that dies closes the socket, which ends the wait. The cancel that
+  kills a hung git is R4.3's, phase 03.
+- **Tokens come from `/dev/urandom`**, 32 bytes as hex, rather than a `rand`
+  dependency.
+
+Zeroize verification, what was actually confirmed against the vendored
+`zeroize-1.9.0/src/lib.rs`: `Zeroizing<Z>::drop` calls `Z::zeroize`;
+`impl Zeroize for Vec<Z>` zeroes the initialised elements through
+`volatile_set` (`ptr::write_volatile` per element, then an
+`optimization_barrier`), calls `clear()`, then zeroes the spare capacity the
+same way — so the whole allocation, not just the length, is scrubbed; it
+documents that it cannot scrub what an earlier REALLOCATION left behind.
+`Secret` therefore has exactly one field, `Zeroizing<Vec<u8>>`, and both
+constructors move a buffer in without copying
+(`a_secret_is_zeroed_on_drop_and_holds_the_only_copy` pins the pointer
+identity, and that `Secret: ZeroizeOnDrop`). The helper reads the socket into a
+buffer sized to the response limit up front and drains the status line in
+place, so its one allocation is the one zeroed. What safe code cannot observe:
+that the freed bytes are zero — reading freed memory is `unsafe`, and `unsafe`
+is forbidden — so that half of B7 rests on the reading above, not a test.
+
+Guards seen red before landing, then restored (snapshot-and-copy, not
+`git checkout`, after the lesson in state.md):
+
+- `no_credential_value_is_logged_printed_serialised_or_stored`, nine shapes:
+  `#[derive(Debug)] struct Held { s: Secret }` appended to
+  `cairn-askpass/src/channel.rs` (caught: "gives `Held`, which holds a
+  credential, an impl that renders"); a hand-written `impl Debug for Held`
+  (same message); `struct Inner(Secret); #[derive(Clone)] struct Outer { inner:
+  Inner }` in `cairn-app/src/worker/request.rs` (caught on `Outer`, the
+  container of a container); `format!("{:?}", s.expose_secret())` in the
+  helper's `main.rs`, a roster file (caught: "names `expose_secret` inside a
+  macro that renders its arguments"); `tracing::info!(pw = ?s.expose_secret())`
+  there (same); `s.expose_secret()` in `cairn-git/src/ops/cli.rs` (caught:
+  outside `SECRET_READERS`); `pub struct Pending { secret: Secret }` in
+  `request.rs` (caught: "application state keeping a credential");
+  `#[derive(Clone)]` on `Secret` itself (caught: "derives something"); the
+  field changed to `Vec<u8>` (caught: "no longer a `Zeroizing<..>`").
+- `every_git_invocation_disables_the_terminal_prompt`, three shapes:
+  `("SSH_ASKPASS_REQUIRE", "never")` in `ALWAYS` (caught: the table "no longer
+  carries"); the `"GIT_ASKPASS"` literal misspelled in the constructor (caught:
+  "no longer sets"); and, live rather than staged, `Askpass::new`'s
+  `Self { .. }` beside `GitEnvironment::new`'s (caught: "built in exactly one
+  place"), which is what moved `Askpass` to its own module.
+- The `compile_fail` doctests: confirmed that stable `rustdoc` ignores the
+  `,E0277` error-code suffix (an `E9999` suffix still passed), so the codes
+  were removed rather than kept as a pin that does not hold, and a passing twin
+  snippet was added so each refused block differs from working code by one
+  line.
+
 ## 2026-09-16 — phase 01: the git subprocess backend landed
 
 Packet mode, committed directly to `feature/credential-prompts` (three focused

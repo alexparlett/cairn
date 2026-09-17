@@ -959,6 +959,278 @@ fn struct_literals(source: &str, idents: &[&str]) -> Vec<usize> {
     literals
 }
 
+/// Keywords that open a type declaration.
+const TYPE_KEYWORDS: &[&str] = &["struct", "enum"];
+
+/// A `struct` or `enum` declared in a source: its name, the keyword, the 1-based line of the
+/// keyword, and the text of its body (fields or variants).
+#[derive(Debug, PartialEq, Eq)]
+pub struct TypeDeclaration {
+    pub name: String,
+    pub keyword: &'static str,
+    pub line: usize,
+    pub body: String,
+}
+
+/// Every `struct` and `enum` declared in `source`, with the text between its braces (or
+/// parentheses, for a tuple struct). A unit struct has an empty body.
+pub fn type_declarations(source: &str) -> Vec<TypeDeclaration> {
+    let code = code_without_strings(source);
+    let bytes = code.as_bytes();
+    let mut found = Vec::new();
+    for keyword in TYPE_KEYWORDS {
+        for offset in ident_offsets(&code, keyword) {
+            // `struct` inside a `use` or as a field name would be odd Rust; a `struct` keyword is
+            // followed by the type's name, which is what is read here.
+            let name_start = skip_whitespace(bytes, offset + keyword.len());
+            let name_end = (name_start..bytes.len())
+                .find(|&i| !is_ident_byte(bytes[i]))
+                .unwrap_or(bytes.len());
+            if name_end == name_start {
+                continue;
+            }
+            let name = code[name_start..name_end].to_owned();
+            // Past generics and a where clause, to the body.
+            let mut at = name_end;
+            let mut depth = 0usize;
+            let body = loop {
+                match bytes.get(at) {
+                    None => break String::new(),
+                    Some(b'<') => depth += 1,
+                    Some(b'>') => depth = depth.saturating_sub(1),
+                    Some(b';') if depth == 0 => break String::new(),
+                    Some(b'{') | Some(b'(') if depth == 0 => {
+                        let end = balanced_end(bytes, at);
+                        break code[at + 1..end.saturating_sub(1).max(at + 1)].to_owned();
+                    }
+                    _ => {}
+                }
+                at += 1;
+            };
+            found.push(TypeDeclaration {
+                name,
+                keyword,
+                line: line_at(&code, offset),
+                body,
+            });
+        }
+    }
+    found.sort_by_key(|declaration| declaration.line);
+    found
+}
+
+/// Names of every `struct` and `enum` in `source` whose body names any of `idents` — a type
+/// that holds one of them in a field or a variant, directly.
+pub fn types_containing(source: &str, idents: &[&str]) -> Vec<String> {
+    type_declarations(source)
+        .into_iter()
+        .filter(|declaration| {
+            idents
+                .iter()
+                .any(|ident| !ident_offsets(&declaration.body, ident).is_empty())
+        })
+        .map(|declaration| declaration.name)
+        .collect()
+}
+
+/// 1-based lines of every `struct` (not `enum`) in `source` with a field naming one of `idents`.
+pub fn structs_with_a_field_naming(source: &str, idents: &[&str]) -> Vec<usize> {
+    type_declarations(source)
+        .into_iter()
+        .filter(|declaration| declaration.keyword == "struct")
+        .filter(|declaration| {
+            idents
+                .iter()
+                .any(|ident| !ident_offsets(&declaration.body, ident).is_empty())
+        })
+        .map(|declaration| declaration.line)
+        .collect()
+}
+
+/// 1-based lines where `source` gives the type `name` one of `traits`: a `#[derive(..)]` on its
+/// declaration naming the trait (however the path is spelled — `serde::Serialize` counts as
+/// `Serialize`), or an `impl Trait for Name` block, generics and paths included.
+pub fn derives_or_implements(source: &str, name: &str, traits: &[&str]) -> Vec<usize> {
+    let code = code_without_strings(source);
+    let bytes = code.as_bytes();
+    let mut lines = BTreeSet::new();
+    let last_segment = |path: &str| -> String {
+        let path = path.trim();
+        let without_generics = path.split('<').next().unwrap_or(path);
+        without_generics
+            .rsplit("::")
+            .next()
+            .unwrap_or(without_generics)
+            .trim()
+            .to_owned()
+    };
+
+    for offset in ident_offsets(&code, "derive") {
+        let open = skip_whitespace(bytes, offset + "derive".len());
+        if bytes.get(open) != Some(&b'(') || !code[..offset].trim_end().ends_with("#[") {
+            continue;
+        }
+        let end = balanced_end(bytes, open);
+        let derived: Vec<String> = code[open + 1..end.saturating_sub(1)]
+            .split(',')
+            .map(last_segment)
+            .collect();
+        if !derived.iter().any(|d| traits.contains(&d.as_str())) {
+            continue;
+        }
+        // The declaration this attribute decorates: the next `struct`/`enum` keyword, past the
+        // attribute's own `]` and any further attributes.
+        let mut at = skip_whitespace(bytes, end);
+        if bytes.get(at) == Some(&b']') {
+            at += 1;
+        }
+        let declared = loop {
+            at = skip_whitespace(bytes, at);
+            if bytes.get(at) == Some(&b'#') {
+                let attribute_open = skip_whitespace(bytes, at + 1);
+                at = balanced_end(bytes, attribute_open);
+                continue;
+            }
+            let word_end = (at..bytes.len())
+                .find(|&i| !is_ident_byte(bytes[i]))
+                .unwrap_or(bytes.len());
+            let word = &code[at..word_end];
+            if TYPE_KEYWORDS.contains(&word) {
+                let name_start = skip_whitespace(bytes, word_end);
+                let name_end = (name_start..bytes.len())
+                    .find(|&i| !is_ident_byte(bytes[i]))
+                    .unwrap_or(bytes.len());
+                break Some(&code[name_start..name_end]);
+            }
+            if word.is_empty() || word_end == bytes.len() {
+                break None;
+            }
+            // `pub`, `pub(crate)`, ...
+            at = word_end;
+            if bytes.get(skip_whitespace(bytes, at)) == Some(&b'(') {
+                at = balanced_end(bytes, skip_whitespace(bytes, at));
+            }
+        };
+        if declared == Some(name) {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+
+    for offset in ident_offsets(&code, "impl") {
+        let Some(open) = code[offset..].find('{') else {
+            continue;
+        };
+        let header = &code[offset + "impl".len()..offset + open];
+        // Generic parameters on the impl itself: `impl<T: Bound> ...`.
+        let header = match header.trim_start().strip_prefix('<') {
+            Some(_) => {
+                let start = header.find('<').unwrap_or(0);
+                let end = balanced_angle_end(header.as_bytes(), start);
+                &header[end..]
+            }
+            None => header,
+        };
+        let Some((trait_path, for_type)) = header.split_once(" for ") else {
+            continue;
+        };
+        let implemented = last_segment(trait_path);
+        let target = for_type.trim();
+        let target_name = target
+            .trim_start_matches('&')
+            .trim_start()
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .next()
+            .unwrap_or("");
+        if traits.contains(&implemented.as_str()) && target_name == name {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+    lines.into_iter().collect()
+}
+
+/// One past the `>` closing the `<` at `open`.
+fn balanced_angle_end(bytes: &[u8], open: usize) -> usize {
+    let mut depth = 0usize;
+    for (i, b) in bytes.iter().enumerate().skip(open) {
+        match b {
+            b'<' => depth += 1,
+            b'>' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return i + 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    bytes.len()
+}
+
+/// Macros that render their arguments: into a string, a stream, a panic message or a log
+/// event. Bare names, so `tracing::info!` and `log::info!` match on `info`.
+const RENDERING_MACROS: &[&str] = &[
+    "format",
+    "print",
+    "println",
+    "eprint",
+    "eprintln",
+    "write",
+    "writeln",
+    "panic",
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "debug_assert",
+    "debug_assert_eq",
+    "debug_assert_ne",
+    "unreachable",
+    "todo",
+    "unimplemented",
+    "dbg",
+    "trace",
+    "debug",
+    "info",
+    "warn",
+    "error",
+    "event",
+    "span",
+    "trace_span",
+    "debug_span",
+    "info_span",
+    "warn_span",
+    "error_span",
+];
+
+/// 1-based lines where `source` invokes one of [`RENDERING_MACROS`] with an argument list that
+/// names any of `idents` — `format!("{:?}", holder)`, `tracing::info!(pw = s.expose_secret())`,
+/// `assert_eq!(secret.expose_secret(), x)`, however wrapped.
+pub fn renders_in_a_macro(source: &str, idents: &[&str]) -> Vec<usize> {
+    let code = code_without_strings(source);
+    let bytes = code.as_bytes();
+    let mut lines = BTreeSet::new();
+    for name in RENDERING_MACROS {
+        for offset in ident_offsets(&code, name) {
+            let bang = skip_whitespace(bytes, offset + name.len());
+            if bytes.get(bang) != Some(&b'!') {
+                continue;
+            }
+            let open = skip_whitespace(bytes, bang + 1);
+            if !matches!(bytes.get(open), Some(b'(' | b'[' | b'{')) {
+                continue;
+            }
+            let end = balanced_end(bytes, open);
+            let arguments = &code[open..end];
+            if idents
+                .iter()
+                .any(|ident| !ident_offsets(arguments, ident).is_empty())
+            {
+                lines.insert(line_at(&code, offset));
+            }
+        }
+    }
+    lines.into_iter().collect()
+}
+
 /// 1-based lines where `source` spawns a `git` subprocess, matched on the literal program name.
 pub fn spawns_git(source: &str) -> Vec<usize> {
     let code = code_only(source);

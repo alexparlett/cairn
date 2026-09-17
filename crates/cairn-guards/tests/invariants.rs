@@ -6,8 +6,9 @@ use std::path::Path;
 use cairn_guards::{
     code_only, code_without_strings, code_without_test_modules, configures_process_environment,
     constructs_named_struct, constructs_process_command, constructs_struct, declared_dependencies,
-    implements_type, mentions_crate, reads_row_content_partially, repo_root, rust_sources,
-    spawns_git, waits_on_work,
+    derives_or_implements, implements_type, mentions_crate, reads_row_content_partially,
+    renders_in_a_macro, repo_root, rust_sources, spawns_git, structs_with_a_field_naming,
+    types_containing, waits_on_work,
 };
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
@@ -1059,6 +1060,489 @@ fn destructive_operations_are_sealed_behind_the_confirmation_token() {
         ops.iter().any(|(_, s)| code_only(s).contains("Confirmed")),
         "no operation in cairn-git/src/ops takes a Confirmed token; either the module is empty \
          of destructive work (delete this guard's expectation) or the seal was dropped."
+    );
+}
+
+/// The one type that holds a credential, and where it lives.
+const SECRET_TYPE_FILE: &str = "crates/cairn-model/src/secret.rs";
+const SECRET_TYPE: &str = "Secret";
+
+/// The one way to read its bytes.
+const SECRET_ACCESSOR: &str = "expose_secret";
+
+/// Traits that would render, copy or serialise a credential; none may be given to the secret
+/// type or to any type that holds one.
+const SECRET_FORBIDDEN_TRAITS: &[&str] = &[
+    "Debug",
+    "Display",
+    "Clone",
+    "Copy",
+    "Serialize",
+    "Deserialize",
+    "Encode",
+    "Decode",
+];
+
+/// Production files allowed to name [`SECRET_ACCESSOR`]: the type's own, the wire encoder that
+/// hands the bytes to the helper, and the helper's `main`, which hands them to git. Each is a
+/// place a credential is in the open, and the list is the review.
+const SECRET_READERS: &[&str] = &[
+    SECRET_TYPE_FILE,
+    "crates/cairn-askpass/src/protocol.rs",
+    "crates/cairn-askpass/src/main.rs",
+];
+
+/// Files whose `struct`s may hold a [`SECRET_TYPE`] in a field. Empty on purpose: a secret
+/// travels by value — through a function, a channel or an enum variant that is consumed once —
+/// and is never kept. A row here is application state holding a credential, and a review.
+const SECRET_HOLDERS: &[&str] = &[];
+
+/// Every crate whose types and macros are read for a credential: all of them but the guards,
+/// whose fixtures contain the shapes they forbid.
+fn secret_scanned_crates() -> Vec<String> {
+    let crates_dir = repo_root().join("crates");
+    let entries = std::fs::read_dir(&crates_dir)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", crates_dir.display()));
+    let mut crates: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().join("Cargo.toml").is_file())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|krate| krate != "cairn-guards")
+        .collect();
+    crates.sort();
+    crates
+}
+
+/// Structural, against erosion of what the TYPE enforces: `Secret` has no `Debug`, `Display`,
+/// `Clone` or serialisation, so the compiler already refuses `{:?}` on it, a `#[derive(Debug)]`
+/// container, and a `tracing` field with a `?` or `%` sigil (`cairn-model`'s compile-fail
+/// doctests pin that). What the compiler cannot refuse is what this reads: an impl written by
+/// hand for the type or for a container of it, the accessor spreading beyond the files that
+/// must hand the bytes on, the accessor inside a macro that renders its arguments, and a
+/// `struct` keeping a secret in a field. Scope: every crate but the guards — types and impls in
+/// `src/` and `tests/` alike, the accessor and macro rules in production code only, since a
+/// test that generates a secret may assert on it.
+#[test]
+fn no_credential_value_is_logged_printed_serialised_or_stored() {
+    let (_, secret) = rust_sources("crates/cairn-model/src")
+        .into_iter()
+        .find(|(path, _)| path == Path::new(SECRET_TYPE_FILE))
+        .unwrap_or_else(|| {
+            panic!("{SECRET_TYPE_FILE} is gone; the type it defines is an invariant")
+        });
+    let production = code_without_test_modules(&code_without_strings(&secret));
+    let declared = cairn_guards::type_declarations(&production);
+    let declaration = declared
+        .iter()
+        .find(|declaration| declaration.name == SECRET_TYPE)
+        .unwrap_or_else(|| panic!("{SECRET_TYPE_FILE} no longer declares `struct {SECRET_TYPE}`"));
+    assert_eq!(
+        declaration.keyword, "struct",
+        "{SECRET_TYPE} is no longer a struct"
+    );
+    assert!(
+        declaration.body.contains("Zeroizing<"),
+        "{SECRET_TYPE}'s field is no longer a `Zeroizing<..>`; a plain buffer is freed with its \
+         contents in place (credential-prompts L11)."
+    );
+    assert_eq!(
+        declaration.body.matches(':').count(),
+        1,
+        "{SECRET_TYPE} gained a field; every field holding secret bytes must be a `Zeroizing`, \
+         and the guard knows how to check one"
+    );
+    assert!(
+        mentions_crate(&production, "derive").is_empty(),
+        "{SECRET_TYPE_FILE} derives something; the type must derive nothing, so that no impl \
+         can be added to it by a one-word edit."
+    );
+    let hits = derives_or_implements(&production, SECRET_TYPE, SECRET_FORBIDDEN_TRAITS);
+    assert!(
+        hits.is_empty(),
+        "{SECRET_TYPE_FILE}:{} gives {SECRET_TYPE} an impl that renders, copies or serialises it \
+         (CLAUDE.md, Invariants).",
+        hits[0]
+    );
+    assert!(
+        !implements_type(&production, SECRET_TYPE).is_empty()
+            && production.contains("ZeroizeOnDrop for Secret"),
+        "{SECRET_TYPE_FILE} no longer declares `impl ZeroizeOnDrop for {SECRET_TYPE}`; that \
+         marker is the type-level promise the drop test relies on."
+    );
+    assert_eq!(
+        production.matches("-> &[u8]").count(),
+        1,
+        "{SECRET_TYPE_FILE} should return the bytes from exactly one method, {SECRET_ACCESSOR}"
+    );
+    assert!(
+        production.contains(&format!("pub fn {SECRET_ACCESSOR}(&self) -> &[u8]")),
+        "{SECRET_TYPE_FILE} no longer defines `pub fn {SECRET_ACCESSOR}(&self) -> &[u8]`; the \
+         accessor's name is what the roster below is keyed on."
+    );
+    for leak in [
+        "-> &str",
+        "-> String",
+        "-> Vec<u8>",
+        "-> &Vec<u8>",
+        "-> &Zeroizing",
+    ] {
+        assert!(
+            !production.contains(leak),
+            "{SECRET_TYPE_FILE} returns `{leak}` somewhere: a second way to read the bytes, one \
+             the roster does not know"
+        );
+    }
+    assert!(
+        secret.matches("```compile_fail").count() >= 4,
+        "{SECRET_TYPE_FILE} lost its compile-fail doctests (PRD B7): `{{:?}}`, `{{}}`, a \
+         `#[derive(Debug)]` container and `.clone()` must each be pinned to not compile"
+    );
+
+    // Containers: every type that holds a Secret, or a type that holds one, in any crate.
+    let mut containers: BTreeSet<String> = BTreeSet::from([SECRET_TYPE.to_owned()]);
+    let sources: Vec<(std::path::PathBuf, String)> = secret_scanned_crates()
+        .iter()
+        .flat_map(|krate| rust_sources(format!("crates/{krate}")))
+        .collect();
+    loop {
+        let known: Vec<String> = containers.iter().cloned().collect();
+        let known: Vec<&str> = known.iter().map(String::as_str).collect();
+        let mut found = Vec::new();
+        for (_, source) in &sources {
+            found.extend(types_containing(source, &known));
+        }
+        let before = containers.len();
+        containers.extend(found);
+        if containers.len() == before {
+            break;
+        }
+    }
+    let containers: Vec<&str> = containers.iter().map(String::as_str).collect();
+
+    let mut scanned = 0usize;
+    for (path, source) in &sources {
+        scanned += 1;
+        for container in &containers {
+            let hits = derives_or_implements(source, container, SECRET_FORBIDDEN_TRAITS);
+            assert!(
+                hits.is_empty(),
+                "{}:{} gives `{container}`, which holds a credential, an impl that renders, \
+                 copies or serialises it. A container that prints is the credential printing \
+                 (CLAUDE.md, Invariants).",
+                path.display(),
+                hits[0]
+            );
+        }
+        let hits = structs_with_a_field_naming(source, &[SECRET_TYPE]);
+        let excused = SECRET_HOLDERS.iter().any(|f| Path::new(f) == path);
+        assert!(
+            hits.is_empty() || excused,
+            "{}:{} declares a struct with a field holding a `{SECRET_TYPE}`: application state \
+             keeping a credential. A secret is passed by value and consumed once; if this \
+             struct genuinely must hold one, add the file to SECRET_HOLDERS, which is the \
+             review (CLAUDE.md, Invariants).",
+            path.display(),
+            hits.first().copied().unwrap_or_default()
+        );
+
+        if !path.starts_with("crates") || path.components().any(|c| c.as_os_str() == "tests") {
+            continue;
+        }
+        let production = code_without_test_modules(&code_without_strings(source));
+        let hits = renders_in_a_macro(&production, &[SECRET_ACCESSOR]);
+        assert!(
+            hits.is_empty(),
+            "{}:{} names `{SECRET_ACCESSOR}` inside a macro that renders its arguments — a \
+             format, a panic, an assertion or a log event. The bytes go to the helper and to \
+             git, never into text (CLAUDE.md, Invariants).",
+            path.display(),
+            hits[0]
+        );
+        let hits = renders_in_a_macro(&production, &containers);
+        assert!(
+            hits.is_empty(),
+            "{}:{} names a type that holds a credential inside a macro that renders its \
+             arguments (CLAUDE.md, Invariants).",
+            path.display(),
+            hits[0]
+        );
+        let hits = mentions_crate(&production, SECRET_ACCESSOR);
+        let excused = SECRET_READERS.iter().any(|f| Path::new(f) == path);
+        assert!(
+            hits.is_empty() || excused,
+            "{}:{} reads a credential's bytes with `{SECRET_ACCESSOR}`. Only the files in \
+             SECRET_READERS may — each is a place the bytes are handed on to the helper or to \
+             git — so a new reader is a review, not an edit (CLAUDE.md, Invariants).",
+            path.display(),
+            hits.first().copied().unwrap_or_default()
+        );
+    }
+    assert!(scanned > 0, "the credential guard scanned nothing");
+    for reader in SECRET_READERS.iter().chain(SECRET_HOLDERS) {
+        assert!(
+            sources.iter().any(|(path, _)| path == Path::new(reader)),
+            "the credential guard excuses `{reader}`, which does not exist; a dead roster row \
+             is a hole nobody can see"
+        );
+    }
+    assert!(
+        sources
+            .iter()
+            .filter(|(path, _)| SECRET_READERS.iter().any(|f| Path::new(f) == path))
+            .filter(|(_, source)| {
+                !mentions_crate(
+                    &code_without_test_modules(&code_without_strings(source)),
+                    SECRET_ACCESSOR,
+                )
+                .is_empty()
+            })
+            .count()
+            >= 2,
+        "fewer than two of SECRET_READERS actually read a credential; either the bytes reach \
+         the helper and git some other way now (then the roster is stale and the guard is \
+         checking the wrong thing) or a reader was removed"
+    );
+}
+
+#[test]
+fn the_credential_matcher_catches_the_shapes_it_claims() {
+    let forbidden = SECRET_FORBIDDEN_TRAITS;
+    // Containers, direct and through another type, struct and enum, braced and tuple.
+    let caught_containers = [
+        (
+            "a braced field",
+            "struct Holder {\n    secret: Secret,\n}",
+            "Holder",
+        ),
+        (
+            "a tuple field",
+            "pub struct Wrapped(pub Secret);",
+            "Wrapped",
+        ),
+        (
+            "an optional field",
+            "struct State { current: Option<Secret> }",
+            "State",
+        ),
+        (
+            "an enum variant",
+            "enum Request {\n    Answer(Secret),\n    Cancel,\n}",
+            "Request",
+        ),
+        (
+            "a generic field",
+            "struct Boxed<T> where T: Send { inner: Box<Secret>, t: T }",
+            "Boxed",
+        ),
+    ];
+    for (shape, source, name) in caught_containers {
+        assert_eq!(
+            types_containing(source, &["Secret"]),
+            vec![name.to_owned()],
+            "the container matcher missed the {shape} shape: {source:?}"
+        );
+    }
+    assert_eq!(
+        types_containing(
+            "struct Inner(Secret);\nstruct Outer { inner: Inner }",
+            &["Secret", "Inner"]
+        ),
+        vec!["Inner".to_owned(), "Outer".to_owned()],
+        "a container of a container is found once its name is known"
+    );
+    for (shape, source) in [
+        ("a signature", "fn answer(&self, secret: &Secret) {}"),
+        ("an import", "use cairn_model::Secret;"),
+        (
+            "a longer identifier",
+            "struct Names { secret_name: String, Secrets: u8 }",
+        ),
+        (
+            "a body of another type",
+            "struct Other { x: u8 }\nlet s: Secret = x;",
+        ),
+        ("prose", "// struct Holder { secret: Secret }\n"),
+        ("a string", "let s = \"struct Holder { secret: Secret }\";"),
+    ] {
+        assert!(
+            types_containing(source, &["Secret"]).is_empty(),
+            "the container matcher fired on the {shape} shape: {source:?}"
+        );
+    }
+    assert_eq!(
+        structs_with_a_field_naming("enum E { A(Secret) }\nstruct S { s: Secret }", &["Secret"]),
+        vec![2],
+        "the stored-state matcher should see the struct and not the enum"
+    );
+
+    // Derives and hand-written impls on a container.
+    let caught_impls = [
+        (
+            "a derived Debug",
+            "#[derive(Debug)]\nstruct Holder {\n    secret: Secret,\n}",
+        ),
+        (
+            "a derived Debug among others",
+            "#[derive(Clone, PartialEq, Debug)]\nstruct Holder { secret: Secret }",
+        ),
+        (
+            "a derive past another attribute",
+            "#[derive(Debug)]\n#[repr(C)]\npub struct Holder(Secret);",
+        ),
+        (
+            "a derived Serialize by path",
+            "#[derive(serde::Serialize)]\nstruct Holder { secret: Secret }",
+        ),
+        (
+            "a derive on an enum",
+            "#[derive(Debug)]\nenum Request { Answer(Secret) }",
+        ),
+        (
+            "a hand-written Debug",
+            "impl std::fmt::Debug for Holder {\n    fn fmt(&self, f: &mut Formatter) -> Result { Ok(()) }\n}",
+        ),
+        ("a hand-written Display", "impl fmt::Display for Holder {"),
+        ("a generic impl", "impl<'a> Debug for Holder<'a> {"),
+        ("a Clone", "impl Clone for Holder {"),
+        (
+            "a Serialize by full path",
+            "impl serde::ser::Serialize for Holder {",
+        ),
+        ("a wrapped header", "impl Debug\n    for Holder\n{"),
+    ];
+    for (shape, source) in caught_impls {
+        assert!(
+            !derives_or_implements(source, "Holder", forbidden).is_empty()
+                || !derives_or_implements(source, "Request", forbidden).is_empty(),
+            "the impl matcher missed the {shape} shape: {source:?}"
+        );
+    }
+    for (shape, source) in [
+        (
+            "a derive on another type",
+            "#[derive(Debug)]\nstruct Other { x: u8 }\nstruct Holder(Secret);",
+        ),
+        (
+            "an allowed impl",
+            "impl Drop for Holder {\n    fn drop(&mut self) {}\n}",
+        ),
+        (
+            "an inherent impl",
+            "impl Holder {\n    fn new() -> Self { todo() }\n}",
+        ),
+        ("a Debug for another type", "impl Debug for HolderView {"),
+        (
+            "a derive of something else",
+            "#[derive(Default)]\nstruct Holder { secret: Secret }",
+        ),
+        (
+            "prose",
+            "// #[derive(Debug)] struct Holder\n// impl Debug for Holder {\n",
+        ),
+        (
+            "an expect attribute",
+            "#[expect(missing_debug_implementations)]\nstruct Holder(Secret);",
+        ),
+    ] {
+        assert!(
+            derives_or_implements(source, "Holder", forbidden).is_empty(),
+            "the impl matcher fired on the {shape} shape: {source:?}"
+        );
+    }
+    assert_eq!(
+        derives_or_implements(
+            "let a = 1;\n#[derive(Debug)]\nstruct Holder(Secret);",
+            "Holder",
+            forbidden
+        ),
+        vec![2],
+        "the impl matcher reports the wrong line"
+    );
+
+    // Rendering macros naming the accessor or a container.
+    let idents = &["expose_secret", "Holder"];
+    for (shape, source) in [
+        (
+            "format of the bytes",
+            "let s = format!(\"{:?}\", secret.expose_secret());",
+        ),
+        (
+            "format of a container",
+            "let s = format!(\"{:?}\", Holder { secret });",
+        ),
+        (
+            "println",
+            "println!(\"{}\", String::from_utf8_lossy(s.expose_secret()));",
+        ),
+        (
+            "a panic",
+            "panic!(\"bad secret {:?}\", secret.expose_secret())",
+        ),
+        (
+            "an assertion",
+            "assert_eq!(secret.expose_secret(), expected);",
+        ),
+        (
+            "a tracing field",
+            "tracing::info!(password = ?secret.expose_secret(), \"asked\");",
+        ),
+        ("a bare log macro", "debug!(\"got {:?}\", Holder::new(s));"),
+        (
+            "a log event",
+            "log::warn!(\"{}\", s.expose_secret().len());",
+        ),
+        (
+            "a span field",
+            "let _s = tracing::info_span!(\"auth\", secret = ?holder_of::<Holder>());",
+        ),
+        (
+            "a wrapped invocation",
+            "write!(\n    f,\n    \"{:?}\",\n    secret.expose_secret()\n)",
+        ),
+        (
+            "a bracketed invocation",
+            "assert![secret.expose_secret().is_empty()];",
+        ),
+        ("dbg", "dbg!(secret.expose_secret());"),
+    ] {
+        assert!(
+            !renders_in_a_macro(source, idents).is_empty(),
+            "the rendering matcher missed the {shape} shape: {source:?}"
+        );
+    }
+    for (shape, source) in [
+        (
+            "a write of the bytes",
+            "stream.write_all(secret.expose_secret())?;",
+        ),
+        (
+            "a length in a message",
+            "let n = secret.len();\nformat!(\"{n} bytes\")",
+        ),
+        (
+            "a macro naming something else",
+            "format!(\"{:?}\", holder_name)",
+        ),
+        ("a longer identifier", "format!(\"{}\", expose_secrets)"),
+        (
+            "a function named like a macro",
+            "info(secret.expose_secret());",
+        ),
+        ("prose", "// format!(\"{:?}\", secret.expose_secret())\n"),
+        ("a string", "let s = \"format!(secret.expose_secret())\";"),
+    ] {
+        assert!(
+            renders_in_a_macro(source, idents).is_empty(),
+            "the rendering matcher fired on the {shape} shape: {source:?}"
+        );
+    }
+    assert_eq!(
+        renders_in_a_macro(
+            "let a = 1;\nlet b = 2;\nformat!(\"{:?}\", s.expose_secret());",
+            idents
+        ),
+        vec![3],
+        "the rendering matcher reports the wrong line"
     );
 }
 

@@ -215,6 +215,37 @@ Project invariants:
   `destructive-ops-reviewer`'s (its check 9); and the matcher reads
   identifiers, so a `Command` reached through a `type` alias, a wrapper crate
   or a macro is `qa-checklist`'s to catch (its item 7).
+- **No credential value is logged, Debug-printed, serialised, or stored in
+  application state.** The one type that holds a credential is
+  `cairn_model::Secret`: no `Debug`, `Display`, `Clone` or serialisation, no
+  derive at all, one accessor (`expose_secret`), and a `zeroize`-wrapped
+  buffer so the drop clears memory with writes the compiler may not remove
+  (credential-prompts L11). Primary enforcement is the type: `{:?}` and `{}`
+  on it, a `#[derive(Debug)]` container of it and `.clone()` do not compile,
+  pinned by the `compile_fail` doctests in `crates/cairn-model/src/secret.rs`
+  (which is why the full gate runs `cargo test --doc`). Twin against what the
+  compiler cannot refuse:
+  `no_credential_value_is_logged_printed_serialised_or_stored`, with matcher
+  self-test `the_credential_matcher_catches_the_shapes_it_claims`. What it
+  decides, over every crate but `cairn-guards`: the type's file declares one
+  `Zeroizing` field, derives nothing, implements `ZeroizeOnDrop`, returns the
+  bytes from exactly one method and keeps its four compile-fail pins; no
+  `struct` or `enum` that holds a `Secret` — directly or through another such
+  type, in `src/` or `tests/` — derives or hand-implements `Debug`, `Display`,
+  `Clone`, `Copy`, `Serialize`, `Deserialize`, `Encode` or `Decode`; no
+  `struct` outside the `SECRET_HOLDERS` roster (empty on purpose: a secret is
+  passed by value and consumed once, never kept) has a field holding one; and
+  in production code `expose_secret` is named only in the `SECRET_READERS`
+  roster (the type, the wire encoder that hands the bytes to the helper, the
+  helper's `main` that hands them to git) and never — nor is any container
+  type — inside a macro that renders its arguments (`format!`, `panic!`, the
+  assertions, `write!`, `dbg!`, the `tracing`/`log` event and span macros).
+  Residual review obligations, `qa-checklist`'s: the matchers read
+  spellings, so a `type` alias for `Secret`, a generic wrapper instantiated
+  with it at a use site rather than in a declaration, or a hand-written
+  `Debug` on such a wrapper is not seen; and whether a prompt's text, which
+  IS rendered, could carry a secret (git puts the prompt on `argv`, so it
+  never should) is a judgement, not a token.
 - **Destructive operations take `cairn_model::Confirmed` by value, and the token
   carries the prompt the user saw.** Primary enforcement is the type: the field is
   private and there is exactly one constructor. Twin against erosion:

@@ -221,10 +221,21 @@ impl SshRemote {
                 return Err(Unavailable(format!("{program} is not on PATH")));
             }
         }
+        // The socket goes under this fixture's root, which is short and removed with it;
+        // left to itself ssh-agent puts one under `$HOME/.ssh/agent/`, and a long `HOME`
+        // is over the Unix socket path limit, which it reports on stderr and nowhere else.
         let output = Command::new("ssh-agent")
-            .arg("-s")
+            .args(["-s", "-a"])
+            .arg(self.root.join("agent.sock"))
             .output()
             .map_err(|e| Unavailable(format!("could not start ssh-agent: {e}")))?;
+        if !output.status.success() {
+            return Err(Unavailable(format!(
+                "ssh-agent failed ({}): {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
         let text = String::from_utf8_lossy(&output.stdout);
         let value = |name: &str| {
             text.lines()

@@ -147,7 +147,13 @@ impl Drop for UnbornRepository {
 }
 
 /// A bare repository, built with `std::fs`, whose `origin` is `remote` and
-/// whose branches are the remote's after a fetch (`HEAD` names `main`).
+/// whose `main` is the remote's `HEAD` after a fetch — whatever that HEAD is.
+/// The remote is the Cairn checkout, and on CI that checkout has no `main`:
+/// `actions/checkout` leaves a `push` run on its one branch and a
+/// `pull_request` run detached with no local branch at all, so a
+/// `refs/heads/*` refspec fetched the wrong branch or nothing (and the
+/// fixture's `HEAD` stayed unborn) while the same test passed on every
+/// developer machine. `HEAD` as the source is what every checkout has.
 struct BareRepository {
     path: PathBuf,
 }
@@ -166,7 +172,7 @@ impl BareRepository {
         }
         let config = format!(
             "[core]\n\trepositoryformatversion = 0\n\tbare = true\n\
-             [remote \"origin\"]\n\turl = {}\n\tfetch = +refs/heads/*:refs/heads/*\n",
+             [remote \"origin\"]\n\turl = {}\n\tfetch = +HEAD:refs/heads/main\n",
             remote.display()
         );
         if let Err(error) = std::fs::write(path.join("config"), config) {
@@ -420,7 +426,7 @@ fn generated(what: &str) -> String {
 /// serves the new commits after a `git` subprocess wrote them.
 #[test]
 fn a_fetch_reports_progress_finishes_and_the_history_reloads_from_the_new_refs() {
-    // The Cairn checkout is the remote; a bare fixture takes its branches as its own.
+    // The Cairn checkout is the remote; a bare fixture takes its HEAD as its `main`.
     let checkout = match cairn_git::SharedRepository::discover(env!("CARGO_MANIFEST_DIR")) {
         Ok(shared) => shared.workdir().map(Path::to_owned),
         Err(error) => panic!("opening the Cairn checkout: {error}"),
@@ -428,7 +434,7 @@ fn a_fetch_reports_progress_finishes_and_the_history_reloads_from_the_new_refs()
     let Some(checkout) = checkout else {
         panic!("the Cairn checkout has no working tree");
     };
-    // Bare, so its branches may be written by a fetch; git refuses to fetch into a
+    // Bare, so its branch may be written by a fetch; git refuses to fetch into a
     // checked-out branch, unborn or not.
     let fixture = BareRepository::new("cairn-fetch-target", &checkout);
     let (home, runtime) = (Home::new(), RuntimeDir::new());

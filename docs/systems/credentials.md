@@ -270,7 +270,9 @@ never enters `cairn-git` and never enters application state.
   `401` to everything:
   `a_fetch_reports_progress_finishes_and_the_history_reloads_from_the_new_refs`
   (the cache contract's first real exercise: the worker's gix handle serves the
-  commits a `git` subprocess just wrote),
+  commits a `git` subprocess just wrote; the remote is the Cairn checkout's
+  `HEAD`, fetched into a bare fixture's `main`, because a CI checkout has no
+  `main` and may have no branch at all),
   `a_prompt_reaches_the_window_as_a_value_and_its_answer_reaches_git`,
   `refusing_a_prompt_fails_the_fetch_once_and_the_worker_carries_on`,
   `cancelling_a_fetch_that_waits_on_a_prompt_ends_it_as_cancelled`,

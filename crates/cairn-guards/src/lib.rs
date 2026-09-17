@@ -990,18 +990,36 @@ pub fn type_declarations(source: &str) -> Vec<TypeDeclaration> {
                 continue;
             }
             let name = code[name_start..name_end].to_owned();
-            // Past generics and a where clause, to the body.
+            // Past generics and a where clause, to the body. A `(` after `where` is a bound
+            // (`F: Fn(u8) -> u8`), not a tuple body; only a `{` can follow a where clause.
             let mut at = name_end;
             let mut depth = 0usize;
+            let mut in_where = false;
             let body = loop {
                 match bytes.get(at) {
                     None => break String::new(),
                     Some(b'<') => depth += 1,
                     Some(b'>') => depth = depth.saturating_sub(1),
                     Some(b';') if depth == 0 => break String::new(),
-                    Some(b'{') | Some(b'(') if depth == 0 => {
+                    Some(b'{') if depth == 0 => {
                         let end = balanced_end(bytes, at);
                         break code[at + 1..end.saturating_sub(1).max(at + 1)].to_owned();
+                    }
+                    Some(b'(') if depth == 0 && !in_where => {
+                        let end = balanced_end(bytes, at);
+                        break code[at + 1..end.saturating_sub(1).max(at + 1)].to_owned();
+                    }
+                    Some(b'(') if depth == 0 => {
+                        at = balanced_end(bytes, at);
+                        continue;
+                    }
+                    Some(b'w')
+                        if depth == 0
+                            && code[at..].starts_with("where")
+                            && bytes.get(at + 5).is_none_or(|b| !is_ident_byte(*b))
+                            && !is_ident_byte(bytes[at - 1]) =>
+                    {
+                        in_where = true;
                     }
                     _ => {}
                 }
@@ -1134,14 +1152,55 @@ pub fn derives_or_implements(source: &str, name: &str, traits: &[&str]) -> Vec<u
             continue;
         };
         let implemented = last_segment(trait_path);
-        let target = for_type.trim();
-        let target_name = target
-            .trim_start_matches('&')
-            .trim_start()
-            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        // The target's own name: past a reference, a lifetime and any path prefix
+        // (`impl Debug for self::Held` names `Held`).
+        let target = for_type.trim().trim_start_matches('&').trim_start();
+        let target = match target.strip_prefix('\'') {
+            Some(rest) => rest.trim_start_matches(is_ident_char).trim_start(),
+            None => target,
+        };
+        let target_name = last_segment(target);
+        let target_name = target_name
+            .split(|c: char| !is_ident_char(c))
             .next()
             .unwrap_or("");
         if traits.contains(&implemented.as_str()) && target_name == name {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+    lines.into_iter().collect()
+}
+
+fn is_ident_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+/// 1-based lines where `source` gives the type `name` another name: `use path::Name as Other`
+/// (in any `use` tree) or `type Other = path::Name;` / `type Other<..> = Name<..>;`. Past
+/// either, code can hold the type without spelling its name, which is what a name-keyed guard
+/// reads.
+pub fn renames_type(source: &str, name: &str) -> Vec<usize> {
+    let code = code_without_strings(source);
+    let bytes = code.as_bytes();
+    let mut lines = BTreeSet::new();
+    for offset in ident_offsets(&code, name) {
+        let after = skip_whitespace(bytes, offset + name.len());
+        let aliased = code[after..].starts_with("as")
+            && bytes.get(after + 2).is_some_and(u8::is_ascii_whitespace)
+            && in_use_statement(&code, offset);
+        if aliased {
+            lines.insert(line_at(&code, offset));
+            continue;
+        }
+        // `type X = ..Name..;` — the statement starts with `type` and has `=` before this name.
+        let start = code[..offset].rfind(';').map_or(0, |at| at + 1);
+        let statement = &code[start..offset];
+        let is_type_item = ident_offsets(statement, "type").first().is_some_and(|at| {
+            statement[..*at].trim().is_empty()
+                || statement[..*at].trim_end().ends_with("pub")
+                || statement[..*at].trim_end().ends_with(')')
+        });
+        if is_type_item && statement.contains('=') {
             lines.insert(line_at(&code, offset));
         }
     }
@@ -1170,6 +1229,8 @@ fn balanced_angle_end(bytes: &[u8], open: usize) -> usize {
 /// event. Bare names, so `tracing::info!` and `log::info!` match on `info`.
 const RENDERING_MACROS: &[&str] = &[
     "format",
+    "format_args",
+    "log",
     "print",
     "println",
     "eprint",

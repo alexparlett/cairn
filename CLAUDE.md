@@ -228,24 +228,31 @@ Project invariants:
   `no_credential_value_is_logged_printed_serialised_or_stored`, with matcher
   self-test `the_credential_matcher_catches_the_shapes_it_claims`. What it
   decides, over every crate but `cairn-guards`: the type's file declares one
-  `Zeroizing` field, derives nothing, implements `ZeroizeOnDrop`, returns the
-  bytes from exactly one method and keeps its four compile-fail pins; no
-  `struct` or `enum` that holds a `Secret` — directly or through another such
-  type, in `src/` or `tests/` — derives or hand-implements `Debug`, `Display`,
-  `Clone`, `Copy`, `Serialize`, `Deserialize`, `Encode` or `Decode`; no
-  `struct` outside the `SECRET_HOLDERS` roster (empty on purpose: a secret is
-  passed by value and consumed once, never kept) has a field holding one; and
-  in production code `expose_secret` is named only in the `SECRET_READERS`
-  roster (the type, the wire encoder that hands the bytes to the helper, the
-  helper's `main` that hands them to git) and never — nor is any container
-  type — inside a macro that renders its arguments (`format!`, `panic!`, the
-  assertions, `write!`, `dbg!`, the `tracing`/`log` event and span macros).
-  Residual review obligations, `qa-checklist`'s: the matchers read
-  spellings, so a `type` alias for `Secret`, a generic wrapper instantiated
-  with it at a use site rather than in a declaration, or a hand-written
-  `Debug` on such a wrapper is not seen; and whether a prompt's text, which
-  IS rendered, could carry a secret (git puts the prompt on `argv`, so it
-  never should) is a judgement, not a token.
+  `Zeroizing` field, derives nothing, has exactly the public functions and
+  impl blocks the guard spells out (`new`, `from_string`, `expose_secret`,
+  `len`, `is_empty`; the inherent impl, `Zeroize`, `ZeroizeOnDrop`), keeps
+  its four compile-fail pins and their passing twin, and no other file opens
+  an impl that names `Secret` (so no `Deref`, `From<Secret>`, `AsRef` route
+  around the accessor); no `struct` or `enum` that holds a `Secret` —
+  directly or through another such type, in `src/` or `tests/` — derives or
+  hand-implements `Debug`, `Display`, `Clone`, `Copy`, `Serialize`,
+  `Deserialize`, `Encode` or `Decode`; nothing renames the type (`use .. as`,
+  a `type` alias); no `struct` outside the `SECRET_HOLDERS` roster (empty on
+  purpose: a secret is passed by value and consumed once, never kept) has a
+  field holding one or holding a type that does; and in production code
+  `expose_secret` is named only in the `SECRET_READERS` roster (the type, the
+  wire encoder that hands the bytes to the helper, the helper's `main` that
+  hands them to git), each of which must actually read, and never — nor is
+  any container type — inside a macro that renders its arguments (`format!`,
+  `format_args!`, `panic!`, the assertions, `write!`, `dbg!`, the
+  `tracing`/`log` event and span macros). Residual review obligations,
+  `qa-checklist`'s: the matchers read spellings, so a generic wrapper
+  instantiated with `Secret` at a use site rather than in a declaration, a
+  hand-written `Debug` on such a wrapper, and — inside a `SECRET_READERS`
+  file — the bytes hoisted into a local that is then rendered
+  (`let b = s.expose_secret(); format!("{b:?}")`) are not seen; and whether a
+  prompt's text, which IS rendered, could carry a secret (git puts the prompt
+  on `argv`, so it never should) is a judgement, not a token.
 - **Destructive operations take `cairn_model::Confirmed` by value, and the token
   carries the prompt the user saw.** Primary enforcement is the type: the field is
   private and there is exactly one constructor. Twin against erosion:

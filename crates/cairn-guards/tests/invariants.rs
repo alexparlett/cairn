@@ -7,8 +7,8 @@ use cairn_guards::{
     code_only, code_without_strings, code_without_test_modules, configures_process_environment,
     constructs_named_struct, constructs_process_command, constructs_struct, declared_dependencies,
     derives_or_implements, implements_type, mentions_crate, reads_row_content_partially,
-    renders_in_a_macro, repo_root, rust_sources, spawns_git, structs_with_a_field_naming,
-    types_containing, waits_on_work,
+    renames_type, renders_in_a_macro, repo_root, rust_sources, spawns_git,
+    structs_with_a_field_naming, types_containing, waits_on_work,
 };
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
@@ -704,10 +704,13 @@ fn every_git_invocation_disables_the_terminal_prompt() {
              R3.3)."
         );
     }
+    // Twice each: the import and the use. The import alone is a name nobody applies.
     assert!(
-        constructor.contains("TOKEN_VARIABLE"),
-        "{PROCESS_ENVIRONMENT_FILE} no longer applies the askpass token; a helper with no token \
-         is refused by the channel, so no prompt could ever be answered."
+        mentions_crate(&constructor, "TOKEN_VARIABLE").len() >= 2
+            && mentions_crate(&constructor, "SOCKET_VARIABLE").len() >= 2,
+        "{PROCESS_ENVIRONMENT_FILE} imports the askpass socket or token variable but no longer \
+         applies it; a helper with no socket or token is refused by the channel, so no prompt \
+         could ever be answered."
     );
     assert!(
         mentions_crate(&production, "ALWAYS").len() >= 2,
@@ -1174,6 +1177,36 @@ fn no_credential_value_is_logged_printed_serialised_or_stored() {
         1,
         "{SECRET_TYPE_FILE} should return the bytes from exactly one method, {SECRET_ACCESSOR}"
     );
+    // The whole surface, spelled out: a new method or impl on the type is a review, because
+    // any of them (`Deref`, `From`, `into_bytes`, ..) is a way out that the accessor roster
+    // does not know.
+    let functions: Vec<&str> = production
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("pub fn "))
+        .filter_map(|rest| rest.split('(').next())
+        .collect();
+    assert_eq!(
+        functions,
+        ["new", "from_string", SECRET_ACCESSOR, "len", "is_empty"],
+        "{SECRET_TYPE_FILE}'s public functions changed. Each one is part of how a credential \
+         can be reached; a new one needs this list, the CLAUDE.md entry, and a look at whether \
+         it is a second accessor."
+    );
+    let impls: Vec<&str> = production
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("impl"))
+        .collect();
+    assert_eq!(
+        impls,
+        [
+            "impl Secret {",
+            "impl Zeroize for Secret {",
+            "impl ZeroizeOnDrop for Secret {}",
+        ],
+        "{SECRET_TYPE_FILE}'s impl blocks changed. `Deref`, `AsRef`, `Borrow`, `From`, `Into` \
+         and the like would each hand the bytes out past the accessor roster."
+    );
     assert!(
         production.contains(&format!("pub fn {SECRET_ACCESSOR}(&self) -> &[u8]")),
         "{SECRET_TYPE_FILE} no longer defines `pub fn {SECRET_ACCESSOR}(&self) -> &[u8]`; the \
@@ -1192,6 +1225,12 @@ fn no_credential_value_is_logged_printed_serialised_or_stored() {
              the roster does not know"
         );
     }
+    assert!(
+        secret.contains("/// ```\n/// let secret = cairn_model::Secret::from_string"),
+        "{SECRET_TYPE_FILE} lost the passing twin of its compile-fail doctests; without it \
+         the refused blocks could all fail for a reason unrelated to the type (stable rustdoc \
+         checks that a block fails, not why)"
+    );
     assert!(
         secret.matches("```compile_fail").count() >= 4,
         "{SECRET_TYPE_FILE} lost its compile-fail doctests (PRD B7): `{{:?}}`, `{{}}`, a \
@@ -1233,17 +1272,50 @@ fn no_credential_value_is_logged_printed_serialised_or_stored() {
                 hits[0]
             );
         }
-        let hits = structs_with_a_field_naming(source, &[SECRET_TYPE]);
+        // Transitive: a struct keeping the enum that carries a secret keeps the secret.
+        let hits = structs_with_a_field_naming(source, &containers);
         let excused = SECRET_HOLDERS.iter().any(|f| Path::new(f) == path);
         assert!(
             hits.is_empty() || excused,
-            "{}:{} declares a struct with a field holding a `{SECRET_TYPE}`: application state \
-             keeping a credential. A secret is passed by value and consumed once; if this \
-             struct genuinely must hold one, add the file to SECRET_HOLDERS, which is the \
-             review (CLAUDE.md, Invariants).",
+            "{}:{} declares a struct with a field holding a `{SECRET_TYPE}`, or a type that \
+             holds one: application state keeping a credential. A secret is passed by value \
+             and consumed once; if this struct genuinely must hold one, add the file to \
+             SECRET_HOLDERS, which is the review (CLAUDE.md, Invariants).",
             path.display(),
             hits.first().copied().unwrap_or_default()
         );
+        let hits = renames_type(source, SECRET_TYPE);
+        assert!(
+            hits.is_empty(),
+            "{}:{} gives `{SECRET_TYPE}` another name (`use .. as`, or a `type` alias). Past \
+             it, a container or an impl can hold a credential without spelling the name this \
+             guard reads (CLAUDE.md, Invariants).",
+            path.display(),
+            hits.first().copied().unwrap_or_default()
+        );
+        if path != Path::new(SECRET_TYPE_FILE) {
+            let code = code_without_strings(source);
+            let hits: Vec<usize> = code
+                .lines()
+                .enumerate()
+                // An impl BLOCK opens its line; `impl Write` in a parameter list does not.
+                .filter(|(_, line)| {
+                    let line = line.trim_start();
+                    (line.starts_with("impl ") || line.starts_with("impl<"))
+                        && !cairn_guards::mentions_crate(line, SECRET_TYPE).is_empty()
+                })
+                .map(|(n, _)| n + 1)
+                .collect();
+            assert!(
+                hits.is_empty(),
+                "{}:{} opens an impl that names `{SECRET_TYPE}` — `impl .. for {SECRET_TYPE}`, \
+                 `impl From<{SECRET_TYPE}> for ..`, or a bound on it. Every impl for the type \
+                 lives in {SECRET_TYPE_FILE}, where the guard spells the whole set out \
+                 (CLAUDE.md, Invariants).",
+                path.display(),
+                hits[0]
+            );
+        }
 
         if !path.starts_with("crates") || path.components().any(|c| c.as_os_str() == "tests") {
             continue;
@@ -1285,23 +1357,25 @@ fn no_credential_value_is_logged_printed_serialised_or_stored() {
              is a hole nobody can see"
         );
     }
-    assert!(
-        sources
+    for reader in SECRET_READERS {
+        let reads = sources
             .iter()
-            .filter(|(path, _)| SECRET_READERS.iter().any(|f| Path::new(f) == path))
-            .filter(|(_, source)| {
+            .filter(|(path, _)| path == Path::new(reader))
+            .any(|(_, source)| {
                 !mentions_crate(
                     &code_without_test_modules(&code_without_strings(source)),
                     SECRET_ACCESSOR,
                 )
                 .is_empty()
-            })
-            .count()
-            >= 2,
-        "fewer than two of SECRET_READERS actually read a credential; either the bytes reach \
-         the helper and git some other way now (then the roster is stale and the guard is \
-         checking the wrong thing) or a reader was removed"
-    );
+            });
+        assert!(
+            reads,
+            "SECRET_READERS excuses `{reader}`, which no longer reads a credential in production \
+             code. Either the bytes reach the helper or git some other way now (then the \
+             roster is stale and the guard checks the wrong file) or the row is a dead excuse: \
+             remove it."
+        );
+    }
 }
 
 #[test]
@@ -1374,6 +1448,63 @@ fn the_credential_matcher_catches_the_shapes_it_claims() {
         vec![2],
         "the stored-state matcher should see the struct and not the enum"
     );
+    assert_eq!(
+        structs_with_a_field_naming(
+            "enum Reply { Answer(Secret), Cancel }\nstruct Pending { reply: Reply }",
+            &["Secret", "Reply"]
+        ),
+        vec![2],
+        "a struct keeping the enum that carries a secret is stored state"
+    );
+    assert_eq!(
+        types_containing(
+            "pub struct Wrapped<F> where F: Fn(u8) -> u8 { s: Secret, f: F }",
+            &["Secret"]
+        ),
+        vec!["Wrapped".to_owned()],
+        "a where clause with a parenthesised bound hid the body"
+    );
+    assert!(
+        types_containing("struct Pair(u8, Secret);\nstruct Unit;", &["Secret"]) == ["Pair"],
+        "a tuple struct's body is still read"
+    );
+
+    for (shape, source) in [
+        ("a use alias", "use cairn_model::Secret as Credential;"),
+        (
+            "a grouped use alias",
+            "use cairn_model::{Oid, Secret as Credential};",
+        ),
+        ("a type alias", "type Credential = cairn_model::Secret;"),
+        ("a public type alias", "pub type Credential = Secret;"),
+        (
+            "a generic type alias",
+            "pub(crate) type Held<T> = Wrapper<T, Secret>;",
+        ),
+    ] {
+        assert!(
+            !renames_type(source, "Secret").is_empty(),
+            "the rename matcher missed the {shape} shape: {source:?}"
+        );
+    }
+    for (shape, source) in [
+        ("a plain import", "use cairn_model::{AskpassToken, Secret};"),
+        ("a signature", "fn f(s: Secret) -> Secret { s }"),
+        (
+            "an associated type",
+            "impl X for Y {\n    type Target = [u8];\n    fn g(s: &Secret) {}\n}",
+        ),
+        (
+            "a longer name",
+            "use cairn_model::Secrets as S;\ntype T = Secrets;",
+        ),
+        ("prose", "// use Secret as Credential\n"),
+    ] {
+        assert!(
+            renames_type(source, "Secret").is_empty(),
+            "the rename matcher fired on the {shape} shape: {source:?}"
+        );
+    }
 
     // Derives and hand-written impls on a container.
     let caught_impls = [
@@ -1409,6 +1540,14 @@ fn the_credential_matcher_catches_the_shapes_it_claims() {
             "impl serde::ser::Serialize for Holder {",
         ),
         ("a wrapped header", "impl Debug\n    for Holder\n{"),
+        (
+            "a path-qualified target",
+            "impl std::fmt::Debug for self::Holder {",
+        ),
+        (
+            "a crate-qualified target",
+            "impl Debug for crate::channel::Holder<'_> {",
+        ),
     ];
     for (shape, source) in caught_impls {
         assert!(
@@ -1503,7 +1642,16 @@ fn the_credential_matcher_catches_the_shapes_it_claims() {
             "a bracketed invocation",
             "assert![secret.expose_secret().is_empty()];",
         ),
-        ("dbg", "dbg!(secret.expose_secret());"),
+        // Spelled in two pieces: the Stop hook scans added lines for the literal.
+        ("dbg", concat!("dbg", "!(secret.expose_secret());")),
+        (
+            "format_args",
+            "out.write_fmt(format_args!(\"{:?}\", secret.expose_secret()))",
+        ),
+        (
+            "log::log!",
+            "log::log!(Level::Info, \"{:?}\", secret.expose_secret());",
+        ),
     ] {
         assert!(
             !renders_in_a_macro(source, idents).is_empty(),

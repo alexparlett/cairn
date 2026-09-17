@@ -73,10 +73,12 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
 10. **Credentials** (any diff naming `cairn_model::Secret` or `expose_secret`,
     anything under `crates/cairn-askpass/`, any new type holding a secret): the
     guard `no_credential_value_is_logged_printed_serialised_or_stored` reads
-    spellings, so what it cannot see is yours — a `type` alias for `Secret`, a
-    generic wrapper (`Holder<T>`) instantiated with it at a use site rather than
-    in its declaration, a hand-written `Debug` on such a wrapper, and a prompt
-    text (which IS rendered) that could carry a secret. Also: the helper's
+    spellings, so what it cannot see is yours — a generic wrapper (`Holder<T>`)
+    instantiated with `Secret` at a use site rather than in its declaration, a
+    hand-written `Debug` on such a wrapper, the bytes hoisted into a local
+    inside a `SECRET_READERS` file and then rendered (`let b =
+    s.expose_secret(); format!("{b:?}")`), and a prompt text (which IS
+    rendered) that could carry a secret. Also: the helper's
     linked surface (`cargo tree -p cairn-askpass`) is code that runs in a process
     holding a plaintext secret — a logging framework or any crate beyond
     `cairn-model` and `zeroize` is a finding — and no `#[allow]`/`#[expect]`

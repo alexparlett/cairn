@@ -1800,3 +1800,72 @@ fn ci_runs_every_merge_bar_gate_step() {
         );
     }
 }
+
+/// The ssh acceptance criteria (`crates/cairn-git/tests/fetch.rs`) skip where the fixture's
+/// `sshd` cannot run, and a passing test's stderr is hidden, so `CAIRN_REQUIRE_SSH_FIXTURE`
+/// is what turns a skip into a failure. Pinned here: CI sets it unconditionally (it
+/// installs the server), the gate's `test-full` step sets it wherever the fixture would
+/// find an `sshd`, and the gate looks for one in every directory the fixture does — a
+/// directory dropped from the gate alone would bring the silent skip back on that machine.
+/// Each is a line-level check, so none can pass on an empty read.
+#[test]
+fn the_ssh_criteria_are_required_wherever_they_can_run() {
+    let root = repo_root();
+    let read = |path: &str| {
+        std::fs::read_to_string(root.join(path)).unwrap_or_else(|e| panic!("reading {path}: {e}"))
+    };
+    let ci = read(".github/workflows/ci.yml");
+    let gate = read("scripts/gate.sh");
+    let fixture = read("crates/cairn-git/tests/remotes/ssh.rs");
+
+    assert!(
+        ci.lines()
+            .any(|line| line.trim() == "CAIRN_REQUIRE_SSH_FIXTURE: 1"),
+        ".github/workflows/ci.yml no longer sets `CAIRN_REQUIRE_SSH_FIXTURE: 1`, so the ssh \
+         acceptance criteria would skip silently in CI wherever the fixture cannot run."
+    );
+    assert!(
+        ci.lines().any(|line| line.contains("openssh-server")),
+        ".github/workflows/ci.yml no longer installs openssh-server, so the ssh fixture has \
+         no sshd to start in CI and every ssh criterion would fail there."
+    );
+
+    let test_full = gate
+        .lines()
+        .skip_while(|line| !line.trim_start().starts_with("run_test_full()"))
+        .take_while(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        test_full.contains("require_ssh_fixture_where_possible"),
+        "scripts/gate.sh's run_test_full no longer calls require_ssh_fixture_where_possible, so \
+         the local merge bar would let the ssh criteria skip where they could have run."
+    );
+
+    let sbin: Vec<&str> = fixture
+        .lines()
+        .find(|line| line.trim_start().starts_with("const SBIN"))
+        .unwrap_or_else(|| panic!("the ssh fixture no longer declares its SBIN roster"))
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .collect();
+    assert!(
+        !sbin.is_empty(),
+        "the ssh fixture's SBIN roster is empty, so this check compared nothing"
+    );
+    let probe = gate
+        .lines()
+        .skip_while(|line| !line.starts_with("require_ssh_fixture_where_possible()"))
+        .take_while(|line| line.trim() != "}")
+        .collect::<Vec<_>>()
+        .join("\n");
+    for dir in sbin {
+        assert!(
+            probe.contains(&format!("{dir}/sshd")),
+            "the ssh fixture looks for sshd in {dir} but scripts/gate.sh's \
+             require_ssh_fixture_where_possible does not, so on a machine whose sshd is only \
+             there the gate would not require the fixture and the criteria would skip silently."
+        );
+    }
+}

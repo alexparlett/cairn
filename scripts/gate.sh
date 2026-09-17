@@ -52,6 +52,10 @@ step() { echo; echo "== gate: $1"; }
 # "skip" notes the deliberate omission and passes.
 run_cmd() { # $1=step name, $2=command string
   step "$1"
+  run_body "$1" "$2"
+}
+
+run_body() { # $1=step name, $2=command string; after the step's banner
   if [ -z "$2" ]; then
     echo "gate step '$1' is not configured. Fill its *_CMD variable in scripts/gate.sh."
     fail=1
@@ -69,12 +73,36 @@ run_typecheck() { run_cmd "typecheck" "$TYPECHECK_CMD"; }
 run_guards()    { run_cmd "guards"    "$GUARDS_CMD"; }
 run_deps()      { run_cmd "deps"      "$DEPS_CMD"; }
 run_test_fast() { run_cmd "test-fast" "$TEST_FAST_CMD"; }
-run_test_full() { run_cmd "test-full" "$TEST_FULL_CMD"; }
+# The SSH acceptance criteria (crates/cairn-git/tests/fetch.rs) run against an
+# unprivileged sshd the fixture starts; where none can be found they skip, and
+# cargo hides a passing test's stderr, so the skip would read `ok`. Where the
+# server is here it is REQUIRED, so a broken fixture is red; where it is not,
+# the gate says so once instead of staying silent. CI installs the server and
+# requires it unconditionally (.github/workflows/ci.yml). The fixture looks on
+# PATH and then in the sbin directories a non-root PATH commonly lacks; the guard
+# the_ssh_criteria_are_required_wherever_they_can_run pins that the two agree,
+# that this runs under test-full, and that CI requires the fixture outright.
+SSH_FIXTURE_NOTE=""
+require_ssh_fixture_where_possible() {
+  if command -v sshd >/dev/null 2>&1 || [ -x /usr/sbin/sshd ] || [ -x /usr/local/sbin/sshd ]; then
+    export CAIRN_REQUIRE_SSH_FIXTURE=1
+  else
+    SSH_FIXTURE_NOTE="the ssh acceptance criteria in crates/cairn-git/tests/fetch.rs SKIPPED here: no sshd (install openssh-server to run them; CI requires them)"
+    echo "gate: $SSH_FIXTURE_NOTE"
+  fi
+}
+
+run_test_full() {
+  step "test-full"
+  require_ssh_fixture_where_possible
+  run_body "test-full" "$TEST_FULL_CMD"
+}
 run_test_doc()  { run_cmd "test-doc"  "$TEST_DOC_CMD"; }
 
 finish() {
   echo
-  if [ "$fail" -eq 0 ]; then echo "gate: PASS"; else echo "gate: FAIL"; fi
+  # A cap on coverage is restated where the verdict is read, not only where it happened.
+  if [ "$fail" -eq 0 ]; then echo "gate: PASS${SSH_FIXTURE_NOTE:+ ($SSH_FIXTURE_NOTE)}"; else echo "gate: FAIL"; fi
   exit "$fail"
 }
 

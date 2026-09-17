@@ -335,10 +335,18 @@ the built helper. The tests are the criteria:
 - **R4.3** — `cancelling_a_fetch_that_is_waiting_on_a_prompt_kills_git_and_leaves_nothing_behind`.
 
 The ssh cases skip where `sshd` cannot run, with the reason on stderr —
-which `cargo test` hides for a passing test, so under the gate a skip reads
-`ok`. Where the fixture is REQUIRED, `CAIRN_REQUIRE_SSH_FIXTURE` set in the
-environment turns the skip into a failure; CI does not set it yet, and
-whether it should provision `sshd` is issue #20.
+which `cargo test` hides for a passing test, so a skip would read `ok`.
+`CAIRN_REQUIRE_SSH_FIXTURE` set in the environment turns the skip into a
+failure, and it is set where the criteria must decide: CI installs
+`openssh-server` and sets it unconditionally (`.github/workflows/ci.yml`),
+and `scripts/gate.sh`'s `test-full` step sets it wherever an `sshd` can be
+found (on `PATH`, `/usr/sbin` or `/usr/local/sbin` — the fixture looks in the
+same places) and otherwise says that the criteria skipped here, under the
+step and again on the `gate: PASS` line (issue #20). That CI sets it, that
+the gate's step probes, and that the two look in the same directories is
+pinned by `the_ssh_criteria_are_required_wherever_they_can_run` in
+`crates/cairn-guards/tests/invariants.rs`. The fixture needs no privilege and no system service: it starts
+its own `sshd` on a loopback port with keys it generates, and kills it after.
 
 ## Building the helper
 

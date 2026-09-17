@@ -22,6 +22,11 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  # The SSH acceptance criteria (crates/cairn-git/tests/fetch.rs, against the
+  # sshd fixture in tests/remotes/ssh.rs) skip by name where sshd cannot run,
+  # and a passing test's stderr is hidden, so a skip would read `ok`. Here the
+  # server is installed below and the fixture is REQUIRED: a skip is a red test.
+  CAIRN_REQUIRE_SSH_FIXTURE: 1
 
 jobs:
   gate:
@@ -36,14 +41,18 @@ jobs:
 
       # Freya links against the system graphics and windowing stack. These are
       # the Linux build inputs; a missing one shows up as a linker error deep in
-      # a dependency, so install them before the toolchain step.
+      # a dependency, so install them before the toolchain step. openssh-server
+      # is the `sshd` the SSH fixture starts unprivileged on a loopback port
+      # (CAIRN_REQUIRE_SSH_FIXTURE above), and openssh-client its `ssh`,
+      # `ssh-keygen`, `ssh-agent` and `ssh-add`.
       - name: Install Linux build inputs
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             build-essential cmake pkg-config \
             libgtk-3-dev libxdo-dev libssl-dev \
-            libglib2.0-dev libwayland-dev libxkbcommon-dev
+            libglib2.0-dev libwayland-dev libxkbcommon-dev \
+            openssh-server openssh-client
 
       - name: Set up toolchain
         id: toolchain

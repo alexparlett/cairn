@@ -15,6 +15,9 @@ use std::time::{Duration, Instant};
 
 use crate::fixtures::Fixture;
 
+/// Where `sshd` is looked for after `PATH`; `scripts/gate.sh` checks the same.
+const SBIN: [&str; 2] = ["/usr/sbin", "/usr/local/sbin"];
+
 /// Why the fixture could not be built here; printed, never swallowed.
 #[derive(Debug)]
 pub struct Unavailable(pub String);
@@ -43,9 +46,18 @@ impl SshRemote {
                 return Err(Unavailable(format!("{program} is not on PATH")));
             }
         }
-        // sshd refuses to run unless invoked by its absolute path.
-        let Some(sshd) = on_path("sshd") else {
-            return Err(Unavailable("sshd is not on PATH".to_owned()));
+        // sshd refuses to run unless invoked by its absolute path; and it lives in an
+        // sbin directory, which a non-root PATH commonly lacks (Debian's does not carry
+        // /usr/sbin), so those are tried after PATH.
+        let Some(sshd) = on_path("sshd").or_else(|| {
+            SBIN.iter()
+                .map(|dir| Path::new(dir).join("sshd"))
+                .find(|candidate| candidate.is_file())
+        }) else {
+            return Err(Unavailable(format!(
+                "sshd is not on PATH or in {}",
+                SBIN.join(", ")
+            )));
         };
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let unique = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -171,9 +183,11 @@ impl SshRemote {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        Err(Unavailable(
-            "sshd did not start listening within 10 seconds".to_owned(),
-        ))
+        // Read now: the root, log included, goes with this fixture.
+        let log = std::fs::read_to_string(self.root.join("sshd.log")).unwrap_or_default();
+        Err(Unavailable(format!(
+            "sshd did not start listening within 10 seconds: {log}"
+        )))
     }
 
     /// An empty `HOME` for git to run with: nothing of the machine's in it.

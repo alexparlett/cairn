@@ -1,0 +1,21 @@
+[package]
+name = "cairn-askpass"
+description = "Cairn's askpass helper: the process git runs to ask the user for a secret, and the channel it asks over."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# Cairn ships as an application, not as crates. Nothing here is published, which
+# is also what lets the internal path dependencies carry no version requirement.
+publish = false
+
+# The binary is what `GIT_ASKPASS` and `SSH_ASKPASS` name; the library is the
+# channel's other end, which the application links. Every crate below runs in a
+# process that holds a plaintext secret: keep this list as short as it is.
+[dependencies]
+cairn-model.workspace = true
+zeroize.workspace = true
+
+[lints]
+workspace = true

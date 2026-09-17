@@ -20,6 +20,8 @@ const DEPENDENCY_ALLOWLIST: &[(&str, &[&str])] = &[
         &["cairn-git", "cairn-model", "cairn-ui", "freya"],
     ),
     ("cairn-guards", &["toml"]),
+    // Every crate here runs in a process holding a plaintext secret; keep it this short.
+    ("cairn-askpass", &["cairn-model", "zeroize"]),
 ];
 
 /// What a crate may take as a dev-dependency beyond its [`DEPENDENCY_ALLOWLIST`] row.
@@ -37,6 +39,19 @@ const FORBIDDEN_IDENTS: &[(&str, &[&str])] = &[
     ),
     ("crates/cairn-ui", &["gix", "cairn_git"]),
     ("crates/cairn-git", &["freya", "dioxus", "cairn_ui"]),
+    // The helper holds a plaintext secret: no engine, no toolkit, and no logging framework.
+    (
+        "crates/cairn-askpass",
+        &[
+            "gix",
+            "freya",
+            "dioxus",
+            "cairn_git",
+            "cairn_ui",
+            "tracing",
+            "log",
+        ],
+    ),
 ];
 
 /// The product crates: the guard suite's own fixtures contain the spellings they forbid.
@@ -45,6 +60,7 @@ const PRODUCT_SOURCE_DIRS: &[&str] = &[
     "crates/cairn-git/src",
     "crates/cairn-ui/src",
     "crates/cairn-app/src",
+    "crates/cairn-askpass/src",
 ];
 
 const RENDER_SOURCE_DIRS: &[&str] = &["crates/cairn-ui/src", "crates/cairn-app/src"];

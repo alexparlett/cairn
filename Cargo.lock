@@ -728,6 +728,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cairn-askpass"
+version = "0.1.0"
+dependencies = [
+ "cairn-model",
+ "zeroize",
+]
+
+[[package]]
 name = "cairn-git"
 version = "0.1.0"
 dependencies = [

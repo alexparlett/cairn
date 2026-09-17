@@ -321,6 +321,16 @@ fn every_rule_fires_through_the_prefilter_committed_or_not() {
             "only crates/cairn-app/src/worker may reach the git engine",
         ),
         (
+            "crates/cairn-askpass/src/leak.rs",
+            "use tracing::info;\n",
+            "cairn-askpass holds a plaintext secret",
+        ),
+        (
+            "crates/cairn-askpass/src/reach.rs",
+            "let repo = gix::open(p)?;\n",
+            "cairn-askpass holds a plaintext secret",
+        ),
+        (
             "crates/cairn-app/src/worker/draw.rs",
             "use freya::prelude::*;\n",
             "the worker module runs off the UI thread",

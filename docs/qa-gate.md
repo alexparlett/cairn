@@ -86,7 +86,8 @@ reason no longer holds is a finding), and is the merge bar before the packet PR.
 
 ## Enforcement-layer parity
 
-`.claude/hooks/qa-stop.sh` restates the crate-layering seal, and the half of the
+`.claude/hooks/qa-stop.sh` restates the crate-layering seal (including the
+`cairn-askpass` row, which also forbids a logging crate), and the half of the
 worker partition that a line scan can express (nothing outside
 `crates/cairn-app/src/worker/` names `gix` or `cairn_git`), both of which
 `crates/cairn-guards/tests/invariants.rs` owns. The guard suite is the authority;

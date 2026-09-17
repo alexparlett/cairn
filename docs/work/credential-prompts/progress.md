@@ -3,6 +3,86 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-17 — phase 03 QA adjudicated and fixed
+
+Reviewers spawned fresh over `b48b5a5...HEAD` (packet context `main...HEAD`):
+`qa-checklist`, `responsiveness-reviewer`, `destructive-ops-reviewer`,
+`test-coverage-auditor`, and `gate-integrity-reviewer` (the diff touches the
+guard rosters); each ran twice because the first set were dispatched in the
+background and their reports were thought lost — both sets arrived and were
+merged. All 43 raw findings went to a fresh `qa-confirm`: 33 confirmed, 6
+dismissed, 2 escalated, 1 needing a display to probe.
+
+Confirmed and fixed, in focused commits:
+
+- `fix(guards)`: `code_only` opened a char literal on ANY apostrophe, so a
+  `&'static str` followed by a string containing `'` and `//` blanked the
+  rest of the file for every matcher — `window.rs` was unseen from its first
+  prompt fixture on (CRITICAL; reproduced by the reviewer with `.lock()` and a
+  `Reply`-holding struct appended there passing). Fixed with the lifetime
+  logic `code_without_strings` already had, plus a self-test; escaped
+  newlines in strings keep the line count. `cairn_askpass` joins the
+  render-path seal (guard roster, hook, CLAUDE.md) since `accept` blocks.
+- `fix(git)`: `reap` checked the cancelled flag before the exit status, so a
+  cancel racing a clean exit reported `GitCancelled` and hid moved refs; the
+  test that pinned it asserted the wrong outcome and now observes a zombie
+  before killing. The kill and fetch docs no longer claim git cleans its
+  locks after `SIGKILL`, nor that a fetch is non-destructive under every
+  configuration. `Repository::remotes` cannot fail and leaves an embedded
+  password out (`Error::Remotes` was never constructed; deleted);
+  `ref_tips` added; `LC_CTYPE` joins the locale roster; the drain fix got a
+  deterministic test (fails 3 of 3 without the drain); the `/proc` scan a
+  positive control; `unknown_tokens() == 0` assertions that could not fail
+  were removed; the ssh skips fail under `CAIRN_REQUIRE_SSH_FIXTURE` and use
+  `eprintln!` like their siblings.
+- `fix(app)`: `refreshed` was always true (every fetch cleared the rows and
+  lost the reader's place) and only on success (a failed or killed fetch that
+  moved refs left the graph stale) — now the operations thread compares ref
+  tips before and after, on every outcome. `FetchStarted` was sent before the
+  kill handle existed (a cancel in that window was a no-op); a cancel queued
+  behind page walks and a second press queued an uncancellable fetch —
+  `FetchControl` arms one fetch at a time, keeps an early cancel, and the
+  handle cancels directly; the button is gone from the press itself. The
+  token is retired before the outcome (a helper orphaned by a killed git is
+  refused, not accepted after `withdraw` ran); an acceptor that could not
+  start is a named reason; `FetchProgress` no longer clones the remote per
+  line; the failure banner is one line. Applying an update moved from
+  `main.rs` to `session.rs` with tests (withdraw, reload, refuse-when-idle),
+  and the task holds the answering end weakly. The first shape of that
+  module held `&Weak<dyn Fn(Reply)>` in a struct and the credential guard
+  refused it — correctly — so it became two plain callbacks.
+- `test(app,ui)`: the boundary B3 test compared the header to a prefix
+  (an empty password passed); it compares to the exact Basic credential.
+  Dialog tests for an unrecognised prompt and a press outside.
+- Docs: CLAUDE.md's threads and epoch sentences, its `TEST_ONLY_ALLOWLIST`
+  and alias sentences, a `cairn-askpass` repo-map row; `history-graph.md`'s
+  "every submit supersedes"; `credentials.md`'s helper-build and ssh-skip
+  claims and the changed shapes; state.md's premature QA row and stale
+  `Invalidated` row.
+
+Dismissed, with reasons (from `qa-confirm`):
+
+- Startup does `git --version` and a socket bind before the first page —
+  milliseconds, not repository-sized.
+- `reap` held the child lock across `wait()` — was a bounded note on the
+  repository thread; moot now that the wait polls `try_wait` and the kill
+  only tries for the lock.
+- `fetch_tests.rs` is held to production guard rules though it is a test
+  module — stricter than documented is not a gap; the asymmetry with
+  `tests/remotes` (out of the product `src/` scope by design) is now stated
+  in state.md.
+- A daemonising grandchild holding stderr — probed, git's own daemons and
+  ssh's masters redirect; not reproducible.
+- `Input::on_submit`'s toolkit copy of the typed text — the argument is
+  discarded; the answer is the component's own buffer, moved.
+
+Escalated to the user (batched in the phase report): `SIGTERM` before
+`SIGKILL` needs a signalling dependency; whether a fetch under a
+local-branch refspec or prune configuration should take `Confirmed`; whether
+CI should provision `sshd` and set `CAIRN_REQUIRE_SSH_FIXTURE`. Needs a
+display to probe: whether closing the window with a dialog up leaves the
+socket directory behind (recorded as a known limit meanwhile).
+
 ## 2026-09-17 — phase 03: fetch end to end landed
 
 Packet mode, committed directly to `feature/credential-prompts` in six

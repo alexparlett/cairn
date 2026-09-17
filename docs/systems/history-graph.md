@@ -239,8 +239,8 @@ FILE, and it is a guard, not a convention — see below.
   finished fetch makes the window ask for the history again from `HEAD`. The
   as-built description is `docs/systems/credentials.md`.
 
-Every `submit` supersedes, and a superseded page delivers nothing — so the
-caller must debounce. `Progress::wants_more()`
+Every `submit` of a QUERY supersedes (an operation carries no epoch), and a
+superseded page delivers nothing — so the caller must debounce. `Progress::wants_more()`
 (`crates/cairn-app/src/history_state.rs`) is that debounce: it is false while a
 page is in flight, while the history is complete, and once the update stream has
 ended (no worker is left to answer).

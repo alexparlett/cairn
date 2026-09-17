@@ -154,11 +154,22 @@ never enters `cairn-git` and never enters application state.
   reaped, and the reader ends when the last child lets the pipe go. Pinned by
   the stub-git tests `a_streamed_invocation_hands_stderr_on_a_redraw_at_a_time`
   and `a_kill_from_another_thread_ends_a_hung_invocation_and_reaps_it`, and
-  end to end by `crates/cairn-git/tests/fetch.rs` (below).
+  end to end by `crates/cairn-git/tests/fetch.rs` (below). A clean exit is
+  reported as the success it was even when a cancel raced it
+  (`a_kill_after_a_clean_exit_reports_the_success`); the kill is `SIGKILL`,
+  which git cannot clean its lock files up after — see the module docs for
+  what a cancel mid ref-update can leave, and the phase 03 report for the
+  `SIGTERM` question. What "not destructive" assumes (tracking-only refspecs,
+  reflogs on) is stated in the module docs too: a `+refs/heads/*:refs/heads/*`
+  refspec, a `--mirror` clone or `fetch.prune` make a plain fetch move or
+  delete local refs, and that policy question is escalated, not decided.
 - **`Repository::remotes`** (`crates/cairn-git/src/remotes.rs`). The
   configured remotes as `cairn_model::RemoteSummary`, the default first, read
-  through gitoxide; what the window's fetch button names
-  (`this_checkout_lists_its_origin_with_a_url`).
+  through gitoxide, a password embedded in a URL left out and a remote without
+  a URL listed without one; what the window's fetch button names
+  (`the_default_is_first_a_password_is_left_out_and_a_missing_url_is_none`).
+  **`Repository::ref_tips`** (`src/refs.rs`) is every ref's id as the handle
+  sees it now, compared before and after a fetch.
 - **The dialog** (`crates/cairn-ui/src/credential_prompt.rs`,
   `CredentialPrompt`). Names the remote the running operation was asked for,
   states what is wanted from where, and shows the prompt exactly as git or ssh
@@ -190,10 +201,17 @@ never enters `cairn-git` and never enters application state.
   derives `Debug`), handing the secret to `Prompt::answer` by reference and
   dropping it. `operations.rs`: the operations thread runs the fetch with a
   token from `Channel::begin`, forwards every progress line as
-  `Update::FetchProgress`, and ends with `FetchFinished { refreshed }`,
-  `FetchCancelled` or `FetchFailed`; `Request::CancelFetch` reaches its
-  `FetchCancel` through the repository thread. Operations carry no epoch, so a
-  scroll cannot supersede a fetch nor a fetch a scroll. On shutdown the
+  `Update::FetchProgress`, and ends with `FetchFinished`, `FetchCancelled` or
+  `FetchFailed`, each carrying `refreshed` — whether a ref moved, told by
+  comparing `ref_tips` before and after, on every outcome, since a fetch that
+  failed or was killed may have moved some. `Request::CancelFetch` never
+  queues: the handle reaches the fetch's `FetchControl` directly (one fetch
+  at a time; a cancel that lands before git runs is kept and applied the
+  moment it does; `FetchStarted` goes out only once the kill handle is
+  installed). Operations carry no epoch, so a scroll cannot supersede a fetch
+  nor a fetch a scroll. The token is retired before the outcome goes out, so
+  a helper orphaned by a killed git is refused at the channel rather than
+  accepted afterwards. On shutdown the
   repository thread kills any fetch, closes the operations queue and wakes the
   acceptor by connecting to its own socket (the one thing that returns a
   blocking `accept`), on a clean exit and on unwinding alike; a prompt still
@@ -208,18 +226,29 @@ never enters `cairn-git` and never enters application state.
   `cancelling_a_fetch_that_waits_on_a_prompt_ends_it_as_cancelled`,
   `letting_go_of_the_repository_ends_the_acceptor_and_removes_its_socket` and
   `a_prompt_waiting_at_shutdown_is_refused`.
-- **The window** (`crates/cairn-app/src/window.rs`, `main.rs`,
-  `fetch_state.rs`). A "Fetch <remote>" button for the default remote, which
-  becomes "Cancel" while a fetch runs; a line under the title bar with git's
-  latest progress or the outcome; and the dialog whenever `Update::Prompt`
-  has set a `PromptView`, answered through the worker's `Replier` callback
-  and taken down. A finished fetch that moved refs clears the rows, resets the
-  progress and asks for the history from `HEAD` again; a fetch ending with a
-  dialog still up refuses that prompt, which releases the helper. Pinned by
+- **The window** (`crates/cairn-app/src/window.rs`, `session.rs`, `main.rs`,
+  `fetch_state.rs`). A "Fetch <remote>" button for the default remote, gone
+  from the press itself (`FetchStatus::Starting`) and "Cancel" until the fetch
+  ends; a one-line banner with git's latest progress or the outcome (a
+  failure's first line); and the dialog whenever a `PromptView` is set,
+  answered through the worker's `Replier` callback and taken down.
+  `session::apply` is where an `Update` becomes view state: a fetch that moved
+  a ref clears the rows, resets the progress and asks for the history from
+  `HEAD` again (one that moved nothing leaves the reader's place alone); a
+  fetch ending with a dialog still up refuses that prompt, which releases the
+  helper; a prompt arriving with no fetch in flight is refused rather than
+  shown. The update task holds the answering end weakly, so the window's last
+  reference is what lets the acceptor go. Pinned by
   `a_prompt_draws_the_dialog_and_its_answer_leaves_as_a_secret_for_that_prompt`,
   `cancelling_the_dialog_refuses_that_prompt`,
-  `the_fetch_button_fetches_the_default_remote_and_becomes_cancel_while_running`
-  and `a_failed_fetch_is_said_in_the_window_and_the_button_comes_back`.
+  `the_fetch_button_fetches_the_default_remote_and_becomes_cancel_while_running`,
+  `a_failed_fetch_is_said_in_the_window_and_the_button_comes_back`, and in
+  `session.rs`
+  `a_fetch_that_moved_refs_clears_the_rows_and_asks_for_the_history_again`,
+  `a_fetch_that_moved_nothing_leaves_the_rows_alone`,
+  `a_cancelled_or_failed_fetch_that_moved_refs_reloads_too`,
+  `a_fetch_ending_takes_the_dialog_down_and_refuses_its_prompt` and
+  `a_prompt_with_no_fetch_in_flight_is_refused_not_shown`.
 
 ## End to end, against real remotes
 
@@ -251,8 +280,11 @@ the built helper. The tests are the criteria:
   read, no secret in it, and no process left pointed at the socket.
 - **R4.3** — `cancelling_a_fetch_that_is_waiting_on_a_prompt_kills_git_and_leaves_nothing_behind`.
 
-The ssh cases skip by name, on stderr, where `sshd` cannot run; they never
-pass silently.
+The ssh cases skip where `sshd` cannot run, with the reason on stderr —
+which `cargo test` hides for a passing test, so under the gate a skip reads
+`ok`. Where the fixture is REQUIRED, `CAIRN_REQUIRE_SSH_FIXTURE` set in the
+environment turns the skip into a failure; CI does not set it yet, and
+whether it should provision `sshd` is the user's decision.
 
 ## Building the helper
 
@@ -263,9 +295,11 @@ The worker looks for `cairn-askpass` beside its own executable
 `cargo build -p cairn-askpass`) puts it. Without it, the application still
 opens and fetches wherever a credential helper or agent answers, and a fetch
 that needed a prompt fails with a message naming the build command. The gate
-and `cargo test --workspace` build it before any test runs; the tests that
-need it fail with the same instruction when it is absent rather than building
-it themselves, since this crate's tests may not run a `Command`.
+and `cargo test --workspace` build it before any test runs. `cairn-app`'s
+tests fail with the same instruction when it is absent rather than building
+it, since that crate's tests may not run a `Command`; `cairn-git`'s fetch
+tests build it themselves (`tests/remotes/askpass.rs`, `--release` when the
+profile directory is).
 
 ## The invariant this leaves behind
 
@@ -298,8 +332,15 @@ Known limits, described rather than pinned:
 - `$XDG_RUNTIME_DIR` is required, so a session without one (macOS today) gets
   no channel and named failures rather than a fallback directory, a policy for
   the user to set.
-- A cancel kills `git` and returns; its children (`ssh`, the helper) end on
-  their own when the dialog's refusal releases them or their pipes break. The
-  runner's reader thread lives until then.
+- A cancel kills `git` (`SIGKILL`) and returns; its children (`ssh`, the
+  helper) end on their own when the dialog's refusal releases them or their
+  pipes break. The runner's reader thread lives until then. A kill that lands
+  while git is updating refs can leave a `*.lock` git will not clean up, and
+  later fetches of that ref fail until it is removed by hand; `SIGTERM` first
+  needs a dependency, which is the user's call.
+- On process exit (the window closing) the socket directory under
+  `$XDG_RUNTIME_DIR` is left behind if the threads did not get to unwind: a
+  runtime directory is a tmpfs cleared at logout, and the names are per pid
+  and random, so nothing collides. Not probed with a display this phase.
 - A stalled network is only interrupted by the cancel; nothing times a fetch
   out.

@@ -66,19 +66,22 @@ contract.
 | `ops::Output` (crate-private) | `cairn-git` | What a successful invocation wrote: `stdout()` bytes, `stdout_text()`, `stderr()`, and `records()` for `-z` output. |
 | `ops::GitBinary` | `cairn-git` | A found and version-checked `git`. `discover()` reads this process's PATH; `discover_with(environment)` searches the environment's own PATH entry (tests and the worker use it). `command()` (crate-private) starts an invocation. |
 | `ops::GitVersion` | `cairn-git` | `major.minor.patch`, `parse()` over `git --version` output, `MINIMUM` = 2.30.0 (L9). |
-| `ops::Invalidated` | `cairn-git` | What a mutation left stale in a gix handle (`refs`, `index`, `objects`, `working_tree`); every `Performed` carries one. The contract for each flag is in the `ops` module docs, and names the worker in `cairn-app` as where it is to be honoured — nothing there reads it yet, because no operation reaches the worker yet; fetch (phase 03) is the first. |
+| `ops::Invalidated` | `cairn-git` | What a mutation left stale in a gix handle (`refs`, `index`, `objects`, `working_tree`); every `Performed` carries one. The contract for each flag is in the `ops` module docs. Fetch declares `refs` + `objects`; the operations thread compares `Repository::ref_tips` before and after and tells the window `refreshed`, on every outcome, and the window re-asks for the history. |
 | `ops::Performed` | `cairn-git` | The record of a mutation: private fields, read through `description()`, `acknowledged()`, `invalidated()`; built by `Performed::new` or, for a destructive one, `Performed::destructive(.., &Confirmed, ..)`, so an acknowledged prompt can only come from a token. |
 | `Error::{GitNotFound, GitTooOld, GitVersionUnreadable, GitNotStarted, GitFailed}` | `cairn-git` | The backend's failures, each naming what the caller must handle; the first three name the required version in their message. |
-| `Error::{GitCancelled, Remotes}` | `cairn-git` | Phase 03: a fetch the user cancelled (killed, reaped, not a failure), and the remotes being unreadable. |
+| `Error::{GitCancelled, Refs}` | `cairn-git` | Phase 03: a fetch the user cancelled (killed, reaped, not a failure; a clean exit is never reported as cancelled, whatever the flag says), and the refs being unreadable for `ref_tips`. |
 | `ops::fetch(&GitBinary, &Repository, remote, Option<&AskpassToken>) -> FetchInProgress` | `cairn-git` | Starts `git fetch --progress --end-of-options <remote>`. Not destructive; no `Confirmed`, by design. `finish(progress) -> Performed` streams each progress redraw and declares `refs` + `objects` invalid; `canceller() -> FetchCancel` (`Send`, `Clone`) kills git from any thread, after which `finish` is `GitCancelled`. |
 | `GitCommand::stream() -> Running` (crate-private) | `cairn-git` | The runner's second form: stdout discarded, stderr read on a thread of its own so a killed git's lingering children cannot hold the wait; `Running::finish`, `Running::killer() -> ProcessKill`. |
-| `Repository::remotes() -> Vec<RemoteSummary>` | `cairn-git` | The configured remotes through gitoxide, default first; a remote with an unparsable URL is listed without one. |
+| `Repository::remotes() -> Vec<RemoteSummary>` | `cairn-git` | The configured remotes through gitoxide, default first; a remote with a missing or unparsable URL is listed without one; a password embedded in a URL is left out. Cannot fail. |
+| `Repository::ref_tips() -> Result<BTreeMap<RefName, Oid>, Error>` | `cairn-git` | Every ref and its id, as the handle sees them now; what the worker compares around a fetch. |
 | `RemoteSummary`, `PromptKind`, `prompt_subject` | `cairn-model` | A remote's name and fetch URL; what a prompt asks for (`Username`, `Password`, `Passphrase`, `Confirmation`, `Other`, from git's and OpenSSH's spellings; `ACCEPTED` = `yes`); the first quoted span of a prompt. |
 | `CredentialPrompt` | `cairn-ui` | The dialog: `new(remote, text)`, `on_submit(EventHandler<String>)` (the input's buffer, moved), `on_cancel`. Masks all but a username; a confirmation gets buttons, no field. |
 | `Request::{ListRemotes, Fetch { remote }, CancelFetch}`, `Request::is_query` | `cairn-app` | Operations carry no epoch (`submit` bumps only for a query). |
-| `Update::{Remotes, FetchStarted, FetchProgress, FetchFinished { refreshed }, FetchCancelled, FetchFailed, Prompt { id, text }}` | `cairn-app` | All epochless. `refreshed` is `Invalidated::refs`: the window clears and re-asks for the history. |
+| `Update::{Remotes, FetchStarted, FetchProgress { line }, FetchFinished/FetchCancelled/FetchFailed { refreshed, .. }, Prompt { id, text }}` | `cairn-app` | All epochless. `refreshed` on every ending says a ref actually moved (tips compared before and after): the window clears and re-asks for the history only then. `FetchStarted` is sent once the kill handle is installed. |
 | `worker::Reply::{Provide { prompt, secret }, Refuse { prompt }}`, `worker::PromptId`, `Replier = Rc<dyn Fn(Reply)>` | `cairn-app` | The window's answer to a prompt, over its own channel; `Reply` derives nothing and is never a struct field. Named `Reply` because the guard reads spellings and the channel's `Error` has a variant `Answer`. |
-| `worker::open -> (RepositoryHandle, Updates, Replier)` | `cairn-app` | Now three threads per repository (`cairn-repository`, `cairn-operations`, `cairn-askpass`), each with its own sender; the stream ends when all have gone. `open_with(path, Startup)` is the test seam. |
+| `worker::open -> (RepositoryHandle, Updates, Replier)` | `cairn-app` | Now three threads per repository (`cairn-repository`, `cairn-operations`, `cairn-askpass`), each with its own sender; the stream ends when all have gone. `open_with(path, Startup)` is the test seam. `submit(CancelFetch)` reaches the fetch directly through `FetchControl` (arm/cancel/install: one fetch at a time, a cancel before git runs is kept), never the jobs queue. |
+| `session::apply(update, View, &Worker { submit, refuse })` | `cairn-app` | The one place an `Update` becomes view state, tested through the headless runner: a fetch ending takes the dialog down and refuses its prompt; `refreshed` clears and re-asks; a prompt with no fetch in flight is refused, not shown. `main.rs` holds the answering end weakly for it. |
+| `FetchStatus::Starting` | `cairn-app` | Set by the button press itself, so a second press has no button; `Running` follows `FetchStarted`. |
 | `worker::startup::{Startup, Backend}` | `cairn-app` | On the repository thread, before anything: `Channel::open($XDG_RUNTIME_DIR)`, the environment around its socket, `GitBinary::discover_with`. `Backend::prompting: Result<(), String>` names why no prompt can be answered (no runtime dir, helper not built) — fetch still runs; a failure appends the reason. |
 | `fetch_state::{FetchStatus, PromptView}`, `window::View` | `cairn-app` | The view state the window is drawn from; `status_text::fetch_line` renders the fetch's sentence. |
 | `worker::open` / `open_with` (startup check) | `cairn-app` | The worker thread runs `GitBinary::discover_with` before opening the repository and reports a refusal as `Update::Failed`, so the window shows the required version; `open_with(path, GitEnvironment)` is the seam a test hands an environment through, since nothing may set this process's variables. |
@@ -107,7 +110,7 @@ self-test `the_process_environment_matcher_catches_the_shapes_it_claims`
 | --- | --- | --- | --- |
 | 01 git backend | landed | `scripts/gate.sh` PASS (full) | run; see progress.md for the adjudication |
 | 02 askpass helper | landed | `scripts/gate.sh` PASS (full, including the `test-doc` step) | run and fixed; see progress.md for the adjudication |
-| 03 fetch end to end | landed | `scripts/gate.sh` PASS (full) | run and fixed; see progress.md for the adjudication |
+| 03 fetch end to end | landed | `scripts/gate.sh` PASS (full) | run, adjudicated (33 confirmed, 6 dismissed, 2 escalated) and fixed; see progress.md |
 | 04 QA | not started | — | — |
 
 ## Environment notes
@@ -160,8 +163,16 @@ self-test `the_process_environment_matcher_catches_the_shapes_it_claims`
   the ssh fixture hands its configuration over through `core.sshCommand`.
 - The helper binary is found at `target/<profile>/cairn-askpass`, two
   directories up from a test executable; `cargo test --workspace` and the
-  gate build it before any test runs, `cargo test -p cairn-app` alone does
-  not (the test names the build command).
+  gate build it before any test runs. `cargo test -p cairn-app` alone does
+  not (its test names the build command); `cargo test -p cairn-git` builds
+  it itself (`tests/remotes/askpass.rs`, with `--release` when the profile is).
+- The ssh fixture tests skip (a line on stderr, hidden by cargo's capture on a
+  pass) where `sshd` cannot run, unless `CAIRN_REQUIRE_SSH_FIXTURE` is set,
+  when they fail instead. CI does not set it yet — whether it should provision
+  `sshd` is the user's (phase 03 report).
+- The credential guard reads spellings: a struct field naming a type that
+  names `Secret` is a holder wherever it is — `session::Worker` learned this
+  with a `&Weak<dyn Fn(Reply)>` field and became two plain callbacks.
 - `std::env::set_var` is `unsafe` in the 2024 edition and `unsafe` is forbidden,
   so nothing can set a variable in-process for a test: `GitEnvironment::new`
   takes a lookup closure instead, and that is also why there is one constructor

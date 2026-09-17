@@ -30,6 +30,7 @@ as if it exists.
 | `docs/` | `qa-gate.md` (QA contract), `design/` intent, `prd/` per-packet specs, `systems/` as-built, `work/` in-flight dirs, `research/` evidence (deferred work goes to GitHub issues; `backlog/` is the no-remote fallback) — findings promote research → brainstorm → design/prd → systems (contract: `docs/CLAUDE.md`) |
 | `crates/cairn-model/` | The vocabulary crossing the seam: `Oid`, `RefName`, `CommitSummary`, the `Confirmed` token. Plain data, plus the pure layout algorithm that produces some of it (`LaneAssigner`), and `Secret`, the one type that holds a credential. Depends on nothing but `zeroize` (for that type) — not `gix`, not `freya`, not the other crates. |
 | `crates/cairn-git/` | The repository engine: gitoxide-backed reads, and under `src/ops/` every write, delegating to the `git` binary per design decision D1. Today `ops/` holds the subprocess backend — `GitBinary` (startup discovery and the 2.30 floor), `GitEnvironment` (the explicitly built environment, the only place a process is built), `Askpass` (where git and ssh are sent for a secret) and the crate-private runner, which streams and can kill a process — and `fetch`, the first verb (not destructive, so it takes no `Confirmed`), plus the confirmation-seal placeholder. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
+| `crates/cairn-askpass/` | The askpass helper binary `git` and `ssh` run to ask for a secret, and the library half — the `Channel` the application listens on. Links `cairn-model` and `zeroize` only: it runs in a process holding a plaintext secret. Never names the engine, the toolkit or a logging crate. |
 | `crates/cairn-ui/` | Freya components. Render `cairn-model` values, report intent through `EventHandler` props. Must never depend on `gix` or `cairn-git`, and must never touch the filesystem. |
 | `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. |
 | `crates/cairn-guards/` | Test-only. The deterministic enforcement twins for the Invariants below; nothing depends on it. |
@@ -120,13 +121,16 @@ empty `gix_hash::Kind` once already)**. Read the vendored source under
   force push or a hard reset without having put words in front of a human — and
   the operation log can quote them afterwards.
 - **The UI thread is never allowed to wait on a repository.** `cairn-git` is
-  synchronous and knows nothing about threads; `cairn-app` decides where the
-  blocking work runs and hands results back as values (decision D3: one
-  `cairn_git::SharedRepository` — gitoxide's `ThreadSafeRepository` — per
-  repository, a worker taking its thread-local handle once, every request
-  carrying an epoch so a superseded query is abandoned rather than rendered). The
-  epoch IS the cancel signal the engine polls, so superseding a query stops its
-  walk rather than discarding its answer. A repository is somebody's 10-year
+  synchronous at its boundary and decides nothing about where work runs (the
+  one thread it owns reads a subprocess's stderr pipe, inside the runner);
+  `cairn-app` decides where the blocking work runs and hands results back as
+  values (decision D3: one `cairn_git::SharedRepository` — gitoxide's
+  `ThreadSafeRepository` — per repository, a worker taking its thread-local
+  handle once, every QUERY carrying an epoch so a superseded query is abandoned
+  rather than rendered; an operation such as fetch carries none, so a scroll
+  and a fetch cannot supersede each other). The epoch IS the cancel signal the
+  engine polls, so superseding a query stops its walk rather than discarding
+  its answer; a fetch is cancelled by killing its process instead. A repository is somebody's 10-year
   monorepo: any design that assumes a query is fast is wrong.
 - **A scroll keeps its walk open.** gitoxide's walk cannot be resumed from a
   value, so a cursor resumes by replaying — which makes page *k* cost `k x limit`

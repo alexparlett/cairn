@@ -116,6 +116,16 @@ impl Component for CredentialPrompt {
                     .font_size(12.)
                     .color(secondary),
             );
+            // What accepting costs, which the question itself does not say: ssh writes
+            // the key to known_hosts and never asks about this host again, so a yes
+            // here is a standing trust decision rather than a one-time answer.
+            content = content.child(
+                label()
+                    .text(ACCEPTING_IS_PERMANENT.to_owned())
+                    .width(Size::fill())
+                    .font_size(12.)
+                    .color(secondary),
+            );
             buttons = buttons.child(
                 Button::new()
                     .filled()
@@ -168,6 +178,13 @@ impl Component for CredentialPrompt {
         self.key.clone().or(self.default_key())
     }
 }
+
+/// Said beside every host-key question, because the question is asked once and
+/// answered for good: ssh appends the key to `known_hosts` and consults it silently
+/// from then on. Stated here rather than left to the user to know.
+const ACCEPTING_IS_PERMANENT: &str =
+    "Accepting adds this key to your known hosts. ssh will trust it from now on \
+     without asking again.";
 
 /// The one-line statement of what is wanted and from where.
 fn asking(kind: PromptKind, text: &str) -> String {

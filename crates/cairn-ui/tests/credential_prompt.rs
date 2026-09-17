@@ -191,6 +191,13 @@ fn a_host_key_confirmation_has_no_text_field_and_is_answered_yes() {
         shown.iter().any(|l| l.contains("git.example.com")),
         "{shown:?}"
     );
+    // The consequence the question leaves out: ssh remembers the key for good.
+    assert!(
+        shown
+            .iter()
+            .any(|l| l.contains("known hosts") && l.contains("without asking again")),
+        "the dialog does not say that accepting is permanent: {shown:?}"
+    );
 
     // Typing lands nowhere: nothing can be submitted by Enter.
     test.write_text("no");

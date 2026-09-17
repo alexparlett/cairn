@@ -74,6 +74,56 @@ const PRODUCT_SOURCE_DIRS: &[&str] = &[
 
 const RENDER_SOURCE_DIRS: &[&str] = &["crates/cairn-ui/src", "crates/cairn-app/src"];
 
+/// The one crate deliberately off `PRODUCT_SOURCE_DIRS`: the guard suite's own fixtures
+/// are written out of the spellings the guards forbid, so scanning itself would fail it.
+const NOT_PRODUCT_SOURCE: &[&str] = &["cairn-guards"];
+
+/// Closes `PRODUCT_SOURCE_DIRS` against the workspace: a crate that ships source must be
+/// on it. Without this the roster is the one hand-maintained list in the suite that can
+/// shrink by omission — a crate added later is silently outside both
+/// `only_the_ops_module_mutates_a_repository` and
+/// `every_git_invocation_disables_the_terminal_prompt`, which is the direction nobody
+/// notices, since the guards go on passing. Modelled on
+/// `every_crate_that_renders_is_on_the_render_roster`, and bidirectional for the same
+/// reason: a row pointing at a crate that is gone is a rule nobody is keeping.
+#[test]
+fn every_product_crate_is_on_the_product_roster() {
+    let crates_dir = repo_root().join("crates");
+    let mut ships = BTreeSet::new();
+
+    let entries = std::fs::read_dir(&crates_dir)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", crates_dir.display()));
+    for entry in entries.filter_map(Result::ok) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if NOT_PRODUCT_SOURCE.contains(&name.as_str()) {
+            continue;
+        }
+        if !entry.path().join("Cargo.toml").is_file() || !entry.path().join("src").is_dir() {
+            continue;
+        }
+        ships.insert(format!("crates/{name}/src"));
+    }
+
+    assert!(
+        !ships.is_empty(),
+        "no crate under crates/ ships a src/, so this check compared nothing; the manifest          walk is looking in the wrong place."
+    );
+
+    for dir in &ships {
+        assert!(
+            PRODUCT_SOURCE_DIRS.contains(&dir.as_str()),
+            "`{dir}` is a product crate's source but is not in PRODUCT_SOURCE_DIRS, so nothing              checks that it keeps the mutation and terminal-prompt invariants: it could spawn              a `git` subprocess with an inherited environment and every guard would still              pass. Add the row, or name the crate in NOT_PRODUCT_SOURCE with the reason              (CLAUDE.md, Invariants)."
+        );
+    }
+
+    for dir in PRODUCT_SOURCE_DIRS {
+        assert!(
+            ships.contains(*dir),
+            "PRODUCT_SOURCE_DIRS names `{dir}`, which is not a product crate's source              directory any more. A roster row that points at nothing is a rule nobody is              keeping: remove it, or fix the path."
+        );
+    }
+}
+
 /// Where repository work runs, and so the only place waiting is allowed.
 const WORKER_DIR: &str = "crates/cairn-app/src/worker";
 
@@ -583,7 +633,6 @@ const PROCESS_ENVIRONMENT_TYPE: &str = "GitEnvironment";
 fn every_git_invocation_disables_the_terminal_prompt() {
     let environment_file = Path::new(PROCESS_ENVIRONMENT_FILE);
     let mut environment_source = None;
-    let mut literals_elsewhere = 0usize;
     let mut scanned = 0usize;
 
     for dir in PRODUCT_SOURCE_DIRS {
@@ -643,14 +692,12 @@ fn every_git_invocation_disables_the_terminal_prompt() {
                 path.display(),
                 hits[0]
             );
-            literals_elsewhere += hits.len();
         }
     }
     assert!(
         scanned > 0,
         "the terminal-prompt guard scanned nothing; did the crates move?"
     );
-    assert_eq!(literals_elsewhere, 0);
 
     let source = environment_source.unwrap_or_else(|| {
         panic!("{PROCESS_ENVIRONMENT_FILE} is gone; the environment it builds is an invariant")
@@ -799,7 +846,9 @@ fn the_process_environment_matcher_catches_the_shapes_it_claims() {
     assert_eq!(
         constructs_struct("let (a, b) = (Self { x }, Self { x });", "GitEnvironment").len(),
         2,
-        "the struct matcher counts lines, not literals"
+        "the struct matcher counts literals, not lines: two on one line must be two. The \
+         `== 1` count over the environment file depends on it, so a second GitEnvironment \
+         literal sharing a line with the first would otherwise be invisible."
     );
     for (shape, source) in [
         ("a declaration", "pub struct GitEnvironment {"),

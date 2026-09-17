@@ -419,6 +419,20 @@ mod tests {
         );
     }
 
+    /// GIT_ASKPASS names the helper installed beside this executable. The bare-name
+    /// fallback runs only when `current_exe` fails, which a test cannot make happen.
+    #[test]
+    fn the_helper_is_named_beside_this_executable() {
+        let askpass = askpass();
+        let this = std::env::current_exe().unwrap();
+        assert_eq!(askpass.program().parent(), this.parent());
+        assert_eq!(
+            askpass.program().file_name().and_then(|n| n.to_str()),
+            Some(cairn_model::HELPER_PROGRAM)
+        );
+        assert_eq!(askpass.socket(), None, "no channel is opened yet");
+    }
+
     /// `open` succeeds for a path with no repository above it.
     #[test]
     fn opening_returns_before_the_repository_is_found() {

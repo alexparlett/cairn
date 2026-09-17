@@ -2,12 +2,12 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phases 01 and 02 landed on `feature/credential-prompts`; phases 03-04
-not started.** The `git` subprocess backend, the askpass helper, its channel
-and the secret type exist and are tested against each other; every `git` Cairn
-starts is pointed at the helper. Nothing opens a channel yet and there is no
-dialog and no fetch: a prompt today fails closed. As-built description:
-`docs/systems/credentials.md`.
+**Status: phases 01, 02 and 03 landed on `feature/credential-prompts`; phase
+04 (QA) not started.** Fetch works end to end: the window's button, the
+operations thread, git's own progress, a cancel that kills git, the acceptor
+thread, the dialog, and the reply back to git — B3, B4 and B5 pinned over
+HTTP and SSH against real remotes. As-built description:
+`docs/systems/credentials.md`. Push is not built (L8).
 
 ## Locked decisions
 
@@ -28,7 +28,13 @@ L1-L11 in `brainstorm.md`; the design-level frame is D1 and D2 in
 
 ## Open questions
 
-O4 and O5 in `brainstorm.md`; O1-O3 were closed by L9-L11, and phase 01
+None. O4 and O5 were settled by test in phase 03 and recorded as addenda to
+the evidence record: a configured `credential.helper` answers before
+`GIT_ASKPASS` is consulted and the askpass fills only what it left (so L7
+holds as designed and the stopping rule did not trigger); `GIT_ASKPASS`
+outranks `core.askPass`; `SSH_ASKPASS_REQUIRE` is OpenSSH 8.4 and `force`
+routes passphrases and host-key confirmations to the helper whatever the
+terminal or `DISPLAY`. Below, as it stood before: O1-O3 were closed by L9-L11, and phase 01
 implemented O1's answer as `GitVersion::MINIMUM` (2.30.0), pinned by
 `crates/cairn-git/tests/git_binary.rs` (discovery, through the public API) and
 `ops/cli.rs`'s stub tests (what a found `git` is then handed). Phase 02
@@ -63,6 +69,18 @@ contract.
 | `ops::Invalidated` | `cairn-git` | What a mutation left stale in a gix handle (`refs`, `index`, `objects`, `working_tree`); every `Performed` carries one. The contract for each flag is in the `ops` module docs, and names the worker in `cairn-app` as where it is to be honoured — nothing there reads it yet, because no operation reaches the worker yet; fetch (phase 03) is the first. |
 | `ops::Performed` | `cairn-git` | The record of a mutation: private fields, read through `description()`, `acknowledged()`, `invalidated()`; built by `Performed::new` or, for a destructive one, `Performed::destructive(.., &Confirmed, ..)`, so an acknowledged prompt can only come from a token. |
 | `Error::{GitNotFound, GitTooOld, GitVersionUnreadable, GitNotStarted, GitFailed}` | `cairn-git` | The backend's failures, each naming what the caller must handle; the first three name the required version in their message. |
+| `Error::{GitCancelled, Remotes}` | `cairn-git` | Phase 03: a fetch the user cancelled (killed, reaped, not a failure), and the remotes being unreadable. |
+| `ops::fetch(&GitBinary, &Repository, remote, Option<&AskpassToken>) -> FetchInProgress` | `cairn-git` | Starts `git fetch --progress --end-of-options <remote>`. Not destructive; no `Confirmed`, by design. `finish(progress) -> Performed` streams each progress redraw and declares `refs` + `objects` invalid; `canceller() -> FetchCancel` (`Send`, `Clone`) kills git from any thread, after which `finish` is `GitCancelled`. |
+| `GitCommand::stream() -> Running` (crate-private) | `cairn-git` | The runner's second form: stdout discarded, stderr read on a thread of its own so a killed git's lingering children cannot hold the wait; `Running::finish`, `Running::killer() -> ProcessKill`. |
+| `Repository::remotes() -> Vec<RemoteSummary>` | `cairn-git` | The configured remotes through gitoxide, default first; a remote with an unparsable URL is listed without one. |
+| `RemoteSummary`, `PromptKind`, `prompt_subject` | `cairn-model` | A remote's name and fetch URL; what a prompt asks for (`Username`, `Password`, `Passphrase`, `Confirmation`, `Other`, from git's and OpenSSH's spellings; `ACCEPTED` = `yes`); the first quoted span of a prompt. |
+| `CredentialPrompt` | `cairn-ui` | The dialog: `new(remote, text)`, `on_submit(EventHandler<String>)` (the input's buffer, moved), `on_cancel`. Masks all but a username; a confirmation gets buttons, no field. |
+| `Request::{ListRemotes, Fetch { remote }, CancelFetch}`, `Request::is_query` | `cairn-app` | Operations carry no epoch (`submit` bumps only for a query). |
+| `Update::{Remotes, FetchStarted, FetchProgress, FetchFinished { refreshed }, FetchCancelled, FetchFailed, Prompt { id, text }}` | `cairn-app` | All epochless. `refreshed` is `Invalidated::refs`: the window clears and re-asks for the history. |
+| `worker::Reply::{Provide { prompt, secret }, Refuse { prompt }}`, `worker::PromptId`, `Replier = Rc<dyn Fn(Reply)>` | `cairn-app` | The window's answer to a prompt, over its own channel; `Reply` derives nothing and is never a struct field. Named `Reply` because the guard reads spellings and the channel's `Error` has a variant `Answer`. |
+| `worker::open -> (RepositoryHandle, Updates, Replier)` | `cairn-app` | Now three threads per repository (`cairn-repository`, `cairn-operations`, `cairn-askpass`), each with its own sender; the stream ends when all have gone. `open_with(path, Startup)` is the test seam. |
+| `worker::startup::{Startup, Backend}` | `cairn-app` | On the repository thread, before anything: `Channel::open($XDG_RUNTIME_DIR)`, the environment around its socket, `GitBinary::discover_with`. `Backend::prompting: Result<(), String>` names why no prompt can be answered (no runtime dir, helper not built) — fetch still runs; a failure appends the reason. |
+| `fetch_state::{FetchStatus, PromptView}`, `window::View` | `cairn-app` | The view state the window is drawn from; `status_text::fetch_line` renders the fetch's sentence. |
 | `worker::open` / `open_with` (startup check) | `cairn-app` | The worker thread runs `GitBinary::discover_with` before opening the repository and reports a refusal as `Update::Failed`, so the window shows the required version; `open_with(path, GitEnvironment)` is the seam a test hands an environment through, since nothing may set this process's variables. |
 
 Guards added in phase 02: `no_credential_value_is_logged_printed_serialised_or_stored`
@@ -89,7 +107,7 @@ self-test `the_process_environment_matcher_catches_the_shapes_it_claims`
 | --- | --- | --- | --- |
 | 01 git backend | landed | `scripts/gate.sh` PASS (full) | run; see progress.md for the adjudication |
 | 02 askpass helper | landed | `scripts/gate.sh` PASS (full, including the `test-doc` step) | run and fixed; see progress.md for the adjudication |
-| 03 fetch end to end | not started | — | — |
+| 03 fetch end to end | landed | `scripts/gate.sh` PASS (full) | run and fixed; see progress.md for the adjudication |
 | 04 QA | not started | — | — |
 
 ## Environment notes
@@ -124,15 +142,26 @@ self-test `the_process_environment_matcher_catches_the_shapes_it_claims`
   such block in `secret.rs` differs from a passing twin by exactly one line.
 - Clippy's `allow-expect-in-tests` does not cover helper functions in
   `tests/*.rs` that are outside a `#[test]` fn; use `unwrap_or_else(panic!)`.
-- The `worker::Request`/`Update` enums derive `Debug`. A variant carrying a
-  `Secret` (phase 03's answer path) would fail the credential guard as a
-  container deriving `Debug`; phase 03 must carry the secret some other way
-  (a dedicated channel, or an enum with no `Debug`) rather than adding a
-  variant to those.
-- The runner's `pub(crate)` methods carry
-  `#[cfg_attr(not(test), expect(dead_code, ..))]` until fetch lands: the
-  `expect` fails the build the moment a caller appears, so the attribute cannot
-  outlive its reason.
+- The `worker::Request`/`Update` enums derive `Debug`, so the secret's answer
+  path is `worker::Reply` over its own channel (phase 03). The credential
+  guard reads SPELLINGS: any struct field naming a type that names `Secret`
+  is a holder, transitively, and a type sharing its name with a variant of
+  another type is caught too (`Error::Answer` in the channel made an enum
+  named `Answer` a container). Name new secret-carrying types distinctly.
+- The runner's `Output::stdout`/`records` still carry
+  `#[cfg_attr(not(test), expect(dead_code, ..))]`, now reasoned "fetch reads
+  nothing from stdout"; the `expect` fails the build once a caller appears.
+- Tests in `cairn-app/src` may not name `Command` (the terminal-prompt guard
+  scans the crate's `src/`, test modules included), so fixtures there are
+  `std::fs` repositories and a loopback `TcpListener`; the tests that need a
+  real remote (`git http-backend`, `sshd`) live in `crates/cairn-git/tests/`,
+  where `cairn-git` has a TEST_ONLY_ALLOWLIST row for `cairn-askpass`.
+- `ssh` reads `~/.ssh/config` from the passwd home directory, never `$HOME`;
+  the ssh fixture hands its configuration over through `core.sshCommand`.
+- The helper binary is found at `target/<profile>/cairn-askpass`, two
+  directories up from a test executable; `cargo test --workspace` and the
+  gate build it before any test runs, `cargo test -p cairn-app` alone does
+  not (the test names the build command).
 - `std::env::set_var` is `unsafe` in the 2024 edition and `unsafe` is forbidden,
   so nothing can set a variable in-process for a test: `GitEnvironment::new`
   takes a lookup closure instead, and that is also why there is one constructor

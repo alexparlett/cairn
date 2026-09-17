@@ -3,6 +3,66 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-17 — phase 03: fetch end to end landed
+
+Packet mode, committed directly to `feature/credential-prompts` in six
+commits (research addenda, model, git, ui, app, an askpass fix) plus docs.
+Full gate PASS. QA adjudication is the entry above this one once it exists.
+
+O4 and O5 settled first, by test, before any code: see the two addenda in
+`docs/research/credential-prompts/git-credential-delegation.md`. O4 came out
+the way L7 needs — a configured `credential.helper` answers before the
+askpass is consulted — so the stopping rule did not trigger.
+
+Decisions taken in-phase, none reopening a locked decision:
+
+- **Fetch takes no `Confirmed`**, said in its module docs: it moves only
+  remote-tracking refs, all in the reflog.
+- **The runner reads stderr on a thread.** `finish` on the calling thread
+  waited for the pipe to close, and a SIGKILLed git's children (`ssh`, the
+  helper, `git-remote-https`) inherit the pipe and outlive it; a cancel would
+  have waited for them. The reader is detached and `finish` returns once git
+  itself is reaped. "`cairn-git` knows nothing about threads" is about where
+  blocking work is scheduled, not a ban on a pipe reader; recorded in
+  `credentials.md`.
+- **Three threads per repository, not one.** Fetch on its own thread so
+  paging keeps working; the acceptor on its own because a fetch blocked on the
+  helper blocked on the acceptor would deadlock on one thread. Each has its own
+  sender; the stream ends when all have gone. Operations carry no epoch.
+- **The secret crosses as `worker::Reply` over its own channel**, handed out
+  by `open` as a bare `Rc<dyn Fn(Reply)>` so no struct holds it. First named
+  `Answer`; renamed because the credential guard reads spellings and
+  `cairn_askpass::Error::Answer` made it a container of `Error` and `Refusal`.
+  The guard erring toward catching is the right direction; the note is in
+  state.md.
+- **The dialog hands out a `String`, not a `Secret`.** An `EventHandler<Secret>`
+  field would make the component a guarded holder; the window wraps the moved
+  buffer in `Secret::from_string` at once. Freya's `Input` keeps its own
+  unzeroed copies regardless — a toolkit limit, written down.
+- **A missing helper or runtime directory is a reason, not a refusal.**
+  Fetch still runs (a helper or agent may answer, L7); a failure appends why
+  nothing could have asked. Working assumption from the orchestrator, pending
+  the user.
+- **`cargo run -p cairn-app` still does not build the helper.** Cargo builds a
+  dependency's library only. Documented in CLAUDE.md and `credentials.md`;
+  the worker looks beside its executable and names the build command. A
+  build.rs that runs cargo, or bindeps, are the user's call (batched).
+- **The remote picker is the default remote.** `Repository::remotes` lists
+  them all, default first; the button fetches the first. A picker is UI work
+  for a later packet.
+- **The ssh fixture goes through `core.sshCommand`**, since ssh ignores
+  `$HOME` for its config; `sshd` must be invoked by absolute path.
+- **A phase-02 flake fixed**: the channel closed an over-long request with
+  bytes unread, which reset the connection and lost the helper its answer
+  (`an_oversized_prompt_is_bounded_rather_than_hung`, two runs in three). The
+  rest is now drained, bounded, before answering.
+
+Assumptions recorded for the user (from phase 02's escalations, taken as the
+orchestrator directed): a user-set `SSH_ASKPASS`/`core.askPass` is replaced
+while Cairn runs git (L5; accepted collateral, in `credentials.md`, not the
+PRD); a missing helper degrades prompting with a clear message rather than
+refusing the app.
+
 ## 2026-09-17 — phase 02 QA adjudicated and fixed
 
 Reviewers spawned fresh over `ea72de9...HEAD` (packet context `main...HEAD`):

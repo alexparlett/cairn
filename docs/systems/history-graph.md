@@ -230,10 +230,14 @@ FILE, and it is a guard, not a convention — see below.
   request is answered by a STREAM of `Update`s rather than by one reply; a worker
   runs ordinary blocking code, so a job that must wait on a UI answer makes its
   own reply channel and blocks on it; and workers are pinned to a purpose rather
-  than fed from an anonymous queue. Those three are what fetch
-  (`docs/prd/credential-prompts.md` R4) needs — long-running, progress-reporting,
-  and blocking mid-flight on a credential dialog — so adding it is a new `Update`
-  variant and its own worker rather than a change at every call site.
+  than fed from an anonymous queue. Fetch (`docs/prd/credential-prompts.md`
+  R4) is the second consumer, and landed as exactly that: its own thread
+  (`worker/operations.rs`), its own `Update` variants, and requests that carry
+  no epoch so a scroll and a fetch cannot supersede each other; the credential
+  dialog is a third thread (`worker/askpass.rs`) blocking on the window's
+  reply. How it honours `Invalidated::refs` is the OpenHistory path above — a
+  finished fetch makes the window ask for the history again from `HEAD`. The
+  as-built description is `docs/systems/credentials.md`.
 
 Every `submit` supersedes, and a superseded page delivers nothing — so the
 caller must debounce. `Progress::wants_more()`

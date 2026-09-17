@@ -15,9 +15,11 @@ query, feeding the lane assigner in `cairn-model` — and it is wired to the win
 through the worker boundary in `crates/cairn-app/src/worker/`. The application
 opens the repository named on its command line (or the working directory), draws
 its history as a virtualized graph with lanes, edges and four columns, pages as
-you scroll, and does all of it off the UI thread. No command mutates a
-repository, and there is no repository picker: one repository, named on the
-command line. Entries marked (planned) below name the canonical home something
+you scroll, and does all of it off the UI thread. It can fetch its default
+remote — the one `git` verb built so far, with git's own progress, a cancel,
+and a credential dialog fed by the askpass helper (`docs/systems/credentials.md`).
+Nothing else mutates a repository, and there is no repository picker: one
+repository, named on the command line. Entries marked (planned) below name the canonical home something
 WILL have so docs and implementation converge on the same names — never cite one
 as if it exists.
 
@@ -27,7 +29,7 @@ as if it exists.
 | --- | --- |
 | `docs/` | `qa-gate.md` (QA contract), `design/` intent, `prd/` per-packet specs, `systems/` as-built, `work/` in-flight dirs, `research/` evidence (deferred work goes to GitHub issues; `backlog/` is the no-remote fallback) — findings promote research → brainstorm → design/prd → systems (contract: `docs/CLAUDE.md`) |
 | `crates/cairn-model/` | The vocabulary crossing the seam: `Oid`, `RefName`, `CommitSummary`, the `Confirmed` token. Plain data, plus the pure layout algorithm that produces some of it (`LaneAssigner`), and `Secret`, the one type that holds a credential. Depends on nothing but `zeroize` (for that type) — not `gix`, not `freya`, not the other crates. |
-| `crates/cairn-git/` | The repository engine: gitoxide-backed reads, and under `src/ops/` every write, delegating to the `git` binary per design decision D1. Today `ops/` holds the subprocess backend — `GitBinary` (startup discovery and the 2.30 floor), `GitEnvironment` (the explicitly built environment, the only place a process is built), `Askpass` (where git and ssh are sent for a secret) and the crate-private runner — plus the confirmation-seal placeholder; no operation mutates a repository yet. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
+| `crates/cairn-git/` | The repository engine: gitoxide-backed reads, and under `src/ops/` every write, delegating to the `git` binary per design decision D1. Today `ops/` holds the subprocess backend — `GitBinary` (startup discovery and the 2.30 floor), `GitEnvironment` (the explicitly built environment, the only place a process is built), `Askpass` (where git and ssh are sent for a secret) and the crate-private runner, which streams and can kill a process — and `fetch`, the first verb (not destructive, so it takes no `Confirmed`), plus the confirmation-seal placeholder. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
 | `crates/cairn-ui/` | Freya components. Render `cairn-model` values, report intent through `EventHandler` props. Must never depend on `gix` or `cairn-git`, and must never touch the filesystem. |
 | `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. |
 | `crates/cairn-guards/` | Test-only. The deterministic enforcement twins for the Invariants below; nothing depends on it. |
@@ -48,7 +50,10 @@ there.
   interface so CI and local runs share the same command implementation.
 - `cargo run -p cairn-app` — run the app. `cargo run -p cairn-app --release` for
   anything where frame time or a large repository is the point; the dev profile
-  builds dependencies at `opt-level = 3` but Cairn's own crates at 1.
+  builds dependencies at `opt-level = 3` but Cairn's own crates at 1. The askpass
+  helper is a second binary that `-p cairn-app` alone does not build: run
+  `cargo build --workspace` first (or `-p cairn-askpass`), or fetches needing a
+  prompt fail with a message saying so.
 - Toolchain is pinned in `rust-toolchain.toml`; `cargo deny` is the one tool the
   gate needs that rustup does not ship (`cargo install cargo-deny --locked`).
 

@@ -147,7 +147,8 @@ impl Drop for UnbornRepository {
 }
 
 /// A bare repository, built with `std::fs`, whose `origin` is `remote` and
-/// whose `main` is the remote's `HEAD` after a fetch — whatever that HEAD is.
+/// whose `HEAD` is the remote's `HEAD` after a fetch — whatever that HEAD is —
+/// through the remote-tracking ref `origin/main`, never a local branch.
 /// The remote is the Cairn checkout, and on CI that checkout has no `main`:
 /// `actions/checkout` leaves a `push` run on its one branch and a
 /// `pull_request` run detached with no local branch at all, so a
@@ -167,12 +168,15 @@ impl BareRepository {
                 panic!("building {}: {error}", path.join(inside).display());
             }
         }
-        if let Err(error) = std::fs::write(path.join("HEAD"), "ref: refs/heads/main\n") {
+        // HEAD names the remote-tracking ref the fetch writes: a fetch that wrote a
+        // local branch is what `ops::fetch` refuses (issue #17), and the history
+        // view walks from HEAD, wherever it points.
+        if let Err(error) = std::fs::write(path.join("HEAD"), "ref: refs/remotes/origin/main\n") {
             panic!("writing HEAD: {error}");
         }
         let config = format!(
             "[core]\n\trepositoryformatversion = 0\n\tbare = true\n\
-             [remote \"origin\"]\n\turl = {}\n\tfetch = +HEAD:refs/heads/main\n",
+             [remote \"origin\"]\n\turl = {}\n\tfetch = +HEAD:refs/remotes/origin/main\n",
             remote.display()
         );
         if let Err(error) = std::fs::write(path.join("config"), config) {
@@ -426,7 +430,7 @@ fn generated(what: &str) -> String {
 /// serves the new commits after a `git` subprocess wrote them.
 #[test]
 fn a_fetch_reports_progress_finishes_and_the_history_reloads_from_the_new_refs() {
-    // The Cairn checkout is the remote; a bare fixture takes its HEAD as its `main`.
+    // The Cairn checkout is the remote; a bare fixture takes its HEAD as `origin/main`.
     let checkout = match cairn_git::SharedRepository::discover(env!("CARGO_MANIFEST_DIR")) {
         Ok(shared) => shared.workdir().map(Path::to_owned),
         Err(error) => panic!("opening the Cairn checkout: {error}"),

@@ -558,57 +558,490 @@ fn ref_tips_follow_the_refs_git_writes() {
 
 // ── Pruning ─────────────────────────────────────────────────────────────────
 
-/// Issue #17: `ops::fetch` takes no `Confirmed` on the claim that it deletes
-/// nothing, and `--no-prune --no-prune-tags` is what keeps that true under a
-/// user's `fetch.prune` / `fetch.pruneTags` (and their `remote.<name>.*`
-/// forms). A stale remote-tracking ref and a purely local tag survive Cairn's
-/// fetch; the control then runs plain `git fetch` under the same configuration
-/// and both go — so the refs survived because of the arguments, not because
-/// the configuration was not being read. The remote is a local path: nothing
-/// here is about credentials, and the channel refuses anything asked.
-#[test]
-fn a_fetch_never_prunes_however_the_repository_is_configured() {
-    let source = fixtures::braided(4);
-    let serving = Serving::serving(refusing());
-    let local = with_origin(&source.path().display().to_string());
-    local.git(&["fetch", "--quiet", "origin"]);
-    let tip = fetched_main(&local);
-    local.git(&["update-ref", "refs/remotes/origin/gone", &tip]);
-    local.git(&["tag", "local-only", &tip]);
-    for setting in [
-        "fetch.prune",
-        "fetch.pruneTags",
-        "remote.origin.prune",
-        "remote.origin.pruneTags",
-    ] {
-        local.git(&["config", setting, "true"]);
+/// A clone of `source` that has fetched once and then grown a remote-tracking
+/// ref the remote never had and a tag of its own: what `fetch.prune` would
+/// remove, and what nothing may. The remote is a local path — nothing here is
+/// about credentials, and the channel refuses anything asked.
+struct Pruning {
+    local: Fixture,
+    serving: Serving,
+    tip: String,
+}
+
+impl Pruning {
+    fn new(source: &Fixture) -> Self {
+        let serving = Serving::serving(refusing());
+        let local = with_origin(&source.path().display().to_string());
+        local.git(&["fetch", "--quiet", "origin"]);
+        let tip = fetched_main(&local);
+        let pruning = Self {
+            local,
+            serving,
+            tip,
+        };
+        pruning.restore_stale_refs();
+        pruning
     }
-    let stale = || {
-        local.git(&[
+
+    /// The stale remote-tracking ref and the local tag, (re)made after a fetch
+    /// that removed either.
+    fn restore_stale_refs(&self) {
+        self.local
+            .git(&["update-ref", "refs/remotes/origin/gone", &self.tip]);
+        self.local.git(&["tag", "-f", "local-only", &self.tip]);
+    }
+
+    fn configure(&self, settings: &[(&str, &str)]) {
+        for (setting, value) in settings {
+            self.local.git(&["config", setting, value]);
+        }
+    }
+
+    fn unset(&self, settings: &[&str]) {
+        for setting in settings {
+            self.local.git(&["config", "--unset", setting]);
+        }
+    }
+
+    /// What is still there: `gone` and/or `local-only`, as git lists them.
+    fn stale(&self) -> String {
+        self.local.git(&[
             "for-each-ref",
-            "--format=%(refname)",
+            "--format=%(refname:short)",
             "refs/remotes/origin/gone",
             "refs/tags/local-only",
         ])
-    };
-    assert_eq!(stale(), "refs/remotes/origin/gone\nrefs/tags/local-only\n");
+    }
 
-    let (outcome, _) = fetch_origin(&serving, &local, local.path(), None);
-    outcome.unwrap_or_else(|e| panic!("the fetch failed: {e}"));
+    fn cairn_fetches(&self) -> String {
+        let (outcome, _) = fetch_origin(&self.serving, &self.local, self.local.path(), None);
+        outcome.unwrap_or_else(|e| panic!("the fetch failed: {e}"));
+        assert_eq!(self.serving.prompts(), Vec::<String>::new());
+        self.stale()
+    }
+
+    /// The control: plain `git fetch`, same repository, same configuration.
+    fn git_fetches(&self) -> String {
+        self.local.git(&["fetch", "--quiet", "origin"]);
+        self.stale()
+    }
+}
+
+const BOTH: &str = "origin/gone\nlocal-only\n";
+const TAG_ONLY: &str = "local-only\n";
+
+/// Issue #17 (a): `fetch.prune` is honoured as `git fetch` honours it — the
+/// remote-tracking ref the remote never had goes — and the tag stays.
+#[test]
+fn fetch_prune_on_prunes_a_stale_remote_tracking_ref_as_git_does() {
+    let source = fixtures::braided(4);
+    let pruning = Pruning::new(&source);
+    pruning.configure(&[("fetch.prune", "true")]);
+    assert_eq!(pruning.stale(), BOTH);
     assert_eq!(
-        stale(),
-        "refs/remotes/origin/gone\nrefs/tags/local-only\n",
-        "Cairn's fetch deleted a ref under the user's prune configuration"
+        pruning.cairn_fetches(),
+        TAG_ONLY,
+        "fetch.prune was not honoured, or the tag was pruned"
     );
-    assert_eq!(serving.prompts(), Vec::<String>::new());
-
-    // The control: plain git, same repository, same configuration.
-    local.git(&["fetch", "--quiet", "origin"]);
+    pruning.restore_stale_refs();
     assert_eq!(
-        stale(),
+        pruning.git_fetches(),
+        TAG_ONLY,
+        "plain git differs from Cairn here"
+    );
+}
+
+/// Issue #17 (b): with `fetch.prune` unset nothing is pruned, by Cairn or by git.
+#[test]
+fn fetch_prune_unset_keeps_a_stale_remote_tracking_ref_as_git_does() {
+    let source = fixtures::braided(4);
+    let pruning = Pruning::new(&source);
+    assert_eq!(
+        pruning.cairn_fetches(),
+        BOTH,
+        "Cairn pruned with nothing configured"
+    );
+    assert_eq!(
+        pruning.git_fetches(),
+        BOTH,
+        "plain git differs from Cairn here"
+    );
+}
+
+/// Issue #17 (c): a local tag survives whatever `fetch.pruneTags` and
+/// `remote.<name>.pruneTags` say, while the remote-tracking ref is still
+/// pruned; the control shows plain git deleting the tag under the same
+/// configuration, so the tag survived because of `--no-prune-tags`.
+#[test]
+fn a_local_tag_survives_whatever_prune_tags_says() {
+    let source = fixtures::braided(4);
+    let pruning = Pruning::new(&source);
+    pruning.configure(&[
+        ("fetch.prune", "true"),
+        ("fetch.pruneTags", "true"),
+        ("remote.origin.pruneTags", "true"),
+    ]);
+    assert_eq!(pruning.cairn_fetches(), TAG_ONLY, "the tag was pruned");
+    pruning.restore_stale_refs();
+    assert_eq!(
+        pruning.git_fetches(),
         "",
-        "plain git did not prune here, so the assertion above decided nothing"
+        "plain git did not prune the tag here, so the assertion above decided nothing"
     );
+}
+
+/// Issue #17 (d): `remote.<name>.prune` overrides `fetch.prune` in both
+/// directions, for Cairn as for git.
+#[test]
+fn remote_prune_overrides_fetch_prune_both_ways_as_git_does() {
+    let source = fixtures::braided(4);
+    let pruning = Pruning::new(&source);
+
+    pruning.configure(&[("fetch.prune", "true"), ("remote.origin.prune", "false")]);
+    assert_eq!(
+        pruning.cairn_fetches(),
+        BOTH,
+        "remote.origin.prune=false did not win"
+    );
+    assert_eq!(pruning.git_fetches(), BOTH);
+
+    pruning.configure(&[("fetch.prune", "false"), ("remote.origin.prune", "true")]);
+    assert_eq!(
+        pruning.cairn_fetches(),
+        TAG_ONLY,
+        "remote.origin.prune=true did not win"
+    );
+    pruning.restore_stale_refs();
+    assert_eq!(pruning.git_fetches(), TAG_ONLY);
+
+    pruning.unset(&["fetch.prune", "remote.origin.prune"]);
+    pruning.restore_stale_refs();
+    assert_eq!(
+        pruning.cairn_fetches(),
+        BOTH,
+        "unsetting both did not stop pruning"
+    );
+}
+
+/// A `git` on a `PATH` of its own that answers `--version` and, for anything
+/// else, leaves a file saying it ran and then hangs — so "no process started"
+/// is a file that is not there, checked after the time a start would take,
+/// rather than a race against a real git that had not written yet.
+struct RecordingGit {
+    directory: PathBuf,
+}
+
+impl RecordingGit {
+    fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let directory = std::env::temp_dir().join(format!(
+            "cairn-recording-git-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap_or_else(|e| panic!("{e}"));
+        // Its PATH is this directory alone, so the system's comes first for `touch`.
+        let script = "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'git version 2.30.0'; exit 0; fi\n\
+                      PATH=/usr/bin:/bin; touch \"$(dirname \"$0\")/ran\"; sleep 5\n";
+        let git = directory.join("git");
+        std::fs::write(&git, script).unwrap_or_else(|e| panic!("{e}"));
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755))
+            .unwrap_or_else(|e| panic!("{e}"));
+        Self { directory }
+    }
+
+    fn environment(&self, serving: &Serving, home: &Path) -> GitEnvironment {
+        let directory = self.directory.clone();
+        let home = home.to_owned();
+        GitEnvironment::new(
+            move |name| match name {
+                "PATH" => Some(directory.clone().into_os_string()),
+                "HOME" => Some(home.clone().into_os_string()),
+                _ => None,
+            },
+            &Askpass::new(
+                askpass::helper_binary(),
+                Some(serving.socket_path().to_owned()),
+            ),
+        )
+    }
+
+    /// Whether the stub was ever run as anything but `--version`, after a wait
+    /// long enough for a spawn to have got to its first line.
+    fn ran(&self) -> bool {
+        std::thread::sleep(Duration::from_millis(300));
+        self.directory.join("ran").exists()
+    }
+}
+
+impl Drop for RecordingGit {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.directory);
+    }
+}
+
+/// What a refused fetch reports, and that nothing ran: the stub `git` would
+/// have said so.
+fn refused_before_any_git_ran(
+    local: &Fixture,
+    serving: &Serving,
+    expected_setting: &str,
+    expected_write: cairn_git::RefusedWrite,
+) {
+    let recording = RecordingGit::new();
+    let git = GitBinary::discover_with(recording.environment(serving, local.path()))
+        .unwrap_or_else(|e| panic!("no usable git: {e}"));
+    let repo = Repository::discover(local.path()).unwrap_or_else(|e| panic!("{e}"));
+    let outcome = fetch(&git, &repo, "origin", None);
+    match outcome {
+        Err(Error::FetchRefused {
+            remote,
+            setting,
+            write,
+        }) => {
+            assert_eq!(remote, "origin");
+            assert_eq!(setting, expected_setting);
+            assert_eq!(write, expected_write);
+        }
+        Ok(_) => panic!("the fetch was not refused under {expected_setting}"),
+        Err(other) => panic!("refused for the wrong reason under {expected_setting}: {other}"),
+    }
+    assert!(
+        !recording.ran(),
+        "a git process was started under {expected_setting} before the refusal"
+    );
+}
+
+/// The recording stub decides something: a fetch that is NOT refused starts it,
+/// and the file appears. Without this the assertion above could pass on a stub
+/// that never records.
+#[test]
+fn the_recording_stub_reports_a_fetch_that_was_allowed_to_start() {
+    let source = fixtures::braided(2);
+    let serving = Serving::serving(refusing());
+    let local = with_origin(&source.path().display().to_string());
+    let recording = RecordingGit::new();
+    let git = GitBinary::discover_with(recording.environment(&serving, local.path()))
+        .unwrap_or_else(|e| panic!("no usable git: {e}"));
+    let repo = Repository::discover(local.path()).unwrap_or_else(|e| panic!("{e}"));
+    let started = fetch(&git, &repo, "origin", None).unwrap_or_else(|e| panic!("{e}"));
+    assert!(recording.ran(), "the allowed fetch did not start the stub");
+    let canceller = started.canceller();
+    canceller.cancel();
+    assert!(matches!(
+        started.finish(|_| {}),
+        Err(Error::GitCancelled { .. })
+    ));
+}
+
+/// Issue #17 (e): a remote whose refspecs would write local branches — a
+/// mirror, `remote.<name>.mirror`, or any `refs/heads/` destination — is
+/// refused with the setting quoted, and no git process runs. The repository
+/// is opened BEFORE the setting is written, so a refspec added in a terminal
+/// after Cairn opened the repository is still what refuses the fetch.
+#[test]
+fn a_refspec_that_writes_local_branches_is_refused_before_git_runs() {
+    let source = fixtures::braided(3);
+    let serving = Serving::serving(refusing());
+    let message = {
+        let local = with_origin(&source.path().display().to_string());
+        let recording = RecordingGit::new();
+        let git = GitBinary::discover_with(recording.environment(&serving, local.path()))
+            .unwrap_or_else(|e| panic!("no usable git: {e}"));
+        let repo = Repository::discover(local.path()).unwrap_or_else(|e| panic!("{e}"));
+        local.git(&["config", "remote.origin.fetch", "+refs/*:refs/*"]);
+        let error = match fetch(&git, &repo, "origin", None) {
+            Err(error) => error,
+            Ok(_) => panic!("a mirror refspec written after the repository was opened was fetched"),
+        };
+        assert!(!recording.ran(), "a git process was started");
+        error.to_string()
+    };
+    assert!(
+        message.contains("+refs/*:refs/*") && message.contains("local branches"),
+        "the refusal did not name the refspec and what it would write: {message}"
+    );
+
+    for (settings, expected_setting, write) in [
+        (
+            vec![("remote.origin.fetch", "+refs/heads/*:refs/heads/*")],
+            "remote.origin.fetch = +refs/heads/*:refs/heads/*",
+            cairn_git::RefusedWrite::LocalBranches,
+        ),
+        (
+            vec![("remote.origin.fetch", "refs/heads/main:refs/heads/main")],
+            "remote.origin.fetch = refs/heads/main:refs/heads/main",
+            cairn_git::RefusedWrite::LocalBranches,
+        ),
+        (
+            vec![("remote.origin.mirror", "true")],
+            "remote.origin.mirror = true",
+            cairn_git::RefusedWrite::Mirror,
+        ),
+    ] {
+        let local = with_origin(&source.path().display().to_string());
+        for (setting, value) in &settings {
+            local.git(&["config", setting, value]);
+        }
+        refused_before_any_git_ran(&local, &serving, expected_setting, write);
+    }
+}
+
+/// Issue #17: a remote whose own refspecs write `refs/tags/` is refused while
+/// pruning is on — `--no-prune-tags` withholds only the refspec git would add,
+/// not one the user configured — and fetched, tag intact, when it is off.
+/// "On" is read as git reads it, `remote.<name>.prune` over `fetch.prune`, and
+/// the refusal names the setting that decided.
+#[test]
+fn a_tag_refspec_is_refused_under_prune_and_fetched_without_it() {
+    let source = fixtures::braided(3);
+    let serving = Serving::serving(refusing());
+    let refspec = "+refs/tags/*:refs/tags/*";
+
+    let local = with_origin(&source.path().display().to_string());
+    local.git(&["config", "--add", "remote.origin.fetch", refspec]);
+    local.git(&["config", "fetch.prune", "true"]);
+    refused_before_any_git_ran(
+        &local,
+        &serving,
+        &format!("remote.origin.fetch = {refspec} with fetch.prune = true"),
+        cairn_git::RefusedWrite::LocalTags,
+    );
+
+    // The remote's own setting wins over fetch.prune, in both directions.
+    local.git(&["config", "remote.origin.prune", "false"]);
+    let (outcome, _) = fetch_origin(&serving, &local, local.path(), None);
+    outcome.unwrap_or_else(|e| panic!("remote.origin.prune=false did not win: {e}"));
+    local.git(&["config", "fetch.prune", "false"]);
+    local.git(&["config", "remote.origin.prune", "true"]);
+    refused_before_any_git_ran(
+        &local,
+        &serving,
+        &format!("remote.origin.fetch = {refspec} with remote.origin.prune = true"),
+        cairn_git::RefusedWrite::LocalTags,
+    );
+
+    local.git(&["config", "--unset", "fetch.prune"]);
+    local.git(&["config", "--unset", "remote.origin.prune"]);
+    let (outcome, _) = fetch_origin(&serving, &local, local.path(), None);
+    outcome.unwrap_or_else(|e| panic!("a tag refspec without pruning was refused: {e}"));
+    assert_eq!(fetched_main(&local), head_of(&source));
+}
+
+/// The check reads configuration as the child git will: a `GIT_CONFIG_*` in
+/// Cairn's own environment never reaches the child (the environment is built,
+/// not inherited), so it must not steer the check either. Pinned through both
+/// routes gix has for such variables — `GIT_CONFIG_COUNT` with a key/value
+/// pair, which its config-from-environment permission gates, and
+/// `GIT_CONFIG_GLOBAL` naming a file, which its `GIT_*` permission gates —
+/// each turning pruning on for the check while git prunes nothing, so a check
+/// that honoured either would refuse the tag refspec below.
+#[test]
+fn the_refspec_check_ignores_config_from_cairns_own_environment() {
+    // `std::env::set_var` is unsafe in the 2024 edition and unsafe is forbidden, so the
+    // variables are set for a child process that runs this check: the test binary itself,
+    // filtered to the inner test below.
+    let inner = "the_refspec_check_ignores_config_from_cairns_own_environment_inner";
+    let exe = std::env::current_exe().unwrap_or_else(|e| panic!("{e}"));
+    let global = std::env::temp_dir().join(format!(
+        "cairn-refspec-check-global-{}.gitconfig",
+        std::process::id()
+    ));
+    std::fs::write(&global, "[fetch]\n\tprune = true\n").unwrap_or_else(|e| panic!("{e}"));
+    let output = std::process::Command::new(exe)
+        .args(["--exact", inner, "--include-ignored", "--nocapture"])
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "fetch.prune")
+        .env("GIT_CONFIG_VALUE_0", "true")
+        .env("GIT_CONFIG_GLOBAL", &global)
+        .env("CAIRN_TEST_INNER", "1")
+        .output();
+    let _ = std::fs::remove_file(&global);
+    let output = output.unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        output.status.success(),
+        "the inner test failed under GIT_CONFIG_*:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "the inner test did not run:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// The inner half of the test above; ignored so it runs only under its parent, where
+/// `GIT_CONFIG_*` is set to turn pruning on if anything read it.
+#[test]
+#[ignore = "run by the_refspec_check_ignores_config_from_cairns_own_environment"]
+fn the_refspec_check_ignores_config_from_cairns_own_environment_inner() {
+    assert_eq!(
+        std::env::var("GIT_CONFIG_COUNT").as_deref(),
+        Ok("1"),
+        "not running under the parent test"
+    );
+    assert!(
+        std::env::var_os("GIT_CONFIG_GLOBAL").is_some_and(|file| {
+            std::fs::read_to_string(file).is_ok_and(|text| text.contains("prune = true"))
+        }),
+        "the parent did not point GIT_CONFIG_GLOBAL at a file that turns pruning on"
+    );
+    let source = fixtures::braided(2);
+    let serving = Serving::serving(refusing());
+    let local = with_origin(&source.path().display().to_string());
+    local.git(&[
+        "config",
+        "--add",
+        "remote.origin.fetch",
+        "+refs/tags/*:refs/tags/*",
+    ]);
+    // The real git in this fixture's helper inherits this process's GIT_CONFIG_* and would
+    // prune; the git Cairn runs does not, and neither may the check.
+    let recording = RecordingGit::new();
+    let git = GitBinary::discover_with(recording.environment(&serving, local.path()))
+        .unwrap_or_else(|e| panic!("no usable git: {e}"));
+    let repo = Repository::discover(local.path()).unwrap_or_else(|e| panic!("{e}"));
+    match fetch(&git, &repo, "origin", None) {
+        Ok(started) => {
+            assert!(recording.ran());
+            started.canceller().cancel();
+            let _ = started.finish(|_| {});
+        }
+        Err(error) => panic!(
+            "the check read fetch.prune from Cairn's own GIT_CONFIG_*, which the child git \
+             never sees: {error}"
+        ),
+    }
+}
+
+/// A remote whose configuration gix cannot read is `Error::RemoteConfig`, and
+/// no process starts: git would refuse the refspec itself, but the fetch must
+/// not reach it on the strength of a check that could not run.
+#[test]
+fn an_unreadable_remote_configuration_is_reported_and_starts_nothing() {
+    let source = fixtures::braided(2);
+    let serving = Serving::serving(refusing());
+    let local = with_origin(&source.path().display().to_string());
+    local.git(&[
+        "config",
+        "remote.origin.fetch",
+        "refs/heads/*:refs/remotes/origin",
+    ]);
+    let recording = RecordingGit::new();
+    let git = GitBinary::discover_with(recording.environment(&serving, local.path()))
+        .unwrap_or_else(|e| panic!("no usable git: {e}"));
+    let repo = Repository::discover(local.path()).unwrap_or_else(|e| panic!("{e}"));
+    match fetch(&git, &repo, "origin", None) {
+        Err(Error::RemoteConfig { remote, source }) => {
+            assert_eq!(remote, "origin");
+            assert!(!source.to_string().is_empty());
+        }
+        other => panic!("expected the configuration error, got {other:?}"),
+    }
+    assert!(!recording.ran(), "a git process was started");
 }
 
 // ── SSH ─────────────────────────────────────────────────────────────────────

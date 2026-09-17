@@ -2,35 +2,33 @@
 //! first that can ask the user for a credential.
 //!
 //! **Not destructive, and deliberately takes no [`cairn_model::Confirmed`].**
-//! With the default refspec (`+refs/heads/*:refs/remotes/<remote>/*`) a fetch
-//! adds objects and moves remote-tracking refs; it touches no local branch,
-//! no index and no working tree, and every ref it moves is in the reflog.
-//! What could make a plain `git fetch` DELETE a ref is the user's
-//! configuration — `fetch.prune` and `remote.<name>.prune` remove
-//! remote-tracking refs gone from the remote, `fetch.pruneTags` and
-//! `remote.<name>.pruneTags` remove even purely local tags — so this
-//! operation always passes `--no-prune --no-prune-tags` (both in git since
-//! 2.17, so within [`super::GitVersion::MINIMUM`]): no configuration makes
-//! Cairn's fetch delete a ref, and a user who set those on purpose gets a
-//! fetch that leaves stale refs standing rather than one that removes them
-//! without a word. `--no-prune` alone is what decides it — git prunes tags
-//! only when it is pruning at all — so the second flag is belt and braces
-//! against a `--prune` ever being added to this invocation, and is pinned as
-//! an argument rather than as behaviour. Pruning as a named operation that
-//! says what will go is the remainder of issue #17.
+//! With the refspecs git gives a clone (`+refs/heads/*:refs/remotes/<remote>/*`)
+//! a fetch adds objects and moves remote-tracking refs; it touches no local
+//! branch, no index and no working tree, and every ref it moves is in the
+//! reflog wherever the repository keeps one (a bare repository logs nothing
+//! by default; the old tip's commits survive until `gc` either way). The one
+//! deletion it performs is the user's own: `fetch.prune` (or
+//! `remote.<name>.prune`, which overrides it) is honoured exactly as
+//! `git fetch` honours it, so a remote-tracking ref the remote has already
+//! deleted is removed here too — its commits survive until `gc`, and the
+//! ref was never local work. Nothing is passed for prune, so git reads that
+//! configuration itself, fresh, on every run (decided on issue #17).
 //!
-//! What the flags cannot cover is a configured refspec that OVERWRITES a
-//! local ref, which no prune flag touches: a destination under `refs/heads/`
-//! (a `--mirror` clone, or a bare repository set up to take the remote's
-//! branches as its own; git refuses only a branch that is checked out, and
-//! in a bare repository `core.logAllRefUpdates` is off by default, so the
-//! old tip goes to no reflog), or a forced tag refspec
-//! (`+refs/tags/*:refs/tags/*`) in any clone at all, since git never reflogs
-//! a tag. This operation runs `git fetch` as the shell would and inspects no
-//! refspec; deciding that needs the remote model that reads them, and is
-//! left on issue #17 rather than approximated here. Push, the next operation
-//! on this backend, is the one that needs the token whatever the
-//! configuration (L8).
+//! What is never done, whatever the configuration: pruning a local tag.
+//! Tags have no reflog, so `--no-prune-tags` is always passed (in git since
+//! 2.17, within [`super::GitVersion::MINIMUM`]) and `fetch.pruneTags` and
+//! `remote.<name>.pruneTags` are ignored — a user who set them gets stale
+//! tags left standing rather than removed without a word. That flag only
+//! withholds the tag refspec git would add, so a remote whose OWN refspecs
+//! write `refs/tags/` is refused while pruning is on, before any process
+//! starts (`super::refspec_policy`). The same check refuses a remote whose
+//! refspecs would write local branches — a mirror clone, `remote.<name>.mirror`,
+//! `+refs/*:refs/*`, any `refs/heads/*` destination — with the setting quoted
+//! in [`Error::FetchRefused`]; a fetch that overwrites local branches, with
+//! no reflog in a bare repository, is a fetch from a terminal, not from a
+//! button. Push, the next operation on this backend, is the one that needs
+//! the token whatever the configuration (L8); pruning that says what will
+//! go, as a confirmed operation, is issue #17's remainder.
 //!
 //! What it invalidates: `refs` (remote-tracking refs moved) and `objects`
 //! (new objects arrived), declared on the [`Performed`] per the cache contract
@@ -52,14 +50,17 @@ use std::path::PathBuf;
 
 use cairn_model::AskpassToken;
 
-use super::{GitBinary, Invalidated, Performed, stranded_locks};
+use super::{GitBinary, Invalidated, Performed, refspec_policy, stranded_locks};
 use crate::ops::cli::{ProcessKill, Running};
 use crate::{Error, Repository};
 
-/// Starts `git fetch --progress --no-prune --no-prune-tags <remote>` in
-/// `repo`, with `token` as the operation's askpass authorisation when there
-/// is a channel to answer on; without one, a prompt fails closed. Returns as
-/// soon as the process is running; [`FetchInProgress::finish`] waits for it.
+/// Starts `git fetch --progress --no-prune-tags <remote>` in `repo`, with
+/// `token` as the operation's askpass authorisation when there is a channel
+/// to answer on; without one, a prompt fails closed. Returns as soon as the
+/// process is running; [`FetchInProgress::finish`] waits for it. A remote
+/// whose configuration would have the fetch write local branches, or delete
+/// local tags under pruning, is [`Error::FetchRefused`] and no process
+/// starts (module docs).
 ///
 /// `remote` is a configured remote name or a URL, as `git fetch` takes it;
 /// it follows `--end-of-options`, so a name beginning with `-` is a remote and
@@ -70,6 +71,7 @@ pub fn fetch(
     remote: &str,
     token: Option<&AskpassToken>,
 ) -> Result<FetchInProgress, Error> {
+    refspec_policy::check(repo.git_dir(), remote)?;
     let mut command = git
         .command()
         .in_repository(repo)
@@ -86,15 +88,10 @@ pub fn fetch(
     })
 }
 
-/// Everything before the remote. The two `--no-prune` flags are what keeps
-/// "deletes nothing" true under the user's configuration (module docs).
-const ARGUMENTS: [&str; 5] = [
-    "fetch",
-    "--progress",
-    "--no-prune",
-    "--no-prune-tags",
-    "--end-of-options",
-];
+/// Everything before the remote. Nothing for prune, so git applies the
+/// user's `fetch.prune`; `--no-prune-tags` always, so no tag is ever pruned
+/// (module docs).
+const ARGUMENTS: [&str; 4] = ["fetch", "--progress", "--no-prune-tags", "--end-of-options"];
 
 /// A fetch that has been started; see [`fetch`].
 #[derive(Debug)]
@@ -155,16 +152,17 @@ impl FetchCancel {
 }
 
 /// Against a stub `git`, since the runner is crate-private: what the process is
-/// actually given. The behaviour the flags buy is pinned end to end by
-/// `a_fetch_never_prunes_however_the_repository_is_configured` in
-/// `tests/fetch.rs`.
+/// actually given. The behaviour the arguments buy is pinned end to end by the
+/// pruning tests in `tests/fetch.rs`.
 #[cfg(all(test, unix))]
 mod tests {
     use super::super::stub_git::{StubGit, discover_retrying};
     use super::*;
 
+    /// Nothing for prune — git reads `fetch.prune` itself — and `--no-prune-tags`
+    /// always, before `--end-of-options` and the remote.
     #[test]
-    fn the_arguments_forbid_pruning_and_end_the_options_before_the_remote() {
+    fn the_arguments_leave_prune_to_git_forbid_pruning_tags_and_end_the_options() {
         let stub = StubGit::with_git(
             "if [ \"$1\" = --version ]; then echo 'git version 2.30.0'; exit 0; fi\n\
              printf '%s\\n' \"$@\" >&2",
@@ -181,7 +179,6 @@ mod tests {
             [
                 "fetch",
                 "--progress",
-                "--no-prune",
                 "--no-prune-tags",
                 "--end-of-options",
                 "-origin",

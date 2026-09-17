@@ -144,14 +144,16 @@ never enters `cairn-git` and never enters application state.
   `core.askPass` and the environment is never inherited; `credential.helper`
   and the agent, which L7 protects, are untouched.
 - **`ops::fetch`** (`crates/cairn-git/src/ops/fetch.rs`). `fetch(&git, &repo,
-  remote, token)` starts `git fetch --progress --no-prune --no-prune-tags
+  remote, token)` starts `git fetch --progress --no-prune-tags
   --end-of-options <remote>` and returns a `FetchInProgress`; `finish(progress)` streams each redraw of git's
   progress meter to the callback and yields a `Performed` declaring `refs` and
   `objects` invalid; `canceller()` is a `Send` handle that ends the process
   from any thread without blocking that thread, after which `finish` reports
   `Error::GitCancelled`. **Not destructive, and takes no `Confirmed` on
-  purpose**: a fetch moves only remote-tracking refs, all in the reflog; the
-  module docs say so. The runner underneath (`GitCommand::stream` in
+  purpose**: a fetch moves only remote-tracking refs, in the reflog wherever
+  the repository keeps one (a bare repository logs nothing by default, and
+  the old tip's commits survive until `gc` either way); the module docs say
+  so. The runner underneath (`GitCommand::stream` in
   `ops/cli.rs`) reads the pipe on a thread of its own, because git's children
   — `ssh`, `git-remote-https`, the helper — inherit it and outlive a killed
   git; a cancel returns once git itself is reaped, and the reader ends when
@@ -224,23 +226,57 @@ never enters `cairn-git` and never enters application state.
   that does not exist yet, and a FAILED fetch whose stderr says `cannot lock
   ref` is not yet read for the lock it names — both remain on issue #19.
   "Not destructive" is kept true against the user's configuration
-  by the two `--no-prune` flags: `fetch.prune`, `fetch.pruneTags` and their
-  `remote.<name>.*` forms would have a plain fetch delete remote-tracking refs
-  and even local tags, and Cairn's never does — a user who set them gets
-  stale refs left standing rather than removed without a word, and pruning
-  as a named operation is issue #17's remainder. Pinned by
-  `a_fetch_never_prunes_however_the_repository_is_configured`
-  (`tests/fetch.rs`, with plain git as the control that the configuration
-  would have pruned) and, for the arguments themselves,
-  `the_arguments_forbid_pruning_and_end_the_options_before_the_remote` (which
-  is the only pin on `--no-prune-tags`: git prunes tags only when pruning at
-  all, so `--no-prune` alone decides the behaviour and the second flag is
-  belt and braces, as the module docs say). What the flags cannot cover,
-  stated in the module docs and left on issue #17, is a configured refspec
-  that overwrites a local ref: a destination under `refs/heads/*` (a
-  `--mirror` clone, or a bare repository taking the remote's branches as its
-  own, where there is no reflog by default), or a forced tag refspec in any
-  clone, since git never reflogs a tag. The operation inspects no refspec.
+  by one flag and one refusal (issue #17, decided 2026-09-17). `fetch.prune`
+  and `remote.<name>.prune` are honoured exactly as `git fetch` honours them
+  — nothing is passed for prune, so git reads that configuration itself,
+  fresh, and a remote-tracking ref the remote has already deleted goes; its
+  commits survive until `gc`, and the ref was never local work. That is the
+  one deletion a fetch performs, by the user's own setting. `--no-prune-tags`
+  is always passed, so `fetch.pruneTags` and `remote.<name>.pruneTags` are
+  ignored and no local tag is ever pruned (tags have no reflog); a user who
+  set them gets stale tags left standing rather than removed without a word.
+  Pinned with plain git as the control on every case, so a passing assertion
+  is Cairn agreeing with git rather than a configuration nobody read:
+  `fetch_prune_on_prunes_a_stale_remote_tracking_ref_as_git_does`,
+  `fetch_prune_unset_keeps_a_stale_remote_tracking_ref_as_git_does`,
+  `remote_prune_overrides_fetch_prune_both_ways_as_git_does` and
+  `a_local_tag_survives_whatever_prune_tags_says` (where the control deletes
+  the tag) in `tests/fetch.rs`; the arguments themselves by
+  `the_arguments_leave_prune_to_git_forbid_pruning_tags_and_end_the_options`.
+  What the flag cannot cover is a configured refspec that writes where a
+  fetch from a button never may: `ops/refspec_policy.rs` reads the remote's
+  configuration afresh before any process starts (gix reads it once at open,
+  git on every run, so a refspec added in a terminal since Cairn started is
+  seen), and reads it as the child git will — from the files, with Cairn's
+  own `GIT_CONFIG_*` environment denied, since the child never inherits it
+  (`the_refspec_check_ignores_config_from_cairns_own_environment`, over both
+  `GIT_CONFIG_COUNT` and `GIT_CONFIG_GLOBAL`); the one file the two can
+  still disagree on is the system configuration, which gix reads at
+  `/etc/gitconfig` and a git installed under another prefix reads elsewhere
+  — stated in the module, not checked, since asking git would spawn a
+  process outside `GitEnvironment` — and refuses, as `Error::FetchRefused`
+  quoting the setting, a remote with `remote.<name>.mirror` (a push setting
+  in git, refused on sight as what a mirror clone carries, and said so), a
+  `+refs/*:refs/*` or any `refs/heads/` destination (local branches
+  overwritten, with no reflog in a bare repository) — and, while pruning is
+  on, one whose own refspecs write
+  `refs/tags/`, since `--no-prune-tags` withholds only the tag refspec git
+  would add; that refusal names the refspec and the prune setting that
+  decided, `remote.<name>.prune` over `fetch.prune` as git reads them. An
+  unqualified destination is read as git's `get_local_ref` reads it
+  (`heads/`, `tags/`, `remotes/` get `refs/` in front, any other name is a
+  branch, an unqualified glob writes nothing), checked against git 2.55.
+  Pinned by `a_refspec_that_writes_local_branches_is_refused_before_git_runs`
+  (opened before the refspec is written) and
+  `a_tag_refspec_is_refused_under_prune_and_fetched_without_it`, both over a
+  recording stub `git` that would have said so had it been started
+  (`the_recording_stub_reports_a_fetch_that_was_allowed_to_start` is the
+  control); a configuration gix cannot read is `Error::RemoteConfig` and
+  starts nothing (`an_unreadable_remote_configuration_is_reported_and_starts_nothing`);
+  the destination reading is the unit tests in `refspec_policy.rs`. The
+  refusal reaches the window as a failed fetch whose one line is the
+  engine's sentence. Pruning that says what will go, as a confirmed
+  operation, and a setting for it, are issue #17's remainder.
 - **The cache-invalidation contract** (`crates/cairn-git/src/ops/mod.rs`,
   module docs; `ops::Invalidated`, `ops::Performed`). D1 puts two
   implementations of git semantics in one process, so after a `git` subprocess

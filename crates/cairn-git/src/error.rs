@@ -102,6 +102,63 @@ pub enum Error {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
+
+    /// The remote's configuration would have a fetch write where Cairn's
+    /// never does, so no process was started. `setting` is the entry as
+    /// configured (a refspec, or `remote.<name>.mirror`), `write` what it
+    /// would have done; the caller shows both, and the user changes the
+    /// setting or fetches from a terminal.
+    #[error(
+        "fetch from {remote} refused: {setting} would {write}; change that setting or fetch \
+         from a terminal"
+    )]
+    FetchRefused {
+        remote: String,
+        setting: String,
+        write: RefusedWrite,
+    },
+
+    /// The remote's configuration could not be read, so the fetch could not
+    /// be checked and did not run.
+    #[error("could not read the configuration of remote {remote}: {source}")]
+    RemoteConfig {
+        remote: String,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+}
+
+/// Why a fetch was refused; see [`Error::FetchRefused`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefusedWrite {
+    /// A destination under `refs/heads/`: local branches, overwritten with
+    /// no reflog in a bare repository.
+    LocalBranches,
+    /// A destination under `refs/tags/` while pruning is on: local tags,
+    /// which have no reflog, deleted. The `setting` beside it names the
+    /// refspec and the prune setting that together would do it.
+    LocalTags,
+    /// `remote.<name>.mirror` is set. git reads it for push, not fetch, so
+    /// the setting itself writes nothing on a fetch; it is refused on sight
+    /// because it is what `git clone --mirror` leaves beside the
+    /// `+refs/*:refs/*` refspec, and a mirror is a repository whose every
+    /// ref is the remote's to overwrite (decided on issue #17).
+    Mirror,
+}
+
+impl std::fmt::Display for RefusedWrite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::LocalBranches => {
+                "write local branches (refs/heads/), which Cairn's fetch never does"
+            }
+            Self::LocalTags => "delete local tags while pruning, which Cairn's fetch never does",
+            Self::Mirror => {
+                "declare the remote a mirror, whose fetch Cairn refuses on sight (the setting \
+                 itself governs push; it is what a mirror clone carries)"
+            }
+        })
+    }
 }
 
 /// Lock files in a message: nothing when there are none, otherwise the

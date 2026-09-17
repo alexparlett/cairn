@@ -9,6 +9,6 @@ mod remotes;
 mod repository;
 
 pub use cancel::{Cancel, CancelSignal};
-pub use error::Error;
+pub use error::{Error, RefusedWrite};
 pub use history::{HistoryCursor, HistoryOrder, HistoryPage, HistoryRequest, HistorySession};
 pub use repository::{Repository, SharedRepository};

@@ -38,6 +38,10 @@
 //!   Nothing outside `ops` can run a raw verb: the public surface is named
 //!   operations ([`fetch`] today), so the confirmation seal cannot be routed
 //!   around through the runner.
+//! - `refspec_policy` (crate-private) reads a remote's configuration afresh
+//!   before a fetch and refuses one whose refspecs would write local branches
+//!   or, under pruning, delete local tags; the refusal is
+//!   [`Error::FetchRefused`], and no process starts.
 //!
 //! # Output policy
 //!
@@ -114,6 +118,7 @@ mod binary;
 mod cli;
 mod environment;
 mod fetch;
+mod refspec_policy;
 mod stranded_locks;
 #[cfg(all(test, unix))]
 mod stub_git;

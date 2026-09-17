@@ -28,6 +28,15 @@ pub(super) struct FetchControl(Arc<Mutex<Stage>>);
 enum Stage {
     #[default]
     Idle,
+    /// A cancel that arrived before the fetch it answers had been dequeued. The
+    /// window shows its Cancel button the moment the button is pressed, but
+    /// `Request::Fetch` queues behind whatever page the repository thread is
+    /// walking, while `CancelFetch` reaches this control directly — so on a cold
+    /// repository the two cross, and without this the cancel is dropped and the
+    /// fetch the user cancelled runs to completion. The next `arm` takes it, which
+    /// is why it is a stage and not a flag: one cancel is claimed by one fetch, and
+    /// a later fetch is not poisoned by it.
+    CancelledBeforeStarting,
     /// Forwarded, not yet running; a cancel that arrives now is kept until it is.
     Starting {
         cancelled: bool,
@@ -41,21 +50,30 @@ impl FetchControl {
     /// the button while a fetch runs, so this is the race it cannot close.
     pub(super) fn arm(&self) -> bool {
         let mut stage = self.lock();
-        if matches!(*stage, Stage::Idle) {
-            *stage = Stage::Starting { cancelled: false };
-            true
-        } else {
-            false
+        match *stage {
+            Stage::Idle => {
+                *stage = Stage::Starting { cancelled: false };
+                true
+            }
+            // The cancel that crossed this fetch on the way in; it is claimed here
+            // and nowhere else, so it kills this fetch and not the one after it.
+            Stage::CancelledBeforeStarting => {
+                *stage = Stage::Starting { cancelled: true };
+                true
+            }
+            Stage::Starting { .. } | Stage::Running(_) => false,
         }
     }
 
-    /// Kills the fetch in flight, or remembers to kill the one that is starting;
-    /// nothing to do when there is none. Never blocks past a momentary lock:
-    /// the kill itself only tries for the child's lock.
+    /// Kills the fetch in flight, or remembers to kill the one that is starting or
+    /// still queued. Never blocks past a momentary lock: the kill itself only tries
+    /// for the child's lock.
     pub(super) fn cancel(&self) {
         let mut stage = self.lock();
         match &mut *stage {
-            Stage::Idle => {}
+            Stage::Idle => *stage = Stage::CancelledBeforeStarting,
+            // Pressing Cancel twice is one cancel.
+            Stage::CancelledBeforeStarting => {}
             Stage::Starting { cancelled } => *cancelled = true,
             Stage::Running(cancel) => cancel.cancel(),
         }
@@ -244,7 +262,6 @@ mod tests {
     #[test]
     fn a_cancel_while_starting_is_kept_and_one_fetch_at_a_time_is_armed() {
         let control = FetchControl::default();
-        control.cancel(); // nothing in flight: ignored, and the next fetch is not poisoned
         assert!(control.arm());
         assert!(!control.arm(), "a second fetch was armed over the first");
         control.cancel();
@@ -254,5 +271,32 @@ mod tests {
         );
         control.clear();
         assert!(control.arm());
+    }
+
+    /// The window shows Cancel the instant the button is pressed, but the fetch queues
+    /// behind the page the repository thread is walking, so a cancel can reach the
+    /// control before `arm` does. Caught by: that cancel being dropped, which ran the
+    /// fetch the user had already cancelled. The second half is the other direction —
+    /// one cancel is claimed by one fetch, never by the fetch after it.
+    #[test]
+    fn a_cancel_that_overtakes_the_fetch_it_answers_is_claimed_by_that_fetch_alone() {
+        let control = FetchControl::default();
+        control.cancel();
+        assert!(
+            matches!(*control.lock(), Stage::CancelledBeforeStarting),
+            "a cancel with nothing yet armed was dropped"
+        );
+        assert!(control.arm(), "the queued fetch could not be armed");
+        assert!(
+            matches!(*control.lock(), Stage::Starting { cancelled: true }),
+            "the fetch was armed without the cancel that overtook it"
+        );
+
+        control.clear();
+        assert!(control.arm());
+        assert!(
+            matches!(*control.lock(), Stage::Starting { cancelled: false }),
+            "the next fetch inherited a cancel that was already spent"
+        );
     }
 }

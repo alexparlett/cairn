@@ -62,8 +62,10 @@ memory, and flag memory-coded usage in review. Here that means **`freya` (0.5 is
 release candidate on a builder API that replaced the old `rsx!` macro — anything
 you remember about Freya from `rsx!` examples is wrong) and `gix` (pre-1.0, and its
 feature flags gate whole modules: `default-features = false` silently produced an
-empty `gix_hash::Kind` once already)**. Read the vendored source under
-`~/.cargo/registry/src/` when the docs are thin; it is the version actually linked.
+empty `gix_hash::Kind` once already)**. Read the vendored source when the docs are
+thin: `~/.cargo/registry/src/` for a registry dependency such as `gix`, and
+`~/.cargo/git/checkouts/` for a git-pinned one such as `freya`, whose registry
+copy is a different version from the fork that links.
 
 ## Default task workflow
 

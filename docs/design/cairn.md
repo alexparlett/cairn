@@ -134,6 +134,33 @@ which the `git` backend wrote down first: the `ops` module docs in
 `crates/cairn-git/src/ops/mod.rs` (`Invalidated`, per flag, checked against
 the linked gix), summarised in `docs/systems/credentials.md`.
 
+**Amended by the `diff-engine` packet (its brainstorm L6). Decided, not yet
+built.** The amendment: converting a working-tree file to git's form, which any
+diff of uncommitted work needs, will run the clean filter driver that the path's
+attributes name and the user's config defines — git-lfs, git-crypt, nbstripout —
+through gix, exactly as `git diff` does. So a read still never runs `git`, but one
+read can start a process, and D1's "never on a read path" means the CLI rather
+than every process. Refusing to run the driver would show those users a diff
+`git diff` does not, and would hand the staging packet a patch built from content
+their filter exists to change.
+
+This answers the **clean** half of obligation 2 above and not the smudge half:
+the packet reads everything in git's form, so an LFS-tracked file in a commit
+diff still shows as its pointer, modelled as a state to display rather than as
+content (`docs/prd/diff-engine.md` R1.2).
+
+Three residuals of running someone else's program are stated rather than implied.
+The driver runs with Cairn's own inherited environment plus the repository's
+paths, because gix builds that process and not `ops::GitEnvironment`. Its stderr
+is Cairn's, inherited. And `textconv` never runs on a read, so a file with a
+textconv driver shows as binary where `git diff` shows text.
+
+Until the packet's phase 03 lands, the root `CLAUDE.md` sentence "reads never
+spawn a process" is the one that describes the code, and that phase changes both
+halves in the same commit (`docs/prd/diff-engine.md` C15). Spec:
+`docs/prd/diff-engine.md` R3; evidence:
+`docs/research/diff-engine/gix-diff-api.md`.
+
 ### D2 — Credentials are delegated to git entirely
 
 Cairn stores no credential, integrates no keychain, and implements no auth. Since
@@ -196,6 +223,15 @@ repository and is not `Send`, so it lives on the thread that owns the handle.
 The epoch also turned out to be the cancel signal itself, not just a discard
 filter — superseding a request stops its walk. Measurement and the rest of the
 as-built: `docs/systems/history-graph.md`.
+
+Planned by the `diff-engine` packet (its brainstorm L8), not yet built: an epoch
+**per lane** rather than one counter, and a second thread per repository for
+diffs. One counter means any query cancels any other, which is right while the
+only query is a history page and wrong the moment a selection and a scroll
+compete. The lanes are history, changes and file diff; a changes query also
+supersedes the file-diff lane, and nothing else crosses. `WORKERS_PER_REPOSITORY`
+gives way to an explicit routing table from lane to thread, which is the routing
+decision its assertion asks for. Spec: `docs/prd/diff-engine.md` R4.
 
 ### D4 — Graph lanes are assigned incrementally, in the engine
 
@@ -329,7 +365,10 @@ URL and a 404.
 
 - **Repository manager shape.** Tabs, a sidebar of repositories, or separate
   windows. Decides how much state is per-repository versus global, so it wants
-  answering before the worker pool in D3 has more than one consumer.
+  answering before the worker pool in D3 has more than one consumer. The
+  `diff-engine` packet adds the second consumer and keeps it per-repository (a
+  diff thread per open repository) with its view settings app-wide, which fits
+  all three shapes; it does not answer the question.
 - **Interactive rebase.** The operation Fork is most valued for and the one with
   the largest UI surface. Its own program, not a packet.
 - **Whether Cairn auto-stashes before destructive working-tree operations.** The
@@ -338,6 +377,9 @@ URL and a 404.
   automatic stash would be a real differentiator and fits the `Confirmed` design.
   The staging packet must meet this deliberately rather than inherit it.
   Background: `docs/design/feature-inventory.md`, "Recovery".
-- **How diffs are rendered.** Syntax highlighting, word-level intra-line diff, and
-  whether the diff view and a future conflict view share a component.
+- **How diffs are rendered.** Partly answered: the `diff-engine` packet locks
+  word-level intra-line highlighting (token granularity, always on), unified by
+  default with side-by-side as one shared setting, and Fork's context controls —
+  `docs/prd/diff-engine.md` R6. Still open: syntax highlighting, and whether the
+  diff view and a future conflict view share a component.
 - **Freya's menu bar story on both platforms** (see D5).

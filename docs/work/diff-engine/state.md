@@ -37,8 +37,8 @@ files each gap, and takes a large gap to the user.
 
 ## New modules and interfaces introduced so far
 
-None yet. As phases land, record here: the type or function, its crate, and the
-one-line contract.
+Recorded as phases land: the type or function, its crate, and the one-line
+contract.
 
 All of phase 01's are in `cairn-model` and all are pure: no I/O, no clock, no
 dependency past the crate's allowlist. As-built prose: `docs/systems/diff.md`.

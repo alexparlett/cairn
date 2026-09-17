@@ -1,12 +1,22 @@
 ---
-status: in-flight
+status: shipped
 packet: credential-prompts
 opened: 2026-09-14
+shipped: 2026-09-17
 ---
 
 # PRD — Credential prompts
 
-The authoritative spec for the `credential-prompts` packet while it is in flight.
+**Shipped. Frozen — what this packet committed to, as it was committed to.** For
+how credentials, the `git` backend and fetch actually work now, read
+`docs/systems/credentials.md`; that is the living truth and this is not.
+Requirements R1-R4 and acceptance criteria B1-B8 were all met, each against a
+test that decides it, with two qualified passes: the SSH halves of B3, B4 and B5
+run against a real `sshd` that CI does not provision, so there they skip rather
+than decide (issue #20); and B6's `argv` arm rests on the guard and the type,
+not on a test that reads a process's command line (issue #26). Nothing below was
+descoped; push stayed out by L8 and is issue #16.
+
 Design frame: `docs/design/cairn.md`, decisions **D1** (writes go through the
 `git` binary) and **D2** (credentials delegated to git entirely). Evidence:
 `docs/research/credential-prompts/git-credential-delegation.md`.

@@ -98,6 +98,19 @@ fn refusing() -> Answers {
     Box::new(|_| None)
 }
 
+/// Answers the username and refuses the password — the only shape in which git's
+/// credential machinery could ask twice, since it retries a credential the server
+/// rejected and a refusal at the first ask never gets that far.
+fn refusing_only_the_password(username: String) -> Answers {
+    Box::new(move |prompt| match PromptKind::of(prompt) {
+        PromptKind::Username => Some(username.clone()),
+        PromptKind::Password
+        | PromptKind::Passphrase
+        | PromptKind::Confirmation
+        | PromptKind::Other => None,
+    })
+}
+
 /// The ssh fixture could not be built. Named on stderr (which `cargo test`
 /// shows only with `--nocapture` or on failure), and a FAILURE where
 /// `CAIRN_REQUIRE_SSH_FIXTURE` is set — which is how a CI job that provides
@@ -287,6 +300,65 @@ fn refusing_the_http_prompt_fails_the_fetch_cleanly_and_asks_nothing_again() {
             .trim()
             .is_empty(),
         "a failed fetch moved a ref"
+    );
+    let left =
+        askpass::wait_for_no_process_pointed_at(serving.socket_path(), Duration::from_secs(5));
+    assert!(
+        left.is_empty(),
+        "processes left behind after the refusal: {left:?}"
+    );
+}
+
+/// PRD B5, the half a refusal at the FIRST prompt cannot reach. `refusing()` makes
+/// git fail at the username, so it never presents a credential and never gets one
+/// rejected — but git retries a rejected credential, which is exactly where a second
+/// dialog would appear. Here the username is answered and the password refused: the
+/// ask must stop at two, and the fetch must fail rather than loop.
+#[test]
+fn refusing_the_password_after_answering_the_username_asks_for_neither_again() {
+    let source = fixtures::braided(4);
+    let remote = HttpRemote::of(&source);
+    let serving = Serving::serving(refusing_only_the_password(remote.username().to_owned()));
+    let local = with_origin(remote.url());
+
+    let started = Instant::now();
+    let (outcome, progress) = fetch_origin(&serving, &local, local.path(), None);
+    let error = match outcome {
+        Err(error) => error,
+        Ok(performed) => panic!("a refused password fetched anyway: {performed:?}"),
+    };
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "a refusal took {:?}: something waited or retried",
+        started.elapsed()
+    );
+
+    let asked = serving.prompts();
+    assert_eq!(
+        asked.len(),
+        2,
+        "git asked again after the password was refused: {asked:?}"
+    );
+    assert!(
+        matches!(PromptKind::of(&asked[0]), PromptKind::Username)
+            && matches!(PromptKind::of(&asked[1]), PromptKind::Password),
+        "the two asks were not the username and then the password: {asked:?}"
+    );
+
+    no_secret_in(
+        &error.to_string(),
+        remote.password(),
+        "the error shown to the user",
+    );
+    for line in &progress {
+        no_secret_in(line, remote.password(), "a progress line");
+    }
+    assert!(
+        local
+            .git(&["for-each-ref", "refs/remotes"])
+            .trim()
+            .is_empty(),
+        "a fetch that never authenticated moved a ref"
     );
     let left =
         askpass::wait_for_no_process_pointed_at(serving.socket_path(), Duration::from_secs(5));

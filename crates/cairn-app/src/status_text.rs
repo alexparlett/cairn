@@ -17,11 +17,29 @@ pub fn fetch_line(fetch: &FetchStatus) -> Option<String> {
         FetchStatus::Finished { remote } => Some(format!("Fetched {remote}")),
         FetchStatus::Cancelled { remote } => Some(format!("Fetch of {remote} cancelled")),
         // One line: git's whole stderr may be long, and the banner draws every frame.
-        FetchStatus::Failed { remote, message } => Some(format!(
-            "Fetch of {remote} failed: {}",
-            message.lines().next().unwrap_or_default()
-        )),
+        FetchStatus::Failed { remote, message } => {
+            Some(format!("Fetch of {remote} failed: {}", why_it_failed(message)))
+        }
     }
+}
+
+/// The one line of a failure worth a banner. `Error::GitFailed` carries git's whole
+/// stderr, and for a fetch that is progress first — "Enumerating objects: 5, done." —
+/// with the reason somewhere after it, so taking the first line told the user what git
+/// had got through rather than why it stopped. git prefixes its diagnostics, so prefer
+/// the first `fatal:` and then the first `error:`; a message with neither (a refusal
+/// raised by Cairn itself, say) is already one sentence and its first line is right.
+fn why_it_failed(message: &str) -> &str {
+    let diagnostic = |marker| {
+        message
+            .lines()
+            .map(str::trim)
+            .find(move |line: &&str| line.contains(marker))
+    };
+    diagnostic("fatal:")
+        .or_else(|| diagnostic("error:"))
+        .or_else(|| message.lines().next())
+        .unwrap_or_default()
 }
 
 /// What fills the list's place, or `None` when the list itself is what to draw.
@@ -111,6 +129,48 @@ mod tests {
             message: "first line\nsecond line\nthird".to_owned(),
         });
         assert_eq!(line.as_deref(), Some("Fetch of origin failed: first line"));
+    }
+
+    /// Caught by: showing how far git got instead of why it stopped. `Error::GitFailed`
+    /// puts the whole stderr in one string, and for a fetch the progress redraws come
+    /// first, so the first line is never the reason.
+    #[test]
+    fn a_failure_says_why_it_failed_and_not_how_far_git_got() {
+        let line = fetch_line(&FetchStatus::Failed {
+            remote: "origin".to_owned(),
+            message: "git fetch --progress origin failed (exit status: 128): remote: \
+                      Enumerating objects: 5, done.\nReceiving objects: 100%\n\
+                      fatal: Authentication failed for 'http://localhost/r.git/'"
+                .to_owned(),
+        });
+        assert_eq!(
+            line.as_deref(),
+            Some(
+                "Fetch of origin failed: fatal: Authentication failed for \
+                 'http://localhost/r.git/'"
+            )
+        );
+
+        // An `error:` line is the reason when there is no `fatal:`.
+        let line = fetch_line(&FetchStatus::Failed {
+            remote: "origin".to_owned(),
+            message: "Receiving objects: 100%\nerror: cannot lock ref 'refs/heads/main'"
+                .to_owned(),
+        });
+        assert_eq!(
+            line.as_deref(),
+            Some("Fetch of origin failed: error: cannot lock ref 'refs/heads/main'")
+        );
+
+        // And a message git did not raise keeps its first line, as before.
+        assert_eq!(
+            fetch_line(&FetchStatus::Failed {
+                remote: "origin".to_owned(),
+                message: "the prompt was refused\nand nothing asked again".to_owned(),
+            })
+            .as_deref(),
+            Some("Fetch of origin failed: the prompt was refused")
+        );
     }
 
     /// Caught by: giving both states the same words.

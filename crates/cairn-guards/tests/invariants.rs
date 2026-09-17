@@ -18,7 +18,13 @@ const DEPENDENCY_ALLOWLIST: &[(&str, &[&str])] = &[
     ("cairn-ui", &["cairn-model", "freya"]),
     (
         "cairn-app",
-        &["cairn-git", "cairn-model", "cairn-ui", "freya"],
+        &[
+            "cairn-askpass",
+            "cairn-git",
+            "cairn-model",
+            "cairn-ui",
+            "freya",
+        ],
     ),
     ("cairn-guards", &["toml"]),
     // Every crate here runs in a process holding a plaintext secret; keep it this short.

@@ -1,15 +1,32 @@
-//! The repository worker pool.
+//! The repository worker pool: the threads that touch the repository, and the
+//! values that cross back to the window.
+//!
+//! Three threads per open repository, started by the first, each with its own
+//! [`Outbox`] so the update stream ends only when every one of them has gone:
+//!
+//! - `cairn-repository` (this file): opens the channel and finds `git` before
+//!   the repository, serves the history walk, forwards operations, and on its
+//!   way out stops the other two.
+//! - `cairn-operations` (`operations.rs`): runs `git` verbs, so a fetch blocks
+//!   neither the walk nor the window.
+//! - `cairn-askpass` (`askpass.rs`): accepts the helper's questions and waits
+//!   on the window for each answer.
+//!
+//! Queries carry an epoch and are superseded by the next; operations carry
+//! none, so a scroll cannot cancel a fetch and a fetch cannot cancel a scroll.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 
-use cairn_git::ops::{Askpass, GitBinary, GitEnvironment};
 use cairn_git::{Error, HistoryCursor, HistoryRequest, HistorySession, SharedRepository};
 
+use super::askpass::{AcceptorStop, Reply, serve_prompts};
 use super::epoch::{Epoch, Epochs};
+use super::operations::{FetchControl, Operation, serve_operations};
 use super::request::{Request, Update};
+use super::startup::{Backend, Startup};
 use super::wake::{Wake, Woken};
 
 pub const WORKERS_PER_REPOSITORY: usize = 1;
@@ -21,44 +38,42 @@ const _: () = assert!(
      workers per repository need a routing decision, not a bigger constant"
 );
 
+/// What the window does with a credential prompt's answer; see [`Reply`].
+/// A plain callback, never a struct field: it holds the channel a secret
+/// travels down, and application state must not keep one.
+pub type Replier = Rc<dyn Fn(Reply)>;
+
 /// Returns before touching a disk; open failures arrive as [`Update::Failed`], and
 /// so does a `git` that is missing or older than Cairn requires, checked first.
 /// Drive [`Updates`] from exactly one task.
-pub fn open(path: impl AsRef<Path>) -> Result<(RepositoryHandle, Updates), OpenError> {
-    open_with(
-        path,
-        GitEnvironment::new(|name| std::env::var_os(name), &askpass()),
-    )
+pub fn open(path: impl AsRef<Path>) -> Result<(RepositoryHandle, Updates, Replier), OpenError> {
+    open_with(path, Startup::of_this_process())
 }
 
-/// The helper installed beside this executable; a bare name, which git and ssh
-/// search `PATH` for, if where this executable is cannot be known. No socket
-/// yet: the channel is opened by the fetch operation (next phase), and until
-/// then every prompt fails closed rather than hanging.
-fn askpass() -> Askpass {
-    let program = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(Path::to_owned))
-        .map_or_else(
-            || PathBuf::from(cairn_model::HELPER_PROGRAM),
-            |directory| directory.join(cairn_model::HELPER_PROGRAM),
-        );
-    Askpass::new(program, None)
-}
-
-/// [`open`] with the environment `git` is searched on and run with; what a test hands in.
-pub(crate) fn open_with(
+/// [`open`] with the environment `git` is searched on and run with, and the
+/// helper it is pointed at; what a test hands in.
+pub(super) fn open_with(
     path: impl AsRef<Path>,
-    environment: GitEnvironment,
-) -> Result<(RepositoryHandle, Updates), OpenError> {
+    startup: Startup,
+) -> Result<(RepositoryHandle, Updates, Replier), OpenError> {
     let path = path.as_ref().to_owned();
 
-    let (jobs, incoming) = channel::<(Epoch, Request)>();
+    let (jobs, incoming) = channel::<(Option<Epoch>, Request)>();
     let (outgoing, inbox) = channel::<Envelope>();
+    let (answers, answered) = channel::<Reply>();
     let wake = Wake::new();
     let epochs = Epochs::new();
 
+    // One sender per thread, so the stream ends when the last thread does.
     let outbox = Outbox {
+        updates: outgoing.clone(),
+        wake: Arc::clone(&wake),
+    };
+    let operations_outbox = Outbox {
+        updates: outgoing.clone(),
+        wake: Arc::clone(&wake),
+    };
+    let acceptor_outbox = Outbox {
         updates: outgoing,
         wake: Arc::clone(&wake),
     };
@@ -74,33 +89,49 @@ pub(crate) fn open_with(
             // leave the UI task an open, empty channel.
             let exit = WorkerExit {
                 outbox: Some(outbox),
-                wake: worker_wake,
+                wake: Arc::clone(&worker_wake),
             };
             let Some(outbox) = exit.outbox.as_ref() else {
                 return;
             };
-            // Once, before anything else: a missing or too-old git is reported with the
-            // version Cairn needs, never worked around (D1). Off the UI thread, since
-            // finding out means running `git --version`.
-            if let Err(error) = GitBinary::discover_with(environment) {
-                outbox.send(
-                    None,
-                    Update::Failed {
-                        message: error.to_string(),
-                    },
-                );
-                return;
-            }
-            match SharedRepository::discover(&opening) {
-                Ok(shared) => serve(shared, incoming, outbox, worker_epochs),
-                Err(source) => outbox.send(
+            // Once, before anything else: the channel, then git around it. A missing or
+            // too-old git is reported with the version Cairn needs, never worked around
+            // (D1). Off the UI thread, since finding out means running `git --version`.
+            let backend = match Backend::open(&startup) {
+                Ok(backend) => backend,
+                Err(error) => {
+                    outbox.send(
+                        None,
+                        Update::Failed {
+                            message: error.to_string(),
+                        },
+                    );
+                    return;
+                }
+            };
+            let shared = match SharedRepository::discover(&opening) {
+                Ok(shared) => Arc::new(shared),
+                Err(source) => {
                     // No epoch: failing to open answers no request.
-                    None,
-                    Update::Failed {
-                        message: source.to_string(),
-                    },
-                ),
-            }
+                    outbox.send(
+                        None,
+                        Update::Failed {
+                            message: source.to_string(),
+                        },
+                    );
+                    return;
+                }
+            };
+            let threads = Threads::start(
+                backend,
+                Arc::clone(&shared),
+                answered,
+                operations_outbox,
+                acceptor_outbox,
+                &worker_wake,
+            );
+            serve(&shared, incoming, outbox, worker_epochs, &threads);
+            threads.stop();
         })
         .map_err(|source| OpenError {
             message: format!(
@@ -119,21 +150,136 @@ pub(crate) fn open_with(
             wake,
             epochs,
         },
+        Rc::new(move |answer| {
+            // A failed send means the acceptor is gone; the prompt it served is refused.
+            let _ = answers.send(answer);
+        }),
     ))
+}
+
+/// The two threads the repository thread starts, and how it reaches them.
+struct Threads {
+    operations: Option<Sender<Operation>>,
+    control: FetchControl,
+    acceptor: Option<AcceptorStop>,
+}
+
+impl Threads {
+    fn start(
+        backend: Backend,
+        shared: Arc<SharedRepository>,
+        answered: Receiver<Reply>,
+        operations_outbox: Outbox,
+        acceptor_outbox: Outbox,
+        wake: &Arc<Wake>,
+    ) -> Self {
+        let (operations, queued) = channel::<Operation>();
+        let control = FetchControl::default();
+        let Backend {
+            git,
+            channel,
+            prompting,
+        } = backend;
+
+        let acceptor = channel.as_ref().map(|channel| {
+            let stop = AcceptorStop::new(channel.socket_path().to_owned());
+            let exit = WorkerExit {
+                outbox: Some(acceptor_outbox),
+                wake: Arc::clone(wake),
+            };
+            let channel = Arc::clone(channel);
+            let serving = stop.clone();
+            let started = std::thread::Builder::new()
+                .name("cairn-askpass".to_owned())
+                .spawn(move || {
+                    if let Some(outbox) = exit.outbox.as_ref() {
+                        serve_prompts(channel, answered, outbox, &serving);
+                    }
+                    // The channel (and with it the socket) goes before the stream ends.
+                    drop(exit);
+                });
+            // A thread that could not start leaves nothing to stop; `exit` went with the closure.
+            let _ = started;
+            stop
+        });
+
+        let running = control.clone();
+        let exit = WorkerExit {
+            outbox: Some(operations_outbox),
+            wake: Arc::clone(wake),
+        };
+        let _ = std::thread::Builder::new()
+            .name("cairn-operations".to_owned())
+            .spawn(move || {
+                if let Some(outbox) = exit.outbox.as_ref() {
+                    serve_operations(
+                        &git,
+                        &shared,
+                        channel.as_ref(),
+                        &prompting,
+                        &running,
+                        &queued,
+                        outbox,
+                    );
+                }
+                // This thread may hold the last reference to the channel: let it go first.
+                drop(channel);
+                drop(exit);
+            });
+
+        Self {
+            operations: Some(operations),
+            control,
+            acceptor,
+        }
+    }
+
+    fn perform(&self, operation: Operation) {
+        if let Some(operations) = &self.operations {
+            let _ = operations.send(operation);
+        }
+    }
+
+    /// Ends both threads; see [`Threads::drop`], which does the work so that
+    /// a panic in `serve` stops them too.
+    fn stop(self) {
+        drop(self);
+    }
+}
+
+impl Drop for Threads {
+    /// A fetch in flight is killed, the operations queue closed, and the
+    /// acceptor woken to see it should stop. Runs once the window has let go
+    /// (the acceptor's answering end is gone by then, so a prompt still
+    /// waiting is refused rather than left hanging) and on unwinding alike.
+    fn drop(&mut self) {
+        self.control.cancel();
+        self.operations = None;
+        if let Some(acceptor) = &self.acceptor {
+            acceptor.stop();
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct RepositoryHandle {
-    jobs: Sender<(Epoch, Request)>,
+    jobs: Sender<(Option<Epoch>, Request)>,
     epochs: Epochs,
 }
 
 impl RepositoryHandle {
-    /// Supersedes whatever was in flight; never blocks.
+    /// Never blocks. A query supersedes whatever query was in flight and is
+    /// numbered; an operation is queued behind nothing and supersedes
+    /// nothing, and the epoch returned is simply the current one.
     pub fn submit(&self, request: Request) -> Epoch {
-        let epoch = self.epochs.bump();
+        let epoch = if request.is_query() {
+            self.epochs.bump()
+        } else {
+            self.epochs.current()
+        };
+        let numbered = request.is_query().then_some(epoch);
         // A failed send means the worker is gone and has already said so.
-        let _ = self.jobs.send((epoch, request));
+        let _ = self.jobs.send((numbered, request));
         epoch
     }
 
@@ -200,20 +346,20 @@ impl std::error::Error for OpenError {}
 
 /// `epoch` is `None` for news about the worker itself.
 #[derive(Debug)]
-struct Envelope {
+pub(super) struct Envelope {
     epoch: Option<Epoch>,
     update: Update,
 }
 
 /// Not `Clone`: a second sender would hold the channel open past the exit wake.
 #[derive(Debug)]
-struct Outbox {
+pub(super) struct Outbox {
     updates: Sender<Envelope>,
     wake: Arc<Wake>,
 }
 
 impl Outbox {
-    fn send(&self, epoch: Option<Epoch>, update: Update) {
+    pub(super) fn send(&self, epoch: Option<Epoch>, update: Update) {
         if self.updates.send(Envelope { epoch, update }).is_ok() {
             self.wake.signal();
         }
@@ -249,15 +395,15 @@ impl Drop for WorkerExit {
 }
 
 fn serve(
-    shared: SharedRepository,
-    jobs: Receiver<(Epoch, Request)>,
+    shared: &SharedRepository,
+    jobs: Receiver<(Option<Epoch>, Request)>,
     outbox: &Outbox,
     epochs: Epochs,
+    threads: &Threads,
 ) {
     let repo = shared.to_worker();
     // Once, outside the loop: `scroll` borrows `repo` across turns, so moving this inside
-    // fails to compile. `drop(shared)` only turns a second `to_worker()` into a use-after-move.
-    drop(shared);
+    // fails to compile.
     let mut scroll: Option<HistorySession<'_>> = None;
     let mut cursor: Option<HistoryCursor> = None;
 
@@ -265,18 +411,45 @@ fn serve(
         if epochs.is_stopping() {
             break;
         }
-        if !epochs.is_current(epoch) {
+        if let Some(epoch) = epoch
+            && !epochs.is_current(epoch)
+        {
             continue; // Superseded before it was picked up; never started.
         }
 
         let rows = match request {
             Request::OpenHistory { rows } => {
-                // A different scroll: drop the open walk first.
+                // A different scroll: drop the open walk first. After a fetch this is
+                // also what honours `Invalidated::refs`: the new walk starts from the
+                // refs as they are now.
                 scroll = None;
                 cursor = None;
                 rows
             }
             Request::MoreHistory { rows } => rows,
+            Request::ListRemotes => {
+                match repo.remotes() {
+                    Ok(remotes) => outbox.send(None, Update::Remotes { remotes }),
+                    Err(error) => outbox.send(
+                        None,
+                        Update::Failed {
+                            message: error.to_string(),
+                        },
+                    ),
+                }
+                continue;
+            }
+            Request::Fetch { remote } => {
+                threads.perform(Operation::Fetch { remote });
+                continue;
+            }
+            Request::CancelFetch => {
+                threads.control.cancel();
+                continue;
+            }
+        };
+        let Some(epoch) = epoch else {
+            continue; // Every query is numbered; `submit` guarantees it.
         };
 
         if scroll.is_none() {
@@ -343,37 +516,15 @@ fn no_walk(error: Error) -> Update {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use std::task::{Context, Poll, Waker};
+    use std::task::Waker;
     use std::time::Instant;
 
-    /// Drives a future on this thread. On `std::task::Wake`, since `unsafe` is forbidden.
-    fn block_on<F: Future>(future: F) -> F::Output {
-        struct Unpark(std::thread::Thread);
-        impl std::task::Wake for Unpark {
-            fn wake(self: Arc<Self>) {
-                self.0.unpark();
-            }
-        }
-        let waker = Waker::from(Arc::new(Unpark(std::thread::current())));
-        woken_by(&waker, future)
-    }
-
-    /// [`block_on`] with the waker supplied.
-    fn woken_by<F: Future>(waker: &Waker, future: F) -> F::Output {
-        let mut cx = Context::from_waker(waker);
-        let mut future = std::pin::pin!(future);
-        loop {
-            match future.as_mut().poll(&mut cx) {
-                Poll::Ready(value) => return value,
-                Poll::Pending => std::thread::park(),
-            }
-        }
-    }
+    use crate::worker::fetch_tests::{UnbornRepository, block_on, woken_by};
 
     /// The Cairn checkout itself, opened through the real boundary.
     fn cairn() -> (RepositoryHandle, Updates) {
         match open(env!("CARGO_MANIFEST_DIR")) {
-            Ok(pair) => pair,
+            Ok((handle, updates, _)) => (handle, updates),
             Err(error) => panic!("opening the Cairn checkout: {error}"),
         }
     }
@@ -382,8 +533,8 @@ mod tests {
     #[test]
     fn opening_a_path_outside_a_repository_is_reported_and_names_the_path() {
         let outside = std::env::temp_dir().join("cairn-not-a-repository");
-        let (_handle, mut updates) = match open(&outside) {
-            Ok(pair) => pair,
+        let (_handle, mut updates, _) = match open(&outside) {
+            Ok(opened) => opened,
             Err(error) => panic!("starting the worker: {error}"),
         };
         match block_on(updates.next()) {
@@ -399,11 +550,11 @@ mod tests {
     /// the repository is not opened behind the refusal.
     #[test]
     fn a_missing_git_is_refused_naming_the_version_and_nothing_is_served() {
-        let (_handle, mut updates) = match open_with(
+        let (_handle, mut updates, _) = match open_with(
             env!("CARGO_MANIFEST_DIR"),
-            GitEnvironment::new(|_| None, &askpass()),
+            Startup::new(|_| None, PathBuf::from("/nonexistent/cairn-askpass")),
         ) {
-            Ok(pair) => pair,
+            Ok(opened) => opened,
             Err(error) => panic!("starting the worker: {error}"),
         };
         match block_on(updates.next()) {
@@ -419,20 +570,6 @@ mod tests {
         );
     }
 
-    /// GIT_ASKPASS names the helper installed beside this executable. The bare-name
-    /// fallback runs only when `current_exe` fails, which a test cannot make happen.
-    #[test]
-    fn the_helper_is_named_beside_this_executable() {
-        let askpass = askpass();
-        let this = std::env::current_exe().unwrap();
-        assert_eq!(askpass.program().parent(), this.parent());
-        assert_eq!(
-            askpass.program().file_name().and_then(|n| n.to_str()),
-            Some(cairn_model::HELPER_PROGRAM)
-        );
-        assert_eq!(askpass.socket(), None, "no channel is opened yet");
-    }
-
     /// `open` succeeds for a path with no repository above it.
     #[test]
     fn opening_returns_before_the_repository_is_found() {
@@ -443,46 +580,12 @@ mod tests {
         );
     }
 
-    /// Built with `std::fs`, not `git init`: the mutation guard scans this crate's tests too.
-    struct UnbornRepository {
-        path: PathBuf,
-    }
-
-    impl UnbornRepository {
-        fn new(name: &str) -> Self {
-            let path = std::env::temp_dir().join(name);
-            let _ = std::fs::remove_dir_all(&path);
-            let dot = path.join(".git");
-            for inside in ["objects/info", "objects/pack", "refs/heads", "refs/tags"] {
-                if let Err(error) = std::fs::create_dir_all(dot.join(inside)) {
-                    panic!("building {}: {error}", dot.join(inside).display());
-                }
-            }
-            if let Err(error) = std::fs::write(dot.join("HEAD"), "ref: refs/heads/main\n") {
-                panic!("writing HEAD: {error}");
-            }
-            if let Err(error) = std::fs::write(
-                dot.join("config"),
-                "[core]\n\trepositoryformatversion = 0\n\tbare = false\n",
-            ) {
-                panic!("writing config: {error}");
-            }
-            Self { path }
-        }
-    }
-
-    impl Drop for UnbornRepository {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.path);
-        }
-    }
-
     /// Caught by: deleting the unborn arm at the call site while `no_walk` stays correct.
     #[test]
     fn a_freshly_initialised_repository_reaches_the_view_as_an_empty_history() {
         let fixture = UnbornRepository::new("cairn-unborn-head");
-        let (handle, mut updates) = match open(&fixture.path) {
-            Ok(pair) => pair,
+        let (handle, mut updates, _) = match open(&fixture.path) {
+            Ok(opened) => opened,
             Err(error) => panic!("starting the worker: {error}"),
         };
         handle.submit(Request::OpenHistory { rows: 8 });
@@ -605,8 +708,8 @@ mod tests {
 
         let fixture = BorrowedRepository::new("cairn-retried-request");
         fixture.point_main_at(&"1".repeat(40));
-        let (handle, mut updates) = match open(&fixture.fixture.path) {
-            Ok(pair) => pair,
+        let (handle, mut updates, _) = match open(&fixture.fixture.path) {
+            Ok(opened) => opened,
             Err(error) => panic!("starting the worker: {error}"),
         };
 
@@ -684,7 +787,7 @@ mod tests {
             let epoch = handle.epochs.bump();
             for _ in 0..batch {
                 let queued = handle.jobs.send((
-                    epoch,
+                    Some(epoch),
                     Request::OpenHistory {
                         rows: whole_history,
                     },
@@ -976,8 +1079,8 @@ mod tests {
     #[test]
     fn a_failed_open_ends_the_stream_rather_than_leaving_it_open() {
         let outside = std::env::temp_dir().join("cairn-not-a-repository");
-        let (_handle, mut updates) = match open(&outside) {
-            Ok(pair) => pair,
+        let (_handle, mut updates, _) = match open(&outside) {
+            Ok(opened) => opened,
             Err(error) => panic!("starting the worker: {error}"),
         };
         match block_on(updates.next()) {
@@ -1008,7 +1111,7 @@ mod tests {
 
     #[test]
     fn submitting_returns_immediately_even_with_nobody_serving() {
-        let (jobs, incoming) = channel::<(Epoch, Request)>();
+        let (jobs, incoming) = channel::<(Option<Epoch>, Request)>();
         drop(incoming);
         let epochs = Epochs::new();
         let handle = RepositoryHandle {

@@ -1,6 +1,24 @@
-//! Status text for the history list.
+//! Status text for the history list and the fetch.
 
+use crate::fetch_state::FetchStatus;
 use crate::history_state::{Progress, Status};
+
+/// What the title bar says about the fetch, or `None` when there is nothing to say.
+pub fn fetch_line(fetch: &FetchStatus) -> Option<String> {
+    match fetch {
+        FetchStatus::Idle => None,
+        FetchStatus::Running { remote, line: None } => Some(format!("Fetching {remote}…")),
+        FetchStatus::Running {
+            remote,
+            line: Some(line),
+        } => Some(format!("Fetching {remote}: {line}")),
+        FetchStatus::Finished { remote } => Some(format!("Fetched {remote}")),
+        FetchStatus::Cancelled { remote } => Some(format!("Fetch of {remote} cancelled")),
+        FetchStatus::Failed { remote, message } => {
+            Some(format!("Fetch of {remote} failed: {message}"))
+        }
+    }
+}
 
 /// What fills the list's place, or `None` when the list itself is what to draw.
 pub fn placeholder(status: &Status, has_rows: bool) -> Option<String> {
@@ -28,6 +46,51 @@ pub fn loaded_count(progress: &Progress) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_fetch_state_but_idle_has_its_own_sentence() {
+        let remote = "origin".to_owned();
+        assert_eq!(fetch_line(&FetchStatus::Idle), None);
+        let sentences = [
+            FetchStatus::Running {
+                remote: remote.clone(),
+                line: None,
+            },
+            FetchStatus::Running {
+                remote: remote.clone(),
+                line: Some("Receiving objects: 40%".to_owned()),
+            },
+            FetchStatus::Finished {
+                remote: remote.clone(),
+            },
+            FetchStatus::Cancelled {
+                remote: remote.clone(),
+            },
+            FetchStatus::Failed {
+                remote,
+                message: "could not read Username".to_owned(),
+            },
+        ]
+        .map(|status| fetch_line(&status));
+        for sentence in &sentences {
+            assert!(
+                sentence.as_ref().is_some_and(|s| s.contains("origin")),
+                "{sentence:?} does not name the remote"
+            );
+        }
+        let distinct: std::collections::BTreeSet<_> = sentences.iter().collect();
+        assert_eq!(
+            distinct.len(),
+            sentences.len(),
+            "two states say the same thing"
+        );
+        assert!(sentences[1].as_ref().is_some_and(|s| s.contains("40%")));
+        assert!(
+            sentences[4]
+                .as_ref()
+                .is_some_and(|s| s.contains("could not read Username"))
+        );
+    }
 
     /// Caught by: giving both states the same words.
     #[test]

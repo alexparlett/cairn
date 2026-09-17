@@ -720,6 +720,7 @@ checksum = "7354288c522e7e980fafd2075d63d1285794c3a6a16cdd492f189ea406e5f18b"
 name = "cairn-app"
 version = "0.1.0"
 dependencies = [
+ "cairn-askpass",
  "cairn-git",
  "cairn-model",
  "cairn-ui",

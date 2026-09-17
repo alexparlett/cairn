@@ -2,39 +2,107 @@
 
 use std::rc::Rc;
 
-use cairn_model::{HistoryRow, RowContent, RowId};
-use cairn_ui::{CommitRow, HistoryHeader, HistoryList, ROW_HEIGHT, RowRender};
+use cairn_model::{HistoryRow, RemoteSummary, RowContent, RowId, Secret};
+use cairn_ui::{CommitRow, CredentialPrompt, HistoryHeader, HistoryList, ROW_HEIGHT, RowRender};
 use freya::prelude::*;
 
+use crate::fetch_state::{FetchStatus, PromptView};
 use crate::history_state::{Progress, Status};
-use crate::worker::Request;
+use crate::worker::{Reply, Request};
 use crate::{PAGE_ROWS, status_text};
 
-/// `submit` is `None` when no repository could be opened.
+/// What the window does with a credential prompt's answer: the worker's
+/// callback, which sends it on as a value. Never kept in a struct — it is
+/// the channel a secret travels down.
+pub type Replier = Rc<dyn Fn(Reply)>;
+
+/// The view state the window is drawn from. Handles, not values: the window
+/// subscribes to what it reads.
+#[derive(Clone, Copy)]
+pub struct View {
+    pub rows: State<Vec<HistoryRow>>,
+    pub progress: State<Progress>,
+    pub selected: State<Option<RowId>>,
+    pub fetch: State<FetchStatus>,
+    pub prompt: State<Option<PromptView>>,
+    pub remotes: State<Vec<RemoteSummary>>,
+}
+
+impl std::fmt::Debug for View {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("View")
+            .field("fetch", &*self.fetch.read())
+            .field("prompt", &*self.prompt.read())
+            .finish_non_exhaustive()
+    }
+}
+
+/// `submit` and `answer` are `None` when no repository could be opened.
 pub fn window(
     opened: &str,
-    rows: State<Vec<HistoryRow>>,
-    progress: State<Progress>,
-    selected: State<Option<RowId>>,
+    view: View,
     submit: Option<Rc<dyn Fn(Request)>>,
+    answer: Option<Replier>,
 ) -> Element {
-    let status = progress.read().status().clone();
-    let lanes = progress.read().lanes();
-    let has_rows = progress.read().has_rows();
-    let counted = status_text::loaded_count(&progress.read());
+    let status = view.progress.read().status().clone();
+    let lanes = view.progress.read().lanes();
+    let has_rows = view.progress.read().has_rows();
+    let counted = status_text::loaded_count(&view.progress.read());
+    let fetch = view.fetch.read().clone();
+    let prompt = view.prompt.read().clone();
 
     rect()
         .expanded()
         .theme_background()
-        .child(title_bar(opened, &counted))
+        .child(title_bar(
+            opened,
+            &counted,
+            &fetch,
+            &view.remotes.read(),
+            submit.clone(),
+        ))
+        .maybe_child(status_text::fetch_line(&fetch).map(|line| {
+            let failed = matches!(fetch, FetchStatus::Failed { .. });
+            banner(line, failed)
+        }))
         .child(HistoryHeader::new())
         .child(match status_text::placeholder(&status, has_rows) {
             Some(message) => notice(message, opened),
-            None => history(rows, lanes, selected, progress, submit),
+            None => history(view.rows, lanes, view.selected, view.progress, submit),
         })
         .maybe(has_rows, |el| match &status {
-            Status::Failed(message) => el.child(banner(message.clone())),
+            Status::Failed(message) => el.child(banner(message.clone(), true)),
             _ => el,
+        })
+        .maybe_child(prompt.map(|prompt| dialog(prompt, &fetch, view.prompt, answer)))
+        .into()
+}
+
+/// The credential dialog for `prompt`, answering through `answer` exactly once.
+fn dialog(
+    prompt: PromptView,
+    fetch: &FetchStatus,
+    mut showing: State<Option<PromptView>>,
+    answer: Option<Replier>,
+) -> Element {
+    let remote = fetch.running_remote().unwrap_or("git").to_owned();
+    let id = prompt.id;
+    let on_submit = answer.clone();
+    let on_cancel = answer;
+    CredentialPrompt::new(remote, prompt.text)
+        .on_submit(move |typed: String| {
+            // The first Cairn-owned type the characters reach; the buffer moves, no copy.
+            let secret = Secret::from_string(typed);
+            if let Some(answer) = &on_submit {
+                answer(Reply::Provide { prompt: id, secret });
+            }
+            showing.set(None);
+        })
+        .on_cancel(move |()| {
+            if let Some(answer) = &on_cancel {
+                answer(Reply::Refuse { prompt: id });
+            }
+            showing.set(None);
         })
         .into()
 }
@@ -71,7 +139,13 @@ fn history(
     .into()
 }
 
-fn title_bar(path: &str, counted: &str) -> Element {
+fn title_bar(
+    path: &str,
+    counted: &str,
+    fetch: &FetchStatus,
+    remotes: &[RemoteSummary],
+    submit: Option<Rc<dyn Fn(Request)>>,
+) -> Element {
     rect()
         .horizontal()
         .content(Content::Flex)
@@ -96,7 +170,40 @@ fn title_bar(path: &str, counted: &str) -> Element {
                 .font_size(13.)
                 .color(get_theme_or_default().read().colors().text_placeholder),
         )
+        .maybe_child(fetch_button(fetch, remotes, submit))
         .into()
+}
+
+/// "Fetch <remote>" for the default remote while nothing runs; "Cancel" while
+/// a fetch does; nothing when the repository has no remote to fetch.
+fn fetch_button(
+    fetch: &FetchStatus,
+    remotes: &[RemoteSummary],
+    submit: Option<Rc<dyn Fn(Request)>>,
+) -> Option<Element> {
+    let submit = submit?;
+    if fetch.is_running() {
+        return Some(
+            Button::new()
+                .compact()
+                .on_press(move |_| submit(Request::CancelFetch))
+                .child("Cancel")
+                .into(),
+        );
+    }
+    let remote = remotes.first()?.name.clone();
+    let caption = format!("Fetch {remote}");
+    Some(
+        Button::new()
+            .compact()
+            .on_press(move |_| {
+                submit(Request::Fetch {
+                    remote: remote.clone(),
+                })
+            })
+            .child(caption)
+            .into(),
+    )
 }
 
 fn notice(message: impl Into<String>, path: &str) -> Element {
@@ -117,20 +224,27 @@ fn notice(message: impl Into<String>, path: &str) -> Element {
         .into()
 }
 
-fn banner(message: String) -> Element {
+/// One line across the window; `alarming` draws it in the error colour.
+fn banner(message: String, alarming: bool) -> Element {
+    let colours = get_theme_or_default();
+    let colour = if alarming {
+        colours.read().colors().error
+    } else {
+        colours.read().colors().text_secondary
+    };
     rect()
         .width(Size::fill())
         .height(Size::px(ROW_HEIGHT))
         .cross_align(Alignment::center())
         .padding(Gaps::new(0., 12., 0., 12.))
-        .background(get_theme_or_default().read().colors().surface_tertiary)
+        .background(colours.read().colors().surface_tertiary)
         .child(
             label()
                 .text(message)
                 .max_lines(1)
                 .text_overflow(TextOverflow::Ellipsis)
                 .font_size(13.)
-                .color(get_theme_or_default().read().colors().error),
+                .color(colour),
         )
         .into()
 }
@@ -141,6 +255,8 @@ mod tests {
 
     use cairn_model::{CommitSummary, EdgeSegment, GraphRow, Lane, Oid};
     use freya_testing::TestingRunner;
+
+    use crate::fetch_state::{FetchStatus, PromptView};
 
     use cairn_ui::{COLUMN_GAP, ROW_PADDING, graph_width};
 
@@ -175,40 +291,77 @@ mod tests {
         }
     }
 
-    #[derive(Clone)]
-    struct Fixture {
-        rows: State<Vec<HistoryRow>>,
-        progress: State<Progress>,
-    }
-
     type Submitted = Rc<RefCell<Vec<Request>>>;
 
-    fn launch(initial: Vec<HistoryRow>, progress: Progress) -> (TestingRunner, Fixture, Submitted) {
+    /// What was answered: the prompt, and the secret's length (never its bytes) or `None`
+    /// for a refusal.
+    type Answered = Rc<RefCell<Vec<(crate::worker::PromptId, Option<usize>)>>>;
+
+    fn launch(initial: Vec<HistoryRow>, progress: Progress) -> (TestingRunner, View, Submitted) {
+        let (test, view, submitted, _) = launch_with(initial, progress, FetchStatus::Idle, None);
+        (test, view, submitted)
+    }
+
+    fn launch_with(
+        initial: Vec<HistoryRow>,
+        progress: Progress,
+        fetch: FetchStatus,
+        prompt: Option<PromptView>,
+    ) -> (TestingRunner, View, Submitted, Answered) {
         let submitted = Submitted::default();
+        let answered = Answered::default();
         let app = {
             let submitted = submitted.clone();
+            let answered = answered.clone();
             move || {
-                let fixture = use_consume::<Fixture>();
-                let selected = use_state(|| None::<RowId>);
+                let view = use_consume::<View>();
                 let submitted = submitted.clone();
+                let answered = answered.clone();
                 let submit: Rc<dyn Fn(Request)> =
                     Rc::new(move |request| submitted.borrow_mut().push(request));
-                window(PATH, fixture.rows, fixture.progress, selected, Some(submit))
+                let answer: Replier = Rc::new(move |answer| {
+                    answered.borrow_mut().push(match answer {
+                        Reply::Provide { prompt, secret } => (prompt, Some(secret.len())),
+                        Reply::Refuse { prompt } => (prompt, None),
+                    });
+                });
+                window(PATH, view, Some(submit), Some(answer))
             }
         };
-        let (mut test, fixture) = TestingRunner::new(
+        let (mut test, view) = TestingRunner::new(
             app,
             (800., HEIGHT).into(),
             move |runner| {
-                runner.provide_root_context(|| Fixture {
+                runner.provide_root_context(|| View {
                     rows: State::create(initial),
                     progress: State::create(progress),
+                    selected: State::create(None),
+                    fetch: State::create(fetch),
+                    prompt: State::create(prompt),
+                    remotes: State::create(vec![RemoteSummary {
+                        name: "origin".to_owned(),
+                        url: Some("https://git.example.com/ada/engine".to_owned()),
+                    }]),
                 })
             },
             1.,
         );
+        for _ in 0..3 {
+            test.sync_and_update();
+        }
+        (test, view, submitted, answered)
+    }
+
+    fn click_label(test: &mut TestingRunner, caption: &str) {
+        let centre = test
+            .find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == caption)
+                    .map(|_| node.layout().area.center())
+            })
+            .unwrap_or_else(|| panic!("no label reads {caption:?}; labels: {:?}", texts(test)));
+        test.click_cursor((f64::from(centre.x), f64::from(centre.y)));
         test.sync_and_update();
-        (test, fixture, submitted)
     }
 
     fn texts(test: &TestingRunner) -> Vec<String> {
@@ -415,7 +568,7 @@ mod tests {
     #[test]
     fn reaching_the_end_asks_for_one_page_until_that_page_arrives() {
         let first = 200;
-        let (mut test, fixture, submitted) =
+        let (mut test, view, submitted) =
             launch((0..first).map(row).collect(), received(first, false));
         let more = Request::MoreHistory { rows: PAGE_ROWS };
         let scroll_to_end = |test: &mut TestingRunner, rows: usize| {
@@ -439,7 +592,7 @@ mod tests {
             "a second page was asked for before the first arrived"
         );
 
-        let (mut rows, mut progress) = (fixture.rows, fixture.progress);
+        let (mut rows, mut progress) = (view.rows, view.progress);
         rows.write().extend((first..first * 2).map(row));
         progress.write().received(1, false, first * 2);
         test.sync_and_update();
@@ -454,7 +607,7 @@ mod tests {
     #[test]
     fn a_failed_page_is_asked_for_again_on_the_next_approach_to_the_end() {
         let first = 200;
-        let (mut test, fixture, submitted) =
+        let (mut test, view, submitted) =
             launch((0..first).map(row).collect(), received(first, false));
         let scroll = |test: &mut TestingRunner, rows: f64| {
             test.scroll((100., 200.), (0., -(rows * ROW_HEIGHT as f64)));
@@ -463,7 +616,7 @@ mod tests {
         scroll(&mut test, first as f64);
         assert_eq!(submitted.borrow().len(), 1);
 
-        let (mut rows, mut progress) = (fixture.rows, fixture.progress);
+        let (mut rows, mut progress) = (view.rows, view.progress);
         progress
             .write()
             .failed("failed to read commit abc".to_owned());
@@ -502,6 +655,134 @@ mod tests {
         assert!(
             !shown.iter().any(|text| text == "failed to read commit abc"),
             "the failure stayed up after the retry worked"
+        );
+    }
+
+    /// PRD product rule: a prompt in the view state is drawn as the dialog naming the
+    /// remote being fetched and the URL git asked about, and what is typed leaves as a
+    /// secret naming that prompt — once — after which the dialog is gone.
+    #[test]
+    fn a_prompt_draws_the_dialog_and_its_answer_leaves_as_a_secret_for_that_prompt() {
+        let id = crate::worker::PromptId::for_tests(7);
+        let (mut test, view, _, answered) = launch_with(
+            (0..3).map(row).collect(),
+            received(3, true),
+            FetchStatus::Running {
+                remote: "origin".to_owned(),
+                line: None,
+            },
+            Some(PromptView {
+                id,
+                text: "Password for 'https://git.example.com/ada/engine': ".to_owned(),
+            }),
+        );
+        let shown = texts(&test);
+        assert!(
+            shown.iter().any(|t| t.contains("origin")),
+            "the dialog does not name the remote: {shown:?}"
+        );
+        assert!(
+            shown
+                .iter()
+                .any(|t| t.contains("https://git.example.com/ada/engine")),
+            "the dialog does not show the URL: {shown:?}"
+        );
+
+        let typed = format!("generated-{}", std::process::id());
+        test.write_text(&typed);
+        test.press_key(Key::Named(NamedKey::Enter));
+        assert_eq!(
+            answered.borrow().as_slice(),
+            [(id, Some(typed.len()))],
+            "the answer did not leave as a secret naming the prompt"
+        );
+        assert_eq!(
+            *view.prompt.read(),
+            None,
+            "the dialog stayed up after answering"
+        );
+        assert!(
+            !texts(&test).iter().any(|t| t.contains(&typed)),
+            "the typed secret is drawn somewhere: {:?}",
+            texts(&test)
+        );
+    }
+
+    #[test]
+    fn cancelling_the_dialog_refuses_that_prompt() {
+        let id = crate::worker::PromptId::for_tests(3);
+        let (mut test, view, _, answered) = launch_with(
+            Vec::new(),
+            received(0, true),
+            FetchStatus::Running {
+                remote: "origin".to_owned(),
+                line: None,
+            },
+            Some(PromptView {
+                id,
+                text: "Username for 'https://git.example.com/x': ".to_owned(),
+            }),
+        );
+        click_label(&mut test, "Cancel");
+        assert_eq!(answered.borrow().as_slice(), [(id, None)]);
+        assert_eq!(*view.prompt.read(), None);
+    }
+
+    #[test]
+    fn the_fetch_button_fetches_the_default_remote_and_becomes_cancel_while_running() {
+        let (mut test, view, submitted) = launch(Vec::new(), received(0, true));
+        click_label(&mut test, "Fetch origin");
+        assert_eq!(
+            submitted.borrow().as_slice(),
+            [Request::Fetch {
+                remote: "origin".to_owned()
+            }]
+        );
+
+        let mut fetch = view.fetch;
+        fetch.write().started("origin".to_owned());
+        fetch
+            .write()
+            .progressed("origin", "Receiving objects: 40%".to_owned());
+        test.sync_and_update();
+        let shown = texts(&test);
+        assert!(
+            shown
+                .iter()
+                .any(|t| t == "Fetching origin: Receiving objects: 40%"),
+            "the progress is not shown: {shown:?}"
+        );
+        assert!(
+            !shown.iter().any(|t| t == "Fetch origin"),
+            "a second fetch was offered while one runs"
+        );
+        click_label(&mut test, "Cancel");
+        assert_eq!(submitted.borrow().last(), Some(&Request::CancelFetch));
+    }
+
+    #[test]
+    fn a_failed_fetch_is_said_in_the_window_and_the_button_comes_back() {
+        let (test, _, _, _) = launch_with(
+            (0..3).map(row).collect(),
+            received(3, true),
+            FetchStatus::Failed {
+                remote: "origin".to_owned(),
+                message: "could not read Username for 'https://x': terminal prompts disabled"
+                    .to_owned(),
+            },
+            None,
+        );
+        let shown = texts(&test);
+        assert!(
+            shown
+                .iter()
+                .any(|t| t.contains("Fetch of origin failed") && t.contains("could not read")),
+            "{shown:?}"
+        );
+        assert!(shown.iter().any(|t| t == "Fetch origin"), "{shown:?}");
+        assert!(
+            shown.iter().any(|t| t == "commit 0"),
+            "the rows were lost: {shown:?}"
         );
     }
 }

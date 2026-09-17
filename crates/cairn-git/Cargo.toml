@@ -13,6 +13,7 @@ publish = false
 [dependencies]
 cairn-model.workspace = true
 gix.workspace = true
+nix.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

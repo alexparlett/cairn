@@ -57,9 +57,16 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             fetch.set(FetchStatus::Finished { remote });
             reload_if(refreshed, rows, progress, worker);
         }
-        Update::FetchCancelled { remote, refreshed } => {
+        Update::FetchCancelled {
+            remote,
+            refreshed,
+            stranded_locks,
+        } => {
             withdraw(&mut prompt, worker);
-            fetch.set(FetchStatus::Cancelled { remote });
+            fetch.set(FetchStatus::Cancelled {
+                remote,
+                stranded_locks,
+            });
             reload_if(refreshed, rows, progress, worker);
         }
         Update::FetchFailed {
@@ -251,6 +258,7 @@ mod tests {
             Update::FetchCancelled {
                 remote: "origin".to_owned(),
                 refreshed: true,
+                stranded_locks: Vec::new(),
             },
             Update::FetchFailed {
                 remote: "origin".to_owned(),
@@ -265,6 +273,31 @@ mod tests {
         }
     }
 
+    /// Caught by: dropping the paths between the worker and the banner, which is the one
+    /// hop nothing else pins.
+    #[test]
+    fn a_cancelled_fetch_hands_the_lock_files_it_found_to_the_banner() {
+        let lock = std::path::PathBuf::from("/r/.git/refs/remotes/origin/main.lock");
+        let (test, view, asked) = launch(running());
+        applying(
+            &test,
+            view,
+            &asked,
+            Update::FetchCancelled {
+                remote: "origin".to_owned(),
+                refreshed: false,
+                stranded_locks: vec![lock.clone()],
+            },
+        );
+        assert_eq!(
+            *view.fetch.read(),
+            FetchStatus::Cancelled {
+                remote: "origin".to_owned(),
+                stranded_locks: vec![lock],
+            }
+        );
+    }
+
     /// Caught by: deleting the withdrawal — the dialog stays up after the fetch ended and
     /// the helper behind it waits until the user notices.
     #[test]
@@ -277,6 +310,7 @@ mod tests {
             Update::FetchCancelled {
                 remote: "origin".to_owned(),
                 refreshed: false,
+                stranded_locks: Vec::new(),
             },
             Update::FetchFailed {
                 remote: "origin".to_owned(),

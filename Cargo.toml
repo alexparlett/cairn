@@ -26,6 +26,12 @@ freya-testing = { git = "https://github.com/alexparlett/freya", rev = "caa46f871
 # is what lets gix open a repository made with `--object-format=sha256`.
 gix = { version = "0.87.1", features = ["blame", "blob-diff", "revision", "status", "max-performance", "parallel", "sha256"] }
 thiserror = "2"
+# Sends SIGTERM to a git child on cancel, from safe code: `std` can only
+# SIGKILL, and git removes its lock files on SIGTERM alone (issue #19).
+# `signal` is the `kill(2)` wrapper, `process` the `Pid` it takes. `process`
+# also compiles `posix_spawn` and the `exec` family, which the terminal-prompt
+# guard forbids by spelling so no process can start without `GitEnvironment`.
+nix = { version = "0.31.3", default-features = false, features = ["signal", "process"] }
 # Zeroes credential buffers on drop with writes the compiler may not remove
 # (credential-prompts L11). `alloc` is the `Vec` impl; nothing else is used.
 zeroize = { version = "1.9", default-features = false, features = ["alloc"] }

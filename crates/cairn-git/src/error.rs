@@ -83,10 +83,18 @@ pub enum Error {
         stderr: String,
     },
 
-    /// The user cancelled the operation and the process was killed. Not a
-    /// failure to report as one: the caller asked for this.
-    #[error("git {arguments} was cancelled")]
-    GitCancelled { arguments: String },
+    /// The user cancelled the operation and the process was ended. Not a
+    /// failure to report as one: the caller asked for this. `stranded_locks`
+    /// is every `*.lock` found under the git directory once the process was
+    /// gone. A `SIGKILL` that landed mid-write leaves one, and so does an
+    /// earlier crash — and so does a git running in a terminal right now,
+    /// which the search cannot tell apart; each is what a later write to
+    /// that file fails on while it is there. Empty in the common case.
+    #[error("git {arguments} was cancelled{}", StrandedLocks(stranded_locks))]
+    GitCancelled {
+        arguments: String,
+        stranded_locks: Vec<PathBuf>,
+    },
 
     /// Reading the refs to see whether an operation moved any failed.
     #[error("failed to read the refs of the repository: {source}")]
@@ -94,6 +102,29 @@ pub enum Error {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
+}
+
+/// Lock files in a message: nothing when there are none, otherwise the
+/// sentence a user needs to act on them, naming each path.
+struct StrandedLocks<'a>(&'a [PathBuf]);
+
+impl std::fmt::Display for StrandedLocks<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0.is_empty() {
+            return Ok(());
+        }
+        f.write_str(
+            "; lock files remain under the git directory, which later writes will fail on while \
+             they are there (stale if no other git is running here): ",
+        )?;
+        for (i, path) in self.0.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{}", path.display())?;
+        }
+        Ok(())
+    }
 }
 
 /// A search path in a message: `/usr/local/bin, /usr/bin`, or `nothing` when
@@ -112,5 +143,39 @@ impl std::fmt::Display for Directories<'_> {
             write!(f, "{}", directory.display())?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Issue #19: the message names every stranded lock, and says nothing about locks
+    /// when there are none — the common case, which must read as before.
+    #[test]
+    fn a_cancellation_names_what_it_stranded_and_is_silent_when_nothing_was() {
+        let clean = Error::GitCancelled {
+            arguments: "fetch origin".to_owned(),
+            stranded_locks: Vec::new(),
+        };
+        assert_eq!(clean.to_string(), "git fetch origin was cancelled");
+
+        let stranded = Error::GitCancelled {
+            arguments: "fetch origin".to_owned(),
+            stranded_locks: vec![
+                PathBuf::from("/r/.git/packed-refs.lock"),
+                PathBuf::from("/r/.git/refs/remotes/origin/main.lock"),
+            ],
+        };
+        let text = stranded.to_string();
+        assert!(
+            text.starts_with("git fetch origin was cancelled; "),
+            "{text}"
+        );
+        assert!(text.contains("lock file"), "{text}");
+        assert!(
+            text.ends_with("/r/.git/packed-refs.lock, /r/.git/refs/remotes/origin/main.lock"),
+            "{text}"
+        );
     }
 }

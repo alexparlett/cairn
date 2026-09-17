@@ -14,7 +14,8 @@ use cairn_guards::{
 /// Crates whose dependency list is pinned; a crate with no row here fails.
 const DEPENDENCY_ALLOWLIST: &[(&str, &[&str])] = &[
     ("cairn-model", &["zeroize"]),
-    ("cairn-git", &["cairn-model", "gix", "thiserror"]),
+    // `nix`: SIGTERM on cancel, so git can remove its lock files (issue #19).
+    ("cairn-git", &["cairn-model", "gix", "nix", "thiserror"]),
     ("cairn-ui", &["cairn-model", "freya"]),
     (
         "cairn-app",
@@ -625,6 +626,40 @@ fn only_the_ops_module_mutates_a_repository() {
 const PROCESS_ENVIRONMENT_FILE: &str = "crates/cairn-git/src/ops/environment.rs";
 const PROCESS_ENVIRONMENT_TYPE: &str = "GitEnvironment";
 
+/// Ways to start a process that are not a `Command` and are safe Rust: `nix`'s `process`
+/// feature (linked for `Pid`, which `SIGTERM` needs) compiles `posix_spawn`, `posix_spawnp`
+/// and the `exec` family, and none of them passes through `GitEnvironment::command`. No
+/// production file may name one; `fork` is `unsafe` and already forbidden by the workspace.
+const SPAWN_SPELLINGS: &[&str] = &[
+    "posix_spawn",
+    "posix_spawnp",
+    "execv",
+    "execve",
+    "execvp",
+    "execvpe",
+    "execveat",
+    "fexecve",
+];
+
+/// Every spawn spelling, as it would be written, spelled out apart from the roster so that
+/// an entry dropped from [`SPAWN_SPELLINGS`] fails here rather than shrinking the check.
+const SPAWN_SPELLINGS_AS_WRITTEN: &[(&str, &str)] = &[
+    (
+        "posix_spawn",
+        "nix::spawn::posix_spawn(&program, &actions, &attr, &args, &env)",
+    ),
+    (
+        "posix_spawnp",
+        "posix_spawnp(&program, &actions, &attr, &args, &env)",
+    ),
+    ("execv", "nix::unistd::execv(&program, &args)"),
+    ("execve", "unistd::execve(&program, &args, &env)"),
+    ("execvp", "execvp(&program, &args)"),
+    ("execvpe", "execvpe(&program, &args, &env)"),
+    ("execveat", "execveat(dirfd, &program, &args, &env, flags)"),
+    ("fexecve", "fexecve(fd, &args, &env)"),
+];
+
 /// Structural, not behavioural: the value is pinned by `cairn-git`'s own tests over the builder
 /// and over a stub `git` that prints its environment. This guard is against erosion of the ONE
 /// construction path those tests rely on. Scope: the product crates' `src/` (test modules
@@ -662,6 +697,17 @@ fn every_git_invocation_disables_the_terminal_prompt() {
                 path.display(),
                 hits[0]
             );
+            for spelling in SPAWN_SPELLINGS {
+                let hits = mentions_crate(&production, spelling);
+                assert!(
+                    hits.is_empty(),
+                    "{}:{} names `{spelling}`, a way to start a process that never passes \
+                     through {PROCESS_ENVIRONMENT_TYPE}::command, so nothing clears the \
+                     inherited environment or sets GIT_TERMINAL_PROMPT=0 for it.",
+                    path.display(),
+                    hits[0]
+                );
+            }
             let hits = configures_process_environment(&production);
             assert!(
                 hits.is_empty(),
@@ -703,6 +749,31 @@ fn every_git_invocation_disables_the_terminal_prompt() {
         panic!("{PROCESS_ENVIRONMENT_FILE} is gone; the environment it builds is an invariant")
     });
     let production = code_without_test_modules(&code_without_strings(&source));
+    for spelling in SPAWN_SPELLINGS {
+        assert!(
+            mentions_crate(&production, spelling).is_empty(),
+            "{PROCESS_ENVIRONMENT_FILE} names `{spelling}`; the one process construction it may \
+             hold is the Command that env_clear()s."
+        );
+    }
+    // The roster is checked against a list spelled out apart from it, so an entry removed
+    // from SPAWN_SPELLINGS fails here; and the matcher sees each spelling as it would be
+    // written, so an empty scan above is a scan, not a miss.
+    for (spelling, as_written) in SPAWN_SPELLINGS_AS_WRITTEN {
+        assert!(
+            SPAWN_SPELLINGS.contains(spelling),
+            "`{spelling}` is a way to start a process and is no longer on SPAWN_SPELLINGS"
+        );
+        assert!(
+            !mentions_crate(as_written, spelling).is_empty(),
+            "the spawn matcher does not see `{spelling}` in `{as_written}`"
+        );
+    }
+    assert_eq!(
+        SPAWN_SPELLINGS.len(),
+        SPAWN_SPELLINGS_AS_WRITTEN.len(),
+        "SPAWN_SPELLINGS and SPAWN_SPELLINGS_AS_WRITTEN name different sets of spellings"
+    );
     assert_eq!(
         constructs_process_command(&production).len(),
         1,

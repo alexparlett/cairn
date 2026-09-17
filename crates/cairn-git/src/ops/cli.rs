@@ -21,9 +21,13 @@ use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStderr, Stdio};
+use std::process::{Child, ChildStderr, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
+
+use nix::sys::signal::{Signal, kill};
+use nix::unistd::Pid;
 
 use cairn_model::AskpassToken;
 
@@ -137,7 +141,11 @@ impl<'a> GitCommand<'a> {
             )));
         };
         Ok(Running {
-            child: Arc::new(Mutex::new(child)),
+            process: Arc::new(Mutex::new(Process {
+                child,
+                terminated_at: None,
+                killed: false,
+            })),
             cancelled: Arc::new(AtomicBool::new(false)),
             stderr: Some(stderr),
             arguments: describe(&self.arguments),
@@ -150,11 +158,80 @@ impl<'a> GitCommand<'a> {
 #[derive(Debug)]
 pub(crate) struct Running {
     /// Shared with every [`ProcessKill`], which needs the handle to signal it.
-    child: Arc<Mutex<Child>>,
+    process: Arc<Mutex<Process>>,
     /// Set by a kill, so [`Running::finish`] reports a cancellation and not a failure.
     cancelled: Arc<AtomicBool>,
     stderr: Option<ChildStderr>,
     arguments: String,
+}
+
+/// The child and how far a cancel has got with it. One lock covers both, so
+/// the two threads that act on a cancel — the one that asked, which sends
+/// `SIGTERM`, and the one waiting in [`Running::finish`], which escalates —
+/// never send the same signal twice or race the reap.
+#[derive(Debug)]
+struct Process {
+    child: Child,
+    /// When `SIGTERM` went out; `None` until a cancel reaches the process.
+    terminated_at: Option<Instant>,
+    /// `SIGKILL` has gone out: the grace period passed with git still running.
+    killed: bool,
+}
+
+/// How long a cancelled git gets to act on `SIGTERM` before `SIGKILL`. git's
+/// handler removes its temporary and lock files and exits at once, in
+/// milliseconds; two seconds is that on a loaded machine with room to spare,
+/// and short enough that "cancelled" still arrives while the user is looking.
+pub(crate) const TERMINATION_GRACE: Duration = Duration::from_secs(2);
+
+impl Process {
+    /// `SIGTERM`, once: git removes the lock files it holds on the way out, which
+    /// it cannot after `SIGKILL`. Never to a child that has exited: once it is
+    /// reaped its pid is free for the system to hand to any other process, and
+    /// `std`'s own `kill` refuses for that reason — `try_wait` under this lock
+    /// is the same refusal, since nothing else can reap while the lock is held,
+    /// and a child that has exited but not been reaped is a zombie the signal
+    /// cannot hurt. A pid the signal cannot name — impossible on the platforms
+    /// git runs on, handled rather than assumed — falls back to what `std` can
+    /// send.
+    fn terminate(&mut self) {
+        if self.terminated_at.is_some() {
+            return;
+        }
+        if !matches!(self.child.try_wait(), Ok(None)) {
+            return;
+        }
+        self.terminated_at = Some(Instant::now());
+        match i32::try_from(self.child.id()) {
+            Ok(pid) => {
+                let _ = kill(Pid::from_raw(pid), Signal::SIGTERM);
+            }
+            Err(_) => {
+                let _ = self.child.kill();
+                self.killed = true;
+            }
+        }
+    }
+
+    /// Whether the child has exited. While `cancelled`, also drives the cancel
+    /// forward: sends `SIGTERM` if the killer missed the lock, and `SIGKILL`
+    /// once [`TERMINATION_GRACE`] has passed with the process still running.
+    fn poll(&mut self, cancelled: bool) -> std::io::Result<Option<ExitStatus>> {
+        if let Some(status) = self.child.try_wait()? {
+            return Ok(Some(status));
+        }
+        if cancelled {
+            match self.terminated_at {
+                None => self.terminate(),
+                Some(at) if !self.killed && at.elapsed() >= TERMINATION_GRACE => {
+                    let _ = self.child.kill();
+                    self.killed = true;
+                }
+                Some(_) => {}
+            }
+        }
+        Ok(None)
+    }
 }
 
 /// Bytes read from the pipe at a time; git's progress lines are far shorter.
@@ -164,7 +241,7 @@ impl Running {
     /// A handle that kills the process from any thread; see [`ProcessKill::kill`].
     pub(crate) fn killer(&self) -> ProcessKill {
         ProcessKill {
-            child: Arc::clone(&self.child),
+            process: Arc::clone(&self.process),
             cancelled: Arc::clone(&self.cancelled),
         }
     }
@@ -172,7 +249,7 @@ impl Running {
     /// The child's process id, for a test that checks it was reaped.
     #[cfg(test)]
     pub(crate) fn id(&self) -> u32 {
-        lock(&self.child).id()
+        lock(&self.process).child.id()
     }
 
     /// Streams stderr to `progress`, one line as each completes — a line ends
@@ -186,6 +263,12 @@ impl Running {
     /// killed `git`. Waiting for the pipe to close would wait for them; after a
     /// kill this returns as soon as `git` itself is reaped, and the reader
     /// thread ends by itself when the last child lets the pipe go.
+    ///
+    /// This is also the thread that finishes a cancel: every poll while
+    /// cancelled runs [`Process::poll`], so a `SIGTERM` the killer could not
+    /// send (it only tries for the lock) goes out from here, and `SIGKILL`
+    /// follows once [`TERMINATION_GRACE`] has passed — the wait after a cancel
+    /// is bounded by that and the poll interval, whatever git does.
     pub(crate) fn finish(mut self, mut progress: impl FnMut(&str)) -> Result<Output, Error> {
         let (lines, read) = std::sync::mpsc::channel::<String>();
         let Some(stderr) = self.stderr.take() else {
@@ -213,8 +296,9 @@ impl Running {
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             }
             if self.cancelled.load(Ordering::Acquire) {
-                // Killed: reap git as soon as it is gone and stop waiting on its children.
-                if let Ok(Some(exited)) = lock(&self.child).try_wait() {
+                // Cancelled: reap git as soon as it is gone and stop waiting on its
+                // children; escalate to SIGKILL if it outstays the grace period.
+                if let Ok(Some(exited)) = lock(&self.process).poll(true) {
                     status = Some(exited);
                     break;
                 }
@@ -225,7 +309,7 @@ impl Running {
 
     fn reap(
         &mut self,
-        already: Option<std::process::ExitStatus>,
+        already: Option<ExitStatus>,
         progress: &mut impl FnMut(&str),
         everything: String,
     ) -> Result<Output, Error> {
@@ -235,9 +319,10 @@ impl Running {
             // Polled rather than `wait()`ed, so the lock is never held across a block and
             // a kill from another thread can always take it.
             None => loop {
+                let cancelled = self.cancelled.load(Ordering::Acquire);
                 let exited =
-                    lock(&self.child)
-                        .try_wait()
+                    lock(&self.process)
+                        .poll(cancelled)
                         .map_err(|source| Error::GitNotStarted {
                             program: PathBuf::from("git"),
                             source,
@@ -258,8 +343,11 @@ impl Running {
             });
         }
         if self.cancelled.load(Ordering::Acquire) {
+            // What the cancel left on disk is the operation's to find: it knows the
+            // repository, and this runner knows only a process.
             return Err(Error::GitCancelled {
                 arguments: std::mem::take(&mut self.arguments),
+                stranded_locks: Vec::new(),
             });
         }
         Err(Error::GitFailed {
@@ -271,7 +359,7 @@ impl Running {
 }
 
 /// How often a cancelled wait checks whether `git` has exited.
-const EXIT_POLL: std::time::Duration = std::time::Duration::from_millis(20);
+const EXIT_POLL: Duration = Duration::from_millis(20);
 
 /// Reads `stderr` to its end, sending each completed line (ending at `\n` or
 /// `\r`, terminator stripped, lossily decoded) down `lines`; a receiver that
@@ -313,39 +401,44 @@ fn report(line: &str, progress: &mut impl FnMut(&str)) {
     }
 }
 
-/// Kills the process a [`Running`] is waiting on, from another thread. The
+/// Ends the process a [`Running`] is waiting on, from another thread. The
 /// process is still reaped by [`Running::finish`], which then reports
 /// [`Error::GitCancelled`]; a kill after a clean exit changes nothing, and
 /// the exit is reported as the success it was.
 #[derive(Debug, Clone)]
 pub(crate) struct ProcessKill {
-    child: Arc<Mutex<Child>>,
+    process: Arc<Mutex<Process>>,
     cancelled: Arc<AtomicBool>,
 }
 
 impl ProcessKill {
-    /// `SIGKILL`, which is what `std` can send. git cleans its lock files up
-    /// on `SIGTERM`, not on `SIGKILL`: a kill that lands while git is updating
-    /// refs can leave a `*.lock` beside a ref (or `packed-refs.lock`), and every
-    /// later update of that ref fails with "another git process seems to be
-    /// running" until the file is removed by hand. A kill while git waits on
+    /// `SIGTERM` now, `SIGKILL` after [`TERMINATION_GRACE`] if git is still
+    /// running then. git removes the lock files it holds on `SIGTERM` — a
+    /// `*.lock` beside a ref, `packed-refs.lock` — and cannot on `SIGKILL`,
+    /// after which every later update of that ref fails with "another git
+    /// process seems to be running" until the file is removed by hand; the
+    /// escalation is for a git that does not go, and what it strands is the
+    /// operation's to report (`stranded_locks`). A cancel while git waits on
     /// the network or a prompt — the common case — leaves at most a partial
-    /// pack under `objects/pack/tmp_*`, which `gc` reaps. Sending `SIGTERM`
-    /// first needs a signalling dependency, which is the user's decision
-    /// (issue #19).
+    /// pack under `objects/pack/tmp_*`, which `gc` reaps.
+    ///
+    /// Never blocks: it tries for the lock and returns. The waiting thread
+    /// does the rest ([`Process::poll`]), so this is safe to call from a
+    /// thread that must not wait.
     pub(crate) fn kill(&self) {
-        // Flagged first, so a `finish` that observes the exit sees why.
+        // Flagged first, so a `finish` that observes the exit sees why — and so a miss on
+        // the lock below is not a lost cancel: the waiter sees the flag and terminates.
         self.cancelled.store(true, Ordering::Release);
-        // `try_lock`: the waiter holds the lock only for a `try_wait`, so a miss means it
-        // is reaping this instant and there is nothing left to kill.
-        if let Ok(mut child) = self.child.try_lock() {
-            let _ = child.kill();
+        // `try_lock`: the waiter holds the lock only for a poll, which itself sends the
+        // signal when it sees the flag, so a miss means the signal is going out anyway.
+        if let Ok(mut process) = self.process.try_lock() {
+            process.terminate();
         }
     }
 }
 
-fn lock(child: &Arc<Mutex<Child>>) -> std::sync::MutexGuard<'_, Child> {
-    child.lock().unwrap_or_else(PoisonError::into_inner)
+fn lock(process: &Arc<Mutex<Process>>) -> std::sync::MutexGuard<'_, Process> {
+    process.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// The arguments as a user would have typed them, for an error message.
@@ -454,10 +547,13 @@ mod tests {
 mod stub_tests {
     use std::collections::BTreeMap;
     use std::ffi::OsString;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
 
     use cairn_model::AskpassToken;
 
     use super::super::stub_git::{StubGit, discover_retrying};
+    use super::{TERMINATION_GRACE, lock};
     use crate::Repository;
 
     /// What `/bin/sh` itself adds to a child's environment; not ours and not git's.
@@ -702,8 +798,12 @@ mod stub_tests {
             started.elapsed()
         );
         assert!(
-            matches!(&error, crate::Error::GitCancelled { arguments } if arguments == "fetch"),
-            "a killed process reported {error:?}"
+            matches!(
+                &error,
+                crate::Error::GitCancelled { arguments, stranded_locks }
+                    if arguments == "fetch" && stranded_locks.is_empty()
+            ),
+            "a killed process reported {error:?}; the runner knows no repository to search"
         );
         assert_eq!(
             seen,
@@ -764,6 +864,246 @@ mod stub_tests {
         assert!(
             matches!(outcome, Err(crate::Error::GitCancelled { .. })),
             "{outcome:?}"
+        );
+    }
+
+    /// A stub that, on `SIGTERM`, says so, ends the child it was hanging in, and exits the
+    /// way git does after removing its locks. `sleep` runs in the background and the shell
+    /// `wait`s, because a shell waiting on a FOREGROUND child runs a trap only once that
+    /// child ends (POSIX), which would make this stub look as if it ignored the signal;
+    /// `wait` returns the moment a trapped signal arrives.
+    const ENDING_ON_TERM: &str = "PATH=/usr/bin:/bin; command -v sleep >/dev/null || exit 99; \
+                                  sleep 30 & child=$!; \
+                                  trap 'echo terminated >&2; kill $child; exit 143' TERM; \
+                                  echo 'hanging' >&2; wait $child";
+
+    /// A stub that ignores `SIGTERM` — `trap ''` — and hangs in one-second sleeps, so
+    /// only `SIGKILL` ends it and nothing it spawned outlives that by more than a second.
+    const IGNORING_TERM: &str = "PATH=/usr/bin:/bin; command -v sleep >/dev/null || exit 99; \
+                                 trap '' TERM; echo 'hanging' >&2; \
+                                 while :; do sleep 1; done";
+
+    /// Issue #19, the first half: a cancel is `SIGTERM` first, and a git that acts on it
+    /// is not `SIGKILL`ed. Decisive because the stub reports the signal it got — a
+    /// `SIGKILL` runs no trap, so "terminated" on stderr is `SIGTERM` and nothing else —
+    /// and because it ends well inside the grace period, which only a process that
+    /// exited on the first signal does (the ignoring stub below is what the grace period
+    /// costs). A stub with no `sleep` exits 99 before saying anything, and the kill never
+    /// fires.
+    #[test]
+    fn a_cancel_sends_sigterm_first_and_a_process_that_exits_on_it_is_not_killed() {
+        let stub = stub(ENDING_ON_TERM);
+        let git = discover_retrying(stub.environment()).unwrap();
+        let running = git.command().arg("fetch").stream().unwrap();
+        let pid = running.id();
+        let killer = running.killer();
+        let mut seen = Vec::new();
+        let (hung, hung_seen) = std::sync::mpsc::channel::<Instant>();
+        let killing = std::thread::spawn(move || hung_seen.recv().ok().inspect(|_| killer.kill()));
+        let error = running
+            .finish(|line| {
+                seen.push(line.to_owned());
+                if line == "hanging" {
+                    let _ = hung.send(Instant::now());
+                }
+            })
+            .unwrap_err();
+        let Some(cancelled_at) = killing.join().unwrap() else {
+            panic!("the stub never said it was hanging: {seen:?}");
+        };
+        let took = cancelled_at.elapsed();
+        assert!(
+            matches!(&error, crate::Error::GitCancelled { .. }),
+            "a terminated process reported {error:?}"
+        );
+        assert_eq!(
+            seen,
+            ["hanging", "terminated"],
+            "the stub did not report SIGTERM: it was ended some other way, or died by itself"
+        );
+        assert!(
+            took < TERMINATION_GRACE,
+            "a process that exited on SIGTERM was waited on for {took:?}, the grace period \
+             or longer: the cancel did not end when the process did"
+        );
+        assert!(
+            std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound),
+            "the terminated git {pid} was not reaped"
+        );
+    }
+
+    /// How long a test waits for a cancelled `finish` before calling it hung: the grace
+    /// period, the poll, and margin for a loaded machine.
+    const CANCEL_DEADLINE: Duration = Duration::from_secs(7);
+
+    /// Runs `finish` on a thread of its own and cancels once the stub has said it is
+    /// hanging (after `after`, so a cancel can be made to land at a chosen moment); hands
+    /// back the outcome, what the stub said, and how long the cancel took to end the
+    /// wait — or panics at [`CANCEL_DEADLINE`], so a runner that never ends a process
+    /// fails here rather than hanging the suite for the stub's lifetime.
+    fn cancelled_after_hanging(
+        running: super::Running,
+        after: Duration,
+    ) -> (Result<super::Output, crate::Error>, Vec<String>, Duration) {
+        let killer = running.killer();
+        let (hung, hung_seen) = std::sync::mpsc::channel::<()>();
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            let outcome = running.finish(|line| {
+                seen.push(line.to_owned());
+                if line == "hanging" {
+                    let _ = hung.send(());
+                }
+            });
+            let _ = done.send((outcome, seen));
+        });
+        hung_seen
+            .recv_timeout(CANCEL_DEADLINE)
+            .unwrap_or_else(|_| panic!("the stub never said it was hanging"));
+        std::thread::sleep(after);
+        let cancelled_at = Instant::now();
+        killer.kill();
+        let (outcome, seen) = finished.recv_timeout(CANCEL_DEADLINE).unwrap_or_else(|_| {
+            panic!(
+                "the cancel did not end the wait within {CANCEL_DEADLINE:?}: the runner never \
+                 ended the process"
+            )
+        });
+        (outcome, seen, cancelled_at.elapsed())
+    }
+
+    fn reaped(pid: u32) -> bool {
+        std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    }
+
+    /// Issue #19, the escalation: a git that ignores `SIGTERM` is `SIGKILL`ed once the
+    /// grace period has passed, and the cancel is still a cancel. Decisive because the
+    /// stub proves it ignored the first signal by outliving the grace period — a stub
+    /// that died of `SIGTERM` would end in milliseconds (the test above) — and because
+    /// `finish` runs under a deadline, so a runner that never escalated fails here rather
+    /// than hanging for the stub's lifetime.
+    #[test]
+    fn a_process_that_ignores_sigterm_is_killed_once_the_grace_period_has_passed() {
+        let stub = stub(IGNORING_TERM);
+        let git = discover_retrying(stub.environment()).unwrap();
+        let running = git.command().arg("fetch").stream().unwrap();
+        let pid = running.id();
+        let (outcome, seen, took) = cancelled_after_hanging(running, Duration::ZERO);
+        assert!(
+            matches!(&outcome, Err(crate::Error::GitCancelled { .. })),
+            "a killed process reported {outcome:?}"
+        );
+        assert_eq!(seen, ["hanging"], "the stub was dying by itself");
+        assert!(
+            took >= TERMINATION_GRACE,
+            "ended after {took:?}: the stub did not survive SIGTERM, so this decided nothing \
+             about the escalation"
+        );
+        assert!(reaped(pid), "the killed git {pid} was not reaped");
+    }
+
+    /// A stub that ignores `SIGTERM` and closes its stderr the moment it has said it is
+    /// hanging, so the runner's reader thread ends before the cancel arrives and the
+    /// escalation must come from the reap loop, not the streaming one.
+    const IGNORING_TERM_SILENTLY: &str = "PATH=/usr/bin:/bin; command -v sleep >/dev/null || \
+                                          exit 99; trap '' TERM; echo 'hanging' >&2; \
+                                          exec 2>&-; while :; do sleep 1; done";
+
+    /// The escalation is the waiter's wherever it is waiting: a cancel that lands after
+    /// git has closed its stderr — so `finish` is in its reap loop, not its streaming
+    /// loop — is still `SIGTERM`, then `SIGKILL` after the grace period. The stub closes
+    /// stderr right after speaking and the cancel is sent a little later, so it lands in
+    /// the reap loop on any machine that is not pathologically slow; on one that is, the
+    /// streaming loop handles it and the test decides nothing extra, never the wrong thing.
+    #[test]
+    fn a_cancel_that_lands_after_stderr_closed_is_still_escalated_to_sigkill() {
+        let stub = stub(IGNORING_TERM_SILENTLY);
+        let git = discover_retrying(stub.environment()).unwrap();
+        let running = git.command().arg("fetch").stream().unwrap();
+        let pid = running.id();
+        let (outcome, seen, took) = cancelled_after_hanging(running, Duration::from_millis(300));
+        assert!(
+            matches!(&outcome, Err(crate::Error::GitCancelled { .. })),
+            "{outcome:?}"
+        );
+        assert_eq!(seen, ["hanging"]);
+        assert!(
+            took >= TERMINATION_GRACE,
+            "the stub did not survive SIGTERM: {took:?}"
+        );
+        assert!(reaped(pid), "the killed git {pid} was not reaped");
+    }
+
+    /// A cancel that arrives after the process has been reaped sends nothing: the pid is
+    /// the system's to reuse by then, and `std`'s own `kill` refuses for that reason —
+    /// the `nix` path must too. Observed through the runner's own state, since a signal
+    /// to a recycled pid is not something a test can watch for from outside.
+    #[test]
+    fn a_cancel_after_the_reap_signals_nothing() {
+        let stub = stub("echo done >&2; exit 0");
+        let git = discover_retrying(stub.environment()).unwrap();
+        let running = git.command().arg("fetch").stream().unwrap();
+        let pid = running.id();
+        let process = Arc::clone(&running.process);
+        let killer = running.killer();
+        running.finish(|_| {}).unwrap();
+        assert!(reaped(pid));
+        killer.kill();
+        let process = lock(&process);
+        assert_eq!(
+            process.terminated_at, None,
+            "a SIGTERM was sent to pid {pid} after it was reaped — the system may have given \
+             that pid to another process by now"
+        );
+        assert!(!process.killed);
+    }
+
+    /// A kill that could not take the lock is not a lost cancel: the flag is set first,
+    /// and the waiter, which sees it on its next poll, sends the signal itself. Pinned
+    /// through the runner's own pieces since the race cannot be staged from outside: the
+    /// lock is held across the kill, as the waiter's poll holds it.
+    #[test]
+    fn a_kill_that_misses_the_lock_is_finished_by_the_waiter() {
+        let stub = stub(ENDING_ON_TERM);
+        let git = discover_retrying(stub.environment()).unwrap();
+        let running = git.command().arg("fetch").stream().unwrap();
+        let killer = running.killer();
+        let mut seen = Vec::new();
+        let (hung, hung_seen) = std::sync::mpsc::channel::<()>();
+        let held = Arc::clone(&running.process);
+        let killing = std::thread::spawn(move || {
+            if hung_seen.recv().is_err() {
+                return false;
+            }
+            let guard = lock(&held);
+            killer.kill();
+            let sent_while_held = guard.terminated_at.is_some();
+            drop(guard);
+            !sent_while_held
+        });
+        let error = running
+            .finish(|line| {
+                seen.push(line.to_owned());
+                if line == "hanging" {
+                    let _ = hung.send(());
+                }
+            })
+            .unwrap_err();
+        assert!(
+            killing.join().unwrap(),
+            "the kill took the lock the test was holding, so the miss was not staged"
+        );
+        assert!(
+            matches!(&error, crate::Error::GitCancelled { .. }),
+            "{error:?}"
+        );
+        assert_eq!(
+            seen,
+            ["hanging", "terminated"],
+            "the waiter did not send the SIGTERM the killer could not"
         );
     }
 

@@ -184,14 +184,22 @@ fn fetch_button(
     submit: Option<Rc<dyn Fn(Request)>>,
 ) -> Option<Element> {
     let submit = submit?;
-    if fetch.is_in_flight() {
+    if fetch.can_be_cancelled() {
         return Some(
             Button::new()
                 .compact()
-                .on_press(move |_| submit(Request::CancelFetch))
+                .on_press(move |_| {
+                    // Said at once: the worker's answer is up to a grace period away.
+                    fetch_state.write().cancelling();
+                    submit(Request::CancelFetch);
+                })
                 .child("Cancel")
                 .into(),
         );
+    }
+    if fetch.is_in_flight() {
+        // Cancelling: nothing to press until the worker says the process is gone.
+        return None;
     }
     let remote = remotes.first()?.name.clone();
     let caption = format!("Fetch {remote}");
@@ -775,6 +783,24 @@ mod tests {
         );
         click_label(&mut test, "Cancel");
         assert_eq!(submitted.borrow().last(), Some(&Request::CancelFetch));
+        // The press says so at once, and takes the button away: the worker may need the
+        // runner's whole grace period before it answers.
+        assert_eq!(
+            *view.fetch.read(),
+            FetchStatus::Cancelling {
+                remote: "origin".to_owned()
+            }
+        );
+        test.sync_and_update();
+        let shown = texts(&test);
+        assert!(
+            shown.iter().any(|t| t == "Cancelling fetch of origin…"),
+            "the cancel was not said: {shown:?}"
+        );
+        assert!(
+            !shown.iter().any(|t| t == "Cancel" || t == "Fetch origin"),
+            "a button was offered while the cancel is in progress: {shown:?}"
+        );
     }
 
     #[test]

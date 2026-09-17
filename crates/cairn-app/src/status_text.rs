@@ -14,8 +14,29 @@ pub fn fetch_line(fetch: &FetchStatus) -> Option<String> {
             remote,
             line: Some(line),
         } => Some(format!("Fetching {remote}: {line}")),
+        FetchStatus::Cancelling { remote } => Some(format!("Cancelling fetch of {remote}…")),
         FetchStatus::Finished { remote } => Some(format!("Fetched {remote}")),
-        FetchStatus::Cancelled { remote } => Some(format!("Fetch of {remote} cancelled")),
+        FetchStatus::Cancelled {
+            remote,
+            stranded_locks,
+        } if stranded_locks.is_empty() => Some(format!("Fetch of {remote} cancelled")),
+        // Named in full, since the path is what the user acts on and nothing in Cairn
+        // removes a lock for them yet. Hedged on purpose: the engine lists what is there,
+        // and cannot tell a lock this cancel stranded from one a git in a terminal holds
+        // this instant, so the banner says what was found and when it is safe to act.
+        FetchStatus::Cancelled {
+            remote,
+            stranded_locks,
+        } => Some(format!(
+            "Fetch of {remote} cancelled; lock files remain under the git directory and will \
+             fail later writes while they are there — stale if no other git is running here, \
+             and then safe to remove: {}",
+            stranded_locks
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
         // One line: git's whole stderr may be long, and the banner draws every frame.
         FetchStatus::Failed { remote, message } => Some(format!(
             "Fetch of {remote} failed: {}",
@@ -83,11 +104,19 @@ mod tests {
                 remote: remote.clone(),
                 line: Some("Receiving objects: 40%".to_owned()),
             },
+            FetchStatus::Cancelling {
+                remote: remote.clone(),
+            },
             FetchStatus::Finished {
                 remote: remote.clone(),
             },
             FetchStatus::Cancelled {
                 remote: remote.clone(),
+                stranded_locks: Vec::new(),
+            },
+            FetchStatus::Cancelled {
+                remote: remote.clone(),
+                stranded_locks: vec!["/r/.git/refs/remotes/origin/main.lock".into()],
             },
             FetchStatus::Failed {
                 remote,
@@ -109,7 +138,7 @@ mod tests {
         );
         assert!(sentences[1].as_ref().is_some_and(|s| s.contains("40%")));
         assert!(
-            sentences[4]
+            sentences[6]
                 .as_ref()
                 .is_some_and(|s| s.contains("could not read Username"))
         );
@@ -120,6 +149,43 @@ mod tests {
             sentences[0],
             "starting and running-without-progress say different things"
         );
+    }
+
+    /// Issue #19: a cancel that found lock files says so, names every path so the user
+    /// can act, says what will happen while they stay, and when removing one is safe —
+    /// the search cannot tell a stranded lock from a live one. Caught by: dropping the
+    /// paths, naming only the first, or telling the user to delete unconditionally.
+    #[test]
+    fn a_cancel_that_left_a_lock_behind_names_every_lock_file() {
+        let line = fetch_line(&FetchStatus::Cancelled {
+            remote: "origin".to_owned(),
+            stranded_locks: vec![
+                "/r/.git/packed-refs.lock".into(),
+                "/r/.git/refs/remotes/origin/main.lock".into(),
+            ],
+        })
+        .unwrap();
+        assert!(line.starts_with("Fetch of origin cancelled;"), "{line}");
+        assert!(line.contains("/r/.git/packed-refs.lock"), "{line}");
+        assert!(
+            line.contains("/r/.git/refs/remotes/origin/main.lock"),
+            "{line}"
+        );
+        assert!(line.contains("lock file"), "{line}");
+        assert!(line.contains("remove"), "{line}");
+        assert!(
+            line.contains("no other git is running"),
+            "the banner told the user to remove a lock without saying when that is safe: {line}"
+        );
+        assert!(!line.contains('\n'), "a banner is one line: {line:?}");
+
+        // And a clean cancel says nothing about locks at all.
+        let clean = fetch_line(&FetchStatus::Cancelled {
+            remote: "origin".to_owned(),
+            stranded_locks: Vec::new(),
+        })
+        .unwrap();
+        assert_eq!(clean, "Fetch of origin cancelled");
     }
 
     /// Caught by: putting git's whole stderr into a one-line banner every frame.

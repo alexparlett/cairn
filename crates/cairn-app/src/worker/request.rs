@@ -1,5 +1,7 @@
 //! Requests and updates crossing the worker boundary.
 
+use std::path::PathBuf;
+
 use cairn_model::{HistoryRow, RemoteSummary};
 
 use super::askpass::PromptId;
@@ -40,35 +42,28 @@ pub enum Update {
         complete: bool,
     },
     /// `message` is display text, already rendered from the engine's error.
-    Failed {
-        message: String,
-    },
+    Failed { message: String },
     /// A worker died. Tied to no request, so never filtered out by epoch.
-    WorkerLost {
-        message: String,
-    },
+    WorkerLost { message: String },
     /// The default remote first, when there is one.
-    Remotes {
-        remotes: Vec<RemoteSummary>,
-    },
+    Remotes { remotes: Vec<RemoteSummary> },
     /// git is running; a `CancelFetch` from here on has something to kill.
-    FetchStarted {
-        remote: String,
-    },
+    FetchStarted { remote: String },
     /// One redraw of git's own progress meter, for the one fetch in flight.
-    FetchProgress {
-        line: String,
-    },
+    FetchProgress { line: String },
     /// `refreshed` says a ref moved: the history on screen is of the old
     /// ones and must be asked for again. On every ending, since a fetch that
     /// failed or was killed may have moved some refs before it stopped.
-    FetchFinished {
-        remote: String,
-        refreshed: bool,
-    },
+    FetchFinished { remote: String, refreshed: bool },
+    /// `stranded_locks` is every `*.lock` found under the git directory once
+    /// git was gone — a lock this cancel stranded, one from an earlier crash,
+    /// or one a git in a terminal holds right now, which the engine cannot
+    /// tell apart; usually none, since the cancel is `SIGTERM` first and git
+    /// cleans up on that.
     FetchCancelled {
         remote: String,
         refreshed: bool,
+        stranded_locks: Vec<PathBuf>,
     },
     FetchFailed {
         remote: String,
@@ -77,10 +72,7 @@ pub enum Update {
     },
     /// git or ssh is asking, through the helper: `text` is the prompt as
     /// given, and `id` is what the answer must name.
-    Prompt {
-        id: PromptId,
-        text: String,
-    },
+    Prompt { id: PromptId, text: String },
 }
 
 #[cfg(test)]

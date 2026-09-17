@@ -644,12 +644,18 @@ fn refusing_a_prompt_fails_the_fetch_once_and_the_worker_carries_on() {
 
 /// PRD R4.3: cancelling kills git while it waits on the prompt; the outcome
 /// says cancelled, the dialog's refusal afterwards is harmless, and the
-/// worker goes on serving.
+/// worker goes on serving. Issue #19: the outcome also names the lock file
+/// left under the git directory — one planted here, since a git ended at a
+/// prompt holds none of its own — so the window can say so.
 #[test]
 fn cancelling_a_fetch_that_waits_on_a_prompt_ends_it_as_cancelled() {
     let remote = Demanding::new();
     let fixture = with_origin("cairn-cancelled-fetch", &remote.url());
     let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let stale = fixture.path.join(".git/refs/remotes/origin/stale.lock");
+    std::fs::create_dir_all(stale.parent().unwrap_or(&stale)).unwrap_or_else(|e| panic!("{e}"));
+    std::fs::write(&stale, b"").unwrap_or_else(|e| panic!("{e}"));
+    let stale = std::fs::canonicalize(&stale).unwrap_or(stale);
     let (handle, mut updates, answer) = boundary(&fixture.path, &home.path, &runtime);
 
     handle.submit(Request::Fetch {
@@ -669,18 +675,29 @@ fn cancelling_a_fetch_that_waits_on_a_prompt_ends_it_as_cancelled() {
                 | Update::FetchFinished { .. }
         )
     });
+    // Under the runner's two-second grace period: git acted on the SIGTERM rather than
+    // being SIGKILLed, with the ref comparison and the lock search inside the bound too.
     assert!(
-        started.elapsed() < Duration::from_secs(10),
-        "the cancel took {:?}",
+        started.elapsed() < Duration::from_secs(2),
+        "the cancel took {:?}: git did not act on SIGTERM",
         started.elapsed()
     );
+    let stranded = match seen.last() {
+        Some(Update::FetchCancelled {
+            remote,
+            refreshed: false,
+            stranded_locks,
+        }) if remote == "origin" => stranded_locks.clone(),
+        other => panic!("expected a cancel of origin that moved nothing, got {other:?}"),
+    };
+    let stranded: Vec<PathBuf> = stranded
+        .into_iter()
+        .map(|path| std::fs::canonicalize(&path).unwrap_or(path))
+        .collect();
     assert_eq!(
-        seen.last(),
-        Some(&Update::FetchCancelled {
-            remote: "origin".to_owned(),
-            refreshed: false
-        }),
-        "{seen:?}"
+        stranded,
+        [stale],
+        "the cancel did not report the lock file under the git directory"
     );
     // What closing the dialog does; the helper it frees belongs to a git that is gone.
     answer(Reply::Refuse { prompt: id });

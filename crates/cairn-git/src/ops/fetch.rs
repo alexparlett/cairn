@@ -39,14 +39,20 @@
 //!
 //! Progress is git's own: `--progress` makes it write its meters to stderr
 //! even with no terminal, and [`FetchInProgress::finish`] hands each redrawn
-//! line to the caller as it arrives. Cancelling kills the process
-//! ([`FetchCancel`]); see `ProcessKill::kill` for what a kill can leave
-//! behind — a stale `*.lock` if it lands mid ref-update, which git does not
-//! clean up after `SIGKILL`.
+//! line to the caller as it arrives. Cancelling ends the process
+//! ([`FetchCancel`]): `SIGTERM`, which git cleans its lock files up on, then
+//! `SIGKILL` if it is still there after the grace period (`ProcessKill::kill`
+//! has the numbers). Whatever `*.lock` files are under the git directory
+//! afterwards — a `SIGKILL` that landed mid ref-update, a lock from an
+//! earlier crash, or one another git holds this instant, which a listing
+//! cannot tell apart — travel on the [`Error::GitCancelled`] so the banner
+//! can name them and say when acting on them is safe (`super::stranded_locks`).
+
+use std::path::PathBuf;
 
 use cairn_model::AskpassToken;
 
-use super::{GitBinary, Invalidated, Performed};
+use super::{GitBinary, Invalidated, Performed, stranded_locks};
 use crate::ops::cli::{ProcessKill, Running};
 use crate::{Error, Repository};
 
@@ -75,6 +81,8 @@ pub fn fetch(
     Ok(FetchInProgress {
         running: command.stream()?,
         remote: remote.to_owned(),
+        git_dir: repo.git_dir().to_owned(),
+        common_dir: repo.inner().common_dir().to_owned(),
     })
 }
 
@@ -93,6 +101,10 @@ const ARGUMENTS: [&str; 5] = [
 pub struct FetchInProgress {
     running: Running,
     remote: String,
+    /// Where a cancel looks for what it stranded; paths rather than the
+    /// repository, which belongs to the thread that opened it.
+    git_dir: PathBuf,
+    common_dir: PathBuf,
 }
 
 impl FetchInProgress {
@@ -107,22 +119,32 @@ impl FetchInProgress {
     /// a ref actually moved is for the caller to see, which the worker does by
     /// comparing [`crate::Repository::ref_tips`] before and after, on every
     /// outcome, since a failed or killed fetch may have updated some refs
-    /// before it stopped. A cancelled fetch is [`Error::GitCancelled`], and
-    /// anything git refused is [`Error::GitFailed`] carrying its stderr — which
-    /// is where "could not read Username ...: terminal prompts disabled"
-    /// arrives when no credential could be had.
+    /// before it stopped. A cancelled fetch is [`Error::GitCancelled`],
+    /// carrying every `*.lock` left under the git directory once git is gone;
+    /// anything git refused is [`Error::GitFailed`] carrying its stderr —
+    /// which is where "could not read Username ...: terminal prompts
+    /// disabled" arrives when no credential could be had.
     pub fn finish(self, progress: impl FnMut(&str)) -> Result<Performed, Error> {
-        self.running.finish(progress)?;
-        Ok(Performed::new(
-            format!("fetched {}", self.remote),
-            Invalidated::refs().and(Invalidated::objects()),
-        ))
+        match self.running.finish(progress) {
+            Ok(_) => Ok(Performed::new(
+                format!("fetched {}", self.remote),
+                Invalidated::refs().and(Invalidated::objects()),
+            )),
+            // Searched after the reap, so a lock git removed on its way out is not
+            // reported; the runner knows a process, not a repository.
+            Err(Error::GitCancelled { arguments, .. }) => Err(Error::GitCancelled {
+                arguments,
+                stranded_locks: stranded_locks::stranded_locks(&self.git_dir, &self.common_dir),
+            }),
+            Err(error) => Err(error),
+        }
     }
 }
 
-/// Cancels a running fetch by killing the `git` process. Cloneable and
-/// `Send`, so the thread waiting in [`FetchInProgress::finish`] need not be
-/// the one deciding to stop; the waiter still reaps the process.
+/// Cancels a running fetch by ending the `git` process (`SIGTERM`, then
+/// `SIGKILL` after the grace period). Cloneable and `Send`, so the thread
+/// waiting in [`FetchInProgress::finish`] need not be the one deciding to
+/// stop; the waiter still reaps the process, and never blocks the caller.
 #[derive(Debug, Clone)]
 pub struct FetchCancel(ProcessKill);
 

@@ -13,7 +13,7 @@ mod fixtures;
 mod remotes;
 
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -408,9 +408,11 @@ fn cancelling_a_fetch_that_is_waiting_on_a_prompt_kills_git_and_leaves_nothing_b
     let cancelled_at = cancelling
         .join()
         .unwrap_or_else(|_| panic!("the cancelling thread panicked"));
+    // Under the two-second grace period: a git that acted on the SIGTERM, not one that
+    // had to be SIGKILLed.
     assert!(
-        cancelled_at.elapsed() < Duration::from_secs(5),
-        "the cancel took {:?} to end the wait",
+        cancelled_at.elapsed() < Duration::from_secs(2),
+        "the cancel took {:?} to end the wait: git did not act on SIGTERM",
         cancelled_at.elapsed()
     );
     assert!(
@@ -425,6 +427,88 @@ fn cancelling_a_fetch_that_is_waiting_on_a_prompt_kills_git_and_leaves_nothing_b
     assert!(
         left.is_empty(),
         "processes left behind after the cancel: {left:?}"
+    );
+}
+
+/// Issue #19, end to end over a real git: a cancel reports every `*.lock` left
+/// under the git directory once git is gone, and nothing when there is none.
+/// git hangs on a remote that accepts the connection and never answers, so it
+/// is mid-transport and holds no lock of its own when the cancel lands; the
+/// locks here are planted, as a crash or an earlier `SIGKILL` would leave
+/// them, and the cancel is sent only once git has connected, so it is a
+/// running git that is ended. `SIGTERM` reaches git itself (its curl
+/// transport runs in-process), which is the signal it removes its own locks
+/// on; that it exits promptly on it is what keeps the bound below.
+#[test]
+fn a_cancel_names_the_lock_files_left_under_the_git_directory_and_only_those() {
+    let unanswering = std::net::TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| panic!("{e}"));
+    let port = unanswering
+        .local_addr()
+        .unwrap_or_else(|e| panic!("{e}"))
+        .port();
+    let local = with_origin(&format!("http://127.0.0.1:{port}/never.git"));
+    let git_dir = local.path().join(".git");
+    let planted: Vec<PathBuf> = ["packed-refs.lock", "refs/remotes/origin/main.lock"]
+        .into_iter()
+        .map(|relative| {
+            let path = git_dir.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap_or(&path))
+                .unwrap_or_else(|e| panic!("{e}"));
+            std::fs::write(&path, b"").unwrap_or_else(|e| panic!("{e}"));
+            std::fs::canonicalize(&path).unwrap_or(path)
+        })
+        .collect();
+    let serving = Serving::serving(Box::new(|_| None));
+    let git = GitBinary::discover_with(environment(&serving, local.path(), None))
+        .unwrap_or_else(|e| panic!("no usable git: {e}"));
+    let repo = Repository::discover(local.path()).unwrap_or_else(|e| panic!("{e}"));
+
+    // Cancelling the fetch once git is connected and waiting for an answer that never comes;
+    // the listener is held open (never read, never replied to) until the cancel has landed.
+    let cancel_once_connected = |started: cairn_git::ops::FetchInProgress| {
+        let canceller = started.canceller();
+        let listener = unanswering.try_clone().unwrap_or_else(|e| panic!("{e}"));
+        let cancelling = std::thread::spawn(move || {
+            let connection = listener.accept().map(|(stream, _)| stream);
+            let waited = Instant::now();
+            canceller.cancel();
+            (connection, waited)
+        });
+        let outcome = started.finish(|_| {});
+        let (connection, cancelled_at) = cancelling.join().unwrap_or_else(|_| panic!("join"));
+        drop(connection.unwrap_or_else(|e| panic!("git never connected: {e}")));
+        // Under the two-second grace period: only a git that acted on the SIGTERM ends
+        // this soon, since one that ignored it is SIGKILLed no earlier than that.
+        assert!(
+            cancelled_at.elapsed() < Duration::from_secs(2),
+            "the cancel took {:?} to end the wait: git did not act on SIGTERM",
+            cancelled_at.elapsed()
+        );
+        match outcome {
+            Err(Error::GitCancelled { stranded_locks, .. }) => stranded_locks
+                .into_iter()
+                .map(|path| std::fs::canonicalize(&path).unwrap_or(path))
+                .collect::<Vec<PathBuf>>(),
+            other => panic!("a cancelled fetch reported {other:?}"),
+        }
+    };
+
+    let started = fetch(&git, &repo, "origin", None).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        cancel_once_connected(started),
+        planted,
+        "the cancel did not name exactly the lock files under the git directory"
+    );
+
+    // Without them, a cancel that caught git mid-transport strands nothing.
+    for path in &planted {
+        std::fs::remove_file(path).unwrap_or_else(|e| panic!("{e}"));
+    }
+    let started = fetch(&git, &repo, "origin", None).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        cancel_once_connected(started),
+        Vec::<PathBuf>::new(),
+        "a cancel that left no lock behind reported one"
     );
 }
 

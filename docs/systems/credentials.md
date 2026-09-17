@@ -147,22 +147,83 @@ never enters `cairn-git` and never enters application state.
   remote, token)` starts `git fetch --progress --no-prune --no-prune-tags
   --end-of-options <remote>` and returns a `FetchInProgress`; `finish(progress)` streams each redraw of git's
   progress meter to the callback and yields a `Performed` declaring `refs` and
-  `objects` invalid; `canceller()` is a `Send` handle that kills the process
-  from any thread, after which `finish` reports `Error::GitCancelled`. **Not
-  destructive, and takes no `Confirmed` on purpose**: a fetch moves only
-  remote-tracking refs, all in the reflog; the module docs say so. The runner
-  underneath (`GitCommand::stream` in `ops/cli.rs`) reads the pipe on a thread
-  of its own, because git's children — `ssh`, `git-remote-https`, the helper —
-  inherit it and outlive a killed git; a cancel returns once git itself is
-  reaped, and the reader ends when the last child lets the pipe go. Pinned by
-  the stub-git tests `a_streamed_invocation_hands_stderr_on_a_redraw_at_a_time`
-  and `a_kill_from_another_thread_ends_a_hung_invocation_and_reaps_it`, and
-  end to end by `crates/cairn-git/tests/fetch.rs` (below). A clean exit is
+  `objects` invalid; `canceller()` is a `Send` handle that ends the process
+  from any thread without blocking that thread, after which `finish` reports
+  `Error::GitCancelled`. **Not destructive, and takes no `Confirmed` on
+  purpose**: a fetch moves only remote-tracking refs, all in the reflog; the
+  module docs say so. The runner underneath (`GitCommand::stream` in
+  `ops/cli.rs`) reads the pipe on a thread of its own, because git's children
+  — `ssh`, `git-remote-https`, the helper — inherit it and outlive a killed
+  git; a cancel returns once git itself is reaped, and the reader ends when
+  the last child lets the pipe go. Pinned by the stub-git tests
+  `a_streamed_invocation_hands_stderr_on_a_redraw_at_a_time` and
+  `a_kill_from_another_thread_ends_a_hung_invocation_and_reaps_it`, and end
+  to end by `crates/cairn-git/tests/fetch.rs` (below). A clean exit is
   reported as the success it was even when a cancel raced it
-  (`a_kill_after_a_clean_exit_reports_the_success`); the kill is `SIGKILL`,
-  which git cannot clean its lock files up after — see the module docs for
-  what a cancel mid ref-update can leave, and issue #19 for the `SIGTERM`
-  question. "Not destructive" is kept true against the user's configuration
+  (`a_kill_after_a_clean_exit_reports_the_success`).
+
+  **A cancel is `SIGTERM` first** (issue #19), sent through `nix`'s safe
+  `kill(2)` wrapper — the one thing that crate is linked for — because git
+  removes the lock files it holds on `SIGTERM` and cannot on `SIGKILL`, which
+  is all `std` can send. The thread waiting in `finish` polls the process
+  every `EXIT_POLL` and escalates to `SIGKILL` once `TERMINATION_GRACE` (two
+  seconds: git's handler exits in milliseconds, so that is margin for a
+  loaded machine, and short enough that "cancelled" still arrives while the
+  user is looking) has passed with git still running, from whichever loop
+  it is waiting in; the same poll sends the `SIGTERM` itself if the
+  cancelling thread could not take the lock, so a cancel is never lost, and
+  no signal goes to a child that has already been reaped, whose pid the
+  system may have handed on. Pinned over stub gits that report the signal
+  they got: `a_cancel_sends_sigterm_first_and_a_process_that_exits_on_it_is_not_killed`
+  (a `SIGKILL` runs no trap, so "terminated" on stderr is `SIGTERM` and
+  nothing else, and the wait ends inside the grace period),
+  `a_process_that_ignores_sigterm_is_killed_once_the_grace_period_has_passed`
+  (the stub outlives the grace period, so it ignored the first signal, under
+  a deadline so a runner that never escalates fails rather than hangs),
+  `a_cancel_that_lands_after_stderr_closed_is_still_escalated_to_sigkill`,
+  `a_kill_that_misses_the_lock_is_finished_by_the_waiter` and
+  `a_cancel_after_the_reap_signals_nothing`; and over real git by the
+  under-two-seconds bound on every end-to-end cancel, which only a git that
+  acted on the `SIGTERM` meets.
+
+  **What a cancel finds is reported.** Once git is reaped, `finish` lists
+  every `*.lock` under the git directory and, for a linked worktree, the
+  common directory — the top level, all of `refs/`, and the three places
+  under `objects/` where git locks a file it rewrites whole (the multi-pack
+  index, the commit graph and its chain, which `fetch.writeCommitGraph`
+  takes), not the packs themselves (`ops/stranded_locks.rs`, pinned by
+  `every_lock_file_git_could_strand_is_found_and_nothing_else` and
+  `a_linked_worktree_is_searched_in_both_of_its_directories`) — and carries
+  the paths on `Error::GitCancelled::stranded_locks`; the message names them
+  (`a_cancellation_names_what_it_stranded_and_is_silent_when_nothing_was`).
+  A listing, not a verdict: it cannot tell a lock this cancel stranded from
+  one left by an earlier crash or one a git in a terminal holds this
+  instant, so the words around the paths say what was found and that
+  removing one is safe only when no other git is running there. End to end,
+  `a_cancel_names_the_lock_files_left_under_the_git_directory_and_only_those`
+  in `tests/fetch.rs` cancels a real git hung on a remote that never answers,
+  with locks planted as a crash would leave them, and reads back exactly
+  those — then none once they are gone; that the search runs after the reap
+  rather than before is stated in `FetchInProgress::finish` and not pinned,
+  since no fixture can hold a real git mid ref-write at the instant of a
+  cancel. The worker hands the paths on as `Update::FetchCancelled::stranded_locks`
+  (`a_cancelled_fetch_carries_the_lock_files_it_stranded`, and the planted
+  lock in `cancelling_a_fetch_that_waits_on_a_prompt_ends_it_as_cancelled`),
+  the session into `FetchStatus::Cancelled`
+  (`a_cancelled_fetch_hands_the_lock_files_it_found_to_the_banner`), and the
+  banner names every one with when acting on it is safe
+  (`a_cancel_that_left_a_lock_behind_names_every_lock_file` in
+  `crates/cairn-app/src/status_text.rs`). The press itself is said at once:
+  Cancel puts the view in `FetchStatus::Cancelling` and takes the button
+  away, since the worker's answer may be the whole grace period away, and a
+  `FetchStarted` that lands after the press does not undo it
+  (`a_cancel_is_said_at_once_and_survives_a_late_start` in
+  `crates/cairn-app/src/fetch_state.rs`, and the window test
+  `the_fetch_button_fetches_the_default_remote_and_becomes_cancel_while_running`). Listing only: removing a lock
+  another process may still hold is a decision for a confirmed operation
+  that does not exist yet, and a FAILED fetch whose stderr says `cannot lock
+  ref` is not yet read for the lock it names — both remain on issue #19.
+  "Not destructive" is kept true against the user's configuration
   by the two `--no-prune` flags: `fetch.prune`, `fetch.pruneTags` and their
   `remote.<name>.*` forms would have a plain fetch delete remote-tracking refs
   and even local tags, and Cairn's never does — a user who set them gets
@@ -403,12 +464,15 @@ Known limits, described rather than pinned:
 - `$XDG_RUNTIME_DIR` is required, so a session without one (macOS today) gets
   no channel and named failures rather than a fallback directory, a policy for
   the user to set (issue #24).
-- A cancel kills `git` (`SIGKILL`) and returns; its children (`ssh`, the
-  helper) end on their own when the dialog's refusal releases them or their
-  pipes break. The runner's reader thread lives until then. A kill that lands
-  while git is updating refs can leave a `*.lock` git will not clean up, and
-  later fetches of that ref fail until it is removed by hand; `SIGTERM` first
-  needs a dependency, which is the user's call (issue #19).
+- A cancel ends `git` (`SIGTERM`, then `SIGKILL` after two seconds) and
+  returns; its children (`ssh`, the helper) end on their own when the
+  dialog's refusal releases them or their pipes break. The runner's reader
+  thread lives until then. A `SIGKILL` that lands while git is updating
+  refs can still leave a `*.lock`; the cancel names every lock file it
+  finds, and removing one is the user's by hand once they know no other git
+  is running — nothing in Cairn removes a lock yet, since the process
+  holding it might not be Cairn's, and a failed fetch that trips over one
+  does not yet name it (issue #19).
 - On process exit (the window closing) the socket directory under
   `$XDG_RUNTIME_DIR` is left behind if the threads did not get to unwind: a
   runtime directory is a tmpfs cleared at logout, and the names are per pid

@@ -171,7 +171,11 @@ fn fetch_outcome(
 ) -> Update {
     match outcome {
         Ok(()) => Update::FetchFinished { remote, refreshed },
-        Err(Error::GitCancelled { .. }) => Update::FetchCancelled { remote, refreshed },
+        Err(Error::GitCancelled { stranded_locks, .. }) => Update::FetchCancelled {
+            remote,
+            refreshed,
+            stranded_locks,
+        },
         Err(error) => Update::FetchFailed {
             remote,
             refreshed,
@@ -211,15 +215,40 @@ mod tests {
                 origin(),
                 Err(Error::GitCancelled {
                     arguments: "fetch origin".to_owned(),
+                    stranded_locks: Vec::new(),
                 }),
                 true,
                 &Ok(())
             ),
             Update::FetchCancelled {
                 remote: origin(),
-                refreshed: true
+                refreshed: true,
+                stranded_locks: Vec::new(),
             },
             "a cancelled fetch that moved refs must still say so"
+        );
+    }
+
+    /// Caught by: dropping the paths on the way to the window, which is the only place
+    /// the user can hear about them.
+    #[test]
+    fn a_cancelled_fetch_carries_the_lock_files_it_stranded() {
+        let lock = std::path::PathBuf::from("/r/.git/refs/remotes/origin/main.lock");
+        assert_eq!(
+            fetch_outcome(
+                "origin".to_owned(),
+                Err(Error::GitCancelled {
+                    arguments: "fetch origin".to_owned(),
+                    stranded_locks: vec![lock.clone()],
+                }),
+                false,
+                &Ok(())
+            ),
+            Update::FetchCancelled {
+                remote: "origin".to_owned(),
+                refreshed: false,
+                stranded_locks: vec![lock],
+            }
         );
     }
 

@@ -30,9 +30,14 @@
 //! - `GitCommand` (crate-private, like `Output`) adds the arguments and runs
 //!   the process with standard input closed — to completion, or streaming its
 //!   stderr and killable from another thread, which is what a long fetch
-//!   needs. Nothing outside `ops` can run a raw verb: the public surface is
-//!   named operations ([`fetch`] today), so the confirmation seal cannot be
-//!   routed around through the runner.
+//!   needs. A cancel is `SIGTERM`, then `SIGKILL` after a bounded grace
+//!   period, so git gets to remove the lock files it holds; what it strands
+//!   anyway is found by `stranded_locks` and carried on the cancellation
+//!   error, so the user hears about a stale `*.lock` from the cancel that
+//!   made it rather than from the next operation that trips over it.
+//!   Nothing outside `ops` can run a raw verb: the public surface is named
+//!   operations ([`fetch`] today), so the confirmation seal cannot be routed
+//!   around through the runner.
 //!
 //! # Output policy
 //!
@@ -109,6 +114,7 @@ mod binary;
 mod cli;
 mod environment;
 mod fetch;
+mod stranded_locks;
 #[cfg(all(test, unix))]
 mod stub_git;
 

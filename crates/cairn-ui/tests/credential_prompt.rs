@@ -214,3 +214,44 @@ fn cancel_and_escape_both_decline_without_submitting() {
     assert_eq!(*reports.cancelled.borrow(), 1, "Escape did not decline");
     assert!(reports.submitted.borrow().is_empty());
 }
+
+/// An unrecognised prompt is treated as a secret: masked, with the generic sentence.
+#[test]
+fn an_unknown_prompt_is_masked_and_stated_generically() {
+    let (mut test, reports) = launch("Token: ");
+    assert!(
+        labels(&test)
+            .iter()
+            .any(|l| l == "A secret is being asked for"),
+        "{:?}",
+        labels(&test)
+    );
+    let secret = generated();
+    test.write_text(&secret);
+    assert!(
+        !spans(&test).iter().any(|s| s.contains(&secret)),
+        "an unknown prompt's answer was drawn in the open: {:?}",
+        spans(&test)
+    );
+    test.press_key(Key::Named(NamedKey::Enter));
+    assert_eq!(
+        reports.submitted.borrow().as_slice(),
+        std::slice::from_ref(&secret)
+    );
+}
+
+/// Caught by: dropping `on_close_request`, which is what a press outside the dialog reaches.
+#[test]
+fn a_press_outside_the_dialog_declines() {
+    let text: &'static str = Box::leak(format!("Password for '{URL}': ").into_boxed_str());
+    let (mut test, reports) = launch(text);
+    // The dialog is centred and DIALOG_WIDTH wide; the top-left corner is the backdrop.
+    test.click_cursor((5., 5.));
+    test.sync_and_update();
+    assert_eq!(
+        *reports.cancelled.borrow(),
+        1,
+        "a press outside did not decline"
+    );
+    assert!(reports.submitted.borrow().is_empty());
+}

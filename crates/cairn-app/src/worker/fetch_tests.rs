@@ -364,6 +364,31 @@ fn prompt_in(seen: &[Update]) -> Option<(PromptId, String)> {
     })
 }
 
+/// Standard base64 with padding, for comparing the `Authorization` header.
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for group in bytes.chunks(3) {
+        let mut triple = [0u8; 3];
+        triple[..group.len()].copy_from_slice(group);
+        let n = u32::from_be_bytes([0, triple[0], triple[1], triple[2]]);
+        for i in 0..4 {
+            if i <= group.len() {
+                out.push(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn base64_matches_the_standard_encoding() {
+    assert_eq!(base64(b"user:pass"), "dXNlcjpwYXNz");
+    assert_eq!(base64(b"fo"), "Zm8=");
+}
+
 /// URL-safe, since git puts the username into the password prompt's URL.
 fn generated(what: &str) -> String {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -521,12 +546,17 @@ fn a_prompt_reaches_the_window_as_a_value_and_its_answer_reaches_git() {
         }
         other => panic!("expected the remote's refusal, got {other:?}"),
     }
+    // The header must carry exactly what the window answered, not merely a credential.
+    let expected = format!(
+        "Basic {}",
+        base64(format!("{username}:{password}").as_bytes())
+    );
     assert!(
         remote
             .authorizations()
             .iter()
             .flatten()
-            .any(|a| a.starts_with("Basic ")),
+            .any(|a| *a == expected),
         "git never sent the credential it was given: {:?}",
         remote.authorizations()
     );

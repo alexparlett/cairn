@@ -105,13 +105,6 @@ impl GitBinary {
 
     /// An invocation of this `git`, ready for its arguments. Crate-private: the
     /// public surface is named operations, never a raw verb.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the first operation to run a verb is fetch, in the next phase"
-        )
-    )]
     pub(crate) fn command(&self) -> GitCommand<'_> {
         GitCommand::new(&self.path, &self.environment)
     }

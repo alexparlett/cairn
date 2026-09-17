@@ -82,6 +82,19 @@ pub enum Error {
         status: ExitStatus,
         stderr: String,
     },
+
+    /// The user cancelled the operation and the process was killed. Not a
+    /// failure to report as one: the caller asked for this.
+    #[error("git {arguments} was cancelled")]
+    GitCancelled { arguments: String },
+
+    /// The remotes could not be read from the repository's configuration.
+    #[error("failed to read the remotes of the repository at {path}: {source}")]
+    Remotes {
+        path: PathBuf,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 }
 
 /// A search path in a message: `/usr/local/bin, /usr/bin`, or `nothing` when

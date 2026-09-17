@@ -739,6 +739,7 @@ dependencies = [
 name = "cairn-git"
 version = "0.1.0"
 dependencies = [
+ "cairn-askpass",
  "cairn-model",
  "gix",
  "thiserror 2.0.20",

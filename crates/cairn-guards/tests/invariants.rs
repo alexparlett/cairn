@@ -29,6 +29,8 @@ const DEPENDENCY_ALLOWLIST: &[(&str, &[&str])] = &[
 const TEST_ONLY_ALLOWLIST: &[(&str, &[&str])] = &[
     ("cairn-ui", &["freya-testing"]),
     ("cairn-app", &["freya-testing"]),
+    // The fetch tests serve a real askpass channel; the engine never links the helper.
+    ("cairn-git", &["cairn-askpass"]),
 ];
 
 /// Crate directory → crate identifiers it may never name in code, in `src/`, `tests/` or anywhere

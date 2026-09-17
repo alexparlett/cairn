@@ -28,9 +28,11 @@
 //!   exists without it; an invocation that may prompt is given its askpass
 //!   token there too, per invocation, because that is what the token is.
 //! - `GitCommand` (crate-private, like `Output`) adds the arguments and runs
-//!   the process with standard input closed. Nothing outside `ops` can run a
-//!   raw verb: the public surface is named operations, so the confirmation
-//!   seal cannot be routed around through the runner.
+//!   the process with standard input closed — to completion, or streaming its
+//!   stderr and killable from another thread, which is what a long fetch
+//!   needs. Nothing outside `ops` can run a raw verb: the public surface is
+//!   named operations ([`fetch`] today), so the confirmation seal cannot be
+//!   routed around through the runner.
 //!
 //! # Output policy
 //!
@@ -95,14 +97,16 @@
 //!
 //! Where it is honoured: the repository worker in `cairn-app` (decision D3),
 //! which owns the handle, the open session and the cursor, and is the only
-//! place a `Performed` arrives. No operation reaches it yet — the first is
-//! fetch, which invalidates `refs` and `objects`, and the graph must stop
-//! showing the pre-fetch refs when it lands.
+//! place a `Performed` arrives. [`fetch`] is the first operation to reach it:
+//! it declares `refs` and `objects`, and the worker answers by dropping its
+//! open walk and querying the history again from `HEAD`, so the graph stops
+//! showing the pre-fetch refs.
 
 mod askpass;
 mod binary;
 mod cli;
 mod environment;
+mod fetch;
 #[cfg(all(test, unix))]
 mod stub_git;
 
@@ -112,6 +116,7 @@ pub use askpass::Askpass;
 pub use binary::{GitBinary, GitVersion};
 pub(crate) use cli::GitCommand;
 pub use environment::GitEnvironment;
+pub use fetch::{FetchCancel, FetchInProgress, fetch};
 
 use crate::Repository;
 

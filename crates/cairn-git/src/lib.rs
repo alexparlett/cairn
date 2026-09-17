@@ -4,6 +4,7 @@ mod cancel;
 mod error;
 mod history;
 pub mod ops;
+mod remotes;
 mod repository;
 
 pub use cancel::{Cancel, CancelSignal};

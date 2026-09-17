@@ -13,6 +13,7 @@ repository = "https://github.com/alexparlett/cairn"
 cairn-model = { path = "crates/cairn-model" }
 cairn-git = { path = "crates/cairn-git" }
 cairn-ui = { path = "crates/cairn-ui" }
+cairn-askpass = { path = "crates/cairn-askpass" }
 
 # Our fork, pinned by commit. To test a fork change, patch this git source to a
 # local clone at the foot of this file; never merge with the patch in place.

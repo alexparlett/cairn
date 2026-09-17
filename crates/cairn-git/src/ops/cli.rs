@@ -19,8 +19,11 @@
 
 use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Child, ChildStderr, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use cairn_model::AskpassToken;
 
@@ -53,13 +56,6 @@ impl<'a> GitCommand<'a> {
         self
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the first operation to run a verb is fetch, in the next phase"
-        )
-    )]
     pub(crate) fn args(mut self, arguments: impl IntoIterator<Item = impl AsRef<OsStr>>) -> Self {
         self.arguments
             .extend(arguments.into_iter().map(|a| a.as_ref().to_owned()));
@@ -67,13 +63,6 @@ impl<'a> GitCommand<'a> {
     }
 
     /// Runs inside `repo`: its working tree, or the git directory of a bare one.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the first operation to run a verb is fetch, in the next phase"
-        )
-    )]
     pub(crate) fn in_repository(mut self, repo: &Repository) -> Self {
         self.directory = Some(repo.workdir().unwrap_or(repo.git_dir()).to_owned());
         self
@@ -82,13 +71,6 @@ impl<'a> GitCommand<'a> {
     /// An invocation that may ask the user for a secret: `token` is what the
     /// askpass helper presents to the channel that issued it. Without one the
     /// helper is still what git runs, and it fails closed.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the first operation that can prompt is fetch, in the next phase"
-        )
-    )]
     pub(crate) fn authorized_by(mut self, token: &AskpassToken) -> Self {
         self.token = Some(token.clone());
         self
@@ -125,6 +107,224 @@ impl<'a> GitCommand<'a> {
             stderr,
         })
     }
+
+    /// Starts the process and hands it back still running, for a verb whose
+    /// stderr is progress a person watches (`fetch --progress`) and which may
+    /// need killing before it is done. Standard output is discarded: nothing
+    /// streamed this way has a machine-readable form on it, and a pipe nobody
+    /// drains would stall the child once it filled.
+    pub(crate) fn stream(self) -> Result<Running, Error> {
+        let mut command = self.environment.command(self.program, self.token.as_ref());
+        command
+            .args(&self.arguments)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        if let Some(directory) = &self.directory {
+            command.current_dir(directory);
+        }
+        let not_started = |source| Error::GitNotStarted {
+            program: self.program.to_owned(),
+            source,
+        };
+        let mut child = command.spawn().map_err(not_started)?;
+        let Some(stderr) = child.stderr.take() else {
+            // Unreachable with `Stdio::piped()` above; reported rather than assumed.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(not_started(std::io::Error::other(
+                "the child was started without a stderr pipe",
+            )));
+        };
+        Ok(Running {
+            child: Arc::new(Mutex::new(child)),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            stderr: Some(stderr),
+            arguments: describe(&self.arguments),
+        })
+    }
+}
+
+/// A started process whose stderr is being streamed; see [`GitCommand::stream`].
+/// Ends with [`Running::finish`], which always reaps the child, killed or not.
+#[derive(Debug)]
+pub(crate) struct Running {
+    /// Shared with every [`ProcessKill`], which needs the handle to signal it.
+    child: Arc<Mutex<Child>>,
+    /// Set by a kill, so [`Running::finish`] reports a cancellation and not a failure.
+    cancelled: Arc<AtomicBool>,
+    stderr: Option<ChildStderr>,
+    arguments: String,
+}
+
+/// Bytes read from the pipe at a time; git's progress lines are far shorter.
+const STDERR_CHUNK: usize = 4096;
+
+impl Running {
+    /// A handle that kills the process from any thread; see [`ProcessKill::kill`].
+    pub(crate) fn killer(&self) -> ProcessKill {
+        ProcessKill {
+            child: Arc::clone(&self.child),
+            cancelled: Arc::clone(&self.cancelled),
+        }
+    }
+
+    /// The child's process id, for a test that checks it was reaped.
+    #[cfg(test)]
+    pub(crate) fn id(&self) -> u32 {
+        lock(&self.child).id()
+    }
+
+    /// Streams stderr to `progress`, one line as each completes — a line ends
+    /// at `\n` or, as git's progress meters redraw themselves, at `\r` — and
+    /// waits for the exit. A process killed through [`ProcessKill`] is
+    /// [`Error::GitCancelled`]; any other non-zero exit is [`Error::GitFailed`]
+    /// with everything stderr said.
+    ///
+    /// The pipe is read on a thread of its own, because git's children —
+    /// `ssh`, `git-remote-https`, the askpass helper — inherit it and outlive a
+    /// killed `git`. Waiting for the pipe to close would wait for them; after a
+    /// kill this returns as soon as `git` itself is reaped, and the reader
+    /// thread ends by itself when the last child lets the pipe go.
+    pub(crate) fn finish(mut self, mut progress: impl FnMut(&str)) -> Result<Output, Error> {
+        let (lines, read) = std::sync::mpsc::channel::<String>();
+        let Some(stderr) = self.stderr.take() else {
+            return self.reap(None, &mut progress, String::new());
+        };
+        // Detached on purpose: see above. `lines` closing is how it reports the pipe's end.
+        std::thread::Builder::new()
+            .name("cairn-git-stderr".to_owned())
+            .spawn(move || read_lines(stderr, &lines))
+            .map_err(|source| Error::GitNotStarted {
+                program: PathBuf::from("git"),
+                source,
+            })?;
+
+        let mut everything = String::new();
+        let mut status = None;
+        loop {
+            match read.recv_timeout(EXIT_POLL) {
+                Ok(line) => {
+                    everything.push_str(&line);
+                    everything.push('\n');
+                    report(&line, &mut progress);
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            }
+            if self.cancelled.load(Ordering::Acquire) {
+                // Killed: reap git as soon as it is gone and stop waiting on its children.
+                if let Ok(Some(exited)) = lock(&self.child).try_wait() {
+                    status = Some(exited);
+                    break;
+                }
+            }
+        }
+        self.reap(status, &mut progress, everything)
+    }
+
+    fn reap(
+        &mut self,
+        already: Option<std::process::ExitStatus>,
+        progress: &mut impl FnMut(&str),
+        everything: String,
+    ) -> Result<Output, Error> {
+        let _ = progress;
+        let status = match already {
+            Some(status) => status,
+            None => lock(&self.child)
+                .wait()
+                .map_err(|source| Error::GitNotStarted {
+                    program: PathBuf::from("git"),
+                    source,
+                })?,
+        };
+        let stderr = everything.trim_end().to_owned();
+        if self.cancelled.load(Ordering::Acquire) {
+            return Err(Error::GitCancelled {
+                arguments: std::mem::take(&mut self.arguments),
+            });
+        }
+        if !status.success() {
+            return Err(Error::GitFailed {
+                arguments: std::mem::take(&mut self.arguments),
+                status,
+                stderr,
+            });
+        }
+        Ok(Output {
+            stdout: Vec::new(),
+            stderr,
+        })
+    }
+}
+
+/// How often a cancelled wait checks whether `git` has exited.
+const EXIT_POLL: std::time::Duration = std::time::Duration::from_millis(20);
+
+/// Reads `stderr` to its end, sending each completed line (ending at `\n` or
+/// `\r`, terminator stripped, lossily decoded) down `lines`; a receiver that
+/// has gone ends the read.
+fn read_lines(mut stderr: ChildStderr, lines: &std::sync::mpsc::Sender<String>) {
+    let mut pending = Vec::new();
+    let mut chunk = [0u8; STDERR_CHUNK];
+    loop {
+        let read = match stderr.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(source) if source.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        };
+        pending.extend_from_slice(&chunk[..read]);
+        while let Some(end) = pending
+            .iter()
+            .position(|byte| matches!(byte, b'\n' | b'\r'))
+        {
+            let line: Vec<u8> = pending.drain(..=end).collect();
+            if lines
+                .send(String::from_utf8_lossy(&line[..line.len() - 1]).into_owned())
+                .is_err()
+            {
+                return;
+            }
+        }
+    }
+    if !pending.is_empty() {
+        let _ = lines.send(String::from_utf8_lossy(&pending).into_owned());
+    }
+}
+
+/// A finished line, handed on unless it was blank.
+fn report(line: &str, progress: &mut impl FnMut(&str)) {
+    let text = line.trim_end();
+    if !text.is_empty() {
+        progress(text);
+    }
+}
+
+/// Kills the process a [`Running`] is waiting on, from another thread. The
+/// process is still reaped by [`Running::finish`], which then reports
+/// [`Error::GitCancelled`]; a kill after the exit is a no-op.
+#[derive(Debug, Clone)]
+pub(crate) struct ProcessKill {
+    child: Arc<Mutex<Child>>,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl ProcessKill {
+    /// `SIGKILL`, not a request: git may be inside `ssh` or a credential
+    /// helper, and a fetch has nothing to save. What it leaves behind is
+    /// nothing a `reflog` cannot show, and git's own lock files are removed by
+    /// the next invocation.
+    pub(crate) fn kill(&self) {
+        // Flagged first, so a `finish` that observes the exit sees why.
+        self.cancelled.store(true, Ordering::Release);
+        let _ = lock(&self.child).kill();
+    }
+}
+
+fn lock(child: &Arc<Mutex<Child>>) -> std::sync::MutexGuard<'_, Child> {
+    child.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// The arguments as a user would have typed them, for an error message.
@@ -149,7 +349,7 @@ impl Output {
         not(test),
         expect(
             dead_code,
-            reason = "the first operation to run a verb is fetch, in the next phase"
+            reason = "fetch reads nothing from stdout; the first operation to will be status"
         )
     )]
     pub(crate) fn stdout(&self) -> &[u8] {
@@ -161,7 +361,7 @@ impl Output {
         not(test),
         expect(
             dead_code,
-            reason = "the first operation to run a verb is fetch, in the next phase"
+            reason = "a streamed invocation hands its stderr on line by line instead"
         )
     )]
     pub(crate) fn stderr(&self) -> &str {
@@ -178,7 +378,7 @@ impl Output {
         not(test),
         expect(
             dead_code,
-            reason = "the first operation to run a verb is fetch, in the next phase"
+            reason = "fetch reads nothing from stdout; the first operation to will be status"
         )
     )]
     pub(crate) fn records(&self) -> impl Iterator<Item = &[u8]> {
@@ -371,6 +571,129 @@ mod stub_tests {
             ran_in,
             std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap()
         );
+    }
+
+    /// Progress arrives one redraw at a time: git ends a meter's redraws with `\r`
+    /// and its last one with `\n`, and both must reach the caller as lines.
+    #[test]
+    fn a_streamed_invocation_hands_stderr_on_a_redraw_at_a_time() {
+        let stub = stub(
+            "printf 'Receiving objects:  50%%\\rReceiving objects: 100%%, done.\\n' >&2; \
+             printf 'From somewhere\\n * branch main -> FETCH_HEAD' >&2; \
+             echo 'nothing to see' >&1",
+        );
+        let git = discover_retrying(stub.environment()).unwrap();
+        let mut seen = Vec::new();
+        let output = git
+            .command()
+            .arg("fetch")
+            .stream()
+            .unwrap()
+            .finish(|line| seen.push(line.to_owned()))
+            .unwrap();
+        assert_eq!(
+            seen,
+            [
+                "Receiving objects:  50%",
+                "Receiving objects: 100%, done.",
+                "From somewhere",
+                " * branch main -> FETCH_HEAD",
+            ]
+        );
+        assert!(output.stderr().contains("Receiving objects: 100%, done."));
+        assert_eq!(
+            output.stdout(),
+            b"",
+            "stdout is discarded on a streamed run"
+        );
+    }
+
+    #[test]
+    fn a_streamed_failure_carries_everything_stderr_said() {
+        let stub =
+            stub("echo 'fatal: could not read Username: terminal prompts disabled' >&2; exit 128");
+        let git = discover_retrying(stub.environment()).unwrap();
+        let mut seen = Vec::new();
+        let error = git
+            .command()
+            .args(["fetch", "origin"])
+            .stream()
+            .unwrap()
+            .finish(|line| seen.push(line.to_owned()))
+            .unwrap_err();
+        match error {
+            crate::Error::GitFailed {
+                arguments,
+                status,
+                stderr,
+            } => {
+                assert_eq!(arguments, "fetch origin");
+                assert_eq!(status.code(), Some(128));
+                assert!(stderr.contains("terminal prompts disabled"), "{stderr}");
+            }
+            other => panic!("expected the failure, got {other:?}"),
+        }
+        assert_eq!(seen.len(), 1);
+    }
+
+    /// PRD R4.3, the cancel half: a kill from another thread ends the wait promptly, the
+    /// outcome says cancelled rather than failed, and the child is reaped, not orphaned.
+    #[test]
+    fn a_kill_from_another_thread_ends_a_hung_invocation_and_reaps_it() {
+        // No `exec`: `sleep` is a child that inherits the pipe and outlives the killed shell,
+        // the way `ssh` or the askpass helper outlives a killed git.
+        let stub = stub("echo 'hanging' >&2; sleep 30");
+        let git = discover_retrying(stub.environment()).unwrap();
+        let running = git.command().arg("fetch").stream().unwrap();
+        let pid = running.id();
+        let killer = running.killer();
+        let (hung, hung_seen) = std::sync::mpsc::channel::<()>();
+        let killing = std::thread::spawn(move || {
+            // Kill once the child has said something, so it was really running.
+            hung_seen.recv().unwrap();
+            killer.kill();
+        });
+
+        let started = std::time::Instant::now();
+        let error = running
+            .finish(|line| {
+                if line == "hanging" {
+                    let _ = hung.send(());
+                }
+            })
+            .unwrap_err();
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "the kill did not end the wait: {:?}",
+            started.elapsed()
+        );
+        assert!(
+            matches!(&error, crate::Error::GitCancelled { arguments } if arguments == "fetch"),
+            "a killed process reported {error:?}"
+        );
+        killing.join().unwrap();
+        assert!(
+            std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound),
+            "the killed git {pid} was not reaped (still in /proc, so a zombie or alive)"
+        );
+    }
+
+    /// A kill after the exit changes nothing; the outcome is the process's own.
+    #[test]
+    fn a_kill_after_the_exit_is_a_no_op() {
+        let stub = stub("exit 0");
+        let git = discover_retrying(stub.environment()).unwrap();
+        let running = git.command().arg("fetch").stream().unwrap();
+        let killer = running.killer();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        killer.kill();
+        // The flag was set, so this is reported as cancelled even though the exit was clean:
+        // the caller asked for a cancel, and got one, whichever came first.
+        assert!(matches!(
+            running.finish(|_| {}),
+            Err(crate::Error::GitCancelled { .. })
+        ));
     }
 
     /// Caught by: `Stdio::null()` becoming `inherit()`, which is how a git waiting on a

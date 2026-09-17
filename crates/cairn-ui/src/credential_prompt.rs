@@ -182,8 +182,7 @@ impl Component for CredentialPrompt {
 /// Said beside every host-key question, because the question is asked once and
 /// answered for good: ssh appends the key to `known_hosts` and consults it silently
 /// from then on. Stated here rather than left to the user to know.
-const ACCEPTING_IS_PERMANENT: &str =
-    "Accepting adds this key to your known hosts. ssh will trust it from now on \
+const ACCEPTING_IS_PERMANENT: &str = "Accepting adds this key to your known hosts. ssh will trust it from now on \
      without asking again.";
 
 /// The one-line statement of what is wanted and from where.

@@ -17,9 +17,10 @@ pub fn fetch_line(fetch: &FetchStatus) -> Option<String> {
         FetchStatus::Finished { remote } => Some(format!("Fetched {remote}")),
         FetchStatus::Cancelled { remote } => Some(format!("Fetch of {remote} cancelled")),
         // One line: git's whole stderr may be long, and the banner draws every frame.
-        FetchStatus::Failed { remote, message } => {
-            Some(format!("Fetch of {remote} failed: {}", why_it_failed(message)))
-        }
+        FetchStatus::Failed { remote, message } => Some(format!(
+            "Fetch of {remote} failed: {}",
+            why_it_failed(message)
+        )),
     }
 }
 
@@ -154,8 +155,7 @@ mod tests {
         // An `error:` line is the reason when there is no `fatal:`.
         let line = fetch_line(&FetchStatus::Failed {
             remote: "origin".to_owned(),
-            message: "Receiving objects: 100%\nerror: cannot lock ref 'refs/heads/main'"
-                .to_owned(),
+            message: "Receiving objects: 100%\nerror: cannot lock ref 'refs/heads/main'".to_owned(),
         });
         assert_eq!(
             line.as_deref(),

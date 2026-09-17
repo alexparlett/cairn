@@ -11,5 +11,5 @@ mod startup;
 mod wake;
 
 pub use askpass::{PromptId, Reply};
-pub use pool::open;
+pub use pool::{Replier, open};
 pub use request::{Request, Update};

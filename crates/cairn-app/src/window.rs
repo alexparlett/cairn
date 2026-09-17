@@ -8,13 +8,8 @@ use freya::prelude::*;
 
 use crate::fetch_state::{FetchStatus, PromptView};
 use crate::history_state::{Progress, Status};
-use crate::worker::{Reply, Request};
+use crate::worker::{Replier, Reply, Request};
 use crate::{PAGE_ROWS, status_text};
-
-/// What the window does with a credential prompt's answer: the worker's
-/// callback, which sends it on as a value. Never kept in a struct — it is
-/// the channel a secret travels down.
-pub type Replier = Rc<dyn Fn(Reply)>;
 
 /// The view state the window is drawn from. Handles, not values: the window
 /// subscribes to what it reads.
@@ -58,6 +53,7 @@ pub fn window(
             opened,
             &counted,
             &fetch,
+            view.fetch,
             &view.remotes.read(),
             submit.clone(),
         ))
@@ -85,7 +81,9 @@ fn dialog(
     mut showing: State<Option<PromptView>>,
     answer: Option<Replier>,
 ) -> Element {
-    let remote = fetch.running_remote().unwrap_or("git").to_owned();
+    // A prompt is only shown while a fetch is in flight (`session::apply` refuses one
+    // otherwise), so the fallback names what asked when that holds no remote.
+    let remote = fetch.remote_in_flight().unwrap_or("git").to_owned();
     let id = prompt.id;
     let on_submit = answer.clone();
     let on_cancel = answer;
@@ -143,6 +141,7 @@ fn title_bar(
     path: &str,
     counted: &str,
     fetch: &FetchStatus,
+    fetch_state: State<FetchStatus>,
     remotes: &[RemoteSummary],
     submit: Option<Rc<dyn Fn(Request)>>,
 ) -> Element {
@@ -170,19 +169,22 @@ fn title_bar(
                 .font_size(13.)
                 .color(get_theme_or_default().read().colors().text_placeholder),
         )
-        .maybe_child(fetch_button(fetch, remotes, submit))
+        .maybe_child(fetch_button(fetch, fetch_state, remotes, submit))
         .into()
 }
 
-/// "Fetch <remote>" for the default remote while nothing runs; "Cancel" while
-/// a fetch does; nothing when the repository has no remote to fetch.
+/// "Fetch <remote>" for the default remote while nothing is in flight;
+/// "Cancel" while a fetch is; nothing when the repository has no remote to
+/// fetch. The press itself marks the fetch as starting, so a second press
+/// before the worker answers has no button to land on.
 fn fetch_button(
     fetch: &FetchStatus,
+    mut fetch_state: State<FetchStatus>,
     remotes: &[RemoteSummary],
     submit: Option<Rc<dyn Fn(Request)>>,
 ) -> Option<Element> {
     let submit = submit?;
-    if fetch.is_running() {
+    if fetch.is_in_flight() {
         return Some(
             Button::new()
                 .compact()
@@ -197,9 +199,10 @@ fn fetch_button(
         Button::new()
             .compact()
             .on_press(move |_| {
+                fetch_state.write().starting(remote.clone());
                 submit(Request::Fetch {
                     remote: remote.clone(),
-                })
+                });
             })
             .child(caption)
             .into(),
@@ -678,8 +681,10 @@ mod tests {
         );
         let shown = texts(&test);
         assert!(
-            shown.iter().any(|t| t.contains("origin")),
-            "the dialog does not name the remote: {shown:?}"
+            shown
+                .iter()
+                .any(|t| t == "origin is asking for a credential"),
+            "the dialog itself does not name the remote: {shown:?}"
         );
         assert!(
             shown
@@ -739,11 +744,23 @@ mod tests {
             }]
         );
 
+        // The press itself takes the button away, before the worker answers.
+        assert_eq!(
+            *view.fetch.read(),
+            FetchStatus::Starting {
+                remote: "origin".to_owned()
+            }
+        );
+        assert!(
+            !texts(&test).iter().any(|t| t == "Fetch origin"),
+            "a second fetch could be asked for before the first was confirmed"
+        );
+
         let mut fetch = view.fetch;
         fetch.write().started("origin".to_owned());
         fetch
             .write()
-            .progressed("origin", "Receiving objects: 40%".to_owned());
+            .progressed("Receiving objects: 40%".to_owned());
         test.sync_and_update();
         let shown = texts(&test);
         assert!(
@@ -783,6 +800,28 @@ mod tests {
         assert!(
             shown.iter().any(|t| t == "commit 0"),
             "the rows were lost: {shown:?}"
+        );
+    }
+
+    /// The dialog's fallback when the view state holds a prompt with no fetch in flight
+    /// (which `session::apply` prevents): it still names what asked.
+    #[test]
+    fn a_prompt_with_no_fetch_in_flight_is_attributed_to_git() {
+        let (test, _, _, _) = launch_with(
+            Vec::new(),
+            received(0, true),
+            FetchStatus::Idle,
+            Some(PromptView {
+                id: crate::worker::PromptId::for_tests(2),
+                text: "Username for 'https://git.example.com/x': ".to_owned(),
+            }),
+        );
+        assert!(
+            texts(&test)
+                .iter()
+                .any(|t| t == "git is asking for a credential"),
+            "{:?}",
+            texts(&test)
         );
     }
 }

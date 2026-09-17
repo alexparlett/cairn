@@ -51,25 +51,28 @@ pub enum Update {
     Remotes {
         remotes: Vec<RemoteSummary>,
     },
+    /// git is running; a `CancelFetch` from here on has something to kill.
     FetchStarted {
         remote: String,
     },
-    /// One redraw of git's own progress meter.
+    /// One redraw of git's own progress meter, for the one fetch in flight.
     FetchProgress {
-        remote: String,
         line: String,
     },
-    /// `refreshed` says the refs moved: the history on screen is of the old
-    /// ones and must be asked for again.
+    /// `refreshed` says a ref moved: the history on screen is of the old
+    /// ones and must be asked for again. On every ending, since a fetch that
+    /// failed or was killed may have moved some refs before it stopped.
     FetchFinished {
         remote: String,
         refreshed: bool,
     },
     FetchCancelled {
         remote: String,
+        refreshed: bool,
     },
     FetchFailed {
         remote: String,
+        refreshed: bool,
         message: String,
     },
     /// git or ssh is asking, through the helper: `text` is the prompt as
@@ -78,4 +81,30 @@ pub enum Update {
         id: PromptId,
         text: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Caught by: an operation numbered like a query, which a scroll would then supersede
+    /// (the fetch never runs) or which would supersede a page (the scroll stalls).
+    #[test]
+    fn queries_are_numbered_and_operations_are_not() {
+        for query in [
+            Request::OpenHistory { rows: 1 },
+            Request::MoreHistory { rows: 1 },
+        ] {
+            assert!(query.is_query(), "{query:?}");
+        }
+        for operation in [
+            Request::ListRemotes,
+            Request::Fetch {
+                remote: "origin".to_owned(),
+            },
+            Request::CancelFetch,
+        ] {
+            assert!(!operation.is_query(), "{operation:?}");
+        }
+    }
 }

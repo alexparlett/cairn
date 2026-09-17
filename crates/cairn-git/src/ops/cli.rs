@@ -232,12 +232,21 @@ impl Running {
         let _ = progress;
         let status = match already {
             Some(status) => status,
-            None => lock(&self.child)
-                .wait()
-                .map_err(|source| Error::GitNotStarted {
-                    program: PathBuf::from("git"),
-                    source,
-                })?,
+            // Polled rather than `wait()`ed, so the lock is never held across a block and
+            // a kill from another thread can always take it.
+            None => loop {
+                let exited =
+                    lock(&self.child)
+                        .try_wait()
+                        .map_err(|source| Error::GitNotStarted {
+                            program: PathBuf::from("git"),
+                            source,
+                        })?;
+                if let Some(status) = exited {
+                    break status;
+                }
+                std::thread::sleep(EXIT_POLL);
+            },
         };
         let stderr = everything.trim_end().to_owned();
         // A clean exit is a clean exit whatever the flag says: a kill that landed after
@@ -327,7 +336,11 @@ impl ProcessKill {
     pub(crate) fn kill(&self) {
         // Flagged first, so a `finish` that observes the exit sees why.
         self.cancelled.store(true, Ordering::Release);
-        let _ = lock(&self.child).kill();
+        // `try_lock`: the waiter holds the lock only for a `try_wait`, so a miss means it
+        // is reaping this instant and there is nothing left to kill.
+        if let Ok(mut child) = self.child.try_lock() {
+            let _ = child.kill();
+        }
     }
 }
 

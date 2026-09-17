@@ -63,6 +63,8 @@ pub(super) fn open_with(
     let (answers, answered) = channel::<Reply>();
     let wake = Wake::new();
     let epochs = Epochs::new();
+    // Held by the handle too, so a cancel reaches the fetch without queueing behind a page.
+    let control = FetchControl::default();
 
     // One sender per thread, so the stream ends when the last thread does.
     let outbox = Outbox {
@@ -79,6 +81,7 @@ pub(super) fn open_with(
     };
     let worker_epochs = epochs.clone();
     let worker_wake = Arc::clone(&wake);
+    let worker_control = control.clone();
     let opening = path.clone();
 
     // Detached; ends when the last `RepositoryHandle` drops.
@@ -129,6 +132,7 @@ pub(super) fn open_with(
                 operations_outbox,
                 acceptor_outbox,
                 &worker_wake,
+                worker_control,
             );
             serve(&shared, incoming, outbox, worker_epochs, &threads);
             threads.stop();
@@ -144,6 +148,7 @@ pub(super) fn open_with(
         RepositoryHandle {
             jobs,
             epochs: epochs.clone(),
+            control,
         },
         Updates {
             inbox,
@@ -172,13 +177,13 @@ impl Threads {
         operations_outbox: Outbox,
         acceptor_outbox: Outbox,
         wake: &Arc<Wake>,
+        control: FetchControl,
     ) -> Self {
         let (operations, queued) = channel::<Operation>();
-        let control = FetchControl::default();
         let Backend {
             git,
             channel,
-            prompting,
+            mut prompting,
         } = backend;
 
         let acceptor = channel.as_ref().map(|channel| {
@@ -198,8 +203,10 @@ impl Threads {
                     // The channel (and with it the socket) goes before the stream ends.
                     drop(exit);
                 });
-            // A thread that could not start leaves nothing to stop; `exit` went with the closure.
-            let _ = started;
+            if let Err(error) = started {
+                // Nothing accepts, so no prompt can be answered: say so on the fetch that needs one.
+                prompting = Err(format!("the askpass thread could not be started: {error}"));
+            }
             stop
         });
 
@@ -234,7 +241,12 @@ impl Threads {
         }
     }
 
+    /// Forwards a fetch, one at a time: a second while one is in flight is
+    /// dropped, since the fetch in flight is the one the window shows.
     fn perform(&self, operation: Operation) {
+        if !self.control.arm() {
+            return;
+        }
         if let Some(operations) = &self.operations {
             let _ = operations.send(operation);
         }
@@ -265,13 +277,22 @@ impl Drop for Threads {
 pub struct RepositoryHandle {
     jobs: Sender<(Option<Epoch>, Request)>,
     epochs: Epochs,
+    control: FetchControl,
 }
 
 impl RepositoryHandle {
     /// Never blocks. A query supersedes whatever query was in flight and is
     /// numbered; an operation is queued behind nothing and supersedes
-    /// nothing, and the epoch returned is simply the current one.
+    /// nothing, and the epoch returned is simply the current one. A cancel
+    /// does not queue at all: it reaches the fetch directly, ahead of any
+    /// page the repository thread is walking, through a lock the operations
+    /// thread holds only for an assignment and a kill that only tries for the
+    /// child's — a review obligation, since this runs on the UI thread.
     pub fn submit(&self, request: Request) -> Epoch {
+        if matches!(request, Request::CancelFetch) {
+            self.control.cancel();
+            return self.epochs.current();
+        }
         let epoch = if request.is_query() {
             self.epochs.bump()
         } else {
@@ -441,6 +462,7 @@ fn serve(
                 continue;
             }
             Request::CancelFetch => {
+                // Handled by the handle itself, never queued; kept so the match is total.
                 threads.control.cancel();
                 continue;
             }
@@ -1114,6 +1136,7 @@ mod tests {
         let handle = RepositoryHandle {
             jobs,
             epochs: epochs.clone(),
+            control: FetchControl::default(),
         };
         let started = Instant::now();
         let epoch = handle.submit(Request::OpenHistory { rows: 1_000_000 });

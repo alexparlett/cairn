@@ -5,7 +5,7 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use cairn_askpass::Channel;
-use cairn_git::ops::{FetchCancel, GitBinary, Invalidated, fetch};
+use cairn_git::ops::{FetchCancel, GitBinary, fetch};
 use cairn_git::{Error, SharedRepository};
 
 use super::pool::Outbox;
@@ -17,20 +17,65 @@ pub(super) enum Operation {
     Fetch { remote: String },
 }
 
-/// The cancel handle of the fetch in flight, shared with the repository
-/// thread, which is where a `CancelFetch` request arrives.
+/// Where the one fetch at a time is, and how to cancel it. Shared between
+/// the window's handle (which cancels), the repository thread (which arms a
+/// fetch it forwards) and the operations thread (which installs the kill
+/// handle once git is running).
 #[derive(Debug, Clone, Default)]
-pub(super) struct FetchControl(Arc<Mutex<Option<FetchCancel>>>);
+pub(super) struct FetchControl(Arc<Mutex<Stage>>);
+
+#[derive(Debug, Default)]
+enum Stage {
+    #[default]
+    Idle,
+    /// Forwarded, not yet running; a cancel that arrives now is kept until it is.
+    Starting {
+        cancelled: bool,
+    },
+    Running(FetchCancel),
+}
 
 impl FetchControl {
-    /// Kills the fetch in flight; nothing to do when there is none.
-    pub(super) fn cancel(&self) {
-        if let Some(cancel) = self.lock().as_ref() {
-            cancel.cancel();
+    /// Claims the slot for a fetch about to be forwarded; `false` when one is
+    /// already in flight, in which case nothing is forwarded — the window hides
+    /// the button while a fetch runs, so this is the race it cannot close.
+    pub(super) fn arm(&self) -> bool {
+        let mut stage = self.lock();
+        if matches!(*stage, Stage::Idle) {
+            *stage = Stage::Starting { cancelled: false };
+            true
+        } else {
+            false
         }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Option<FetchCancel>> {
+    /// Kills the fetch in flight, or remembers to kill the one that is starting;
+    /// nothing to do when there is none. Never blocks past a momentary lock:
+    /// the kill itself only tries for the child's lock.
+    pub(super) fn cancel(&self) {
+        let mut stage = self.lock();
+        match &mut *stage {
+            Stage::Idle => {}
+            Stage::Starting { cancelled } => *cancelled = true,
+            Stage::Running(cancel) => cancel.cancel(),
+        }
+    }
+
+    /// git is running: from now on a cancel kills it, and one that arrived
+    /// while it was starting kills it now.
+    fn install(&self, cancel: FetchCancel) {
+        let mut stage = self.lock();
+        if matches!(*stage, Stage::Starting { cancelled: true }) {
+            cancel.cancel();
+        }
+        *stage = Stage::Running(cancel);
+    }
+
+    fn clear(&self) {
+        *self.lock() = Stage::Idle;
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Stage> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
@@ -49,14 +94,12 @@ pub(super) fn serve_operations(
     while let Ok(operation) = operations.recv() {
         match operation {
             Operation::Fetch { remote } => {
-                // One token for the whole invocation, retired when this drops.
+                // What the refs were, so the window is told whether anything moved —
+                // on every outcome, since a failed or killed fetch may have moved some.
+                let before = repo.ref_tips().ok();
+                // One token for the whole invocation, retired below before the outcome
+                // goes out, so no helper of a dead git is accepted afterwards.
                 let authorised = channel.and_then(|channel| channel.begin().ok());
-                outbox.send(
-                    None,
-                    Update::FetchStarted {
-                        remote: remote.clone(),
-                    },
-                );
                 let outcome = fetch(
                     git,
                     &repo,
@@ -64,48 +107,56 @@ pub(super) fn serve_operations(
                     authorised.as_ref().map(cairn_askpass::Operation::token),
                 )
                 .and_then(|started| {
-                    *control.lock() = Some(started.canceller());
-                    let finished = started.finish(|line| {
+                    // Installed BEFORE the window hears "started", so a cancel it sends
+                    // in answer always has something to kill.
+                    control.install(started.canceller());
+                    outbox.send(
+                        None,
+                        Update::FetchStarted {
+                            remote: remote.clone(),
+                        },
+                    );
+                    started.finish(|line| {
                         outbox.send(
                             None,
                             Update::FetchProgress {
-                                remote: remote.clone(),
                                 line: line.to_owned(),
                             },
                         );
-                    });
-                    *control.lock() = None;
-                    finished
+                    })
                 });
+                control.clear();
+                drop(authorised);
+                let refreshed = match (before, repo.ref_tips().ok()) {
+                    (Some(before), Some(after)) => before != after,
+                    // Could not tell: assume the worst, which costs a reload.
+                    _ => true,
+                };
                 outbox.send(
                     None,
-                    fetch_outcome(
-                        remote,
-                        outcome.map(|performed| performed.invalidated()),
-                        prompting,
-                    ),
+                    fetch_outcome(remote, outcome.map(|_| ()), refreshed, prompting),
                 );
             }
         }
     }
 }
 
-/// The update for how a fetch ended. A failure while no prompt could have
-/// been answered says so, since git's own message ("terminal prompts
-/// disabled") does not say why nothing answered.
+/// The update for how a fetch ended; `refreshed` says whether a ref moved,
+/// whatever the outcome. A failure while no prompt could have been answered
+/// says so, since git's own message ("terminal prompts disabled") does not
+/// say why nothing answered.
 fn fetch_outcome(
     remote: String,
-    outcome: Result<Invalidated, Error>,
+    outcome: Result<(), Error>,
+    refreshed: bool,
     prompting: &Result<(), String>,
 ) -> Update {
     match outcome {
-        Ok(invalidated) => Update::FetchFinished {
-            refreshed: invalidated.refs,
-            remote,
-        },
-        Err(Error::GitCancelled { .. }) => Update::FetchCancelled { remote },
+        Ok(()) => Update::FetchFinished { remote, refreshed },
+        Err(Error::GitCancelled { .. }) => Update::FetchCancelled { remote, refreshed },
         Err(error) => Update::FetchFailed {
             remote,
+            refreshed,
             message: match prompting {
                 Ok(()) => error.to_string(),
                 Err(why) => format!(
@@ -121,39 +172,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_finished_fetch_says_whether_the_refs_moved() {
-        let moved = fetch_outcome("origin".to_owned(), Ok(Invalidated::refs()), &Ok(()));
+    fn every_outcome_carries_whether_the_refs_moved() {
+        let origin = || "origin".to_owned();
         assert_eq!(
-            moved,
+            fetch_outcome(origin(), Ok(()), true, &Ok(())),
             Update::FetchFinished {
-                remote: "origin".to_owned(),
+                remote: origin(),
                 refreshed: true
             }
         );
-        let unmoved = fetch_outcome("origin".to_owned(), Ok(Invalidated::objects()), &Ok(()));
         assert_eq!(
-            unmoved,
+            fetch_outcome(origin(), Ok(()), false, &Ok(())),
             Update::FetchFinished {
-                remote: "origin".to_owned(),
+                remote: origin(),
                 refreshed: false
             }
         );
-    }
-
-    #[test]
-    fn a_cancelled_fetch_is_not_reported_as_a_failure() {
-        let outcome = fetch_outcome(
-            "origin".to_owned(),
-            Err(Error::GitCancelled {
-                arguments: "fetch origin".to_owned(),
-            }),
-            &Ok(()),
-        );
         assert_eq!(
-            outcome,
+            fetch_outcome(
+                origin(),
+                Err(Error::GitCancelled {
+                    arguments: "fetch origin".to_owned(),
+                }),
+                true,
+                &Ok(())
+            ),
             Update::FetchCancelled {
-                remote: "origin".to_owned()
-            }
+                remote: origin(),
+                refreshed: true
+            },
+            "a cancelled fetch that moved refs must still say so"
         );
     }
 
@@ -167,7 +215,7 @@ mod tests {
                 source: std::io::Error::other("boom"),
             })
         };
-        match fetch_outcome("origin".to_owned(), failure(), &Ok(())) {
+        match fetch_outcome("origin".to_owned(), failure(), false, &Ok(())) {
             Update::FetchFailed { message, .. } => {
                 assert!(message.contains("boom"));
                 assert!(!message.contains("could not have asked"));
@@ -177,18 +225,34 @@ mod tests {
         match fetch_outcome(
             "origin".to_owned(),
             failure(),
+            true,
             &Err("the askpass helper is not at /x".to_owned()),
         ) {
-            Update::FetchFailed { message, .. } => {
+            Update::FetchFailed {
+                message, refreshed, ..
+            } => {
                 assert!(message.contains("boom"), "{message}");
                 assert!(message.contains("helper is not at /x"), "{message}");
+                assert!(refreshed);
             }
             other => panic!("{other:?}"),
         }
     }
 
+    /// Caught by: a cancel while starting being dropped, or a second fetch being armed
+    /// over a running one.
     #[test]
-    fn cancelling_with_nothing_in_flight_is_nothing() {
-        FetchControl::default().cancel();
+    fn a_cancel_while_starting_is_kept_and_one_fetch_at_a_time_is_armed() {
+        let control = FetchControl::default();
+        control.cancel(); // nothing in flight: ignored, and the next fetch is not poisoned
+        assert!(control.arm());
+        assert!(!control.arm(), "a second fetch was armed over the first");
+        control.cancel();
+        assert!(
+            matches!(*control.lock(), Stage::Starting { cancelled: true }),
+            "the cancel that arrived before git ran was lost"
+        );
+        control.clear();
+        assert!(control.arm());
     }
 }

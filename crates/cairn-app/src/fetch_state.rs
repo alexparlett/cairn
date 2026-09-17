@@ -2,10 +2,15 @@
 
 use crate::worker::PromptId;
 
-/// The one fetch the window shows; a second is not offered while one runs.
+/// The one fetch the window shows; a second is not offered while one is in flight.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FetchStatus {
     Idle,
+    /// Asked for, not yet confirmed running by the worker; the button is
+    /// already gone so it cannot be asked for twice.
+    Starting {
+        remote: String,
+    },
     /// `line` is git's latest progress redraw, once there is one.
     Running {
         remote: String,
@@ -25,32 +30,33 @@ pub enum FetchStatus {
 }
 
 impl FetchStatus {
-    pub fn is_running(&self) -> bool {
-        matches!(self, Self::Running { .. })
+    /// Starting or running: a fetch is in flight and can be cancelled.
+    pub fn is_in_flight(&self) -> bool {
+        matches!(self, Self::Starting { .. } | Self::Running { .. })
     }
 
-    /// The remote the running fetch is for, which is who a prompt is asking on behalf of.
-    pub fn running_remote(&self) -> Option<&str> {
+    /// The remote the fetch in flight is for, which is who a prompt is asking on behalf of.
+    pub fn remote_in_flight(&self) -> Option<&str> {
         match self {
-            Self::Running { remote, .. } => Some(remote),
+            Self::Starting { remote } | Self::Running { remote, .. } => Some(remote),
             Self::Idle | Self::Finished { .. } | Self::Cancelled { .. } | Self::Failed { .. } => {
                 None
             }
         }
     }
 
+    /// The window asked; set on the press, before the worker answers.
+    pub fn starting(&mut self, remote: String) {
+        *self = Self::Starting { remote };
+    }
+
     pub fn started(&mut self, remote: String) {
         *self = Self::Running { remote, line: None };
     }
 
-    /// Progress for a fetch that is not the running one is ignored.
-    pub fn progressed(&mut self, remote: &str, line: String) {
-        if let Self::Running {
-            remote: running,
-            line: latest,
-        } = self
-            && running == remote
-        {
+    /// Progress with nothing running is ignored.
+    pub fn progressed(&mut self, line: String) {
+        if let Self::Running { line: latest, .. } = self {
             *latest = Some(line);
         }
     }
@@ -71,25 +77,27 @@ mod tests {
     #[test]
     fn progress_belongs_to_the_running_fetch_only() {
         let mut status = FetchStatus::Idle;
-        status.progressed("origin", "early".to_owned());
+        status.progressed("early".to_owned());
         assert_eq!(
             status,
             FetchStatus::Idle,
             "progress with nothing running was kept"
         );
 
-        status.started("origin".to_owned());
-        assert!(status.is_running());
-        assert_eq!(status.running_remote(), Some("origin"));
-        status.progressed("upstream", "not mine".to_owned());
+        status.starting("origin".to_owned());
+        assert!(status.is_in_flight());
+        status.progressed("not yet".to_owned());
         assert_eq!(
             status,
-            FetchStatus::Running {
-                remote: "origin".to_owned(),
-                line: None
-            }
+            FetchStatus::Starting {
+                remote: "origin".to_owned()
+            },
+            "progress before git ran was kept"
         );
-        status.progressed("origin", "Receiving objects: 40%".to_owned());
+        status.started("origin".to_owned());
+        assert!(status.is_in_flight());
+        assert_eq!(status.remote_in_flight(), Some("origin"));
+        status.progressed("Receiving objects: 40%".to_owned());
         assert_eq!(
             status,
             FetchStatus::Running {
@@ -100,7 +108,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_running_fetch_has_a_remote_to_name() {
+    fn only_a_fetch_in_flight_has_a_remote_to_name() {
         for done in [
             FetchStatus::Idle,
             FetchStatus::Finished {
@@ -114,8 +122,15 @@ mod tests {
                 message: "no".to_owned(),
             },
         ] {
-            assert!(!done.is_running(), "{done:?}");
-            assert_eq!(done.running_remote(), None, "{done:?}");
+            assert!(!done.is_in_flight(), "{done:?}");
+            assert_eq!(done.remote_in_flight(), None, "{done:?}");
         }
+        assert_eq!(
+            FetchStatus::Starting {
+                remote: "upstream".to_owned()
+            }
+            .remote_in_flight(),
+            Some("upstream")
+        );
     }
 }

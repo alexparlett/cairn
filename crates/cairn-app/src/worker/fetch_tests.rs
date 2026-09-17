@@ -626,7 +626,8 @@ fn cancelling_a_fetch_that_waits_on_a_prompt_ends_it_as_cancelled() {
     assert_eq!(
         seen.last(),
         Some(&Update::FetchCancelled {
-            remote: "origin".to_owned()
+            remote: "origin".to_owned(),
+            refreshed: false
         }),
         "{seen:?}"
     );
@@ -699,9 +700,9 @@ fn a_prompt_waiting_at_shutdown_is_refused() {
     });
     collect_until(&mut updates, |u| matches!(u, Update::Prompt { .. }));
 
+    // Only the window's answering end goes first: the refusal, not the kill, must end it.
     let started = Instant::now();
     drop(answer);
-    drop(handle);
     let rest = collect_until(&mut updates, |u| {
         matches!(
             u,
@@ -714,12 +715,11 @@ fn a_prompt_waiting_at_shutdown_is_refused() {
         started.elapsed()
     );
     assert!(
-        matches!(
-            rest.last(),
-            Some(Update::FetchCancelled { .. } | Update::FetchFailed { .. })
-        ),
-        "{rest:?}"
+        matches!(rest.last(), Some(Update::FetchFailed { .. })),
+        "the window letting go did not refuse the waiting prompt (git would then have \
+         failed on its own): {rest:?}"
     );
+    drop(handle);
     assert!(block_on(updates.next()).is_none(), "the stream did not end");
 }
 
@@ -737,4 +737,46 @@ fn the_answerer_never_blocks_even_with_nobody_listening() {
         prompt: PromptId::for_tests(1),
     });
     assert!(started.elapsed() < Duration::from_millis(50));
+}
+
+/// A fetch that fails where nothing could have answered a prompt says why, at the
+/// boundary: no runtime directory means no channel, and the failure names it.
+#[test]
+fn a_failure_with_no_channel_names_why_nothing_could_ask() {
+    let remote = Demanding::new();
+    let fixture = with_origin("cairn-no-channel-fetch", &remote.url());
+    let home = Home::new();
+    let startup = Startup::new(
+        {
+            let home = home.path.clone();
+            move |name| match name {
+                "PATH" => std::env::var_os("PATH"),
+                "HOME" => Some(home.clone().into_os_string()),
+                _ => None,
+            }
+        },
+        built_helper(),
+    );
+    let (handle, mut updates, _reply) = match open_with(&fixture.path, startup) {
+        Ok(opened) => opened,
+        Err(error) => panic!("starting the worker: {error}"),
+    };
+    handle.submit(Request::Fetch {
+        remote: "origin".to_owned(),
+    });
+    let seen = collect_until(&mut updates, |u| {
+        matches!(u, Update::FetchFailed { .. } | Update::FetchFinished { .. })
+    });
+    match seen.last() {
+        Some(Update::FetchFailed { message, .. }) => assert!(
+            message.contains("XDG_RUNTIME_DIR"),
+            "the failure does not say why nothing could ask: {message}"
+        ),
+        other => panic!("expected the fetch to fail closed, got {other:?}"),
+    }
+    assert!(
+        prompt_in(&seen).is_none(),
+        "a prompt arrived with no channel: {seen:?}"
+    );
+    drop(handle);
 }

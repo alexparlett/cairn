@@ -7,16 +7,20 @@ use crate::history_state::{Progress, Status};
 pub fn fetch_line(fetch: &FetchStatus) -> Option<String> {
     match fetch {
         FetchStatus::Idle => None,
-        FetchStatus::Running { remote, line: None } => Some(format!("Fetching {remote}…")),
+        FetchStatus::Starting { remote } | FetchStatus::Running { remote, line: None } => {
+            Some(format!("Fetching {remote}…"))
+        }
         FetchStatus::Running {
             remote,
             line: Some(line),
         } => Some(format!("Fetching {remote}: {line}")),
         FetchStatus::Finished { remote } => Some(format!("Fetched {remote}")),
         FetchStatus::Cancelled { remote } => Some(format!("Fetch of {remote} cancelled")),
-        FetchStatus::Failed { remote, message } => {
-            Some(format!("Fetch of {remote} failed: {message}"))
-        }
+        // One line: git's whole stderr may be long, and the banner draws every frame.
+        FetchStatus::Failed { remote, message } => Some(format!(
+            "Fetch of {remote} failed: {}",
+            message.lines().next().unwrap_or_default()
+        )),
     }
 }
 
@@ -90,6 +94,23 @@ mod tests {
                 .as_ref()
                 .is_some_and(|s| s.contains("could not read Username"))
         );
+        assert_eq!(
+            fetch_line(&FetchStatus::Starting {
+                remote: "origin".to_owned()
+            }),
+            sentences[0],
+            "starting and running-without-progress say different things"
+        );
+    }
+
+    /// Caught by: putting git's whole stderr into a one-line banner every frame.
+    #[test]
+    fn a_failure_is_said_in_one_line() {
+        let line = fetch_line(&FetchStatus::Failed {
+            remote: "origin".to_owned(),
+            message: "first line\nsecond line\nthird".to_owned(),
+        });
+        assert_eq!(line.as_deref(), Some("Fetch of origin failed: first line"));
     }
 
     /// Caught by: giving both states the same words.

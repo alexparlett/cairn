@@ -21,9 +21,10 @@ TYPECHECK_CMD="cargo check --workspace --all-targets --all-features"
 GUARDS_CMD="cargo test -p cairn-guards"                    # the invariant twins
 DEPS_CMD="cargo deny check advisories bans sources licenses"
 TEST_FAST_CMD="cargo test --workspace --lib --bins"        # --bins: cairn-app is a binary
+TEST_FULL_CMD="cargo test --workspace --all-targets"
 # --all-targets never runs doctests, and cairn-model's compile-fail pins on the
-# secret type ARE doctests; the second command is what makes them decide anything.
-TEST_FULL_CMD="cargo test --workspace --all-targets && cargo test --workspace --doc"
+# secret type ARE doctests. Its own step, so a red test-full does not hide it.
+TEST_DOC_CMD="cargo test --workspace --doc"
 
 FAST=0
 SELECTED_STEP=""
@@ -69,6 +70,7 @@ run_guards()    { run_cmd "guards"    "$GUARDS_CMD"; }
 run_deps()      { run_cmd "deps"      "$DEPS_CMD"; }
 run_test_fast() { run_cmd "test-fast" "$TEST_FAST_CMD"; }
 run_test_full() { run_cmd "test-full" "$TEST_FULL_CMD"; }
+run_test_doc()  { run_cmd "test-doc"  "$TEST_DOC_CMD"; }
 
 finish() {
   echo
@@ -85,6 +87,7 @@ if [ -n "$SELECTED_STEP" ]; then
     deps) run_deps ;;
     test-fast) run_test_fast ;;
     test-full) run_test_full ;;
+    test-doc) run_test_doc ;;
     *)
       echo "unknown gate step: $SELECTED_STEP" >&2
       exit 2
@@ -101,6 +104,7 @@ run_guards
 if [ "$FAST" -eq 0 ]; then
   run_deps
   run_test_full
+  run_test_doc
 else
   run_test_fast
 fi

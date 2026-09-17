@@ -93,3 +93,7 @@ jobs:
       - name: Run full test suite
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: scripts/gate.sh --step test-full
+
+      - name: Run doctests
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: scripts/gate.sh --step test-doc

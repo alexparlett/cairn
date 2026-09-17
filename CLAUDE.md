@@ -39,7 +39,7 @@ there.
 ## Commands
 
 - `scripts/gate.sh` — the pre-merge gate: format, lint, typecheck, guards,
-  dependency policy, full test suite. Exit-code safe; run it before calling a
+  dependency policy, full test suite, doctests. Exit-code safe; run it before calling a
   change done instead of an ad-hoc `&&` chain (piping test output through
   `tail`/`head` masks the exit code).
 - `scripts/gate.sh --fast` — day-loop subset. Never the merge bar; deliberately
@@ -223,7 +223,7 @@ Project invariants:
   (credential-prompts L11). Primary enforcement is the type: `{:?}` and `{}`
   on it, a `#[derive(Debug)]` container of it and `.clone()` do not compile,
   pinned by the `compile_fail` doctests in `crates/cairn-model/src/secret.rs`
-  (which is why the full gate runs `cargo test --doc`). Twin against what the
+  (which is why the full gate has a `test-doc` step). Twin against what the
   compiler cannot refuse:
   `no_credential_value_is_logged_printed_serialised_or_stored`, with matcher
   self-test `the_credential_matcher_catches_the_shapes_it_claims`. What it

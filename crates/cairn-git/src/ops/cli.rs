@@ -22,6 +22,8 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+use cairn_model::AskpassToken;
+
 use super::GitEnvironment;
 use crate::{Error, Repository};
 
@@ -32,6 +34,7 @@ pub(crate) struct GitCommand<'a> {
     environment: &'a GitEnvironment,
     arguments: Vec<OsString>,
     directory: Option<PathBuf>,
+    token: Option<AskpassToken>,
 }
 
 impl<'a> GitCommand<'a> {
@@ -41,6 +44,7 @@ impl<'a> GitCommand<'a> {
             environment,
             arguments: Vec::new(),
             directory: None,
+            token: None,
         }
     }
 
@@ -75,10 +79,25 @@ impl<'a> GitCommand<'a> {
         self
     }
 
+    /// An invocation that may ask the user for a secret: `token` is what the
+    /// askpass helper presents to the channel that issued it. Without one the
+    /// helper is still what git runs, and it fails closed.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the first operation that can prompt is fetch, in the next phase"
+        )
+    )]
+    pub(crate) fn authorized_by(mut self, token: &AskpassToken) -> Self {
+        self.token = Some(token.clone());
+        self
+    }
+
     /// Runs to completion. A non-zero exit is [`Error::GitFailed`], with what git
     /// wrote to stderr; a process that never started is [`Error::GitNotStarted`].
     pub(crate) fn run(self) -> Result<Output, Error> {
-        let mut command = self.environment.command(self.program);
+        let mut command = self.environment.command(self.program, self.token.as_ref());
         command
             .args(&self.arguments)
             .stdin(Stdio::null())
@@ -215,6 +234,8 @@ mod stub_tests {
     use std::collections::BTreeMap;
     use std::ffi::OsString;
 
+    use cairn_model::AskpassToken;
+
     use super::super::stub_git::{StubGit, discover_retrying};
     use crate::Repository;
 
@@ -277,6 +298,41 @@ mod stub_tests {
             Some("/nonexistent/home-from-cairn"),
             "HOME must be the value the builder chose, not this process's"
         );
+        assert_eq!(
+            seen.get("GIT_ASKPASS").map(String::as_str),
+            Some(StubGit::HELPER),
+            "git must be pointed at Cairn's askpass helper"
+        );
+        assert_eq!(
+            seen.get("SSH_ASKPASS").map(String::as_str),
+            Some(StubGit::HELPER)
+        );
+        assert_eq!(
+            seen.get("SSH_ASKPASS_REQUIRE").map(String::as_str),
+            Some("force")
+        );
+        assert!(
+            !seen.contains_key("CAIRN_ASKPASS_TOKEN"),
+            "an invocation nobody authorised carried a token"
+        );
+    }
+
+    /// The token reaches the child only on an invocation that was given one.
+    #[test]
+    fn an_authorised_invocation_carries_its_token_and_only_that_one() {
+        let stub = stub("exec /usr/bin/env");
+        let git = discover_retrying(stub.environment()).unwrap();
+        let token = AskpassToken::new(format!("token-{}", std::process::id()));
+        let output = git
+            .command()
+            .arg("print-environment")
+            .authorized_by(&token)
+            .run()
+            .unwrap();
+        let text = output.stdout_text();
+        let seen: BTreeMap<&str, &str> = text.lines().filter_map(|l| l.split_once('=')).collect();
+        assert_eq!(seen.get("CAIRN_ASKPASS_TOKEN"), Some(&token.as_str()));
+        assert_eq!(seen.get("GIT_ASKPASS"), Some(&StubGit::HELPER));
     }
 
     #[test]

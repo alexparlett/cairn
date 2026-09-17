@@ -22,8 +22,11 @@
 //!   message. Nothing degrades silently.
 //! - [`GitEnvironment`] is the environment every invocation runs with. It is
 //!   built from a spelled-out roster, never inherited wholesale, and it always
-//!   sets `GIT_TERMINAL_PROMPT=0`. It is also the only place a
-//!   `std::process::Command` is built, so no process exists without it.
+//!   sets `GIT_TERMINAL_PROMPT=0` and `SSH_ASKPASS_REQUIRE=force` and points
+//!   `GIT_ASKPASS` and `SSH_ASKPASS` at Cairn's helper ([`Askpass`]). It is
+//!   also the only place a `std::process::Command` is built, so no process
+//!   exists without it; an invocation that may prompt is given its askpass
+//!   token there too, per invocation, because that is what the token is.
 //! - `GitCommand` (crate-private, like `Output`) adds the arguments and runs
 //!   the process with standard input closed. Nothing outside `ops` can run a
 //!   raw verb: the public surface is named operations, so the confirmation
@@ -49,7 +52,8 @@
 //! stderr, so "git failed" is never the whole message. Because stderr is never
 //! matched on, an outcome a caller must tell apart from "git failed" — a
 //! credential prompt the user cancelled, say — has to come from a channel of
-//! its own (the askpass helper's), never from reading git's prose.
+//! its own (the askpass channel in `cairn-askpass`, whose `Prompt::refuse`
+//! is what the worker sees), never from reading git's prose.
 //!
 //! # The cache-invalidation contract
 //!
@@ -95,6 +99,7 @@
 //! fetch, which invalidates `refs` and `objects`, and the graph must stop
 //! showing the pre-fetch refs when it lands.
 
+mod askpass;
 mod binary;
 mod cli;
 mod environment;
@@ -103,6 +108,7 @@ mod stub_git;
 
 use cairn_model::Confirmed;
 
+pub use askpass::Askpass;
 pub use binary::{GitBinary, GitVersion};
 pub(crate) use cli::GitCommand;
 pub use environment::GitEnvironment;

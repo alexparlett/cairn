@@ -688,6 +688,27 @@ fn every_git_invocation_disables_the_terminal_prompt() {
          \"0\"); without it a GUI with no terminal hangs on git's own prompt."
     );
     assert!(
+        always.contains("(\"SSH_ASKPASS_REQUIRE\", \"force\")"),
+        "{PROCESS_ENVIRONMENT_FILE}'s ALWAYS table no longer carries (\"SSH_ASKPASS_REQUIRE\", \
+         \"force\"); without it ssh asks for a key passphrase on a terminal nobody is watching \
+         (PRD R3.3)."
+    );
+    // The helper is named in the constructor, from the `Askpass` it is given, not from a table.
+    let constructor = code_without_test_modules(&with_strings);
+    for variable in ["\"GIT_ASKPASS\"", "\"SSH_ASKPASS\"", "SOCKET_VARIABLE"] {
+        assert!(
+            constructor.contains(variable),
+            "{PROCESS_ENVIRONMENT_FILE} no longer sets {variable}: git or ssh would have no \
+             helper to ask and, with the terminal prompt off, no way to ask at all (PRD R3.2, \
+             R3.3)."
+        );
+    }
+    assert!(
+        constructor.contains("TOKEN_VARIABLE"),
+        "{PROCESS_ENVIRONMENT_FILE} no longer applies the askpass token; a helper with no token \
+         is refused by the channel, so no prompt could ever be answered."
+    );
+    assert!(
         mentions_crate(&production, "ALWAYS").len() >= 2,
         "ALWAYS is declared in {PROCESS_ENVIRONMENT_FILE} but never consulted; the constructor \
          must apply it."

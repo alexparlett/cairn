@@ -13,7 +13,12 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cairn_git::Error;
-use cairn_git::ops::{GitBinary, GitEnvironment, GitVersion};
+use cairn_git::ops::{Askpass, GitBinary, GitEnvironment, GitVersion};
+
+/// Where the environment points git for a secret; nothing here runs it.
+fn askpass() -> Askpass {
+    Askpass::new("/nonexistent/cairn-askpass", None)
+}
 
 /// A directory holding one stub `git`, removed when the test ends.
 struct StubPath {
@@ -56,13 +61,16 @@ impl StubPath {
     /// An environment whose `PATH` is this directory alone; `parent` supplies the rest.
     fn environment_with(&self, parent: impl Fn(&str) -> Option<OsString>) -> GitEnvironment {
         let directory = self.directory.clone();
-        GitEnvironment::new(move |name| {
-            if name == "PATH" {
-                Some(directory.clone().into_os_string())
-            } else {
-                parent(name)
-            }
-        })
+        GitEnvironment::new(
+            move |name| {
+                if name == "PATH" {
+                    Some(directory.clone().into_os_string())
+                } else {
+                    parent(name)
+                }
+            },
+            &askpass(),
+        )
     }
 
     fn environment(&self) -> GitEnvironment {
@@ -136,7 +144,7 @@ fn a_missing_git_is_refused_naming_the_required_version() {
 #[test]
 fn an_unset_path_is_reported_rather_than_searched_nowhere_silently() {
     let error = failure(
-        discover_retrying(GitEnvironment::new(|_| None)),
+        discover_retrying(GitEnvironment::new(|_| None, &askpass())),
         "PATH unset",
     );
     assert!(
@@ -262,7 +270,8 @@ fn the_first_directory_on_path_wins() {
     let first = StubPath::printing_version("git version 2.31.0");
     let second = StubPath::printing_version("git version 2.55.0");
     let joined = std::env::join_paths([&first.directory, &second.directory]).unwrap();
-    let environment = GitEnvironment::new(|name| (name == "PATH").then(|| joined.clone()));
+    let environment =
+        GitEnvironment::new(|name| (name == "PATH").then(|| joined.clone()), &askpass());
     let git = discover_retrying(environment).unwrap();
     assert_eq!(git.path(), first.git_path());
     assert_eq!(git.version().to_string(), "2.31.0");
@@ -271,7 +280,7 @@ fn the_first_directory_on_path_wins() {
 /// The machine's own git, through the same path the application takes at startup.
 #[test]
 fn the_installed_git_is_discovered_from_the_process_environment() {
-    let git = match GitBinary::discover() {
+    let git = match GitBinary::discover(&askpass()) {
         Ok(git) => git,
         Err(error) => panic!("this machine's git was refused: {error}"),
     };

@@ -1,11 +1,11 @@
 //! The repository worker pool.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 
-use cairn_git::ops::{GitBinary, GitEnvironment};
+use cairn_git::ops::{Askpass, GitBinary, GitEnvironment};
 use cairn_git::{Error, HistoryCursor, HistoryRequest, HistorySession, SharedRepository};
 
 use super::epoch::{Epoch, Epochs};
@@ -25,7 +25,25 @@ const _: () = assert!(
 /// so does a `git` that is missing or older than Cairn requires, checked first.
 /// Drive [`Updates`] from exactly one task.
 pub fn open(path: impl AsRef<Path>) -> Result<(RepositoryHandle, Updates), OpenError> {
-    open_with(path, GitEnvironment::new(|name| std::env::var_os(name)))
+    open_with(
+        path,
+        GitEnvironment::new(|name| std::env::var_os(name), &askpass()),
+    )
+}
+
+/// The helper installed beside this executable; a bare name, which git and ssh
+/// search `PATH` for, if where this executable is cannot be known. No socket
+/// yet: the channel is opened by the fetch operation (next phase), and until
+/// then every prompt fails closed rather than hanging.
+fn askpass() -> Askpass {
+    let program = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_owned))
+        .map_or_else(
+            || PathBuf::from(cairn_model::HELPER_PROGRAM),
+            |directory| directory.join(cairn_model::HELPER_PROGRAM),
+        );
+    Askpass::new(program, None)
 }
 
 /// [`open`] with the environment `git` is searched on and run with; what a test hands in.
@@ -381,11 +399,13 @@ mod tests {
     /// the repository is not opened behind the refusal.
     #[test]
     fn a_missing_git_is_refused_naming_the_version_and_nothing_is_served() {
-        let (_handle, mut updates) =
-            match open_with(env!("CARGO_MANIFEST_DIR"), GitEnvironment::new(|_| None)) {
-                Ok(pair) => pair,
-                Err(error) => panic!("starting the worker: {error}"),
-            };
+        let (_handle, mut updates) = match open_with(
+            env!("CARGO_MANIFEST_DIR"),
+            GitEnvironment::new(|_| None, &askpass()),
+        ) {
+            Ok(pair) => pair,
+            Err(error) => panic!("starting the worker: {error}"),
+        };
         match block_on(updates.next()) {
             Some(Update::Failed { message }) => {
                 assert!(message.contains("2.30.0"), "no required version: {message}");

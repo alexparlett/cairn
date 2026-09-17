@@ -6,7 +6,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use super::{GitCommand, GitEnvironment};
+use super::{Askpass, GitCommand, GitEnvironment};
 use crate::Error;
 
 /// The program name searched for on `PATH`.
@@ -68,8 +68,8 @@ pub struct GitBinary {
 
 impl GitBinary {
     /// Locates `git` on this process's `PATH` and checks its version. Call once at startup.
-    pub fn discover() -> Result<Self, Error> {
-        Self::discover_with(GitEnvironment::new(|name| std::env::var_os(name)))
+    pub fn discover(askpass: &Askpass) -> Result<Self, Error> {
+        Self::discover_with(GitEnvironment::new(|name| std::env::var_os(name), askpass))
     }
 
     /// `environment` is both where `git` is searched for (its `PATH` entry) and

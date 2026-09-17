@@ -27,7 +27,7 @@ as if it exists.
 | --- | --- |
 | `docs/` | `qa-gate.md` (QA contract), `design/` intent, `prd/` per-packet specs, `systems/` as-built, `work/` in-flight dirs, `research/` evidence (deferred work goes to GitHub issues; `backlog/` is the no-remote fallback) — findings promote research → brainstorm → design/prd → systems (contract: `docs/CLAUDE.md`) |
 | `crates/cairn-model/` | The vocabulary crossing the seam: `Oid`, `RefName`, `CommitSummary`, the `Confirmed` token. Plain data, plus the pure layout algorithm that produces some of it (`LaneAssigner`), and `Secret`, the one type that holds a credential. Depends on nothing but `zeroize` (for that type) — not `gix`, not `freya`, not the other crates. |
-| `crates/cairn-git/` | The repository engine: gitoxide-backed reads, and under `src/ops/` every write, delegating to the `git` binary per design decision D1. Today `ops/` holds the subprocess backend — `GitBinary` (startup discovery and the 2.30 floor), `GitEnvironment` (the explicitly built environment, the only place a process is built) and the crate-private runner — plus the confirmation-seal placeholder; no operation mutates a repository yet. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
+| `crates/cairn-git/` | The repository engine: gitoxide-backed reads, and under `src/ops/` every write, delegating to the `git` binary per design decision D1. Today `ops/` holds the subprocess backend — `GitBinary` (startup discovery and the 2.30 floor), `GitEnvironment` (the explicitly built environment, the only place a process is built), `Askpass` (where git and ssh are sent for a secret) and the crate-private runner — plus the confirmation-seal placeholder; no operation mutates a repository yet. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
 | `crates/cairn-ui/` | Freya components. Render `cairn-model` values, report intent through `EventHandler` props. Must never depend on `gix` or `cairn-git`, and must never touch the filesystem. |
 | `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. |
 | `crates/cairn-guards/` | Test-only. The deterministic enforcement twins for the Invariants below; nothing depends on it. |
@@ -180,16 +180,20 @@ Project invariants:
 - **Only `cairn-git/src/ops/` mutates a repository**, whether through gitoxide or
   a `git` subprocess. Twin: `only_the_ops_module_mutates_a_repository`.
 - **Every `git` subprocess runs with an environment Cairn built, and that
-  environment always sets `GIT_TERMINAL_PROMPT=0`.** A GUI has no terminal, so
-  git's own credential prompt would hang the window on nothing; and an
-  inherited environment carries whatever the launching shell had — a
+  environment always sets `GIT_TERMINAL_PROMPT=0` and `SSH_ASKPASS_REQUIRE=force`
+  and points `GIT_ASKPASS` and `SSH_ASKPASS` at Cairn's own helper.** A GUI has
+  no terminal, so git's own credential prompt would hang the window on
+  nothing, and ssh would ask for a passphrase on a tty nobody is watching; and
+  an inherited environment carries whatever the launching shell had — a
   `GIT_ASKPASS` meant for something else, a `GIT_DIR` pointing elsewhere.
   Primary enforcement is construction: `cairn_git::ops::GitEnvironment` has one
-  constructor, which copies a spelled-out roster from the parent and then
-  applies its `ALWAYS` table; `GitEnvironment::command` is the only place a
-  `std::process::Command` is built, clearing the inherited environment before
-  applying that one; and the runner that takes it is crate-private, so nothing
-  outside `ops` can run a raw verb. Twin against erosion:
+  constructor, which copies a spelled-out roster from the parent, applies its
+  `ALWAYS` table, and names the helper from the `Askpass` it is given (there
+  is no environment without one); `GitEnvironment::command` is the only place
+  a `std::process::Command` is built, clearing the inherited environment
+  before applying that one and the invocation's askpass token; and the runner
+  that takes it is crate-private, so nothing outside `ops` can run a raw
+  verb. Twin against erosion:
   `every_git_invocation_disables_the_terminal_prompt`, over the product crates'
   `src/` with test modules blanked (a test fixture may spawn what it likes) —
   no production file but `crates/cairn-git/src/ops/environment.rs` names
@@ -197,9 +201,11 @@ Project invariants:
   environment-setting method (`env`, `envs`, `env_clear`, `env_remove`), writes
   a `GitEnvironment { .. }` literal or opens an `impl` block for the type; that
   file builds exactly one `Command` and one `GitEnvironment` literal, calls
-  both `env_clear` and `envs`, has no `&mut self` method, and its `ALWAYS`
+  both `env_clear` and `envs`, has no `&mut self` method, its `ALWAYS`
   table — the table itself, not the file — carries
-  `("GIT_TERMINAL_PROMPT", "0")`. Matcher self-test:
+  `("GIT_TERMINAL_PROMPT", "0")` and `("SSH_ASKPASS_REQUIRE", "force")`, and
+  its production code names `"GIT_ASKPASS"`, `"SSH_ASKPASS"`, the socket
+  variable and the token variable. Matcher self-test:
   `the_process_environment_matcher_catches_the_shapes_it_claims`. The VALUE is
   pinned behaviourally in `cairn-git`: the builder's tests spell out the whole
   variable set, and `ops/cli.rs`'s stub tests run a `git` that prints what it

@@ -9,7 +9,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::{GitBinary, GitEnvironment};
+use super::{Askpass, GitBinary, GitEnvironment};
 use crate::Error;
 
 /// A directory holding one stub `git`, removed when the test ends.
@@ -18,6 +18,9 @@ pub(crate) struct StubGit {
 }
 
 impl StubGit {
+    /// Where the environment points git for a secret; nothing here runs it.
+    pub(crate) const HELPER: &str = "/nonexistent/cairn-askpass";
+
     /// A `git` whose whole behaviour is `script`, run by `/bin/sh`.
     pub(crate) fn with_git(script: &str) -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -43,13 +46,16 @@ impl StubGit {
         parent: impl Fn(&str) -> Option<OsString>,
     ) -> GitEnvironment {
         let directory = self.directory.clone();
-        GitEnvironment::new(move |name| {
-            if name == "PATH" {
-                Some(directory.clone().into_os_string())
-            } else {
-                parent(name)
-            }
-        })
+        GitEnvironment::new(
+            move |name| {
+                if name == "PATH" {
+                    Some(directory.clone().into_os_string())
+                } else {
+                    parent(name)
+                }
+            },
+            &Askpass::new(Self::HELPER, None),
+        )
     }
 
     pub(crate) fn environment(&self) -> GitEnvironment {

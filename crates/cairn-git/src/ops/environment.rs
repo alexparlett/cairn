@@ -51,9 +51,12 @@ const ALWAYS: &[(&str, &str)] = &[
 /// the user's configuration out, `GIT_ASKPASS` may be meant for something
 /// else), which includes `GIT_SSH_COMMAND` and `GIT_SSH` — a user who sets
 /// those in a shell rather than in `core.sshCommand` will find Cairn ignores
-/// them, and that is the cost of never inheriting a git override. Proxy, CA
-/// bundle, Kerberos, display and signing variables are open questions for the
-/// user, not omissions.
+/// them, and that is the cost of never inheriting a git override. The two
+/// exceptions, `GIT_SSL_CAINFO` and `GIT_SSL_CAPATH`, name a CA bundle and
+/// nothing else (issue #18). Display (`DISPLAY`, `WAYLAND_DISPLAY`) and
+/// signing (`GNUPGHOME`) variables remain open questions for the user on
+/// that issue, not omissions; so does pinning `GIT_EDITOR` in [`ALWAYS`],
+/// which is due with the first verb that can open an editor.
 const INHERITED: &[&str] = &[
     // Credential helpers, `ssh`, LFS filters and hooks are found on it.
     "PATH",
@@ -83,6 +86,45 @@ const INHERITED: &[&str] = &[
     "LC_ALL",
     "LC_CTYPE",
     "LC_MESSAGES",
+    // Transport, decided on issue #18: each configures how git reaches a
+    // remote, and its absence is a "cannot connect" the user cannot diagnose
+    // from Cairn. A proxy URL may carry the user's proxy credentials; they go
+    // to git and nowhere else, since a `GitEnvironment` is never rendered,
+    // logged or written.
+    //
+    // The proxy that git's HTTP transport (libcurl) reads; `http.proxy` in
+    // git config overrides these (git-config(1), `http.proxy`), but a user
+    // behind a corporate proxy usually has only the shell variables. Per
+    // curl(1) ENVIRONMENT, the lower-case form wins when both are set, and
+    // `http_proxy` exists in lower case ONLY — curl ignores `HTTP_PROXY`
+    // because a CGI would set it from a request header — so that one name is
+    // deliberately absent.
+    "http_proxy",
+    "https_proxy",
+    "HTTPS_PROXY",
+    "all_proxy",
+    "ALL_PROXY",
+    "no_proxy",
+    "NO_PROXY",
+    // A private CA, as OpenSSL reads it (openssl(7) ENVIRONMENT: the file and
+    // directory its default verify paths come from), which libcurl's OpenSSL
+    // backend falls back to when it was built with no CA bundle of its own and
+    // nothing named one. `CURL_CA_BUNDLE`, which curl(1) documents beside
+    // them, is the curl TOOL's and is read by neither libcurl nor git, so it is
+    // deliberately absent: an entry that does nothing would only mislead.
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    // git's own spelling of the same two, overriding `http.sslCAInfo` and
+    // `http.sslCAPath` (git-config(1)); the only `GIT_*` names on the roster,
+    // and they name a CA bundle and nothing else.
+    "GIT_SSL_CAINFO",
+    "GIT_SSL_CAPATH",
+    // Kerberos, for a remote authenticated over GSSAPI: the credential cache
+    // (kinit(1), `KRB5CCNAME`) and the configuration (krb5.conf(5),
+    // `KRB5_CONFIG`) the library under libcurl reads when either is not in
+    // its default place.
+    "KRB5CCNAME",
+    "KRB5_CONFIG",
 ];
 
 /// Every variable a `git` subprocess will see, but for the per-invocation
@@ -173,24 +215,37 @@ mod tests {
         assert_eq!(
             names(&environment),
             [
+                "ALL_PROXY",
                 "CAIRN_ASKPASS_SOCKET",
                 "DBUS_SESSION_BUS_ADDRESS",
                 "GIT_ASKPASS",
+                "GIT_SSL_CAINFO",
+                "GIT_SSL_CAPATH",
                 "GIT_TERMINAL_PROMPT",
                 "HOME",
+                "HTTPS_PROXY",
+                "KRB5CCNAME",
+                "KRB5_CONFIG",
                 "LANG",
                 "LANGUAGE",
                 "LC_ALL",
                 "LC_CTYPE",
                 "LC_MESSAGES",
+                "NO_PROXY",
                 "PATH",
                 "SSH_ASKPASS",
                 "SSH_ASKPASS_REQUIRE",
                 "SSH_AUTH_SOCK",
+                "SSL_CERT_DIR",
+                "SSL_CERT_FILE",
                 "TMPDIR",
                 "XDG_CACHE_HOME",
                 "XDG_CONFIG_HOME",
                 "XDG_RUNTIME_DIR",
+                "all_proxy",
+                "http_proxy",
+                "https_proxy",
+                "no_proxy",
             ]
         );
         assert_eq!(environment.get("HOME"), Some(OsStr::new("parent-HOME")));
@@ -263,19 +318,32 @@ mod tests {
         assert_eq!(
             asked,
             [
+                "ALL_PROXY",
                 "DBUS_SESSION_BUS_ADDRESS",
+                "GIT_SSL_CAINFO",
+                "GIT_SSL_CAPATH",
                 "HOME",
+                "HTTPS_PROXY",
+                "KRB5CCNAME",
+                "KRB5_CONFIG",
                 "LANG",
                 "LANGUAGE",
                 "LC_ALL",
                 "LC_CTYPE",
                 "LC_MESSAGES",
+                "NO_PROXY",
                 "PATH",
                 "SSH_AUTH_SOCK",
+                "SSL_CERT_DIR",
+                "SSL_CERT_FILE",
                 "TMPDIR",
                 "XDG_CACHE_HOME",
                 "XDG_CONFIG_HOME",
                 "XDG_RUNTIME_DIR",
+                "all_proxy",
+                "http_proxy",
+                "https_proxy",
+                "no_proxy",
             ]
         );
         for poison in [
@@ -290,6 +358,17 @@ mod tests {
             "CAIRN_ASKPASS_SOCKET",
             "CAIRN_ASKPASS_TOKEN",
             "DISPLAY",
+            "WAYLAND_DISPLAY",
+            "GNUPGHOME",
+            "GIT_EDITOR",
+            "EDITOR",
+            // curl reads the proxy for plain HTTP in lower case only (httpoxy).
+            "HTTP_PROXY",
+            // The curl tool's, never libcurl's or git's.
+            "CURL_CA_BUNDLE",
+            "GIT_SSL_NO_VERIFY",
+            "GIT_SSL_CERT",
+            "GIT_SSL_KEY",
             "LD_PRELOAD",
         ] {
             assert!(
@@ -301,6 +380,9 @@ mod tests {
             "GIT_DIR",
             "GIT_CONFIG_GLOBAL",
             "DISPLAY",
+            "HTTP_PROXY",
+            "CURL_CA_BUNDLE",
+            "GNUPGHOME",
             "CAIRN_ASKPASS_TOKEN",
         ] {
             assert_eq!(environment.get(poison), None, "{poison} reached git");

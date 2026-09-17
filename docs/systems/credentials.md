@@ -382,8 +382,10 @@ the safe direction.
 ## Not here, and known limits
 
 Not in the packet at all: push (issue #16), clone, submodule credentials,
-proxies (issue #18 decides the environment roster), GPG signing, and any
-Cairn-owned credential storage, which D2 rules out permanently. Not built:
+GPG signing, and any Cairn-owned credential storage, which D2 rules out
+permanently. Proxy, CA-bundle and Kerberos variables are inherited since
+issue #18 decided them (below, under L5); what that issue still holds open
+is the display and signing variables and pinning `GIT_EDITOR`. Not built:
 remembering anything between fetches (D2), a remote picker (the button
 fetches the default remote; issue #23), and a fetch of more than one remote
 at a time.
@@ -437,9 +439,18 @@ must not reopen by accident, each with the reason that locked it.
 - **L5** The environment handed to `git` is built explicitly, never inherited
   wholesale; every passed variable is a deliberate entry with its reason
   beside it in `environment.rs`. Rejected: passing the parent environment
-  through and overriding a few keys. Issue #18 decides the entries the packet
-  left undecided (proxies, CA bundles, Kerberos, display, GnuPG, `GIT_EDITOR`);
-  issue #22 whether a user-set askpass program is an exception.
+  through and overriding a few keys. Issue #18 decided the transport entries
+  the packet left undecided — the proxy variables libcurl reads
+  (`http_proxy`, `https_proxy`/`HTTPS_PROXY`, `all_proxy`/`ALL_PROXY`,
+  `no_proxy`/`NO_PROXY`; not `HTTP_PROXY`, which curl ignores), the CA bundle
+  (OpenSSL's `SSL_CERT_FILE` and `SSL_CERT_DIR`, and git's own
+  `GIT_SSL_CAINFO`, `GIT_SSL_CAPATH`, the only `GIT_*` names on the roster;
+  not `CURL_CA_BUNDLE`, which the curl tool reads and libcurl does not)
+  and Kerberos (`KRB5CCNAME`, `KRB5_CONFIG`) — each with its reason beside it
+  and all pinned by `the_environment_is_exactly_the_deliberate_entries`. Still
+  open on #18: `DISPLAY`/`WAYLAND_DISPLAY`, `GNUPGHOME`, and pinning
+  `GIT_EDITOR` to fail closed when a verb that opens an editor lands. Issue
+  #22 is whether a user-set askpass program is an exception.
 - **L6** A secret never travels on `argv` (`/proc` makes it world-readable);
   the socket and token reach the helper through its environment.
 - **L7** A working setup is not degraded — a user with libsecret, osxkeychain
@@ -480,7 +491,8 @@ Taken inside the phases, none reopening the above:
   reading the process environment, because `std::env::set_var` is `unsafe` in
   the 2024 edition and `unsafe` is forbidden, so a test could set nothing.
 - Locale variables are inherited because git's stderr is shown verbatim;
-  proxy variables are not (issue #18).
+  proxy, CA-bundle and Kerberos variables because their absence is a
+  "cannot connect" nobody can diagnose from Cairn (issue #18).
 - The startup check refuses to open a repository with no usable `git` rather
   than carrying on read-only: a Cairn that cannot say why its write buttons
   are missing is the silent degradation D1 forbids.

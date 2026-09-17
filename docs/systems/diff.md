@@ -7,17 +7,19 @@ that exists, and behaviour is pinned by a test named beside it.
 file diff, project it into hunks and rows, and emit a unified patch from a
 selection of lines. No engine query computes one yet, no component draws one, and
 nothing stages anything — the patch emitter ships with no caller, deliberately
-(program decision L2 in `docs/work/daily-loop/roadmap.md`), because its round-trip
-tests are what make a later staging packet a feature rather than a rewrite. Intent
+(program decision L2 in `docs/work/daily-loop/brainstorm.md`), because its
+round-trip tests are what make a later staging packet a feature rather than a
+rewrite. Intent
 for this surface is `docs/design/cairn.md` (decisions D1, D3, D5, D6) and
 `docs/design/ui.md`; the commitment it was built against is
 `docs/prd/diff-engine.md`, in flight.
 
 ## One exact answer, and projections of it
 
-The load-bearing shape (decision L2 of `docs/work/diff-engine/brainstorm.md`) is
-that a file diff holds **one** exact answer and everything else is derived from it
-on demand.
+The load-bearing shape (packet decision L2 in
+`docs/work/diff-engine/brainstorm.md`, which is a different decision from the
+program's L2 above) is that a file diff holds **one** exact answer and everything
+else is derived from it on demand.
 
 `cairn_model::TextDiff` is that answer: both versions of the file as
 `DiffLine`s — each line its bytes without the terminator, plus whether it had
@@ -148,7 +150,8 @@ them against real `git apply` is criteria C1-C3, which land with the engine in
   `a_hunk_with_nothing_selected_is_left_out_and_the_next_hunks_new_side_shifts`.
 - An empty range in a header names the line *before* it and a count of one is left
   out, so a new file writes `-0,0` and a one-line edit writes `@@ -1 +1 @@`.
-  `a_header_spells_what_git_spells` holds the seven shapes, taken from `git diff`.
+  `a_header_spells_what_git_spells` holds every shape in that roster, each taken
+  from `git diff`.
 - `\ No newline at end of file` follows the line it belongs to, whatever marker
   that line ended up with — including a removal that a selection turned into
   context: `the_marker_follows_a_removal_that_was_turned_into_context`.

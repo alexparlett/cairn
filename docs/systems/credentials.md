@@ -24,9 +24,11 @@ git / ssh ──runs──▶ cairn-askpass ──unix socket──▶ Channel (
                     GIT_TERMINAL_PROMPT=0, CAIRN_ASKPASS_SOCKET, CAIRN_ASKPASS_TOKEN
 ```
 
-Cairn implements no authentication and stores no credential (D2, L1). git
-consults the user's `credential.helper` first and only runs the askpass program
-when nothing answered; ssh-agent keys never ask. The helper is a separate binary
+Cairn implements no authentication and stores no credential (D2, L1). By the
+evidence record's reading of `git(1)`, git consults the user's
+`credential.helper` first and runs the askpass program only when nothing
+answered, and ssh-agent keys never ask — the precedence is O4, unverified until
+phase 03 settles it with a test (B4). The helper is a separate binary
 because git's contract is a process: prompt on `argv[1]`, secret on stdout
 (L2). A secret's whole life is: the dialog (not yet), the channel, the helper's
 stdout, git's stdin. It never enters `cairn-git` and never enters application
@@ -47,9 +49,17 @@ state.
   `crates/cairn-askpass/tests/helper.rs`, which runs the built binary: the
   success path
   (`the_helper_prints_the_answer_with_a_trailing_newline_and_nothing_else`), and
-  each failure path — no prompt, no variables, no listener, a stale socket, a
-  refused prompt, a dropped prompt, a dead or unknown token, wrong permissions,
-  not a socket — each named `..._fails_closed` or `..._is_refused...`.
+  each failure path: `without_a_prompt_the_helper_fails_closed`,
+  `without_the_channel_in_its_environment_the_helper_fails_closed`,
+  `with_no_cairn_listening_the_helper_fails_closed` (no socket, and a stale
+  one), `a_refused_prompt_fails_closed_and_retires_the_token`,
+  `a_prompt_dropped_unanswered_is_a_refusal`,
+  `a_token_for_no_live_operation_is_refused`,
+  `a_socket_with_the_wrong_permissions_is_refused_before_connecting` (modes,
+  a symlink, not a socket), and `an_oversized_prompt_is_bounded_rather_than_hung`.
+  Every refusal's stderr is asserted to name neither the prompt nor the token.
+  The answer and its newline reach stdout as one write from a zeroed buffer —
+  two writes would leave the first in std's line buffer, which nothing zeroes.
 - **`cairn_askpass::Channel`** (`crates/cairn-askpass/src/channel.rs`), the
   application's end. `Channel::open($XDG_RUNTIME_DIR)` creates
   `cairn-<pid>-<random>/` with mode `0700` (created with the mode, not chmod'd
@@ -71,7 +81,10 @@ state.
   (`one_operation_answers_more_than_one_prompt`).
 - **The threat model, as stated in the crate docs (L10):** the channel protects
   against other users on the machine, not against other processes running as
-  the same user. Same-user isolation is not achievable — such a process can
+  the same user. The helper checks the socket and its directory are mode
+  owner-only and, on Linux, owned by the user running it (read off
+  `/proc/self`), so a runtime directory that is not the private one XDG
+  promises still cannot hand a prompt to another user's socket. Same-user isolation is not achievable — such a process can
   read Cairn's environment through `/proc` — and not worth pursuing, because it
   could read `~/.git-credentials` or query the ssh-agent directly. Rejected:
   `SO_PEERCRED` and an inherited descriptor, for the reasons given there.
@@ -81,7 +94,8 @@ state.
   (`zeroize`, L11); read through `expose_secret` only. What the compiler
   refuses is pinned by the type's `compile_fail` doctests, which is why the
   full gate runs `cargo test --doc`; the drop half by
-  `a_secret_is_zeroed_on_drop_and_holds_the_only_copy`. What safe code cannot
+  `a_secret_promises_to_zero_zeroes_on_request_and_holds_the_only_copy`, which
+  says in its name what safe code can observe. What safe code cannot
   observe — that the freed bytes are zero — rests on reading `zeroize`'s
   `Vec` impl (it zeroes the length, clears, then zeroes the spare capacity,
   through volatile writes); the packet's `progress.md` records that reading.

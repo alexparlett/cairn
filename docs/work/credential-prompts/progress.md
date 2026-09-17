@@ -3,6 +3,85 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-17 — phase 02 QA adjudicated and fixed
+
+Reviewers spawned fresh over `ea72de9...HEAD` (packet context `main...HEAD`):
+`qa-checklist`, `destructive-ops-reviewer`, `gate-integrity-reviewer` (the
+phase changes the enforcement layer), `test-coverage-auditor`. All raw findings
+went to a fresh `qa-confirm`: 27 confirmed (5 duplicate groups merged), 6
+dismissed, 2 escalated to the user.
+
+Confirmed and fixed, in focused commits:
+
+- Guard holes the gate-integrity reviewer reproduced on a scratch copy: the
+  stored-state rule read only the direct type (a struct keeping the enum that
+  carries a secret passed); "one accessor" was a count of `-> &[u8]`, so a
+  `Deref`, an `impl From<Secret>` or an `into_bytes` routed around the reader
+  roster; `use Secret as ..` and a `type` alias passed; `format_args!` and
+  `log::log!` were missing from the rendering macros; a path-qualified impl
+  target (`impl Debug for self::Held`) and a `where` clause with a
+  parenthesised bound escaped the matchers; the readers floor was satisfied by
+  the definition itself; the socket/token spellings in the terminal-prompt
+  guard were satisfied by the import line; the passing twin of the
+  compile-fail doctests was unpinned. Each fixed, added to the self-test, and
+  seen red on real code (a struct keeping a secret-carrying enum, an
+  `impl From<Secret>` in `protocol.rs`, a `use .. as`, a `type` alias, a
+  `Deref` in `secret.rs` itself). The `dbg!` fixture in the self-test tripped
+  the Stop hook on every turn of this branch; it is spelled in two pieces now.
+- Hook parity: `.claude/hooks/qa-stop.sh` gained the `cairn-askpass` seal row
+  (engine, toolkit, and logging crates) with two hook tests.
+- The helper wrote the secret and its newline in two `write_all`s, which
+  parks a newline-free secret in std's 1 KiB line buffer, never zeroed; it now
+  writes once from a zeroed buffer. The "one allocation" claim in this log's
+  previous entry was overstated for the helper — there are two, both zeroed.
+- The helper checked modes, never ownership; it now refuses a socket or
+  directory owned by another user (Linux, via `/proc/self`). Not testable
+  without a second user; the positive arm runs in every helper test.
+- The wrong-permissions test could only fail by hanging; it keeps an acceptor
+  ready so a helper that connected is answered and fails the assertion. Every
+  refusal asserts its stderr names neither the prompt nor the token (the B6
+  arm for the helper's own stderr). New tests: a symlinked socket, an
+  oversized prompt (bounded, not hung), a bind that fails after mkdir (nothing
+  left behind), and where the worker points `GIT_ASKPASS`.
+- Two test names claimed what safe code cannot observe (zeroing on drop, no
+  reallocation) and now say what they pin; `Secret::len`/`is_empty` are
+  documented as the deliberate non-secret they are.
+- Docs: `credentials.md` no longer states O4's precedence as fact, and names
+  the failure tests rather than a pattern that did not hold; the CLAUDE.md
+  residual list gains the hoisted-local shape and loses the alias (now
+  guarded); the gate gets a separate `test-doc` step so a red `--all-targets`
+  run no longer hides the doctest result.
+
+Dismissed, with reasons:
+
+- "`cargo run -p cairn-app` does not build `cairn-askpass`" — true, and the
+  app opens no channel this phase; a missing helper fails closed. Phase 03,
+  where the app first needs the helper, decides the build wiring.
+- "XDG_RUNTIME_DIR required / host-key confirmation routed to the helper / O5
+  open" — all already stated under Known limits in `credentials.md`.
+- "The `ALWAYS` comment on `SSH_ASKPASS_REQUIRE` overstates" — the comment
+  already defers the OpenSSH floor to O5 by name.
+- "The helper cannot tell host-key confirmation from a passphrase" — real, no
+  ssh operation exists this phase, and the dialog that must handle it is
+  phase 03's (carried forward below by name).
+- "`the_variable_names_are_the_ones_the_helper_reads` is a constant-vs-literal
+  pin" — the auditor's own verdict was "not a gap"; the cross-side pin is the
+  end-to-end helper test.
+
+Escalated to the user (batched in the phase report): whether a user-set
+`SSH_ASKPASS` (a wallet-backed askpass with no agent) should be honoured rather
+than replaced — L5 says replace, L7/B4 name only `credential.helper` and
+ssh-agent as the protected setups; and whether a missing helper should be
+refused at startup rather than surfacing as git's "terminal prompts disabled"
+on the first prompt.
+
+Carried forward to phase 03 by name: the dialog must show the prompt text (or
+the channel gains a prompt kind) so ssh's host-key confirmation is not typed
+into a password field; `worker::Request`/`Update` derive `Debug`, so the
+secret's path from dialog to worker cannot be a variant of either; the app must
+build and locate the helper for the B3 fixture; `Channel::accept` blocks and
+needs its own thread plus a way to unblock it on shutdown.
+
 ## 2026-09-17 — phase 02: the askpass helper, its channel and the secret type landed
 
 Packet mode, committed directly to `feature/credential-prompts` in four commits

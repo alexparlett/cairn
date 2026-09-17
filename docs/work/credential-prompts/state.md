@@ -88,7 +88,7 @@ self-test `the_process_environment_matcher_catches_the_shapes_it_claims`
 | Phase | Status | Gate | QA |
 | --- | --- | --- | --- |
 | 01 git backend | landed | `scripts/gate.sh` PASS (full) | run; see progress.md for the adjudication |
-| 02 askpass helper | landed | `scripts/gate.sh` PASS (full, including `cargo test --doc`) | run; see progress.md for the adjudication |
+| 02 askpass helper | landed | `scripts/gate.sh` PASS (full, including the `test-doc` step) | run and fixed; see progress.md for the adjudication |
 | 03 fetch end to end | not started | — | — |
 | 04 QA | not started | — | — |
 

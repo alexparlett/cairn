@@ -9,7 +9,7 @@ nuance that run must not lose.
 | --- | --- | --- | --- |
 | 1 | `history-graph` | **shipped** | — |
 | 2 | `credential-prompts` | **shipped** | 1 |
-| 3 | `diff-engine` | brief only | 1 |
+| 3 | `diff-engine` | **planned** | 1 |
 | 4 | `refs-and-status` | brief only | 1 |
 | 5 | `staging-and-commit` | brief only | 2, 3, 4 |
 | 6 | `remote-sync` | brief only | 2, 4 |
@@ -39,7 +39,16 @@ that D1 created written into the `ops` module docs. **Load-bearing for packet
 Left for packet 6 by name: push (issue #16), the remote picker (#23), and the
 fetch-under-prune policy (#17). As built: `docs/systems/credentials.md`.
 
-## 3. diff-engine — brief
+## 3. diff-engine — planned
+
+`docs/prd/diff-engine.md` (in flight), work directory `docs/work/diff-engine/`,
+evidence `docs/research/diff-engine/` (six records). Planned 2026-09-17 in nine
+phases. **O1 is closed** (decision L1 there): both presentations, unified by
+default, side-by-side as one shared setting, and Fork's context controls — and
+the patch model is independent of either, which was the half of O1 that mattered.
+Two decisions reach beyond this packet: D1 is amended so a working-tree read may
+run the user's clean filter driver, and queries are numbered per lane so a scroll
+and a diff stop cancelling each other. The brief it was planned from follows.
 
 **Builds:** the diff model and its rendering. Commit diffs, working-tree diffs,
 and comparing two arbitrary revisions. The commit details pane. Diff options:
@@ -56,8 +65,8 @@ difference between packet 5 being a feature and being a rewrite.
 details, working-tree changes, hunk staging, line staging, compare revisions,
 conflict resolution (D6), image diffs, stash contents, interactive-rebase preview.
 
-**Open:** O1 — side-by-side, unified, or both, and whether the patch model is
-genuinely independent of presentation.
+**Open:** ~~O1~~ — closed by the packet's L1, above: both, unified by default,
+over a patch model that is independent of either.
 
 **Carries a measured bar (L6):** diffing a large commit in a large repository.
 
@@ -86,6 +95,13 @@ the query a client runs most often and the one most likely to feel slow.
 
 **Out:** acting on any ref (packet 7), staging (packet 5).
 
+**Inherited from packet 3, once it lands:** the single-path working-tree diff
+query and the diff view itself. This packet owns the changed-path enumeration
+that neither of them has, so whichever of 4 and 5 lands first wires the Local
+Changes list to them. Note for O2: gix's status runs the user's clean filter
+driver when it hashes a working-tree file, exactly as packet 3's diff does, so a
+filtered path belongs in the agreement measurement rather than beside it.
+
 ## 5. staging-and-commit — brief
 
 **Builds:** stage and unstage by file, hunk and line. Discard by file, hunk and
@@ -109,7 +125,18 @@ the architecture has been saving up:
   auto-stashes first. Do not inherit a default.
 
 **Depends on packet 3 for patch construction and packet 2 for the backend** —
-`git apply --cached` is how a partial stage happens.
+`git apply --cached` is how a partial stage happens. Three things packet 3 will
+leave on the doorstep. Its patch emitter and round-trip tests are built for this
+packet to consume, and a patch is always emitted at three lines of context from
+the exact diff, never from a whitespace-ignoring view, which is what Fork gets
+wrong. The subprocess runner
+cannot take stdin today — both its paths pin it to null — so `git apply --cached`
+needs a runner change, which puts `destructive-ops-reviewer` on that phase. And
+the staging affordance is undecided on purpose: Fork floats Stage and Discard
+over a hovered chunk and narrows them by drag-selection — Discard on unstaged
+chunks only, since Fork refuses to discard staged changes by design — while
+Cairn's mockup shows header actions and a selection gutter
+(`docs/research/diff-engine/fork-detail-and-diff-ui.md`).
 
 **Out:** merge, rebase, cherry-pick, revert, reset (all Tier 4, second lap).
 

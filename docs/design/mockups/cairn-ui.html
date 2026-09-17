@@ -224,6 +224,16 @@
     <h1>Five screens, modelled on Fork</h1>
     <p>What Fork gets right is kept: three regions, the graph as the front door, staging on one screen. What changes is driven by a decision already taken in <code>docs/design/cairn.md</code>, and each callout names it. Commits shown are Cairn's own log plus two invented feature commits.</p>
     <div class="legend"><span class="k">Kept from Fork</span><span class="c">Cairn's own — names its decision</span></div>
+    <p style="margin-top:16px;padding:12px 14px;border:1px solid var(--pg-line);border-left:3px solid var(--pg-accent);background:var(--pg-note);color:var(--pg-fg)">
+      <strong>TRAP: the detail pane and the diff are superseded here.</strong>
+      The <code>diff-engine</code> packet locked a different design, from a study of
+      Fork's own pane: <code>docs/design/ui.md</code>, section "The detail pane and
+      the diff", and <code>docs/prd/diff-engine.md</code> R5–R7. These screens still
+      show a fixed-height pane, a count on a tab, per-file <code>+N</code> counts, a
+      banded hunk header carrying buttons, a checkbox column and transparent colour
+      washes; none of those survive. Everything else here — the graph, the sidebar,
+      the dialogs, the conflict and worktree screens — still stands.
+    </p>
   </div>
 
   <!-- ═══════════════ 1. HISTORY ═══════════════ -->

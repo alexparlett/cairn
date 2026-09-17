@@ -79,9 +79,35 @@ not a copy.
 with its i-th added line; when one side is shorter, the leftover rows are
 `Removed` or `Added`, and the other side is the filler.
 
-**Residual, for the phases that draw this:** these are model-level pins, not
-frame-level ones. That a component really builds only a viewport of rows is
-criterion C9's, headless, and nothing here decides it.
+**Residuals, stated rather than implied, for the phases that draw this.** These are
+model-level pins and each has a hole a mutation walks through:
+
+- *`index_size` measures what was stored, not what was built.* It returns the index's
+  own entry count, so a projection that also materialised every row into a `Vec`
+  would keep every assertion above green. The `Copy` pin says a row owns nothing;
+  neither says the collection was not built. Criterion C9's headless count is what
+  decides it, and it belongs to the phase that draws the view.
+- *The binary search is unpinned.* `row(i)` is cheap because the index is searched
+  rather than scanned; rewriting that search as a linear scan gives identical
+  answers and keeps every test green, while turning a handful of comparisons per row
+  into one per index entry. Nothing here measures comparisons, so keeping the search
+  a search is a review obligation, not a guarded fact.
+- *Building the projection costs what the file has changes, and it borrows.* `new`
+  walks every hunk and every change up front, and the type holds a reference to the
+  diff, so it cannot be kept in a view's state and the path of least resistance is
+  rebuilding it inside the per-row builder — which would pay that cost per row per
+  frame. Build it once per file and context, off the UI thread, and hand it over;
+  whether the model needs an owning form is the view phase's call, not something to
+  design before there is a caller.
+- *Neither projection maps a change to a row number or back*, although the index
+  computes exactly that. The previous-change and next-change controls of R6.2 will
+  want it; adding it before there is a caller would be inventing an API for a
+  hypothetical, so it is recorded here for the phase that builds those controls.
+- *The row enums are `RowContent`-class.* `UnifiedRow` and `SideBySideRow` are drawn
+  per row by matching on them, so a wildcard arm compiles and silently draws nothing
+  the day an expansion row or a marker row lands. No guard covers them — the
+  row-content twin reads that one type's spelling — and nothing reads them yet. The
+  first view phase should either widen that guard to them or say why not.
 
 ## What a view may see and a patch may not
 
@@ -97,7 +123,8 @@ something a reviewer has to notice. The `compile_fail` doctest on `TextDiff` in
 its last line alone. (That pin is why the full gate has a `test-doc` step.)
 
 `DisplayOverlay::hides_a_change` answers whether ignoring whitespace swallowed a
-change that is really there, which is the notice R6.7 asks a view to show. A
+change that is really there, which is the notice R6.7 asks a view to show. It reads
+both sets of ranges, so it is a question to ask once per overlay and keep. A
 highlight is found from either side by search rather than by scan, so a row can
 ask for its own tinting without walking the file.
 
@@ -107,8 +134,10 @@ ask for its own tinting without walking the file.
 `git apply --cached`. It takes no context and no view — three lines of context,
 always (R1.6) — and there is no argument it could take one through.
 
-The rules, each read out of git's own `add-patch.c` and `apply.c` and checked
-against real `git diff` output:
+The rules, each read out of git's own `add-patch.c` and `apply.c` and matched by
+hand against `git diff` output. The tests named below pin the shapes; what proves
+them against real `git apply` is criteria C1-C3, which land with the engine in
+`cairn-git`:
 
 - An unselected removed line becomes context; an unselected added line is dropped.
   `an_unselected_removal_becomes_context_and_an_unselected_addition_is_dropped`.
@@ -153,17 +182,31 @@ accepts anything decides nothing, and
 
 They take **one file's** patch, which is what `emit_patch` produces.
 
+They are **a test oracle and never a write path.** They are public because the
+round-trip tests that need them live in another crate, but they are pure
+`(content, patch) -> bytes` and touch no repository: every mutation Cairn performs
+goes through the `git` binary under `cairn-git::ops`, per decision D1, and nothing
+here changes that. A later phase may put them behind `#[doc(hidden)]` or a
+test-support feature once there is a caller to gate against.
+
 The round-trip tests judge the emitter against *two* other paths: the applier, and
 `diffs::expected_result` in `crates/cairn-model/tests/diffs/mod.rs`, which states
 the selection rule with no hunks, headers, context or counts in it at all.
-`a_patch_gives_what_the_selection_means_over_every_awkward_case` runs nineteen
-seeded selections over a corpus covering a missing final newline on each side and
+`a_patch_gives_what_the_selection_means_over_every_awkward_case` runs a seeded
+sweep of selections over a corpus covering a missing final newline on each side and
 on both, a hunk at the first line and at the last, adjacent hunks that merge and
 hunks that do not, an empty file, a one-line file, CRLF content, an added file, a
 deleted file, a rename with edits and a mode change — each of those twice, once
 with blob ids and once without.
 `a_patch_for_one_selection_does_not_give_what_another_one_means` is the negative
 that keeps the comparison honest.
+
+**Residual for the view phases:** `TextDiff`, `DiffContent` and `FileDiff` derive
+`Clone` and `PartialEq`, which a file's worth of lines makes expensive — a toolkit
+that compares component props by value on every parent render would pay it every
+frame. `cairn_ui::HistoryList` already met this and hand-wrote a `PartialEq` that
+compares the collection as a handle rather than by content; the diff view should
+follow it rather than passing a diff by value.
 
 ## The states that are not text
 

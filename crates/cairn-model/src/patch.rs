@@ -7,8 +7,9 @@
 //! than by care — the ranges a view may draw instead live in [`crate::DisplayOverlay`],
 //! which this function never sees.
 //!
-//! The rules the format imposes, each of them read out of git's own `add-patch.c` and
-//! `apply.c` and checked against `git diff` output:
+//! The rules the format imposes, each read out of git's own `add-patch.c` and `apply.c` and
+//! matched by hand against `git diff` output. The tests below pin the shapes; what proves
+//! them against real `git apply` is C1-C3, in `cairn-git`:
 //!
 //! - An unselected removed line becomes context; an unselected added line is dropped.
 //! - Counts are recounted from the lines actually emitted, and a hunk's new start is its

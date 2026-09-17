@@ -76,7 +76,7 @@ dependency past the crate's allowlist. As-built prose: `docs/systems/diff.md`.
 
 | Phase | Status | Gate | QA |
 | --- | --- | --- | --- |
-| 01 diff model | landed | `scripts/gate.sh` PASS | `/qa`: qa-checklist + test-coverage-auditor, adjudicated by `qa-confirm` |
+| 01 diff model | landed | `scripts/gate.sh` PASS | `qa-checklist`, `test-coverage-auditor` and `responsiveness-reviewer`, adjudicated by `qa-confirm`; confirmed findings fixed or recorded as residuals in `docs/systems/diff.md` |
 | 02 engine, commits | not started | — | — |
 | 03 engine, working tree | not started | — | — |
 | 04 worker lanes | not started | — | — |

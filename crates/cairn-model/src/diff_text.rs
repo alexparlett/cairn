@@ -110,7 +110,11 @@ impl DiffLine {
         self.terminated
     }
 
-    /// Text for a human. Borrowed when the bytes are UTF-8, so a redraw allocates nothing.
+    /// Text for a human. Borrowed when the bytes are UTF-8, so a redraw allocates nothing —
+    /// but it reads the whole line every call to decide that, and copies it when they are
+    /// not. A row that only needs a prefix (R6.9's truncated long line) should slice
+    /// [`Self::bytes`] first; over the limit R2.6 allows loading anyway, this is the
+    /// difference between microseconds and milliseconds a frame.
     pub fn text(&self) -> Cow<'_, str> {
         String::from_utf8_lossy(&self.bytes)
     }

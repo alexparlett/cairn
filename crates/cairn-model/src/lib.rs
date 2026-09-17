@@ -1,23 +1,45 @@
-//! Commit, ref, graph and lane types shared by the engine and the UI.
+//! Commit, ref, graph, lane and diff types shared by the engine and the UI.
 
 mod askpass;
+mod changed_file;
+mod commit_details;
 mod confirm;
+mod diff_content;
+mod diff_hunks;
+mod diff_overlay;
+mod diff_rows;
+mod diff_text;
 mod graph;
 mod history;
 mod lane_assignment;
+mod line_selection;
 mod oid;
+mod patch;
+mod patch_apply;
 mod prompt;
 mod remote;
+mod repo_path;
 mod secret;
 
 pub use askpass::{AskpassToken, HELPER_PROGRAM, SOCKET_VARIABLE, TOKEN_VARIABLE};
+pub use changed_file::{ChangeStatus, ChangedFile, FileMode, Similarity};
+pub use commit_details::{CommitDetails, Signature, Timestamp};
 pub use confirm::Confirmed;
+pub use diff_content::{DiffContent, DiffLimits, FileDiff, SizeLimit};
+pub use diff_hunks::{Context, Hunk, HunkHeader, Hunks};
+pub use diff_overlay::{ByteRange, DisplayOverlay, IntraLineHighlight};
+pub use diff_rows::{SideBySideRow, SideBySideRows, UnifiedRow, UnifiedRows};
+pub use diff_text::{ChangedRange, DiffLine, LineNumber, LineSpan, TextDiff, split_lines};
 pub use graph::{EdgeKind, EdgeSegment, GraphRow, Lane};
 pub use history::{HistoryRow, RowContent, RowId};
 pub use lane_assignment::LaneAssigner;
+pub use line_selection::Selection;
 pub use oid::{Oid, OidHex, OidParseError};
+pub use patch::{PATCH_CONTEXT, Patch, emit_patch};
+pub use patch_apply::{PatchApplyError, apply_patch, apply_patch_in_reverse};
 pub use prompt::{PromptKind, prompt_subject};
 pub use remote::RemoteSummary;
+pub use repo_path::RepoPath;
 pub use secret::Secret;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

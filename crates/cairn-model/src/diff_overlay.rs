@@ -96,6 +96,10 @@ impl DisplayOverlay {
 
     /// Whether ignoring whitespace hides a change that is really there — which is what a
     /// view has to say out loud (R6.7). False when no whitespace-ignoring ranges exist.
+    ///
+    /// Reads both sets of ranges and allocates while doing it, so it costs what the file has
+    /// changes rather than what a frame shows. Ask it once when the overlay arrives and keep
+    /// the answer; it is a notice, not a per-row question.
     pub fn hides_a_change(&self, exact: &TextDiff) -> bool {
         let Some(shown) = self.changes_ignoring_whitespace() else {
             return false;

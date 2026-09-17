@@ -22,7 +22,8 @@ impl Selection {
         Self::default()
     }
 
-    /// Every changed line of a diff — what staging a whole file selects.
+    /// Every changed line of a diff — what staging a whole file selects. Costs what the
+    /// file has changed lines; see [`Self::holds_every_change`].
     pub fn with_every_change(text: &TextDiff) -> Self {
         let mut selection = Self::empty();
         for change in text.changes() {
@@ -81,6 +82,12 @@ impl Selection {
     /// Whether every changed line of `text` is selected — the difference between staging
     /// a whole file and staging part of it, which decides whether a deletion stays a
     /// deletion.
+    ///
+    /// Reads every changed LINE, not every change, so a file with tens of thousands of them
+    /// costs milliseconds. [`crate::emit_patch`] asks it once, off the UI thread. A
+    /// whole-file control that wants the same answer per frame should keep it and update it
+    /// as the selection changes, not recompute it; the per-row [`Self::holds_removed`] and
+    /// [`Self::holds_added`] are the cheap ones.
     pub fn holds_every_change(&self, text: &TextDiff) -> bool {
         text.changes().iter().all(|change| {
             change

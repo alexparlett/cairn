@@ -13,15 +13,21 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use cairn_model::{AskpassToken, SOCKET_VARIABLE, Secret, TOKEN_VARIABLE};
+use zeroize::Zeroizing;
 
 fn main() -> ExitCode {
     match answer() {
         Ok(secret) => {
+            // One write, ending in the newline git reads up to. Two writes would
+            // leave the first — the secret without its newline — sitting in std's
+            // line buffer, which is never zeroed; a single newline-terminated
+            // write with nothing buffered goes straight to the descriptor. The
+            // concatenation is the one copy made, and it is zeroed on drop.
+            let mut line = Zeroizing::new(Vec::with_capacity(secret.len() + 1));
+            line.extend_from_slice(secret.expose_secret());
+            line.push(b'\n');
             let mut stdout = std::io::stdout().lock();
-            let written = stdout
-                .write_all(secret.expose_secret())
-                .and_then(|()| stdout.write_all(b"\n"))
-                .and_then(|()| stdout.flush());
+            let written = stdout.write_all(&line).and_then(|()| stdout.flush());
             match written {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(_) => refuse("could not write the answer to git"),

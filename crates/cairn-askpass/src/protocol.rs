@@ -153,9 +153,10 @@ mod tests {
         assert!(read_response(b"answered".as_slice()).unwrap().is_none());
     }
 
-    /// The helper copies nothing: the buffer the socket was read into is the secret's.
+    /// Content only: that the buffer is sized up front and never reallocated is
+    /// not observable from safe code, and stands on `read_response`'s doc comment.
     #[test]
-    fn the_response_buffer_is_read_once_and_never_reallocated() {
+    fn a_kilobyte_answer_arrives_whole() {
         let mut wire = Vec::new();
         write_answer(&mut wire, &Secret::new(vec![9u8; 1024])).unwrap();
         let secret = read_response(wire.as_slice()).unwrap().unwrap();

@@ -95,6 +95,9 @@ impl Secret {
         &self.bytes
     }
 
+    /// How many bytes, which is not the value: a length is deliberately
+    /// allowed into a message (`"{n} bytes"`), and this and [`Self::is_empty`]
+    /// are the only things about a secret that may be.
     pub fn len(&self) -> usize {
         self.bytes.len()
     }
@@ -127,12 +130,15 @@ mod tests {
         )
     }
 
-    /// PRD B7, the drop half. What safe code can observe: the type promises
-    /// to zero on drop at the type level, zeroing empties the buffer through
-    /// the same path the drop takes, and construction copies nothing — so the
-    /// buffer that is zeroed is the only one that ever held the value.
+    /// PRD B7, the drop half — as much of it as safe code can observe. This
+    /// pins that the type declares `ZeroizeOnDrop` (a marker, not a proof),
+    /// that `zeroize()` empties the buffer, and that construction copies
+    /// nothing, so the buffer that is zeroed is the only one that ever held the
+    /// value. That the field is a `Zeroizing`, which is what makes the drop
+    /// zero, is pinned by the credential guard's reading of the declaration;
+    /// that `Zeroizing`'s drop writes zeros is `zeroize`'s documented contract.
     #[test]
-    fn a_secret_is_zeroed_on_drop_and_holds_the_only_copy() {
+    fn a_secret_promises_to_zero_zeroes_on_request_and_holds_the_only_copy() {
         fn zeroes_on_drop<T: ZeroizeOnDrop>(_: &T) {}
 
         let typed = generated();

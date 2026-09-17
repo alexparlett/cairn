@@ -77,6 +77,23 @@ fn run_helper(prompt: Option<&str>, variables: &[(&str, &OsStr)]) -> Output {
         .unwrap_or_else(|e| panic!("could not run {HELPER}: {e}"))
 }
 
+/// A helper run that must fail closed, and whose stderr — which git forwards to
+/// the user — must name neither the prompt nor the token it was given.
+fn refused(channel: &Channel, token: &AskpassToken, prompt: &str) -> Output {
+    let output = run_against(channel, token, prompt);
+    failed_closed(&output);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains(token.as_str()),
+        "the helper's stderr carries the token: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains(prompt.trim()),
+        "the helper's stderr carries the prompt: {stderr:?}"
+    );
+    output
+}
+
 fn run_against(channel: &Channel, token: &AskpassToken, prompt: &str) -> Output {
     run_helper(
         Some(prompt),
@@ -264,15 +281,14 @@ fn a_refused_prompt_fails_closed_and_retires_the_token() {
     let channel = shared(&runtime);
     let operation = channel.begin().unwrap();
     let served = accept_once(channel.clone(), |prompt| prompt.unwrap().refuse());
-    let output = run_against(&channel, operation.token(), "Password: ");
-    failed_closed(&output);
+    let output = refused(&channel, operation.token(), "Password: ");
     assert!(String::from_utf8_lossy(&output.stderr).contains("declined"));
     served.join().unwrap();
 
     let served = accept_once(channel.clone(), |prompt| {
         assert!(matches!(prompt, Err(Error::UnknownToken)), "{prompt:?}");
     });
-    failed_closed(&run_against(&channel, operation.token(), "Password: "));
+    refused(&channel, operation.token(), "Password: ");
     served.join().unwrap();
 }
 
@@ -283,12 +299,12 @@ fn a_prompt_dropped_unanswered_is_a_refusal() {
     let channel = shared(&runtime);
     let operation = channel.begin().unwrap();
     let served = accept_once(channel.clone(), |prompt| drop(prompt.unwrap()));
-    failed_closed(&run_against(&channel, operation.token(), "Password: "));
+    refused(&channel, operation.token(), "Password: ");
     served.join().unwrap();
     let served = accept_once(channel.clone(), |prompt| {
         assert!(matches!(prompt, Err(Error::UnknownToken)), "{prompt:?}");
     });
-    failed_closed(&run_against(&channel, operation.token(), "Password: "));
+    refused(&channel, operation.token(), "Password: ");
     served.join().unwrap();
 }
 
@@ -303,13 +319,16 @@ fn a_token_for_no_live_operation_is_refused() {
         let served = accept_once(channel.clone(), |prompt| {
             assert!(matches!(prompt, Err(Error::UnknownToken)), "{prompt:?}");
         });
-        failed_closed(&run_against(&channel, &token, "Password: "));
+        refused(&channel, &token, "Password: ");
         served.join().unwrap();
     }
 }
 
-/// A socket or directory readable beyond its owner is one the helper will not
-/// hand a secret to; it never even connects.
+/// A socket or directory readable beyond its owner, or a symlink to one, is one
+/// the helper will not hand a secret to; it never even connects. An acceptor
+/// stands ready with an answer for every run, so a helper that DID connect
+/// would be answered, exit 0 with the secret, and fail `failed_closed` — rather
+/// than hang, which is what a connecting helper with nobody accepting does.
 #[test]
 fn a_socket_with_the_wrong_permissions_is_refused_before_connecting() {
     let runtime = RuntimeDir::new();
@@ -318,34 +337,40 @@ fn a_socket_with_the_wrong_permissions_is_refused_before_connecting() {
     let socket = channel.socket_path().to_owned();
     let directory = socket.parent().unwrap().to_owned();
 
+    // One acceptor for the whole test: it answers whatever connects, once.
+    let answered = generated_secret();
+    let answer = answered.clone();
+    let acceptor = accept_once(channel.clone(), move |prompt| {
+        let prompt = prompt.unwrap();
+        let text = prompt.text().to_owned();
+        prompt.answer(&Secret::from_string(answer)).unwrap();
+        text
+    });
+
     for (path, mode) in [(&socket, 0o666), (&socket, 0o640), (&directory, 0o755)] {
         let original = std::fs::metadata(path).unwrap().permissions();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
-        let output = run_against(&channel, operation.token(), "Password: ");
+        let output = refused(&channel, operation.token(), "Password: ");
         std::fs::set_permissions(path, original).unwrap();
-        failed_closed(&output);
         assert!(
             String::from_utf8_lossy(&output.stderr).contains("beyond its owner"),
             "{path:?} mode {mode:o}: {:?}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    // Nothing above reached the channel: had the helper connected, its request
-    // would be queued ahead of this probe and `accept` would return a Prompt
-    // for the still-live operation instead of the probe's refusal.
-    let served = accept_once(channel.clone(), |first| {
-        assert!(
-            matches!(first, Err(Error::Malformed)),
-            "the helper connected to a socket it should have refused: {first:?}"
-        );
-    });
-    let mut probe = UnixStream::connect(&socket).unwrap();
-    probe.write_all(b"probe").unwrap();
-    probe.shutdown(std::net::Shutdown::Write).unwrap();
-    let mut reply = Vec::new();
-    probe.read_to_end(&mut reply).unwrap();
-    assert_eq!(reply, b"refused\n");
-    served.join().unwrap();
+
+    // A symlink to the real socket: not followed, not ours.
+    let link = runtime.path.join("link");
+    std::os::unix::fs::symlink(&socket, &link).unwrap();
+    let output = run_helper(
+        Some("Password: "),
+        &[
+            (SOCKET_VARIABLE, link.as_os_str()),
+            (TOKEN_VARIABLE, OsStr::new(operation.token().as_str())),
+        ],
+    );
+    failed_closed(&output);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("is not the Cairn askpass socket"));
 
     // Not a socket at all.
     let file = runtime.path.join("plain");
@@ -360,6 +385,66 @@ fn a_socket_with_the_wrong_permissions_is_refused_before_connecting() {
     );
     failed_closed(&output);
     assert!(String::from_utf8_lossy(&output.stderr).contains("is not the Cairn askpass socket"));
+
+    // The acceptor is still waiting: nothing above reached it. Spend it on a
+    // run that should succeed, which also proves the restored modes are right.
+    let output = run_against(&channel, operation.token(), "Password for 'https://host': ");
+    assert!(
+        output.status.success(),
+        "the restored socket did not serve: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, format!("{answered}\n").into_bytes());
+    assert_eq!(acceptor.join().unwrap(), "Password for 'https://host': ");
+}
+
+/// A prompt longer than the channel reads is bounded, not hung and not an error:
+/// the helper is still answered, and the channel saw a prompt of the limit's length.
+#[test]
+fn an_oversized_prompt_is_bounded_rather_than_hung() {
+    let runtime = RuntimeDir::new();
+    let channel = shared(&runtime);
+    let operation = channel.begin().unwrap();
+    let secret = generated_secret();
+    let answer = secret.clone();
+    let served = accept_once(channel.clone(), move |prompt| {
+        let prompt = prompt.unwrap();
+        let length = prompt.text().len();
+        prompt.answer(&Secret::from_string(answer)).unwrap();
+        length
+    });
+    // Past the channel's 64 KiB, under the kernel's 128 KiB ceiling for one argument.
+    let huge = "P".repeat(100 * 1024);
+    let output = run_against(&channel, operation.token(), &huge);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, format!("{secret}\n").into_bytes());
+    let seen = served.join().unwrap();
+    assert!(
+        seen < huge.len() && seen > 32 * 1024,
+        "prompt length seen: {seen}"
+    );
+}
+
+/// A runtime directory whose path is too long for a socket address: the
+/// directory the channel created is removed again, not left behind.
+#[test]
+fn a_channel_that_cannot_bind_leaves_nothing_behind() {
+    let runtime = RuntimeDir::new();
+    let deep = runtime.path.join("d".repeat(120));
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&deep)
+        .unwrap();
+    let error = match Channel::open(&deep) {
+        Ok(_) => panic!("a socket bound at a path longer than sun_path allows"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, Error::Create { .. }), "{error:?}");
+    let entries: Vec<_> = std::fs::read_dir(&deep)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert!(entries.is_empty(), "left behind: {entries:?}");
 }
 
 #[test]

@@ -23,6 +23,35 @@ pub enum Error {
     #[error("the repository at {path} has no commits yet")]
     UnbornHead { path: PathBuf },
 
+    /// A changes query was cancelled; `changed` is how many files it had collected.
+    /// Not a failure to report as one: the caller asked for this by superseding it.
+    #[error("the changes query was cancelled after {changed} files")]
+    ChangesCancelled { changed: usize },
+
+    /// The diff machinery could not be built for this repository — the index or the
+    /// attribute stack could not be read. No query ran.
+    #[error("failed to prepare the repository for diffing: {source}")]
+    DiffSetup {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// Two trees could not be compared. Usually a corrupt or missing object.
+    #[error("failed to compare the trees: {source}")]
+    TreeDiff {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// One path's content could not be read or compared; every other path in the same
+    /// change set is unaffected.
+    #[error("failed to diff {path}: {source}")]
+    DiffFile {
+        path: String,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
     /// Usually a corrupt or missing object.
     #[error("failed to walk the history: {source}")]
     Walk {

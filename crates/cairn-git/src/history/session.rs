@@ -145,10 +145,10 @@ impl HistorySession<'_> {
             source: Box::new(source),
         })?;
 
-        let id = super::model_id(&info.id)?;
+        let id = crate::object_id::model_id(&info.id)?;
         let mut parents = Vec::with_capacity(info.parent_ids.len());
         for parent in info.parent_ids.iter() {
-            parents.push(super::model_id(parent)?);
+            parents.push(crate::object_id::model_id(parent)?);
         }
         if self.walked >= self.skip {
             self.pending.push_back((id, parents.clone()));

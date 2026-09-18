@@ -8,6 +8,7 @@ use cairn_model::{CommitSummary, HistoryRow, LaneAssigner, Oid, RowContent};
 
 pub use session::HistorySession;
 
+use crate::object_id::{model_id, object_id};
 use crate::{Cancel, Error, Repository};
 
 /// Neither order is topological: a parent can arrive before its child.
@@ -327,7 +328,6 @@ fn starting_points(repo: &Repository, request: &HistoryRequest) -> Result<Resolv
     })
 }
 
-/// An id of the other width is refused here: gix asserts rather than failing on one.
 fn walk_tips(repo: &gix::Repository, tips: &[Oid]) -> Result<Tips, Error> {
     let format = repo.object_hash();
     let mut object_ids = Vec::with_capacity(tips.len());
@@ -345,22 +345,6 @@ fn walk_tips(repo: &gix::Repository, tips: &[Oid]) -> Result<Tips, Error> {
         object_ids.push(id);
     }
     Ok(object_ids.into())
-}
-
-fn object_id(oid: &Oid) -> Result<gix::hash::ObjectId, Error> {
-    // Both sides hold the digest; no hex round-trip.
-    gix::hash::ObjectId::try_from(oid.as_bytes()).map_err(|source| Error::ReadCommit {
-        id: oid.to_string(),
-        source: Box::new(source),
-    })
-}
-
-fn model_id(id: &gix::hash::oid) -> Result<Oid, Error> {
-    // Hex is built only to name the commit in an error.
-    Oid::from_bytes(id.as_bytes()).map_err(|source| Error::ReadCommit {
-        id: id.to_hex().to_string(),
-        source: Box::new(source),
-    })
 }
 
 /// The one place a walk step reads a commit object.

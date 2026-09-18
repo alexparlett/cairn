@@ -3,14 +3,16 @@
 How Cairn describes a change to a file today. As-built: everything here is code
 that exists, and behaviour is pinned by a test named beside it.
 
-**What exists so far is the model and nothing else.** `cairn-model` can hold a
-file diff, project it into hunks and rows, and emit a unified patch from a
-selection of lines. No engine query computes one yet, no component draws one, and
-nothing stages anything — the patch emitter ships with no caller, deliberately
-(program decision L2 in `docs/work/daily-loop/brainstorm.md`), because its
-round-trip tests are what make a later staging packet a feature rather than a
-rewrite. Intent
-for this surface is `docs/design/cairn.md` (decisions D1, D3, D5, D6) and
+**What exists is the model and the engine that fills it.** `cairn-model` can hold
+a file diff, project it into hunks and rows, and emit a unified patch from a
+selection of lines; `cairn-git` answers what a commit or a comparison changed and
+what one of those changes is, line by line, against a real repository. No
+component draws one and nothing stages anything — the patch emitter still ships
+with no caller, deliberately (program decision L2 in
+`docs/work/daily-loop/brainstorm.md`), because its round-trip tests are what make
+a later staging packet a feature rather than a rewrite. **Working-tree diffs are
+not here**: everything below reads trees and blobs from the object database.
+Intent for this surface is `docs/design/cairn.md` (decisions D1, D3, D5, D6) and
 `docs/design/ui.md`; the commitment it was built against is
 `docs/prd/diff-engine.md`, in flight.
 
@@ -147,6 +149,198 @@ model-level pins and each has a hole a mutation walks through:
   row-content twin reads that one type's spelling — and nothing reads them yet. The
   first view phase should either widen that guard to them or say why not.
 
+## What the engine answers
+
+Two queries in `cairn-git`, both reads, neither spawning a process. gix computes
+both diffs and Cairn only groups what it returns (decision L3): no diff algorithm
+is written here, and no gix type appears in a public signature.
+
+`DiffSession` (`crates/cairn-git/src/diff.rs`) holds gix's blob resource cache for
+a run of queries. Building one reads the index and the attribute stack, which on a
+62,892-entry repository is several megabytes; `Repository::changes` and
+`Repository::file_diff` are one-shot sessions over it for a caller with a single
+question. Like `HistorySession` it borrows the repository and is not `Send`, so it
+lives on the worker that owns that handle. The cache is created in
+`pipeline::Mode::ToGit` with no worktree roots, which is the mode that never runs a
+textconv program, and `gix::diff::resource_cache` builds it with
+`skip_internal_diff_if_external_is_configured` off, so a `diff.<driver>.command` in
+the user's config is read and never started. Both are checked by running a diff
+over a path that has a textconv *and* an external diff command configured, each a
+script that writes a sentinel file first thing:
+`neither_a_textconv_nor_an_external_diff_program_is_started` requires the sentinel
+to be absent afterwards, and then runs the script by hand so the absence is not an
+absence of a program that could never have run.
+
+### The changes query
+
+`Repository::changes(&ChangesRequest, &impl Cancel) -> ChangeSet` (R2.1, R2.2,
+R2.9, R2.10). A request names one commit — compared with its first parent, or with
+the empty tree when it is a root commit (L5) — or two commits, tip against tip and
+never against a merge base (R7.2). A merge is compared with its first parent like
+any other commit; a combined diff is out of scope by D6.
+
+The answer holds the changed files, the commit's `CommitDetails` when one commit
+was named, and a `RenameDetection` reporting gix's counters as plain numbers.
+`RenameDetection::was_cut_short()` is R2.2's "the answer says so": it is true when
+`diff.renameLimit` stopped the search, which is the fact git prints as "exhaustive
+rename detection was skipped due to too many files".
+
+**The file list is sorted here, because gix does not sort it.** gix emits
+modifications in traversal order and rename pairs as its tracker finds them. The
+key is total — destination path, then source path — so two runs of one query list
+the same files in the same places;
+`the_file_list_is_sorted_by_path_and_never_shuffles` runs the query twice and
+requires both, and requires the key to separate every pair.
+
+**Cancellation stops the walk.** `Cancel` is polled once per change, inside gix's
+callback, and a poll that answers yes returns `ControlFlow::Break`, which ends the
+traversal rather than letting it finish and discarding the answer. Whether it
+broke is recorded on Cairn's side and checked before gix's own error, because gix
+reports a break as a failure. `a_cancelled_changes_query_stops_walking` compares
+the files collected before the break with the whole answer.
+**The gap, stated:** rename detection runs its similarity comparisons *between*
+those callbacks, so a superseded query on a rename-heavy commit finishes that
+phase before the break is seen. It is bounded by `diff.renameLimit` and by
+nothing else.
+
+**A copy's source is put back where git has it.** With `diff.renames=copies`, gix
+reports a copy's source as it is AFTER the change and stops reporting that file as
+modified at all; git reports the source as it was BEFORE — which is the version in
+the index, so it is the version a patch must be built against — and still lists the
+file as modified. `repair_copies` reads the source path out of the old tree and
+corrects both: one lookup per copy, and nothing at all when copies are not
+configured. Without it a copy's patch does not apply and a modified file vanishes
+from the list. The similarity percentage stays gix's, and gix measured it against
+the other version of the source; where the repaired source is byte-identical to the
+copy — git's `C100` — the percentage is set from that fact instead.
+
+### The content query
+
+`Repository::file_diff(&ChangedFile, &ContentOptions) -> FileDiff` (R2.3 through
+R2.8). It decides in this order, and the order is the point:
+
+1. **A submodule** answers its two commit ids. gix's blob platform refuses the mode
+   outright, so this is settled before anything is asked of it.
+2. **A mode change alone** — the same blob on both sides, a different mode — answers
+   `ModeChangeOnly` without reading the content. On a commit that renames 27,592
+   files this is the difference between a file list and inflating every blob.
+3. **The size ceiling, before the content is read** (R2.6). An object's header
+   carries its size, so `repo.find_header` decides it without inflating anything.
+4. Both sides are set on the resource cache and `prepare_diff` decides **binary**
+   the way git does — the `diff` and `binary` attributes, `core.bigFileThreshold`,
+   and a NUL byte in the first 8,000 bytes (R2.5).
+5. **The line ceilings** — 50,000 lines, 2,048 bytes in a line — are measured over
+   git's form of the content, without splitting it into lines.
+6. **A Git LFS pointer** is recognised when every side that exists begins
+   `version https://git-lfs.github.com/spec/` and is at most 1 KiB.
+7. Otherwise the file is diffed as text.
+
+That the size check really precedes the read is pinned deterministically rather
+than by timing: `the_size_ceiling_is_decided_before_the_content_is_read` builds a
+repository whose over-limit blob is a **loose object truncated after its header**.
+gix reads a loose object's header by inflating into a fixed buffer, so the size is
+still readable and the content is not — answering "too large" is therefore only
+possible without reading it, and asking for it anyway (`load_anyway`) fails, which
+is what stops the first half from being a claim about a file that could have been
+read either way.
+
+**The tokens keep their terminators.** `gix::diff::blob::sources::byte_lines` is
+what the exact diff is computed over, so a last line that lost its newline, and a
+CRLF ending that became LF, are changes — exactly as git sees them. gix's own
+`interned_input()` strips terminators and would lose both. `split_lines` splits the
+same buffer the same way, so there is one `DiffLine` per token on each side and
+every range lands inside its own side.
+
+**The algorithm is the user's, and so is the indent heuristic.** `prepare_diff`
+resolves `diff.<driver>.algorithm`, then `diff.algorithm`, then gix's default, and
+`diff_with_slider_heuristics` is `Diff::compute` followed by `postprocess_lines`,
+which is git's `--indent-heuristic`. `diff.algorithm = patience`, the one algorithm
+gix lacks, needs no handling of Cairn's own: gix opens a repository leniently and
+falls back to histogram itself, which is what R2.4 asks for.
+
+**What `TextDiff::new` requires of its producer, gix gives for free.** Its
+`HunkIter` advances both sides over the same unchanged tokens, so the unchanged run
+between two changes is the same length on both sides by construction, and a hunk's
+range cannot reach past its side. Nothing is converted or clamped at the seam; the
+`debug_assert!`s have not fired over any fixture, the Cairn checkout's own history,
+or the bench repository.
+
+### The display-only overlay
+
+**Ignoring whitespace** compares lines with every ASCII whitespace byte removed,
+which is git's `-w`, and the key is one token per line — so a range over the keys
+indexes the original lines one for one and nothing has to be mapped back. The lines
+drawn are always the original bytes; only which ranges are marked changes. A blank
+line keeps its place with an empty key rather than being dropped, which is what
+stops every later range from shifting by one.
+
+**Intra-line highlighting** is always on (L4). The i-th removed line of a change is
+paired with its i-th added line, which is the pairing a side-by-side view draws, and
+the two are diffed at word granularity: a run of word bytes (ASCII alphanumeric,
+`_`, or any byte at or above `0x80`, which keeps a multi-byte character whole), a
+run of spacing, or one other byte. Myers, and no indent heuristic, on imara's own
+advice about character diffs. A pair where either line is over the long-line limit
+is skipped (R2.7). Both sides share one interner and one `Diff` across the file, so
+a file of ten thousand changed pairs reuses two allocations.
+
+### What decides the engine, and what it decides against
+
+Real `git`, never the model against itself. The tests live in
+`crates/cairn-git/tests/diff/` and every apply runs with `GIT_INDEX_FILE`,
+`GIT_OBJECT_DIRECTORY` and `GIT_ALTERNATE_OBJECT_DIRECTORIES` pointed at a scratch
+directory, so the repository under test — including this checkout — is only ever
+read.
+
+- **C1** (`every_crafted_commit_round_trips_through_real_git_apply`,
+  `every_rewrite_commit_round_trips_through_real_git_apply`,
+  `every_commit_of_this_repository_round_trips_through_real_git_apply`) applies
+  every file's patch, with every line selected, to the parent's tree and compares
+  the **tree** `git write-tree` gives with the commit's own. Not the patch text: a
+  patch that applies cleanly and stages the wrong bytes passes any comparison of
+  strings.
+- **C2** (`a_seeded_selection_stages_what_its_patch_says_it_does`) runs twelve
+  selections per file — every line, no lines, only additions, only removals, the
+  first line of every change, the last line of every change, and eight seeded ones —
+  and checks the staged blob against `apply_patch` **and** what the headers claim
+  against the index: the mode staged, whether the source path survives, whether
+  anything is staged at all. That second half matters because the reference applier
+  discards every non-`@@` line, so nothing before this checked a header end to end.
+  `the_last_line_of_a_file_with_no_newline_stages_on_its_own` reaches by hand the
+  edge a seeded selection may never reach.
+- **C3** reverses the same patches onto the commit's tree and requires the parent's.
+- **C5** (`every_crafted_commit_lists_what_git_lists` and its neighbours) compares
+  with `git diff-tree -r --raw --no-abbrev` under the same config, field for field.
+- **C6** (`every_crafted_file_diff_is_the_one_git_prints`) compares the unified
+  projection with `git diff -U3` of the same two **blobs** — two blobs rather than
+  two commits and a path, so rename detection cannot change what is compared.
+
+### Known limits of the engine
+
+- **gix finds far fewer renames than git once the limit bites.** On
+  `5a3292f163d`, git's largest rollup, gix finds 231 rename pairs where git finds
+  2,774, and runs zero similarity checks. Two causes, both gix's:
+  `gix_diff::rewrites::tracker` compares `diff.renameLimit` against the raw
+  permutation count where git compares it against the square (gix's own doc on
+  `Rewrites::limit` states git's rule, which the code does not implement), and gix
+  has no basename stage in front of its exhaustive one, so when the limit is
+  exceeded it falls back to exact matching alone. Raising the limit Cairn passes
+  does not close it at an acceptable cost. The measurement and the options are in
+  the phase 02 entry of `docs/work/diff-engine/progress.md`.
+- **A copy cannot be reverse-applied — by git either.** `git apply -R` of
+  `copy from A / copy to B` re-creates A from B and refuses because A is still
+  there. `gits_own_copy_patch_cannot_be_reversed_either` pins that git's own patch
+  fails the same way, which is why C3 undoes a copy by removing its destination.
+- **A type change reads as one file and writes as two.** The changed-file list
+  reports git's `T` for one path, and the content query answers a text diff of the
+  old bytes against the new. Its patch is two file patches at that path (see below),
+  and it is all or nothing.
+- **An LFS pointer is a deliberate deviation from git**, which shows a pointer as
+  ordinary text. R1.2 and R6.8 commit to the state, and nothing else would ever
+  produce it.
+- **`Operation::ExternalCommand` is answered, not asserted unreachable.** It cannot
+  happen while the cache is built as above; answering it as `Unsupported` means a
+  gix that changed that default draws a notice instead of starting a program.
+
 ## What a view may see and a patch may not
 
 Ignoring whitespace computes a **second** set of changed ranges, for display only
@@ -202,6 +396,16 @@ them against real `git apply` is criteria C1-C3, which land with the engine in
   `the_index_line_follows_gits_own_rule`, `a_partial_selection_claims_no_blob_id`.
 - Paths go out as the bytes git stores (`RepoPath`), so a patch names the file git
   names even when the path is not text.
+- **A type change is two file patches at one path**, the old kind deleted and the
+  new kind added, which is what `git diff` writes and the only form `git apply`
+  takes: one `diff --git` carrying `old mode`/`new mode` is refused with "wrong
+  type", because the preimage git would patch is not the kind the new mode names.
+  A type change is all or nothing — half of a file becoming a symbolic link is not
+  a state a repository can hold, and the second section would land on a path the
+  first had left in place — so a selection that does not hold every change emits
+  nothing. `a_type_change_is_written_as_a_deletion_and_an_addition` and
+  `a_type_change_that_is_not_wholly_selected_emits_nothing`, with C1 and C3 proving
+  both directions against real `git apply`.
 
 ## The reference applier
 
@@ -219,7 +423,10 @@ accepts anything decides nothing, and
 `a_header_that_does_not_match_its_lines_is_refused` and
 `a_missing_marker_is_refused_over_a_line_that_never_ended` pin that it does not.
 
-They take **one file's** patch, which is what `emit_patch` produces.
+They take **one file's** patch, which is what `emit_patch` produces for every
+status but a type change — that one is two sections, and the applier reads the
+second as a hunk out of order. What a type change's patch must DO is staged and
+checked against the index instead, in C2.
 
 They are **a test oracle and never a write path.** They are public because the
 round-trip tests that need them live in another crate, but they are pure

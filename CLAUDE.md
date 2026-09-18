@@ -18,8 +18,10 @@ its history as a virtualized graph with lanes, edges and four columns, pages as
 you scroll, and does all of it off the UI thread. It can fetch its default
 remote — the one `git` verb built so far, with git's own progress, a cancel,
 and a credential dialog fed by the askpass helper (`docs/systems/credentials.md`).
-Nothing else mutates a repository, and there is no repository picker: one
-repository, named on the command line.
+The engine can also answer what a commit or a pair of commits changed and what one
+of those files' change is, line by line (`docs/systems/diff.md`), with nothing
+drawing it yet. Nothing else mutates a repository, and there is no repository
+picker: one repository, named on the command line.
 
 ## Repo map
 
@@ -27,7 +29,7 @@ repository, named on the command line.
 | --- | --- |
 | `docs/` | `qa-gate.md` (QA contract), `design/` intent, `prd/` per-packet specs, `systems/` as-built, `work/` in-flight dirs, `research/` evidence (deferred work goes to GitHub issues; `backlog/` is the no-remote fallback) — findings promote research → brainstorm → design/prd → systems (contract: `docs/CLAUDE.md`) |
 | `crates/cairn-model/` | The vocabulary crossing the seam: `Oid`, `RefName`, `CommitSummary`, `CommitDetails`, the `Confirmed` token. Plain data, plus the pure algorithms that produce some of it — the layout one (`LaneAssigner`) and the diff model (`TextDiff` and the hunk, row and patch projections of it, `Selection`, `emit_patch` and the reference `apply_patch`; `docs/systems/diff.md`) — and `Secret`, the one type that holds a credential. Depends on nothing but `zeroize` (for that type) — not `gix`, not `freya`, not the other crates. |
-| `crates/cairn-git/` | The repository engine: gitoxide-backed reads, and under `src/ops/` every write, delegating to the `git` binary per design decision D1. Today `ops/` holds the subprocess backend — `GitBinary` (startup discovery and the 2.30 floor), `GitEnvironment` (the explicitly built environment, the only place a process is built), `Askpass` (where git and ssh are sent for a secret) and the crate-private runner, which streams and can kill a process — and `fetch`, the first verb (not destructive, so it takes no `Confirmed`), plus the confirmation-seal placeholder. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
+| `crates/cairn-git/` | The repository engine: gitoxide-backed reads — the history walk, and under `src/diff/` the queries answering what a commit changed and what one file's change is — and under `src/ops/` every write, delegating to the `git` binary per design decision D1. Today `ops/` holds the subprocess backend — `GitBinary` (startup discovery and the 2.30 floor), `GitEnvironment` (the explicitly built environment, the only place a process is built), `Askpass` (where git and ssh are sent for a secret) and the crate-private runner, which streams and can kill a process — and `fetch`, the first verb (not destructive, so it takes no `Confirmed`), plus the confirmation-seal placeholder. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
 | `crates/cairn-askpass/` | The askpass helper binary `git` and `ssh` run to ask for a secret, and the library half — the `Channel` the application listens on. Links `cairn-model` and `zeroize` only: it runs in a process holding a plaintext secret. Never names the engine, the toolkit or a logging crate. |
 | `crates/cairn-ui/` | Freya components. Render `cairn-model` values, report intent through `EventHandler` props. Must never depend on `gix` or `cairn-git`, and must never touch the filesystem. |
 | `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. |
@@ -440,5 +442,6 @@ same fork and rev as `freya`): `crates/cairn-ui/tests/` for components, and
   repository today, with the twin that pins each rule. `credentials.md`: the
   `git` subprocess backend, the askpass helper and its channel, fetch end to
   end, and the decisions the packet locked. `diff.md`: how a change to a file is
-  described — one exact answer, its hunk, row and patch projections, and the
-  reference applier that checks the emitter. Model only so far.
+  described — one exact answer, its hunk, row and patch projections, the
+  reference applier that checks the emitter, and the two engine queries that fill
+  it from a repository. No view yet.

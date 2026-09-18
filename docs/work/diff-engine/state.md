@@ -2,8 +2,9 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 01 landed. The diff model exists in `cairn-model`; no engine
-query, no component, nothing that reads a repository.**
+**Status: phase 02 landed. The diff model exists in `cairn-model` and
+`cairn-git` answers R2's two queries against a real repository; no component,
+nothing on a worker, nothing that draws.**
 
 ## Locked decisions
 
@@ -31,17 +32,25 @@ L1-L16 in `brainstorm.md`; the design frame is D1, D3, D5 and D6 in
 ## Open questions
 
 Q1-Q3 in `brainstorm.md`, lettered Q so they cannot be confused with the
-program's O1-O6. Q3 (how far gix's rename detection is from git's on the largest
-rollup) is the one that can reach an acceptance criterion: phase 02 measures it,
-files each gap, and takes a large gap to the user.
+program's O1-O6.
+
+**Q3 is answered, and the answer is a large gap that is with the user.** On
+`5a3292f163d` gix finds 231 rename pairs where git finds 2,774 — every one of
+git's 2,543 inexact renames is missing — because gix compares `diff.renameLimit`
+against the raw permutation count where git compares it against the square, and
+because gix has no basename stage in front of its exhaustive one. Neither is
+closable by raising the limit Cairn passes. The measurement, the cause and the
+options are in the phase 02 entry of `progress.md`.
 
 ## New modules and interfaces introduced so far
 
 Recorded as phases land: the type or function, its crate, and the one-line
 contract.
 
-All of phase 01's are in `cairn-model` and all are pure: no I/O, no clock, no
-dependency past the crate's allowlist. As-built prose: `docs/systems/diff.md`.
+Phase 01's are all in `cairn-model` and all pure: no I/O, no clock, no
+dependency past the crate's allowlist. Phase 02's are in `cairn-git`, read a real
+repository, and speak `cairn-model` at the boundary — no gix type reaches a
+public signature. As-built prose for both: `docs/systems/diff.md`.
 
 | Symbol | Crate | Contract |
 | --- | --- | --- |
@@ -71,13 +80,22 @@ dependency past the crate's allowlist. As-built prose: `docs/systems/diff.md`.
 | `Patch`, `emit_patch`, `PATCH_CONTEXT` | model | The unified patch a selection makes, always at three lines of context. |
 | `apply_patch`, `apply_patch_in_reverse`, `PatchApplyError` | model | The reference applier, written from the format and independent of the emitter. Public so `cairn-git`'s round-trip tests can reach it. |
 | `Timestamp`, `Signature`, `CommitDetails` | model | R1.8: both signatures with their offsets, the whole message, the parents. |
+| `ChangesRequest` | git | What to compare: one commit against its first parent (the empty tree for a root), or two commits tip against tip. |
+| `ChangeSet` | git | What a commit or a comparison changed: the files sorted by a total key, the commit's details when one commit was named, and how rename detection went. |
+| `RenameDetection` | git | gix's rename and copy counters as plain numbers, and `was_cut_short()`, which is R2.2's "the answer says so". |
+| `ContentOptions` | git | R2.6's limits, whether to load past them anyway, and whether to compute the whitespace-ignoring ranges. |
+| `DiffSession` | git | Holds gix's resource cache for a run of queries. Borrows the repository and is not `Send`, like `HistorySession`. |
+| `Repository::changes` | git | R2.1, R2.2, R2.9, R2.10, on a session of its own. Polls `Cancel` once per change. |
+| `Repository::file_diff` | git | R2.3 through R2.8, on a session of its own. |
+| `Repository::commit_details` | git | One commit in the detail R5.3 draws, without a changes query. |
+| `Error::ChangesCancelled`, `DiffSetup`, `TreeDiff`, `DiffFile` | git | What the caller of a diff query must handle. |
 
 ## Validation status
 
 | Phase | Status | Gate | QA |
 | --- | --- | --- | --- |
 | 01 diff model | landed | `scripts/gate.sh` PASS | `qa-checklist`, `test-coverage-auditor` and `responsiveness-reviewer`, adjudicated by `qa-confirm`; confirmed findings fixed or recorded as residuals in `docs/systems/diff.md` |
-| 02 engine, commits | not started | — | — |
+| 02 engine, commits | landed | `scripts/gate.sh` PASS | packet-mode: the orchestrator runs QA over the phase diff |
 | 03 engine, working tree | not started | — | — |
 | 04 worker lanes | not started | — | — |
 | 05 detail pane | not started | — | — |

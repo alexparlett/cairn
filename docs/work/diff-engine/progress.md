@@ -3,6 +3,67 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-18 — phase 01: the two escalated QA findings, decided by the user
+
+The two findings the QA pass could not settle on its own were put to the user and
+both were decided YES. They are the last of phase 01; `scripts/gate.sh` passes.
+
+**F10 — `TextDiff::new` now states and `debug_assert!`s its real precondition.** The
+doc promised only increasing, non-overlapping changes. Two more conditions were
+already load-bearing and unwritten: the unchanged run between consecutive changes
+(and from the start of the file to the first change) is the same length on BOTH
+sides, and every range lies inside its own side's lines. `emit_patch` and the row
+index each measure that run as the smaller of the two gaps, so unequal gaps drop
+their difference from the body while the header is recounted from what was emitted
+— an internally consistent patch that omits content its own span claims to cover,
+which only real `git apply` notices.
+
+The objection a previous session raised against this fix, and the answer the user
+weighed: it cuts against the crate's "malformed input is placed rather than
+rejected" precedent (`malformed_input_is_placed_rather_than_rejected` in the lane
+assigner is that precedent by name). `debug_assert!` is what answers it. It does
+not fire in release, so "shipping code never panics on a path a user can reach"
+is untouched, while phase 02 — which builds the gix-backed PRODUCER of these
+values against this contract, and runs its tests in debug — gets a loud failure
+instead of a silently wrong patch. That is also why it had to land before phase 02
+starts rather than at the packet's QA.
+
+Three refusals are pinned (`an_unchanged_run_of_two_different_lengths_...`,
+`a_change_reaching_past_the_end_of_its_side_...`, `changes_that_go_backwards_...`)
+with `a_well_formed_diff_with_several_changes_is_accepted` as the passing twin. No
+existing test violates the new preconditions — the 168-patch fixture corpus
+included. One run is deliberately NOT asserted and is stated as a residual in
+`docs/systems/diff.md`: the trailing run to the end of each side, because a
+`TextDiff` built as a container for one side's content is a legitimate shape and
+refusing it was not the decision taken.
+
+**F1 — R1.5 is pinned by counting allocations, not by a claim.** `index_size`
+measures what the index STORED; nothing measured what a lookup BUILDS. Verified by
+executing the mutation: renaming `row` to `row_uncached` and giving `row` the body
+`(0..self.len()).map(|n| self.row_uncached(n)).collect::<Vec<_>>().get(row).copied().flatten()`
+leaves every pre-existing `cairn-model` test green — including
+`one_row_of_a_hundred_thousand_lines_is_reached_through_four_index_entries` and
+`many_changes_index_by_change_and_not_by_row`, the two that look like they would
+catch it. `crates/cairn-model/tests/diff_row_lookup.rs` is the pin that closes it:
+a single `row(k)` on a hundred-thousand-line diff, probed at every kind of piece
+the index holds, for both `UnifiedRows` and `SideBySideRows`, measured to zero
+allocations. It was watched go RED on that mutation (one allocation of 2.4 MB
+unified and 3.2 MB side-by-side, on row 0 alone) and GREEN on its revert, before
+being committed. `the_counter_sees_an_allocation_when_there_is_one` is there so a
+counter that had stopped counting cannot leave the pin dead.
+
+**New dev-dependency, `allocation-counter` 0.8.1** (MIT/Apache-2.0, no dependencies
+of its own), on `cairn-model` alone. A counting global allocator is the only thing
+that can decide R1.5: a timing ratio is flaky, and a counter inside `TextDiff`
+would put test state in a seam type. `unsafe_code = "forbid"` is why it is a
+dependency rather than hand-rolled — the lint binds Cairn's crates, a dependency
+may contain `unsafe` internally, and this crate carries the `#[global_allocator]`
+itself, so linking it replaces the allocator of that one test binary and of nothing
+shipped. Its counters are thread-local, so `cargo test`'s parallel threads cannot
+pollute each other's totals. Its row went into `TEST_ONLY_ALLOWLIST` in
+`crates/cairn-guards/tests/invariants.rs`; `cargo deny` needed no exception, so
+`deny.toml` is unchanged.
+
 ## 2026-09-17 — phase 01: the diff model and the patch emitter
 
 The model of R1 exists in `cairn-model` and nothing else does: no engine query, no

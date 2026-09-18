@@ -38,6 +38,10 @@ const TEST_ONLY_ALLOWLIST: &[(&str, &[&str])] = &[
     ("cairn-app", &["freya-testing"]),
     // The fetch tests serve a real askpass channel; the engine never links the helper.
     ("cairn-git", &["cairn-askpass"]),
+    // R1.5's pin counts allocations, which needs a counting global allocator. The crate
+    // carries its own `#[global_allocator]`, so it replaces the allocator of the test
+    // binary that links it and of nothing the seam ships.
+    ("cairn-model", &["allocation-counter"]),
 ];
 
 /// Crate directory → crate identifiers it may never name in code, in `src/`, `tests/` or anywhere

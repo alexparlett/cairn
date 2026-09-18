@@ -35,6 +35,14 @@ nix = { version = "0.31.3", default-features = false, features = ["signal", "pro
 # Zeroes credential buffers on drop with writes the compiler may not remove
 # (credential-prompts L11). `alloc` is the `Vec` impl; nothing else is used.
 zeroize = { version = "1.9", default-features = false, features = ["alloc"] }
+# Test-only, and only cairn-model's: R1.5 says asking for a diff row allocates
+# nothing, and nothing but a counting allocator can decide that — a timing ratio
+# is flaky and a counter inside `TextDiff` would change a seam type. The crate
+# carries the `#[global_allocator]` itself, so it replaces the allocator of the
+# one test binary that links it and of nothing shipped; its counters are
+# thread-local, so `cargo test`'s parallel threads cannot pollute each other's
+# totals. No dependencies of its own.
+allocation-counter = "0.8.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

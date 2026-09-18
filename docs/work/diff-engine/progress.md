@@ -3,6 +3,168 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-18 — phase 02: the engine answers commit and comparison diffs
+
+`cairn-git` has R2's two queries. `Repository::changes` walks two trees — two
+commits, one commit against its first parent, or a root commit against the empty
+tree — and answers `ChangeSet`: the changed files sorted by a total key, the
+commit's details when one commit was named, and how rename detection went.
+`Repository::file_diff` turns one of those files into a `FileDiff`, through gix's
+resource cache in `Mode::ToGit`. `DiffSession` holds that cache for a run of
+queries; the two `Repository` methods are one-shot sessions over it. As-built
+prose: `docs/systems/diff.md`. `scripts/gate.sh` passes.
+
+### C1, C2, C3, C5 and C6
+
+All five pass, in `crates/cairn-git/tests/diff/`. Every apply runs real `git` with
+`GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY` and `GIT_ALTERNATE_OBJECT_DIRECTORIES`
+pointed at a scratch directory, so the repository under test is only ever read —
+including this checkout, which C1 walks.
+
+- **C1** compares TREES, never patch text: `git write-tree` after the apply
+  against `<commit>^{tree}`. Over the crafted fixtures, both rewrite fixtures and
+  every non-merge commit of the Cairn checkout.
+- **C2** seeds twelve selections per file — every line, no lines, only additions,
+  only removals, the first line of every change, the last line of every change and
+  eight pseudo-random ones — and checks the staged blob against `apply_patch`
+  **and** the header effects against the index: the mode staged, whether the
+  source path survives, whether anything is staged at all.
+- **C3** reverses the same patches onto the commit's tree and requires the
+  parent's.
+- **C5** compares against `git diff-tree -r --raw --no-abbrev` under the same
+  config, field for field: both modes, both ids, the status letter with its
+  similarity score, and rename and copy pairs.
+- **C6** compares the unified projection with `git diff -U3` of the same two
+  BLOBS — two blobs rather than two commits and a path, so rename detection cannot
+  change what is being compared.
+
+### C14, measured
+
+Machine, repository and method: `docs/research/diff-engine/measured-baseline.md`
+section 1 — AMD Ryzen 7 9800X3D, 60.4 GiB, NVMe, rust-lang/rust at
+`c999cef531e`. Release build, warm, five runs, `CAIRN_BENCH_REPO` set;
+`measures_the_diff_queries_against_a_named_repository` in
+`crates/cairn-git/tests/diff/bench.rs`. git's numbers are the baseline's own
+warm medians for the same subject.
+
+Changes query, a session built per query — what a cold worker pays:
+
+| Subject | Cairn median | min / max | git | Bar | |
+| --- | --- | --- | --- | --- | --- |
+| S7 `f0845adb0c1`, 1,017 files | **1.631 ms** | 1.613 / 23.393 | 7.9 ms | 100 ms | MET |
+| S1 `cf2dff2b1e3`, 55,184 paths | **20.658 ms** | 20.525 / 31.418 | 28.6 ms | 500 ms | MET |
+| M1 `5a3292f163d`, 5,602 paths | **2.845 ms** | 2.844 / 4.933 | 78.5 ms | 500 ms | MET |
+
+The same three on a session already open — what phase 04's worker will pay:
+1.059 ms, 20.741 ms and 2.377 ms. So building the resource cache costs about
+0.5 ms on this repository, and holding it open is worth having but is not what
+the bars turn on.
+
+Content query, F7 `3b09522c34b`,
+`library/stdarch/crates/core_arch/src/arm_shared/neon/generated.rs`:
+
+| Answer | Cairn median | min / max | git | Bar | |
+| --- | --- | --- | --- | --- | --- |
+| Refused: 2,532,736 bytes crosses the 1 MiB ceiling | **0.004 ms** | 0.004 / 0.006 | — | — | — |
+| Loaded anyway | **8.727 ms** | 8.718 / 10.170 | 9.8 ms | 100 ms | MET |
+
+Note for the record: this subject is 2.5 MB, so the DEFAULT content query
+refuses it on R2.6's byte ceiling. The 100 ms bar is read as the time to answer
+it with its lines, which is the `load_anyway` path.
+
+F1 `6a6e8446b97`, `library/stdarch/intrinsics_data/arm_intrinsics.json`, the
+too-large subject: refused in **0.002 ms** on `SizeLimit::Bytes`, with
+`loadable` true; **Load Diff 127.190 ms** (126.832 / 128.810) against git's
+163.0 ms with Myers. The refusal reads the object's header and never inflates
+it, which is pinned separately and deterministically —
+`the_size_ceiling_is_decided_before_the_content_is_read` truncates a loose
+object after its header, so answering "too large" is only possible without
+reading it, and asking for it anyway fails.
+
+**Not measured, and not phase 02's to measure:** "the window stays responsive
+while the two heaviest subjects load". There is no window on this branch yet.
+Phase 04 or 05 owns that check by hand.
+
+### Q3, answered: the rename gap is large, and it is the limit
+
+**On `5a3292f163d`, gix finds 231 rename pairs where git finds 2,774.** All 231
+are exact (100%); the gap is every one of git's 2,543 inexact renames — the exact
+number C14 names. The reporter prints it; the cause is in the same line:
+
+```
+RenameDetection { enabled: true, copies: false, limit: 1000,
+                  similarity_checks: 0,
+                  renames_skipped_for_limit: 6946095, ... }
+```
+
+Zero similarity checks ran. Two findings behind that, both gix's:
+
+1. **gix compares `diff.renameLimit` against the raw permutation count; git
+   compares it against the square.** `gix_diff::rewrites::tracker`'s
+   `match_pairs_of_kind` computes `permutations = num_src * num_dst` and skips the
+   fuzzy stage when `permutations > rewrites.limit`. gix's own doc on
+   `Rewrites::limit` says the opposite — "Defaults to 1000, meaning that only
+   1000*1000 combinations can be tested" — which is git's rule. As implemented,
+   gix's default behaves like git's `diff.renameLimit=31`.
+2. **gix has no basename stage.** git's `diffcore-rename` pairs by file name
+   before the exhaustive stage and is not governed by the limit, which is why the
+   baseline found git still reporting 2,505 inexact renames at `-l1` (section 2b).
+   When gix's limit is exceeded it falls back to exact matching alone.
+
+Raising the limit Cairn passes does **not** close this at an acceptable cost: M1
+needs 6,946,095 permutations, so matching git's budget (1,000,000) still skips,
+and lifting the limit high enough would run millions of blob-pair similarity
+diffs with none of git's cheap pre-stages in front of them. **This is phase 02's
+stopping rule and goes to the user with the final report.** Filed as gaps, not
+fixed here.
+
+### Two more gix divergences, found and handled
+
+- **A copy's source.** With `diff.renames=copies`, gix reports the copy's source
+  as it is AFTER the change and stops reporting that file as modified at all. git
+  reports the source as it was BEFORE — which is the version in the index, so it
+  is the version a patch must be built against — and still lists the file as
+  modified. `repair_copies` in `crates/cairn-git/src/diff/changes.rs` puts both
+  right by reading the source path out of the old tree: one lookup per copy, and
+  nothing at all when copies are off. Without it a copy's patch does not apply and
+  a modified file disappears from the list. Pinned by C5's strict comparison with
+  `git diff-tree -C --raw`.
+- **A copy cannot be reverse-applied, by git either.** `git apply -R` of
+  `copy from A / copy to B` re-creates A from B and refuses because A is still
+  there. git's OWN patch for a copy fails the same way, which
+  `gits_own_copy_patch_cannot_be_reversed_either` pins — so C3 undoes a copy by
+  removing its destination rather than requiring of Cairn's patch what git does
+  not manage with its own.
+
+### Decisions taken without asking
+
+- **A type change is emitted as git emits one: two file patches at one path**, and
+  a selection that does not hold every change emits nothing. A single
+  `diff --git` with `old mode`/`new mode` is refused by `git apply` with "wrong
+  type". This is a `cairn-model` change, with its tests in the same commit.
+- **An LFS pointer is detected** — `version https://git-lfs.github.com/spec/` at
+  the front of a buffer of at most 1 KiB — and only when EVERY side that exists is
+  one, so a file that became a pointer keeps the lines of its real side. R1.2 and
+  R6.8 commit to the state and nothing else would ever produce it. It is a
+  deliberate deviation from git, which shows a pointer as text.
+- **`Operation::ExternalCommand` is answered as `Unsupported`, not asserted
+  unreachable.** It cannot happen while the cache is built with
+  `skip_internal_diff_if_external_is_configured` off, which is what
+  `gix::diff::resource_cache` does; answering it means a gix that changed that
+  default draws a notice instead of starting a program.
+- **The engine's own line-length ceiling measures a line without its terminator**,
+  which is how `DiffLine` holds one and what a view would draw. A `\r` of a CRLF
+  ending is part of the line.
+- **C1 reads every file with `load_anyway`**, so the emitter is exercised over real
+  content rather than over whatever happens to sit under a display ceiling. The
+  states that have no patch — binary, submodule, too large past 64 MiB — are
+  staged directly with `update-index`, which is what keeps "yields exactly the
+  commit's tree" meaningful for a commit that holds one.
+- **`diff.algorithm = patience` needs no handling of Cairn's own.** gix opens a
+  repository leniently by default, and `config::cache::access::diff_algorithm`
+  falls back to `Histogram` for the one algorithm gix lacks, which is what R2.4
+  asks for.
+
 ## 2026-09-18 — phase 01: the two escalated QA findings, decided by the user
 
 The two findings the QA pass could not settle on its own were put to the user and

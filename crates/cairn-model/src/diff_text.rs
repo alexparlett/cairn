@@ -191,8 +191,81 @@ impl TextDiff {
     /// `changes` is expected in increasing order and not overlapping, which is the order
     /// a diff produces them in. Nothing downstream sorts it: a projection reads it as
     /// given, so a caller that shuffles it gets shuffled rows and a shuffled patch.
+    ///
+    /// Two further conditions are structure rather than style, and every projection of
+    /// this type already depends on them:
+    ///
+    /// - **The unchanged run between two consecutive changes is the same length on both
+    ///   sides**, and so is the run from the start of the file to the first change. Both
+    ///   [`crate::emit_patch`] and the row index measure that run as the *smaller* of the
+    ///   two gaps, which loses nothing only while they are equal. Unequal gaps drop their
+    ///   difference from the body, while a hunk header is recounted from the lines actually
+    ///   emitted — so the result is an internally consistent patch that omits content its
+    ///   own span claims to cover, which real `git apply` then rejects on a context
+    ///   mismatch and nothing in this crate notices.
+    /// - **Every range lies inside its own side's lines**: `removed` within
+    ///   [`Self::old_lines`], `added` within [`Self::new_lines`]. A line asked for past the
+    ///   end answers `None`, and the projections skip such a line rather than fail, which
+    ///   shortens the hunk by exactly as many lines as were out of range.
+    ///
+    /// All three — the order and non-overlap above included — are checked by
+    /// `debug_assert!`, so the producer of these values fails loudly in a debug build and
+    /// under `cargo test` instead of emitting a quietly wrong patch. A release build
+    /// compiles the check away and keeps the crate's existing behaviour: malformed input is
+    /// drawn short, never panicked on in front of a user.
+    ///
+    /// One run is deliberately left out: the trailing one, from the end of the last change
+    /// to the end of each side. It has the same shape, but a `TextDiff` is also built as a
+    /// container for one side's content alone, and refusing that is a wider precondition
+    /// than the projections need.
     pub fn new(old: Vec<DiffLine>, new: Vec<DiffLine>, changes: Vec<ChangedRange>) -> Self {
-        Self { old, new, changes }
+        let text = Self { old, new, changes };
+        #[cfg(debug_assertions)]
+        text.debug_assert_changes_are_well_formed();
+        text
+    }
+
+    /// The structural half of [`Self::new`]'s contract, checked where the producer of a
+    /// diff can see it fail. Gated on `debug_assertions` rather than left to the macro
+    /// alone so a release build walks no changes at all.
+    #[cfg(debug_assertions)]
+    fn debug_assert_changes_are_well_formed(&self) {
+        let old_len = u32::try_from(self.old.len()).unwrap_or(u32::MAX);
+        let new_len = u32::try_from(self.new.len()).unwrap_or(u32::MAX);
+        let mut old = 0u32;
+        let mut new = 0u32;
+        for (index, change) in self.changes.iter().enumerate() {
+            let removed_start = change.removed.start().index();
+            let added_start = change.added.start().index();
+            debug_assert!(
+                removed_start >= old && added_start >= new,
+                "change {index} starts at old {removed_start} / new {added_start}, behind the \
+                 old {old} / new {new} the change before it ended at: changes must be in \
+                 increasing order and must not overlap"
+            );
+            debug_assert_eq!(
+                removed_start - old,
+                added_start - new,
+                "change {index} follows an unchanged run of {} lines on the old side and {} on \
+                 the new one; a projection measures that run as the smaller of the two, so the \
+                 difference would be dropped from the body of a patch whose header still \
+                 claims it",
+                removed_start - old,
+                added_start - new
+            );
+            debug_assert!(
+                change.removed.end().index() <= old_len,
+                "change {index} removes lines up to {} of an old side that has {old_len}",
+                change.removed.end().index()
+            );
+            debug_assert!(
+                change.added.end().index() <= new_len,
+                "change {index} adds lines up to {} of a new side that has {new_len}",
+                change.added.end().index()
+            );
+            old = change.removed.end().index();
+            new = change.added.end().index();
+        }
     }
 
     pub fn old_lines(&self) -> &[DiffLine] {
@@ -397,6 +470,78 @@ mod tests {
             "a line past the end of the old side answered"
         );
         assert_eq!(text.new_content(), b"a\nB\nc\n");
+    }
+
+    fn lines(count: u32) -> Vec<DiffLine> {
+        (0..count)
+            .map(|n| DiffLine::terminated(format!("l{n}")))
+            .collect()
+    }
+
+    fn change(removed: (u32, u32), added: (u32, u32)) -> ChangedRange {
+        ChangedRange::new(
+            LineSpan::at(removed.0, removed.1),
+            LineSpan::at(added.0, added.1),
+        )
+    }
+
+    /// The shape every projection is written against: each change follows a run of
+    /// unchanged lines that is the same length on both sides, and no range reaches past its
+    /// own side. The passing twin of the three refusals below — without it they would stay
+    /// green against an assertion that fired on everything.
+    #[test]
+    fn a_well_formed_diff_with_several_changes_is_accepted() {
+        let text = TextDiff::new(
+            lines(10),
+            lines(11),
+            vec![
+                change((1, 1), (1, 2)),
+                change((4, 2), (5, 2)),
+                change((9, 1), (10, 1)),
+            ],
+        );
+        assert_eq!(text.changes().len(), 3);
+    }
+
+    /// The precondition the `min` in every projection quietly depends on. A run of three
+    /// unchanged lines on one side and two on the other is measured as two, so the third is
+    /// dropped from a patch body whose recounted header still claims it — and real
+    /// `git apply` rejects the result on a context mismatch.
+    ///
+    /// `cfg(debug_assertions)`, because that is where the check lives: a release build must
+    /// keep drawing a malformed diff short rather than panicking at a user.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "unchanged run of 3 lines on the old side and 2 on")]
+    fn an_unchanged_run_of_two_different_lengths_is_refused_in_a_debug_build() {
+        let _ = TextDiff::new(
+            lines(10),
+            lines(10),
+            vec![change((1, 1), (1, 1)), change((5, 1), (4, 1))],
+        );
+    }
+
+    /// The milder instance of the same defect: a line asked for past the end of its side
+    /// answers `None`, and every projection skips such a line rather than failing, which
+    /// shortens the hunk by exactly as much.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "removes lines up to 5 of an old side that has 2")]
+    fn a_change_reaching_past_the_end_of_its_side_is_refused_in_a_debug_build() {
+        let _ = TextDiff::new(lines(2), lines(2), vec![change((0, 5), (0, 5))]);
+    }
+
+    /// The order the doc comment has always promised, now said out loud where a producer
+    /// can hear it.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "behind the old 6 / new 6")]
+    fn changes_that_go_backwards_are_refused_in_a_debug_build() {
+        let _ = TextDiff::new(
+            lines(10),
+            lines(10),
+            vec![change((5, 1), (5, 1)), change((1, 1), (1, 1))],
+        );
     }
 
     #[test]

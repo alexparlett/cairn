@@ -30,6 +30,33 @@ built from. `split_lines` splits content the way git's own diff does, and
 `splitting_and_rejoining_returns_the_same_bytes` pins that a file survives the
 round trip, a missing final newline and a CRLF ending included.
 
+**What `TextDiff::new` requires of its producer is stated and checked**, because
+every projection already depends on it and none of them can see it broken.
+Changes arrive in increasing order and do not overlap; the unchanged run between
+two consecutive changes — and the run from the start of the file to the first
+change — is the same length on both sides; and every range lies inside its own
+side's lines. `emit_patch` and the row index each measure that run as the
+*smaller* of the two gaps, which loses nothing only while they are equal: unequal
+gaps drop their difference from the body while the hunk header is recounted from
+the lines actually emitted, so the result is an internally consistent patch that
+omits content its own span claims to cover — and real `git apply` is the first
+thing in the world to notice. All three conditions are `debug_assert!`ed, so a
+producer fails loudly under `cargo test` while a release build keeps the crate's
+existing behaviour: malformed input drawn short, never a panic in front of a user.
+`an_unchanged_run_of_two_different_lengths_is_refused_in_a_debug_build`,
+`a_change_reaching_past_the_end_of_its_side_is_refused_in_a_debug_build` and
+`changes_that_go_backwards_are_refused_in_a_debug_build` pin the three refusals,
+with `a_well_formed_diff_with_several_changes_is_accepted` as the passing twin
+that stops them holding against an assertion which fired on everything.
+
+**Residual, stated rather than implied:** the *trailing* run — from the end of the
+last change to the end of each side — is not asserted. It has the same defect
+shape, but a `TextDiff` is also legitimately built as a container for one side's
+content alone (`splitting_and_rejoining_returns_the_same_bytes` does exactly
+that), and refusing that shape was not part of the decision taken. Whether a
+producer's two sides end consistently with each other is a review obligation for
+the phase that builds the producer.
+
 Three things are projections of that answer and hold no state of their own:
 
 - **Hunks** (`Hunks::of(text, context)`), which group the changed ranges at a
@@ -84,11 +111,20 @@ with its i-th added line; when one side is shorter, the leftover rows are
 **Residuals, stated rather than implied, for the phases that draw this.** These are
 model-level pins and each has a hole a mutation walks through:
 
-- *`index_size` measures what was stored, not what was built.* It returns the index's
-  own entry count, so a projection that also materialised every row into a `Vec`
-  would keep every assertion above green. The `Copy` pin says a row owns nothing;
-  neither says the collection was not built. Criterion C9's headless count is what
-  decides it, and it belongs to the phase that draws the view.
+- *`index_size` measures what was stored; what a LOOKUP builds is measured separately,
+  and now pinned.* `index_size` returns the index's own entry count, so a projection
+  that also materialised every row into a `Vec` would keep every assertion above green —
+  the `Copy` pin says a row owns nothing, and neither says the collection was not built.
+  `crates/cairn-model/tests/diff_row_lookup.rs` closes that hole at this level: it counts
+  a single `row(k)` on a hundred-thousand-line diff under a counting global allocator
+  (`allocation-counter`, a dev-dependency of `cairn-model` alone, which carries the
+  `#[global_allocator]` itself and counts per thread) and requires zero allocations, for
+  both projections, with `the_counter_sees_an_allocation_when_there_is_one` as the pin
+  that the counter is still counting. The mutation it was written against — `row`
+  collecting every row and indexing the result — leaves every other model test green and
+  turns these two red. What no model-level count can see is how many rows the drawn
+  component asks for per frame: that is criterion C9's headless count, and it still
+  belongs to the phase that draws the view.
 - *The binary search is unpinned.* `row(i)` is cheap because the index is searched
   rather than scanned; rewriting that search as a linear scan gives identical
   answers and keeps every test green, while turning a handful of comparisons per row

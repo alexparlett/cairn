@@ -73,6 +73,9 @@ impl fmt::Debug for Patch {
 /// selected. A file whose change is not in its lines at all — a rename, a mode change, an
 /// empty file added or deleted — still gets its headers, because that is the whole change.
 pub fn emit_patch(file: &ChangedFile, text: &TextDiff, selection: &Selection) -> Patch {
+    if matches!(file.status, ChangeStatus::TypeChanged) {
+        return emit_type_change(file, text, selection);
+    }
     let (body, hunks_emitted) = emit_body(text, selection);
     let selectable = text
         .changes()
@@ -87,6 +90,79 @@ pub fn emit_patch(file: &ChangedFile, text: &TextDiff, selection: &Selection) ->
     write_headers(&mut out, file, whole, hunks_emitted > 0);
     out.extend_from_slice(&body);
     Patch(out)
+}
+
+/// A path that stopped being one kind of thing and became another, as **two** file patches
+/// at the same path: the old kind deleted, the new kind added.
+///
+/// That is what `git diff` writes and the only form `git apply` takes. One `diff --git`
+/// carrying `old mode`/`new mode` — which is what every other mode change is — is refused
+/// with "wrong type", because the preimage git would patch is not the kind the new mode
+/// names. Verified against `git apply --check --cached` in `cairn-git`'s C1 and C3 tests,
+/// forwards and in reverse.
+///
+/// A type change is all or nothing: half of a file becoming a symbolic link is not a state
+/// a repository can hold, and the second section would land on a path the first had left in
+/// place. A selection that does not hold every change therefore emits nothing, exactly as a
+/// selection that holds none of them does.
+fn emit_type_change(file: &ChangedFile, text: &TextDiff, selection: &Selection) -> Patch {
+    if !selection.holds_every_change(text) {
+        return Patch::empty();
+    }
+    let old_only = one_sided(text.old_lines().to_vec(), Vec::new());
+    let new_only = one_sided(Vec::new(), text.new_lines().to_vec());
+
+    let removal = ChangedFile {
+        status: ChangeStatus::Deleted,
+        old_path: file.old_path.clone(),
+        new_path: file.old_path.clone(),
+        old_mode: file.old_mode,
+        new_mode: None,
+        old_id: file.old_id,
+        new_id: None,
+    };
+    let addition = ChangedFile {
+        status: ChangeStatus::Added,
+        old_path: file.new_path.clone(),
+        new_path: file.new_path.clone(),
+        old_mode: None,
+        new_mode: file.new_mode,
+        old_id: None,
+        new_id: file.new_id,
+    };
+
+    let mut out = emit_patch(
+        &removal,
+        &old_only,
+        &Selection::with_every_change(&old_only),
+    )
+    .into_bytes();
+    out.extend_from_slice(
+        emit_patch(
+            &addition,
+            &new_only,
+            &Selection::with_every_change(&new_only),
+        )
+        .as_bytes(),
+    );
+    Patch(out)
+}
+
+/// One version of a file against nothing, as one change covering the whole of it. A side
+/// with no lines carries no change at all: an empty run says where it sits, and there is
+/// nowhere for it to sit.
+fn one_sided(old: Vec<DiffLine>, new: Vec<DiffLine>) -> TextDiff {
+    let old_len = u32::try_from(old.len()).unwrap_or(u32::MAX);
+    let new_len = u32::try_from(new.len()).unwrap_or(u32::MAX);
+    let changes = if old_len == 0 && new_len == 0 {
+        Vec::new()
+    } else {
+        vec![crate::ChangedRange::new(
+            LineSpan::at(0, old_len),
+            LineSpan::at(0, new_len),
+        )]
+    };
+    TextDiff::new(old, new, changes)
 }
 
 /// The hunks, and how many of them survived the selection.
@@ -312,6 +388,78 @@ fn write_path_line(out: &mut Vec<u8>, prefix: &str, path: &RepoPath) {
 mod tests {
     use super::*;
     use crate::{ChangedRange, FileMode, split_lines};
+
+    /// A path whose kind changed: three lines of text became a symbolic link.
+    fn type_changed() -> (ChangedFile, TextDiff) {
+        let file = ChangedFile {
+            status: ChangeStatus::TypeChanged,
+            old_path: RepoPath::from("t.txt"),
+            new_path: RepoPath::from("t.txt"),
+            old_mode: Some(FileMode::Regular),
+            new_mode: Some(FileMode::Symlink),
+            old_id: Oid::parse("4cb29ea1a2ca2d0e0b1e0d4e1ee4e2e2d1b0a9f8").ok(),
+            new_id: Oid::parse("aa1fcfd1e2c3b4a5968778695a4b3c2d1e0f9a8b").ok(),
+        };
+        let old = split_lines(b"one\ntwo\nthree\n");
+        let new = split_lines(b"other.txt");
+        let changes = vec![ChangedRange::new(LineSpan::at(0, 3), LineSpan::at(0, 1))];
+        (file, TextDiff::new(old, new, changes))
+    }
+
+    /// git writes a type change as TWO file patches at one path, and `git apply` refuses
+    /// anything else with "wrong type". Caught by: emitting one section with
+    /// `old mode`/`new mode`, which is what every other mode change is and what a real
+    /// `git apply --cached` rejects (pinned end to end by `cairn-git`'s C1 and C3).
+    #[test]
+    fn a_type_change_is_written_as_a_deletion_and_an_addition() {
+        let (file, text) = type_changed();
+        let patch = emit_patch(&file, &text, &Selection::with_every_change(&text));
+        assert_eq!(
+            patch.text(),
+            "diff --git a/t.txt b/t.txt\n\
+             deleted file mode 100644\n\
+             index 4cb29ea..0000000\n\
+             --- a/t.txt\n\
+             +++ /dev/null\n\
+             @@ -1,3 +0,0 @@\n\
+             -one\n\
+             -two\n\
+             -three\n\
+             diff --git a/t.txt b/t.txt\n\
+             new file mode 120000\n\
+             index 0000000..aa1fcfd\n\
+             --- /dev/null\n\
+             +++ b/t.txt\n\
+             @@ -0,0 +1 @@\n\
+             +other.txt\n\
+             \\ No newline at end of file\n"
+        );
+        assert!(
+            !patch.text().contains("old mode "),
+            "a type change must not be written as a mode change"
+        );
+    }
+
+    /// Half of a file becoming a symbolic link is not a state a repository can hold: the
+    /// second section would land on a path the first had left in place.
+    #[test]
+    fn a_type_change_that_is_not_wholly_selected_emits_nothing() {
+        let (file, text) = type_changed();
+        let mut partial = Selection::empty();
+        partial.select_removed(LineNumber::from_index(0));
+        assert!(
+            emit_patch(&file, &text, &partial).is_empty(),
+            "a partial type change was emitted"
+        );
+        assert!(
+            emit_patch(&file, &text, &Selection::empty()).is_empty(),
+            "an empty selection of a type change was emitted"
+        );
+        assert!(
+            !emit_patch(&file, &text, &Selection::with_every_change(&text)).is_empty(),
+            "the whole type change must still be emitted, or the refusals above prove nothing"
+        );
+    }
 
     fn modified(old: &[u8], new: &[u8], changes: Vec<ChangedRange>) -> (ChangedFile, TextDiff) {
         (

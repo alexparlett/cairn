@@ -3,18 +3,17 @@
 Intent, not as-built. Nothing here exists unless `docs/systems/` says so; the
 root `CLAUDE.md` status paragraph is the authority on what is built today.
 
-Assembled 2026-09-14 against Fork's own published feature list (the reference
-client, per `cairn.md`) plus what a git client needs that Fork does not
-advertise. ~69 items. The count is the least interesting thing about it — the
-useful structure is which few things everything else depends on, and which few
-can lose someone's work.
+Built against Fork's own published feature list (the reference client, per
+`cairn.md`) plus what a git client needs that Fork does not advertise. The useful
+structure is which few things everything else depends on, and which few can lose
+someone's work.
 
 ## How this is organised, and why not by menu
 
 Grouped by **risk**, because that is what Cairn's architecture is organised
 around: the `Confirmed` seal, `destructive-ops-reviewer`, and the `ops/`
 confinement all exist to serve the destructive tier. A menu-shaped list would
-scatter those fourteen items across every group and hide the thing that matters.
+scatter those items across every group and hide the thing that matters.
 
 **[D]** marks an operation that can lose work a user has not got another copy of.
 
@@ -24,8 +23,8 @@ Everything downstream consumes these. Getting one wrong is a rewrite, not a fix.
 
 | Feature | Note |
 | --- | --- |
-| Repository open / discovery | Minimal version is `history-graph` R5: a command-line argument. The manager shape is deliberately parked. |
-| History graph | `history-graph` packet. Incremental lane assignment (D4). |
+| Repository open / discovery | From a path on the command line, and from the repository manager, whose shape is deliberately parked (`cairn.md`, "Still open"). |
+| History graph | Incremental lane assignment (D4). |
 | Refs enumeration | Branches, remotes, tags, stashes. Feeds graph decoration, branch UI, and every ref operation. |
 | Working-tree status | Changed, staged, untracked, ignored, conflicted. The other half of what staging needs. |
 | **Diff model and rendering** | The single most load-bearing item after the graph — see below. |
@@ -119,7 +118,7 @@ reason it comes last here.
 
 | Feature | Note |
 | --- | --- |
-| Fetch | `credential-prompts` packet. |
+| Fetch | Prompts for credentials through Cairn's askpass helper (D2). |
 | Pull | Merge or rebase; the choice must be visible, not buried in config. |
 | Push | |
 | Force push **[D]** | `--force-with-lease` is the default; plain `--force` should be hard to reach. |
@@ -165,7 +164,7 @@ rather than a guessed URL and a 404.
 | Feature | Note |
 | --- | --- |
 | Preferences | |
-| Light / dark theme | Partly present. |
+| Light / dark theme | Dark-first; light needs its own diff palette (`ui.md`). |
 | Accelerator table | One logical-action-to-chord map (D5). Not per-component literals. |
 | Command palette | |
 | Open in terminal / editor | |
@@ -173,7 +172,7 @@ rather than a guessed URL and a 404.
 | Update mechanism | |
 | Accessibility | Keyboard reachability throughout; lane identity legible without colour. |
 | Error and notification surface | |
-| Operation log | Already implied by `ops::Performed` — it quotes the prompt the user accepted. Half the recovery story. |
+| Operation log | Fed by `ops::Performed` — it quotes the prompt the user accepted. Half the recovery story. |
 
 ## Recovery: two classes, two stories
 
@@ -192,19 +191,17 @@ recovery.** A confirmation dialog is the only barrier, which makes it a thin one
 The option worth considering for that second class: Cairn **auto-stashes before a
 destructive working-tree operation**, giving the one thing git itself does not — a
 way back from a discarded edit. It would be a genuine differentiator and it fits
-the `Confirmed` design rather than fighting it. Not decided; raised here so the
-staging packet meets it deliberately.
+the `Confirmed` design rather than fighting it. Not decided — open in `cairn.md`,
+"Still open".
 
 ## Explicitly out of scope
 
 Each with the reason, so the next person does not relitigate it.
 
-**Reviewed against real usage on 2026-09-14** and confirmed, with one change: the
-pull-request entry moved into scope as D9, because creating a PR turned out to be
-URL construction rather than API work, and one of the most-used commands in the
-reference client. Everything below survived that review. Treat the list as
-validated rather than asserted — reopening an entry wants new information, not a
-fresh opinion.
+**Reviewed against real usage.** Creating a pull request is not here: it is URL
+construction rather than API work, and one of the most-used commands in the
+reference client, so D9 puts it in scope. Treat the list as validated rather than
+asserted — reopening an entry wants new information, not a fresh opinion.
 
 | Not doing | Why |
 | --- | --- |
@@ -221,7 +218,6 @@ fresh opinion.
 
 Fork's tagline is "fast and friendly", and Cairn's competitive claim rests on the
 same ground. Choosing gitoxide (D1) does not deliver it; it only makes it
-possible. Every surface in Tier 0 and Tier 1 needs a stated, measured bar the way
-`history-graph`'s A7 does — against a named real repository, with the numbers
-recorded. An unmeasured performance claim decays silently, and the decay is
+possible. Every surface in Tier 0 and Tier 1 needs a stated, measured bar —
+against a named real repository, with the numbers recorded. An unmeasured performance claim decays silently, and the decay is
 invisible until a user with a big repository finds it.

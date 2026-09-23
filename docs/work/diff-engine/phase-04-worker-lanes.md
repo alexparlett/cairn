@@ -47,10 +47,11 @@ STEP 3  Validate: scripts/gate.sh. Then orchestrate this phase's QA in this
         (fresh); log dismissals with reasons in progress.md.
 STEP 4  Acceptance: C8 passes against its tests.
 STEP 5  Update state.md and progress.md. Update docs/systems/history-graph.md
-        where it describes one epoch counter and one worker per repository, the
-        D3 as-built paragraph in docs/design/cairn.md, and the worker bullet in
-        the root CLAUDE.md architecture section — all three describe the world
-        this phase changes. Save memory-worthy decisions.
+        where it describes one epoch counter and one worker per repository, and
+        the worker bullet in the root CLAUDE.md architecture section — both
+        describe the world this phase changes. D3 in docs/design/cairn.md is
+        intent and already states the lanes; it needs no edit unless this phase
+        changes the design. Save memory-worthy decisions.
 STEP 6  Branch authority follows the declared mode, as phase 01.
 STEP 7  Final response: what shipped, what is deferred, exact follow-ups.
 STOPPING RULES: stop and ask the user if the history session cannot stay on its

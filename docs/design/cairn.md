@@ -11,7 +11,7 @@ audience is the developer who reaches for Fork or Sourcetree not to avoid the
 command line but because a graph, a diff, and a staging area are genuinely better
 rendered than printed.
 
-Three things that has to mean in practice:
+Four things that has to mean in practice:
 
 1. **The history graph is readable at scale.** Not a list of commits with a
    decorative gutter — an actual graph that stays legible across a repository with
@@ -33,15 +33,13 @@ each deviation tied to a decision here — is `docs/design/ui.md`, with mockups 
 ## What Cairn is not
 
 - Not a git tutorial. It assumes the user knows what a rebase is.
-- Not a platform client — but see D9, which draws that line more precisely than
-  this bullet originally did. Reviewing pull requests, reading issues and showing
-  CI status stay out. *Opening* the right forge URL is in, and is not the same
-  thing at all.
+- Not a platform client. Reviewing pull requests, reading issues and showing CI
+  status stay out. *Opening* the right forge URL is in, and is not the same thing
+  at all — D9 draws the line.
 - Not cross-platform-first. Linux is the target; macOS follows where Freya makes
   it free. Windows is not a goal and no design should be compromised for it.
 - Not an editor. Diffs are read-only, and conflict resolution is *structured*
-  rather than free-text — see D6, which revised this bullet's original claim that
-  conflicts would simply open the user's editor.
+  rather than free-text (D6).
 
 ## The bets
 
@@ -51,9 +49,8 @@ holds up as the UI grows. The cost is maturity — Freya 0.5 is a release candid
 whose API replaced the previous one wholesale. Accepted deliberately: the
 alternative toolkits either bring a browser or bring C++.
 
-**gitoxide for reads, the `git` binary for writes.** Locked 2026-09-14 (see
-Decisions). gitoxide is a pure-Rust engine whose performance work aims squarely
-at large repositories, which is the case a GUI lives or dies on — and reads are
+**gitoxide for reads, the `git` binary for writes.** Decision D1. gitoxide is a
+pure-Rust engine whose performance work aims squarely at large repositories, which is the case a GUI lives or dies on — and reads are
 what a GUI does constantly. Writes go to `git` itself, because a mutation must
 run the user's hooks, filters and credential helpers, and honour their config;
 those are exactly the places where a reimplementation corrupts a repository
@@ -64,8 +61,8 @@ defends the seam and not the backend choice.
 
 **Speed is a claim, so it gets measured.** Choosing gitoxide does not deliver
 speed; it makes it possible. Every read surface carries a stated bar against a
-named real repository, the way `history-graph`'s A7 does. An unmeasured
-performance claim decays invisibly until someone with a big repository finds it.
+named real repository, with the numbers recorded — `docs/systems/history-graph.md`
+shows the shape. An unmeasured performance claim decays invisibly until someone with a big repository finds it.
 
 **The confirmation token as a type, not a convention.** `cairn_model::Confirmed`
 exists because "remember to ask first" is exactly the kind of rule that holds for
@@ -76,9 +73,9 @@ guarantees a prompt happened, not that the prompt was true — which is why
 
 ## Decisions
 
-Locked 2026-09-14 with the user. Each states the rule, the reason it beat the
-alternative, and the cost accepted. Evidence for the two that needed it is in
-`docs/research/`.
+Locked with the user. Each states the rule, the reason it beat the alternative,
+and the cost accepted. Evidence, where a decision needed it, is in
+`docs/research/`; how each is built today is in `docs/systems/`.
 
 ### D1 — gitoxide reads, `git` subprocess writes
 
@@ -90,9 +87,9 @@ The deciding argument is hooks, not coverage. A client that does not run
 neither. The same reasoning covers clean/smudge filters (so Git LFS works),
 `core.fsmonitor`, sparse checkout, submodule recursion, and index locking.
 
-Coverage is a second, independent reason. Verified against the linked gix 0.87.1
-source — method and queries in
-`docs/research/backend-split/gix-write-path-coverage.md`: gix has commit creation, real three-way tree merge (`merge_trees`,
+Coverage is a second, independent reason. Verified against gix source — method
+and queries in `docs/research/backend-split/gix-write-path-coverage.md`: gix has
+commit creation, real three-way tree merge (`merge_trees`,
 `merge_commits`, `virtual_merge_base`), merge bases, tag, `delete_local_branches`,
 index read and write, blame, status, dirwalk and fetch. It has no push — the
 `gix::push` module is only `push.default` config parsing — no branch-switch
@@ -106,13 +103,11 @@ locate `git` and check its version at startup, and fail loudly rather than
 degrade silently.
 
 Consequence worth naming: this narrows the gitoxide bet to reads, where gitoxide
-is strongest, and removes the need for the backend spike this document previously
-carried as an open question.
+is strongest, so no backend spike is needed to validate it.
 
-**The cost this decision creates, which the first draft understated.** Two
-implementations of git semantics now live in one application, and they can
-disagree. Three specific obligations follow, and they are requirements rather
-than observations:
+**The cost this decision creates.** Two implementations of git semantics live in
+one application, and they can disagree. Three specific obligations follow, and
+they are requirements rather than observations:
 
 1. **Cache coherence is part of every mutation.** After a `git` subprocess writes,
    the gix handle may hold a stale index, stale refs or stale packs. Every
@@ -129,36 +124,28 @@ than observations:
    The failure mode is that Cairn shows one answer and the user's next `git`
    command acts on another.
 
-None of this reopens D1. It means the seam owes a cache-invalidation contract,
-which the `git` backend wrote down first: the `ops` module docs in
-`crates/cairn-git/src/ops/mod.rs` (`Invalidated`, per flag, checked against
-the linked gix), summarised in `docs/systems/credentials.md`.
+None of this reopens D1. It means the seam owes a cache-invalidation contract:
+every operation in `ops/` reports what it invalidated (`Invalidated`, per flag,
+on its `Performed`), documented in `crates/cairn-git/src/ops/mod.rs`.
 
-**Amended by the `diff-engine` packet (its brainstorm L6). Decided, not yet
-built.** The amendment: converting a working-tree file to git's form, which any
-diff of uncommitted work needs, will run the clean filter driver that the path's
-attributes name and the user's config defines — git-lfs, git-crypt, nbstripout —
-through gix, exactly as `git diff` does. So a read still never runs `git`, but one
-read can start a process, and D1's "never on a read path" means the CLI rather
-than every process. Refusing to run the driver would show those users a diff
-`git diff` does not, and would hand the staging packet a patch built from content
-their filter exists to change.
+**A working-tree read runs the user's clean filter driver.** Converting a
+working-tree file to git's form, which any diff of uncommitted work needs, runs
+the clean filter driver that the path's attributes name and the user's config
+defines — git-lfs, git-crypt, nbstripout — through gix, exactly as `git diff`
+does. So a read never runs `git`, but one read can start a process: D1's "never
+on a read path" means the CLI, not every process. Refusing to run the driver would
+show those users a diff `git diff` does not, and would hand staging a patch built
+from content their filter exists to change.
 
 This answers the **clean** half of obligation 2 above and not the smudge half:
-the packet reads everything in git's form, so an LFS-tracked file in a commit
-diff still shows as its pointer, modelled as a state to display rather than as
-content (`docs/prd/diff-engine.md` R1.2).
+reads see everything in git's form, so an LFS-tracked file in a commit diff shows
+as its pointer, modelled as a state to display rather than as content.
 
 Three residuals of running someone else's program are stated rather than implied.
 The driver runs with Cairn's own inherited environment plus the repository's
 paths, because gix builds that process and not `ops::GitEnvironment`. Its stderr
 is Cairn's, inherited. And `textconv` never runs on a read, so a file with a
-textconv driver shows as binary where `git diff` shows text.
-
-Until the packet's phase 03 lands, the root `CLAUDE.md` sentence "reads never
-spawn a process" is the one that describes the code, and that phase changes both
-halves in the same commit (`docs/prd/diff-engine.md` C15). Spec:
-`docs/prd/diff-engine.md` R3; evidence:
+textconv driver shows as binary where `git diff` shows text. Evidence:
 `docs/research/diff-engine/gix-diff-api.md`.
 
 ### D2 — Credentials are delegated to git entirely
@@ -176,62 +163,51 @@ git falling back to a tty. So Cairn ships a small askpass helper binary that
 round-trips the prompt to the running UI, and sets `SSH_ASKPASS` with
 `SSH_ASKPASS_REQUIRE=force` for key passphrases.
 
-This makes "Cairn never handles a secret" nearly literal: the value exists only
-inside the helper process and on git's stdin, never in application state.
-Packet: `docs/prd/credential-prompts.md` (shipped, frozen).
+This makes "Cairn never handles a secret" nearly literal: the value exists
+inside the helper process and on git's stdin, and passes through the application
+exactly once — the dialog hands it to a worker thread, which writes it to the
+helper's socket and drops it. It is never application state; the `Secret` type and
+its guard are what keep that passage from becoming state. The environment roster,
+the threat model and what a cancel can leave: `docs/systems/credentials.md`.
 
-As built by the `credential-prompts` packet: the backend, the helper, its
-channel and fetch exist as described, with one refinement — the secret does
-pass through the application once, as a value the dialog hands the worker
-thread, which writes it to the helper's socket and drops it; the guard
-`no_credential_value_is_logged_printed_serialised_or_stored` is what keeps
-that passage from becoming state. Everything else — the environment roster,
-the threat model, what a cancel can leave — is in `docs/systems/credentials.md`.
-
-**Cairn's helper is the askpass while Cairn runs git** (decided 2026-09-17,
-issue #22). A user who has set `GIT_ASKPASS`, `SSH_ASKPASS` or `core.askPass`
-for something else finds it replaced by Cairn's helper for the duration of a
-Cairn-run `git`: the environment is built, never inherited (L5), and a prompt
-must reach the running window rather than a program with no window to reach.
-This is a decision, not collateral. What it does not touch: `credential.helper`
-and the ssh-agent, which git consults before it ever asks (L7), so a setup that
-answers without prompting keeps answering. Rejected for now: honouring the
+**Cairn's helper is the askpass while Cairn runs git.** A user who has set
+`GIT_ASKPASS`, `SSH_ASKPASS` or `core.askPass` for something else finds it
+replaced by Cairn's helper for the duration of a Cairn-run `git`: the environment
+is built, never inherited, and a prompt must reach the running window rather than
+a program with no window to reach. This is a decision, not collateral. What it
+does not touch: `credential.helper` and the ssh-agent, which git consults before
+it ever asks, so a setup that answers without prompting keeps answering. Rejected: honouring the
 user's askpass over Cairn's dialog, because a program chosen for a terminal
 may itself expect one, and a fetch that hangs on it is the failure this whole
 decision exists to prevent. The way back in, when someone needs it, is an
 "auth provider" setting that lets the user pick their own askpass program over
 Cairn's dialog explicitly — issue #22 holds that setting.
 
-### D3 — A worker pool per repository, not a thread per repository
+### D3 — A few routed worker threads per repository, not a thread per repository
 
 `gix::Repository` is not `Send`; gitoxide's model is a `ThreadSafeRepository`
 (shared object database and pack indices) that each thread converts with
 `.to_thread_local()` to get its own caches. So Cairn holds one
-`ThreadSafeRepository` per open repository and a small pool of worker threads,
+`ThreadSafeRepository` per open repository and a small number of worker threads,
 each taking a thread-local handle once. Cache reuse where it is expensive,
 no contention where it is not — the shape gitoxide was designed around.
 
-Every request carries an epoch so a superseded query can be abandoned rather than
-rendered. That is the part that is painful to retrofit, and it is what
-`responsiveness-reviewer`'s cancellation check exists to protect.
+Work is routed to a thread by an explicit table, not handed to whichever thread is
+free, because some work is pinned: a scroll keeps one gitoxide walk alive, that
+walk borrows the repository and is not `Send`, so every page of it runs on the
+thread that owns the handle. History has its thread; diffs — commit, comparison
+and working-tree — have another, so a long history page never queues a diff
+behind it.
 
-As built by the `history-graph` packet, the pool is **one** worker per
-repository (`WORKERS_PER_REPOSITORY`, with a `const` assertion that fails the
-build if it is raised). The reason is structural rather than a throughput
-finding: a scroll keeps one gitoxide walk alive, that walk borrows the
-repository and is not `Send`, so it lives on the thread that owns the handle.
-The epoch also turned out to be the cancel signal itself, not just a discard
-filter — superseding a request stops its walk. Measurement and the rest of the
-as-built: `docs/systems/history-graph.md`.
-
-Planned by the `diff-engine` packet (its brainstorm L8), not yet built: an epoch
-**per lane** rather than one counter, and a second thread per repository for
-diffs. One counter means any query cancels any other, which is right while the
-only query is a history page and wrong the moment a selection and a scroll
-compete. The lanes are history, changes and file diff; a changes query also
-supersedes the file-diff lane, and nothing else crosses. `WORKERS_PER_REPOSITORY`
-gives way to an explicit routing table from lane to thread, which is the routing
-decision its assertion asks for. Spec: `docs/prd/diff-engine.md` R4.
+Every query belongs to a **lane** — history, changes, file diff — and carries an
+epoch numbered per lane, so a superseded query is abandoned rather than rendered.
+A new query supersedes older ones in its own lane only, except that a changes
+query also supersedes the file-diff lane; nothing else crosses. One counter for
+everything would let a scroll cancel a selection. The epoch is the cancel signal
+itself, not just a discard filter: superseding a query stops its walk. That is
+the part that is painful to retrofit, and it is what `responsiveness-reviewer`'s
+cancellation check exists to protect. An operation such as fetch carries no
+epoch; it is cancelled by killing its process.
 
 ### D4 — Graph lanes are assigned incrementally, in the engine
 
@@ -246,27 +222,22 @@ lanes rather than to history length, and — because the walk is newest-first �
 appending more commits never renumbers a lane already emitted. That stability is
 what lets rows stream into a virtualised list.
 
-The `history-graph` packet narrowed the middle clause in practice: the assigner
-owns a bounded window of rows so that a line to a late-arriving parent has
-something to repaint, which makes retained state proportional to that window
-times the lanes across it. Measurement put the real cost far below what the
-packet first feared, and lane *width* on real repositories at single digits.
-Spec: `docs/prd/history-graph.md` R1 (shipped, frozen). Evidence:
-`docs/research/history-graph/scroll-memory-model.md`. As built:
-`docs/systems/history-graph.md`.
+Precisely: the assigner owns a bounded window of rows so that a line to a
+late-arriving parent has something to repaint, which makes retained state
+proportional to that window times the lanes across it — and lane *width* on real
+repositories is single digits. Evidence:
+`docs/research/history-graph/scroll-memory-model.md`.
 
 It belongs in `cairn-git`, not `cairn-ui`: the lane is part of the answer, so it
 is `cairn-model` vocabulary. A component that computed lanes would need the whole
 history in memory, which is the failure this design exists to avoid.
 
-Open sub-problem carried into the packet, not hand-waved: gix offers no
-`--topo-order` equivalent. `Sorting` is `BreadthFirst`, `ByCommitTime` or
-`ByCommitTimeCutoff`, and commit-time order can emit a parent before its child
-under clock skew, which is common in rebased and imported history. The assigner
-must therefore be correct under out-of-order arrival rather than assume the walk
-guarantees child-before-parent. Evidence and the candidate approaches:
-`docs/research/history-graph/gix-revwalk-ordering.md`. Packet:
-`docs/prd/history-graph.md`.
+gix offers no `--topo-order` equivalent. `Sorting` is `BreadthFirst`,
+`ByCommitTime` or `ByCommitTimeCutoff`, and commit-time order can emit a parent
+before its child under clock skew, which is common in rebased and imported
+history. The assigner is therefore correct under out-of-order arrival rather than
+assuming the walk guarantees child-before-parent; the window above is what lets
+it repaint. Evidence: `docs/research/history-graph/gix-revwalk-ordering.md`.
 
 ### D5 — macOS is deferred, with two disciplines kept now
 
@@ -287,9 +258,8 @@ anything.
 A three-way view with per-region *take ours / take theirs / take both*, plus "open
 in your editor" as the escape hatch for the messy remainder.
 
-This revises the spine's original position, which said conflict resolution would
-simply open the user's editor. Fork headlines a built-in resolver, and delegating
-is materially worse at the single most painful moment in git. The distinction that
+Rejected: simply opening the user's editor. Fork headlines a built-in resolver,
+and delegating is materially worse at the single most painful moment in git. The distinction that
 makes this compatible with "not an editor": **structured resolution picks between
 existing alternatives; an editor accepts arbitrary text.** Cairn does the first and
 hands off the second.
@@ -311,7 +281,7 @@ conflict resolution, submodules, LFS. Those are the second lap.
 
 Rejected: a read-only explorer first — it ships sooner and would validate the
 gitoxide read bet with real numbers, but it replaces nothing, and the read bet
-gets validated by the graph packet anyway. Also rejected: read plus commit with no
+gets validated by the history graph anyway. Also rejected: read plus commit with no
 remote, which defers the credential work into a milestone that still sends you
 back to Fork daily.
 
@@ -344,11 +314,9 @@ keep in sync, and nothing to get out of date.
 Out: reviewing pull requests, reading or filing issues, CI status, and creating
 repositories on a platform.
 
-This revises the spine's original "not a platform client" bullet, which lumped the
-two together and said a half-implemented GitHub panel is worse than a link. That
-was right about panels and wrong about links. The correction came from the user
-reporting that "create pull request on origin" is one of their most-used Fork
-context-menu commands — which also means D7's milestone cannot be met without it.
+A half-implemented forge panel is worse than no panel, but a link is not a panel.
+"Create pull request on origin" is one of the user's most-used Fork context-menu
+commands — which also means D7's milestone cannot be met without it.
 
 **CI status deserves its own reason for staying out**, because it is the most
 tempting thing on the far side of the line: it needs a per-forge API token, which
@@ -365,21 +333,18 @@ URL and a 404.
 
 - **Repository manager shape.** Tabs, a sidebar of repositories, or separate
   windows. Decides how much state is per-repository versus global, so it wants
-  answering before the worker pool in D3 has more than one consumer. The
-  `diff-engine` packet adds the second consumer and keeps it per-repository (a
-  diff thread per open repository) with its view settings app-wide, which fits
-  all three shapes; it does not answer the question.
+  answering before more of D3's state is shared across repositories. Worker
+  threads per repository with view settings app-wide fit all three shapes; that
+  constrains the answer without giving it.
 - **Interactive rebase.** The operation Fork is most valued for and the one with
   the largest UI surface. Its own program, not a packet.
 - **Whether Cairn auto-stashes before destructive working-tree operations.** The
   reflog covers destroyed *commits*; nothing covers a discarded uncommitted edit,
   so for that class a confirmation dialog is the only barrier there is. An
   automatic stash would be a real differentiator and fits the `Confirmed` design.
-  The staging packet must meet this deliberately rather than inherit it.
+  It must be decided before any discard operation ships, not inherited.
   Background: `docs/design/feature-inventory.md`, "Recovery".
-- **How diffs are rendered.** Partly answered: the `diff-engine` packet locks
-  word-level intra-line highlighting (token granularity, always on), unified by
-  default with side-by-side as one shared setting, and Fork's context controls —
-  `docs/prd/diff-engine.md` R6. Still open: syntax highlighting, and whether the
-  diff view and a future conflict view share a component.
+- **Syntax highlighting in diffs**, and whether the diff view and a future
+  conflict view share a component. The rest of how a diff renders is in
+  `docs/design/ui.md`, "The detail pane and the diff".
 - **Freya's menu bar story on both platforms** (see D5).

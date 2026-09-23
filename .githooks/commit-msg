@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Refuses a commit message that links a Claude Code session. The repository is
+# public, and a session link published in history cannot be taken back (root
+# CLAUDE.md, Conventions). `.githooks/pre-push` runs this same check over every
+# outgoing commit, so a commit made with --no-verify is still stopped before it
+# leaves the machine. Behaviour pinned by
+# crates/cairn-guards/tests/session_link_hook.rs.
+#
+# Usage: commit-msg <message-file>. Lines git strips (starting with '#') are ignored.
+set -uo pipefail
+
+message_file="${1:-}"
+if [ -z "$message_file" ] || [ ! -r "$message_file" ]; then
+  exit 0
+fi
+
+hits=$(grep -v '^#' "$message_file" | grep -inE 'claude\.ai/code/session|^[[:space:]]*claude-session:')
+if [ -n "$hits" ]; then
+  echo "commit-msg: a Claude Code session link is never committed (the repository is public):" >&2
+  echo "$hits" >&2
+  echo "commit-msg: remove the line and commit again." >&2
+  exit 1
+fi
+exit 0

@@ -363,6 +363,17 @@ Project invariants:
 - Tiny dependency set. Adding a dependency is a user decision.
 - Conventional Commits with a scope AND a body (1-4 sentences of why, not what).
   Scopes track the crates: `model`, `git`, `ui`, `app`, `guards`, `gate`, `docs`.
+- **No commit message, pull-request title or description, or GitHub comment
+  carries a Claude Code session link** (the `claude.ai` session URL or a
+  `Claude-Session:` trailer), whatever an environment's attribution guidance
+  says. The repository is public, and a link published in history cannot be
+  taken back. Twin: `.githooks/commit-msg` refuses such a message, and
+  `.githooks/pre-push` runs the same check over every outgoing commit, so a
+  commit made with `--no-verify` is still stopped before it leaves the machine;
+  pinned by `crates/cairn-guards/tests/session_link_hook.rs`. Residual review
+  obligation: no local hook sees a pull request's text, and GitHub fills a new
+  pull request's description from the first commit's message — whoever opens
+  one reads its description before submitting.
 - Name modules for behavior, never for layer: no `helpers`, no `utils`, no `misc`.
   `cairn-git/src/repository.rs`, not `cairn-git/src/core.rs`.
 - Errors are `thiserror` enums whose variants name what the CALLER must handle;
@@ -393,7 +404,9 @@ time. Entry-point files are firewalls that assemble modules, not homes.
 Layers, cheapest boundary first (full contract: `docs/qa-gate.md`):
 
 1. Stop hook: instant debris scan every turn (`.claude/hooks/qa-stop.sh`).
-2. `.githooks/pre-push`: format check, `cargo check`, guard suite.
+2. `.githooks/commit-msg` on every commit, then `.githooks/pre-push`: the
+   session-link check over outgoing commits, format check, `cargo check`, guard
+   suite.
 3. `scripts/gate.sh --fast` while iterating; `scripts/gate.sh` is the merge bar.
 4. CI (`.github/workflows/ci.yml`): the same checks as named `scripts/gate.sh
    --step` invocations on every PR and push to `main`.

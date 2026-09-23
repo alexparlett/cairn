@@ -13,8 +13,9 @@ all consume it.
 
 And the trap: a diff model built for display makes line-level staging impossible
 without a rewrite. Staging one line means *constructing a patch* and handing it to
-`git apply --cached`, which is what `git add -p` does internally. So the model is
-patch-capable from the start.
+`git apply --cached`, which is what `git add -p` does internally. Fork headlines
+line-by-line staging, and it is the feature that most demands the foundation be
+right the first time, so the model is patch-capable from the start.
 
 ## The model holds one exact answer
 
@@ -33,7 +34,8 @@ the view shows, and the same patch in reverse removes exactly the selection.
 What a user stages is the exact diff, never the displayed one. Ignoring
 whitespace produces a second set of ranges for display only, which the emitter
 cannot reach by construction. Display context, expansion and side-by-side change
-what is drawn and never what the emitter reads.
+what is drawn and never what the emitter reads. Hidden changes are announced:
+with whitespace ignored, the view says that some changes are hidden.
 
 A file that is not diffed as text carries its state instead of lines — binary
 with both sizes, too large with the limit it crossed, a Git LFS pointer, a
@@ -76,7 +78,8 @@ shows, filters included (`engine.md`, "Reads see git's form"). Spec:
   file and side-by-side. Context starts at three lines and moves one line per
   click, never below one.
 - A hunk header is git's `@@` line in muted text at normal row height, with no
-  band and no buttons.
+  band and no buttons; staging acts on a selection, not on the header
+  (`ui.md`, "Staging gestures").
 - Intra-line highlighting is word-level (token granularity) and always on.
 - Colours are **solid tints**, starting from Fork's measured dark values and
   retuned to Cairn's palette; intra-line ranges take stronger tints, and the tint

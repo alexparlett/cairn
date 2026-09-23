@@ -143,7 +143,7 @@ One mechanism, several commands, no API token and no network call from Cairn
 | Feature | Note |
 | --- | --- |
 | Preferences | |
-| Light / dark theme | Dark-first; light needs its own diff palette (`ui.md`). |
+| Light / dark theme | `ui.md`, "Palette and type". |
 | Accelerator table | One logical-action-to-chord map, not per-component literals (`platform.md`). |
 | Command palette | |
 | Open in terminal / editor | |
@@ -183,7 +183,7 @@ URL construction, not API work, and it is in scope (Tier 6½).
 | Not doing | Why |
 | --- | --- |
 | *Reviewing* pull requests, reading or filing issues | Panels need an API token and go stale (`forge-links.md`). |
-| CI status | It needs a per-forge API token, which would make Cairn a credential holder — inconsistent with `credentials.md`, not merely expensive. |
+| CI status | It needs a per-forge API token, which would make Cairn a credential holder (`forge-links.md`). |
 | Creating / deleting repositories on a platform | Fork does this. Genuinely API work (`forge-links.md`). |
 | Being a text editor | Conflict resolution stays *structured* precisely to stay on this side of the line (`conflicts.md`). |
 | Git-flow | Fork has it. A lot of UI for a convention that has fallen out of fashion. |

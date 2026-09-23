@@ -84,8 +84,8 @@ back to Fork daily. The build order is `docs/work/daily-loop/roadmap.md`.
 | `ui.md` | The layout, kept from Fork, and every deviation from it |
 | `feature-inventory.md` | The whole feature surface, tiered by risk, and what is out of scope |
 
-**Decision index.** Other documents cite the locked decisions by number; each
-lives in the document that designs it.
+**Decision index.** The decisions locked with the user, which other documents
+cite by number; each lives in the document that designs it.
 
 | Id | Decision | Document |
 | --- | --- | --- |

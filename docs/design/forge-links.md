@@ -25,7 +25,8 @@ together with push, and the first milestone cannot be met without it.
 
 CI status stays out for its own reason, because it is the most tempting thing on
 the far side of the line: it needs a per-forge API token, which would make Cairn a
-credential holder, and `credentials.md` rests on Cairn never being one.
+credential holder, and `credentials.md` rests on Cairn never being one. So "the
+pull-request link worked out fine" is not an argument for it.
 
 ## Where they appear
 

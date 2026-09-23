@@ -4,7 +4,7 @@ How Cairn asks a user for a secret today, and what it does not do. As-built:
 everything here is code that exists, with the test that pins each behaviour
 named beside it. The commitment it was built against is
 `docs/prd/credential-prompts.md` (shipped, frozen); the decisions are D1 and D2
-in `docs/design/cairn.md` and the packet's locked decisions L1-L11, kept under
+in `docs/design/engine.md` and `docs/design/credentials.md` and the packet's locked decisions L1-L11, kept under
 "Decisions the packet locked" below now that its work directory is gone; the
 evidence is `docs/research/credential-prompts/git-credential-delegation.md`,
 whose 2026-09-17 addenda settle the two questions the design left open (O4,

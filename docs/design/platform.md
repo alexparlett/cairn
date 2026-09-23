@@ -6,7 +6,8 @@ Intent, not as-built. Spine: `docs/design/cairn.md`, where this is decision
 ## Linux first, macOS where it is cheap
 
 Linux is the target. macOS follows where Freya makes it cheap, and no Linux
-design is compromised for it. Windows is not a goal.
+design is compromised for it. Windows is not a goal, and no design is compromised
+for it either.
 
 Two disciplines keep macOS reachable at near-zero cost:
 
@@ -21,12 +22,12 @@ Credentials raise no platform question, because git's helpers hold them
 ## The toolkit
 
 The interface is Freya: a Rust-native, Skia-backed, declarative toolkit, with no
-web runtime and no FFI layer between the view and the data. The cost is maturity
+web runtime, no FFI layer between the view and the data, and a component model
+that holds up as the UI grows. The cost is maturity
 — Freya 0.5 is a release candidate whose API replaced the previous one wholesale.
 Accepted deliberately: the alternatives either bring a browser or bring C++.
 
-On Linux the chrome is native: no traffic lights, client-side decorations with
-the controls at the right, keyboard-first throughout (`ui.md`).
+The chrome is Linux-native (`ui.md`).
 
 ## Open
 

@@ -45,5 +45,4 @@ commit's header. That is the part that is painful to retrofit, and what
 
 An operation such as fetch carries no epoch, so a scroll and a fetch cannot
 supersede each other; an operation is cancelled by killing its process. When it
-finishes, what it reports invalidated (`engine.md`) is applied before the next
-answer is drawn. Spec: `docs/prd/diff-engine.md` R4.
+finishes, the worker acts on what it reports invalidated (`engine.md`). Spec: `docs/prd/diff-engine.md` R4.

@@ -4,8 +4,8 @@ Intent, not as-built. The mockups are `docs/design/mockups/cairn-ui.html` — fi
 screens, example data, dark-first because the application is. Where a mockup and
 a design document differ, the document is the design: the detail pane and the
 diff view in particular are designed in `diff.md`, and the mockup's fixed-height
-pane, tab count, `+N` file counts, banded hunk header and checkbox column are not
-part of it.
+pane, tab count, `+N` file counts, banded hunk header with buttons, checkbox
+column and transparent diff washes are not part of it.
 
 Modelled on Fork, deliberately: it is the client the user reaches for, and its
 layout is the thing worth keeping. What changes is driven by the design, not by
@@ -43,8 +43,8 @@ Kept, and why:
 
 | Change | Driven by |
 | --- | --- |
-| The destructive-operation dialog says what is lost, how much, and whether it is recoverable — in that order — and its text IS the `Confirmed` prompt. Fork's dialogs are generic. | `cairn.md`, what Cairn is; `engine.md`, the confirmation seal |
-| An **operation log** drawer, quoting the prompt the user acknowledged for each destructive operation. Fork has nothing like it. | `engine.md`, the confirmation seal |
+| The destructive-operation dialog says what is lost, how much, and whether it is recoverable — in that order — and its text IS the `Confirmed` prompt. Fork's dialogs are generic. | `cairn.md`, what Cairn is; `engine.md`, "The confirmation seal" |
+| An **operation log** drawer, quoting the prompt the user acknowledged for each destructive operation. Fork has nothing like it. | `engine.md`, "The confirmation seal" |
 | The discard dialog offers **stash first** as an option — surfacing the open auto-stash question as UI rather than deciding it silently. | `cairn.md`, "Still open" |
 | **Worktrees are a sidebar section**, and a branch checked out in another worktree carries a chip and a disabled checkout. Fork has no worktree UI. | `worktrees.md` |
 | Branch and commit context menus carry **forge links**: create pull request, open on the forge, copy permalink. After a push, the toast offers *Create pull request* directly. | `forge-links.md` |
@@ -61,9 +61,11 @@ Stage and Discard over it; a drag-selection narrows them to the selected lines;
 there is no checkbox column and no button on the `@@` row; and Discard appears on
 unstaged chunks only, because Fork refuses to discard staged changes at all
 (`docs/research/diff-engine/fork-detail-and-diff-ui.md`). The mockup instead shows
-hunk-header actions with a line-selection gutter. Which of the two Cairn uses is
-open (below); either way a gesture produces a selection, and the patch is built
-from the exact diff, never the displayed one (`diff.md`).
+actions on the hunk header with a line-selection gutter, which the diff view's
+button-free hunk header (`diff.md`) rules out as drawn; a selection gutter without
+header buttons remains a candidate. Which gesture Cairn uses is open (below);
+either way a gesture produces a selection, and the patch is built from the exact
+diff, never the displayed one (`diff.md`).
 
 ## Palette and type
 
@@ -80,7 +82,7 @@ family, so the UI and its data read as one instrument. `tabular-nums` wherever
 digits align.
 
 A light theme is a real obligation, not a toggle: a diff palette that works on a
-dark ground does not survive inversion, so it needs its own design (below).
+dark ground does not survive inversion, so it needs its own design (Open, below).
 
 ## The screens
 
@@ -100,7 +102,5 @@ dark ground does not survive inversion, so it needs its own design (below).
 ## Open
 
 - The staging gesture: Fork's hover outline with floating Stage and Discard, or
-  hunk-header actions with a selection gutter. Decided before hunk staging is
-  built.
+  a line-selection gutter. Decided before hunk staging is built.
 - A light theme, with its own diff palette.
-- The menu bar on both platforms (`platform.md`).

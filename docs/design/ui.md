@@ -58,7 +58,7 @@ Kept, and why:
 | **Conflict resolution is three-way and region-level**: ours / result / theirs, with *use ours / use theirs / use both* per conflict region, and *edit in your editor* as the escape hatch. Fork resolves per file and opens a resolver for the rest. | D6 |
 | The toolbar drops Fork's Appearance / Workspace / Feedback and adds *Open in terminal / editor* and a command palette. | Tier 7 of the inventory |
 | No Accounts section in any sidebar. | D2 — Cairn holds no credentials |
-| A visible **loading state** distinct from an empty repository. | D3 — a query is never assumed fast |
+| A visible **loading state** distinct from an empty repository. | D3 — every query is assumed slow |
 | Linux-native chrome: no traffic lights, client-side decorations with controls at the right, keyboard-first throughout. | D5 |
 
 ## Palette and type
@@ -105,8 +105,8 @@ mockup is superseded — it shows a fixed-height pane, a count on a tab, `+N` fi
 counts, a banded hunk header with buttons and a checkbox column, none of which
 survive.
 
-- **The pane** sits below the commit list behind a draggable splitter and
-  collapses, as both of Fork's builds do by default. Putting it to the right is a
+- **The pane** sits below the commit list by default, as in both of Fork's
+  builds, behind a draggable splitter, and collapses. Putting it to the right is a
   user preference (issue #30, which needs somewhere to keep preferences, issue
   #29), so the pane's components never assume their width. Two tabs: Commit, the
   default, and Changes; the last one used is kept for the session.

@@ -110,7 +110,7 @@ Living docs are updated in the change that makes them true or false, never later
 | --- | --- |
 | 01 | create `docs/systems/diff.md` describing the model as built; add its row to `docs/systems/README.md`; update the `cairn-model` row in the root `CLAUDE.md` repo map |
 | 02-03 | extend `docs/systems/diff.md` with the engine as built; phase 03 amends D1's paragraph in the root `CLAUDE.md` to match `docs/design/cairn.md` |
-| 04 | update `docs/systems/history-graph.md` where it describes one epoch counter and one worker, the spine's D3 as-built paragraph, and the root `CLAUDE.md` architecture bullet |
+| 04 | update `docs/systems/history-graph.md` where it describes one epoch counter and one worker, and the root `CLAUDE.md` architecture bullet (D3 in the spine is intent and already states the lanes) |
 | 05-08 | extend `docs/systems/diff.md` with the pane and the view; update the root `CLAUDE.md` status paragraph when the application draws a diff |
 | 09 | verify all of the above against the code, stamp the PRD, tear the packet down |
 

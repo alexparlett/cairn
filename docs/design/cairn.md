@@ -11,7 +11,7 @@ audience is the developer who reaches for Fork or Sourcetree not to avoid the
 command line but because a graph, a diff, and a staging area are genuinely better
 rendered than printed.
 
-Four things that has to mean in practice:
+What that has to mean in practice:
 
 1. **The history graph is readable at scale.** Not a list of commits with a
    decorative gutter — an actual graph that stays legible across a repository with
@@ -87,8 +87,8 @@ The deciding argument is hooks, not coverage. A client that does not run
 neither. The same reasoning covers clean/smudge filters (so Git LFS works),
 `core.fsmonitor`, sparse checkout, submodule recursion, and index locking.
 
-Coverage is a second, independent reason. Verified against gix source — method
-and queries in `docs/research/backend-split/gix-write-path-coverage.md`: gix has
+Coverage is a second, independent reason. Verified against the gix 0.87.1
+source — method and queries in `docs/research/backend-split/gix-write-path-coverage.md`: gix has
 commit creation, real three-way tree merge (`merge_trees`,
 `merge_commits`, `virtual_merge_base`), merge bases, tag, `delete_local_branches`,
 index read and write, blame, status, dirwalk and fetch. It has no push — the
@@ -126,7 +126,8 @@ they are requirements rather than observations:
 
 None of this reopens D1. It means the seam owes a cache-invalidation contract:
 every operation in `ops/` reports what it invalidated (`Invalidated`, per flag,
-on its `Performed`), documented in `crates/cairn-git/src/ops/mod.rs`.
+on its `Performed`), documented in `crates/cairn-git/src/ops/mod.rs` and
+summarised in `docs/systems/credentials.md`.
 
 **A working-tree read runs the user's clean filter driver.** Converting a
 working-tree file to git's form, which any diff of uncommitted work needs, runs
@@ -145,8 +146,8 @@ Three residuals of running someone else's program are stated rather than implied
 The driver runs with Cairn's own inherited environment plus the repository's
 paths, because gix builds that process and not `ops::GitEnvironment`. Its stderr
 is Cairn's, inherited. And `textconv` never runs on a read, so a file with a
-textconv driver shows as binary where `git diff` shows text. Evidence:
-`docs/research/diff-engine/gix-diff-api.md`.
+textconv driver shows as binary where `git diff` shows text. Spec:
+`docs/prd/diff-engine.md` R3; evidence: `docs/research/diff-engine/gix-diff-api.md`.
 
 ### D2 — Credentials are delegated to git entirely
 
@@ -167,8 +168,9 @@ This makes "Cairn never handles a secret" nearly literal: the value exists
 inside the helper process and on git's stdin, and passes through the application
 exactly once — the dialog hands it to a worker thread, which writes it to the
 helper's socket and drops it. It is never application state; the `Secret` type and
-its guard are what keep that passage from becoming state. The environment roster,
-the threat model and what a cancel can leave: `docs/systems/credentials.md`.
+its guard are what keep that passage from becoming state. Spec:
+`docs/prd/credential-prompts.md`. The environment roster, the threat model and what
+a cancel can leave: `docs/systems/credentials.md`.
 
 **Cairn's helper is the askpass while Cairn runs git.** A user who has set
 `GIT_ASKPASS`, `SSH_ASKPASS` or `core.askPass` for something else finds it
@@ -183,14 +185,16 @@ decision exists to prevent. The way back in, when someone needs it, is an
 "auth provider" setting that lets the user pick their own askpass program over
 Cairn's dialog explicitly — issue #22 holds that setting.
 
-### D3 — A few routed worker threads per repository, not a thread per repository
+### D3 — A few routed worker threads per repository
 
 `gix::Repository` is not `Send`; gitoxide's model is a `ThreadSafeRepository`
 (shared object database and pack indices) that each thread converts with
 `.to_thread_local()` to get its own caches. So Cairn holds one
 `ThreadSafeRepository` per open repository and a small number of worker threads,
 each taking a thread-local handle once. Cache reuse where it is expensive,
-no contention where it is not — the shape gitoxide was designed around.
+no contention where it is not — the shape gitoxide was designed around. Rejected:
+one thread per repository, which serialises every query behind the slowest, and
+one `Repository` shared behind a lock, which gitoxide's design exists to avoid.
 
 Work is routed to a thread by an explicit table, not handed to whichever thread is
 free, because some work is pinned: a scroll keeps one gitoxide walk alive, that
@@ -209,6 +213,10 @@ the part that is painful to retrofit, and it is what `responsiveness-reviewer`'s
 cancellation check exists to protect. An operation such as fetch carries no
 epoch; it is cancelled by killing its process.
 
+Every query is also assumed slow: a repository is somebody's 10-year monorepo, so
+the view always has a loading state distinct from an empty answer. Spec:
+`docs/prd/diff-engine.md` R4; as built: `docs/systems/history-graph.md`.
+
 ### D4 — Graph lanes are assigned incrementally, in the engine
 
 Walk newest-first; keep a vector of active lanes, each holding the commit id it is
@@ -225,8 +233,9 @@ what lets rows stream into a virtualised list.
 Precisely: the assigner owns a bounded window of rows so that a line to a
 late-arriving parent has something to repaint, which makes retained state
 proportional to that window times the lanes across it — and lane *width* on real
-repositories is single digits. Evidence:
-`docs/research/history-graph/scroll-memory-model.md`.
+repositories is single digits. Spec: `docs/prd/history-graph.md` R1; evidence:
+`docs/research/history-graph/scroll-memory-model.md`; as built:
+`docs/systems/history-graph.md`.
 
 It belongs in `cairn-git`, not `cairn-ui`: the lane is part of the answer, so it
 is `cairn-model` vocabulary. A component that computed lanes would need the whole
@@ -235,9 +244,10 @@ history in memory, which is the failure this design exists to avoid.
 gix offers no `--topo-order` equivalent. `Sorting` is `BreadthFirst`,
 `ByCommitTime` or `ByCommitTimeCutoff`, and commit-time order can emit a parent
 before its child under clock skew, which is common in rebased and imported
-history. The assigner is therefore correct under out-of-order arrival rather than
-assuming the walk guarantees child-before-parent; the window above is what lets
-it repaint. Evidence: `docs/research/history-graph/gix-revwalk-ordering.md`.
+history. The assigner must therefore be correct under out-of-order arrival rather
+than assume the walk guarantees child-before-parent; the window above is what lets
+it repaint, and skew deeper than the window is a stated blind spot
+(`docs/systems/history-graph.md`). Evidence: `docs/research/history-graph/gix-revwalk-ordering.md`.
 
 ### D5 — macOS is deferred, with two disciplines kept now
 
@@ -245,7 +255,7 @@ Linux is the target. macOS follows where Freya makes it cheap, and no Linux
 design is compromised for it. Two habits keep it possible at near-zero cost:
 
 1. Platform surface stays in `cairn-app`. `cairn-model` and `cairn-git` are
-   portable today; keep them that way.
+   portable; keep them that way.
 2. Keyboard shortcuts resolve through one accelerator table mapping a logical
    action to a per-platform chord — never a literal `Ctrl` inside a component.
 
@@ -333,9 +343,9 @@ URL and a 404.
 
 - **Repository manager shape.** Tabs, a sidebar of repositories, or separate
   windows. Decides how much state is per-repository versus global, so it wants
-  answering before more of D3's state is shared across repositories. Worker
-  threads per repository with view settings app-wide fit all three shapes; that
-  constrains the answer without giving it.
+  answering before a second repository can be open at once. Worker threads per
+  repository with view settings app-wide fit all three shapes; that constrains
+  the answer without giving it.
 - **Interactive rebase.** The operation Fork is most valued for and the one with
   the largest UI surface. Its own program, not a packet.
 - **Whether Cairn auto-stashes before destructive working-tree operations.** The

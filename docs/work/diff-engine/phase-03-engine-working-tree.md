@@ -7,8 +7,8 @@ STEP 0  Pre-flight: read docs/work/diff-engine/state.md and this file. Nothing
         Verify phases 01 and 02 are present at the integration tip.
 STEP 1  Load context via an Explore agent over crates/cairn-git/,
         docs/prd/diff-engine.md (R3, criteria C7 and C15),
-        docs/research/diff-engine/gix-diff-api.md sections 5 and 6, and the D1
-        section of docs/design/cairn.md as amended by this packet. Re-read the
+        docs/research/diff-engine/gix-diff-api.md sections 5 and 6, and
+        docs/design/engine.md ("Reads see git's form" and the residuals). Re-read the
         vendored gix-filter and gix-status source before writing against them.
 STEP 2  Implement. L6 decided that a working-tree read runs the user's clean
         filter driver, exactly as `git diff` does, and that D1 says so.
@@ -27,7 +27,7 @@ STEP 2  Implement. L6 decided that a working-tree read runs the user's clean
            Each compared against git's own output where git has one, and the
            index file checked byte-identical after every query.
         3. D1's amendment in the root CLAUDE.md, matching the wording already in
-           docs/design/cairn.md, including the residual it creates: the filter
+           docs/design/engine.md, including the residual it creates: the filter
            driver runs with Cairn's inherited environment plus the repository's
            paths, not with a GitEnvironment, because gix starts it. C15.
 

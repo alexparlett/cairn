@@ -10,10 +10,11 @@ opened: 2026-09-17
 and points at `docs/systems/diff.md`; until then this is the one copy of what the
 packet commits to.
 
-Design frame: `docs/design/cairn.md` decisions **D1** (amended by this packet for
+Design frame: `docs/design/diff.md`, and decisions **D1** (amended by this packet for
 filter drivers on a working-tree read), **D3** (the worker pool, which this packet
 splits into lanes), **D5** (the accelerator table, born here) and **D6**
-(conflicts stay out); `docs/design/ui.md` for the layout. Program:
+(conflicts stay out), in `engine.md`, `concurrency.md`, `platform.md` and
+`conflicts.md` under `docs/design/`; `docs/design/ui.md` for the layout. Program:
 `docs/work/daily-loop/roadmap.md` packet 3, under program decisions L2 (the model
 is patch-capable) and L6 (a measured bar). Decisions and rejected alternatives:
 `docs/work/diff-engine/brainstorm.md` L1-L16. Evidence, all under
@@ -287,7 +288,7 @@ here and does not restate them.
 | C12 | A modifier-click selects two commits, the comparison is tip against tip with the lower row as base, and swap reverses it | headless test |
 | C13 | Every R8.2 action resolves through the accelerator table, and no component names a literal modifier | unit test, plus the guard from R8.3 |
 | C14 | On rust-lang/rust at `c999cef531e`, on the machine recorded in `measured-baseline.md`, warm, in a release build: the changes query finishes within 100 ms on `f0845adb0c1`, 500 ms on `cf2dff2b1e3` and 500 ms on `5a3292f163d`; the content query finishes within 100 ms on `3b09522c34b`; `6a6e8446b97` answers too large without reading its content, and its Load Diff time is recorded; the rename pairs on `5a3292f163d` match git's, or each gap is filed; the window stays responsive while the two heaviest subjects load | an `#[ignore]`d reporter driven by `CAIRN_BENCH_REPO` for the engine numbers, and a check by hand for the window, all recorded in `progress.md` |
-| C15 | D1's amendment is in `docs/design/cairn.md` and `CLAUDE.md`, and the filter driver's inherited environment is stated there as a residual | review |
+| C15 | D1's amendment is in `docs/design/engine.md` and `CLAUDE.md`, and the filter driver's inherited environment is stated there as a residual | review |
 | C16 | `scripts/gate.sh` passes | the gate |
 
 C14 is deliberately not automated, for the reason `history-graph`'s A7 was not: a

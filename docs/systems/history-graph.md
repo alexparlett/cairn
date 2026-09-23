@@ -5,7 +5,8 @@ that exists. Behaviour is pinned by a test named beside it; the paragraphs that
 report a MEASUREMENT say so in their own words, because a measurement is not a
 test — `measures_layout_over_every_ref_of_a_named_repository` is an `#[ignore]`d
 reporter, and "Known limits" is description rather than anything pinned. Intent
-for this surface lives in `docs/design/cairn.md` (decisions D3 and D4) and the
+for this surface lives in `docs/design/history-graph.md` (D4) and
+`docs/design/concurrency.md` (D3) and the
 commitment it was built against in `docs/prd/history-graph.md` (shipped, frozen).
 
 What the application does today, end to end: it opens the repository containing

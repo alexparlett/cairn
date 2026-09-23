@@ -111,7 +111,7 @@ copy is a different version from the fork that links.
   replaceable — the decision to bet on gitoxide is reversible exactly as long as
   this holds.
 - **Reads go through gitoxide; writes go through the `git` binary.** Decision D1
-  in `docs/design/cairn.md`: a mutation must run the user's hooks, filters and
+  in `docs/design/engine.md`: a mutation must run the user's hooks, filters and
   credential helpers and honour their config, and gix runs none of them. Reads
   never spawn a process — that is the whole reason the split pays. Consequence
   for free: Cairn stores no credentials, because git's helpers do (D2).
@@ -363,6 +363,17 @@ Project invariants:
 - Tiny dependency set. Adding a dependency is a user decision.
 - Conventional Commits with a scope AND a body (1-4 sentences of why, not what).
   Scopes track the crates: `model`, `git`, `ui`, `app`, `guards`, `gate`, `docs`.
+- **No commit message, pull-request title or description, or GitHub comment
+  carries a Claude Code session link** (the `claude.ai` session URL or a
+  `Claude-Session:` trailer), whatever an environment's attribution guidance
+  says. The repository is public, and a link published in history cannot be
+  taken back. Twin: `.githooks/commit-msg` refuses such a message, and
+  `.githooks/pre-push` runs the same check over every outgoing commit, so a
+  commit made with `--no-verify` is still stopped before it leaves the machine;
+  pinned by `crates/cairn-guards/tests/session_link_hook.rs`. Residual review
+  obligation: no local hook sees a pull request's text, and GitHub fills a new
+  pull request's description from the first commit's message — whoever opens
+  one reads its description before submitting.
 - Name modules for behavior, never for layer: no `helpers`, no `utils`, no `misc`.
   `cairn-git/src/repository.rs`, not `cairn-git/src/core.rs`.
 - Errors are `thiserror` enums whose variants name what the CALLER must handle;
@@ -393,7 +404,9 @@ time. Entry-point files are firewalls that assemble modules, not homes.
 Layers, cheapest boundary first (full contract: `docs/qa-gate.md`):
 
 1. Stop hook: instant debris scan every turn (`.claude/hooks/qa-stop.sh`).
-2. `.githooks/pre-push`: format check, `cargo check`, guard suite.
+2. `.githooks/commit-msg` on every commit, then `.githooks/pre-push`: the
+   session-link check over outgoing commits, format check, `cargo check`, guard
+   suite.
 3. `scripts/gate.sh --fast` while iterating; `scripts/gate.sh` is the merge bar.
 4. CI (`.github/workflows/ci.yml`): the same checks as named `scripts/gate.sh
    --step` invocations on every PR and push to `main`.
@@ -424,11 +437,14 @@ same fork and rev as `freya`): `crates/cairn-ui/tests/` for components, and
 ## Pointers
 
 - `docs/design/cairn.md` — the design spine: what Cairn is for, what it is not,
-  and the locked decisions D1-D9 that the architecture above implements.
+  the first milestone, and the map to one design doc per feature (`engine.md`,
+  `credentials.md`, `concurrency.md`, `history-graph.md`, `diff.md`,
+  `conflicts.md`, `worktrees.md`, `forge-links.md`, `platform.md`), with the
+  index of decisions D1-D9 that the architecture above implements.
 - `docs/design/feature-inventory.md` — the full feature surface, tiered by risk,
   with the out-of-scope list and its reasons. Intent, not as-built.
 - `docs/design/ui.md` — the UI design: Fork's layout model kept, every deviation
-  named with its decision; mockups in `docs/design/mockups/cairn-ui.html`.
+  named with the doc that drives it; mockups in `docs/design/mockups/cairn-ui.html`.
 - `docs/work/daily-loop/roadmap.md` — the build order to the D7 milestone: eight
   packets, two shipped and six as briefs.
 - `docs/qa-gate.md` — the QA layer contract and reviewer dispatch table.

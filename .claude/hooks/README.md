@@ -7,6 +7,7 @@ Four QA layers, each doing one job at the cheapest useful boundary. Full contrac
 | --- | --- | --- | --- |
 | Instant debris gate | Runtime-native `qa-stop.sh` (Stop hook, every agent turn) | ms | yes |
 | Hook bootstrap | `ensure-hooks.sh` (SessionStart) | ms | no |
+| Session-link check | `.githooks/commit-msg`, and again over every outgoing commit in `.githooks/pre-push` | ms | yes |
 | Pre-push floor | `.githooks/pre-push` | seconds | yes |
 | Judgment review | `/qa` + reviewer agents | minutes | advisory |
 
@@ -32,6 +33,13 @@ parsing Rust, so a sealed import hidden behind a trailing comment slips past. Th
 authority is `crates/cairn-guards/tests/invariants.rs`, which strips comments
 properly and runs in the gate; the hook exists only to fail in milliseconds
 instead of minutes. When you change one, change the other in the same commit.
+
+`.githooks/commit-msg` refuses a commit message that links a Claude Code session,
+because the repository is public (root `CLAUDE.md`, Conventions). `pre-push`
+runs the same script over the messages of every commit it is about to send, so a
+commit made with `--no-verify`, or rewritten after the fact, is still caught
+before it is published. `crates/cairn-guards/tests/session_link_hook.rs` runs
+the hook against scratch messages; change the two together.
 
 ## Adding a generated-file guard (pattern, for when you need it)
 

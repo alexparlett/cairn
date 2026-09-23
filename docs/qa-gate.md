@@ -10,7 +10,8 @@ that can catch its class of defect.
 | Layer | What | When | Blocks? |
 | --- | --- | --- | --- |
 | Instant debris gate | `.claude/hooks/qa-stop.sh`: added-line scan for debug debris, focused/ignored tests, conflict markers, and the crate-layering seal — over uncommitted lines AND lines committed on the branch but not yet in `main`, so committed debris stays in view until it is fixed. Committed lines skip two rules a kept measurement reporter legitimately trips (`eprintln!`, `#[ignore = "reason"]`); a bare `#[ignore]` is flagged in both. Behaviour pinned by `crates/cairn-guards/tests/debris_hook.rs`, which runs the hook against scratch repositories | end of every agent turn | yes |
-| Pre-push floor | `.githooks/pre-push`: `cargo fmt --check`, `cargo check`, the guard suite | before every push | yes |
+| Session-link check | `.githooks/commit-msg`: refuses a commit message that links a Claude Code session (the repository is public). Pinned by `crates/cairn-guards/tests/session_link_hook.rs` | every commit | yes |
+| Pre-push floor | `.githooks/pre-push`: the session-link check over every outgoing commit's message, `cargo fmt --check`, `cargo check`, the guard suite | before every push | yes |
 | Day loop | `scripts/gate.sh --fast`: format, lint, guards, fast tests (no network-dependent checks: the day loop must work offline) | while iterating | no |
 | **Pre-merge gate** | `scripts/gate.sh`: format, lint, typecheck, guards, dependency policy, full test suite, doctests (`test-doc`, where the secret type's compile-fail pins live) | **before any merge to main; the merge bar** | **yes** |
 | CI | `.github/workflows/ci.yml`: each merge-bar check is a named `scripts/gate.sh --step` invocation; after setup, later checks run despite earlier check failures unless the job is cancelled | every PR, every push to main, and every push to a `feature/**` packet integration branch | yes, once branch protection requires the `gate` check |

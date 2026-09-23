@@ -6,8 +6,9 @@ The cross-session cheat sheet. Every session updates this before ending.
 
 ## Locked decisions
 
-L1-L16 in `brainstorm.md`; the design frame is D1, D3, D5 and D6 in
-`docs/design/cairn.md`. The ones that most constrain implementation:
+L1-L16 in `brainstorm.md`; the design frame is `docs/design/diff.md`,
+with D1, D3, D5 and D6 in `engine.md`, `concurrency.md`, `platform.md` and
+`conflicts.md` beside it. The ones that most constrain implementation:
 
 - **The model holds one exact answer** — both versions' lines and the exact
   changed ranges — and hunks, rows and patches are pure projections of it (L2).

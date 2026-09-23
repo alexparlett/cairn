@@ -52,7 +52,7 @@ Beyond the PRD, phase 09 confirms:
 - [ ] **`docs/systems/diff.md` describes only what was built** — no Local Changes
       screen, no staging, no ref chips. Documenting the obvious next consumer as
       though it exists is the failure mode here.
-- [ ] **D1's amendment reads the same in the spine and in `CLAUDE.md`**, and the
+- [ ] **D1's amendment reads the same in `docs/design/engine.md` and in `CLAUDE.md`**, and the
       filter driver's inherited environment is stated in both.
 - [ ] **The measured numbers are recorded with their hardware, commit ids and
       build profile**, and each rename gap against git is filed.

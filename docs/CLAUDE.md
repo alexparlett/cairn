@@ -21,14 +21,22 @@ Every directory answers ONE reader question; the path tells you the tense:
 | `research/<slug>/` | What did we find when we decided? | evidence | historical, never deleted |
 | `qa-gate.md` | How is work reviewed? | process contract | living |
 
-- **`design/`** — the spine (pillars, the map, roadmap, open questions — summaries
-  and pointers only) and intent docs, one per feature or doctrine. A program's
-  design is one or more per-feature intent docs.
+- **`design/`** — the spine, `cairn.md` (pillars, the milestone, the map of
+  feature docs, the decision index, open questions — summaries and pointers
+  only), and one intent doc per feature or doctrine (`engine.md`, `diff.md`, ...).
+  A program's design is one or more per-feature intent docs. When the spine
+  starts carrying a feature's design, that design moves into its own doc.
 
-  **Design is timeless: it states the whole design, never a packet's progress.**
-  When a packet decides something, rewrite the decision's own text so it reads as
-  the design — never append "amended by packet X", "decided, not yet built",
-  "as built by", "until phase N lands", or a note on what the doc used to say.
+  **Design describes the end state, as a cohesive whole.** Each doc reads as one
+  account of how its feature works when finished, with its reasons and rejected
+  alternatives where they apply — never as a log of decisions and amendments.
+  When a packet changes the design, rewrite the sections it touches so the doc
+  reads as if it had always been so: edit the sentences the change contradicts,
+  move content to where it belongs, and split a doc that has outgrown its
+  subject. Never add a paragraph after text it corrects, a new numbered decision
+  entry, an "amended by packet X", "decided, not yet built", "as built by",
+  "until phase N lands", or a note on what the doc used to say. The `D1`-`D9`
+  ids are an index in the spine for citations, not a structure to append to.
   No dates, no phase numbers, no brainstorm or program lock ids (`L3`, `O1`,
   `Q2`), no acceptance-criterion ids (`A7`, `C15`), no struck-through answered
   items. What is built goes in `systems/`, what a packet commits to in `prd/`,
@@ -41,7 +49,8 @@ Every directory answers ONE reader question; the path tells you the tense:
   `the_point_in_time_matcher_catches_the_shapes_it_claims`. Residual review
   obligation: the matcher reads a finite phrase list, so a sentence that dates
   itself in other words ("for now", "the first version of this doc") is the
-  reviewer's to catch.
+  reviewer's to catch, and so is cohesion — a doc that reads as an original plus
+  appended corrections passes every token check.
 - **`prd/`** — feature specs, ONE packet each, written at that packet's decision
   lock by `/feature-plan`: requirements, product rules, and the ONE authoritative
   copy of the packet's acceptance criteria (work-dir qa-checklists point here,

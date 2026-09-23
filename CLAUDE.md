@@ -111,7 +111,7 @@ copy is a different version from the fork that links.
   replaceable — the decision to bet on gitoxide is reversible exactly as long as
   this holds.
 - **Reads go through gitoxide; writes go through the `git` binary.** Decision D1
-  in `docs/design/cairn.md`: a mutation must run the user's hooks, filters and
+  in `docs/design/engine.md`: a mutation must run the user's hooks, filters and
   credential helpers and honour their config, and gix runs none of them. Reads
   never spawn a process — that is the whole reason the split pays. Consequence
   for free: Cairn stores no credentials, because git's helpers do (D2).
@@ -424,11 +424,14 @@ same fork and rev as `freya`): `crates/cairn-ui/tests/` for components, and
 ## Pointers
 
 - `docs/design/cairn.md` — the design spine: what Cairn is for, what it is not,
-  and the locked decisions D1-D9 that the architecture above implements.
+  the first milestone, and the map to one design doc per feature (`engine.md`,
+  `credentials.md`, `concurrency.md`, `history-graph.md`, `diff.md`,
+  `conflicts.md`, `worktrees.md`, `forge-links.md`, `platform.md`), with the
+  index of decisions D1-D9 that the architecture above implements.
 - `docs/design/feature-inventory.md` — the full feature surface, tiered by risk,
   with the out-of-scope list and its reasons. Intent, not as-built.
 - `docs/design/ui.md` — the UI design: Fork's layout model kept, every deviation
-  named with its decision; mockups in `docs/design/mockups/cairn-ui.html`.
+  named with the doc that drives it; mockups in `docs/design/mockups/cairn-ui.html`.
 - `docs/work/daily-loop/roadmap.md` — the build order to the D7 milestone: eight
   packets, two shipped and six as briefs.
 - `docs/qa-gate.md` — the QA layer contract and reviewer dispatch table.

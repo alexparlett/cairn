@@ -7,8 +7,9 @@ valid patch for an arbitrary subset of hunks and lines, which is how packet 5 wi
 stage a single line. Nothing consumes that emitter yet, and its round-trip tests
 against `git apply` are the point of building it now.
 
-Spec: `docs/prd/diff-engine.md`. Design frame: `docs/design/cairn.md` decisions
-D1, D3, D5 and D6, and `docs/design/ui.md` for the layout. Decisions:
+Spec: `docs/prd/diff-engine.md`. Design frame: `docs/design/diff.md`, with
+`engine.md` (D1), `concurrency.md` (D3), `platform.md` (D5), `conflicts.md` (D6)
+and `ui.md` in the same directory. Decisions:
 `brainstorm.md` L1-L16. Evidence: `docs/research/diff-engine/` (six records).
 
 Integration branch: `feature/diff-engine`, off `main`.

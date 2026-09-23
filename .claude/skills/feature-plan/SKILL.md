@@ -58,7 +58,11 @@ and the ONE authoritative copy of the acceptance criteria — with a
 cross-packet design goes in `docs/design/` intent docs instead, and the packet
 PRD points at it for the frame. It is authoritative while the packet is in
 flight; teardown stamps it and it is never edited again. The design spine gets
-only a pointer. The as-built reference `docs/systems/<system>.md` is NOT written
+only a pointer. Where the packet changes the design itself, rewrite the affected
+decision in `docs/design/` so it reads as the whole design — no "amended by this
+packet", no "not yet built", no dates, phases or lock ids (`docs/CLAUDE.md`,
+guarded by `design_docs_carry_no_point_in_time_state`). Status stays in the PRD
+and the work dir. The as-built reference `docs/systems/<system>.md` is NOT written
 now: phases create and update it as behavior actually lands.
 
 **User-mode branch rule:** create a runtime-owned phase branch from

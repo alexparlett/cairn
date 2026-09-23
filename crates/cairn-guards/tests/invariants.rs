@@ -1940,3 +1940,171 @@ fn the_ssh_criteria_are_required_wherever_they_can_run() {
         );
     }
 }
+
+/// Where `docs/design/` lives: intent, in the tense `docs/CLAUDE.md` gives it.
+const DESIGN_DOCS_DIR: &str = "docs/design";
+
+/// Phrases that date a sentence to a packet's progress rather than to the design.
+const POINT_IN_TIME_PHRASES: &[&str] = &[
+    "not yet built",
+    "not yet implemented",
+    "as built by",
+    "as-built paragraph",
+    "planned by the",
+    "amended by the",
+    "decided, not yet",
+    "first draft",
+    "originally said",
+    "this document first",
+    "previously carried",
+    "until the packet",
+];
+
+/// Lock and criterion ids that live in a work dir or a PRD, never in the design:
+/// brainstorm locks (L), program and packet open questions (O, Q), acceptance
+/// criteria (A, C). Decisions (D), tiers and PRD requirements (R, as pointers) stay.
+const WORK_ID_PREFIXES: &[char] = &['L', 'O', 'Q', 'A', 'C'];
+
+/// Why `line` reads as point-in-time state, or `None` if it reads as intent.
+fn point_in_time_state(line: &str) -> Option<String> {
+    let lower = line.to_lowercase();
+    if let Some(phrase) = POINT_IN_TIME_PHRASES.iter().find(|p| lower.contains(*p)) {
+        return Some(format!("the phrase {phrase:?}"));
+    }
+    if line.contains("~~") {
+        return Some("a struck-through (answered) item".to_owned());
+    }
+    let words: Vec<&str> = line
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+        .filter(|w| !w.is_empty())
+        .collect();
+    for pair in words.windows(2) {
+        if pair[0].eq_ignore_ascii_case("phase")
+            && pair[1].starts_with(|c: char| c.is_ascii_digit())
+        {
+            return Some(format!("a phase reference ({} {})", pair[0], pair[1]));
+        }
+    }
+    for word in &words {
+        let bytes = word.as_bytes();
+        let is_date = bytes.len() == 10
+            && bytes[4] == b'-'
+            && bytes[7] == b'-'
+            && bytes
+                .iter()
+                .enumerate()
+                .all(|(i, b)| i == 4 || i == 7 || b.is_ascii_digit());
+        if is_date {
+            return Some(format!("a date ({word})"));
+        }
+        let mut chars = word.chars();
+        if let Some(first) = chars.next()
+            && WORK_ID_PREFIXES.contains(&first)
+            && !chars.as_str().is_empty()
+            && chars
+                .as_str()
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == '-')
+            && chars.as_str().starts_with(|c: char| c.is_ascii_digit())
+        {
+            return Some(format!("a work-dir or PRD id ({word})"));
+        }
+    }
+    None
+}
+
+/// `docs/design/` states the whole design as intent. A packet's progress — dates,
+/// phases, "not yet built", "as built by", brainstorm lock ids, criterion ids,
+/// struck-through answers, the history of the doc's own revisions — belongs in
+/// `docs/prd/`, `docs/work/` or `docs/systems/`, which is what `docs/CLAUDE.md`
+/// says; this is its twin. Residual review obligation: the phrase list is finite,
+/// so a sentence that dates itself in other words is the review's.
+#[test]
+fn design_docs_carry_no_point_in_time_state() {
+    let root = repo_root();
+    let dir = root.join(DESIGN_DOCS_DIR);
+    let mut docs: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("reading {DESIGN_DOCS_DIR}: {e}"))
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "md"))
+        .collect();
+    docs.sort();
+    assert!(
+        !docs.is_empty(),
+        "found no markdown under {DESIGN_DOCS_DIR}, so this guard checked nothing"
+    );
+
+    let mut findings = Vec::new();
+    for path in &docs {
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+        let mut fenced = false;
+        for (number, line) in text.lines().enumerate() {
+            if line.trim_start().starts_with("```") {
+                fenced = !fenced;
+                continue;
+            }
+            if fenced {
+                continue;
+            }
+            if let Some(why) = point_in_time_state(line) {
+                let relative = path.strip_prefix(&root).unwrap_or(path);
+                findings.push(format!("{}:{}: {why}", relative.display(), number + 1));
+            }
+        }
+    }
+    assert!(
+        findings.is_empty(),
+        "docs/design/ is intent, not progress (docs/CLAUDE.md). State the design itself and \
+         move status to docs/prd/, docs/work/ or docs/systems/:\n{}",
+        findings.join("\n")
+    );
+}
+
+#[test]
+fn the_point_in_time_matcher_catches_the_shapes_it_claims() {
+    let caught = [
+        "Locked 2026-09-14 with the user.",
+        "Until the packet's phase 03 lands, this is true.",
+        "Phase 4 changes both halves.",
+        "**Amended by the `diff-engine` packet.** Decided, not yet built.",
+        "As built by the `history-graph` packet, the pool is one worker.",
+        "Planned by the `diff-engine` packet (its brainstorm L8).",
+        "decided in L6",
+        "closing the program's O1",
+        "Q3 is the one that can reach a criterion",
+        "the way `history-graph`'s A7 does",
+        "(`docs/prd/diff-engine.md` C15)",
+        "- ~~Side-by-side diff.~~ Answered.",
+        "This revises what the first draft understated.",
+        "This bullet originally said conflicts open an editor.",
+        "This document first said Fork puts actions on the header.",
+    ];
+    for line in caught {
+        assert!(
+            point_in_time_state(line).is_some(),
+            "the point-in-time matcher missed {line:?}"
+        );
+    }
+
+    let ignored = [
+        "### D1 — gitoxide reads, `git` subprocess writes",
+        "Spec: `docs/prd/diff-engine.md` R3; evidence: `docs/research/diff-engine/gix-diff-api.md`.",
+        "## Tier 6½ — Forge links",
+        "Verified against the gix 0.87.1 source.",
+        "Verified against git 2.55.0's documentation.",
+        "The alternative toolkits either bring a browser or bring C++.",
+        "Lane colours are a six-step set.",
+        "Fork's third tab, File Tree, is deferred to issue #31.",
+        "A worker pool per repository; phases of a rebase are a state machine.",
+        "Choosing gitoxide does not deliver speed; it makes it possible.",
+    ];
+    for line in ignored {
+        assert_eq!(
+            point_in_time_state(line),
+            None,
+            "the point-in-time matcher fired on {line:?}"
+        );
+    }
+}

@@ -24,6 +24,24 @@ Every directory answers ONE reader question; the path tells you the tense:
 - **`design/`** — the spine (pillars, the map, roadmap, open questions — summaries
   and pointers only) and intent docs, one per feature or doctrine. A program's
   design is one or more per-feature intent docs.
+
+  **Design is timeless: it states the whole design, never a packet's progress.**
+  When a packet decides something, rewrite the decision's own text so it reads as
+  the design — never append "amended by packet X", "decided, not yet built",
+  "as built by", "until phase N lands", or a note on what the doc used to say.
+  No dates, no phase numbers, no brainstorm or program lock ids (`L3`, `O1`,
+  `Q2`), no acceptance-criterion ids (`A7`, `C15`), no struck-through answered
+  items. What is built goes in `systems/`, what a packet commits to in `prd/`,
+  and what is in flight in `work/`; design may POINT at each (`Spec:
+  docs/prd/x.md R3`, `As built: docs/systems/x.md`), and a pointer is the only
+  way it names a packet. Decision ids (`D1`), issue numbers and dependency
+  versions behind evidence are fine. Twin:
+  `design_docs_carry_no_point_in_time_state` in
+  `crates/cairn-guards/tests/invariants.rs`, with matcher self-test
+  `the_point_in_time_matcher_catches_the_shapes_it_claims`. Residual review
+  obligation: the matcher reads a finite phrase list, so a sentence that dates
+  itself in other words ("for now", "the first version of this doc") is the
+  reviewer's to catch.
 - **`prd/`** — feature specs, ONE packet each, written at that packet's decision
   lock by `/feature-plan`: requirements, product rules, and the ONE authoritative
   copy of the packet's acceptance criteria (work-dir qa-checklists point here,

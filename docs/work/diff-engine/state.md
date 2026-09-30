@@ -2,9 +2,14 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 02 landed. The diff model exists in `cairn-model` and
-`cairn-git` answers R2's two queries against a real repository; no component,
-nothing on a worker, nothing that draws.**
+**Status: PAUSED after phase 02 (2026-09-30).** The diff model exists in
+`cairn-model` and `cairn-git` answers R2's two queries, but the user decided the
+changes query must come from `git diff-tree -M` (option E, for exact rename
+parity) and that a git process manager is built first as its own packet. Resume
+only after that packet merges; phase 02's changes query is then reworked. Why, and
+the evidence: the 2026-09-30 entry in `progress.md`,
+`docs/research/diff-engine/rename-parity-spike.md` and
+`docs/research/diff-engine/git-process-survey.md`.
 
 ## Locked decisions
 
@@ -96,7 +101,7 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | Phase | Status | Gate | QA |
 | --- | --- | --- | --- |
 | 01 diff model | landed | `scripts/gate.sh` PASS | `qa-checklist`, `test-coverage-auditor` and `responsiveness-reviewer`, adjudicated by `qa-confirm`; confirmed findings fixed or recorded as residuals in `docs/systems/diff.md` |
-| 02 engine, commits | landed | `scripts/gate.sh` PASS | packet-mode: the orchestrator runs QA over the phase diff |
+| 02 engine, commits | landed; changes query to be reworked (decision E) | `scripts/gate.sh` PASS | deferred to the reworked phase |
 | 03 engine, working tree | not started | — | — |
 | 04 worker lanes | not started | — | — |
 | 05 detail pane | not started | — | — |

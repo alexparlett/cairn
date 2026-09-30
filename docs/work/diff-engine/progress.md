@@ -3,6 +3,51 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-09-30 — packet PAUSED: rename parity, decision E, a process manager first
+
+Phase 02 stopped on its rename rule: on `5a3292f163d` gix pairs 231 renames where
+git pairs 2,774. The user classed a wrong rename as a critical bug, so "accept and
+file" was ruled out, and asked whether gix is the right backend at all.
+
+Two evidence records settled it, both in `docs/research/diff-engine/`:
+`rename-parity-spike.md` (measured on the bench repository) and
+`git-process-survey.md` (how Cairn spawns git today). What they showed:
+
+- The cause is two defects in gix's rename tracker — the limit compared unsquared
+  against its own documented contract, and no basename stage — unchanged on
+  gitoxide `main`.
+- Passing gix a squared limit (B) is not viable: it still skips the worst subject,
+  and where it completes its pairs differ from git's.
+- Falling back to git only when gix reports it was cut short (D) is rare and
+  cheap and merges cleanly, but closes only about 64% of disagreeing commits:
+  gix's similarity measure and first-match pairing diverge from git's even when
+  it runs a full search (0.32% of recent first-parent diffs, a lower bound).
+- Cairn has a careful single-invocation runner, not a process manager: no stdout
+  that is both captured and cancellable, no stdin, no timeouts, no tracking or
+  kill-all, no epoch-driven cancel, and a guard gap that lets `diff/` reach the
+  runner without tripping any twin.
+
+**Decided by the user:** gix stays the read backend for history, content diffs
+and the model. **Option E**: the changes query — which paths changed, their
+statuses, modes, ids and rename and copy pairs — comes from `git diff-tree -M`
+always, exact by construction, at git's own cost (about 8–37 ms per selection,
+83 ms on the worst subject, inside every C14 bar). This amends D1 (now in
+`docs/design/engine.md` on `main`, after #39). And **a process manager for
+spawning git is designed and built first, as its own packet**, planned with
+`/feature-plan`; phase 03's working-tree reads and packet 5's staging build on it
+too.
+
+Consequences for this packet, to be re-planned when it resumes:
+
+- Phase 02's gix changes query (`crates/cairn-git/src/diff/changes.rs`, including
+  `repair_copies` and `RenameDetection`) is superseded by a git-backed one; the
+  content query, the model and the round-trip tests stand. C5 already compares
+  against git, so it carries over; C14's changes-query numbers must be re-measured.
+- Phase 02's QA, not yet run, is deferred to the reworked phase.
+- The integration branch is behind `main` by #39 (D1's move to
+  `docs/design/engine.md`). Bringing it up to date means a rebase and a force
+  push of a shared branch, which is the user's call.
+
 ## 2026-09-18 — phase 02: the engine answers commit and comparison diffs
 
 `cairn-git` has R2's two queries. `Repository::changes` walks two trees — two

@@ -550,11 +550,12 @@ mod tests {
         command -v sleep >/dev/null || exit 99; \
         sleep 30 & echo hanging >&2; wait";
 
-    /// On `SIGTERM`: says so, ends its grandchild, and exits as git does after
-    /// removing its locks. The trap runs at once because the shell is in `wait`.
+    /// On `SIGTERM`: says so, ends its grandchild (quietly: the group signal may
+    /// have ended it first), and exits as git does after removing its locks. The
+    /// trap runs at once because the shell is in `wait`.
     const ENDING_ON_TERM: &str = "PATH=/usr/bin:/bin; command -v sleep >/dev/null || exit 99; \
         sleep 30 & child=$!; \
-        trap 'echo terminated >&2; kill $child; exit 143' TERM; \
+        trap 'echo terminated >&2; kill $child 2>/dev/null; exit 143' TERM; \
         echo hanging >&2; wait $child";
 
     /// Ignores `SIGTERM` and hangs in one-second sleeps, so only `SIGKILL` ends it.
@@ -954,13 +955,18 @@ mod tests {
         let dropping = Instant::now();
         drop(invocation);
         let took = dropping.elapsed();
-        assert!(took < Duration::from_millis(50), "the drop blocked for {took:?}");
+        assert!(
+            took < Duration::from_millis(50),
+            "the drop blocked for {took:?}"
+        );
         assert!(
             !group_gone(pid),
             "the stub ended at once, so this decided nothing about waiting"
         );
         assert!(
-            eventually(TERMINATION_GRACE + Duration::from_secs(2), || group_gone(pid)),
+            eventually(TERMINATION_GRACE + Duration::from_secs(2), || group_gone(
+                pid
+            )),
             "the reaper never ended the group {pid}: {:?}",
             group_members(pid)
         );
@@ -1104,7 +1110,7 @@ mod tests {
     fn a_cancelled_process_that_exits_zero_after_the_signal_is_reported_cancelled() {
         let stub = stub(
             "PATH=/usr/bin:/bin; command -v sleep >/dev/null || exit 99; \
-             sleep 30 & child=$!; trap 'kill $child; exit 0' TERM; \
+             sleep 30 & child=$!; trap 'kill $child 2>/dev/null; exit 0' TERM; \
              echo hanging >&2; wait $child",
         );
         let (outcome, seen, _) = cancel_once_hanging(started(&stub), Cancelling::ByHandle);

@@ -90,7 +90,13 @@ WARNING tier:
    writes whatever it writes. The compiler and
    `the_runner_is_named_only_by_ops_and_reads` decide that a read path cannot
    build a write; whether the verb a read runs is really a read is this
-   check. Evidence: quote the argument list.
+   check. So is the read in a partial clone: a read carries
+   `GIT_NO_LAZY_FETCH=1`, which git older than 2.44 ignores, so on such a git
+   a read that touches an object the clone lacks fetches it from the promisor
+   remote — a pack written, the network reached (the 2.30 floor stays, by the
+   user's decision). Whether a new read could touch a missing object, and
+   what it does on an old git if so, is this check. Evidence: quote the
+   argument list.
 
 Distinguish what the diff CHANGED from what it inherited: pre-existing debt next
 to the change is a note, not a blocking finding. If a check here duplicates a

@@ -18,6 +18,13 @@ its history as a virtualized graph with lanes, edges and four columns, pages as
 you scroll, and does all of it off the UI thread. It can fetch its default
 remote — the one `git` verb built so far, with git's own progress, a cancel,
 and a credential dialog fed by the askpass helper (`docs/systems/credentials.md`).
+Every `git` process runs on one runner in `cairn-git`'s private `process/`
+module (`docs/systems/git-processes.md`): `git` is found once, as the
+application starts; fetch runs in the network lane, which refuses a second
+fetch with a reason the window draws; each repository keeps a registry of the
+`git` it is running and a bounded command log, which the worker answers as
+values and no view draws yet; and closing the window closes its repository,
+ending and reaping every `git` in it before the window goes.
 Nothing else mutates a repository, and there is no repository picker: one
 repository, named on the command line.
 
@@ -27,10 +34,10 @@ repository, named on the command line.
 | --- | --- |
 | `docs/` | `qa-gate.md` (QA contract), `design/` intent, `prd/` per-packet specs, `systems/` as-built, `work/` in-flight dirs, `research/` evidence (deferred work goes to GitHub issues; `backlog/` is the no-remote fallback) — findings promote research → brainstorm → design/prd → systems (contract: `docs/CLAUDE.md`) |
 | `crates/cairn-model/` | The vocabulary crossing the seam: `Oid`, `RefName`, `CommitSummary`, the `Confirmed` token. Plain data, plus the pure layout algorithm that produces some of it (`LaneAssigner`), and `Secret`, the one type that holds a credential. Depends on nothing but `zeroize` (for that type) — not `gix`, not `freya`, not the other crates. |
-| `crates/cairn-git/` | The repository engine: gitoxide-backed reads, and under `src/ops/` every write, delegating to the `git` binary per design decision D1. Every `git` process is built in the crate-private `src/process/` — `GitBinary` (startup discovery and the 2.30 floor), `GitEnvironment` (the explicitly built environment, the only place a `Command` is built), `Askpass` (where git and ssh are sent for a secret) and the runner, which streams and can kill a process — and an invocation is typed a read or a write, a write needing the `WriteAuthority` only `ops/` can construct. `src/ops/` holds `fetch`, the first verb (not destructive, so it takes no `Confirmed`), and the confirmation-seal placeholder, and re-exports what the application needs of `process/`; `src/reads/` is where each read `git` answers will live, one named function each (empty until `diff-engine`). Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
+| `crates/cairn-git/` | The repository engine: gitoxide-backed reads, and under `src/ops/` every write, delegating to the `git` binary per design decision D1. Every `git` process is built in the crate-private `src/process/` — `GitBinary` (startup discovery and the 2.30 floor), `GitEnvironment` (the explicitly built environment, the only place a `Command` is built), `Askpass` (where git and ssh are sent for a secret), the runner, which streams and can kill a process, and each repository's registry of running invocations and its command log — and an invocation is typed a read or a write, a write needing the `WriteAuthority` only `ops/` can construct. `src/ops/` holds `fetch`, the first verb (not destructive, so it takes no `Confirmed`), and the confirmation-seal placeholder, and re-exports what the application needs of `process/`; `src/reads/` is where each read `git` answers will live, one named function each (empty until `diff-engine`). Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
 | `crates/cairn-askpass/` | The askpass helper binary `git` and `ssh` run to ask for a secret, and the library half — the `Channel` the application listens on. Links `cairn-model` and `zeroize` only: it runs in a process holding a plaintext secret. Never names the engine, the toolkit or a logging crate. |
 | `crates/cairn-ui/` | Freya components. Render `cairn-model` values, report intent through `EventHandler` props. Must never depend on `gix` or `cairn-git`, and must never touch the filesystem. |
-| `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. |
+| `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. `src/worker/` is everything that may wait: `git` found once per application (`discovery.rs`), each repository's threads (`pool.rs`), the network lane (`network_lane.rs`) and the askpass acceptor; `src/closing.rs` is the window's close hook, which asks the worker to close and never waits. |
 | `crates/cairn-guards/` | Test-only. The deterministic enforcement twins for the Invariants below; nothing depends on it. |
 | `scripts/`, `.githooks/`, `.github/` | The enforcement layer (contract: `docs/qa-gate.md`). |
 
@@ -118,7 +125,7 @@ copy is a different version from the fork that links.
   today) — and each such read is a named function in `cairn-git/src/reads/`,
   run as a read invocation: query plumbing (never a plumbing writer such as
   `update-ref`, `update-index` or `write-tree`) or `status` only,
-  `GIT_OPTIONAL_LOCKS=0`, no askpass token. Everywhere gix
+  `GIT_OPTIONAL_LOCKS=0`, `GIT_NO_LAZY_FETCH=1`, no askpass token. Everywhere gix
   agrees with git, a read spawns no process — that is the whole reason the split
   pays. How every `git` process is built, run and ended is
   `docs/design/processes.md`. Consequence for free: Cairn stores no
@@ -224,16 +231,29 @@ Project invariants:
   `the_runner_matcher_catches_the_shapes_it_claims`, and
   `the_unguarded_routes_to_a_process_now_fail_a_twin` over the four routes
   `docs/research/process-manager/runner-and-worker-as-built.md` section 3
-  found unguarded). Residual review obligations: the gitoxide roster reads
+  found unguarded); and `the_retired_runner_is_gone` — the runner
+  credential-prompts built and process-manager replaced stays gone: nowhere in
+  `crates/cairn-git/src`, `process/` and test modules included, is `Running`
+  or `ProcessKill` named, `run` or `stream` declared in an `impl` block of
+  `GitCommand`, or `.stream(..)` called, and production `process/` starts a
+  process on exactly one line (`.spawn()` in `GitCommand::start_with`) and
+  never calls `.output()`, `.status()` or `.exec()`, so a second runner fails
+  whatever it is called (self-test
+  `the_retired_runner_matcher_catches_the_shapes_it_claims`). Residual review
+  obligations: the gitoxide roster reads
   names, so a gix write behind a name it does not hold — an API added after
   0.87.1, or one reached through a trait object, a generic or a macro — is not
   seen; the runner guard reads names too, so a built or started invocation (a
-  `GitCommand`, a `Running`, an `Invocation`) or a kill handle (`ProcessKill`,
-  `KillHandle`) handed out of `ops/` or `reads/` and driven elsewhere by
+  `GitCommand`, an `Invocation`) or a kill handle (`KillHandle`) handed out of
+  `ops/` or `reads/` and driven elsewhere by
   inference (`crate::ops::w(&git).args(..).start()?.finish(..)`,
   `handle.kill()`) is not seen either, and that `ops/` and
   `reads/` hand out only named operation types — as `fetch` does with
-  `FetchInProgress` and `FetchCancel` — is review. Both are `qa-checklist`'s
+  `FetchInProgress` and `FetchCancel` — is review; and the retired-runner twin
+  sees a retired entry point declared through a `type` alias of the builder,
+  as a free function or by a macro only if it starts a process, counts two
+  spawns on one line once, and does not see a second path built on `start`
+  that drives an `Invocation` by rules of its own. All are `qa-checklist`'s
   (its item 7). Whether a read in `reads/` really runs query plumbing or
   `status` — `GIT_OPTIONAL_LOCKS=0` covers `status` alone, so a porcelain `diff`
   built as a read still rewrites the index, and a plumbing writer built as one
@@ -242,11 +262,13 @@ Project invariants:
   environment always sets `GIT_TERMINAL_PROMPT=0`, `SSH_ASKPASS_REQUIRE=force`,
   `GIT_EDITOR=false` and `GIT_SEQUENCE_EDITOR=false` and points `GIT_ASKPASS`
   and `SSH_ASKPASS` at Cairn's own helper; a read adds
-  `GIT_OPTIONAL_LOCKS=0` and never carries an askpass token.** A GUI has no
+  `GIT_OPTIONAL_LOCKS=0` and `GIT_NO_LAZY_FETCH=1` and never carries an
+  askpass token.** A GUI has no
   terminal, so git's own credential prompt would hang the window on nothing,
   ssh would ask for a passphrase on a tty nobody is watching, and a verb that
   wants an editor would launch one nobody can see; a read must not rewrite
-  the index it is looking at; and an inherited environment carries whatever
+  the index it is looking at, nor fetch a missing object from a partial
+  clone's promisor remote; and an inherited environment carries whatever
   the launching shell had — a `GIT_ASKPASS` meant for something else, a
   `GIT_DIR` pointing elsewhere. Primary enforcement is construction:
   `cairn_git::ops::GitEnvironment` has one constructor, which copies a
@@ -271,7 +293,9 @@ Project invariants:
   `ALWAYS` table — the table itself, not the file — carries
   `("GIT_TERMINAL_PROMPT", "0")`, `("SSH_ASKPASS_REQUIRE", "force")`,
   `("GIT_EDITOR", "false")` and `("GIT_SEQUENCE_EDITOR", "false")`, its
-  `READ_ONLY` table carries `("GIT_OPTIONAL_LOCKS", "0")` and is applied, and
+  `READ_ONLY` table carries each of `READ_ONLY_PINS` —
+  `("GIT_OPTIONAL_LOCKS", "0")` and `("GIT_NO_LAZY_FETCH", "1")` — and is
+  applied, and
   its production code names `"GIT_ASKPASS"`, `"SSH_ASKPASS"`, the socket
   variable and the token variable (matcher self-test
   `the_process_environment_matcher_catches_the_shapes_it_claims`); and
@@ -280,9 +304,12 @@ Project invariants:
   pipes, `CommandExt` or `nix`, calls `.spawn()`, `.output()`, `.status()`,
   `.wait()`, `.try_wait()` or `.wait_with_output()`, or calls
   `GitEnvironment::command`, which stays `pub(super)`; `process/` itself is
-  required to show `.spawn()`, `.output()`, `.wait()`, `.try_wait()`, `Stdio`,
-  `Child`, `ChildStderr`, `nix` and `.command(..)`, so the matcher is proven
-  to read real code, and every roster entry has a self-test case spelled out
+  required to show `.spawn()`, `.try_wait()`, `CommandExt`, `Stdio`,
+  `Child`, `ChildStdout`, `ChildStderr`, `nix` and `.command(..)`, so the
+  matcher is proven to read real code (`.output()` and `.wait()`, required
+  while the retired runner used them, were swapped for `CommandExt` and
+  `ChildStdout` when it went, and stay banned outside `process/`), and every
+  roster entry has a self-test case spelled out
   apart from the roster (matcher self-test
   `the_process_matcher_catches_the_shapes_it_claims`; its one exception row,
   `HistoryProgress::status` in `cairn-app`, fails when no longer needed). The
@@ -291,9 +318,19 @@ Project invariants:
   `process/cli.rs`, `ops/authority.rs` and `ops/fetch.rs` run a `git` that
   prints what it was given — the probe's, a read's, a write's and fetch's —
   and real `git` proves the effect: a `status` read leaves a stale index
-  byte-identical where the same `status` as a write rewrites it, and a
+  byte-identical where the same `status` as a write rewrites it, a read in a
+  partial clone leaves a missing object missing where the same command as a
+  write fetches it (`a_read_in_a_partial_clone_does_not_fetch_a_missing_object`,
+  skipped below git 2.44), and a
   `commit` or `rebase -i` with a hanging configured editor fails promptly
-  without running it. Residual review obligations: whether the inherited
+  without running it. Residual review obligations: git older than 2.44
+  ignores `GIT_NO_LAZY_FETCH`, so on such a git a read in a partial clone may
+  still lazy-fetch — a pack written and the network reached; with no token an
+  authenticated promisor fails closed — which no check can refuse while the
+  floor is 2.30 (the user's decision); whether a new read could touch a
+  missing object, and what it does on such a git, is
+  `destructive-ops-reviewer`'s (its check 10);
+  whether the inherited
   roster is RIGHT — each entry is a deliberate leak of the user's
   environment to git, and a missing one breaks a credential helper that
   worked — is `destructive-ops-reviewer`'s (its check 9); and the matchers
@@ -369,10 +406,18 @@ Project invariants:
   rather than implied, and owned by `responsiveness-reviewer`: a file partition
   cannot decide which THREAD a function runs on, so the handful of `worker/`
   functions the UI thread itself calls (`RepositoryHandle::submit`, through the
-  closure `RepositoryHandle::into_submitter` builds,
-  `Updates::next`, `Wake::poll`, all in `crates/cairn-app/src/worker/`) are
+  closure `RepositoryHandle::into_submitter` builds and through
+  `Closing::requested`, the window's close hook, whose `Request::Close` arm
+  stops the epochs with an atomic store and queues the close;
+  `Updates::next`, `Wake::poll`; and `Discovery::start`, which `main` calls on
+  the main thread before the window exists and which only spawns the thread
+  that runs `git --version` — all in `crates/cairn-app/src/worker/`) are
   exempt from the matcher while running on the UI thread, and that they never
-  block is a review judgement. (The spinning spellings — `try_recv`, `try_iter`,
+  block is a review judgement. So is the close's shape: that the hook only
+  asks, that what waits for the reaps (`SharedRepository::end_invocations`,
+  in `Threads::drop`) runs on the repository thread, and that the window
+  closes on the update stream's end, or on a second request after
+  `worker::CLOSE_PATIENCE`, never by waiting. (The spinning spellings — `try_recv`, `try_iter`,
   `try_lock`, `spin_loop`, `yield_now` — ARE on the roster, so a busy poll loop
   on a render path is caught; one written inside `worker/` is not.) The matcher is
   also FILE-scoped, which is what "naming the constructor" buys and all it buys:
@@ -531,5 +576,7 @@ same fork and rev as `freya`): `crates/cairn-ui/tests/` for components, and
   repository today, with the twin that pins each rule. `credentials.md`: the
   askpass helper and its channel, fetch end to end, and the decisions the
   packet locked. `git-processes.md`: where every `git` process is built, the
-  read/write seal, the environment each kind of invocation runs with, and the
-  runner — its pipes, how an invocation is cancelled, and what it reports.
+  read/write seal, the environment each kind of invocation runs with, the
+  runner — its pipes, how an invocation is cancelled, and what it reports —
+  each repository's registry and command log, and, in the application, `git`
+  found once, the network lane and its refusal, and closing.

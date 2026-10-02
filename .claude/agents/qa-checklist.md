@@ -67,12 +67,18 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
    `ops/` through a name `only_the_ops_module_mutates_a_repository`'s roster
    does not hold — a gix API added after 0.87.1, or one reached through a
    trait object, a generic or a macro. And the runner guard reads names, so a
-   built or started invocation (a `GitCommand`, a `Running`, an `Invocation`)
-   or a kill handle (`ProcessKill`, `KillHandle`) handed out of `ops/` or
-   `reads/` and driven elsewhere by inference
-   (`crate::ops::w(&git).args(..).start()?.finish(..)`, `handle.kill()`) names
-   nothing it reads: that `ops/` and `reads/` hand out only named operation types — as
-   `fetch` does with `FetchInProgress` and `FetchCancel` — is yours. Dispatch pointer:
+   built or started invocation (a `GitCommand`, an `Invocation`) or a kill
+   handle (`KillHandle`) handed out of `ops/` or `reads/` and driven elsewhere
+   by inference (`crate::ops::w(&git).args(..).start()?.finish(..)`,
+   `handle.kill()`) names nothing it reads: that `ops/` and `reads/` hand out
+   only named operation types — as `fetch` does with `FetchInProgress` and
+   `FetchCancel` — is yours. So is what `the_retired_runner_is_gone` cannot
+   see: a retired entry point (`run`, `stream`) declared through a `type`
+   alias of the builder, as a free function or by a macro is caught only if it
+   starts a process of its own; two spawns on one line count once; and a
+   second path built on `GitCommand::start` that drives an `Invocation` by
+   rules of its own — its own ending, its own outcome — starts no second
+   process and is not seen at all. Dispatch pointer:
    `destructive-ops-reviewer`.
 8. **Responsiveness** (any diff in `crates/cairn-ui/` or `crates/cairn-app/`, or
    anything changing what runs per frame or per query): no repository work on the

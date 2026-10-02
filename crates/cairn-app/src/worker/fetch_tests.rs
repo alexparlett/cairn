@@ -194,12 +194,12 @@ impl Drop for BareRepository {
 
 /// A `HOME` with a `.gitconfig` that resets the credential helper list, so
 /// nothing the machine has configured answers (or opens a keyring) for a test.
-struct Home {
-    path: PathBuf,
+pub(super) struct Home {
+    pub(super) path: PathBuf,
 }
 
 impl Home {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let path = std::env::temp_dir().join(format!(
             "cairn-app-home-{}-{}",
@@ -317,7 +317,7 @@ fn read_head(stream: &mut TcpStream) -> String {
 }
 
 /// A repository whose `origin` is `url`, built with `std::fs`.
-fn with_origin(name: &str, url: &str) -> UnbornRepository {
+pub(super) fn with_origin(name: &str, url: &str) -> UnbornRepository {
     let fixture = UnbornRepository::new(name);
     let config = fixture.path.join(".git/config");
     let written = std::fs::write(
@@ -357,7 +357,7 @@ fn boundary(
 }
 
 /// Reads updates until `stop` says so, bounded, returning everything seen.
-fn collect_until(updates: &mut Updates, stop: impl Fn(&Update) -> bool) -> Vec<Update> {
+pub(super) fn collect_until(updates: &mut Updates, stop: impl Fn(&Update) -> bool) -> Vec<Update> {
     let (told, verdict) = channel::<()>();
     let deadline = std::thread::spawn(move || {
         if verdict.recv_timeout(Duration::from_secs(60)).is_err() {

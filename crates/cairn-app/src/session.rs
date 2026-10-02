@@ -4,7 +4,7 @@
 use freya::prelude::*;
 
 use crate::PAGE_ROWS;
-use crate::fetch_state::{FetchStatus, PromptView};
+use crate::fetch_state::{FetchRefusal, FetchStatus, PromptView};
 use crate::history_state::{self, Progress};
 use crate::window::View;
 use crate::worker::{PromptId, Request, Update};
@@ -30,6 +30,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         mut fetch,
         mut prompt,
         mut remotes,
+        mut refused,
         ..
     } = view;
     match update {
@@ -78,6 +79,12 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             fetch.set(FetchStatus::Failed { remote, message });
             reload_if(refreshed, rows, progress, worker);
         }
+        // Beside the fetch in flight, which it leaves as it was; the next press clears it.
+        Update::FetchRefused { remote, reason } => {
+            refused.set(Some(FetchRefusal { remote, reason }));
+        }
+        // Answered for whoever asks; no view draws the log in this packet (PRD R8.3).
+        Update::CommandLog { .. } => {}
         Update::Prompt { id, text } => {
             if fetch.read().is_in_flight() {
                 prompt.set(Some(PromptView { id, text }));
@@ -168,6 +175,7 @@ mod tests {
                         fetch: State::create(fetch),
                         prompt: State::create(None),
                         remotes: State::create(Vec::new()),
+                        refused: State::create(None),
                     }
                 })
             },
@@ -353,6 +361,33 @@ mod tests {
         );
         assert_eq!(*view.prompt.read(), None);
         assert_eq!(asked.refused.borrow().as_slice(), [id]);
+    }
+
+    /// PRD R7.2, the hop between the worker and the window: a refusal lands in the view
+    /// for the banner, and the fetch in flight is left as it was. Caught by: dropping the
+    /// update, or letting it end or replace the fetch that is running.
+    #[test]
+    fn a_refused_fetch_is_kept_for_the_window_and_the_fetch_in_flight_is_untouched() {
+        let (test, view, asked) = launch(running());
+        applying(
+            &test,
+            view,
+            &asked,
+            Update::FetchRefused {
+                remote: "origin".to_owned(),
+                reason: "a fetch of origin is already running".to_owned(),
+            },
+        );
+        assert_eq!(
+            *view.refused.read(),
+            Some(FetchRefusal {
+                remote: "origin".to_owned(),
+                reason: "a fetch of origin is already running".to_owned(),
+            })
+        );
+        assert_eq!(*view.fetch.read(), running(), "the fetch in flight changed");
+        assert!(asked.submitted.borrow().is_empty());
+        assert!(asked.refused.borrow().is_empty());
     }
 
     #[test]

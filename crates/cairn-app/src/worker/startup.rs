@@ -1,5 +1,7 @@
-//! What the worker builds before it serves anything: the askpass channel,
-//! the environment every `git` runs with, and the found `git` itself.
+//! What the worker builds before it serves a repository: the askpass
+//! channel, and the environment every `git` in that repository runs with,
+//! around the `git` the application found once as it started
+//! ([`super::Discovery`]).
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -8,9 +10,11 @@ use std::sync::Arc;
 use cairn_askpass::Channel;
 use cairn_git::ops::{Askpass, GitBinary, GitEnvironment};
 
-/// What `open` is given: how to read the launching environment, and where the
-/// helper is. Both are decided on the calling thread and used on the worker's,
-/// because opening the channel is filesystem work.
+/// How the application was launched: how to read the launching environment,
+/// and where the helper is. Decided on the calling thread and used on the
+/// workers', because finding `git` and opening a channel are not the UI
+/// thread's work; shared by every repository the application opens.
+#[derive(Clone)]
 pub(super) struct Startup {
     /// Asked about the environment's inherited roster and nothing else.
     parent: ParentLookup,
@@ -18,17 +22,27 @@ pub(super) struct Startup {
 }
 
 /// How the launching environment is read, by name.
-type ParentLookup = Box<dyn Fn(&str) -> Option<OsString> + Send>;
+type ParentLookup = Arc<dyn Fn(&str) -> Option<OsString> + Send + Sync>;
 
 impl Startup {
     pub(super) fn new(
-        parent: impl Fn(&str) -> Option<OsString> + Send + 'static,
+        parent: impl Fn(&str) -> Option<OsString> + Send + Sync + 'static,
         helper: PathBuf,
     ) -> Self {
         Self {
-            parent: Box::new(parent),
+            parent: Arc::new(parent),
             helper,
         }
+    }
+
+    /// The environment `git` is searched for and probed with: the launching
+    /// one, pointed at the helper, with no channel yet — the probe asks
+    /// nobody anything.
+    pub(super) fn probe_environment(&self) -> GitEnvironment {
+        GitEnvironment::new(
+            |name| (self.parent)(name),
+            &Askpass::new(self.helper.clone(), None),
+        )
     }
 
     /// This process's environment and the helper installed beside its executable.
@@ -52,7 +66,7 @@ pub(super) fn helper_beside_this_executable() -> PathBuf {
         )
 }
 
-/// The backend the worker threads share.
+/// The backend one repository's worker threads share.
 pub(super) struct Backend {
     pub(super) git: GitBinary,
     /// `None` when no channel could be opened; `prompting` says why.
@@ -65,10 +79,11 @@ pub(super) struct Backend {
 }
 
 impl Backend {
-    /// Opens the channel, builds the environment around it, and finds `git`.
-    /// A missing or too-old `git` is the one refusal; everything about
-    /// prompting degrades to a named reason instead.
-    pub(super) fn open(startup: &Startup) -> Result<Self, cairn_git::Error> {
+    /// Opens this repository's channel and points `git` — found once, as the
+    /// application started — at it. A missing or too-old `git` was refused
+    /// before this (`super::Discovery`); everything about prompting degrades
+    /// to a named reason instead.
+    pub(super) fn open(startup: &Startup, git: &GitBinary) -> Self {
         let channel = match (startup.parent)("XDG_RUNTIME_DIR") {
             Some(runtime) => Channel::open(Path::new(&runtime))
                 .map(Arc::new)
@@ -95,18 +110,27 @@ impl Backend {
                 .ok()
                 .map(|channel| channel.socket_path().to_owned()),
         );
-        let git = GitBinary::discover_with(GitEnvironment::new(&startup.parent, &askpass))?;
-        Ok(Self {
+        let git =
+            git.with_environment(GitEnvironment::new(|name| (startup.parent)(name), &askpass));
+        Self {
             git,
             channel: channel.ok(),
             prompting,
-        })
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// This machine's `git`, found the way the application finds it.
+    fn found(startup: &Startup) -> GitBinary {
+        match GitBinary::discover_with(startup.probe_environment()) {
+            Ok(git) => git,
+            Err(error) => panic!("this machine's git was refused: {error}"),
+        }
+    }
 
     /// GIT_ASKPASS names the helper installed beside this executable. The bare-name
     /// fallback runs only when `current_exe` fails, which a test cannot make happen.
@@ -137,10 +161,7 @@ mod tests {
             },
             helper.clone(),
         );
-        let backend = match Backend::open(&startup) {
-            Ok(backend) => backend,
-            Err(error) => panic!("no backend: {error}"),
-        };
+        let backend = Backend::open(&startup, &found(&startup));
         assert_eq!(backend.prompting, Ok(()));
         let socket = backend
             .channel
@@ -174,10 +195,7 @@ mod tests {
             |name| (name == "PATH").then(|| std::env::var_os("PATH")).flatten(),
             crate::worker::fetch_tests::built_helper(),
         );
-        let backend = match Backend::open(&startup) {
-            Ok(backend) => backend,
-            Err(error) => panic!("no backend: {error}"),
-        };
+        let backend = Backend::open(&startup, &found(&startup));
         assert!(backend.channel.is_none());
         assert!(
             backend
@@ -209,10 +227,7 @@ mod tests {
             },
             PathBuf::from("/nonexistent/cairn/cairn-askpass"),
         );
-        let backend = match Backend::open(&startup) {
-            Ok(backend) => backend,
-            Err(error) => panic!("no backend: {error}"),
-        };
+        let backend = Backend::open(&startup, &found(&startup));
         assert!(
             backend
                 .prompting

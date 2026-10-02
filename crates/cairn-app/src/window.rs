@@ -6,7 +6,7 @@ use cairn_model::{HistoryRow, RemoteSummary, RowContent, RowId, Secret};
 use cairn_ui::{CommitRow, CredentialPrompt, HistoryHeader, HistoryList, ROW_HEIGHT, RowRender};
 use freya::prelude::*;
 
-use crate::fetch_state::{FetchStatus, PromptView};
+use crate::fetch_state::{FetchRefusal, FetchStatus, PromptView};
 use crate::history_state::{Progress, Status};
 use crate::worker::{Replier, Reply, Request};
 use crate::{PAGE_ROWS, status_text};
@@ -21,6 +21,8 @@ pub struct View {
     pub fetch: State<FetchStatus>,
     pub prompt: State<Option<PromptView>>,
     pub remotes: State<Vec<RemoteSummary>>,
+    /// A fetch the worker refused, until another is asked for.
+    pub refused: State<Option<FetchRefusal>>,
 }
 
 impl std::fmt::Debug for View {
@@ -28,6 +30,7 @@ impl std::fmt::Debug for View {
         f.debug_struct("View")
             .field("fetch", &*self.fetch.read())
             .field("prompt", &*self.prompt.read())
+            .field("refused", &*self.refused.read())
             .finish_non_exhaustive()
     }
 }
@@ -45,6 +48,7 @@ pub fn window(
     let counted = status_text::loaded_count(&view.progress.read());
     let fetch = view.fetch.read().clone();
     let prompt = view.prompt.read().clone();
+    let refused = view.refused.read().clone();
 
     rect()
         .expanded()
@@ -54,6 +58,7 @@ pub fn window(
             &counted,
             &fetch,
             view.fetch,
+            view.refused,
             &view.remotes.read(),
             submit.clone(),
         ))
@@ -61,6 +66,11 @@ pub fn window(
             let failed = matches!(fetch, FetchStatus::Failed { .. });
             banner(line, failed)
         }))
+        .maybe_child(
+            refused
+                .as_ref()
+                .map(|refusal| banner(status_text::refusal_line(refusal), false)),
+        )
         .child(HistoryHeader::new())
         .child(match status_text::placeholder(&status, has_rows) {
             Some(message) => notice(message, opened),
@@ -142,6 +152,7 @@ fn title_bar(
     counted: &str,
     fetch: &FetchStatus,
     fetch_state: State<FetchStatus>,
+    refused: State<Option<FetchRefusal>>,
     remotes: &[RemoteSummary],
     submit: Option<Rc<dyn Fn(Request)>>,
 ) -> Element {
@@ -169,17 +180,19 @@ fn title_bar(
                 .font_size(13.)
                 .color(get_theme_or_default().read().colors().text_placeholder),
         )
-        .maybe_child(fetch_button(fetch, fetch_state, remotes, submit))
+        .maybe_child(fetch_button(fetch, fetch_state, refused, remotes, submit))
         .into()
 }
 
 /// "Fetch <remote>" for the default remote while nothing is in flight;
 /// "Cancel" while a fetch is; nothing when the repository has no remote to
 /// fetch. The press itself marks the fetch as starting, so a second press
-/// before the worker answers has no button to land on.
+/// before the worker answers has no button to land on, and takes down an
+/// earlier refusal, which was about a press before this one.
 fn fetch_button(
     fetch: &FetchStatus,
     mut fetch_state: State<FetchStatus>,
+    mut refused: State<Option<FetchRefusal>>,
     remotes: &[RemoteSummary],
     submit: Option<Rc<dyn Fn(Request)>>,
 ) -> Option<Element> {
@@ -207,6 +220,7 @@ fn fetch_button(
         Button::new()
             .compact()
             .on_press(move |_| {
+                refused.set(None);
                 fetch_state.write().starting(remote.clone());
                 submit(Request::Fetch {
                     remote: remote.clone(),
@@ -353,6 +367,7 @@ mod tests {
                         name: "origin".to_owned(),
                         url: Some("https://git.example.com/ada/engine".to_owned()),
                     }]),
+                    refused: State::create(None),
                 })
             },
             1.,
@@ -826,6 +841,61 @@ mod tests {
         assert!(
             shown.iter().any(|t| t == "commit 0"),
             "the rows were lost: {shown:?}"
+        );
+    }
+
+    /// PRD R7.2, G15's window half: a refused fetch is drawn as a reason, beside the fetch
+    /// in flight, which goes on showing; and the next press takes it down. Caught by: not
+    /// drawing the refusal, drawing it in place of the running fetch, or leaving it up
+    /// after the user has asked again.
+    #[test]
+    fn a_refused_fetch_is_drawn_with_its_reason_until_the_next_press() {
+        let (mut test, view, submitted, _) = launch_with(
+            (0..3).map(row).collect(),
+            received(3, true),
+            FetchStatus::Running {
+                remote: "origin".to_owned(),
+                line: Some("Receiving objects: 40%".to_owned()),
+            },
+            None,
+        );
+        let mut refused = view.refused;
+        refused.set(Some(FetchRefusal {
+            remote: "origin".to_owned(),
+            reason: "a fetch of origin is already running".to_owned(),
+        }));
+        test.sync_and_update();
+        let shown = texts(&test);
+        assert!(
+            shown
+                .iter()
+                .any(|t| t == "Fetch of origin not started: a fetch of origin is already running"),
+            "the refusal is not drawn: {shown:?}"
+        );
+        assert!(
+            shown
+                .iter()
+                .any(|t| t == "Fetching origin: Receiving objects: 40%"),
+            "the refusal took the running fetch's place: {shown:?}"
+        );
+
+        let mut fetch = view.fetch;
+        fetch.set(FetchStatus::Finished {
+            remote: "origin".to_owned(),
+        });
+        test.sync_and_update();
+        click_label(&mut test, "Fetch origin");
+        assert_eq!(*view.refused.read(), None, "the press left the refusal up");
+        assert!(
+            !texts(&test).iter().any(|t| t.contains("not started")),
+            "{:?}",
+            texts(&test)
+        );
+        assert_eq!(
+            submitted.borrow().last(),
+            Some(&Request::Fetch {
+                remote: "origin".to_owned()
+            })
         );
     }
 

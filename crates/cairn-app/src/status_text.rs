@@ -1,6 +1,6 @@
 //! Status text for the history list and the fetch.
 
-use crate::fetch_state::FetchStatus;
+use crate::fetch_state::{FetchRefusal, FetchStatus};
 use crate::history_state::{Progress, Status};
 
 /// What the title bar says about the fetch, or `None` when there is nothing to say.
@@ -43,6 +43,14 @@ pub fn fetch_line(fetch: &FetchStatus) -> Option<String> {
             why_it_failed(message)
         )),
     }
+}
+
+/// What the window says about a fetch it asked for and the worker refused.
+pub fn refusal_line(refusal: &FetchRefusal) -> String {
+    format!(
+        "Fetch of {} not started: {}",
+        refusal.remote, refusal.reason
+    )
 }
 
 /// The one line of a failure worth a banner. `Error::GitFailed` carries git's whole
@@ -186,6 +194,18 @@ mod tests {
         })
         .unwrap();
         assert_eq!(clean, "Fetch of origin cancelled");
+    }
+
+    /// Caught by: a refusal that does not say which fetch was refused, or why.
+    #[test]
+    fn a_refusal_names_the_fetch_refused_and_the_reason() {
+        assert_eq!(
+            refusal_line(&FetchRefusal {
+                remote: "origin".to_owned(),
+                reason: "a fetch of upstream is already running".to_owned(),
+            }),
+            "Fetch of origin not started: a fetch of upstream is already running"
+        );
     }
 
     /// Caught by: putting git's whole stderr into a one-line banner every frame.

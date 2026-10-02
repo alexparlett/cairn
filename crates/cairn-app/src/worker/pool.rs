@@ -4,11 +4,13 @@
 //! Three threads per open repository, started by the first, each with its own
 //! [`Outbox`] so the update stream ends only when every one of them has gone:
 //!
-//! - `cairn-repository` (this file): opens the channel and finds `git` before
-//!   the repository, serves the history walk, forwards operations, and on its
-//!   way out stops the other two.
-//! - `cairn-operations` (`operations.rs`): runs `git` verbs, so a fetch blocks
-//!   neither the walk nor the window.
+//! - `cairn-repository` (this file): takes the `git` the application found as
+//!   it started ([`Discovery`]), opens the repository and its askpass channel,
+//!   serves the history walk and the command log, forwards each operation to
+//!   its write lane, and on its way out closes the repository — every `git`
+//!   in it ended and reaped, up to `CLOSE_BOUND` — and stops the other two.
+//! - `cairn-network` (`network_lane.rs`): the network lane, where fetch runs,
+//!   so it blocks neither the walk nor the window.
 //! - `cairn-askpass` (`askpass.rs`): accepts the helper's questions and waits
 //!   on the window for each answer.
 //!
@@ -19,14 +21,20 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
+use std::time::Duration;
 
-use cairn_git::{Error, HistoryCursor, HistoryRequest, HistorySession, SharedRepository};
+use cairn_git::{
+    CLOSE_BOUND, Error, HistoryCursor, HistoryRequest, HistorySession, SharedRepository,
+};
 
-use super::askpass::{AcceptorStop, Reply, serve_prompts};
+use super::askpass::{AcceptorStop, Reply, STOP_DEADLINE, serve_prompts};
+use super::discovery::Discovery;
 use super::epoch::{Epoch, Epochs};
-use super::operations::{FetchControl, Operation, serve_operations};
+use super::network_lane::{FetchControl, Lane, Operation, serve_network_lane};
 use super::request::{Request, Update};
-use super::startup::{Backend, Startup};
+use super::startup::Backend;
+#[cfg(test)]
+use super::startup::Startup;
 use super::wake::{Wake, Woken};
 
 pub const WORKERS_PER_REPOSITORY: usize = 1;
@@ -43,20 +51,28 @@ const _: () = assert!(
 /// travels down, and application state must not keep one.
 pub type Replier = Rc<dyn Fn(Reply)>;
 
-/// Returns before touching a disk; open failures arrive as [`Update::Failed`], and
-/// so does a `git` that is missing or older than Cairn requires, checked first.
-/// Drive [`Updates`] from exactly one task.
-pub fn open(path: impl AsRef<Path>) -> Result<(RepositoryHandle, Updates, Replier), OpenError> {
-    open_with(path, Startup::of_this_process())
-}
+/// How long the window may wait on a close it asked for before a second
+/// request closes it anyway: past the longest an honest close takes —
+/// `CLOSE_BOUND` for the reaps, then up to the acceptor's stop deadline — so
+/// only a worker that has stopped answering is abandoned, and the window can
+/// always be closed.
+pub const CLOSE_PATIENCE: Duration = Duration::from_secs(5);
 
-/// [`open`] with the environment `git` is searched on and run with, and the
-/// helper it is pointed at; what a test hands in.
-pub(super) fn open_with(
+const _: () = assert!(
+    CLOSE_PATIENCE.as_millis() > CLOSE_BOUND.as_millis() + STOP_DEADLINE.as_millis(),
+    "the window must not give up on a close before an honest one can finish"
+);
+
+/// Returns before touching a disk; open failures arrive as [`Update::Failed`], and
+/// so does a `git` that is missing or older than Cairn requires, checked first —
+/// once per application, by `git` ([`Discovery`]), never per repository.
+/// Drive [`Updates`] from exactly one task.
+pub fn open(
     path: impl AsRef<Path>,
-    startup: Startup,
+    git: &Discovery,
 ) -> Result<(RepositoryHandle, Updates, Replier), OpenError> {
     let path = path.as_ref().to_owned();
+    let discovery = git.clone();
 
     let (jobs, incoming) = channel::<(Option<Epoch>, Request)>();
     let (outgoing, inbox) = channel::<Envelope>();
@@ -71,7 +87,7 @@ pub(super) fn open_with(
         updates: Some(outgoing.clone()),
         wake: Arc::clone(&wake),
     };
-    let operations_outbox = Outbox {
+    let network_outbox = Outbox {
         updates: Some(outgoing.clone()),
         wake: Arc::clone(&wake),
     };
@@ -97,16 +113,16 @@ pub(super) fn open_with(
             let Some(outbox) = exit.outbox.as_ref() else {
                 return;
             };
-            // Once, before anything else: the channel, then git around it. A missing or
-            // too-old git is reported with the version Cairn needs, never worked around
-            // (D1). Off the UI thread, since finding out means running `git --version`.
-            let backend = match Backend::open(&startup) {
-                Ok(backend) => backend,
-                Err(error) => {
+            // Before anything else: the git the application found as it started,
+            // waiting for that answer if it is still being found. A missing or too-old
+            // git is reported with the version Cairn needs, never worked around (D1).
+            let git = match discovery.git() {
+                Ok(git) => git.clone(),
+                Err(message) => {
                     outbox.send(
                         None,
                         Update::Failed {
-                            message: error.to_string(),
+                            message: message.to_owned(),
                         },
                     );
                     return;
@@ -125,16 +141,19 @@ pub(super) fn open_with(
                     return;
                 }
             };
+            // This repository's channel, and git pointed at it.
+            let backend = Backend::open(discovery.startup(), &git);
             let threads = Threads::start(
                 backend,
                 Arc::clone(&shared),
                 answered,
-                operations_outbox,
+                network_outbox,
                 acceptor_outbox,
                 &worker_wake,
                 worker_control,
             );
             serve(&shared, incoming, outbox, worker_epochs, &threads);
+            // However serve ended — a close, every handle gone — the repository closes.
             threads.stop();
         })
         .map_err(|source| OpenError {
@@ -162,11 +181,25 @@ pub(super) fn open_with(
     ))
 }
 
-/// The two threads the repository thread starts, and how it reaches them.
+/// [`open`] with a `git` found afresh from `startup` — the environment it is
+/// searched on and run with, and the helper it is pointed at; what a test
+/// hands in.
+#[cfg(test)]
+pub(super) fn open_with(
+    path: impl AsRef<Path>,
+    startup: Startup,
+) -> Result<(RepositoryHandle, Updates, Replier), OpenError> {
+    open(path, &Discovery::new(startup))
+}
+
+/// The two threads the repository thread starts, how it reaches them, and
+/// the repository they run `git` in, which stopping them closes.
 struct Threads {
-    operations: Option<Sender<Operation>>,
+    /// The network lane's queue; one lane per [`Lane`], one lane so far.
+    network: Option<Sender<Operation>>,
     control: FetchControl,
     acceptor: Option<AcceptorStop>,
+    shared: Arc<SharedRepository>,
 }
 
 impl Threads {
@@ -174,12 +207,12 @@ impl Threads {
         backend: Backend,
         shared: Arc<SharedRepository>,
         answered: Receiver<Reply>,
-        operations_outbox: Outbox,
+        network_outbox: Outbox,
         acceptor_outbox: Outbox,
         wake: &Arc<Wake>,
         control: FetchControl,
     ) -> Self {
-        let (operations, queued) = channel::<Operation>();
+        let (network, queued) = channel::<Operation>();
         let Backend {
             git,
             channel,
@@ -214,16 +247,17 @@ impl Threads {
 
         let running = control.clone();
         let exit = WorkerExit {
-            outbox: Some(operations_outbox),
+            outbox: Some(network_outbox),
             wake: Arc::clone(wake),
         };
+        let lane_shared = Arc::clone(&shared);
         let _ = std::thread::Builder::new()
-            .name("cairn-operations".to_owned())
+            .name("cairn-network".to_owned())
             .spawn(move || {
                 if let Some(outbox) = exit.outbox.as_ref() {
-                    serve_operations(
+                    serve_network_lane(
                         &git,
-                        &shared,
+                        &lane_shared,
                         channel.as_ref(),
                         &prompting,
                         &running,
@@ -237,38 +271,62 @@ impl Threads {
             });
 
         Self {
-            operations: Some(operations),
+            network: Some(network),
             control,
             acceptor,
+            shared,
         }
     }
 
-    /// Forwards a fetch, one at a time: a second while one is in flight is
-    /// dropped, since the fetch in flight is the one the window shows.
-    fn perform(&self, operation: Operation) {
-        if !self.control.arm() {
-            return;
-        }
-        if let Some(operations) = &self.operations {
-            let _ = operations.send(operation);
+    /// Forwards an operation to its lane. A second copy of one already
+    /// running or waiting there is refused, with the reason sent to the
+    /// window, never dropped in silence (PRD R7.2).
+    fn perform(&self, operation: Operation, outbox: &Outbox) {
+        match operation.lane() {
+            Lane::Network => {
+                let Operation::Fetch { remote } = &operation;
+                if let Err(refusal) = self.control.arm(remote) {
+                    outbox.send(
+                        None,
+                        Update::FetchRefused {
+                            remote: remote.clone(),
+                            reason: refusal.to_string(),
+                        },
+                    );
+                    return;
+                }
+                if let Some(network) = &self.network {
+                    let _ = network.send(operation);
+                }
+            }
         }
     }
 
-    /// Ends both threads; see [`Threads::drop`], which does the work so that
-    /// a panic in `serve` stops them too.
+    /// Closes the repository and ends both threads; see [`Threads::drop`],
+    /// which does the work so that a panic in `serve` does it too.
     fn stop(self) {
         drop(self);
     }
 }
 
 impl Drop for Threads {
-    /// A fetch in flight is killed, the operations queue closed, and the
-    /// acceptor woken to see it should stop. Runs once the window has let go
-    /// (the acceptor's answering end is gone by then, so a prompt still
-    /// waiting is refused rather than left hanging) and on unwinding alike.
+    /// Closes the repository (PRD R6.3): the network lane's queue is closed;
+    /// then every `git` running in the repository — a fetch in flight, one
+    /// mid-spawn, one dropped to a reaper — is ended the way a cancel ends
+    /// it, and this waits up to `CLOSE_BOUND` for their reaps, here on the
+    /// repository thread. One that enters the registry afterwards — a fetch
+    /// still queued when the close came, which the lane takes up after it —
+    /// is ended as it enters. The registry is the one authority here: a fetch
+    /// is ended by it, not by its cancel, so nothing it misses is ended by
+    /// accident. Last, the acceptor is woken to see it should stop. Runs once
+    /// the window has asked to close or let go (the acceptor's answering end
+    /// may still be held then: a prompt still waiting is withdrawn by the
+    /// window when its fetch's outcome arrives) and on unwinding alike.
     fn drop(&mut self) {
-        self.control.cancel();
-        self.operations = None;
+        self.network = None;
+        // How many outlived the bound is told to nobody: the window is closing, and
+        // each has had `SIGKILL`, which waiting longer cannot improve on.
+        let _ = self.shared.end_invocations(CLOSE_BOUND);
         if let Some(acceptor) = &self.acceptor {
             acceptor.stop();
         }
@@ -287,13 +345,19 @@ impl RepositoryHandle {
     /// numbered; an operation is queued behind nothing and supersedes
     /// nothing, and the epoch returned is simply the current one. A cancel
     /// does not queue at all: it reaches the fetch directly, ahead of any
-    /// page the repository thread is walking, through a lock the operations
-    /// thread holds only for an assignment and a kill that only tries for the
-    /// child's — a review obligation, since this runs on the UI thread.
+    /// page the repository thread is walking, through a lock the network
+    /// lane holds only for an assignment and a kill that only tries for the
+    /// child's — a review obligation, since this runs on the UI thread. A
+    /// close stops the epochs first, an atomic store, so the page being
+    /// walked is abandoned at its next poll and the close behind it is
+    /// reached at once; the waiting it starts is the repository thread's.
     pub fn submit(&self, request: Request) -> Epoch {
         if matches!(request, Request::CancelFetch) {
             self.control.cancel();
             return self.epochs.current();
+        }
+        if matches!(request, Request::Close) {
+            self.epochs.stop();
         }
         let epoch = if request.is_query() {
             self.epochs.bump()
@@ -312,6 +376,21 @@ impl RepositoryHandle {
             self.submit(request);
         })
     }
+}
+
+/// A handle with no worker behind it, and what has been sent through it
+/// since last asked: for a test of the window's side alone.
+#[cfg(test)]
+pub fn idle_handle() -> (RepositoryHandle, impl Fn() -> Vec<Request>) {
+    let (jobs, incoming) = channel::<(Option<Epoch>, Request)>();
+    let handle = RepositoryHandle {
+        jobs,
+        epochs: Epochs::new(),
+        control: FetchControl::default(),
+    };
+    (handle, move || {
+        incoming.try_iter().map(|(_, request)| request).collect()
+    })
 }
 
 /// Driven from exactly one task.
@@ -494,7 +573,7 @@ fn serve(
                 continue;
             }
             Request::Fetch { remote } => {
-                threads.perform(Operation::Fetch { remote });
+                threads.perform(Operation::Fetch { remote }, outbox);
                 continue;
             }
             Request::CancelFetch => {
@@ -502,6 +581,17 @@ fn serve(
                 threads.control.cancel();
                 continue;
             }
+            Request::CommandLog => {
+                outbox.send(
+                    None,
+                    Update::CommandLog {
+                        records: shared.command_log(),
+                    },
+                );
+                continue;
+            }
+            // The epochs were stopped as it was sent; the closing is the caller's.
+            Request::Close => break,
         };
         let Some(epoch) = epoch else {
             continue; // Every query is numbered; `submit` guarantees it.
@@ -578,7 +668,7 @@ mod tests {
 
     /// The Cairn checkout itself, opened through the real boundary.
     fn cairn() -> (RepositoryHandle, Updates) {
-        match open(env!("CARGO_MANIFEST_DIR")) {
+        match open_with(env!("CARGO_MANIFEST_DIR"), Startup::of_this_process()) {
             Ok((handle, updates, _)) => (handle, updates),
             Err(error) => panic!("opening the Cairn checkout: {error}"),
         }
@@ -588,7 +678,7 @@ mod tests {
     #[test]
     fn opening_a_path_outside_a_repository_is_reported_and_names_the_path() {
         let outside = std::env::temp_dir().join("cairn-not-a-repository");
-        let (_handle, mut updates, _) = match open(&outside) {
+        let (_handle, mut updates, _) = match open_with(&outside, Startup::of_this_process()) {
             Ok(opened) => opened,
             Err(error) => panic!("starting the worker: {error}"),
         };
@@ -630,7 +720,7 @@ mod tests {
     fn opening_returns_before_the_repository_is_found() {
         let outside = std::env::temp_dir().join("cairn-not-a-repository");
         assert!(
-            open(&outside).is_ok(),
+            open_with(&outside, Startup::of_this_process()).is_ok(),
             "open() decided there was no repository, so it looked — on the caller's thread"
         );
     }
@@ -639,7 +729,7 @@ mod tests {
     #[test]
     fn a_freshly_initialised_repository_reaches_the_view_as_an_empty_history() {
         let fixture = UnbornRepository::new("cairn-unborn-head");
-        let (handle, mut updates, _) = match open(&fixture.path) {
+        let (handle, mut updates, _) = match open_with(&fixture.path, Startup::of_this_process()) {
             Ok(opened) => opened,
             Err(error) => panic!("starting the worker: {error}"),
         };
@@ -763,10 +853,11 @@ mod tests {
 
         let fixture = BorrowedRepository::new("cairn-retried-request");
         fixture.point_main_at(&"1".repeat(40));
-        let (handle, mut updates, _) = match open(&fixture.fixture.path) {
-            Ok(opened) => opened,
-            Err(error) => panic!("starting the worker: {error}"),
-        };
+        let (handle, mut updates, _) =
+            match open_with(&fixture.fixture.path, Startup::of_this_process()) {
+                Ok(opened) => opened,
+                Err(error) => panic!("starting the worker: {error}"),
+            };
 
         handle.submit(Request::OpenHistory { rows: 3 });
         match block_on(updates.next()) {
@@ -1134,7 +1225,7 @@ mod tests {
     #[test]
     fn a_failed_open_ends_the_stream_rather_than_leaving_it_open() {
         let outside = std::env::temp_dir().join("cairn-not-a-repository");
-        let (_handle, mut updates, _) = match open(&outside) {
+        let (_handle, mut updates, _) = match open_with(&outside, Startup::of_this_process()) {
             Ok(opened) => opened,
             Err(error) => panic!("starting the worker: {error}"),
         };

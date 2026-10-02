@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use cairn_model::{HistoryRow, RemoteSummary};
+use cairn_model::{CommandRecord, HistoryRow, RemoteSummary};
 
 use super::askpass::PromptId;
 
@@ -14,11 +14,28 @@ pub enum Request {
     MoreHistory { rows: usize },
     /// The configured remotes, answered by [`Update::Remotes`].
     ListRemotes,
-    /// Fetches `remote` (a configured name or a URL) on the operations
-    /// thread; its progress and outcome arrive as the `Fetch*` updates.
+    /// Fetches `remote` (a configured name or a URL) in the network lane;
+    /// its progress and outcome arrive as the `Fetch*` updates, or
+    /// [`Update::FetchRefused`] when a fetch is already in flight.
     Fetch { remote: String },
     /// Kills the fetch in flight, if any.
     CancelFetch,
+    /// Every `git` invocation this repository has run that is over, oldest
+    /// first, answered by [`Update::CommandLog`].
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no view asks for the log in this packet (PRD R8.3); the worker answers it, \
+                      and its tests ask"
+        )
+    )]
+    CommandLog,
+    /// Closes the repository: stops any walk, ends every `git` running in it
+    /// and waits a bounded time for their reaps — on the worker, never the
+    /// caller — then lets every worker thread go, which ends the update
+    /// stream. What closing the window asks for.
+    Close,
 }
 
 impl Request {
@@ -27,7 +44,11 @@ impl Request {
     pub fn is_query(&self) -> bool {
         match self {
             Self::OpenHistory { .. } | Self::MoreHistory { .. } => true,
-            Self::ListRemotes | Self::Fetch { .. } | Self::CancelFetch => false,
+            Self::ListRemotes
+            | Self::Fetch { .. }
+            | Self::CancelFetch
+            | Self::CommandLog
+            | Self::Close => false,
         }
     }
 }
@@ -70,9 +91,15 @@ pub enum Update {
         refreshed: bool,
         message: String,
     },
+    /// A fetch of `remote` was not started because one is already in flight;
+    /// `reason` says which, as display text. Nothing else about the fetch in
+    /// flight changes.
+    FetchRefused { remote: String, reason: String },
     /// git or ssh is asking, through the helper: `text` is the prompt as
     /// given, and `id` is what the answer must name.
     Prompt { id: PromptId, text: String },
+    /// The repository's command log, oldest first, as far back as it keeps.
+    CommandLog { records: Vec<CommandRecord> },
 }
 
 #[cfg(test)]
@@ -95,6 +122,8 @@ mod tests {
                 remote: "origin".to_owned(),
             },
             Request::CancelFetch,
+            Request::CommandLog,
+            Request::Close,
         ] {
             assert!(!operation.is_query(), "{operation:?}");
         }

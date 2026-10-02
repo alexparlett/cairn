@@ -84,6 +84,15 @@ const READ_ONLY: &[(&str, &str)] = &[
     // else (`crate::reads`; evidence:
     // `docs/research/process-manager/platform-and-git-behaviour.md` C3).
     ("GIT_OPTIONAL_LOCKS", "0"),
+    // In a partial clone, asking for an object only the promisor remote holds
+    // fetches it: a pack written and the network reached, from a read. With
+    // this, git answers that the object is missing instead. Git older than
+    // 2.44 ignores the variable, and the floor is 2.30, so on such a git a read
+    // can still lazy-fetch — and, carrying no askpass token, an authenticated
+    // promisor fails closed. That is a constraint the reads in `crate::reads`
+    // design around, not one this line removes (decided by the user,
+    // 2026-10-02: keep the floor, set the variable).
+    ("GIT_NO_LAZY_FETCH", "1"),
 ];
 
 /// Copied from the parent process when present, and nothing else is. Each is
@@ -315,11 +324,13 @@ mod tests {
             environment.get("GIT_SEQUENCE_EDITOR"),
             Some(OsStr::new("false"))
         );
-        assert_eq!(
-            environment.get("GIT_OPTIONAL_LOCKS"),
-            None,
-            "the read-only variable is a read's, not every invocation's"
-        );
+        for read_only in ["GIT_OPTIONAL_LOCKS", "GIT_NO_LAZY_FETCH"] {
+            assert_eq!(
+                environment.get(read_only),
+                None,
+                "{read_only} is a read's, not every invocation's"
+            );
+        }
         assert_eq!(
             environment.get("GIT_ASKPASS"),
             Some(OsStr::new("/opt/cairn/cairn-askpass"))
@@ -542,10 +553,10 @@ mod tests {
     }
 
     /// PRD G3, a read: the base, the editor pinned to `false`, optional locks
-    /// off, and no token — spelled out variable by variable, so adding one to
-    /// either profile is an edit here.
+    /// and lazy fetching off, and no token — spelled out variable by variable,
+    /// so adding one to either profile is an edit here.
     #[test]
-    fn a_read_is_the_base_with_optional_locks_off_and_no_token() {
+    fn a_read_is_the_base_with_optional_locks_and_lazy_fetch_off_and_no_token() {
         let read = profiled().command(Path::new("git"), Profile::Read);
         assert_eq!(
             applied(&read),
@@ -553,6 +564,7 @@ mod tests {
                 ("CAIRN_ASKPASS_SOCKET", "/run/user/1000/cairn-1-abc/askpass"),
                 ("GIT_ASKPASS", "/opt/cairn/cairn-askpass"),
                 ("GIT_EDITOR", "false"),
+                ("GIT_NO_LAZY_FETCH", "1"),
                 ("GIT_OPTIONAL_LOCKS", "0"),
                 ("GIT_SEQUENCE_EDITOR", "false"),
                 ("GIT_TERMINAL_PROMPT", "0"),

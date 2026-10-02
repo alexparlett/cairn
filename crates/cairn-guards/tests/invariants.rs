@@ -1822,21 +1822,21 @@ fn every_git_invocation_disables_the_terminal_prompt() {
         );
     }
     // A read's additions, the same way: the table itself, then that it is applied.
-    let read_only = with_strings
-        .find("const READ_ONLY")
-        .map(|at| &with_strings[at..])
-        .and_then(|rest| rest.find("];").map(|end| &rest[..end]))
-        .unwrap_or_else(|| {
-            panic!(
-                "{PROCESS_ENVIRONMENT_FILE} no longer declares a `const READ_ONLY` table; a read \
-                 would refresh the index behind the user's back"
-            )
-        });
+    let read_only = const_table(&with_strings, "READ_ONLY").unwrap_or_else(|| {
+        panic!(
+            "{PROCESS_ENVIRONMENT_FILE} no longer declares a `const READ_ONLY` table; a read \
+             would refresh the index behind the user's back"
+        )
+    });
+    let missing = missing_pins(read_only, READ_ONLY_PINS);
     assert!(
-        read_only.contains("(\"GIT_OPTIONAL_LOCKS\", \"0\")"),
-        "{PROCESS_ENVIRONMENT_FILE}'s READ_ONLY table no longer carries (\"GIT_OPTIONAL_LOCKS\", \
-         \"0\"); without it a `git status` read rewrites the index and holds index.lock while \
-         the user's own commit needs it (process-manager PRD R2.3)."
+        missing.is_empty(),
+        "{PROCESS_ENVIRONMENT_FILE}'s READ_ONLY table no longer carries {}",
+        missing
+            .iter()
+            .map(|(pin, why)| format!("{pin}; {why}"))
+            .collect::<Vec<_>>()
+            .join(" And ")
     );
     assert!(
         mentions_crate(&production, "READ_ONLY").len() >= 2,
@@ -1867,8 +1867,109 @@ fn every_git_invocation_disables_the_terminal_prompt() {
     );
 }
 
+/// What a read's environment must carry, each with what goes wrong without it (process-manager
+/// PRD R2.3, and D3 as the user decided it on 2026-10-02).
+const READ_ONLY_PINS: &[(&str, &str, &str)] = &[
+    (
+        "GIT_OPTIONAL_LOCKS",
+        "0",
+        "without it a `git status` read rewrites the index and holds index.lock while the \
+         user's own commit needs it (process-manager PRD R2.3).",
+    ),
+    (
+        "GIT_NO_LAZY_FETCH",
+        "1",
+        "without it a read in a partial clone fetches a missing object from the promisor \
+         remote: a pack written and the network reached, from a read (D3, decided by the user \
+         2026-10-02; git older than 2.44 ignores it).",
+    ),
+];
+
+/// The text of the table `const <name>: ..` declares in `source` (strings kept, comments
+/// blanked), from its declaration to its closing `];`; `None` when there is no such table. The
+/// name is matched whole, so `READ_ONLY_EXTRA` is not `READ_ONLY`.
+fn const_table<'a>(source: &'a str, name: &str) -> Option<&'a str> {
+    let declaration = format!("const {name}:");
+    let at = source.find(&declaration)?;
+    let rest = &source[at..];
+    rest.find("];").map(|end| &rest[..end])
+}
+
+/// Each pin `table` does not carry as a `("NAME", "value")` tuple, spelled as it should be,
+/// with the reason the pin exists.
+fn missing_pins<'a>(table: &str, pins: &'a [(&str, &str, &str)]) -> Vec<(String, &'a str)> {
+    pins.iter()
+        .filter_map(|(name, value, why)| {
+            let tuple = format!("(\"{name}\", \"{value}\")");
+            (!table.contains(&tuple)).then_some((tuple, *why))
+        })
+        .collect()
+}
+
 #[test]
 fn the_process_environment_matcher_catches_the_shapes_it_claims() {
+    // The read pins, spelled out apart from the roster, so a pin dropped from it fails here.
+    assert_eq!(
+        READ_ONLY_PINS
+            .iter()
+            .map(|(name, value, _)| (*name, *value))
+            .collect::<Vec<_>>(),
+        [("GIT_OPTIONAL_LOCKS", "0"), ("GIT_NO_LAZY_FETCH", "1")],
+        "READ_ONLY_PINS no longer names exactly the variables a read must carry"
+    );
+    let carried = "const READ_ONLY: &[(&str, &str)] = &[\n    (\"GIT_OPTIONAL_LOCKS\", \"0\"),\n    \
+                   (\"GIT_NO_LAZY_FETCH\", \"1\"),\n];\nconst OTHER: &[(&str, &str)] = &[];";
+    let table = const_table(carried, "READ_ONLY")
+        .unwrap_or_else(|| panic!("the table matcher missed a READ_ONLY table"));
+    assert!(
+        missing_pins(table, READ_ONLY_PINS).is_empty(),
+        "the pin matcher fired on a table that carries every pin: {table:?}"
+    );
+    for (shape, source, missing) in [
+        (
+            "a table without the lazy-fetch pin",
+            "const READ_ONLY: &[(&str, &str)] = &[(\"GIT_OPTIONAL_LOCKS\", \"0\")];",
+            "GIT_NO_LAZY_FETCH",
+        ),
+        (
+            "the pin with the wrong value",
+            "const READ_ONLY: &[(&str, &str)] = &[(\"GIT_OPTIONAL_LOCKS\", \"0\"), \
+             (\"GIT_NO_LAZY_FETCH\", \"0\")];",
+            "GIT_NO_LAZY_FETCH",
+        ),
+        (
+            "the pin in the next table, not this one",
+            "const READ_ONLY: &[(&str, &str)] = &[(\"GIT_OPTIONAL_LOCKS\", \"0\")];\n\
+             const ALWAYS: &[(&str, &str)] = &[(\"GIT_NO_LAZY_FETCH\", \"1\")];",
+            "GIT_NO_LAZY_FETCH",
+        ),
+        (
+            "a table without the optional-locks pin",
+            "const READ_ONLY: &[(&str, &str)] = &[(\"GIT_NO_LAZY_FETCH\", \"1\")];",
+            "GIT_OPTIONAL_LOCKS",
+        ),
+    ] {
+        let table = const_table(source, "READ_ONLY")
+            .unwrap_or_else(|| panic!("the table matcher missed the table in {shape}"));
+        let found = missing_pins(table, READ_ONLY_PINS);
+        assert!(
+            found.len() == 1 && found[0].0.contains(missing),
+            "the pin matcher did not report exactly {missing} for {shape}: {found:?}"
+        );
+    }
+    for (shape, source) in [
+        (
+            "a longer name",
+            "const READ_ONLY_EXTRA: &[(&str, &str)] = &[(\"GIT_NO_LAZY_FETCH\", \"1\")];",
+        ),
+        ("no table at all", "fn read_only() {}"),
+    ] {
+        assert!(
+            const_table(source, "READ_ONLY").is_none(),
+            "the table matcher took {shape} for the READ_ONLY table: {source:?}"
+        );
+    }
+
     for (shape, source) in [
         ("plain", "Command::new(p)"),
         ("qualified", "std::process::Command::new(\"git\")"),

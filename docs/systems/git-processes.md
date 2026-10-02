@@ -98,8 +98,9 @@ gets:
 `std::process::Command` is built. It clears the inherited environment, applies
 the base, and then applies what the invocation's kind adds:
 
-- **A read** (`Profile::Read`) adds the `READ_ONLY` table, `GIT_OPTIONAL_LOCKS=0`,
-  and never a token, because the variant has no field for one.
+- **A read** (`Profile::Read`) adds the `READ_ONLY` table, `GIT_OPTIONAL_LOCKS=0`
+  and `GIT_NO_LAZY_FETCH=1`, and never a token, because the variant has no
+  field for one.
 - **A write** (`Profile::Write { token }`) adds `CAIRN_ASKPASS_TOKEN` when the
   operation was given a token, and nothing else.
 
@@ -117,12 +118,20 @@ Why each variable is there, with its evidence, is beside it in
   `diff` and `describe --dirty` refresh the index anyway. That is why a read in
   `reads/` runs query plumbing or `status` only, as the module's own docs say where
   `diff-engine` will read them.
+- **`GIT_NO_LAZY_FETCH=1` needs git 2.44; the floor is 2.30.** In a partial
+  clone, a read that asks for an object only the promisor remote holds would
+  fetch it — a pack written, the network reached. With the variable, git
+  answers that the object is missing instead. Git older than 2.44 ignores it,
+  so there a read in a partial clone may still lazy-fetch, and, carrying no
+  askpass token, an authenticated promisor fails closed. The user decided on
+  2026-10-02 to keep the floor and set the variable; the reads `diff-engine`
+  adds design around the older-git case (`reads/mod.rs`).
 
 Pinned:
 
 - **Variable by variable, from the builder.** `environment.rs`:
   `the_environment_is_exactly_the_deliberate_entries`,
-  `a_read_is_the_base_with_optional_locks_off_and_no_token`,
+  `a_read_is_the_base_with_optional_locks_and_lazy_fetch_off_and_no_token`,
   `a_write_is_the_base_with_its_token_only_when_given` and
   `the_always_table_wins_whatever_the_parent_says`.
 - **From what a stub `git` printed.** Each test spells out the exact set the stub
@@ -137,6 +146,11 @@ Pinned:
     information is stale and the working tree is dirty. The read leaves the
     index byte for byte as it was, and the same `status` run as a write
     rewrites it — the control that proves the fixture was stale.
+  - `a_read_in_a_partial_clone_does_not_fetch_a_missing_object`. In a
+    `--filter=blob:none` clone, a read of a blob only the promisor holds fails
+    and writes no pack; the same `cat-file` as a write fetches it into a new
+    pack — the control that proves the clone was partial. On a git older than
+    2.44 it says it was skipped and decides nothing.
   - `a_commit_without_a_message_fails_promptly_instead_of_opening_an_editor`
     and `an_interactive_rebase_fails_promptly_instead_of_opening_the_sequence_editor`.
     Each configures an editor that records it ran and then hangs. Each verb
@@ -376,7 +390,7 @@ count, and each has a matcher self-test:
 
 | Twin | What it decides |
 | --- | --- |
-| `every_git_invocation_disables_the_terminal_prompt` | Outside `process/environment.rs`, no product file names or builds a `Command`, sets a process environment variable, or builds or implements `GitEnvironment`. Inside it: one `Command`, one literal, `env_clear` and `envs`, and the `ALWAYS` table's four pins. The `READ_ONLY` table carries `GIT_OPTIONAL_LOCKS=0` and is applied. The askpass names are set. |
+| `every_git_invocation_disables_the_terminal_prompt` | Outside `process/environment.rs`, no product file names or builds a `Command`, sets a process environment variable, or builds or implements `GitEnvironment`. Inside it: one `Command`, one literal, `env_clear` and `envs`, and the `ALWAYS` table's four pins. The `READ_ONLY` table carries each of `READ_ONLY_PINS` — `GIT_OPTIONAL_LOCKS=0` and `GIT_NO_LAZY_FETCH=1` — and is applied. The askpass names are set. |
 | `only_the_process_module_builds_or_runs_a_process` | Outside `process/`, no product file names `Stdio`, `Child` or its pipes, `CommandExt` or `nix`. It calls none of `.spawn()`, `.output()`, `.status()`, `.wait()`, `.try_wait()` or `.wait_with_output()`, and does not call `GitEnvironment::command`. `GitEnvironment::command` stays `pub(super)`. `process/` itself must show `.spawn()`, `.output()`, `.wait()`, `.try_wait()`, `Stdio`, `Child`, `ChildStderr`, `nix` and `.command(..)`, so the matcher is proven to read real code. The one exception row, `.status()` in `cairn-app` (`HistoryProgress::status`), fails once it is no longer needed. |
 | `the_runner_is_named_only_by_ops_and_reads` | In `crates/cairn-git/src`, the runner's names (`GitCommand`, `read_invocation`, `Running`, `ProcessKill`, `Invocation`, `KillHandle`) are allowed in `process/`, `ops/` and `reads/` only. The write builder and `WriteAuthority` are allowed in `process/` and `ops/`. Constructing, writing a literal of or implementing `WriteAuthority` is allowed in `ops/` only. Nothing is declared or re-exported `pub`, and `process` stays private. The authority keeps its shape, and the doctests stay. |
 | `only_the_ops_module_mutates_a_repository` | No product file outside `ops/` and `process/` spawns `git` by its literal name. No file of `crates/cairn-git/src` outside `ops/` names gitoxide's mutation API. That roster was enumerated from the vendored gix 0.87.1 source and sits, with each entry's file and line, in `crates/cairn-guards/src/lib.rs`. |

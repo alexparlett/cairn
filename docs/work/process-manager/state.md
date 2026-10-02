@@ -50,16 +50,21 @@ implementation most:
   wholly `#[cfg(target_os = "linux")]`; only their `/proc` reads need Linux.
   Narrow the gating so macOS keeps the rest (QA TC16).
 
-## Open questions
+## Decided by the user
 
-- **Partial-clone lazy fetch on a read** (raised by phase 01 QA). In a partial
-  clone, a read that asks for an object only the promisor remote holds fetches
-  it: a pack written, the network reached, and with no askpass token an
-  authenticated promisor fails closed. `GIT_NO_LAZY_FETCH=1` stops it but needs
-  git 2.44, above the 2.30 floor. For the user to decide before `reads/` gets
-  its first function: add it to `READ_ONLY` anyway (inert below 2.44), or leave
-  it as a constraint `diff-engine` designs around. Recorded in
-  `crates/cairn-git/src/reads/mod.rs`.
+- **Partial-clone lazy fetch on a read (D3, raised by phase 01 QA) — decided
+  by the user on 2026-10-02.** Keep the git floor at 2.30 and add
+  `("GIT_NO_LAZY_FETCH", "1")` to `READ_ONLY`. Git older than 2.44 ignores the
+  variable, so a read in a partial clone on such a git may still lazy-fetch (a
+  pack written, the network reached; with no token an authenticated promisor
+  fails closed) — a constraint `diff-engine` designs around, recorded in
+  `crates/cairn-git/src/reads/mod.rs` and `docs/systems/git-processes.md`.
+  Landed in phase 03: the builder's and the stub tests' read sets,
+  `READ_ONLY_PINS` in `every_git_invocation_disables_the_terminal_prompt` with
+  self-test cases, and `a_read_in_a_partial_clone_does_not_fetch_a_missing_object`
+  against real git.
+
+## Open questions
 
 Otherwise none of this packet's own. The questions it leaves to other packets are listed
 at the end of `brainstorm.md`.

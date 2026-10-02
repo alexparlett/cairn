@@ -30,12 +30,18 @@
 //! `--refresh` included), `read-tree`, `write-tree`, `hash-object -w` and
 //! `commit-tree` are plumbing writers, and each is a write, built in `ops/`.
 //!
-//! One read can still write in a partial clone: asking for an object the
-//! promisor remote holds fetches it, writing a pack and reaching the network
-//! (with no askpass token, an authenticated promisor fails closed).
-//! `GIT_NO_LAZY_FETCH` stops it but needs git 2.44, above the 2.30 floor.
-//! How a read meets that is open, for the user, before the first function
-//! here lands.
+//! **A read never lazily fetches — on git 2.44 or later.** In a partial
+//! clone, asking for an object only the promisor remote holds fetches it,
+//! writing a pack and reaching the network. A read runs with
+//! `GIT_NO_LAZY_FETCH=1`, so git answers that the object is missing instead
+//! (decided by the user on 2026-10-02, keeping the 2.30 floor). Git older than
+//! 2.44 ignores the variable: there, a read in a partial clone may still
+//! lazy-fetch, and, carrying no askpass token, an authenticated promisor fails
+//! closed. That is a constraint each read here designs around — a read that
+//! may touch an object a partial clone lacks must treat both answers, the
+//! object missing and the fetch that failed, as what they are — not one the
+//! environment removes. Pinned against real git by
+//! `a_read_in_a_partial_clone_does_not_fetch_a_missing_object`.
 //!
 //! A read can carry no askpass token — its invocation has nowhere to hold one —
 //! so a read that reached a credential prompt fails closed rather than asking

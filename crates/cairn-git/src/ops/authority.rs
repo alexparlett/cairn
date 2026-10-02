@@ -773,4 +773,111 @@ mod tests {
             started.elapsed()
         );
     }
+
+    /// The packs under a repository's object store, by name: a lazy fetch adds one.
+    fn packs(repo: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(repo.join(".git/objects/pack"))
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+
+    /// A read never lazily fetches (decided by the user on 2026-10-02): in a
+    /// partial clone, a read asking for a blob only the promisor remote holds
+    /// is told it is missing, and no pack is written. Decisive because the same
+    /// `cat-file` as a write — whose profile lacks `GIT_NO_LAZY_FETCH` — does
+    /// fetch the blob, into a new pack, from the same clone: without that, a
+    /// clone that already held the blob would pass this whatever the
+    /// environment said. Git older than 2.44 ignores the variable, so there
+    /// the read may fetch, which is the constraint `crate::reads` designs
+    /// around; on such a git this says so and decides nothing.
+    #[test]
+    fn a_read_in_a_partial_clone_does_not_fetch_a_missing_object() {
+        let scratch = Scratch::new("partial-clone");
+        let honoured = crate::ops::GitVersion {
+            major: 2,
+            minor: 44,
+            patch: 0,
+        };
+        if scratch.git.version() < honoured {
+            eprintln!(
+                "SKIPPED a_read_in_a_partial_clone_does_not_fetch_a_missing_object: git {} \
+                 ignores GIT_NO_LAZY_FETCH",
+                scratch.git.version()
+            );
+            return;
+        }
+        let source = scratch.repo();
+        std::fs::write(source.join("file"), "only the promisor holds this\n").unwrap();
+        scratch.write(&["add", "file"], &source);
+        scratch.write(&["commit", "-q", "-m", "initial"], &source);
+        scratch.write(&["config", "uploadpack.allowFilter", "true"], &source);
+        let clone = scratch.root.join("clone");
+        let url = format!("file://{}", source.display());
+        let clone_arg = clone.to_string_lossy().into_owned();
+        scratch.write(
+            &[
+                "clone",
+                "-q",
+                "--no-checkout",
+                "--filter=blob:none",
+                &url,
+                &clone_arg,
+            ],
+            &scratch.root,
+        );
+        let blob = scratch
+            .git
+            .read_invocation()
+            .arg("-C")
+            .arg(&source)
+            .args(["rev-parse", "HEAD:file"])
+            .start()
+            .unwrap()
+            .collect(&CancelSignal::new(), 1024, |_| {})
+            .unwrap()
+            .stdout_text()
+            .trim()
+            .to_owned();
+        let before = packs(&clone);
+
+        let read = scratch
+            .git
+            .read_invocation()
+            .arg("-C")
+            .arg(&clone)
+            .args(["cat-file", "-p", &blob])
+            .start()
+            .unwrap()
+            .collect(&CancelSignal::new(), 1024, |_| {});
+        assert!(
+            matches!(&read, Err(Error::GitFailed { .. })),
+            "a read of a blob only the promisor holds did not fail as missing: {read:?}"
+        );
+        assert_eq!(packs(&clone), before, "a read wrote a pack: it fetched");
+
+        let written = scratch
+            .git
+            .write_invocation(WriteAuthority::new())
+            .arg("-C")
+            .arg(&clone)
+            .args(["cat-file", "-p", &blob])
+            .start()
+            .unwrap()
+            .collect(&CancelSignal::new(), 1024, |_| {})
+            .unwrap_or_else(|error| panic!("the same cat-file as a write: {error}"));
+        assert_eq!(written.stdout_text(), "only the promisor holds this\n");
+        assert_ne!(
+            packs(&clone),
+            before,
+            "the same cat-file as a write fetched no pack either, so the clone was not \
+             partial and the read above decided nothing"
+        );
+    }
 }

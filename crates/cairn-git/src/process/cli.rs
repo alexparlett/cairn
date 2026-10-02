@@ -796,6 +796,7 @@ mod stub_tests {
         let expected: BTreeMap<String, String> = [
             ("GIT_ASKPASS", StubGit::HELPER),
             ("GIT_EDITOR", "false"),
+            ("GIT_NO_LAZY_FETCH", "1"),
             ("GIT_OPTIONAL_LOCKS", "0"),
             ("GIT_SEQUENCE_EDITOR", "false"),
             ("GIT_TERMINAL_PROMPT", "0"),
@@ -836,6 +837,7 @@ mod stub_tests {
         let expected: BTreeMap<String, String> = [
             ("GIT_ASKPASS", StubGit::HELPER),
             ("GIT_EDITOR", "false"),
+            ("GIT_NO_LAZY_FETCH", "1"),
             ("GIT_OPTIONAL_LOCKS", "0"),
             ("GIT_SEQUENCE_EDITOR", "false"),
             ("GIT_TERMINAL_PROMPT", "0"),

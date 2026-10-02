@@ -65,9 +65,15 @@ Fetch is built as a write (`ops/fetch.rs`). The probe is built as a read
 From outside the crate nothing is nameable. The `compile_fail` doctests in
 `crates/cairn-git/src/ops/mod.rs` each add one line to a passing scaffold:
 naming a `WriteAuthority`, calling its constructor, calling either builder, and
-calling `GitEnvironment::command`. Stable `rustdoc` checks that a block fails,
-not why. Each was checked by hand, by turning it into a plain block, and fails
-on privacy (E0603 for the type, E0624 for the methods).
+calling `GitEnvironment::command`. Every argument is `unreachable!()`, so no
+block can fail on its arguments. Stable `rustdoc` checks that a block fails,
+not why, so each was checked by hand, by turning it into a plain block: each
+fails on privacy alone (E0603 for the type, E0624 for the methods). With a
+builder or `command` widened to `pub`, its block still fails on privacy, of
+the crate-private type it returns or takes (`GitCommand`, `Profile`). So the
+doctests decide that the public surface offers no way in. The methods' own
+visibility is pinned by the guard, which also requires each refused block to
+be exactly the scaffold plus its line.
 
 ## The environment
 
@@ -101,7 +107,7 @@ Why each variable is there, with its evidence, is beside it in
   `sequence.editor` outranks `GIT_EDITOR` for the rebase todo list.
 - **`GIT_OPTIONAL_LOCKS=0` covers `git status` and nothing else.** Porcelain
   `diff` and `describe --dirty` refresh the index anyway. That is why a read in
-  `reads/` runs plumbing or `status` only, as the module's own docs say where
+  `reads/` runs query plumbing or `status` only, as the module's own docs say where
   `diff-engine` will read them.
 
 Pinned:
@@ -136,9 +142,9 @@ count, and each has a matcher self-test:
 | Twin | What it decides |
 | --- | --- |
 | `every_git_invocation_disables_the_terminal_prompt` | Outside `process/environment.rs`, no product file names or builds a `Command`, sets a process environment variable, or builds or implements `GitEnvironment`. Inside it: one `Command`, one literal, `env_clear` and `envs`, and the `ALWAYS` table's four pins. The `READ_ONLY` table carries `GIT_OPTIONAL_LOCKS=0` and is applied. The askpass names are set. |
-| `only_the_process_module_builds_or_runs_a_process` | Outside `process/`, no product file names `Stdio`, `Child` or its pipes, `CommandExt` or `nix`. It calls none of `.spawn()`, `.output()`, `.status()`, `.wait()`, `.try_wait()` or `.wait_with_output()`, and does not call `GitEnvironment::command`. `process/` itself must show those shapes, so the matcher is proven to read real code. The one exception row, `.status()` in `cairn-app` (`HistoryProgress::status`), fails once it is no longer needed. |
-| `the_runner_is_named_only_by_ops_and_reads` | In `cairn-git`, the runner's names are allowed in `process/`, `ops/` and `reads/` only. The write builder and `WriteAuthority` are allowed in `process/` and `ops/`. Constructing, writing a literal of or implementing `WriteAuthority` is allowed in `ops/` only. Nothing is declared or re-exported `pub`, and `process` stays private. The authority keeps its shape, and the doctests stay. |
-| `only_the_ops_module_mutates_a_repository` | No product file outside `ops/` and `process/` spawns `git` by its literal name. No file of `cairn-git` outside `ops/` names gitoxide's mutation API. That roster was enumerated from the vendored gix 0.87.1 source and sits, with each entry's file and line, in `crates/cairn-guards/src/lib.rs`. |
+| `only_the_process_module_builds_or_runs_a_process` | Outside `process/`, no product file names `Stdio`, `Child` or its pipes, `CommandExt` or `nix`. It calls none of `.spawn()`, `.output()`, `.status()`, `.wait()`, `.try_wait()` or `.wait_with_output()`, and does not call `GitEnvironment::command`. `GitEnvironment::command` stays `pub(super)`. `process/` itself must show `.spawn()`, `.output()`, `.wait()`, `.try_wait()`, `Stdio`, `Child`, `ChildStderr`, `nix` and `.command(..)`, so the matcher is proven to read real code. The one exception row, `.status()` in `cairn-app` (`HistoryProgress::status`), fails once it is no longer needed. |
+| `the_runner_is_named_only_by_ops_and_reads` | In `crates/cairn-git/src`, the runner's names are allowed in `process/`, `ops/` and `reads/` only. The write builder and `WriteAuthority` are allowed in `process/` and `ops/`. Constructing, writing a literal of or implementing `WriteAuthority` is allowed in `ops/` only. Nothing is declared or re-exported `pub`, and `process` stays private. The authority keeps its shape, and the doctests stay. |
+| `only_the_ops_module_mutates_a_repository` | No product file outside `ops/` and `process/` spawns `git` by its literal name. No file of `crates/cairn-git/src` outside `ops/` names gitoxide's mutation API. That roster was enumerated from the vendored gix 0.87.1 source and sits, with each entry's file and line, in `crates/cairn-guards/src/lib.rs`. |
 
 `the_unguarded_routes_to_a_process_now_fail_a_twin` pins the routes that
 `docs/research/process-manager/runner-and-worker-as-built.md` section 3 found
@@ -151,6 +157,10 @@ open, each now failing a twin:
 - a `reads/` file constructing a `WriteAuthority`.
 
 What the guards cannot decide is stated in the root `CLAUDE.md` beside each
-invariant. That a read runs plumbing or `status` is
-`destructive-ops-reviewer`'s check 10. A process or a gix write reached through
-an alias, a trait object or a macro is `qa-checklist`'s item 7.
+invariant. That a read runs query plumbing or `status` is
+`destructive-ops-reviewer`'s check 10. These are `qa-checklist`'s item 7:
+
+- a process or a gix write reached through an alias, a trait object or a macro;
+- a built invocation or `Running` handed out of `ops/` or `reads/` and driven
+  elsewhere by inference. The runner guard reads names, so whether `ops/` and
+  `reads/` hand out only named operation types (as fetch does) is review.

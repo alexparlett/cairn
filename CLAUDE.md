@@ -114,9 +114,11 @@ copy is a different version from the fork that links.
   in `docs/design/engine.md`: a mutation must run the user's hooks, filters and
   credential helpers and honour their config, and gix runs none of them. A read
   runs `git` only where gix's answer differs from git's — the changes query's
-  rename and copy detection is the first — and each such read is a named
-  function in `cairn-git/src/reads/`, run as a read invocation: plumbing or
-  `status` only, `GIT_OPTIONAL_LOCKS=0`, no askpass token. Everywhere gix
+  rename and copy detection will be the first (`diff-engine`; `reads/` is empty
+  today) — and each such read is a named function in `cairn-git/src/reads/`,
+  run as a read invocation: query plumbing (never a plumbing writer such as
+  `update-ref`, `update-index` or `write-tree`) or `status` only,
+  `GIT_OPTIONAL_LOCKS=0`, no askpass token. Everywhere gix
   agrees with git, a read spawns no process — that is the whole reason the split
   pays. How every `git` process is built, run and ended is
   `docs/design/processes.md`. Consequence for free: Cairn stores no
@@ -205,11 +207,11 @@ Project invariants:
   against erosion, each with a nonzero-files assertion and a matcher
   self-test: `only_the_ops_module_mutates_a_repository` — no product file
   outside `ops/` and `process/` spawns `git` by its literal name, and no file
-  of `cairn-git` outside `ops/` names gitoxide's mutation API, a roster
+  of `crates/cairn-git/src` outside `ops/` names gitoxide's mutation API, a roster
   enumerated from the vendored gix 0.87.1 source with each entry's file and
   line beside it in `crates/cairn-guards/src/lib.rs` (self-test
   `the_gitoxide_mutation_matcher_catches_the_shapes_it_claims`);
-  `the_runner_is_named_only_by_ops_and_reads` — no file of `cairn-git` but
+  `the_runner_is_named_only_by_ops_and_reads` — no file of `crates/cairn-git/src` but
   `process/`, `ops/` and `reads/` names the runner (`GitCommand`,
   `read_invocation`, `Running`, `ProcessKill`), none but `process/` and `ops/`
   names `write_invocation` or `WriteAuthority`, none but `ops/` constructs,
@@ -222,11 +224,16 @@ Project invariants:
   `docs/research/process-manager/runner-and-worker-as-built.md` section 3
   found unguarded). Residual review obligations: the gitoxide roster reads
   names, so a gix write behind a name it does not hold — an API added after
-  0.87.1, or one reached through a trait object, a generic or a macro — is
-  `qa-checklist`'s (its item 7); and whether a read in `reads/` really runs
-  plumbing or `status` — `GIT_OPTIONAL_LOCKS=0` covers `status` alone, so a
-  porcelain `diff` built as a read still rewrites the index — is
-  `destructive-ops-reviewer`'s (its check 10).
+  0.87.1, or one reached through a trait object, a generic or a macro — is not
+  seen; the runner guard reads names too, so a built invocation or a `Running`
+  handed out of `ops/` or `reads/` and driven elsewhere by inference
+  (`crate::ops::w(&git).args(..).run()`) is not seen either, and that `ops/` and
+  `reads/` hand out only named operation types — as `fetch` does with
+  `FetchInProgress` and `FetchCancel` — is review. Both are `qa-checklist`'s
+  (its item 7). Whether a read in `reads/` really runs query plumbing or
+  `status` — `GIT_OPTIONAL_LOCKS=0` covers `status` alone, so a porcelain `diff`
+  built as a read still rewrites the index, and a plumbing writer built as one
+  writes whatever it writes — is `destructive-ops-reviewer`'s (its check 10).
 - **Every `git` subprocess runs with an environment Cairn built, and that
   environment always sets `GIT_TERMINAL_PROMPT=0`, `SSH_ASKPASS_REQUIRE=force`,
   `GIT_EDITOR=false` and `GIT_SEQUENCE_EDITOR=false` and points `GIT_ASKPASS`
@@ -268,8 +275,11 @@ Project invariants:
   outside `crates/cairn-git/src/process/` names `Stdio`, `Child` or its
   pipes, `CommandExt` or `nix`, calls `.spawn()`, `.output()`, `.status()`,
   `.wait()`, `.try_wait()` or `.wait_with_output()`, or calls
-  `GitEnvironment::command`, with `process/` itself required to show those
-  shapes so the matcher is proven to read real code (matcher self-test
+  `GitEnvironment::command`, which stays `pub(super)`; `process/` itself is
+  required to show `.spawn()`, `.output()`, `.wait()`, `.try_wait()`, `Stdio`,
+  `Child`, `ChildStderr`, `nix` and `.command(..)`, so the matcher is proven
+  to read real code, and every roster entry has a self-test case spelled out
+  apart from the roster (matcher self-test
   `the_process_matcher_catches_the_shapes_it_claims`; its one exception row,
   `HistoryProgress::status` in `cairn-app`, fails when no longer needed). The
   VALUE is pinned behaviourally in `cairn-git`: the builder's tests spell out

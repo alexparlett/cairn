@@ -82,10 +82,12 @@ WARNING tier:
 10. **A write built as a read.** Every invocation in `ops/` that can change
    the repository — refs, objects, the index, the working tree, config — is
    built with `GitBinary::write_invocation`, and every function in
-   `crates/cairn-git/src/reads/` runs plumbing or `git status` and nothing
-   else: a read runs with `GIT_OPTIONAL_LOCKS=0`, which only `status`
+   `crates/cairn-git/src/reads/` runs query plumbing or `git status` and
+   nothing else: a read runs with `GIT_OPTIONAL_LOCKS=0`, which only `status`
    honours, so a porcelain `diff` or `describe --dirty` built as a read still
-   rewrites the index. The compiler and
+   rewrites the index, and a plumbing writer (`update-ref`, `update-index`,
+   `read-tree`, `write-tree`, `hash-object -w`, `commit-tree`) built as a read
+   writes whatever it writes. The compiler and
    `the_runner_is_named_only_by_ops_and_reads` decide that a read path cannot
    build a write; whether the verb a read runs is really a read is this
    check. Evidence: quote the argument list.

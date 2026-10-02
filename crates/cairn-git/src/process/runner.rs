@@ -1495,7 +1495,12 @@ mod tests {
         if seen.is_empty()
             && matches!(&outcome, Err(Error::GitFailed { status, .. }) if status.code() == Some(99))
         {
-            // No `setsid` on this system: nothing to decide here.
+            // No `setsid` on this system: nothing to decide here — unless this is CI,
+            // whose Linux has one, where a pass that decided nothing would be a lie.
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "CI has no `setsid`, so this test decides nothing there"
+            );
             return;
         }
         assert!(

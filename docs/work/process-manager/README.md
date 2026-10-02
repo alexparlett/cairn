@@ -30,6 +30,6 @@ Integration branch: `feature/process-manager`, off `main`.
 Strictly sequential. 02 needs 01's types to build the runner around, 03 moves
 fetch onto 02's runner, and 04 wires what 03 exposes.
 
-After this packet merges, `diff-engine` resumes on `feature/diff-engine`. It
+After this packet merges, `diff-engine` continues on `feature/diff-engine`. It
 has to be brought up to date with `main`, which is the user's call because it is
 a shared branch. Its changes query is then reworked onto `reads/`.

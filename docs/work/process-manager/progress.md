@@ -5,8 +5,8 @@ Correct course in a new entry.
 
 ## 2026-10-02 — planned
 
-The packet was planned with `/feature-plan` after `diff-engine` paused on rename
-parity (its 2026-09-30 progress entry). Four recon records are saved under
+The packet was planned with `/feature-plan` while `diff-engine` was in flight, when its
+changes query hit rename parity (its 2026-09-30 progress entry). Four recon records are saved under
 `docs/research/process-manager/`, and the two that commissioned the packet were
 copied from the `diff-engine` branch into `docs/research/diff-engine/` so `main`
 can cite them.

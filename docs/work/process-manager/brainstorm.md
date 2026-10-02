@@ -7,7 +7,7 @@ packet was commissioned by `docs/research/diff-engine/git-process-survey.md` and
 
 ## How this was decided
 
-`diff-engine` paused on 2026-09-30 when gix's rename detection disagreed with
+`diff-engine`, in flight, switched to this on 2026-09-30 when gix's rename detection disagreed with
 git's on a large rollup (231 pairs against 2,774). The user classed that as a
 critical bug, chose to take the changes query from `git diff-tree -M` (that
 packet's option E), and asked for "a proper process manager designed and built
@@ -178,7 +178,7 @@ land with the planning PR; `CLAUDE.md` lands with the code that makes it true.
 
 - **Whether `diff-engine`'s phase 03 working-tree reads move to git.** Its
   progress log says they "build on" this packet, but its R3 still has gix doing
-  them. `diff-engine` decides on resume, against this packet's runner.
+  them. `diff-engine` decides when it continues, against this packet's runner.
 - **The rename-limit signal.** `diff-engine` R2.2 says a changes answer cut short
   by `diff.renameLimit` says so. `git diff-tree` reports that only as a translated
   stderr warning, and L8 forbids parsing it. `diff-engine` must find a signal

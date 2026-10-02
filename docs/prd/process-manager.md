@@ -14,7 +14,7 @@ Design frame: `docs/design/processes.md` (how every `git` process is built, run,
 cancelled and accounted for), with **D1** in `docs/design/engine.md` (reads `git`
 answers) and **D3** in `docs/design/concurrency.md` (the write lanes). Program:
 `docs/work/daily-loop/roadmap.md`, where this packet sits between
-`credential-prompts` and the resumption of `diff-engine`. Decisions and rejected
+`credential-prompts` and the rest of `diff-engine`, which is in flight and needs it. Decisions and rejected
 alternatives: `docs/work/process-manager/brainstorm.md` L1-L15. Evidence, all
 under `docs/research/process-manager/`: `runner-and-worker-as-built.md` (the
 runner, worker and guards as they stand), `consumer-invocations.md` (every `git`
@@ -36,7 +36,7 @@ nobody was told about.
 
 The packet adds no verb the user can see. Fetch and the startup probe move onto
 the new runner and the old one is deleted. The first consumer of a read is
-`diff-engine`'s changes query, which resumes on top of this packet; the first
+`diff-engine`'s changes query, which continues on top of this packet; the first
 consumers of stdin and the local write lane are `staging-and-commit`'s. Every
 shape is proven here against real `git` so that neither of them has to reopen the
 runner.
@@ -213,7 +213,7 @@ observable with a display (issue #27).
 ## Out of scope
 
 Another packet's: the changes query on `git diff-tree` and its parser
-(`diff-engine`, on resume); the local write lane, stdin's first verb and lock
+(`diff-engine`, continuing on top of this packet); the local write lane, stdin's first verb and lock
 contention beyond naming the lock (`staging-and-commit`); push and its
 `pre-push` hook (`remote-sync`); the editor helper for interactive rebase (the
 second lap); a view of the command log (to be filed); coalescing fetch progress to

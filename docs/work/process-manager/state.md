@@ -3,7 +3,8 @@
 The cross-session cheat sheet. Every session updates this before ending.
 
 **Status: planned. No phase has started. No code exists for this packet.**
-`diff-engine` is paused on `feature/diff-engine` until this packet merges.
+`diff-engine` is in flight on `feature/diff-engine` and switched to this packet
+because its changes query needs a `git` process; it continues once this merges.
 
 ## Locked decisions
 

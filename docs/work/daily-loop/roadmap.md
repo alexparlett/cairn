@@ -10,7 +10,7 @@ nuance that run must not lose.
 | 1 | `history-graph` | **shipped** | — |
 | 2 | `credential-prompts` | **shipped** | 1 |
 | 2a | `process-manager` | **planned** | 2 |
-| 3 | `diff-engine` | **paused** after its phase 02, on 2a | 1, 2a |
+| 3 | `diff-engine` | **in flight**, phases 01-02 landed; changes query waits on 2a | 1, 2a |
 | 4 | `refs-and-status` | brief only | 1 (and 2a if O2 picks `git status`) |
 | 5 | `staging-and-commit` | brief only | 2, 2a, 3, 4 |
 | 6 | `remote-sync` | brief only | 2, 2a, 4 |
@@ -47,7 +47,7 @@ fetch-under-prune policy (#17). As built: `docs/systems/credentials.md`.
 
 `docs/prd/process-manager.md` (in flight), work directory
 `docs/work/process-manager/`, evidence `docs/research/process-manager/`. Inserted
-when `diff-engine` paused on rename parity: gix paired 231 renames where git
+while `diff-engine` was in flight, when its changes query hit rename parity: gix paired 231 renames where git
 paired 2,774 on a large rollup, the user classed that as a critical bug, and the
 changes query moved to `git diff-tree` — the first read `git` answers (D1, as
 rewritten). The user asked for a proper manager for `git` processes before any
@@ -66,10 +66,11 @@ command log as data. Design: `docs/design/processes.md`; the write lanes in
 cancel by epoch; for 5, stdin and the local write lane's design; for 6, the
 network lane push joins.
 
-## 3. diff-engine — paused
+## 3. diff-engine — in flight
 
-**Paused after its phase 02, on `feature/diff-engine`, until 2a merges.** The
-changes query is then reworked onto `git diff-tree` through `reads/`; the model,
+**In flight on `feature/diff-engine`: phases 01 and 02 landed, and the work
+switched to 2a because the changes query needs a `git` process.** Once 2a
+merges, the changes query is reworked onto `git diff-tree` through `reads/`; the model,
 the content query and the round-trip tests stand. Why: that branch's
 `docs/work/diff-engine/progress.md` (2026-09-30) and
 `docs/research/diff-engine/rename-parity-spike.md`.

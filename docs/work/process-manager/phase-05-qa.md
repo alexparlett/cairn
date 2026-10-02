@@ -52,7 +52,7 @@ STEP 6  Branch authority follows the declared mode.
           raise the packet PR to main directly.
         The USER merges every PR.
 STEP 7  Final response: the verdict, every finding and its outcome, what is
-        deferred and where it was filed, and that diff-engine can resume (it
+        deferred and where it was filed, and that diff-engine can continue (it
         needs feature/diff-engine brought up to date with main — the user's
         call, as it is a shared branch).
 STOPPING RULES: stop and ask the user if any acceptance criterion fails and the
@@ -70,7 +70,7 @@ The merge bar for code that every later packet will run its `git` through.
 - Re-run the four unguarded routes from
   `docs/research/process-manager/runner-and-worker-as-built.md` section 3 in a
   scratch module, and confirm each now fails the gate.
-- Confirm `diff-engine`'s resume path: a read built in `reads/`, run by the diff
+- Confirm `diff-engine`'s path forward: a read built in `reads/`, run by the diff
   thread with its own `GitBinary` copy, cancelled by an epoch, answering `-z`
   records. If that sketch does not compile against what shipped, the packet did
   not deliver its reason for existing.

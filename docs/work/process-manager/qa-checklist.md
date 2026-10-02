@@ -42,7 +42,7 @@ Beyond the PRD, phase 05 confirms each of these:
       `describe --dirty` refreshes the index despite `GIT_OPTIONAL_LOCKS=0`.
       The packet adds none, but the rule must be stated where `diff-engine`
       will read it.
-- [ ] **The diff-engine resume path is real.** A read invocation can be built
+- [ ] **The diff-engine path forward is real.** A read invocation can be built
       from `reads/` with a `GitBinary` the diff thread can hold, it cancels on an
       epoch, and its stdout comes back as `-z` records. Prove it with a sketch in
       a test, not a doc claim.

@@ -22,7 +22,15 @@
 //! `diff-files` — never writes the index (evidence:
 //! `docs/research/process-manager/platform-and-git-behaviour.md`, C3). So a
 //! read that wants a diff runs `diff-tree` or `diff-index`, never `diff`; and
-//! a refresh, if one is ever wanted, is a write, built in `ops/`. Any other
+//! a refresh, if one is ever wanted, is a write, built in `ops/`.
+//!
+//! Plumbing is not write-free for every flag. With `diff.<driver>.cachetextconv`
+//! set, `--textconv` writes a ref (`refs/notes/textconv/<driver>`) and objects
+//! whatever `GIT_OPTIONAL_LOCKS` says, and `--ext-diff` runs a program the
+//! user configured. So a read never passes `--textconv` or `--ext-diff`, and
+//! the raw and patch forms without them write nothing (reproduced with
+//! git 2.56: `diff-tree --raw` and `diff-tree -p` leave the refs alone,
+//! `diff-tree --textconv -p` and the porcelain `log -p` create the notes ref). Any other
 //! query plumbing a read adds (`ls-files`, `rev-parse`, `cat-file`, ...) brings
 //! its own evidence that it writes nothing, because C3 does not cover it.
 //!

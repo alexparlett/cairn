@@ -55,7 +55,9 @@ pub type Replier = Rc<dyn Fn(Reply)>;
 /// request closes it anyway: past the longest an honest close takes —
 /// `CLOSE_BOUND` for the reaps, then up to the acceptor's stop deadline — so
 /// only a worker that has stopped answering is abandoned, and the window can
-/// always be closed.
+/// always be closed. It does not bound the network lane's ref scans, which
+/// run before and after a fetch and cannot be cancelled: a repository with a
+/// great many refs can hold the stream's end past it.
 pub const CLOSE_PATIENCE: Duration = Duration::from_secs(5);
 
 const _: () = assert!(

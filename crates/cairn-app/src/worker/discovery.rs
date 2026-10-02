@@ -44,7 +44,8 @@ impl std::fmt::Debug for Discovery {
 impl Discovery {
     /// Starts finding `git` for this process, on a `cairn-discovery` thread,
     /// and returns at once: called on the main thread as the application
-    /// starts, before there is a window. Spawning is all it does there.
+    /// starts, before there is a window. It resolves the helper's path
+    /// (`std::env::current_exe`, a `readlink`) and spawns; it runs no `git`.
     pub fn start() -> Self {
         Self::start_with(Startup::of_this_process())
     }

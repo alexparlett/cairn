@@ -51,7 +51,8 @@ crates/cairn-git/src/
 `process` is a private module (`mod process;` in `lib.rs`). The application
 reaches `GitBinary`, `GitVersion`, `GitEnvironment` and `Askpass` through
 `cairn_git::ops`, which re-exports them because the application owns startup
-and the helper's channel. It cannot reach the runner: nothing in it is `pub`.
+and the helper's channel, and `cairn_git::CLOSE_BOUND` is re-exported at the crate
+root. It cannot reach the runner: nothing that builds or runs a process is `pub`.
 
 On the application's side, in `crates/cairn-app/src/`:
 
@@ -644,6 +645,20 @@ worker that has stopped answering cannot keep it open for good — at the cost,
 then, of whatever that worker had not yet ended: the process exits, nothing
 is left to drive a late `git` to its `SIGKILL` or reap it, and such a `git`
 runs on, orphaned, holding whatever locks it holds.
+
+What a close does not bound: the network lane, after its fetch is reaped,
+still reads the refs once more (`ref_tips`, which has no cancel and peels
+every ref) before it lets its sender go, and it read them once before the
+fetch started, so a repository with a great many refs and a cold cache can
+hold the stream's end — and the window — past `CLOSE_PATIENCE`. The window
+stays open and draws nothing until the second request closes it. The
+constants above bound the reaps, not the scans.
+
+A close also ends any `git` in flight, a write included, without asking: the
+window refuses nothing and the user is told nothing about what was running.
+Fetch is the only verb today and is not destructive; the first local write
+verb must decide whether the close hook may refuse while a write is in flight,
+or say what the close cost.
 
 What a close costs is the registry's: a write that outlasts the grace is
 `SIGKILL`ed and may strand its lock files, and its `FetchCancelled` lists

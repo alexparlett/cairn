@@ -191,7 +191,7 @@
 mod authority;
 mod fetch;
 mod refspec_policy;
-mod stranded_locks;
+pub(crate) mod stranded_locks;
 
 use cairn_model::Confirmed;
 

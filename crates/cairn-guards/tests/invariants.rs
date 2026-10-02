@@ -837,10 +837,18 @@ fn only_the_process_module_builds_or_runs_a_process() {
 }
 
 /// The runner, by the names a caller outside `process/` reaches it through: the read builder,
-/// the streamed process and its kill handle, and the builder type itself (which `process/` does
-/// not re-export, so the compiler refuses it elsewhere; this is the twin against a re-export).
-/// Allowed in `process/`, `ops/` and `reads/`.
-const RUNNER_NAMES: &[&str] = &["GitCommand", "read_invocation", "Running", "ProcessKill"];
+/// a started process and its kill handle — the streamed `Running` and its `ProcessKill`, and
+/// the runner's `Invocation` and its `KillHandle` — and the builder type itself (none of which
+/// `process/` re-exports, so the compiler refuses them elsewhere; this is the twin against a
+/// re-export). Allowed in `process/`, `ops/` and `reads/`.
+const RUNNER_NAMES: &[&str] = &[
+    "GitCommand",
+    "read_invocation",
+    "Running",
+    "ProcessKill",
+    "Invocation",
+    "KillHandle",
+];
 
 /// A write, by the names that build one: the write builder and the authority it consumes.
 /// Allowed in `process/`, which declares the builder and names the type in its signature, and
@@ -1334,7 +1342,14 @@ fn the_runner_matcher_catches_the_shapes_it_claims() {
     // Every roster entry on its own, spelled out apart from the rosters, in a file outside every
     // allowed module — and the write names in reads/ too — so an entry dropped from a roster
     // fails here rather than taking its own case with it.
-    let runner = ["GitCommand", "read_invocation", "Running", "ProcessKill"];
+    let runner = [
+        "GitCommand",
+        "read_invocation",
+        "Running",
+        "ProcessKill",
+        "Invocation",
+        "KillHandle",
+    ];
     let write = ["write_invocation", "WriteAuthority"];
     assert_eq!(
         (RUNNER_NAMES.len(), WRITE_NAMES.len()),
@@ -1371,6 +1386,11 @@ fn the_runner_matcher_catches_the_shapes_it_claims() {
             "a streamed process",
             SCRATCH_FILE,
             "fn f(r: Running) -> ProcessKill { r.killer() }",
+        ),
+        (
+            "a started invocation",
+            SCRATCH_FILE,
+            "fn f(i: Invocation<Read>) -> KillHandle { i.kill_handle() }",
         ),
         (
             "a write built outside ops/",
@@ -1482,6 +1502,16 @@ fn the_runner_matcher_catches_the_shapes_it_claims() {
             "a grouped public re-export",
             "Running",
             "pub use crate::process::{GitBinary, Running};",
+        ),
+        (
+            "a public kill handle",
+            "KillHandle",
+            "pub struct KillHandle(pub(super) Arc<Group>);",
+        ),
+        (
+            "a public invocation re-export",
+            "Invocation",
+            "pub use crate::process::runner::Invocation;",
         ),
         (
             "a nested, wrapped re-export",

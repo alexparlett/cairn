@@ -75,12 +75,46 @@ pub enum Error {
         source: std::io::Error,
     },
 
-    /// git ran and exited non-zero. `stderr` is git's own diagnostic, for the user.
-    #[error("git {arguments} failed ({status}): {stderr}")]
+    /// git ran and exited non-zero. `stderr` is git's own diagnostic, for the
+    /// user: the last 256 KiB of it on the runner, whatever it said before that
+    /// dropped. `present_locks` is every `*.lock` under the git directory once
+    /// a WRITE had failed — the file another git holds, or a stale one from a
+    /// crash, which is what a write fails on and git does not wait for. Never
+    /// retried and never removed. Empty for a read, and for a write run outside
+    /// a repository.
+    #[error(
+        "git {arguments} failed ({status}): {stderr}{}",
+        PresentLocks(present_locks)
+    )]
     GitFailed {
         arguments: String,
         status: ExitStatus,
         stderr: String,
+        present_locks: Vec<PathBuf>,
+    },
+
+    /// A read was cancelled — superseded, cancelled through its handle, or
+    /// dropped — and its process ended. Nothing else to report: a read writes
+    /// nothing, so it can leave nothing behind.
+    #[error("git {arguments} was cancelled")]
+    GitReadCancelled { arguments: String },
+
+    /// git wrote more to stdout than the caller said it would take, so the
+    /// process was ended and nothing it wrote is returned: an answer cut short
+    /// would look like a whole one.
+    #[error(
+        "git {arguments} wrote more than {ceiling} bytes; the answer was refused, not cut short"
+    )]
+    GitOutputTooLarge { arguments: String, ceiling: usize },
+
+    /// Cairn lost hold of a running git: a thread to read or feed one of its
+    /// pipes could not start, writing its input failed, or waiting on it did.
+    /// The process was ended rather than left running with nobody watching.
+    #[error("lost hold of git {arguments}: {source}")]
+    GitUnwatched {
+        arguments: String,
+        #[source]
+        source: std::io::Error,
     },
 
     /// The user cancelled the operation and the process was ended. Not a
@@ -184,6 +218,29 @@ impl std::fmt::Display for StrandedLocks<'_> {
     }
 }
 
+/// Lock files present when a write failed: nothing when there are none,
+/// otherwise the sentence naming each, which says what the user can do.
+struct PresentLocks<'a>(&'a [PathBuf]);
+
+impl std::fmt::Display for PresentLocks<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0.is_empty() {
+            return Ok(());
+        }
+        f.write_str(
+            "; lock files are present under the git directory — another git process is \
+             running here, or one was stopped before it could remove them: ",
+        )?;
+        for (i, path) in self.0.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{}", path.display())?;
+        }
+        Ok(())
+    }
+}
+
 /// A search path in a message: `/usr/local/bin, /usr/bin`, or `nothing` when
 /// `PATH` was unset.
 struct Directories<'a>(&'a [PathBuf]);
@@ -206,6 +263,33 @@ impl std::fmt::Display for Directories<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R5.3: a failed write's message names the lock files present, and a failure
+    /// with none reads as before.
+    #[test]
+    fn a_failure_names_the_locks_present_and_is_silent_when_there_are_none() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let status = ExitStatus::from_raw(128 << 8);
+        let clean = Error::GitFailed {
+            arguments: "add x".to_owned(),
+            status,
+            stderr: "fatal: no".to_owned(),
+            present_locks: Vec::new(),
+        };
+        assert_eq!(
+            clean.to_string(),
+            "git add x failed (exit status: 128): fatal: no"
+        );
+        let locked = Error::GitFailed {
+            arguments: "add x".to_owned(),
+            status,
+            stderr: "fatal: Unable to create index.lock".to_owned(),
+            present_locks: vec![PathBuf::from("/r/.git/index.lock")],
+        };
+        let text = locked.to_string();
+        assert!(text.contains("lock files are present"), "{text}");
+        assert!(text.ends_with("/r/.git/index.lock"), "{text}");
+    }
 
     /// Issue #19: the message names every stranded lock, and says nothing about locks
     /// when there are none — the common case, which must read as before.

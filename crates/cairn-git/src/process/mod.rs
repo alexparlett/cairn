@@ -41,6 +41,9 @@ mod askpass;
 mod binary;
 mod cli;
 mod environment;
+mod group;
+mod pipes;
+mod runner;
 #[cfg(all(test, unix))]
 pub(crate) mod stub_git;
 

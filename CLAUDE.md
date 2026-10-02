@@ -213,8 +213,9 @@ Project invariants:
   `the_gitoxide_mutation_matcher_catches_the_shapes_it_claims`);
   `the_runner_is_named_only_by_ops_and_reads` — no file of `crates/cairn-git/src` but
   `process/`, `ops/` and `reads/` names the runner (`GitCommand`,
-  `read_invocation`, `Running`, `ProcessKill`), none but `process/` and `ops/`
-  names `write_invocation` or `WriteAuthority`, none but `ops/` constructs,
+  `read_invocation`, `Running`, `ProcessKill`, `Invocation`, `KillHandle`),
+  none but `process/` and `ops/` names `write_invocation` or
+  `WriteAuthority`, none but `ops/` constructs,
   builds a literal of or implements `WriteAuthority`, none declares or
   re-exports any of them `pub`, `process` stays a private module, the
   authority keeps its private field, its `pub(in crate::ops)` constructor and

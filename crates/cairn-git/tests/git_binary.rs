@@ -226,8 +226,13 @@ fn stderr_reaches_the_error_when_git_fails() {
             arguments,
             status,
             stderr,
+            present_locks,
         } => {
             assert_eq!(arguments, "--version");
+            assert!(
+                present_locks.is_empty(),
+                "the probe is a read: {present_locks:?}"
+            );
             assert_eq!(status.code(), Some(127));
             assert_eq!(stderr, "libgit.so: cannot open shared object");
         }

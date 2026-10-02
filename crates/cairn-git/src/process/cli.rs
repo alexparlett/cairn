@@ -13,12 +13,20 @@
 //! its token. The kind is what chooses the environment's profile, so a caller
 //! cannot pick a write's environment for a read or the reverse.
 //!
-//! Standard input is always closed. Together with `GIT_TERMINAL_PROMPT=0` that
-//! is what stops `git` itself from waiting for something nobody will type. It
-//! does not reach `ssh`, which prompts on `/dev/tty` directly — a host-key
-//! confirmation or a key passphrase from a Cairn launched in a terminal lands
-//! on that terminal; closing that path is `SSH_ASKPASS_REQUIRE=force`, which
-//! arrives with the askpass helper.
+//! Two ways to run one. [`GitCommand::start`] is the runner (`runner.rs`): the
+//! process leads a new process group, every pipe it uses has a thread of its
+//! own, stdout is handed over as it arrives, stderr kept as a bounded tail, and
+//! the invocation ends by a cancel signal, a kill handle or a drop.
+//! [`GitCommand::run`] and [`GitCommand::stream`] are the paths the version
+//! probe and fetch still use, which the runner replaces.
+//!
+//! Standard input is closed unless the caller gives bytes for it
+//! ([`GitCommand::input`]), which are written and then closed. Together with
+//! `GIT_TERMINAL_PROMPT=0` that is what stops `git` itself from waiting for
+//! something nobody will type. It does not reach `ssh`, which prompts on
+//! `/dev/tty` directly — a host-key confirmation or a key passphrase from a
+//! Cairn launched in a terminal lands on that terminal; closing that path is
+//! `SSH_ASKPASS_REQUIRE=force`, which arrives with the askpass helper.
 //!
 //! Everything here is `pub(crate)`, and [`GitCommand::new`] is visible to
 //! `process/` alone: the crate's public surface is named operations, never a
@@ -31,6 +39,7 @@
 use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
 use std::io::Read as _;
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,7 +53,10 @@ use cairn_model::AskpassToken;
 
 use super::GitEnvironment;
 use super::environment::Profile;
+use super::group::{Spawner, os_thread};
+use super::runner::{Invocation, watch};
 use crate::ops::WriteAuthority;
+use crate::ops::stranded_locks::stranded_locks;
 use crate::{Error, Repository};
 
 /// One invocation of the kind `K` ([`Read`] or [`Write`]), built up and then
@@ -56,6 +68,26 @@ pub(crate) struct GitCommand<'a, K> {
     kind: K,
     arguments: Vec<OsString>,
     directory: Option<PathBuf>,
+    /// Where a write's lock files live, for its outcome; set with the directory.
+    dirs: Option<GitDirs>,
+    /// What [`GitCommand::start`] writes to stdin before closing it; `None`
+    /// leaves stdin closed from the start.
+    input: Option<Vec<u8>>,
+}
+
+/// A repository's git directory and the common directory it shares (the same
+/// path unless it is a linked worktree): the two places its lock files live.
+#[derive(Debug, Clone)]
+pub(crate) struct GitDirs {
+    git_dir: PathBuf,
+    common_dir: PathBuf,
+}
+
+impl GitDirs {
+    /// Every `*.lock` under the two directories now.
+    fn locks(&self) -> Vec<PathBuf> {
+        stranded_locks(&self.git_dir, &self.common_dir)
+    }
 }
 
 /// An invocation that reads: optional locks off, and no askpass token.
@@ -79,22 +111,54 @@ impl Write {
     }
 }
 
-/// What an invocation's kind adds to the base environment.
+/// What an invocation's kind decides: what it adds to the base environment,
+/// and what its cancellation and failure report.
 pub(crate) trait Kind {
     fn profile(&self) -> Profile<'_>;
+
+    /// The error for a cancelled invocation, built after the reap.
+    fn cancelled(&self, arguments: String, dirs: Option<&GitDirs>) -> Error;
+
+    /// The lock files a failed invocation reports as present.
+    fn present_locks(&self, dirs: Option<&GitDirs>) -> Vec<PathBuf>;
 }
 
+/// A read writes nothing, so it leaves nothing behind and fails on no lock of
+/// its own: its cancellation is that and nothing else (R5.2).
 impl Kind for Read {
     fn profile(&self) -> Profile<'_> {
         Profile::Read
     }
+
+    fn cancelled(&self, arguments: String, _: Option<&GitDirs>) -> Error {
+        Error::GitReadCancelled { arguments }
+    }
+
+    fn present_locks(&self, _: Option<&GitDirs>) -> Vec<PathBuf> {
+        Vec::new()
+    }
 }
 
+/// A write's cancellation lists the lock files present once it is reaped —
+/// what a `SIGKILL` stranded, or a lock another git holds — and its failure
+/// names those present, which is what a write fails on (R5.2, R5.3). Listed,
+/// never removed.
 impl Kind for Write {
     fn profile(&self) -> Profile<'_> {
         Profile::Write {
             token: self.token.as_ref(),
         }
+    }
+
+    fn cancelled(&self, arguments: String, dirs: Option<&GitDirs>) -> Error {
+        Error::GitCancelled {
+            arguments,
+            stranded_locks: dirs.map(GitDirs::locks).unwrap_or_default(),
+        }
+    }
+
+    fn present_locks(&self, dirs: Option<&GitDirs>) -> Vec<PathBuf> {
+        dirs.map(GitDirs::locks).unwrap_or_default()
     }
 }
 
@@ -109,6 +173,8 @@ impl<'a, K: Kind> GitCommand<'a, K> {
             kind,
             arguments: Vec::new(),
             directory: None,
+            dirs: None,
+            input: None,
         }
     }
 
@@ -126,7 +192,78 @@ impl<'a, K: Kind> GitCommand<'a, K> {
     /// Runs inside `repo`: its working tree, or the git directory of a bare one.
     pub(crate) fn in_repository(mut self, repo: &Repository) -> Self {
         self.directory = Some(repo.workdir().unwrap_or(repo.git_dir()).to_owned());
+        self.dirs = Some(GitDirs {
+            git_dir: repo.git_dir().to_owned(),
+            common_dir: repo.inner().common_dir().to_owned(),
+        });
         self
+    }
+
+    /// Bytes [`GitCommand::start`] writes to the process's stdin, on a thread
+    /// of their own, and then closes it: git reads a patch or a list to its
+    /// end before it acts, so a stdin left open would hold it forever.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the first verb fed on stdin arrives with staging; tests drive it today"
+        )
+    )]
+    pub(crate) fn input(mut self, bytes: impl Into<Vec<u8>>) -> Self {
+        self.input = Some(bytes.into());
+        self
+    }
+
+    /// Starts the process as the leader of a new process group, with a thread
+    /// on each pipe it uses, and hands it back running (`runner.rs`). A process
+    /// that never started is [`Error::GitNotStarted`]; one whose threads could
+    /// not start is ended and reaped, then [`Error::GitUnwatched`].
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "fetch and the version probe move onto this runner next, and reads/ gets \
+                      its first caller with diff-engine"
+        )
+    )]
+    pub(crate) fn start(self) -> Result<Invocation<K>, Error> {
+        self.start_with(&os_thread)
+    }
+
+    /// [`GitCommand::start`] with the thread starter given, so a test can make
+    /// one fail.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "reached through `start`, which has no caller yet")
+    )]
+    pub(super) fn start_with(self, spawner: &Spawner) -> Result<Invocation<K>, Error> {
+        let mut command = self.environment.command(self.program, self.kind.profile());
+        command
+            .args(&self.arguments)
+            .stdin(if self.input.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            // Its own group, so ending it reaches everything it started (R3.1).
+            .process_group(0);
+        if let Some(directory) = &self.directory {
+            command.current_dir(directory);
+        }
+        let child = command.spawn().map_err(|source| Error::GitNotStarted {
+            program: self.program.to_owned(),
+            source,
+        })?;
+        watch(
+            child,
+            self.input,
+            self.kind,
+            describe(&self.arguments),
+            self.dirs,
+            spawner,
+        )
     }
 
     /// Runs to completion. A non-zero exit is [`Error::GitFailed`], with what git
@@ -153,6 +290,7 @@ impl<'a, K: Kind> GitCommand<'a, K> {
                 arguments: describe(&self.arguments),
                 status: output.status,
                 stderr,
+                present_locks: Vec::new(),
             });
         }
         Ok(Output {
@@ -414,6 +552,7 @@ impl Running {
             arguments: std::mem::take(&mut self.arguments),
             status,
             stderr,
+            present_locks: Vec::new(),
         })
     }
 }
@@ -518,6 +657,10 @@ pub(crate) struct Output {
 }
 
 impl Output {
+    pub(super) fn new(stdout: Vec<u8>, stderr: String) -> Self {
+        Self { stdout, stderr }
+    }
+
     /// Bytes, because paths are bytes: decode at the point that knows the format.
     #[cfg_attr(
         not(test),
@@ -790,6 +933,7 @@ mod stub_tests {
                 arguments,
                 status,
                 stderr,
+                ..
             } => {
                 assert_eq!(arguments, "fetch origin");
                 assert_eq!(status.code(), Some(128));

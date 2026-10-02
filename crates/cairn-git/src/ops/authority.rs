@@ -41,7 +41,8 @@ impl WriteAuthority {
 mod tests {
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::{Duration, Instant, SystemTime};
 
     use cairn_model::AskpassToken;
@@ -49,7 +50,7 @@ mod tests {
     use super::WriteAuthority;
     use crate::ops::{Askpass, GitBinary, GitEnvironment};
     use crate::process::stub_git::{StubGit, discover_retrying, printed_environment};
-    use crate::{Error, Repository};
+    use crate::{CancelSignal, Error, Repository};
 
     /// Answers `--version`, then prints its environment for anything else.
     fn printing_stub() -> StubGit {
@@ -362,6 +363,307 @@ mod tests {
             std::fs::read(&index).unwrap() != before,
             "the same status as a write left the index alone too, so the fixture was not \
              stale and the read above decided nothing"
+        );
+    }
+
+    /// The runner's criteria that are about `git` itself, with real `git`: they
+    /// need a write, and only `ops/` can build one.
+    ///
+    /// G6, real git: a tree of 100,000 entries made by `mktree` fed on stdin, then
+    /// read back by `ls-tree -z` — over 5 MiB of records — arrives whole and in
+    /// order. Caught by: a record lost or split at a chunk boundary, or stdin
+    /// never closed (`mktree` waits for the end of its input forever).
+    #[test]
+    fn a_real_read_of_over_five_mib_of_records_arrives_whole_and_in_order() {
+        const ENTRIES: usize = 100_000;
+        const EMPTY_BLOB: &str = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
+        let scratch = Scratch::new("big-read");
+        let handle = Repository::discover(scratch.repo()).unwrap();
+        let listing: String = (0..ENTRIES)
+            .map(|n| format!("100644 blob {EMPTY_BLOB}\tf-{n:06}\n"))
+            .collect();
+        let tree = scratch
+            .git
+            .write_invocation(WriteAuthority::new())
+            .in_repository(&handle)
+            .args(["mktree", "--missing"])
+            .input(listing)
+            .start()
+            .unwrap()
+            .collect(&CancelSignal::new(), 1024, |_| {})
+            .unwrap()
+            .stdout_text()
+            .trim()
+            .to_owned();
+        let mut records = Vec::with_capacity(ENTRIES);
+        scratch
+            .git
+            .read_invocation()
+            .in_repository(&handle)
+            .args(["ls-tree", "-z", &tree])
+            .start()
+            .unwrap()
+            .records(
+                &CancelSignal::new(),
+                |record| records.push(String::from_utf8_lossy(record).into_owned()),
+                |_| {},
+            )
+            .unwrap();
+        let bytes: usize = records.iter().map(|record| record.len() + 1).sum();
+        assert!(bytes >= 5 * 1024 * 1024, "only {bytes} bytes");
+        assert_eq!(records.len(), ENTRIES);
+        for (n, record) in records.iter().enumerate() {
+            assert_eq!(record, &format!("100644 blob {EMPTY_BLOB}\tf-{n:06}"));
+        }
+    }
+
+    /// A repository with a commit and a tracked file changed since, and a
+    /// `pre-commit` hook that says it is running and then sleeps: a `commit -a`
+    /// holds `index.lock` while the hook runs.
+    fn committing_into_a_sleeping_hook(name: &str) -> (Scratch, PathBuf) {
+        let scratch = Scratch::new(name);
+        let repo = scratch.repo();
+        std::fs::write(repo.join("tracked"), "one\n").unwrap_or_else(|error| panic!("{error}"));
+        scratch.write(&["add", "tracked"], &repo);
+        scratch.write(&["commit", "-q", "-m", "initial"], &repo);
+        std::fs::write(repo.join("tracked"), "two\n").unwrap_or_else(|error| panic!("{error}"));
+        let marker = scratch.root.join("hook-running");
+        let hook = repo.join(".git/hooks/pre-commit");
+        std::fs::create_dir_all(
+            hook.parent()
+                .unwrap_or_else(|| panic!("a hook path has a parent")),
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        std::fs::write(
+            &hook,
+            format!("#!/bin/sh\ntouch '{}'\nexec sleep 30\n", marker.display()),
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        std::fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap_or_else(|error| panic!("{error}"));
+        (scratch, marker)
+    }
+
+    /// Runs `commit -a` in `scratch` and cancels it through its kill handle once
+    /// the hook is running, after checking `index.lock` is held then — so the
+    /// test decides something. Retried when the hook could not be executed
+    /// because a parallel test's fork still held the file just written ("Text
+    /// file busy"), a property of the harness rather than of the runner.
+    fn cancel_inside_the_hook(scratch: &Scratch, marker: &Path) -> (Result<(), Error>, Duration) {
+        let handle = Repository::discover(scratch.repo()).unwrap_or_else(|error| panic!("{error}"));
+        let index_lock = scratch.repo().join(".git/index.lock");
+        for _ in 0..5 {
+            let _ = std::fs::remove_file(marker);
+            let invocation = scratch
+                .git
+                .write_invocation(WriteAuthority::new())
+                .in_repository(&handle)
+                .args(["commit", "-a", "-m", "second"])
+                .start()
+                .unwrap_or_else(|error| panic!("{error}"));
+            let killer = invocation.kill_handle();
+            let done = Arc::new(AtomicBool::new(false));
+            let finished = Arc::clone(&done);
+            let watched = marker.to_owned();
+            let lock = index_lock.clone();
+            let watching = std::thread::spawn(move || {
+                let started = Instant::now();
+                while !finished.load(Ordering::Acquire) && started.elapsed() < PROMPTLY * 2 {
+                    if watched.exists() {
+                        let held = lock.exists();
+                        let at = Instant::now();
+                        killer.kill();
+                        return Some((held, at));
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                None
+            });
+            let outcome = invocation.finish(&CancelSignal::new(), |_| {}, |_| {});
+            done.store(true, Ordering::Release);
+            let killed = watching
+                .join()
+                .unwrap_or_else(|_| panic!("the watching thread panicked"));
+            match (&outcome, killed) {
+                (Err(Error::GitFailed { stderr, .. }), None)
+                    if stderr.contains("Text file busy") =>
+                {
+                    continue;
+                }
+                (_, Some((held, at))) => {
+                    assert!(
+                        held,
+                        "index.lock was not held while the hook ran: decided nothing"
+                    );
+                    return (outcome.map(drop), at.elapsed());
+                }
+                (_, None) => panic!("the hook never ran: {outcome:?}"),
+            }
+        }
+        panic!("the hook stayed 'text file busy' through every retry");
+    }
+
+    /// G9, real git: a `commit` cancelled while its `pre-commit` hook sleeps
+    /// leaves no `index.lock` — `SIGTERM` to the group, which git cleans up on and
+    /// which ends the hook too — commits nothing, and reports a cancelled write
+    /// with nothing stranded. Caught by: `SIGKILL` first (the lock stays), or a
+    /// signal to git alone (the hook's `sleep` holds the pipes for 30 s).
+    #[test]
+    fn a_commit_cancelled_inside_a_sleeping_hook_leaves_no_index_lock() {
+        let (scratch, marker) = committing_into_a_sleeping_hook("cancelled-commit");
+        let before = scratch.head();
+        let (outcome, took) = cancel_inside_the_hook(&scratch, &marker);
+        assert!(
+            matches!(
+                &outcome,
+                Err(Error::GitCancelled { arguments, stranded_locks })
+                    if arguments == "commit -a -m second" && stranded_locks.is_empty()
+            ),
+            "{outcome:?}"
+        );
+        assert!(
+            took < TERMINATION_GRACE_FOR_TESTS,
+            "the cancel took {took:?}: not SIGTERM"
+        );
+        assert!(
+            !scratch.repo().join(".git/index.lock").exists(),
+            "index.lock was stranded"
+        );
+        assert_eq!(scratch.head(), before, "the cancelled commit committed");
+    }
+
+    /// Below the runner's two seconds: a cancel that took the grace was `SIGKILL`.
+    const TERMINATION_GRACE_FOR_TESTS: Duration = Duration::from_millis(1500);
+
+    /// G11, a cancelled write lists the lock files present AFTER the reap: a
+    /// stale lock left by an earlier crash is reported, and the `index.lock` git
+    /// held until the signal is not, because git removed it on its way out.
+    /// Caught by: searching before the reap (the index lock is listed too), or
+    /// not searching.
+    #[test]
+    fn a_cancelled_write_lists_the_locks_present_after_the_reap() {
+        let (scratch, marker) = committing_into_a_sleeping_hook("cancelled-locks");
+        let stale = scratch.repo().join(".git/refs/heads/stale.lock");
+        std::fs::write(&stale, "").unwrap();
+        let (outcome, _) = cancel_inside_the_hook(&scratch, &marker);
+        match outcome {
+            Err(Error::GitCancelled { stranded_locks, .. }) => {
+                let stale = std::fs::canonicalize(&stale).unwrap();
+                let found: Vec<PathBuf> = stranded_locks
+                    .iter()
+                    .map(|path| std::fs::canonicalize(path).unwrap())
+                    .collect();
+                assert_eq!(found, [stale]);
+            }
+            other => panic!("expected a cancelled write, got {other:?}"),
+        }
+    }
+
+    /// G11, a failed write names the `index.lock` it failed on — another git, or
+    /// a stale lock — and nothing removes it. Caught by: a write failure that
+    /// reports no locks.
+    #[test]
+    fn a_failed_write_names_a_present_index_lock() {
+        let scratch = Scratch::new("failed-write");
+        let repo = scratch.repo();
+        std::fs::write(repo.join("tracked"), "one\n").unwrap();
+        let index_lock = repo.join(".git/index.lock");
+        std::fs::write(&index_lock, "").unwrap();
+        let handle = Repository::discover(&repo).unwrap();
+        let outcome = scratch
+            .git
+            .write_invocation(WriteAuthority::new())
+            .in_repository(&handle)
+            .args(["add", "tracked"])
+            .start()
+            .unwrap()
+            .finish(&CancelSignal::new(), |_| {}, |_| {});
+        match outcome {
+            Err(Error::GitFailed {
+                arguments,
+                status,
+                stderr,
+                present_locks,
+            }) => {
+                assert_eq!(arguments, "add tracked");
+                assert_eq!(status.code(), Some(128));
+                assert!(stderr.contains("index.lock"), "{stderr}");
+                let found: Vec<PathBuf> = present_locks
+                    .iter()
+                    .map(|path| std::fs::canonicalize(path).unwrap())
+                    .collect();
+                assert_eq!(found, [std::fs::canonicalize(&index_lock).unwrap()]);
+            }
+            other => panic!("expected the failure, got {other:?}"),
+        }
+        assert!(
+            index_lock.exists(),
+            "the lock was removed; nothing may remove a lock"
+        );
+    }
+
+    /// G11, a read with real git: its failure carries the arguments, the status and
+    /// git's stderr, and no locks; cancelled, it reports a read's cancellation and
+    /// nothing else. The long read is a shell alias, so it runs as long as the test
+    /// needs. Caught by: a read cancelled as a write (lock files searched), or a
+    /// superseded read that runs to its end.
+    #[test]
+    fn a_real_read_fails_with_its_diagnostic_and_cancels_as_a_read() {
+        let scratch = Scratch::new("read-outcomes");
+        let handle = Repository::discover(scratch.repo()).unwrap();
+        let failed = scratch
+            .git
+            .read_invocation()
+            .in_repository(&handle)
+            .args([
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                "refs/heads/absent",
+            ])
+            .start()
+            .unwrap()
+            .collect(&CancelSignal::new(), 1024, |_| {});
+        match failed {
+            Err(Error::GitFailed {
+                arguments,
+                status,
+                stderr,
+                present_locks,
+            }) => {
+                assert_eq!(
+                    arguments,
+                    "rev-parse --verify --end-of-options refs/heads/absent"
+                );
+                assert_eq!(status.code(), Some(128));
+                assert!(stderr.contains("fatal"), "{stderr}");
+                assert!(
+                    present_locks.is_empty(),
+                    "a read named locks: {present_locks:?}"
+                );
+            }
+            other => panic!("expected the failure, got {other:?}"),
+        }
+
+        let superseded = CancelSignal::new();
+        let invocation = scratch
+            .git
+            .read_invocation()
+            .in_repository(&handle)
+            .args(["-c", "alias.linger=!sleep 30", "linger"])
+            .start()
+            .unwrap();
+        superseded.cancel();
+        let started = Instant::now();
+        let outcome = invocation.finish(&superseded, |_| {}, |_| {});
+        assert!(
+            matches!(&outcome, Err(Error::GitReadCancelled { arguments }) if arguments == "-c alias.linger=!sleep 30 linger"),
+            "{outcome:?}"
+        );
+        assert!(
+            started.elapsed() < TERMINATION_GRACE_FOR_TESTS,
+            "{:?}",
+            started.elapsed()
         );
     }
 }

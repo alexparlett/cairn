@@ -15,8 +15,10 @@ a thread, stdout is handed over as it arrives or collected under a ceiling,
 stderr is kept as a bounded tail, and an invocation ends by a cancel signal, a
 kill handle or a drop — `SIGTERM` to the group, then `SIGKILL` after two
 seconds. The version probe and fetch run on it like everything else; the
-paths they ran on before are gone, and a guard keeps them gone. The registry
-and the command log are not built yet.
+paths they ran on before are gone, and a guard keeps them gone. Each open
+repository keeps a registry of the invocations running in it, which closing
+it can end and wait on, and a bounded log of every one that is over. The
+application does not call the close or read the log yet.
 
 ## The layout
 
@@ -31,6 +33,9 @@ crates/cairn-git/src/
     group.rs        the process group: when it may be signalled, ending it, KillHandle,
                     TERMINATION_GRACE
     pipes.rs        the pipe threads: stdout chunks, stderr lines, stdin; the tail, the records
+    registry.rs     Processes — a repository's running invocations, end_all, CLOSE_BOUND;
+                    Registration, an invocation's booking from spawn to end
+    command_log.rs  CommandLog — the records, LOG_ENTRIES, LOG_BYTES
     stub_git.rs     (tests) a stub `git` on a PATH the test controls
   ops/          every mutation; constructs WriteAuthority; re-exports what the app needs
     authority.rs    WriteAuthority, and the tests that need one (real `git` writes among them)
@@ -388,6 +393,104 @@ a completed invocation reported as cancelled.
    and nothing removes a lock. A read's is always empty
    (`a_failure_carries_the_arguments_the_status_and_stderr`,
    `a_real_read_fails_with_its_diagnostic_and_cancels_as_a_read`).
+
+## The registry
+
+Each `SharedRepository` holds one `Processes` (`process/registry.rs`), shared
+with every worker handle `to_worker` makes from it. An invocation built with
+`in_repository` carries a `Registration` for it, and that registration is the
+one place the invocation's life is booked:
+
+- **It enters the registry when its process is spawned** (`watch`, right
+  after the group is made). A spawn that fails enters nothing and is logged as
+  never started.
+- **It leaves when the runner concludes the invocation**, on whichever thread
+  that is — the caller's `finish`, `records` or `collect`, the reaper thread a
+  drop hands it to, or the calling thread when a pipe thread could not start —
+  and it writes the invocation's one log record as it leaves, log first, so
+  whoever sees the registry empty sees the log complete. The registration is
+  consumed by that, so a second record cannot be written; a registration
+  dropped unfinished, which no path does, still writes one, exit unknown.
+- **A drop with no thread to reap on** leaves at once, reaped or not: it sends
+  `SIGKILL` and reaps only if it already can, and nothing is left that would
+  reap it later.
+
+An invocation run in no repository — the version probe, and the tests that
+give none — is booked nowhere.
+
+`SharedRepository::end_invocations(bound)` (`Processes::end_all`) is what
+closing a repository will run, with `cairn_git::CLOSE_BOUND`: every
+invocation in the registry is asked to end the way a cancel asks (`SIGTERM`
+to its group if the lock is free, the rest by the thread driving it), and the
+call waits on a condition variable, up to `bound`, for the registry to empty.
+It returns how many were still running when it stopped waiting. From then on
+the repository is closing: an invocation that enters afterwards is asked to
+end the moment it does. It waits, so it is a worker's call; the application
+does not call it yet.
+
+`CLOSE_BOUND` is 3 s: the 2 s grace and the 250 ms drain bound, which is the
+longest a cancel can take, with three-quarters of a second to spare; a
+compile-time assertion keeps it above their sum.
+
+Pinned (`process/registry.rs`):
+`a_finished_invocation_is_logged_once_with_every_field` (in the registry from
+the spawn, not after the end),
+`ending_every_invocation_ends_them_all_and_waits_for_their_reaps` (two driven
+and one dropped, ended and reaped well inside the bound, each recorded once as
+cancelled), `ending_every_invocation_waits_no_longer_than_its_bound` (a git
+that ignores `SIGTERM` outlives a 100 ms bound, which says so, and is reaped
+within `CLOSE_BOUND`), `an_invocation_started_after_the_end_is_ended_at_once`
+and `every_handle_on_a_repository_shares_its_log`.
+
+## The command log
+
+A record is a `cairn_model::CommandRecord`: the arguments after the program,
+lossily decoded; the directory it ran in; when it started, by the wall clock;
+how long until it was over; how it ended (`CommandExit`: a code, a signal,
+never started, or unknown); whether it was cancelled; and the retained
+stderr tail. There is no field for the environment, so the askpass token an
+invocation carried has nowhere to land, and none that could hold a `Secret`;
+`the_record_holds_exactly_what_r8_1_lists` destructures it exhaustively, so a
+new field stops it compiling. Its arguments are what Cairn passed — fetch
+passes the remote name the application gives it.
+
+`cancelled` is the rule the caller's outcome reads (`Ended::cancelled` in
+`runner.rs`): asked to end and not beaten by a clean exit. A crossed ceiling,
+a lost status and a pipe thread that could not start are the runner's own
+ends and are not cancellations; a drop is.
+
+The log (`process/command_log.rs`) is in memory, oldest first, and bounded
+two ways, dropping its oldest records to stay under both:
+
+- **`LOG_ENTRIES`, 1000 records** — what bounds it in the common case, where
+  git says little: a long session's worth of fetches and of the reads
+  `diff-engine` adds, one per selection.
+- **`LOG_BYTES`, 4 MiB** of arguments, directories and stderr — what bounds it
+  when git says a lot: sixteen full 256 KiB tails. It is above what one record
+  holds at the platforms' default `ARG_MAX` (2 MiB on Linux, 1 MiB on macOS),
+  so a record is trimmed only past those: its stderr keeps its end, then its
+  arguments their start, with a last argument counting what went.
+
+`SharedRepository::command_log()` answers it. No view draws it yet.
+
+Pinned, G17's engine half, one record per exit path (`process/registry.rs`):
+`a_finished_invocation_is_logged_once_with_every_field`,
+`a_failed_invocation_is_logged_once_with_its_status`,
+`a_cancelled_invocation_is_logged_once_as_cancelled` (by the handle and by the
+signal), `a_dropped_invocation_is_logged_once_by_its_reaper`,
+`a_drop_with_no_reaper_thread_is_logged_once`,
+`an_invocation_that_never_started_is_logged_once`,
+`what_the_runner_ends_is_logged_once_and_not_as_a_cancel`,
+`a_cancel_beaten_by_a_clean_exit_is_logged_as_the_success` and
+`an_invocation_in_no_repository_is_not_logged_in_one`; the bounds by
+`the_log_keeps_the_newest_log_entries_records`,
+`the_log_holds_no_more_than_log_bytes`,
+`a_record_larger_than_the_bound_is_trimmed_to_fit_and_says_so` and
+`the_log_and_close_bounds_have_the_values_the_packet_recorded`; and the token
+by `a_fetch_with_a_token_is_logged_once_without_the_token_or_the_environment`
+(`ops/fetch.rs`), whose stub writes the environment it was given to a file —
+the token and every value looked for among it — while its record holds none
+of them.
 
 ## The guards
 

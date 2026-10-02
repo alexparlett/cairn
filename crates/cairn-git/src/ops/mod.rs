@@ -30,14 +30,17 @@
 //!   adds `GIT_OPTIONAL_LOCKS=0` and never carries an askpass token; a write
 //!   that may prompt carries the operation's token, per invocation, because
 //!   that is what the token is.
-//! - The runner (crate-private) adds the arguments and runs the process with
-//!   standard input closed — to completion, or streaming its stderr and
-//!   killable from another thread, which is what a long fetch needs. A cancel
-//!   is `SIGTERM`, then `SIGKILL` after a bounded grace period, so git gets to
-//!   remove the lock files it holds; what it strands anyway is found by
-//!   `stranded_locks` and carried on the cancellation error, so the user hears
-//!   about a stale `*.lock` from the cancel that made it rather than from the
-//!   next operation that trips over it. Nothing outside `cairn-git` can run a
+//! - The runner (crate-private) adds the arguments and runs the process as
+//!   the leader of its own process group, with a thread on each pipe and
+//!   standard input closed unless it is fed: stdout handed over as it arrives
+//!   or collected under a ceiling, stderr forwarded line by line and kept as a
+//!   bounded tail, and killable from another thread, which is what a long
+//!   fetch needs. A cancel is `SIGTERM` to the group, then `SIGKILL` after a
+//!   bounded grace period, so git gets to remove the lock files it holds; what
+//!   a write strands anyway is found by `stranded_locks` and carried on the
+//!   cancellation error, so the user hears about a stale `*.lock` from the
+//!   cancel that made it rather than from the next operation that trips over
+//!   it. Nothing outside `cairn-git` can run a
 //!   raw verb: the public surface is named operations ([`fetch`] today), so
 //!   the confirmation seal cannot be routed around through the runner.
 //! - `refspec_policy` (crate-private) reads a remote's configuration afresh

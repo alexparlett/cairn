@@ -34,25 +34,20 @@
 //! miss is not a lost cancel, because the request is recorded first and the
 //! thread driving the invocation sends the signal itself on its next tick.
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "fetch and the version probe move onto this runner next, and reads/ gets its \
-                  first caller with diff-engine"
-    )
-)]
-
 use std::io;
 use std::process::{Child, ExitStatus};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
 
-use super::cli::TERMINATION_GRACE;
+/// How long a cancelled git gets to act on `SIGTERM` before `SIGKILL`. git's
+/// handler removes its temporary and lock files and exits at once, in
+/// milliseconds; two seconds is that on a loaded machine with room to spare,
+/// and short enough that "cancelled" still arrives while the user is looking.
+pub(crate) const TERMINATION_GRACE: Duration = Duration::from_secs(2);
 
 /// Shared by the thread driving an invocation, its pipe threads and every
 /// [`KillHandle`].

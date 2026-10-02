@@ -787,17 +787,22 @@ fn only_the_process_module_builds_or_runs_a_process() {
          move with it rather than exempt a directory that is not there"
     );
     // The module does what the matchers look for, so a matcher that stopped reading real code
-    // fails here rather than passing everything.
+    // fails here rather than passing everything. The shapes are the runner's own. `.output()`
+    // and `.wait()` were here while `GitCommand::run` and `stream` existed, and went with them
+    // (process-manager phase 03): SWAPPED, not dropped, for the extension trait that puts each
+    // process in a group of its own and the stdout pipe a thread reads, beside `.try_wait()`,
+    // which is how the runner reaps. Those two stay on PROCESS_IDENTS and
+    // PROCESS_NULLARY_CALLS, so a call outside `process/` still fails.
     for (shape, hits) in [
         ("`.spawn()`", calls_nullary_method(&module, &["spawn"])),
-        ("`.output()`", calls_nullary_method(&module, &["output"])),
         (
             "`.try_wait()`",
             calls_nullary_method(&module, &["try_wait"]),
         ),
-        ("`.wait()`", calls_nullary_method(&module, &["wait"])),
+        ("`CommandExt`", mentions_crate(&module, "CommandExt")),
         ("`Stdio`", mentions_crate(&module, "Stdio")),
         ("`Child`", mentions_crate(&module, "Child")),
+        ("`ChildStdout`", mentions_crate(&module, "ChildStdout")),
         ("`ChildStderr`", mentions_crate(&module, "ChildStderr")),
         ("`nix`", mentions_crate(&module, "nix")),
         (
@@ -849,6 +854,225 @@ const RUNNER_NAMES: &[&str] = &[
     "Invocation",
     "KillHandle",
 ];
+
+/// The runner the credential-prompts packet built, which process-manager replaced (R3.7, G18):
+/// the streamed process and its kill handle, by name. Banned everywhere in `cairn-git`,
+/// `process/` included, test modules included: the runner in `runner.rs` is the one way a
+/// process runs, and a second would be a second set of rules for ending one. They stay on
+/// [`RUNNER_NAMES`] as well, which is the weaker rule.
+const RETIRED_RUNNER_NAMES: &[&str] = &["Running", "ProcessKill"];
+
+/// That runner's two entry points, the methods `GitCommand` declared for it: `run` to
+/// completion and `stream` with a kill. Banned as a declaration in any `impl` block whose header
+/// names `GitCommand`, and `stream` as a method call anywhere (`run` has innocent namesakes —
+/// the runner's own `Driver::run` — so its call is not matched; its declaration is).
+const RETIRED_RUNNER_METHODS: &[&str] = &["run", "stream"];
+
+/// The type the retired methods were declared on.
+const INVOCATION_BUILDER: &str = "GitCommand";
+
+/// Each `impl` block in `code` (strings and comments blanked) whose header names `ty`, as its
+/// 1-based header line and the text between its braces. Generic and trait impls alike:
+/// `impl<'a, K: Kind> GitCommand<'a, K> {` and `impl Debug for GitCommand<'_, Read> {`.
+fn impl_blocks_naming<'a>(code: &'a str, ty: &str) -> Vec<(usize, &'a str)> {
+    let bytes = code.as_bytes();
+    let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut blocks = Vec::new();
+    for (at, _) in code.match_indices("impl") {
+        let bounded =
+            (at == 0 || !ident(bytes[at - 1])) && bytes.get(at + 4).is_some_and(|b| !ident(*b));
+        if !bounded {
+            continue;
+        }
+        let Some(open) = code[at..].find('{').map(|offset| at + offset) else {
+            continue;
+        };
+        let header = &code[at..open];
+        if header.contains(';') || mentions_crate(header, ty).is_empty() {
+            continue;
+        }
+        let mut depth = 0usize;
+        let mut close = code.len();
+        for (offset, byte) in code[open..].bytes().enumerate() {
+            match byte {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = open + offset;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let line = code[..at].bytes().filter(|b| *b == b'\n').count() + 1;
+        blocks.push((line, &code[open + 1..close]));
+    }
+    blocks
+}
+
+/// Whether `body` declares a function named `name`: `fn name(` or `fn name<`, however spaced.
+fn declares_function(body: &str, name: &str) -> bool {
+    let bytes = body.as_bytes();
+    let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    body.match_indices(name).any(|(at, _)| {
+        let end = at + name.len();
+        let bounded =
+            (at == 0 || !ident(bytes[at - 1])) && bytes.get(end).is_none_or(|b| !ident(*b));
+        let before = body[..at].trim_end();
+        let after = body[end..].trim_start();
+        bounded
+            && before.ends_with("fn")
+            && before[..before.len() - 2]
+                .bytes()
+                .next_back()
+                .is_none_or(|b| !ident(b))
+            && (after.starts_with('(') || after.starts_with('<'))
+    })
+}
+
+/// Every trace of the retired runner in one source file, as `path:line ..`.
+fn retired_runner_traces(path: &Path, source: &str) -> Vec<String> {
+    let code = code_without_strings(source);
+    let at = |line: usize| format!("{}:{line}", path.display());
+    let mut found = Vec::new();
+    for name in RETIRED_RUNNER_NAMES {
+        for line in mentions_crate(&code, name) {
+            found.push(format!("{} names `{name}`", at(line)));
+        }
+    }
+    for (line, body) in impl_blocks_naming(&code, INVOCATION_BUILDER) {
+        for method in RETIRED_RUNNER_METHODS {
+            if declares_function(body, method) {
+                found.push(format!(
+                    "{} declares `{INVOCATION_BUILDER}::{method}` in the impl opened here",
+                    at(line)
+                ));
+            }
+        }
+    }
+    for line in calls_method(&code, &["stream"]) {
+        found.push(format!("{} calls `.stream(..)`", at(line)));
+    }
+    found
+}
+
+/// The probe and fetch run on the runner, and the paths they ran on before are gone (process-
+/// manager R3.7, G18): nothing in `cairn-git` names the streamed `Running` or its
+/// `ProcessKill`, declares `GitCommand::run` or `GitCommand::stream`, or calls `.stream(..)`.
+/// Over every file of the crate, `process/` and test modules included — a test that keeps an old
+/// path alive keeps its rules alive. Proven to read real code by finding `GitCommand`'s own impl
+/// blocks, and the runner's `start` in one of them.
+#[test]
+fn the_retired_runner_is_gone() {
+    let mut scanned = 0usize;
+    let mut builder_impls = 0usize;
+    let mut declares_start = false;
+    for (path, source) in rust_sources(ENGINE_SOURCE_DIR) {
+        scanned += 1;
+        let found = retired_runner_traces(&path, &source);
+        assert!(
+            found.is_empty(),
+            "the runner process-manager replaced is back: {found:?}. Every invocation runs on \
+             `GitCommand::start` and the `Invocation` it hands back, which end a process the one \
+             way the packet decided (its whole group, SIGTERM then SIGKILL)."
+        );
+        let code = code_without_strings(&source);
+        for (_, body) in impl_blocks_naming(&code, INVOCATION_BUILDER) {
+            builder_impls += 1;
+            declares_start |= declares_function(body, "start");
+        }
+    }
+    assert!(
+        scanned > 0,
+        "the retired-runner guard scanned nothing; did cairn-git move?"
+    );
+    assert!(
+        builder_impls > 0 && declares_start,
+        "the retired-runner guard found no impl block of {INVOCATION_BUILDER} declaring `start`; \
+         the builder moved or was renamed, and this guard must follow it rather than pass on \
+         nothing"
+    );
+}
+
+#[test]
+fn the_retired_runner_matcher_catches_the_shapes_it_claims() {
+    assert_eq!(
+        (RETIRED_RUNNER_NAMES, RETIRED_RUNNER_METHODS),
+        (
+            ["Running", "ProcessKill"].as_slice(),
+            ["run", "stream"].as_slice()
+        ),
+        "a retired-runner roster changed; spell the entry out here too"
+    );
+    let file = Path::new("crates/cairn-git/src/process/cli.rs");
+    for (shape, source) in [
+        ("the streamed process", "fn f(r: Running) {}"),
+        ("its kill handle", "struct Fetch(ProcessKill);"),
+        (
+            "run, in a generic impl",
+            "impl<'a, K: Kind> GitCommand<'a, K> {\n    pub(crate) fn run(self) -> R {\n        \
+             x\n    }\n}",
+        ),
+        (
+            "stream, in an impl of one kind",
+            "impl GitCommand<'_, Write> {\n    fn stream (self) -> R { x }\n}",
+        ),
+        (
+            "run, generic over its argument",
+            "impl<K> GitCommand<'_, K> { fn run<F>(self, f: F) {} }",
+        ),
+        ("a stream call", "let r = command.stream()?;"),
+        (
+            "a wrapped stream call",
+            "let r = command\n    .stream()\n    ?;",
+        ),
+    ] {
+        assert!(
+            !retired_runner_traces(file, source).is_empty(),
+            "the retired-runner matcher missed {shape}: {source:?}"
+        );
+    }
+    for (shape, source) in [
+        (
+            "the driver's own run",
+            "impl Driver {\n    fn run(&mut self) -> Ended { x }\n}",
+        ),
+        ("a reader's run, called", "Self::Stdout(p) => reader.run(),"),
+        (
+            "the runner's start",
+            "impl<'a, K: Kind> GitCommand<'a, K> {\n    fn start(self) -> R { x }\n}",
+        ),
+        (
+            "a longer name",
+            "impl GitCommand<'_, Read> { fn run_to_end(self) {} fn streaming(self) {} }",
+        ),
+        ("a longer type", "fn f(t: RunningTotal) {}"),
+        ("prose", "// GitCommand::stream and Running are gone\n"),
+        ("a string", "let s = \"Running ProcessKill .stream()\";"),
+        (
+            "run in an impl of another type after one of the builder",
+            "impl GitCommand<'_, Read> { fn start(self) {} }\nimpl Driver { fn run(self) {} }",
+        ),
+    ] {
+        assert!(
+            retired_runner_traces(file, source).is_empty(),
+            "the retired-runner matcher fired on {shape}: {source:?}"
+        );
+    }
+    assert_eq!(
+        impl_blocks_naming(
+            "impl A {\n}\nimpl<'a> GitCommand<'a, Read> {\n    fn start(self) { inner { } }\n}",
+            "GitCommand"
+        )
+        .iter()
+        .map(|(line, body)| (*line, declares_function(body, "start")))
+        .collect::<Vec<_>>(),
+        [(3, true)],
+        "the impl matcher found the wrong blocks, or cut one short at an inner brace"
+    );
+}
 
 /// A write, by the names that build one: the write builder and the authority it consumes.
 /// Allowed in `process/`, which declares the builder and names the type in its signature, and

@@ -14,15 +14,6 @@
 //! end of the pipe: a process still writing there gets `EPIPE` instead of
 //! filling a pipe nobody empties.
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "fetch and the version probe move onto this runner next, and reads/ gets its \
-                  first caller with diff-engine"
-    )
-)]
-
 use std::io::{self, Read as _};
 use std::process::{ChildStderr, ChildStdout};
 use std::sync::mpsc::SyncSender;
@@ -199,11 +190,25 @@ impl Tail {
 
 /// Splits stdout into NUL-terminated records across chunks, handing each to
 /// the caller as soon as it is whole.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the first `-z` read arrives with diff-engine's changes query; tests drive it today"
+    )
+)]
 #[derive(Debug, Default)]
 pub(super) struct Records {
     pending: Vec<u8>,
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the first `-z` read arrives with diff-engine's changes query; tests drive it today"
+    )
+)]
 impl Records {
     pub(super) fn push(&mut self, mut chunk: &[u8], record: &mut impl FnMut(&[u8])) {
         while let Some(end) = chunk.iter().position(|byte| *byte == 0) {

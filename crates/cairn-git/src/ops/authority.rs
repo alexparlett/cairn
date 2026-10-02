@@ -97,7 +97,7 @@ mod tests {
         let output = git
             .write_invocation(WriteAuthority::new())
             .arg("print-environment")
-            .run()
+            .collected()
             .unwrap();
         assert_eq!(
             printed_environment(&output.stdout_text()),
@@ -118,7 +118,7 @@ mod tests {
             .write_invocation(WriteAuthority::new())
             .arg("print-environment")
             .authorized_by(&token)
-            .run()
+            .collected()
             .unwrap();
         assert_eq!(
             printed_environment(&output.stdout_text()),
@@ -181,7 +181,7 @@ mod tests {
                 .arg("-C")
                 .arg(directory)
                 .args(args)
-                .run()
+                .collected()
                 .unwrap_or_else(|error| panic!("git {args:?}: {error}"));
         }
 
@@ -191,7 +191,7 @@ mod tests {
                 .arg("-C")
                 .arg(self.repo())
                 .args(["rev-parse", "HEAD"])
-                .run()
+                .collected()
                 .unwrap_or_else(|error| panic!("git rev-parse HEAD: {error}"))
                 .stdout_text()
                 .trim()
@@ -247,7 +247,7 @@ mod tests {
             .write_invocation(WriteAuthority::new())
             .in_repository(&handle)
             .arg("commit")
-            .run();
+            .collected();
         let took = started.elapsed();
 
         assert!(
@@ -286,7 +286,7 @@ mod tests {
             .write_invocation(WriteAuthority::new())
             .in_repository(&handle)
             .args(["rebase", "-i", "HEAD~1"])
-            .run();
+            .collected();
         let took = started.elapsed();
 
         assert!(
@@ -335,7 +335,7 @@ mod tests {
             .read_invocation()
             .in_repository(&handle)
             .args(["status", "--porcelain=v2", "-z"])
-            .run()
+            .collected()
             .unwrap();
         let records: Vec<&[u8]> = read.records().collect();
         assert!(
@@ -357,7 +357,7 @@ mod tests {
             .write_invocation(WriteAuthority::new())
             .in_repository(&handle)
             .args(["status", "--porcelain=v2", "-z"])
-            .run()
+            .collected()
             .unwrap_or_else(|error| panic!("the same status as a write: {error}"));
         assert!(
             std::fs::read(&index).unwrap() != before,

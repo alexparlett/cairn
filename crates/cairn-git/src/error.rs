@@ -76,14 +76,13 @@ pub enum Error {
     },
 
     /// git ran and exited non-zero. `stderr` is git's own diagnostic, for the
-    /// user: the last 256 KiB of it on the runner, whatever it said before that
-    /// dropped. `present_locks` is every `*.lock` under the git directory once
-    /// a WRITE had failed — the file another git holds, or a stale one from a
-    /// crash, which is what a write fails on and git does not wait for. Never
-    /// retried and never removed. Filled only for a write run on the runner in
-    /// a repository (`GitCommand::start` after `in_repository`); empty for a
-    /// read, and for anything that still runs on the older `run` and `stream`
-    /// paths — fetch and the version probe among them.
+    /// user: the last 256 KiB of it, whatever it said before that dropped.
+    /// `present_locks` is every `*.lock` under the git directory once a WRITE
+    /// had failed — the file another git holds, or a stale one from a crash,
+    /// which is what a write fails on and git does not wait for. Never retried
+    /// and never removed. Filled for a write run in a repository (fetch among
+    /// them); empty for a read, the version probe included, and for a write
+    /// given no repository to look in.
     #[error(
         "git {arguments} failed ({status}): {stderr}{}",
         PresentLocks(present_locks)

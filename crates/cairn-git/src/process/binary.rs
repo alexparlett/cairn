@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 
 use super::cli::{GitCommand, Read, Write};
 use super::{Askpass, GitEnvironment};
-use crate::Error;
 use crate::ops::WriteAuthority;
+use crate::{CancelSignal, Error};
 
 /// The program name searched for on `PATH`.
 const PROGRAM: &str = "git";
@@ -162,12 +162,20 @@ fn is_executable(path: &Path) -> bool {
     path.is_file()
 }
 
-/// `git --version`, as a read: the one invocation outside `ops/` and `reads/`,
-/// because it runs before there is a [`GitBinary`] to build one from.
+/// The most of `git --version`'s stdout the probe reads: one line, a few
+/// dozen bytes from any git there is. More is not a version, and is refused
+/// rather than held.
+const PROBE_CEILING: usize = 4096;
+
+/// `git --version`, as a read on the runner: the one invocation outside `ops/`
+/// and `reads/`, because it runs before there is a [`GitBinary`] to build one
+/// from. Nothing cancels it — it is startup's, and git answers it at once — so
+/// its cancel signal is one nobody holds.
 fn probe(path: &Path, environment: &GitEnvironment) -> Result<GitVersion, Error> {
     let output = GitCommand::new(path, environment, Read)
         .arg("--version")
-        .run()?;
+        .start()?
+        .collect(&CancelSignal::new(), PROBE_CEILING, |_| {})?;
     let text = output.stdout_text();
     GitVersion::parse(&text).ok_or_else(|| Error::GitVersionUnreadable {
         path: path.to_owned(),

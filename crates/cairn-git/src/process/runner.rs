@@ -57,15 +57,6 @@
 //! ends a process for — a crossed ceiling, a failed stdin write, a pipe thread
 //! that could not start.
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "fetch and the version probe move onto this runner next, and reads/ gets its \
-                  first caller with diff-engine"
-    )
-)]
-
 use std::process::{Child, ChildStdin};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError, sync_channel};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -331,6 +322,14 @@ impl<K: Kind> Invocation<K> {
     /// succeeded, since a cancelled one may have been cut off inside it. On an
     /// `Err`, the records already handed on are a prefix of an answer that did
     /// not complete, for the caller to discard.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the first `-z` read arrives with diff-engine's changes query; tests drive \
+                      it today"
+        )
+    )]
     pub(crate) fn records(
         self,
         cancel: &impl Cancel,
@@ -658,8 +657,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    use super::super::cli::{Read, TERMINATION_GRACE};
-    use super::super::group::os_thread;
+    use super::super::cli::Read;
+    use super::super::group::{TERMINATION_GRACE, os_thread};
     use super::super::pipes;
     use super::super::stub_git::{StubGit, discover_retrying};
     use super::{DRAIN_BOUND, Invocation, TICK};
@@ -1188,6 +1187,69 @@ mod tests {
         assert!(
             took < TERMINATION_GRACE + Duration::from_secs(2),
             "{took:?}"
+        );
+        #[cfg(target_os = "linux")]
+        assert!(eventually(DEADLINE, || group_gone(pid)));
+        let _ = pid;
+    }
+
+    /// Ignores `SIGTERM` and closes stdout and stderr the moment it has said it is
+    /// hanging, so its `sleep`s inherit no pipe and both readers end before any
+    /// cancel arrives.
+    const IGNORING_TERM_WITH_ITS_PIPES_CLOSED: &str = "PATH=/usr/bin:/bin; \
+        command -v sleep >/dev/null || exit 99; trap '' TERM; echo hanging >&2; \
+        exec 1>&- 2>&-; while :; do sleep 1; done";
+
+    /// The escalation is the driver's wherever it is waiting: a cancel that lands
+    /// after the pipes have closed — so the driver is backing off on `try_wait`,
+    /// not receiving — is still `SIGTERM`, then `SIGKILL` once the grace has
+    /// passed. Carried over from the runner this one replaced, which had the same
+    /// case. The cancel comes 300 ms after the stub spoke, so it lands after the
+    /// close on any machine that is not pathologically slow; on one that is, the
+    /// receiving loop handles it and this decides nothing extra, never the wrong
+    /// thing. Caught by: a backoff loop that never looks at the end request (the
+    /// stub sleeps forever and `within` fails), or one that never escalates.
+    #[test]
+    fn a_cancel_that_lands_after_the_pipes_closed_is_still_escalated_to_sigkill() {
+        let stub = stub(IGNORING_TERM_WITH_ITS_PIPES_CLOSED);
+        let invocation = started(&stub);
+        let pid = invocation.id();
+        let handle = invocation.kill_handle();
+        let (spoke, heard) = std::sync::mpsc::channel::<()>();
+        let cancelling = std::thread::spawn(move || {
+            heard.recv().ok()?;
+            std::thread::sleep(Duration::from_millis(300));
+            let at = Instant::now();
+            handle.kill();
+            Some(at)
+        });
+        let (outcome, seen) = within(DEADLINE, move || {
+            let mut seen = Vec::new();
+            let outcome = invocation.finish(
+                &never(),
+                |_| {},
+                |line| {
+                    seen.push(line.to_owned());
+                    if line == "hanging" {
+                        let _ = spoke.send(());
+                    }
+                },
+            );
+            (outcome, seen)
+        });
+        let Some(cancelled_at) = cancelling.join().unwrap() else {
+            panic!("the stub never said it was hanging: {seen:?}");
+        };
+        let took = cancelled_at.elapsed();
+        assert!(
+            matches!(&outcome, Err(Error::GitReadCancelled { .. })),
+            "{outcome:?}"
+        );
+        assert_eq!(seen, ["hanging"], "the stub was dying by itself");
+        assert!(
+            took >= TERMINATION_GRACE,
+            "ended after {took:?}: the stub did not survive SIGTERM, so this decided nothing \
+             about the escalation"
         );
         #[cfg(target_os = "linux")]
         assert!(eventually(DEADLINE, || group_gone(pid)));

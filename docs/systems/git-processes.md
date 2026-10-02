@@ -14,10 +14,9 @@ and the runner: each process leads its own process group, each pipe it uses has
 a thread, stdout is handed over as it arrives or collected under a ceiling,
 stderr is kept as a bounded tail, and an invocation ends by a cancel signal, a
 kill handle or a drop — `SIGTERM` to the group, then `SIGKILL` after two
-seconds. Beside it are the two older paths the credential-prompts packet built,
-`GitCommand::run` and `GitCommand::stream`; the version probe and fetch still
-run on them, and they signal `git` alone. The registry and the command log are
-not built yet.
+seconds. The version probe and fetch run on it like everything else; the
+paths they ran on before are gone, and a guard keeps them gone. The registry
+and the command log are not built yet.
 
 ## The layout
 
@@ -27,10 +26,10 @@ crates/cairn-git/src/
     binary.rs       GitBinary, GitVersion — discovery, the 2.30 floor, the read and write builders
     environment.rs  GitEnvironment — the base, ALWAYS, INHERITED, READ_ONLY, Profile
     askpass.rs      Askpass — where git and ssh are sent for a secret
-    cli.rs          GitCommand<K>, Read, Write, Kind, GitDirs, Output; `start` (the runner's entry),
-                    and the older `run`, `stream`, Running, ProcessKill
+    cli.rs          GitCommand<K>, Read, Write, Kind, GitDirs, Output; `start`, the runner's entry
     runner.rs       Invocation<K>: driving a started process to its end, and its outcome
-    group.rs        the process group: when it may be signalled, ending it, KillHandle
+    group.rs        the process group: when it may be signalled, ending it, KillHandle,
+                    TERMINATION_GRACE
     pipes.rs        the pipe threads: stdout chunks, stderr lines, stdin; the tail, the records
     stub_git.rs     (tests) a stub `git` on a PATH the test controls
   ops/          every mutation; constructs WriteAuthority; re-exports what the app needs
@@ -67,8 +66,12 @@ An invocation is a `GitCommand<'_, K>`, and `K` says what kind:
   outside the two builders. It runs before there is a `GitBinary`, and it is a
   read.
 
-Fetch is built as a write (`ops/fetch.rs`). The probe is built as a read
-(`process/binary.rs`).
+Fetch is built as a write (`ops/fetch.rs`): `FetchInProgress` holds its
+`Invocation<Write>`, `FetchCancel` its `KillHandle`, and `finish` drives it
+with a cancel signal nobody holds, since its cancel is the handle's, and
+drops what it writes to stdout. The probe is built as a read
+(`process/binary.rs`) and collected under a 4 KiB ceiling (`PROBE_CEILING`):
+one line is all `git --version` prints.
 
 From outside the crate nothing is nameable. The `compile_fail` doctests in
 `crates/cairn-git/src/ops/mod.rs` each add one line to a passing scaffold:
@@ -316,8 +319,11 @@ A cancel that arrives after the leader has exited while a pipe is still held
 signals the group too — whatever is left of what git started — and can take
 the same; an uncancelled invocation in that state waits only the bound.
 Pinned by `a_cancel_sends_sigterm_first_and_a_process_that_acts_on_it_is_not_killed`
-(a trap that reports `SIGTERM`, ending inside the grace) and
-`a_process_that_ignores_sigterm_is_killed_after_the_grace`; each G8 test then
+(a trap that reports `SIGTERM`, ending inside the grace),
+`a_process_that_ignores_sigterm_is_killed_after_the_grace` and
+`a_cancel_that_lands_after_the_pipes_closed_is_still_escalated_to_sigkill`
+(the driver escalates from its `try_wait` backoff too, not only while it
+receives); each G8 test then
 reads `/proc` and finds no member of the group alive or unreaped. With real
 `git`, `a_commit_cancelled_inside_a_sleeping_hook_leaves_no_index_lock` cancels
 a `commit -a` while its `pre-commit` hook sleeps, having seen `index.lock` held,
@@ -391,8 +397,9 @@ count, and each has a matcher self-test:
 | Twin | What it decides |
 | --- | --- |
 | `every_git_invocation_disables_the_terminal_prompt` | Outside `process/environment.rs`, no product file names or builds a `Command`, sets a process environment variable, or builds or implements `GitEnvironment`. Inside it: one `Command`, one literal, `env_clear` and `envs`, and the `ALWAYS` table's four pins. The `READ_ONLY` table carries each of `READ_ONLY_PINS` — `GIT_OPTIONAL_LOCKS=0` and `GIT_NO_LAZY_FETCH=1` — and is applied. The askpass names are set. |
-| `only_the_process_module_builds_or_runs_a_process` | Outside `process/`, no product file names `Stdio`, `Child` or its pipes, `CommandExt` or `nix`. It calls none of `.spawn()`, `.output()`, `.status()`, `.wait()`, `.try_wait()` or `.wait_with_output()`, and does not call `GitEnvironment::command`. `GitEnvironment::command` stays `pub(super)`. `process/` itself must show `.spawn()`, `.output()`, `.wait()`, `.try_wait()`, `Stdio`, `Child`, `ChildStderr`, `nix` and `.command(..)`, so the matcher is proven to read real code. The one exception row, `.status()` in `cairn-app` (`HistoryProgress::status`), fails once it is no longer needed. |
+| `only_the_process_module_builds_or_runs_a_process` | Outside `process/`, no product file names `Stdio`, `Child` or its pipes, `CommandExt` or `nix`. It calls none of `.spawn()`, `.output()`, `.status()`, `.wait()`, `.try_wait()` or `.wait_with_output()`, and does not call `GitEnvironment::command`. `GitEnvironment::command` stays `pub(super)`. `process/` itself must show the runner's own shapes — `.spawn()`, `.try_wait()`, `CommandExt`, `Stdio`, `Child`, `ChildStdout`, `ChildStderr`, `nix` and `.command(..)` — so the matcher is proven to read real code; `.output()` and `.wait()` were swapped out for `CommandExt` and `ChildStdout` when the old runner went, and stay banned outside `process/`. The one exception row, `.status()` in `cairn-app` (`HistoryProgress::status`), fails once it is no longer needed. |
 | `the_runner_is_named_only_by_ops_and_reads` | In `crates/cairn-git/src`, the runner's names (`GitCommand`, `read_invocation`, `Running`, `ProcessKill`, `Invocation`, `KillHandle`) are allowed in `process/`, `ops/` and `reads/` only. The write builder and `WriteAuthority` are allowed in `process/` and `ops/`. Constructing, writing a literal of or implementing `WriteAuthority` is allowed in `ops/` only. Nothing is declared or re-exported `pub`, and `process` stays private. The authority keeps its shape, and the doctests stay. |
+| `the_retired_runner_is_gone` | Nowhere in `crates/cairn-git/src`, `process/` and test modules included, is `Running` or `ProcessKill` named, `run` or `stream` declared in an `impl` block of `GitCommand`, or `.stream(..)` called (PRD R3.7, G18). Proven to read real code by finding `GitCommand`'s impl declaring `start`; self-test `the_retired_runner_matcher_catches_the_shapes_it_claims`. |
 | `only_the_ops_module_mutates_a_repository` | No product file outside `ops/` and `process/` spawns `git` by its literal name. No file of `crates/cairn-git/src` outside `ops/` names gitoxide's mutation API. That roster was enumerated from the vendored gix 0.87.1 source and sits, with each entry's file and line, in `crates/cairn-guards/src/lib.rs`. |
 
 `the_unguarded_routes_to_a_process_now_fail_a_twin` pins the routes that
@@ -410,7 +417,7 @@ invariant. That a read runs query plumbing or `status` is
 `destructive-ops-reviewer`'s check 10. These are `qa-checklist`'s item 7:
 
 - a process or a gix write reached through an alias, a trait object or a macro;
-- a built or started invocation (`GitCommand`, `Running`, `Invocation`) or a
-  kill handle (`ProcessKill`, `KillHandle`) handed out of `ops/` or `reads/` and driven
+- a built or started invocation (`GitCommand`, `Invocation`) or a
+  kill handle (`KillHandle`) handed out of `ops/` or `reads/` and driven
   elsewhere by inference. The runner guard reads names, so whether `ops/` and
   `reads/` hand out only named operation types (as fetch does) is review.

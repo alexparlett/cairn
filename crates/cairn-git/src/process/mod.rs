@@ -49,5 +49,7 @@ pub(crate) mod stub_git;
 
 pub use askpass::Askpass;
 pub use binary::{GitBinary, GitVersion};
-pub(crate) use cli::{ProcessKill, Running};
+pub(crate) use cli::Write;
 pub use environment::GitEnvironment;
+pub(crate) use group::KillHandle;
+pub(crate) use runner::Invocation;

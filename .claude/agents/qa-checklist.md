@@ -67,9 +67,11 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
    `ops/` through a name `only_the_ops_module_mutates_a_repository`'s roster
    does not hold — a gix API added after 0.87.1, or one reached through a
    trait object, a generic or a macro. And the runner guard reads names, so a
-   built invocation or a `Running` handed out of `ops/` or `reads/` and driven
-   elsewhere by inference (`crate::ops::w(&git).args(..).run()`) names nothing
-   it reads: that `ops/` and `reads/` hand out only named operation types — as
+   built or started invocation (a `GitCommand`, a `Running`, an `Invocation`)
+   or a kill handle (`ProcessKill`, `KillHandle`) handed out of `ops/` or
+   `reads/` and driven elsewhere by inference
+   (`crate::ops::w(&git).args(..).start()?.finish(..)`, `handle.kill()`) names
+   nothing it reads: that `ops/` and `reads/` hand out only named operation types — as
    `fetch` does with `FetchInProgress` and `FetchCancel` — is yours. Dispatch pointer:
    `destructive-ops-reviewer`.
 8. **Responsiveness** (any diff in `crates/cairn-ui/` or `crates/cairn-app/`, or

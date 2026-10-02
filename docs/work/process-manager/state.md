@@ -2,7 +2,7 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 02 (the runner) implemented on `feature/process-manager`, in QA; phase 03
+**Status: phase 02 (the runner) done on `feature/process-manager`; phase 03
 (engine lifecycle) is next** — it moves fetch and the version probe onto the
 runner and deletes `GitCommand::run`, `GitCommand::stream`, `Running` and
 `ProcessKill`. Items awaiting user review are in `progress.md` (the phase 01
@@ -30,6 +30,25 @@ implementation most:
   `GIT_EDITOR=false` and `GIT_SEQUENCE_EDITOR=false` always; a read adds
   `GIT_OPTIONAL_LOCKS=0` and carries no token (L9).
 - **No timeouts, no batch children, no retries, no lock deletion** (L5, L8, L12).
+
+## Obligations for later phases (from phase 02 QA)
+
+- **Phase 03, when fetch moves onto the runner:** `Error::GitFailed`'s doc in
+  `crates/cairn-git/src/error.rs` says `present_locks` is filled only on the
+  runner; once fetch and the probe move and `run`/`stream` are deleted, rewrite
+  it to drop the mention of the older paths (QA QC3).
+- **Phase 03:** narrow the module-level
+  `#![cfg_attr(not(test), expect(dead_code, ..))]` in `process/runner.rs`,
+  `group.rs` and `pipes.rs` to item-level expects once fetch and the probe call
+  the runner, so a newly dead item is not hidden (QA QC6).
+- **Phase 03, guard:** `only_the_process_module_builds_or_runs_a_process`
+  requires `process/` to show `.output()` and `.wait()`, which live only in
+  `run`/`stream`. When those go, SWAP those rows for the runner's own shapes
+  (`CommandExt`, `ChildStdout`, `.try_wait()`) in the same commit and say so in
+  its body, rather than dropping them (QA GI2; gate-integrity-reviewer).
+- **Phase 05:** the G8 drop tests, G10, G12's success arm and R3.1's test are
+  wholly `#[cfg(target_os = "linux")]`; only their `/proc` reads need Linux.
+  Narrow the gating so macOS keeps the rest (QA TC16).
 
 ## Open questions
 
@@ -75,7 +94,7 @@ Record each value and its reason here when it is chosen.
 
 | Bound | Phase | Value | Why |
 | --- | --- | --- | --- |
-| `DRAIN_BOUND` — output read after the leader exits (R3.6) | 02 | 250 ms from the exit, the 20 ms tick included (`process/runner.rs`) | Bounds only the case where something other than git holds a pipe after git exits; the common case ends when the pipes close. What is still owed then is output git wrote before exiting, already in the pipe, which the readers move in well under a millisecond, so 250 ms is two orders of margin for a loaded machine's scheduler, and short enough that a finished operation still reads as finished. The same bound applies after `SIGKILL` on a cancel, for a holder that left the group. |
+| `DRAIN_BOUND` — output read after the leader exits (R3.6) | 02 | 250 ms from the exit, the 20 ms tick included (`process/runner.rs`) | Bounds only the case where something other than git holds a pipe after git exits; the common case ends when the pipes close. What is still owed then is output git wrote before exiting: at most a pipe's capacity per stream plus what the readers queued. Readers send one event per read (stderr's lines together), so that is a handful of events, moved in well under a millisecond, and the driver takes what is queued once more before it lets go; 250 ms is two orders of margin for a loaded machine's scheduler, and short enough that a finished operation still reads as finished. The same bound applies after `SIGKILL` on a cancel, for a holder that left the group. Pinned by `the_fixed_bounds_have_the_values_the_packet_recorded`. |
 | `CLOSE_BOUND` — wait for reaps on repository close (R6.3) | 03 | — | — |
 | `LOG_ENTRIES`, `LOG_BYTES` — command log size (R8.2) | 03 | — | — |
 
@@ -84,7 +103,7 @@ Record each value and its reason here when it is chosen.
 | Phase | Status | Gate | QA |
 | --- | --- | --- | --- |
 | 01 seal and environment | done (`main...HEAD` through phase 01's commits) | `scripts/gate.sh` exit 0 | qa-checklist, gate-integrity, destructive-ops, test-coverage; qa-confirm: 11 confirmed and fixed, 5 dismissed, 1 escalated (lazy fetch), 1 probed and resolved |
-| 02 runner | implemented (`a5f5160..HEAD`); QA in progress | `scripts/gate.sh --fast` exit 0 | pending |
+| 02 runner | done (`a5f5160..HEAD`) | `scripts/gate.sh` exit 0 (`progress.md`) | qa-checklist, destructive-ops, responsiveness, test-coverage, gate-integrity; qa-confirm: 34 confirmed and fixed or deferred, 6 dismissed, 3 escalated (`progress.md`) |
 | 03 engine lifecycle | not started | — | — |
 | 04 application | not started | — | — |
 | 05 QA | not started | — | — |

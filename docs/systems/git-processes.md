@@ -158,7 +158,15 @@ each taking the cancel signal it polls:
 `GitCommand::input(bytes)` gives the process those bytes on stdin, written and
 then closed; without it stdin is `/dev/null`. `Invocation::kill_handle()` hands
 out a `KillHandle`. Each call returns an `Output` holding the retained stderr
-(and stdout, for `collect`).
+(and stdout, for `collect`). On an `Err` from `records`, the records already
+handed on are a prefix of an answer that did not complete, for the caller to
+discard; a last record without its NUL is handed on only on success
+(`a_cancelled_read_hands_on_no_partial_last_record`).
+
+`start` runs on the caller's thread and may wait — it spawns, and a pipe thread
+that cannot start makes it end the process there — so it is a worker's call.
+What the UI thread may call is `KillHandle::kill` and the drop, neither of
+which waits.
 
 ### Spawning and the pipes
 
@@ -176,35 +184,52 @@ out a `KillHandle`. Each call returns an `Output` holding the retained stderr
   bounded at `EVENTS_BOUND`, so a caller slower than git holds git back rather
   than buffering without limit. Pinned by
   `five_mib_of_records_beside_continuous_stderr_arrive_whole_and_in_order`
-  (6 MB of records while another member of the group writes stderr) and
+  (G6's volume of records while another member of the group writes many
+  pipes' worth of stderr) and
   `sixty_four_mib_of_stdin_beside_busy_stdout_and_stderr_completes`; each runs
   under a deadline, so a deadlock fails rather than hangs. With real `git`:
   `sixty_four_mib_through_hash_object_gives_gits_own_id` (end of input, and the
   id gitoxide computes for the same bytes) and
   `a_real_read_of_over_five_mib_of_records_arrives_whole_and_in_order`
-  (`mktree` fed 100,000 entries on stdin, read back by `ls-tree -z`).
-- **stdin first.** The writer thread starts before the readers. A write failure
-  other than git closing its end (`EPIPE`, git's own choice) ends the process
-  BEFORE the pipe closes, since git would take what it had as its whole input,
-  and the outcome is `Error::GitUnwatched`
-  (`a_failed_stdin_write_ends_the_process_and_a_closed_stdin_does_not`).
+  (a generated tree, made by `mktree` fed on stdin and read back by
+  `ls-tree -z`).
+- **stdin first, and held until its thread runs.** The writer thread starts
+  before the readers, and the pipe stays with the runner until that thread has
+  started: a thread that cannot start would otherwise drop it, and git would
+  read the end of an EMPTY input as the whole of it —
+  `reset --pathspec-from-file=-` given nothing unstages everything. On that
+  failure the process is ended first and the pipe dropped after
+  (`a_stdin_thread_that_cannot_start_ends_the_process_before_its_input_closes`).
+  A write failure other than git closing its end (`EPIPE`, git's own choice)
+  likewise ends the process BEFORE the pipe closes, and the outcome is
+  `Error::GitUnwatched`
+  (`a_failed_stdin_write_ends_the_process_and_a_closed_stdin_does_not`,
+  `a_failed_stdin_write_signals_before_it_closes_the_pipe`).
 - **A thread that cannot start** is `Error::GitUnwatched`, and the process is
   ended and reaped on the calling thread first, never left running with nobody
   waiting on it (`a_thread_that_cannot_start_ends_and_reaps_the_process`, with
-  a thread starter that fails at the first and the second thread).
-- **stderr** is split into lines at `\r` and `\n`; every non-blank line goes to
-  `progress`, and the last `TAIL_BYTES` (256 KiB) is retained, starting at a
-  line's start where one falls inside the window. A line with no terminator is
-  cut into pieces of that size. Pinned by
-  `a_mib_of_stderr_is_forwarded_whole_and_retained_as_a_bounded_tail` and the
-  unit tests in `pipes.rs`.
+  a thread starter that fails at the stdout and the stderr reader).
+- **stderr** is split into lines at `\r` and `\n`, and each read's lines cross
+  to the driver as one event, so what git wrote before it exited is a handful
+  of events however many lines it was. Every non-blank line goes to `progress`,
+  and the last `TAIL_BYTES` (256 KiB) is retained, starting at a line's start
+  where one falls inside the window; while the process runs the tail holds at
+  most twice that and the line being added, because it cuts in batches. A line
+  with no terminator is cut into pieces of that size. Pinned by
+  `a_mib_of_stderr_is_forwarded_whole_and_retained_as_a_bounded_tail`,
+  `a_final_burst_of_stderr_is_kept_whole_though_a_holder_keeps_the_pipe` (a
+  burst written just before git fails, with a slow progress callback and a pipe
+  still held: its last line arrives) and the unit tests in `pipes.rs`.
 - **Thread hygiene.** Every thread is counted while it runs;
   `every_thread_an_invocation_starts_ends_with_it` sees the three names started
   and the count back at zero once the invocation is over. The one thread that
   may outlive its invocation is a reader left on a pipe that a process git left
   behind still holds; it ends when that process lets the pipe go, or at its
-  next send, since the receiver is gone. A stdin writer whose reader is such a
-  process and never reads is the same case.
+  next send, since the receiver is gone, which closes the pipe on a writer
+  that keeps writing
+  (`a_reader_left_on_a_pipe_still_written_ends_when_its_invocation_lets_go`).
+  A stdin writer whose reader is such a process and never reads is the same
+  case.
 
 ### When it is over
 
@@ -222,9 +247,18 @@ something else still holds a pipe.
   included. Pinned by
   `an_exit_with_a_grandchild_holding_the_pipes_returns_within_the_drain_bound`:
   the stub leaves a `sleep` holding both pipes, its last output still arrives,
-  and the `sleep` — never cancelled — is left alone.
+  the return comes within the bound of the stub's last line and not before the
+  drain, and the `sleep` — never cancelled — is left alone.
 
-What G19 measured is in the packet's progress log; the reporter is
+The values are pinned by `the_fixed_bounds_have_the_values_the_packet_recorded`:
+the 2 s grace, the 256 KiB tail, the 250 ms drain bound.
+
+**What the runner costs** (PRD G19): `git diff-tree -r -M -z --raw` on the
+rust-lang/rust bench commit `5a3292f163d` against its first parent, through a
+read invocation and through a bare `std::process::Command`, release build,
+warm, on an AMD Ryzen 7 9800X3D with git 2.56.0: within noise of each other,
+0.38 ms apart at the median in one run and none in another, against the 2 ms
+the criterion allows; on the empty-diff floor, about 12 µs. The reporter is
 `g19_reports_the_runners_overhead_over_a_bare_command`, `#[ignore]`d and driven
 by `CAIRN_BENCH_REPO`.
 
@@ -248,12 +282,23 @@ Three ways, all ending the process the same way:
   `dropping_never_waits_for_a_process_that_outlasts_sigterm` times it against a
   process that takes the whole grace to end). If even that thread cannot start,
   the group is sent `SIGKILL` at once and the leader reaped if it already can
-  be; one that outlives that is a zombie until Cairn exits.
+  be; one that outlives that is a zombie until Cairn exits, and a write's
+  locks a `SIGKILL` strands go unreported, since nothing is left to report
+  them (`a_drop_with_no_thread_to_reap_on_kills_the_group_at_once`). The same
+  hand-off happens when a caller's callback panics: the driver, unwinding,
+  gives the invocation to a reaper
+  (`a_panicking_callback_still_ends_and_reaps_the_process`).
 
 **Ending** is `SIGTERM` to the group (`killpg`), then `SIGKILL` to it once
 `TERMINATION_GRACE` (2 s) has passed. A cancelled invocation waits for its
-group: the leader reaped and its pipes closed, or — when a pipe's holder has
-left the group and survives `SIGKILL` — `DRAIN_BOUND` after the `SIGKILL`.
+group: the leader reaped and its pipes closed, within the grace plus a tick.
+When a pipe's holder has left the group, neither signal reaches it, and the
+pipes are abandoned `DRAIN_BOUND` after the `SIGKILL`, so that cancel takes the
+grace plus the bound
+(`a_cancel_whose_pipe_holder_left_the_group_returns_after_the_grace_and_the_bound`).
+A cancel that arrives after the leader has exited while a pipe is still held
+signals the group too — whatever is left of what git started — and can take
+the same; an uncancelled invocation in that state waits only the bound.
 Pinned by `a_cancel_sends_sigterm_first_and_a_process_that_acts_on_it_is_not_killed`
 (a trap that reports `SIGTERM`, ending inside the grace) and
 `a_process_that_ignores_sigterm_is_killed_after_the_grace`; each G8 test then
@@ -265,21 +310,34 @@ and finds the lock gone, the hook ended and nothing committed.
 **When the group may be signalled.** Only while a member is believed alive —
 the leader not yet reaped, or one of the pipes the readers hold still open —
 and never once the invocation is over. The check and the signal are made under
-the one lock the reap also takes, so nothing signals a reaped pid unless an
-open pipe still names the group
-(`a_kill_after_the_invocation_is_over_signals_nothing`). A group id is not
-reused while any member lives, which closes all but a stated race: an open pipe
-does not prove its holder is still in the group, and if every member exits
-between the check and the signal the id could in principle be reused.
+the one lock the reap also takes, and the open pipes are read after that reap,
+so nothing signals a reaped pid unless an open pipe still names the group
+(`a_kill_after_the_invocation_is_over_signals_nothing`; and after a drain-bound
+return, with the leftover process still holding the pipes, the G10 test's kill
+signals nothing). A group id is not reused while any member lives, which
+closes all but a stated race: an open pipe does not prove its holder is still
+in the group, and if every member exits between the check and the signal the
+id could in principle be reused. The escalation widens that window: once the
+leader is reaped and only an open pipe keeps the group believed alive, the
+`SIGKILL` goes out up to the whole grace after the leader's pid was freed. One
+more window is stated rather than closed: git may exit 0 between the reap's
+`try_wait` and the `killpg`, and is then counted as signalled while running —
+a completed invocation reported as cancelled.
 
 ### Outcomes
 
 `Invocation::drive` decides, after the reap, in this order:
 
-1. A crossed ceiling is `Error::GitOutputTooLarge { arguments, ceiling }`
-   (`a_collect_over_its_ceiling_is_refused_whole_and_the_process_ended`).
-2. A failed stdin write, or a `try_wait` that itself failed, is
-   `Error::GitUnwatched { arguments, source }`.
+1. A crossed ceiling is `Error::GitOutputTooLarge { arguments, ceiling,
+   stranded_locks }`
+   (`a_collect_over_its_ceiling_is_refused_whole_and_the_process_ended`;
+   `output_exactly_at_the_ceiling_is_collected_and_one_byte_over_is_refused`).
+2. A failed stdin write, a pipe thread that could not start, or a `try_wait`
+   that itself failed is `Error::GitUnwatched { arguments, source,
+   stranded_locks }`. In the first two the process was ended; in the last,
+   what became of it is not known.
+   For a write, both list the lock files present after the reap, as a
+   cancelled write does; for a read, nothing.
 3. A cancel that lost the race to a clean exit — status 0 with no signal sent
    while the leader was running — is the success it was
    (`a_cancel_after_a_clean_exit_is_reported_as_success`). Any other invocation
@@ -292,7 +350,14 @@ between the check and the signal the id could in principle be reused.
      `*.lock` files under its git and common directories (recorded by
      `in_repository`) listed after the reap, so what git removed on its way out
      is not reported (`a_cancelled_write_lists_the_locks_present_after_the_reap`:
-     a stale lock is listed and the `index.lock` git held is not).
+     a stale lock is listed and the `index.lock` git held is not;
+     `a_cancelled_write_lists_its_locks_only_once_it_is_reaped`: a process that
+     takes 300 ms to remove its lock on `SIGTERM` has it not listed). The
+     listing is what was there at that moment. A cancelled write may still
+     have taken effect, in part or whole — the signal can land after git made
+     its change and before it exited — so an operation that must know
+     compares the repository's state before and after, as fetch does with its
+     refs.
 4. A non-zero exit is `Error::GitFailed { arguments, status, stderr,
    present_locks }`, `stderr` the retained tail; for a write, `present_locks`
    lists the lock files present, which is what a write fails on and git never
@@ -328,6 +393,7 @@ invariant. That a read runs query plumbing or `status` is
 `destructive-ops-reviewer`'s check 10. These are `qa-checklist`'s item 7:
 
 - a process or a gix write reached through an alias, a trait object or a macro;
-- a built invocation or `Running` handed out of `ops/` or `reads/` and driven
+- a built or started invocation (`GitCommand`, `Running`, `Invocation`) or a
+  kill handle (`ProcessKill`, `KillHandle`) handed out of `ops/` or `reads/` and driven
   elsewhere by inference. The runner guard reads names, so whether `ops/` and
   `reads/` hand out only named operation types (as fetch does) is review.

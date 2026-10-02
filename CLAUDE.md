@@ -130,7 +130,8 @@ copy is a different version from the fork that links.
   the operation log can quote them afterwards.
 - **The UI thread is never allowed to wait on a repository.** `cairn-git` is
   synchronous at its boundary and decides nothing about where work runs (the
-  one thread it owns reads a subprocess's stderr pipe, inside the runner);
+  threads it owns read and feed a subprocess's pipes and reap it, inside the
+  runner);
   `cairn-app` decides where the blocking work runs and hands results back as
   values (decision D3: one `cairn_git::SharedRepository` — gitoxide's
   `ThreadSafeRepository` — per repository, a worker taking its thread-local
@@ -226,9 +227,11 @@ Project invariants:
   found unguarded). Residual review obligations: the gitoxide roster reads
   names, so a gix write behind a name it does not hold — an API added after
   0.87.1, or one reached through a trait object, a generic or a macro — is not
-  seen; the runner guard reads names too, so a built invocation or a `Running`
-  handed out of `ops/` or `reads/` and driven elsewhere by inference
-  (`crate::ops::w(&git).args(..).run()`) is not seen either, and that `ops/` and
+  seen; the runner guard reads names too, so a built or started invocation (a
+  `GitCommand`, a `Running`, an `Invocation`) or a kill handle (`ProcessKill`,
+  `KillHandle`) handed out of `ops/` or `reads/` and driven elsewhere by
+  inference (`crate::ops::w(&git).args(..).start()?.finish(..)`,
+  `handle.kill()`) is not seen either, and that `ops/` and
   `reads/` hand out only named operation types — as `fetch` does with
   `FetchInProgress` and `FetchCancel` — is review. Both are `qa-checklist`'s
   (its item 7). Whether a read in `reads/` really runs query plumbing or
@@ -528,4 +531,5 @@ same fork and rev as `freya`): `crates/cairn-ui/tests/` for components, and
   repository today, with the twin that pins each rule. `credentials.md`: the
   askpass helper and its channel, fetch end to end, and the decisions the
   packet locked. `git-processes.md`: where every `git` process is built, the
-  read/write seal, and the environment each kind of invocation runs with.
+  read/write seal, the environment each kind of invocation runs with, and the
+  runner — its pipes, how an invocation is cancelled, and what it reports.

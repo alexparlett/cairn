@@ -185,7 +185,10 @@ Project invariants:
   `[target.*]` forms, renames seen through — and a dev-dependency beyond the
   crate's row needs its own `TEST_ONLY_ALLOWLIST` row (`freya-testing` in
   `cairn-ui` and `cairn-app`; `cairn-askpass` in `cairn-git`, whose fetch tests
-  answer a real channel).
+  answer a real channel). The allowlist reads names, never features, so the one
+  dependency whose features matter — `nix`, whose `process` feature compiles the
+  exec family — is pinned in `deny.toml` (`[[bans.features]]`, `exact`: `process`
+  and `signal`), which `gate.sh --step deps` enforces.
 - **`cairn-ui` and `cairn-model` never name `gix` or `cairn_git`; `cairn-git`
   never names `freya` or `cairn_ui`.** Manifests alone would miss a re-export, so
   the twin reads source: `layers_never_name_the_crates_they_are_sealed_from`,
@@ -263,9 +266,9 @@ Project invariants:
   every product file but `process/environment.rs` may not name `Command`,
   and every product file is held to its `exec*`/`posix_spawn*` roster — so
   what no twin sees is a path-call start inside `process/environment.rs`, the
-  one file allowed to name `Command`, and `nix`'s `fork` (which its
-  `process` feature compiles, and which no roster names) anywhere. All are
-  `qa-checklist`'s (its item 7). Whether a read in `reads/` really runs query plumbing or
+  one file allowed to name `Command`. (`nix` named outside `process/` is
+  caught by the process twin, and `fork` inside it is `unsafe`, which the
+  workspace forbids.) That is `qa-checklist`'s (its item 7). Whether a read in `reads/` really runs query plumbing or
   `status` — `GIT_OPTIONAL_LOCKS=0` covers `status` alone, so a porcelain `diff`
   built as a read still rewrites the index, and a plumbing writer built as one
   writes whatever it writes — is `destructive-ops-reviewer`'s (its check 10).
@@ -424,7 +427,8 @@ Project invariants:
   `Request::Close` arm stops the epochs with an atomic store and queues the
   close, and whose `CancelFetch` arm takes `FetchControl`'s mutex and calls
   `KillHandle::kill`; `worker::open`, called from `main.rs`'s `use_hook`,
-  and the `Replier` closure it returns; `Updates::next`, `Wake::poll`; and
+  and the `Replier` closure it returns; `Updates::next`, `Wake::poll`, `Drop for Updates` (an atomic
+  store, when the stream's task is dropped); and
   `Discovery::start`, which `main` calls on the main thread before the window
   exists and which only spawns the thread that runs `git --version` — all in
   `crates/cairn-app/src/worker/`) are exempt from the matcher while running

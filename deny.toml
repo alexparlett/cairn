@@ -25,6 +25,16 @@ wildcards = "deny"
 # their version requirements are deliberately absent.
 allow-wildcard-paths = true
 
+# nix compiles whole families of process-starting and signalling calls behind
+# features (`process` brings posix_spawn and the exec family, `fork` would add
+# more), and the crate allowlist in cairn-guards reads names, never features. So
+# the set Cairn links is pinned here: exactly `process`, for `Pid`, and `signal`,
+# for `killpg`. Another feature is a decision to surface, not a default move.
+[[bans.features]]
+crate = "nix"
+exact = true
+allow = ["process", "signal"]
+
 [licenses]
 # Permissive only. Cairn ships as a binary, so a copyleft transitive dependency
 # is a licensing decision about the whole application, never a silent one.

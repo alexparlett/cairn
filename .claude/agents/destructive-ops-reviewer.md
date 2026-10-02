@@ -19,11 +19,14 @@ yourself entirely on the half no check can reach — whether the English handed 
 ## Scope gate, run this FIRST
 
 Apply `docs/qa-gate.md`'s Review diff scope rule. If nothing under
-`crates/cairn-git/src/ops/` or `crates/cairn-git/src/process/` changed and no
+`crates/cairn-git/src/ops/`, `crates/cairn-git/src/process/` or
+`crates/cairn-git/src/reads/` changed and no
 changed file constructs a `Confirmed` or a `WriteAuthority`, or calls into
 `ops`, report "out of scope" and STOP. A change to the `git` subprocess
 environment (`crates/cairn-git/src/process/environment.rs`) IS in scope even
-when no operation changed: check 9 owns it. So is a change to the write seal
+when no operation changed: check 9 owns it. A new or changed read in `reads/` IS in scope: check 10 owns it, and a read
+that calls into `ops` or builds a `Confirmed` need not exist for it to matter.
+So is a change to the write seal
 (`crates/cairn-git/src/ops/authority.rs`, the read and write builders in
 `process/binary.rs`): check 10 owns it.
 
@@ -87,7 +90,10 @@ WARNING tier:
    honours, so a porcelain `diff` or `describe --dirty` built as a read still
    rewrites the index, and a plumbing writer (`update-ref`, `update-index`,
    `read-tree`, `write-tree`, `hash-object -w`, `commit-tree`) built as a read
-   writes whatever it writes. The compiler and
+   writes whatever it writes; and plumbing flags can write too — `--textconv`
+   with `diff.<driver>.cachetextconv` creates `refs/notes/textconv/<driver>`
+   and objects, `--ext-diff` runs a configured program — so a read passes
+   neither. The compiler and
    `the_runner_is_named_only_by_ops_and_reads` decide that a read path cannot
    build a write; whether the verb a read runs is really a read is this
    check. So is the read in a partial clone: a read carries

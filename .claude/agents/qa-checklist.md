@@ -83,7 +83,8 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
    outside `process/environment.rs`, the `exec*`/`posix_spawn*` roster
    everywhere), so what no twin sees is a path-call start
    (`Command::spawn(&mut c)`, `Command::output(&mut c)`) inside
-   `process/environment.rs`, and `nix`'s `fork` anywhere. Dispatch pointer:
+   `process/environment.rs` (`nix` named outside `process/` is caught, and
+   `fork` is `unsafe`, which the workspace forbids). Dispatch pointer:
    `destructive-ops-reviewer`.
 8. **Responsiveness** (any diff in `crates/cairn-ui/` or `crates/cairn-app/`, or
    anything changing what runs per frame or per query): no repository work on the

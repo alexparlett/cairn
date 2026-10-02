@@ -799,6 +799,28 @@ impl RecordingGit {
         )
     }
 
+    /// `GitBinary::discover_with` on this stub, retried while the stub is "text
+    /// file busy". Tests run in parallel, and a fork in another thread inherits
+    /// this thread's write descriptor to the script it is still creating for the
+    /// microseconds until that child execs; running the script in that window
+    /// fails with ETXTBSY. A property of the harness, not of the backend, so it
+    /// is absorbed here, as `process/stub_git.rs` absorbs it for the unit tests.
+    fn discover(&self, serving: &Serving, home: &Path) -> GitBinary {
+        const ETXTBSY: i32 = 26;
+        let mut attempts = 0;
+        loop {
+            match GitBinary::discover_with(self.environment(serving, home)) {
+                Err(Error::GitNotStarted { source, .. })
+                    if source.raw_os_error() == Some(ETXTBSY) && attempts < 50 =>
+                {
+                    attempts += 1;
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                other => return other.unwrap_or_else(|e| panic!("no usable git: {e}")),
+            }
+        }
+    }
+
     /// Whether the stub was ever run as anything but `--version`, after a wait
     /// long enough for a spawn to have got to its first line.
     fn ran(&self) -> bool {
@@ -822,8 +844,7 @@ fn refused_before_any_git_ran(
     expected_write: cairn_git::RefusedWrite,
 ) {
     let recording = RecordingGit::new();
-    let git = GitBinary::discover_with(recording.environment(serving, local.path()))
-        .unwrap_or_else(|e| panic!("no usable git: {e}"));
+    let git = recording.discover(serving, local.path());
     let repo = Repository::discover(local.path()).unwrap_or_else(|e| panic!("{e}"));
     let outcome = fetch(&git, &repo, "origin", None);
     match outcome {
@@ -854,8 +875,7 @@ fn the_recording_stub_reports_a_fetch_that_was_allowed_to_start() {
     let serving = Serving::serving(refusing());
     let local = with_origin(&source.path().display().to_string());
     let recording = RecordingGit::new();
-    let git = GitBinary::discover_with(recording.environment(&serving, local.path()))
-        .unwrap_or_else(|e| panic!("no usable git: {e}"));
+    let git = recording.discover(&serving, local.path());
     let repo = Repository::discover(local.path()).unwrap_or_else(|e| panic!("{e}"));
     let started = fetch(&git, &repo, "origin", None).unwrap_or_else(|e| panic!("{e}"));
     assert!(recording.ran(), "the allowed fetch did not start the stub");
@@ -879,8 +899,7 @@ fn a_refspec_that_writes_local_branches_is_refused_before_git_runs() {
     let message = {
         let local = with_origin(&source.path().display().to_string());
         let recording = RecordingGit::new();
-        let git = GitBinary::discover_with(recording.environment(&serving, local.path()))
-            .unwrap_or_else(|e| panic!("no usable git: {e}"));
+        let git = recording.discover(&serving, local.path());
         let repo = Repository::discover(local.path()).unwrap_or_else(|e| panic!("{e}"));
         local.git(&["config", "remote.origin.fetch", "+refs/*:refs/*"]);
         let error = match fetch(&git, &repo, "origin", None) {
@@ -1032,8 +1051,7 @@ fn the_refspec_check_ignores_config_from_cairns_own_environment_inner() {
     // The real git in this fixture's helper inherits this process's GIT_CONFIG_* and would
     // prune; the git Cairn runs does not, and neither may the check.
     let recording = RecordingGit::new();
-    let git = GitBinary::discover_with(recording.environment(&serving, local.path()))
-        .unwrap_or_else(|e| panic!("no usable git: {e}"));
+    let git = recording.discover(&serving, local.path());
     let repo = Repository::discover(local.path()).unwrap_or_else(|e| panic!("{e}"));
     match fetch(&git, &repo, "origin", None) {
         Ok(started) => {
@@ -1062,8 +1080,7 @@ fn an_unreadable_remote_configuration_is_reported_and_starts_nothing() {
         "refs/heads/*:refs/remotes/origin",
     ]);
     let recording = RecordingGit::new();
-    let git = GitBinary::discover_with(recording.environment(&serving, local.path()))
-        .unwrap_or_else(|e| panic!("no usable git: {e}"));
+    let git = recording.discover(&serving, local.path());
     let repo = Repository::discover(local.path()).unwrap_or_else(|e| panic!("{e}"));
     match fetch(&git, &repo, "origin", None) {
         Err(Error::RemoteConfig { remote, source }) => {

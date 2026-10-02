@@ -2,8 +2,9 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: two of eight packets shipped (`history-graph`, `credential-prompts`);
-`diff-engine` is planned and has not started. The other five are briefs.**
+**Status: two of nine packets shipped (`history-graph`, `credential-prompts`).
+`process-manager` (2a) is planned. `diff-engine` is paused after its phase 02 on
+`feature/diff-engine` until 2a merges. The other five are briefs.**
 
 ## The milestone
 
@@ -39,14 +40,15 @@ amended D1 for the filter drivers that status also runs.
 | --- | --- | --- |
 | 1 | `history-graph` | **shipped** — PRD frozen, as-built in `docs/systems/history-graph.md`; work dir torn down |
 | 2 | `credential-prompts` | **shipped** — PRD frozen, as-built in `docs/systems/credentials.md`; work dir torn down |
-| 3 | `diff-engine` | **planned** — PRD `docs/prd/diff-engine.md` in flight; work dir `docs/work/diff-engine/`; nine phases, none started |
+| 2a | `process-manager` | **planned** — PRD `docs/prd/process-manager.md` in flight; work dir `docs/work/process-manager/`; five phases, none started |
+| 3 | `diff-engine` | **paused** after phase 02 on `feature/diff-engine` (its `state.md` there is current; the copy on `main` predates the pause) until 2a merges |
 | 4 | `refs-and-status` | brief in `roadmap.md` |
 | 5 | `staging-and-commit` | brief in `roadmap.md` |
 | 6 | `remote-sync` | brief in `roadmap.md` |
 | 7 | `branch-ops` | brief in `roadmap.md` |
 | 8 | `worktrees` | brief in `roadmap.md` |
 
-Critical path to D7: 1 → 2 → 3 → 5, with 4 needed before 5.
+Critical path to D7: 1 → 2 → 2a → 3 → 5, with 4 needed before 5.
 
 ## Environment notes
 

@@ -47,8 +47,11 @@ claim decays invisibly until someone with a big repository finds it.
 One hard seam. `cairn-git` answers questions and performs operations;
 `cairn-ui` renders answers; `cairn-model` is the plain-data vocabulary between
 them, and neither side leaks its own types across. Reads go through gitoxide,
-writes through the `git` binary, and every destructive write demands a
-confirmation token carrying the words the user saw (`engine.md`). Cairn holds no
+writes through the `git` binary — and so does any read where gix would show
+something git does not — and every destructive write demands a confirmation
+token carrying the words the user saw (`engine.md`). Every `git` process is built
+in one place, in its own process group, and can always be cancelled
+(`processes.md`). Cairn holds no
 credential; git's helpers do, and prompts reach the window through Cairn's own
 askpass helper (`credentials.md`). The UI thread never waits on a repository:
 work runs on a few routed worker threads per repository, and a superseded query
@@ -75,6 +78,7 @@ back to Fork daily. The build order is `docs/work/daily-loop/roadmap.md`.
 | `engine.md` | Reads through gitoxide, writes through `git`, keeping the two in agreement, the confirmation seal |
 | `credentials.md` | No stored credential; prompts through Cairn's askpass helper; where a secret may exist |
 | `concurrency.md` | Worker threads per repository, lanes, epochs and cancellation |
+| `processes.md` | How every `git` process is built, fed, read, cancelled and accounted for |
 | `history-graph.md` | The graph view, incremental lane assignment, the held walk |
 | `diff.md` | The patch-capable diff model, the detail pane, the diff view |
 | `conflicts.md` | Structured three-way resolution |
@@ -89,7 +93,7 @@ cite by number; each lives in the document that designs it.
 
 | Id | Decision | Document |
 | --- | --- | --- |
-| D1 | gitoxide reads, `git` subprocess writes | `engine.md` |
+| D1 | gitoxide reads, `git` subprocess writes, and `git` answers a read where gix would differ | `engine.md` |
 | D2 | Credentials are delegated to git entirely | `credentials.md` |
 | D3 | A few routed worker threads per repository | `concurrency.md` |
 | D4 | Graph lanes are assigned incrementally, in the engine | `history-graph.md` |
@@ -105,6 +109,9 @@ cite by number; each lives in the document that designs it.
   windows. It decides how much state is per-repository versus global, so it wants
   answering before a second repository can be open at once. Worker threads per
   repository with view settings app-wide fit all three shapes.
+- **Whether the local write lane is keyed per worktree.** One lane per
+  repository is safe because refs and objects are shared, but it puts staging in
+  one worktree behind a commit in another (`concurrency.md`, `worktrees.md`).
 - **Interactive rebase.** The operation Fork is most valued for and the one with
   the largest UI surface: its own program, not a packet.
 - **Whether Cairn auto-stashes before destructive working-tree operations.** The

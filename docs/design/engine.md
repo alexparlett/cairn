@@ -5,10 +5,15 @@ Intent, not as-built; `docs/systems/` describes what exists. Spine:
 
 ## The split: gitoxide reads, `git` writes
 
-Every repository read goes through `gix`, in process. Every mutation goes through
-the `git` binary, invoked from `crates/cairn-git/src/ops/` and nowhere else. The
-`git` CLI never runs on a read path; the one process a read may start is the
-user's own clean filter driver ("Reads see git's form", below).
+Every repository read goes through `gix`, in process, unless gix's answer to it
+differs from git's. Every mutation goes through the `git` binary, invoked from
+`crates/cairn-git/src/ops/` and nowhere else. A read runs the `git` CLI only where
+showing what git shows means asking git, and each such read is a named function
+in `crates/cairn-git/src/reads/`. The changes query — which paths a commit or a
+comparison changed, with their renames and copies — is one, because rename and
+copy detection is where gix and git disagree ("Where git answers a read", below). Besides those, the one process a
+read may start is the user's own clean filter driver ("Reads see git's form",
+below). How every `git` process is built, run and ended is `processes.md`.
 
 Writes go to `git` because of hooks, not coverage. A client that does not run
 `pre-commit` and `commit-msg` is broken for a large share of users, and gix runs
@@ -26,13 +31,33 @@ hunk-staging helper. Verified against the gix 0.87.1 source:
 
 Reads go to gitoxide because reads are what a GUI does constantly, and its
 performance work aims squarely at large repositories. Keeping the CLI off the read
-path is the whole reason the split pays.
+path wherever gix agrees with git is the whole reason the split pays.
 
 What it costs: a process spawn per mutation (milliseconds, against a
-user-initiated action), and parsing git's output, mitigated by preferring `-z`
+user-initiated action) and per read git answers (below), and parsing git's output, mitigated by preferring `-z`
 and porcelain v2 formats. Cairn locates `git` and checks its version at startup,
 and fails loudly rather than degrading silently. Because gitoxide carries only
 reads, no backend spike is needed to validate the bet.
+
+## Where git answers a read
+
+Showing the user something git would not show them is a defect, not a gap to
+document, so where gix and git disagree on a read the user can see, git answers
+it. Rename and copy detection is the case that forced the rule: on the largest
+rollup measured, gix paired 231 renames where git paired 2,774, because gix
+compares `diff.renameLimit` against a different quantity than git does and has
+no basename stage, and even where gix searches exhaustively its similarity
+measure and its pairing pick different pairs from git's. So the changes query
+runs `git diff-tree`, at git's own cost — a few tens of milliseconds a
+selection, under a hundred on the worst subject for renames and about 130 when
+copies are detected too — and gix keeps everything it
+agrees with git on: history, content diffs, and the model they feed.
+
+Each such read is a named function in `reads/`, runs under a read's environment
+— no optional locks, no askpass token — and is cancelled by its query's epoch
+like any gix walk (`processes.md`, `concurrency.md`). A new one is a decision,
+argued from a measured disagreement, never a convenience. Evidence:
+`docs/research/diff-engine/rename-parity-spike.md`.
 
 ## Behind the seam
 

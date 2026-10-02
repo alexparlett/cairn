@@ -1,6 +1,6 @@
 # Roadmap — daily-loop
 
-Build order for the eight packets that reach D7. Order lives here, never in the
+Build order for the nine packets that reach D7. Order lives here, never in the
 design spine. Each packet gets its own `/feature-plan` run when it starts, writing
 its PRD and phases against then-current code — the briefs below carry the design
 nuance that run must not lose.
@@ -9,15 +9,19 @@ nuance that run must not lose.
 | --- | --- | --- | --- |
 | 1 | `history-graph` | **shipped** | — |
 | 2 | `credential-prompts` | **shipped** | 1 |
-| 3 | `diff-engine` | **planned** | 1 |
-| 4 | `refs-and-status` | brief only | 1 |
-| 5 | `staging-and-commit` | brief only | 2, 3, 4 |
-| 6 | `remote-sync` | brief only | 2, 4 |
-| 7 | `branch-ops` | brief only | 4 |
-| 8 | `worktrees` | brief only | 4 |
+| 2a | `process-manager` | **planned** | 2 |
+| 3 | `diff-engine` | **paused** after its phase 02, on 2a | 1, 2a |
+| 4 | `refs-and-status` | brief only | 1 (and 2a if O2 picks `git status`) |
+| 5 | `staging-and-commit` | brief only | 2, 2a, 3, 4 |
+| 6 | `remote-sync` | brief only | 2, 2a, 4 |
+| 7 | `branch-ops` | brief only | 2a, 4 |
+| 8 | `worktrees` | brief only | 2a, 4 |
 
-3 and 4 are independent of each other and of 2. 6, 7 and 8 are independent of
-each other. The critical path to D7 is 1 → 2 → 3 → 5, with 4 needed before 5.
+2a depends on 2. 3 depends on 2a, and 4 depends on neither, unless O2 sends
+status to `git`. Every packet that spawns `git` depends on 2a. 6, 7 and 8 are
+independent of each other. The local write lane is built by whichever of 5 and 7
+lands first. The critical path to D7 is 1 → 2 → 2a → 3 → 5, with 4 needed before 5.
+2a was inserted on 2026-10-02 and numbered so the other packets keep theirs.
 
 ---
 
@@ -39,7 +43,36 @@ that D1 created written into the `ops` module docs. **Load-bearing for packet
 Left for packet 6 by name: push (issue #16), the remote picker (#23), and the
 fetch-under-prune policy (#17). As built: `docs/systems/credentials.md`.
 
-## 3. diff-engine — planned
+## 2a. process-manager — planned
+
+`docs/prd/process-manager.md` (in flight), work directory
+`docs/work/process-manager/`, evidence `docs/research/process-manager/`. Inserted
+when `diff-engine` paused on rename parity: gix paired 231 renames where git
+paired 2,774 on a large rollup, the user classed that as a critical bug, and the
+changes query moved to `git diff-tree` — the first read `git` answers (D1, as
+rewritten). The user asked for a proper manager for `git` processes before any
+new spawn, and the runner credential-prompts built was shaped around fetch alone
+(`docs/research/diff-engine/git-process-survey.md`).
+
+**Builds:** one place that builds a process (`process/`), a read/write split
+sealed by a token only `ops/` can make, a `reads/` module, a runner carrying
+every daily-loop shape (captured cancellable stdout, stdin, bounded stderr,
+process-group kill by poll, handle or drop), a registry with kill-all on close,
+discovery once at startup, the network write lane with duplicate refusal, and a
+command log as data. Design: `docs/design/processes.md`; the write lanes in
+`concurrency.md`.
+
+**Leaves on the doorstep:** for 3, a read invocation the diff thread can run and
+cancel by epoch; for 5, stdin and the local write lane's design; for 6, the
+network lane push joins.
+
+## 3. diff-engine — paused
+
+**Paused after its phase 02, on `feature/diff-engine`, until 2a merges.** The
+changes query is then reworked onto `git diff-tree` through `reads/`; the model,
+the content query and the round-trip tests stand. Why: that branch's
+`docs/work/diff-engine/progress.md` (2026-09-30) and
+`docs/research/diff-engine/rename-parity-spike.md`.
 
 `docs/prd/diff-engine.md` (in flight), work directory `docs/work/diff-engine/`,
 evidence `docs/research/diff-engine/` (six records). Planned 2026-09-17 in nine
@@ -129,9 +162,9 @@ the architecture has been saving up:
 leave on the doorstep. Its patch emitter and round-trip tests are built for this
 packet to consume, and a patch is always emitted at three lines of context from
 the exact diff, never from a whitespace-ignoring view, which is what Fork gets
-wrong. The subprocess runner
-cannot take stdin today — both its paths pin it to null — so `git apply --cached`
-needs a runner change, which puts `destructive-ops-reviewer` on that phase. And
+wrong. `git apply --cached`
+feeds its patch on stdin, which the runner gains in packet 2a; this packet adds
+the local write lane it designs, and `destructive-ops-reviewer` reviews both. And
 the staging affordance is undecided on purpose: Fork floats Stage and Discard
 over a hovered chunk and narrows them by drag-selection — Discard on unstaged
 chunks only, since Fork refuses to discard staged changes by design — while

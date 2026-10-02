@@ -3371,6 +3371,37 @@ fn ci_runs_every_merge_bar_gate_step() {
     }
 }
 
+/// The partial-clone pin of `GIT_NO_LAZY_FETCH` skips on a git older than 2.44, which ignores
+/// the variable, and a passing test's stderr is hidden, so `CAIRN_REQUIRE_NO_LAZY_FETCH` is
+/// what turns that skip into a failure on the merge bar. Pinned here: CI sets it, and the
+/// test still reads it in its skip branch (without that, setting it would change nothing).
+#[test]
+fn the_partial_clone_pin_is_required_in_ci() {
+    let root = repo_root();
+    let read = |path: &str| {
+        std::fs::read_to_string(root.join(path)).unwrap_or_else(|e| panic!("reading {path}: {e}"))
+    };
+    let ci = read(".github/workflows/ci.yml");
+    let authority = read("crates/cairn-git/src/ops/authority.rs");
+
+    assert!(
+        ci.lines()
+            .any(|line| line.trim() == "CAIRN_REQUIRE_NO_LAZY_FETCH: 1"),
+        ".github/workflows/ci.yml no longer sets `CAIRN_REQUIRE_NO_LAZY_FETCH: 1`, so the \
+         partial-clone test of GIT_NO_LAZY_FETCH would skip silently on a git older than 2.44."
+    );
+    let test = authority
+        .split("fn a_read_in_a_partial_clone_does_not_fetch_a_missing_object()")
+        .nth(1)
+        .unwrap_or_else(|| panic!("the partial-clone test is gone from ops/authority.rs"));
+    let skip_branch = test.split("eprintln!(").next().unwrap_or_default();
+    assert!(
+        skip_branch.contains("CAIRN_REQUIRE_NO_LAZY_FETCH"),
+        "the partial-clone test no longer fails on an old git when CAIRN_REQUIRE_NO_LAZY_FETCH \
+         is set, so CI's setting of it decides nothing"
+    );
+}
+
 /// The ssh acceptance criteria (`crates/cairn-git/tests/fetch.rs`) skip where the fixture's
 /// `sshd` cannot run, and a passing test's stderr is hidden, so `CAIRN_REQUIRE_SSH_FIXTURE`
 /// is what turns a skip into a failure. Pinned here: CI sets it unconditionally (it

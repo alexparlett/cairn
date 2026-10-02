@@ -806,6 +806,15 @@ mod tests {
             patch: 0,
         };
         if scratch.git.version() < honoured {
+            // A passing test's stderr is hidden, so on the merge bar a skip would read
+            // `ok` for ever: CI sets the variable and a git that cannot honour
+            // `GIT_NO_LAZY_FETCH` is then a red test, not a silent one.
+            assert!(
+                std::env::var_os("CAIRN_REQUIRE_NO_LAZY_FETCH").is_none(),
+                "git {} ignores GIT_NO_LAZY_FETCH (it needs 2.44), so the one behavioural pin \
+                 of the read profile cannot run here; this environment must provide a newer git",
+                scratch.git.version()
+            );
             eprintln!(
                 "SKIPPED a_read_in_a_partial_clone_does_not_fetch_a_missing_object: git {} \
                  ignores GIT_NO_LAZY_FETCH",

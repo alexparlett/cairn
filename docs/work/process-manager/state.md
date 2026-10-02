@@ -2,8 +2,8 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 04 (application) done on `feature/process-manager`; phase 05
-(QA over the whole packet) is next.** `git` is found once per application;
+**Status: phase 05 (QA over the whole packet) done on `feature/process-manager`;
+teardown is next, after the user has seen the verdict.** `git` is found once per application;
 fetch runs in the network lane, which refuses a second with a reason the
 window draws; closing the window closes its repository through the registry
 on the repository thread, and the window goes when the worker's stream ends
@@ -71,18 +71,14 @@ both are user-visible, batched in `progress.md`'s phase 04 entry.
 
 Raised in phase 04 for later phases:
 
-- **Phase 05:** assert CI's git is 2.44 or later, or the partial-clone test
-  is skipped on the merge bar (GI7). Re-verify G20 is recorded, not re-run.
+- **Phase 05 (done):** CI's git asserted (GI7); G20's record audited, not re-run.
 - **User:** RR1 (a closing banner), DO1/DO3 (stranded locks on close), QC6/DO2
   (the failure banner's lock list), QC5 (no spawn after close), QC2 (a late
   cancel cancels the next fetch), RR4 (a probe deadline), DO4, DO6's older
   derives — `progress.md`'s phase 04 entry.
 
-Still owed:
-
-- **Phase 05:** the G8 drop tests, G10, G12's success arm and R3.1's test are
-  wholly `#[cfg(target_os = "linux")]`; only their `/proc` reads need Linux.
-  Narrow the gating so macOS keeps the rest (QA TC16).
+Still owed: nothing. Phase 05 narrowed the Linux-only gating to the `/proc`
+reads that remain (TC16) and made the partial-clone pin fail on CI (GI7).
 
 ## Decided by the user
 
@@ -161,7 +157,7 @@ Record each value and its reason here when it is chosen.
 | 02 runner | done (`a5f5160..HEAD`) | `scripts/gate.sh` exit 0 (`progress.md`) | qa-checklist, destructive-ops, responsiveness, test-coverage, gate-integrity; qa-confirm: 34 confirmed and fixed or deferred, 6 dismissed, 3 escalated; re-review of the fixes (destructive-ops, test-coverage; qa-confirm): 8 confirmed and fixed, 1 dismissed (`progress.md`) |
 | 03 engine lifecycle | done (`edee9cf..HEAD`) | `scripts/gate.sh` exit 0 (`progress.md`) | see `progress.md`'s phase 03 entry |
 | 04 application | done (`49ece74..HEAD`) | `scripts/gate.sh` exit 0 (`progress.md`) | qa-checklist, responsiveness, test-coverage, gate-integrity, destructive-ops; qa-confirm: 22 confirmed and fixed (or settled), 7 deferred to the user, 5 dismissed; re-review of the fixes in `progress.md` |
-| 05 QA | not started | — | — |
+| 05 QA | done (`5ffbd4a..HEAD`) | `scripts/gate.sh` exit 0 on the integration tip (`progress.md`) | qa-checklist, gate-integrity, destructive-ops, responsiveness, test-coverage; qa-confirm: 11 confirmed and fixed, 7 known-undecided, 9 dismissed (`progress.md`'s phase 05 entry) |
 
 ## Environment notes
 

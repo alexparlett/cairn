@@ -3,6 +3,91 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-02 — phase 05: merge-bar QA over the whole packet
+
+Packet mode, committed directly to `feature/process-manager` (`5ffbd4a..HEAD`).
+Reviewers (fresh, Sonnet; each re-asked after a turn limit until a full report
+came): qa-checklist, gate-integrity, destructive-ops, responsiveness,
+test-coverage; a fresh qa-confirm adjudicated 27 raw findings: 11 confirmed, 7
+known-undecided (already batched), 9 dismissed.
+
+**Fixed (`5ffbd4a..HEAD`):**
+- `d0a8e19` — the diff-engine path forward is now a test in `reads/mod.rs`
+  (`diff_engine_path_forward`): a read built in `reads/` from a cloned
+  `GitBinary`, run on a thread with its own thread-local repository, answering
+  `-z` records over a rename (a space and a tab survive), and superseded by an
+  epoch mid-answer (git ended, `GitReadCancelled`, the log books one cancelled
+  record, nothing left running). Mutation: an epoch that never cancels fails the
+  second test.
+- `f8a3974` — flake: the askpass positive control read `/proc/<pid>/environ`
+  once, straight after `spawn`, when the kernel has not yet recorded the new
+  program's environment. Reproduced 2 in 300 runs with the CPUs busy (a python
+  loop shows the same: 97 % empty reads); polling fixes it, assertion unchanged,
+  0 in 500 under the same load. The test was untouched by the packet and failed
+  on `main`'s CI at `bf93a4e` too: not made likelier.
+- `5101610` — flake: `RecordingGit` (integration tests) ran its freshly written
+  stub with no ETXTBSY retry, which the unit tests' stub has. std still uses
+  `posix_spawn` with a process group, so the packet did not change the spawn
+  path; it added one test to that binary. Fixed anyway, assertions unchanged.
+- `7acf3a8` — GI7: `CAIRN_REQUIRE_NO_LAZY_FETCH=1` in CI makes the partial-clone
+  test fail instead of skip on a git older than 2.44, pinned by
+  `the_partial_clone_pin_is_required_in_ci`. CI's git is 2.55.0 (run
+  `37067473216`).
+- `91c0bff` — TC16: the runner's and registry's `/proc` reads became a `ps`
+  process table (pid, group, state), so those tests run wherever the runner
+  does; only `process/cli.rs`'s `readlink /proc/$$/fd/0` and the app's
+  by-block-gated lifecycle checks stay Linux.
+- `d7ed383` — QC1: nix's features pinned by an exact `[[bans.features]]` row in
+  `deny.toml` (adding `fs` turns `cargo deny check bans` red); GI1: `reads/` is
+  a destructive-ops dispatch trigger; GI5: CLAUDE.md and the qa-checklist agent
+  no longer claim nix's `fork` is unseen by every twin.
+- `6b9c135` — docs: QC4 (the `pub` surface), DO2 and RV1 (what a close does not
+  bound; a close ends a write in flight without asking), DO3 (`--textconv` and
+  `--ext-diff` make plumbing write: reproduced on git 2.56), RV6.
+- `7f2f3d2` — TV3: the group-leaving-holder test fails, not returns, on CI
+  without `setsid`.
+
+**G1-G22:** all verified (table in the QA report). Mutations re-run by the
+test-coverage auditor: 35, all red 3/3 except one that the runner test alone does
+not catch (TV1, dismissed: `pipes::the_tail_holds_a_bounded_amount_while_stderr_runs_on`
+pins it). By the QA lead: G15's window half (the refusal line emptied) fails
+`a_refused_fetch_is_drawn_with_its_reason_until_the_next_press`; G18 (no
+assertion removed from any fetch test: `git diff main...5ffbd4a` over
+`crates/cairn-git/tests`, `ops/fetch.rs` and `fetch_tests.rs` shows only
+additions and harness changes). The four unguarded routes of
+`runner-and-worker-as-built.md` section 3, plus a `reads/` `WriteAuthority`, an
+`.start()` in `history/` and a gix index write, were each written as a real
+scratch file and each turned a named twin red.
+
+**G19** (release, `CAIRN_BENCH_REPO=~/Development/bench/rust` at `c999cef531e`,
+read-only; AMD Ryzen 7 9800X3D, Linux 7.2.8-2-cachyos, git 2.56.0, load 0.6):
+M1 overhead at the median 0.14 ms and 0.56 ms (min 0 and 0.10 ms), the empty
+floor 0; the responsiveness reviewer's two runs, 0.07 and 0.26 ms. All inside 2 ms.
+
+**G20 record audited:** the method exercised the shipped close path (real close
+action, `Closing::requested`, `Request::Close`, `end_invocations`, a group with a
+grandchild, the askpass directory) but the record names no commit. It ran after
+`3160095`; between that and `5ffbd4a` the close-adjacent production changes are
+`session.rs`'s `closing` flag and the `Closing::is_requested` wiring in
+`main.rs`, which only stop the window reloading the history during a close;
+`registry.rs` and `network_lane.rs` are unchanged and `pool.rs` changed only in
+comments and tests. So the evidence still describes the shipped kill path; the
+reload skip was not driven by hand.
+
+**Dismissal log audited:** every per-phase dismissal still holds. Two had a
+reason that needed restating: phase 03's TC3 (CI's git not checked) is now
+checked and asserted; phase 04's QC3 (no window refusal today) holds, since the
+Fetch button is hidden in flight.
+
+**Not decided here, worse or newer than recorded (for the user):**
+- RV1: a close also waits on two uncancellable `ref_tips` scans in the network
+  lane, so the silent-close wait the user has batched (RR1) can exceed
+  `CLOSE_PATIENCE` on a repository with a great many refs. Stated, not fixed.
+- DO2: closing the window ends a write in flight without asking; nothing is lost
+  while fetch is the only verb. The first local write must decide.
+- DO3 and the reads rule: `--textconv`/`--ext-diff` are now banned in `reads/`'
+  docs only (no twin can see an argument list built at run time).
+
 ## 2026-10-02 — phase 04: the application — discovery, the network lane, close, the log
 
 Packet mode, committed directly to `feature/process-manager` (`49ece74..HEAD`).

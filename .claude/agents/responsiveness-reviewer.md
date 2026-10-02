@@ -46,7 +46,8 @@ update stream's end (or a second request after `worker::CLOSE_PATIENCE`) and
 never by waiting, that the stream's end still depends on the window refusing a
 prompt left open when the ended fetch's outcome arrives (`session::apply`'s
 `withdraw`), and that `main.rs` wires it — `Closing::opened` given the handle,
-the hook installed, the window closed past the hook on the stream's end — which
+the hook installed, `Closing::is_requested` passed to `session::apply` as
+`Worker::closing`, the window closed past the hook on the stream's end — which
 no test drives (`closing.rs`'s tests drive `Closing` alone, and the window's
 close was checked by hand on a desktop session).
 

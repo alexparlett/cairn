@@ -256,12 +256,16 @@ Project invariants:
   sees a retired entry point declared through a `type` alias of the builder,
   as a free function or by a macro only if it starts a process, counts two
   spawns on one line once, does not see a second path built on `start`
-  that drives an `Invocation` by rules of its own, and does not count a
-  process started in production `process/` by a path call
-  (`Command::spawn(&mut c)`, `Command::output(&mut c)`) or through `nix`
-  (`fork`, `exec*`, `posix_spawn*`, which its `process` feature compiles) —
-  `process/` is exempt from every other process twin, so nothing else does
-  either. All are `qa-checklist`'s (its item 7). Whether a read in `reads/` really runs query plumbing or
+  that drives an `Invocation` by rules of its own, and counts method calls
+  only, so a process started in production `process/` by a path call
+  (`Command::spawn(&mut c)`, `Command::output(&mut c)`) or through `nix` is
+  not counted by it. The terminal-prompt twin still sees most of those —
+  every product file but `process/environment.rs` may not name `Command`,
+  and every product file is held to its `exec*`/`posix_spawn*` roster — so
+  what no twin sees is a path-call start inside `process/environment.rs`, the
+  one file allowed to name `Command`, and `nix`'s `fork` (which its
+  `process` feature compiles, and which no roster names) anywhere. All are
+  `qa-checklist`'s (its item 7). Whether a read in `reads/` really runs query plumbing or
   `status` — `GIT_OPTIONAL_LOCKS=0` covers `status` alone, so a porcelain `diff`
   built as a read still rewrites the index, and a plumbing writer built as one
   writes whatever it writes — is `destructive-ops-reviewer`'s (its check 10).
@@ -432,8 +436,9 @@ Project invariants:
   that the stream's end still depends on the window refusing a prompt left
   open when the ended fetch's outcome arrives (`session::apply`'s
   `withdraw`); and `main.rs`'s wiring of it (`Closing::opened` given the
-  handle, the hook installed, the window closed past the hook on the
-  stream's end), which no test drives. (The spinning spellings — `try_recv`, `try_iter`,
+  handle, the hook installed, `Closing::is_requested` passed to
+  `session::apply`, the window closed past the hook on the stream's end),
+  which no test drives. (The spinning spellings — `try_recv`, `try_iter`,
   `try_lock`, `spin_loop`, `yield_now` — ARE on the roster, so a busy poll loop
   on a render path is caught; one written inside `worker/` is not.) The matcher is
   also FILE-scoped, which is what "naming the constructor" buys and all it buys:

@@ -78,11 +78,12 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
    starts a process of its own; two spawns on one line count once; and a
    second path built on `GitCommand::start` that drives an `Invocation` by
    rules of its own — its own ending, its own outcome — starts no second
-   process and is not seen at all; and the twin counts method calls only, so
-   a process started in production `process/` by a path call
-   (`Command::spawn(&mut c)`, `Command::output(&mut c)`) or through `nix`
-   (`fork`, `exec*`, `posix_spawn*`) is not counted, and `process/` is exempt
-   from every other process twin. Dispatch pointer:
+   process and is not seen at all; and the twin counts method calls only.
+   The terminal-prompt twin catches most other starts (`Command` named
+   outside `process/environment.rs`, the `exec*`/`posix_spawn*` roster
+   everywhere), so what no twin sees is a path-call start
+   (`Command::spawn(&mut c)`, `Command::output(&mut c)`) inside
+   `process/environment.rs`, and `nix`'s `fork` anywhere. Dispatch pointer:
    `destructive-ops-reviewer`.
 8. **Responsiveness** (any diff in `crates/cairn-ui/` or `crates/cairn-app/`, or
    anything changing what runs per frame or per query): no repository work on the

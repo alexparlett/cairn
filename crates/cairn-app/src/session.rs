@@ -227,27 +227,35 @@ mod tests {
     /// stopped, so the history vanishes behind "Reading history…" while the window closes.
     #[test]
     fn a_fetch_ended_by_the_close_leaves_the_history_as_it_is() {
-        let (test, view, asked) = launch(running());
-        applying_while(
-            &test,
-            view,
-            &asked,
+        // However it ended: the close may land just as a fetch finishes or fails.
+        for ending in [
+            Update::FetchFinished {
+                remote: "origin".to_owned(),
+                refreshed: true,
+            },
             Update::FetchCancelled {
                 remote: "origin".to_owned(),
                 refreshed: true,
                 stranded_locks: Vec::new(),
             },
-            true,
-        );
-        assert_eq!(
-            view.rows.read().len(),
-            3,
-            "the rows were cleared on the way out"
-        );
-        assert!(
-            asked.submitted.borrow().is_empty(),
-            "a closing repository was asked for its history again"
-        );
+            Update::FetchFailed {
+                remote: "origin".to_owned(),
+                refreshed: true,
+                message: "some local refs could not be updated".to_owned(),
+            },
+        ] {
+            let (test, view, asked) = launch(running());
+            applying_while(&test, view, &asked, ending.clone(), true);
+            assert_eq!(
+                view.rows.read().len(),
+                3,
+                "the rows were cleared on the way out: {ending:?}"
+            );
+            assert!(
+                asked.submitted.borrow().is_empty(),
+                "a closing repository was asked for its history again: {ending:?}"
+            );
+        }
     }
 
     fn running() -> FetchStatus {

@@ -43,8 +43,11 @@ submodule with both commit ids, a mode change only, conflicted, or unsupported
 with its reason — and the view shows that state. A too-large file is refused
 before it is read, never after the window has stalled on it.
 
-gix computes the diff; Cairn groups it. No diff algorithm is written here, and gix
-types stop at the seam (`engine.md`). A working-tree diff shows what `git diff`
+gix computes each file's diff; Cairn groups it. No diff algorithm is written
+here, and gix types stop at the seam. Which files a commit or a comparison
+changed, with their renames and copies, comes from `git` itself, because that is
+where gix's answer differs from git's (`engine.md`, "Where git answers a
+read"). A working-tree diff shows what `git diff`
 shows, filters included (`engine.md`, "Reads see git's form"). Spec:
 `docs/prd/diff-engine.md` R1-R3.
 

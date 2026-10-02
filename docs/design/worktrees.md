@@ -14,6 +14,11 @@ out elsewhere, and then fails confusingly. So in the interface they are a sideba
 section, and a branch checked out in another worktree carries a chip and a
 disabled checkout (`ui.md`).
 
+Writes in two worktrees of one repository share a local write lane, because refs
+and objects are shared even where the index and `HEAD` are not
+(`concurrency.md`). Whether staging in one worktree may run beside a commit in
+another is the open question that design leaves here.
+
 Rejected: read-only awareness alone, which avoids that failure but leaves the
 workflow unserved; and ignoring worktrees, which is actively unhelpful for the intended
 user.

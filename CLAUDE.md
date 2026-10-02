@@ -438,15 +438,15 @@ same fork and rev as `freya`): `crates/cairn-ui/tests/` for components, and
 
 - `docs/design/cairn.md` — the design spine: what Cairn is for, what it is not,
   the first milestone, and the map to one design doc per feature (`engine.md`,
-  `credentials.md`, `concurrency.md`, `history-graph.md`, `diff.md`,
+  `credentials.md`, `concurrency.md`, `processes.md`, `history-graph.md`, `diff.md`,
   `conflicts.md`, `worktrees.md`, `forge-links.md`, `platform.md`), with the
   index of decisions D1-D9 that the architecture above implements.
 - `docs/design/feature-inventory.md` — the full feature surface, tiered by risk,
   with the out-of-scope list and its reasons. Intent, not as-built.
 - `docs/design/ui.md` — the UI design: Fork's layout model kept, every deviation
   named with the doc that drives it; mockups in `docs/design/mockups/cairn-ui.html`.
-- `docs/work/daily-loop/roadmap.md` — the build order to the D7 milestone: eight
-  packets, two shipped and six as briefs.
+- `docs/work/daily-loop/roadmap.md` — the build order to the D7 milestone and
+  each packet's status.
 - `docs/qa-gate.md` — the QA layer contract and reviewer dispatch table.
 - `docs/CLAUDE.md` — the docs layer contract (tenses, promotion, teardown).
 - `docs/work/<packet>/` — in-flight packet dirs, created by `/feature-plan`, torn

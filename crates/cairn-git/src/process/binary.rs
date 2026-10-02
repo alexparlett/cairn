@@ -105,6 +105,21 @@ impl GitBinary {
         &self.environment
     }
 
+    /// This `git` — found and checked once — run with `environment` from now
+    /// on, in place of the one it was found with. For an application that
+    /// finds `git` once, as it starts, and only later knows the askpass
+    /// channel each repository's invocations are to be pointed at: the answer
+    /// is copied, never searched for or probed again. The program stays the
+    /// one found, by its absolute path, whatever `environment`'s `PATH` says;
+    /// that `PATH` is still what `git` and its helpers then search.
+    pub fn with_environment(&self, environment: GitEnvironment) -> Self {
+        Self {
+            path: self.path.clone(),
+            version: self.version,
+            environment,
+        }
+    }
+
     /// A read of this `git`, ready for its arguments: optional locks off and
     /// no askpass token, ever (`environment.rs`). For `crate::reads`, whose
     /// functions each run plumbing or `status`, and for `crate::ops`. Never

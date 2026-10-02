@@ -314,3 +314,61 @@ fn a_git_that_cannot_be_started_names_the_program_and_the_cause() {
         "{message}"
     );
 }
+
+/// PRD R6.1: the application finds git once, as it starts, and later points
+/// each repository's invocations at that repository's askpass channel. Caught
+/// by: `with_environment` searching or probing again (the count moves), or
+/// keeping the environment git was found with.
+#[test]
+fn a_found_git_takes_a_new_environment_without_being_searched_for_or_probed_again() {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let probes = std::env::temp_dir().join(format!(
+        "cairn-git-probes-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_file(&probes);
+    let stub = StubPath::with_git(&format!(
+        "echo probed >> '{}'\necho 'git version 2.40.1'",
+        probes.display()
+    ));
+    let count = || {
+        std::fs::read_to_string(&probes)
+            .map(|text| text.lines().count())
+            .unwrap_or(0)
+    };
+    let found = stub.discover().unwrap();
+    let probed = count();
+    assert!(probed >= 1, "the stub never recorded the discovery's probe");
+
+    let socket = PathBuf::from("/run/user/1000/cairn-askpass-x/socket");
+    let elsewhere = GitEnvironment::new(
+        |name| (name == "PATH").then(|| OsString::from("/nonexistent/elsewhere")),
+        &Askpass::new("/elsewhere/cairn-askpass", Some(socket)),
+    );
+    assert_ne!(
+        &elsewhere,
+        found.environment(),
+        "the case needs two environments"
+    );
+    let moved = found.with_environment(elsewhere.clone());
+
+    assert_eq!(
+        moved.environment(),
+        &elsewhere,
+        "the new environment was not taken"
+    );
+    assert_eq!(
+        moved.path(),
+        found.path(),
+        "the program moved with the PATH"
+    );
+    assert_eq!(moved.version(), found.version());
+    assert_eq!(
+        found.environment(),
+        &stub.environment(),
+        "the original was changed"
+    );
+    assert_eq!(count(), probed, "taking an environment probed git again");
+    let _ = std::fs::remove_file(&probes);
+}

@@ -512,6 +512,37 @@ fn a_cancel_names_the_lock_files_left_under_the_git_directory_and_only_those() {
     );
 }
 
+/// A fetch that fails names the lock files present under the git directory
+/// once it is over, as every failed write does (process-manager R5.3): the
+/// lock another git holds, or one a crash left, is what a write fails on and
+/// git does not wait for. The remote is a path with no repository behind it,
+/// so git fails at once and on its own, and the lock is planted, as a crash
+/// would leave it. And a failure with no lock present names none.
+#[test]
+fn a_failed_fetch_names_the_lock_files_present_and_only_those() {
+    let missing = std::env::temp_dir().join(format!("cairn-no-remote-here-{}", std::process::id()));
+    let local = with_origin(&missing.display().to_string());
+    let lock = local.path().join(".git/refs/remotes/origin/main.lock");
+    std::fs::create_dir_all(lock.parent().unwrap_or(&lock)).unwrap_or_else(|e| panic!("{e}"));
+    std::fs::write(&lock, b"").unwrap_or_else(|e| panic!("{e}"));
+    let lock = std::fs::canonicalize(&lock).unwrap_or(lock);
+    let serving = Serving::serving(refusing());
+
+    let failed = |local: &Fixture| {
+        let (outcome, _) = fetch_origin(&serving, local, local.path(), None);
+        match outcome {
+            Err(Error::GitFailed { present_locks, .. }) => present_locks
+                .into_iter()
+                .map(|path| std::fs::canonicalize(&path).unwrap_or(path))
+                .collect::<Vec<PathBuf>>(),
+            other => panic!("a fetch from nowhere reported {other:?}"),
+        }
+    };
+    assert_eq!(failed(&local), std::slice::from_ref(&lock));
+    std::fs::remove_file(&lock).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(failed(&local), Vec::<PathBuf>::new());
+}
+
 // ── Ref tips ────────────────────────────────────────────────────────────────
 
 /// What the worker compares before and after a fetch: every ref's id as git

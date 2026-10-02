@@ -34,12 +34,15 @@ use super::group::Group;
 pub(super) enum Event {
     /// Bytes from stdout, in order, as they arrived.
     Stdout(Vec<u8>),
-    /// One line of stderr, its terminator stripped, lossily decoded.
-    Line(String),
+    /// The lines of stderr one read completed, in order, each with its
+    /// terminator stripped and lossily decoded. One event per read, not per
+    /// line, so what git wrote before it exited is a few events however many
+    /// lines it was, and the driver's last look at the queue takes it all.
+    Lines(Vec<String>),
 }
 
 /// How many events may wait for the driving thread before a reader waits for
-/// it: a few MiB of stdout at most.
+/// it: a few MiB of stdout at most, and as much stderr.
 pub(super) const EVENTS_BOUND: usize = 64;
 
 /// Bytes read from a pipe at a time: the most a Linux pipe holds by default.
@@ -82,14 +85,13 @@ pub(super) fn read_stderr(mut pipe: ChildStderr, events: &SyncSender<Event>, gro
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(_) => break,
         };
-        for line in lines.push(&chunk[..read]) {
-            if events.send(Event::Line(line)).is_err() {
-                break 'reading;
-            }
+        let complete = lines.push(&chunk[..read]);
+        if !complete.is_empty() && events.send(Event::Lines(complete)).is_err() {
+            break 'reading;
         }
     }
     if let Some(line) = lines.rest() {
-        let _ = events.send(Event::Line(line));
+        let _ = events.send(Event::Lines(vec![line]));
     }
     group.pipe_closed();
 }
@@ -138,7 +140,9 @@ impl Lines {
 }
 
 /// The retained end of stderr: at most [`TAIL_BYTES`], ending with the last
-/// line, starting at a line's start where one falls inside the window.
+/// line, starting at a line's start where one falls inside the window. While
+/// the process runs it holds at most twice that plus the line being added,
+/// because it cuts in batches.
 #[derive(Debug, Default)]
 pub(super) struct Tail {
     text: String,
@@ -170,6 +174,12 @@ impl Tail {
             start += newline + 1;
         }
         self.text.drain(..start);
+    }
+
+    /// How many bytes it holds now, for a test of what it holds while running.
+    #[cfg(test)]
+    fn held(&self) -> usize {
+        self.text.len()
     }
 
     /// The retained text, trailing whitespace trimmed.
@@ -269,6 +279,23 @@ mod tests {
         assert!(text.len() > TAIL_BYTES - 64, "{}", text.len());
         assert!(text.ends_with("line 039999 of a long stderr"));
         assert!(text.starts_with("line "), "{:?}", &text[..20]);
+    }
+
+    /// R3.5, while the process runs: what is held never grows past twice the
+    /// window and the line being added, however much stderr goes by. Caught by:
+    /// cutting only at the end.
+    #[test]
+    fn the_tail_holds_a_bounded_amount_while_stderr_runs_on() {
+        let mut tail = Tail::default();
+        let line = "a line of a stderr that runs on and on, about sixty bytes long";
+        for _ in 0..80_000 {
+            tail.push(line);
+            assert!(
+                tail.held() <= 2 * 256 * 1024 + line.len() + 1,
+                "{}",
+                tail.held()
+            );
+        }
     }
 
     /// One line longer than the window keeps its end, never more than the window.

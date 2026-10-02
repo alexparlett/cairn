@@ -118,8 +118,9 @@ impl Group {
         self.leader.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub(super) fn open_pipes(&self) -> usize {
-        self.open_pipes.load(Ordering::Acquire)
+    /// The count of open pipes, read by [`Leader`]'s signalling after its reap.
+    pub(super) fn pipes(&self) -> &AtomicUsize {
+        &self.open_pipes
     }
 
     pub(super) fn pipe_opened(&self) {
@@ -144,23 +145,26 @@ impl Group {
     pub(super) fn request_end(&self) {
         self.mark_ending();
         if let Ok(mut leader) = self.leader.try_lock() {
-            leader.terminate(self.open_pipes());
+            leader.terminate(&self.open_pipes);
         }
     }
 
-    /// Ends the group with `SIGKILL` now, for a drop that could not start the
-    /// thread that would have ended it gracefully; reaps the leader if it can.
-    /// Never waits: a lock it cannot take now is held by a thread that will
-    /// see the request.
+    /// Ends the group with `SIGKILL` now, for a drop whose reaper thread could
+    /// not start: no thread is left to drive a graceful end, so there is no
+    /// grace, and the leader is reaped if it already can be — one that is not
+    /// is a zombie until Cairn exits. A `SIGKILL` strands a write's locks, and
+    /// nothing is left to report them; this is the path for a system with no
+    /// threads to give. It takes the lock rather than trying for it, because
+    /// no other thread would send the signal if it missed: every hold of the
+    /// lock is a non-blocking `try_wait`, `killpg` or field write, so the wait
+    /// is bounded by a few system calls.
     pub(super) fn kill_now(&self) {
         self.mark_ending();
-        if let Ok(mut leader) = self.leader.try_lock() {
-            let open = self.open_pipes();
-            leader.terminated_at.get_or_insert_with(Instant::now);
-            leader.signal(Signal::SIGKILL, open);
-            leader.killed_at = Some(Instant::now());
-            leader.reap();
-        }
+        let mut leader = self.leader();
+        leader.terminated_at.get_or_insert_with(Instant::now);
+        leader.signal(Signal::SIGKILL, &self.open_pipes);
+        leader.killed_at = Some(Instant::now());
+        leader.reap();
     }
 
     /// A stdin write that failed for a reason other than git closing its end:
@@ -173,8 +177,7 @@ impl Group {
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(error);
         self.mark_ending();
-        let open = self.open_pipes();
-        self.leader().terminate(open);
+        self.leader().terminate(&self.open_pipes);
     }
 
     pub(super) fn take_input_error(&self) -> Option<io::Error> {
@@ -230,6 +233,9 @@ impl Drop for Counted {
 /// call so a test can make a thread fail to start.
 pub(super) type Spawner = dyn Fn(&str, Box<dyn FnOnce() + Send>) -> io::Result<()>;
 
+/// A [`Spawner`] that can be kept: what a driver holds to start its reaper.
+pub(super) type ThreadStarter = fn(&str, Box<dyn FnOnce() + Send>) -> io::Result<()>;
+
 /// The real [`Spawner`].
 pub(super) fn os_thread(name: &str, body: Box<dyn FnOnce() + Send>) -> io::Result<()> {
     std::thread::Builder::new()
@@ -260,9 +266,17 @@ impl Leader {
     }
 
     /// Sends `signal` to the group if a member is believed alive, reaping first
-    /// so an exit that has already happened is seen as one. Whether it went out.
-    fn signal(&mut self, signal: Signal, open_pipes: usize) -> bool {
+    /// so an exit that has already happened is seen as one, and reading the
+    /// open pipes only after that reap, so the count it decides on is never
+    /// older than the reap. Whether it went out.
+    ///
+    /// One more window is stated rather than closed: git may exit 0 between
+    /// the reap's `try_wait` and the `killpg`, and is then counted as signalled
+    /// while running — a completed invocation reported as cancelled. The
+    /// window is microseconds and the error is on the cautious side.
+    fn signal(&mut self, signal: Signal, open_pipes: &AtomicUsize) -> bool {
         self.reap();
+        let open_pipes = open_pipes.load(Ordering::Acquire);
         if !self.believed_alive(open_pipes) {
             return false;
         }
@@ -284,7 +298,7 @@ impl Leader {
     }
 
     /// `SIGTERM` to the group, once.
-    pub(super) fn terminate(&mut self, open_pipes: usize) {
+    pub(super) fn terminate(&mut self, open_pipes: &AtomicUsize) {
         if self.terminated_at.is_none() && self.signal(Signal::SIGTERM, open_pipes) {
             self.terminated_at = Some(Instant::now());
         }
@@ -292,7 +306,14 @@ impl Leader {
 
     /// `SIGKILL` to the group once [`TERMINATION_GRACE`] has passed since the
     /// `SIGTERM`, once.
-    pub(super) fn escalate(&mut self, open_pipes: usize) {
+    ///
+    /// When the leader was reaped before then and only an open pipe keeps the
+    /// group believed alive, this widens the stated reuse race: the group's
+    /// id has been free since the reap, up to the whole grace, unless a member
+    /// still in the group holds it. A holder that left the group cannot be
+    /// reached by either signal, and if every member of the group exited, the
+    /// id could in principle be reused in those two seconds.
+    pub(super) fn escalate(&mut self, open_pipes: &AtomicUsize) {
         if let Some(at) = self.terminated_at
             && self.killed_at.is_none()
             && at.elapsed() >= TERMINATION_GRACE

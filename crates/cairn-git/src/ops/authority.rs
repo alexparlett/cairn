@@ -559,6 +559,61 @@ mod tests {
         }
     }
 
+    /// G11, the ordering pinned: a write whose process takes a moment to remove its
+    /// lock on `SIGTERM` — as git does, but slowly enough to see — has its locks
+    /// listed only after it is reaped, so the lock it removed on its way out is
+    /// not reported and the stale one is. A stub `git`, run as a write in a real
+    /// repository, makes `index.lock` and removes it 300 ms into its `SIGTERM`
+    /// trap. Caught by: listing the locks when the cancel is asked for, or at any
+    /// point before the reap.
+    #[test]
+    fn a_cancelled_write_lists_its_locks_only_once_it_is_reaped() {
+        let scratch = Scratch::new("locks-after-reap");
+        let repo = scratch.repo();
+        let stale = repo.join(".git/refs/heads/stale.lock");
+        std::fs::write(&stale, "").unwrap();
+        let stub = StubGit::with_git(
+            "if [ \"$1\" = --version ]; then echo 'git version 2.30.0'; exit 0; fi\n\
+             PATH=/usr/bin:/bin; command -v sleep >/dev/null || exit 99; \
+             : > .git/index.lock; \
+             trap 'sleep 0.3; rm -f .git/index.lock; exit 143' TERM; \
+             sleep 30 & echo hanging >&2; wait",
+        );
+        let git = discover_retrying(stub.environment()).unwrap();
+        let handle = Repository::discover(&repo).unwrap();
+        let invocation = git
+            .write_invocation(WriteAuthority::new())
+            .in_repository(&handle)
+            .arg("commit")
+            .start()
+            .unwrap();
+        let killer = invocation.kill_handle();
+        let outcome = invocation.finish(
+            &CancelSignal::new(),
+            |_| {},
+            |line| {
+                if line == "hanging" {
+                    killer.kill();
+                }
+            },
+        );
+        match outcome {
+            Err(Error::GitCancelled { stranded_locks, .. }) => {
+                let found: Vec<PathBuf> = stranded_locks
+                    .iter()
+                    .map(|path| std::fs::canonicalize(path).unwrap())
+                    .collect();
+                assert_eq!(
+                    found,
+                    [std::fs::canonicalize(&stale).unwrap()],
+                    "the locks were listed before the process that held index.lock was gone"
+                );
+            }
+            other => panic!("expected a cancelled write, got {other:?}"),
+        }
+        assert!(!repo.join(".git/index.lock").exists());
+    }
+
     /// G11, a failed write names the `index.lock` it failed on — another git, or
     /// a stale lock — and nothing removes it. Caught by: a write failure that
     /// reports no locks.

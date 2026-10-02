@@ -80,8 +80,10 @@ pub enum Error {
     /// dropped. `present_locks` is every `*.lock` under the git directory once
     /// a WRITE had failed — the file another git holds, or a stale one from a
     /// crash, which is what a write fails on and git does not wait for. Never
-    /// retried and never removed. Empty for a read, and for a write run outside
-    /// a repository.
+    /// retried and never removed. Filled only for a write run on the runner in
+    /// a repository (`GitCommand::start` after `in_repository`); empty for a
+    /// read, and for anything that still runs on the older `run` and `stream`
+    /// paths — fetch and the version probe among them.
     #[error(
         "git {arguments} failed ({status}): {stderr}{}",
         PresentLocks(present_locks)
@@ -101,24 +103,43 @@ pub enum Error {
 
     /// git wrote more to stdout than the caller said it would take, so the
     /// process was ended and nothing it wrote is returned: an answer cut short
-    /// would look like a whole one.
+    /// would look like a whole one. For a write, `stranded_locks` lists the lock
+    /// files present once it was reaped, as for a cancelled one; empty for a
+    /// read.
     #[error(
-        "git {arguments} wrote more than {ceiling} bytes; the answer was refused, not cut short"
+        "git {arguments} wrote more than {ceiling} bytes; the answer was refused, not cut \
+         short{}",
+        StrandedLocks(stranded_locks)
     )]
-    GitOutputTooLarge { arguments: String, ceiling: usize },
+    GitOutputTooLarge {
+        arguments: String,
+        ceiling: usize,
+        stranded_locks: Vec<PathBuf>,
+    },
 
-    /// Cairn lost hold of a running git: a thread to read or feed one of its
-    /// pipes could not start, writing its input failed, or waiting on it did.
-    /// The process was ended rather than left running with nobody watching.
-    #[error("lost hold of git {arguments}: {source}")]
+    /// Cairn lost hold of a running git. A thread to read or feed one of its
+    /// pipes could not start, or writing its input failed: the process was
+    /// ended rather than left running with nobody watching, or acting on part
+    /// of its input. Or waiting on it failed, and what became of it is not
+    /// known. For a write, `stranded_locks` lists the lock files present
+    /// afterwards; empty for a read.
+    #[error(
+        "lost hold of git {arguments}: {source}{}",
+        StrandedLocks(stranded_locks)
+    )]
     GitUnwatched {
         arguments: String,
         #[source]
         source: std::io::Error,
+        stranded_locks: Vec<PathBuf>,
     },
 
     /// The user cancelled the operation and the process was ended. Not a
-    /// failure to report as one: the caller asked for this. `stranded_locks`
+    /// failure to report as one: the caller asked for this. Not a promise that
+    /// nothing happened either: the signal can land after git made its change
+    /// and before it exited, so a cancelled write may have taken effect in part
+    /// or in whole, and an operation that must know compares the repository's
+    /// state before and after, as fetch does with its refs. `stranded_locks`
     /// is every `*.lock` found under the git directory once the process was
     /// gone. A `SIGKILL` that landed mid-write leaves one, and so does an
     /// earlier crash — and so does a git running in a terminal right now,

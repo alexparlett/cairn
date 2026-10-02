@@ -12,8 +12,10 @@ with no caller, deliberately (program decision L2 in
 `docs/work/daily-loop/brainstorm.md`), because its round-trip tests are what make
 a later staging packet a feature rather than a rewrite. **Working-tree diffs are
 not here**: everything below reads trees and blobs from the object database.
-Intent for this surface is `docs/design/cairn.md` (decisions D1, D3, D5, D6) and
-`docs/design/ui.md`; the commitment it was built against is
+Intent for this surface is `docs/design/diff.md` and `docs/design/ui.md`, under
+decisions D1 (`docs/design/engine.md`), D3 (`docs/design/concurrency.md`), D5
+(`docs/design/platform.md`) and D6 (`docs/design/conflicts.md`), indexed in the
+spine `docs/design/cairn.md`; the commitment it was built against is
 `docs/prd/diff-engine.md`, in flight.
 
 ## One exact answer, and projections of it

@@ -166,7 +166,7 @@ discard; a last record without its NUL is handed on only on success
 `start` runs on the caller's thread and may wait — it spawns, and a pipe thread
 that cannot start makes it end the process there — so it is a worker's call.
 What the UI thread may call is `KillHandle::kill` and the drop, neither of
-which waits.
+which waits, but for the drop's no-thread fallback below.
 
 ### Spawning and the pipes
 
@@ -276,7 +276,9 @@ Three ways, all ending the process the same way:
   `the_kill_handle_is_send_and_clone`).
 - **Dropping** an unfinished invocation asks for the end without waiting
   (`SIGTERM` if the lock is free) and drives it to the reap on a
-  `cairn-git-reaper` thread
+  `cairn-git-reaper` thread — the one wait being the fallback below, when no
+  such thread can start, which takes the group's lock, held only for a few
+  non-blocking system calls
   (`dropping_an_unfinished_invocation_ends_and_reaps_its_group_without_blocking`
   times the drop and watches the group go, and
   `dropping_never_waits_for_a_process_that_outlasts_sigterm` times it against a
@@ -316,8 +318,9 @@ so nothing signals a reaped pid unless an open pipe still names the group
 return, with the leftover process still holding the pipes, the G10 test's kill
 signals nothing). A group id is not reused while any member lives, which
 closes all but a stated race: an open pipe does not prove its holder is still
-in the group, and if every member exits between the check and the signal the
-id could in principle be reused. The escalation widens that window: once the
+in the group, the count lags the pipe (a reader still handing on its last read
+counts its pipe open after the writer closed it), and if every member exits
+between the check and the signal the id could in principle be reused. The escalation widens that window: once the
 leader is reaped and only an open pipe keeps the group believed alive, the
 `SIGKILL` goes out up to the whole grace after the leader's pid was freed. One
 more window is stated rather than closed: git may exit 0 between the reap's

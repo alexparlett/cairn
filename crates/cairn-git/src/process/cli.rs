@@ -230,6 +230,13 @@ impl<'a, K: Kind> GitCommand<'a, K> {
         self.start_with(&os_thread)
     }
 
+    /// [`GitCommand::start`] with no thread able to start, for a test outside
+    /// `process/` of what a runner-ended invocation reports.
+    #[cfg(test)]
+    pub(crate) fn start_without_threads(self) -> Result<Invocation<K>, Error> {
+        self.start_with(&|name, _| Err(std::io::Error::other(format!("no thread for {name}"))))
+    }
+
     /// [`GitCommand::start`] with the thread starter given, so a test can make
     /// one fail.
     #[cfg_attr(

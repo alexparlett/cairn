@@ -9,7 +9,9 @@
 //! `start` itself runs on the caller's thread and may wait — it spawns, and a
 //! pipe thread that cannot start makes it end the process there — so it is a
 //! worker's call; what the UI thread may call is [`KillHandle::kill`] and the
-//! drop, neither of which waits.
+//! drop, neither of which waits — except a drop when no reaper thread can
+//! start, which takes the group's lock, held only for a few non-blocking
+//! system calls ([`Group::kill_now`]).
 //!
 //! # When it is over
 //!
@@ -227,12 +229,45 @@ pub(super) fn watch<K: Kind>(
             if let Some(mut driver) = invocation.driver.take() {
                 driver.run(&|| true, &mut |_| Flow::Continue, &mut |_| {});
             }
-            Err(Error::GitUnwatched {
-                arguments: std::mem::take(&mut invocation.arguments),
-                source,
-                stranded_locks: invocation.kind.present_locks(invocation.dirs.as_ref()),
-            })
+            Err(ended_by_the_runner(
+                &invocation.kind,
+                invocation.dirs.as_ref(),
+                std::mem::take(&mut invocation.arguments),
+                RunnerEnded::Lost(source),
+            ))
         }
+    }
+}
+
+/// Why the runner itself ended an invocation, rather than git or a cancel.
+enum RunnerEnded {
+    /// stdout crossed the caller's ceiling.
+    Ceiling(usize),
+    /// A pipe thread could not start, writing stdin failed, or waiting failed.
+    Lost(std::io::Error),
+}
+
+/// The error for an invocation the runner ended, built after the reap and, for
+/// a write, carrying the lock files present then — one place, so every such
+/// outcome lists them.
+fn ended_by_the_runner<K: Kind>(
+    kind: &K,
+    dirs: Option<&GitDirs>,
+    arguments: String,
+    why: RunnerEnded,
+) -> Error {
+    let stranded_locks = kind.present_locks(dirs);
+    match why {
+        RunnerEnded::Ceiling(ceiling) => Error::GitOutputTooLarge {
+            arguments,
+            ceiling,
+            stranded_locks,
+        },
+        RunnerEnded::Lost(source) => Error::GitUnwatched {
+            arguments,
+            source,
+            stranded_locks,
+        },
     }
 }
 
@@ -384,25 +419,16 @@ impl<K: Kind> Invocation<K> {
         let ended = driver.run(&|| cancel.is_cancelled(), stdout, progress);
         // Everything below is after the reap: what git removed on its way out is
         // not reported.
-        let locks = || self.kind.present_locks(self.dirs.as_ref());
+        let ended_here =
+            |arguments, why| ended_by_the_runner(&self.kind, self.dirs.as_ref(), arguments, why);
         if ended.stopped
             && let Some(ceiling) = ceiling
         {
-            return Err(Error::GitOutputTooLarge {
-                arguments,
-                ceiling,
-                stranded_locks: locks(),
-            });
+            return Err(ended_here(arguments, RunnerEnded::Ceiling(ceiling)));
         }
         let status = match ended.status {
             Ok(status) => status,
-            Err(source) => {
-                return Err(Error::GitUnwatched {
-                    arguments,
-                    source,
-                    stranded_locks: locks(),
-                });
-            }
+            Err(source) => return Err(ended_here(arguments, RunnerEnded::Lost(source))),
         };
         // A cancel that lost the race to a clean exit is that exit's success (R4.5).
         let beaten_by_a_clean_exit = status.success() && !ended.signalled_while_running;
@@ -414,7 +440,7 @@ impl<K: Kind> Invocation<K> {
                 arguments,
                 status,
                 stderr: ended.tail,
-                present_locks: locks(),
+                present_locks: self.kind.present_locks(self.dirs.as_ref()),
             });
         }
         Ok(ended.tail)
@@ -424,7 +450,9 @@ impl<K: Kind> Invocation<K> {
 impl<K: Kind> Drop for Invocation<K> {
     /// Ends an invocation dropped before it finished: dropping its driver asks
     /// for the end at once (`SIGTERM` if the lock is free) and drives it to the
-    /// reap on a thread of its own, so this returns without waiting.
+    /// reap on a thread of its own, so this returns without waiting — except
+    /// when that thread cannot start, and [`Group::kill_now`] takes the group's
+    /// lock, held only for a few non-blocking system calls.
     fn drop(&mut self) {
         drop(self.driver.take());
     }
@@ -476,12 +504,12 @@ impl Driver {
                 }
             }
             Event::Lines(lines) => {
-                for line in lines {
+                for line in lines.split('\n') {
                     let text = line.trim_end();
                     if !text.is_empty() {
                         progress(text);
                     }
-                    tail.push(&line);
+                    tail.push(line);
                 }
             }
         };
@@ -498,8 +526,15 @@ impl Driver {
                 });
                 match events.recv_timeout(wait) {
                     Ok(event) => {
+                        // Bounded by count and by time, so a slow callback on a flood
+                        // of output still reaches the cancel poll and the escalation
+                        // below at least once a tick.
+                        let received = Instant::now();
                         handle(event, &mut stopped);
                         for _ in 0..EVENTS_BOUND {
+                            if received.elapsed() >= TICK {
+                                break;
+                            }
                             match events.try_recv() {
                                 Ok(event) => handle(event, &mut stopped),
                                 Err(TryRecvError::Empty) => break,
@@ -1721,10 +1756,18 @@ mod tests {
     fn a_last_record_without_its_terminator_still_counts_on_success() {
         let stub = stub("printf 'a\\0b'");
         let mut records = Vec::new();
-        started(&stub)
+        let invocation = started(&stub);
+        let group = invocation.group();
+        invocation
             .records(&never(), |record| records.push(record.to_vec()), |_| {})
             .unwrap();
         assert_eq!(records, [b"a".to_vec(), b"b".to_vec()]);
+        // A finished invocation is concluded: its driver's drop asks for no end
+        // and starts no reaper.
+        assert!(
+            !group.ending(),
+            "a cleanly finished invocation was asked to end"
+        );
     }
 
     /// A cancelled read does not hand on a record its cancel cut off: only whole
@@ -1836,6 +1879,54 @@ mod tests {
                     .all(|member| state(member) == Some('Z') || state(member).is_none())
             }),
             "the group outlived a SIGKILL: {:?}",
+            group_members(pid)
+        );
+    }
+
+    /// The no-thread fallback WAITS for the lock: no other thread would send the
+    /// signal if it missed. Here the lock is held on another thread across the
+    /// drop, as a stdin writer's failure or a kill handle might hold it; the
+    /// group must still die. Caught by: a fallback that only tries for the lock.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_drop_with_no_thread_to_reap_on_waits_out_a_held_lock_and_kills_the_group() {
+        fn no_thread(_: &str, _: Box<dyn FnOnce() + Send>) -> io::Result<()> {
+            Err(io::Error::other("no thread"))
+        }
+        let state = |pid: u32| {
+            std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .ok()
+                .and_then(|stat| {
+                    stat.rsplit_once(')')
+                        .map(|(_, rest)| rest.trim().to_owned())
+                })
+                .and_then(|rest| rest.chars().next())
+        };
+        let stub = stub(IGNORING_TERM);
+        let invocation = started(&stub).without_a_reaper(no_thread);
+        let pid = invocation.id();
+        assert!(eventually(DEADLINE, || group_members(pid).len() >= 2));
+        let group = invocation.group();
+        let (held, holding) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let leader = group.leader();
+            let _ = held.send(());
+            std::thread::sleep(Duration::from_millis(100));
+            drop(leader);
+        });
+        holding.recv().unwrap();
+        let dropping = Instant::now();
+        drop(invocation);
+        let took = dropping.elapsed();
+        holder.join().unwrap();
+        assert!(took < Duration::from_secs(1), "the drop waited {took:?}");
+        assert!(
+            eventually(Duration::from_secs(1), || {
+                group_members(pid)
+                    .into_iter()
+                    .all(|member| state(member) == Some('Z') || state(member).is_none())
+            }),
+            "the group outlived the fallback: {:?}",
             group_members(pid)
         );
     }

@@ -18,8 +18,9 @@
 //! so that rule closes all but a narrow race, stated rather than claimed
 //! closed: an open pipe does not prove its holder is still IN the group (it
 //! may have left it, or on macOS been handed the pipe by another thread's
-//! spawn), and if every member exits between the check and the signal the id
-//! can in principle be reused. Closing that needs process handles std does not
+//! spawn), and the count lags the pipe — a reader still handing on its last
+//! read counts its pipe open after the writer closed it — and if every member
+//! exits between the check and the signal the id can in principle be reused. Closing that needs process handles std does not
 //! offer stably. The check and the signal are made under one lock, which the
 //! reap also takes, so nothing signals a pid this module has reaped unless an
 //! open pipe still names the group — and nothing signals at all once the

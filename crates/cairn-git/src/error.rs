@@ -121,7 +121,10 @@ pub enum Error {
     /// pipes could not start, or writing its input failed: the process was
     /// ended rather than left running with nobody watching, or acting on part
     /// of its input. Or waiting on it failed, and what became of it is not
-    /// known. For a write, `stranded_locks` lists the lock files present
+    /// known. A write ended this way may still have taken effect, in part or
+    /// whole — its input may have been delivered before it was ended — so an
+    /// operation that must know compares the repository's state before and
+    /// after. For a write, `stranded_locks` lists the lock files present
     /// afterwards; empty for a read.
     #[error(
         "lost hold of git {arguments}: {source}{}",
@@ -227,7 +230,7 @@ impl std::fmt::Display for StrandedLocks<'_> {
         }
         f.write_str(
             "; lock files remain under the git directory, which later writes will fail on while \
-             they are there (stale if no other git is running here): ",
+             they are there (stale if no git is running here): ",
         )?;
         for (i, path) in self.0.iter().enumerate() {
             if i > 0 {

@@ -614,6 +614,58 @@ mod tests {
         assert!(!repo.join(".git/index.lock").exists());
     }
 
+    /// R5.2 for the writes the runner ends itself: a crossed ceiling and a pipe
+    /// thread that could not start each list the lock files present after the
+    /// reap, as a cancel does — here a stale one planted beforehand. Caught by:
+    /// either error built without the write's lock search.
+    #[test]
+    fn a_write_the_runner_ends_lists_the_locks_present() {
+        let scratch = Scratch::new("runner-ended-write");
+        let repo = scratch.repo();
+        let stale = repo.join(".git/refs/heads/stale.lock");
+        std::fs::write(&stale, "").unwrap();
+        let stale = std::fs::canonicalize(&stale).unwrap();
+        let stub = StubGit::with_git(
+            "if [ \"$1\" = --version ]; then echo 'git version 2.30.0'; exit 0; fi\n\
+             PATH=/usr/bin:/bin; command -v sleep >/dev/null || exit 99; \
+             sleep 30 & head -c 4096 /dev/zero; wait",
+        );
+        let git = discover_retrying(stub.environment()).unwrap();
+        let handle = Repository::discover(&repo).unwrap();
+        let listed = |locks: &[PathBuf]| -> Vec<PathBuf> {
+            locks
+                .iter()
+                .map(|path| std::fs::canonicalize(path).unwrap())
+                .collect()
+        };
+
+        let over = git
+            .write_invocation(WriteAuthority::new())
+            .in_repository(&handle)
+            .arg("commit")
+            .start()
+            .unwrap()
+            .collect(&CancelSignal::new(), 1024, |_| {});
+        match over {
+            Err(Error::GitOutputTooLarge { stranded_locks, .. }) => {
+                assert_eq!(listed(&stranded_locks), std::slice::from_ref(&stale));
+            }
+            other => panic!("expected the ceiling error, got {other:?}"),
+        }
+
+        let unwatched = git
+            .write_invocation(WriteAuthority::new())
+            .in_repository(&handle)
+            .arg("commit")
+            .start_without_threads();
+        match unwatched {
+            Err(Error::GitUnwatched { stranded_locks, .. }) => {
+                assert_eq!(listed(&stranded_locks), [stale]);
+            }
+            other => panic!("expected the thread failure, got {other:?}"),
+        }
+    }
+
     /// G11, a failed write names the `index.lock` it failed on — another git, or
     /// a stale lock — and nothing removes it. Caught by: a write failure that
     /// reports no locks.

@@ -35,14 +35,20 @@ pub(super) enum Event {
     /// Bytes from stdout, in order, as they arrived.
     Stdout(Vec<u8>),
     /// The lines of stderr one read completed, in order, each with its
-    /// terminator stripped and lossily decoded. One event per read, not per
-    /// line, so what git wrote before it exited is a few events however many
-    /// lines it was, and the driver's last look at the queue takes it all.
-    Lines(Vec<String>),
+    /// terminator stripped and lossily decoded, joined by `\n` (which no line
+    /// contains) into one string. One event per read, not per line, so what git
+    /// wrote before it exited is a few events however many lines it was, and the
+    /// driver's last look at the queue takes it all; one string, not a string
+    /// per line, so an event costs one allocation of at most a read's bytes and
+    /// a pending line piece, however short its lines.
+    Lines(String),
 }
 
 /// How many events may wait for the driving thread before a reader waits for
-/// it: a few MiB of stdout at most, and as much stderr.
+/// it: each is one allocation of at most a 64 KiB read — a stderr event also
+/// a line piece of up to 256 KiB, and up to three bytes for each undecodable
+/// one — so a few MiB of stdout queued at most, and some tens of MiB of
+/// stderr in the worst case.
 pub(super) const EVENTS_BOUND: usize = 64;
 
 /// Bytes read from a pipe at a time: the most a Linux pipe holds by default.
@@ -86,12 +92,12 @@ pub(super) fn read_stderr(mut pipe: ChildStderr, events: &SyncSender<Event>, gro
             Err(_) => break,
         };
         let complete = lines.push(&chunk[..read]);
-        if !complete.is_empty() && events.send(Event::Lines(complete)).is_err() {
+        if !complete.is_empty() && events.send(Event::Lines(complete.join("\n"))).is_err() {
             break 'reading;
         }
     }
     if let Some(line) = lines.rest() {
-        let _ = events.send(Event::Lines(vec![line]));
+        let _ = events.send(Event::Lines(line));
     }
     group.pipe_closed();
 }

@@ -52,15 +52,21 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
    Conventional Commits with a body. If the diff touches the enforcement layer
    itself (guard checks, hooks, gate script, CI workflows, reviewer/skill
    definitions), dispatch pointer: `gate-integrity-reviewer`.
-7. **Destructive operations** (any diff under `crates/cairn-git/src/ops/`, or a
-   new call site reaching one): the operation takes `cairn_model::Confirmed` by
+7. **Destructive operations** (any diff under `crates/cairn-git/src/ops/` or
+   `crates/cairn-git/src/process/`, or a new call site reaching one): the operation takes `cairn_model::Confirmed` by
    value, the prompt text handed to `Confirmed::by_user` names the actual
    consequence (what is lost, how much, whether it is recoverable), and nothing
    constructs the token outside a user acknowledgement path. Also: no
    `std::process::Command` reached through a spelling the terminal-prompt guard
    cannot read — a `type` alias for it, a wrapper crate that spawns, a macro
-   that expands to one — anywhere but `crates/cairn-git/src/ops/environment.rs`;
-   the guard matches the identifier, so those are yours. Dispatch pointer:
+   that expands to one — anywhere but `crates/cairn-git/src/process/environment.rs`;
+   the guard matches the identifier, so those are yours. Likewise a process
+   driven outside `crates/cairn-git/src/process/` through a spelling
+   `only_the_process_module_builds_or_runs_a_process` cannot read (a method
+   reached through a trait object or a macro), and a gitoxide write outside
+   `ops/` through a name `only_the_ops_module_mutates_a_repository`'s roster
+   does not hold — a gix API added after 0.87.1, or one reached through a
+   trait object, a generic or a macro. Dispatch pointer:
    `destructive-ops-reviewer`.
 8. **Responsiveness** (any diff in `crates/cairn-ui/` or `crates/cairn-app/`, or
    anything changing what runs per frame or per query): no repository work on the

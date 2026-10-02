@@ -4,9 +4,12 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use cairn_guards::{
-    code_only, code_without_strings, code_without_test_modules, configures_process_environment,
-    constructs_named_struct, constructs_process_command, constructs_struct, declared_dependencies,
-    derives_or_implements, implements_type, mentions_crate, reads_row_content_partially,
+    GITOXIDE_MUTATION_CALLS, GITOXIDE_MUTATION_IDENTS, GITOXIDE_MUTATION_METHODS,
+    GITOXIDE_MUTATION_PATH_ENDS, GITOXIDE_MUTATION_PATHS, calls_associated_function, calls_method,
+    calls_nullary_method, code_only, code_without_strings, code_without_test_modules,
+    configures_process_environment, constructs_named_struct, constructs_process_command,
+    constructs_struct, declared_dependencies, declares_publicly, derives_or_implements,
+    implements_type, mentions_crate, names_gitoxide_mutation, reads_row_content_partially,
     renames_type, renders_in_a_macro, repo_root, rust_sources, spawns_git,
     structs_with_a_field_naming, types_containing, waits_on_work,
 };
@@ -593,9 +596,22 @@ fn the_row_content_matcher_catches_the_shapes_it_claims() {
     }
 }
 
+/// Where every repository mutation lives, and the only module that may build a write.
+const OPS_DIR: &str = "crates/cairn-git/src/ops";
+
+/// Where every `git` process is built, spawned, waited on and read, and nowhere else.
+const PROCESS_DIR: &str = "crates/cairn-git/src/process";
+
+/// Where every read that `git` answers lives, one named function each: the runner's other caller.
+const READS_DIR: &str = "crates/cairn-git/src/reads";
+
+/// The engine's source: the one crate that links `gix` and the runner.
+const ENGINE_SOURCE_DIR: &str = "crates/cairn-git/src";
+
 #[test]
 fn only_the_ops_module_mutates_a_repository() {
-    let ops = Path::new("crates/cairn-git/src/ops");
+    let ops = Path::new(OPS_DIR);
+    let process = Path::new(PROCESS_DIR);
     let mut scanned = 0usize;
 
     for dir in PRODUCT_SOURCE_DIRS {
@@ -604,26 +620,892 @@ fn only_the_ops_module_mutates_a_repository() {
                 continue;
             }
             scanned += 1;
-            let hits = spawns_git(&source);
-            assert!(
-                hits.is_empty(),
-                "{}:{} spawns a `git` subprocess outside crates/cairn-git/src/ops. Every \
-                 repository mutation lives in that module so the confirmation seal cannot be \
-                 routed around.",
-                path.display(),
-                hits[0]
-            );
+            // `process/` runs the `git` binary by design; whether what it runs may write is
+            // the write seal's (`the_runner_is_named_only_by_ops_and_reads`).
+            if !path.starts_with(process) {
+                let hits = spawns_git(&source);
+                assert!(
+                    hits.is_empty(),
+                    "{}:{} spawns a `git` subprocess outside crates/cairn-git/src/ops. Every \
+                     repository mutation lives in that module so the confirmation seal cannot \
+                     be routed around.",
+                    path.display(),
+                    hits[0]
+                );
+            }
         }
     }
     assert!(
         scanned > 0,
         "the mutation guard scanned nothing; did the crates move?"
     );
+
+    // The gitoxide half, over the one crate that links gix (the dependency allowlist keeps it
+    // that way). Test modules are scanned too: a fixture is built by running real git.
+    let mut engine_files = 0usize;
+    for (path, source) in rust_sources(ENGINE_SOURCE_DIR) {
+        if path.starts_with(ops) {
+            continue;
+        }
+        engine_files += 1;
+        let found = names_gitoxide_mutation(&source);
+        assert!(
+            found.is_empty(),
+            "{} names a gitoxide mutation API outside {OPS_DIR}, at {found:?}. Every repository \
+             mutation lives in that module, and goes through the `git` binary there (D1); a gix \
+             write anywhere else runs none of the user's hooks and skips the seal. The roster \
+             and its sources are in crates/cairn-guards/src/lib.rs.",
+            path.display()
+        );
+    }
+    assert!(
+        engine_files > 0,
+        "the gitoxide half of the mutation guard scanned nothing outside {OPS_DIR}"
+    );
+    assert!(
+        DEPENDENCY_ALLOWLIST
+            .iter()
+            .filter(|(_, allowed)| allowed.contains(&"gix"))
+            .map(|(name, _)| *name)
+            .eq(["cairn-git"]),
+        "a crate other than cairn-git may now depend on gix, so the gitoxide half of this guard, \
+         which reads {ENGINE_SOURCE_DIR} alone, no longer sees every caller: widen its scope"
+    );
 }
 
-/// Where a `git` process is built: the environment module, the only place a
+/// The process half of a file's verdict: every way it builds, spawns, waits on or reads a
+/// process, or calls a method that yields one, as `path:line names ..` — empty for a file that
+/// does none of them. Test modules are blanked, as in the environment twin: a fixture may spawn
+/// what it likes. Applies to files outside [`PROCESS_DIR`].
+fn process_violations(path: &Path, source: &str) -> Vec<String> {
+    let production = code_without_test_modules(&code_without_strings(source));
+    let at = |line: usize| format!("{}:{line}", path.display());
+    let mut found = Vec::new();
+    for ident in PROCESS_IDENTS {
+        for line in mentions_crate(&production, ident) {
+            found.push(format!("{} names `{ident}`", at(line)));
+        }
+    }
+    for name in PROCESS_NULLARY_CALLS {
+        if PROCESS_CALL_EXCEPTIONS
+            .iter()
+            .any(|(excused, method, _)| path.starts_with(excused) && method == name)
+        {
+            continue;
+        }
+        for line in calls_nullary_method(&production, &[name]) {
+            found.push(format!("{} calls `.{name}()`", at(line)));
+        }
+    }
+    for line in calls_method(&production, PROCESS_YIELDING_METHODS) {
+        found.push(format!("{} calls `.command(..)`", at(line)));
+    }
+    for line in calls_associated_function(&production, PROCESS_ENVIRONMENT_TYPE, "command") {
+        found.push(format!("{} calls `GitEnvironment::command`", at(line)));
+    }
+    found
+}
+
+/// What a process is, or what starts and signals one, by name: std's pipe and child types,
+/// the extension trait that adds `exec` and `process_group`, and `nix`, which `cairn-git` links
+/// for signals and whose `process` feature compiles `posix_spawn` and the `exec` family. An
+/// alias is caught on its import line, as with `Command` in the environment twin.
+const PROCESS_IDENTS: &[&str] = &[
+    "Stdio",
+    "Child",
+    "ChildStdin",
+    "ChildStdout",
+    "ChildStderr",
+    "CommandExt",
+    "nix",
+];
+
+/// Methods that spawn, wait on or read a process when called with no arguments — `Command`'s
+/// `spawn`, `output` and `status`, `Child`'s `wait`, `try_wait` and `wait_with_output`. Each has
+/// a namesake that takes arguments (`thread::Builder::spawn(f)`, `Condvar::wait(guard)`), which
+/// is not matched.
+const PROCESS_NULLARY_CALLS: &[&str] = &[
+    "spawn",
+    "output",
+    "status",
+    "wait",
+    "try_wait",
+    "wait_with_output",
+];
+
+/// Methods that hand back a process: `GitEnvironment::command`, which yields a ready
+/// `std::process::Command`. Visible to `process/` alone (`pub(super)`), so the compiler refuses
+/// it elsewhere in `cairn-git` too; this is the twin against that visibility widening.
+const PROCESS_YIELDING_METHODS: &[&str] = &["command"];
+
+/// Where a nullary call on [`PROCESS_NULLARY_CALLS`] is something else, keyed by a source
+/// directory and the method, with what the call is instead and why no process can be behind
+/// it. A row excuses that method under that directory wholly; a row whose directory no longer
+/// makes the call fails the guard, so the roster cannot outlive its reason.
+const PROCESS_CALL_EXCEPTIONS: &[(&str, &str, &str)] = &[(
+    "crates/cairn-app/src",
+    "status",
+    "HistoryProgress::status, the history view's load state, read by the window and the status \
+     line. No process can be behind a `.status()` in cairn-app: a Command there is caught by its \
+     name and by `.command(..)`, cairn-git's public surface yields none, and a dependency that \
+     did would need an allowlist row",
+)];
+/// Nothing outside `process/` builds, spawns, waits on or reads a process, or calls a method that
+/// yields one (process-manager R1.3, G2). The environment twin pins that one file builds the
+/// `Command`; this pins that nothing else can drive one, so the runner's stdin, kill and error
+/// mapping cannot be bypassed with the built environment in hand.
+#[test]
+fn only_the_process_module_builds_or_runs_a_process() {
+    let process = Path::new(PROCESS_DIR);
+    let (mut outside, mut inside) = (0usize, 0usize);
+    let mut module = String::new();
+
+    for dir in PRODUCT_SOURCE_DIRS {
+        for (path, source) in rust_sources(dir) {
+            if path.starts_with(process) {
+                inside += 1;
+                module.push_str(&code_without_test_modules(&code_without_strings(&source)));
+                module.push('\n');
+                continue;
+            }
+            outside += 1;
+            let found = process_violations(&path, &source);
+            assert!(
+                found.is_empty(),
+                "a process is handled outside {PROCESS_DIR}: {found:?}. Only that module builds, \
+                 spawns, waits on or reads a `git` process, so that every one gets the explicit \
+                 environment, closed stdin, the kill path and git's diagnostic in its error; \
+                 anything else reaches `git` through `ops/` or `reads/`."
+            );
+        }
+    }
+    assert!(
+        outside > 0,
+        "the process guard scanned nothing outside {PROCESS_DIR}; did the crates move?"
+    );
+    assert!(
+        inside > 0,
+        "{PROCESS_DIR} holds no Rust source: the process module moved, and this guard must \
+         move with it rather than exempt a directory that is not there"
+    );
+    // The module does what the matchers look for, so a matcher that stopped reading real code
+    // fails here rather than passing everything.
+    for (shape, hits) in [
+        ("`.spawn()`", calls_nullary_method(&module, &["spawn"])),
+        ("`.output()`", calls_nullary_method(&module, &["output"])),
+        (
+            "`.try_wait()`",
+            calls_nullary_method(&module, &["try_wait"]),
+        ),
+        ("`Stdio`", mentions_crate(&module, "Stdio")),
+        ("`Child`", mentions_crate(&module, "Child")),
+        ("`nix`", mentions_crate(&module, "nix")),
+        (
+            "`.command(..)`",
+            calls_method(&module, PROCESS_YIELDING_METHODS),
+        ),
+    ] {
+        assert!(
+            !hits.is_empty(),
+            "{PROCESS_DIR} no longer shows {shape} to the process matchers, though it is where a \
+             process is run; either the runner changed shape and the roster must follow, or \
+             the matcher stopped matching"
+        );
+    }
+    for (dir, method, _) in PROCESS_CALL_EXCEPTIONS {
+        let still_called = rust_sources(dir).iter().any(|(_, source)| {
+            let production = code_without_test_modules(&code_without_strings(source));
+            !calls_nullary_method(&production, &[method]).is_empty()
+        });
+        assert!(
+            still_called,
+            "PROCESS_CALL_EXCEPTIONS excuses `.{method}()` under {dir}, which no longer calls it; \
+             remove the row"
+        );
+    }
+}
+
+/// The runner, by the names a caller outside `process/` reaches it through: the read builder,
+/// the streamed process and its kill handle, and the builder type itself (which `process/` does
+/// not re-export, so the compiler refuses it elsewhere; this is the twin against a re-export).
+/// Allowed in `process/`, `ops/` and `reads/`.
+const RUNNER_NAMES: &[&str] = &["GitCommand", "read_invocation", "Running", "ProcessKill"];
+
+/// A write, by the names that build one: the write builder and the authority it consumes.
+/// Allowed in `process/`, which declares the builder and names the type in its signature, and
+/// `ops/`, which constructs the authority. Not `reads/`: a read cannot build a write.
+const WRITE_NAMES: &[&str] = &["write_invocation", "WriteAuthority"];
+
+const WRITE_AUTHORITY: &str = "WriteAuthority";
+
+/// The file that declares [`WRITE_AUTHORITY`], and the one place it may be constructed.
+const WRITE_AUTHORITY_FILE: &str = "crates/cairn-git/src/ops/authority.rs";
+
+/// The runner half of a file's verdict, for a file of `cairn-git`: each runner or write name it
+/// uses outside the modules allowed them, and each way it constructs a `WriteAuthority` outside
+/// `ops/`, as `path:line names ..`. Comments and strings are blanked; test modules are NOT —
+/// a test outside `ops/` cannot construct the authority either, and nothing outside the three
+/// modules has a reason to name the runner.
+fn runner_violations(path: &Path, source: &str) -> Vec<String> {
+    let code = code_without_strings(source);
+    let at = |line: usize| format!("{}:{line}", path.display());
+    let in_ops = path.starts_with(OPS_DIR);
+    let in_process = path.starts_with(PROCESS_DIR);
+    let in_reads = path.starts_with(READS_DIR);
+    let mut found = Vec::new();
+    if !(in_ops || in_process || in_reads) {
+        for name in RUNNER_NAMES {
+            for line in mentions_crate(&code, name) {
+                found.push(format!(
+                    "{} names `{name}`, the runner, outside process/, ops/ and reads/",
+                    at(line)
+                ));
+            }
+        }
+    }
+    if !(in_ops || in_process) {
+        for name in WRITE_NAMES {
+            for line in mentions_crate(&code, name) {
+                found.push(format!(
+                    "{} names `{name}`, which builds a write, outside ops/",
+                    at(line)
+                ));
+            }
+        }
+    }
+    if !in_ops {
+        for line in calls_associated_function(&code, WRITE_AUTHORITY, "new") {
+            found.push(format!(
+                "{} calls `WriteAuthority::new` outside ops/",
+                at(line)
+            ));
+        }
+        for line in constructs_named_struct(&code, WRITE_AUTHORITY) {
+            found.push(format!(
+                "{} builds a `WriteAuthority` literal outside ops/",
+                at(line)
+            ));
+        }
+        for line in implements_type(&code, WRITE_AUTHORITY) {
+            found.push(format!(
+                "{} implements `WriteAuthority` outside ops/, where a constructor could be \
+                 written",
+                at(line)
+            ));
+        }
+    }
+    found
+}
+
+/// Only `ops/` and `reads/` name the runner (beside `process/` itself), and only `ops/`
+/// constructs a `WriteAuthority` or builds a write (process-manager R1.2, R1.3, G1, G2). The
+/// compiler refuses most of this already — the authority's constructor is `pub(in crate::ops)`,
+/// the builder type is not re-exported, `process` is a private module — and this twin is what
+/// fails if any of that visibility is widened, which would compile quietly. Over `cairn-git`
+/// alone, because the runner's names are crate-private: another crate cannot name them, which
+/// the visibility pins below keep true.
+#[test]
+fn the_runner_is_named_only_by_ops_and_reads() {
+    let mut scanned = 0usize;
+    let mut authority_file = None;
+    let mut ops_docs = None;
+    let mut library = None;
+    for (path, source) in rust_sources(ENGINE_SOURCE_DIR) {
+        scanned += 1;
+        let found = runner_violations(&path, &source);
+        assert!(
+            found.is_empty(),
+            "the runner or the write seal is reached from outside the modules allowed it: \
+             {found:?}. Only ops/ (every mutation) and reads/ (every read git answers) invoke \
+             the runner, and only ops/ can build a write."
+        );
+        for name in RUNNER_NAMES.iter().chain(WRITE_NAMES) {
+            let hits = declares_publicly(&source, name);
+            assert!(
+                hits.is_empty(),
+                "{}:{} declares or re-exports `{name}` as `pub`. The runner and the write seal \
+                 are crate-private, so no other crate can run a raw verb or build a write.",
+                path.display(),
+                hits[0]
+            );
+        }
+        if path == Path::new(WRITE_AUTHORITY_FILE) {
+            authority_file = Some(source);
+        } else if path == Path::new(OPS_DIR).join("mod.rs") {
+            ops_docs = Some(source);
+        } else if path == Path::new(ENGINE_SOURCE_DIR).join("lib.rs") {
+            library = Some(source);
+        }
+    }
+    assert!(
+        scanned > 0,
+        "the runner guard scanned nothing; did cairn-git move?"
+    );
+    for dir in [OPS_DIR, PROCESS_DIR, READS_DIR] {
+        assert!(
+            repo_root().join(dir).is_dir(),
+            "{dir} is gone, and this guard exempts it by path: move the guard with the module"
+        );
+    }
+
+    let library = library.unwrap_or_else(|| panic!("{ENGINE_SOURCE_DIR}/lib.rs is gone"));
+    let library = code_without_strings(&library);
+    assert!(
+        library.contains("\nmod process;") && declares_publicly(&library, "process").is_empty(),
+        "{ENGINE_SOURCE_DIR}/lib.rs no longer declares `mod process;` privately; the process \
+         module is crate-private, so nothing outside cairn-git reaches the runner"
+    );
+
+    let source = authority_file.unwrap_or_else(|| {
+        panic!("{WRITE_AUTHORITY_FILE} is gone; the write seal it defines is an invariant")
+    });
+    let production = code_without_test_modules(&code_without_strings(&source));
+    assert!(
+        production.contains("pub(crate) struct WriteAuthority {"),
+        "{WRITE_AUTHORITY_FILE} no longer declares `pub(crate) struct WriteAuthority {{`; a \
+         public type could be named from another crate, and a tuple or unit struct has no \
+         private field to seal it"
+    );
+    let body = production
+        .split("pub(crate) struct WriteAuthority {")
+        .nth(1)
+        .and_then(|rest| rest.split('}').next())
+        .unwrap_or_default();
+    assert!(
+        !body.trim().is_empty() && mentions_crate(body, "pub").is_empty(),
+        "WriteAuthority's field is no longer private; a field another module can name is a \
+         literal another module can write"
+    );
+    assert!(
+        production.contains("pub(in crate::ops) fn new() -> Self"),
+        "{WRITE_AUTHORITY_FILE}'s constructor is no longer `pub(in crate::ops) fn new() -> Self`; \
+         a wider one lets a read build a write"
+    );
+    // One impl block, the inherent one, and one literal in it: the constructor. The file's own
+    // test module builds other types with `Self { .. }`, so the count is taken in the block.
+    assert_eq!(
+        implements_type(&production, WRITE_AUTHORITY).len(),
+        1,
+        "{WRITE_AUTHORITY_FILE} should open exactly one impl block for WriteAuthority, the \
+         inherent one holding the constructor; a trait impl (`From`, `Default`) is a second way in"
+    );
+    let inherent = production
+        .split("impl WriteAuthority {")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}").next())
+        .unwrap_or_else(|| {
+            panic!("{WRITE_AUTHORITY_FILE} no longer opens `impl WriteAuthority {{`")
+        });
+    assert_eq!(
+        constructs_struct(inherent, WRITE_AUTHORITY).len(),
+        1,
+        "{WRITE_AUTHORITY_FILE} should build a WriteAuthority in exactly one place, the \
+         constructor; a second is a second way in"
+    );
+    assert!(
+        constructs_named_struct(&production, WRITE_AUTHORITY).is_empty(),
+        "{WRITE_AUTHORITY_FILE} builds a `WriteAuthority {{ .. }}` literal outside its constructor"
+    );
+    assert!(
+        derives_or_implements(&source, WRITE_AUTHORITY, &["Clone", "Copy", "Default"]).is_empty(),
+        "WriteAuthority gained Clone, Copy or Default: `Default` is a second constructor, and a \
+         copy is an authority that outlives the write it was made for"
+    );
+
+    // The public half of the seal: the doctests in ops' module docs, each a one-line difference
+    // from a passing scaffold (stable rustdoc checks that a block fails, not why).
+    let docs = ops_docs.unwrap_or_else(|| panic!("{OPS_DIR}/mod.rs is gone"));
+    assert!(
+        docs.contains("//! ```\n//! fn scaffold(git: &cairn_git::ops::GitBinary) {"),
+        "{OPS_DIR}/mod.rs lost the passing scaffold of its compile-fail doctests; without it the \
+         refused blocks could all fail for a reason unrelated to the seal"
+    );
+    for refused in [
+        "let _: Option<cairn_git::ops::WriteAuthority> = None;",
+        "let _ = cairn_git::ops::WriteAuthority::new();",
+        "let _ = git.write_invocation();",
+        "let _ = git.read_invocation();",
+        "let _ = git.environment().command(git.path(), None);",
+    ] {
+        let pinned = docs.split("//! ```compile_fail\n").skip(1).any(|block| {
+            block
+                .split("//! ```\n")
+                .next()
+                .is_some_and(|block| block.contains(refused))
+        });
+        assert!(
+            pinned,
+            "{OPS_DIR}/mod.rs no longer pins `{refused}` in a compile_fail doctest; from outside \
+             cairn-git, no write and no WriteAuthority can be named or built (process-manager G1)"
+        );
+    }
+}
+
+#[test]
+fn the_gitoxide_mutation_matcher_catches_the_shapes_it_claims() {
+    // Every roster entry, in the shape it is matched in, so a matcher that stopped reading one
+    // kind of entry fails here rather than passing every file.
+    for ident in GITOXIDE_MUTATION_IDENTS {
+        let source = format!("let id = repo.{ident}(x)?;");
+        assert!(
+            !names_gitoxide_mutation(&source).is_empty(),
+            "the gitoxide matcher missed `{ident}`: {source:?}"
+        );
+        let imported = format!("use gix::clone::{ident};");
+        assert!(
+            !names_gitoxide_mutation(&imported).is_empty(),
+            "the gitoxide matcher missed `{ident}` imported: {imported:?}"
+        );
+    }
+    for name in GITOXIDE_MUTATION_CALLS {
+        for source in [
+            format!("repo.{name}(a, b)"),
+            format!("Repository::{name}(&repo, a)"),
+            format!("repo\n    .{name}\n    (a)"),
+        ] {
+            assert!(
+                !names_gitoxide_mutation(&source).is_empty(),
+                "the gitoxide matcher missed the call `{name}`: {source:?}"
+            );
+        }
+    }
+    for name in GITOXIDE_MUTATION_METHODS {
+        let source = format!("index.{name}(options)?;");
+        assert!(
+            !names_gitoxide_mutation(&source).is_empty(),
+            "the gitoxide matcher missed the method `{name}`: {source:?}"
+        );
+    }
+    for path in GITOXIDE_MUTATION_PATHS
+        .iter()
+        .chain(GITOXIDE_MUTATION_PATH_ENDS)
+    {
+        for source in [
+            format!("use {};", path.join("::")),
+            format!("let x = {} (a);", path.join(" :: ")),
+        ] {
+            assert!(
+                !names_gitoxide_mutation(&source).is_empty(),
+                "the gitoxide matcher missed the path `{}`: {source:?}",
+                path.join("::")
+            );
+        }
+    }
+    for (shape, source) in [
+        (
+            "an index written back after it was read",
+            "repo.open_index()?.write(Default::default())?;",
+        ),
+        (
+            "a tree editor written",
+            "let id = repo.edit_tree(tree)?.write()?;",
+        ),
+        (
+            "the Write trait called fully qualified",
+            "gix::objs::Write::write_buf(&repo, kind, bytes)",
+        ),
+        (
+            "a ref transaction",
+            "repo.refs.transaction().prepare(edits, a, b)?.commit(None)?;",
+        ),
+        ("a new repository", "let repo = gix::init(path)?;"),
+        (
+            "an imported init, called bare",
+            "use gix::init;\nlet r = init(path)?;",
+        ),
+        ("a clone kept", "gix::prepare_clone(url, path)?.persist()"),
+        (
+            "a lock taken",
+            "let f = gix::lock::File::acquire_to_update_resource(p, m, b)?;",
+        ),
+        (
+            "a checkout",
+            "gix::worktree::state::checkout(&mut index, dir, objects, &p, &s, opts)",
+        ),
+        ("a deleted ref", "reference.delete()?;"),
+        (
+            "a note written",
+            "repo.notes()?.replace(target, note, message)?;",
+        ),
+    ] {
+        assert!(
+            !names_gitoxide_mutation(source).is_empty(),
+            "the gitoxide matcher missed {shape}: {source:?}"
+        );
+    }
+    // Reads, and the namesakes the roster's shapes exist to let through: each is a call
+    // cairn-git makes today or a std spelling it may.
+    for (shape, source) in [
+        (
+            "the commit-time order path",
+            "Sorting::ByCommitTime(gix::traverse::commit::simple::CommitTimeOrder::NewestFirst)",
+        ),
+        ("a commit looked up", "let commit = repo.find_commit(id)?;"),
+        ("a commit kind", "gix::object::Kind::Commit"),
+        ("a local named reference", "let reference = reference?;"),
+        ("a tag namespace", "use gix::tag;"),
+        ("std's file write", "std::fs::write(path, bytes)?;"),
+        (
+            "an archive written to a writer",
+            "gix::worktree::archive::write_stream(t, w, o)",
+        ),
+        ("the init error", "Err(gix::init::Error::Init(e))"),
+        ("the index read", "let index = repo.open_index()?;"),
+        ("Cairn's own lock helper", "lock(&self.process).poll(true)"),
+        (
+            "Cairn's own probe",
+            "fn probe(path: &Path) -> Result<V, E> {",
+        ),
+        (
+            "a password set on a URL in memory",
+            "url.set_password(Some(p));",
+        ),
+        ("a buffer written whole", "stdin.write_all(&bytes)?;"),
+        (
+            "the config snapshot",
+            "let mut config = repo.config_snapshot_mut();",
+        ),
+        ("a definition named like a write", "fn write(&self) {}"),
+        ("prose", "// repo.commit(..) belongs in ops\n"),
+        ("a string", "let s = \"repo.write_blob(x)\";"),
+        ("a longer identifier", "let commits = new_commits_since(x);"),
+    ] {
+        assert_eq!(
+            names_gitoxide_mutation(source),
+            Vec::<String>::new(),
+            "the gitoxide matcher fired on {shape}: {source:?}"
+        );
+    }
+    assert_eq!(
+        names_gitoxide_mutation("let a = 1;\nlet b = 2;\nrepo.write_blob(x)?;\n"),
+        vec!["3: write_blob".to_owned()],
+        "the gitoxide matcher reports the wrong line"
+    );
+}
+
+/// A file outside every module allowed a process or the runner, for the self-tests below.
+const SCRATCH_FILE: &str = "crates/cairn-git/src/history/scratch.rs";
+
+/// Both halves of the verdict on a file, as the two twins reach them.
+fn verdict(path: &str, source: &str) -> Vec<String> {
+    let path = Path::new(path);
+    let mut found = runner_violations(path, source);
+    if !path.starts_with(PROCESS_DIR) {
+        found.extend(process_violations(path, source));
+    }
+    found
+}
+
+#[test]
+fn the_process_matcher_catches_the_shapes_it_claims() {
+    for (shape, source) in [
+        ("a pipe", "cmd.stdout(Stdio::piped());"),
+        ("a child", "fn reap(child: Child) {}"),
+        ("a child's stream", "let err: ChildStderr = taken;"),
+        ("a renamed import", "use std::process::Child as Kid;"),
+        (
+            "the extension trait",
+            "use std::os::unix::process::CommandExt;",
+        ),
+        ("nix", "nix::sys::signal::killpg(group, Signal::SIGTERM)"),
+        ("a nix import", "use nix::unistd::Pid;"),
+        ("spawn", "let child = built.spawn()?;"),
+        ("output", "let out = built.output()?;"),
+        ("status", "let status = built.status()?;"),
+        ("wait", "let status = child.wait()?;"),
+        ("try_wait", "if let Ok(Some(s)) = child.try_wait() {}"),
+        ("wait_with_output", "child.wait_with_output()"),
+        ("a wrapped call", "built\n    .spawn\n    (\n    )"),
+        ("a spaced call", "child . wait ( )"),
+        (
+            "the environment's process",
+            "let built = environment.command(program, profile);",
+        ),
+        (
+            "the environment's process, qualified",
+            "GitEnvironment::command(&environment, program, profile)",
+        ),
+    ] {
+        assert!(
+            !process_violations(Path::new(SCRATCH_FILE), source).is_empty(),
+            "the process matcher missed the {shape} shape: {source:?}"
+        );
+    }
+    for (shape, source) in [
+        (
+            "a thread spawned with a closure",
+            "thread::Builder::new().name(n).spawn(move || work())",
+        ),
+        ("a condvar wait", "let guard = ready.wait(guard)?;"),
+        ("a longer name", "progress.status_line()"),
+        (
+            "a definition",
+            "fn status(&self) -> &Status { &self.status }",
+        ),
+        ("a field", "let s = self.status;"),
+        ("prose", "// child.wait() would block here\n"),
+        ("a string", "let s = \"Stdio::piped() then .spawn()\";"),
+        ("a longer identifier", "let children = ChildrenOf::new();"),
+        (
+            "a test module",
+            "#[cfg(test)]\nmod tests {\n    fn t() { let _ = cmd.spawn(); }\n}\n",
+        ),
+    ] {
+        assert_eq!(
+            process_violations(Path::new(SCRATCH_FILE), source),
+            Vec::<String>::new(),
+            "the process matcher fired on the {shape} shape: {source:?}"
+        );
+    }
+    // An exception covers its own method under its own directory, and nothing else.
+    let excused = "let s = view.progress.read().status().clone();";
+    assert!(process_violations(Path::new("crates/cairn-app/src/window.rs"), excused).is_empty());
+    assert!(
+        !process_violations(Path::new(SCRATCH_FILE), excused).is_empty(),
+        "the cairn-app exception leaked into cairn-git"
+    );
+    assert!(
+        !process_violations(
+            Path::new("crates/cairn-app/src/window.rs"),
+            "let out = built.output()?;"
+        )
+        .is_empty(),
+        "the `status` exception excused another method"
+    );
+}
+
+#[test]
+fn the_runner_matcher_catches_the_shapes_it_claims() {
+    for (shape, path, source) in [
+        (
+            "a read built outside ops/ and reads/",
+            SCRATCH_FILE,
+            "let out = git.read_invocation().arg(\"x\").run()?;",
+        ),
+        (
+            "the builder type",
+            SCRATCH_FILE,
+            "fn f(c: GitCommand<'_, Read>) {}",
+        ),
+        (
+            "a streamed process",
+            SCRATCH_FILE,
+            "fn f(r: Running) -> ProcessKill { r.killer() }",
+        ),
+        (
+            "a write built outside ops/",
+            SCRATCH_FILE,
+            "git.write_invocation(authority)",
+        ),
+        (
+            "a write built in reads/",
+            "crates/cairn-git/src/reads/changes.rs",
+            "git.write_invocation(authority)",
+        ),
+        (
+            "an authority constructed in reads/",
+            "crates/cairn-git/src/reads/changes.rs",
+            "let a = WriteAuthority::new();",
+        ),
+        (
+            "an authority constructed in process/",
+            "crates/cairn-git/src/process/cli.rs",
+            "let a = WriteAuthority::new();",
+        ),
+        (
+            "an authority literal",
+            "crates/cairn-git/src/process/cli.rs",
+            "let a = WriteAuthority { _sealed: () };",
+        ),
+        (
+            "an impl block for the authority",
+            "crates/cairn-git/src/process/cli.rs",
+            "impl Default for WriteAuthority { fn default() -> Self { todo() } }",
+        ),
+        (
+            "the authority's constructor passed as a value",
+            "crates/cairn-git/src/reads/changes.rs",
+            "let make = crate::ops::WriteAuthority :: new;",
+        ),
+        (
+            "a test module outside ops/",
+            SCRATCH_FILE,
+            "#[cfg(test)]\nmod tests {\n    fn t() { let _ = WriteAuthority::new(); }\n}\n",
+        ),
+    ] {
+        assert!(
+            !runner_violations(Path::new(path), source).is_empty(),
+            "the runner matcher missed {shape} in {path}: {source:?}"
+        );
+    }
+    for (shape, path, source) in [
+        (
+            "a read in reads/",
+            "crates/cairn-git/src/reads/changes.rs",
+            "let out = git.read_invocation().arg(\"x\").run()?;",
+        ),
+        (
+            "a write in ops/",
+            "crates/cairn-git/src/ops/fetch.rs",
+            "git.write_invocation(WriteAuthority::new())",
+        ),
+        (
+            "the write builder declared in process/",
+            "crates/cairn-git/src/process/binary.rs",
+            "pub(crate) fn write_invocation(&self, authority: WriteAuthority) {}",
+        ),
+        (
+            "prose",
+            SCRATCH_FILE,
+            "// git.read_invocation() is ops' and reads' alone\n",
+        ),
+        (
+            "a string",
+            SCRATCH_FILE,
+            "let s = \"WriteAuthority::new()\";",
+        ),
+        (
+            "a longer name",
+            SCRATCH_FILE,
+            "let r = RunningTotal::default();",
+        ),
+    ] {
+        assert_eq!(
+            runner_violations(Path::new(path), source),
+            Vec::<String>::new(),
+            "the runner matcher fired on {shape} in {path}: {source:?}"
+        );
+    }
+
+    for (shape, name, source) in [
+        (
+            "a public struct",
+            "GitCommand",
+            "pub struct GitCommand<'a, K> {",
+        ),
+        (
+            "a public function",
+            "read_invocation",
+            "    pub fn read_invocation(&self) {}",
+        ),
+        (
+            "a public const fn",
+            "read_invocation",
+            "pub const fn read_invocation() {}",
+        ),
+        (
+            "a public re-export",
+            "GitCommand",
+            "pub use cli::GitCommand;",
+        ),
+        (
+            "a grouped public re-export",
+            "Running",
+            "pub use crate::process::{GitBinary, Running};",
+        ),
+        (
+            "a nested, wrapped re-export",
+            "GitCommand",
+            "pub use crate::process::{\n    cli::{GitCommand, Read},\n    Running,\n};",
+        ),
+        ("a public module", "process", "pub mod process;"),
+    ] {
+        assert!(
+            !declares_publicly(source, name).is_empty(),
+            "the visibility matcher missed {shape}: {source:?}"
+        );
+    }
+    for (shape, name, source) in [
+        (
+            "a crate-private struct",
+            "GitCommand",
+            "pub(crate) struct GitCommand<'a, K> {",
+        ),
+        (
+            "a module-private function",
+            "read_invocation",
+            "pub(super) fn read_invocation(&self) {}",
+        ),
+        (
+            "a restricted function",
+            "read_invocation",
+            "pub(in crate::ops) fn read_invocation() {}",
+        ),
+        (
+            "a crate-private re-export",
+            "GitCommand",
+            "pub(crate) use cli::GitCommand;",
+        ),
+        (
+            "another name re-exported publicly",
+            "Running",
+            "pub use crate::process::{Askpass, GitBinary};",
+        ),
+        ("a private module", "process", "mod process;"),
+        ("prose", "GitCommand", "// pub use cli::GitCommand;\n"),
+        (
+            "a use inside a function",
+            "GitCommand",
+            "fn f() { use cli::GitCommand; }",
+        ),
+    ] {
+        assert_eq!(
+            declares_publicly(source, name),
+            Vec::<usize>::new(),
+            "the visibility matcher fired on {shape}: {source:?}"
+        );
+    }
+}
+
+/// The four routes to a process that no guard saw before the process-manager packet
+/// (`docs/research/process-manager/runner-and-worker-as-built.md`, section 3), as they would
+/// be written today in a module outside `ops/`, `reads/` and `process/`, and a `reads/` file
+/// that constructs a `WriteAuthority`: each must fail a twin.
+#[test]
+fn the_unguarded_routes_to_a_process_now_fail_a_twin() {
+    for (route, path, source) in [
+        (
+            "the binary's builder, run to completion",
+            SCRATCH_FILE,
+            "let out = git.read_invocation().args([\"diff-tree\", \"-z\"]).run()?;",
+        ),
+        (
+            "the old binary builder, by its old name",
+            SCRATCH_FILE,
+            "let out = git.command().args([\"diff-tree\", \"-z\"]).run()?;",
+        ),
+        (
+            "a streamed run with its kill",
+            SCRATCH_FILE,
+            "let running = git.read_invocation().arg(\"x\").stream()?;\n\
+             running.killer().kill();",
+        ),
+        (
+            "the builder's constructor",
+            SCRATCH_FILE,
+            "let out = GitCommand::new(git.path(), git.environment(), Read).run()?;",
+        ),
+        (
+            "the environment's process, driven by hand",
+            SCRATCH_FILE,
+            "let out = git.environment().command(git.path(), Profile::Read).output()?;",
+        ),
+        (
+            "a reads/ file that constructs a WriteAuthority",
+            "crates/cairn-git/src/reads/changes.rs",
+            "let write = git.write_invocation(crate::ops::WriteAuthority::new());",
+        ),
+    ] {
+        assert!(
+            !verdict(path, source).is_empty(),
+            "the route `{route}` passes every twin: {source:?}"
+        );
+    }
+}
+
+/// Where a `git` process is built: the environment module inside `process/`, the only place a
 /// `std::process::Command` comes into being, and the only production file that may name it.
-const PROCESS_ENVIRONMENT_FILE: &str = "crates/cairn-git/src/ops/environment.rs";
+const PROCESS_ENVIRONMENT_FILE: &str = "crates/cairn-git/src/process/environment.rs";
 const PROCESS_ENVIRONMENT_TYPE: &str = "GitEnvironment";
 
 /// Ways to start a process that are not a `Command` and are safe Rust: `nix`'s `process`
@@ -819,6 +1701,36 @@ fn every_git_invocation_disables_the_terminal_prompt() {
         "{PROCESS_ENVIRONMENT_FILE}'s ALWAYS table no longer carries (\"SSH_ASKPASS_REQUIRE\", \
          \"force\"); without it ssh asks for a key passphrase on a terminal nobody is watching \
          (PRD R3.3)."
+    );
+    for editor in ["GIT_EDITOR", "GIT_SEQUENCE_EDITOR"] {
+        assert!(
+            always.contains(&format!("(\"{editor}\", \"false\")")),
+            "{PROCESS_ENVIRONMENT_FILE}'s ALWAYS table no longer carries (\"{editor}\", \
+             \"false\"); without it a verb that wants an editor launches the user's configured \
+             one — on a pipe, or as a window nobody asked for — and waits on it (process-manager \
+             PRD R2.2). Both are needed: `sequence.editor` outranks GIT_EDITOR."
+        );
+    }
+    // A read's additions, the same way: the table itself, then that it is applied.
+    let read_only = with_strings
+        .find("const READ_ONLY")
+        .map(|at| &with_strings[at..])
+        .and_then(|rest| rest.find("];").map(|end| &rest[..end]))
+        .unwrap_or_else(|| {
+            panic!(
+                "{PROCESS_ENVIRONMENT_FILE} no longer declares a `const READ_ONLY` table; a read \
+                 would refresh the index behind the user's back"
+            )
+        });
+    assert!(
+        read_only.contains("(\"GIT_OPTIONAL_LOCKS\", \"0\")"),
+        "{PROCESS_ENVIRONMENT_FILE}'s READ_ONLY table no longer carries (\"GIT_OPTIONAL_LOCKS\", \
+         \"0\"); without it a `git status` read rewrites the index and holds index.lock while \
+         the user's own commit needs it (process-manager PRD R2.3)."
+    );
+    assert!(
+        mentions_crate(&production, "READ_ONLY").len() >= 2,
+        "READ_ONLY is declared in {PROCESS_ENVIRONMENT_FILE} but never applied; a read must get it."
     );
     // The helper is named in the constructor, from the `Askpass` it is given, not from a table.
     let constructor = code_without_test_modules(&with_strings);

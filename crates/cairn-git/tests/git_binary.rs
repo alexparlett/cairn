@@ -4,7 +4,7 @@
 //! script in a fresh directory and hands that directory to the backend as the
 //! whole `PATH`, so "absent" is an empty directory and "too old" is a script.
 //! The runner itself is `pub(crate)`, so what a found `git` is then handed is
-//! tested inside the crate (`ops/cli.rs`), with a copy of this stub helper.
+//! tested inside the crate (`process/cli.rs`), with a copy of this stub helper.
 #![cfg(unix)]
 
 use std::ffi::OsString;

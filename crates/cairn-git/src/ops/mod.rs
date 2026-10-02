@@ -15,33 +15,101 @@
 //! Every write goes through the `git` binary rather than gitoxide (design
 //! decision D1): a mutation must run the user's hooks, filters and credential
 //! helpers and honour their configuration, and gix runs none of them. The
-//! pieces, each its own module:
+//! process itself is built in the crate-private `process` module and nowhere
+//! else; what it holds, re-exported here because the application owns startup
+//! and the helper's channel:
 //!
 //! - [`GitBinary`] finds `git` on `PATH` once at startup and refuses one older
 //!   than [`GitVersion::MINIMUM`], loudly, with the required version in the
 //!   message. Nothing degrades silently.
 //! - [`GitEnvironment`] is the environment every invocation runs with. It is
 //!   built from a spelled-out roster, never inherited wholesale, and it always
-//!   sets `GIT_TERMINAL_PROMPT=0` and `SSH_ASKPASS_REQUIRE=force` and points
-//!   `GIT_ASKPASS` and `SSH_ASKPASS` at Cairn's helper ([`Askpass`]). It is
-//!   also the only place a `std::process::Command` is built, so no process
-//!   exists without it; an invocation that may prompt is given its askpass
-//!   token there too, per invocation, because that is what the token is.
-//! - `GitCommand` (crate-private, like `Output`) adds the arguments and runs
-//!   the process with standard input closed — to completion, or streaming its
-//!   stderr and killable from another thread, which is what a long fetch
-//!   needs. A cancel is `SIGTERM`, then `SIGKILL` after a bounded grace
-//!   period, so git gets to remove the lock files it holds; what it strands
-//!   anyway is found by `stranded_locks` and carried on the cancellation
-//!   error, so the user hears about a stale `*.lock` from the cancel that
-//!   made it rather than from the next operation that trips over it.
-//!   Nothing outside `ops` can run a raw verb: the public surface is named
-//!   operations ([`fetch`] today), so the confirmation seal cannot be routed
-//!   around through the runner.
+//!   sets `GIT_TERMINAL_PROMPT=0`, `SSH_ASKPASS_REQUIRE=force`,
+//!   `GIT_EDITOR=false` and `GIT_SEQUENCE_EDITOR=false`, and points
+//!   `GIT_ASKPASS` and `SSH_ASKPASS` at Cairn's helper ([`Askpass`]). A read
+//!   adds `GIT_OPTIONAL_LOCKS=0` and never carries an askpass token; a write
+//!   that may prompt carries the operation's token, per invocation, because
+//!   that is what the token is.
+//! - The runner (crate-private) adds the arguments and runs the process with
+//!   standard input closed — to completion, or streaming its stderr and
+//!   killable from another thread, which is what a long fetch needs. A cancel
+//!   is `SIGTERM`, then `SIGKILL` after a bounded grace period, so git gets to
+//!   remove the lock files it holds; what it strands anyway is found by
+//!   `stranded_locks` and carried on the cancellation error, so the user hears
+//!   about a stale `*.lock` from the cancel that made it rather than from the
+//!   next operation that trips over it. Nothing outside `cairn-git` can run a
+//!   raw verb: the public surface is named operations ([`fetch`] today), so
+//!   the confirmation seal cannot be routed around through the runner.
 //! - `refspec_policy` (crate-private) reads a remote's configuration afresh
 //!   before a fetch and refuses one whose refspecs would write local branches
 //!   or, under pruning, delete local tags; the refusal is
 //!   [`Error::FetchRefused`], and no process starts.
+//!
+//! # The write seal
+//!
+//! Inside the crate, an invocation is built as a read or a write, and a write
+//! needs a `WriteAuthority`: a value with a private field whose one
+//! constructor is visible to this module and its children alone. So `reads/`,
+//! `history/` or any other module cannot build a write — the compiler refuses
+//! the constructor, and the guard
+//! `the_runner_is_named_only_by_ops_and_reads` refuses its name, the write
+//! builder's and the runner's outside the modules allowed them. Every
+//! operation here builds its invocation as a write, whether or not it is
+//! destructive; [`cairn_model::Confirmed`] is the seal on top of this one for
+//! the operations that are.
+//!
+//! From outside the crate there is nothing to name at all. The scaffolding the
+//! refused snippets below share compiles; each adds one line, and that line is
+//! what does not (stable `rustdoc` checks that a `compile_fail` block fails,
+//! not why, so the one-line difference is what keeps each of them honest):
+//!
+//! ```
+//! fn scaffold(git: &cairn_git::ops::GitBinary) {
+//!     let _ = git.path();
+//! }
+//! ```
+//!
+//! A `WriteAuthority` cannot be named, so it cannot be constructed or passed:
+//!
+//! ```compile_fail
+//! fn scaffold(git: &cairn_git::ops::GitBinary) {
+//!     let _ = git.path();
+//!     let _: Option<cairn_git::ops::WriteAuthority> = None;
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! fn scaffold(git: &cairn_git::ops::GitBinary) {
+//!     let _ = git.path();
+//!     let _ = cairn_git::ops::WriteAuthority::new();
+//! }
+//! ```
+//!
+//! A write cannot be built, with an authority or without one, and nor can a
+//! read — the crate's public surface is named operations:
+//!
+//! ```compile_fail
+//! fn scaffold(git: &cairn_git::ops::GitBinary) {
+//!     let _ = git.path();
+//!     let _ = git.write_invocation();
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! fn scaffold(git: &cairn_git::ops::GitBinary) {
+//!     let _ = git.path();
+//!     let _ = git.read_invocation();
+//! }
+//! ```
+//!
+//! And the environment cannot be turned into a process from outside either:
+//!
+//! ```compile_fail
+//! fn scaffold(git: &cairn_git::ops::GitBinary) {
+//!     let _ = git.path();
+//!     let _ = git.environment().command(git.path(), None);
+//! }
+//! ```
 //!
 //! # Output policy
 //!
@@ -113,23 +181,17 @@
 //! repository thread answers by dropping its open walk — so the graph stops
 //! showing the pre-fetch refs.
 
-mod askpass;
-mod binary;
-mod cli;
-mod environment;
+mod authority;
 mod fetch;
 mod refspec_policy;
 mod stranded_locks;
-#[cfg(all(test, unix))]
-mod stub_git;
 
 use cairn_model::Confirmed;
 
-pub use askpass::Askpass;
-pub use binary::{GitBinary, GitVersion};
-pub(crate) use cli::GitCommand;
-pub use environment::GitEnvironment;
+pub(crate) use authority::WriteAuthority;
 pub use fetch::{FetchCancel, FetchInProgress, fetch};
+
+pub use crate::process::{Askpass, GitBinary, GitEnvironment, GitVersion};
 
 use crate::Repository;
 

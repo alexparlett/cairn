@@ -50,8 +50,8 @@ use std::path::PathBuf;
 
 use cairn_model::AskpassToken;
 
-use super::{GitBinary, Invalidated, Performed, refspec_policy, stranded_locks};
-use crate::ops::cli::{ProcessKill, Running};
+use super::{GitBinary, Invalidated, Performed, WriteAuthority, refspec_policy, stranded_locks};
+use crate::process::{ProcessKill, Running};
 use crate::{Error, Repository};
 
 /// Starts `git fetch --progress --no-prune-tags <remote>` in `repo`, with
@@ -72,8 +72,10 @@ pub fn fetch(
     token: Option<&AskpassToken>,
 ) -> Result<FetchInProgress, Error> {
     refspec_policy::check(repo.git_dir(), remote)?;
+    // A write: it moves remote-tracking refs and adds objects, and it is the
+    // one invocation that may ask the user for a credential.
     let mut command = git
-        .command()
+        .write_invocation(WriteAuthority::new())
         .in_repository(repo)
         .args(ARGUMENTS)
         .arg(remote);
@@ -156,8 +158,8 @@ impl FetchCancel {
 /// pruning tests in `tests/fetch.rs`.
 #[cfg(all(test, unix))]
 mod tests {
-    use super::super::stub_git::{StubGit, discover_retrying};
     use super::*;
+    use crate::process::stub_git::{StubGit, discover_retrying, printed_environment};
 
     /// Nothing for prune — git reads `fetch.prune` itself — and `--no-prune-tags`
     /// always, before `--end-of-options` and the remote.
@@ -183,6 +185,58 @@ mod tests {
                 "--end-of-options",
                 "-origin",
             ]
+        );
+    }
+
+    /// Fetch runs with the write environment the tests in `ops/authority.rs`
+    /// spell out — no `GIT_OPTIONAL_LOCKS`, the editor pinned — and with the
+    /// token it was given, or none: the stub prints what it was given, on
+    /// stderr, which is what a fetch hands on as progress.
+    #[test]
+    fn a_fetch_runs_with_the_write_environment_and_its_token() {
+        let stub = StubGit::with_git(
+            "if [ \"$1\" = --version ]; then echo 'git version 2.30.0'; exit 0; fi\n\
+             /usr/bin/env >&2",
+        );
+        let environment = stub.environment();
+        let path = environment
+            .get("PATH")
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap();
+        let git = discover_retrying(environment).unwrap();
+        let repo = Repository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let printed = |token: Option<&AskpassToken>| {
+            let mut seen = String::new();
+            fetch(&git, &repo, "origin", token)
+                .unwrap()
+                .finish(|line| {
+                    seen.push_str(line);
+                    seen.push('\n');
+                })
+                .unwrap();
+            printed_environment(&seen)
+        };
+        let base = [
+            ("GIT_ASKPASS", StubGit::HELPER),
+            ("GIT_EDITOR", "false"),
+            ("GIT_SEQUENCE_EDITOR", "false"),
+            ("GIT_TERMINAL_PROMPT", "0"),
+            ("PATH", path.as_str()),
+            ("SSH_ASKPASS", StubGit::HELPER),
+            ("SSH_ASKPASS_REQUIRE", "force"),
+        ];
+        let spelled = |extra: &[(&str, &str)]| {
+            base.iter()
+                .chain(extra)
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+
+        assert_eq!(printed(None), spelled(&[]));
+        let token = AskpassToken::new("fetch-token");
+        assert_eq!(
+            printed(Some(&token)),
+            spelled(&[("CAIRN_ASKPASS_TOKEN", "fetch-token")])
         );
     }
 }

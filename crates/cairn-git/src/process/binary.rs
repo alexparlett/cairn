@@ -6,8 +6,10 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use super::{Askpass, GitCommand, GitEnvironment};
+use super::cli::{GitCommand, Read, Write};
+use super::{Askpass, GitEnvironment};
 use crate::Error;
+use crate::ops::WriteAuthority;
 
 /// The program name searched for on `PATH`.
 const PROGRAM: &str = "git";
@@ -103,10 +105,27 @@ impl GitBinary {
         &self.environment
     }
 
-    /// An invocation of this `git`, ready for its arguments. Crate-private: the
-    /// public surface is named operations, never a raw verb.
-    pub(crate) fn command(&self) -> GitCommand<'_> {
-        GitCommand::new(&self.path, &self.environment)
+    /// A read of this `git`, ready for its arguments: optional locks off and
+    /// no askpass token, ever (`environment.rs`). For `crate::reads`, whose
+    /// functions each run plumbing or `status`, and for `crate::ops`. Never
+    /// public: the public surface is named operations, not a raw verb.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "reads/ is empty until diff-engine adds its first read, and the probe \
+                      builds its read before there is a GitBinary"
+        )
+    )]
+    pub(crate) fn read_invocation(&self) -> GitCommand<'_, Read> {
+        GitCommand::new(&self.path, &self.environment, Read)
+    }
+
+    /// A write of this `git`, ready for its arguments. Only `crate::ops` can
+    /// call it, because only `ops` can construct the [`WriteAuthority`] it
+    /// consumes; the write carries it, so a `Write` cannot exist without one.
+    pub(crate) fn write_invocation(&self, authority: WriteAuthority) -> GitCommand<'_, Write> {
+        GitCommand::new(&self.path, &self.environment, Write::new(authority))
     }
 }
 
@@ -143,8 +162,12 @@ fn is_executable(path: &Path) -> bool {
     path.is_file()
 }
 
+/// `git --version`, as a read: the one invocation outside `ops/` and `reads/`,
+/// because it runs before there is a [`GitBinary`] to build one from.
 fn probe(path: &Path, environment: &GitEnvironment) -> Result<GitVersion, Error> {
-    let output = GitCommand::new(path, environment).arg("--version").run()?;
+    let output = GitCommand::new(path, environment, Read)
+        .arg("--version")
+        .run()?;
     let text = output.stdout_text();
     GitVersion::parse(&text).ok_or_else(|| Error::GitVersionUnreadable {
         path: path.to_owned(),

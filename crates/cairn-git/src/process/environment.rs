@@ -9,15 +9,19 @@
 //! This module is also the only place a [`Command`] is built, which is what
 //! makes the rule structural: a process cannot exist without passing through
 //! [`GitEnvironment::command`], and that clears the inherited environment
-//! before applying this one.
+//! before applying this one. The method is visible to `process/` alone; the
+//! runner is its one caller.
 //!
-//! Three kinds of entry: the [`ALWAYS`] table, fixed for every invocation;
-//! the [`INHERITED`] roster, copied from the parent when present; and the
-//! askpass entries, which point git and ssh at Cairn's helper ([`Askpass`])
-//! and, per invocation, carry the token for the operation being run — the one
-//! variable that differs between two invocations, applied by
-//! [`GitEnvironment::command`] because it is an invocation's property, not the
-//! environment's.
+//! Three kinds of entry make the base: the [`ALWAYS`] table, fixed for every
+//! invocation; the [`INHERITED`] roster, copied from the parent when present;
+//! and the askpass entries, which point git and ssh at Cairn's helper
+//! ([`Askpass`]). On top of the base, the invocation's [`Profile`] decides
+//! the rest: a read adds the [`READ_ONLY`] table and can carry no askpass
+//! token, because its variant has nowhere to put one; a write carries the
+//! token for the operation being run when it may prompt — the one variable
+//! that differs between two invocations of the same kind, applied by
+//! [`GitEnvironment::command`] because it is an invocation's property, not
+//! the environment's.
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
@@ -27,6 +31,18 @@ use std::process::Command;
 use cairn_model::{AskpassToken, SOCKET_VARIABLE, TOKEN_VARIABLE};
 
 use super::Askpass;
+
+/// Which environment an invocation runs with on top of the base; the kind of
+/// invocation decides it (`cli.rs`), never the caller.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Profile<'a> {
+    /// A read: [`READ_ONLY`] applied, and no askpass token — there is no field
+    /// to carry one, so a read's helper always fails closed.
+    Read,
+    /// A write: the base, and the operation's askpass token when it may prompt.
+    /// Without one the helper is still what git runs, and it fails closed.
+    Write { token: Option<&'a AskpassToken> },
+}
 
 /// Set on every invocation, whatever the parent process has.
 const ALWAYS: &[(&str, &str)] = &[
@@ -39,6 +55,35 @@ const ALWAYS: &[(&str, &str)] = &[
     // launched in a terminal, so a key passphrase never lands on a tty the
     // user is not looking at (evidence record; the OpenSSH floor is O5).
     ("SSH_ASKPASS_REQUIRE", "force"),
+    // A GUI has no terminal, and git still launches a configured `core.editor`
+    // with `TERM` unset — a `vim` on a pipe, or a `code --wait` window nobody
+    // asked for — so a verb that wants an editor must fail rather than wait on
+    // one. `false` and not `:`, because `:` silently accepts whatever message
+    // git proposed: a merge message the user never read. GIT_EDITOR is the
+    // first thing git's `editor.c` consults, ahead of `core.editor`, `VISUAL`
+    // and `EDITOR` (evidence:
+    // `docs/research/process-manager/platform-and-git-behaviour.md` C9).
+    ("GIT_EDITOR", "false"),
+    // Both, because the rebase todo list's editor is `GIT_SEQUENCE_EDITOR`,
+    // then `sequence.editor`, and only then GIT_EDITOR, so a user's
+    // `sequence.editor` would beat the line above. The verb whose purpose is
+    // the editor needs a helper of Cairn's own here instead: a change to this
+    // construction and its guard, argued when that verb is designed, never a
+    // per-call override.
+    ("GIT_SEQUENCE_EDITOR", "false"),
+];
+
+/// Added to a read's environment, on top of the base.
+const READ_ONLY: &[(&str, &str)] = &[
+    // `git status` refreshes the index's stat information and writes it back
+    // when it can take the lock; with this it never takes the lock, so looking
+    // at a repository never rewrites its index behind the user's back — nor
+    // holds `index.lock` while the user's own `git commit` needs it. Only
+    // `status` honours it: porcelain `diff` and `describe --dirty` refresh the
+    // index anyway, which is why a read runs plumbing or `status` and nothing
+    // else (`crate::reads`; evidence:
+    // `docs/research/process-manager/platform-and-git-behaviour.md` C3).
+    ("GIT_OPTIONAL_LOCKS", "0"),
 ];
 
 /// Copied from the parent process when present, and nothing else is. Each is
@@ -55,8 +100,8 @@ const ALWAYS: &[(&str, &str)] = &[
 /// exceptions, `GIT_SSL_CAINFO` and `GIT_SSL_CAPATH`, name a CA bundle and
 /// nothing else (issue #18). Display (`DISPLAY`, `WAYLAND_DISPLAY`) and
 /// signing (`GNUPGHOME`) variables remain open questions for the user on
-/// that issue, not omissions; so does pinning `GIT_EDITOR` in [`ALWAYS`],
-/// which is due with the first verb that can open an editor.
+/// that issue, not omissions. `GIT_EDITOR` and `EDITOR` are not inherited
+/// either: [`ALWAYS`] pins the editor to `false`.
 const INHERITED: &[&str] = &[
     // Credential helpers, `ssh`, LFS filters and hooks are found on it.
     "PATH",
@@ -159,8 +204,8 @@ impl GitEnvironment {
         Self { entries }
     }
 
-    /// The variables `git` will see, by name; the per-invocation token is not
-    /// among them, since it belongs to an invocation.
+    /// The base every invocation sees, by name. A read's [`READ_ONLY`] entries
+    /// and a write's token are not among them: they belong to an invocation.
     pub fn variables(&self) -> impl Iterator<Item = (&str, &OsStr)> {
         self.entries
             .iter()
@@ -172,15 +217,21 @@ impl GitEnvironment {
     }
 
     /// The only way a process is built: `program`, this environment, nothing
-    /// inherited, plus the operation's askpass token when the invocation is one
-    /// that may ask. Without a token the helper is still what git runs, and it
-    /// fails closed.
-    pub(crate) fn command(&self, program: &Path, token: Option<&AskpassToken>) -> Command {
+    /// inherited, plus what `profile` adds — [`READ_ONLY`] for a read, the
+    /// operation's askpass token for a write that may ask. Visible to
+    /// `process/` alone: the runner is the one caller.
+    pub(super) fn command(&self, program: &Path, profile: Profile<'_>) -> Command {
         let mut command = Command::new(program);
         command.env_clear();
         command.envs(&self.entries);
-        if let Some(token) = token {
-            command.env(TOKEN_VARIABLE, token.as_str());
+        match profile {
+            Profile::Read => {
+                command.envs(READ_ONLY.iter().copied());
+            }
+            Profile::Write { token: Some(token) } => {
+                command.env(TOKEN_VARIABLE, token.as_str());
+            }
+            Profile::Write { token: None } => {}
         }
         command
     }
@@ -219,6 +270,8 @@ mod tests {
                 "CAIRN_ASKPASS_SOCKET",
                 "DBUS_SESSION_BUS_ADDRESS",
                 "GIT_ASKPASS",
+                "GIT_EDITOR",
+                "GIT_SEQUENCE_EDITOR",
                 "GIT_SSL_CAINFO",
                 "GIT_SSL_CAPATH",
                 "GIT_TERMINAL_PROMPT",
@@ -257,6 +310,16 @@ mod tests {
             environment.get("SSH_ASKPASS_REQUIRE"),
             Some(OsStr::new("force"))
         );
+        assert_eq!(environment.get("GIT_EDITOR"), Some(OsStr::new("false")));
+        assert_eq!(
+            environment.get("GIT_SEQUENCE_EDITOR"),
+            Some(OsStr::new("false"))
+        );
+        assert_eq!(
+            environment.get("GIT_OPTIONAL_LOCKS"),
+            None,
+            "the read-only variable is a read's, not every invocation's"
+        );
         assert_eq!(
             environment.get("GIT_ASKPASS"),
             Some(OsStr::new("/opt/cairn/cairn-askpass"))
@@ -287,6 +350,8 @@ mod tests {
             names(&environment),
             [
                 "GIT_ASKPASS",
+                "GIT_EDITOR",
+                "GIT_SEQUENCE_EDITOR",
                 "GIT_TERMINAL_PROMPT",
                 "SSH_ASKPASS",
                 "SSH_ASKPASS_REQUIRE",
@@ -394,25 +459,29 @@ mod tests {
         );
     }
 
-    /// A parent that turned the prompt on, or pointed ssh elsewhere, does not get a say.
+    /// A parent that turned the prompt on, pointed ssh elsewhere or named an
+    /// editor does not get a say. The editor variables are never even asked
+    /// about (the roster test above); the parent offers them here anyway, so a
+    /// constructor that started reading them would be caught by its values.
     #[test]
     fn the_always_table_wins_whatever_the_parent_says() {
         let environment = GitEnvironment::new(
             |name| match name {
                 "GIT_TERMINAL_PROMPT" => Some(OsString::from("1")),
                 "SSH_ASKPASS_REQUIRE" => Some(OsString::from("never")),
+                "GIT_EDITOR" | "GIT_SEQUENCE_EDITOR" => Some(OsString::from("vim")),
                 _ => None,
             },
             &askpass(),
         );
-        assert_eq!(
-            environment.get("GIT_TERMINAL_PROMPT"),
-            Some(OsStr::new("0"))
-        );
-        assert_eq!(
-            environment.get("SSH_ASKPASS_REQUIRE"),
-            Some(OsStr::new("force"))
-        );
+        for (name, value) in [
+            ("GIT_TERMINAL_PROMPT", "0"),
+            ("SSH_ASKPASS_REQUIRE", "force"),
+            ("GIT_EDITOR", "false"),
+            ("GIT_SEQUENCE_EDITOR", "false"),
+        ] {
+            assert_eq!(environment.get(name), Some(OsStr::new(value)), "{name}");
+        }
     }
 
     #[test]
@@ -423,6 +492,8 @@ mod tests {
             [
                 "CAIRN_ASKPASS_SOCKET",
                 "GIT_ASKPASS",
+                "GIT_EDITOR",
+                "GIT_SEQUENCE_EDITOR",
                 "GIT_TERMINAL_PROMPT",
                 "SSH_ASKPASS",
                 "SSH_ASKPASS_REQUIRE",
@@ -431,33 +502,98 @@ mod tests {
         assert_eq!(environment.get("HOME"), None);
     }
 
-    /// The token is applied by `command`, and only when given. Read back from the
-    /// `Command` itself; what the child then sees is `cli.rs`'s stub test.
-    #[test]
-    fn the_token_is_set_on_the_invocation_and_only_when_given() {
-        let environment = GitEnvironment::new(|_| None, &askpass());
-        let token = AskpassToken::new("deadbeef");
-        let with = environment.command(Path::new("git"), Some(&token));
-        let set: BTreeMap<_, _> = with
+    /// What `command` sets, read back from the `Command` itself: after
+    /// `env_clear`, every variable the child will see is one of these. What
+    /// the child then actually sees is `cli.rs`'s and `ops/authority.rs`'s stub
+    /// tests.
+    fn applied(command: &Command) -> BTreeMap<String, String> {
+        command
             .get_envs()
-            .map(|(k, v)| (k.to_owned(), v.map(OsStr::to_owned)))
-            .collect();
-        assert_eq!(
-            set.get(OsStr::new("CAIRN_ASKPASS_TOKEN")),
-            Some(&Some(OsString::from("deadbeef")))
-        );
-        assert_eq!(
-            set.get(OsStr::new("GIT_ASKPASS")),
-            Some(&Some(OsString::from("/opt/cairn/cairn-askpass")))
-        );
-        assert!(with.get_program() == "git");
+            .map(|(name, value)| {
+                (
+                    name.to_string_lossy().into_owned(),
+                    value.map_or_else(
+                        || "<removed>".to_owned(),
+                        |v| v.to_string_lossy().into_owned(),
+                    ),
+                )
+            })
+            .collect()
+    }
 
-        let without = environment.command(Path::new("git"), None);
-        assert!(
-            without
-                .get_envs()
-                .all(|(name, _)| name != OsStr::new("CAIRN_ASKPASS_TOKEN")),
-            "a token was set for an invocation that has none"
+    /// The parent of the two profile tests below: two inherited variables, so
+    /// the base carries the roster's kind of entry as well as the fixed ones.
+    fn profiled() -> GitEnvironment {
+        GitEnvironment::new(
+            |name| match name {
+                "HOME" => Some(OsString::from("/home/someone")),
+                "LANG" => Some(OsString::from("en_GB.UTF-8")),
+                _ => None,
+            },
+            &askpass(),
+        )
+    }
+
+    fn spelled(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
+        entries
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect()
+    }
+
+    /// PRD G3, a read: the base, the editor pinned to `false`, optional locks
+    /// off, and no token — spelled out variable by variable, so adding one to
+    /// either profile is an edit here.
+    #[test]
+    fn a_read_is_the_base_with_optional_locks_off_and_no_token() {
+        let read = profiled().command(Path::new("git"), Profile::Read);
+        assert_eq!(
+            applied(&read),
+            spelled(&[
+                ("CAIRN_ASKPASS_SOCKET", "/run/user/1000/cairn-1-abc/askpass"),
+                ("GIT_ASKPASS", "/opt/cairn/cairn-askpass"),
+                ("GIT_EDITOR", "false"),
+                ("GIT_OPTIONAL_LOCKS", "0"),
+                ("GIT_SEQUENCE_EDITOR", "false"),
+                ("GIT_TERMINAL_PROMPT", "0"),
+                ("HOME", "/home/someone"),
+                ("LANG", "en_GB.UTF-8"),
+                ("SSH_ASKPASS", "/opt/cairn/cairn-askpass"),
+                ("SSH_ASKPASS_REQUIRE", "force"),
+            ])
         );
+        assert!(read.get_program() == "git");
+    }
+
+    /// PRD G3, a write: the same base with the editor pinned, no read-only
+    /// variable, and the token exactly when the operation was given one.
+    #[test]
+    fn a_write_is_the_base_with_its_token_only_when_given() {
+        let base = [
+            ("CAIRN_ASKPASS_SOCKET", "/run/user/1000/cairn-1-abc/askpass"),
+            ("GIT_ASKPASS", "/opt/cairn/cairn-askpass"),
+            ("GIT_EDITOR", "false"),
+            ("GIT_SEQUENCE_EDITOR", "false"),
+            ("GIT_TERMINAL_PROMPT", "0"),
+            ("HOME", "/home/someone"),
+            ("LANG", "en_GB.UTF-8"),
+            ("SSH_ASKPASS", "/opt/cairn/cairn-askpass"),
+            ("SSH_ASKPASS_REQUIRE", "force"),
+        ];
+        let environment = profiled();
+
+        let without = environment.command(Path::new("git"), Profile::Write { token: None });
+        assert_eq!(applied(&without), spelled(&base));
+
+        let token = AskpassToken::new("deadbeef");
+        let with = environment.command(
+            Path::new("git"),
+            Profile::Write {
+                token: Some(&token),
+            },
+        );
+        let mut expected = spelled(&base);
+        expected.insert("CAIRN_ASKPASS_TOKEN".to_owned(), "deadbeef".to_owned());
+        assert_eq!(applied(&with), expected);
     }
 }

@@ -123,19 +123,23 @@ never enters `cairn-git` and never enters application state.
   URL, key path or host. Presentation only; no outcome depends on it
   (`the_spellings_git_and_ssh_use_are_told_apart`,
   `the_subject_is_the_first_quoted_span`).
-- **The environment** (`crates/cairn-git/src/ops/environment.rs`, and
-  `ops/askpass.rs`). `GitEnvironment::new(parent, &Askpass)` sets, on every
-  invocation, `GIT_TERMINAL_PROMPT=0` and `SSH_ASKPASS_REQUIRE=force` (the
-  `ALWAYS` table), `GIT_ASKPASS` and `SSH_ASKPASS` to the helper, and
-  `CAIRN_ASKPASS_SOCKET` when the `Askpass` names a socket; there is no
-  environment without an `Askpass`. `GitEnvironment::command` applies
-  `CAIRN_ASKPASS_TOKEN` per invocation, from `GitCommand::authorized_by`,
-  because the token is the invocation's. Pinned by
-  `the_environment_is_exactly_the_deliberate_entries` (the whole set, spelled
-  out), `the_token_is_set_on_the_invocation_and_only_when_given`, and the stub
-  `git` in `ops/cli.rs` that prints what it was given
-  (`the_child_sees_the_built_environment_and_nothing_inherited`,
-  `an_authorised_invocation_carries_its_token_and_only_that_one`).
+- **The environment** (`crates/cairn-git/src/process/environment.rs`, and
+  `process/askpass.rs`; the environment's home, its read and write profiles
+  and the seal that chooses between them are `docs/systems/git-processes.md`).
+  `GitEnvironment::new(parent, &Askpass)` sets, on every invocation,
+  `GIT_TERMINAL_PROMPT=0` and `SSH_ASKPASS_REQUIRE=force` (the `ALWAYS` table,
+  which also pins the editor), `GIT_ASKPASS` and `SSH_ASKPASS` to the helper,
+  and `CAIRN_ASKPASS_SOCKET` when the `Askpass` names a socket; there is no
+  environment without an `Askpass`. `CAIRN_ASKPASS_TOKEN` is applied per
+  invocation, from `GitCommand::authorized_by`, because the token is the
+  invocation's — and only on a write: a read has nowhere to hold one. Pinned
+  by `the_environment_is_exactly_the_deliberate_entries` (the whole set,
+  spelled out), `a_write_is_the_base_with_its_token_only_when_given`, and the
+  stub `git` that prints what it was given
+  (`a_read_sees_exactly_the_read_environment_and_nothing_inherited` in
+  `process/cli.rs`, `an_authorised_write_carries_its_token_and_only_that_one`
+  in `ops/authority.rs`, `a_fetch_runs_with_the_write_environment_and_its_token`
+  in `ops/fetch.rs`).
   `SSH_ASKPASS_REQUIRE=force` needs OpenSSH 8.4 (2020-09); on an older one the
   variable is ignored and a passphrase goes to the terminal Cairn was launched
   from, or fails closed without one (O5 addendum). By decision D2 (amended
@@ -156,7 +160,7 @@ never enters `cairn-git` and never enters application state.
   the repository keeps one (a bare repository logs nothing by default, and
   the old tip's commits survive until `gc` either way); the module docs say
   so. The runner underneath (`GitCommand::stream` in
-  `ops/cli.rs`) reads the pipe on a thread of its own, because git's children
+  `process/cli.rs`) reads the pipe on a thread of its own, because git's children
   — `ssh`, `git-remote-https`, the helper — inherit it and outlive a killed
   git; a cancel returns once git itself is reaped, and the reader ends when
   the last child lets the pipe go. Pinned by the stub-git tests
@@ -625,7 +629,7 @@ record was the deleted progress log.
   packet's history was scanned at the merge bar and nothing was ever
   committed.
 - The stub-`git` tests (`crates/cairn-git/tests/git_binary.rs`,
-  `crates/cairn-git/src/ops/stub_git.rs`) retry on `ETXTBSY`: a fork in a
+  `crates/cairn-git/src/process/stub_git.rs`) retry on `ETXTBSY`: a fork in a
   parallel test inherits a still-open write descriptor to a stub for
   microseconds. The stub exists twice because the runner is crate-private.
 - A test that mutates a committed file to see a guard go red must snapshot

@@ -6,6 +6,13 @@
 //! standard streams, waits for the exit, and turns a failure into an [`Error`]
 //! that carries git's own diagnostic.
 //!
+//! An invocation is a [`GitCommand`] of one of two kinds, fixed when it is
+//! built and never changed after: a [`Read`], which carries no askpass token
+//! because it has no field to hold one, or a [`Write`], which holds the
+//! [`WriteAuthority`] it was built from and, when the operation may prompt,
+//! its token. The kind is what chooses the environment's profile, so a caller
+//! cannot pick a write's environment for a read or the reverse.
+//!
 //! Standard input is always closed. Together with `GIT_TERMINAL_PROMPT=0` that
 //! is what stops `git` itself from waiting for something nobody will type. It
 //! does not reach `ssh`, which prompts on `/dev/tty` directly — a host-key
@@ -13,13 +20,17 @@
 //! on that terminal; closing that path is `SSH_ASKPASS_REQUIRE=force`, which
 //! arrives with the askpass helper.
 //!
-//! Everything here is `pub(crate)`: the crate's public surface is named
-//! operations, never a raw invocation, so a caller outside `ops` cannot run a
-//! verb the confirmation seal does not know about.
+//! Everything here is `pub(crate)`, and [`GitCommand::new`] is visible to
+//! `process/` alone: the crate's public surface is named operations, never a
+//! raw invocation, and inside the crate an invocation is reached only through
+//! [`super::GitBinary`]'s two builders, which the guard suite lets `ops/` and
+//! `reads/` name and nothing else.
+//!
+//! [`Command`]: std::process::Command
 
 use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
-use std::io::Read;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -32,26 +43,72 @@ use nix::unistd::Pid;
 use cairn_model::AskpassToken;
 
 use super::GitEnvironment;
+use super::environment::Profile;
+use crate::ops::WriteAuthority;
 use crate::{Error, Repository};
 
-/// One invocation, built up and then run once with [`GitCommand::run`].
+/// One invocation of the kind `K` ([`Read`] or [`Write`]), built up and then
+/// run once with [`GitCommand::run`] or [`GitCommand::stream`].
 #[derive(Debug)]
-pub(crate) struct GitCommand<'a> {
+pub(crate) struct GitCommand<'a, K> {
     program: &'a Path,
     environment: &'a GitEnvironment,
+    kind: K,
     arguments: Vec<OsString>,
     directory: Option<PathBuf>,
+}
+
+/// An invocation that reads: optional locks off, and no askpass token.
+#[derive(Debug)]
+pub(crate) struct Read;
+
+/// An invocation that may write, built from the [`WriteAuthority`] only `ops/`
+/// can construct and holding it for its life.
+#[derive(Debug)]
+pub(crate) struct Write {
+    _authority: WriteAuthority,
     token: Option<AskpassToken>,
 }
 
-impl<'a> GitCommand<'a> {
-    pub(crate) fn new(program: &'a Path, environment: &'a GitEnvironment) -> Self {
+impl Write {
+    pub(super) fn new(authority: WriteAuthority) -> Self {
+        Self {
+            _authority: authority,
+            token: None,
+        }
+    }
+}
+
+/// What an invocation's kind adds to the base environment.
+pub(crate) trait Kind {
+    fn profile(&self) -> Profile<'_>;
+}
+
+impl Kind for Read {
+    fn profile(&self) -> Profile<'_> {
+        Profile::Read
+    }
+}
+
+impl Kind for Write {
+    fn profile(&self) -> Profile<'_> {
+        Profile::Write {
+            token: self.token.as_ref(),
+        }
+    }
+}
+
+impl<'a, K: Kind> GitCommand<'a, K> {
+    /// Visible to `process/` alone: everything else starts from
+    /// [`super::GitBinary::read_invocation`] or
+    /// [`super::GitBinary::write_invocation`].
+    pub(super) fn new(program: &'a Path, environment: &'a GitEnvironment, kind: K) -> Self {
         Self {
             program,
             environment,
+            kind,
             arguments: Vec::new(),
             directory: None,
-            token: None,
         }
     }
 
@@ -72,18 +129,10 @@ impl<'a> GitCommand<'a> {
         self
     }
 
-    /// An invocation that may ask the user for a secret: `token` is what the
-    /// askpass helper presents to the channel that issued it. Without one the
-    /// helper is still what git runs, and it fails closed.
-    pub(crate) fn authorized_by(mut self, token: &AskpassToken) -> Self {
-        self.token = Some(token.clone());
-        self
-    }
-
     /// Runs to completion. A non-zero exit is [`Error::GitFailed`], with what git
     /// wrote to stderr; a process that never started is [`Error::GitNotStarted`].
     pub(crate) fn run(self) -> Result<Output, Error> {
-        let mut command = self.environment.command(self.program, self.token.as_ref());
+        let mut command = self.environment.command(self.program, self.kind.profile());
         command
             .args(&self.arguments)
             .stdin(Stdio::null())
@@ -118,7 +167,7 @@ impl<'a> GitCommand<'a> {
     /// streamed this way has a machine-readable form on it, and a pipe nobody
     /// drains would stall the child once it filled.
     pub(crate) fn stream(self) -> Result<Running, Error> {
-        let mut command = self.environment.command(self.program, self.token.as_ref());
+        let mut command = self.environment.command(self.program, self.kind.profile());
         command
             .args(&self.arguments)
             .stdin(Stdio::null())
@@ -150,6 +199,17 @@ impl<'a> GitCommand<'a> {
             stderr: Some(stderr),
             arguments: describe(&self.arguments),
         })
+    }
+}
+
+impl GitCommand<'_, Write> {
+    /// A write that may ask the user for a secret: `token` is what the
+    /// askpass helper presents to the channel that issued it. Without one the
+    /// helper is still what git runs, and it fails closed. There is no such
+    /// method on a read.
+    pub(crate) fn authorized_by(mut self, token: &AskpassToken) -> Self {
+        self.kind.token = Some(token.clone());
+        self
     }
 }
 
@@ -550,14 +610,9 @@ mod stub_tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use cairn_model::AskpassToken;
-
-    use super::super::stub_git::{StubGit, discover_retrying};
+    use super::super::stub_git::{StubGit, discover_retrying, printed_environment};
     use super::{TERMINATION_GRACE, lock};
     use crate::Repository;
-
-    /// What `/bin/sh` itself adds to a child's environment; not ours and not git's.
-    const SHELL_OWN: &[&str] = &["PWD", "OLDPWD", "SHLVL", "_"];
 
     /// Answers `--version`, then runs `rest` for anything else.
     fn stub(rest: &str) -> StubGit {
@@ -566,90 +621,82 @@ mod stub_tests {
         ))
     }
 
-    /// PRD B1 end to end: what the child actually sees is the built environment and
-    /// nothing from this process. The test process is full of `CARGO_*` variables,
-    /// which is what makes a leak visible.
+    /// PRD B1 and G3 end to end, for a read: what the child actually sees is
+    /// the base, the editor pinned, optional locks off, no token — spelled out
+    /// variable by variable — and nothing from this process. The test process
+    /// is full of `CARGO_*` variables, which is what makes a leak visible.
     #[test]
-    fn the_child_sees_the_built_environment_and_nothing_inherited() {
+    fn a_read_sees_exactly_the_read_environment_and_nothing_inherited() {
         let stub = stub("exec /usr/bin/env");
         let environment = stub.environment_with(|name| match name {
             "HOME" => Some(OsString::from("/nonexistent/home-from-cairn")),
             _ => None,
         });
-        let expected: BTreeMap<String, String> = environment
-            .variables()
-            .map(|(name, value)| (name.to_owned(), value.to_string_lossy().into_owned()))
-            .collect();
+        let path = environment
+            .get("PATH")
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap();
         let git = discover_retrying(environment).unwrap();
-        let output = git.command().arg("print-environment").run().unwrap();
-        let seen: BTreeMap<String, String> = output
-            .stdout_text()
-            .lines()
-            .filter_map(|line| line.split_once('='))
-            .map(|(name, value)| (name.to_owned(), value.to_owned()))
-            .collect();
-
-        for (name, value) in &expected {
-            assert_eq!(
-                seen.get(name),
-                Some(value),
-                "{name} did not reach git as built"
-            );
-        }
-        let leaked: Vec<&String> = seen
-            .keys()
-            .filter(|name| !expected.contains_key(*name) && !SHELL_OWN.contains(&name.as_str()))
-            .collect();
-        assert!(leaked.is_empty(), "inherited by git: {leaked:?}");
-        assert!(
-            !seen.keys().any(|name| name.starts_with("CARGO_")),
-            "cargo's variables reached git: {:?}",
-            seen.keys().collect::<Vec<_>>()
-        );
+        let output = git
+            .read_invocation()
+            .arg("print-environment")
+            .run()
+            .unwrap();
+        let seen = printed_environment(&output.stdout_text());
+        let expected: BTreeMap<String, String> = [
+            ("GIT_ASKPASS", StubGit::HELPER),
+            ("GIT_EDITOR", "false"),
+            ("GIT_OPTIONAL_LOCKS", "0"),
+            ("GIT_SEQUENCE_EDITOR", "false"),
+            ("GIT_TERMINAL_PROMPT", "0"),
+            ("HOME", "/nonexistent/home-from-cairn"),
+            ("PATH", path.as_str()),
+            ("SSH_ASKPASS", StubGit::HELPER),
+            ("SSH_ASKPASS_REQUIRE", "force"),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        .collect();
         assert_eq!(
-            seen.get("GIT_TERMINAL_PROMPT").map(String::as_str),
-            Some("0")
-        );
-        assert_eq!(
-            seen.get("HOME").map(String::as_str),
-            Some("/nonexistent/home-from-cairn"),
-            "HOME must be the value the builder chose, not this process's"
-        );
-        assert_eq!(
-            seen.get("GIT_ASKPASS").map(String::as_str),
-            Some(StubGit::HELPER),
-            "git must be pointed at Cairn's askpass helper"
-        );
-        assert_eq!(
-            seen.get("SSH_ASKPASS").map(String::as_str),
-            Some(StubGit::HELPER)
-        );
-        assert_eq!(
-            seen.get("SSH_ASKPASS_REQUIRE").map(String::as_str),
-            Some("force")
-        );
-        assert!(
-            !seen.contains_key("CAIRN_ASKPASS_TOKEN"),
-            "an invocation nobody authorised carried a token"
+            seen, expected,
+            "a read must see exactly the read environment: no token, nothing inherited"
         );
     }
 
-    /// The token reaches the child only on an invocation that was given one.
+    /// The version probe is a read like any other, and runs with that
+    /// environment: the stub writes what it was given to a file beside itself
+    /// before answering, since the probe reads nothing but the version line.
     #[test]
-    fn an_authorised_invocation_carries_its_token_and_only_that_one() {
-        let stub = stub("exec /usr/bin/env");
-        let git = discover_retrying(stub.environment()).unwrap();
-        let token = AskpassToken::new(format!("token-{}", std::process::id()));
-        let output = git
-            .command()
-            .arg("print-environment")
-            .authorized_by(&token)
-            .run()
+    fn the_version_probe_runs_with_the_read_environment() {
+        let stub = StubGit::with_git_from(|directory| {
+            format!(
+                "if [ \"$1\" = --version ]; then /usr/bin/env > '{}'; \
+                 echo 'git version 2.30.0'; exit 0; fi; exit 1",
+                directory.join("probe-environment").display()
+            )
+        });
+        let dump = stub.directory().join("probe-environment");
+        let environment = stub.environment();
+        let path = environment
+            .get("PATH")
+            .map(|path| path.to_string_lossy().into_owned())
             .unwrap();
-        let text = output.stdout_text();
-        let seen: BTreeMap<&str, &str> = text.lines().filter_map(|l| l.split_once('=')).collect();
-        assert_eq!(seen.get("CAIRN_ASKPASS_TOKEN"), Some(&token.as_str()));
-        assert_eq!(seen.get("GIT_ASKPASS"), Some(&StubGit::HELPER));
+        discover_retrying(environment).unwrap();
+        let seen = printed_environment(&std::fs::read_to_string(&dump).unwrap());
+        let expected: BTreeMap<String, String> = [
+            ("GIT_ASKPASS", StubGit::HELPER),
+            ("GIT_EDITOR", "false"),
+            ("GIT_OPTIONAL_LOCKS", "0"),
+            ("GIT_SEQUENCE_EDITOR", "false"),
+            ("GIT_TERMINAL_PROMPT", "0"),
+            ("PATH", path.as_str()),
+            ("SSH_ASKPASS", StubGit::HELPER),
+            ("SSH_ASKPASS_REQUIRE", "force"),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        .collect();
+        assert_eq!(seen, expected);
     }
 
     #[test]
@@ -657,7 +704,7 @@ mod stub_tests {
         let stub = stub("printf '%s\\0%s\\0' \"$1\" \"$2\"");
         let git = discover_retrying(stub.environment()).unwrap();
         let output = git
-            .command()
+            .read_invocation()
             .args(["rev-parse", "--show-toplevel"])
             .run()
             .unwrap();
@@ -677,12 +724,12 @@ mod stub_tests {
         let repo = Repository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
         let expected = std::fs::canonicalize(repo.workdir().unwrap()).unwrap();
 
-        let output = git.command().in_repository(&repo).run().unwrap();
+        let output = git.read_invocation().in_repository(&repo).run().unwrap();
         let ran_in = std::fs::canonicalize(output.stdout_text().trim()).unwrap();
         assert_eq!(ran_in, expected);
 
         // Without `in_repository`, the process runs wherever this one does.
-        let output = git.command().run().unwrap();
+        let output = git.read_invocation().run().unwrap();
         let ran_in = std::fs::canonicalize(output.stdout_text().trim()).unwrap();
         assert_eq!(
             ran_in,
@@ -702,7 +749,7 @@ mod stub_tests {
         let git = discover_retrying(stub.environment()).unwrap();
         let mut seen = Vec::new();
         let output = git
-            .command()
+            .read_invocation()
             .arg("fetch")
             .stream()
             .unwrap()
@@ -732,7 +779,7 @@ mod stub_tests {
         let git = discover_retrying(stub.environment()).unwrap();
         let mut seen = Vec::new();
         let error = git
-            .command()
+            .read_invocation()
             .args(["fetch", "origin"])
             .stream()
             .unwrap()
@@ -770,7 +817,7 @@ mod stub_tests {
         // nothing. Here such a stub exits without a word, and the kill never fires.
         let stub = stub(HANGING);
         let git = discover_retrying(stub.environment()).unwrap();
-        let running = git.command().arg("fetch").stream().unwrap();
+        let running = git.read_invocation().arg("fetch").stream().unwrap();
         let pid = running.id();
         let killer = running.killer();
         let mut seen = Vec::new();
@@ -827,7 +874,7 @@ mod stub_tests {
     fn a_kill_after_a_clean_exit_reports_the_success() {
         let stub = stub("echo done >&2; exit 0");
         let git = discover_retrying(stub.environment()).unwrap();
-        let running = git.command().arg("fetch").stream().unwrap();
+        let running = git.read_invocation().arg("fetch").stream().unwrap();
         let pid = running.id();
         let killer = running.killer();
         let started = std::time::Instant::now();
@@ -854,7 +901,7 @@ mod stub_tests {
     fn a_kill_that_ends_the_process_is_reported_as_cancelled() {
         let stub = stub(HANGING);
         let git = discover_retrying(stub.environment()).unwrap();
-        let running = git.command().arg("fetch").stream().unwrap();
+        let running = git.read_invocation().arg("fetch").stream().unwrap();
         let killer = running.killer();
         let outcome = running.finish(|line| {
             if line == "hanging" {
@@ -894,7 +941,7 @@ mod stub_tests {
     fn a_cancel_sends_sigterm_first_and_a_process_that_exits_on_it_is_not_killed() {
         let stub = stub(ENDING_ON_TERM);
         let git = discover_retrying(stub.environment()).unwrap();
-        let running = git.command().arg("fetch").stream().unwrap();
+        let running = git.read_invocation().arg("fetch").stream().unwrap();
         let pid = running.id();
         let killer = running.killer();
         let mut seen = Vec::new();
@@ -989,7 +1036,7 @@ mod stub_tests {
     fn a_process_that_ignores_sigterm_is_killed_once_the_grace_period_has_passed() {
         let stub = stub(IGNORING_TERM);
         let git = discover_retrying(stub.environment()).unwrap();
-        let running = git.command().arg("fetch").stream().unwrap();
+        let running = git.read_invocation().arg("fetch").stream().unwrap();
         let pid = running.id();
         let (outcome, seen, took) = cancelled_after_hanging(running, Duration::ZERO);
         assert!(
@@ -1022,7 +1069,7 @@ mod stub_tests {
     fn a_cancel_that_lands_after_stderr_closed_is_still_escalated_to_sigkill() {
         let stub = stub(IGNORING_TERM_SILENTLY);
         let git = discover_retrying(stub.environment()).unwrap();
-        let running = git.command().arg("fetch").stream().unwrap();
+        let running = git.read_invocation().arg("fetch").stream().unwrap();
         let pid = running.id();
         let (outcome, seen, took) = cancelled_after_hanging(running, Duration::from_millis(300));
         assert!(
@@ -1045,7 +1092,7 @@ mod stub_tests {
     fn a_cancel_after_the_reap_signals_nothing() {
         let stub = stub("echo done >&2; exit 0");
         let git = discover_retrying(stub.environment()).unwrap();
-        let running = git.command().arg("fetch").stream().unwrap();
+        let running = git.read_invocation().arg("fetch").stream().unwrap();
         let pid = running.id();
         let process = Arc::clone(&running.process);
         let killer = running.killer();
@@ -1069,7 +1116,7 @@ mod stub_tests {
     fn a_kill_that_misses_the_lock_is_finished_by_the_waiter() {
         let stub = stub(ENDING_ON_TERM);
         let git = discover_retrying(stub.environment()).unwrap();
-        let running = git.command().arg("fetch").stream().unwrap();
+        let running = git.read_invocation().arg("fetch").stream().unwrap();
         let killer = running.killer();
         let mut seen = Vec::new();
         let (hung, hung_seen) = std::sync::mpsc::channel::<()>();
@@ -1114,7 +1161,7 @@ mod stub_tests {
     fn standard_input_is_closed_not_inherited() {
         let stub = stub("PATH=/usr/bin:/bin readlink /proc/$$/fd/0");
         let git = discover_retrying(stub.environment()).unwrap();
-        let output = git.command().run().unwrap();
+        let output = git.read_invocation().run().unwrap();
         assert_eq!(output.stdout_text().trim(), "/dev/null");
     }
 }

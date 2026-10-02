@@ -966,13 +966,29 @@ fn retired_runner_traces(path: &Path, source: &str) -> Vec<String> {
     found
 }
 
-/// How many times production code calls `.spawn()` with no arguments — a process started.
+/// The lines of production code that call `.spawn()` with no arguments — a process started.
 /// Over `process/` this is the one place a `git` process is started, `GitCommand::start_with`,
-/// so a second runner that spawns for itself makes it two.
+/// so a second runner that spawns for itself makes it two. Lines, not calls: two spawns
+/// written on one line count once, a gap accepted and stated in the twin's residual.
 fn process_spawns(source: &str) -> usize {
     calls_nullary_method(
         &code_without_test_modules(&code_without_strings(source)),
         &["spawn"],
+    )
+    .len()
+}
+
+/// The other ways a `Command` starts a process — `output()`, `status()` and `CommandExt`'s
+/// `exec()`, each with no arguments. None belongs in production `process/`, whose one start is
+/// `.spawn()`. An innocent namesake there (a `status()` getter of its own) is caught too, and
+/// is renamed: in that module those names mean a process.
+const OTHER_PROCESS_STARTS: &[&str] = &["output", "status", "exec"];
+
+/// The production lines of `source` calling one of [`OTHER_PROCESS_STARTS`].
+fn other_process_starts(source: &str) -> usize {
+    calls_nullary_method(
+        &code_without_test_modules(&code_without_strings(source)),
+        OTHER_PROCESS_STARTS,
     )
     .len()
 }
@@ -983,14 +999,16 @@ fn process_spawns(source: &str) -> usize {
 /// `GitCommand::run(..)`/`GitCommand::stream(..)`. Over every file of `crates/cairn-git/src`,
 /// `process/` and test modules included — a test that keeps an old path alive keeps its rules
 /// alive (`tests/` cannot name these crate-private items at all). And production `process/`
-/// starts a process in exactly one place, so a second runner spawning for itself — under any
-/// name, through an alias, a free function or a macro — fails here even where the name ban
-/// does not see it. Proven to read real code by finding `GitCommand`'s own impl blocks, and the
-/// runner's `start` in one of them.
+/// starts a process in exactly one place — one line calling `.spawn()`, and none calling
+/// `.output()`, `.status()` or `.exec()` — so a second runner starting its own process, under
+/// any name, through an alias, a free function or a macro, fails here even where the name ban
+/// does not see it. Proven to read real code by finding `GitCommand`'s own impl blocks, and
+/// the runner's `start` in one of them.
 ///
 /// Residual review obligation, `qa-checklist`'s (its item 7): the names are read as spelled, so
 /// a retired entry point declared through a `type` alias of the builder, as a free function or
-/// by a macro is seen only if it spawns; and a second path built ON `start` — a wrapper that
+/// by a macro is seen only if it starts a process; two spawns written on one line count once;
+/// and a second path built ON `start` — a wrapper that
 /// drives an `Invocation` by rules of its own — spawns nothing new and is not seen at all.
 #[test]
 fn the_retired_runner_is_gone() {
@@ -998,11 +1016,15 @@ fn the_retired_runner_is_gone() {
     let mut builder_impls = 0usize;
     let mut declares_start = false;
     let mut spawns = Vec::new();
+    let mut other_starts = Vec::new();
     for (path, source) in rust_sources(ENGINE_SOURCE_DIR) {
         scanned += 1;
         if path.starts_with(PROCESS_DIR) {
             for _ in 0..process_spawns(&source) {
                 spawns.push(path.display().to_string());
+            }
+            for _ in 0..other_process_starts(&source) {
+                other_starts.push(path.display().to_string());
             }
         }
         let found = retired_runner_traces(&path, &source);
@@ -1035,6 +1057,13 @@ fn the_retired_runner_is_gone() {
          `GitCommand::start_with` is the one way a `git` process starts, so a second spawn is a \
          second runner with rules of its own for ending one",
         spawns.len()
+    );
+    assert!(
+        other_starts.is_empty(),
+        "production {PROCESS_DIR} calls `.output()`, `.status()` or `.exec()` ({other_starts:?}): \
+         each starts a process outside the runner, as the retired `GitCommand::run` did with \
+         `.output()`. If it is an innocent namesake — a getter of {PROCESS_DIR}'s own — rename \
+         it: in this module those names mean a process"
     );
 }
 
@@ -1108,6 +1137,14 @@ fn the_retired_runner_matcher_catches_the_shapes_it_claims() {
         ),
         ("a longer type", "fn f(t: RunningTotal) {}"),
         ("prose", "// GitCommand::stream and Running are gone\n"),
+        (
+            "another type's run, by its path",
+            "let ended = Driver::run(driver);",
+        ),
+        (
+            "a longer method, by its path",
+            "let o = GitCommand::run_to_end(command);",
+        ),
         ("a string", "let s = \"Running ProcessKill .stream()\";"),
         (
             "run in an impl of another type after one of the builder",
@@ -1155,6 +1192,33 @@ fn the_retired_runner_matcher_catches_the_shapes_it_claims() {
             process_spawns(source),
             expected,
             "the spawn count misread {shape}: {source:?}"
+        );
+    }
+    assert_eq!(
+        OTHER_PROCESS_STARTS,
+        ["output", "status", "exec"],
+        "OTHER_PROCESS_STARTS changed; spell the entry out here too"
+    );
+    for (shape, source, expected) in [
+        ("output", "let out = env.command(p, q).output()?;", 1),
+        ("status", "let status = command\n    .status()?;", 1),
+        ("exec", "let error = command.exec();", 1),
+        (
+            "a status with an argument",
+            "let s = registry.status(id);",
+            0,
+        ),
+        (
+            "output in a test module",
+            "#[cfg(test)]\nmod tests {\n    fn t() { c.output().unwrap(); }\n}",
+            0,
+        ),
+        ("prose", "// command.output() was the old run\n", 0),
+    ] {
+        assert_eq!(
+            other_process_starts(source),
+            expected,
+            "the other-start count misread {shape}: {source:?}"
         );
     }
 }

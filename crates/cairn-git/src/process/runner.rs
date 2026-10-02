@@ -811,36 +811,49 @@ mod tests {
         }
     }
 
-    /// Every process in group `group`, zombies included: what is alive or unreaped.
-    #[cfg(target_os = "linux")]
-    fn group_members(group: u32) -> Vec<u32> {
-        let mut found = Vec::new();
-        for entry in std::fs::read_dir("/proc").unwrap().flatten() {
-            let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
-                continue;
-            };
-            let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
-                continue;
-            };
-            // After the command's closing parenthesis: state, ppid, pgrp.
-            let Some((_, rest)) = stat.rsplit_once(')') else {
-                continue;
-            };
-            if rest.split_whitespace().nth(2).and_then(|f| f.parse().ok()) == Some(group) {
-                found.push(pid);
-            }
-        }
-        found
+    /// Every process on the machine as `(pid, process group, state)`, zombies
+    /// included, from `ps`, which Linux and macOS both have: the state is the
+    /// first letter of `ps`'s `stat`, `Z` for one that exited and is not yet
+    /// reaped. A test reads the process table through this and not `/proc`, so
+    /// that it runs wherever the runner does.
+    fn process_table() -> Vec<(u32, u32, char)> {
+        let output = std::process::Command::new("ps")
+            .args(["-A", "-o", "pid=", "-o", "pgid=", "-o", "stat="])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| {
+                let mut fields = line.split_whitespace();
+                let pid = fields.next()?.parse().ok()?;
+                let group = fields.next()?.parse().ok()?;
+                Some((pid, group, fields.next()?.chars().next()?))
+            })
+            .collect()
     }
 
-    #[cfg(target_os = "linux")]
+    /// Every process in group `group`, zombies included: what is alive or unreaped.
+    fn group_members(group: u32) -> Vec<u32> {
+        process_table()
+            .into_iter()
+            .filter(|(_, member_of, _)| *member_of == group)
+            .map(|(pid, _, _)| pid)
+            .collect()
+    }
+
+    /// The state of `pid` in the process table, or `None` once it is reaped.
+    fn state_of(pid: u32) -> Option<char> {
+        process_table()
+            .into_iter()
+            .find(|(found, _, _)| *found == pid)
+            .map(|(_, _, state)| state)
+    }
+
     fn reaped(pid: u32) -> bool {
-        std::fs::read_to_string(format!("/proc/{pid}/stat"))
-            .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+        state_of(pid).is_none()
     }
 
     /// The whole group gone: the leader reaped and no member alive or a zombie.
-    #[cfg(target_os = "linux")]
     fn group_gone(pid: u32) -> bool {
         reaped(pid) && group_members(pid).is_empty()
     }
@@ -857,7 +870,6 @@ mod tests {
     /// R3.1: the leader of a new group. Caught by: dropping `process_group(0)`,
     /// after which the stub is in this test process's group and every group
     /// signal below would go nowhere — or, worse, here.
-    #[cfg(target_os = "linux")]
     #[test]
     fn every_invocation_leads_a_process_group_of_its_own() {
         let stub = stub(HANGING_WITH_A_GRANDCHILD);
@@ -958,7 +970,6 @@ mod tests {
             took < Duration::from_secs(2),
             "took {took:?}: the process was not ended when the ceiling was crossed"
         );
-        #[cfg(target_os = "linux")]
         assert!(eventually(DEADLINE, || group_gone(pid)));
         let _ = pid;
     }
@@ -1116,7 +1127,6 @@ mod tests {
             "the cancel took {took:?}: the grace plus a tick is the most it may"
         );
         // The grandchild lets the pipes go as it dies, a moment before init reaps it.
-        #[cfg(target_os = "linux")]
         assert!(
             eventually(Duration::from_millis(500), || group_gone(pid)),
             "the cancel left the group {pid} alive or unreaped: {:?}",
@@ -1176,7 +1186,6 @@ mod tests {
             "{:?}",
             started_at.elapsed()
         );
-        #[cfg(target_os = "linux")]
         assert!(eventually(DEADLINE, || group_gone(pid)));
         let _ = pid;
     }
@@ -1185,7 +1194,6 @@ mod tests {
     /// running, and the reaper thread ends and reaps the group within the grace
     /// plus a tick; then every thread the invocation started has ended. Caught by:
     /// a drop that waits for the process, or one that leaves it running or a zombie.
-    #[cfg(target_os = "linux")]
     #[test]
     fn dropping_an_unfinished_invocation_ends_and_reaps_its_group_without_blocking() {
         let stub = stub(HANGING_WITH_A_GRANDCHILD);
@@ -1220,7 +1228,6 @@ mod tests {
     /// and the drop has returned long before. Caught by: ending the process on the
     /// dropping thread (the drop takes the grace), which a stub that dies of
     /// `SIGTERM` at once, as in the test above, would not show.
-    #[cfg(target_os = "linux")]
     #[test]
     fn dropping_never_waits_for_a_process_that_outlasts_sigterm() {
         let stub = stub(IGNORING_TERM);
@@ -1295,7 +1302,6 @@ mod tests {
             took < TERMINATION_GRACE + Duration::from_secs(2),
             "{took:?}"
         );
-        #[cfg(target_os = "linux")]
         assert!(eventually(DEADLINE, || group_gone(pid)));
         let _ = pid;
     }
@@ -1358,7 +1364,6 @@ mod tests {
             "ended after {took:?}: the stub did not survive SIGTERM, so this decided nothing \
              about the escalation"
         );
-        #[cfg(target_os = "linux")]
         assert!(eventually(DEADLINE, || group_gone(pid)));
         let _ = pid;
     }
@@ -1372,7 +1377,6 @@ mod tests {
     /// close (30 s, so `within` fails), noticing the exit only on a cancel, not
     /// waiting to drain (returns well inside the bound), waiting longer than the
     /// bound, or a kill handle that ignores the end of the invocation.
-    #[cfg(target_os = "linux")]
     #[test]
     fn an_exit_with_a_grandchild_holding_the_pipes_returns_within_the_drain_bound() {
         let stub = stub(
@@ -1434,7 +1438,6 @@ mod tests {
     /// gets `SIGPIPE` rather than a reader that never ends. Then every thread of
     /// the invocation has ended. Caught by: a reader that keeps reading after the
     /// receiver has gone (the writer never dies and the thread count never falls).
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_reader_left_on_a_pipe_still_written_ends_when_its_invocation_lets_go() {
         let stub = stub(
@@ -1535,17 +1538,13 @@ mod tests {
 
     /// G12, a cancel after a clean exit is the success it was. The exit is
     /// observed (a zombie) before the cancel. Caught by: deciding by the flag alone.
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_cancel_after_a_clean_exit_is_reported_as_success() {
         let stub = stub("echo done >&2; exit 0");
         let invocation = started(&stub);
         let pid = invocation.id();
         assert!(
-            eventually(DEADLINE, || std::fs::read_to_string(format!(
-                "/proc/{pid}/stat"
-            ))
-            .is_ok_and(|stat| stat.contains(") Z "))),
+            eventually(DEADLINE, || state_of(pid) == Some('Z')),
             "the stub never exited"
         );
         invocation.kill_handle().kill();
@@ -1716,7 +1715,6 @@ mod tests {
     /// ended and reaped first — never left running with nobody waiting on it.
     /// Caught by: returning the error with the process still running (the old
     /// runner's leak).
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_thread_that_cannot_start_ends_and_reaps_the_process() {
         let stub = StubGit::with_git_from(|directory| {
@@ -1785,7 +1783,6 @@ mod tests {
     /// the pipe would hand git its end of input with time to act on it. The stub
     /// records reaching the end of its input. Caught by: a writer closure that
     /// owns the pipe, or ending the process after dropping it.
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_stdin_thread_that_cannot_start_ends_the_process_before_its_input_closes() {
         let stub = StubGit::with_git_from(|directory| {
@@ -2016,21 +2013,12 @@ mod tests {
     /// `SIGKILL` at once and nothing of it is left running — only the leader, a
     /// zombie nobody can reap now. Caught by: a fallback that only tries for the
     /// lock, or sends nothing.
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_drop_with_no_thread_to_reap_on_kills_the_group_at_once() {
         fn no_thread(_: &str, _: Box<dyn FnOnce() + Send>) -> io::Result<()> {
             Err(io::Error::other("no thread"))
         }
-        let state = |pid: u32| {
-            std::fs::read_to_string(format!("/proc/{pid}/stat"))
-                .ok()
-                .and_then(|stat| {
-                    stat.rsplit_once(')')
-                        .map(|(_, rest)| rest.trim().to_owned())
-                })
-                .and_then(|rest| rest.chars().next())
-        };
+        let state = state_of;
         let stub = stub(IGNORING_TERM);
         let invocation = started(&stub).without_a_reaper(no_thread);
         let pid = invocation.id();
@@ -2056,21 +2044,12 @@ mod tests {
     /// signal if it missed. Here the lock is held on another thread across the
     /// drop, as a stdin writer's failure or a kill handle might hold it; the
     /// group must still die. Caught by: a fallback that only tries for the lock.
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_drop_with_no_thread_to_reap_on_waits_out_a_held_lock_and_kills_the_group() {
         fn no_thread(_: &str, _: Box<dyn FnOnce() + Send>) -> io::Result<()> {
             Err(io::Error::other("no thread"))
         }
-        let state = |pid: u32| {
-            std::fs::read_to_string(format!("/proc/{pid}/stat"))
-                .ok()
-                .and_then(|stat| {
-                    stat.rsplit_once(')')
-                        .map(|(_, rest)| rest.trim().to_owned())
-                })
-                .and_then(|rest| rest.chars().next())
-        };
+        let state = state_of;
         let stub = stub(IGNORING_TERM);
         let invocation = started(&stub).without_a_reaper(no_thread);
         let pid = invocation.id();
@@ -2103,7 +2082,6 @@ mod tests {
     /// A caller's callback that panics does not leave git running unwatched: the
     /// unwinding driver hands the invocation to a reaper. Caught by: a driver with
     /// no drop of its own (the stub runs on, unsignalled).
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_panicking_callback_still_ends_and_reaps_the_process() {
         let stub = stub(HANGING_WITH_A_GRANDCHILD);

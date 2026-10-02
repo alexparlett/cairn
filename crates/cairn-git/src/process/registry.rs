@@ -271,6 +271,18 @@ mod tests {
             .unwrap()
     }
 
+    /// Whether `pid` exited and has not been reaped, from `ps`, which Linux and
+    /// macOS both have.
+    fn is_zombie(pid: u32) -> bool {
+        let output = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .starts_with('Z')
+    }
+
     fn eventually(mut condition: impl FnMut() -> bool) -> bool {
         let started = Instant::now();
         while started.elapsed() < DEADLINE {
@@ -463,9 +475,8 @@ mod tests {
 
     /// The same path when the stub has already exited: the reap the kill makes
     /// finds the status, and the record carries it rather than `Unknown`.
-    /// Linux: it waits for the stub to be a zombie. Caught by: a record that
+    /// It waits for the stub to be a zombie. Caught by: a record that
     /// says `Unknown` whatever the reap found.
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_drop_with_no_reaper_thread_records_an_exit_it_can_see() {
         fn no_thread(_: &str, _: Box<dyn FnOnce() + Send>) -> io::Result<()> {
@@ -476,11 +487,7 @@ mod tests {
         let processes = processes(&repo);
         let invocation = started(&stub, &repo).without_a_reaper(no_thread);
         let pid = invocation.id();
-        assert!(eventually(|| {
-            std::fs::read_to_string(format!("/proc/{pid}/stat"))
-                .unwrap_or_default()
-                .contains(") Z ")
-        }));
+        assert!(eventually(|| is_zombie(pid)));
         drop(invocation);
         let record = the_one_record(&processes);
         assert_eq!(record.exit, CommandExit::Code(3), "{record:?}");
@@ -576,9 +583,8 @@ mod tests {
     }
 
     /// A cancel that loses the race to a clean exit is recorded as the success
-    /// the caller was told of, not as a cancel. Linux: it waits for the stub to
+    /// the caller was told of, not as a cancel. It waits for the stub to
     /// be a zombie before cancelling.
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_cancel_beaten_by_a_clean_exit_is_logged_as_the_success() {
         let stub = stub("echo done >&2; exit 0");
@@ -586,11 +592,7 @@ mod tests {
         let processes = processes(&repo);
         let invocation = started(&stub, &repo);
         let pid = invocation.id();
-        assert!(eventually(|| {
-            std::fs::read_to_string(format!("/proc/{pid}/stat"))
-                .unwrap_or_default()
-                .contains(") Z ")
-        }));
+        assert!(eventually(|| is_zombie(pid)));
         invocation.kill_handle().kill();
         invocation
             .finish(&CancelSignal::new(), |_| {}, |_| {})

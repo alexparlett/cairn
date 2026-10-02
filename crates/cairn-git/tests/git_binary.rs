@@ -322,12 +322,20 @@ fn a_git_that_cannot_be_started_names_the_program_and_the_cause() {
 #[test]
 fn a_found_git_takes_a_new_environment_without_being_searched_for_or_probed_again() {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
+    /// Removes the probe count however the test ends.
+    struct Removed(PathBuf);
+    impl Drop for Removed {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
     let probes = std::env::temp_dir().join(format!(
         "cairn-git-probes-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = std::fs::remove_file(&probes);
+    let _removed = Removed(probes.clone());
     let stub = StubPath::with_git(&format!(
         "echo probed >> '{}'\necho 'git version 2.40.1'",
         probes.display()
@@ -370,5 +378,4 @@ fn a_found_git_takes_a_new_environment_without_being_searched_for_or_probed_agai
         "the original was changed"
     );
     assert_eq!(count(), probed, "taking an environment probed git again");
-    let _ = std::fs::remove_file(&probes);
 }

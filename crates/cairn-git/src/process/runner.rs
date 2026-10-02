@@ -1258,8 +1258,11 @@ mod tests {
 
     /// The one cancel that takes longer than the grace plus a tick: a pipe held by
     /// a process that left the group, which neither signal reaches, is abandoned
-    /// `DRAIN_BOUND` after the `SIGKILL`. Caught by: never abandoning it (the
-    /// holder sleeps 30 s and `within` fails).
+    /// `DRAIN_BOUND` after the `SIGKILL`. The holder writes its pid only once it
+    /// is in a session of its own, and the stub says it is hanging only after
+    /// that, so the cancel never lands while the holder is still in the group.
+    /// Caught by: never abandoning it (the holder sleeps 30 s and `within`
+    /// fails).
     #[test]
     fn a_cancel_whose_pipe_holder_left_the_group_returns_after_the_grace_and_the_bound() {
         let stub = StubGit::with_git_from(|directory| {
@@ -1267,8 +1270,9 @@ mod tests {
                 "if [ \"$1\" = --version ]; then echo 'git version 2.30.0'; exit 0; fi\n\
                  PATH=/usr/bin:/bin; command -v setsid >/dev/null || exit 99; \
                  command -v sleep >/dev/null || exit 99; \
-                 setsid sleep 30 & echo $! > '{}'; echo hanging >&2; wait",
-                directory.join("holder").display()
+                 setsid sh -c 'echo $$ > \"$0\"; exec sleep 30' '{holder}' & \
+                 until [ -s '{holder}' ]; do sleep 0.01; done; echo hanging >&2; wait",
+                holder = directory.join("holder").display()
             )
         });
         let holder = stub.directory().join("holder");

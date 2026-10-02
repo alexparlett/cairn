@@ -312,9 +312,11 @@ never enters `cairn-git` and never enters application state.
   copied, and the window wraps it in `Secret::from_string` at once.
 - **The application** (`crates/cairn-app/src/worker/`). Three threads per open
   repository, each with its own sender, so the update stream ends only when all
-  have gone. `startup.rs`: on the repository thread, before anything else, the
-  channel is opened under `$XDG_RUNTIME_DIR`, the environment built around its
-  socket, and `git` found — a missing runtime directory or a helper that is not
+  have gone. `git` itself is found once per application, as it starts
+  (`discovery.rs`; `docs/systems/git-processes.md`). `startup.rs`: on the
+  repository thread, once the repository is open, the channel is opened under
+  `$XDG_RUNTIME_DIR` and that `git` pointed at its socket
+  (`GitBinary::with_environment`) — a missing runtime directory or a helper that is not
   built beside the executable is kept as a reason, not a refusal: fetching still
   works wherever a helper or agent answers (L7), and a fetch that then fails
   says why nothing could have asked
@@ -326,20 +328,23 @@ never enters `cairn-git` and never enters application state.
   and waits on the window's `Reply` — `Provide { prompt, secret }` or
   `Refuse { prompt }` — over a channel of its own (never a `Request`, which
   derives `Debug`), handing the secret to `Prompt::answer` by reference and
-  dropping it. `operations.rs`: the operations thread runs the fetch with a
+  dropping it. `network_lane.rs`: the network lane runs the fetch with a
   token from `Channel::begin`, forwards every progress line as
   `Update::FetchProgress`, and ends with `FetchFinished`, `FetchCancelled` or
   `FetchFailed`, each carrying `refreshed` — whether a ref moved, told by
   comparing `ref_tips` before and after, on every outcome, since a fetch that
   failed or was killed may have moved some. `Request::CancelFetch` never
   queues: the handle reaches the fetch's `FetchControl` directly (one fetch
-  at a time; a cancel that lands before git runs is kept and applied the
+  at a time, a second refused with a reason the window draws; a cancel that
+  lands before git runs is kept and applied the
   moment it does; `FetchStarted` goes out only once the kill handle is
   installed). Operations carry no epoch, so a scroll cannot supersede a fetch
   nor a fetch a scroll. The token is retired before the outcome goes out, so
   a helper orphaned by a killed git is refused at the channel rather than
-  accepted afterwards. On shutdown the
-  repository thread kills any fetch, closes the operations queue and wakes the
+  accepted afterwards. On shutdown — the window's `Request::Close`, or every
+  handle gone — the repository thread closes the network lane's queue, ends
+  and reaps every `git` running in the repository through its registry
+  (`docs/systems/git-processes.md`, "Closing"), and wakes the
   acceptor by connecting to its own socket (the one thing that returns a
   blocking `accept`), on a clean exit and on unwinding alike; a prompt still
   waiting is refused. The wake is retried until the acceptor acknowledges it
@@ -589,7 +594,7 @@ Taken inside the phases, none reopening the above:
   are missing is the silent degradation D1 forbids.
 - `Invalidated` lives in `cairn-git::ops`, not `cairn-model`: only the worker
   reads it, and it describes the engine's own caches.
-- Three threads per repository (repository, operations, acceptor): a fetch
+- Three threads per repository (repository, network lane, acceptor): a fetch
   blocked on the helper blocked on the acceptor would deadlock on one thread.
   Operations carry no epoch.
 - The secret crosses the worker boundary as `worker::Reply` over its own

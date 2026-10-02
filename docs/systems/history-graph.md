@@ -187,15 +187,20 @@ FILE, and it is a guard, not a convention — see below.
   commit-time walk of 50k commits cost 178 ms without the cache and 116 ms with
   it, and more bought nothing. `a_shared_repository_can_cross_threads` pins
   `Send + Sync`, and is also the twin for gix's `parallel` feature staying on.
-- `worker::open(path) -> Result<(RepositoryHandle, Updates), OpenError>`. **The worker opens the
-  repository**, because discovering one reads the filesystem. A path outside a
-  repository therefore arrives as an `Update::Failed` naming the path, not as a
-  panic and not as an empty window
-  (`opening_a_path_outside_a_repository_is_reported_and_names_the_path`). Before
-  it looks for the repository at all it looks for `git`, on the same thread and
-  for the same reason (running `git --version` is work): a missing or too-old
-  `git` arrives the same way, naming the version Cairn needs, and nothing is
-  served behind it (`a_missing_git_is_refused_naming_the_version_and_nothing_is_served`).
+- `worker::open(path, &Discovery) -> Result<(RepositoryHandle, Updates, Replier), OpenError>`.
+  **The worker opens the repository**, because discovering one reads the
+  filesystem. A path outside a repository therefore arrives as an
+  `Update::Failed` naming the path, not as a panic and not as an empty window
+  (`opening_a_path_outside_a_repository_is_reported_and_names_the_path`). `git`
+  is found once per application, not here: `main` starts a
+  `worker::Discovery` before the window exists, which runs `git --version` on
+  a `cairn-discovery` thread of its own, and before the worker looks for the
+  repository at all it takes that answer — waiting for it, on the worker's
+  thread, if it is not in yet. A missing or too-old `git` arrives the same way
+  as a missing repository, naming the version Cairn needs, and nothing is
+  served behind it (`a_missing_git_is_refused_naming_the_version_and_nothing_is_served`,
+  `a_git_refused_at_discovery_is_refused_to_every_repository_that_asks`); one
+  probe per application is `git_is_found_once_per_application_not_once_per_repository`.
 - `RepositoryHandle::submit(Request) -> Epoch` returns immediately over an
   unbounded channel and holds no receiving end of anything.
 - `Updates::next()` is an `async fn`: it `try_recv`s and otherwise parks on
@@ -205,7 +210,8 @@ FILE, and it is a guard, not a convention — see below.
   implements `cairn_git::Cancel` as "is my epoch still current", so superseding
   a request stops its walk at the next commit rather than discarding a finished
   answer (`superseding_a_request_stops_the_walk_that_is_serving_it`). Dropping
-  `Updates` stops everything, so closing the window does not wait for a page.
+  `Updates` stops everything, and so does `Request::Close`, which stops the
+  epochs as it is submitted: closing the window does not wait for a page.
 - **A dead worker is announced, not waited for.** `Update::WorkerLost` is sent
   from `WorkerExit`'s `Drop`, and the job channel is closed BEFORE the waiting
   task is woken. That ordering is the point: reversed, a worker that panicked
@@ -223,7 +229,7 @@ FILE, and it is a guard, not a convention — see below.
   `WorkerExit` around it (`an_outbox_dropped_anywhere_ends_the_stream`): that
   is what makes "the last sender closing wakes the task" hold by construction
   rather than by each path remembering to. It did not always — the two extra
-  outboxes `open_with` makes for the operations and acceptor threads were
+  outboxes `open` makes for the network-lane and acceptor threads were
   captured by the repository thread's closure, and on an early exit (no usable
   `git`, no repository at the path) were dropped after the `WorkerExit` had
   signalled, with no wake of their own; a task parked between the two never
@@ -247,13 +253,15 @@ FILE, and it is a guard, not a convention — see below.
   runs ordinary blocking code, so a job that must wait on a UI answer makes its
   own reply channel and blocks on it; and workers are pinned to a purpose rather
   than fed from an anonymous queue. Fetch (`docs/prd/credential-prompts.md`
-  R4) is the second consumer, and landed as exactly that: its own thread
-  (`worker/operations.rs`), its own `Update` variants, and requests that carry
-  no epoch so a scroll and a fetch cannot supersede each other; the credential
+  R4) is the second consumer, and landed as exactly that: its own thread, now
+  the network lane (`worker/network_lane.rs`, `cairn-network`), its own
+  `Update` variants, and requests that carry no epoch so a scroll and a fetch
+  cannot supersede each other; the credential
   dialog is a third thread (`worker/askpass.rs`) blocking on the window's
   reply. How it honours `Invalidated::refs` is the OpenHistory path above — a
   finished fetch makes the window ask for the history again from `HEAD`. The
-  as-built description is `docs/systems/credentials.md`.
+  as-built description is `docs/systems/credentials.md`; the lane, the close
+  and the command log are `docs/systems/git-processes.md`.
 
 Every `submit` of a QUERY supersedes (an operation carries no epoch), and a
 superseded page delivers nothing — so the caller must debounce. `Progress::wants_more()`

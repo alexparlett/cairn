@@ -17,8 +17,10 @@ kill handle or a drop — `SIGTERM` to the group, then `SIGKILL` after two
 seconds. The version probe and fetch run on it like everything else; the
 paths they ran on before are gone, and a guard keeps them gone. Each open
 repository keeps a registry of the invocations running in it, which closing
-it can end and wait on, and a bounded log of every one that is over. The
-application does not call the close or read the log yet.
+it ends and waits on, and a bounded log of every one that is over. In the
+application, `git` is found once, as it starts; a fetch runs in the network
+lane, which refuses a second; closing the window closes its repository; and
+the worker answers the log as values, which no view draws yet.
 
 ## The layout
 
@@ -48,6 +50,46 @@ crates/cairn-git/src/
 reaches `GitBinary`, `GitVersion`, `GitEnvironment` and `Askpass` through
 `cairn_git::ops`, which re-exports them because the application owns startup
 and the helper's channel. It cannot reach the runner: nothing in it is `pub`.
+
+On the application's side, in `crates/cairn-app/src/`:
+
+```
+  worker/discovery.rs     Discovery — git found once per application, on cairn-discovery
+  worker/startup.rs       Startup, Backend — a repository's channel, and git pointed at it
+  worker/network_lane.rs  the network lane (cairn-network): Operation, Lane, FetchControl, Refusal
+  worker/pool.rs          the repository thread: Request::Close, Request::CommandLog, Threads::drop
+  closing.rs              Closing — the window's close hook, which asks and never waits
+```
+
+## Discovery
+
+`git` is found and its version checked once per application, as it starts
+(PRD R6.1). `main` calls `worker::Discovery::start()` before the window
+exists; it spawns a `cairn-discovery` thread that runs
+`GitBinary::discover_with` against the launching environment — `PATH` and
+the inherited roster, pointed at the helper with no channel yet, since the
+probe asks nobody anything — and keeps the answer, or the refusal's text, in
+a `OnceLock`. Each repository's thread asks for it before it looks for the
+repository, and waits if it is not in yet; if the discovery thread could not
+be started, the first to ask finds it, once. A missing or too-old `git`
+reaches every repository that asks as the same `Update::Failed`, naming the
+version Cairn needs, and nothing is served behind it.
+
+The answer is a path and a version, and each repository needs it pointed at
+its own askpass channel, which does not exist until the repository opens:
+`GitBinary::with_environment` copies the path and version onto the
+environment built around that channel's socket, with no second search and no
+second probe. The program stays the one found, by its absolute path.
+
+Pinned: `git_is_found_once_per_application_not_once_per_repository`
+(`worker/lifecycle_tests.rs`: three repositories opened on one discovery,
+started as `main` starts it and raced by the first open, probe the stub once;
+two opened with a discovery each probe it twice, so the count moves),
+`a_git_refused_at_discovery_is_refused_to_every_repository_that_asks`,
+`a_missing_git_is_refused_naming_the_version_and_nothing_is_served`
+(`worker/pool.rs`), and
+`a_found_git_takes_a_new_environment_without_being_searched_for_or_probed_again`
+(`crates/cairn-git/tests/git_binary.rs`).
 
 ## The seal
 
@@ -424,14 +466,14 @@ An invocation run in no repository — the version probe, and the tests that
 give none — is booked nowhere.
 
 `SharedRepository::end_invocations(bound)` (`Processes::end_all`) is what
-closing a repository will run, with `cairn_git::CLOSE_BOUND`: every
+closing a repository runs, with `cairn_git::CLOSE_BOUND` ("Closing", below): every
 invocation in the registry is asked to end the way a cancel asks (`SIGTERM`
 to its group if the lock is free, the rest by the thread driving it), and the
 call waits on a condition variable, up to `bound`, for the registry to empty.
 It returns how many were still running when it stopped waiting. From then on
 the repository is closing: an invocation that enters afterwards is asked to
-end the moment it does. It waits, so it is a worker's call; the application
-does not call it yet.
+end the moment it does. It waits, so it is a worker's call: the application
+calls it on the repository thread.
 
 What a close costs: a write that outlasts the grace is `SIGKILL`ed, which can
 strand its lock files. Its cancellation still lists them, to whoever drives
@@ -481,7 +523,16 @@ two ways, dropping its oldest records to stay under both:
   so a record is trimmed only past those: its stderr keeps its end, then its
   arguments their start, with a last argument counting what went.
 
-`SharedRepository::command_log()` answers it. No view draws it yet.
+`SharedRepository::command_log()` answers it, and the worker hands it to
+whoever asks: `Request::CommandLog` is answered on the repository thread by
+`Update::CommandLog { records }`, the records oldest first. Nothing in the
+application asks yet — no view draws the log in this packet (PRD R8.3) — so
+the request is its tests' alone. Pinned, G17's worker half:
+`the_command_log_is_answered_through_the_worker_with_the_fetch_in_it`
+(`worker/lifecycle_tests.rs`: empty before anything has run; after a fetch
+through the boundary, one record with fetch's arguments, the repository's
+directory, exit code 0, not cancelled, and the stub's stderr — the probe,
+run in no repository, is not in it).
 
 Residual, `qa-checklist`'s: the retained stderr is git's own text, kept for
 the session where before it travelled only on an error. git can quote a
@@ -510,6 +561,88 @@ by `a_fetch_with_a_token_is_logged_once_without_the_token_or_the_environment`
 (`ops/fetch.rs`), whose stub writes the environment it was given to a file —
 the token and every value looked for among it — while its record holds none
 of them.
+
+## The network lane
+
+A `git` operation runs in a write lane (PRD R7, `docs/design/concurrency.md`,
+"Operations"); one lane exists, the network lane, on the `cairn-network`
+thread (`worker/network_lane.rs`), where fetch runs — what was the operations
+thread. The lane is chosen per operation: `Operation::lane` names one for each
+operation by an exhaustive match, and the repository thread's
+`Threads::perform` routes by it, so the local lane lands beside this one with
+the first local write rather than being assumed away
+(`a_fetch_runs_in_the_network_lane`).
+
+One fetch at a time. `FetchControl::arm` claims the lane for a fetch of a
+remote, or refuses it naming the fetch already in flight and how far it has
+got — "a fetch of origin is already running", or "already waiting to start"
+while it is queued — and a refusal goes to the window as
+`Update::FetchRefused { remote, reason }`, never dropped (R7.2). The window
+keeps it in its own state, beside the fetch in flight, which the refusal
+leaves as it was, and draws it as a banner — "Fetch of origin not started:
+…" — until the Fetch button is next pressed. The window hides that button
+while a fetch is in flight, so a refusal is what a second fetch meets when
+anything else asks for one. Pinned, G15:
+`a_second_fetch_while_one_runs_is_refused_with_a_reason` (through the
+boundary, with a stub fetch that hangs), `a_second_fetch_is_refused_naming_the_fetch_in_flight`
+(`network_lane.rs`), `a_refused_fetch_is_kept_for_the_window_and_the_fetch_in_flight_is_untouched`
+(`session.rs`), `a_refused_fetch_is_drawn_with_its_reason_until_the_next_press`
+(`window.rs`, headless) and `a_refusal_names_the_fetch_refused_and_the_reason`
+(`status_text.rs`).
+
+## Closing
+
+Closing the window closes its repository (PRD R6.3), and nothing that waits
+runs on the UI thread:
+
+1. The window's close hook (`WindowConfig::with_on_close`, `main.rs`) calls
+   `Closing::requested` (`closing.rs`). The first time, it submits
+   `Request::Close` and keeps the window open. `RepositoryHandle::submit`
+   stops the epochs — an atomic store, so a page being walked is abandoned at
+   its next poll — and queues the close, which `serve` breaks on.
+2. On the repository thread, `Threads::drop` closes the network lane's queue
+   and calls `SharedRepository::end_invocations(CLOSE_BOUND)`: every `git` in
+   the registry is ended the way a cancel ends it, and the thread waits up to
+   `CLOSE_BOUND` for their reaps. The registry is the one authority here — a
+   fetch in flight is ended by it, not by its cancel. Then it stops the
+   acceptor, and the thread exits.
+3. A fetch still queued, or mid-spawn, when the close arrives is ended as it
+   enters the registry, because `end_all` marks the repository closing before
+   it looks: the network lane takes the fetch up after the close, spawns it,
+   and the registry asks it to end at once. Its process is in the registry
+   from the spawn, so there is no moment at which it runs unregistered.
+4. Each worker thread lets its update sender go as it exits, the network lane
+   only once its fetch is reaped, so the stream's end means every `git` in the
+   repository is over and the channel — and with it the askpass socket — is
+   gone. The task driving the stream sees it end, and `Closing::worker_gone`
+   says the window asked; the task then closes the window past the hook
+   (`Platform::close_current_window`).
+
+A window whose repository never opened, or whose worker has already gone,
+closes at once. A second close request before `worker::CLOSE_PATIENCE` (5 s,
+past `CLOSE_BOUND` and the acceptor's one-second stop deadline, asserted at
+compile time) changes nothing; one after it closes the window anyway, so a
+worker that has stopped answering cannot keep it open for good — at the cost,
+then, of whatever that worker had not yet ended.
+
+What a close costs is the registry's: a write that outlasts the grace is
+`SIGKILL`ed and may strand its lock files, and its `FetchCancelled` lists
+them on a stream about to end, to a window about to close, so nobody may be
+left to read them (above, "The registry").
+
+Pinned, G14: `closing_a_repository_ends_and_reaps_every_git_in_it_within_the_bound`
+(`worker/lifecycle_tests.rs`: a stub fetch leading its group with a
+grandchild holding its pipes; after `Request::Close` the stream ends inside
+`CLOSE_BOUND`, nothing in the group is alive, the leader is reaped, and the
+askpass socket is gone — deleting the `end_invocations` call fails it) and
+`a_fetch_closed_as_it_starts_is_still_ended`; on the window's side,
+`the_first_request_asks_the_worker_and_its_stream_ending_closes_the_window`,
+`a_window_with_no_repository_closes_at_once` and
+`a_window_whose_worker_has_gone_closes_at_once_and_only_when_asked`
+(`closing.rs`). That the toolkit runs the hook and the window then closes is
+G20, which only a display can show: checked by hand on a desktop session
+when this landed (Linux, Hyprland, the window closed through the desktop's
+own close action, under both the Wayland and the X11 backend), not by a test.
 
 ## The guards
 

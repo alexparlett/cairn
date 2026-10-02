@@ -62,6 +62,12 @@ impl Closing {
         }
     }
 
+    /// The window has asked the repository to close, and the worker has not
+    /// finished: nothing more is to be asked of it.
+    pub fn is_requested(&self) -> bool {
+        matches!(*self.0.borrow(), Stage::Closing { .. })
+    }
+
     /// The worker's update stream has ended; `true` when the window asked to
     /// close and should close now.
     pub fn worker_gone(&self) -> bool {
@@ -120,7 +126,12 @@ mod tests {
         let closing = Closing::default();
         closing.opened(handle);
 
+        assert!(!closing.is_requested(), "closing before anyone asked");
         assert_eq!(closing.requested(), CloseDecision::KeepOpen);
+        assert!(
+            closing.is_requested(),
+            "the close asked for was not remembered"
+        );
         assert_eq!(
             asked(),
             vec![Request::Close],

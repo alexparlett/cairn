@@ -11,10 +11,13 @@ use crate::worker::{PromptId, Request, Update};
 
 /// What applying an update may ask of the worker: a request, and the refusal
 /// of a prompt the window will not show. Two plain callbacks, never a struct
-/// holding the answering end: nothing may hold that.
+/// holding the answering end: nothing may hold that. `closing` says the
+/// window has asked the repository to close, so nothing is to be asked of it
+/// again.
 pub struct Worker<'a> {
     pub submit: &'a dyn Fn(Request),
     pub refuse: &'a dyn Fn(PromptId),
+    pub closing: bool,
 }
 
 /// Applies `update` to `view`. A fetch ending takes down any dialog and
@@ -95,14 +98,16 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
     }
 }
 
-/// The refs moved: the rows on screen are of the old ones.
+/// The refs moved: the rows on screen are of the old ones — unless the window
+/// is closing, when the history stays as it is: the worker that would answer
+/// has stopped, and clearing every row on the way out is work for nothing.
 fn reload_if(
     refreshed: bool,
     mut rows: State<Vec<cairn_model::HistoryRow>>,
     mut progress: State<Progress>,
     worker: &Worker<'_>,
 ) {
-    if !refreshed {
+    if !refreshed || worker.closing {
         return;
     }
     rows.write().clear();
@@ -186,6 +191,16 @@ mod tests {
     }
 
     fn applying(test: &TestingRunner, view: View, asked: &Rc<Asked>, update: Update) {
+        applying_while(test, view, asked, update, false);
+    }
+
+    fn applying_while(
+        test: &TestingRunner,
+        view: View,
+        asked: &Rc<Asked>,
+        update: Update,
+        closing: bool,
+    ) {
         let submit = {
             let asked = Rc::clone(asked);
             move |request| asked.submitted.borrow_mut().push(request)
@@ -201,9 +216,38 @@ mod tests {
                 &Worker {
                     submit: &submit,
                     refuse: &refuse,
+                    closing,
                 },
             );
         });
+    }
+
+    /// A fetch the close itself ended may still have moved refs. Caught by: reloading
+    /// anyway — every row cleared on the UI thread and a request sent to a worker that has
+    /// stopped, so the history vanishes behind "Reading history…" while the window closes.
+    #[test]
+    fn a_fetch_ended_by_the_close_leaves_the_history_as_it_is() {
+        let (test, view, asked) = launch(running());
+        applying_while(
+            &test,
+            view,
+            &asked,
+            Update::FetchCancelled {
+                remote: "origin".to_owned(),
+                refreshed: true,
+                stranded_locks: Vec::new(),
+            },
+            true,
+        );
+        assert_eq!(
+            view.rows.read().len(),
+            3,
+            "the rows were cleared on the way out"
+        );
+        assert!(
+            asked.submitted.borrow().is_empty(),
+            "a closing repository was asked for its history again"
+        );
     }
 
     fn running() -> FetchStatus {

@@ -93,6 +93,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
                             &session::Worker {
                                 submit: &submit,
                                 refuse: &refuse,
+                                closing: closing.is_requested(),
                             },
                         );
                     }

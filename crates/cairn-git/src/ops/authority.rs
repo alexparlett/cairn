@@ -351,7 +351,13 @@ mod tests {
             "a status read left index.lock behind"
         );
 
-        scratch.write(&["status", "--porcelain=v2"], &repo);
+        scratch
+            .git
+            .write_invocation(WriteAuthority::new())
+            .in_repository(&handle)
+            .args(["status", "--porcelain=v2", "-z"])
+            .run()
+            .unwrap_or_else(|error| panic!("the same status as a write: {error}"));
         assert!(
             std::fs::read(&index).unwrap() != before,
             "the same status as a write left the index alone too, so the fixture was not \

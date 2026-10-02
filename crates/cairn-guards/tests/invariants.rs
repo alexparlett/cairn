@@ -616,23 +616,21 @@ fn only_the_ops_module_mutates_a_repository() {
 
     for dir in PRODUCT_SOURCE_DIRS {
         for (path, source) in rust_sources(dir) {
-            if path.starts_with(ops) {
+            // `process/` runs the `git` binary by design; whether what it runs may write is
+            // the write seal's (`the_runner_is_named_only_by_ops_and_reads`).
+            if path.starts_with(ops) || path.starts_with(process) {
                 continue;
             }
             scanned += 1;
-            // `process/` runs the `git` binary by design; whether what it runs may write is
-            // the write seal's (`the_runner_is_named_only_by_ops_and_reads`).
-            if !path.starts_with(process) {
-                let hits = spawns_git(&source);
-                assert!(
-                    hits.is_empty(),
-                    "{}:{} spawns a `git` subprocess outside crates/cairn-git/src/ops. Every \
-                     repository mutation lives in that module so the confirmation seal cannot \
-                     be routed around.",
-                    path.display(),
-                    hits[0]
-                );
-            }
+            let hits = spawns_git(&source);
+            assert!(
+                hits.is_empty(),
+                "{}:{} spawns a `git` subprocess outside crates/cairn-git/src/ops. Every \
+                 repository mutation lives in that module so the confirmation seal cannot \
+                 be routed around.",
+                path.display(),
+                hits[0]
+            );
         }
     }
     assert!(
@@ -797,8 +795,10 @@ fn only_the_process_module_builds_or_runs_a_process() {
             "`.try_wait()`",
             calls_nullary_method(&module, &["try_wait"]),
         ),
+        ("`.wait()`", calls_nullary_method(&module, &["wait"])),
         ("`Stdio`", mentions_crate(&module, "Stdio")),
         ("`Child`", mentions_crate(&module, "Child")),
+        ("`ChildStderr`", mentions_crate(&module, "ChildStderr")),
         ("`nix`", mentions_crate(&module, "nix")),
         (
             "`.command(..)`",
@@ -812,6 +812,17 @@ fn only_the_process_module_builds_or_runs_a_process() {
              the matcher stopped matching"
         );
     }
+    // The method that hands back a process stays visible to `process/` alone: widened, it is
+    // a `Command` any module could drive, and the call matcher above sees only product `src/`.
+    let environment = std::fs::read_to_string(repo_root().join(PROCESS_ENVIRONMENT_FILE))
+        .unwrap_or_else(|e| panic!("{PROCESS_ENVIRONMENT_FILE}: {e}"));
+    let environment = code_without_test_modules(&code_without_strings(&environment));
+    assert!(
+        environment.contains("pub(super) fn command(")
+            && declares_publicly(&environment, "command").is_empty(),
+        "{PROCESS_ENVIRONMENT_FILE} no longer declares `pub(super) fn command(`; a wider \
+         {PROCESS_ENVIRONMENT_TYPE}::command is a process any module of the crate can run"
+    );
     for (dir, method, _) in PROCESS_CALL_EXCEPTIONS {
         let still_called = rust_sources(dir).iter().any(|(_, source)| {
             let production = code_without_test_modules(&code_without_strings(source));
@@ -1020,23 +1031,29 @@ fn the_runner_is_named_only_by_ops_and_reads() {
         "{OPS_DIR}/mod.rs lost the passing scaffold of its compile-fail doctests; without it the \
          refused blocks could all fail for a reason unrelated to the seal"
     );
+    // Each refused block is exactly the scaffold plus its one line, so none can fail on a typo
+    // in the part it shares with the block that compiles.
+    let refused_blocks: Vec<&str> = docs
+        .split("//! ```compile_fail\n")
+        .skip(1)
+        .filter_map(|block| block.split("//! ```\n").next())
+        .collect();
     for refused in [
         "let _: Option<cairn_git::ops::WriteAuthority> = None;",
         "let _ = cairn_git::ops::WriteAuthority::new();",
-        "let _ = git.write_invocation();",
+        "let _ = git.write_invocation(unreachable!());",
         "let _ = git.read_invocation();",
-        "let _ = git.environment().command(git.path(), None);",
+        "let _ = git.environment().command(git.path(), unreachable!());",
     ] {
-        let pinned = docs.split("//! ```compile_fail\n").skip(1).any(|block| {
-            block
-                .split("//! ```\n")
-                .next()
-                .is_some_and(|block| block.contains(refused))
-        });
+        let expected = format!(
+            "//! fn scaffold(git: &cairn_git::ops::GitBinary) {{\n//!     let _ = git.path();\n\
+             //!     {refused}\n//! }}\n"
+        );
         assert!(
-            pinned,
-            "{OPS_DIR}/mod.rs no longer pins `{refused}` in a compile_fail doctest; from outside \
-             cairn-git, no write and no WriteAuthority can be named or built (process-manager G1)"
+            refused_blocks.contains(&expected.as_str()),
+            "{OPS_DIR}/mod.rs no longer pins `{refused}` in a compile_fail doctest that is the \
+             passing scaffold plus that one line; from outside cairn-git, no write and no \
+             WriteAuthority can be named or built (process-manager G1)"
         );
     }
 }
@@ -1198,6 +1215,44 @@ fn verdict(path: &str, source: &str) -> Vec<String> {
 
 #[test]
 fn the_process_matcher_catches_the_shapes_it_claims() {
+    // Every roster entry on its own, spelled out apart from the roster, so an entry dropped
+    // from it fails here rather than taking its own case with it.
+    let idents = [
+        "Stdio",
+        "Child",
+        "ChildStdin",
+        "ChildStdout",
+        "ChildStderr",
+        "CommandExt",
+        "nix",
+    ];
+    let calls = [
+        "spawn",
+        "output",
+        "status",
+        "wait",
+        "try_wait",
+        "wait_with_output",
+    ];
+    assert_eq!(
+        (PROCESS_IDENTS.len(), PROCESS_NULLARY_CALLS.len()),
+        (idents.len(), calls.len()),
+        "a process roster changed; spell the entry out here too, so it has a case of its own"
+    );
+    for ident in idents {
+        let source = format!("use std::process::{ident};");
+        assert!(
+            !process_violations(Path::new(SCRATCH_FILE), &source).is_empty(),
+            "the process matcher missed `{ident}`: {source:?}"
+        );
+    }
+    for name in calls {
+        let source = format!("let x = built.{name}();");
+        assert!(
+            !process_violations(Path::new(SCRATCH_FILE), &source).is_empty(),
+            "the process matcher missed `.{name}()`: {source:?}"
+        );
+    }
     for (shape, source) in [
         ("a pipe", "cmd.stdout(Stdio::piped());"),
         ("a child", "fn reap(child: Child) {}"),
@@ -1276,6 +1331,31 @@ fn the_process_matcher_catches_the_shapes_it_claims() {
 
 #[test]
 fn the_runner_matcher_catches_the_shapes_it_claims() {
+    // Every roster entry on its own, spelled out apart from the rosters, in a file outside every
+    // allowed module — and the write names in reads/ too — so an entry dropped from a roster
+    // fails here rather than taking its own case with it.
+    let runner = ["GitCommand", "read_invocation", "Running", "ProcessKill"];
+    let write = ["write_invocation", "WriteAuthority"];
+    assert_eq!(
+        (RUNNER_NAMES.len(), WRITE_NAMES.len()),
+        (runner.len(), write.len()),
+        "a runner roster changed; spell the entry out here too, so it has a case of its own"
+    );
+    for name in runner.iter().chain(&write) {
+        let source = format!("fn f(x: &{name}) {{}}");
+        assert!(
+            !runner_violations(Path::new(SCRATCH_FILE), &source).is_empty(),
+            "the runner matcher missed `{name}`: {source:?}"
+        );
+    }
+    for name in write {
+        let source = format!("fn f(x: &{name}) {{}}");
+        assert!(
+            !runner_violations(Path::new("crates/cairn-git/src/reads/changes.rs"), &source)
+                .is_empty(),
+            "the runner matcher let reads/ name `{name}`, which builds a write"
+        );
+    }
     for (shape, path, source) in [
         (
             "a read built outside ops/ and reads/",

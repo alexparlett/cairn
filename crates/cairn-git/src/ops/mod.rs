@@ -61,7 +61,14 @@
 //! From outside the crate there is nothing to name at all. The scaffolding the
 //! refused snippets below share compiles; each adds one line, and that line is
 //! what does not (stable `rustdoc` checks that a `compile_fail` block fails,
-//! not why, so the one-line difference is what keeps each of them honest):
+//! not why, so the one-line difference is what keeps each of them honest, and
+//! the guard requires each block to be exactly the scaffold plus its line).
+//! Every argument is `unreachable!()`, so no block can fail on its arguments:
+//! each fails on privacy alone — of the item it names, or of a type that item
+//! takes or returns, which is crate-private too (`GitCommand`, `Profile`). So
+//! these decide that the public surface offers no way in; that each builder
+//! and `GitEnvironment::command` keeps its own restricted visibility is pinned
+//! separately, by the guard `the_runner_is_named_only_by_ops_and_reads`:
 //!
 //! ```
 //! fn scaffold(git: &cairn_git::ops::GitBinary) {
@@ -91,7 +98,7 @@
 //! ```compile_fail
 //! fn scaffold(git: &cairn_git::ops::GitBinary) {
 //!     let _ = git.path();
-//!     let _ = git.write_invocation();
+//!     let _ = git.write_invocation(unreachable!());
 //! }
 //! ```
 //!
@@ -107,7 +114,7 @@
 //! ```compile_fail
 //! fn scaffold(git: &cairn_git::ops::GitBinary) {
 //!     let _ = git.path();
-//!     let _ = git.environment().command(git.path(), None);
+//!     let _ = git.environment().command(git.path(), unreachable!());
 //! }
 //! ```
 //!

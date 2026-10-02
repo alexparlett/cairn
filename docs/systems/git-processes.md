@@ -368,7 +368,12 @@ a completed invocation reported as cancelled.
    cancelled write does; for a read, nothing.
 3. A cancel that lost the race to a clean exit — status 0 with no signal sent
    while the leader was running — is the success it was
-   (`a_cancel_after_a_clean_exit_is_reported_as_success`). Any other invocation
+   (`a_cancel_after_a_clean_exit_is_reported_as_success`). "No signal sent
+   while running" is what the runner can see: a git that exits 0 after the
+   last `try_wait` but before the `SIGTERM` lands is counted signalled, and
+   reported cancelled though it completed — for fetch, a completed fetch the
+   window calls cancelled, whose moved refs the worker still finds by
+   comparing them before and after. Any other invocation
    asked to end is cancelled, whatever its status
    (`a_cancelled_process_that_exits_zero_after_the_signal_is_reported_cancelled`,
    `a_cancelled_process_that_exits_nonzero_is_reported_cancelled`). What that
@@ -428,6 +433,11 @@ the repository is closing: an invocation that enters afterwards is asked to
 end the moment it does. It waits, so it is a worker's call; the application
 does not call it yet.
 
+What a close costs: a write that outlasts the grace is `SIGKILL`ed, which can
+strand its lock files. Its cancellation still lists them, to whoever drives
+it, but on a close nobody may be left to show them, and the next write in
+that repository fails on them with git's own "File exists" message.
+
 `CLOSE_BOUND` is 3 s: the 2 s grace and the 250 ms drain bound, which is the
 longest a cancel can take, with three-quarters of a second to spare; a
 compile-time assertion keeps it above their sum.
@@ -473,6 +483,15 @@ two ways, dropping its oldest records to stay under both:
 
 `SharedRepository::command_log()` answers it. No view draws it yet.
 
+Residual, `qa-checklist`'s: the retained stderr is git's own text, kept for
+the session where before it travelled only on an error. git can quote a
+remote's URL there, and a URL configured with userinfo
+(`https://user:token@host`) is a credential that is not a `Secret`. git
+anonymises the URL in the messages checked (`From <url>`), but that every
+message of every git from 2.30 does is not verified; scrubbing userinfo from
+the tail would be a design change, and is not made. The arguments carry what
+Cairn passed, which for fetch is a remote's name.
+
 Pinned, G17's engine half, one record per exit path (`process/registry.rs`):
 `a_finished_invocation_is_logged_once_with_every_field`,
 `a_failed_invocation_is_logged_once_with_its_status`,
@@ -502,7 +521,7 @@ count, and each has a matcher self-test:
 | `every_git_invocation_disables_the_terminal_prompt` | Outside `process/environment.rs`, no product file names or builds a `Command`, sets a process environment variable, or builds or implements `GitEnvironment`. Inside it: one `Command`, one literal, `env_clear` and `envs`, and the `ALWAYS` table's four pins. The `READ_ONLY` table carries each of `READ_ONLY_PINS` — `GIT_OPTIONAL_LOCKS=0` and `GIT_NO_LAZY_FETCH=1` — and is applied. The askpass names are set. |
 | `only_the_process_module_builds_or_runs_a_process` | Outside `process/`, no product file names `Stdio`, `Child` or its pipes, `CommandExt` or `nix`. It calls none of `.spawn()`, `.output()`, `.status()`, `.wait()`, `.try_wait()` or `.wait_with_output()`, and does not call `GitEnvironment::command`. `GitEnvironment::command` stays `pub(super)`. `process/` itself must show the runner's own shapes — `.spawn()`, `.try_wait()`, `CommandExt`, `Stdio`, `Child`, `ChildStdout`, `ChildStderr`, `nix` and `.command(..)` — so the matcher is proven to read real code; `.output()` and `.wait()` were swapped out for `CommandExt` and `ChildStdout` when the old runner went, and stay banned outside `process/`. The one exception row, `.status()` in `cairn-app` (`HistoryProgress::status`), fails once it is no longer needed. |
 | `the_runner_is_named_only_by_ops_and_reads` | In `crates/cairn-git/src`, the runner's names (`GitCommand`, `read_invocation`, `Running`, `ProcessKill`, `Invocation`, `KillHandle`) are allowed in `process/`, `ops/` and `reads/` only. The write builder and `WriteAuthority` are allowed in `process/` and `ops/`. Constructing, writing a literal of or implementing `WriteAuthority` is allowed in `ops/` only. Nothing is declared or re-exported `pub`, and `process` stays private. The authority keeps its shape, and the doctests stay. |
-| `the_retired_runner_is_gone` | Nowhere in `crates/cairn-git/src`, `process/` and test modules included, is `Running` or `ProcessKill` named, `run` or `stream` declared in an `impl` block of `GitCommand`, or `.stream(..)` called (PRD R3.7, G18). Proven to read real code by finding `GitCommand`'s impl declaring `start`; self-test `the_retired_runner_matcher_catches_the_shapes_it_claims`. |
+| `the_retired_runner_is_gone` | Nowhere in `crates/cairn-git/src`, `process/` and test modules included, is `Running` or `ProcessKill` named, `run` or `stream` declared in an `impl` block of `GitCommand`, or `.stream(..)`, `GitCommand::run(..)` or `GitCommand::stream(..)` called (PRD R3.7, G18). Production `process/` calls `.spawn()` in exactly one place, `GitCommand::start_with`, so a second runner that spawns for itself fails whatever it is called. Proven to read real code by finding `GitCommand`'s impl declaring `start`; self-test `the_retired_runner_matcher_catches_the_shapes_it_claims`. |
 | `only_the_ops_module_mutates_a_repository` | No product file outside `ops/` and `process/` spawns `git` by its literal name. No file of `crates/cairn-git/src` outside `ops/` names gitoxide's mutation API. That roster was enumerated from the vendored gix 0.87.1 source and sits, with each entry's file and line, in `crates/cairn-guards/src/lib.rs`. |
 
 `the_unguarded_routes_to_a_process_now_fail_a_twin` pins the routes that
@@ -520,6 +539,10 @@ invariant. That a read runs query plumbing or `status` is
 `destructive-ops-reviewer`'s check 10. These are `qa-checklist`'s item 7:
 
 - a process or a gix write reached through an alias, a trait object or a macro;
+- a retired entry point declared through a `type` alias of the builder, as a
+  free function or by a macro, which the retired-runner twin sees only if it
+  spawns, and a second path built on `start` that drives an `Invocation` by
+  rules of its own, which it does not see at all;
 - a built or started invocation (`GitCommand`, `Invocation`) or a
   kill handle (`KillHandle`) handed out of `ops/` or `reads/` and driven
   elsewhere by inference. The runner guard reads names, so whether `ops/` and

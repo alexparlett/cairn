@@ -166,8 +166,13 @@ never enters `cairn-git` and never enters application state.
   helper with it; a cancel is `SIGTERM` to that group, then `SIGKILL` after
   `TERMINATION_GRACE` (two seconds), because git removes the lock files it
   holds on `SIGTERM` and cannot on `SIGKILL` (issue #19); and a clean exit
-  that a cancel raced is reported as the success it was. What fetch adds is
-  only its arguments and its outcome. Pinned end to end by
+  that a cancel raced is reported as the success it was — where the runner
+  saw it exit before the signal; one that exits in the microseconds between
+  the last look and the `SIGTERM` is reported cancelled. A failed fetch
+  names the lock files present under the git directory, as every failed
+  write does (`a_failed_fetch_names_the_lock_files_present_and_only_those`
+  in `tests/fetch.rs`). What fetch adds is only its arguments and its
+  outcome. Pinned end to end by
   `crates/cairn-git/tests/fetch.rs` (below), every one of whose cancels is
   bounded under two seconds, which only a git that acted on the `SIGTERM`
   meets.

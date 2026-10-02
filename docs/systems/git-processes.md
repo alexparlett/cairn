@@ -43,7 +43,9 @@ crates/cairn-git/src/
     authority.rs    WriteAuthority, and the tests that need one (real `git` writes among them)
     fetch.rs        fetch, built as a write
     stranded_locks.rs  every `*.lock` under a git directory; the runner reports them for a write
-  reads/        each read `git` answers, one named function each — empty until diff-engine
+  reads/        each read `git` answers, one named function each — empty until diff-engine;
+                its test module proves the shape that packet takes: a read built from a
+                `GitBinary` copy, run on a thread, stopped by an epoch, answering `-z` records
 ```
 
 `process` is a private module (`mod process;` in `lib.rs`). The application

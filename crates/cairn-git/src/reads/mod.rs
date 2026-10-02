@@ -58,3 +58,265 @@
 //! `WriteAuthority` a write needs. That each function here runs query
 //! plumbing or `status` is a review obligation: a token scan cannot tell `diff-tree` from
 //! `diff` in an argument list built at run time.
+
+/// The path `diff-engine` takes, proved against what shipped: a read built here
+/// in `reads/` from a `GitBinary` copy the diff thread holds, run on that
+/// thread, stopped by an epoch, answering `-z` records. `changes` is the shape
+/// of that packet's first function (`git diff-tree -r -M -z --raw`); it is
+/// declared inside this test module because nothing in the product calls a read
+/// yet.
+#[cfg(test)]
+mod diff_engine_path_forward {
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+
+    use crate::ops::{Askpass, GitBinary, GitEnvironment};
+    use crate::{Cancel, Error, Repository, SharedRepository};
+
+    /// What the worker's epoch is: a counter the UI advances, and a query that
+    /// carries the value it started under and is superseded once they differ.
+    struct Epoch {
+        current: Arc<AtomicU64>,
+        started_under: u64,
+    }
+
+    impl Cancel for Epoch {
+        fn is_cancelled(&self) -> bool {
+            self.current.load(Ordering::Acquire) != self.started_under
+        }
+    }
+
+    /// The read: one named function, plumbing only, `-z` records handed over as
+    /// they arrive. A fresh `GitBinary` copy and a thread-local `Repository`
+    /// are all it needs.
+    fn changes(
+        git: &GitBinary,
+        repo: &Repository,
+        from: &str,
+        to: &str,
+        cancel: &impl Cancel,
+        mut record: impl FnMut(&[u8]),
+    ) -> Result<(), Error> {
+        git.read_invocation()
+            .in_repository(repo)
+            .args([
+                "diff-tree",
+                "-r",
+                "-M",
+                "-z",
+                "--raw",
+                "--end-of-options",
+                from,
+                to,
+            ])
+            .start()?
+            .records(cancel, &mut record, |_| {})
+            .map(|_| ())
+    }
+
+    fn git_in(
+        program: &Path,
+        directory: &Path,
+        home: &Path,
+        args: &[&str],
+        input: Option<&str>,
+    ) -> String {
+        use std::io::Write;
+        let mut child = std::process::Command::new(program)
+            .arg("-C")
+            .arg(directory)
+            .args(args)
+            .env("HOME", home)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "A U Thor")
+            .env("GIT_AUTHOR_EMAIL", "author@example.com")
+            .env("GIT_COMMITTER_NAME", "A U Thor")
+            .env("GIT_COMMITTER_EMAIL", "author@example.com")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap_or_else(|error| panic!("git {args:?}: {error}"));
+        let mut stdin = child.stdin.take().unwrap_or_else(|| panic!("piped stdin"));
+        let bytes = input.unwrap_or_default().to_owned();
+        let feeder = std::thread::spawn(move || {
+            let _ = stdin.write_all(bytes.as_bytes());
+        });
+        let output = child
+            .wait_with_output()
+            .unwrap_or_else(|error| panic!("git {args:?}: {error}"));
+        let _ = feeder.join();
+        assert!(output.status.success(), "git {args:?} failed");
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    struct Fixture {
+        program: PathBuf,
+        root: PathBuf,
+        repo: PathBuf,
+        home: PathBuf,
+    }
+
+    impl Fixture {
+        fn new(name: &str) -> Self {
+            static NEXT: AtomicUsize = AtomicUsize::new(0);
+            let root = std::env::temp_dir().join(format!(
+                "cairn-reads-{name}-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            let (repo, home) = (root.join("repo"), root.join("home"));
+            std::fs::create_dir_all(&home).unwrap_or_else(|error| panic!("{error}"));
+            std::fs::create_dir_all(&repo).unwrap_or_else(|error| panic!("{error}"));
+            // The `git` Cairn itself would find, so the fixture is built by the
+            // binary the read under test runs.
+            let program = GitBinary::discover(&Askpass::new("/nonexistent/cairn-askpass", None))
+                .unwrap_or_else(|error| panic!("{error}"))
+                .path()
+                .to_owned();
+            git_in(&program, &repo, &home, &["init", "-q", "."], None);
+            Self {
+                program,
+                root,
+                repo,
+                home,
+            }
+        }
+
+        fn git(&self, args: &[&str], input: Option<&str>) -> String {
+            git_in(&self.program, &self.repo, &self.home, args, input)
+        }
+
+        /// The discovery the application does once, on the machine's `git`, with
+        /// a home that holds no configuration.
+        fn binary(&self) -> GitBinary {
+            let home = self.home.clone().into_os_string();
+            let environment = GitEnvironment::new(
+                |name| match name {
+                    "PATH" => std::env::var_os("PATH"),
+                    "HOME" => Some(home.clone()),
+                    _ => None,
+                },
+                &Askpass::new("/nonexistent/cairn-askpass", None),
+            );
+            GitBinary::discover_with(environment).unwrap_or_else(|error| panic!("{error}"))
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    /// A rename with an edit, between two commits: the answer `gix` and `git`
+    /// can differ on, and the reason a read here runs `git` at all.
+    #[test]
+    fn a_read_built_here_and_run_on_a_threads_own_copy_answers_z_records() {
+        let fixture = Fixture::new("rename");
+        let body: String = (0..40).map(|n| format!("line {n}\n")).collect();
+        std::fs::write(fixture.repo.join("old name"), &body).unwrap_or_else(|e| panic!("{e}"));
+        fixture.git(&["add", "."], None);
+        fixture.git(&["commit", "-q", "-m", "one"], None);
+        fixture.git(&["mv", "old name", "new\tname"], None);
+        std::fs::write(
+            fixture.repo.join("new\tname"),
+            body.replace("line 7\n", "line 7!\n"),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        fixture.git(&["add", "."], None);
+        fixture.git(&["commit", "-q", "-m", "two"], None);
+
+        let shared = SharedRepository::discover(&fixture.repo).unwrap_or_else(|e| panic!("{e}"));
+        let git = fixture.binary();
+        let epochs = Arc::new(AtomicU64::new(0));
+        let query = Epoch {
+            current: Arc::clone(&epochs),
+            started_under: 0,
+        };
+        // The diff thread: its own `GitBinary` copy, its own thread-local handle.
+        let thread_git = git.clone();
+        let answered = std::thread::spawn(move || {
+            let repo = shared.to_worker();
+            let mut records = Vec::new();
+            changes(&thread_git, &repo, "HEAD~1", "HEAD", &query, |record| {
+                records.push(String::from_utf8_lossy(record).into_owned());
+            })
+            .map(|()| (records, shared.command_log()))
+        })
+        .join()
+        .unwrap_or_else(|_| panic!("the diff thread panicked"))
+        .unwrap_or_else(|error| panic!("{error}"));
+
+        let (records, log) = answered;
+        assert_eq!(records.len(), 3, "{records:?}");
+        assert!(
+            records[0].starts_with(':') && records[0].contains(" R"),
+            "not a rename: {records:?}"
+        );
+        assert_eq!(records[1], "old name", "a space in a path survives -z");
+        assert_eq!(records[2], "new\tname", "a tab in a path survives -z");
+        assert_eq!(log.len(), 1, "the read is booked once: {log:?}");
+        assert_eq!(
+            log[0].arguments.first().map(String::as_str),
+            Some("diff-tree")
+        );
+        assert!(!log[0].cancelled);
+    }
+
+    /// The same read superseded: the epoch moves while a slow consumer holds
+    /// the answer back, `git` is stopped rather than waited for, the caller
+    /// hears a cancelled read, and nothing is left running.
+    #[test]
+    fn a_read_superseded_by_a_newer_epoch_stops_git_and_reports_a_cancelled_read() {
+        const ENTRIES: usize = 60_000;
+        let fixture = Fixture::new("superseded");
+        let blob = |content: &str| fixture.git(&["hash-object", "-w", "--stdin"], Some(content));
+        let (before, after) = (blob("before\n"), blob("after\n"));
+        let tree = |blob: &str| {
+            let listing: String = (0..ENTRIES)
+                .map(|n| format!("100644 blob {blob}\tf-{n:06}\n"))
+                .collect();
+            fixture.git(&["mktree"], Some(&listing))
+        };
+        let (from, to) = (tree(&before), tree(&after));
+
+        let shared = SharedRepository::discover(&fixture.repo).unwrap_or_else(|e| panic!("{e}"));
+        let git = fixture.binary();
+        let epochs = Arc::new(AtomicU64::new(0));
+        let query = Epoch {
+            current: Arc::clone(&epochs),
+            started_under: 0,
+        };
+        let repo = shared.to_worker();
+        let mut seen = 0_usize;
+        let started = Instant::now();
+        let outcome = changes(&git, &repo, &from, &to, &query, |_| {
+            seen += 1;
+            if seen == 1 {
+                // A newer query supersedes this one while the consumer is slow:
+                // `git` is blocked writing into a pipe nobody is emptying.
+                epochs.fetch_add(1, Ordering::Release);
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        });
+        let elapsed = started.elapsed();
+
+        assert!(
+            matches!(outcome, Err(Error::GitReadCancelled { .. })),
+            "expected a cancelled read, got {outcome:?}"
+        );
+        assert!(seen < ENTRIES, "the whole answer was read ({seen} records)");
+        assert!(elapsed < Duration::from_secs(5), "took {elapsed:?}");
+        let log = shared.command_log();
+        assert_eq!(log.len(), 1, "{log:?}");
+        assert!(log[0].cancelled, "{log:?}");
+        assert_eq!(
+            shared.end_invocations(Duration::from_secs(1)),
+            0,
+            "left running"
+        );
+    }
+}

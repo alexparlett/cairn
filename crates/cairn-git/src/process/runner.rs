@@ -936,6 +936,36 @@ mod tests {
         );
     }
 
+    /// The drop never waits, even for a process that will take the whole grace to
+    /// end: a stub that ignores `SIGTERM` keeps the reaper busy for two seconds,
+    /// and the drop has returned long before. Caught by: ending the process on the
+    /// dropping thread (the drop takes the grace), which a stub that dies of
+    /// `SIGTERM` at once, as in the test above, would not show.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn dropping_never_waits_for_a_process_that_outlasts_sigterm() {
+        let stub = stub(IGNORING_TERM);
+        let invocation = started(&stub);
+        let pid = invocation.id();
+        assert!(
+            eventually(DEADLINE, || group_members(pid).len() >= 2),
+            "the stub never started its sleep"
+        );
+        let dropping = Instant::now();
+        drop(invocation);
+        let took = dropping.elapsed();
+        assert!(took < Duration::from_millis(50), "the drop blocked for {took:?}");
+        assert!(
+            !group_gone(pid),
+            "the stub ended at once, so this decided nothing about waiting"
+        );
+        assert!(
+            eventually(TERMINATION_GRACE + Duration::from_secs(2), || group_gone(pid)),
+            "the reaper never ended the group {pid}: {:?}",
+            group_members(pid)
+        );
+    }
+
     /// G9, `SIGTERM` first: a stub that traps it says so and ends well inside the
     /// grace, so it was not `SIGKILL`ed (which runs no trap). Caught by: `SIGKILL`
     /// first, or no signal to a process that is waiting rather than running.

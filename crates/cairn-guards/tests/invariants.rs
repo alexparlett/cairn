@@ -955,22 +955,56 @@ fn retired_runner_traces(path: &Path, source: &str) -> Vec<String> {
     for line in calls_method(&code, &["stream"]) {
         found.push(format!("{} calls `.stream(..)`", at(line)));
     }
+    for method in RETIRED_RUNNER_METHODS {
+        for line in calls_associated_function(&code, INVOCATION_BUILDER, method) {
+            found.push(format!(
+                "{} calls `{INVOCATION_BUILDER}::{method}(..)`",
+                at(line)
+            ));
+        }
+    }
     found
+}
+
+/// How many times production code calls `.spawn()` with no arguments — a process started.
+/// Over `process/` this is the one place a `git` process is started, `GitCommand::start_with`,
+/// so a second runner that spawns for itself makes it two.
+fn process_spawns(source: &str) -> usize {
+    calls_nullary_method(
+        &code_without_test_modules(&code_without_strings(source)),
+        &["spawn"],
+    )
+    .len()
 }
 
 /// The probe and fetch run on the runner, and the paths they ran on before are gone (process-
 /// manager R3.7, G18): nothing in `cairn-git` names the streamed `Running` or its
-/// `ProcessKill`, declares `GitCommand::run` or `GitCommand::stream`, or calls `.stream(..)`.
-/// Over every file of the crate, `process/` and test modules included — a test that keeps an old
-/// path alive keeps its rules alive. Proven to read real code by finding `GitCommand`'s own impl
-/// blocks, and the runner's `start` in one of them.
+/// `ProcessKill`, declares `GitCommand::run` or `GitCommand::stream`, or calls `.stream(..)` or
+/// `GitCommand::run(..)`/`GitCommand::stream(..)`. Over every file of `crates/cairn-git/src`,
+/// `process/` and test modules included — a test that keeps an old path alive keeps its rules
+/// alive (`tests/` cannot name these crate-private items at all). And production `process/`
+/// starts a process in exactly one place, so a second runner spawning for itself — under any
+/// name, through an alias, a free function or a macro — fails here even where the name ban
+/// does not see it. Proven to read real code by finding `GitCommand`'s own impl blocks, and the
+/// runner's `start` in one of them.
+///
+/// Residual review obligation, `qa-checklist`'s (its item 7): the names are read as spelled, so
+/// a retired entry point declared through a `type` alias of the builder, as a free function or
+/// by a macro is seen only if it spawns; and a second path built ON `start` — a wrapper that
+/// drives an `Invocation` by rules of its own — spawns nothing new and is not seen at all.
 #[test]
 fn the_retired_runner_is_gone() {
     let mut scanned = 0usize;
     let mut builder_impls = 0usize;
     let mut declares_start = false;
+    let mut spawns = Vec::new();
     for (path, source) in rust_sources(ENGINE_SOURCE_DIR) {
         scanned += 1;
+        if path.starts_with(PROCESS_DIR) {
+            for _ in 0..process_spawns(&source) {
+                spawns.push(path.display().to_string());
+            }
+        }
         let found = retired_runner_traces(&path, &source);
         assert!(
             found.is_empty(),
@@ -993,6 +1027,14 @@ fn the_retired_runner_is_gone() {
         "the retired-runner guard found no impl block of {INVOCATION_BUILDER} declaring `start`; \
          the builder moved or was renamed, and this guard must follow it rather than pass on \
          nothing"
+    );
+    assert_eq!(
+        spawns.len(),
+        1,
+        "production {PROCESS_DIR} starts a process in {} places ({spawns:?}); the runner's \
+         `GitCommand::start_with` is the one way a `git` process starts, so a second spawn is a \
+         second runner with rules of its own for ending one",
+        spawns.len()
     );
 }
 
@@ -1024,6 +1066,22 @@ fn the_retired_runner_matcher_catches_the_shapes_it_claims() {
             "impl<K> GitCommand<'_, K> { fn run<F>(self, f: F) {} }",
         ),
         ("a stream call", "let r = command.stream()?;"),
+        (
+            "run, in a trait impl",
+            "impl Run for GitCommand<'_, Read> {\n    fn run(self) -> R { x }\n}",
+        ),
+        (
+            "a stream called by its path",
+            "let r = GitCommand::stream(command)?;",
+        ),
+        (
+            "a run called by its path",
+            "let o = GitCommand :: run(command)?;",
+        ),
+        (
+            "the streamed process, in a test module",
+            "#[cfg(test)]\nmod tests {\n    fn f(r: Running) {}\n}",
+        ),
         (
             "a wrapped stream call",
             "let r = command\n    .stream()\n    ?;",
@@ -1072,6 +1130,33 @@ fn the_retired_runner_matcher_catches_the_shapes_it_claims() {
         [(3, true)],
         "the impl matcher found the wrong blocks, or cut one short at an inner brace"
     );
+    // The spawn count reads production calls only: a test module's spawn, a thread builder's
+    // spawn with its closure, and prose do not count.
+    for (shape, source, expected) in [
+        ("one spawn", "let child = command.spawn()?;", 1),
+        (
+            "two spawns",
+            "let a = c.spawn()?;\nfn second() { let b = d\n    .spawn()?; }",
+            2,
+        ),
+        (
+            "a thread builder's spawn",
+            "std::thread::Builder::new().spawn(move || {})",
+            0,
+        ),
+        (
+            "a spawn in a test module",
+            "#[cfg(test)]\nmod tests {\n    fn t() { c.spawn().unwrap(); }\n}",
+            0,
+        ),
+        ("prose", "// command.spawn() is the one place\n", 0),
+    ] {
+        assert_eq!(
+            process_spawns(source),
+            expected,
+            "the spawn count misread {shape}: {source:?}"
+        );
+    }
 }
 
 /// A write, by the names that build one: the write builder and the authority it consumes.

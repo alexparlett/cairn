@@ -172,8 +172,9 @@ Why each variable is there, with its evidence, is beside it in
   clone, a read that asks for an object only the promisor remote holds would
   fetch it — a pack written, the network reached. With the variable, git
   answers that the object is missing instead. Git older than 2.44 ignores it,
-  so there a read in a partial clone may still lazy-fetch, and, carrying no
-  askpass token, an authenticated promisor fails closed. The user decided on
+  so there a read in a partial clone may still lazy-fetch. Carrying no askpass
+  token, it fails closed only where the promisor needs a prompt; one a
+  configured credential helper or the ssh agent answers fetches. The user decided on
   2026-10-02 to keep the floor and set the variable; the reads `diff-engine`
   adds design around the older-git case (`reads/mod.rs`).
 
@@ -606,24 +607,41 @@ runs on the UI thread:
    `CLOSE_BOUND` for their reaps. The registry is the one authority here — a
    fetch in flight is ended by it, not by its cancel. Then it stops the
    acceptor, and the thread exits.
-3. A fetch still queued, or mid-spawn, when the close arrives is ended as it
-   enters the registry, because `end_all` marks the repository closing before
-   it looks: the network lane takes the fetch up after the close, spawns it,
-   and the registry asks it to end at once. Its process is in the registry
-   from the spawn, so there is no moment at which it runs unregistered.
+3. A fetch asked for just before the close goes one of two ways. If it is
+   still on the repository thread's queue, `serve` has stopped (the epochs
+   were stopped as the close was submitted) and it is never forwarded or
+   started. If it has already been forwarded to the network lane, the lane
+   takes it up after the close and spawns it, and it is ended as it enters
+   the registry: `end_all` marks the repository closing before it looks,
+   and an invocation that enters afterwards is asked to end at once. A
+   process does run for a moment before it is registered — between its
+   spawn and its booking — and the closing mark is what covers that moment,
+   not simultaneity. One that enters after `end_all` has stopped waiting is
+   not in that wait; the network lane, which drives it to its reap, is what
+   the window then waits on (step 4).
 4. Each worker thread lets its update sender go as it exits, the network lane
-   only once its fetch is reaped, so the stream's end means every `git` in the
-   repository is over and the channel — and with it the askpass socket — is
-   gone. The task driving the stream sees it end, and `Closing::worker_gone`
+   only once its fetch is reaped, so the stream's end means every `git` Cairn
+   started in the repository is over — except a process git itself detached
+   from the group, such as the auto-maintenance a fetch may start, which
+   outlives any group kill (`docs/design/processes.md`) — and the channel,
+   and with it the askpass socket, is gone. A prompt still open holds the
+   acceptor until the window refuses it, which the window does when the
+   ended fetch's outcome arrives (`session::apply`, `withdraw`); a change to
+   that would make every close with a prompt open wait for the patience
+   below. The task driving the stream sees it end, and `Closing::worker_gone`
    says the window asked; the task then closes the window past the hook
-   (`Platform::close_current_window`).
+   (`Platform::close_current_window`). Meanwhile the window draws nothing
+   new, and an outcome the close produced does not reload the history
+   (`Closing::is_requested`, `session::Worker::closing`).
 
 A window whose repository never opened, or whose worker has already gone,
 closes at once. A second close request before `worker::CLOSE_PATIENCE` (5 s,
 past `CLOSE_BOUND` and the acceptor's one-second stop deadline, asserted at
 compile time) changes nothing; one after it closes the window anyway, so a
 worker that has stopped answering cannot keep it open for good — at the cost,
-then, of whatever that worker had not yet ended.
+then, of whatever that worker had not yet ended: the process exits, nothing
+is left to drive a late `git` to its `SIGKILL` or reap it, and such a `git`
+runs on, orphaned, holding whatever locks it holds.
 
 What a close costs is the registry's: a write that outlasts the grace is
 `SIGKILL`ed and may strand its lock files, and its `FetchCancelled` lists
@@ -635,7 +653,11 @@ Pinned, G14: `closing_a_repository_ends_and_reaps_every_git_in_it_within_the_bou
 grandchild holding its pipes; after `Request::Close` the stream ends inside
 `CLOSE_BOUND`, nothing in the group is alive, the leader is reaped, and the
 askpass socket is gone — deleting the `end_invocations` call fails it) and
-`a_fetch_closed_as_it_starts_is_still_ended`; on the window's side,
+`a_fetch_closed_as_it_starts_is_still_ended` (the fetch forwarded to the lane
+before the close — the repository thread answering the command log in
+between proves it — ends once, as a cancel, inside the bound; deleting the
+`end_invocations` call fails it too), and
+`a_close_stops_the_epochs_as_it_is_submitted_and_is_queued`; on the window's side,
 `the_first_request_asks_the_worker_and_its_stream_ending_closes_the_window`,
 `a_window_with_no_repository_closes_at_once` and
 `a_window_whose_worker_has_gone_closes_at_once_and_only_when_asked`

@@ -88,8 +88,9 @@ const READ_ONLY: &[(&str, &str)] = &[
     // fetches it: a pack written and the network reached, from a read. With
     // this, git answers that the object is missing instead. Git older than
     // 2.44 ignores the variable, and the floor is 2.30, so on such a git a read
-    // can still lazy-fetch — and, carrying no askpass token, an authenticated
-    // promisor fails closed. That is a constraint the reads in `crate::reads`
+    // can still lazy-fetch: carrying no askpass token, it fails closed only
+    // where the promisor needs a prompt, and one a configured credential
+    // helper or the ssh agent answers fetches. That is a constraint the reads in `crate::reads`
     // design around, not one this line removes (decided by the user,
     // 2026-10-02: keep the floor, set the variable).
     ("GIT_NO_LAZY_FETCH", "1"),

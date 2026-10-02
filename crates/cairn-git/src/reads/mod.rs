@@ -36,8 +36,9 @@
 //! `GIT_NO_LAZY_FETCH=1`, so git answers that the object is missing instead
 //! (decided by the user on 2026-10-02, keeping the 2.30 floor). Git older than
 //! 2.44 ignores the variable: there, a read in a partial clone may still
-//! lazy-fetch, and, carrying no askpass token, an authenticated promisor fails
-//! closed. That is a constraint each read here designs around — a read that
+//! lazy-fetch. Carrying no askpass token, it fails closed only where the
+//! promisor needs a prompt; one a configured credential helper or the ssh
+//! agent answers fetches. That is a constraint each read here designs around — a read that
 //! may touch an object a partial clone lacks must treat both answers, the
 //! object missing and the fetch that failed, as what they are — not one the
 //! environment removes. Pinned against real git by

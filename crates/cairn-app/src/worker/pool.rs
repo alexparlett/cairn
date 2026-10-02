@@ -315,8 +315,10 @@ impl Drop for Threads {
     /// mid-spawn, one dropped to a reaper — is ended the way a cancel ends
     /// it, and this waits up to `CLOSE_BOUND` for their reaps, here on the
     /// repository thread. One that enters the registry afterwards — a fetch
-    /// still queued when the close came, which the lane takes up after it —
-    /// is ended as it enters. The registry is the one authority here: a fetch
+    /// already forwarded to the lane's queue when the close came, which the
+    /// lane takes up after it — is ended as it enters. (A fetch still on this
+    /// thread's own queue is never forwarded: `serve` stopped with the
+    /// epochs.) The registry is the one authority here: a fetch
     /// is ended by it, not by its cancel, so nothing it misses is ended by
     /// accident. Last, the acceptor is woken to see it should stop. Runs once
     /// the window has asked to close or let go (the acceptor's answering end

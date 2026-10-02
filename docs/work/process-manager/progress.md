@@ -3,6 +3,194 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-02 — phase 04: the application — discovery, the network lane, close, the log
+
+Packet mode, committed directly to `feature/process-manager` (`49ece74..HEAD`).
+
+**What landed:**
+- `a9021bb` — `GitBinary::with_environment`: the found path and version onto a
+  new environment, no second search or probe (pinned by
+  `a_found_git_takes_a_new_environment_without_being_searched_for_or_probed_again`;
+  mutation: re-probing inside it fails the test).
+- `3160095` — R6.1: `worker::Discovery` (`worker/discovery.rs`), started in
+  `main` before the window on a `cairn-discovery` thread; each repository
+  takes a copy pointed at its own channel (`Backend::open`). R7: the
+  operations thread is the network lane (`worker/network_lane.rs`,
+  `cairn-network`), `Operation::lane` chosen per operation, and a second
+  fetch is refused (`Update::FetchRefused`), kept in the view's `refused`
+  state and drawn as a banner until the next press. R6.3: `Request::Close`;
+  `Threads::drop` closes the lane's queue and calls
+  `SharedRepository::end_invocations(CLOSE_BOUND)` on the repository thread —
+  the registry is the one authority for ending a fetch on close; `closing.rs`
+  is the window's `with_on_close` hook (first request asks and keeps the
+  window open; the stream's end closes it past the hook; a second request
+  after `worker::CLOSE_PATIENCE` = 5 s closes it anyway). R8.3:
+  `Request::CommandLog` / `Update::CommandLog`.
+- `e3108f2` — `docs/systems/git-processes.md` (Discovery, The network lane,
+  Closing, the log through the worker), `credentials.md`, `history-graph.md`.
+- `8f00c66` — deliverable B: root `CLAUDE.md` (status, repo map, the read
+  profile's `GIT_NO_LAZY_FETCH=1` and its 2.44 caveat, the process twin's real
+  required shapes, `Running`/`ProcessKill` dropped from the residual
+  examples, `the_retired_runner_is_gone` named with its residuals, the new
+  UI-thread residuals), qa-checklist item 7, destructive-ops check 10. Each
+  claim was checked against `crates/cairn-guards/tests/invariants.rs`
+  (`only_the_process_module_builds_or_runs_a_process`'s required shapes,
+  `READ_ONLY_PINS`, `RUNNER_NAMES`, `RETIRED_RUNNER_NAMES`,
+  `the_retired_runner_is_gone`) and the code; phase 03's draft text was
+  treated as a draft.
+- QA fixes: `e3b26b3`, `9bf402c`, `9e4f8f8`, `9d3d38e`, `d40c319`, `c01d55e`, `0c28987`
+  (below).
+
+**Acceptance, each with the test that pins it and a mutation run that turns it red:**
+- G14 — `closing_a_repository_ends_and_reaps_every_git_in_it_within_the_bound`
+  (stub fetch leading its group with a grandchild holding its pipes; stream
+  ends inside `CLOSE_BOUND`, nothing in the group alive, leader reaped, socket
+  gone) and `a_fetch_closed_as_it_starts_is_still_ended` (fetch forwarded to
+  the lane, then closed: ends once as a cancel). Mutation: deleting the
+  `end_invocations` call fails both (3/3 runs for the second). Window side:
+  `closing.rs` tests.
+- G15 — worker `a_second_fetch_while_one_runs_is_refused_with_a_reason`
+  (mutation: `perform` returning without sending the refusal fails it);
+  `a_second_fetch_is_refused_naming_the_fetch_in_flight`; session
+  `a_refused_fetch_is_kept_for_the_window_and_the_fetch_in_flight_is_untouched`;
+  window (headless) `a_refused_fetch_is_drawn_with_its_reason_until_the_next_press`.
+- G16 — `git_is_found_once_per_application_not_once_per_repository` (three
+  opens on one discovery probe once, raced by the start thread; two opens
+  with a discovery each probe twice). Mutation: a fresh `Discovery` per open
+  fails it. `a_git_refused_at_discovery_is_refused_to_every_repository_that_asks`
+  (mutation: re-probing after a refusal fails it). A missing or too-old git
+  still fails loudly with the minimum version, in the same place and words.
+- G17 (worker half) — `the_command_log_is_answered_through_the_worker_with_the_fetch_in_it`.
+  Mutation: answering an empty log fails it.
+- G21 — review: `docs/design/processes.md` ("Lifecycle"), D1 (`engine.md`,
+  "locates `git` and checks its version at startup") and D3 (`concurrency.md`
+  "Operations": lanes per operation, a duplicate refused with a reason) match
+  what was built; the queueing of different operations is the local lane's,
+  out of scope. The write lane is chosen per operation (`Operation::lane`,
+  exhaustive). Every parse site reads an untranslated format: this phase
+  added none. #18 was answered by phase 01's comment (editor half); the rest
+  of #18 is a user decision. The root `CLAUDE.md` points at
+  `git-processes.md`, which is current.
+
+**G20 — verified by hand on this machine's desktop session (Hyprland 0.56.2,
+Linux), not by a test:**
+1. Build: the dev profile (`cargo build --workspace`, so the helper
+   was beside the binary). A scratch repository in the session scratchpad
+   whose `origin` was a local path with `remote.origin.uploadpack` set to
+   `sleep 600; git-upload-pack`, so `git fetch` stays alive with a child.
+2. X11 backend (`env -u WAYLAND_DISPLAY target/debug/cairn <repo>`): Fetch
+   pressed through XTEST; the process table showed `git fetch --progress
+   --no-prune-tags --end-of-options origin` (pid 924443, pgid 924443), its
+   `sh -c sleep 600; git-upload-pack …` and `sleep 600` in that group, and
+   `$XDG_RUNTIME_DIR/cairn-923077-dff7bd83/askpass`. Closed through the
+   desktop's own close action (`qs … ipc call windows close`, what the title
+   bar's × and Super+Q run). Five seconds later: the Cairn process gone, no
+   process in pgid 924443, no `sleep 600`, no `cairn-*` directory.
+3. Wayland backend (`target/debug/cairn <repo>`): Fetch pressed by keyboard
+   (Tab, Space via `wtype`); `git fetch` pgid 926264 with `sh` and `sleep 600`;
+   `cairn-925872-5f9f0385` present. Closed the same way at 21:43:09.541; the
+   Cairn process had exited by 21:43:09.669 (128 ms); no process in the group,
+   no socket directory.
+4. Issue #27's case, Wayland: a loopback HTTP remote answering `401` to
+   everything; Fetch pressed; the credential dialog up ("origin is asking for
+   a credential", `cairn-askpass Username for 'http://127.0.0.1:38917': `
+   running in git's group 943471, `git-remote-http` beside it); closed the
+   same way: Cairn exited in 125 ms, no process in the group, no helper, no
+   `cairn-*` directory, no `*.lock` in the repository.
+Everything made for the check was removed afterwards.
+
+**QA** (fresh: qa-checklist, responsiveness-reviewer, test-coverage-auditor,
+gate-integrity-reviewer, destructive-ops-reviewer; four hit their turn limit
+and were re-asked once, and every report was received). qa-confirm (fresh;
+re-asked once after its turn limit) adjudicated 41 raw findings: 22
+confirmed, 7 confirmed-defer, 6 duplicates merged, 5 dismissed (one finding
+split). Fixed:
+- `e3b26b3` — QC1/TC1 (the mid-spawn close test could not fail: the close
+  stopped the epochs before the fetch was forwarded; it now waits for the
+  command log's answer), TC4 (`a_close_stops_the_epochs_as_it_is_submitted_and_is_queued`;
+  mutation: deleting `epochs.stop()` fails it), TC5, TC7, TC8, TC2.
+- `9bf402c` — TC9.
+- `9e4f8f8` — RR2: an outcome produced by the close no longer clears the
+  rows and asks a stopped worker for the history.
+- `9d3d38e` — DO6 (`Discovery`'s Debug).
+- `d40c319` — QC4 (a)(b), DO2, DO4, GI2 in the code comments.
+- `c01d55e` — GI1, GI2, GI3, GI4, GI5, GI6, RR3, TC3 (stated as review),
+  DO2 in `CLAUDE.md`.
+- TC6 — probed: replacing `with_environment` with a clone in `Backend::open`
+  fails five tests (`a_runtime_directory_gives_the_environment_a_socket_and_prompting`
+  and four prompt tests), so it is already pinned; nothing added.
+
+Dismissed, with reasons (qa-confirm):
+- QC3 — the window cannot produce a refusal today (button hidden in flight,
+  slot cleared before the outcome), and "drawn until another fetch is asked
+  for" is the documented design; revisit when something else can ask.
+- QC4 (c) — step 4 already covers a process entering after `end_all` returns.
+- QC7 — STEP 4/5 own it; G20 is recorded above (the sentence in
+  `git-processes.md` describes a check that was done).
+- QC8 — the stray experiment was reverted; the tree was clean.
+- DO5 — `end_invocations`' doc already states the latch.
+
+**Re-review of the fixes** (fresh test-coverage-auditor and
+gate-integrity-reviewer; qa-confirm, fresh): every fix test fails on its
+mutation (QC1 3/3 with `end_invocations` deleted and 5/5 with the registry's
+late-entry check deleted; TC4; RR2; unmutated lifecycle suite 10/10). 7 raw
+findings, all confirmed (RG1 with its restatement corrected, RG3 in part),
+fixed in `0c28987`: RG1 (what no twin sees is a path-call
+start inside `process/environment.rs` and `nix`'s `fork`; the terminal-prompt
+twin catches the rest), RG2, RG3 (`withdraw`), RG4 (state.md), RG5, RT1
+(the `is_requested` hop named as review; its test-level fix filed as #42),
+RT2 (the reload test over all three endings).
+
+**Pending user decision, not decided (CONFIRMED-DEFER):**
+- **RR1 / DO1 (silent close half)** — the first close keeps the window open
+  and draws nothing; a close can take up to `CLOSE_BOUND` + 1 s, and a worker
+  stuck before `serve` (a hung `git --version`, a slow `discover`) never
+  reaches the close, so it takes a second request after 5 s. Options: (a) as
+  built; (b) a "Closing — ending fetch of origin…" banner while closing;
+  (c) (b) plus a timer that closes the window by itself after
+  `CLOSE_PATIENCE`. Recommendation: (b). User-visible beyond the PRD.
+- **DO1 (stranded locks half) / phase 03's DO3** — locks a close `SIGKILL`
+  strands are listed on a `FetchCancelled` the window never shows. Options:
+  (a) stated residual (done: `git-processes.md` "Closing"); (b) keep the
+  window open when the last outcome carried locks, showing them, and let the
+  next request close it. Recommendation: (a) for now — a `SIGKILL` on close
+  needs a git that ignored `SIGTERM` for 2 s, and git names the lock itself
+  on the next write.
+- **QC6 / phase 03's DO2** — a failed fetch's `present_locks` reach the
+  message but not the banner (`why_it_failed` shows the first
+  `fatal:`/`error:` line). Options: (a) as is; (b) carry `present_locks`
+  structurally to `FetchStatus::Failed` and append them to the banner.
+  Recommendation: (b), small, in the next packet that touches the banner.
+- **QC5 / DO3** — a fetch already forwarded to the lane when the close lands
+  is spawned, then ended at once (reaches the network). Options: (a) as is —
+  the registry is the one authority; (b) a `Closed` stage in `FetchControl`
+  so the lane answers it cancelled without spawning, the registry kept as the
+  backstop. Recommendation: (b), later; harmless today.
+- **QC2** — pre-existing: a Cancel pressed in the moment after the lane
+  clears the control and before the outcome arrives cancels the user's NEXT
+  fetch, whenever it is started. Options: tie a cancel to a fetch identity,
+  or drop the overtaking-cancel stage once the outcome is sent.
+  Recommendation: an issue, fixed with the next change to `FetchControl`.
+- **RR4** — `git --version` has no bound; a hung probe leaves every
+  repository unable to open or close. The PRD says no timeouts. Options: a
+  probe deadline (a refusal after N seconds) vs. as is.
+- **DO4** — a close forced after `CLOSE_PATIENCE` orphans a late git (now
+  stated). Option: `SIGKILL` the registered groups before that close.
+- **GI7** — CI's git version is unchecked, so the partial-clone test may be
+  skipped on the merge bar; for phase 05: assert CI's git is 2.44 or later.
+- **DO6 (older derives)** — `GitBinary`/`GitEnvironment` derive `Debug` and
+  would render proxy values if anything printed them; nothing does. Options:
+  a value-free `Debug` on `GitEnvironment`.
+- **Banner lock list (state.md DO2)** — decided not to change in this phase:
+  no phase 04 deliverable covers the failure banner and the change is
+  user-visible; batched above (QC6).
+
+**Issues:** #41 filed (the command-log view, R8.3's deferral); #42 filed (a
+headless test of `main.rs`'s close wiring, TC3/RT1). Not closed:
+#27 (recommend closing — its exact case, the window closed with the dialog
+up, was checked by hand above and leaves no socket, helper or git) and #18
+(its remaining half, `DISPLAY`/`WAYLAND_DISPLAY`/`GNUPGHOME`, is the user's).
+
 ## 2026-10-02 — phase 03: fetch on the runner, the registry and the log
 
 Packet mode, committed directly to `feature/process-manager` (`edee9cf..HEAD`).

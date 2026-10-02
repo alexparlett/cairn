@@ -2,13 +2,14 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 03 (engine lifecycle) done on `feature/process-manager`;
-phase 04 (application) is next** — it wires `SharedRepository::end_invocations`
-with `CLOSE_BOUND` to the window's close on a worker thread, and has the worker
-answer `SharedRepository::command_log`. Fetch and the version probe run on the
-runner, and `GitCommand::run`, `stream`, `Running` and `ProcessKill` are gone.
-Items awaiting user review are in `progress.md` (the phase 01, 02 and 03
-entries). `diff-engine` is in flight on `feature/diff-engine` and switched to
+**Status: phase 04 (application) done on `feature/process-manager`; phase 05
+(QA over the whole packet) is next.** `git` is found once per application;
+fetch runs in the network lane, which refuses a second with a reason the
+window draws; closing the window closes its repository through the registry
+on the repository thread, and the window goes when the worker's stream ends
+(G20 checked by hand, X11 and Wayland, with and without a credential dialog
+up); the worker answers the command log. Items awaiting user review are in
+`progress.md` (the phase 01, 02, 03 and 04 entries). `diff-engine` is in flight on `feature/diff-engine` and switched to
 this packet because its changes query needs a `git` process; it continues
 once this merges.
 
@@ -62,12 +63,23 @@ Raised in phase 03 for later phases:
   cancelled), the stderr-tail retention residual, and the stale CLAUDE.md and
   qa-checklist text — all in `progress.md`'s phase 03 entry.
 
+Discharged in phase 04: `end_invocations(CLOSE_BOUND)` runs in `Threads::drop`
+on the repository thread when the repository closes, and the window's close
+asks for it; the worker answers `command_log()` (`Request::CommandLog`). DO2
+(the banner's lock list) and DO3 (locks stranded on close) were not changed:
+both are user-visible, batched in `progress.md`'s phase 04 entry.
+
+Raised in phase 04 for later phases:
+
+- **Phase 05:** assert CI's git is 2.44 or later, or the partial-clone test
+  is skipped on the merge bar (GI7). Re-verify G20 is recorded, not re-run.
+- **User:** RR1 (a closing banner), DO1/DO3 (stranded locks on close), QC6/DO2
+  (the failure banner's lock list), QC5 (no spawn after close), QC2 (a late
+  cancel cancels the next fetch), RR4 (a probe deadline), DO4, DO6's older
+  derives — `progress.md`'s phase 04 entry.
+
 Still owed:
 
-- **Phase 04:** call `SharedRepository::end_invocations(CLOSE_BOUND)` on a
-  worker thread when the repository closes (and the window with it), and
-  answer `SharedRepository::command_log()` through the worker (G14, G17's
-  worker half). The UI thread must not call either: `end_invocations` waits.
 - **Phase 05:** the G8 drop tests, G10, G12's success arm and R3.1's test are
   wholly `#[cfg(target_os = "linux")]`; only their `/proc` reads need Linux.
   Narrow the gating so macOS keeps the rest (QA TC16).
@@ -78,8 +90,9 @@ Still owed:
   by the user on 2026-10-02.** Keep the git floor at 2.30 and add
   `("GIT_NO_LAZY_FETCH", "1")` to `READ_ONLY`. Git older than 2.44 ignores the
   variable, so a read in a partial clone on such a git may still lazy-fetch (a
-  pack written, the network reached; with no token an authenticated promisor
-  fails closed) — a constraint `diff-engine` designs around, recorded in
+  pack written, the network reached; with no token only a promisor that needs
+  a prompt fails closed, and one a credential helper or the ssh agent answers
+  fetches) — a constraint `diff-engine` designs around, recorded in
   `crates/cairn-git/src/reads/mod.rs` and `docs/systems/git-processes.md`.
   Landed in phase 03: the builder's and the stub tests' read sets,
   `READ_ONLY_PINS` in `every_git_invocation_disables_the_terminal_prompt` with
@@ -119,6 +132,14 @@ one-line contract.
 | `SharedRepository::end_invocations(bound) -> usize`, `SharedRepository::command_log() -> Vec<CommandRecord>` (phase 03) | cairn-git | Public. `end_invocations` asks every running invocation to end as a cancel does and waits up to `bound` for the registry to empty, returning how many were left; afterwards the repository is closing and a new invocation is ended at once. It waits: a worker's call. `command_log` is the log, oldest first. |
 | `the_retired_runner_is_gone` (phase 03) | cairn-guards | Bans `Running`, `ProcessKill`, `run`/`stream` declared on `GitCommand`, and `.stream(..)` calls anywhere in `cairn-git` (G18); self-test `the_retired_runner_matcher_catches_the_shapes_it_claims`. |
 | `READ_ONLY_PINS` (phase 03) | cairn-guards | The read table's pins, `GIT_OPTIONAL_LOCKS=0` and `GIT_NO_LAZY_FETCH=1`, checked by `every_git_invocation_disables_the_terminal_prompt` through `const_table` and `missing_pins`, with self-test cases. |
+| `GitBinary::with_environment(GitEnvironment) -> GitBinary` (phase 04) | cairn-git | Public. The found path and version on a new environment: no search, no probe. How each repository points the one `git` at its own channel. |
+| `worker::Discovery` (phase 04) | cairn-app | `start()` (main thread, before the window: spawns `cairn-discovery`), `git()` (`pub(super)`, blocks on a `OnceLock`: worker threads only), `startup()`. One per application. |
+| `worker::open(path, &Discovery)` (phase 04) | cairn-app | Was `open(path)`. Takes `git` from the discovery, then opens the repository and its channel. |
+| `network_lane.rs`: `Operation::lane`, `Lane::Network`, `Refusal`, `FetchControl::arm(remote) -> Result<(), Refusal>` (phase 04) | cairn-app | The operations thread renamed the network lane (`cairn-network`); the lane chosen per operation by an exhaustive match; a second fetch refused naming the one in flight. |
+| `Request::Close`, `Request::CommandLog`; `Update::FetchRefused`, `Update::CommandLog` (phase 04) | cairn-app | Close stops the epochs as submitted and breaks `serve`; `Threads::drop` then calls `end_invocations(CLOSE_BOUND)`. The log answered as `Vec<CommandRecord>`. |
+| `worker::CLOSE_PATIENCE` (phase 04) | cairn-app | 5 s; a second close request after it closes the window anyway. Compile-time assertion: above `CLOSE_BOUND` + the acceptor's stop deadline. |
+| `closing.rs`: `Closing` (phase 04) | cairn-app | Render-side; `opened`, `requested` (the `with_on_close` hook: never waits), `is_requested`, `worker_gone`. |
+| `View::refused`, `fetch_state::FetchRefusal`, `status_text::refusal_line`; `session::Worker::closing` (phase 04) | cairn-app | The refusal drawn as a banner until the next press; an outcome during a close does not reload the history. |
 
 ## Bounds fixed by phases
 
@@ -129,6 +150,7 @@ Record each value and its reason here when it is chosen.
 | --- | --- | --- | --- |
 | `DRAIN_BOUND` — output read after the leader exits (R3.6) | 02 | 250 ms from the exit, the 20 ms tick included (`process/runner.rs`) | Bounds only the case where something other than git holds a pipe after git exits; the common case ends when the pipes close. What is still owed then is output git wrote before exiting: at most a pipe's capacity per stream plus what the readers queued. Readers send one event per read (stderr's lines together), so that is a handful of events, moved in well under a millisecond, and the driver takes what is queued once more before it lets go; 250 ms is two orders of margin for a loaded machine's scheduler, and short enough that a finished operation still reads as finished. The same bound applies after `SIGKILL` on a cancel, for a holder that left the group. Pinned by `the_fixed_bounds_have_the_values_the_packet_recorded`. |
 | `CLOSE_BOUND` — wait for reaps on repository close (R6.3) | 03 | 3 s (`process/registry.rs`, `cairn_git::CLOSE_BOUND`) | A close ends each invocation as a cancel does: `SIGTERM`, then `SIGKILL` after the 2 s `TERMINATION_GRACE`, and a pipe held by a process that left the group is abandoned `DRAIN_BOUND` (250 ms) after that — so 2.25 s is the longest the runner itself takes. 3 s adds three-quarters of a second for a loaded machine's scheduler; anything not reaped by then has had `SIGKILL` and is past what waiting changes, so the window closes rather than hangs. A compile-time assertion keeps it above grace + drain. Pinned by `the_log_and_close_bounds_have_the_values_the_packet_recorded` and `ending_every_invocation_waits_no_longer_than_its_bound`. |
+| `CLOSE_PATIENCE` — how long the window waits on a close before a second request closes it anyway | 04 | 5 s (`worker/pool.rs`, `worker::CLOSE_PATIENCE`) | An honest close takes at most `CLOSE_BOUND` (3 s) for the reaps and then the acceptor's `STOP_DEADLINE` (1 s); 5 s leaves a second past both, so only a worker that has stopped answering is abandoned, and the window can always be closed. A compile-time assertion keeps it above their sum. Pinned by `the_first_request_asks_the_worker_and_its_stream_ending_closes_the_window`. |
 | `LOG_ENTRIES`, `LOG_BYTES` — command log size (R8.2) | 03 | 1000 records; 4 MiB (`process/command_log.rs`) | The count bounds the common case, where a record is a few hundred bytes: a thousand is a long session's fetches and per-selection reads, so the log reaches back through the afternoon, not the last minute. The bytes bound the case the count cannot — git saying a lot, each record up to a 256 KiB tail, which a thousand of would make 256 MiB: 4 MiB keeps sixteen full tails, and is above what one record holds at the default `ARG_MAX` (2 MiB Linux, 1 MiB macOS), so a record is trimmed to fit only past that. Pinned by `the_log_and_close_bounds_have_the_values_the_packet_recorded`, `the_log_keeps_the_newest_log_entries_records`, `the_log_holds_no_more_than_log_bytes`. |
 
 ## Validation status
@@ -138,7 +160,7 @@ Record each value and its reason here when it is chosen.
 | 01 seal and environment | done (`main...HEAD` through phase 01's commits) | `scripts/gate.sh` exit 0 | qa-checklist, gate-integrity, destructive-ops, test-coverage; qa-confirm: 11 confirmed and fixed, 5 dismissed, 1 escalated (lazy fetch), 1 probed and resolved |
 | 02 runner | done (`a5f5160..HEAD`) | `scripts/gate.sh` exit 0 (`progress.md`) | qa-checklist, destructive-ops, responsiveness, test-coverage, gate-integrity; qa-confirm: 34 confirmed and fixed or deferred, 6 dismissed, 3 escalated; re-review of the fixes (destructive-ops, test-coverage; qa-confirm): 8 confirmed and fixed, 1 dismissed (`progress.md`) |
 | 03 engine lifecycle | done (`edee9cf..HEAD`) | `scripts/gate.sh` exit 0 (`progress.md`) | see `progress.md`'s phase 03 entry |
-| 04 application | not started | — | — |
+| 04 application | done (`49ece74..HEAD`) | `scripts/gate.sh` exit 0 (`progress.md`) | qa-checklist, responsiveness, test-coverage, gate-integrity, destructive-ops; qa-confirm: 22 confirmed and fixed (or settled), 7 deferred to the user, 5 dismissed; re-review of the fixes in `progress.md` |
 | 05 QA | not started | — | — |
 
 ## Environment notes

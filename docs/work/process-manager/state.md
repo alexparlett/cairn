@@ -51,6 +51,17 @@ Discharged in phase 03 (from phase 02 QA):
   outside `process/`. A new twin, `the_retired_runner_is_gone`, bans the old
   runner's names and entry points everywhere in `cairn-git`.
 
+Raised in phase 03 for later phases:
+
+- **Phase 04:** a failed fetch's `GitFailed` now carries `present_locks`, but
+  the banner (`crates/cairn-app/src/status_text.rs`) shows only the first
+  `fatal:`/`error:` line, so the list may not reach the user (QA DO2).
+- **Phase 04:** a close `SIGKILL`s a write that outlasts the grace; the locks
+  it strands are listed on a cancellation nobody may be left to show (QA DO3).
+- **User:** DO1 (a fetch exiting 0 inside the signal race is reported
+  cancelled), the stderr-tail retention residual, and the stale CLAUDE.md and
+  qa-checklist text — all in `progress.md`'s phase 03 entry.
+
 Still owed:
 
 - **Phase 04:** call `SharedRepository::end_invocations(CLOSE_BOUND)` on a

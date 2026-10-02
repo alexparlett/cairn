@@ -3,6 +3,110 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-02 — phase 03: fetch on the runner, the registry and the log
+
+Packet mode, committed directly to `feature/process-manager` (`edee9cf..HEAD`).
+
+**What landed:**
+- `49cc25e` — D3, **decided by the user on 2026-10-02**: the 2.30 floor
+  stays and `READ_ONLY` gains `GIT_NO_LAZY_FETCH=1`. Git older than 2.44
+  ignores it, a constraint `diff-engine` designs around (`reads/mod.rs`,
+  `docs/systems/git-processes.md`). Pinned by the builder and stub tests' read
+  sets, `READ_ONLY_PINS` in `every_git_invocation_disables_the_terminal_prompt`
+  (self-test cases), and `a_read_in_a_partial_clone_does_not_fetch_a_missing_object`
+  against real git with a write control.
+- `a895e81` — R3.7: fetch and the probe run on `GitCommand::start`;
+  `GitCommand::run`, `stream`, `Running`, `ProcessKill` deleted, with the new
+  twin `the_retired_runner_is_gone`. Discharged phase 02's QC3, QC6 and GI2
+  (the `.output()`/`.wait()` positive rows SWAPPED for `CommandExt` and
+  `ChildStdout`, said so in the body).
+- `277ed60` — `cairn_model::CommandRecord`, `CommandExit`.
+- `2b27b77` — the registry and log (`process/registry.rs`,
+  `process/command_log.rs`), `SharedRepository::end_invocations`,
+  `command_log`, `CLOSE_BOUND` 3 s, `LOG_ENTRIES` 1000, `LOG_BYTES` 4 MiB
+  (reasons in `state.md`).
+- `7f88857` — docs.
+
+**G18:** `git diff edee9cf..HEAD -- crates/cairn-git/tests crates/cairn-app`
+shows one ADDED test (`a_failed_fetch_names_the_lock_files_present_and_only_those`)
+and no changed assertion. The fetch tests that pin fetch's five behaviours
+predate this phase: progress — `the_arguments_leave_prune_to_git_forbid_pruning_tags_and_end_the_options`
+(exact lines through `fetch()`), `a_fetch_over_http_prompts_for_each_half_of_the_credential_and_succeeds`,
+the app's `a_fetch_reports_progress_finishes_and_the_history_reloads_from_the_new_refs`;
+cancel before git starts — `the_recording_stub_reports_a_fetch_that_was_allowed_to_start`
+(cancel before `finish`) and the operations.rs `FetchControl` tests; cancel
+mid-transfer — `cancelling_a_fetch_that_is_waiting_on_a_prompt_kills_git_and_leaves_nothing_behind`;
+stranded locks — `a_cancel_names_the_lock_files_left_under_the_git_directory_and_only_those`;
+`Performed` — `tests/fetch.rs`'s `Invalidated::refs().and(Invalidated::objects())`.
+Mutation: restoring a `run` on `GitCommand` fails `the_retired_runner_is_gone`.
+
+**G17 (engine half):** the `process/registry.rs` tests, one per exit path
+(finish, failure, cancel by handle and by signal, drop, drop with no reaper,
+never started, runner-ended, cancel beaten by a clean exit, failed stdin
+write), the bounds' tests in `process/command_log.rs`, and
+`a_fetch_with_a_token_is_logged_once_without_the_token_or_the_environment`.
+Mutations: `cancelled = asked_to_end` fails two; `end_all` asking nothing to
+end fails both close tests; dropping the char-boundary step panics the trim
+test; recording `Unknown` for a failed stdin write fails its test.
+
+**QA** (fresh: qa-checklist, destructive-ops-reviewer, test-coverage-auditor,
+gate-integrity-reviewer; each was re-asked once after hitting its turn limit
+and delivered). qa-confirm adjudicated 26 raw findings: 13 confirmed (4
+duplicates merged), 1 escalated, 5 dismissed, 3 unverified then settled.
+Fixed in `a279103`, `53a9440`, `96421a0`, `1d01608`: QC7, DO4 (stderr half),
+TC4, TC1, TC2, TC5, QC4, DO3, DO2/QC1 (test; outcome recorded in `state.md`),
+GI1 (path calls, spawn-once pin, residual), GI5, DO5/QC2 (residual stated),
+DO1 (stated in `git-processes.md` and `credentials.md`; policy batched).
+A fresh re-review of the fixes (gate-integrity, test-coverage; qa-confirm)
+confirmed 9 of 10, fixed in `152e952` and `576bc61`: RG1 (the spawn pin
+passed `.status()`/`.output()`; now banned in production `process/`), RG2,
+RG4, RT1, RT2, RT3, RT4, RT6.
+
+Dismissed, with reasons (qa-confirm):
+- GI6 — the production `const READ_ONLY` precedes `mod tests`, and a test
+  module above it trips clippy's `items_after_test_module`; builder tests
+  spell the set out anyway.
+- QC3 — the only caller passes `RemoteSummary.name`, never a configured URL.
+- QC8 — process note, not a defect; the full gate was run.
+- TC3 — skipping the partial-clone test below git 2.44 is the stated design;
+  the value stays pinned by the guard and the builder tests. Whether CI's git
+  is 2.44 or later was not checked here.
+- TC6 — `CommandRecord` derives `PartialEq`.
+- RT5 — only `leave` holds two locks, so no reverse order exists to observe.
+- DO4's `cancelled: true` half — per phase 02's rule a cancel that lands
+  before the reap is a cancel.
+- QC4, TC7 (unverified by qa-confirm) — settled by the pre-existing fetch-level
+  tests named under G18, and QC4 also by the added
+  `a_kill_before_the_invocation_is_driven_still_ends_it`.
+
+**Pending user review, not decided:**
+- **DO1 (escalated by qa-confirm).** A fetch that exits 0 in the microseconds
+  between the runner's last `try_wait` and its `SIGTERM` is now reported
+  cancelled; the old fetch path checked success first. It is phase 02's R4.5
+  rule (and the race `group.rs` states) applied to a write. Options: (a) keep
+  and state it (done: `git-processes.md`, `credentials.md`); (b) for a write,
+  report any exit 0 as success whatever was signalled; (c) as (a), and reword
+  the cancelled banner to say a cancelled write may have taken effect.
+  Related to phase 02's DO4 and DO2 policy items.
+- **A failed fetch's outcome grew** (DO2/QC1): `GitFailed::present_locks` is
+  filled, and `GitUnwatched`/`GitOutputTooLarge` are reachable. Within R5.3;
+  whether the banner shows the lock list (it shows only the first
+  `fatal:`/`error:` line) is phase 04's.
+- **Stderr tail retention** (DO5/QC2): the log keeps up to 256 KiB of git's
+  stderr per record; a URL with userinfo there would be a credential outside
+  `Secret`. Stated as a residual; scrubbing is a design change.
+- **CLAUDE.md and `.claude/agents/qa-checklist.md` are stale** (GI2, GI3, GI4,
+  RG3). Not edited by this phase, because they are the user's instruction
+  files. Proposed: in root `CLAUDE.md`, the process twin's required shapes
+  become `.spawn()`, `.try_wait()`, `CommandExt`, `Stdio`, `Child`,
+  `ChildStdout`, `ChildStderr`, `nix` and `.command(..)`; a read adds
+  `GIT_OPTIONAL_LOCKS=0` and `GIT_NO_LAZY_FETCH=1` (the latter ignored below git
+  2.44) and the `READ_ONLY` twin text names both; drop `Running`/`ProcessKill`
+  from the residual's examples and name `the_retired_runner_is_gone`; and add
+  to qa-checklist item 7 the retired-runner residual (alias, free function or
+  macro entry points seen only if they start a process; a wrapper on `start`
+  not seen).
+
 ## 2026-10-02 — phase 02: the runner
 
 Packet mode, committed directly to `feature/process-manager`.

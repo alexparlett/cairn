@@ -154,13 +154,15 @@ impl Group {
     /// no other thread would send the signal if it missed: every hold of the
     /// lock is a non-blocking `try_wait`, `killpg` or field write, so the wait
     /// is bounded by a few system calls.
-    pub(super) fn kill_now(&self) {
+    /// Hands back the leader's exit status if the reap found one.
+    pub(super) fn kill_now(&self) -> Option<ExitStatus> {
         self.mark_ending();
         let mut leader = self.leader();
         leader.terminated_at.get_or_insert_with(Instant::now);
         leader.signal(Signal::SIGKILL, &self.open_pipes);
         leader.killed_at = Some(Instant::now());
         leader.reap();
+        leader.status
     }
 
     /// A stdin write that failed for a reason other than git closing its end:

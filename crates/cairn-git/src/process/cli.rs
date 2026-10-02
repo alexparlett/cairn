@@ -40,12 +40,14 @@ use std::ffi::{OsStr, OsString};
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 
 use cairn_model::AskpassToken;
 
 use super::GitEnvironment;
 use super::environment::Profile;
 use super::group::{Spawner, os_thread};
+use super::registry::{Processes, Registration};
 use super::runner::{Invocation, watch};
 use crate::ops::WriteAuthority;
 use crate::ops::stranded_locks::stranded_locks;
@@ -65,6 +67,9 @@ pub(crate) struct GitCommand<'a, K> {
     /// What [`GitCommand::start`] writes to stdin before closing it; `None`
     /// leaves stdin closed from the start.
     input: Option<Vec<u8>>,
+    /// The repository's registry and log, which the invocation is booked in
+    /// from its spawn to its end; set with the directory (`registry.rs`).
+    processes: Option<Arc<Processes>>,
 }
 
 /// A repository's git directory and the common directory it shares (the same
@@ -167,6 +172,7 @@ impl<'a, K: Kind> GitCommand<'a, K> {
             directory: None,
             dirs: None,
             input: None,
+            processes: None,
         }
     }
 
@@ -182,12 +188,15 @@ impl<'a, K: Kind> GitCommand<'a, K> {
     }
 
     /// Runs inside `repo`: its working tree, or the git directory of a bare one.
+    /// The invocation is booked in `repo`'s registry from its spawn to its end,
+    /// and written to its command log once, however it ends.
     pub(crate) fn in_repository(mut self, repo: &Repository) -> Self {
         self.directory = Some(repo.workdir().unwrap_or(repo.git_dir()).to_owned());
         self.dirs = Some(GitDirs {
             git_dir: repo.git_dir().to_owned(),
             common_dir: repo.inner().common_dir().to_owned(),
         });
+        self.processes = Some(Arc::clone(repo.processes()));
         self
     }
 
@@ -248,16 +257,35 @@ impl<'a, K: Kind> GitCommand<'a, K> {
         if let Some(directory) = &self.directory {
             command.current_dir(directory);
         }
-        let child = command.spawn().map_err(|source| Error::GitNotStarted {
-            program: self.program.to_owned(),
-            source,
-        })?;
+        let registration = self.processes.as_ref().map(|processes| {
+            Registration::new(
+                processes,
+                self.arguments
+                    .iter()
+                    .map(|argument| argument.to_string_lossy().into_owned())
+                    .collect(),
+                self.directory.clone(),
+            )
+        });
+        let child = match command.spawn() {
+            Ok(child) => child,
+            Err(source) => {
+                if let Some(registration) = registration {
+                    registration.not_started();
+                }
+                return Err(Error::GitNotStarted {
+                    program: self.program.to_owned(),
+                    source,
+                });
+            }
+        };
         watch(
             child,
             self.input,
             self.kind,
             describe(&self.arguments),
             self.dirs,
+            registration,
             spawner,
         )
     }

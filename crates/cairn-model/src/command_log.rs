@@ -90,6 +90,30 @@ mod tests {
         assert_eq!(nowhere.held_bytes(), 11);
     }
 
+    /// R8.1 and R8.2, at the compiler: the record is exactly these fields, so a
+    /// field added to it — an environment, a token — stops this compiling and
+    /// is a decision made here, in sight of the rule that the log never holds
+    /// the environment or a secret.
+    #[test]
+    fn the_record_holds_exactly_what_r8_1_lists() {
+        let CommandRecord {
+            arguments,
+            directory,
+            started,
+            duration,
+            exit,
+            cancelled,
+            stderr,
+        } = record();
+        assert_eq!(arguments.len(), 2);
+        assert!(directory.is_some());
+        assert_eq!(started, SystemTime::UNIX_EPOCH);
+        assert_eq!(duration, Duration::from_millis(1500));
+        assert_eq!(exit, CommandExit::Code(0));
+        assert!(!cancelled);
+        assert_eq!(stderr, "From x");
+    }
+
     /// Plain data: a record compares by every field and survives a clone, so a
     /// snapshot of the log handed to a view is the log as it was.
     #[test]

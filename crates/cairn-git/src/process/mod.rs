@@ -2,8 +2,9 @@
 //!
 //! Crate-private. It holds the binary Cairn found ([`GitBinary`]), the
 //! environment every invocation runs with ([`GitEnvironment`], pointing git and
-//! ssh at [`Askpass`]), and the runner that drives a process from spawn to
-//! reap. The application constructs the binary, the environment and the
+//! ssh at [`Askpass`]), the runner that drives a process from spawn to reap,
+//! and each repository's registry of what is still running and log of what
+//! ran (`registry.rs`, `command_log.rs`). The application constructs the binary, the environment and the
 //! askpass target through re-exports from [`crate::ops`], because it owns
 //! startup and the helper's channel; it never reaches the runner.
 //!
@@ -40,9 +41,11 @@
 mod askpass;
 mod binary;
 mod cli;
+mod command_log;
 mod environment;
 mod group;
 mod pipes;
+mod registry;
 mod runner;
 #[cfg(all(test, unix))]
 pub(crate) mod stub_git;
@@ -52,4 +55,6 @@ pub use binary::{GitBinary, GitVersion};
 pub(crate) use cli::Write;
 pub use environment::GitEnvironment;
 pub(crate) use group::KillHandle;
+pub use registry::CLOSE_BOUND;
+pub(crate) use registry::Processes;
 pub(crate) use runner::Invocation;

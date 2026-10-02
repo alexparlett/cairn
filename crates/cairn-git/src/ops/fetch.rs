@@ -238,4 +238,80 @@ mod tests {
             spelled(&[("CAIRN_ASKPASS_TOKEN", "fetch-token")])
         );
     }
+
+    /// G17, the engine half's last clause: a fetch run with an askpass token is
+    /// logged once, as what it was given and what it said, and its record holds
+    /// neither the token nor any value of the environment git ran with. Decisive
+    /// because the stub writes the environment it was given to a file beside
+    /// itself, which must show the token and every value looked for — so each
+    /// was there to leak — while what it says on stderr, which the log keeps,
+    /// is a line of progress.
+    #[test]
+    fn a_fetch_with_a_token_is_logged_once_without_the_token_or_the_environment() {
+        let stub = StubGit::with_git_from(|directory| {
+            format!(
+                "if [ \"$1\" = --version ]; then echo 'git version 2.30.0'; exit 0; fi\n\
+                 /usr/bin/env > '{}'; echo 'Receiving objects: 100%, done.' >&2",
+                directory.join("environment-seen").display()
+            )
+        });
+        let home = format!("/nonexistent/home-g17-{}", std::process::id());
+        let language = "xx_G17.UTF-8";
+        let environment = stub.environment_with(|name| match name {
+            "HOME" => Some(home.clone().into()),
+            "LANG" => Some(language.into()),
+            _ => None,
+        });
+        let path = environment
+            .get("PATH")
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap();
+        let git = discover_retrying(environment).unwrap();
+        let repo = Repository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let token = AskpassToken::new(format!("g17-token-{}", std::process::id()));
+
+        fetch(&git, &repo, "origin", Some(&token))
+            .unwrap()
+            .finish(|_| {})
+            .unwrap();
+
+        let seen = printed_environment(
+            &std::fs::read_to_string(stub.directory().join("environment-seen")).unwrap(),
+        );
+        let values = [
+            ("CAIRN_ASKPASS_TOKEN", token.as_str()),
+            ("HOME", home.as_str()),
+            ("LANG", language),
+            ("PATH", path.as_str()),
+            ("GIT_ASKPASS", StubGit::HELPER),
+        ];
+        for (name, value) in values {
+            assert_eq!(
+                seen.get(name).map(String::as_str),
+                Some(value),
+                "git was not given {name}, so its absence below decides nothing"
+            );
+        }
+        let log = repo.processes().log();
+        assert_eq!(log.len(), 1, "one fetch, recorded {} times", log.len());
+        let record = &log[0];
+        assert_eq!(
+            record.arguments,
+            [
+                "fetch",
+                "--progress",
+                "--no-prune-tags",
+                "--end-of-options",
+                "origin"
+            ]
+        );
+        assert_eq!(record.stderr, "Receiving objects: 100%, done.");
+        let rendered = format!("{record:?}");
+        for (name, value) in values {
+            assert!(
+                !rendered.contains(value),
+                "the log's record carries {name}'s value: {rendered}"
+            );
+        }
+    }
 }

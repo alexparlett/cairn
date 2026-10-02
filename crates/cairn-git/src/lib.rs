@@ -13,4 +13,4 @@ mod repository;
 pub use cancel::{Cancel, CancelSignal};
 pub use error::{Error, RefusedWrite};
 pub use history::{HistoryCursor, HistoryOrder, HistoryPage, HistoryRequest, HistorySession};
-pub use repository::{Repository, SharedRepository};
+pub use repository::{CLOSE_BOUND, Repository, SharedRepository};

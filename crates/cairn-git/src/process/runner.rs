@@ -62,9 +62,12 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError, sync_channel};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use cairn_model::CommandExit;
+
 use super::cli::{GitDirs, Kind, Output};
 use super::group::{Group, KillHandle, Spawner, ThreadStarter, os_thread};
 use super::pipes::{self, EVENTS_BOUND, Event, Records, Tail};
+use super::registry::{Registration, exit_of};
 use crate::{Cancel, Error};
 
 /// How long an invocation waits for its pipes after its leader has exited,
@@ -128,6 +131,13 @@ struct Driver {
     /// This driver already is the reaper's: if its thread could not start,
     /// there is no other to hand it to.
     handed_off: bool,
+    /// The invocation's booking in its repository, finished when this driver
+    /// concludes it, on whichever thread (`registry.rs`); `None` for an
+    /// invocation run in no repository.
+    registration: Option<Registration>,
+    /// The runner itself is ending it — a thread that could not start — so
+    /// its end is not a cancellation, whatever was signalled.
+    runner_ended: bool,
 }
 
 /// How a driven invocation ended, before the kind gives it a meaning.
@@ -139,6 +149,20 @@ struct Ended {
     tail: String,
 }
 
+impl Ended {
+    /// Whether this end is a cancellation: asked for, and not beaten by a
+    /// clean exit (R4.5), and neither a crossed ceiling nor an end whose
+    /// status was lost, which are the runner's own outcomes. The one rule
+    /// [`Invocation::drive`]'s outcome and the command log both read.
+    fn cancelled(&self) -> bool {
+        !self.stopped
+            && self.status.as_ref().is_ok_and(|status| {
+                let beaten_by_a_clean_exit = status.success() && !self.signalled_while_running;
+                self.asked_to_end && !beaten_by_a_clean_exit
+            })
+    }
+}
+
 /// Starts the pipe threads for `child` and hands back the invocation. A thread
 /// that cannot start is an error that ends and reaps the process first, on
 /// this thread: never a running git with nobody waiting on it.
@@ -148,6 +172,7 @@ pub(super) fn watch<K: Kind>(
     kind: K,
     arguments: String,
     dirs: Option<GitDirs>,
+    mut registration: Option<Registration>,
     spawner: &Spawner,
 ) -> Result<Invocation<K>, Error> {
     let stdout = child.stdout.take();
@@ -159,10 +184,13 @@ pub(super) fn watch<K: Kind>(
     // first and only then is this dropped.
     let stdin: Arc<Mutex<Option<ChildStdin>>> = Arc::new(Mutex::new(child.stdin.take()));
     let group = Arc::new(Group::new(child));
+    if let Some(registration) = registration.as_mut() {
+        registration.enter(&group);
+    }
     let (sender, events) = sync_channel(EVENTS_BOUND);
     let mut invocation = Invocation {
         group: Arc::clone(&group),
-        driver: Some(Driver::new(Arc::clone(&group), events)),
+        driver: Some(Driver::new(Arc::clone(&group), events, registration)),
         kind,
         arguments,
         dirs,
@@ -218,6 +246,7 @@ pub(super) fn watch<K: Kind>(
             group.leader().terminate(group.pipes());
             drop(stdin);
             if let Some(mut driver) = invocation.driver.take() {
+                driver.runner_ended = true;
                 driver.run(&|| true, &mut |_| Flow::Continue, &mut |_| {});
             }
             Err(ended_by_the_runner(
@@ -391,7 +420,7 @@ impl<K: Kind> Invocation<K> {
 
     /// Makes the reaper thread a drop would start fail to start, for a test.
     #[cfg(test)]
-    fn without_a_reaper(mut self, starter: ThreadStarter) -> Self {
+    pub(super) fn without_a_reaper(mut self, starter: ThreadStarter) -> Self {
         if let Some(driver) = self.driver.as_mut() {
             driver.reaper = starter;
         }
@@ -430,8 +459,7 @@ impl<K: Kind> Invocation<K> {
             Err(source) => return Err(ended_here(arguments, RunnerEnded::Lost(source))),
         };
         // A cancel that lost the race to a clean exit is that exit's success (R4.5).
-        let beaten_by_a_clean_exit = status.success() && !ended.signalled_while_running;
-        if ended.asked_to_end && !beaten_by_a_clean_exit {
+        if ended.cancelled() {
             return Err(self.kind.cancelled(arguments, self.dirs.as_ref()));
         }
         if !status.success() {
@@ -458,13 +486,28 @@ impl<K: Kind> Drop for Invocation<K> {
 }
 
 impl Driver {
-    fn new(group: Arc<Group>, events: Receiver<Event>) -> Self {
+    fn new(group: Arc<Group>, events: Receiver<Event>, registration: Option<Registration>) -> Self {
         Self {
             group,
             events: Some(events),
             concluded: false,
             reaper: os_thread,
             handed_off: false,
+            registration,
+            runner_ended: false,
+        }
+    }
+
+    /// Books the end in the repository's log and lets the invocation leave its
+    /// registry: once, here, whichever thread concluded it.
+    fn record(&mut self, ended: &Ended) {
+        if let Some(registration) = self.registration.take() {
+            let exit = match &ended.status {
+                Ok(status) => exit_of(*status),
+                Err(_) => CommandExit::Unknown,
+            };
+            let cancelled = !self.runner_ended && ended.cancelled();
+            registration.finish(exit, cancelled, ended.tail.clone());
         }
     }
 
@@ -479,13 +522,15 @@ impl Driver {
         let group = Arc::clone(&self.group);
         let Some(events) = self.events.as_ref() else {
             self.concluded = true;
-            return Ended {
+            let ended = Ended {
                 status: Err(std::io::Error::other("the invocation was already driven")),
                 signalled_while_running: false,
                 asked_to_end: group.ending(),
                 stopped: false,
                 tail: String::new(),
             };
+            self.record(&ended);
+            return ended;
         };
         let mut tail = Tail::default();
         let mut stopped = false;
@@ -599,7 +644,7 @@ impl Driver {
         // Dropping the receiver ends a reader still on a pipe at its next send.
         self.events = None;
         let input = group.take_input_error();
-        Ended {
+        let ended = Ended {
             status: match input {
                 Some(error) => Err(error),
                 None => status,
@@ -608,7 +653,9 @@ impl Driver {
             asked_to_end,
             stopped,
             tail: tail.into_text(),
-        }
+        };
+        self.record(&ended);
+        ended
     }
 }
 
@@ -623,7 +670,16 @@ impl Drop for Driver {
         }
         self.group.request_end();
         if self.handed_off {
-            self.group.kill_now();
+            // Nothing is left to reap it later, so it leaves the registry now,
+            // reaped or not, with whatever the kill could see of its end.
+            let status = self.group.kill_now();
+            if let Some(registration) = self.registration.take() {
+                registration.finish(
+                    status.map_or(CommandExit::Unknown, exit_of),
+                    true,
+                    String::new(),
+                );
+            }
             return;
         }
         let reaper = Driver {
@@ -632,6 +688,8 @@ impl Drop for Driver {
             concluded: false,
             reaper: self.reaper,
             handed_off: true,
+            registration: self.registration.take(),
+            runner_ended: self.runner_ended,
         };
         let started = self.group.spawn(
             "cairn-git-reaper",

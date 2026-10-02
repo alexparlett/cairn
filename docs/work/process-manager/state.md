@@ -2,7 +2,10 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: planned. No phase has started. No code exists for this packet.**
+**Status: phase 01 (seal and environment) done on `feature/process-manager`;
+phase 02 (the runner) is next.** Two items from phase 01 await user review
+(`progress.md`, 2026-10-02 phase 01 entry): the gitoxide guard's method-call
+bans and the `PROCESS_CALL_EXCEPTIONS` row; and one open question (below).
 `diff-engine` is in flight on `feature/diff-engine` and switched to this packet
 because its changes query needs a `git` process; it continues once this merges.
 
@@ -29,7 +32,16 @@ implementation most:
 
 ## Open questions
 
-None of this packet's own. The questions it leaves to other packets are listed
+- **Partial-clone lazy fetch on a read** (raised by phase 01 QA). In a partial
+  clone, a read that asks for an object only the promisor remote holds fetches
+  it: a pack written, the network reached, and with no askpass token an
+  authenticated promisor fails closed. `GIT_NO_LAZY_FETCH=1` stops it but needs
+  git 2.44, above the 2.30 floor. For the user to decide before `reads/` gets
+  its first function: add it to `READ_ONLY` anyway (inert below 2.44), or leave
+  it as a constraint `diff-engine` designs around. Recorded in
+  `crates/cairn-git/src/reads/mod.rs`.
+
+Otherwise none of this packet's own. The questions it leaves to other packets are listed
 at the end of `brainstorm.md`.
 
 ## New modules and interfaces introduced so far
@@ -39,7 +51,14 @@ one-line contract.
 
 | Symbol | Crate | Contract |
 | --- | --- | --- |
-| _(none)_ | | |
+| `process` module (`src/process/`) | cairn-git | Crate-private; the only place a process is built, spawned, waited on or read. Holds `GitBinary`, `GitVersion`, `GitEnvironment`, `Askpass` (re-exported from `ops`) and the runner (`cli.rs`, moved unchanged). |
+| `GitBinary::read_invocation()` | cairn-git | `pub(crate)`; a `GitCommand<'_, Read>`: `READ_ONLY` env, no token field. For `reads/` and `ops/`. |
+| `GitBinary::write_invocation(WriteAuthority)` | cairn-git | `pub(crate)`; a `GitCommand<'_, Write>` holding the authority; `authorized_by` exists only on it. |
+| `ops::WriteAuthority` | cairn-git | `pub(crate)`, private field, `pub(in crate::ops) fn new()`; no Clone/Copy/Default. The write seal. |
+| `GitCommand<'a, K>`, `Read`, `Write`, `Kind` | cairn-git | In private `process/cli.rs`; `GitCommand::new` is `pub(super)`. The kind picks the profile. |
+| `environment::Profile` (`Read` / `Write { token }`), `READ_ONLY` | cairn-git | `GitEnvironment::command(program, Profile)` is `pub(super)`; a read adds `GIT_OPTIONAL_LOCKS=0`. `ALWAYS` now also pins `GIT_EDITOR=false`, `GIT_SEQUENCE_EDITOR=false`. |
+| `reads` module (`src/reads/`) | cairn-git | Empty, documented: one named function per read git answers; query plumbing or `status` only. |
+| `only_the_process_module_builds_or_runs_a_process`, `the_runner_is_named_only_by_ops_and_reads`, gitoxide half of `only_the_ops_module_mutates_a_repository` | cairn-guards | New twins; rosters `PROCESS_IDENTS`, `PROCESS_NULLARY_CALLS`, `PROCESS_CALL_EXCEPTIONS`, `RUNNER_NAMES`, `WRITE_NAMES`, `GITOXIDE_MUTATION_*`. |
 
 ## Bounds fixed by phases
 
@@ -56,7 +75,7 @@ Record each value and its reason here when it is chosen.
 
 | Phase | Status | Gate | QA |
 | --- | --- | --- | --- |
-| 01 seal and environment | not started | — | — |
+| 01 seal and environment | done (`main...HEAD` through phase 01's commits) | `scripts/gate.sh` exit 0 | qa-checklist, gate-integrity, destructive-ops, test-coverage; qa-confirm: 11 confirmed and fixed, 5 dismissed, 1 escalated (lazy fetch), 1 probed and resolved |
 | 02 runner | not started | — | — |
 | 03 engine lifecycle | not started | — | — |
 | 04 application | not started | — | — |

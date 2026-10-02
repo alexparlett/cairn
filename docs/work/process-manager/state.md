@@ -103,7 +103,7 @@ Record each value and its reason here when it is chosen.
 | Phase | Status | Gate | QA |
 | --- | --- | --- | --- |
 | 01 seal and environment | done (`main...HEAD` through phase 01's commits) | `scripts/gate.sh` exit 0 | qa-checklist, gate-integrity, destructive-ops, test-coverage; qa-confirm: 11 confirmed and fixed, 5 dismissed, 1 escalated (lazy fetch), 1 probed and resolved |
-| 02 runner | done (`a5f5160..HEAD`) | `scripts/gate.sh` exit 0 (`progress.md`) | qa-checklist, destructive-ops, responsiveness, test-coverage, gate-integrity; qa-confirm: 34 confirmed and fixed or deferred, 6 dismissed, 3 escalated (`progress.md`) |
+| 02 runner | done (`a5f5160..HEAD`) | `scripts/gate.sh` exit 0 (`progress.md`) | qa-checklist, destructive-ops, responsiveness, test-coverage, gate-integrity; qa-confirm: 34 confirmed and fixed or deferred, 6 dismissed, 3 escalated; re-review of the fixes (destructive-ops, test-coverage; qa-confirm): 8 confirmed and fixed, 1 dismissed (`progress.md`) |
 | 03 engine lifecycle | not started | — | — |
 | 04 application | not started | — | — |
 | 05 QA | not started | — | — |

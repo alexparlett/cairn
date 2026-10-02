@@ -139,6 +139,33 @@ Dismissed, with qa-confirm's reasons:
 - **QC12** — a `\r\n` blank line is never forwarded and is trimmed from the
   tail; a 256 KiB cut is lossy by design and respects char boundaries.
 
+**Re-review of the fixes** (fresh destructive-ops-reviewer and
+test-coverage-auditor over `bf17825..f98f5f7`; a fresh qa-confirm adjudicated
+9 findings: 8 confirmed, 1 dismissed), fixed in the commit after `f98f5f7`:
+- **R2D1** — `GitUnwatched` now says a write ended that way may have taken
+  effect (its stdin writer starts first and may have delivered it all).
+- **R2D2** — per-read stderr events could hold tens of thousands of strings and
+  starve the tick behind a slow callback. A read's lines now travel as one
+  string, and the driver breaks off its batch once a tick has passed so the
+  cancel poll and escalation still run. `EVENTS_BOUND`'s doc restated.
+- **R2D3** — the lock advice reads "stale if no git is running here", true even
+  when Cairn lost track of its own git.
+- **R2D-n1, R2D-n2** — the drop's bounded wait in the no-thread fallback, and the
+  open-pipe count lagging its pipe, are stated where the docs claimed more.
+- **R2T1, R2T2, R2T3** — new tests: a write the runner ends lists its locks
+  (`a_write_the_runner_ends_lists_the_locks_present`; the runner-ended errors
+  are now built in one place), the fallback waits out a held lock
+  (`a_drop_with_no_thread_to_reap_on_waits_out_a_held_lock_and_kills_the_group`),
+  and a finished invocation is not asked to end. Each turned red by its
+  mutation (empty locks; `try_lock`; `concluded` never set); the per-line
+  stderr mutation still fails the burst test.
+- Dismissed: **R2D-n3** — the blocked stdin writer is already documented and
+  its pipe gives no signalling evidence.
+- One more load flake this round, fixed in `f98f5f7`: the setsid holder test
+  could cancel before the holder had left the group.
+- G19 re-run after the last fix: M1 overhead 0 at the median (0.43 ms at the
+  min); floor 0 at the median.
+
 **Escalated to the user** (current behaviour kept, spec-conformant; batched in
 the phase report):
 - **RS2** — a cancel that arrives after the leader exited, while a pipe is
@@ -152,7 +179,8 @@ the phase report):
   (b) cancelled only when a signal reached the running leader; (c) cancelled,
   carrying the failure's status and stderr.
 - **DO6** — once the leader is reaped and only an open pipe remains, the
-  SIGKILL goes out up to 2 s after its pid was freed. Options: (a) don't reap
+  SIGKILL goes out up to 2 s after its pid was freed (and, per the re-review,
+  the open-pipe count can lag a pipe whose writers have all gone). Options: (a) don't reap
   until conclude (`waitid(WNOWAIT)`: not on Apple in nix 0.31, and against the
   "never nix-waitpid a pid std owns" rule); (b) skip the SIGKILL once only pipe
   evidence remains; (c) keep and state it (done).

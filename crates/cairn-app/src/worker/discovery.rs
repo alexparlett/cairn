@@ -25,10 +25,18 @@ struct Found {
     answer: OnceLock<Result<GitBinary, String>>,
 }
 
+/// The path and version found, or the refusal, and nothing of the
+/// environment: its inherited roster carries values such as proxy URLs, which
+/// may hold the user's proxy credentials and are never rendered.
 impl std::fmt::Debug for Discovery {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let answer = self.0.answer.get().map(|answer| {
+            answer
+                .as_ref()
+                .map(|git| (git.path().to_owned(), git.version()))
+        });
         f.debug_struct("Discovery")
-            .field("answer", &self.0.answer.get())
+            .field("answer", &answer)
             .finish_non_exhaustive()
     }
 }
@@ -81,5 +89,39 @@ impl Discovery {
     /// environment are built from.
     pub(super) fn startup(&self) -> &Startup {
         &self.0.startup
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Caught by: a `Debug` that renders the found `git` whole, which carries its
+    /// environment — the proxy URLs among it, which may hold a credential.
+    #[test]
+    fn a_discovery_renders_what_was_found_and_nothing_of_the_environment() {
+        let proxy = "http://ada:hunter2@proxy.example.com:3128";
+        let discovery = Discovery::new(Startup::new(
+            move |name| match name {
+                "PATH" => std::env::var_os("PATH"),
+                "https_proxy" => Some(proxy.into()),
+                _ => None,
+            },
+            std::path::PathBuf::from("/nonexistent/cairn-askpass"),
+        ));
+        let found = match discovery.git() {
+            Ok(git) => git.clone(),
+            Err(why) => panic!("this machine's git was refused: {why}"),
+        };
+        assert!(
+            format!("{found:?}").contains("hunter2"),
+            "the case needs the proxy in the environment git was found with"
+        );
+        let rendered = format!("{discovery:?}");
+        assert!(!rendered.contains("hunter2"), "{rendered}");
+        assert!(
+            rendered.contains(&found.path().display().to_string()),
+            "{rendered}"
+        );
     }
 }

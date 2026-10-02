@@ -2,12 +2,13 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 01 (seal and environment) done on `feature/process-manager`;
-phase 02 (the runner) is next.** Two items from phase 01 await user review
-(`progress.md`, 2026-10-02 phase 01 entry): the gitoxide guard's method-call
-bans and the `PROCESS_CALL_EXCEPTIONS` row; and one open question (below).
-`diff-engine` is in flight on `feature/diff-engine` and switched to this packet
-because its changes query needs a `git` process; it continues once this merges.
+**Status: phase 02 (the runner) implemented on `feature/process-manager`, in QA; phase 03
+(engine lifecycle) is next** — it moves fetch and the version probe onto the
+runner and deletes `GitCommand::run`, `GitCommand::stream`, `Running` and
+`ProcessKill`. Items awaiting user review are in `progress.md` (the phase 01
+and phase 02 entries), and one open question is below. `diff-engine` is in
+flight on `feature/diff-engine` and switched to this packet because its changes
+query needs a `git` process; it continues once this merges.
 
 ## Locked decisions
 
@@ -58,6 +59,13 @@ one-line contract.
 | `GitCommand<'a, K>`, `Read`, `Write`, `Kind` | cairn-git | In private `process/cli.rs`; `GitCommand::new` is `pub(super)`. The kind picks the profile. |
 | `environment::Profile` (`Read` / `Write { token }`), `READ_ONLY` | cairn-git | `GitEnvironment::command(program, Profile)` is `pub(super)`; a read adds `GIT_OPTIONAL_LOCKS=0`. `ALWAYS` now also pins `GIT_EDITOR=false`, `GIT_SEQUENCE_EDITOR=false`. |
 | `reads` module (`src/reads/`) | cairn-git | Empty, documented: one named function per read git answers; query plumbing or `status` only. |
+| `GitCommand::start()`, `GitCommand::input(bytes)` | cairn-git | `pub(crate)`; spawns with `process_group(0)`, a thread per pipe, stdin fed then closed; returns `Invocation<K>`. `start_with(&Spawner)` is `pub(super)` for tests. |
+| `Invocation<K>` (`process/runner.rs`) | cairn-git | `pub(crate)`, not re-exported. `finish(cancel, stdout, progress)`, `records(cancel, record, progress)`, `collect(cancel, ceiling, progress)` → `Result<Output, Error>`; `kill_handle()`. Drop ends and reaps on a `cairn-git-reaper` thread. |
+| `KillHandle` (`process/group.rs`) | cairn-git | `pub(crate)`, `Send + Sync + Clone`; `kill()` records the request and only try-locks. Nothing signals once the invocation is over. |
+| `Kind::cancelled`, `Kind::present_locks`, `GitDirs` (`process/cli.rs`) | cairn-git | The kind decides the outcome: a read's cancel is `GitReadCancelled`; a write's is `GitCancelled` with locks listed after the reap, and its failure names the locks present. `in_repository` records the git and common directories. |
+| `Error::GitReadCancelled`, `GitOutputTooLarge`, `GitUnwatched`; `GitFailed::present_locks` | cairn-git | New public error shapes (R5). `GitUnwatched` covers a pipe thread that could not start, a failed stdin write and a failed `try_wait`. |
+| `ops::stranded_locks` | cairn-git | Now `pub(crate) mod`, so the runner can list a write's locks. |
+| `RUNNER_NAMES` += `Invocation`, `KillHandle` | cairn-guards | The runner guard and its self-test cover the new names. |
 | `only_the_process_module_builds_or_runs_a_process`, `the_runner_is_named_only_by_ops_and_reads`, gitoxide half of `only_the_ops_module_mutates_a_repository` | cairn-guards | New twins; rosters `PROCESS_IDENTS`, `PROCESS_NULLARY_CALLS`, `PROCESS_CALL_EXCEPTIONS`, `RUNNER_NAMES`, `WRITE_NAMES`, `GITOXIDE_MUTATION_*`. |
 
 ## Bounds fixed by phases
@@ -67,7 +75,7 @@ Record each value and its reason here when it is chosen.
 
 | Bound | Phase | Value | Why |
 | --- | --- | --- | --- |
-| `DRAIN_BOUND` — output read after the leader exits (R3.6) | 02 | — | — |
+| `DRAIN_BOUND` — output read after the leader exits (R3.6) | 02 | 250 ms from the exit, the 20 ms tick included (`process/runner.rs`) | Bounds only the case where something other than git holds a pipe after git exits; the common case ends when the pipes close. What is still owed then is output git wrote before exiting, already in the pipe, which the readers move in well under a millisecond, so 250 ms is two orders of margin for a loaded machine's scheduler, and short enough that a finished operation still reads as finished. The same bound applies after `SIGKILL` on a cancel, for a holder that left the group. |
 | `CLOSE_BOUND` — wait for reaps on repository close (R6.3) | 03 | — | — |
 | `LOG_ENTRIES`, `LOG_BYTES` — command log size (R8.2) | 03 | — | — |
 
@@ -76,7 +84,7 @@ Record each value and its reason here when it is chosen.
 | Phase | Status | Gate | QA |
 | --- | --- | --- | --- |
 | 01 seal and environment | done (`main...HEAD` through phase 01's commits) | `scripts/gate.sh` exit 0 | qa-checklist, gate-integrity, destructive-ops, test-coverage; qa-confirm: 11 confirmed and fixed, 5 dismissed, 1 escalated (lazy fetch), 1 probed and resolved |
-| 02 runner | not started | — | — |
+| 02 runner | implemented (`a5f5160..HEAD`); QA in progress | `scripts/gate.sh --fast` exit 0 | pending |
 | 03 engine lifecycle | not started | — | — |
 | 04 application | not started | — | — |
 | 05 QA | not started | — | — |

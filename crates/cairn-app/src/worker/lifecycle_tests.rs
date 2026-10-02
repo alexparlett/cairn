@@ -21,7 +21,7 @@ use cairn_model::CommandExit;
 
 use super::discovery::Discovery;
 use super::fetch_tests::{
-    Home, RuntimeDir, UnbornRepository, block_on, built_helper, collect_until, with_origin,
+    Home, RuntimeDir, UnbornRepository, WAIT, built_helper, collect_until, next_by, with_origin,
 };
 use super::pool::{RepositoryHandle, Updates, open};
 use super::request::{Request, Update};
@@ -45,6 +45,11 @@ struct StubGit {
 
 impl StubGit {
     fn new(fetch: &str) -> Self {
+        Self::reporting("2.45.0", fetch)
+    }
+
+    /// A stub whose `--version` reports `version`.
+    fn reporting(version: &str, fetch: &str) -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let directory = std::env::temp_dir().join(format!(
             "cairn-app-stub-{}-{}",
@@ -58,7 +63,7 @@ impl StubGit {
         let git = directory.join("git");
         let script = format!(
             "#!/bin/sh\nDIR='{}'\ncase \"$1\" in\n--version)\n  echo probed >> \"$DIR/probes\"\n  \
-             echo 'git version 2.45.0'\n  ;;\nfetch)\n{fetch}\n  ;;\n*)\n  exit 1\n  ;;\nesac\n",
+             echo 'git version {version}'\n  ;;\nfetch)\n{fetch}\n  ;;\n*)\n  exit 1\n  ;;\nesac\n",
             directory.display()
         );
         if let Err(error) = std::fs::write(&git, script) {
@@ -81,7 +86,8 @@ impl StubGit {
         const ETXTBSY: i32 = 26;
         for _ in 0..500 {
             match GitBinary::discover_with(self.startup(None).probe_environment()) {
-                Ok(_) => return,
+                // It ran: found, or refused for the version it reported.
+                Ok(_) | Err(cairn_git::Error::GitTooOld { .. }) => return,
                 Err(cairn_git::Error::GitNotStarted { source, .. })
                     if source.raw_os_error() == Some(ETXTBSY) =>
                 {
@@ -189,37 +195,17 @@ fn opened(repository: &Path, discovery: &Discovery) -> (RepositoryHandle, Update
 /// took; a stream still open `within` after the call is a failure, then and
 /// there, rather than a wait on the boundary's whole patience.
 fn until_the_stream_ends(updates: &mut Updates, within: Duration) -> (Vec<Update>, Duration) {
-    struct Unpark(std::thread::Thread);
-    impl std::task::Wake for Unpark {
-        fn wake(self: std::sync::Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-    let waker = std::task::Waker::from(std::sync::Arc::new(Unpark(std::thread::current())));
-    let mut cx = std::task::Context::from_waker(&waker);
     let started = Instant::now();
-    let deadline = started + within;
     let mut seen = Vec::new();
-    loop {
-        let next = {
-            let mut next = std::pin::pin!(updates.next());
-            loop {
-                if let std::task::Poll::Ready(next) = next.as_mut().poll(&mut cx) {
-                    break next;
-                }
-                let now = Instant::now();
-                assert!(
-                    now < deadline,
-                    "the stream had not ended {within:?} after the close; saw {seen:?}"
-                );
-                std::thread::park_timeout(deadline - now);
-            }
-        };
-        match next {
-            Some(update) => seen.push(update),
-            None => return (seen, started.elapsed()),
-        }
+    while let Some(update) = next_by(updates, started + within, &seen) {
+        seen.push(update);
     }
+    (seen, started.elapsed())
+}
+
+/// The next update, within the boundary's patience.
+fn next(updates: &mut Updates) -> Option<Update> {
+    next_by(updates, Instant::now() + WAIT, &[])
 }
 
 /// PRD G16: `git` is found once per application, not once per repository
@@ -239,7 +225,7 @@ fn git_is_found_once_per_application_not_once_per_repository() {
     for _ in 0..3 {
         let (handle, mut updates) = opened(&fixture.path, &discovery);
         handle.submit(Request::OpenHistory { rows: 1 });
-        match block_on(updates.next()) {
+        match next(&mut updates) {
             Some(Update::Rows { .. }) => {}
             other => panic!("the repository was not served: {other:?}"),
         }
@@ -266,32 +252,40 @@ fn git_is_found_once_per_application_not_once_per_repository() {
     );
 }
 
-/// PRD G16's other half: a refusal at discovery still reaches the repository
-/// in the same words, naming the version Cairn needs, every time it is asked.
+/// PRD G16's other half: a `git` refused at discovery is refused once, and
+/// every repository that asks is told so in the same words, naming the
+/// version found and the version Cairn needs. Caught by: a discovery that
+/// keeps only a found `git` and probes again after a refusal (the count
+/// moves), or a refusal reworded per repository.
 #[test]
 fn a_git_refused_at_discovery_is_refused_to_every_repository_that_asks() {
-    let empty = std::env::temp_dir().join(format!("cairn-app-no-git-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&empty);
-    let path = empty.clone().into_os_string();
-    let discovery = Discovery::new(Startup::new(
-        move |name| (name == "PATH").then(|| path.clone()),
-        built_helper(),
-    ));
+    let stub = StubGit::reporting("2.20.0", "  exit 0");
     let fixture = UnbornRepository::new(&format!("cairn-refused-git-{}", std::process::id()));
+    let before = stub.probes();
+    let discovery = Discovery::new(stub.startup(None));
+    let mut said = Vec::new();
     for _ in 0..2 {
         let (_handle, mut updates) = opened(&fixture.path, &discovery);
-        match block_on(updates.next()) {
-            Some(Update::Failed { message }) => {
-                assert!(message.contains("2.30.0"), "no required version: {message}");
-            }
+        match next(&mut updates) {
+            Some(Update::Failed { message }) => said.push(message),
             other => panic!("expected the refusal, got {other:?}"),
         }
-        assert!(
-            block_on(updates.next()).is_none(),
-            "the repository was served"
-        );
+        assert!(next(&mut updates).is_none(), "the repository was served");
     }
-    let _ = std::fs::remove_dir_all(&empty);
+    assert!(
+        said[0].contains("2.30.0") && said[0].contains("2.20.0"),
+        "the refusal does not name both versions: {}",
+        said[0]
+    );
+    assert_eq!(
+        said[0], said[1],
+        "the refusal was said differently the second time"
+    );
+    assert_eq!(
+        stub.probes() - before,
+        1,
+        "a refused git was probed again for the second repository"
+    );
 }
 
 /// PRD G15, the worker's half: a second fetch while one runs is refused with a
@@ -440,6 +434,16 @@ fn closing_a_repository_ends_and_reaps_every_git_in_it_within_the_bound() {
     });
     collect_until(&mut updates, |u| matches!(u, Update::FetchStarted { .. }));
     let (leader, grandchild) = (stub.pid("leader"), stub.pid("grandchild"));
+    let made: Vec<_> = std::fs::read_dir(&runtime.path)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .collect();
+    assert_eq!(
+        made.len(),
+        1,
+        "the case needs the askpass channel's directory there while the fetch runs"
+    );
     #[cfg(target_os = "linux")]
     {
         let alive = alive_in_group(leader);
@@ -479,14 +483,19 @@ fn closing_a_repository_ends_and_reaps_every_git_in_it_within_the_bound() {
         "the askpass socket outlived the close: {left:?}"
     );
     drop(handle);
-    let _ = grandchild;
+    // Read only by the Linux checks above.
+    let _ = (leader, grandchild);
 }
 
-/// PRD R6.3 and the QA brief: a fetch asked for and closed at once — queued,
-/// mid-spawn or running when the close lands, whichever this run happens to
-/// catch — is still ended, never missed for not yet being in the registry.
-/// Caught by: a close that ends only what is registered when it starts, which
-/// leaves a fetch that enters afterwards running for ten minutes.
+/// PRD R6.3 and the QA brief: a fetch forwarded to the network lane and
+/// closed at once — mid-spawn or just running when the close lands, whichever
+/// this run catches — is still ended as a cancel, never missed for not yet
+/// being in the registry when the close looked. The command log is asked for
+/// in between because the repository thread answers in order: once it has
+/// answered, the fetch has been forwarded, so the close cannot drop it before
+/// it reaches the lane. Caught by: a close that ends only what is registered
+/// when it starts, or none at all — the stub then runs for ten minutes and the
+/// stream outlives the bound.
 #[test]
 fn a_fetch_closed_as_it_starts_is_still_ended() {
     let stub = StubGit::new(HANGS_WITH_A_GRANDCHILD);
@@ -501,10 +510,28 @@ fn a_fetch_closed_as_it_starts_is_still_ended() {
     handle.submit(Request::Fetch {
         remote: "origin".to_owned(),
     });
+    handle.submit(Request::CommandLog);
+    let before = collect_until(&mut updates, |u| matches!(u, Update::CommandLog { .. }));
     handle.submit(Request::Close);
     let (seen, took) = until_the_stream_ends(&mut updates, CLOSE_BOUND);
     assert!(took < CLOSE_BOUND, "the close took {took:?}: {seen:?}");
-    // Whether git started at all depends on where the close landed; if it did, it is gone.
+    let ended = before
+        .iter()
+        .chain(&seen)
+        .filter(|u| {
+            matches!(
+                u,
+                Update::FetchCancelled { .. }
+                    | Update::FetchFinished { .. }
+                    | Update::FetchFailed { .. }
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        matches!(ended.as_slice(), [Update::FetchCancelled { .. }]),
+        "the fetch forwarded before the close did not end, once, as a cancel: {before:?} {seen:?}"
+    );
+    // The stub may not have got as far as writing its pid; if it did, its group is gone.
     #[cfg(target_os = "linux")]
     if let Some(leader) = std::fs::read_to_string(stub.directory.join("leader"))
         .ok()

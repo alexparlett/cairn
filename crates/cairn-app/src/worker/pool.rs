@@ -1293,6 +1293,22 @@ mod tests {
         );
     }
 
+    /// A close stops the epochs as it is submitted, on the caller's thread, so a page
+    /// being walked is abandoned at its next poll and the close behind it is reached at
+    /// once — and it is still queued, for a worker that is between requests. Caught by:
+    /// a close that only queues, which waits behind whatever page is being walked.
+    #[test]
+    fn a_close_stops_the_epochs_as_it_is_submitted_and_is_queued() {
+        let (handle, asked) = idle_handle();
+        assert!(!handle.epochs.is_stopping());
+        handle.submit(Request::Close);
+        assert!(
+            handle.epochs.is_stopping(),
+            "the close left the walk in progress to finish its page"
+        );
+        assert_eq!(asked(), vec![Request::Close], "the close was not queued");
+    }
+
     #[test]
     fn submitting_returns_immediately_even_with_nobody_serving() {
         let (jobs, incoming) = channel::<(Option<Epoch>, Request)>();

@@ -356,30 +356,47 @@ fn boundary(
     }
 }
 
-/// Reads updates until `stop` says so, bounded, returning everything seen.
-pub(super) fn collect_until(updates: &mut Updates, stop: impl Fn(&Update) -> bool) -> Vec<Update> {
-    let (told, verdict) = channel::<()>();
-    let deadline = std::thread::spawn(move || {
-        if verdict.recv_timeout(Duration::from_secs(60)).is_err() {
-            panic!("no update matched within 60 seconds");
+/// The next update, or `None` once the stream has ended; a failure on this
+/// thread, naming what was seen, if nothing comes by `deadline`. The bound is
+/// the test thread's own, so a missing update is a red test with a name rather
+/// than a panic on a thread nobody joins.
+pub(super) fn next_by(updates: &mut Updates, deadline: Instant, seen: &[Update]) -> Option<Update> {
+    struct Unpark(std::thread::Thread);
+    impl std::task::Wake for Unpark {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
         }
-    });
+    }
+    let waker = Waker::from(Arc::new(Unpark(std::thread::current())));
+    let mut cx = Context::from_waker(&waker);
+    let mut next = std::pin::pin!(updates.next());
+    loop {
+        if let Poll::Ready(next) = next.as_mut().poll(&mut cx) {
+            return next;
+        }
+        let now = Instant::now();
+        assert!(
+            now < deadline,
+            "nothing more arrived on the boundary in time; saw {seen:?}"
+        );
+        std::thread::park_timeout(deadline - now);
+    }
+}
+
+/// Reads updates until `stop` says so, within [`WAIT`], returning everything seen.
+pub(super) fn collect_until(updates: &mut Updates, stop: impl Fn(&Update) -> bool) -> Vec<Update> {
+    let deadline = Instant::now() + WAIT;
     let mut seen = Vec::new();
     loop {
-        let Some(update) = block_on(updates.next()) else {
-            let _ = told.send(());
-            let _ = deadline.join();
+        let Some(update) = next_by(updates, deadline, &seen) else {
             panic!("the stream ended before the expected update; saw {seen:?}");
         };
         let done = stop(&update);
         seen.push(update);
         if done {
-            break;
+            return seen;
         }
     }
-    let _ = told.send(());
-    let _ = deadline.join();
-    seen
 }
 
 fn prompt_in(seen: &[Update]) -> Option<(PromptId, String)> {

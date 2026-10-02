@@ -427,13 +427,25 @@ mod tests {
         fn no_thread(_: &str, _: Box<dyn FnOnce() + Send>) -> io::Result<()> {
             Err(io::Error::other("no thread"))
         }
-        let stub = stub(HANGING);
+        // Says so, leaves a marker once the line is in the pipe, then hangs.
+        let stub = StubGit::with_git_from(|directory| {
+            format!(
+                "if [ \"$1\" = --version ]; then echo 'git version 2.30.0'; exit 0; fi\n\
+                 PATH=/usr/bin:/bin; command -v sleep >/dev/null || exit 99; \
+                 echo hanging >&2; touch '{}'; sleep 30",
+                directory.join("spoke").display()
+            )
+        });
         let repo = repo();
         let processes = processes(&repo);
         let invocation = started(&stub, &repo).without_a_reaper(no_thread);
-        // Long enough for the stub's one line to be read and queued, which is
-        // what the record keeps of its stderr; nothing waits for more.
-        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            eventually(|| stub.directory().join("spoke").exists()),
+            "the stub never spoke"
+        );
+        // The line is in the pipe; the reader, blocked on it already, queues it
+        // in microseconds. The margin is for a loaded machine's scheduler.
+        std::thread::sleep(Duration::from_millis(200));
         drop(invocation);
         assert_eq!(
             processes.running(),
@@ -447,6 +459,60 @@ mod tests {
             "the SIGKILL's end, or none seen yet: {record:?}"
         );
         assert_eq!(record.stderr, "hanging", "what was queued was dropped");
+    }
+
+    /// The same path when the stub has already exited: the reap the kill makes
+    /// finds the status, and the record carries it rather than `Unknown`.
+    /// Linux: it waits for the stub to be a zombie. Caught by: a record that
+    /// says `Unknown` whatever the reap found.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_drop_with_no_reaper_thread_records_an_exit_it_can_see() {
+        fn no_thread(_: &str, _: Box<dyn FnOnce() + Send>) -> io::Result<()> {
+            Err(io::Error::other("no thread"))
+        }
+        let stub = stub("exit 3");
+        let repo = repo();
+        let processes = processes(&repo);
+        let invocation = started(&stub, &repo).without_a_reaper(no_thread);
+        let pid = invocation.id();
+        assert!(eventually(|| {
+            std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .unwrap_or_default()
+                .contains(") Z ")
+        }));
+        drop(invocation);
+        let record = the_one_record(&processes);
+        assert_eq!(record.exit, CommandExit::Code(3), "{record:?}");
+    }
+
+    /// A failed stdin write is the outcome the caller is told of, but the log
+    /// records how the leader itself ended: the signal the runner sent. Caught
+    /// by: recording `Unknown` because the outcome was an error.
+    #[test]
+    fn a_failed_stdin_write_is_logged_with_the_leaders_own_exit() {
+        struct Failing;
+        impl io::Write for Failing {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::other("the disk went away"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let stub = stub(HANGING);
+        let repo = repo();
+        let processes = processes(&repo);
+        let invocation = started(&stub, &repo);
+        super::super::pipes::feed(Failing, b"input", &invocation.group());
+        let outcome = invocation.finish(&CancelSignal::new(), |_| {}, |_| {});
+        assert!(
+            matches!(outcome, Err(Error::GitUnwatched { .. })),
+            "{outcome:?}"
+        );
+        let record = the_one_record(&processes);
+        assert_eq!(record.exit, CommandExit::Signal(15), "{record:?}");
+        assert!(!record.cancelled, "{record:?}");
     }
 
     /// A spawn that fails is recorded once, as never started, and never enters

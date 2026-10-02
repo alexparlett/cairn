@@ -177,6 +177,11 @@ mod tests {
         // to the next character boundary rather than split one.
         let mut loud = record(0, format!("{}the end.", "é".repeat(LOG_BYTES)));
         loud.arguments = vec!["fetch".to_owned()];
+        assert_eq!(
+            (loud.held_bytes() - LOG_BYTES) % 2,
+            1,
+            "the overage is even, so the cut lands on a boundary and this decides nothing"
+        );
         log.push(loud);
         let kept = &log.records()[0];
         assert!(kept.held_bytes() <= LOG_BYTES);

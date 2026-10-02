@@ -418,7 +418,7 @@ impl<K: Kind> Invocation<K> {
 
     /// The group, for a test that watches its threads and signals.
     #[cfg(test)]
-    fn group(&self) -> Arc<Group> {
+    pub(super) fn group(&self) -> Arc<Group> {
         Arc::clone(&self.group)
     }
 
@@ -1150,10 +1150,13 @@ mod tests {
 
     /// A kill that arrives before anyone drives the invocation — the worker
     /// installs a fetch's canceller and a cancel can land before `finish` is
-    /// called — is not lost: the driver, once it runs, ends the group and
+    /// called — is not lost: the group is ended and the driver, once it runs,
     /// reports the cancel. Caught by: a kill handle that does nothing until
-    /// the driver exists, or a driver that reads the request only from its
-    /// own cancel signal.
+    /// the driver exists (the stub hangs and `within` fails). The handle
+    /// signals the group itself when, as here, nothing holds the lock, so a
+    /// driver that never read the request would end too; that the driver
+    /// finishes a request the handle could not signal is
+    /// `a_kill_that_misses_the_lock_returns_at_once_and_the_driver_finishes_it`'s.
     #[test]
     fn a_kill_before_the_invocation_is_driven_still_ends_it() {
         let stub = stub(HANGING_WITH_A_GRANDCHILD);

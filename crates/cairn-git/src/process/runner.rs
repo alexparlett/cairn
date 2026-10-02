@@ -143,6 +143,10 @@ struct Driver {
 /// How a driven invocation ended, before the kind gives it a meaning.
 struct Ended {
     status: std::io::Result<std::process::ExitStatus>,
+    /// How the leader itself ended, when that is known, even where `status`
+    /// is an error the runner reports instead (a failed stdin write): what
+    /// the command log records.
+    leader: Option<std::process::ExitStatus>,
     signalled_while_running: bool,
     asked_to_end: bool,
     stopped: bool,
@@ -502,10 +506,7 @@ impl Driver {
     /// registry: once, here, whichever thread concluded it.
     fn record(&mut self, ended: &Ended) {
         if let Some(registration) = self.registration.take() {
-            let exit = match &ended.status {
-                Ok(status) => exit_of(*status),
-                Err(_) => CommandExit::Unknown,
-            };
+            let exit = ended.leader.map_or(CommandExit::Unknown, exit_of);
             let cancelled = !self.runner_ended && ended.cancelled();
             registration.finish(exit, cancelled, ended.tail.clone());
         }
@@ -524,6 +525,7 @@ impl Driver {
             self.concluded = true;
             let ended = Ended {
                 status: Err(std::io::Error::other("the invocation was already driven")),
+                leader: None,
                 signalled_while_running: false,
                 asked_to_end: group.ending(),
                 stopped: false,
@@ -644,7 +646,9 @@ impl Driver {
         // Dropping the receiver ends a reader still on a pipe at its next send.
         self.events = None;
         let input = group.take_input_error();
+        let leader = status.as_ref().ok().copied();
         let ended = Ended {
+            leader,
             status: match input {
                 Some(error) => Err(error),
                 None => status,
@@ -674,10 +678,22 @@ impl Drop for Driver {
             // reaped or not, with whatever the kill could see of its end.
             let status = self.group.kill_now();
             if let Some(registration) = self.registration.take() {
+                // What the readers had already queued is kept, as a reap would
+                // have kept it; nothing waits for more.
+                let mut tail = Tail::default();
+                if let Some(events) = self.events.take() {
+                    for event in events.try_iter() {
+                        if let Event::Lines(lines) = event {
+                            for line in lines.split('\n') {
+                                tail.push(line);
+                            }
+                        }
+                    }
+                }
                 registration.finish(
                     status.map_or(CommandExit::Unknown, exit_of),
                     true,
-                    String::new(),
+                    tail.into_text(),
                 );
             }
             return;
@@ -1130,6 +1146,36 @@ mod tests {
         let pid = invocation.id();
         let (outcome, seen, took) = cancel_once_hanging(invocation, Cancelling::BySignal);
         assert_ended_whole(&outcome, &seen, took, pid);
+    }
+
+    /// A kill that arrives before anyone drives the invocation — the worker
+    /// installs a fetch's canceller and a cancel can land before `finish` is
+    /// called — is not lost: the driver, once it runs, ends the group and
+    /// reports the cancel. Caught by: a kill handle that does nothing until
+    /// the driver exists, or a driver that reads the request only from its
+    /// own cancel signal.
+    #[test]
+    fn a_kill_before_the_invocation_is_driven_still_ends_it() {
+        let stub = stub(HANGING_WITH_A_GRANDCHILD);
+        let invocation = started(&stub);
+        let pid = invocation.id();
+        invocation.kill_handle().kill();
+        let started_at = Instant::now();
+        let outcome = within(DEADLINE, move || {
+            invocation.finish(&never(), |_| {}, |_| {})
+        });
+        assert!(
+            matches!(outcome, Err(Error::GitReadCancelled { .. })),
+            "{outcome:?}"
+        );
+        assert!(
+            started_at.elapsed() < TERMINATION_GRACE + TICK,
+            "{:?}",
+            started_at.elapsed()
+        );
+        #[cfg(target_os = "linux")]
+        assert!(eventually(DEADLINE, || group_gone(pid)));
+        let _ = pid;
     }
 
     /// G8, by dropping it: the drop returns at once, even though the stub is still

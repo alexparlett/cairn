@@ -67,6 +67,10 @@ impl SharedRepository {
     /// afterwards is ended as soon as it starts, since the repository is
     /// closing.
     ///
+    /// A write that outlasts the grace is `SIGKILL`ed, which can strand its
+    /// lock files; its cancellation lists them to whoever drives it, but on a
+    /// close nobody may be left to show them.
+    ///
     /// It waits, so it is a worker's call, never the UI thread's.
     pub fn end_invocations(&self, bound: Duration) -> usize {
         self.processes.end_all(bound)

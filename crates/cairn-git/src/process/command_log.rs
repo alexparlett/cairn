@@ -173,12 +173,14 @@ mod tests {
     #[test]
     fn a_record_larger_than_the_bound_is_trimmed_to_fit_and_says_so() {
         let mut log = CommandLog::default();
-        let mut loud = record(0, format!("{}the end", "é".repeat(LOG_BYTES)));
+        // An odd overage, so the first cut lands inside an `é` and must move
+        // to the next character boundary rather than split one.
+        let mut loud = record(0, format!("{}the end.", "é".repeat(LOG_BYTES)));
         loud.arguments = vec!["fetch".to_owned()];
         log.push(loud);
         let kept = &log.records()[0];
         assert!(kept.held_bytes() <= LOG_BYTES);
-        assert!(kept.stderr.ends_with("the end"));
+        assert!(kept.stderr.ends_with("the end."));
         assert_eq!(kept.arguments, ["fetch"]);
 
         let mut long = record(1, "said".to_owned());

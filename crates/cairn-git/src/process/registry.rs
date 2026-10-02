@@ -88,7 +88,10 @@ impl Processes {
 
     /// Asks every running invocation to end — `SIGTERM` to its group now, and
     /// the rest by the thread driving it, as a cancel does — and waits up to
-    /// `bound` for all of them to be over. Returns how many were still
+    /// `bound` for all of them to be over. A write that outlasts the grace is
+    /// `SIGKILL`ed, which can strand its lock files; its cancellation still
+    /// lists them, to whoever drives it, but on a close nobody may be left to
+    /// show them, and the next write there trips over them. Returns how many were still
     /// running when it stopped waiting: zero, unless one outlived the bound.
     /// Every invocation that enters after this is asked to end at once, since
     /// the repository is closing.
@@ -114,12 +117,17 @@ impl Processes {
         id
     }
 
-    /// Writes `record`, then lets `id` leave: so whoever sees the registry
-    /// empty sees the log complete.
+    /// Writes `record` and lets `id` leave, under the registry's lock held
+    /// across both: so nobody can see the registry without it until the log
+    /// has it, and whoever sees the registry empty sees the log complete. The
+    /// lock order is the registry's, then the log's; nothing takes them the
+    /// other way round.
     fn leave(&self, id: Option<u64>, record: CommandRecord) {
+        let mut running = lock(&self.running);
         lock(&self.log).push(record);
         if let Some(id) = id {
-            lock(&self.running).remove(&id);
+            running.remove(&id);
+            drop(running);
             self.left.notify_all();
         }
     }
@@ -405,6 +413,11 @@ mod tests {
         let record = the_one_record(&processes);
         assert!(record.cancelled, "{record:?}");
         assert_eq!(record.arguments, ["stub", "an argument"]);
+        assert_eq!(
+            record.exit,
+            CommandExit::Signal(15),
+            "recorded before the reaper knew how it ended: {record:?}"
+        );
     }
 
     /// A drop with no thread to reap on is still recorded once, as cancelled,
@@ -417,7 +430,11 @@ mod tests {
         let stub = stub(HANGING);
         let repo = repo();
         let processes = processes(&repo);
-        drop(started(&stub, &repo).without_a_reaper(no_thread));
+        let invocation = started(&stub, &repo).without_a_reaper(no_thread);
+        // Long enough for the stub's one line to be read and queued, which is
+        // what the record keeps of its stderr; nothing waits for more.
+        std::thread::sleep(Duration::from_millis(300));
+        drop(invocation);
         assert_eq!(
             processes.running(),
             0,
@@ -425,6 +442,11 @@ mod tests {
         );
         let record = the_one_record(&processes);
         assert!(record.cancelled, "{record:?}");
+        assert!(
+            matches!(record.exit, CommandExit::Signal(9) | CommandExit::Unknown),
+            "the SIGKILL's end, or none seen yet: {record:?}"
+        );
+        assert_eq!(record.stderr, "hanging", "what was queued was dropped");
     }
 
     /// A spawn that fails is recorded once, as never started, and never enters
@@ -448,6 +470,7 @@ mod tests {
         let record = the_one_record(&processes);
         assert_eq!(record.exit, CommandExit::NotStarted);
         assert_eq!(record.arguments, ["stub"]);
+        assert_eq!(record.directory.as_deref(), repo.workdir());
         assert!(!record.cancelled);
         assert_eq!(record.stderr, "");
     }

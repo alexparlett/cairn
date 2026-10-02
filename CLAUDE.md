@@ -326,7 +326,7 @@ Project invariants:
   roster entry has a self-test case spelled out
   apart from the roster (matcher self-test
   `the_process_matcher_catches_the_shapes_it_claims`; its one exception row,
-  `HistoryProgress::status` in `cairn-app`, fails when no longer needed). The
+  `history_state::Progress::status` in `cairn-app`, fails when no longer needed). The
   VALUE is pinned behaviourally in `cairn-git`: the builder's tests spell out
   the read and write variable sets in full, the stub tests in
   `process/cli.rs`, `ops/authority.rs` and `ops/fetch.rs` run a `git` that

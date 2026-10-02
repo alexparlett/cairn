@@ -214,8 +214,8 @@ never enters `cairn-git` and never enters application state.
   `crates/cairn-app/src/fetch_state.rs`, and the window test
   `the_fetch_button_fetches_the_default_remote_and_becomes_cancel_while_running`). Listing only: removing a lock
   another process may still hold is a decision for a confirmed operation
-  that does not exist yet, and a FAILED fetch whose stderr says `cannot lock
-  ref` is not yet read for the lock it names — both remain on issue #19.
+  that does not exist yet (issue #19); a FAILED fetch names the lock files
+  present in its error, which the banner does not yet draw (issue #44).
   "Not destructive" is kept true against the user's configuration
   by one flag and one refusal (issue #17, decided 2026-09-17). `fetch.prune`
   and `remote.<name>.prune` are honoured exactly as `git fetch` honours them
@@ -502,12 +502,19 @@ Known limits, described rather than pinned:
   refs can still leave a `*.lock`; the cancel names every lock file it
   finds, and removing one is the user's by hand once they know no other git
   is running — nothing in Cairn removes a lock yet, since the process
-  holding it might not be Cairn's, and a failed fetch that trips over one
-  does not yet name it (issue #19).
-- On process exit (the window closing) the socket directory under
-  `$XDG_RUNTIME_DIR` is left behind if the threads did not get to unwind: a
-  runtime directory is a tmpfs cleared at logout, and the names are per pid
-  and random, so nothing collides. Not probed with a display (issue #27).
+  holding it might not be Cairn's (issue #19). A failed fetch names the lock
+  files present in its error (`GitFailed::present_locks`), but the banner
+  draws only git's first `fatal:`/`error:` line, so the list does not reach
+  the user (issue #44).
+- Closing the window closes the repository first: every `git` in it is
+  ended and reaped, the acceptor stopped and the socket directory removed,
+  and only then does the window go (`docs/systems/git-processes.md`,
+  "Closing"). Checked by hand on a desktop session with the credential
+  dialog up: no `git`, no helper, no socket directory and no lock left. A
+  window forced closed after `worker::CLOSE_PATIENCE`, or a crash, can
+  still leave the directory under `$XDG_RUNTIME_DIR`: a runtime directory is
+  a tmpfs cleared at logout, and the names are per pid and random, so
+  nothing collides.
 - A stalled network is only interrupted by the cancel; nothing times a fetch
   out.
 - What a large fetch costs the window — one update per progress redraw, a

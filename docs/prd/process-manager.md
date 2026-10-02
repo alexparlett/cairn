@@ -1,21 +1,40 @@
 ---
-status: in-flight
+status: shipped
 packet: process-manager
 opened: 2026-10-02
+shipped: 2026-10-02
 ---
 
 # PRD — Process manager
 
-**In flight. Authoritative while the packet is open.** Teardown stamps this file
-and points at `docs/systems/git-processes.md`; until then this is the one copy of
-what the packet commits to.
+**Shipped. Frozen — what this packet committed to, as it was committed to.** For
+how every `git` process is built, run, cancelled and accounted for now, read
+`docs/systems/git-processes.md`; that is the living truth and this is not.
+Requirements R1-R9 and acceptance criteria G1-G22 were all met, each against a
+test that decides it, but for the two this PRD set by other means: G19 by its
+`#[ignore]`d reporter on the bench machine (overhead within noise, well inside
+2 ms) and G20 checked by hand on a desktop session under Wayland and X11. One
+addition the user decided in flight: a read also sets `GIT_NO_LAZY_FETCH=1`,
+which git older than 2.44 ignores, and its partial-clone test is required, not
+skipped, on CI (`CAIRN_REQUIRE_NO_LAZY_FETCH`). Nothing below was descoped.
+What the packet left, the user reviewed when it shipped: the residuals and enforcement choices it kept are recorded as accepted
+in `docs/systems/git-processes.md`, and the rest is filed — the command log's
+view (#41), the close's wiring test (#42), the silent close (#43), lock lists
+never shown (#44), the write-verb policies for the first local write (#45),
+stderr retention (#46), `FetchControl`'s races (#47), a hung probe and a forced
+close (#48), the engine types' `Debug` (#49), and #25's remainder. The
+`state.md` this file names below, and the packet's work directory, were deleted
+at teardown; git history holds them, and the bound values they recorded are in
+`docs/systems/git-processes.md` with their reasons beside each constant in the
+code.
 
 Design frame: `docs/design/processes.md` (how every `git` process is built, run,
 cancelled and accounted for), with **D1** in `docs/design/engine.md` (reads `git`
 answers) and **D3** in `docs/design/concurrency.md` (the write lanes). Program:
 `docs/work/daily-loop/roadmap.md`, where this packet sits between
 `credential-prompts` and the rest of `diff-engine`, which is in flight and needs it. Decisions and rejected
-alternatives: `docs/work/process-manager/brainstorm.md` L1-L15. Evidence, all
+alternatives: the packet's brainstorm, L1-L15, deleted at teardown and promoted
+to `docs/design/processes.md`. Evidence, all
 under `docs/research/process-manager/`: `runner-and-worker-as-built.md` (the
 runner, worker and guards as they stand), `consumer-invocations.md` (every `git`
 invocation the daily loop needs), `precedent-study.md` (how other clients run
@@ -176,8 +195,8 @@ runner.
 
 ## Acceptance criteria
 
-The single authoritative copy. `docs/work/process-manager/qa-checklist.md` points
-here and does not restate them.
+The single authoritative copy. The packet's qa-checklist pointed here and did not
+restate them.
 
 | # | Criterion | Pinned by |
 | --- | --- | --- |

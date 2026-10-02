@@ -9,8 +9,8 @@ nuance that run must not lose.
 | --- | --- | --- | --- |
 | 1 | `history-graph` | **shipped** | — |
 | 2 | `credential-prompts` | **shipped** | 1 |
-| 2a | `process-manager` | **planned** | 2 |
-| 3 | `diff-engine` | **in flight**, phases 01-02 landed; changes query waits on 2a | 1, 2a |
+| 2a | `process-manager` | **shipped** | 2 |
+| 3 | `diff-engine` | **in flight**, phases 01-02 landed; unblocked by 2a | 1, 2a |
 | 4 | `refs-and-status` | brief only | 1 (and 2a if O2 picks `git status`) |
 | 5 | `staging-and-commit` | brief only | 2, 2a, 3, 4 |
 | 6 | `remote-sync` | brief only | 2, 2a, 4 |
@@ -43,18 +43,18 @@ that D1 created written into the `ops` module docs. **Load-bearing for packet
 Left for packet 6 by name: push (issue #16), the remote picker (#23), and the
 fetch-under-prune policy (#17). As built: `docs/systems/credentials.md`.
 
-## 2a. process-manager — planned
+## 2a. process-manager — shipped
 
-`docs/prd/process-manager.md` (in flight), work directory
-`docs/work/process-manager/`, evidence `docs/research/process-manager/`. Inserted
-while `diff-engine` was in flight, when its changes query hit rename parity: gix paired 231 renames where git
+`docs/prd/process-manager.md` (frozen), evidence `docs/research/process-manager/`.
+Inserted while `diff-engine` was in flight, when its changes query hit rename parity: gix paired 231 renames where git
 paired 2,774 on a large rollup, the user classed that as a critical bug, and the
 changes query moved to `git diff-tree` — the first read `git` answers (D1, as
 rewritten). The user asked for a proper manager for `git` processes before any
 new spawn, and the runner credential-prompts built was shaped around fetch alone
-(`docs/research/diff-engine/git-process-survey.md`).
+(`docs/research/diff-engine/git-process-survey.md`). As built:
+`docs/systems/git-processes.md`.
 
-**Builds:** one place that builds a process (`process/`), a read/write split
+**Built:** one place that builds a process (`process/`), a read/write split
 sealed by a token only `ops/` can make, a `reads/` module, a runner carrying
 every daily-loop shape (captured cancellable stdout, stdin, bounded stderr,
 process-group kill by poll, handle or drop), a registry with kill-all on close,
@@ -63,15 +63,20 @@ command log as data. Design: `docs/design/processes.md`; the write lanes in
 `concurrency.md`.
 
 **Leaves on the doorstep:** for 3, a read invocation the diff thread can run and
-cancel by epoch; for 5, stdin and the local write lane's design; for 6, the
-network lane push joins.
+cancel by epoch (proven against what shipped by `diff_engine_path_forward` in
+`crates/cairn-git/src/reads/mod.rs`); for 5, stdin, the local write lane's
+design, and the write-verb policies it must decide before its first verb
+(issue #45, with #44 on lock lists); for 6, the network lane push joins.
+Left as issues: #41-#49, and #25's remainder.
 
 ## 3. diff-engine — in flight
 
 **In flight on `feature/diff-engine`: phases 01 and 02 landed, and the work
-switched to 2a because the changes query needs a `git` process.** Once 2a
-merges, the changes query is reworked onto `git diff-tree` through `reads/`; the model,
-the content query and the round-trip tests stand. Why: that branch's
+switched to 2a because the changes query needs a `git` process. 2a has
+shipped, so it is unblocked:** `feature/diff-engine` is brought up to date with
+`main` first (a shared branch, so the user's call), then the changes query is
+reworked onto `git diff-tree` through `reads/`; the model, the content query and
+the round-trip tests stand. Why: that branch's
 `docs/work/diff-engine/progress.md` (2026-09-30) and
 `docs/research/diff-engine/rename-parity-spike.md`.
 

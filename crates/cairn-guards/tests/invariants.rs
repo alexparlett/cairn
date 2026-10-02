@@ -743,7 +743,7 @@ const PROCESS_YIELDING_METHODS: &[&str] = &["command"];
 const PROCESS_CALL_EXCEPTIONS: &[(&str, &str, &str)] = &[(
     "crates/cairn-app/src",
     "status",
-    "HistoryProgress::status, the history view's load state, read by the window and the status \
+    "history_state::Progress::status, the history view's load state, read by the window and the status \
      line. No process can be behind a `.status()` in cairn-app: a Command there is caught by its \
      name and by `.command(..)`, cairn-git's public surface yields none, and a dependency that \
      did would need an allowlist row",

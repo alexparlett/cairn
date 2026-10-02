@@ -2,10 +2,12 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: two of nine packets shipped (`history-graph`, `credential-prompts`).
-`diff-engine` is in flight on `feature/diff-engine`, phases 01 and 02 landed.
-Its changes query needs a `git` process, so `process-manager` (2a) was planned
-and is built next; `diff-engine` continues on top of it. The other five are briefs.**
+**Status: three packets shipped (`history-graph`, `credential-prompts`,
+`process-manager`). `diff-engine` is in flight on `feature/diff-engine`, phases
+01 and 02 landed, and is unblocked: its changes query needed a `git` process,
+which `process-manager` (2a) built. That branch is brought up to date with
+`main` before it continues — the user's call, as it is a shared branch. The
+other five are briefs.**
 
 ## The milestone
 
@@ -41,8 +43,8 @@ amended D1 for the filter drivers that status also runs.
 | --- | --- | --- |
 | 1 | `history-graph` | **shipped** — PRD frozen, as-built in `docs/systems/history-graph.md`; work dir torn down |
 | 2 | `credential-prompts` | **shipped** — PRD frozen, as-built in `docs/systems/credentials.md`; work dir torn down |
-| 2a | `process-manager` | **planned** — PRD `docs/prd/process-manager.md` in flight; work dir `docs/work/process-manager/`; five phases, none started |
-| 3 | `diff-engine` | **in flight** on `feature/diff-engine`, phases 01-02 landed; its changes query waits on 2a (the branch's `state.md` is current; the copy on `main` predates the work) |
+| 2a | `process-manager` | **shipped** — PRD frozen, as-built in `docs/systems/git-processes.md`; work dir torn down; leftovers #41-#49 and #25 |
+| 3 | `diff-engine` | **in flight** on `feature/diff-engine`, phases 01-02 landed; unblocked by 2a, after the branch is brought up to date with `main` (the branch's `state.md` is current; the copy on `main` predates the work) |
 | 4 | `refs-and-status` | brief in `roadmap.md` |
 | 5 | `staging-and-commit` | brief in `roadmap.md` |
 | 6 | `remote-sync` | brief in `roadmap.md` |

@@ -2,8 +2,8 @@
 
 How Cairn builds and runs a `git` process today, and what keeps that in one
 place. As-built: everything here is code that exists, with the test that pins
-each rule named beside it. The commitment it is being built against is
-`docs/prd/process-manager.md` (in flight); the intent is
+each rule named beside it. The commitment it was built against is
+`docs/prd/process-manager.md` (shipped, frozen); the intent is
 `docs/design/processes.md`, with D1 in `docs/design/engine.md`. What the askpass
 helper does with the environment described here, and fetch end to end, are
 `docs/systems/credentials.md`.
@@ -20,7 +20,12 @@ repository keeps a registry of the invocations running in it, which closing
 it ends and waits on, and a bounded log of every one that is over. In the
 application, `git` is found once, as it starts; a fetch runs in the network
 lane, which refuses a second; closing the window closes its repository; and
-the worker answers the log as values, which no view draws yet.
+the worker answers the log as values, which no view draws yet (issue #41).
+
+Where a residual below says **accepted by the user on 2026-10-02**, the user
+reviewed it when the packet shipped and kept the behaviour as stated; where it
+cites an issue, the user chose to have it fixed later, and the issue holds the
+options.
 
 ## The layout
 
@@ -42,6 +47,7 @@ crates/cairn-git/src/
   ops/          every mutation; constructs WriteAuthority; re-exports what the app needs
     authority.rs    WriteAuthority, and the tests that need one (real `git` writes among them)
     fetch.rs        fetch, built as a write
+    refspec_policy.rs  the refspecs fetch refuses (docs/systems/credentials.md)
     stranded_locks.rs  every `*.lock` under a git directory; the runner reports them for a write
   reads/        each read `git` answers, one named function each — empty until diff-engine;
                 its test module proves the shape that packet takes: a read built from a
@@ -59,8 +65,10 @@ On the application's side, in `crates/cairn-app/src/`:
 ```
   worker/discovery.rs     Discovery — git found once per application, on cairn-discovery
   worker/startup.rs       Startup, Backend — a repository's channel, and git pointed at it
-  worker/network_lane.rs  the network lane (cairn-network): Operation, Lane, FetchControl, Refusal
-  worker/pool.rs          the repository thread: Request::Close, Request::CommandLog, Threads::drop
+  worker/network_lane.rs  the network lane's loop: Operation, Lane, FetchControl, Refusal
+  worker/pool.rs          the repository thread: serves Request::Close and Request::CommandLog,
+                          spawns the network lane's cairn-network thread, Threads::drop
+  worker/request.rs       Request and Update, the boundary's messages
   closing.rs              Closing — the window's close hook, which asks and never waits
 ```
 
@@ -78,6 +86,10 @@ be started, the first to ask finds it, once. A missing or too-old `git`
 reaches every repository that asks as the same `Update::Failed`, naming the
 version Cairn needs, and nothing is served behind it.
 
+The probe has no deadline, as no invocation does: a `git --version` that never
+answers leaves every repository waiting on `Discovery::git`, unable to open,
+and a worker that never reaches `serve` never sees a close (issue #48).
+
 The answer is a path and a version, and each repository needs it pointed at
 its own askpass channel, which does not exist until the repository opens:
 `GitBinary::with_environment` copies the path and version onto the
@@ -88,7 +100,8 @@ Pinned: `git_is_found_once_per_application_not_once_per_repository`
 (`worker/lifecycle_tests.rs`: three repositories opened on one discovery,
 started as `main` starts it and raced by the first open, probe the stub once;
 two opened with a discovery each probe it twice, so the count moves),
-`a_git_refused_at_discovery_is_refused_to_every_repository_that_asks`,
+`a_git_refused_at_discovery_is_refused_to_every_repository_that_asks`
+(`worker/lifecycle_tests.rs`),
 `a_missing_git_is_refused_naming_the_version_and_nothing_is_served`
 (`worker/pool.rs`), and
 `a_found_git_takes_a_new_environment_without_being_searched_for_or_probed_again`
@@ -159,6 +172,13 @@ the base, and then applies what the invocation's kind adds:
 
 The kind chooses the profile (`Kind::profile` in `cli.rs`). The caller never
 does.
+
+`GitEnvironment` and `GitBinary`, which holds one, derive `Debug`, so `{:?}`
+on either renders the inherited values, the proxy URLs among them, which may
+carry the user's proxy credentials. Nothing prints either; the application's
+`worker::Discovery` has a `Debug` of its own that renders the path and version
+only (`a_discovery_renders_what_was_found_and_nothing_of_the_environment`).
+A value-free `Debug` on the engine types is issue #49.
 
 Why each variable is there, with its evidence, is beside it in
 `environment.rs`. Two need a word here:
@@ -244,8 +264,9 @@ which waits, but for the drop's no-thread fallback below.
   `every_invocation_leads_a_process_group_of_its_own`, which reads the stub's
   group from `/proc` and finds the stub and its `sleep` in it, and this test
   process not.
-- **A thread per pipe** (`pipes.rs`): `cairn-git-stdout`, `cairn-git-stderr`,
-  and `cairn-git-stdin` when there is input. No thread reads one pipe while
+- **A thread per pipe** (`pipes.rs`, started and named in `runner.rs`):
+  `cairn-git-stdout`, `cairn-git-stderr`, and `cairn-git-stdin` when there is
+  input. No thread reads one pipe while
   another is read or written on it, so no output volume on one stream can stall
   another at any pipe capacity — 64 KiB, two pages at a user's pipe limit, or
   512 bytes on macOS. Readers send `Event`s to the driving thread on a channel
@@ -368,7 +389,8 @@ grace plus the bound
 (`a_cancel_whose_pipe_holder_left_the_group_returns_after_the_grace_and_the_bound`).
 A cancel that arrives after the leader has exited while a pipe is still held
 signals the group too — whatever is left of what git started — and can take
-the same; an uncancelled invocation in that state waits only the bound.
+the same; an uncancelled invocation in that state waits only the bound
+(accepted by the user on 2026-10-02).
 Pinned by `a_cancel_sends_sigterm_first_and_a_process_that_acts_on_it_is_not_killed`
 (a trap that reports `SIGTERM`, ending inside the grace),
 `a_process_that_ignores_sigterm_is_killed_after_the_grace` and
@@ -393,17 +415,25 @@ in the group, the count lags the pipe (a reader still handing on its last read
 counts its pipe open after the writer closed it), and if every member exits
 between the check and the signal the id could in principle be reused. The escalation widens that window: once the
 leader is reaped and only an open pipe keeps the group believed alive, the
-`SIGKILL` goes out up to the whole grace after the leader's pid was freed. One
-more window is stated rather than closed: git may exit 0 between the reap's
+`SIGKILL` goes out up to the whole grace after the leader's pid was freed
+(accepted by the user on 2026-10-02: the alternatives were not reaping until
+the end — `waitid` with `WNOWAIT`, which nix 0.31 lacks on Apple and which
+would wait on a pid std's `Child` owns — and skipping the `SIGKILL` once only
+pipe evidence remains). One more
+window is stated rather than closed: git may exit 0 between the reap's
 `try_wait` and the `killpg`, and is then counted as signalled while running —
-a completed invocation reported as cancelled.
+a completed invocation reported as cancelled (accepted by the user on
+2026-10-02, for writes as for reads).
 
 ### Outcomes
 
 `Invocation::drive` decides, after the reap, in this order:
 
 1. A crossed ceiling is `Error::GitOutputTooLarge { arguments, ceiling,
-   stranded_locks }`
+   stranded_locks }`, whatever the exit status: a write collected under a
+   ceiling that git then completes is reported as this error though its change
+   stands — harmless while no write is collected; whether a ceiling may
+   outrank a write's clean exit, or a write may have one at all, is issue #45
    (`a_collect_over_its_ceiling_is_refused_whole_and_the_process_ended`;
    `output_exactly_at_the_ceiling_is_collected_and_one_byte_over_is_refused`).
 2. A failed stdin write, a pipe thread that could not start, or a `try_wait`
@@ -420,7 +450,10 @@ a completed invocation reported as cancelled.
    reported cancelled though it completed — for fetch, a completed fetch the
    window calls cancelled, whose moved refs the worker still finds by
    comparing them before and after. Any other invocation
-   asked to end is cancelled, whatever its status
+   asked to end is cancelled, whatever its status — a git that had already
+   failed on its own when the request landed included, so the outcome carries
+   neither its status nor its stderr, which its command-log record still
+   holds (accepted by the user on 2026-10-02)
    (`a_cancelled_process_that_exits_zero_after_the_signal_is_reported_cancelled`,
    `a_cancelled_process_that_exits_nonzero_is_reported_cancelled`). What that
    means is the kind's (`Kind::cancelled` in `cli.rs`):
@@ -436,11 +469,15 @@ a completed invocation reported as cancelled.
      have taken effect, in part or whole — the signal can land after git made
      its change and before it exited — so an operation that must know
      compares the repository's state before and after, as fetch does with its
-     refs.
+     refs. Whether that comparison becomes a review obligation for every write
+     verb, and the cancelled message says a write may have taken effect, is
+     for the first local write (issue #45).
 4. A non-zero exit is `Error::GitFailed { arguments, status, stderr,
    present_locks }`, `stderr` the retained tail; for a write, `present_locks`
    lists the lock files present, which is what a write fails on and git never
-   waits for (`a_failed_write_names_a_present_index_lock`). Nothing retries,
+   waits for (`a_failed_write_names_a_present_index_lock`). For fetch the list
+   reaches the error's message, but the window's banner draws only git's
+   first `fatal:`/`error:` line, so it does not reach the user (issue #44). Nothing retries,
    and nothing removes a lock. A read's is always empty
    (`a_failure_carries_the_arguments_the_status_and_stderr`,
    `a_real_read_fails_with_its_diagnostic_and_cancels_as_a_read`).
@@ -482,7 +519,8 @@ calls it on the repository thread.
 What a close costs: a write that outlasts the grace is `SIGKILL`ed, which can
 strand its lock files. Its cancellation still lists them, to whoever drives
 it, but on a close nobody may be left to show them, and the next write in
-that repository fails on them with git's own "File exists" message.
+that repository fails on them with git's own "File exists" message (issue
+#44).
 
 `CLOSE_BOUND` is 3 s: the 2 s grace and the 250 ms drain bound, which is the
 longest a cancel can take, with three-quarters of a second to spare; a
@@ -530,7 +568,7 @@ two ways, dropping its oldest records to stay under both:
 `SharedRepository::command_log()` answers it, and the worker hands it to
 whoever asks: `Request::CommandLog` is answered on the repository thread by
 `Update::CommandLog { records }`, the records oldest first. Nothing in the
-application asks yet — no view draws the log in this packet (PRD R8.3) — so
+application asks yet — no view draws the log (PRD R8.3; issue #41) — so
 the request is its tests' alone. Pinned, G17's worker half:
 `the_command_log_is_answered_through_the_worker_with_the_fetch_in_it`
 (`worker/lifecycle_tests.rs`: empty before anything has run; after a fetch
@@ -544,7 +582,8 @@ remote's URL there, and a URL configured with userinfo
 (`https://user:token@host`) is a credential that is not a `Secret`. git
 anonymises the URL in the messages checked (`From <url>`), but that every
 message of every git from 2.30 does is not verified; scrubbing userinfo from
-the tail would be a design change, and is not made. The arguments carry what
+the tail would be a design change, and is not made; whether to make it, before
+the log's view (issue #41) draws a tail, is issue #46. The arguments carry what
 Cairn passed, which for fetch is a remote's name.
 
 Pinned, G17's engine half, one record per exit path (`process/registry.rs`):
@@ -558,9 +597,11 @@ signal), `a_dropped_invocation_is_logged_once_by_its_reaper`,
 `a_cancel_beaten_by_a_clean_exit_is_logged_as_the_success` and
 `an_invocation_in_no_repository_is_not_logged_in_one`; the bounds by
 `the_log_keeps_the_newest_log_entries_records`,
-`the_log_holds_no_more_than_log_bytes`,
-`a_record_larger_than_the_bound_is_trimmed_to_fit_and_says_so` and
-`the_log_and_close_bounds_have_the_values_the_packet_recorded`; and the token
+`the_log_holds_no_more_than_log_bytes` and
+`a_record_larger_than_the_bound_is_trimmed_to_fit_and_says_so`
+(`process/command_log.rs`), and
+`the_log_and_close_bounds_have_the_values_the_packet_recorded`
+(`process/registry.rs`); and the token
 by `a_fetch_with_a_token_is_logged_once_without_the_token_or_the_environment`
 (`ops/fetch.rs`), whose stub writes the environment it was given to a file —
 the token and every value looked for among it — while its record holds none
@@ -570,8 +611,8 @@ of them.
 
 A `git` operation runs in a write lane (PRD R7, `docs/design/concurrency.md`,
 "Operations"); one lane exists, the network lane, on the `cairn-network`
-thread (`worker/network_lane.rs`), where fetch runs — what was the operations
-thread. The lane is chosen per operation: `Operation::lane` names one for each
+thread (its loop in `worker/network_lane.rs`, spawned by `Threads::start` in
+`worker/pool.rs`), where fetch runs — what was the operations thread. The lane is chosen per operation: `Operation::lane` names one for each
 operation by an exhaustive match, and the repository thread's
 `Threads::perform` routes by it, so the local lane lands beside this one with
 the first local write rather than being assumed away
@@ -586,7 +627,15 @@ keeps it in its own state, beside the fetch in flight, which the refusal
 leaves as it was, and draws it as a banner — "Fetch of origin not started:
 …" — until the Fetch button is next pressed. The window hides that button
 while a fetch is in flight, so a refusal is what a second fetch meets when
-anything else asks for one. Pinned, G15:
+anything else asks for one.
+
+A cancel is not tied to the fetch it was pressed for. The lane clears
+`FetchControl` once a fetch is over and before its outcome reaches the window;
+a Cancel pressed in that moment is kept as a cancel that overtook its fetch's
+start, and the next fetch, whenever it is asked for, starts cancelled (issue
+#47).
+
+Pinned, G15:
 `a_second_fetch_while_one_runs_is_refused_with_a_reason` (through the
 boundary, with a stub fetch that hangs), `a_second_fetch_is_refused_naming_the_fetch_in_flight`
 (`network_lane.rs`), `a_refused_fetch_is_kept_for_the_window_and_the_fetch_in_flight_is_untouched`
@@ -614,8 +663,8 @@ runs on the UI thread:
    still on the repository thread's queue, `serve` has stopped (the epochs
    were stopped as the close was submitted) and it is never forwarded or
    started. If it has already been forwarded to the network lane, the lane
-   takes it up after the close and spawns it, and it is ended as it enters
-   the registry: `end_all` marks the repository closing before it looks,
+   takes it up after the close and spawns it — it reaches the network for
+   that moment (issue #47) — and it is ended as it enters the registry: `end_all` marks the repository closing before it looks,
    and an invocation that enters afterwards is asked to end at once. A
    process does run for a moment before it is registered — between its
    spawn and its booking — and the closing mark is what covers that moment,
@@ -634,8 +683,9 @@ runs on the UI thread:
    below. The task driving the stream sees it end, and `Closing::worker_gone`
    says the window asked; the task then closes the window past the hook
    (`Platform::close_current_window`). Meanwhile the window draws nothing
-   new, and an outcome the close produced does not reload the history
-   (`Closing::is_requested`, `session::Worker::closing`).
+   new — no banner says it is closing (issue #43) — and an outcome the close
+   produced does not reload the history (`Closing::is_requested`,
+   `session::Worker::closing`).
 
 A window whose repository never opened, or whose worker has already gone,
 closes at once. A second close request before `worker::CLOSE_PATIENCE` (5 s,
@@ -644,7 +694,7 @@ compile time) changes nothing; one after it closes the window anyway, so a
 worker that has stopped answering cannot keep it open for good — at the cost,
 then, of whatever that worker had not yet ended: the process exits, nothing
 is left to drive a late `git` to its `SIGKILL` or reap it, and such a `git`
-runs on, orphaned, holding whatever locks it holds.
+runs on, orphaned, holding whatever locks it holds (issue #48).
 
 What a close does not bound: the network lane, after its fetch is reaped,
 still reads the refs once more (`ref_tips`, which has no cancel and peels
@@ -652,18 +702,19 @@ every ref) before it lets its sender go, and it read them once before the
 fetch started, so a repository with a great many refs and a cold cache can
 hold the stream's end — and the window — past `CLOSE_PATIENCE`. The window
 stays open and draws nothing until the second request closes it. The
-constants above bound the reaps, not the scans.
+constants above bound the reaps, not the scans (issue #43; the scans
+themselves are #25's).
 
 A close also ends any `git` in flight, a write included, without asking: the
 window refuses nothing and the user is told nothing about what was running.
 Fetch is the only verb today and is not destructive; the first local write
 verb must decide whether the close hook may refuse while a write is in flight,
-or say what the close cost.
+or say what the close cost (issue #45).
 
 What a close costs is the registry's: a write that outlasts the grace is
 `SIGKILL`ed and may strand its lock files, and its `FetchCancelled` lists
 them on a stream about to end, to a window about to close, so nobody may be
-left to read them (above, "The registry").
+left to read them (above, "The registry"; issue #44).
 
 Pinned, G14: `closing_a_repository_ends_and_reaps_every_git_in_it_within_the_bound`
 (`worker/lifecycle_tests.rs`: a stub fetch leading its group with a
@@ -691,10 +742,10 @@ count, and each has a matcher self-test:
 | Twin | What it decides |
 | --- | --- |
 | `every_git_invocation_disables_the_terminal_prompt` | Outside `process/environment.rs`, no product file names or builds a `Command`, sets a process environment variable, or builds or implements `GitEnvironment`. Inside it: one `Command`, one literal, `env_clear` and `envs`, and the `ALWAYS` table's four pins. The `READ_ONLY` table carries each of `READ_ONLY_PINS` — `GIT_OPTIONAL_LOCKS=0` and `GIT_NO_LAZY_FETCH=1` — and is applied. The askpass names are set. |
-| `only_the_process_module_builds_or_runs_a_process` | Outside `process/`, no product file names `Stdio`, `Child` or its pipes, `CommandExt` or `nix`. It calls none of `.spawn()`, `.output()`, `.status()`, `.wait()`, `.try_wait()` or `.wait_with_output()`, and does not call `GitEnvironment::command`. `GitEnvironment::command` stays `pub(super)`. `process/` itself must show the runner's own shapes — `.spawn()`, `.try_wait()`, `CommandExt`, `Stdio`, `Child`, `ChildStdout`, `ChildStderr`, `nix` and `.command(..)` — so the matcher is proven to read real code; `.output()` and `.wait()` were swapped out for `CommandExt` and `ChildStdout` when the old runner went, and stay banned outside `process/`. The one exception row, `.status()` in `cairn-app` (`HistoryProgress::status`), fails once it is no longer needed. |
+| `only_the_process_module_builds_or_runs_a_process` | Outside `process/`, no product file names `Stdio`, `Child` or its pipes, `CommandExt` or `nix`. It calls none of `.spawn()`, `.output()`, `.status()`, `.wait()`, `.try_wait()` or `.wait_with_output()`, and does not call `GitEnvironment::command`. `GitEnvironment::command` stays `pub(super)`. `process/` itself must show the runner's own shapes — `.spawn()`, `.try_wait()`, `CommandExt`, `Stdio`, `Child`, `ChildStdout`, `ChildStderr`, `nix` and `.command(..)` — so the matcher is proven to read real code; `.output()` and `.wait()` were swapped out for `CommandExt` and `ChildStdout` when the old runner went, and stay banned outside `process/`. The one exception row in `PROCESS_CALL_EXCEPTIONS`, `.status()` in `cairn-app` (`history_state::Progress::status`, the history view's load state), fails once it is no longer needed; the row was accepted by the user on 2026-10-02. |
 | `the_runner_is_named_only_by_ops_and_reads` | In `crates/cairn-git/src`, the runner's names (`GitCommand`, `read_invocation`, `Running`, `ProcessKill`, `Invocation`, `KillHandle`) are allowed in `process/`, `ops/` and `reads/` only. The write builder and `WriteAuthority` are allowed in `process/` and `ops/`. Constructing, writing a literal of or implementing `WriteAuthority` is allowed in `ops/` only. Nothing is declared or re-exported `pub`, and `process` stays private. The authority keeps its shape, and the doctests stay. |
 | `the_retired_runner_is_gone` | Nowhere in `crates/cairn-git/src`, `process/` and test modules included, is `Running` or `ProcessKill` named, `run` or `stream` declared in an `impl` block of `GitCommand`, or `.stream(..)`, `GitCommand::run(..)` or `GitCommand::stream(..)` called (PRD R3.7, G18). Production `process/` calls `.spawn()` on exactly one line (today in `GitCommand::start_with`), and never `.output()`, `.status()` or `.exec()`, so a second runner that starts its own process by those method calls fails whatever it is called; a path call (`Command::spawn(&mut c)`) or a `nix` start (`fork`, `exec*`, `posix_spawn*`) is not counted, a residual stated in the root `CLAUDE.md`. Proven to read real code by finding `GitCommand`'s impl declaring `start`; self-test `the_retired_runner_matcher_catches_the_shapes_it_claims`. |
-| `only_the_ops_module_mutates_a_repository` | No product file outside `ops/` and `process/` spawns `git` by its literal name. No file of `crates/cairn-git/src` outside `ops/` names gitoxide's mutation API. That roster was enumerated from the vendored gix 0.87.1 source and sits, with each entry's file and line, in `crates/cairn-guards/src/lib.rs`. |
+| `only_the_ops_module_mutates_a_repository` | No product file outside `ops/` and `process/` spawns `git` by its literal name. No file of `crates/cairn-git/src` outside `ops/` names gitoxide's mutation API. That roster was enumerated from the vendored gix 0.87.1 source and sits, with each entry's file and line, in `crates/cairn-guards/src/lib.rs`. It includes method calls — `.write(`, `.write_to(` and `.write_stream(` (`GITOXIDE_MUTATION_METHODS`) and `.notes(` (in `GITOXIDE_MUTATION_CALLS`) — the only shapes that catch an index's or a tree editor's `.write()` and a note write. The cost: engine code outside `ops/` cannot call `io::Write::write` or `RwLock::write` (`write_all` is fine), and a notes read would have to live in `ops/`. Accepted by the user on 2026-10-02. |
 
 `the_unguarded_routes_to_a_process_now_fail_a_twin` pins the routes that
 `docs/research/process-manager/runner-and-worker-as-built.md` section 3 found
@@ -705,6 +756,13 @@ open, each now failing a twin:
 - `GitCommand::new`;
 - `git.environment().command(..).output()`;
 - a `reads/` file constructing a `WriteAuthority`.
+
+Outside the guard suite, `nix`'s features are pinned in `deny.toml` (a
+`[[bans.features]]` row, `exact`: `process` and `signal`), which
+`scripts/gate.sh --step deps` enforces, because the dependency allowlist reads
+names, not features; and `reads/` and `process/` are in
+`destructive-ops-reviewer`'s dispatch row in `docs/qa-gate.md`. Both accepted
+by the user on 2026-10-02.
 
 What the guards cannot decide is stated in the root `CLAUDE.md` beside each
 invariant. That a read runs query plumbing or `status` is

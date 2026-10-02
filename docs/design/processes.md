@@ -1,7 +1,7 @@
 # Running `git`
 
-Intent, not as-built; `docs/systems/` describes what exists. Spine:
-`docs/design/cairn.md`. This designs how Cairn starts, feeds, reads, cancels and
+Intent, not as-built; `docs/systems/git-processes.md` describes what exists.
+Spine: `docs/design/cairn.md`. This designs how Cairn starts, feeds, reads, cancels and
 accounts for every `git` process it runs. Which work goes to `git` at all is D1
 (`engine.md`); which thread waits on it is D3 (`concurrency.md`); what a process
 may ask the user for is D2 (`credentials.md`).

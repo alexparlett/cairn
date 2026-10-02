@@ -24,7 +24,9 @@ application starts; fetch runs in the network lane, which refuses a second
 fetch with a reason the window draws; each repository keeps a registry of the
 `git` it is running and a bounded command log, which the worker answers as
 values and no view draws yet; and closing the window closes its repository,
-ending and reaping every `git` in it before the window goes.
+ending and reaping every `git` Cairn started in it before the window goes
+(what git itself detaches from the group, such as auto-maintenance, is not
+Cairn's to end).
 Nothing else mutates a repository, and there is no repository picker: one
 repository, named on the command line.
 
@@ -236,9 +238,10 @@ Project invariants:
   `crates/cairn-git/src`, `process/` and test modules included, is `Running`
   or `ProcessKill` named, `run` or `stream` declared in an `impl` block of
   `GitCommand`, or `.stream(..)` called, and production `process/` starts a
-  process on exactly one line (`.spawn()` in `GitCommand::start_with`) and
-  never calls `.output()`, `.status()` or `.exec()`, so a second runner fails
-  whatever it is called (self-test
+  process by method-call syntax on exactly one line (today `.spawn()` in
+  `GitCommand::start_with`) and never calls `.output()`, `.status()` or
+  `.exec()` that way, so a second runner that starts its own process by those
+  methods fails whatever it is called (self-test
   `the_retired_runner_matcher_catches_the_shapes_it_claims`). Residual review
   obligations: the gitoxide roster reads
   names, so a gix write behind a name it does not hold — an API added after
@@ -252,9 +255,13 @@ Project invariants:
   `FetchInProgress` and `FetchCancel` — is review; and the retired-runner twin
   sees a retired entry point declared through a `type` alias of the builder,
   as a free function or by a macro only if it starts a process, counts two
-  spawns on one line once, and does not see a second path built on `start`
-  that drives an `Invocation` by rules of its own. All are `qa-checklist`'s
-  (its item 7). Whether a read in `reads/` really runs query plumbing or
+  spawns on one line once, does not see a second path built on `start`
+  that drives an `Invocation` by rules of its own, and does not count a
+  process started in production `process/` by a path call
+  (`Command::spawn(&mut c)`, `Command::output(&mut c)`) or through `nix`
+  (`fork`, `exec*`, `posix_spawn*`, which its `process` feature compiles) —
+  `process/` is exempt from every other process twin, so nothing else does
+  either. All are `qa-checklist`'s (its item 7). Whether a read in `reads/` really runs query plumbing or
   `status` — `GIT_OPTIONAL_LOCKS=0` covers `status` alone, so a porcelain `diff`
   built as a read still rewrites the index, and a plumbing writer built as one
   writes whatever it writes — is `destructive-ops-reviewer`'s (its check 10).
@@ -325,8 +332,9 @@ Project invariants:
   `commit` or `rebase -i` with a hanging configured editor fails promptly
   without running it. Residual review obligations: git older than 2.44
   ignores `GIT_NO_LAZY_FETCH`, so on such a git a read in a partial clone may
-  still lazy-fetch — a pack written and the network reached; with no token an
-  authenticated promisor fails closed — which no check can refuse while the
+  still lazy-fetch — a pack written and the network reached; with no token
+  only a promisor that needs a prompt fails closed, and one a configured
+  credential helper or the ssh agent answers fetches — which no check can refuse while the
   floor is 2.30 (the user's decision); whether a new read could touch a
   missing object, and what it does on such a git, is
   `destructive-ops-reviewer`'s (its check 10);
@@ -406,18 +414,26 @@ Project invariants:
   rather than implied, and owned by `responsiveness-reviewer`: a file partition
   cannot decide which THREAD a function runs on, so the handful of `worker/`
   functions the UI thread itself calls (`RepositoryHandle::submit`, through the
-  closure `RepositoryHandle::into_submitter` builds and through
-  `Closing::requested`, the window's close hook, whose `Request::Close` arm
-  stops the epochs with an atomic store and queues the close;
-  `Updates::next`, `Wake::poll`; and `Discovery::start`, which `main` calls on
-  the main thread before the window exists and which only spawns the thread
-  that runs `git --version` — all in `crates/cairn-app/src/worker/`) are
-  exempt from the matcher while running on the UI thread, and that they never
-  block is a review judgement. So is the close's shape: that the hook only
-  asks, that what waits for the reaps (`SharedRepository::end_invocations`,
-  in `Threads::drop`) runs on the repository thread, and that the window
-  closes on the update stream's end, or on a second request after
-  `worker::CLOSE_PATIENCE`, never by waiting. (The spinning spellings — `try_recv`, `try_iter`,
+  closure `RepositoryHandle::into_submitter` builds and through the window's
+  close hook — `Closing::requested`, which lives in the render-side
+  `crates/cairn-app/src/closing.rs` and is scanned, but calls `submit` — whose
+  `Request::Close` arm stops the epochs with an atomic store and queues the
+  close, and whose `CancelFetch` arm takes `FetchControl`'s mutex and calls
+  `KillHandle::kill`; `worker::open`, called from `main.rs`'s `use_hook`,
+  and the `Replier` closure it returns; `Updates::next`, `Wake::poll`; and
+  `Discovery::start`, which `main` calls on the main thread before the window
+  exists and which only spawns the thread that runs `git --version` — all in
+  `crates/cairn-app/src/worker/`) are exempt from the matcher while running
+  on the UI thread, and that they never block is a review judgement. So is
+  the close's shape: that the hook only asks, that what waits for the reaps
+  (`SharedRepository::end_invocations`, in `Threads::drop`) runs on the
+  repository thread, that the window closes on the update stream's end, or
+  on a second request after `worker::CLOSE_PATIENCE`, never by waiting, and
+  that the stream's end still depends on the window refusing a prompt left
+  open when the ended fetch's outcome arrives (`session::apply`'s
+  `withdraw`); and `main.rs`'s wiring of it (`Closing::opened` given the
+  handle, the hook installed, the window closed past the hook on the
+  stream's end), which no test drives. (The spinning spellings — `try_recv`, `try_iter`,
   `try_lock`, `spin_loop`, `yield_now` — ARE on the roster, so a busy poll loop
   on a render path is caught; one written inside `worker/` is not.) The matcher is
   also FILE-scoped, which is what "naming the constructor" buys and all it buys:

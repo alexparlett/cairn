@@ -32,10 +32,23 @@ flat (a per-index item size walks every row above the viewport). Those three are
 yours, in full, and
 `docs/qa-gate.md`'s dispatch row states them as such. In particular the
 `worker/` functions the UI thread itself calls — `RepositoryHandle::submit` (and
-the closure `RepositoryHandle::into_submitter` wraps it in),
-`Updates::next`, `Wake::poll` — are exempt from the guard's matcher by
+the closure `RepositoryHandle::into_submitter` wraps it in, and the window's
+close hook `Closing::requested`, in `closing.rs`, which calls it with
+`Request::Close`), whose `CancelFetch` arm takes `FetchControl`'s mutex and
+calls `KillHandle::kill`; `worker::open` and the `Replier` closure it returns;
+`Updates::next`, `Wake::poll`; and `Discovery::start`, which `main` calls before
+the window exists — are exempt from the guard's matcher by
 construction, so whether they block is a judgement you must actually make rather
-than assume from a green guard.
+than assume from a green guard. So is the close's shape: that the hook only
+asks, that what waits for the reaps (`SharedRepository::end_invocations`, in
+`Threads::drop`) runs on the repository thread, that the window closes on the
+update stream's end (or a second request after `worker::CLOSE_PATIENCE`) and
+never by waiting, that the stream's end still depends on the window refusing a
+prompt left open when the ended fetch's outcome arrives (`session::apply`'s
+`withdraw`), and that `main.rs` wires it — `Closing::opened` given the handle,
+the hook installed, the window closed past the hook on the stream's end — which
+no test drives (`closing.rs`'s tests drive `Closing` alone, and the window's
+close was checked by hand on a desktop session).
 
 ## Scope gate, run this FIRST
 

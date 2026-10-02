@@ -1000,9 +1000,11 @@ fn other_process_starts(source: &str) -> usize {
 /// `process/` and test modules included — a test that keeps an old path alive keeps its rules
 /// alive (`tests/` cannot name these crate-private items at all). And production `process/`
 /// starts a process in exactly one place — one line calling `.spawn()`, and none calling
-/// `.output()`, `.status()` or `.exec()` — so a second runner starting its own process, under
-/// any name, through an alias, a free function or a macro, fails here even where the name ban
-/// does not see it. Proven to read real code by finding `GitCommand`'s own impl blocks, and
+/// `.output()`, `.status()` or `.exec()` — so a second runner starting its own process by those
+/// method calls, under any name, through an alias, a free function or a macro, fails here even
+/// where the name ban does not see it. Method-call syntax only: a path call
+/// (`Command::spawn(&mut c)`) or a `nix` start (`fork`, `exec*`, `posix_spawn*`) is not
+/// counted, which the root `CLAUDE.md` states as a residual. Proven to read real code by finding `GitCommand`'s own impl blocks, and
 /// the runner's `start` in one of them.
 ///
 /// Residual review obligation, `qa-checklist`'s (its item 7): the names are read as spelled, so

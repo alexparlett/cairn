@@ -193,9 +193,9 @@ impl HistoryList {
         let on_select = self.on_select.clone();
 
         move |e: Event<KeyboardEventData>| {
-            // A chord is an accelerator's, resolved by the window: Ctrl+↓ is "next change",
-            // not "next commit".
-            if accelerators::resolve_key(&e).is_some() {
+            // A chord is an accelerator's, whoever hears it: Ctrl+↓ is "next change", not
+            // "next commit", even while the pane that hears it does not have focus.
+            if accelerators::is_chord(&e) {
                 return;
             }
             // Drop the read guard before calling out: a handler that reloads the list would panic.

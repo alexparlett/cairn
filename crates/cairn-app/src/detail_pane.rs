@@ -8,13 +8,14 @@
 use std::rc::Rc;
 
 use cairn_model::{Oid, RowId};
+use cairn_ui::accelerators::{self, Scope};
 use cairn_ui::{CommitTab, DetailTab, DetailTabs, reveal_row};
 use freya::prelude::*;
 
 use crate::diff_state::{Answer, answered_changes};
-use crate::selection;
 use crate::window::View;
 use crate::worker::Request;
+use crate::{selection, shortcuts};
 
 /// Said in the pane while no row is selected.
 pub const NOTHING_SELECTED: &str = "Select a commit to see its details.";
@@ -74,6 +75,14 @@ impl Component for DetailPane {
         rect()
             .width(Size::fill())
             .height(Size::fill())
+            // The pane's own chords (previous and next change), heard only from inside it: a
+            // key press reaches this from whatever in the pane has focus, and from nowhere else.
+            .on_key_down(move |e: Event<KeyboardEventData>| {
+                if let Some(action) = accelerators::resolve_key(&e, Scope::Detail) {
+                    e.stop_propagation();
+                    shortcuts::act(action, view);
+                }
+            })
             .child(strip)
             .maybe_child((!collapsed).then(|| match tab {
                 DetailTab::Commit => commit_body(view, self.submit.clone()),

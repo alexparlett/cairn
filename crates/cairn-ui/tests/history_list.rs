@@ -156,17 +156,18 @@ fn only_a_viewport_of_rows_is_built_however_long_the_history() {
     );
 }
 
-/// C13, D5: an arrow held with a chord's modifiers is the accelerator's — "next change",
-/// "next file" — resolved through the table, not the list's "next commit". Caught by: the list
-/// moving on any arrow whatever is held.
+/// C13, D5: an arrow held with a chord's modifiers is the accelerator's — "previous change",
+/// "next change" — resolved through the table, not the list's "next commit", though the
+/// detail pane that hears those chords does not have focus here. Caught by: the list moving
+/// on any arrow whatever is held, or asking only the scope it sits in.
 #[test]
 fn an_accelerators_chord_does_not_move_the_selection() {
     let reports = Reports::default();
     let (mut test, _) = launch(rows(0..100), &reports);
     press(&mut test, NamedKey::ArrowDown);
 
-    for action in [Action::NextChange, Action::NextFile, Action::PreviousFile] {
-        let chord = accelerators::chord(action, Os::current());
+    for action in [Action::NextChange, Action::PreviousChange] {
+        let chord = accelerators::chord(action, Os::current()).unwrap();
         let (key, _, held) = chord.key_press().unwrap();
         test.press_key_with_modifiers(key, held);
         test.sync_and_update();

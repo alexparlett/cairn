@@ -7,6 +7,7 @@ use cairn_model::{
     ChangeSet, ChangeStatus, ChangedFile, CommitDetails, FileMode, Oid, RenameDetection, RepoPath,
     Signature, Similarity, Timestamp,
 };
+use cairn_ui::accelerators::{self, Action, Os, Scope};
 use cairn_ui::{
     AUTHOR_CAPTION, COLLAPSE_CAPTION, COMMITTER_CAPTION, CommitTab, DETAIL_ROW_HEIGHT, DetailTab,
     DetailTabs, EXPAND_CAPTION, ID_CAPTION, NO_FILES, PARENTS_CAPTION, cut_short_notice,
@@ -392,6 +393,164 @@ fn another_commits_answer_replaces_every_row_of_the_last() {
             "{stale:?} of the previous commit is still drawn: {shown:?}"
         );
     }
+}
+
+/// What the focus tests saw: the files made current, and the detail pane's actions heard.
+#[derive(Default, Clone)]
+struct Heard {
+    files: Rc<RefCell<Vec<usize>>>,
+    actions: Rc<RefCell<Vec<Action>>>,
+}
+
+const ELSEWHERE: &str = "Elsewhere";
+
+/// The tab inside a pane that hears the detail pane's chords as the window's does — on a
+/// key press that reaches it from whatever inside has focus — after a focusable control
+/// standing for the rest of the window.
+fn launch_focus(initial: ChangeSet) -> (TestingRunner, Heard) {
+    let heard = Heard::default();
+    let app = {
+        let heard = heard.clone();
+        move || {
+            let fixture = use_consume::<Fixture>();
+            let (files, actions) = (heard.files.clone(), heard.actions.clone());
+            rect()
+                .expanded()
+                .child(Button::new().child(ELSEWHERE))
+                .child(
+                    rect()
+                        .expanded()
+                        .on_key_down(move |e: Event<KeyboardEventData>| {
+                            if let Some(action) = accelerators::resolve_key(&e, Scope::Detail) {
+                                e.stop_propagation();
+                                actions.borrow_mut().push(action);
+                            }
+                        })
+                        .child(
+                            CommitTab::new(fixture.changes)
+                                .on_file(move |index: usize| files.borrow_mut().push(index)),
+                        ),
+                )
+                .into_element()
+        }
+    };
+    let (mut test, _) = TestingRunner::new(
+        app,
+        (WIDTH, HEIGHT).into(),
+        move |runner| {
+            runner.provide_root_context(|| Fixture {
+                changes: State::create(initial),
+            })
+        },
+        1.,
+    );
+    test.sync_and_update();
+    test.sync_and_update();
+    (test, heard)
+}
+
+fn press_key(test: &mut TestingRunner, key: NamedKey) {
+    test.press_key(Key::Named(key));
+    test.sync_and_update();
+}
+
+fn press_action(test: &mut TestingRunner, action: Action) {
+    // A named key: its code is not what the table matches it by.
+    let Some((key, _, modifiers)) =
+        accelerators::chord(action, Os::current()).and_then(|chord| chord.key_press())
+    else {
+        panic!("{action:?} has no key chord");
+    };
+    test.press_key_with_modifiers(key, modifiers);
+    test.sync_and_update();
+}
+
+/// User decision 6, Fork's previous and next file: a pressed file row is the current file
+/// and gives the tab focus, and while it has focus ↑ and ↓ move the current file — stopping
+/// at either end, and bringing a file below the viewport into view. Caught by: arrows that
+/// move nothing, run past the ends, or leave the current file out of sight.
+#[test]
+fn the_focused_file_list_moves_the_current_file_with_the_arrows() {
+    let more = 40;
+    let last = more + 2;
+    let (mut test, heard) = launch_focus(change_set(more));
+    click_label(&mut test, "src/file-000001.rs");
+    assert_eq!(heard.files.borrow().as_slice(), [1]);
+
+    press_key(&mut test, NamedKey::ArrowDown);
+    for _ in 0..5 {
+        press_key(&mut test, NamedKey::ArrowUp);
+    }
+    assert_eq!(heard.files.borrow().as_slice(), [1, 2, 1, 0, 0, 0, 0]);
+
+    for _ in 0..last + 5 {
+        press_key(&mut test, NamedKey::ArrowDown);
+    }
+    assert_eq!(heard.files.borrow().last(), Some(&last));
+    let name = format!("src/file-{last:06}.rs");
+    assert!(
+        built_files(&test)
+            .iter()
+            .any(|(text, visible)| *visible && *text == name),
+        "the last file was made current out of sight: {:?}",
+        built_files(&test)
+    );
+}
+
+/// User decision 6: previous and next change are heard only while the detail pane has
+/// focus, and pressing one moves no file; Tab moves focus into the file list and Shift-Tab
+/// out of it again, after which its arrows are not the list's. Caught by: change chords
+/// heard wherever focus is (they would take ⌘↑ from a text field), a file list that reads
+/// a chord as its arrow, or a tab that Tab cannot reach.
+#[test]
+fn the_change_chords_and_the_arrows_belong_to_the_focused_pane() {
+    let (mut test, heard) = launch_focus(change_set(5));
+    click_label(&mut test, "src/file-000001.rs");
+    press_action(&mut test, Action::NextChange);
+    press_action(&mut test, Action::PreviousChange);
+    assert_eq!(
+        heard.actions.borrow().as_slice(),
+        [Action::NextChange, Action::PreviousChange]
+    );
+    assert_eq!(
+        heard.files.borrow().as_slice(),
+        [1],
+        "a chord moved the file"
+    );
+
+    click_label(&mut test, ELSEWHERE);
+    press_action(&mut test, Action::NextChange);
+    press_key(&mut test, NamedKey::ArrowDown);
+    assert_eq!(
+        heard.actions.borrow().len(),
+        2,
+        "a change chord was heard with focus outside the pane"
+    );
+    assert_eq!(
+        heard.files.borrow().as_slice(),
+        [1],
+        "the arrows moved an unfocused list"
+    );
+
+    // Back with Tab, out with Shift-Tab.
+    press_key(&mut test, NamedKey::Tab);
+    test.sync_and_update();
+    press_key(&mut test, NamedKey::ArrowDown);
+    // The current file is where it was left.
+    assert_eq!(
+        heard.files.borrow().as_slice(),
+        [1, 2],
+        "Tab did not reach the file list"
+    );
+    test.press_key_with_modifiers(Key::Named(NamedKey::Tab), Modifiers::SHIFT);
+    test.sync_and_update();
+    test.sync_and_update();
+    press_key(&mut test, NamedKey::ArrowDown);
+    assert_eq!(
+        heard.files.borrow().as_slice(),
+        [1, 2],
+        "Shift-Tab did not leave the file list"
+    );
 }
 
 #[derive(Clone)]

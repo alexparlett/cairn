@@ -3,7 +3,7 @@
 use std::rc::Rc;
 
 use cairn_model::{HistoryRow, RemoteSummary, RowContent, RowId, Secret};
-use cairn_ui::accelerators;
+use cairn_ui::accelerators::{self, Scope};
 use cairn_ui::{
     CommitRow, CredentialPrompt, DETAIL_STRIP_HEIGHT, DetailTab, HistoryHeader, HistoryList,
     ROW_HEIGHT, RowRender,
@@ -88,9 +88,10 @@ pub fn window(
     rect()
         .expanded()
         .theme_background()
-        // Every shortcut resolves through the accelerator table, wherever focus is (R8).
+        // Every shortcut resolves through the accelerator table (R8): here the ones heard
+        // wherever focus is; the detail pane hears its own (`detail_pane`).
         .on_global_key_down(move |e: Event<KeyboardEventData>| {
-            if let Some(action) = accelerators::resolve_key(&e) {
+            if let Some(action) = accelerators::resolve_key(&e, Scope::Window) {
                 shortcuts::act(action, view);
             }
         })
@@ -1076,7 +1077,7 @@ mod tests {
     }
 
     fn press_chord(test: &mut TestingRunner, action: Action) {
-        let chord = accelerators::chord(action, accelerators::Os::current());
+        let chord = accelerators::chord(action, accelerators::Os::current()).unwrap();
         let (key, code, modifiers) = chord.key_press().unwrap();
         test.send_event(PlatformEvent::Keyboard {
             name: KeyboardEventName::KeyDown,
@@ -1211,6 +1212,106 @@ mod tests {
             pane(&test).iter().any(|t| t == CHANGES_NOT_BUILT),
             "{:?}",
             pane(&test)
+        );
+    }
+
+    /// Q3: while a credential prompt is up no accelerator acts — the dialog owns the keys
+    /// until it is answered — and once it is gone they act again. Caught by: a window that
+    /// acts on a chord typed into the dialog.
+    #[test]
+    fn no_accelerator_acts_while_a_credential_prompt_is_up() {
+        let prompt = PromptView {
+            id: crate::worker::PromptId::for_tests(1),
+            text: "Password for 'https://ada@git.example.com': ".to_owned(),
+        };
+        let (mut test, view, _, _) = launch_with(
+            (0..10).map(row).collect(),
+            received(10, true),
+            FetchStatus::Idle,
+            Some(prompt),
+        );
+        // In the field, which keeps what it is typed; and outside it, in the dialog's text,
+        // where nothing else would stop the chord.
+        press_chord(&mut test, Action::ShowChangesTab);
+        click_label(&mut test, "git is asking for a credential");
+        press_chord(&mut test, Action::ShowChangesTab);
+        assert_eq!(
+            *view.detail_tab.read(),
+            DetailTab::Commit,
+            "a chord acted under the credential prompt"
+        );
+
+        let mut prompt = view.prompt;
+        prompt.set(None);
+        test.sync_and_update();
+        press_chord(&mut test, Action::ShowChangesTab);
+        assert_eq!(*view.detail_tab.read(), DetailTab::Changes);
+    }
+
+    /// User decision 6, Fork's model through the window: Tab takes focus from the history
+    /// into the Commit tab's files, whose ↑ and ↓ then move the current file — bringing it
+    /// into view — and not the commit; Shift-Tab gives the history its arrows back. Caught
+    /// by: a Commit tab Tab cannot reach, arrows that move the commit while the files have
+    /// focus, or a focus that does not come back.
+    #[test]
+    fn tab_moves_the_arrows_between_the_history_and_the_commits_files() {
+        let (mut test, view, _) = launch((0..10).map(row).collect(), received(10, true));
+        click_row(&mut test, 2);
+        let mut answer = answer_for(2, Vec::new());
+        answer.files = (0..30)
+            .map(|n| ChangedFile {
+                old_path: RepoPath::from(format!("many-{n:02}.rs").as_str()),
+                new_path: RepoPath::from(format!("many-{n:02}.rs").as_str()),
+                ..answer.files[0].clone()
+            })
+            .collect();
+        let mut diff = view.diff;
+        test.run_in(|| {
+            diff.write()
+                .changes_arrived(Comparison::Commit(oid(2)), answer)
+        });
+        test.sync_and_update();
+        test.sync_and_update();
+        assert!(
+            !pane(&test).iter().any(|t| t == "many-25.rs"),
+            "{:?}",
+            pane(&test)
+        );
+
+        let tab = |test: &mut TestingRunner, held: Modifiers| {
+            test.press_key_with_modifiers(Key::Named(NamedKey::Tab), held);
+            test.sync_and_update();
+            test.sync_and_update();
+        };
+        let arrow = |test: &mut TestingRunner| {
+            test.press_key(Key::Named(NamedKey::ArrowDown));
+            test.sync_and_update();
+            test.sync_and_update();
+        };
+        // The history list, then the strip's Collapse control, then the files.
+        tab(&mut test, Modifiers::empty());
+        tab(&mut test, Modifiers::empty());
+        for _ in 0..26 {
+            arrow(&mut test);
+        }
+        assert_eq!(
+            *view.selected.read(),
+            Some(RowId::Commit(oid(2))),
+            "the arrows moved the commit while the files had focus"
+        );
+        assert!(
+            pane(&test).iter().any(|t| t == "many-25.rs"),
+            "the current file was not brought into view: {:?}",
+            pane(&test)
+        );
+
+        tab(&mut test, Modifiers::SHIFT);
+        tab(&mut test, Modifiers::SHIFT);
+        arrow(&mut test);
+        assert_eq!(
+            *view.selected.read(),
+            Some(RowId::Commit(oid(3))),
+            "Shift-Tab did not give the history its arrows back"
         );
     }
 

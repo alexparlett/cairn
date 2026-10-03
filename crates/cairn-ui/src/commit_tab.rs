@@ -18,7 +18,7 @@ use std::rc::Rc;
 use cairn_model::{ChangeSet, ChangeStatus, ChangedFile, Oid, Signature};
 use freya::prelude::*;
 
-use crate::{date_text, message_lines};
+use crate::{accelerators, date_text, message_lines};
 
 /// Every row of the tab is this tall: a fixed size is what keeps the list O(viewport).
 pub const DETAIL_ROW_HEIGHT: f32 = 24.0;
@@ -182,9 +182,14 @@ fn cached_header(cache: &HeaderCache, changes: &ChangeSet) -> Rc<Vec<Line>> {
 
 /// The Commit tab over one change set. `changes` is a handle, not a copy: the files are read
 /// by index as rows are built, so a commit of any size costs one viewport per frame.
+///
+/// The tab takes focus when it is pressed or reached with Tab, and while it has it, ↑ and ↓
+/// move the current file — Fork's previous and next file (user decision 6), keys of the
+/// focused list rather than chords. A chord pressed here is left for whoever hears it.
 pub struct CommitTab {
     changes: Readable<ChangeSet>,
     on_parent: EventHandler<Oid>,
+    on_file: EventHandler<usize>,
     key: DiffKey,
 }
 
@@ -193,6 +198,7 @@ impl CommitTab {
         Self {
             changes: changes.into(),
             on_parent: EventHandler::new(|_| {}),
+            on_file: EventHandler::new(|_| {}),
             key: DiffKey::None,
         }
     }
@@ -201,6 +207,13 @@ impl CommitTab {
     /// decide (R5.3: a loaded parent is selected; an unloaded one is issue #3).
     pub fn on_parent(mut self, on_parent: impl Into<EventHandler<Oid>>) -> Self {
         self.on_parent = on_parent.into();
+        self
+    }
+
+    /// A file became the current one — pressed, or reached with ↑ or ↓ — by its index in the
+    /// change set's files. What that shows is the caller's (its diff, from phase 06).
+    pub fn on_file(mut self, on_file: impl Into<EventHandler<usize>>) -> Self {
+        self.on_file = on_file.into();
         self
     }
 }
@@ -224,27 +237,133 @@ impl KeyExt for CommitTab {
     }
 }
 
-/// Data captured inside the builder closure is invisible to `VirtualScrollView`'s diffing,
-/// so what decides which rows are drawn is passed here.
+/// What one commit's list is drawn from, as the tab hands it to the list.
 #[derive(Clone)]
-struct TabData {
+struct TabContent {
     changes: Readable<ChangeSet>,
     lines: Rc<Vec<Line>>,
     files: usize,
     on_parent: EventHandler<Oid>,
+    on_file: EventHandler<usize>,
+    /// The tab's focus target, which a pressed row takes.
+    tab_id: AccessibilityId,
 }
 
-impl PartialEq for TabData {
+impl PartialEq for TabContent {
     fn eq(&self, other: &Self) -> bool {
         // The header is cached, so an unchanged one is the same allocation: no compare.
         (Rc::ptr_eq(&self.lines, &other.lines) || self.lines == other.lines)
             && self.files == other.files
+            && self.tab_id == other.tab_id
+    }
+}
+
+/// Data captured inside the builder closure is invisible to `VirtualScrollView`'s diffing,
+/// so what decides which rows are drawn is passed here.
+#[derive(Clone, PartialEq)]
+struct TabData {
+    content: TabContent,
+    /// The current file, by index into the files; drawn highlighted.
+    current: Option<usize>,
+    cursor: State<Option<usize>>,
+}
+
+/// One commit's list. Keyed by the commit, so another commit is a list of its own: it opens
+/// at its top, with no file current.
+#[derive(Clone)]
+struct TabBody {
+    content: TabContent,
+    key: DiffKey,
+}
+
+impl PartialEq for TabBody {
+    fn eq(&self, other: &Self) -> bool {
+        self.content == other.content && self.key == other.key
+    }
+}
+
+impl KeyExt for TabBody {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for TabBody {
+    fn render(&self) -> impl IntoElement {
+        let tab_id = self.content.tab_id;
+        let focus = use_focus(tab_id);
+        let controller = use_scroll_controller(ScrollConfig::default);
+        let cursor = use_state(|| None::<usize>);
+        let data = TabData {
+            content: self.content.clone(),
+            current: *cursor.read(),
+            cursor,
+        };
+        let length = data.content.lines.len() + data.content.files;
+        let border = colours().border_focus;
+
+        rect()
+            .expanded()
+            .a11y_id(tab_id)
+            .a11y_focusable(true)
+            .a11y_role(AccessibilityRole::List)
+            .on_key_down(keyboard(&data, controller))
+            .maybe(focus() == Focus::Keyboard, |el| {
+                el.border(Border::new().fill(border).width(1.))
+            })
+            .child(
+                VirtualScrollView::new_with_data_controlled(data, build_row, controller)
+                    .length(length)
+                    .item_size(DETAIL_ROW_HEIGHT)
+                    // The arrows move the current file, not the viewport.
+                    .scroll_with_arrows(false)
+                    .expanded(),
+            )
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+}
+
+/// ↑ and ↓ over the files; every other key, and every chord, is left unhandled.
+fn keyboard(
+    data: &TabData,
+    mut controller: ScrollController,
+) -> impl FnMut(Event<KeyboardEventData>) + 'static {
+    let (files, header) = (data.content.files, data.content.lines.len());
+    let mut cursor = data.cursor;
+    let on_file = data.content.on_file.clone();
+    move |e: Event<KeyboardEventData>| {
+        if accelerators::is_chord(&e) {
+            return;
+        }
+        let Some(last) = files.checked_sub(1) else {
+            return;
+        };
+        // Nothing current yet: either arrow starts at the first file.
+        let current = *cursor.peek();
+        let next = match e.key {
+            Key::Named(NamedKey::ArrowDown) => current.map_or(0, |at| (at + 1).min(last)),
+            Key::Named(NamedKey::ArrowUp) => current.map_or(0, |at| at.saturating_sub(1)),
+            _ => return,
+        };
+        e.stop_propagation();
+        cursor.set(Some(next));
+        on_file.call(next);
+        controller.scroll_to_offset(
+            (header + next) as f32 * DETAIL_ROW_HEIGHT,
+            DETAIL_ROW_HEIGHT,
+            Direction::Vertical,
+        );
     }
 }
 
 impl Component for CommitTab {
     fn render(&self) -> impl IntoElement {
         let cache: HeaderCache = use_hook(HeaderCache::default);
+        // The tab's, not one commit's: focus stays on the tab as the commit changes.
+        let tab_id = use_a11y();
         // Reading subscribes the tab to the answer it draws.
         let (lines, files, identity) = {
             let changes = self.changes.read();
@@ -255,20 +374,21 @@ impl Component for CommitTab {
                 identity,
             )
         };
-        let data = TabData {
+        let content = TabContent {
             changes: self.changes.clone(),
             lines,
             files,
             on_parent: self.on_parent.clone(),
+            on_file: self.on_file.clone(),
+            tab_id,
         };
-        let length = data.lines.len() + files;
 
-        VirtualScrollView::new_with_data(data, build_row)
-            // Another commit is another list: it opens at its top, not where the last one was.
-            .key(identity)
-            .length(length)
-            .item_size(DETAIL_ROW_HEIGHT)
-            .expanded()
+        TabBody {
+            content,
+            key: DiffKey::None,
+        }
+        // Another commit is another list: it opens at its top, not where the last one was.
+        .key(identity)
     }
 
     fn render_key(&self) -> DiffKey {
@@ -277,27 +397,36 @@ impl Component for CommitTab {
 }
 
 fn build_row(item: VirtualItem, data: &TabData) -> Element {
-    let row = match data.lines.get(item.index) {
-        Some(line) => header_row(line, &data.on_parent),
-        None => {
-            let index = item.index - data.lines.len();
-            // Read, not peeked: the list redraws when the answer it shows is replaced.
-            match data.changes.read().files.get(index) {
-                Some(file) => file_row(file),
-                // The count and the files can disagree for one frame; an empty row of the
-                // right height stands in.
-                None => rect().into(),
-            }
-        }
-    };
-    rect()
+    let row = rect()
         .key(item.index)
         .min_width(Size::fill())
         .height(Size::px(item.size))
         .main_align(Alignment::Center)
-        .padding(Gaps::new(0., PADDING, 0., PADDING))
-        .child(row)
-        .into()
+        .padding(Gaps::new(0., PADDING, 0., PADDING));
+    let content = &data.content;
+    let Some(index) = item.index.checked_sub(content.lines.len()) else {
+        return match content.lines.get(item.index) {
+            Some(line) => row.child(header_row(line, &content.on_parent)).into(),
+            None => row.into(),
+        };
+    };
+    // Read, not peeked: the list redraws when the answer it shows is replaced.
+    let Some(drawn) = content.changes.read().files.get(index).map(file_row) else {
+        // The count and the files can disagree for one frame; an empty row of the right
+        // height stands in.
+        return row.into();
+    };
+    let (tab_id, mut cursor, on_file) = (content.tab_id, data.cursor, content.on_file.clone());
+    row.maybe(data.current == Some(index), |el| {
+        el.background(colours().surface_secondary)
+    })
+    .on_press(move |_| {
+        tab_id.request_focus();
+        cursor.set(Some(index));
+        on_file.call(index);
+    })
+    .child(drawn)
+    .into()
 }
 
 fn colours() -> ColorsSheet {

@@ -352,4 +352,54 @@ mod tests {
             Some((commit(1), options, &Answer::Failed("no".to_owned())))
         );
     }
+
+    /// T4: each selection lets go of what shares its lane, one assertion per rule.
+    /// Selecting a file lets Expand All go, and Expand All the file. Caught by: either
+    /// assignment taken out (the pane waits for good on an answer superseded in its lane).
+    #[test]
+    fn a_file_and_expand_all_let_each_other_go() {
+        let mut state = DiffState::default();
+        state.select_changes(commit(1));
+        state.expand_all(commit(1), DiffOptions::default());
+        state.select_file(file_of(commit(1), "a.txt"));
+        assert_eq!(state.expanded(), None, "select_file kept Expand All");
+
+        state.expand_all(commit(1), DiffOptions::default());
+        assert_eq!(state.file(), None, "expand_all kept the file");
+    }
+
+    /// T4: a batch for the selected comparison at other options is not this expansion's.
+    /// Caught by: comparing the comparison alone (a batch at the old context appended to
+    /// one at the new).
+    #[test]
+    fn an_expansion_batch_at_other_options_is_dropped() {
+        let mut state = DiffState::default();
+        let options = DiffOptions::default();
+        let mut other = options;
+        other.ignore_whitespace = true;
+        state.expand_all(commit(1), options);
+        let diff = FileDiff {
+            file: change_set("a").files.remove(0),
+            content: cairn_model::DiffContent::ModeChangeOnly,
+        };
+        assert!(!state.expansion_arrived(commit(1), other, vec![diff], true));
+        assert_eq!(
+            state.expanded(),
+            Some((commit(1), options, &Answer::Waiting))
+        );
+    }
+
+    /// T4: a failure of the selected file is recorded as that file's answer. Caught by: the
+    /// file arm of `failed` writing nothing (the pane waits for good on a failed diff).
+    #[test]
+    fn a_failed_file_diff_is_recorded_for_the_file() {
+        let mut state = DiffState::default();
+        let selected = file_of(commit(1), "a.txt");
+        state.select_file(selected.clone());
+        assert!(state.failed(&DiffQuery::File(selected.clone()), "git failed".to_owned()));
+        assert_eq!(
+            state.file(),
+            Some((&selected, &Answer::Failed("git failed".to_owned())))
+        );
+    }
 }

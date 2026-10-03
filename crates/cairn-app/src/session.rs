@@ -295,6 +295,100 @@ mod tests {
         drop(handle);
     }
 
+    /// T5, the other three diff arms: a file's diff, Expand All's batch and a failure are
+    /// each refused with nothing selected and kept once their selection is made. Synthetic
+    /// answers, since what is decided here is the window's own check. Caught by: an arm
+    /// that stores whatever arrives (selecting what it names first), or one that drops
+    /// even its own selection's answer.
+    #[test]
+    fn every_diff_answer_is_kept_for_its_selection_alone() {
+        use cairn_model::{
+            ChangeStatus, ChangedFile, DiffContent, FileDiff, FileMode, Oid, RepoPath,
+        };
+
+        use crate::diff_state::{Answer, Expanded};
+        use crate::worker::{Comparison, DiffOptions, DiffQuery, FileQuery, FileTarget};
+
+        let of = Comparison::Commit(Oid::from_bytes(&[1; 20]).unwrap());
+        let file = ChangedFile {
+            status: ChangeStatus::Modified,
+            old_path: RepoPath::from("a.txt"),
+            new_path: RepoPath::from("a.txt"),
+            old_mode: Some(FileMode::Regular),
+            new_mode: Some(FileMode::Executable),
+            old_id: Some(Oid::from_bytes(&[2; 20]).unwrap()),
+            new_id: Some(Oid::from_bytes(&[2; 20]).unwrap()),
+        };
+        let diff = FileDiff {
+            file: file.clone(),
+            content: DiffContent::ModeChangeOnly,
+        };
+        let query = FileQuery {
+            target: FileTarget::Committed { of, file },
+            options: DiffOptions::default(),
+        };
+        let options = DiffOptions::default();
+        let (test, mut view, asked) = launch(FetchStatus::Idle);
+        let file_update = || Update::FileDiff {
+            query: query.clone(),
+            diff: Some(diff.clone()),
+        };
+        let batch = || Update::FileDiffs {
+            of,
+            options,
+            diffs: vec![diff.clone()],
+            complete: true,
+        };
+
+        applying(&test, view, &asked, file_update());
+        assert!(
+            !test.run_in(|| view.diff.peek().file().is_some()),
+            "an answer was kept with nothing selected"
+        );
+        test.run_in(|| view.diff.write().select_file(query.clone()));
+        applying(&test, view, &asked, file_update());
+        assert_eq!(
+            test.run_in(|| view.diff.peek().file().map(|(_, a)| a.clone())),
+            Some(Answer::Ready(Some(diff.clone()))),
+            "the selected file's diff was not kept"
+        );
+
+        test.run_in(|| view.diff.write().clear());
+        applying(&test, view, &asked, batch());
+        assert!(
+            !test.run_in(|| view.diff.peek().expanded().is_some()),
+            "an answer was kept with nothing selected"
+        );
+        test.run_in(|| view.diff.write().expand_all(of, options));
+        applying(&test, view, &asked, batch());
+        assert_eq!(
+            test.run_in(|| view.diff.peek().expanded().map(|(_, _, a)| a.clone())),
+            Some(Answer::Ready(Expanded {
+                diffs: vec![diff.clone()],
+                complete: true
+            })),
+            "the selected expansion's batch was not kept"
+        );
+
+        test.run_in(|| view.diff.write().clear());
+        let failure = || Update::DiffFailed {
+            query: DiffQuery::File(query.clone()),
+            message: "git failed".to_owned(),
+        };
+        applying(&test, view, &asked, failure());
+        assert!(
+            !test.run_in(|| view.diff.peek().file().is_some()),
+            "an answer was kept with nothing selected"
+        );
+        test.run_in(|| view.diff.write().select_file(query.clone()));
+        applying(&test, view, &asked, failure());
+        assert_eq!(
+            test.run_in(|| view.diff.peek().file().map(|(_, a)| a.clone())),
+            Some(Answer::Failed("git failed".to_owned())),
+            "the selected file's failure was not kept"
+        );
+    }
+
     /// A fetch the close itself ended may still have moved refs. Caught by: reloading
     /// anyway — every row cleared on the UI thread and a request sent to a worker that has
     /// stopped, so the history vanishes behind "Reading history…" while the window closes.

@@ -13,7 +13,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use cairn_model::{ChangeSet, ChangeStatus, ChangedFile, DiffContent, FileDiff, Oid};
+use cairn_model::{ChangeSet, ChangeStatus, ChangedFile, DiffContent, FileDiff, Oid, RepoPath};
 
 use super::diff_freshness::SETTLING;
 use super::discovery::Discovery;
@@ -22,7 +22,9 @@ use super::lifecycle_tests::StubGit;
 #[cfg(target_os = "linux")]
 use super::lifecycle_tests::alive_in_group;
 use super::pool::{RepositoryHandle, Updates, open_with};
-use super::request::{Comparison, DiffOptions, FileQuery, FileTarget, Request, Update};
+use super::request::{
+    Comparison, DiffOptions, DiffQuery, FileQuery, FileTarget, Request, Update, WorkingSide,
+};
 use super::startup::Startup;
 
 /// The boundary over `repository`, with this process's `git`.
@@ -243,10 +245,12 @@ fn a_click_through_files_answers_the_last_file_only() {
     drop(handle);
 }
 
-/// A diff thread's `git` that leads its group, starts a grandchild holding its pipes and
-/// waits on it for ten minutes, appending its pid to `leaders`: what only a group kill
-/// ends. `/bin/sleep` by its path, since the stub's `PATH` is its own directory.
-const DIFF_TREE_HANGS: &str = "  echo $$ >> \"$DIR/leaders\"\n  /bin/sleep 600 &\n  wait";
+/// A diff thread's `git` that leads its group, starts a grandchild holding its pipes,
+/// appends its pid to `leaders` and waits on the grandchild for ten minutes: what only a
+/// group kill ends. `/bin/sleep` by its path, since the stub's `PATH` is its own directory.
+/// The grandchild is started before the pid is written, so a test that has read the pid can
+/// rely on both being in the group.
+const DIFF_TREE_HANGS: &str = "  /bin/sleep 600 &\n  echo $$ >> \"$DIR/leaders\"\n  wait";
 
 /// The pids the stub's `diff-tree` has written, waiting until there are `count`.
 fn leaders(stub: &StubGit, count: usize) -> Vec<i32> {
@@ -736,6 +740,159 @@ fn a_stat_only_index_refresh_keeps_what_is_kept() {
         reads(&handle, &mut updates),
         before,
         "a stat-only refresh let the kept answer go"
+    );
+    drop(handle);
+}
+
+/// T7: two identical asks run `git` once each — the change set's listing and the file's
+/// patch read — the second answered from what was kept. Over this checkout, whose files
+/// are long settled. Caught by: either early return taken out, which reads again.
+#[test]
+fn an_identical_ask_is_answered_from_what_is_kept() {
+    let (handle, mut updates) = checkout();
+    let ids = commits(&handle, &mut updates, 40);
+    let start = reads(&handle, &mut updates);
+    let (of, file) = ids
+        .iter()
+        .find_map(|id| {
+            let of = Comparison::Commit(*id);
+            change_set(&handle, &mut updates, of)
+                .files
+                .into_iter()
+                .find(|f| f.status == ChangeStatus::Modified)
+                .map(|file| (of, file))
+        })
+        .unwrap_or_else(|| panic!("none of {ids:?} modified a file"));
+    let listed = reads(&handle, &mut updates).1 - start.1;
+    change_set(&handle, &mut updates, of);
+    assert_eq!(
+        reads(&handle, &mut updates).1 - start.1,
+        listed,
+        "the second change set was listed again"
+    );
+
+    let query = committed(of, &file);
+    file_answer(&handle, &mut updates, &query);
+    let (patches, _) = reads(&handle, &mut updates);
+    assert!(
+        patches > start.0,
+        "the file asked no patch read, so the test decides nothing"
+    );
+    file_answer(&handle, &mut updates, &query);
+    assert_eq!(
+        reads(&handle, &mut updates).0,
+        patches,
+        "the second file diff read again"
+    );
+    drop(handle);
+}
+
+/// T2: a read git fails reaches the window as `DiffFailed`, naming the query. A stub `git`
+/// whose `diff-tree` exits 128. Caught by: a failure arm that sends nothing (`Err(_) =>
+/// {}`), which leaves the pane waiting for good.
+#[test]
+fn a_failed_read_is_sent_as_a_failure_naming_its_query() {
+    let ids = {
+        let (handle, mut updates) = checkout();
+        commits(&handle, &mut updates, 1)
+    };
+    let stub = StubGit::answering(
+        "2.45.0",
+        "diff-tree",
+        "  echo 'fatal: bad object' >&2\n  exit 128",
+    );
+    let fixture = BorrowedRepository::new(&format!("cairn-diff-failed-{}", std::process::id()));
+    fixture.point_main_at(&ids[0].to_string());
+    let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let (handle, mut updates) = match super::pool::open(
+        &fixture.fixture.path,
+        &Discovery::new(stub.startup(Some((&home, &runtime)))),
+    ) {
+        Ok((handle, updates, _)) => (handle, updates),
+        Err(error) => panic!("starting the worker: {error}"),
+    };
+    let of = Comparison::Commit(ids[0]);
+    handle.submit(Request::Changes { of });
+    let seen = collect_until(&mut updates, |u| {
+        matches!(u, Update::DiffFailed { .. } | Update::Changes { .. })
+    });
+    match seen.last() {
+        Some(Update::DiffFailed { query, message }) => {
+            assert_eq!(*query, DiffQuery::Changes(of));
+            assert!(
+                message.contains("128") || message.contains("bad object"),
+                "{message}"
+            );
+        }
+        other => panic!("expected the failure, got {other:?}"),
+    }
+    drop(handle);
+}
+
+/// T8: Expand All through the boundary answers every file of the change set, in its order,
+/// complete. Caught by: a lane that drops the batch, or answers another comparison's.
+#[test]
+fn expand_all_answers_every_file_through_the_boundary() {
+    let (handle, mut updates) = checkout();
+    let ids = commits(&handle, &mut updates, 8);
+    let (of, changes) = ids
+        .iter()
+        .map(|id| {
+            let of = Comparison::Commit(*id);
+            (of, change_set(&handle, &mut updates, of))
+        })
+        .find(|(_, changes)| changes.files.len() >= 2)
+        .unwrap_or_else(|| panic!("none of {ids:?} changed two files"));
+    let options = DiffOptions::default();
+    handle.submit(Request::ExpandAll { of, options });
+    let seen = collect_until(&mut updates, |u| {
+        matches!(u, Update::FileDiffs { .. } | Update::DiffFailed { .. })
+    });
+    match seen.last() {
+        Some(Update::FileDiffs {
+            of: answered,
+            options: at,
+            diffs,
+            complete,
+        }) => {
+            assert_eq!((*answered, *at, *complete), (of, options, true));
+            let files: Vec<&ChangedFile> = diffs.iter().map(|d| &d.file).collect();
+            assert_eq!(files, changes.files.iter().collect::<Vec<_>>());
+        }
+        other => panic!("expected Expand All's files, got {other:?}"),
+    }
+    drop(handle);
+}
+
+/// T8: a working-tree file diff through the boundary answers the working tree as it is:
+/// an untracked file's lines, and nothing for its unstaged side, which git does not list.
+/// Caught by: a working-tree query routed to the commit path, or answered for another
+/// side.
+#[test]
+fn a_working_tree_diff_answers_through_the_boundary() {
+    let ids = {
+        let (handle, mut updates) = checkout();
+        commits(&handle, &mut updates, 1)
+    };
+    let fixture = BorrowedRepository::new(&format!("cairn-diff-worktree-{}", std::process::id()));
+    fixture.point_main_at(&ids[0].to_string());
+    write(&fixture.fixture.path.join("new.txt"), "hello\n");
+    let (handle, mut updates) = opened(&fixture.fixture.path);
+    let side = |side| FileQuery {
+        target: FileTarget::WorkingTree {
+            path: RepoPath::from("new.txt"),
+            side,
+        },
+        options: DiffOptions::default(),
+    };
+    let untracked = file_answer(&handle, &mut updates, &side(WorkingSide::Untracked));
+    match untracked.as_ref().and_then(FileDiff::text) {
+        Some(text) => assert_eq!(text.new_content(), b"hello\n"),
+        None => panic!("the untracked file was not answered as text: {untracked:?}"),
+    }
+    assert_eq!(
+        file_answer(&handle, &mut updates, &side(WorkingSide::Unstaged)),
+        None
     );
     drop(handle);
 }

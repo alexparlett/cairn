@@ -9,9 +9,10 @@ use cairn_guards::{
     calls_nullary_method, code_only, code_without_strings, code_without_test_modules,
     configures_process_environment, constructs_named_struct, constructs_process_command,
     constructs_struct, declared_dependencies, declares_publicly, derives_or_implements,
-    implements_type, job_env_entries, mentions_crate, names_gitoxide_mutation,
-    reads_row_content_partially, renames_type, renders_in_a_macro, repo_root, rust_sources,
-    spawns_git, structs_with_a_field_naming, types_containing, waits_on_work,
+    gate_dispatch_arms, gate_full_sequence, implements_type, job_env_entries, mentions_crate,
+    names_gitoxide_mutation, reads_row_content_partially, renames_type, renders_in_a_macro,
+    repo_root, rust_sources, spawns_git, structs_with_a_field_naming, types_containing,
+    waits_on_work,
 };
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
@@ -3533,6 +3534,104 @@ fn the_workflow_env_matcher_reads_only_the_jobs_own_block() {
         assert!(
             !finds(workflow),
             "the env matcher counted {shape} as the gate job's own: {workflow:?}"
+        );
+    }
+}
+
+/// Steps the local full gate deliberately does not run, each with its reason. `test-fast`
+/// is the day loop's subset of `test-full`, which the full gate runs instead.
+const LOCAL_FULL_GATE_EXEMPT: &[&str] = &["test-fast"];
+
+/// `scripts/gate.sh` with no arguments is the merge bar a contributor runs, so every step
+/// it can run by name is in it — `deps` and `git-floor`, which reach the network, included
+/// — but for the explicit exemptions above. Without this a step added to the dispatch
+/// arms, and so to CI by `ci_runs_every_merge_bar_gate_step`, could be left out of the
+/// local merge bar, and a contributor's green gate would not be CI's.
+#[test]
+fn the_local_full_gate_runs_every_step_but_the_day_loops() {
+    let gate = std::fs::read_to_string(repo_root().join("scripts/gate.sh"))
+        .unwrap_or_else(|e| panic!("reading scripts/gate.sh: {e}"));
+    let arms = gate_dispatch_arms(&gate);
+    assert!(
+        arms.len() > LOCAL_FULL_GATE_EXEMPT.len(),
+        "parsed {} dispatch arms out of scripts/gate.sh, so this check compared nothing",
+        arms.len()
+    );
+    let full = gate_full_sequence(&gate)
+        .unwrap_or_else(|e| panic!("scripts/gate.sh's full sequence cannot be read: {e}"));
+    for exempt in LOCAL_FULL_GATE_EXEMPT {
+        assert!(
+            arms.iter().any(|(step, _)| step == exempt),
+            "`{exempt}` is exempt from the local full gate but is no step of scripts/gate.sh; \
+             drop it from LOCAL_FULL_GATE_EXEMPT"
+        );
+    }
+    for (step, function) in &arms {
+        if LOCAL_FULL_GATE_EXEMPT.contains(&step.as_str()) {
+            continue;
+        }
+        assert!(
+            full.contains(function),
+            "scripts/gate.sh defines the step `{step}` but its full run never calls \
+             `{function}`, so the local merge bar would pass without it. Call it in the full \
+             sequence, or exempt it in LOCAL_FULL_GATE_EXEMPT with the reason."
+        );
+    }
+}
+
+/// The two readings the local-gate guard rests on, against the shapes they claim.
+#[test]
+fn the_gate_sequence_matcher_catches_the_shapes_it_claims() {
+    let arms = "case \"$SELECTED_STEP\" in\n    format) run_format ;;\n    \
+                git-floor) run_git_floor ;;\n    *)\n      exit 2\n      ;;\nesac\n";
+    assert_eq!(
+        gate_dispatch_arms(arms),
+        vec![
+            ("format".to_owned(), "run_format".to_owned()),
+            ("git-floor".to_owned(), "run_git_floor".to_owned()),
+        ],
+        "the dispatch arms were misread"
+    );
+
+    let script = |tail: &str| {
+        format!(
+            "run_x() {{ :; }}\nif [ -n \"$SELECTED_STEP\" ]; then\n  case \"$SELECTED_STEP\" in\n    \
+             x) run_x ;;\n  esac\n  if [ \"$a\" ]; then\n    :\n  fi\n  finish\nfi\n\n{tail}"
+        )
+    };
+    let full = |tail: &str| gate_full_sequence(&script(tail));
+    let names = |items: &[&str]| -> BTreeSet<String> {
+        items.iter().map(|item| (*item).to_owned()).collect()
+    };
+
+    assert_eq!(
+        full(
+            "run_format\n\nif [ \"$FAST\" -eq 0 ]; then\n  run_deps\nelse\n  run_test_fast\nfi\n\nfinish\n"
+        ),
+        Ok(names(&["run_deps", "run_format"])),
+        "the top level and the full branch count, the day loop's branch does not"
+    );
+    assert_eq!(
+        full("# run_deps\nrun_format\nfinish\nrun_git_floor\n"),
+        Ok(names(&["run_format"])),
+        "a commented-out call and a call after `finish` are not in the full run"
+    );
+    for (shape, tail) in [
+        (
+            "an unknown conditional",
+            "if [ \"$CI\" ]; then\n  run_git_floor\nfi\nfinish\n",
+        ),
+        (
+            "a call with arguments",
+            "run_cmd \"git-floor\" \"$X\"\nfinish\n",
+        ),
+        ("a backgrounded call", "run_git_floor &\nfinish\n"),
+        ("no finish", "run_format\n"),
+    ] {
+        assert!(
+            full(tail).is_err(),
+            "the full-sequence reader guessed at {shape} instead of refusing it: {:?}",
+            full(tail)
         );
     }
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The pre-merge gate. Exit-code safe: run this, never an ad-hoc && chain.
-#   scripts/gate.sh                 full gate (the merge bar)
+#   scripts/gate.sh                 full gate (the merge bar): every step but test-fast
 #   scripts/gate.sh --fast          day-loop subset (skips network-dependent checks)
 #   scripts/gate.sh --step <name>   one named check (used by CI)
 #
@@ -26,10 +26,11 @@ TEST_FULL_CMD="cargo test --workspace --all-targets"
 # secret type ARE doctests. Its own step, so a red test-full does not hide it.
 TEST_DOC_CMD="cargo test --workspace --doc"
 # cairn-git's real-git diff tests against the oldest gits Cairn supports, built from
-# source (scripts/git-floor.sh). CI runs it as its own job, which is what the guard
-# ci_runs_every_merge_bar_gate_step holds it to. It is not in the local full sequence
-# below: it fetches git's source over the network and builds two gits, so run it
-# locally by name, `scripts/gate.sh --step git-floor`, when the floor is the point.
+# source (scripts/git-floor.sh). In the full sequence below, like `deps`: the first run
+# fetches git's source and builds two gits (a C compiler, make and zlib's headers; the
+# script names what is missing and FAILS, never skips), and later runs reuse the cached
+# builds. CI runs it as its own job (ci_runs_every_merge_bar_gate_step), and
+# the_local_full_gate_runs_every_step_but_the_day_loops holds the local full run to it.
 GIT_FLOOR_CMD="scripts/git-floor.sh"
 
 FAST=0
@@ -141,6 +142,7 @@ if [ "$FAST" -eq 0 ]; then
   run_deps
   run_test_full
   run_test_doc
+  run_git_floor
 else
   run_test_fast
 fi

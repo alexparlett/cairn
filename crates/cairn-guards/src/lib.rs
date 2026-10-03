@@ -1663,6 +1663,93 @@ pub fn job_env_entries(workflow: &str, job: &str) -> Vec<String> {
     entries
 }
 
+/// `scripts/gate.sh`'s `--step` dispatch arms, as `(step, function)`: `name) run_x ;;`.
+pub fn gate_dispatch_arms(gate: &str) -> Vec<(String, String)> {
+    gate.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let body = line.strip_suffix(";;")?;
+            let (name, call) = body.split_once(')')?;
+            let (name, call) = (name.trim(), call.trim());
+            let plain = |word: &str| {
+                !word.is_empty()
+                    && word
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            };
+            (plain(name) && call.starts_with("run_") && plain(call))
+                .then(|| (name.to_owned(), call.to_owned()))
+        })
+        .collect()
+}
+
+/// The `run_*` functions `scripts/gate.sh` calls when run with no arguments: the full
+/// gate, the merge bar. Read from the script's tail — everything after the `--step`
+/// block's closing `fi`, up to `finish` — counting a call at the top level or in the
+/// full branch of the one conditional the tail may hold (`if [ "$FAST" -eq 0 ]; then`),
+/// and not in its `else`, which is the day loop's. Any other line there is an `Err`
+/// rather than a guess, so a new conditional cannot hide a step from this reading.
+pub fn gate_full_sequence(gate: &str) -> Result<BTreeSet<String>, String> {
+    let mut lines = gate
+        .lines()
+        .skip_while(|line| line.trim() != "if [ -n \"$SELECTED_STEP\" ]; then");
+    if lines.next().is_none() {
+        return Err("no `if [ -n \"$SELECTED_STEP\" ]; then` block".to_owned());
+    }
+    let mut depth = 1usize;
+    for line in lines.by_ref() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("if ") {
+            depth += 1;
+        } else if trimmed == "fi" {
+            depth -= 1;
+            if depth == 0 {
+                break;
+            }
+        }
+    }
+    if depth != 0 {
+        return Err("the `--step` block never closes".to_owned());
+    }
+
+    #[derive(PartialEq)]
+    enum Branch {
+        Top,
+        Full,
+        Fast,
+    }
+    let mut branch = Branch::Top;
+    let mut full = BTreeSet::new();
+    let mut finished = false;
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        match trimmed {
+            "if [ \"$FAST\" -eq 0 ]; then" if branch == Branch::Top => branch = Branch::Full,
+            "else" if branch == Branch::Full => branch = Branch::Fast,
+            "fi" if branch != Branch::Top => branch = Branch::Top,
+            "finish" if branch == Branch::Top => {
+                finished = true;
+                break;
+            }
+            call if call.starts_with("run_")
+                && call.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') =>
+            {
+                if branch != Branch::Fast {
+                    full.insert(call.to_owned());
+                }
+            }
+            other => return Err(format!("a line the reading does not know: {other:?}")),
+        }
+    }
+    if !finished {
+        return Err("the full sequence never reaches `finish`".to_owned());
+    }
+    Ok(full)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

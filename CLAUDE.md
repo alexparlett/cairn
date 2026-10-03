@@ -52,11 +52,17 @@ there.
 ## Commands
 
 - `scripts/gate.sh` — the pre-merge gate: format, lint, typecheck, guards,
-  dependency policy, full test suite, doctests. Exit-code safe; run it before calling a
-  change done instead of an ad-hoc `&&` chain (piping test output through
-  `tail`/`head` masks the exit code).
+  dependency policy, full test suite, doctests, and `git-floor` (`cairn-git`'s
+  real-git diff tests against git 2.30.9 and 2.32.7, built from source by
+  `scripts/git-floor.sh` into `~/.cache/cairn/git-floor` on the first run, which
+  needs the network, a C compiler, make and zlib's headers, and fails naming what
+  is missing rather than skipping). Every `--step` but `test-fast` runs in it
+  (`the_local_full_gate_runs_every_step_but_the_day_loops`). Exit-code safe; run it
+  before calling a change done instead of an ad-hoc `&&` chain (piping test output
+  through `tail`/`head` masks the exit code).
 - `scripts/gate.sh --fast` — day-loop subset. Never the merge bar; deliberately
-  skips network-dependent checks so the day loop stays usable offline.
+  skips network-dependent checks (`deps`, `git-floor`) so the day loop stays usable
+  offline.
 - `scripts/gate.sh --step <name>` — one named gate component. CI uses this
   interface so CI and local runs share the same command implementation.
 - `cargo run -p cairn-app` — run the app. `cargo run -p cairn-app --release` for
@@ -65,8 +71,10 @@ there.
   helper is a second binary that `-p cairn-app` alone does not build: run
   `cargo build --workspace` first (or `-p cairn-askpass`), or fetches needing a
   prompt fail with a message saying so.
-- Toolchain is pinned in `rust-toolchain.toml`; `cargo deny` is the one tool the
-  gate needs that rustup does not ship (`cargo install cargo-deny --locked`).
+- Toolchain is pinned in `rust-toolchain.toml`; `cargo deny` is the one Rust tool the
+  gate needs that rustup does not ship (`cargo install cargo-deny --locked`), and
+  `git-floor` needs a C toolchain and zlib's headers (`build-essential zlib1g-dev`
+  on Debian and Ubuntu).
 
 **Version-sensitive API rule:** for any fast-moving dependency, verify APIs you are
 not certain of against current docs before writing them. Never code such an API from
@@ -406,9 +414,15 @@ Project invariants:
   `todo!`, `unimplemented!` and `dbg!` are denied by the workspace clippy table,
   with tests exempted via `clippy.toml`. A panic in a git client can cost someone
   a working tree.
-- **CI runs every merge-bar gate step.** Twin: `ci_runs_every_merge_bar_gate_step`
+- **CI runs every merge-bar gate step, and the local full gate runs every step but
+  the day loop's `test-fast`.** Twins: `ci_runs_every_merge_bar_gate_step`
   compares `gate.sh`'s dispatch arms against the workflow, so a step added locally
-  cannot quietly skip CI.
+  cannot quietly skip CI; `the_local_full_gate_runs_every_step_but_the_day_loops`
+  compares them against what `gate.sh` with no arguments calls, read by a matcher
+  that refuses a conditional it does not know rather than guessing (self-test
+  `the_gate_sequence_matcher_catches_the_shapes_it_claims`), with its exemptions
+  an explicit roster (`LOCAL_FULL_GATE_EXEMPT`) that fails when a name in it stops
+  being a step.
 - **The UI thread never waits on repository work.** `cairn-app` is partitioned by
   FILE: `crates/cairn-app/src/worker/` runs repository work and may block; every
   other file in the crate renders, and may name neither `cairn_git`, `gix` nor
@@ -557,7 +571,10 @@ Layers, cheapest boundary first (full contract: `docs/qa-gate.md`):
    suite.
 3. `scripts/gate.sh --fast` while iterating; `scripts/gate.sh` is the merge bar.
 4. CI (`.github/workflows/ci.yml`): the same checks as named `scripts/gate.sh
-   --step` invocations on every PR and push to `main`.
+   --step` invocations on every PR and every push to `main` or a `feature/**`
+   branch — `git-floor` in a job of its own — so CI runs what the local full gate
+   runs (`ci_runs_every_merge_bar_gate_step` one way,
+   `the_local_full_gate_runs_every_step_but_the_day_loops` the other).
 5. `/qa` at end of contribution: dispatches the `qa-checklist` agent plus the
    domain reviewers matching the diff surface. Spawn reviewers FRESH; never have
    the implementer review its own work.

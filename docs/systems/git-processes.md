@@ -49,9 +49,9 @@ crates/cairn-git/src/
     fetch.rs        fetch, built as a write
     refspec_policy.rs  the refspecs fetch refuses (docs/systems/credentials.md)
     stranded_locks.rs  every `*.lock` under a git directory; the runner reports them for a write
-  reads/        each read `git` answers, one named function each — empty until diff-engine;
-                its test module proves the shape that packet takes: a read built from a
-                `GitBinary` copy, run on a thread, stopped by an epoch, answering `-z` records
+  reads/        each read `git` answers, one named function each; its tests run a read
+                built from a `GitBinary` copy, on a thread, stopped by an epoch
+    changes.rs      changes — `git diff-tree -r -z --raw`, the changes query (docs/systems/diff.md)
 ```
 
 `process` is a private module (`mod process;` in `lib.rs`). The application

@@ -2,12 +2,12 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: PAUSED after phase 02 (2026-09-30).** The diff model exists in
-`cairn-model` and `cairn-git` answers R2's two queries, but the user decided the
-changes query must come from `git diff-tree -M` (option E, for exact rename
-parity) and that a git process manager is built first as its own packet. Resume
-only after that packet merges; phase 02's changes query is then reworked. Why, and
-the evidence: the 2026-09-30 entry in `progress.md`,
+**Status: phase 02's rework landed (2026-10-03); phase 03 next.** The diff model
+exists in `cairn-model`, and `cairn-git` answers R2's two queries: the changes
+query from `git diff-tree` through the process manager (decision E, PRD R2.1, R2.2,
+R2.9 and C14 amended), the content query from gix. Phase 02's QA, deferred when the
+packet paused, runs over the reworked phase. Why decision E, and the evidence: the
+2026-09-30 and 2026-10-03 entries in `progress.md`,
 `docs/research/diff-engine/rename-parity-spike.md` and
 `docs/research/diff-engine/git-process-survey.md`.
 
@@ -40,13 +40,9 @@ with D1, D3, D5 and D6 in `engine.md`, `concurrency.md`, `platform.md` and
 Q1-Q3 in `brainstorm.md`, lettered Q so they cannot be confused with the
 program's O1-O6.
 
-**Q3 is answered, and the answer is a large gap that is with the user.** On
-`5a3292f163d` gix finds 231 rename pairs where git finds 2,774 — every one of
-git's 2,543 inexact renames is missing — because gix compares `diff.renameLimit`
-against the raw permutation count where git compares it against the square, and
-because gix has no basename stage in front of its exhaustive one. Neither is
-closable by raising the limit Cairn passes. The measurement, the cause and the
-options are in the phase 02 entry of `progress.md`.
+**Q3 is answered and closed by decision E.** gix paired 231 renames on
+`5a3292f163d` where git pairs 2,774; the changes query now asks git, and the bench
+reporter requires every one of M1's 2,774 pairs to equal `git diff-tree`'s.
 
 ## New modules and interfaces introduced so far
 
@@ -88,20 +84,22 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | `Timestamp`, `Signature`, `CommitDetails` | model | R1.8: both signatures with their offsets, the whole message, the parents. |
 | `ChangesRequest` | git | What to compare: one commit against its first parent (the empty tree for a root), or two commits tip against tip. |
 | `ChangeSet` | git | What a commit or a comparison changed: the files sorted by a total key, the commit's details when one commit was named, and how rename detection went. |
-| `RenameDetection` | git | gix's rename and copy counters as plain numbers, and `was_cut_short()`, which is R2.2's "the answer says so". |
+| `RenameDetection` | git | Whether detection was on and found copies, the limit git applied, and `needed_limit` / `was_cut_short()`: R2.2's "the answer says so", decided from git's answer and the limit, never from stderr. |
 | `ContentOptions` | git | R2.6's limits, whether to load past them anyway, and whether to compute the whitespace-ignoring ranges. |
-| `DiffSession` | git | Holds gix's resource cache for a run of queries. Borrows the repository and is not `Send`, like `HistorySession`. |
-| `Repository::changes` | git | R2.1, R2.2, R2.9, R2.10, on a session of its own. Polls `Cancel` once per change. |
+| `DiffSession` | git | Holds gix's resource cache for a run of content queries; its `changes` is `Repository::changes`. Borrows the repository and is not `Send`, like `HistorySession`. |
+| `Repository::changes(&GitBinary, ..)` | git | R2.1, R2.2, R2.9, R2.10: gix reads the commits and the two rename keys, `git diff-tree` answers. Blocks on one read process; `Cancel` polled every runner tick ends it. |
+| `reads::changes`, `reads::Detection` | git (crate-private) | The read: `git diff-tree -r -z --raw --no-abbrev` with detection spelled out, `-z` records parsed into `ChangedFile`s, a superseded query answering `ChangesCancelled`. |
+| `diff::renames` (`Configured`, `Search`) | git (crate-private) | `diff.renames` and `diff.renameLimit` parsed by git's rules, the limit the git in use applies, and the cut-short inference per git version. |
 | `Repository::file_diff` | git | R2.3 through R2.8, on a session of its own. |
 | `Repository::commit_details` | git | One commit in the detail R5.3 draws, without a changes query. |
-| `Error::ChangesCancelled`, `DiffSetup`, `TreeDiff`, `DiffFile` | git | What the caller of a diff query must handle. |
+| `Error::ChangesCancelled`, `DiffSetup`, `DiffFile`, `UnexpectedGitOutput`, `InvalidConfig` | git | What the caller of a diff query must handle; `TreeDiff` went with the gix tree walk. |
 
 ## Validation status
 
 | Phase | Status | Gate | QA |
 | --- | --- | --- | --- |
 | 01 diff model | landed | `scripts/gate.sh` PASS | `qa-checklist`, `test-coverage-auditor` and `responsiveness-reviewer`, adjudicated by `qa-confirm`; confirmed findings fixed or recorded as residuals in `docs/systems/diff.md` |
-| 02 engine, commits | landed; changes query to be reworked (decision E) | `scripts/gate.sh` PASS | deferred to the reworked phase |
+| 02 engine, commits | landed 2026-09-18; changes query reworked onto `git diff-tree` 2026-10-03 (decision E) | `scripts/gate.sh` PASS | due over the reworked phase |
 | 03 engine, working tree | not started | — | — |
 | 04 worker lanes | not started | — | — |
 | 05 detail pane | not started | — | — |

@@ -94,11 +94,17 @@ being a feature and being a rewrite.
 
 - R2.1 A **changes query** takes two commits, or one commit meaning against its
   first parent (the empty tree for a root commit, L5), and returns the changed
-  files sorted by path. For one commit it also returns the details the Commit tab
+  files sorted by path. Which paths changed, their statuses, modes and ids, and
+  every rename and copy pair are `git diff-tree`'s answer, run as a read through
+  the process manager; gix reads the commits it names (amended 2026-10, decision
+  E, see progress.md). For one commit it also returns the details the Commit tab
   shows (R5.3). No gix type appears in its signature.
 - R2.2 Renames and copies are detected as the user's `diff.renames` and
-  `diff.renameLimit` configure them, with gix's defaults otherwise. When the limit
-  cuts rename detection short, the answer says so.
+  `diff.renameLimit` configure them, with git's defaults otherwise — the search the
+  user's own `git log` makes, applied by git (amended 2026-10, decision E, see
+  progress.md). When the limit cuts rename detection short, the answer says so,
+  decided from git's answer and never by reading its stderr (amended 2026-10,
+  decision E, see progress.md).
 - R2.3 A **content query** takes one changed file and the display options and
   returns its file diff. Both versions are read in git's form through gix's
   resource cache in its to-git mode: no textconv program and no external diff
@@ -124,9 +130,11 @@ being a feature and being a rewrite.
 - R2.8 **Ignoring whitespace** computes the second set of changed ranges by
   comparing lines with all whitespace removed, which is git's `-w`. The lines drawn
   are always the original bytes.
-- R2.9 A query can be cancelled: a tree walk checks at every change, and work that
-  spans files checks between files. Rename detection and a single file's content
-  diff run to completion, bounded by the rename limit and by R2.6.
+- R2.9 A query can be cancelled: a superseded changes query ends its `git`
+  process through its query's epoch, rename detection included, rather than
+  waiting for it (amended 2026-10, decision E, see progress.md), and work that
+  spans files checks between files. A single file's content diff runs to
+  completion, bounded by R2.6.
 - R2.10 Failures are `cairn_git::Error` variants naming what the caller must
   handle.
 
@@ -287,7 +295,7 @@ here and does not restate them.
 | C11 | The header toggles behave as R6.2 and R6.3 say, including the one-line minimum; ignore-whitespace hides whitespace-only changes and says so; intra-line ranges are drawn; every R6.8 state draws its notice | headless tests |
 | C12 | A modifier-click selects two commits, the comparison is tip against tip with the lower row as base, and swap reverses it | headless test |
 | C13 | Every R8.2 action resolves through the accelerator table, and no component names a literal modifier | unit test, plus the guard from R8.3 |
-| C14 | On rust-lang/rust at `c999cef531e`, on the machine recorded in `measured-baseline.md`, warm, in a release build: the changes query finishes within 100 ms on `f0845adb0c1`, 500 ms on `cf2dff2b1e3` and 500 ms on `5a3292f163d`; the content query finishes within 100 ms on `3b09522c34b`; `6a6e8446b97` answers too large without reading its content, and its Load Diff time is recorded; the rename pairs on `5a3292f163d` match git's, or each gap is filed; the window stays responsive while the two heaviest subjects load | an `#[ignore]`d reporter driven by `CAIRN_BENCH_REPO` for the engine numbers, and a check by hand for the window, all recorded in `progress.md` |
+| C14 | On rust-lang/rust at `c999cef531e`, on the machine recorded in `measured-baseline.md`, warm, in a release build: the changes query finishes within 100 ms on `f0845adb0c1`, 500 ms on `cf2dff2b1e3` and 500 ms on `5a3292f163d`; the content query finishes within 100 ms on `3b09522c34b`; `6a6e8446b97` answers too large without reading its content, and its Load Diff time is recorded; the rename pairs on `5a3292f163d` match git's (amended 2026-10, decision E, see progress.md: they are git's own, so no gap may be filed); the window stays responsive while the two heaviest subjects load | an `#[ignore]`d reporter driven by `CAIRN_BENCH_REPO` for the engine numbers, and a check by hand for the window, all recorded in `progress.md` |
 | C15 | D1's amendment is in `docs/design/engine.md` and `CLAUDE.md`, and the filter driver's inherited environment is stated there as a residual | review |
 | C16 | `scripts/gate.sh` passes | the gate |
 

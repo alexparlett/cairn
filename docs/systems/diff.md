@@ -153,16 +153,20 @@ model-level pins and each has a hole a mutation walks through:
 
 ## What the engine answers
 
-Two queries in `cairn-git`, both reads, neither spawning a process. gix computes
-both diffs and Cairn only groups what it returns (decision L3): no diff algorithm
-is written here, and no gix type appears in a public signature.
+Two queries in `cairn-git`. The **changes query** is answered by `git diff-tree`
+(decision E; D1 in `docs/design/engine.md`, "Where git answers a read"): which paths
+changed, with their statuses, modes, ids and every rename and copy pair, are git's
+own. It is the one diff query that starts a process. The **content query** is
+computed by gix, in process, and Cairn only groups what gix returns (decision L3).
+No diff algorithm is written here, and no gix type appears in a public signature.
 
 `DiffSession` (`crates/cairn-git/src/diff.rs`) holds gix's blob resource cache for
-a run of queries. Building one reads the index and the attribute stack, which on a
-62,892-entry repository is several megabytes; `Repository::changes` and
-`Repository::file_diff` are one-shot sessions over it for a caller with a single
-question. Like `HistorySession` it borrows the repository and is not `Send`, so it
-lives on the worker that owns that handle. The cache is created in
+a run of content queries. Building one reads the index and the attribute stack,
+which on a 62,892-entry repository is several megabytes; `Repository::file_diff` is
+a one-shot session over it for a caller with a single question, and
+`DiffSession::changes` is `Repository::changes` on the session's repository, which
+needs no cache. Like `HistorySession` the session borrows the repository and is not
+`Send`, so it lives on the worker that owns that handle. The cache is created in
 `pipeline::Mode::ToGit` with no worktree roots, which is the mode that never runs a
 textconv program, and `gix::diff::resource_cache` builds it with
 `skip_internal_diff_if_external_is_configured` off, so a `diff.<driver>.command` in
@@ -175,46 +179,90 @@ absence of a program that could never have run.
 
 ### The changes query
 
-`Repository::changes(&ChangesRequest, &impl Cancel) -> ChangeSet` (R2.1, R2.2,
-R2.9, R2.10). A request names one commit — compared with its first parent, or with
-the empty tree when it is a root commit (L5) — or two commits, tip against tip and
-never against a merge base (R7.2). A merge is compared with its first parent like
-any other commit; a combined diff is out of scope by D6.
+`Repository::changes(&GitBinary, &ChangesRequest, &impl Cancel) -> ChangeSet`
+(R2.1, R2.2, R2.9, R2.10). A request names one commit — compared with its first
+parent, or with the empty tree when it is a root commit (L5) — or two commits, tip
+against tip and never against a merge base (R7.2). A merge is compared with its
+first parent like any other commit; a combined diff is out of scope by D6. The
+`GitBinary` is the one the application found at startup; the call blocks until its
+process ends, so it is a worker's call.
 
-The answer holds the changed files, the commit's `CommitDetails` when one commit
-was named, and a `RenameDetection` reporting gix's counters as plain numbers.
-`RenameDetection::was_cut_short()` is R2.2's "the answer says so": it is true when
-`diff.renameLimit` stopped the search, which is the fact git prints as "exhaustive
-rename detection was skipped due to too many files".
+What runs, in order (`crates/cairn-git/src/diff/changes.rs`):
 
-**The file list is sorted here, because gix does not sort it.** gix emits
-modifications in traversal order and rename pairs as its tracker finds them. The
-key is total — destination path, then source path — so two runs of one query list
-the same files in the same places;
-`the_file_list_is_sorted_by_path_and_never_shuffles` runs the query twice and
-requires both, and requires the key to separate every pair.
+1. **gix reads the commits.** Each id named is found as a commit, so a missing one
+   is `Error::ReadCommit` on either side of a comparison, and no process starts
+   (`a_commit_that_is_not_there_is_refused`). For one commit, its `CommitDetails`
+   come from the same read, and its first parent is what it is compared with —
+   or the empty tree, for a root commit and for a shallow clone's boundary commit,
+   whose parents the clone does not have and which git's own `git log` shows as a
+   root (`a_shallow_clones_boundary_commit_is_compared_as_git_log_shows_it`).
+2. **The user's configuration is read, the way git reads it**
+   (`crates/cairn-git/src/diff/renames.rs`). Plumbing reads neither key the way
+   the user's own `git log` and `git show` do — `diff.renames` not at all, and
+   `diff.renameLimit` only as `-l`'s default — so the two keys are read here, from
+   the configuration gix loaded when the repository was opened: the last value
+   across every file, a bare key included, parsed by git's own rules
+   (`git_config_rename`, `git_parse_maybe_bool`, and `git_parse_int`'s base-0
+   `strtoimax` with its `k`/`m`/`g` suffixes and its `int` range). A value git
+   refuses is `Error::InvalidConfig`, because the user's own `git log` refuses to
+   answer on it too. Unset, detection is renames — porcelain's default — and the
+   limit is the default of the git in use: 1,000 from git 2.33, 400 before.
+3. **`git diff-tree -r -z --raw --no-abbrev` answers**, in
+   `crate::reads::changes` (`crates/cairn-git/src/reads/changes.rs`), as a read
+   invocation: `GIT_OPTIONAL_LOCKS=0`, `GIT_NO_LAZY_FETCH=1`, no askpass token
+   (`docs/systems/git-processes.md`). Detection is spelled out — `-M` or `-C` with
+   `-l<limit>`, or `--no-renames` — so git searches exactly what the user's
+   `git log` would. Neither `--textconv` nor `--ext-diff` is ever passed. The
+   `-z` records are parsed as they arrive: a metadata record, then one path, or
+   two for a rename or a copy. A record git does not print for two trees — `U`,
+   `X`, a score where none belongs, a mode no file has, a path missing at the end —
+   is `Error::UnexpectedGitOutput`, and nothing of the answer is used. git failing
+   is `Error::GitFailed`, classified by its exit status, never by its stderr.
+4. **The answer is sorted, by a total key** — destination path, then source path —
+   so two runs of one query list the same files in the same places;
+   `the_file_list_is_sorted_by_path_and_never_shuffles` runs the query twice and
+   requires both, and requires the key to separate every pair.
 
-**Cancellation stops the walk.** `Cancel` is polled once per change, inside gix's
-callback, and a poll that answers yes returns `ControlFlow::Break`, which ends the
-traversal rather than letting it finish and discarding the answer. Whether it
-broke is recorded on Cairn's side and checked before gix's own error, because gix
-reports a break as a failure. `a_cancelled_changes_query_stops_walking` compares
-the files collected before the break with the whole answer.
-**The gap, stated:** rename detection runs its similarity comparisons *between*
-those callbacks, so a superseded query on a rename-heavy commit finishes that
-phase before the break is seen. It is bounded by `diff.renameLimit` and by
-nothing else.
+**How detection went** is `RenameDetection`: whether it was on, whether copies
+were, the limit git applied (`None` for none), and `needed_limit`, which is R2.2's
+"the answer says so". `RenameDetection::was_cut_short()` is true when
+`diff.renameLimit` stopped git's exhaustive search — the fact git prints as
+"exhaustive rename detection was skipped due to too many files" — and
+`needed_limit` is then the number git's warning asks the limit to be raised to.
+Both are decided from git's answer, never from that warning, which is prose in the
+user's language. git skips its exhaustive stage when the sources it has left times
+the destinations it has left exceeds the square of the limit
+(`too_many_rename_candidates` in git's `diffcore-rename.c`), and when it skips,
+what it had left are exactly the answer's unpaired paths, while when it does not
+they are a superset of them — so the same inequality over the answer's counts is
+exact, provided the sources are counted as the git in use counts them: the
+unpaired deletions for renames from git 2.31, which culls what the exact and
+basename stages paired before the check; every deletion for renames on git 2.30,
+which culls nothing; and every deletion and every modified file for copies, on
+every version. A limit of zero or less is no limit from git 2.33 and 32,767 before.
+Each of these was read from git's source at v2.30.0, v2.31.0, v2.32.0, v2.33.0 and
+v2.56.0; against the git that links,
+`a_rename_limit_that_cuts_detection_short_is_reported_exactly_when_git_warns`
+requires `needed_limit` to equal what git's own warning says, at limits either
+side of each boundary, over renames and copies, a commit whose exact renames a
+non-culling git would have counted, and one paired by name ahead of the limit.
 
-**A copy's source is put back where git has it.** With `diff.renames=copies`, gix
-reports a copy's source as it is AFTER the change and stops reporting that file as
-modified at all; git reports the source as it was BEFORE — which is the version in
-the index, so it is the version a patch must be built against — and still lists the
-file as modified. `repair_copies` reads the source path out of the old tree and
-corrects both: one lookup per copy, and nothing at all when copies are not
-configured. Without it a copy's patch does not apply and a modified file vanishes
-from the list. The similarity percentage stays gix's, and gix measured it against
-the other version of the source; where the repaired source is byte-identical to the
-copy — git's `C100` — the percentage is set from that fact instead.
+**Cancellation ends the process.** `cancel` is polled by the runner on every tick
+while `git` runs — through rename detection too, which used to run to completion —
+and once it says the query was superseded the process group is ended, the query
+answers `Error::ChangesCancelled`, and the command log records the invocation as
+cancelled. A query already superseded starts no process. Pinned by
+`a_changes_query_superseded_by_a_newer_epoch_stops_git_and_reports_it` (an
+exhaustive search over 4,000 deletions against 4,000 additions, ended mid-search;
+the log's `cancelled` is what a cancel that lost the race to git's own exit never
+says) and `a_changes_query_superseded_before_it_starts_runs_nothing`, both in
+`crates/cairn-git/src/reads/mod.rs`, and `a_cancelled_changes_query_answers_cancelled`
+from outside the crate.
+
+**It writes nothing.** `the_changes_query_writes_nothing` holds the whole git
+directory byte-identical across a copy search, a root commit and a comparison, with
+the working tree stat-dirty and a `diff.<driver>.cachetextconv` configured, and the
+textconv program never runs.
 
 ### The content query
 
@@ -311,23 +359,46 @@ read.
   edge a seeded selection may never reach.
 - **C3** reverses the same patches onto the commit's tree and requires the parent's.
 - **C5** (`every_crafted_commit_lists_what_git_lists` and its neighbours) compares
-  with `git diff-tree -r --raw --no-abbrev` under the same config, field for field.
+  with `git diff-tree -r --raw --no-abbrev` under the same config, field for field:
+  a root commit, a merge against its first parent, a comparison and its swap,
+  renames, copies when configured, and a limit that cuts detection short. Since
+  git answers the query, what these decide is that Cairn asks git the right
+  question and reads its answer whole. `the_answer_is_what_git_log_shows_under_each_configuration`
+  decides the question against what the user sees: for each spelling of
+  `diff.renames` (unset, the words, numbers, the bare key, `copy`) against each of
+  `diff.renameLimit` (unset, `1`, `0`, `-1`, `1k`, `0x1`), every commit's list
+  equals porcelain `git log --raw`'s and its `needed_limit` equals git's warning;
+  `a_configuration_git_refuses_is_refused` holds a value git refuses to
+  `Error::InvalidConfig`.
 - **C6** (`every_crafted_file_diff_is_the_one_git_prints`) compares the unified
   projection with `git diff -U3` of the same two **blobs** — two blobs rather than
   two commits and a path, so rename detection cannot change what is compared.
 
 ### Known limits of the engine
 
-- **gix finds far fewer renames than git once the limit bites.** On
-  `5a3292f163d`, git's largest rollup, gix finds 231 rename pairs where git finds
-  2,774, and runs zero similarity checks. Two causes, both gix's:
-  `gix_diff::rewrites::tracker` compares `diff.renameLimit` against the raw
-  permutation count where git compares it against the square (gix's own doc on
-  `Rewrites::limit` states git's rule, which the code does not implement), and gix
-  has no basename stage in front of its exhaustive one, so when the limit is
-  exceeded it falls back to exact matching alone. Raising the limit Cairn passes
-  does not close it at an acceptable cost. The measurement and the options are in
-  the phase 02 entry of `docs/work/diff-engine/progress.md`.
+- **The configuration is gix's view of it, as of when the repository was opened.**
+  The two rename keys are read from the configuration gix loaded, so a change the
+  user makes while Cairn has the repository open is not seen until it is opened
+  again — as for every other key gix reads, `diff.algorithm` among them. And gix
+  reads from Cairn's own environment, which may carry `GIT_CONFIG_GLOBAL`,
+  `GIT_CONFIG_COUNT` and the rest, where the `git` process's environment carries
+  none of them (`docs/systems/git-processes.md`); since detection and the limit are
+  passed to git spelled out, what decides the search is gix's view, which is the
+  one the user's own shell has.
+- **In a blob-less partial clone, a rename search fails rather than fetching.**
+  Comparing contents needs blobs only the promisor may hold, and a read never
+  fetches (`GIT_NO_LAZY_FETCH=1`, from git 2.44), so the query answers
+  `Error::GitFailed` where the user's own `git log` would fetch and show the pairs.
+  With detection off, only trees are read, and the clone answers.
+  `in_a_partial_clone_a_rename_search_fails_rather_than_fetching` pins both. Older
+  git may fetch.
+- **A shallow clone's boundary commit keeps its parents in its details.** The
+  changes query compares it with the empty tree, as `git log` does, but
+  `CommitDetails::parents` is read from the commit object, which names parents the
+  clone does not have, where `git log --format=%P` shows none. Not pinned.
+- **`diff.ignoreSubmodules` is not applied.** It is porcelain configuration, which
+  `diff-tree` does not read, and it can hide a submodule's change from the user's
+  own `git log`; the query lists it. Not pinned.
 - **A copy cannot be reverse-applied — by git either.** `git apply -R` of
   `copy from A / copy to B` re-creates A from B and refuses because A is still
   there. `gits_own_copy_patch_cannot_be_reversed_either` pins that git's own patch

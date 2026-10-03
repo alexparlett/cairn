@@ -3,6 +3,126 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-03 — phase 02 reworked: the changes query answered by `git diff-tree`
+
+The packet resumed on the process manager (#50) and phase 02's changes query moved
+from gix to git, per decision E. `Repository::changes` now takes the `GitBinary`
+the application found at startup: gix reads the commits named and the two rename
+keys, and `crate::reads::changes` runs `git diff-tree -r -z --raw --no-abbrev` as a
+read invocation, parsing its `-z` records into `ChangedFile`s, which are then sorted
+by the same total key as before. The gix tree walk went with it — `repair_copies`,
+gix's `RenameDetection` counters, the per-change cancel poll and `Error::TreeDiff`.
+The content query, the model and the round trips stand. As built:
+`docs/systems/diff.md`, "The changes query". `scripts/gate.sh` passes.
+
+PRD amended, each marked inline: R2.1 (the answer is `git diff-tree`'s), R2.2
+(git's defaults, the search the user's own `git log` makes, cut short decided from
+the answer), R2.9 (a superseded query ends its process, rename detection included)
+and C14's rename clause (git's own pairs, no gap may be filed).
+
+### How the configuration is honoured — decided here
+
+- **`diff-tree` reads `diff.renameLimit` but not `diff.renames`.** Verified against
+  git: `git help config` says `diff.renames` affects porcelain only, and git's
+  `builtin/diff-tree.c` loads `git_diff_basic_config`, which holds
+  `diff.renamelimit` while `diff.renames` is in `git_diff_ui_config`; a fixture
+  with `diff.renameLimit=1` and plain `diff-tree -M` printed git's limit warning.
+  So detection must be passed, and it is all passed: `-M` or `-C` with
+  `-l<limit>`, or `--no-renames`.
+- **Read in process, from gix's loaded configuration, parsed by git's rules** —
+  the last value across files, the bare key as true, `copies`/`copy`, git's
+  boolean words, any integer git accepts (base 0, `k`/`m`/`g`, the `int` range).
+  Not by a `git config` process: `crate::reads` admits query plumbing and `status`
+  only, and that list is a user-owned rule. Two residuals follow and are stated in
+  `docs/systems/diff.md`: the keys are as of the repository's opening, like every
+  key gix reads; and gix sees Cairn's own `GIT_CONFIG_*` environment, which the
+  `git` process does not inherit — since the flags are passed explicitly, gix's
+  view, which is the user's shell's, decides.
+- **The default limit and what zero means depend on the git**, read from git's
+  source at v2.30.0, v2.31.0, v2.32.0, v2.33.0 and v2.56.0: 400 before 2.33 and
+  1,000 from it; a limit of zero or less is 32,767 before 2.33 and none from it.
+- A value git refuses is `Error::InvalidConfig`: the user's own `git log` refuses
+  to answer on it too.
+
+### "Cut short", without reading stderr — decided here
+
+git's warning is prose in the user's language, and there is no exit status or
+flag for it. But git skips its exhaustive stage exactly when the sources it has
+left times the destinations it has left exceeds the limit squared
+(`too_many_rename_candidates`), and when it skips, those leftovers are the
+answer's unpaired paths; when it does not, they are a superset of them. So the
+inequality over the answer's own counts is exact, with sources counted as the git
+in use counts them: unpaired deletions for renames from 2.31 (which culls what the
+exact and basename stages paired), every deletion on 2.30, every deletion and
+modified file for copies on every version. `RenameDetection::needed_limit` carries
+git's own "set it to at least N". Pinned against the linking git's warning, read in
+the C locale by the test only, at limits either side of each boundary.
+
+### Tests
+
+C1, C2, C3 and C6 pass unchanged on the git-produced lists. C5 is kept and widened:
+`the_answer_is_what_git_log_shows_under_each_configuration` compares with porcelain
+`git log --raw` — what the user sees — over 11 spellings of `diff.renames` against
+6 of `diff.renameLimit`, every commit including the root;
+`a_rename_limit_that_cuts_detection_short_is_reported_exactly_when_git_warns`;
+`a_configuration_git_refuses_is_refused`. New: cancellation of a running
+`diff-tree` by epoch (`a_changes_query_superseded_by_a_newer_epoch_stops_git_and_reports_it`,
+an exhaustive 4,000 x 4,000 search ended mid-run, the command log saying it was
+ended), a query superseded before it starts (no process), the read writing nothing
+(`the_changes_query_writes_nothing`: the whole git directory byte-identical, the
+working tree stat-dirty, `cachetextconv` configured, the textconv never run), a
+partial clone (`in_a_partial_clone_a_rename_search_fails_rather_than_fetching`), and
+a shallow clone's boundary commit (below). Each new rule was mutated by hand — the
+bare key read as off, the culling rule dropped, the 2.33 default dropped, the
+shallow check dropped — and a named test failed each time.
+
+### Found while building, decided without asking
+
+- **A shallow clone's boundary commit** named a parent the clone lacks, so
+  `diff-tree` failed (`fatal: bad object`) where `git log` shows it as a root. The
+  query now compares it with the empty tree
+  (`a_shallow_clones_boundary_commit_is_compared_as_git_log_shows_it`). Its
+  `CommitDetails::parents` still lists that parent: left for a follow-up.
+- **In a blob-less partial clone a rename search fails** (`GitFailed`, nothing
+  fetched), where `git log` would fetch: the read's no-lazy-fetch rule wins over
+  parity. With detection off the same clone answers.
+- **`diff.ignoreSubmodules`** is porcelain config `diff-tree` does not read, so a
+  submodule change it would hide from `git log` is listed. Not handled.
+
+### C14, re-measured
+
+Same machine and repository as phase 02 (AMD Ryzen 7 9800X3D, 60.4 GiB, NVMe,
+rust-lang/rust at `c999cef531e`); `git version 2.56.0` (the baseline measured
+2.55.0); `cargo test --release` (release profile), warm: one run to warm up, then
+the median of seven; `measures_the_diff_queries_against_a_named_repository` with
+`CAIRN_BENCH_REPO`, which only reads the repository.
+
+| Subject | Cairn now (git) | min / max | Cairn before (gix) | git baseline | Bar | |
+| --- | --- | --- | --- | --- | --- | --- |
+| S7 `f0845adb0c1`, 1,017 files | **8.205 ms** | 7.883 / 8.465 | 1.631 ms | 7.9 ms | 100 ms | MET |
+| S1 `cf2dff2b1e3`, 27,592 exact renames | **35.816 ms** | 34.166 / 36.725 | 20.658 ms | 28.6 ms | 500 ms | MET |
+| M1 `5a3292f163d`, 5,602 paths | **83.476 ms** | 80.153 / 84.458 | 2.845 ms | 78.5 ms | 500 ms | MET |
+
+The cost is git's own plus a few milliseconds of parsing and sorting; S1's 27,592
+records are the most of that. **M1's rename pairs: 2,774, equal to git's** — and
+the reporter now asserts every pair, source, destination and score, against
+`git diff-tree -M` on the same commit, not only the count. Not cut short at the
+default limit of 1,000. The content query is unchanged: F7 loaded in 9.024 ms (bar
+100 ms, MET), F1 refused in 0.002 ms and loaded anyway in 128.4 ms.
+
+### For phase 03 and 04
+
+- Phase 04's diff thread holds a `GitBinary` copy (the application's
+  `Discovery`) and calls `Repository::changes` with its epoch; the engine API is
+  synchronous and testable directly, as here.
+- The rename keys are read at repository open: phase 04 decides when the worker
+  reopens, and that is when a config change is seen.
+- `process::registry::tests::a_drop_with_no_reaper_thread_is_logged_once` failed
+  once in six runs of the crate's unit tests during this phase (the record showed
+  `Signal(15)` where it allows `Signal(9)` or `Unknown`), then passed five times
+  running; a timing race in the process manager's own test under load, not in
+  this change. Worth an issue.
+
 ## 2026-09-30 — packet PAUSED: rename parity, decision E, a process manager first
 
 Phase 02 stopped on its rename rule: on `5a3292f163d` gix pairs 231 renames where

@@ -697,7 +697,24 @@ fn top_level_module_declarations(code: &str) -> (BTreeSet<String>, BTreeSet<Stri
 /// state (`matches!(content, DiffContent::Binary { .. })`) is a check, not a view.
 #[test]
 fn every_view_of_a_file_diff_names_every_state() {
-    const DIFF_CONTENT: &str = "DiffContent";
+    every_production_view_names_every_variant("DiffContent");
+}
+
+/// The diff's row enums, `cairn_model::UnifiedRow` and `cairn_model::SideBySideRow`, are read
+/// the same way (phase 07, which brought the second reader): each variant is a kind of row a
+/// view draws — a header, a line on one side or both, git's end-of-file marker — and a
+/// wildcard arm compiles the day another kind lands and draws nothing for it. Production code
+/// only, over every crate's `src/` but the model's and this suite's, as for `DiffContent`.
+#[test]
+fn every_view_of_a_diff_row_names_every_kind_of_row() {
+    for row in ["UnifiedRow", "SideBySideRow"] {
+        every_production_view_names_every_variant(row);
+    }
+}
+
+/// Every production file outside [`DIFF_CONTENT_EXEMPT`] that names `name` reads it by naming
+/// every variant ([`reads_enum_partially`]), and at least one does, so the scan saw a reader.
+fn every_production_view_names_every_variant(name: &str) {
     let crates_dir = repo_root().join("crates");
     let entries = std::fs::read_dir(&crates_dir)
         .unwrap_or_else(|e| panic!("reading {}: {e}", crates_dir.display()));
@@ -730,16 +747,16 @@ fn every_view_of_a_file_diff_names_every_state() {
                 continue;
             }
             let production = code_without_test_modules(&code_without_strings(source));
-            if mentions_crate(&production, DIFF_CONTENT).is_empty() {
+            if mentions_crate(&production, name).is_empty() {
                 continue;
             }
             readers += 1;
-            let hits = reads_enum_partially(&production, DIFF_CONTENT);
+            let hits = reads_enum_partially(&production, name);
             assert!(
                 hits.is_empty(),
-                "{}:{} reads a `DiffContent` through a wildcard arm, a catch-all binding, \
-                 `if let`, `let .. else` or `matches!`. Every state is something a view draws; \
-                 match each one by name (CLAUDE.md, Invariants).",
+                "{}:{} reads a `{name}` through a wildcard arm, a catch-all binding, \
+                 `if let`, `let .. else` or `matches!`. Every variant is something a view \
+                 draws; match each one by name (CLAUDE.md, Invariants).",
                 path.display(),
                 hits[0]
             );
@@ -747,9 +764,55 @@ fn every_view_of_a_file_diff_names_every_state() {
     }
     assert!(
         readers > 0,
-        "no production file outside {DIFF_CONTENT_EXEMPT:?} names `DiffContent`, so this guard \
-         checked nothing. If diffs are read some other way now, move the guard with them."
+        "no production file outside {DIFF_CONTENT_EXEMPT:?} names `{name}`, so this guard \
+         checked nothing. If it is read some other way now, move the guard with it."
     );
+}
+
+/// The matcher, over the row enums' own shapes: a wildcard or catch-all beside a header arm,
+/// an `if let` or `let .. else` taking one kind of row, `matches!` over one, a glob of the
+/// variants and a rename — each caught for `UnifiedRow` and for `SideBySideRow` — and a
+/// match naming every variant, as the views write it, passes.
+#[test]
+fn the_diff_row_matcher_catches_the_shapes_it_claims() {
+    for row in ["UnifiedRow", "SideBySideRow"] {
+        let caught = [
+            (
+                "wildcard arm",
+                format!("match drawn {{\n    {row}::Header(h) => h,\n    _ => return,\n}}"),
+            ),
+            (
+                "catch-all binding",
+                format!(
+                    "match drawn {{\n    {row}::Header(h) => a(h),\n    other => b(other),\n}}"
+                ),
+            ),
+            (
+                "if let",
+                format!("if let {row}::Removed {{ line, .. }} = drawn {{ draw(line) }}"),
+            ),
+            (
+                "let else",
+                format!("let Some({row}::Header(h)) = layout.row(t, o, 0) else {{ return }};"),
+            ),
+            (
+                "matches!",
+                format!("let header = matches!(drawn, Some({row}::Header(_)));"),
+            ),
+            ("glob import", format!("use cairn_model::{row}::*;")),
+            ("renamed import", format!("use cairn_model::{row} as Row;")),
+        ];
+        for (shape, source) in &caught {
+            assert!(
+                !reads_enum_partially(source, row).is_empty(),
+                "the matcher missed the {shape} shape of {row}: {source:?}"
+            );
+        }
+    }
+    let unified = "match drawn {\n    UnifiedRow::Header(h) => a(h),\n    UnifiedRow::Context { line, .. }\n    | UnifiedRow::Removed { line, .. }\n    | UnifiedRow::Added { line, .. } => b(line),\n    UnifiedRow::NoNewlineAtEnd => c(),\n}";
+    assert!(reads_enum_partially(unified, "UnifiedRow").is_empty());
+    let side = "let (left, right) = match drawn {\n    SideBySideRow::Header(h) => (h, h),\n    SideBySideRow::Context { old, new, .. } => (old, new),\n    SideBySideRow::Replaced { old, new, .. } => (old, new),\n    SideBySideRow::Removed { old, .. } => (old, x),\n    SideBySideRow::Added { new, .. } => (x, new),\n    SideBySideRow::NoNewlineAtEnd { old, new } => (old, new),\n};";
+    assert!(reads_enum_partially(side, "SideBySideRow").is_empty());
 }
 
 #[test]

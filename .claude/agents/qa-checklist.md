@@ -123,9 +123,10 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
     is for headless tests, and a render path calling it is a finding); a key event
     handled in `crates/cairn-ui/tests/` (unscanned); and whether a new chord is
     right for each platform and clear of the desktop's and Fork's. Also: every
-    `match` over `DiffContent` in a test helper that a view could call names every
-    state, since `every_view_of_a_file_diff_names_every_state` reads production
-    code only.
+    `match` over `DiffContent`, `UnifiedRow` or `SideBySideRow` in a test helper
+    that a view could call names every variant, since
+    `every_view_of_a_file_diff_names_every_state` and
+    `every_view_of_a_diff_row_names_every_kind_of_row` read production code only.
 
 ## Review dispatch
 

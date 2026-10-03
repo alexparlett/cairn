@@ -38,10 +38,14 @@ under the list — behind a draggable, collapsible splitter, with Commit and
 Changes tabs — draws its author, committer, id, parents, message and changed
 files in the Commit tab; a file pressed there has its diff drawn in the Changes
 tab, as the unified rows `git diff` prints — gutters, a marker column, hunk
-headers with git's function context, intra-line ranges, in IBM Plex Mono — under
-Fork's bar of previous and next change and the ignore-whitespace, context and
-entire-file buttons, the context starting at the user's `diff.context`
-(`docs/systems/diff.md`, "The diff view"). Keyboard shortcuts
+headers with git's function context, intra-line ranges, in IBM Plex Mono — or
+side by side, under Fork's bar of previous and next change and the
+ignore-whitespace, context, entire-file and side-by-side buttons, the context
+starting at the user's `diff.context` (`docs/systems/diff.md`, "The diff view").
+The Changes tab is Fork's: a one-line summary, the changed files behind a filter
+answered on a worker, the first file chosen, and one file's diff — its rows, or
+the notice of a state that is not text, with Load Diff for a file past the
+limits and every line past the long-line limit drawn cut. Keyboard shortcuts
 resolve through one accelerator table (`cairn_ui::accelerators`). Nothing else
 mutates a repository, and there is no repository picker: one repository, named
 on the command line.
@@ -51,11 +55,11 @@ on the command line.
 | Path | What lives there |
 | --- | --- |
 | `docs/` | `qa-gate.md` (QA contract), `design/` intent, `prd/` per-packet specs, `systems/` as-built, `work/` in-flight dirs, `research/` evidence (deferred work goes to GitHub issues; `backlog/` is the no-remote fallback) — findings promote research → brainstorm → design/prd → systems (contract: `docs/CLAUDE.md`) |
-| `crates/cairn-model/` | The vocabulary crossing the seam: `Oid`, `RefName`, `CommitSummary`, `CommitDetails`, `ChangeSet`, the `Confirmed` token. Plain data, plus the pure algorithms that produce some of it — the layout one (`LaneAssigner`) and the diff model (`TextDiff` and the hunk, row and patch projections of it, `Selection`, `emit_patch` and the reference `apply_patch`; `docs/systems/diff.md`) — and `Secret`, the one type that holds a credential. Depends on nothing but `zeroize` (for that type) — not `gix`, not `freya`, not the other crates. |
+| `crates/cairn-model/` | The vocabulary crossing the seam: `Oid`, `RefName`, `CommitSummary`, `CommitDetails`, `ChangeSet`, the `Confirmed` token. Plain data, plus the pure algorithms that produce some of it — the layout one (`LaneAssigner`) and the diff model (`TextDiff` and the hunk, row and patch projections of it, `ShownDiff` — one answer prepared for the views, built on the worker — `Selection`, `emit_patch` and the reference `apply_patch`; `docs/systems/diff.md`) — and `Secret`, the one type that holds a credential. Depends on nothing but `zeroize` (for that type) — not `gix`, not `freya`, not the other crates. |
 | `crates/cairn-git/` | The repository engine: gitoxide-backed reads — the history walk, and under `src/diff/` the queries answering what a commit changed (asked of `git diff-tree` through `src/reads/`), what one file's change is, and one path's working-tree diff — and under `src/ops/` every write, delegating to the `git` binary per design decision D1. Every `git` process is built in the crate-private `src/process/` — `GitBinary` (startup discovery and the 2.30 floor), `GitEnvironment` (the explicitly built environment, the only place a `Command` is built), `Askpass` (where git and ssh are sent for a secret), the runner, which streams and can kill a process, and each repository's registry of running invocations and its command log — and an invocation is typed a read or a write, a write needing the `WriteAuthority` only `ops/` can construct. `src/ops/` holds `fetch`, the first verb (not destructive, so it takes no `Confirmed`), and the confirmation-seal placeholder, and re-exports what the application needs of `process/`; `src/reads/` is where each read `git` answers lives, one named function each: today `changes`, `git diff-tree` for the changes query, whose rename and copy pairs gix and git disagree on; `patches`, `git diff-tree -p` for the content query's changed lines and function context, whose line diff gix and git disagree on too; `diff_attributes`, `git check-attr`, which says whether a path's diff driver names its own algorithm; and `working_tree_patch`, one path's staged, unstaged or untracked diff (`git diff-index --cached`, `git diff-files`, `git diff --no-index`), which reads the working tree through git so its side is git's form of the file. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
 | `crates/cairn-askpass/` | The askpass helper binary `git` and `ssh` run to ask for a secret, and the library half — the `Channel` the application listens on. Links `cairn-model` and `zeroize` only: it runs in a process holding a plaintext secret. Never names the engine, the toolkit or a logging crate. |
-| `crates/cairn-ui/` | Freya components. Render `cairn-model` values, report intent through `EventHandler` props. `src/accelerators.rs` is the accelerator table, the one render file that names a modifier; `src/diff_view.rs` the unified diff view, `src/diff_header.rs` its bar (whose glyphs `src/toggle_glyphs.rs` draws), `src/columns.rs` the terminal column widths tabs stop by, `src/diff_settings.rs` the settings every diff view shares and `src/diff_palette.rs` the diff's colour tokens and typeface. Must never depend on `gix` or `cairn-git`, and must never touch the filesystem. |
-| `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. `src/worker/` is everything that may wait: `git` found once per application (`discovery.rs`), each repository's threads (`pool.rs`), the routing table from query lane to thread (`routing.rs`) and the per-lane epochs (`epoch.rs`), the diff thread (`diff_lane.rs`), the network lane (`network_lane.rs`) and the askpass acceptor; `src/diff_state.rs` is the diff selection and the answers kept for it; `src/selection.rs` chooses a row and asks what it changed; `src/detail_pane.rs` draws the pane for the selection now; `src/diff_actions.rs` chooses a file, changes the shared diff settings and moves between changes; `src/shortcuts.rs` is what each accelerator, and each button of the diff's bar, does; `assets/fonts/` holds the embedded IBM Plex Mono and its licence; `src/closing.rs` is the window's close hook, which asks the worker to close and never waits. |
+| `crates/cairn-ui/` | Freya components. Render `cairn-model` values, report intent through `EventHandler` props. `src/accelerators.rs` is the accelerator table, the one render file that names a modifier; `src/diff_view.rs` the diff view, drawing `src/unified_rows.rs` or `src/side_by_side_rows.rs` (each from `src/diff_row_parts.rs`), `src/diff_notice.rs` what stands in place of rows, `src/changes_list.rs` the Changes tab's filtered file list and summary, `src/diff_header.rs` its bar (whose glyphs `src/toggle_glyphs.rs` draws), `src/columns.rs` the terminal column widths tabs stop by, `src/diff_settings.rs` the settings every diff view shares and `src/diff_palette.rs` the diff's colour tokens and typeface. Must never depend on `gix` or `cairn-git`, and must never touch the filesystem. |
+| `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. `src/worker/` is everything that may wait: `git` found once per application (`discovery.rs`), each repository's threads (`pool.rs`), the routing table from query lane to thread (`routing.rs`) and the per-lane epochs (`epoch.rs`), the diff thread (`diff_lane.rs`), the network lane (`network_lane.rs`) and the askpass acceptor; `src/diff_state.rs` is the diff selection and the answers kept for it; `src/selection.rs` chooses a row and asks what it changed; `src/detail_pane.rs` draws the pane for the selection now and `src/changes_tab.rs` its Changes tab; `src/file_filter.rs` the Changes tab's filter as the window keeps it; `src/diff_actions.rs` chooses a file, changes the shared diff settings and moves between changes; `src/shortcuts.rs` is what each accelerator, and each button of the diff's bar, does; `assets/fonts/` holds the embedded IBM Plex Mono and its licence; `src/closing.rs` is the window's close hook, which asks the worker to close and never waits. |
 | `crates/cairn-guards/` | Test-only. The deterministic enforcement twins for the Invariants below; nothing depends on it. |
 | `scripts/`, `.githooks/`, `.github/` | The enforcement layer (contract: `docs/qa-gate.md`). |
 
@@ -273,7 +277,8 @@ Project invariants:
   imports and qualified paths, with the debris hook echoing the same rule in
   milliseconds.
 - **Outside `cairn-model`, a `RowContent` — and, in production code, a
-  `DiffContent` — is read by naming every variant.** No
+  `DiffContent`, a `UnifiedRow` or a `SideBySideRow` — is read by naming every
+  variant.** No
   `_ =>`, catch-all binding (`other`, `ref x`, `&_`) or `Some(_)`-beside-
   `Some(RowContent::..)` arm in a match that names it, no `if let`, `while let`,
   let-chain or `let .. else` over it, no `matches!` over it, and no `use` that
@@ -293,7 +298,13 @@ Project invariants:
   file and through no other declaration (`#[cfg(not(test))] mod x;` keeps `x`
   scanned; self-tested in `the_diff_content_matcher_catches_the_shapes_it_claims`),
   and `tests/` are left out, since a test asserting one state is a check rather than a view; that a test
-  helper of this kind is not used to draw is the same review's.
+  helper of this kind is not used to draw is the same review's. The diff's row
+  enums, `UnifiedRow` and `SideBySideRow`, are held to the same matcher over the
+  same files by `every_view_of_a_diff_row_names_every_kind_of_row` (self-test
+  `the_diff_row_matcher_catches_the_shapes_it_claims`, every shape spelled for
+  both enums), since phase 07 brought their second reader; the residuals are
+  `DiffContent`'s (a helper handing out one kind of row and read partially, or a
+  `type` alias for either enum, is `qa-checklist`'s).
 - **Only `cairn-git/src/ops/` mutates a repository**, whether through gitoxide or
   a `git` subprocess. Primary enforcement is the type: a `git` invocation is
   built as a read or a write (`GitBinary::read_invocation`,
@@ -641,11 +652,17 @@ Project invariants:
     parent with `selection::loaded_row`, a scan of every loaded row, once per
     press on the UI thread — and the Commit tab builds its header (proportional
     to the commit's message, never to its files) once per commit, cached on its id.
-    A file's diff is prepared once on the UI thread as its answer arrives
-    (`cairn_ui::ShownDiff::new`, in `DiffState::file_arrived`): its row index,
-    proportional to its changes, and one pass over its bytes for the widest line —
-    bounded by R2.6's ceilings by default, and by the 64 MiB load-anyway ceiling
-    for a file loaded past them.
+    A file's diff is prepared once, on the diff thread that answered it
+    (`cairn_model::ShownDiff::new`, in `worker/diff_lane.rs`; the window only keeps
+    the value, `DiffState::file_arrived`): both rows' indexes, proportional to its
+    changes, and one pass over its drawn bytes for the widest line — a line past
+    the long-line limit counted to its cut — bounded by R2.6's ceilings by default,
+    and by the 64 MiB load-anyway ceiling for a file loaded past them. The Changes
+    tab's filter is a pass over every path of a change set, run on the repository
+    thread in a lane of its own (`Request::FilterFiles`), never on the UI thread;
+    the window keeps the indices it answers (`file_filter.rs`), and the list reads
+    the chosen file's index from `DiffState` rather than searching the change set
+    for it.
 
   Whether the virtualizing view really builds only what its viewport shows is
   pinned by a second, behavioural twin:
@@ -656,7 +673,10 @@ Project invariants:
   `only_a_viewport_of_files_is_built_however_many_the_commit_touched`, and for a
   file's diff rows, `only_a_viewport_of_diff_rows_is_built_however_long_the_file`
   (`crates/cairn-ui/tests/diff_view.rs`, which also scrolls to the end and requires
-  the projection's last row there), hold the other two lists to the same. They count
+  the projection's last row there) and its side-by-side twin
+  `only_a_viewport_of_side_by_side_rows_is_built_however_long_the_file`, and for the
+  Changes tab's files, `a_list_of_55184_files_builds_one_viewport_filtered_or_not`
+  (`crates/cairn-ui/tests/changes_list.rs`), hold the other lists to the same. They count
   rows built, not work done: whether per-frame work grows with scroll depth while
   that count stays flat stays `responsiveness-reviewer`'s.
 

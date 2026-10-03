@@ -309,8 +309,18 @@ Project invariants:
   what no twin sees is a path-call start inside `process/environment.rs`, the
   one file allowed to name `Command`. (`nix` named outside `process/` is
   caught by the process twin, and `fork` inside it is `unsafe`, which the
-  workspace forbids.) That is `qa-checklist`'s (its item 7). Whether a read in `reads/` really runs query plumbing,
-  `status` or `diff --no-index` — `GIT_OPTIONAL_LOCKS=0` covers `status` alone, so a porcelain `diff`
+  workspace forbids.) That is `qa-checklist`'s (its item 7). The one porcelain
+  verb a read runs is pinned by
+  `the_one_porcelain_read_is_diff_no_index_in_the_working_tree_read` (self-test
+  `the_porcelain_read_matcher_catches_the_shapes_it_claims`): in the production
+  code of `crates/cairn-git/src/reads/`, the exact literal `"diff"` appears only
+  in `reads/working_tree.rs`, once, with `"--no-index"` the next literal on its
+  line and `"/dev/null"` in the file (the `diff` attribute's two lines in
+  `reads/attributes.rs` excused by `DIFF_ATTRIBUTE_LINES`, each required to
+  still match). Whether a read in `reads/` really runs query plumbing,
+  `status` or `git diff --no-index -- /dev/null <path>` beyond that literal —
+  a verb built at run time (`format!`, `concat!`, bytes) is not seen, and
+  `GIT_OPTIONAL_LOCKS=0` covers `status` alone, so a porcelain `diff`
   built as a read still rewrites the index, and a plumbing writer built as one
   writes whatever it writes — is `destructive-ops-reviewer`'s (its check 10).
 - **Every `git` subprocess runs with an environment Cairn built, and that

@@ -723,7 +723,7 @@ impl Parser {
         self.flush()?;
         let files = self
             .records
-            .finish("diff")
+            .finish("a working-tree read")
             .map_err(|error| error.to_string())?;
         if !files.is_empty() && !self.in_patches && !raw_only {
             return Err("raw records with no patches after them".to_owned());
@@ -737,7 +737,9 @@ impl Parser {
         if !self.in_patches {
             return None;
         }
-        std::mem::take(&mut self.records).finish("diff").ok()
+        std::mem::take(&mut self.records)
+            .finish("a working-tree read")
+            .ok()
     }
 
     /// Reads what is left of the output after its last newline, and refuses an answer

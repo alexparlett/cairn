@@ -131,9 +131,18 @@
 //! out by its tests; that only this module and `ops/` name the runner is
 //! `the_runner_is_named_only_by_ops_and_reads`; that a read cannot build a
 //! write is the compiler's, because only `ops/` can construct the
-//! `WriteAuthority` a write needs. That each function here runs query
-//! plumbing, `status` or `diff --no-index` is a review obligation: a token scan cannot
-//! tell `diff-tree` from `diff` in an argument list built at run time.
+//! `WriteAuthority` a write needs; and that the porcelain verb is built once,
+//! as `--no-index` against `/dev/null`, is
+//! `the_one_porcelain_read_is_diff_no_index_in_the_working_tree_read` (matcher
+//! self-test `the_porcelain_read_matcher_catches_the_shapes_it_claims`): the
+//! exact literal `"diff"` appears in this module's production code only in
+//! `working_tree.rs`, once, with `"--no-index"` the next literal on its line
+//! and `"/dev/null"` in the file — the `diff` attribute's two lines in
+//! `attributes.rs` excused by name. What it cannot see is a review obligation
+//! (`destructive-ops-reviewer`, check 10): a verb built at run time — by
+//! `format!`, `concat!` or from bytes — and whether every other verb a read
+//! runs is query plumbing or `status`, since a token scan cannot tell
+//! `diff-tree` from `update-index` by what it does.
 
 mod attributes;
 mod changes;

@@ -96,6 +96,9 @@ WARNING tier:
    index, so it has none to refresh. The exception is that mode alone: `git
    diff` without `--no-index`, or `--no-index` against anything but
    `/dev/null` and that path, or built anywhere else, is still a finding.
+   The literal is pinned by
+   `the_one_porcelain_read_is_diff_no_index_in_the_working_tree_read` — run
+   it; what it cannot see, a verb built at run time, is this check.
    A read runs with `GIT_OPTIONAL_LOCKS=0`, which only `status`
    honours, so a porcelain `diff` or `describe --dirty` built as a read still
    rewrites the index, and a plumbing writer (`update-ref`, `update-index`,

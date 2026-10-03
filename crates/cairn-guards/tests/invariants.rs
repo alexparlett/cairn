@@ -11,8 +11,9 @@ use cairn_guards::{
     constructs_struct, declared_dependencies, declares_publicly, derives_or_implements,
     gate_command_assignments, gate_dispatch_arms, gate_full_sequence, gate_function_commands,
     implements_type, job_env_entries, mentions_crate, names_gitoxide_mutation,
-    reads_row_content_partially, renames_type, renders_in_a_macro, repo_root, rust_sources,
-    spawns_git, structs_with_a_field_naming, types_containing, waits_on_work,
+    production_string_literals, reads_row_content_partially, renames_type, renders_in_a_macro,
+    repo_root, rust_sources, spawns_git, structs_with_a_field_naming, types_containing,
+    waits_on_work,
 };
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
@@ -1445,6 +1446,266 @@ fn the_runner_is_named_only_by_ops_and_reads() {
              WriteAuthority can be named or built (process-manager G1)"
         );
     }
+}
+
+/// The one file that may build the one porcelain read, `git diff --no-index`.
+const PORCELAIN_READ_FILE: &str = "crates/cairn-git/src/reads/working_tree.rs";
+
+/// The lines of `reads/` whose literal `"diff"` is not the verb: the `diff` ATTRIBUTE, which
+/// `git check-attr` is asked for and answers with. Each row is the file and the whole
+/// trimmed line, and must still match, so a row outliving its line fails rather than
+/// excusing whatever lands there next.
+const DIFF_ATTRIBUTE_LINES: &[(&str, &str)] = &[
+    (
+        "crates/cairn-git/src/reads/attributes.rs",
+        r#"const ARGUMENTS: [&str; 4] = ["check-attr", "--stdin", "-z", "diff"];"#,
+    ),
+    (
+        "crates/cairn-git/src/reads/attributes.rs",
+        r#"if named.as_slice() == path.as_bytes() && attribute.as_slice() == b"diff" =>"#,
+    ),
+];
+
+/// What the reads of `reads/` say about the porcelain verb `diff`, as `path:line ..` for each
+/// way they break the one accepted exception: the exact literal `"diff"` (plain, byte or raw)
+/// appears in production code of [`PORCELAIN_READ_FILE`] alone, exactly once, with the next
+/// literal on its line `"--no-index"`, and that file's production code holds `"/dev/null"`
+/// — but for the attribute lines of [`DIFF_ATTRIBUTE_LINES`], each of which must match.
+/// Comments and test modules are not read; a verb built by `format!` or `concat!` is not
+/// seen.
+fn porcelain_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut verbs = 0usize;
+    let mut has_null_device = false;
+    let mut attribute_lines_seen = vec![false; DIFF_ATTRIBUTE_LINES.len()];
+    for (path, source) in files {
+        let literals = production_string_literals(source);
+        let source_lines: Vec<&str> = source.lines().collect();
+        let at = |line: usize| format!("{}:{line}", path.display());
+        let home = *path == Path::new(PORCELAIN_READ_FILE);
+        if home {
+            has_null_device = literals.iter().any(|(_, text)| text == "/dev/null");
+        }
+        for (index, (line, text)) in literals.iter().enumerate() {
+            if text != "diff" {
+                continue;
+            }
+            let written = source_lines.get(line - 1).map_or("", |text| text.trim());
+            let attribute = DIFF_ATTRIBUTE_LINES
+                .iter()
+                .position(|(file, exact)| *path == Path::new(file) && written == *exact);
+            if let Some(row) = attribute {
+                attribute_lines_seen[row] = true;
+                continue;
+            }
+            verbs += 1;
+            if !home {
+                found.push(format!(
+                    "{} names the porcelain verb `diff` outside {PORCELAIN_READ_FILE}",
+                    at(*line)
+                ));
+                continue;
+            }
+            let beside = literals
+                .get(index + 1)
+                .is_some_and(|(next_line, next)| next_line == line && next == "--no-index");
+            if !beside {
+                found.push(format!(
+                    "{} names `diff` without `--no-index` beside it on its line",
+                    at(*line)
+                ));
+            }
+        }
+    }
+    if verbs != 1 {
+        found.push(format!(
+            "reads/ names the verb `diff` {verbs} times in production code; the one accepted \
+             porcelain read is built once, in {PORCELAIN_READ_FILE}"
+        ));
+    }
+    if !has_null_device {
+        found.push(format!(
+            "{PORCELAIN_READ_FILE} no longer names `/dev/null`, the one side `--no-index` is \
+             accepted against"
+        ));
+    }
+    let scanned_attributes = files.iter().any(|(path, _)| {
+        DIFF_ATTRIBUTE_LINES
+            .iter()
+            .any(|(file, _)| *path == Path::new(file))
+    });
+    for ((file, exact), seen) in DIFF_ATTRIBUTE_LINES.iter().zip(attribute_lines_seen) {
+        if scanned_attributes && !seen {
+            found.push(format!(
+                "DIFF_ATTRIBUTE_LINES excuses `{exact}` in {file}, which no longer holds it: \
+                 remove the row"
+            ));
+        }
+    }
+    found
+}
+
+/// The one porcelain verb a read runs is `git diff --no-index`, built once, by the
+/// working-tree read, against `/dev/null` (the user's decision of 2026-10-03; check 10 of
+/// `destructive-ops-reviewer`). Porcelain `git diff` against the working tree refreshes the
+/// index whatever `GIT_OPTIONAL_LOCKS` says, so a second `"diff"` in `reads/` — a porcelain
+/// diff built as a read — is the regression this catches. Scoped to that literal; a verb
+/// built at run time (`format!`), and whether every other verb a read runs is query
+/// plumbing, stay the reviewer's.
+#[test]
+fn the_one_porcelain_read_is_diff_no_index_in_the_working_tree_read() {
+    let sources = rust_sources(READS_DIR);
+    assert!(
+        sources
+            .iter()
+            .any(|(path, _)| path == Path::new(PORCELAIN_READ_FILE)),
+        "{PORCELAIN_READ_FILE} is gone; this guard names it as the home of the one porcelain \
+         read — move the guard with the read"
+    );
+    for (file, _) in DIFF_ATTRIBUTE_LINES {
+        assert!(
+            sources.iter().any(|(path, _)| path == Path::new(file)),
+            "{file} is gone, and DIFF_ATTRIBUTE_LINES still excuses lines in it: remove its rows"
+        );
+    }
+    let files: Vec<(&Path, &str)> = sources
+        .iter()
+        .map(|(path, source)| (path.as_path(), source.as_str()))
+        .collect();
+    let found = porcelain_read_violations(&files);
+    assert!(
+        found.is_empty(),
+        "the porcelain read escaped its one accepted shape: {found:?}. A read runs query \
+         plumbing, `status`, or `git diff --no-index -- /dev/null <path>` built in \
+         {PORCELAIN_READ_FILE}; porcelain `git diff` rewrites the index it reads."
+    );
+}
+
+#[test]
+fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
+    let home = Path::new(PORCELAIN_READ_FILE);
+    let other = Path::new("crates/cairn-git/src/reads/changes.rs");
+    let accepted =
+        "fn a() { args.extend([\"diff\", \"--no-index\"]); args.extend([\"--\", \"/dev/null\"]); }";
+    let verdict = |files: &[(&Path, &str)]| porcelain_read_violations(files);
+    assert!(
+        verdict(&[(home, accepted)]).is_empty(),
+        "the accepted shape"
+    );
+    assert!(
+        verdict(&[
+            (home, accepted),
+            (other, "fn b() { x.args([\"diff-tree\", \"-p\"]); }")
+        ])
+        .is_empty(),
+        "a plumbing verb that merely starts with diff"
+    );
+
+    let refused: &[(&str, &[(&Path, &str)])] = &[
+        (
+            "a second `diff --no-index` elsewhere in reads/",
+            &[
+                (home, accepted),
+                (other, "fn b() { x.args([\"diff\", \"--no-index\"]); }"),
+            ],
+        ),
+        (
+            "porcelain diff elsewhere",
+            &[(home, accepted), (other, "fn b() { x.arg(\"diff\"); }")],
+        ),
+        (
+            "a second one in the home file",
+            &[(
+                home,
+                "fn a() { [\"diff\", \"--no-index\"]; [\"diff\", \"--no-index\"]; \"/dev/null\"; }",
+            )],
+        ),
+        (
+            "diff without --no-index beside it",
+            &[(home, "fn a() { [\"diff\", \"-p\"]; \"/dev/null\"; }")],
+        ),
+        (
+            "--no-index on another line",
+            &[(
+                home,
+                "fn a() { [\"diff\",\n \"--no-index\"]; \"/dev/null\"; }",
+            )],
+        ),
+        (
+            "no /dev/null",
+            &[(home, "fn a() { [\"diff\", \"--no-index\"]; }")],
+        ),
+        (
+            "no porcelain read at all",
+            &[(home, "fn a() { \"/dev/null\"; }")],
+        ),
+        (
+            "a raw string",
+            &[(home, accepted), (other, "fn b() { x.arg(r#\"diff\"#); }")],
+        ),
+        (
+            "a byte string",
+            &[(home, accepted), (other, "fn b() { x.arg(b\"diff\"); }")],
+        ),
+        (
+            "after a char literal holding a quote",
+            &[
+                (home, accepted),
+                (other, "fn b() { let q = '\"'; x.arg(\"diff\"); }"),
+            ],
+        ),
+    ];
+    for (shape, files) in refused {
+        assert!(!verdict(files).is_empty(), "{shape} was not caught");
+    }
+
+    // The attribute lines are excused only as written, and only while they are there.
+    let attributes = Path::new(DIFF_ATTRIBUTE_LINES[0].0);
+    let both = format!(
+        "fn c() {{\n    {}\n    {}\n}}\n",
+        DIFF_ATTRIBUTE_LINES[0].1, DIFF_ATTRIBUTE_LINES[1].1
+    );
+    assert!(
+        verdict(&[(home, accepted), (attributes, &both)]).is_empty(),
+        "the diff attribute's own lines"
+    );
+    let one = format!("fn c() {{\n    {}\n}}\n", DIFF_ATTRIBUTE_LINES[0].1);
+    assert!(
+        !verdict(&[(home, accepted), (attributes, &one)]).is_empty(),
+        "a stale attribute row was not caught"
+    );
+    let moved = format!(
+        "fn c() {{\n    {}\n    {}\n    x.arg(\"diff\");\n}}\n",
+        DIFF_ATTRIBUTE_LINES[0].1, DIFF_ATTRIBUTE_LINES[1].1
+    );
+    assert!(
+        !verdict(&[(home, accepted), (attributes, &moved)]).is_empty(),
+        "a verb in the attribute file beside its excused lines was not caught"
+    );
+
+    // Not production code, or not a literal: not the matcher's.
+    for (shape, extra) in [
+        ("a comment", "// x.arg(\"diff\");\nfn b() {}"),
+        ("a doc comment", "/// `git diff` is \"diff\"\nfn b() {}"),
+        (
+            "a test module",
+            "#[cfg(test)]\nmod tests {\n    fn t() { x.arg(\"diff\"); }\n}\n",
+        ),
+        (
+            "a longer literal",
+            "fn b() { x.arg(\"diff.noprefix=false\"); }",
+        ),
+    ] {
+        assert!(
+            verdict(&[(home, accepted), (other, extra)]).is_empty(),
+            "{shape} was read as the verb"
+        );
+    }
+    // The literals are read where they are, lines counted through a multi-line string.
+    assert_eq!(
+        production_string_literals("let a = \"x\ny\";\nlet b = \"diff\";"),
+        vec![(1, "x\ny".to_owned()), (3, "diff".to_owned())]
+    );
 }
 
 #[test]

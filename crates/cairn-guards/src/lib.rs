@@ -372,6 +372,78 @@ pub fn code_without_test_modules(code: &str) -> String {
     String::from_utf8(out).unwrap_or_default()
 }
 
+/// Every string literal of `source` outside comments and `#[cfg(test)]` modules, as (1-based
+/// line it opens on, its text between the quotes as written, escapes not interpreted).
+/// Plain, byte and raw strings (`"..."`, `b"..."`, `r#"..."#`) all count; a char literal
+/// (`'"'`) does not open one.
+pub fn production_string_literals(source: &str) -> Vec<(usize, String)> {
+    let code = code_only(source);
+    let strings_blanked = code_without_strings(source);
+    let tests_blanked = code_without_test_modules(&strings_blanked);
+    // A line a test module blanked: it had code, and has none left.
+    let in_test: Vec<bool> = strings_blanked
+        .lines()
+        .zip(tests_blanked.lines())
+        .map(|(before, after)| !before.trim().is_empty() && after.trim().is_empty())
+        .collect();
+    let bytes = code.as_bytes();
+    let is_ident = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    let mut found = Vec::new();
+    let mut line = 1usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        let after_ident = i > 0 && is_ident(bytes[i - 1]);
+        // `r"`, `r#"`, `br"`: a raw string, ended by a quote and as many hashes.
+        let raw_hashes = (byte == b'r'
+            && (!after_ident || (bytes[i - 1] == b'b' && (i < 2 || !is_ident(bytes[i - 2])))))
+        .then(|| bytes[i + 1..].iter().take_while(|&&c| c == b'#').count())
+        .filter(|hashes| bytes.get(i + 1 + hashes) == Some(&b'"'));
+        if let Some(hashes) = raw_hashes {
+            let start = i + hashes + 2;
+            let mut end = start;
+            while end < bytes.len()
+                && !(bytes[end] == b'"'
+                    && bytes[end + 1..].iter().take_while(|&&c| c == b'#').count() >= hashes)
+            {
+                end += 1;
+            }
+            let text = &code[start..end.min(code.len())];
+            found.push((line, text.to_owned()));
+            line += text.matches('\n').count();
+            i = end + hashes + 1;
+            continue;
+        }
+        match byte {
+            b'\n' => {
+                line += 1;
+                i += 1;
+            }
+            b'\'' => match char_literal_end(bytes, i) {
+                Some(end) => i = end + 1,
+                None => i += 1,
+            },
+            b'"' => {
+                let start = i + 1;
+                let mut end = start;
+                while end < bytes.len() && bytes[end] != b'"' {
+                    end += if bytes[end] == b'\\' { 2 } else { 1 };
+                }
+                let end = end.min(bytes.len());
+                let text = &code[start..end];
+                found.push((line, text.to_owned()));
+                line += text.matches('\n').count();
+                i = end + 1;
+            }
+            _ => i += 1,
+        }
+    }
+    found
+        .into_iter()
+        .filter(|(line, _)| !in_test.get(line - 1).copied().unwrap_or(false))
+        .collect()
+}
+
 /// 1-based lines where `source` names the crate `ident` as a path root or import, in code,
 /// including aliases, `::ident` and re-exports.
 pub fn mentions_crate(source: &str, ident: &str) -> Vec<usize> {

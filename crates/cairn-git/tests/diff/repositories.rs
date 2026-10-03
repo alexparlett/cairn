@@ -971,6 +971,106 @@ pub fn discriminating(config: &[(&str, &str)]) -> Repo {
     repo
 }
 
+/// Paths `git diff` quotes or that a careless reader splits: a space, a double quote, a
+/// tab, a newline, a backslash, a non-ASCII letter, glob characters, and a leading `-`, each
+/// edited in the middle; and one renamed with an edit from one such path to another.
+pub const UNUSUAL_PATHS: &[&str] = &[
+    "a b.txt",
+    "q\"t.txt",
+    "tab\t.txt",
+    "nl\n.txt",
+    "back\\slash.txt",
+    "\u{e9}.txt",
+    "[ab].txt",
+    "-lead.txt",
+];
+
+/// [`UNUSUAL_PATHS`] seeded and then each edited, beside `a.txt` and `b.txt`, which a
+/// glob `[ab].txt` would match, unchanged; and `from \"x\".txt` renamed to `to\t\u{e9}.txt`.
+pub fn unusual_paths() -> Repo {
+    let repo = Repo::new("unusual-paths");
+    let body = |path: &str| -> String {
+        (0..12)
+            .map(|line| format!("{path:?} line {line}\n"))
+            .collect()
+    };
+    for path in UNUSUAL_PATHS
+        .iter()
+        .chain(&["a.txt", "b.txt", "from \"x\".txt"])
+    {
+        repo.write(path, body(path).as_bytes());
+    }
+    repo.commit("seed");
+    for path in UNUSUAL_PATHS {
+        repo.write(path, body(path).replace("line 6", "line six").as_bytes());
+    }
+    repo.remove("from \"x\".txt");
+    repo.write(
+        "to\t\u{e9}.txt",
+        body("from \"x\".txt")
+            .replace("line 6", "line six")
+            .as_bytes(),
+    );
+    repo.commit("edit every unusual path");
+    repo
+}
+
+/// Two files renamed with an edit across the `drv` driver's boundary — `drv/in.pl` out to
+/// `out/in.pl`, and `out/out.pl` in to `drv/out.pl` — each long and changed enough that
+/// myers, which stops searching at its cost limit, and minimal give different answers; with
+/// `diff.drv.algorithm = minimal` configured, and `config` after it.
+pub fn renamed_across_a_driver(config: &[(&str, &str)]) -> Repo {
+    let repo = Repo::new("renamed-across-a-driver");
+    repo.config("diff.drv.algorithm", "minimal");
+    for (key, value) in config {
+        repo.config(key, value);
+    }
+    repo.write(".gitattributes", b"drv/** diff=drv\n");
+    // Whether myers stops short of minimal is a property of the content, so each pair is
+    // drawn until git itself shows the two algorithms disagree on it.
+    let mut random = Seeded::new(20_261_004);
+    let mut versions = Vec::new();
+    while versions.len() < 2 {
+        let old = random_lines(&mut random, 3000);
+        let mut new = old.clone();
+        for _ in 0..600 {
+            let at = random.below(new.len());
+            new[at] = random.pick(VOCABULARY).to_owned();
+        }
+        let (old, new) = (joined(&old), joined(&new));
+        repo.write("probe/old", &old);
+        repo.write("probe/new", &new);
+        let under = |algorithm: &str| {
+            repo.run(
+                &[
+                    "diff",
+                    "--no-index",
+                    &format!("--diff-algorithm={algorithm}"),
+                    "probe/old",
+                    "probe/new",
+                ],
+                &[],
+                None,
+            )
+            .1
+        };
+        if under("myers") != under("minimal") {
+            versions.push((old, new));
+        }
+    }
+    repo.remove("probe/old");
+    repo.remove("probe/new");
+    repo.write("drv/in.pl", &versions[0].0);
+    repo.write("out/out.pl", &versions[1].0);
+    repo.commit("seed");
+    repo.remove("drv/in.pl");
+    repo.write("out/in.pl", &versions[0].1);
+    repo.remove("out/out.pl");
+    repo.write("drv/out.pl", &versions[1].1);
+    repo.commit("rename across the driver");
+    repo
+}
+
 /// Whitespace-only edits beside real ones, seeded: indentation changed, trailing blanks
 /// added, a tab for spaces, a blank line's spaces, a line split by a space — and files with
 /// both, and one with only a real edit.

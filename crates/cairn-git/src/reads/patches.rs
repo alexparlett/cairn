@@ -1039,6 +1039,29 @@ mod tests {
         );
     }
 
+    /// Under `-w` the old side is not checked for a context line, so the new side is the
+    /// only check left on it: a context line that is the old side's but not the new blob's
+    /// — git read another new side than the caller did — refuses the reading, which the
+    /// content query reports as `Error::ContentReadsDisagree`. Caught by: dropping the
+    /// new-side check of a context line, which leaves a `-w` reading unchecked there.
+    #[test]
+    fn under_ignored_whitespace_a_context_line_not_the_new_sides_refuses_the_reading() {
+        let patch = "diff --git a/f b/f\n@@ -1,3 +1,3 @@\n   a\n-b\n+B\n c\n";
+        let patches = parse(&output(&[record("M", &["f"])], patch)).unwrap();
+        let text = patches[0].text.as_ref().unwrap();
+        let old = split_lines(b"  a\nb\nc\n");
+        let stale_new = split_lines(b"a\nB\nc\n");
+        assert!(
+            text.read_against(&old, &stale_new, true).is_err(),
+            "a context line that is not the new side's was accepted under -w"
+        );
+        assert!(
+            text.read_against(&old, &split_lines(b"  a\nB\nc\n"), true)
+                .is_ok(),
+            "the passing twin"
+        );
+    }
+
     /// `\ No newline at end of file` belongs to the line before it, inside a hunk or at its
     /// end, and is read by its first byte. Caught by: counting it as a line, or attaching it
     /// to the wrong one.

@@ -710,3 +710,212 @@ fn a_file_git_is_not_asked_about_still_reads_as_git_diff_shows_it() {
     }
     assert_eq!(skipped, 16);
 }
+
+/// What the user's `git diff -U3` prints for `file` of `HEAD`, its paths given as literal
+/// pathspecs and the whole output read, so a path git quotes in its `diff --git` line (or a
+/// glob character in it) is still one file's answer: the output is required to hold exactly
+/// one file.
+fn literal_git_view(repo: &Repo, file: &ChangedFile, config: &[&str]) -> Vec<Hunk> {
+    let (old_path, new_path) = (file.old_path.display(), file.new_path.display());
+    let mut args: Vec<&str> = config.to_vec();
+    args.extend([
+        "--literal-pathspecs",
+        "diff",
+        "-U3",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+    ]);
+    args.extend_from_slice(detection(file));
+    args.extend(["HEAD^", "HEAD", "--", &new_path]);
+    if old_path != new_path {
+        args.push(&old_path);
+    }
+    let out = repo.git(&args);
+    assert_eq!(
+        out.lines()
+            .filter(|line| line.starts_with("diff --git "))
+            .count(),
+        1,
+        "git diff for {new_path:?} is not one file's: {out}"
+    );
+    hunks_of(&out)
+}
+
+/// `git diff --name-status -z` of `HEAD` as (status letter, old path, new path).
+fn name_status(repo: &Repo) -> std::collections::BTreeSet<(char, Vec<u8>, Vec<u8>)> {
+    let out = repo.git(&["diff", "--name-status", "-z", "-M", "HEAD^", "HEAD"]);
+    let mut fields = out.split('\0').filter(|field| !field.is_empty());
+    let mut found = std::collections::BTreeSet::new();
+    while let Some(status) = fields.next() {
+        let letter = some(status.chars().next(), "a status letter");
+        let first = some(fields.next(), "a path").as_bytes().to_vec();
+        let second = if matches!(letter, 'R' | 'C') {
+            some(fields.next(), "a second path").as_bytes().to_vec()
+        } else {
+            first.clone()
+        };
+        found.insert((letter, first, second));
+    }
+    found
+}
+
+fn letter(status: &ChangeStatus) -> char {
+    match status {
+        ChangeStatus::Added => 'A',
+        ChangeStatus::Deleted => 'D',
+        ChangeStatus::Modified => 'M',
+        ChangeStatus::TypeChanged => 'T',
+        ChangeStatus::Renamed(_) => 'R',
+        ChangeStatus::Copied(_) => 'C',
+    }
+}
+
+/// Every file of `HEAD` asked about alone and through Expand All: the two answers equal,
+/// and each equal to `git diff` for its paths, under `config` (`-c` pairs, as git's own
+/// global options). Returns how many files were compared.
+fn alone_and_expanded_read_as_git_diff(repo: &Repo, config: &[&str]) -> usize {
+    let engine = ok(Repository::discover(repo.path()), "the fixture opens");
+    let mut session = ok(engine.diff_session(), "a diff session");
+    let head = repo.rev("HEAD");
+    let request = ChangesRequest::commit(head);
+    let set = ok(
+        session.changes(super::git(), &request, &CancelSignal::new()),
+        "the changes query answers",
+    );
+    let options = ContentOptions {
+        load_anyway: true,
+        ..ContentOptions::default()
+    };
+    let all = ok(
+        session.file_diffs(super::git(), &request, &set, &options, &CancelSignal::new()),
+        "Expand All answers",
+    );
+    assert_eq!(all.len(), set.files.len());
+    for (expanded, file) in all.iter().zip(&set.files) {
+        let alone = ok(
+            session.file_diff(super::git(), &request, file, &options, &CancelSignal::new()),
+            "a file diff",
+        );
+        assert_eq!(
+            expanded, &alone,
+            "{:?}: Expand All against alone",
+            file.new_path
+        );
+        assert_eq!(
+            cairn_view(&alone, Context::lines(3), false),
+            literal_git_view(repo, file, config),
+            "{:?} against git diff",
+            file.new_path
+        );
+    }
+    set.files.len()
+}
+
+/// C6 on paths git quotes: a space, a double quote, a tab, a newline, a backslash, a
+/// non-ASCII letter, glob characters and a leading `-`, each edited, and a rename from one
+/// such path to another. The changes query lists exactly `git diff --name-status -z`'s
+/// pairs, and every file reads as `git diff` shows it, alone and through Expand All, whose
+/// one `diff-tree -p` prints most of them under a quoted `diff --git` line. The fixture is
+/// first shown to make git quote. Caught by: a patch matched to its file by the `diff --git`
+/// line's paths, a pathspec read as a glob, or a path read up to a space.
+#[test]
+fn a_path_git_quotes_reads_as_git_diff_shows_it_alone_and_through_expand_all() {
+    let repo = repositories::unusual_paths();
+    let porcelain = repo.git(&["diff", "-M", "HEAD^", "HEAD"]);
+    assert!(
+        porcelain
+            .lines()
+            .filter(|line| line.starts_with("diff --git \""))
+            .count()
+            >= 4,
+        "git quotes too few of the fixture's paths for this to decide anything:\n{porcelain}"
+    );
+
+    let engine = ok(Repository::discover(repo.path()), "the fixture opens");
+    let mut session = ok(engine.diff_session(), "a diff session");
+    let set = ok(
+        session.changes(
+            super::git(),
+            &ChangesRequest::commit(repo.rev("HEAD")),
+            &CancelSignal::new(),
+        ),
+        "the changes query answers",
+    );
+    let listed: std::collections::BTreeSet<(char, Vec<u8>, Vec<u8>)> = set
+        .files
+        .iter()
+        .map(|file| {
+            (
+                letter(&file.status),
+                file.old_path.as_bytes().to_vec(),
+                file.new_path.as_bytes().to_vec(),
+            )
+        })
+        .collect();
+    assert_eq!(listed, name_status(&repo), "the changes query against git");
+    for path in repositories::UNUSUAL_PATHS {
+        assert!(
+            set.files
+                .iter()
+                .any(|file| file.new_path.as_bytes() == path.as_bytes()),
+            "{path:?} is not listed"
+        );
+    }
+    assert!(
+        set.files
+            .iter()
+            .any(|file| matches!(file.status, ChangeStatus::Renamed(_))),
+        "the rename was not found"
+    );
+
+    let compared = alone_and_expanded_read_as_git_diff(&repo, &[]);
+    assert_eq!(compared, repositories::UNUSUAL_PATHS.len() + 1);
+}
+
+/// git chooses a renamed file's diff driver by its OLD path (`run_diff` in `diff.c` looks
+/// the driver up by `one->path`), so with `diff.drv.algorithm = minimal`, a file renamed out
+/// of `drv/` is diffed with minimal and one renamed into it with myers — shown here on git
+/// itself, where the fixture's content tells the two algorithms apart. Each reads as `git
+/// diff` shows it, alone and through Expand All. Before git 2.40 no driver names an
+/// algorithm, and both read as myers. Caught by: the driver looked up by the new path, in
+/// the per-file read or in Expand All.
+#[test]
+fn a_renamed_files_driver_algorithm_is_its_old_paths() {
+    let repo = repositories::renamed_across_a_driver(&[]);
+    let diff = |flags: &[&str], new: &str, old: &str| {
+        let mut args = vec!["diff", "-M", "--no-ext-diff", "--no-color"];
+        args.extend_from_slice(flags);
+        args.extend(["HEAD^", "HEAD", "--", new, old]);
+        repo.git(&args)
+    };
+    for (new, old) in [("out/in.pl", "drv/in.pl"), ("drv/out.pl", "out/out.pl")] {
+        let myers = diff(&["--diff-algorithm=myers"], new, old);
+        let minimal = diff(&["--diff-algorithm=minimal"], new, old);
+        assert!(
+            myers.contains("rename from"),
+            "{old} -> {new} is not a rename"
+        );
+        assert_ne!(
+            myers, minimal,
+            "{old} -> {new}: the fixture does not tell myers from minimal"
+        );
+        let drivers_read = super::git().version()
+            >= cairn_git::ops::GitVersion {
+                major: 2,
+                minor: 40,
+                patch: 0,
+            };
+        let configured = diff(&[], new, old);
+        let expected = if drivers_read && old.starts_with("drv/") {
+            &minimal
+        } else {
+            &myers
+        };
+        assert_eq!(
+            &configured, expected,
+            "{old} -> {new}: git's own rule is not the old path's driver"
+        );
+    }
+    assert_eq!(alone_and_expanded_read_as_git_diff(&repo, &[]), 2);
+}

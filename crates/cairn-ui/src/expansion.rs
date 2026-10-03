@@ -9,7 +9,9 @@
 //! index order with the rows each adds and the rows the opened files before it add, in both
 //! layouts, and an index is placed by a binary search of them — `O(log opened)` per row built,
 //! however many files the commit touched or how deep the list is scrolled. The table is built
-//! again when a file opens, closes or is answered: `O(opened)`, never per frame.
+//! again from the first file that opened, closed or was answered — never per frame — and each
+//! file's row counts are worked out once, as it is set, so a page of Expand All appended after
+//! the files already open costs the page, not every file open before it.
 
 use std::collections::BTreeMap;
 
@@ -55,7 +57,8 @@ struct Placed {
 /// The files of one change set opened in place, by their index in it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Expansion {
-    opened: BTreeMap<usize, Opened>,
+    /// What each file draws, and the rows that adds, unified then side by side.
+    opened: BTreeMap<usize, (Opened, [usize; 2])>,
     placed: Vec<Placed>,
     /// Expand All stopped with its line budget spent, leaving the rest collapsed.
     stopped_at_budget: bool,
@@ -95,7 +98,7 @@ impl Expansion {
 
     /// What the file at `index` draws under its row, if it is open.
     pub fn get(&self, index: usize) -> Option<&Opened> {
-        self.opened.get(&index)
+        self.opened.get(&index).map(|(opened, _)| opened)
     }
 
     pub fn is_open(&self, index: usize) -> bool {
@@ -104,27 +107,43 @@ impl Expansion {
 
     /// The files open, in index order, with what each draws.
     pub fn iter(&self) -> impl Iterator<Item = (usize, &Opened)> {
-        self.opened.iter().map(|(index, opened)| (*index, opened))
+        self.opened
+            .iter()
+            .map(|(index, (opened, _))| (*index, opened))
     }
 
     /// Sets what each file draws, opening any that was not open; returns what each replaced,
-    /// for the caller to let go of off the UI thread. One rebuild however many.
+    /// for the caller to let go of off the UI thread. The table is built again from the first
+    /// file set on.
     pub fn set(&mut self, files: impl IntoIterator<Item = (usize, Opened)>) -> Vec<Opened> {
-        let replaced = files
-            .into_iter()
-            .filter_map(|(index, opened)| self.opened.insert(index, opened))
-            .collect();
-        self.rebuild();
+        let mut first = None::<usize>;
+        let mut replaced = Vec::new();
+        for (index, opened) in files {
+            first = Some(first.map_or(index, |at| at.min(index)));
+            let rows = [opened.rows(false), opened.rows(true)];
+            if let Some((was, _)) = self.opened.insert(index, (opened, rows)) {
+                replaced.push(was);
+            }
+        }
+        if let Some(first) = first {
+            self.rebuild_from(first);
+        }
         replaced
     }
 
     /// Closes the files named; returns what each drew.
     pub fn close(&mut self, files: impl IntoIterator<Item = usize>) -> Vec<Opened> {
-        let closed = files
-            .into_iter()
-            .filter_map(|index| self.opened.remove(&index))
-            .collect();
-        self.rebuild();
+        let mut first = None::<usize>;
+        let mut closed = Vec::new();
+        for index in files {
+            if let Some((opened, _)) = self.opened.remove(&index) {
+                first = Some(first.map_or(index, |at| at.min(index)));
+                closed.push(opened);
+            }
+        }
+        if let Some(first) = first {
+            self.rebuild_from(first);
+        }
         closed
     }
 
@@ -132,7 +151,10 @@ impl Expansion {
     pub fn close_all(&mut self) -> Vec<Opened> {
         self.placed.clear();
         self.stopped_at_budget = false;
-        std::mem::take(&mut self.opened).into_values().collect()
+        std::mem::take(&mut self.opened)
+            .into_values()
+            .map(|(opened, _)| opened)
+            .collect()
     }
 
     /// Whether Expand All stopped with its budget spent: what the tab says beside it.
@@ -144,15 +166,17 @@ impl Expansion {
         self.stopped_at_budget = stopped;
     }
 
-    fn rebuild(&mut self) {
-        let mut before = [0usize; 2];
-        self.placed.clear();
-        self.placed.reserve(self.opened.len());
-        for (index, opened) in &self.opened {
-            let rows = [opened.rows(false), opened.rows(true)];
+    /// The table rebuilt from the file at `first` on: the places before it stand.
+    fn rebuild_from(&mut self, first: usize) {
+        let kept = self.placed.partition_point(|placed| placed.file < first);
+        self.placed.truncate(kept);
+        let mut before = self.placed.last().map_or([0, 0], |last| {
+            [last.before[0] + last.rows[0], last.before[1] + last.rows[1]]
+        });
+        for (index, (_, rows)) in self.opened.range(first..) {
             self.placed.push(Placed {
                 file: *index,
-                rows,
+                rows: *rows,
                 before,
             });
             before = [before[0] + rows[0], before[1] + rows[1]];
@@ -221,9 +245,13 @@ mod tests {
             (3, Opened::Failed("no".to_owned())),
             (7, Opened::Reading),
         ]);
-        // Rows of one height: give the second a different count per layout by hand.
-        expansion.placed[1].rows = [2, 3];
-        expansion.placed[2].before = [3, 4];
+        // Give the second a different count per layout by hand, and place the table again
+        // from it.
+        if let Some((_, rows)) = expansion.opened.get_mut(&3) {
+            *rows = [2, 3];
+        }
+        expansion.rebuild_from(3);
+        assert_eq!(expansion.placed[2].before, [3, 4]);
         for side_by_side in [false, true] {
             let which = layout(side_by_side);
             let mut walked = Vec::new();
@@ -246,6 +274,30 @@ mod tests {
                     assert_eq!(expansion.position(*file, side_by_side), at, "file {file}");
                 }
             }
+        }
+    }
+
+    /// The table built a piece at a time — files appended after those open, one set before
+    /// them, one closed between — is the table built whole. Caught by: a rebuild that starts
+    /// past the first file changed (a stale place after it), or one that drops the places
+    /// before it.
+    #[test]
+    fn a_table_built_a_piece_at_a_time_is_the_table_built_whole() {
+        let mut pieces = Expansion::default();
+        pieces.set([(4, Opened::Reading), (9, Opened::Reading)]);
+        pieces.set([(12, Opened::Failed("x".to_owned())), (15, Opened::Reading)]);
+        pieces.set([(1, Opened::Reading)]);
+        pieces.close([9]);
+        pieces.set([(9, Opened::Reading), (20, Opened::Reading)]);
+        let mut whole = Expansion::default();
+        whole.set(
+            [1, 4, 9, 12, 15, 20]
+                .into_iter()
+                .map(|index| (index, pieces.get(index).cloned().unwrap_or(Opened::Reading))),
+        );
+        assert_eq!(pieces.placed, whole.placed);
+        for at in 0..40 {
+            assert_eq!(pieces.item(at, false), whole.item(at, false), "item {at}");
         }
     }
 

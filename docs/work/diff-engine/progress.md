@@ -3,6 +3,63 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-03 — Phase 06 QA: findings fixed, and the user's four decisions applied
+
+Packet mode, committed to `feature/diff-engine`. The QA round: 15 raw findings plus one
+found while adjudicating, 14 confirmed by `qa-confirm`, C4 dismissed (packet PRs are
+squash-merged, so what it asked of the commit history does not reach `main`).
+
+**The user's decisions (2026-10-03).**
+
+- *Bar toggles: match Fork.* Each button is Fork's glyph (Finding 10: chevrons, `⎵`, `−`,
+  `+` and `↕` over lines, a split rectangle), built from plain shapes — no icon font, and
+  IBM Plex Mono has neither `⎵` nor a chevron — lit in the accent while on, never filled
+  (the vendor, Tracker #2623). Each carries its name for assistive technology and as its
+  tooltip: Fork's where recorded ("Ignore whitespaces", "Decrease number of visible
+  lines", "Increase number of visible lines", "Show entire file"), Cairn's otherwise
+  ("Previous change", "Next change", "Side-by-side diff" — the header toggle's tooltip is
+  not recorded; a search of both trackers on 2026-10-03 found none). Tests find buttons
+  by name, not caption.
+- *Sizing and keys: measure Fork first.* Established and aligned: diff text 11 px (Mac
+  Menlo 11 pt, Findings 17 and 24; Plex Mono's 0.6 em advance gives Menlo's measured
+  6.6) and a 17 px row (Mac's 17 pt pitch, Finding 24). Not established, kept and
+  recorded as Cairn-chosen: the bar's height (30 px, the strip's — the research measured
+  no Fork bar) and the keys of a focused diff (Fork's diff is a text control whose keys
+  move a caret; Fork documents only ⌘↑/↓ and Ctrl+↑/↓, which Cairn has). The colour
+  retune rule and `CURRENT_CHANGE` = the theme's `text_highlight` are recorded as
+  Cairn-chosen. The whole record is the table in `docs/systems/diff.md`, "Measured from
+  Fork, or chosen by Cairn".
+- *`diff.context` live edit: adopted only while the user has not moved the context* —
+  `DiffSettings::configured` already held that rule; T7 below makes the edit reach it.
+- *Tab stops: terminal widths.* `unicode-width` 0.2.2 (MIT OR Apache-2.0, no default
+  features, no dependencies of its own) added to `cairn-ui`, allowlisted in the same
+  commit; `columns::columns` is the one rule for the diff's rows and the Commit tab's
+  message lines, replacing `message_lines`' hand-rolled table. Each new message case was
+  checked against `git log --format=fuller` (git 2.56).
+
+**Fixes, each shown RED under the named mutation (or on the code before the fix), then
+GREEN.**
+
+| Item | Test | RED |
+| --- | --- | --- |
+| T7 (parity) | `session`'s `a_configuration_edit_mid_session_reaches_the_next_answer`, through the real worker: `diff.context` and `diff.interHunkContext` edited mid-session reach the next answer while unmoved; once moved, a `diff.context` edit is sent but not adopted and the inter-hunk context still applies | the code before the fix (the context read once on the repository thread's handle): no second `ConfiguredContext`, the wait at the first edit timed out |
+| T1 | `a_grouping_git_refuses_refuses_every_content_query`: `diff.context=abc` and `diff.interHunkContext=-1` through `file_diff`, `file_diffs`, `working_tree_diff` | `.unwrap_or(Grouping { 3, 0 })` at each of the three reads, one at a time |
+| T2 | `the_view_groups_hunks_as_the_users_git_diff_does` now requires `file_diffs` to equal `file_diff` under `diff.interHunkContext=3` and every text file to carry 3 | `0` passed for the inter-hunk context in `file_diffs` |
+| T6 | `the_whitespace_ignoring_ranges_are_grouped_with_the_inter_hunk_context_too`; the parity test shows the fixture discriminating at plain `git diff` (five), `-w`, `-U1` and `-U1 -w`, and now compares `-U1 -w` too (no fixture change needed) | `inter_hunk` → `0` in `UnifiedLayout::shown`'s `-w` arm |
+| T5 | `intra_line_ranges_are_drawn_in_the_stronger_tint`: the pair at different numbers per side, different ranges | `on_removed_line`/`on_added_line` swapped in `build_row` |
+| T4 | `only_a_viewport_of_diff_rows_is_built_however_long_the_file` counts the rows from the file (`lines + lines/50 + 1`: every line once, the added side of each one-line change, one header — the brief's `lines + 1` would hold only for a file with no change) | `UnifiedLayout::len` one short, which the old comparison of two projections passed |
+| T8 | `previous_and_next_change_stop_at_what_is_drawn`: with `-w` hiding a change, at a context and at the entire file, and at the entire file without `-w` | `ShownDiff` built from `UnifiedLayout::exact` |
+| C2 | `the_embedded_fonts_are_the_roster_each_with_its_licence` (roster `EMBEDDED_FONTS`), self-test `the_embedded_font_matcher_catches_the_shapes_it_claims`; CLAUDE.md invariant and `deny.toml` note in the same commit | a planted `Planted.ttf`; the licence file moved away |
+| Bar | `every_button_is_a_named_glyph_and_an_active_toggle_is_lit_in_the_accent` | an active glyph drawn in the text colour; an active toggle filled |
+| Accent | `the_current_change_is_the_themes_accent` | — (pins the documented equality) |
+| Tabs | `a_tab_after_a_wide_or_combining_character_stops_where_a_terminal_stops`; new rows in `a_message_reads_line_for_line_as_git_log_shows_it` | the code before the change (a column per character; the old table's misses) |
+
+**Recorded, not built.** C1: the `UnifiedRow`/`SideBySideRow` exhaustiveness residual is
+`qa-checklist`'s until phase 07 extends the guard (`docs/systems/diff.md`). The doc's
+"`diff.context` and `diff.interHunkContext` are not read" corrected. Phase 07's
+obligations (R6.9 truncation with Load Diff, `ShownDiff` on the worker, integer offsets in
+`step_change`, the row guard) are in `state.md`.
+
 ## 2026-10-03 — Phase 06: the unified diff view, its font and colours, and the bar
 
 Packet mode, committed to `feature/diff-engine`. Landed; QA is due (the orchestrator

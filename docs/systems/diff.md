@@ -168,8 +168,11 @@ model-level pins and each has a hole a mutation walks through:
 - *The row enums are `RowContent`-class, and still unguarded.* The one view that reads
   `UnifiedRow` (`cairn_ui::diff_view`'s `build_row`) names every variant, and phase 06
   added `NoNewlineAtEnd` without a wildcard to catch it; no guard holds the next reader
-  to that, which stays the review's. `SideBySideRow` has no reader yet and no
-  end-of-file marker: phase 07 draws side-by-side and owes both.
+  to that. Until one does, a partial read of `UnifiedRow` or `SideBySideRow` — a
+  wildcard arm, an `if let`, a `matches!` — is `qa-checklist`'s to catch. Phase 07, which
+  brings the second reader (side-by-side), owes the guard: the row-exhaustiveness matcher
+  (`reads_enum_partially`) extended to both enums. `SideBySideRow` has no reader yet and
+  no end-of-file marker: phase 07 draws side-by-side and owes both.
 
 ## What the engine answers
 
@@ -852,10 +855,16 @@ read.
   algorithm is diffed with that algorithm too (reproduced with 2.40.0 and 2.56.0).
   Cairn answers each file as `git diff <old> <new> -- <path>` does, which is the
   same for every file of the commit whatever its order.
-- **`diff.context` and `diff.interHunkContext` are not read.** The view's context is
-  its own setting (R6.3), and hunks merge at twice the context, as `git diff` does
-  when neither key is set. A user who sets either sees `git diff` group hunks
-  otherwise than Cairn; the changed lines are the same.
+- **`diff.context` and `diff.interHunkContext` are read as porcelain reads them, not
+  passed to git.** The plumbing the content query runs reads neither, so
+  `diff/hunk_grouping.rs` reads both (phase 06): `diff.context` is where a view's
+  context starts (`Repository::configured_context`), the view's own context is the
+  `-U<n>` git is asked at, and `diff.interHunkContext` rides in each answer's
+  `FunctionContext` for the view to group with (`Hunks::of_ranges`, twice the context
+  plus it). A value git refuses is `InvalidConfig` for every content query — one file,
+  Expand All and the working tree
+  (`a_grouping_git_refuses_refuses_every_content_query`) — and Expand All groups as each
+  file alone does (`the_view_groups_hunks_as_the_users_git_diff_does`).
 - **A diff driver named `set`, `unset` or `unspecified`** reads, through
   `git check-attr`, as that state of the attribute rather than as a driver.
 
@@ -1315,7 +1324,11 @@ text — Skia's paragraph indexes UTF-16, measured: a range splitting a surrogat
 draws nothing (`intra_line_ranges_are_drawn_in_the_stronger_tint`,
 `a_range_after_a_wide_character_lands_in_utf16_units`). What a row draws of a line's
 bytes (`diff_line_text::shown_line`): a tab to the next multiple of eight columns, as a
-terminal shows `git diff` (Skia draws a tab as a box, measured); a CRLF file's final
+terminal shows `git diff` (Skia draws a tab as a box, measured), the columns before it
+counted as a terminal counts them — two for an emoji or a CJK ideograph, none for a
+combining mark, a control's picture one — by `unicode-width` (`cairn_ui`'s `columns`, the
+user's decision "terminal widths", 2026-10-03; the Commit tab's message lines use the same
+rule; `a_tab_after_a_wide_or_combining_character_stops_where_a_terminal_stops`); a CRLF file's final
 `\r` not drawn; another C0 control or DEL as its Unicode control picture, which IBM Plex
 Mono 2.5 carries; invalid UTF-8 as one `U+FFFD` per invalid sequence.
 
@@ -1338,7 +1351,12 @@ wider fallback, can run a line past the extent.
 (Finding 10): ↑ and ↓ for previous and next change on the left; the path in IBM Plex
 Mono, the directory muted and the file name in the text colour, a rename's or a copy's
 old path in a tooltip; on the right, Ignore whitespace, Fewer lines, More lines, Entire
-file and Side-by-side, the last drawn disabled until phase 07. Active toggles are filled.
+file and Side-by-side, the last drawn disabled until phase 07. Each button is Fork's glyph
+(`cairn_ui`'s `toggle_glyphs`, built from plain shapes, no icon font): chevrons, `⎵`,
+`−`, `+` and `↕` over lines, a split rectangle. A toggle that is on draws its glyph in the
+accent colour, never filled, as Fork does; each button carries its name — read by assistive
+technology and shown as its tooltip — so its meaning never rests on the glyph
+(`every_button_is_a_named_glyph_and_an_active_toggle_is_lit_in_the_accent`).
 Fewer lines is disabled at one line, and both line buttons while the entire file is
 shown; a disabled button reports nothing
 (`the_bar_reports_each_button_and_holds_fewer_lines_at_one`). With whitespace ignored
@@ -1355,10 +1373,16 @@ diff view, kept for the session, not across sessions (issue #29): the lines of c
 the entire file or not, whitespace ignored or not. Context moves a line per click, never
 below one (`context_moves_a_line_at_a_time_and_never_below_one`); the entire file is a
 toggle that gives back the lines it left. It starts at the user's `diff.context`, raised
-to one — read on the repository thread at open (`Request::ConfiguredContext`,
-`Repository::configured_context`), and taken unless the user has already moved the
-context (`the_configured_context_is_where_the_session_starts_until_the_user_moves_it`,
-`the_configured_context_is_answered_through_the_boundary`); a value git refuses sends
+to one — read on the diff thread, whose handle is the one opened again when the
+configuration moves, when the window asks at open (`Request::ConfiguredContext`,
+`Repository::configured_context`) and sent again each time that handle is opened afresh,
+so an edit to `diff.context` reaches a running session; taken unless the user has
+already moved the context
+(`the_configured_context_is_where_the_session_starts_until_the_user_moves_it`,
+`the_configured_context_is_answered_through_the_boundary`,
+`a_configuration_edit_mid_session_reaches_the_next_answer` — the last also showing
+`diff.interHunkContext` reaching the next answer whether the context was moved or not,
+since every answer reads it afresh); a value git refuses sends
 nothing, and every diff then fails saying so. A setting changed asks the file shown again
 through the file-diff lane — the context is the `-U<n>` git is asked at, so a new context
 is a new query, superseding the one in flight and keyed apart in the thread's cache — and
@@ -1367,7 +1391,7 @@ the answer kept is the one naming the new options
 keeps its scroll across a setting changed, and opens at the top for another file.
 
 **Previous and next change** (`cairn_ui::step_change`, `diff_actions::step`). The bar's
-↑ and ↓, and Fork's chords — Ctrl+↑/↓, ⌘↑/↓ on macOS — heard in `Scope::Detail`, so only
+chevrons, and Fork's chords — Ctrl+↑/↓, ⌘↑/↓ on macOS — heard in `Scope::Detail`, so only
 while focus is inside the detail pane: the diff (focused by a press), the files, the bar.
 One step goes from the change last moved to while the view is still where that step left
 it, and otherwise from the top row in view, so the first press finds the first change at
@@ -1379,6 +1403,26 @@ Changes tab is hidden or the pane collapsed
 `previous_and_next_change_move_the_diff_while_the_pane_has_focus`). With the diff
 focused, the plain arrows scroll a row, Page Up and Page Down a view, Home and End to
 either end, and ← and → a few columns.
+
+**Measured from Fork, or chosen by Cairn.** The user's rule is that Fork is the standard
+for what a user sees, so each such value is one or the other, with its source or its
+reason. Sources are `docs/research/diff-engine/fork-detail-and-diff-ui.md` (Findings by
+number) and `docs/research/diff-engine/fork-shortcuts.md`.
+
+| What | Value | Fork-measured, or Cairn-chosen |
+| --- | --- | --- |
+| Diff text size (`DIFF_FONT_SIZE`) | 11 px | Fork-measured: Mac's default diff font is Menlo 11 pt (Finding 17, two screenshots four years apart) with a 6.6 pt advance (Finding 24); a macOS point is a logical pixel, and Plex Mono's 0.6 em advance at 11 px is the same 6.6. Fork's Windows size and face are not established. |
+| Row pitch (`DIFF_ROW_HEIGHT`) | 17 px, a hunk header the same | Fork-measured: 17 pt on the Mac (Finding 24, a vendor screenshot at 2×, May 2026). Windows' 30–31 px is at an unknown display scale, so not used. |
+| Bar height (`DIFF_HEADER_HEIGHT`) | 30 px | Cairn-chosen: Fork's bar is not measured in the research; 30 lines up with the detail pane's strip above it. |
+| The bar's buttons | chevrons; `⎵`; `−`, `+`, `↕` over lines; a split rectangle | Fork-measured: Finding 10 (vendor screenshots, Mac and Windows, 2025–2026), word wrap and invisibles left out (not in this packet). Drawn from plain shapes, not Fork's artwork. |
+| An active toggle | its glyph in the accent, not filled | Fork-measured: the vendor, Tracker #2623 (Finding 10). |
+| Tooltips and names | "Ignore whitespaces", "Decrease number of visible lines", "Increase number of visible lines", "Show entire file" | Fork-measured: Finding 10. |
+| Tooltips and names | "Previous change", "Next change", "Side-by-side diff" | Cairn-chosen: Fork's are not recorded (the eye button's "Show diff side-by-side (spacebar)" belongs to the quick look, another control); the words Fork's release notes use. |
+| Previous and next change chords | Ctrl+↑/↓, ⌘↑/↓, heard in the detail pane | Fork-measured: `fork-shortcuts.md`. |
+| Keys in a focused diff | ↑/↓ a row, Page Up/Down a view, Home/End either end, ←/→ four columns | Cairn-chosen: Fork's diff is a text control (`NSTextView`, AvalonEdit) whose keys move a caret, and Fork documents none of its own beyond the chords above; Cairn's diff has no caret, so the keys scroll as a list's do. |
+| Tab stops | eight columns, counted in terminal widths | Cairn-chosen (the user's decision "terminal widths"): what `git diff` shows in a terminal. Fork's tab width is a setting whose default is not established (Finding 17). |
+| Colours | Fork's dark values, retuned | Fork-measured values (Finding 25), moved by a Cairn-chosen rule: each keeps its offset from Fork's ground, channel by channel, on Cairn's darker ground, so a tint stands out as much as in Fork (`retuned`, below). |
+| `CURRENT_CHANGE` | the dark theme's `text_highlight` | Cairn-chosen: Fork uses the system accent (Finding 25), which Cairn has no platform call to read; the theme's accent, pinned equal by `the_current_change_is_the_themes_accent`. |
 
 **Colours and typeface** (`cairn_ui::diff_palette`). Named tokens, never literals at a
 call site. Fork's measured dark values (`docs/research/diff-engine/fork-detail-and-diff-ui.md`,
@@ -1405,7 +1449,7 @@ further from the ground than its line. Diff text, the bar's path, and the Commit
 id, parents and paths are drawn in IBM Plex Mono (R6.6, L16): Regular from IBM's release
 `@ibm/plex-mono@2.5.0` (`crates/cairn-app/assets/fonts/IBMPlexMono-Regular.ttf`, with
 `IBMPlexMono-LICENSE.txt`, the SIL Open Font License 1.1, beside it), embedded with
-`LaunchConfig::with_font` under `DIFF_FONT_FAMILY` at 12 px; its advance is 0.6 em
+`LaunchConfig::with_font` under `DIFF_FONT_FAMILY` at 11 px; its advance is 0.6 em
 (`MONO_ADVANCE_EM`, read from its `hmtx` table). The download was the user's approval;
 no other weight is embedded.
 

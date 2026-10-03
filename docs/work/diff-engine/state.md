@@ -31,7 +31,10 @@ full timestamps at their offsets, full id, parent links, whole message, a virtua
 file list with renames' both names and the cut-short notice); the accelerator table
 (R8) and its guarded invariant "no component names a literal modifier" landed, and
 `DiffContent` is held to the RowContent rule in production code. Phase 06 landed
-(2026-10-03), QA due: a file pressed in the Commit tab has its diff drawn in the
+(2026-10-03) and its QA is fixed (the user's decisions recorded in `progress.md`: the bar
+is Fork's named glyphs lit in the accent, sizes are Fork-measured where established, a
+`diff.context` edit is adopted live while the user has not moved the context, and tabs
+stop at terminal widths through `unicode-width`, user-approved): a file pressed in the Commit tab has its diff drawn in the
 Changes tab as the unified rows `git diff` prints (context lines from the new side,
 git's end-of-file marker, hunks grouped with the user's `diff.interHunkContext`, the
 whitespace-ignoring ranges under `-w`), through the virtualising view, under Fork's bar
@@ -84,6 +87,23 @@ with D1, D3, D5 and D6 in `engine.md`, `concurrency.md`, `platform.md` and
   407 ms counting them on the largest subject.
 
 ## Open questions
+
+**For phase 07: what phase 06's QA left owed (recorded 2026-10-03).**
+
+- **R6.9's truncation MUST land with Load Diff.** Today a file loaded past the ceilings
+  draws each long line whole: a 64 MiB one-line file would cost about 100 ms and a
+  75-million-character `String` every time its row is built. The view must not offer
+  Load Diff without the truncation.
+- **Build `ShownDiff` on the worker.** It is built on the UI thread as the answer
+  arrives (`DiffState::file_arrived`), about 39 ms for a 64 MiB loaded file; phase 07
+  moves the preparation to the diff thread and hands the window the prepared value.
+- **`step_change`'s offset arithmetic in integers.** It turns a scroll offset into a row
+  through `f32` (`DIFF_ROW_HEIGHT`) and back; at a very deep row the float loses whole
+  rows. Phase 07 does the arithmetic on integer pixel offsets.
+- **Extend the row-exhaustiveness guard to `UnifiedRow` and `SideBySideRow`** when
+  side-by-side brings the second reader: `reads_enum_partially` over both enums, as for
+  `RowContent` and `DiffContent`. Until then a partial read is `qa-checklist`'s
+  (`docs/systems/diff.md`, "Rows are reached one at a time").
 
 Q1-Q3 in `brainstorm.md`, lettered Q so they cannot be confused with the
 program's O1-O6.
@@ -214,12 +234,15 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | `UnifiedRow::NoNewlineAtEnd`, `UnifiedLayout` (`exact`, `shown`, `row`, `change_rows`, `first_change_from`, `next_change_after`, `previous_change_before`), `UnifiedRows::shown`, `DrawnRanges`, `Hunks::of_ranges`, `FunctionContext::with_inter_hunk_context`/`inter_hunk_context` | model | Phase 06: the unified rows as `git diff [-w]` prints them (context from the new side, the end-of-file marker, no hunk without a change), an owning layout a view keeps across frames, git's grouping with `diff.interHunkContext`. |
 | `Repository::configured_context`, `diff::hunk_grouping::Grouping` | git | Phase 06: `diff.context` (raised to one) and `diff.interHunkContext` read as porcelain reads them; a value git refuses is `InvalidConfig` for every content query; the inter-hunk context carried in each answer's function context. |
 | `ShownDiff`, `UnifiedDiffView`, `DIFF_ROW_HEIGHT`, `NO_NEWLINE_AT_END`, `ChangeCursor`, `step_change` | ui (`diff_view.rs`) | Phase 06: one file's diff prepared once per answer; its rows through `VirtualScrollView` at a fixed height; previous/next change from the view or the change last moved to. |
-| `DiffHeader`, `HeaderAction`, `*_CAPTION`, `HIDDEN_CHANGES_NOTICE`, `DIFF_HEADER_HEIGHT` | ui (`diff_header.rs`) | Phase 06: Fork's bar, buttons only, side-by-side disabled; the notice only when the answer hides a change. |
+| `DiffHeader`, `HeaderAction`, `*_LABEL`, `HIDDEN_CHANGES_NOTICE`, `DIFF_HEADER_HEIGHT` | ui (`diff_header.rs`) | Phase 06: Fork's bar, buttons only, side-by-side disabled; the notice only when the answer hides a change. Phase 06 QA: each button a glyph named with Fork's tooltip where recorded (`*_LABEL`, replacing `*_CAPTION`), lit in the accent while on. |
+| `toggle_glyphs::Glyph` | ui (private) | Phase 06 QA: Fork's glyphs from plain shapes, one colour each. |
+| `columns::columns` | ui (private) | Phase 06 QA: a character's terminal columns (`unicode-width`), the one rule the diff's and the message's tab stops use. |
 | `DiffSettings` | ui (`diff_settings.rs`) | Phase 06: the shared session settings — lines (never below one), entire file, ignore whitespace — starting at the configured context until the user moves it. |
 | `diff_palette` (`REMOVED_TINT`, `ADDED_TINT`, `*_EMPHASIS`, `DIFF_TEXT`, `DIFF_MUTED`, `GUTTER_SEPARATOR`, `HEADER_BAR`, `CURRENT_CHANGE`, `GROUND`, `retuned`, `DIFF_FONT_FAMILY`, `DIFF_FONT_SIZE`, `MONO_ADVANCE_EM`) | ui | Phase 06: Fork's measured dark values retuned to Cairn's ground, and IBM Plex Mono. |
 | `shown_line`, `ShownLine`, `TAB_WIDTH`, `widest_columns` | ui (`diff_line_text.rs`) | Phase 06: a line's bytes as a row draws them (tabs to eight, control pictures, a CRLF `\r` hidden), its intra-line byte ranges carried to UTF-16 units. |
 | `CommitTab::on_file_pressed` | ui | Phase 06: a press distinct from an arrow. |
-| `Request::ConfiguredContext`, `Update::ConfiguredContext`, `RepositoryJob::ConfiguredContext` | app (`worker/`) | Phase 06: `diff.context` read on the repository thread at open; nothing sent for a refused value. |
+| `Request::ConfiguredContext`, `Update::ConfiguredContext`, `Routed::ConfiguredContext`, `DiffJob::ConfiguredContext` | app (`worker/`) | Phase 06: `diff.context`; nothing sent for a refused value. Phase 06 QA (T7): read on the diff thread, whose handle the configuration's freshness reopens, and sent again on every reopen (`RepositoryJob::ConfiguredContext` gone). |
+| `embedded_font_violations`, `EMBEDDED_FONTS` | guards | Phase 06 QA (C2): the fonts directory is exactly the roster, each font beside its licence. |
 | `diff_actions` (`choose_file`, `change_settings`, `configured`, `step`, `options`), `shortcuts::of_header`, `View::{diff_settings, diff_scroll, change_cursor}`, `diff_state::answered_file`, `DiffState::shown_file` | app | Phase 06: choosing a file, the shared settings re-asking through the lane, previous/next change; `select_file` now returns the query and a `Retire` for the replaced diff. |
 | `detail_pane::{NO_FILE_CHOSEN, READING_DIFF, NO_CHANGES_SHOWN, ONLY_WHITESPACE_CHANGED}` | app | Phase 06: the Changes tab's sentences (replacing `CHANGES_NOT_BUILT`). |
 | `Error::ChangesCancelled`, `ContentCancelled`, `ContentReadsDisagree`, `DiffSetup`, `DiffFile`, `UnexpectedGitOutput`, `InvalidConfig`, `NotAWorkTreePath` | git | What the caller of a diff query must handle; `TreeDiff` went with the gix tree walk. `ContentReadsDisagree` is the stale-read guard: git printed lines that are not the lines gix read; ask again. `NotAWorkTreePath`: an untracked path that is empty, absolute or has a `.`/`..` component, refused before anything runs. |
@@ -233,7 +256,7 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | 03 engine, working tree | landed 2026-10-03; **phase 03 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 19 raw, 16 confirmed by `qa-confirm`, QC3 dismissed; every confirmed finding fixed test-first (`progress.md`); the `diff --no-index` exception accepted by the user (2026-10-03); a full read-verb roster guard is a candidate follow-up for the user |
 | 04 worker lanes | landed 2026-10-03; **phase 04 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 17 raw, 15 confirmed plus escalations; the user decided freshness ("stamp what git reads"); every confirmed finding fixed test-first, Expand All's per-file outcomes deferred to phase 08 — `progress.md` |
 | 05 detail pane | landed 2026-10-03; **phase 05 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 26 raw, 15 confirmed by `qa-confirm`, R3/G5 and one more dismissed; every confirmed finding fixed test-first and the user's six decisions applied (`progress.md`): dates in Fork's fixed English format, encodings through `encoding_rs` (user-approved) |
-| 06 unified diff view | landed 2026-10-03; **phase 06 landed, QA due** | `scripts/gate.sh` PASS, `git-floor` included | due: `/qa` with `responsiveness-reviewer` and `test-coverage-auditor` fresh, plus the phase's QA brief |
+| 06 unified diff view | landed 2026-10-03; **phase 06 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 15 raw plus 1 found, 14 confirmed by `qa-confirm`, C4 dismissed; every confirmed finding fixed test-first or recorded for phase 07, and the user's four decisions applied (`progress.md`), `unicode-width` user-approved |
 | 07 Changes tab and side-by-side | not started | — | — |
 | 08 expansion and compare | not started | — | — |
 | 09 QA | not started | — | — |
@@ -262,6 +285,9 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 - Commit explicit paths, never `git add -A`.
 - A new dependency, crate or invariant needs its row in
   `crates/cairn-guards/tests/invariants.rs` in the same commit, or the gate fails.
+- **`unicode-width` 0.2.2** (MIT OR Apache-2.0, `default-features = false`) is
+  `cairn-ui`'s, user-approved 2026-10-03 ("terminal widths"), allowlisted in
+  `crates/cairn-guards/tests/invariants.rs`.
 - **The diff font is in the repository** (user-approved download, 2026-10-03):
   `crates/cairn-app/assets/fonts/IBMPlexMono-Regular.ttf` (173,052 bytes, SHA-256
   `7c6fbddca4b700be918f5f6183d9bd4464fa427fe435f0b480d77fe2bb8c5a43`) with

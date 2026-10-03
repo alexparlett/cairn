@@ -3,6 +3,139 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-03 — Phase 04 QA: every confirmed finding fixed, test-first; freshness is "stamp what git reads"
+
+Packet mode, committed to `feature/diff-engine`. **The round:** 17 raw findings over
+phase 04, 15 confirmed by `qa-confirm`, with escalations. The user decided the cache's
+freshness (P1, P2(a), R3): **stamp what git reads**. The orchestrator took four
+recommendations without asking the user: R2 fixed now rather than in phase 08;
+Expand All's per-file outcomes (R1's second half) deferred to phase 08 (`state.md`);
+on a configuration move only the DIFF thread's handle reopens, the history thread
+keeps its own (it reads no diff key); T1 fixed whatever its severity. Every git
+behaviour below was reproduced on 2.30.9, 2.32.7 and 2.56.0, and every gix API read in
+the vendored 0.87.1 source.
+
+**P2(b), critical (parity): a commit's attributes came from the index alone.**
+`Repository::diff_resource_cache` builds its attribute stack with
+`Source::IdMapping` unless a worktree root is set — and a root also makes
+`Pipeline::convert_to_diffable` read every resource's CONTENT from the working tree
+(`gix-diff-0.67.1/src/blob/pipeline.rs`, `platform.rs`'s `use_id`), so setting one
+was not an option. `Repository::diff_session` now builds the stack itself
+(`attributes_only(.., WorktreeThenIdMapping)`, `IdMapping` when bare, `detach()`) and
+hands it to `gix::diff::resource_cache` with no root; blobs are still read by id.
+`binary_detection_reads_the_attributes_where_git_reads_them` (against `git diff` and
+`git show`, a fresh repository each time): RED on the old session — an unstaged
+`-diff` answered `binary=false` where git said true; with that case skipped, a
+committed `-diff` dropped by the working tree answered `binary=true` where git said
+false — GREEN after, on all three gits; `info/attributes` was already read.
+
+**Found in passing, critical by the same rule, fixed:** where there is no index
+file — a bare repository, or one whose index was removed — git reads NO in-tree
+attributes (2.30.9, 2.32.7, 2.56.0 all print a committed `-diff` file as text), but
+gix's `index_or_load_from_head_or_empty` loaded `HEAD`'s tree and answered binary
+without asking git. The session (and `StagedInputs`) now use `index_or_empty`.
+`where_git_reads_no_attributes_the_commit_reads_none`: RED before (`flagged.dat`
+binary where git says text), and its bare half RED alone under a mutation that kept
+`HEAD`'s tree for a bare repository; GREEN after.
+
+**P1 + P2(a) + R3, the user's decision: stamp what git reads.** `IndexStamp` is gone.
+`cairn_git::DiffInputs` names the files outside the object database a commit's diff
+reads; `crates/cairn-app/src/worker/diff_freshness.rs` stamps them before every query
+(modification and change time in ns, length, inode, device, or missing) in three tiers:
+
+- **Configuration** — every file gix loaded (section metadata, so `include.path` and
+  `includeIf` targets), the system, XDG and global candidates as Cairn's environment
+  names them AND as `git`'s (which carries `HOME` and `XDG_CONFIG_HOME` but no
+  `GIT_CONFIG_*`), `$GIT_DIR/config`, `config.worktree`, every include target whether
+  or not it exists or its condition holds, and `HEAD` where an `onbranch:` condition
+  exists. A move reopens the diff thread's handle through
+  `SharedRepository::reopen_for` — `discover_as` from the path first opened, the
+  version's bare-repository check, the same registry and log; a different git
+  directory is `Error::RepositoryReplaced` — and lets everything go. A failed reopen
+  fails the query and the next query tries again.
+- **Global** — `info/attributes`, `core.attributesFile` (else XDG `git/attributes`),
+  the system `gitattributes`, the working tree's `.gitmodules`; and the index's part
+  by value (`StagedInputs`: every `.gitattributes` entry and `.gitmodules`, else
+  `HEAD`'s), read again only when the index file's stamp or `HEAD` moved, so a
+  stat-only `git update-index --refresh` (whose checksum moves) keeps the cache. A
+  move drops the session and every answer.
+- **Per path** — the working tree's `.gitattributes` above each path. An answer
+  records them (`Dependence`) and a hit re-stamps them; the session records what it
+  read (`SessionReads`), since gix's stack keeps the top of the tree for its life.
+  Memoized per query (`Directories`).
+
+Change sets, decided by experiment: an unstaged `.gitmodules` `ignore = all` hides a
+gitlink from `git diff-tree --raw` (global tier), and rename scoring DOES read
+attributes — an unstaged `*.txt -diff` (worktree or `info/attributes`) turned a CRLF
+file's `R095` into `D`+`A`, since `diff_filespec_is_binary` decides whether CRs are
+skipped in `hash_chars` — so a change set records the directories above every path
+the search could pair (added, deleted, renamed, copied; modified too under copies),
+none with detection off.
+
+**Racy guard:** a stamp whose file's modification or change time is within `SETTLING`
+(2 s) of the query's start matches nothing, and an answer read under one is answered
+but not kept; stamps taken after a read (a change set's directories, a reopened
+handle's configuration against `opened_at`) are safe by the same rule.
+
+Tests, each RED on the pre-fix code (the new boundary tests run in a scratch
+worktree of `80b64e3`) or under the named mutation, GREEN after:
+
+| Test | RED |
+| --- | --- |
+| `an_unstaged_attribute_edit_reaches_a_kept_answer_and_a_new_one` (worktree `.gitattributes`, then `info/attributes`, each against the engine's own fresh answer, pinned to `git show` in `cairn-git`) | pre-fix: "the kept answer did not see -diff"; mutations: hit not checking directories, session ignoring its reads, global tier ignored |
+| `a_configuration_edit_reaches_the_next_answer` (created include target, `$GIT_DIR/config` `diff.algorithm`, `diff.renames` → next change set) | pre-fix: "a created include target was not read" (`myers`); mutation: configuration tier ignored |
+| `a_stat_only_index_refresh_keeps_what_is_kept` (git runs counted) | pre-fix: `(2, 0)` ≠ `(1, 0)`; mutation: index keyed on its file |
+| `each_tier_lets_go_of_what_its_move_makes_stale` (T3 re-pinned) | renewal keeping session and answers; global, configuration, index-key mutations |
+| `the_session_goes_when_a_directory_it_read_moved`, `a_stamp_taken_while_its_file_may_still_change_matches_nothing`, `a_file_replaced_by_another_of_the_same_length_is_seen`, `a_session_is_trusted_only_for_the_directories_it_read_as_they_were` | racy guard off; stamp of mtime and length only |
+| `every_configuration_file_git_reads_is_named_even_one_that_does_not_exist`, `the_attribute_files_git_reads_are_named_where_git_reads_them`, `the_index_is_compared_by_what_it_holds_not_by_its_file`, `opening_again_reads_the_configuration_afresh_and_refuses_another_repository` (`cairn-git`, real git) | include targets unlisted; `HEAD` unlisted for `onbranch`; staged inputs empty; reopen handing back the old handle |
+
+**Cost, measured on `~/Development/bench/rust` (read only, release build):** a query's
+configuration (5 files), global (4) and index stamps plus `HEAD`: 6 µs median, 17 µs
+max; a file diff's directories 1-4 µs; the index moved: gix's reload of 62,892 entries
+14-20 ms, the attribute entries compared in 0.08 ms. A change set's directories: M1
+`5a3292f163d` (5,590 searched paths, 231 directories) 0.6 ms to stamp and 0.14 ms to
+check on a hit; S1 `cf2dff2b1e3` (55,184 paths, 2,490 directories) 5.4 ms and 1.5 ms,
+against its 35 ms query — 75 ms once on a cold page cache.
+
+**R1:** `ContentReadsDisagree` is asked again only for a working-tree target; the
+commit and Expand All paths no longer wrap in `asking_again` (a commit's content
+cannot change between reads). **R2:** `content::file_diffs` checks `cancel` before each
+`alone` file and between files of the assembly (now a loop) —
+`expand_all_superseded_while_its_answers_are_assembled_ends_there` (a cancel that
+fires once the log holds the finished patch read): RED before (`Ok`), GREEN after.
+**R4** documented in `diff_lane.rs`'s module doc and `docs/systems/diff.md`. **R5:**
+`held_bytes` counts changed ranges, whitespace ranges, highlights and function
+context (80 bytes each, xdiff's line; an upper bound) —
+`the_budget_counts_ranges_and_the_overlay_too`, RED with the overlay counted as 0.
+**P3:** the `WORKERS_PER_REPOSITORY` sentence deleted from `history-graph.md`.
+
+**Tests (T1-T9):** T1 asserts the literal 3 (RED under `READ_ATTEMPTS = 1`, which the
+old assertion against the constant passed). T2
+`a_failed_read_is_sent_as_a_failure_naming_its_query` (stub `diff-tree` exits 128): RED
+under `Err(_) => {}` (timed out). T3 above. T4 three `diff_state` tests, one per
+mutation (`select_file` keeping Expand All, `expand_all` keeping the file,
+`expansion_arrived` ignoring options, `failed`'s file arm writing nothing): each RED.
+T5 `every_diff_answer_is_kept_for_its_selection_alone` over the FileDiff, FileDiffs and
+DiffFailed arms: RED under each arm storing whatever arrives and each dropping its own
+selection's answer. T6: the kill stub forks the grandchild before writing its pid.
+T7 `an_identical_ask_is_answered_from_what_is_kept`: RED with either early return
+removed. T8 `expand_all_answers_every_file_through_the_boundary`,
+`a_working_tree_diff_answers_through_the_boundary`. T9: an `old_id` miss, and a
+budget exactly met kept and one byte over refused.
+
+**Decisions taken without asking:** the HEAD-fallback parity fix above; the new
+`Error::RepositoryReplaced`; `Answers` moved to `worker/diff_answers.rs` beside the
+new `worker/diff_freshness.rs`, `diff_lane.rs` keeping the loop; the change set's
+dependence is the searched paths, not every path; a reopen failure fails the query
+and retries next query rather than serving on the old configuration; the git-floor
+counts raised to 61 and 90 (62 and 91 listed).
+
+**Residuals**, in `docs/systems/diff.md` "Known limits": a system file under another
+`sysconfdir` is neither read by gix nor stamped; the includes of a global file only
+`git` reads (when `GIT_CONFIG_GLOBAL` differs) are not named; `%(prefix)` include
+paths are not resolved; a filesystem coarser than 2 s, or future file times, keep
+nothing rather than something wrong.
+
 ## 2026-10-03 — Phase 04 landed: lanes, a diff thread, answers that name their selection
 
 Packet mode, committed to `feature/diff-engine`. The phase doc predates the

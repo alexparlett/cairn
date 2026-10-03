@@ -15,11 +15,14 @@ is git's form of the file (clean filter driver run by git, with the read's
 environment), and every R3.4 state answered. The user accepted `git diff
 --no-index` for an untracked file as the one porcelain exception to the reads rule
 (2026-10-03), its presentation settings pinned by `-c`. Phase 04 landed
-(2026-10-03), QA due: queries are numbered per lane (history, changes, file diff), the
+(2026-10-03) and its QA is fixed: queries are numbered per lane (history, changes, file diff), the
 changes and file-diff lanes run on a `cairn-diff` thread routed to at submit time, a
 superseded diff's `git` is killed by its epoch, and every answer names the selection it
-answers, which `DiffState` checks before the window keeps it; nothing selects or draws
-a diff yet (phase 05).** The diff model exists in
+answers, which `DiffState` checks before the window keeps it; a commit's diff reads
+its attributes where git does (the working tree first, nothing from `HEAD`), and the
+diff thread keeps an answer only while every file git read for it is as it was — the
+user's decision "stamp what git reads" — opening its handle again when the
+configuration moves; nothing selects or draws a diff yet (phase 05).** The diff model exists in
 `cairn-model`, and `cairn-git` answers R2's two queries: the changes query from
 `git diff-tree` through the process manager (decision E, PRD R2.1, R2.2, R2.9 and C14
 amended), honouring `diff.ignoreSubmodules` and `log.showRoot` as the user's `git log`
@@ -90,6 +93,11 @@ notice from it without naming the engine.
 (the commit list's selection is phase 05's to wire), and `FileTarget`/`WorkingSide`
 are re-exported from `worker` for tests only until the window names them. The window
 draws an `Answer` per selection: `Waiting`, `Ready`, or `Failed` with display text.
+
+**For phase 08: Expand All answers per file (phase 04 QA, R1; deferred by the
+orchestrator).** Today one file that fails — a read git fails, a disagreement —
+fails the whole batch as one `DiffFailed`. Phase 08 answers each file's outcome
+beside the others, so one bad file shows its own failure and the rest draw.
 
 **For phase 08: Expand All's lane is ready to page.** `Update::FileDiffs` carries
 `complete`, and `DiffState::expansion_arrived` appends batches; today the diff thread
@@ -165,7 +173,11 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | `diff::submodules::working_tree_ignore` | git (crate-private) | The `--ignore-submodules` value porcelain applies and plumbing does not read: `diff.ignoreSubmodules`, unless the submodule has an `ignore` of its own. |
 | `QueryLane`, `Epoch`, `Epochs::bump(lane)`, `Superseded` | app (`worker/epoch.rs`) | Phase 04, R4.1: epochs numbered per lane; `QueryLane::supersedes` is the rule (a changes query also supersedes the file-diff lane); `Superseded` is the `Cancel` for walks and diff reads alike. |
 | `route`, `Routed`, `RepositoryJob`, `Page`, `thread_of` | app (`worker/routing.rs`) | Phase 04, R4.2: the routing table, applied in `submit`; history to `cairn-repository`, changes and file diff to `cairn-diff`. `thread_of`/`Thread` are the lanes' half, test-only. |
-| `serve_diffs`, `DiffJob`, `READ_ATTEMPTS`, `Answers`, `Kept` | app (`worker/diff_lane.rs`) | Phase 04, R4.2-R4.5: the diff thread; newest request per lane, file diff first, blocks when idle; a disagreeing read asked again up to three times; commit/comparison answers kept, bounded, keyed by everything asked; all kept state let go when the index moves. |
+| `serve_diffs`, `Serving`, `DiffJob`, `READ_ATTEMPTS`, `Kept` | app (`worker/diff_lane.rs`) | Phase 04, R4.2-R4.5: the diff thread; newest request per lane, file diff first, blocks when idle; a disagreeing working-tree read asked again up to three times (a commit's never); kept state renewed per what moved (QA: the handle reopened when the configuration moves). |
+| `Answers`, `searched_paths`, `held_bytes` | app (`worker/diff_answers.rs`) | Phase 04 QA: commit/comparison answers kept, bounded, keyed by everything asked, each with the `Dependence` it read; a hit checks it; the budget counts ranges and the overlay. |
+| `Stamp`, `SETTLING`, `Dependence`, `Directories`, `SessionReads`, `Freshness`, `Moved`, `Checked` | app (`worker/diff_freshness.rs`) | Phase 04 QA, "stamp what git reads": every file a kept answer depends on stamped before each query, three tiers (configuration → reopen; global and staged → drop all; per-path `.gitattributes` → drop that answer, and the session when it read the directory); a stamp within two seconds of its file's change matches nothing. |
+| `DiffInputs`, `StagedInputs`, `Repository::diff_inputs`, `staged_inputs`, `head_id` | git | Phase 04 QA: the files outside the object database a commit's diff reads (configuration with includes and missing files, global attribute files, `.gitmodules`, per-directory `.gitattributes`) and the index's attribute and `.gitmodules` entries by value. |
+| `SharedRepository::reopen_for`, `opened_at`, `Error::RepositoryReplaced` | git | Phase 04 QA: a worker handle opened afresh by the application's route, sharing the registry and log; another repository at the path is refused. |
 | `Comparison`, `WorkingSide`, `DiffOptions`, `FileTarget`, `FileQuery`, `DiffQuery` | app (`worker/request.rs`) | Phase 04, R4.4: what a diff request names and its answer names back. |
 | `Request::Changes`/`FileDiff`/`ExpandAll`, `Update::Changes`/`FileDiff`/`FileDiffs`/`DiffFailed`, `Request::lane()` | app (`worker/request.rs`) | Phase 04: the diff boundary; `lane()` replaced `is_query()`. A superseded query sends nothing. |
 | `DiffState`, `Answer`, `Expanded` | app (`src/diff_state.rs`) | Phase 04, R4.4: the diff selection in `View::diff`; an answer is kept only when it names what is selected now. |
@@ -178,7 +190,7 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | 01 diff model | landed | `scripts/gate.sh` PASS | `qa-checklist`, `test-coverage-auditor` and `responsiveness-reviewer`, adjudicated by `qa-confirm`; confirmed findings fixed or recorded as residuals in `docs/systems/diff.md` |
 | 02 engine, commits | landed 2026-09-18; changes query reworked onto `git diff-tree` 2026-10-03 (decision E) | `scripts/gate.sh` PASS, `git-floor` included | done over the reworked phase (2026-10-03), adjudicated by `qa-confirm`; confirmed findings fixed. C6 audit done (2026-10-03, adjudicated): F2-F7 fixed; F1 closed by the content-parity rework (landed 2026-10-03, `scripts/gate.sh` PASS with `git-floor`): R2.4 and R2.8 parity enforced under every algorithm and over real history. QA of the content rework (round 3, 2026-10-03): 21 raw, 16 confirmed by `qa-confirm`, S3 dismissed, S1/R2/G4 escalated and decided by the user; **phase 02 QA round 3 fixed** — every confirmed finding fixed or recorded (R2 above, for phase 08; G4 as issue #51), `scripts/gate.sh` PASS with `git-floor` |
 | 03 engine, working tree | landed 2026-10-03; **phase 03 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 19 raw, 16 confirmed by `qa-confirm`, QC3 dismissed; every confirmed finding fixed test-first (`progress.md`); the `diff --no-index` exception accepted by the user (2026-10-03); a full read-verb roster guard is a candidate follow-up for the user |
-| 04 worker lanes | **phase 04 landed, QA due** (2026-10-03) | `scripts/gate.sh` PASS, `git-floor` included | due — C8's tests and the mutation that reddens each are in `progress.md` |
+| 04 worker lanes | landed 2026-10-03; **phase 04 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 17 raw, 15 confirmed plus escalations; the user decided freshness ("stamp what git reads"); every confirmed finding fixed test-first, Expand All's per-file outcomes deferred to phase 08 — `progress.md` |
 | 05 detail pane | not started | — | — |
 | 06 unified diff view | not started | — | — |
 | 07 Changes tab and side-by-side | not started | — | — |

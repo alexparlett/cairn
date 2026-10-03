@@ -643,6 +643,81 @@ mod tests {
         );
     }
 
+    /// Phase 06 QA (T8): previous and next change stop at what is drawn. With whitespace
+    /// ignored a whitespace-only change draws nothing and is never a stop, at a context
+    /// and at the entire file; at the entire file every change of its one hunk is a stop.
+    /// Each stop is the change's first row, a removed line at the change's own number,
+    /// and previous retraces next. Caught by: stepping over the exact ranges under `-w` (a
+    /// stop where nothing is drawn), or stopping once per hunk rather than per change.
+    #[test]
+    fn previous_and_next_change_stop_at_what_is_drawn() {
+        let old: Vec<u8> = (0..60)
+            .flat_map(|n| format!("l{n}\n").into_bytes())
+            .collect();
+        let new: Vec<u8> = (0..60)
+            .flat_map(|n| match n {
+                10 | 50 => format!("L{n}\n").into_bytes(),
+                30 => format!(" l{n}\n").into_bytes(),
+                _ => format!("l{n}\n").into_bytes(),
+            })
+            .collect();
+        let at = |line: u32| ChangedRange::new(LineSpan::at(line, 1), LineSpan::at(line, 1));
+        let shown = |overlay: DisplayOverlay, context: Context| {
+            ShownDiff::new(
+                FileDiff {
+                    file: file(),
+                    content: DiffContent::Text {
+                        text: TextDiff::new(
+                            split_lines(&old),
+                            split_lines(&new),
+                            vec![at(10), at(30), at(50)],
+                        ),
+                        overlay,
+                    },
+                },
+                context,
+            )
+        };
+        let ignoring = || DisplayOverlay::new(Some(vec![at(10), at(50)]), Vec::new());
+        for (shown, stops) in [
+            (shown(ignoring(), Context::lines(1)), &[10, 50][..]),
+            (shown(ignoring(), Context::EntireFile), &[10, 50]),
+            (
+                shown(DisplayOverlay::none(), Context::EntireFile),
+                &[10, 30, 50],
+            ),
+        ] {
+            let layout = shown.layout().expect("text");
+            let (text, overlay) = shown.text().expect("text");
+            let stopped_at = |cursor: ChangeCursor| {
+                let row = layout.change_row(cursor.change).expect("a change");
+                match layout.row(text, overlay, row) {
+                    Some(UnifiedRow::Removed { old, .. }) => old.one_based() - 1,
+                    other => panic!("change {} starts on {other:?}", cursor.change),
+                }
+            };
+            let mut forward = Vec::new();
+            let mut cursor = step_change(layout, None, 0, true);
+            while let Some(at) = cursor {
+                forward.push(stopped_at(at));
+                cursor = step_change(layout, Some(at), at.scrolled_y, true);
+            }
+            assert_eq!(forward, stops, "{:?}", shown.context());
+            let last = layout.change_count().checked_sub(1).expect("a change");
+            let mut backward = Vec::new();
+            let mut cursor = Some(ChangeCursor {
+                change: last,
+                scrolled_y: 7,
+            });
+            while let Some(at) = cursor {
+                backward.push(stopped_at(at));
+                cursor = step_change(layout, Some(at), at.scrolled_y, false);
+            }
+            backward.reverse();
+            assert_eq!(backward, stops, "{:?} backwards", shown.context());
+        }
+    }
+
     /// The answer's extent is measured once: every row is the gutters, the marker column
     /// and the widest line wide, whichever rows are built.
     #[test]

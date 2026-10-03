@@ -108,6 +108,7 @@ impl Algorithms {
     }
 
     /// What every file is diffed with unless its driver names an algorithm.
+    #[cfg(test)]
     pub(super) fn configured(&self) -> Algorithm {
         self.configured
     }

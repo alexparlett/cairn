@@ -29,14 +29,13 @@ use gix::objs::tree::EntryKind;
 use crate::object_id::object_id;
 use crate::ops::GitBinary;
 use crate::reads::{
-    Algorithm, Detection, FilePatch, PatchQuery, PatchText, Reading, Scope, Submodules, patches,
+    Algorithm, Detection, FilePatch, PatchQuery, PatchText, Reading, Scope, patches,
 };
 use crate::{Cancel, Error, Repository};
 
 use super::ContentOptions;
 use super::algorithm::{Algorithms, PathAlgorithm};
 use super::hunk_grouping::Grouping;
-use super::submodules::Hiding;
 
 /// A Git LFS pointer names its own version first; the format caps a pointer at 1 KiB.
 const LFS_PREFIX: &[u8] = b"version https://git-lfs.github.com/spec/";
@@ -105,43 +104,84 @@ pub(super) fn file_diff(
     })
 }
 
-/// Every file of a change set, for Expand All: decided file by file as [`file_diff`]
-/// decides one, with the lines of every text file git has to read asked of git in as few
-/// `diff-tree -p` runs as the algorithms allow — ONE over the whole comparison for every
-/// file diffed with `diff.algorithm`, with the changes query's own detection, so git pairs
-/// and lists exactly what that query listed; and one per distinct algorithm the files'
-/// diff drivers name, over those files' paths, since one run cannot pass two algorithms
-/// (and a run that leaves a driver to apply its own carries it into every later file,
-/// `docs/systems/diff.md`). A file a run's answer does not hold as the change set holds it
-/// — paired otherwise, which a hidden submodule's place in a cut-short rename search or a
-/// group's narrower paths can do, or called binary where gix called it text — is asked
-/// about on its own. `cancel` is checked between files while they are read, before each
-/// file asked about on its own, and between files as the answers are assembled, and
+/// One page of files of a change set, for Expand All and for files opened in place one at a
+/// time: `offered` (indices into `set`) read in order, each decided as [`file_diff`] decides
+/// one, until the page is full ([`PAGE_FILES`] files, or [`PAGE_LINES`] lines read on it) or
+/// `budget` — when there is one — is spent. Whether a file is admitted is decided BEFORE any of
+/// its blobs is read, from what the files before it cost; a file costs one, for itself, and
+/// every line of both its versions it holds (a state that is not text, refused before its
+/// lines are split, holds none), so the overshoot past a budget is at most the one file that
+/// crossed it, which R2.6's ceilings bound.
+///
+/// The lines of the page's text files git has to read are asked of git in as few `diff-tree
+/// -p` runs as the algorithms allow, each over the page's paths alone (`Scope::Paths`) with
+/// the change set's own detection: one for every file diffed with `diff.algorithm`, and one
+/// per distinct algorithm the files' diff drivers name, since one run cannot pass two (and a
+/// run that leaves a driver to apply its own carries it into every later file,
+/// `docs/systems/diff.md`). So the memory is the page's — its blobs and its patch — never the
+/// comparison's. A file a run's answer does not hold as the change set holds it — paired
+/// otherwise, which a page's narrower paths can do, or called binary where gix called it text
+/// — or whose run failed, is asked about on its own.
+///
+/// A file that fails is that file's outcome, beside the others: a blob gix cannot read, a
+/// read git fails or one that disagrees with the lines read. What fails the whole page is
+/// what no file is to blame for: the configuration git refuses, the diff attributes that could
+/// not be asked, and being superseded. `cancel` is checked before each file is read, before
+/// each file asked about on its own and between files as the answers are assembled, and
 /// polled while git runs.
-pub(super) fn file_diffs(
+pub(super) fn page(
     repo: &Repository,
     cache: &mut gix::diff::blob::Platform,
     git: &GitBinary,
     trees: Trees,
-    set: &ChangeSet,
+    (set, offered, mut budget): (&ChangeSet, &[usize], Option<&mut LineBudget>),
     options: &ContentOptions,
     cancel: &impl Cancel,
-) -> Result<Vec<FileDiff>, Error> {
+) -> Result<Page, Error> {
     let grouping = Grouping::read(repo.inner())?;
-    let mut prepared = Vec::with_capacity(set.files.len());
-    for file in &set.files {
+    let mut admitted: Vec<usize> = Vec::new();
+    let mut prepared: BTreeMap<usize, Prepared> = BTreeMap::new();
+    let mut failed: BTreeMap<usize, Error> = BTreeMap::new();
+    let mut page_lines = 0u64;
+    let mut taken = 0usize;
+    for &index in offered {
         if cancel.is_cancelled() {
             return Err(Error::ContentCancelled);
         }
-        prepared.push(prepare(repo, cache, file, options)?);
+        let full = admitted.len() >= PAGE_FILES || page_lines >= PAGE_LINES;
+        let spent = budget.as_deref().is_some_and(LineBudget::is_spent);
+        if full || spent {
+            break;
+        }
+        taken += 1;
+        // An index the change set does not hold is no file at all: passed over.
+        let Some(file) = set.files.get(index) else {
+            continue;
+        };
+        admitted.push(index);
+        let cost = match prepare(repo, cache, file, options) {
+            Ok(read) => {
+                let lines = held_lines(&read);
+                prepared.insert(index, read);
+                lines
+            }
+            Err(error) => {
+                failed.insert(index, error);
+                0
+            }
+        };
+        let cost = cost.saturating_add(1);
+        page_lines = page_lines.saturating_add(cost);
+        if let Some(budget) = budget.as_deref_mut() {
+            budget.charge(cost);
+        }
     }
+
     let asking: Vec<usize> = prepared
         .iter()
-        .enumerate()
         .filter(|(_, prepared)| matches!(prepared, Prepared::Text { asks_git: true, .. }))
-        .map(|(index, _)| index)
+        .map(|(index, _)| *index)
         .collect();
-
     let algorithms = Algorithms::read(repo.inner(), git.version())?;
     let old_paths: Vec<&RepoPath> = asking
         .iter()
@@ -149,18 +189,15 @@ pub(super) fn file_diffs(
         .map(|file| &file.old_path)
         .collect();
     let chosen = algorithms.for_old_paths(git, repo, &old_paths, cancel)?;
-    let mut together: Vec<usize> = Vec::new();
-    // Each driver algorithm in the order it was first met, with its files.
-    let mut by_driver: Vec<(Algorithm, Vec<usize>)> = Vec::new();
+    // Each algorithm in the order it was first met, with its files: `diff.algorithm` passed
+    // for the configured ones, alone and together alike; for a driver's, its algorithm
+    // passed for the group, and none for a file asked alone, which git then applies itself
+    // as the user's `git diff -- <path>` does.
+    let mut groups: Vec<(PathAlgorithm, Vec<usize>)> = Vec::new();
     for (index, path_algorithm) in asking.iter().zip(chosen) {
-        match path_algorithm {
-            PathAlgorithm::Configured(_) => together.push(*index),
-            PathAlgorithm::Driver(algorithm) => {
-                match by_driver.iter_mut().find(|(held, _)| *held == algorithm) {
-                    Some((_, group)) => group.push(*index),
-                    None => by_driver.push((algorithm, vec![*index])),
-                }
-            }
+        match groups.iter_mut().find(|(held, _)| *held == path_algorithm) {
+            Some((_, group)) => group.push(*index),
+            None => groups.push((path_algorithm, vec![*index])),
         }
     }
 
@@ -177,26 +214,7 @@ pub(super) fn file_diffs(
     };
     let mut readings: BTreeMap<usize, (Reading, Option<Reading>)> = BTreeMap::new();
     let mut alone: Vec<(usize, Option<Algorithm>)> = Vec::new();
-    if !together.is_empty() {
-        let hiding = Hiding::read(repo.inner(), repo.workdir().is_some())?;
-        let comparison = Scope::Comparison {
-            detection: detection_of(set),
-            submodules: match hiding {
-                Hiding::EveryGitlink => Submodules::HideEvery,
-                Hiding::Nothing | Hiding::GitlinksExcept(_) => Submodules::AsListed,
-            },
-        };
-        let configured = Some(algorithms.configured());
-        asker.many(
-            &held,
-            &together,
-            (comparison, configured),
-            configured,
-            &mut readings,
-            &mut alone,
-        )?;
-    }
-    for (algorithm, group) in &by_driver {
+    for (path_algorithm, group) in &groups {
         let files: Vec<&ChangedFile> = group
             .iter()
             .filter_map(|index| set.files.get(*index))
@@ -205,59 +223,166 @@ pub(super) fn file_diffs(
             files: &files,
             detection: detection_of(set),
         };
-        // Alone, a driver's file passes no flag and git applies the driver itself, as the
-        // user's `git diff -- <path>` does; the group's run names the same algorithm.
-        asker.many(
+        let run_with = match path_algorithm {
+            PathAlgorithm::Configured(algorithm) | PathAlgorithm::Driver(algorithm) => {
+                Some(*algorithm)
+            }
+        };
+        let asked = asker.many(
             &held,
             group,
-            (scope, Some(*algorithm)),
-            None,
+            (scope, run_with),
+            path_algorithm.flag(),
             &mut readings,
             &mut alone,
-        )?;
+        );
+        match asked {
+            Ok(()) => {}
+            Err(error) if is_cancel(&error) => return Err(error),
+            // No file is to blame for a run that failed: each is asked on its own, and what
+            // fails then is that file's.
+            Err(_) => {
+                for index in group {
+                    readings.remove(index);
+                    alone.retain(|(held, _)| held != index);
+                    alone.push((*index, path_algorithm.flag()));
+                }
+            }
+        }
     }
     for (index, algorithm) in alone {
         if cancel.is_cancelled() {
             return Err(Error::ContentCancelled);
         }
         let (Some(file), Some(Prepared::Text { old, new, .. })) =
-            (set.files.get(index), prepared.get(index))
+            (set.files.get(index), prepared.get(&index))
         else {
             continue;
         };
-        readings.insert(index, asker.file(file, algorithm, old, new)?);
+        match asker.file(file, algorithm, old, new) {
+            Ok(read) => {
+                readings.insert(index, read);
+            }
+            Err(error) if is_cancel(&error) => return Err(error),
+            Err(error) => {
+                failed.insert(index, error);
+            }
+        }
     }
 
     // Each file's lines, ranges and intra-line highlights are built here, after git has
-    // answered: work proportional to the whole commit, so it is cancellable file by file
-    // like the reads before it.
-    let mut diffs = Vec::with_capacity(set.files.len());
-    for (index, (file, prepared)) in set.files.iter().zip(prepared).enumerate() {
+    // answered: work proportional to the page, so it is cancellable file by file like the
+    // reads before it.
+    let mut files = Vec::with_capacity(admitted.len());
+    for index in admitted {
         if cancel.is_cancelled() {
             return Err(Error::ContentCancelled);
         }
-        diffs.push(FileDiff {
-            file: file.clone(),
-            content: match prepared {
-                Prepared::Done(content) => content,
-                Prepared::Text { old, new, .. } => text_content(
-                    old,
-                    new,
-                    readings.remove(&index),
-                    options,
-                    grouping.inter_hunk_context,
-                ),
-            },
-        });
+        let Some(file) = set.files.get(index) else {
+            continue;
+        };
+        if let Some(error) = failed.remove(&index) {
+            files.push((index, Err(error)));
+            continue;
+        }
+        let Some(read) = prepared.remove(&index) else {
+            continue;
+        };
+        let content = match read {
+            Prepared::Done(content) => content,
+            Prepared::Text { old, new, .. } => text_content(
+                old,
+                new,
+                readings.remove(&index),
+                options,
+                grouping.inter_hunk_context,
+            ),
+        };
+        files.push((
+            index,
+            Ok(FileDiff {
+                file: file.clone(),
+                content,
+            }),
+        ));
     }
-    Ok(diffs)
+    Ok(Page { files, taken })
 }
 
-/// The change set and what reading each of its files decided, which a run over several
-/// files is read against.
+/// What a page answered: each file read, by its index in the change set, in the order it was
+/// offered, with what it turned out to be or why it could not be read; and how many of the
+/// files offered it decided, which is where the next page starts.
+#[derive(Debug)]
+pub struct Page {
+    pub files: Vec<(usize, Result<FileDiff, Error>)>,
+    pub taken: usize,
+}
+
+/// The most files one page reads: what its blobs, its patch and the paths on its `git`
+/// command line are bounded by.
+pub const PAGE_FILES: usize = 256;
+
+/// The most lines one page reads, both versions of every file counted: past it the page ends
+/// at the file that crossed it, so a page of large files is answered before the next is read.
+pub const PAGE_LINES: u64 = 20_000;
+
+/// A total line budget, and how much of it is spent: what Expand All opens files until (R5.3).
+/// A file costs one, for itself, and the lines of both its versions it holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LineBudget {
+    limit: u64,
+    spent: u64,
+}
+
+impl LineBudget {
+    pub fn new(limit: u64) -> Self {
+        Self { limit, spent: 0 }
+    }
+
+    /// A budget `spent` into already, for an Expand All taken up again where it stopped.
+    pub fn resumed(limit: u64, spent: u64) -> Self {
+        Self { limit, spent }
+    }
+
+    pub fn limit(&self) -> u64 {
+        self.limit
+    }
+
+    pub fn spent(&self) -> u64 {
+        self.spent
+    }
+
+    /// Whether no other file may be opened: the lines spent reach the limit.
+    pub fn is_spent(&self) -> bool {
+        self.spent >= self.limit
+    }
+
+    fn charge(&mut self, lines: u64) {
+        self.spent = self.spent.saturating_add(lines);
+    }
+}
+
+/// The lines a read file holds, both versions: none for a state that is not text.
+fn held_lines(read: &Prepared) -> u64 {
+    match read {
+        Prepared::Done(_) => 0,
+        Prepared::Text { old, new, .. } => (old.len() as u64).saturating_add(new.len() as u64),
+    }
+}
+
+/// A read ended because it was superseded.
+fn is_cancel(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::ContentCancelled | Error::GitReadCancelled { .. } | Error::ChangesCancelled { .. }
+    )
+}
+
+/// The change set and what reading each of its files decided, by index, which a run over
+/// several files is read against.
 struct Held<'a> {
     set: &'a ChangeSet,
-    prepared: &'a [Prepared],
+    prepared: &'a BTreeMap<usize, Prepared>,
 }
 
 /// The changes query's detection, as its answer reports it: what `diff.renames` asked for,
@@ -351,7 +476,7 @@ impl<C: Cancel> Asker<'_, C> {
         };
         for &index in indices {
             let (Some(file), Some(Prepared::Text { old, new, .. })) =
-                (held.set.files.get(index), held.prepared.get(index))
+                (held.set.files.get(index), held.prepared.get(&index))
             else {
                 continue;
             };

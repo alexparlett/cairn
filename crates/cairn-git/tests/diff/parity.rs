@@ -763,13 +763,7 @@ fn expand_all_answers_what_each_file_answers_alone() {
                     ..ContentOptions::default()
                 };
                 let all = ok(
-                    session.file_diffs(
-                        super::git(),
-                        &request,
-                        &set,
-                        &options,
-                        &CancelSignal::new(),
-                    ),
+                    super::every_file(&mut session, &request, &set, &options, &CancelSignal::new()),
                     "Expand All answers",
                 );
                 assert_eq!(all.len(), set.files.len());
@@ -798,9 +792,9 @@ fn expand_all_answers_what_each_file_answers_alone() {
 }
 
 /// How many `git diff-tree` runs Expand All makes, read from the repository's command log:
-/// one for the whole comparison, one more for each distinct algorithm the files' diff
-/// drivers name (git 2.40 and later; none before), and all of it twice when whitespace is
-/// ignored — never one per file — over a fixture of seventy-odd text files, renames and
+/// one per page (phase 08 pages it: `PAGE_FILES`, `PAGE_LINES`), one more for each distinct
+/// algorithm the page's diff drivers name (git 2.40 and later; none before), and all of it
+/// twice when whitespace is ignored — never one per file — over a fixture of seventy-odd text files, renames and
 /// copies among them, without a driver algorithm and with one naming patience for its
 /// seventeen-odd `drv/` files. Its answers are shown equal to the per-file ones by
 /// `expand_all_answers_what_each_file_answers_alone`; this is what that test cannot see.
@@ -858,18 +852,30 @@ fn expand_all_runs_one_diff_tree_per_comparison() {
                 load_anyway: true,
                 ..ContentOptions::default()
             };
-            let all = ok(
-                session.file_diffs(super::git(), &request, &set, &options, &CancelSignal::new()),
+            let (all, pages) = ok(
+                super::every_file_paged(
+                    &mut session,
+                    &request,
+                    &set,
+                    &options,
+                    &CancelSignal::new(),
+                ),
                 "Expand All answers",
             );
             assert_eq!(all.len(), set.files.len());
-            let expected = if ignore_whitespace { 2 * runs } else { runs };
-            assert_eq!(
-                diff_trees() - before,
-                expected,
+            // A page is read with one run for its configured files and one per driver
+            // algorithm among its own; which page the driver's files land on is the page
+            // caps', so the bound is per page: at least one, at most `runs`.
+            let per_run = if ignore_whitespace { 2 } else { 1 };
+            let ran = diff_trees() - before;
+            assert!(
+                (pages * per_run..=pages * runs * per_run).contains(&ran),
                 "Expand All under {config:?} (ignoring whitespace: {ignore_whitespace}) ran \
-                 another number of diff-tree than one per comparison and per driver algorithm"
+                 {ran} diff-tree over {pages} pages: not one per page and per driver algorithm"
             );
+            if runs == 1 {
+                assert_eq!(ran, pages * per_run, "{config:?}");
+            }
         }
     }
 }
@@ -1124,7 +1130,7 @@ fn alone_and_expanded_read_as_git_diff(repo: &Repo, config: &[&str]) -> usize {
         ..ContentOptions::default()
     };
     let all = ok(
-        session.file_diffs(super::git(), &request, &set, &options, &CancelSignal::new()),
+        super::every_file(&mut session, &request, &set, &options, &CancelSignal::new()),
         "Expand All answers",
     );
     assert_eq!(all.len(), set.files.len());
@@ -1332,8 +1338,7 @@ fn a_grouping_git_refuses_refuses_every_content_query() {
         );
         refused(
             "Expand All",
-            session
-                .file_diffs(super::git(), &request, &set, &options, &CancelSignal::new())
+            super::every_file(&mut session, &request, &set, &options, &CancelSignal::new())
                 .map(drop),
         );
         refused(
@@ -1411,7 +1416,7 @@ fn the_view_groups_hunks_as_the_users_git_diff_does() {
     );
     let options = ContentOptions::default();
     let all = ok(
-        session.file_diffs(super::git(), &request, &set, &options, &CancelSignal::new()),
+        super::every_file(&mut session, &request, &set, &options, &CancelSignal::new()),
         "Expand All answers",
     );
     assert_eq!(all.len(), set.files.len());

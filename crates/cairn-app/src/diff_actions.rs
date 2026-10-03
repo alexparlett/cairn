@@ -9,9 +9,10 @@
 //! what is in flight; the answer kept is then the one naming the new options, and no other.
 
 use cairn_model::Context;
-use cairn_ui::{DiffSettings, step_change};
+use cairn_ui::{DetailTab, DiffSettings, step_change};
 use freya::prelude::*;
 
+use crate::diff_state::Asking;
 use crate::window::View;
 use crate::worker::{DiffOptions, FileQuery, FileTarget, Request};
 
@@ -113,7 +114,10 @@ pub fn toggle_side_by_side(view: View) {
     change_cursor.set(None);
 }
 
-/// Asks the file shown again at the settings as they are now, keeping where the view is.
+/// Asks the file shown, and the files opened in place, again at the settings as they are
+/// now, keeping where the views are: the one whose tab is shown at once, the other as its tab
+/// is shown again — they share the file-diff lane, so asking both would only have the second
+/// end the first.
 fn ask_again(view: View, submit: Option<&dyn Fn(Request)>) {
     let View {
         mut diff,
@@ -121,18 +125,52 @@ fn ask_again(view: View, submit: Option<&dyn Fn(Request)>) {
         mut change_cursor,
         ..
     } = view;
-    let Some(mut query) = diff.peek().file().map(|(query, _)| query.clone()) else {
-        return;
+    let asking = match crate::detail_pane::shown_tab(view) {
+        DetailTab::Changes => Asking::File,
+        DetailTab::Commit => Asking::Expansion,
     };
-    let mut asked = options(*diff_settings.peek());
-    // A file loaded past the limits stays loaded while its settings change.
-    asked.load_anyway = query.options.load_anyway;
-    if query.options == asked {
-        return;
+    let requests = diff
+        .write()
+        .settings_changed(options(*diff_settings.peek()), asking);
+    if !requests.is_empty() {
+        change_cursor.set(None);
     }
-    query.options = asked;
-    let requests = diff.write().select_file(query);
-    change_cursor.set(None);
+    submit_all(requests, submit);
+}
+
+/// A file pressed in the Commit tab opens its diff in place under its row, or closes it
+/// (R5.3, Fork's Finding 4), at the session's settings.
+pub fn toggle_in_place(index: usize, view: View, submit: Option<&dyn Fn(Request)>) {
+    let View {
+        mut diff,
+        diff_settings,
+        ..
+    } = view;
+    let requests = diff
+        .write()
+        .toggle_file(index, options(*diff_settings.peek()));
+    submit_all(requests, submit);
+}
+
+/// Expand All (`all`) or Collapse All, above the Commit tab's files.
+pub fn expand_all(all: bool, view: View, submit: Option<&dyn Fn(Request)>) {
+    let View {
+        mut diff,
+        diff_settings,
+        ..
+    } = view;
+    let requests = if all {
+        diff.write().expand_all(options(*diff_settings.peek()))
+    } else {
+        diff.write().collapse_all()
+    };
+    submit_all(requests, submit);
+}
+
+/// Load Diff under a file opened in place (R6.8).
+pub fn load_in_place(index: usize, view: View, submit: Option<&dyn Fn(Request)>) {
+    let View { mut diff, .. } = view;
+    let requests = diff.write().load_in_place(index);
     submit_all(requests, submit);
 }
 

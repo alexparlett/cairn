@@ -4,7 +4,7 @@
 //! | --- | --- |
 //! | history (`OpenHistory`, `MoreHistory`) | `cairn-repository`, which owns the live walk |
 //! | changes (`Changes`) | `cairn-diff` |
-//! | file diff (`FileDiff`, `ExpandAll`) | `cairn-diff` |
+//! | file diff (`FileDiff`, `Expand`) | `cairn-diff` |
 //! | `ConfiguredContext` | `cairn-diff`, whose handle is opened again when the configuration moves, and which sends the context again each time |
 //! | `ListRemotes`, `CommandLog`, `Close`, `Fetch` | `cairn-repository` (a fetch is forwarded on to the network lane) |
 //! | `Retire` | `cairn-repository`, which frees what it is handed |
@@ -117,7 +117,7 @@ pub(super) fn route(request: Request) -> Routed {
         Request::FileDiff(FileQuery { target, options }) => {
             Routed::Diff(DiffQuery::File(FileQuery { target, options }))
         }
-        Request::ExpandAll { of, options } => Routed::Diff(DiffQuery::All { of, options }),
+        Request::Expand(asked) => Routed::Diff(DiffQuery::Expand(asked)),
         Request::FilterFiles { of, files, text } => {
             Routed::Repository(RepositoryJob::Filter { of, files, text })
         }
@@ -152,7 +152,7 @@ pub(super) fn unroute(routed: Routed) -> Request {
         Routed::Repository(RepositoryJob::Close) => Request::Close,
         Routed::Diff(DiffQuery::Changes(of)) => Request::Changes { of },
         Routed::Diff(DiffQuery::File(query)) => Request::FileDiff(query),
-        Routed::Diff(DiffQuery::All { of, options }) => Request::ExpandAll { of, options },
+        Routed::Diff(DiffQuery::Expand(asked)) => Request::Expand(asked),
         Routed::ConfiguredContext => Request::ConfiguredContext,
         Routed::CancelFetch => Request::CancelFetch,
     }
@@ -176,10 +176,20 @@ mod tests {
                 },
                 options: DiffOptions::default(),
             }),
-            Request::ExpandAll {
+            Request::Expand(crate::worker::request::ExpandQuery {
                 of: commit,
+                changes: Arc::new(cairn_model::ChangeSet {
+                    files: Vec::new(),
+                    details: None,
+                    renames: cairn_model::RenameDetection::default(),
+                }),
                 options: DiffOptions::default(),
-            },
+                files: vec![crate::worker::request::OpenedFile {
+                    index: 0,
+                    load_anyway: true,
+                }],
+                all: Some(crate::worker::request::AllFrom { next: 3, spent: 9 }),
+            }),
             Request::FilterFiles {
                 of: commit,
                 files: Arc::new(cairn_model::ChangeSet {
@@ -203,7 +213,6 @@ mod tests {
                         details: None,
                         renames: cairn_model::RenameDetection::default(),
                     })),
-                    Vec::new(),
                     Vec::new(),
                 )
                 .unwrap_or_else(|| unreachable!("a change set is something to retire")),

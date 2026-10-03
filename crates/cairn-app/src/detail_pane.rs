@@ -8,9 +8,12 @@
 //! settings selected now.
 //!
 //! The Changes tab is a component of its own (`changes_tab`, phase 07): the summary, the
-//! filtered file list and one file's diff. A file pressed in the Commit tab is chosen there
-//! and shown in the Changes tab; a file's diff opening in place under its row in the Commit
-//! tab is phase 08's.
+//! filtered file list and one file's diff. So is the Commit tab's body (`CommitBody`, phase
+//! 08): a file pressed there opens its diff in place under its row, as Fork's Commit tab does
+//! (Finding 4), and closes it when pressed again; Expand All opens the files in order until its
+//! line budget is spent. The Changes tab keeps its own file, chosen from its own list: Fork's
+//! Commit tab does not switch to Changes, and the buttons Fork added to reveal a file there are
+//! not recorded (Finding 4), so none is drawn.
 
 use std::rc::Rc;
 
@@ -20,7 +23,7 @@ use cairn_ui::{CommitTab, DetailTab, DetailTabs, reveal_row};
 use freya::prelude::*;
 
 use crate::changes_tab::ChangesTab;
-use crate::diff_state::{Answer, answered_changes};
+use crate::diff_state::{Answer, answered_changes, answered_expansion};
 use crate::window::View;
 use crate::worker::Request;
 use crate::{diff_actions, selection, shortcuts};
@@ -97,13 +100,60 @@ impl Component for DetailPane {
             })
             .child(strip)
             .maybe_child((!collapsed).then(|| match tab {
-                DetailTab::Commit => commit_body(view, self.submit.clone()),
+                DetailTab::Commit => Element::from(CommitBody::new(view, self.submit.clone())),
                 DetailTab::Changes => ChangesTab::new(view, self.submit.clone()).into(),
             }))
     }
 }
 
-/// The Commit tab's body: the selected commit's answer, and only that.
+/// The Commit tab's body: the selected commit's answer, and only that, with its files opened
+/// in place. A component of its own, mounted only while the tab is shown, so the files it
+/// opened ask again — when the Changes tab's file took the lane they share — only for a tab
+/// someone is looking at.
+struct CommitBody {
+    view: View,
+    submit: Option<Rc<dyn Fn(Request)>>,
+}
+
+impl CommitBody {
+    fn new(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Self {
+        Self { view, submit }
+    }
+}
+
+// By the handles it reads: the submitter is the same repository's however often it is built.
+impl PartialEq for CommitBody {
+    fn eq(&self, other: &Self) -> bool {
+        let (one, two) = (&self.view, &other.view);
+        one.selected == two.selected
+            && one.diff == two.diff
+            && one.rows == two.rows
+            && one.diff_settings == two.diff_settings
+            && one.history_scroll == two.history_scroll
+            && self.submit.is_some() == other.submit.is_some()
+    }
+}
+
+impl Component for CommitBody {
+    fn render(&self) -> impl IntoElement {
+        let view = self.view;
+        let asking = self.submit.clone();
+        // Files opened here whose request lost the lane to the Changes tab's file are asked
+        // again as the tab is shown.
+        use_side_effect(move || {
+            if !view.diff.read().expansion_needs_asking() {
+                return;
+            }
+            let mut diff = view.diff;
+            let asked = diff.write().reask_expansion();
+            if let (Some(request), Some(submit)) = (asked, asking.as_deref()) {
+                submit(request);
+            }
+        });
+        commit_body(view, self.submit.clone())
+    }
+}
+
 fn commit_body(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Element {
     let Some(id) = *view.selected.read() else {
         return notice(NOTHING_SELECTED, false);
@@ -120,19 +170,32 @@ fn commit_body(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Element {
         Answer::Ready(changes) if changes.details.is_none() => notice(NOT_ONE_COMMIT, false),
         Answer::Ready(_) => {
             let changes = view.diff.into_readable().map(answered_changes, |_| true);
-            let choosing = submit.clone();
-            let mut detail_tab = view.detail_tab;
+            let expansion = view.diff.into_readable().map(answered_expansion, |_| true);
+            let side_by_side = view.diff_settings.read().side_by_side();
+            let (toggling, expanding, loading) = (submit.clone(), submit.clone(), submit.clone());
             CommitTab::new(changes)
+                .expansion(expansion)
+                .side_by_side(side_by_side)
                 .on_parent(move |parent: Oid| follow_parent(parent, view, submit.as_deref()))
-                .on_file(move |index: usize| {
-                    diff_actions::choose_file(index, view, choosing.as_deref());
+                // A press opens the file's diff in place, or closes it; an arrow only makes a
+                // file current.
+                .on_file_pressed(move |index: usize| {
+                    diff_actions::toggle_in_place(index, view, toggling.as_deref());
                 })
-                // A press shows the file's diff, in the Changes tab until phase 08 opens it
-                // in place; an arrow only makes it current.
-                .on_file_pressed(move |_| detail_tab.set(DetailTab::Changes))
+                .on_expand_all(move |all: bool| {
+                    diff_actions::expand_all(all, view, expanding.as_deref());
+                })
+                .on_load(move |index: usize| {
+                    diff_actions::load_in_place(index, view, loading.as_deref());
+                })
                 .into()
         }
     }
+}
+
+/// The tab the pane shows: the one chosen for the session.
+pub fn shown_tab(view: View) -> DetailTab {
+    *view.detail_tab.peek()
 }
 
 /// A parent link: a loaded parent is selected, its changes asked for and its row brought

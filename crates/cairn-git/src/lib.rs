@@ -18,7 +18,8 @@ mod shallow;
 
 pub use cancel::{Cancel, CancelSignal};
 pub use diff::{
-    ChangesRequest, ContentOptions, DiffInputs, DiffSession, StagedInputs, WorkingTreeDiff,
+    ChangesRequest, ContentOptions, DiffInputs, DiffSession, LineBudget, Offered, PAGE_FILES,
+    PAGE_LINES, Page, StagedInputs, WorkingTreeDiff,
 };
 pub use error::{Error, RefusedWrite};
 pub use history::{HistoryCursor, HistoryOrder, HistoryPage, HistoryRequest, HistorySession};

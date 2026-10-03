@@ -23,7 +23,8 @@ use super::lifecycle_tests::StubGit;
 use super::lifecycle_tests::alive_in_group;
 use super::pool::{RepositoryHandle, Updates, open_with};
 use super::request::{
-    Comparison, DiffOptions, DiffQuery, FileQuery, FileTarget, Request, Update, WorkingSide,
+    AllEnded, AllFrom, Comparison, DiffOptions, DiffQuery, ExpandQuery, FileQuery, FileTarget,
+    OpenedFile, Request, Update, WorkingSide,
 };
 use super::startup::Startup;
 
@@ -867,39 +868,224 @@ fn a_failed_read_is_sent_as_a_failure_naming_its_query() {
     drop(handle);
 }
 
-/// T8: Expand All through the boundary answers every file of the change set, in its order,
-/// complete. Caught by: a lane that drops the batch, or answers another comparison's.
-#[test]
-fn expand_all_answers_every_file_through_the_boundary() {
-    let (handle, mut updates) = checkout();
-    let ids = commits(&handle, &mut updates, 8);
-    let (of, changes) = ids
-        .iter()
+/// The files opened in place `asked` names: every update up to Expand All's end, or up to the
+/// page answering the last file named when Expand All is not asked.
+fn expansion(handle: &RepositoryHandle, updates: &mut Updates, asked: ExpandQuery) -> Vec<Update> {
+    let named = asked.files.len();
+    let all = asked.all.is_some();
+    handle.submit(Request::Expand(asked));
+    let mut answered = 0;
+    collect_until(updates, |u| match u {
+        Update::Expanded {
+            files,
+            all: progress,
+            ..
+        } => {
+            answered += files.iter().filter(|file| !file.by_all).count();
+            if all {
+                progress.is_some_and(|progress| progress.ended.is_some())
+            } else {
+                answered >= named
+            }
+        }
+        Update::DiffFailed { .. } => true,
+        _ => false,
+    })
+}
+
+/// The files of the `Expanded` pages in `seen`, by index, in the order they came.
+fn expanded_files(seen: &[Update]) -> Vec<(usize, bool)> {
+    seen.iter()
+        .flat_map(|u| match u {
+            Update::Expanded { files, .. } => files
+                .iter()
+                .map(|file| (file.file.index, file.outcome.is_ok()))
+                .collect(),
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
+/// A commit of this checkout that changed at least `files` files, and its change set.
+fn commit_changing(
+    handle: &RepositoryHandle,
+    updates: &mut Updates,
+    files: usize,
+) -> (Comparison, ChangeSet) {
+    let ids = commits(handle, updates, 40);
+    ids.iter()
         .map(|id| {
             let of = Comparison::Commit(*id);
-            (of, change_set(&handle, &mut updates, of))
+            (of, change_set(handle, updates, of))
         })
-        .find(|(_, changes)| changes.files.len() >= 2)
-        .unwrap_or_else(|| panic!("none of {ids:?} changed two files"));
+        .find(|(_, changes)| changes.files.len() >= files)
+        .unwrap_or_else(|| panic!("none of {ids:?} changed {files} files"))
+}
+
+/// Phase 08, R5.3 through the boundary: Expand All answers every file of a change set that
+/// fits its budget, in the change set's order, page after page, and ends saying every file
+/// is open; a file opened by name is answered on its own, before any Expand All. Caught by: a
+/// lane that drops a page, answers files out of order, never ends, or reads a file named
+/// as part of Expand All.
+#[test]
+fn expand_all_answers_every_file_in_order_through_the_boundary() {
+    let (handle, mut updates) = checkout();
+    let (of, changes) = commit_changing(&handle, &mut updates, 2);
+    let changes = std::sync::Arc::new(changes);
     let options = DiffOptions::default();
-    handle.submit(Request::ExpandAll { of, options });
-    let seen = collect_until(&mut updates, |u| {
-        matches!(u, Update::FileDiffs { .. } | Update::DiffFailed { .. })
-    });
+    let seen = expansion(
+        &handle,
+        &mut updates,
+        ExpandQuery {
+            of,
+            changes: changes.clone(),
+            options,
+            files: Vec::new(),
+            all: Some(AllFrom::default()),
+        },
+    );
+    let every: Vec<(usize, bool)> = (0..changes.files.len()).map(|n| (n, true)).collect();
+    assert_eq!(expanded_files(&seen), every);
     match seen.last() {
-        Some(Update::FileDiffs {
+        Some(Update::Expanded {
             of: answered,
             options: at,
-            diffs,
-            complete,
+            all: Some(progress),
+            ..
         }) => {
-            assert_eq!((*answered, *at, *complete), (of, options, true));
-            let files: Vec<&ChangedFile> = diffs.iter().map(|d| &d.file).collect();
-            assert_eq!(files, changes.files.iter().collect::<Vec<_>>());
+            assert_eq!((*answered, *at), (of, options));
+            assert_eq!(progress.ended, Some(AllEnded::Every));
+            assert_eq!(progress.at.next, changes.files.len());
         }
-        other => panic!("expected Expand All's files, got {other:?}"),
+        other => panic!("expected Expand All's end, got {other:?}"),
     }
-    drop(handle);
+
+    let seen = expansion(
+        &handle,
+        &mut updates,
+        ExpandQuery {
+            of,
+            changes,
+            options,
+            files: vec![OpenedFile {
+                index: 1,
+                load_anyway: false,
+            }],
+            all: None,
+        },
+    );
+    assert_eq!(expanded_files(&seen), [(1, true)]);
+    assert!(
+        seen.iter()
+            .all(|u| !matches!(u, Update::Expanded { all: Some(_), .. })),
+        "Expand All answered where only a file was asked: {seen:?}"
+    );
+}
+
+/// Q2 through the boundary: Expand All stops at `EXPAND_ALL_LINES` — taken up one line short
+/// of it, it opens one file and ends with its budget spent, leaving the rest of a change set
+/// of several files unread; the progress it reports is where it stopped and what it spent.
+/// Caught by: the budget not applied on the diff thread (every file read), or the end
+/// reported as every file opened.
+#[test]
+fn expand_all_stops_at_its_budget_through_the_boundary() {
+    let (handle, mut updates) = checkout();
+    let (of, changes) = commit_changing(&handle, &mut updates, 3);
+    let changes = std::sync::Arc::new(changes);
+    let spent = super::expand_all::EXPAND_ALL_LINES - 1;
+    let seen = expansion(
+        &handle,
+        &mut updates,
+        ExpandQuery {
+            of,
+            changes,
+            options: DiffOptions::default(),
+            files: Vec::new(),
+            all: Some(AllFrom { next: 0, spent }),
+        },
+    );
+    assert_eq!(expanded_files(&seen), [(0, true)]);
+    match seen.last() {
+        Some(Update::Expanded {
+            all: Some(progress),
+            ..
+        }) => {
+            assert_eq!(progress.ended, Some(AllEnded::Budget));
+            assert_eq!(progress.at.next, 1);
+            assert!(progress.at.spent > spent, "{progress:?}");
+        }
+        other => panic!("expected Expand All stopped at its budget, got {other:?}"),
+    }
+}
+
+/// Phase 08, R4.3 and phase 02 QA's R2: Expand All is in the file-diff lane, so a newer
+/// request there ends it — its `git` killed while it reads, never left to run out — and
+/// nothing more of it is sent. Over a stub whose `diff-tree -p` hangs with a grandchild.
+/// Caught by: an expansion read on a cancel that never fires (the first `diff-tree` running
+/// for ten minutes), or one that keeps paging after it was superseded.
+#[test]
+fn a_newer_request_in_the_lane_ends_an_expansion_and_kills_its_read() {
+    let (head, of, first, second) = two_rust_files();
+    let changes = {
+        let (handle, mut updates) = checkout();
+        change_set(&handle, &mut updates, of)
+    };
+    let index = |file: &ChangedFile| {
+        changes
+            .files
+            .iter()
+            .position(|held| held == file)
+            .unwrap_or_else(|| panic!("{file:?} is not in its change set"))
+    };
+    let first_at = index(&first);
+    // A page's `diff-tree -p` names its paths literally, `--literal-pathspecs` first, as a
+    // single file's does: the stub hangs on both.
+    let stub = StubGit::answering("2.45.0", "--literal-pathspecs", DIFF_TREE_HANGS);
+    let fixture = BorrowedRepository::new(&format!("cairn-expand-killed-{}", std::process::id()));
+    fixture.point_main_at(&head.to_string());
+    let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let (handle, mut updates) = match super::pool::open(
+        &fixture.fixture.path,
+        &Discovery::new(stub.startup(Some((&home, &runtime)))),
+    ) {
+        Ok((handle, updates, _)) => (handle, updates),
+        Err(error) => panic!("starting the worker: {error}"),
+    };
+    handle.submit(Request::Expand(ExpandQuery {
+        of,
+        changes: std::sync::Arc::new(changes),
+        options: DiffOptions::default(),
+        files: vec![OpenedFile {
+            index: first_at,
+            load_anyway: false,
+        }],
+        all: Some(AllFrom::default()),
+    }));
+    let reading = leaders(&stub, 1)[0];
+    let superseded = Instant::now();
+    handle.submit(Request::FileDiff(committed(of, &second)));
+    leaders(&stub, 2);
+    #[cfg(target_os = "linux")]
+    {
+        let deadline = superseded + Duration::from_secs(10);
+        while !alive_in_group(reading).is_empty() {
+            assert!(
+                Instant::now() < deadline,
+                "ten seconds after it was superseded, the expansion's diff-tree still ran"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (reading, superseded);
+    // Nothing of the expansion arrives after it was superseded: the epoch filter drops a page
+    // in flight, and the thread reads no more.
+    handle.submit(Request::CommandLog);
+    let seen = collect_until(&mut updates, |u| matches!(u, Update::CommandLog { .. }));
+    assert!(
+        !seen.iter().any(|u| matches!(u, Update::Expanded { .. })),
+        "a superseded expansion sent a page: {seen:?}"
+    );
 }
 
 /// T8: a working-tree file diff through the boundary answers the working tree as it is:
@@ -944,9 +1130,8 @@ fn a_retired_change_set_is_freed_on_the_worker_without_an_answer() {
     let ids = commits(&handle, &mut updates, 2);
     let of = Comparison::Commit(ids[1]);
     let kept = change_set(&handle, &mut updates, of);
-    let retired =
-        super::request::Retired::of(Some(std::sync::Arc::new(kept)), Vec::new(), Vec::new())
-            .unwrap_or_else(|| unreachable!("a change set is something to retire"));
+    let retired = super::request::Retired::of(Some(std::sync::Arc::new(kept)), Vec::new())
+        .unwrap_or_else(|| unreachable!("a change set is something to retire"));
 
     handle.submit(Request::Retire(retired));
     handle.submit(Request::ListRemotes);

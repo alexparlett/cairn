@@ -9,7 +9,7 @@ use crate::PAGE_ROWS;
 use crate::fetch_state::{FetchRefusal, FetchStatus, PromptView};
 use crate::history_state::{self, Progress};
 use crate::window::View;
-use crate::worker::{PromptId, Request, Retired, Update};
+use crate::worker::{PromptId, Request, Retired, Update, expanded_diffs};
 
 /// What applying an update may ask of the worker: a request, and the refusal
 /// of a prompt the window will not show. Two plain callbacks, never a struct
@@ -116,10 +116,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                     (worker.submit)(request);
                 }
             } else {
-                retire(
-                    Retired::of(Some(Arc::new(changes)), Vec::new(), Vec::new()),
-                    worker,
-                );
+                retire(Retired::of(Some(Arc::new(changes)), Vec::new()), worker);
             }
         }
         Update::FilteredFiles { of, text, files } => {
@@ -135,22 +132,22 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             if diff.peek().wants_file(&query) {
                 diff.write().file_arrived(&query, answer);
             } else {
-                retire(
-                    Retired::of(None, Vec::new(), answer.into_iter().collect()),
-                    worker,
-                );
+                retire(Retired::of(None, answer.into_iter().collect()), worker);
             }
         }
-        Update::FileDiffs {
+        Update::Expanded {
             of,
             options,
-            diffs,
-            complete,
+            files,
+            all,
         } => {
             if diff.peek().wants_expansion(of, options) {
-                diff.write().expansion_arrived(of, options, diffs, complete);
+                let freeing = diff.write().expansion_arrived(files, all);
+                if let Some(request) = freeing {
+                    (worker.submit)(request);
+                }
             } else {
-                retire(Retired::of(None, diffs, Vec::new()), worker);
+                retire(Retired::of(None, expanded_diffs(files)), worker);
             }
         }
         Update::DiffFailed { query, message } => {
@@ -361,8 +358,11 @@ mod tests {
             ChangeStatus, ChangedFile, DiffContent, FileDiff, FileMode, Oid, RepoPath,
         };
 
-        use crate::diff_state::{Answer, Expanded};
-        use crate::worker::{Comparison, DiffOptions, DiffQuery, FileQuery, FileTarget};
+        use crate::diff_state::{Answer, answered_expansion};
+        use crate::worker::{
+            AllEnded, AllFrom, AllProgress, Comparison, DiffOptions, DiffQuery, ExpandedFile,
+            FileQuery, FileTarget, OpenedFile,
+        };
 
         let of = Comparison::Commit(Oid::from_bytes(&[1; 20]).unwrap());
         let file = ChangedFile {
@@ -391,11 +391,24 @@ mod tests {
                 query.options.context,
             ))),
         };
-        let batch = || Update::FileDiffs {
+        let page = || Update::Expanded {
             of,
             options,
-            diffs: vec![diff.clone()],
-            complete: true,
+            files: vec![ExpandedFile {
+                file: OpenedFile {
+                    index: 0,
+                    load_anyway: false,
+                },
+                by_all: true,
+                outcome: Ok(Box::new(cairn_model::ShownDiff::new(
+                    diff.clone(),
+                    options.context,
+                ))),
+            }],
+            all: Some(AllProgress {
+                at: AllFrom { next: 1, spent: 1 },
+                ended: Some(AllEnded::Every),
+            }),
         };
 
         applying(&test, view, &asked, file_update());
@@ -415,20 +428,31 @@ mod tests {
         );
 
         test.run_in(|| view.diff.write().clear());
-        applying(&test, view, &asked, batch());
+        applying(&test, view, &asked, page());
         assert!(
-            !test.run_in(|| view.diff.peek().expanded().is_some()),
+            test.run_in(|| answered_expansion(&view.diff.peek()).is_empty()),
             "an answer was kept with nothing selected"
         );
-        test.run_in(|| view.diff.write().expand_all(of, options));
-        applying(&test, view, &asked, batch());
-        assert_eq!(
-            test.run_in(|| view.diff.peek().expanded().map(|(_, _, a)| a.clone())),
-            Some(Answer::Ready(Expanded {
-                diffs: vec![diff.clone()],
-                complete: true
-            })),
-            "the selected expansion's batch was not kept"
+        test.run_in(|| {
+            let mut state = view.diff.write();
+            state.select_changes(of);
+            state.changes_arrived(
+                of,
+                cairn_model::ChangeSet {
+                    files: vec![diff.file.clone()],
+                    details: None,
+                    renames: cairn_model::RenameDetection::default(),
+                },
+            );
+            state.expand_all(options)
+        });
+        applying(&test, view, &asked, page());
+        assert!(
+            test.run_in(|| matches!(
+                answered_expansion(&view.diff.peek()).get(0),
+                Some(cairn_ui::Opened::Shown(_))
+            )),
+            "the selected expansion's page was not kept"
         );
 
         test.run_in(|| view.diff.write().clear());
@@ -502,7 +526,7 @@ mod tests {
         let (test, view, asked) = launch(FetchStatus::Idle);
 
         // Caught by the epoch filter: handed back as it came.
-        let stale = Retired::of(None, Vec::new(), vec![shown.clone()])
+        let stale = Retired::of(None, vec![shown.clone()])
             .unwrap_or_else(|| unreachable!("a diff is something"));
         applying(&test, view, &asked, Update::Superseded(stale.clone()));
         assert_eq!(retired(&asked), [stale]);
@@ -519,7 +543,7 @@ mod tests {
         );
         let handed = retired(&asked);
         assert_eq!(handed.len(), 1, "an unwanted file diff was not retired");
-        assert_eq!(handed[0].shown(), [shown]);
+        assert_eq!(handed[0].shown(), std::slice::from_ref(&shown));
 
         applying(
             &test,
@@ -538,20 +562,27 @@ mod tests {
             &test,
             view,
             &asked,
-            Update::FileDiffs {
+            Update::Expanded {
                 of,
                 options: DiffOptions::default(),
-                diffs: vec![diff.clone()],
-                complete: true,
+                files: vec![crate::worker::ExpandedFile {
+                    file: crate::worker::OpenedFile {
+                        index: 0,
+                        load_anyway: false,
+                    },
+                    by_all: true,
+                    outcome: Ok(Box::new(shown.clone())),
+                }],
+                all: None,
             },
         );
         let handed = retired(&asked);
         assert_eq!(
             handed.len(),
             1,
-            "an unwanted Expand All batch was not retired"
+            "an unwanted page of files opened in place was not retired"
         );
-        assert_eq!(handed[0].diffs(), [diff]);
+        assert_eq!(handed[0].shown(), std::slice::from_ref(&shown));
 
         // A clean working-tree path's answer holds nothing to free, so nothing is sent.
         applying(&test, view, &asked, Update::FileDiff { query, diff: None });
@@ -811,7 +842,7 @@ mod tests {
     }
 
     /// Phase 06: the user's `diff.context` is where the session's context starts; a file
-    /// already shown at git's default is asked again at it; once the user has moved the
+    /// already shown at git's default — in the Changes tab — is asked again at it; once the user has moved the
     /// context, a later reading of the configuration does not move it back. Caught by: a
     /// context fixed at three, or one the configuration overrides after the user chose.
     #[test]
@@ -837,6 +868,9 @@ mod tests {
             },
             options: crate::diff_actions::options(cairn_ui::DiffSettings::default()),
         };
+        // Shown in the Changes tab, whose file a setting asks again at once (phase 08: the
+        // Commit tab's files opened in place share the lane, and the hidden one waits).
+        test.run_in(|| view.detail_tab.set(cairn_ui::DetailTab::Changes));
         test.run_in(|| view.diff.write().select_file(query.clone()));
 
         applying(
@@ -892,7 +926,9 @@ mod tests {
 
         let repository = Configurable::new("diff-context-edit");
         let (handle, mut updates) = repository.open();
-        let (test, view, asked) = launch(FetchStatus::Idle);
+        let (test, mut view, asked) = launch(FetchStatus::Idle);
+        // The file is the Changes tab's, shown, so a setting asks it again at once.
+        test.run_in(|| view.detail_tab.set(cairn_ui::DetailTab::Changes));
 
         // Applies updates, handing on whatever applying them asked, until `done` holds of
         // the state and what arrived; returns what arrived.

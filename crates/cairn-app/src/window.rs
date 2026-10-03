@@ -1538,11 +1538,13 @@ mod tests {
             .expect("a file's diff was asked")
     }
 
-    /// Row 2 chosen, its change set arrived, and its one file pressed in the Commit tab.
+    /// Row 2 chosen, its change set arrived, and the Changes tab shown, which chooses its
+    /// one file as Fork chooses the first (phase 08: a press in the Commit tab opens a file in
+    /// place instead, and the Changes tab keeps a file of its own).
     fn choose_the_file(test: &mut TestingRunner, view: View) {
         click_row(test, 2);
         arrives(test, view, 2, Vec::new());
-        click_label(test, "file-of-2.rs");
+        click_label(test, DetailTab::Changes.caption());
         test.sync_and_update();
     }
 
@@ -1566,13 +1568,13 @@ mod tests {
         test.sync_and_update();
     }
 
-    /// Phase 06 wiring, R4.4: pressing a file in the Commit tab asks its diff at the
-    /// session's settings and shows the Changes tab, which says it is reading, then draws the
-    /// answer's rows under the bar naming the file — and an answer naming the file at other
-    /// options is not drawn. Caught by: a press that asks nothing, an answer drawn for a
-    /// query no longer selected, or a diff drawn from anything but `DiffState`.
+    /// Phase 06 wiring, R4.4: the Changes tab's file is asked at the session's settings,
+    /// says it is reading, then draws the answer's rows under the bar naming the file — and an
+    /// answer naming the file at other options is not drawn. Caught by: a file chosen that
+    /// asks nothing, an answer drawn for a query no longer selected, or a diff drawn from
+    /// anything but `DiffState`.
     #[test]
-    fn a_pressed_file_draws_its_diff_in_the_changes_tab_for_that_query_alone() {
+    fn the_changes_tabs_file_draws_its_diff_for_that_query_alone() {
         let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
         choose_the_file(&mut test, view);
         let query = last_file_query(&submitted);
@@ -1605,6 +1607,157 @@ mod tests {
         );
         assert!(rows.iter().any(|t| t.starts_with("@@ -3,")), "{rows:?}");
         assert!(rows.iter().any(|t| t == "LINE 5"), "{rows:?}");
+    }
+
+    /// The files opened in place the request asked last names, and whether it asked for
+    /// Expand All.
+    fn last_expansion(submitted: &Submitted) -> crate::worker::ExpandQuery {
+        submitted
+            .borrow()
+            .iter()
+            .rev()
+            .find_map(|request| match request {
+                Request::Expand(asked) => Some(asked.clone()),
+                _ => None,
+            })
+            .expect("files opened in place were asked")
+    }
+
+    /// One file of a page of files opened in place, read by Expand All or by name.
+    fn opened_file(
+        index: usize,
+        diff: cairn_model::FileDiff,
+        by_all: bool,
+    ) -> crate::worker::ExpandedFile {
+        crate::worker::ExpandedFile {
+            file: crate::worker::OpenedFile {
+                index,
+                load_anyway: false,
+            },
+            by_all,
+            outcome: Ok(Box::new(cairn_model::ShownDiff::new(
+                diff,
+                crate::diff_actions::options(DiffSettings::default()).context,
+            ))),
+        }
+    }
+
+    /// C10, R5.3 through the window (Fork, Finding 4): a file pressed in the Commit tab asks
+    /// for its diff in place — the Commit tab stays shown — says it is reading under its row,
+    /// then draws the answer's rows there; pressed again, it closes, and what it drew is
+    /// handed to a worker. Caught by: a press that switches to the Changes tab (phase 06's
+    /// wiring), asks nothing, or draws the rows anywhere but the Commit tab.
+    #[test]
+    fn a_file_pressed_in_the_commit_tab_opens_its_diff_in_place() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        click_row(&mut test, 2);
+        arrives(&mut test, view, 2, Vec::new());
+        click_label(&mut test, "file-of-2.rs");
+        test.sync_and_update();
+        assert_eq!(*view.detail_tab.read(), DetailTab::Commit);
+        let asked = last_expansion(&submitted);
+        assert_eq!(asked.of, Comparison::Commit(oid(2)));
+        assert_eq!(
+            asked.files,
+            [crate::worker::OpenedFile {
+                index: 0,
+                load_anyway: false
+            }]
+        );
+        assert_eq!(asked.all, None);
+        assert!(
+            pane(&test).iter().any(|t| t == cairn_ui::READING_DIFF),
+            "{:?}",
+            pane(&test)
+        );
+
+        let mut diff = view.diff;
+        test.run_in(|| {
+            diff.write()
+                .expansion_arrived(vec![opened_file(0, text_answer(2, 40), false)], None)
+        });
+        test.sync_and_update();
+        test.sync_and_update();
+        // The pane is short: the hunk's header is what shows under the file's row.
+        let rows = pane_rows(&test);
+        assert!(rows.iter().any(|t| t.starts_with("@@ -3,")), "{rows:?}");
+        assert_eq!(*view.detail_tab.read(), DetailTab::Commit);
+
+        let before = submitted.borrow().len();
+        click_label(&mut test, "file-of-2.rs");
+        test.sync_and_update();
+        assert!(
+            !pane_rows(&test).iter().any(|t| t.starts_with("@@")),
+            "the file did not close"
+        );
+        assert!(
+            submitted.borrow()[before..]
+                .iter()
+                .any(|r| matches!(r, Request::Retire(_))),
+            "what the closed file drew was not handed to a worker"
+        );
+    }
+
+    /// C10, R5.3 through the window: Expand All asks from the first file; each page opens its
+    /// files under their rows; when Expand All stops with its budget spent the tab says how
+    /// many files stay collapsed, and the button is Collapse All, which closes every file and
+    /// ends what is in flight. Caught by: Expand All asking nothing, a page not drawn, the
+    /// budget's end not said, or Collapse All leaving files open.
+    #[test]
+    fn expand_all_stops_at_its_budget_and_says_how_many_files_stay_collapsed() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        click_row(&mut test, 2);
+        let mut diff = view.diff;
+        test.run_in(|| {
+            diff.write()
+                .changes_arrived(Comparison::Commit(oid(2)), answer_with(2, 6))
+        });
+        test.sync_and_update();
+        test.sync_and_update();
+        click_label(&mut test, cairn_ui::EXPAND_ALL_CAPTION);
+        let asked = last_expansion(&submitted);
+        assert_eq!(asked.all, Some(crate::worker::AllFrom::default()));
+
+        let file = |k: usize| {
+            let mut answer = text_answer(2, 12);
+            answer.file = answer_with(2, 6).files.remove(k);
+            answer
+        };
+        test.run_in(|| {
+            diff.write().expansion_arrived(
+                vec![opened_file(0, file(0), true), opened_file(1, file(1), true)],
+                Some(crate::worker::AllProgress {
+                    at: crate::worker::AllFrom { next: 2, spent: 50 },
+                    ended: Some(crate::worker::AllEnded::Budget),
+                }),
+            )
+        });
+        test.sync_and_update();
+        test.sync_and_update();
+        let shown = pane(&test);
+        assert!(
+            shown.iter().any(|t| *t == cairn_ui::budget_notice(4)),
+            "the budget's notice is not drawn: {shown:?}"
+        );
+        assert!(shown.iter().any(|t| t == cairn_ui::COLLAPSE_ALL_CAPTION));
+        assert!(pane_rows(&test).iter().any(|t| t.starts_with("@@")));
+
+        let before = submitted.borrow().len();
+        click_label(&mut test, cairn_ui::COLLAPSE_ALL_CAPTION);
+        test.sync_and_update();
+        assert!(!pane_rows(&test).iter().any(|t| t.starts_with("@@")));
+        let superseding = last_expansion(&submitted);
+        assert!(
+            submitted.borrow().len() > before
+                && superseding.files.is_empty()
+                && superseding.all.is_none(),
+            "Collapse All did not end what was in flight: {superseding:?}"
+        );
+        assert!(
+            pane(&test)
+                .iter()
+                .any(|t| t == cairn_ui::EXPAND_ALL_CAPTION)
+        );
     }
 
     fn requests_since(submitted: &Submitted, from: usize) -> Vec<Request> {

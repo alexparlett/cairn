@@ -1318,11 +1318,18 @@ mod tests {
         );
         outbox.send(
             Some(stale_file),
-            Update::FileDiffs {
+            Update::Expanded {
                 of,
                 options: DiffOptions::default(),
-                diffs: vec![diff.clone()],
-                complete: true,
+                files: vec![crate::worker::ExpandedFile {
+                    file: crate::worker::OpenedFile {
+                        index: 0,
+                        load_anyway: false,
+                    },
+                    by_all: true,
+                    outcome: Ok(Box::new(shown.clone())),
+                }],
+                all: None,
             },
         );
         outbox.send(
@@ -1348,12 +1355,12 @@ mod tests {
         );
 
         match block_on(updates.next()) {
-            Some(Update::Superseded(retired)) => assert_eq!(retired.shown(), [shown]),
+            Some(Update::Superseded(retired)) => assert_eq!(retired.shown(), std::slice::from_ref(&shown)),
             other => panic!("expected the stale file diff handed back, got {other:?}"),
         }
         match block_on(updates.next()) {
-            Some(Update::Superseded(retired)) => assert_eq!(retired.diffs(), [diff]),
-            other => panic!("expected the stale batch handed back, got {other:?}"),
+            Some(Update::Superseded(retired)) => assert_eq!(retired.shown(), std::slice::from_ref(&shown)),
+            other => panic!("expected the stale page handed back, got {other:?}"),
         }
         match block_on(updates.next()) {
             Some(Update::Superseded(retired)) => {

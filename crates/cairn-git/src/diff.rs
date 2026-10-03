@@ -24,6 +24,7 @@ mod renames;
 mod submodules;
 mod working_tree;
 
+pub use content::{LineBudget, PAGE_FILES, PAGE_LINES, Page};
 pub use inputs::{DiffInputs, StagedInputs};
 
 use cairn_model::{ChangeSet, ChangedFile, Context, DiffLimits, FileDiff, Oid, RepoPath};
@@ -81,6 +82,14 @@ pub struct ContentOptions {
     /// for those very hunks ([`cairn_model::FunctionContext`]). The changed ranges are the
     /// same at every context; the entire file asks at one line.
     pub context: Context,
+}
+
+/// Which files of a change set a page may read: `files`, indices into `changes.files`, in the
+/// order they are to be read.
+#[derive(Debug, Clone, Copy)]
+pub struct Offered<'a> {
+    pub changes: &'a ChangeSet,
+    pub files: &'a [usize],
 }
 
 /// Which of a path's working-tree diffs to answer (R3.1).
@@ -215,28 +224,38 @@ impl DiffSession<'_> {
             .working_tree_diff(git, path, which, options, cancel)
     }
 
-    /// Every file of `changes`, the change set `request` answered, in its order — what
-    /// Expand All shows. Each is decided as [`DiffSession::file_diff`] decides it, but the
-    /// lines of every text file git has to compare come from ONE `git diff-tree -p` over the
-    /// whole comparison (two with whitespace ignored), asked with the change set's own rename
-    /// detection; a file that answer does not hold as the change set does is asked about on
-    /// its own. `cancel` is checked between files and polled while git runs.
-    pub fn file_diffs(
+    /// One page of a change set's files, the change set `request` answered — what Expand All
+    /// and a file opened in place read: the files `offered` names, in order, each decided as
+    /// [`DiffSession::file_diff`] decides it, until the page is full ([`PAGE_FILES`],
+    /// [`PAGE_LINES`]) or `budget`, when given, is spent — each file admitted or not before
+    /// its blobs are read. The lines of the page's text files come from as few `git diff-tree
+    /// -p` runs over the page's paths as the algorithms allow, with the change set's own rename
+    /// detection; a file those runs do not answer as the change set holds it is asked about on
+    /// its own. A file that fails is that file's outcome in the [`Page`] (one bad file never
+    /// fails the rest); what fails the call is what no file is to blame for — a configuration
+    /// git refuses, a superseded query ([`Error::ContentCancelled`]). `cancel` is checked
+    /// between files and polled while git runs. Offer the files from `page.taken` on for the
+    /// next page.
+    pub fn page(
         &mut self,
         git: &GitBinary,
         request: &ChangesRequest,
-        changes: &ChangeSet,
+        Offered {
+            changes,
+            files: offered,
+        }: Offered<'_>,
+        budget: Option<&mut LineBudget>,
         options: &ContentOptions,
         cancel: &impl Cancel,
-    ) -> Result<Vec<FileDiff>, Error> {
+    ) -> Result<Page, Error> {
         let (old, new, _) = changes::subject(self.repo.inner(), request)?;
         let trees = content::Trees { old, new };
-        content::file_diffs(
+        content::page(
             self.repo,
             &mut self.cache,
             git,
             trees,
-            changes,
+            (changes, offered, budget),
             options,
             cancel,
         )

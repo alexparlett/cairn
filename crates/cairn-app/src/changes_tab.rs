@@ -82,6 +82,19 @@ impl Component for ChangesTab {
                 submit(request);
             }
         });
+        // A file whose request lost the lane to the Commit tab's files opened in place (they
+        // share it) is asked again as this tab is shown.
+        let reasking = self.submit.clone();
+        use_side_effect(move || {
+            if !view.diff.read().file_needs_asking() {
+                return;
+            }
+            let mut diff = view.diff;
+            let asked = diff.write().reask_file();
+            if let (Some(request), Some(submit)) = (asked, reasking.as_deref()) {
+                submit(request);
+            }
+        });
         // With no file chosen, the first the list shows is: Fork's default (Finding 5).
         let choosing = self.submit.clone();
         use_side_effect(move || {

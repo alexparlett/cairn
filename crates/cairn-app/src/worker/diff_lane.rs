@@ -39,18 +39,21 @@ use std::time::SystemTime;
 
 use cairn_git::ops::GitBinary;
 use cairn_git::{
-    Cancel, ChangesRequest, ContentOptions, DiffSession, Error, Repository, SharedRepository,
-    WorkingTreeDiff,
+    Cancel, ChangesRequest, ContentOptions, DiffSession, Error, LineBudget, Offered, Repository,
+    SharedRepository, WorkingTreeDiff,
 };
 use cairn_model::ShownDiff;
 use cairn_model::{ChangeSet, FileDiff};
+
+use super::expand_all::EXPAND_ALL_LINES;
 
 use super::diff_answers::{Answers, searched_paths};
 use super::diff_freshness::{Dependence, Directories, Freshness, Moved, SessionReads};
 use super::epoch::{Epoch, Epochs, Superseded};
 use super::pool::Outbox;
 use super::request::{
-    Comparison, DiffOptions, DiffQuery, FileQuery, FileTarget, Update, WorkingSide,
+    AllEnded, AllFrom, AllProgress, Comparison, DiffOptions, DiffQuery, ExpandQuery, ExpandedFile,
+    FileQuery, FileTarget, OpenedFile, Update, WorkingSide,
 };
 use super::startup::Startup;
 
@@ -305,7 +308,7 @@ impl Waiting {
             }
             DiffJob::Query { epoch, query } => match *query {
                 query @ DiffQuery::Changes(_) => self.changes = Some((epoch, query)),
-                query @ (DiffQuery::File(_) | DiffQuery::All { .. }) => {
+                query @ (DiffQuery::File(_) | DiffQuery::Expand(_)) => {
                     self.file = Some((epoch, query));
                 }
             },
@@ -348,25 +351,21 @@ impl<'a> Served<'a, '_> {
         let outcome = match &query {
             DiffQuery::Changes(of) => self
                 .change_set(*of, &mut kept.answers)
-                .map(|changes| Update::Changes { of: *of, changes }),
+                .map(|changes| Some(Update::Changes { of: *of, changes })),
             // Prepared for the views here, on this thread, never on the UI thread: both rows'
             // indexes and a pass over the drawn bytes, 39 ms for a 64 MiB file (phase 06 QA).
-            DiffQuery::File(asked) => self.file_diff(asked, kept).map(|diff| Update::FileDiff {
-                query: asked.clone(),
-                diff: diff.map(|diff| Box::new(ShownDiff::new(diff, asked.options.context))),
+            DiffQuery::File(asked) => self.file_diff(asked, kept).map(|diff| {
+                Some(Update::FileDiff {
+                    query: asked.clone(),
+                    diff: diff.map(|diff| Box::new(ShownDiff::new(diff, asked.options.context))),
+                })
             }),
-            DiffQuery::All { of, options } => {
-                self.every_file(*of, options, kept)
-                    .map(|diffs| Update::FileDiffs {
-                        of: *of,
-                        options: *options,
-                        diffs,
-                        complete: true,
-                    })
-            }
+            // Answered a page at a time as it is read, so its pages are sent from inside.
+            DiffQuery::Expand(asked) => self.expand(asked, kept).map(|()| None),
         };
         match outcome {
-            Ok(update) => self.send(update),
+            Ok(Some(update)) => self.send(update),
+            Ok(None) => {}
             // Superseded: asked for by whoever superseded it, and nothing to show.
             Err(error) if was_cancelled(&error) || !self.epochs.is_current(self.epoch) => {}
             Err(error) => self.send(Update::DiffFailed {
@@ -432,26 +431,148 @@ impl<'a> Served<'a, '_> {
         }
     }
 
-    /// Expand All: every file of `of`'s change set, in one engine call that checks the
-    /// epoch between files and while each `git` read runs — so a newer file diff or
-    /// changes query ends it at the next file or kills its read, rather than waiting
-    /// behind it. Not kept: phase 08 bounds and pages it. A file whose reads disagree fails
-    /// the whole call today; phase 08 answers per file.
-    fn every_file(
-        &mut self,
-        of: Comparison,
-        options: &DiffOptions,
-        kept: &mut Kept<'a>,
-    ) -> Result<Vec<FileDiff>, Error> {
-        let changes = self.change_set(of, &mut kept.answers)?;
-        let read = self.directories.of(changes
+    /// Files opened in place (R5.3), answered a page at a time as each is read: first the
+    /// files opened by name — those read past the limits apart, since a page is read at one
+    /// set of options — then, when Expand All is on its way, the rest of the change set from
+    /// where it stands, until its line budget ([`EXPAND_ALL_LINES`]) is spent or every file is
+    /// open. Each page is read with the engine's per-page bound and sent as soon as it is
+    /// prepared, so the memory held is a page's, and a file's failure is that file's outcome.
+    /// The epoch is checked between files and polled while each read runs, so a newer request
+    /// in the lane — another expansion, a file diff, a changes query — ends this one at the
+    /// next file or kills its read. Nothing is kept: a page is read once and handed over.
+    fn expand(&mut self, asked: &ExpandQuery, kept: &mut Kept<'a>) -> Result<(), Error> {
+        let changes = asked.changes.as_ref();
+        let request = request(asked.of);
+        let named = |load_anyway: bool| -> Vec<usize> {
+            asked
+                .files
+                .iter()
+                .filter(|file| file.load_anyway == load_anyway)
+                .map(|file| file.index)
+                .collect()
+        };
+        let all_from = asked.all.map(|all| all.next.min(changes.files.len()));
+        // The directories whose attributes this reads: the files named, and every file Expand
+        // All may still reach.
+        let reached = asked
             .files
             .iter()
-            .flat_map(|file| [&file.old_path, &file.new_path]));
+            .map(|file| file.index)
+            .chain(
+                all_from
+                    .into_iter()
+                    .flat_map(|from| from..changes.files.len()),
+            )
+            .filter_map(|index| changes.files.get(index))
+            .flat_map(|file| [&file.old_path, &file.new_path]);
+        let read = self.directories.of(reached);
         let session = kept.session_for(self.repo, &read)?;
-        let options = content_options(options);
-        session.file_diffs(self.git, &request(of), &changes, &options, &self.cancel)
+
+        for load_anyway in [false, true] {
+            let offered = named(load_anyway);
+            let mut options = asked.options;
+            options.load_anyway = load_anyway;
+            let content = content_options(&options);
+            let mut from = 0;
+            while from < offered.len() {
+                let page = session.page(
+                    self.git,
+                    &request,
+                    Offered {
+                        changes,
+                        files: &offered[from..],
+                    },
+                    None,
+                    &content,
+                    &self.cancel,
+                )?;
+                // A page always takes a file when it has no budget; this only keeps a page
+                // that took nothing from looping.
+                if page.taken == 0 {
+                    break;
+                }
+                from += page.taken;
+                self.send(Update::Expanded {
+                    of: asked.of,
+                    options: asked.options,
+                    files: prepared(page.files, asked.options, load_anyway, false),
+                    all: None,
+                });
+            }
+        }
+
+        let (Some(start), Some(all)) = (all_from, asked.all) else {
+            return Ok(());
+        };
+        let offered: Vec<usize> = (start..changes.files.len()).collect();
+        let mut budget = LineBudget::resumed(EXPAND_ALL_LINES, all.spent);
+        let content = content_options(&asked.options);
+        let mut from = 0;
+        loop {
+            let page = if from < offered.len() && !budget.is_spent() {
+                Some(session.page(
+                    self.git,
+                    &request,
+                    Offered {
+                        changes,
+                        files: &offered[from..],
+                    },
+                    Some(&mut budget),
+                    &content,
+                    &self.cancel,
+                )?)
+            } else {
+                None
+            };
+            let (files, taken) = match page {
+                Some(page) => (page.files, page.taken),
+                None => (Vec::new(), 0),
+            };
+            from += taken;
+            let ended = if from >= offered.len() {
+                Some(AllEnded::Every)
+            } else if budget.is_spent() || taken == 0 {
+                Some(AllEnded::Budget)
+            } else {
+                None
+            };
+            self.send(Update::Expanded {
+                of: asked.of,
+                options: asked.options,
+                files: prepared(files, asked.options, false, true),
+                all: Some(AllProgress {
+                    at: AllFrom {
+                        next: start + from,
+                        spent: budget.spent(),
+                    },
+                    ended,
+                }),
+            });
+            if ended.is_some() {
+                return Ok(());
+            }
+        }
     }
+}
+
+/// A page's files prepared for the views on this thread, as a single file's diff is: each
+/// outcome a [`ShownDiff`] at the context asked, or its failure as display text.
+fn prepared(
+    files: Vec<(usize, Result<FileDiff, Error>)>,
+    options: DiffOptions,
+    load_anyway: bool,
+    by_all: bool,
+) -> Vec<ExpandedFile> {
+    files
+        .into_iter()
+        .map(|(index, outcome)| ExpandedFile {
+            file: OpenedFile { index, load_anyway },
+            by_all,
+            outcome: outcome
+                .map(|diff| Box::new(ShownDiff::new(diff, options.context)))
+                .map_err(|error| error.to_string()),
+        })
+        .collect()
 }
 
 /// Asks again while git's lines and Cairn's read of the same working-tree content

@@ -63,8 +63,8 @@ use cairn_model::{
     ChangeStatus, ChangedFile, ChangedRange, DiffLine, LineNumber, LineSpan, Oid, RepoPath,
 };
 
+use super::Detection;
 use super::changes::RawRecords;
-use super::{Detection, Submodules};
 use crate::ops::GitBinary;
 use crate::{Cancel, Error, Repository};
 
@@ -114,16 +114,10 @@ pub(crate) enum Scope<'a> {
     /// what pairs them — `-M` for a rename, `-C --find-copies-harder` for a copy, so that a
     /// copy's source is a candidate whether or not it changed, and none otherwise.
     File(&'a ChangedFile),
-    /// Every file of the comparison, with the changes query's detection and submodule rule,
-    /// so git pairs and lists exactly what that query listed.
-    Comparison {
-        detection: Detection,
-        submodules: Submodules<'a>,
-    },
-    /// Some files of the comparison — those that share an algorithm Expand All could not
-    /// ask the whole comparison with — by their paths, read literally, under the changes
-    /// query's detection. A file whose pair or status that answer does not hold as the
-    /// change set does is the caller's to ask about alone.
+    /// Some files of the comparison — one page of them that share an algorithm, as Expand
+    /// All and a file opened in place read them — by their paths, read literally, under the
+    /// changes query's detection. A file whose pair or status that answer does not hold as
+    /// the change set does is the caller's to ask about alone.
     Paths {
         files: &'a [&'a ChangedFile],
         detection: Detection,
@@ -492,15 +486,6 @@ fn arguments(query: &PatchQuery<'_>) -> Vec<OsString> {
             | ChangeStatus::Modified
             | ChangeStatus::TypeChanged => arguments.push("--no-renames".into()),
         },
-        Scope::Comparison {
-            detection,
-            submodules,
-        } => {
-            arguments.extend(detection.arguments().into_iter().map(OsString::from));
-            if submodules == Submodules::HideEvery {
-                arguments.push("--ignore-submodules=all".into());
-            }
-        }
         Scope::Paths { detection, .. } => {
             arguments.extend(detection.arguments().into_iter().map(OsString::from));
         }
@@ -514,18 +499,6 @@ fn arguments(query: &PatchQuery<'_>) -> Vec<OsString> {
             arguments.push(path(&file.new_path));
             if file.old_path != file.new_path {
                 arguments.push(path(&file.old_path));
-            }
-        }
-        Scope::Comparison { submodules, .. } => {
-            if let Submodules::Excluding(paths) = submodules
-                && !paths.is_empty()
-            {
-                arguments.push("--".into());
-                for excluded in paths {
-                    let mut pathspec = b":(exclude,literal)".to_vec();
-                    pathspec.extend_from_slice(excluded.as_bytes());
-                    arguments.push(OsString::from_vec(pathspec));
-                }
             }
         }
         Scope::Paths { files, .. } => {
@@ -1057,33 +1030,7 @@ mod tests {
         assert!(a.ends_with(&["--".into(), "dst".into(), "src".into()]));
     }
 
-    /// The whole-comparison form asks what the changes query asked, and nothing it would
-    /// read as a literal pathspec — its exclusions are magic.
-    #[test]
-    fn a_comparison_read_asks_what_the_changes_query_asked() {
-        let (old, new) = (Oid::parse(OLD).unwrap(), Oid::parse(NEW).unwrap());
-        let excluded = [RepoPath::new("sub")];
-        let asked = PatchQuery {
-            old: &old,
-            new: &new,
-            context: 5,
-            algorithm: Some(Algorithm::Myers),
-            ignore_whitespace: false,
-            scope: Scope::Comparison {
-                detection: Detection::Copies { limit: 7 },
-                submodules: Submodules::Excluding(&excluded),
-            },
-        };
-        let arguments = strings(arguments(&asked));
-        assert_eq!(arguments[0], "-c", "{arguments:?}");
-        assert!(!arguments.iter().any(|a| a == "--literal-pathspecs"));
-        assert!(!arguments.iter().any(|a| a == "-a"));
-        assert!(arguments.iter().any(|a| a == "-U5"));
-        assert!(arguments.windows(2).any(|pair| pair == ["-C", "-l7"]));
-        assert!(arguments.ends_with(&["--".into(), ":(exclude,literal)sub".into()]));
-    }
-
-    /// A group of files is read like the comparison — its detection, no `-a`, so a file git
+    /// A group of files is read with the changes query's detection, no `-a`, so a file git
     /// calls binary is the caller's to ask about alone — but by their paths, read
     /// literally, each named once. Caught by: a path read with magic, a pair's old path
     /// left out (which unpairs the rename), or `-a` forced on files git was not asked to

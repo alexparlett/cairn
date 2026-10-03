@@ -9,8 +9,7 @@ use std::sync::Arc;
 
 use cairn_model::ShownDiff;
 use cairn_model::{
-    ChangeSet, ChangedFile, CommandRecord, Context, FileDiff, HistoryRow, Oid, RemoteSummary,
-    RepoPath,
+    ChangeSet, ChangedFile, CommandRecord, Context, HistoryRow, Oid, RemoteSummary, RepoPath,
 };
 
 use super::askpass::PromptId;
@@ -94,11 +93,72 @@ pub enum DiffQuery {
     Changes(Comparison),
     /// One file's diff.
     File(FileQuery),
-    /// Every file of `of`'s change set, in its order (Expand All).
-    All {
-        of: Comparison,
-        options: DiffOptions,
-    },
+    /// Files of `of`'s change set opened in place: some by name, and Expand All's from where it
+    /// stands.
+    Expand(ExpandQuery),
+}
+
+/// Files of a change set to open in place in the Commit tab (PRD R5.3): the ones opened one at
+/// a time, by name, and — when Expand All is on its way — the rest of the change set from the
+/// file it reached, under its line budget. Read on the diff thread a page at a time, each page
+/// answered as it is read ([`Update::Expanded`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpandQuery {
+    pub of: Comparison,
+    /// The window's own change set, shared rather than copied: the files are named by their
+    /// index in it.
+    pub changes: Arc<ChangeSet>,
+    /// What every file is asked at — the view's context and whether whitespace is ignored.
+    /// Its `load_anyway` is never set: that is per file, in `files`.
+    pub options: DiffOptions,
+    /// The files opened one at a time and not answered yet, in the order to read them.
+    pub files: Vec<OpenedFile>,
+    /// Expand All, taken up where it stands; `None` when it is not on its way.
+    pub all: Option<AllFrom>,
+}
+
+/// One file opened in place, by its index in the change set, and whether it is read past
+/// R2.6's limits (its Load Diff pressed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct OpenedFile {
+    pub index: usize,
+    pub load_anyway: bool,
+}
+
+/// Where an Expand All stands: the first file it has not decided, and the lines its files have
+/// spent of its budget so far — so one superseded midway is taken up again where it stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AllFrom {
+    pub next: usize,
+    pub spent: u64,
+}
+
+/// What a page of Expand All leaves it at: where it stands, and whether it has ended — at the
+/// last file, or with its budget spent and the rest left collapsed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AllProgress {
+    pub at: AllFrom,
+    pub ended: Option<AllEnded>,
+}
+
+/// Why an Expand All ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AllEnded {
+    /// Every file was opened.
+    Every,
+    /// Its line budget was spent: the files from `next` on stay collapsed.
+    Budget,
+}
+
+/// One file of an [`Update::Expanded`] page: which file, read with or without the limits, and
+/// what it turned out to be — prepared for the views on the worker — or why it could not be
+/// read, as display text. A file's failure is that file's alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpandedFile {
+    pub file: OpenedFile,
+    /// Whether Expand All read it, rather than its being opened by name.
+    pub by_all: bool,
+    pub outcome: Result<Box<ShownDiff>, String>,
 }
 
 impl DiffQuery {
@@ -108,7 +168,7 @@ impl DiffQuery {
     pub fn lane(&self) -> QueryLane {
         match self {
             Self::Changes(_) => QueryLane::Changes,
-            Self::File(_) | Self::All { .. } => QueryLane::FileDiff,
+            Self::File(_) | Self::Expand(_) => QueryLane::FileDiff,
         }
     }
 }
@@ -123,25 +183,15 @@ pub struct Retired(Box<RetiredAnswers>);
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RetiredAnswers {
     changes: Option<Arc<ChangeSet>>,
-    diffs: Vec<FileDiff>,
     shown: Vec<ShownDiff>,
 }
 
 impl Retired {
-    /// What is let go of: a change set, file diffs, and a diff as the view drew it (its rows'
-    /// indexes with it). `None` when that is nothing.
-    pub fn of(
-        changes: Option<Arc<ChangeSet>>,
-        diffs: Vec<FileDiff>,
-        shown: Vec<ShownDiff>,
-    ) -> Option<Self> {
-        (changes.is_some() || !diffs.is_empty() || !shown.is_empty()).then(|| {
-            Self(Box::new(RetiredAnswers {
-                changes,
-                diffs,
-                shown,
-            }))
-        })
+    /// What is let go of: a change set, and diffs as the views drew them (their rows' indexes
+    /// with them) — a file's, and the files opened in place. `None` when that is nothing.
+    pub fn of(changes: Option<Arc<ChangeSet>>, shown: Vec<ShownDiff>) -> Option<Self> {
+        (changes.is_some() || !shown.is_empty())
+            .then(|| Self(Box::new(RetiredAnswers { changes, shown })))
     }
 
     /// The change set let go of, for a test that checks what was handed over.
@@ -154,12 +204,6 @@ impl Retired {
     #[cfg(test)]
     pub fn shown(&self) -> &[ShownDiff] {
         &self.0.shown
-    }
-
-    /// The file diffs let go of, for a test that checks what was handed over.
-    #[cfg(test)]
-    pub fn diffs(&self) -> &[FileDiff] {
-        &self.0.diffs
     }
 }
 
@@ -175,19 +219,12 @@ pub enum Request {
     /// One file's diff, answered by [`Update::FileDiff`]. Supersedes the file diff in
     /// flight, and nothing else.
     FileDiff(FileQuery),
-    /// Every file of `of`'s change set (Expand All), answered by [`Update::FileDiffs`] —
-    /// in the file-diff lane, so a file diff or a changes query asked after it ends it.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Expand All is drawn in phase 08; the worker answers it"
-        )
-    )]
-    ExpandAll {
-        of: Comparison,
-        options: DiffOptions,
-    },
+    /// Files of a change set opened in place (R5.3): those opened by name, and Expand All's
+    /// from where it stands, answered a page at a time by [`Update::Expanded`] — in the
+    /// file-diff lane, so a file diff, a changes query or a newer expansion asked after it
+    /// ends it between files or kills its read. One that names nothing to read asks nothing:
+    /// what it is for is to supersede the one in flight (Collapse All).
+    Expand(ExpandQuery),
     /// Which of `files`' files hold `text` in a path (the Changes tab's filter, R5.4),
     /// answered by [`Update::FilteredFiles`]: a pass over every path, so run on a worker and
     /// never on the UI thread. Numbered in the file-filter lane, so the next keystroke
@@ -240,7 +277,7 @@ impl Request {
         match self {
             Self::OpenHistory { .. } | Self::MoreHistory { .. } => Some(QueryLane::History),
             Self::Changes { .. } => Some(QueryLane::Changes),
-            Self::FileDiff(_) | Self::ExpandAll { .. } => Some(QueryLane::FileDiff),
+            Self::FileDiff(_) | Self::Expand(_) => Some(QueryLane::FileDiff),
             Self::FilterFiles { .. } => Some(QueryLane::FileFilter),
             Self::ListRemotes
             | Self::ConfiguredContext
@@ -323,14 +360,14 @@ pub enum Update {
         text: String,
         files: Vec<u32>,
     },
-    /// Expand All's answer: files of `of`'s change set in its order, appended to what
-    /// came before; `complete` says no more follow. One batch, complete, until phase 08
-    /// bounds Expand All and pages it.
-    FileDiffs {
+    /// A page of files opened in place, of `of`'s change set at `options`: each file's
+    /// outcome, and — for a page of Expand All — where it stands after it. Pages arrive in the
+    /// order they are read; the files opened by name come before Expand All's.
+    Expanded {
         of: Comparison,
         options: DiffOptions,
-        diffs: Vec<FileDiff>,
-        complete: bool,
+        files: Vec<ExpandedFile>,
+        all: Option<AllProgress>,
     },
     /// A diff query failed: `query` is what was asked, so the window shows the failure
     /// only for the selection it names, and `message` is display text. A query that was
@@ -353,15 +390,11 @@ impl Update {
     /// update does not compile until it is placed.
     pub(super) fn into_retired(self) -> Option<Retired> {
         match self {
-            Self::Changes { changes, .. } => {
-                Retired::of(Some(Arc::new(changes)), Vec::new(), Vec::new())
+            Self::Changes { changes, .. } => Retired::of(Some(Arc::new(changes)), Vec::new()),
+            Self::FileDiff { diff, .. } => {
+                Retired::of(None, diff.map(|shown| *shown).into_iter().collect())
             }
-            Self::FileDiff { diff, .. } => Retired::of(
-                None,
-                Vec::new(),
-                diff.map(|shown| *shown).into_iter().collect(),
-            ),
-            Self::FileDiffs { diffs, .. } => Retired::of(None, diffs, Vec::new()),
+            Self::Expanded { files, .. } => Retired::of(None, expanded_diffs(files)),
             Self::Superseded(retired) => Some(retired),
             Self::Rows { .. }
             | Self::Failed { .. }
@@ -380,6 +413,15 @@ impl Update {
             | Self::DiffFailed { .. } => None,
         }
     }
+}
+
+/// The diffs a page of files opened in place holds, for a worker to free.
+pub fn expanded_diffs(files: Vec<ExpandedFile>) -> Vec<ShownDiff> {
+    files
+        .into_iter()
+        .filter_map(|file| file.outcome.ok())
+        .map(|shown| *shown)
+        .collect()
 }
 
 #[cfg(test)]
@@ -417,10 +459,17 @@ mod tests {
                 QueryLane::FileFilter,
             ),
             (
-                Request::ExpandAll {
+                Request::Expand(ExpandQuery {
                     of: commit,
+                    changes: Arc::new(ChangeSet {
+                        files: Vec::new(),
+                        details: None,
+                        renames: cairn_model::RenameDetection::default(),
+                    }),
                     options: DiffOptions::default(),
-                },
+                    files: Vec::new(),
+                    all: Some(AllFrom::default()),
+                }),
                 QueryLane::FileDiff,
             ),
         ] {
@@ -436,7 +485,6 @@ mod tests {
             Request::CommandLog,
             Request::Retire(Retired(Box::new(RetiredAnswers {
                 changes: None,
-                diffs: Vec::new(),
                 shown: Vec::new(),
             }))),
             Request::Close,

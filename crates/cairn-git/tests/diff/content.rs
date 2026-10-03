@@ -1027,7 +1027,7 @@ fn the_content_query_writes_nothing_and_runs_nothing() {
             text_files += usize::from(matches!(diff.content, DiffContent::Text { .. }));
         }
         let _ = ok(
-            session.file_diffs(super::git(), &request, &set, &options, &CancelSignal::new()),
+            super::every_file(&mut session, &request, &set, &options, &CancelSignal::new()),
             "Expand All answers",
         );
     }
@@ -1203,8 +1203,8 @@ fn expand_all_superseded_while_its_answers_are_assembled_ends_there() {
         "the changes query answers",
     );
     assert!(set.files.len() >= 2, "the commit must change several files");
-    let outcome = session.file_diffs(
-        super::git(),
+    let outcome = super::every_file(
+        &mut session,
         &request,
         &set,
         &ContentOptions::default(),

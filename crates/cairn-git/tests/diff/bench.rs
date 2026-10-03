@@ -358,8 +358,8 @@ fn measures_the_diff_queries_against_a_named_repository() {
     let set = changes(&mut session, &id);
     let all = |session: &mut DiffSession<'_>| {
         super::ok(
-            session.file_diffs(
-                super::git(),
+            super::every_file(
+                session,
                 &request,
                 &set,
                 &ContentOptions::default(),

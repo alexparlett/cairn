@@ -8,16 +8,20 @@
 //! names anything but what is selected now — the selection cleared, or changed in a way
 //! that asked nothing new — so the files of one commit are never drawn under another.
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, LazyLock};
 
 use cairn_model::ShownDiff;
 use cairn_model::{
     ChangeSet, ChangeStatus, ChangedFile, Context, DiffContent, FileDiff, RenameDetection, RepoPath,
 };
-use cairn_ui::ShownFiles;
+use cairn_ui::{Expansion, Opened, ShownFiles};
 
 use crate::file_filter::FileFilter;
-use crate::worker::{Comparison, DiffOptions, DiffQuery, FileQuery, Request, Retired};
+use crate::worker::{
+    AllEnded, AllFrom, AllProgress, Comparison, DiffOptions, DiffQuery, ExpandQuery, ExpandedFile,
+    FileQuery, OpenedFile, Request, Retired,
+};
 
 /// An answer the window is waiting for, has, or was told failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,11 +32,57 @@ pub enum Answer<T> {
     Failed(String),
 }
 
-/// Expand All's files so far, in the change set's order, and whether they are all here.
+/// Where Expand All stands, as the window keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AllState {
+    /// Not pressed, or collapsed again.
+    Off,
+    /// On its way, from where it stands — taken up from there if it is superseded.
+    Running(AllFrom),
+    /// Every file opened.
+    Done,
+    /// Its line budget spent: the files it did not reach stay collapsed.
+    Stopped,
+}
+
+/// The files of the selected change set opened in place in the Commit tab (R5.3): what each
+/// draws, the ones read past R2.6's limits, where Expand All stands, and the options every
+/// file is asked at.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Expanded {
-    pub diffs: Vec<FileDiff>,
-    pub complete: bool,
+struct Opening {
+    of: Comparison,
+    /// The view's context and whitespace setting; never `load_anyway`, which is per file.
+    options: DiffOptions,
+    shown: Expansion,
+    loaded: BTreeSet<usize>,
+    all: AllState,
+    /// The request for what is unanswered is the one in the file-diff lane now. The Changes
+    /// tab's file shares the lane, so asking for it takes the lane from this, and the other
+    /// way round; whichever lost it asks again when its tab is shown.
+    in_lane: bool,
+}
+
+/// Which of the two selections sharing the file-diff lane a change of settings asks for at
+/// once: the one whose tab is shown. The other is asked when its tab is shown again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Asking {
+    File,
+    Expansion,
+}
+
+/// The diffs `opened` holds, for a worker to free.
+fn shown_of(opened: impl IntoIterator<Item = Opened>) -> Vec<ShownDiff> {
+    opened
+        .into_iter()
+        .filter_map(|opened| match opened {
+            Opened::Shown(shown) => Some(*shown),
+            Opened::Reading | Opened::Failed(_) => None,
+        })
+        .collect()
+}
+
+fn retire(shown: Vec<ShownDiff>) -> Option<Request> {
+    Retired::of(None, shown).map(Request::Retire)
 }
 
 /// The diff selection and its answers.
@@ -44,8 +94,10 @@ pub struct DiffState {
     /// The file selected, and its diff as the view draws it, prepared on the worker that
     /// answered it — `None` inside `Ready` for a clean working-tree path.
     file: Option<(FileQuery, Answer<Option<ShownDiff>>)>,
-    /// Expand All over a comparison, at some options, and what has arrived of it.
-    expanded: Option<(Comparison, DiffOptions, Answer<Expanded>)>,
+    /// The files opened in place in the Commit tab, for the comparison selected.
+    opening: Option<Opening>,
+    /// The file selected's request is the one in the file-diff lane now (see `Opening`).
+    file_in_lane: bool,
     /// The Changes tab's filter over the selected change set's files (phase 07).
     filter: FileFilter,
     /// Where the file selected is in the change set, when it was chosen from it: what the
@@ -64,23 +116,23 @@ impl DiffState {
     pub fn select_changes(&mut self, of: Comparison) -> Vec<Request> {
         let changes = self.changes.replace((of, Answer::Waiting));
         let file = self.file.take();
-        let expanded = self.expanded.take();
+        let opening = self.opening.take();
         self.file_index = None;
+        self.file_in_lane = false;
         self.filter.changes_selected();
         let mut shown_diffs: Vec<ShownDiff> = Vec::new();
         if let Some((_, Answer::Ready(Some(shown)))) = file {
             shown_diffs.push(shown);
         }
-        let mut diffs: Vec<FileDiff> = Vec::new();
-        if let Some((_, _, Answer::Ready(Expanded { diffs: all, .. }))) = expanded {
-            diffs.extend(all);
+        if let Some(mut opening) = opening {
+            shown_diffs.extend(shown_of(opening.shown.close_all()));
         }
         let changes = changes.and_then(|(_, answer)| match answer {
             Answer::Ready(changes) => Some(changes),
             Answer::Waiting | Answer::Failed(_) => None,
         });
         let mut requests = vec![Request::Changes { of }];
-        requests.extend(Retired::of(changes, diffs, shown_diffs).map(Request::Retire));
+        requests.extend(Retired::of(changes, shown_diffs).map(Request::Retire));
         requests
     }
 
@@ -92,27 +144,50 @@ impl DiffState {
     /// of fifty thousand lines is as many allocations to free.
     pub fn select_file(&mut self, query: FileQuery) -> Vec<Request> {
         let replaced = self.file.replace((query.clone(), Answer::Waiting));
-        self.expanded = None;
+        self.took_lane_for_file();
         let mut requests = vec![Request::FileDiff(query)];
         if let Some((_, Answer::Ready(Some(shown)))) = replaced {
-            requests.extend(Retired::of(None, Vec::new(), vec![shown]).map(Request::Retire));
+            requests.extend(retire(vec![shown]));
         }
         requests
     }
 
-    /// Asks for every file of `of`. The single file selected goes: it shares the lane.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Expand All is drawn in phase 08; its answers land here"
-        )
-    )]
-    pub fn expand_all(&mut self, of: Comparison, options: DiffOptions) -> Request {
-        self.expanded = Some((of, options, Answer::Waiting));
-        self.file = None;
-        self.file_index = None;
-        Request::ExpandAll { of, options }
+    /// The file selected's request is now the one in the file-diff lane; whatever the
+    /// expansion asked is superseded, and asked again when the Commit tab is shown.
+    fn took_lane_for_file(&mut self) {
+        self.file_in_lane = true;
+        if let Some(opening) = &mut self.opening {
+            opening.in_lane = false;
+        }
+    }
+
+    /// Whether the file selected is awaited and its request lost the lane: what the Changes
+    /// tab checks, reading only, before it asks again.
+    pub fn file_needs_asking(&self) -> bool {
+        !self.file_in_lane && matches!(self.file, Some((_, Answer::Waiting)))
+    }
+
+    /// Whether files opened in place are awaited and their request lost the lane.
+    pub fn expansion_needs_asking(&self) -> bool {
+        self.opening.as_ref().is_some_and(|opening| {
+            !opening.in_lane
+                && (matches!(opening.all, AllState::Running(_))
+                    || opening
+                        .shown
+                        .iter()
+                        .any(|(_, opened)| matches!(opened, Opened::Reading)))
+        })
+    }
+
+    /// The file selected asked again when its answer is still awaited and its request lost
+    /// the lane to the files opened in place: what the Changes tab does as it is shown.
+    pub fn reask_file(&mut self) -> Option<Request> {
+        let query = match &self.file {
+            Some((query, Answer::Waiting)) if !self.file_in_lane => query.clone(),
+            Some(_) | None => return None,
+        };
+        self.took_lane_for_file();
+        Some(Request::FileDiff(query))
     }
 
     /// Nothing selected: whatever is still on its way is not drawn.
@@ -153,17 +228,246 @@ impl DiffState {
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Expand All is drawn in phase 08; its answers land here"
-        )
-    )]
-    pub fn expanded(&self) -> Option<(Comparison, DiffOptions, &Answer<Expanded>)> {
-        self.expanded
-            .as_ref()
-            .map(|(of, options, answer)| (*of, *options, answer))
+    /// Where Expand All stands for the change set selected, if anything is open or asked.
+    #[cfg(test)]
+    pub fn all_state(&self) -> Option<AllState> {
+        self.opening.as_ref().map(|opening| opening.all)
+    }
+}
+
+/// The Commit tab's files opened in place (phase 08, R5.3).
+impl DiffState {
+    /// The opening for the change set selected now, made at `options` if there is none; `None`
+    /// while no change set is here to name files of.
+    fn opening_now(&mut self, options: DiffOptions) -> Option<&mut Opening> {
+        let of = match &self.changes {
+            Some((of, Answer::Ready(_))) => *of,
+            Some((_, Answer::Waiting | Answer::Failed(_))) | None => return None,
+        };
+        let opening = self.opening.get_or_insert_with(|| Opening {
+            of,
+            options: DiffOptions {
+                load_anyway: false,
+                ..options
+            },
+            shown: Expansion::new(),
+            loaded: BTreeSet::new(),
+            all: AllState::Off,
+            in_lane: false,
+        });
+        Some(opening)
+    }
+
+    /// Opens the change set's file at `index` in place, or closes it when it is open (Fork,
+    /// Finding 4). Returns what to submit: the request for what is unanswered when a file
+    /// opened, and a closed file's diff handed to a worker to free.
+    pub fn toggle_file(&mut self, index: usize, options: DiffOptions) -> Vec<Request> {
+        let Some(opening) = self.opening_now(options) else {
+            return Vec::new();
+        };
+        if opening.shown.is_open(index) {
+            opening.loaded.remove(&index);
+            let closed = opening.shown.close([index]);
+            return retire(shown_of(closed)).into_iter().collect();
+        }
+        opening.shown.set([(index, Opened::Reading)]);
+        self.ask_expansion().into_iter().collect()
+    }
+
+    /// Expand All (R5.3): every file opened in the change set's order, from the first, until
+    /// its line budget is spent. Files already open are read again with the rest, replacing
+    /// what they drew.
+    pub fn expand_all(&mut self, options: DiffOptions) -> Vec<Request> {
+        let Some(opening) = self.opening_now(options) else {
+            return Vec::new();
+        };
+        opening.all = AllState::Running(AllFrom::default());
+        opening.shown.set_stopped_at_budget(false);
+        self.ask_expansion().into_iter().collect()
+    }
+
+    /// Collapse All: every file closed and Expand All stopped. Returns a request that names
+    /// nothing to read — which supersedes whatever the lane holds for them, ending its `git`
+    /// — and the diffs drawn, for a worker to free.
+    pub fn collapse_all(&mut self) -> Vec<Request> {
+        let Some(opening) = self.opening.as_mut() else {
+            return Vec::new();
+        };
+        let closed = opening.shown.close_all();
+        opening.loaded.clear();
+        opening.all = AllState::Off;
+        let mut requests = Vec::new();
+        if opening.in_lane
+            && let Some(Answer::Ready(changes)) = self.changes.as_ref().map(|(_, answer)| answer)
+        {
+            requests.push(Request::Expand(ExpandQuery {
+                of: opening.of,
+                changes: changes.clone(),
+                options: opening.options,
+                files: Vec::new(),
+                all: None,
+            }));
+            opening.in_lane = false;
+        }
+        requests.extend(retire(shown_of(closed)));
+        requests
+    }
+
+    /// Load Diff under the file opened in place at `index` (R6.8): it is read again past
+    /// R2.6's limits, up to the load-anyway ceiling.
+    pub fn load_in_place(&mut self, index: usize) -> Vec<Request> {
+        let Some(opening) = self.opening.as_mut() else {
+            return Vec::new();
+        };
+        if !opening.shown.is_open(index) || !opening.loaded.insert(index) {
+            return Vec::new();
+        }
+        let replaced = opening.shown.set([(index, Opened::Reading)]);
+        let mut requests: Vec<Request> = self.ask_expansion().into_iter().collect();
+        requests.extend(retire(shown_of(replaced)));
+        requests
+    }
+
+    /// The files opened in place asked again when something is unanswered and their request
+    /// lost the lane to the Changes tab's file: what the Commit tab does as it is shown.
+    pub fn reask_expansion(&mut self) -> Option<Request> {
+        if self.opening.as_ref().is_none_or(|opening| opening.in_lane) {
+            return None;
+        }
+        self.ask_expansion()
+    }
+
+    /// The request for every file opened by name that is not answered, and for Expand All
+    /// from where it stands; `None` when nothing is awaited. Takes the lane from the file.
+    fn ask_expansion(&mut self) -> Option<Request> {
+        let changes = match &self.changes {
+            Some((_, Answer::Ready(changes))) => changes.clone(),
+            Some((_, Answer::Waiting | Answer::Failed(_))) | None => return None,
+        };
+        let opening = self.opening.as_mut()?;
+        let files: Vec<OpenedFile> = opening
+            .shown
+            .iter()
+            .filter(|(_, opened)| matches!(opened, Opened::Reading))
+            .map(|(index, _)| OpenedFile {
+                index,
+                load_anyway: opening.loaded.contains(&index),
+            })
+            .collect();
+        let all = match opening.all {
+            AllState::Running(from) => Some(from),
+            AllState::Off | AllState::Done | AllState::Stopped => None,
+        };
+        if files.is_empty() && all.is_none() {
+            return None;
+        }
+        opening.in_lane = true;
+        self.file_in_lane = false;
+        Some(Request::Expand(ExpandQuery {
+            of: opening.of,
+            changes,
+            options: opening.options,
+            files,
+            all,
+        }))
+    }
+
+    /// The shared settings moved to `options`: the file selected and the files opened in place
+    /// are asked again at them — the one `asking` names now, the other as soon as its tab is
+    /// shown, since the two share the file-diff lane. A file read past the limits stays so.
+    /// Returns what to submit: the request, and the replaced diffs for a worker to free.
+    pub fn settings_changed(&mut self, options: DiffOptions, asking: Asking) -> Vec<Request> {
+        let mut requests = Vec::new();
+        let mut file_asked = false;
+        if let Some((query, answer)) = &mut self.file {
+            let wanted = DiffOptions {
+                load_anyway: query.options.load_anyway,
+                ..options
+            };
+            if query.options != wanted {
+                query.options = wanted;
+                if let Answer::Ready(Some(shown)) = std::mem::replace(answer, Answer::Waiting) {
+                    requests.extend(retire(vec![shown]));
+                }
+                self.file_in_lane = false;
+                file_asked = true;
+            }
+        }
+        let mut expansion_asked = false;
+        if let Some(opening) = &mut self.opening {
+            let wanted = DiffOptions {
+                load_anyway: false,
+                ..options
+            };
+            if opening.options != wanted {
+                opening.options = wanted;
+                let open: Vec<usize> = opening.shown.iter().map(|(index, _)| index).collect();
+                let replaced = opening
+                    .shown
+                    .set(open.into_iter().map(|index| (index, Opened::Reading)));
+                requests.extend(retire(shown_of(replaced)));
+                opening.in_lane = false;
+                expansion_asked = true;
+            }
+        }
+        let asked = match asking {
+            Asking::File if file_asked => self.reask_file(),
+            Asking::Expansion if expansion_asked => self.reask_expansion(),
+            Asking::File | Asking::Expansion => None,
+        };
+        let mut ordered: Vec<Request> = asked.into_iter().collect();
+        ordered.extend(requests);
+        ordered
+    }
+
+    /// A page of files opened in place arrived for `of` at `options`, which the caller has
+    /// checked are the opening's. Each file is kept when it is open and read as it is to be
+    /// — past the limits or not — or when Expand All on its way read it; Expand All moves on,
+    /// or ends. Returns the request to free what was not kept and what was replaced.
+    pub fn expansion_arrived(
+        &mut self,
+        files: Vec<ExpandedFile>,
+        all: Option<AllProgress>,
+    ) -> Option<Request> {
+        let Some(opening) = self.opening.as_mut() else {
+            return retire(crate::worker::expanded_diffs(files));
+        };
+        let running = matches!(opening.all, AllState::Running(_));
+        let mut kept = Vec::new();
+        let mut dropped = Vec::new();
+        for file in files {
+            let index = file.file.index;
+            let read_as_asked = opening.loaded.contains(&index) == file.file.load_anyway;
+            let wanted = if opening.shown.is_open(index) {
+                read_as_asked
+            } else {
+                file.by_all && running && read_as_asked
+            };
+            if !wanted {
+                dropped.extend(file.outcome.ok().map(|shown| *shown));
+                continue;
+            }
+            kept.push((
+                index,
+                match file.outcome {
+                    Ok(shown) => Opened::Shown(shown),
+                    Err(message) => Opened::Failed(message),
+                },
+            ));
+        }
+        let replaced = opening.shown.set(kept);
+        dropped.extend(shown_of(replaced));
+        if let (Some(progress), true) = (all, running) {
+            opening.all = match progress.ended {
+                None => AllState::Running(progress.at),
+                Some(AllEnded::Every) => AllState::Done,
+                Some(AllEnded::Budget) => AllState::Stopped,
+            };
+            opening
+                .shown
+                .set_stopped_at_budget(opening.all == AllState::Stopped);
+        }
+        retire(dropped)
     }
 }
 
@@ -215,6 +519,18 @@ static NO_DIFF: LazyLock<ShownDiff> = LazyLock::new(|| {
     )
 });
 
+/// What [`answered_expansion`] hands back while nothing is open.
+static NOTHING_OPEN: Expansion = Expansion::new();
+
+/// The files opened in place for the change set selected, or none: the view of the state the
+/// Commit tab is handed, which reads each file's rows by index rather than copying them.
+pub fn answered_expansion(state: &DiffState) -> &Expansion {
+    state
+        .opening
+        .as_ref()
+        .map_or(&NOTHING_OPEN, |opening| &opening.shown)
+}
+
 /// The selected file's diff, or an empty one while none is kept: the view of the state the
 /// diff view is handed, which reads its rows by index rather than copying them. Whether the
 /// selection's answer is ready is the pane's to check before drawing it.
@@ -263,7 +579,7 @@ impl DiffState {
         match asked {
             DiffQuery::Changes(of) => self.wants_changes(*of),
             DiffQuery::File(query) => self.wants_file(query),
-            DiffQuery::All { of, options } => self.wants_expansion(*of, *options),
+            DiffQuery::Expand(asked) => self.wants_expansion(asked.of, asked.options),
         }
     }
 
@@ -280,9 +596,11 @@ impl DiffState {
     }
 
     pub fn wants_expansion(&self, of: Comparison, options: DiffOptions) -> bool {
-        self.expanded
-            .as_ref()
-            .is_some_and(|(selected, at, _)| *selected == of && *at == options)
+        self.wants_changes(of)
+            && self
+                .opening
+                .as_ref()
+                .is_some_and(|opening| opening.of == of && opening.options == options)
     }
 
     /// `of`'s change set arrived; kept only if `of` is selected. Returns whether it was.
@@ -308,31 +626,6 @@ impl DiffState {
         }
     }
 
-    /// A batch of Expand All arrived; appended only if `of` at `options` is selected.
-    pub fn expansion_arrived(
-        &mut self,
-        of: Comparison,
-        options: DiffOptions,
-        diffs: Vec<FileDiff>,
-        complete: bool,
-    ) -> bool {
-        match &mut self.expanded {
-            Some((selected, at, answer)) if *selected == of && *at == options => {
-                match answer {
-                    Answer::Ready(expanded) => {
-                        expanded.diffs.extend(diffs);
-                        expanded.complete = complete;
-                    }
-                    Answer::Waiting | Answer::Failed(_) => {
-                        *answer = Answer::Ready(Expanded { diffs, complete });
-                    }
-                }
-                true
-            }
-            Some(_) | None => false,
-        }
-    }
-
     /// `asked` failed; kept only if it is what is selected.
     pub fn failed(&mut self, asked: &DiffQuery, message: String) -> bool {
         if !self.wants(asked) {
@@ -349,9 +642,23 @@ impl DiffState {
                     *answer = Answer::Failed(message);
                 }
             }
-            DiffQuery::All { .. } => {
-                if let Some((_, _, answer)) = &mut self.expanded {
-                    *answer = Answer::Failed(message);
+            // What no file is to blame for — the configuration git refuses — fails every file
+            // still awaited, and stops Expand All.
+            DiffQuery::Expand(_) => {
+                if let Some(opening) = &mut self.opening {
+                    let awaited: Vec<usize> = opening
+                        .shown
+                        .iter()
+                        .filter(|(_, opened)| matches!(opened, Opened::Reading))
+                        .map(|(index, _)| index)
+                        .collect();
+                    opening.shown.set(
+                        awaited
+                            .into_iter()
+                            .map(|index| (index, Opened::Failed(message.clone()))),
+                    );
+                    opening.all = AllState::Off;
+                    opening.in_lane = false;
                 }
             }
         }
@@ -489,101 +796,299 @@ mod tests {
         assert_eq!(state.file(), Some((&selected, &Answer::Ready(None))));
     }
 
-    /// A new commit takes the file and Expand All with it, since the changes query
-    /// supersedes their lane. Caught by: keeping the old file selected, whose answer will
-    /// never come — the pane would wait for good.
-    #[test]
-    fn selecting_a_commit_lets_go_of_the_file_and_the_expansion() {
+    /// A change set of `files` files, for the files opened in place.
+    fn many(files: usize) -> ChangeSet {
+        let mut set = change_set("f0");
+        set.files = (0..files)
+            .map(|n| change_set(&format!("f{n}")).files.remove(0))
+            .collect();
+        set
+    }
+
+    /// `commit(1)` selected and its change set of `files` files here.
+    fn answered(files: usize) -> DiffState {
         let mut state = DiffState::default();
         state.select_changes(commit(1));
+        assert!(state.changes_arrived(commit(1), many(files)));
+        state
+    }
+
+    fn shown_file(index: usize) -> Box<ShownDiff> {
+        Box::new(ShownDiff::new(
+            FileDiff {
+                file: many(index + 1).files.remove(index),
+                content: DiffContent::ModeChangeOnly,
+            },
+            Context::default(),
+        ))
+    }
+
+    fn page(indices: &[usize], by_all: bool) -> Vec<ExpandedFile> {
+        indices
+            .iter()
+            .map(|index| ExpandedFile {
+                file: OpenedFile {
+                    index: *index,
+                    load_anyway: false,
+                },
+                by_all,
+                outcome: Ok(shown_file(*index)),
+            })
+            .collect()
+    }
+
+    fn expand_query(requests: &[Request]) -> &ExpandQuery {
+        requests
+            .iter()
+            .find_map(|request| match request {
+                Request::Expand(asked) => Some(asked),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("nothing was asked: {requests:?}"))
+    }
+
+    fn retired_count(requests: &[Request]) -> usize {
+        requests
+            .iter()
+            .map(|request| match request {
+                Request::Retire(retired) => retired.shown().len(),
+                _ => 0,
+            })
+            .sum()
+    }
+
+    /// A new commit takes the file and the files opened in place with it — the changes query
+    /// supersedes their lane — and hands what they drew to a worker to free. Caught by:
+    /// keeping either (the pane waits for good on an answer that will never come, or draws one
+    /// commit's diff under another's file), or dropping what they drew on the UI thread.
+    #[test]
+    fn selecting_a_commit_lets_go_of_the_file_and_the_files_opened_in_place() {
+        let mut state = answered(3);
         state.select_file(file_of(commit(1), "a.txt"));
-        state.select_changes(commit(2));
+        state.toggle_file(1, DiffOptions::default());
+        state.expansion_arrived(page(&[1], false), None);
+        let requests = state.select_changes(commit(2));
         assert_eq!(state.file(), None);
-
-        state.expand_all(commit(2), DiffOptions::default());
-        state.select_changes(commit(3));
-        assert_eq!(state.expanded(), None);
+        assert_eq!(state.all_state(), None);
+        assert!(answered_expansion(&state).is_empty());
+        assert_eq!(retired_count(&requests), 1, "{requests:?}");
     }
 
-    /// Expand All's batches append in order until the last; a failure is shown only for
-    /// the expansion asked. Caught by: a batch replacing the one before it.
+    /// R5.3, phase 02 QA's R2 at the window: Expand All asks from the first file with nothing
+    /// spent; each page opens the files it read and moves Expand All on to where it stands; the
+    /// page that ends it with the budget spent stops it and says so. Caught by: a page that
+    /// replaces the last, progress not kept (a superseded Expand All starting again from the
+    /// top), or the budget's end taken for every file opened.
     #[test]
-    fn expand_all_batches_append_until_complete() {
-        let mut state = DiffState::default();
+    fn expand_all_opens_each_pages_files_and_moves_on_until_its_budget() {
+        let mut state = answered(10);
         let options = DiffOptions::default();
-        state.expand_all(commit(1), options);
-        let diff = |path: &str| FileDiff {
-            file: change_set(path).files.remove(0),
-            content: cairn_model::DiffContent::ModeChangeOnly,
-        };
-        assert!(state.expansion_arrived(commit(1), options, vec![diff("a")], false));
-        assert!(state.expansion_arrived(commit(1), options, vec![diff("b")], true));
-        assert!(!state.expansion_arrived(commit(2), options, vec![diff("c")], true));
-        assert_eq!(
-            state.expanded(),
-            Some((
-                commit(1),
-                options,
-                &Answer::Ready(Expanded {
-                    diffs: vec![diff("a"), diff("b")],
-                    complete: true
-                })
-            ))
+        let asked = state.expand_all(options);
+        let asked = expand_query(&asked);
+        assert_eq!(asked.all, Some(AllFrom::default()));
+        assert!(asked.files.is_empty());
+
+        let at = AllFrom { next: 2, spent: 30 };
+        state.expansion_arrived(page(&[0, 1], true), Some(AllProgress { at, ended: None }));
+        assert_eq!(state.all_state(), Some(AllState::Running(at)));
+        assert_eq!(answered_expansion(&state).len(), 2);
+        assert!(!answered_expansion(&state).stopped_at_budget());
+
+        let end = AllFrom { next: 4, spent: 60 };
+        state.expansion_arrived(
+            page(&[2, 3], true),
+            Some(AllProgress {
+                at: end,
+                ended: Some(AllEnded::Budget),
+            }),
         );
-        assert!(!state.failed(
-            &DiffQuery::All {
-                of: commit(2),
-                options
-            },
-            "no".to_owned()
-        ));
-        assert!(state.failed(
-            &DiffQuery::All {
-                of: commit(1),
-                options
-            },
-            "no".to_owned()
-        ));
-        assert_eq!(
-            state.expanded(),
-            Some((commit(1), options, &Answer::Failed("no".to_owned())))
-        );
+        assert_eq!(state.all_state(), Some(AllState::Stopped));
+        let expansion = answered_expansion(&state);
+        assert_eq!(expansion.len(), 4);
+        assert!(expansion.stopped_at_budget());
+        assert!(matches!(expansion.get(3), Some(Opened::Shown(_))));
     }
 
-    /// T4: each selection lets go of what shares its lane, one assertion per rule.
-    /// Selecting a file lets Expand All go, and Expand All the file. Caught by: either
-    /// assignment taken out (the pane waits for good on an answer superseded in its lane).
+    /// The Changes tab's file and the files opened in place share the file-diff lane, so each
+    /// asking takes it from the other — and the one that lost it is asked again, whole, when
+    /// its tab is shown: never left half-answered. Caught by: a file waiting for good after an
+    /// expansion superseded it, an expansion waiting for good after the file did, or an
+    /// expansion asked again without the files it was waiting for.
     #[test]
-    fn a_file_and_expand_all_let_each_other_go() {
-        let mut state = DiffState::default();
-        state.select_changes(commit(1));
-        state.expand_all(commit(1), DiffOptions::default());
+    fn the_file_and_the_files_opened_in_place_take_the_lane_from_each_other() {
+        let mut state = answered(6);
+        let options = DiffOptions::default();
+        state.toggle_file(4, options);
+        assert!(!state.expansion_needs_asking());
         state.select_file(file_of(commit(1), "a.txt"));
-        assert_eq!(state.expanded(), None, "select_file kept Expand All");
+        assert!(!state.file_needs_asking());
+        assert!(
+            state.expansion_needs_asking(),
+            "the expansion lost the lane"
+        );
 
-        state.expand_all(commit(1), DiffOptions::default());
-        assert_eq!(state.file(), None, "expand_all kept the file");
+        let asked = state.reask_expansion().into_iter().collect::<Vec<_>>();
+        let asked = expand_query(&asked);
+        assert_eq!(
+            asked.files,
+            [OpenedFile {
+                index: 4,
+                load_anyway: false
+            }]
+        );
+        assert!(state.file_needs_asking(), "the file lost the lane");
+        assert!(state.reask_expansion().is_none(), "asked twice");
+        assert!(matches!(
+            state.reask_file(),
+            Some(Request::FileDiff(query)) if query == file_of(commit(1), "a.txt")
+        ));
+        assert!(!state.file_needs_asking());
+
+        // Answered, neither needs asking whatever holds the lane.
+        state.expansion_arrived(page(&[4], false), None);
+        assert!(state.file_arrived(&file_of(commit(1), "a.txt"), None));
+        state.select_file(file_of(commit(1), "a.txt"));
+        assert!(!state.expansion_needs_asking());
     }
 
-    /// T4: a batch for the selected comparison at other options is not this expansion's.
-    /// Caught by: comparing the comparison alone (a batch at the old context appended to
-    /// one at the new).
+    /// An answer is kept only for what is asked now: a page for another comparison or at
+    /// other options is not this expansion's, and a file closed while its page was on its way
+    /// is not opened again by it — its diff is handed to a worker. Caught by: comparing the
+    /// comparison alone (a page at the old context kept at the new), or a closed file
+    /// springing open.
     #[test]
-    fn an_expansion_batch_at_other_options_is_dropped() {
-        let mut state = DiffState::default();
+    fn a_page_is_kept_only_for_the_files_asked_as_they_were_asked() {
+        let mut state = answered(6);
         let options = DiffOptions::default();
         let mut other = options;
         other.ignore_whitespace = true;
-        state.expand_all(commit(1), options);
-        let diff = FileDiff {
-            file: change_set("a").files.remove(0),
-            content: cairn_model::DiffContent::ModeChangeOnly,
-        };
-        assert!(!state.expansion_arrived(commit(1), other, vec![diff], true));
-        assert_eq!(
-            state.expanded(),
-            Some((commit(1), options, &Answer::Waiting))
+        state.toggle_file(3, options);
+        assert!(state.wants_expansion(commit(1), options));
+        assert!(!state.wants_expansion(commit(1), other));
+        assert!(!state.wants_expansion(commit(2), options));
+
+        let closing = state.toggle_file(3, options);
+        assert!(
+            closing.is_empty(),
+            "nothing drawn, nothing to free: {closing:?}"
         );
+        let freed = state.expansion_arrived(page(&[3], false), None);
+        assert!(
+            answered_expansion(&state).is_empty(),
+            "the closed file opened again"
+        );
+        assert!(
+            matches!(&freed, Some(Request::Retire(retired)) if retired.shown().len() == 1),
+            "{freed:?}"
+        );
+
+        // A file read past the limits is kept only from the read past the limits.
+        state.toggle_file(2, options);
+        state.expansion_arrived(page(&[2], false), None);
+        let loading = state.load_in_place(2);
+        assert_eq!(
+            expand_query(&loading).files,
+            [OpenedFile {
+                index: 2,
+                load_anyway: true
+            }]
+        );
+        assert_eq!(
+            retired_count(&loading),
+            1,
+            "the replaced diff was not freed"
+        );
+        state.expansion_arrived(page(&[2], false), None);
+        assert!(
+            matches!(answered_expansion(&state).get(2), Some(Opened::Reading)),
+            "a read within the limits answered a Load Diff"
+        );
+    }
+
+    /// Collapse All closes every file, stops Expand All, frees what was drawn and ends what is
+    /// in flight by asking for nothing in its place. Caught by: a page in flight opening files
+    /// again after Collapse All, or answers dropped on the UI thread.
+    #[test]
+    fn collapse_all_ends_what_is_in_flight_and_frees_what_was_drawn() {
+        let mut state = answered(6);
+        let options = DiffOptions::default();
+        state.expand_all(options);
+        state.expansion_arrived(
+            page(&[0, 1], true),
+            Some(AllProgress {
+                at: AllFrom { next: 2, spent: 9 },
+                ended: None,
+            }),
+        );
+        let requests = state.collapse_all();
+        let superseding = expand_query(&requests);
+        assert!(superseding.files.is_empty() && superseding.all.is_none());
+        assert_eq!(retired_count(&requests), 2);
+        assert_eq!(state.all_state(), Some(AllState::Off));
+        state.expansion_arrived(
+            page(&[2], true),
+            Some(AllProgress {
+                at: AllFrom { next: 3, spent: 12 },
+                ended: None,
+            }),
+        );
+        assert!(
+            answered_expansion(&state).is_empty(),
+            "a late page reopened files"
+        );
+    }
+
+    /// A failure no file is to blame for fails every file still awaited, each on its own row,
+    /// and stops Expand All; a file already drawn keeps its diff. Caught by: the failure
+    /// dropped (files reading for good) or drawn over answered files.
+    #[test]
+    fn a_failed_expansion_fails_the_files_still_awaited() {
+        let mut state = answered(4);
+        let options = DiffOptions::default();
+        state.toggle_file(0, options);
+        state.expansion_arrived(page(&[0], false), None);
+        let asked = state.toggle_file(2, options);
+        let asked = expand_query(&asked).clone();
+        assert!(state.failed(&DiffQuery::Expand(asked), "bad config".to_owned()));
+        let expansion = answered_expansion(&state);
+        assert!(matches!(expansion.get(0), Some(Opened::Shown(_))));
+        assert_eq!(
+            expansion.get(2),
+            Some(&Opened::Failed("bad config".to_owned()))
+        );
+    }
+
+    /// A setting moved: the selection whose tab is shown is asked again at once, and the other
+    /// — they share the lane — when its tab is shown; what either drew is freed. Caught by:
+    /// both asked (the second ending the first), neither, or the hidden one never asked again.
+    #[test]
+    fn a_setting_asks_the_shown_tabs_selection_now_and_the_others_later() {
+        let mut state = answered(4);
+        let options = DiffOptions::default();
+        state.toggle_file(1, options);
+        state.expansion_arrived(page(&[1], false), None);
+        let chosen = file_of(commit(1), "a.txt");
+        state.select_file(chosen.clone());
+        assert!(state.file_arrived(&chosen, None));
+
+        let mut wider = options;
+        wider.context = Context::Lines(7);
+        let requests = state.settings_changed(wider, Asking::Expansion);
+        let asked = expand_query(&requests);
+        assert_eq!(asked.options, wider);
+        assert_eq!(retired_count(&requests), 1);
+        assert!(
+            !requests.iter().any(|r| matches!(r, Request::FileDiff(_))),
+            "{requests:?}"
+        );
+        assert!(
+            state.file_needs_asking(),
+            "the file is not asked again when shown"
+        );
+        match state.reask_file() {
+            Some(Request::FileDiff(query)) => assert_eq!(query.options, wider),
+            other => panic!("{other:?}"),
+        }
     }
 
     /// T4: a failure of the selected file is recorded as that file's answer. Caught by: the

@@ -8,6 +8,7 @@ mod diff_lane;
 mod diff_tests;
 mod discovery;
 mod epoch;
+mod expand_all;
 #[cfg(test)]
 mod fetch_tests;
 #[cfg(test)]
@@ -29,5 +30,6 @@ pub use pool::{CLOSE_PATIENCE, Replier, RepositoryHandle, open};
 #[cfg(test)]
 pub use request::WorkingSide;
 pub use request::{
-    Comparison, DiffOptions, DiffQuery, FileQuery, FileTarget, Request, Retired, Update,
+    AllEnded, AllFrom, AllProgress, Comparison, DiffOptions, DiffQuery, ExpandQuery, ExpandedFile,
+    FileQuery, FileTarget, OpenedFile, Request, Retired, Update, expanded_diffs,
 };

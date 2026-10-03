@@ -7,6 +7,7 @@ mod bare_discovery;
 mod bench;
 mod changes;
 mod content;
+mod expansion;
 mod inputs;
 mod parity;
 mod patches;
@@ -52,4 +53,53 @@ pub fn some<T>(value: Option<T>, what: &str) -> T {
         Some(value) => value,
         None => panic!("{what}"),
     }
+}
+
+/// Every file of `set`, page by page and with no budget, in the change set's order: what
+/// Expand All reads of a change set that fits its budget. A file whose outcome is a failure
+/// fails the whole answer here, since the tests that call this compare every file with its
+/// answer alone; `a_failing_file_is_that_files_outcome_and_the_rest_are_read` holds the
+/// per-file outcomes themselves.
+pub fn every_file(
+    session: &mut cairn_git::DiffSession<'_>,
+    request: &cairn_git::ChangesRequest,
+    set: &cairn_model::ChangeSet,
+    options: &cairn_git::ContentOptions,
+    cancel: &impl cairn_git::Cancel,
+) -> Result<Vec<cairn_model::FileDiff>, cairn_git::Error> {
+    every_file_paged(session, request, set, options, cancel).map(|(diffs, _)| diffs)
+}
+
+/// [`every_file`], and how many pages it took.
+pub fn every_file_paged(
+    session: &mut cairn_git::DiffSession<'_>,
+    request: &cairn_git::ChangesRequest,
+    set: &cairn_model::ChangeSet,
+    options: &cairn_git::ContentOptions,
+    cancel: &impl cairn_git::Cancel,
+) -> Result<(Vec<cairn_model::FileDiff>, usize), cairn_git::Error> {
+    let offered: Vec<usize> = (0..set.files.len()).collect();
+    let mut pages = 0;
+    let mut from = 0;
+    let mut diffs = Vec::with_capacity(set.files.len());
+    while from < offered.len() {
+        let page = session.page(
+            git(),
+            request,
+            cairn_git::Offered {
+                changes: set,
+                files: &offered[from..],
+            },
+            None,
+            options,
+            cancel,
+        )?;
+        assert!(page.taken > 0, "a page read nothing of what it was offered");
+        pages += 1;
+        from += page.taken;
+        for (_, outcome) in page.files {
+            diffs.push(outcome?);
+        }
+    }
+    Ok((diffs, pages))
 }

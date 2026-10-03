@@ -21,13 +21,24 @@
 //! measured: a range splitting a surrogate pair draws nothing). [`shown_line`] maps one to
 //! the other in the same pass that builds the text. A row's work is proportional to its own
 //! line — never to the file, never to where the view is scrolled.
+//!
+//! **A line past the long-line limit is drawn cut** (R6.9). Only a diff loaded past R2.6's
+//! ceilings holds one — the engine refuses any other with a line longer than
+//! [`DiffLimits::MAX_LINE_BYTES`] — and drawn whole it would cost its whole length per row
+//! built (a 64 MiB line is 64 MiB of text for one row) and a horizontal extent of hundreds of
+//! millions of pixels. So a row draws at most `cairn_model::LINE_CUT_BYTES` of a line, ending
+//! on a character (`cairn_model::drawn_bytes`), followed by [`LINE_CUT_MARKER`] in the muted
+//! colour, which says that the rest is not drawn.
 
-use cairn_model::{ByteRange, DiffLine};
+use cairn_model::{ByteRange, TAB_STOP, drawn_bytes};
 
 use crate::columns::columns;
 
-/// The column a tab moves to a multiple of.
-pub const TAB_WIDTH: usize = 8;
+/// The column a tab moves to a multiple of: `git diff` in a terminal.
+pub const TAB_WIDTH: usize = TAB_STOP;
+
+/// Drawn after a line cut at [`LINE_CUT_BYTES`], in the muted colour (R6.9).
+pub const LINE_CUT_MARKER: &str = " … line truncated";
 
 /// A line as a row draws it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,12 +46,32 @@ pub struct ShownLine {
     pub text: String,
     /// The intra-line ranges, as UTF-16 ranges of `text`; empty ones dropped.
     pub highlights: Vec<(usize, usize)>,
+    /// Whether the line was longer than the long-line limit and `text` is its start only.
+    pub cut: bool,
 }
 
 /// `bytes` as a row draws them, with `ranges` (byte ranges of `bytes`) carried into the text.
-/// A range boundary inside a character moves to that character's end.
+/// A range boundary inside a character moves to that character's end. A line longer than
+/// `cairn_model::LINE_CUT_BYTES` is drawn to its cut (`cairn_model::drawn_bytes`), and only the
+/// ranges that start before the cut are read, so the work is bounded by the cut whatever the
+/// line's length.
 pub fn shown_line(bytes: &[u8], ranges: &[ByteRange]) -> ShownLine {
-    let body = bytes.strip_suffix(b"\r").unwrap_or(bytes);
+    let (bytes, cut) = drawn_bytes(bytes);
+    let ranges = if cut {
+        // In order, as the engine answers them: those that start before the cut.
+        let kept = ranges
+            .iter()
+            .take_while(|range| (range.start as usize) < bytes.len())
+            .count();
+        ranges.get(..kept).unwrap_or_default()
+    } else {
+        ranges
+    };
+    let body = if cut {
+        bytes
+    } else {
+        bytes.strip_suffix(b"\r").unwrap_or(bytes)
+    };
     // Each range's two ends, in byte order, with where each lands in UTF-16 units.
     let mut ends: Vec<(usize, usize)> = ranges
         .iter()
@@ -115,22 +146,11 @@ pub fn shown_line(bytes: &[u8], ranges: &[ByteRange]) -> ShownLine {
             (start < end).then_some((start, end))
         })
         .collect();
-    ShownLine { text, highlights }
-}
-
-/// At least as many columns as the widest of `lines` draws: a byte draws at most one
-/// column (a two-column character is at least three bytes) and a tab at most
-/// [`TAB_WIDTH`]. One pass over the bytes, done once per answer
-/// so the view's width does not change as it scrolls.
-pub fn widest_columns<'a>(lines: impl Iterator<Item = &'a DiffLine>) -> usize {
-    lines
-        .map(|line| {
-            let bytes = line.bytes();
-            let tabs = bytes.iter().filter(|byte| **byte == b'\t').count();
-            bytes.len() + tabs * (TAB_WIDTH - 1)
-        })
-        .max()
-        .unwrap_or(0)
+    ShownLine {
+        text,
+        highlights,
+        cut,
+    }
 }
 
 #[cfg(test)]
@@ -210,19 +230,17 @@ mod tests {
         assert!(shown_line(b"abc", &[range(2, 2)]).highlights.is_empty());
     }
 
+    /// R6.9: a line longer than the long-line limit is drawn to the limit, never past it,
+    /// with its ranges past the cut left out. Caught by: drawing the whole line (a
+    /// multi-mebibyte row), or reading ranges past the cut.
     #[test]
-    fn the_widest_line_is_bounded_from_above_by_its_bytes_and_tabs() {
-        let lines = [
-            DiffLine::terminated("short"),
-            DiffLine::terminated("\t\tx"),
-            DiffLine::unterminated("é"),
-        ];
-        assert_eq!(widest_columns(lines.iter()), 17);
-        for line in &lines {
-            assert!(
-                shown_line(line.bytes(), &[]).text.chars().count() <= widest_columns(lines.iter())
-            );
-        }
-        assert_eq!(widest_columns(std::iter::empty()), 0);
+    fn a_line_past_the_limit_is_drawn_to_the_limit() {
+        let long = "a".repeat(3 * 1024 * 1024);
+        let shown = shown_line(long.as_bytes(), &[range(10, 12), range(5_000, 5_002)]);
+        assert!(shown.cut);
+        assert_eq!(shown.text.len(), cairn_model::LINE_CUT_BYTES);
+        assert_eq!(shown.highlights, [(10, 12)]);
+        let at_limit = "a".repeat(cairn_model::LINE_CUT_BYTES);
+        assert!(!shown_line(at_limit.as_bytes(), &[]).cut);
     }
 }

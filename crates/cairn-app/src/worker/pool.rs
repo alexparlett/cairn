@@ -669,11 +669,43 @@ fn serve(
                     records: shared.command_log(),
                 },
             ),
+            RepositoryJob::Filter { of, files, text } => {
+                if let Some(epoch) = epoch {
+                    filter_files(of, &files, text, epoch, &epochs, outbox);
+                }
+            }
             // Freed here, off the UI thread, which is the whole of the job.
             RepositoryJob::Retire(retired) => drop(retired),
             // The epochs were stopped as it was sent; the closing is the caller's.
             RepositoryJob::Close => break,
         }
+    }
+}
+
+/// Which of `files`' files hold `text` (the Changes tab's filter, R5.4), answered while
+/// `epoch` is current: one superseded before it started, or by a keystroke while it runs,
+/// stops at the next few thousand files and sends nothing. The change set is the window's
+/// own, shared; if the window let go of it meanwhile, it is freed here, off the UI thread.
+fn filter_files(
+    of: super::request::Comparison,
+    files: &cairn_model::ChangeSet,
+    text: String,
+    epoch: Epoch,
+    epochs: &Epochs,
+    outbox: &Outbox,
+) {
+    if !epochs.is_current(epoch) {
+        return;
+    }
+    if let Some(matched) = files.files_matching(&text, || epochs.is_current(epoch)) {
+        outbox.send(
+            Some(epoch),
+            Update::FilteredFiles {
+                of,
+                text,
+                files: matched,
+            },
+        );
     }
 }
 

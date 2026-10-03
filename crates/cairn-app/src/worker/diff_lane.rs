@@ -42,6 +42,7 @@ use cairn_git::{
     Cancel, ChangesRequest, ContentOptions, DiffSession, Error, Repository, SharedRepository,
     WorkingTreeDiff,
 };
+use cairn_model::ShownDiff;
 use cairn_model::{ChangeSet, FileDiff};
 
 use super::diff_answers::{Answers, searched_paths};
@@ -348,9 +349,11 @@ impl<'a> Served<'a, '_> {
             DiffQuery::Changes(of) => self
                 .change_set(*of, &mut kept.answers)
                 .map(|changes| Update::Changes { of: *of, changes }),
+            // Prepared for the views here, on this thread, never on the UI thread: both rows'
+            // indexes and a pass over the drawn bytes, 39 ms for a 64 MiB file (phase 06 QA).
             DiffQuery::File(asked) => self.file_diff(asked, kept).map(|diff| Update::FileDiff {
                 query: asked.clone(),
-                diff,
+                diff: diff.map(|diff| Box::new(ShownDiff::new(diff, asked.options.context))),
             }),
             DiffQuery::All { of, options } => {
                 self.every_file(*of, options, kept)
@@ -525,7 +528,7 @@ mod tests {
         let of = Comparison::Commit(oid(n));
         let query = match lane {
             QueryLane::Changes => DiffQuery::Changes(of),
-            QueryLane::FileDiff | QueryLane::History => {
+            QueryLane::FileDiff | QueryLane::History | QueryLane::FileFilter => {
                 DiffQuery::File(committed(n, DiffOptions::default()))
             }
         };

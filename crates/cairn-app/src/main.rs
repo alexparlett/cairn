@@ -1,10 +1,12 @@
 //! The Cairn binary.
 
+mod changes_tab;
 mod closing;
 mod detail_pane;
 mod diff_actions;
 mod diff_state;
 mod fetch_state;
+mod file_filter;
 mod history_state;
 mod repository_path;
 mod selection;
@@ -74,6 +76,9 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let diff_settings = use_state(DiffSettings::default);
     let diff_scroll = use_scroll_controller(ScrollConfig::default);
     let change_cursor = use_state(|| None);
+    // Session state of the Changes tab: its filter and its list's width.
+    let filter_text = use_state(String::new);
+    let changes_list_width = use_state(|| changes_tab::LIST_WIDTH);
     let view = View {
         rows,
         progress,
@@ -90,6 +95,8 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         diff_settings,
         diff_scroll,
         change_cursor,
+        filter_text,
+        changes_list_width,
     };
 
     let opened = use_hook(|| {

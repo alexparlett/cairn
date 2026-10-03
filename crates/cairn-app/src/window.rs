@@ -51,6 +51,10 @@ pub struct View {
     pub diff_scroll: ScrollController,
     /// The change previous or next change last moved to.
     pub change_cursor: State<Option<ChangeCursor>>,
+    /// The Changes tab's filter, as typed; kept for the session.
+    pub filter_text: State<String>,
+    /// The Changes tab's file list's width as last dragged.
+    pub changes_list_width: State<f32>,
 }
 
 impl std::fmt::Debug for View {
@@ -367,7 +371,7 @@ mod tests {
     use freya_testing::TestingRunner;
     use freya_testing::prelude::{KeyboardEventName, PlatformEvent};
 
-    use crate::detail_pane::{NO_FILE_CHOSEN, NOTHING_SELECTED, READING};
+    use crate::detail_pane::{NOTHING_SELECTED, READING};
     use crate::worker::Comparison;
 
     use crate::fetch_state::{FetchStatus, PromptView};
@@ -471,6 +475,8 @@ mod tests {
                     diff_settings: State::create(DiffSettings::default()),
                     diff_scroll: ScrollController::new(0, 0, Vec::new()),
                     change_cursor: State::create(None),
+                    filter_text: State::create(String::new()),
+                    changes_list_width: State::create(crate::changes_tab::LIST_WIDTH),
                 })
             },
             1.,
@@ -1206,7 +1212,7 @@ mod tests {
 
         click_label(&mut test, DetailTab::Changes.caption());
         assert!(
-            pane(&test).iter().any(|t| t == NO_FILE_CHOSEN),
+            pane(&test).iter().any(|t| t == NOTHING_SELECTED),
             "{:?}",
             pane(&test)
         );
@@ -1215,7 +1221,7 @@ mod tests {
         click_row(&mut test, 5);
         assert_eq!(*view.detail_tab.read(), DetailTab::Changes);
         assert!(
-            pane(&test).iter().any(|t| t == NO_FILE_CHOSEN),
+            pane(&test).iter().any(|t| t == READING),
             "{:?}",
             pane(&test)
         );
@@ -1228,12 +1234,12 @@ mod tests {
             pane_top(&test) > open_top,
             "the collapsed pane did not give the list its room"
         );
-        assert!(!texts(&test).iter().any(|t| t == NO_FILE_CHOSEN));
+        assert!(!texts(&test).iter().any(|t| t == READING));
 
         click_label(&mut test, EXPAND_CAPTION);
         assert_eq!(*view.detail_tab.read(), DetailTab::Changes);
         assert!(
-            pane(&test).iter().any(|t| t == NO_FILE_CHOSEN),
+            pane(&test).iter().any(|t| t == READING),
             "{:?}",
             pane(&test)
         );
@@ -1548,8 +1554,13 @@ mod tests {
     ) {
         let mut diff = view.diff;
         test.run_in(|| {
-            diff.write()
-                .file_arrived(query, Some(text_answer(2, lines)))
+            diff.write().file_arrived(
+                query,
+                Some(cairn_model::ShownDiff::new(
+                    text_answer(2, lines),
+                    query.options.context,
+                )),
+            )
         });
         test.sync_and_update();
         test.sync_and_update();
@@ -1573,7 +1584,7 @@ mod tests {
         assert!(
             pane(&test)
                 .iter()
-                .any(|t| t == crate::detail_pane::READING_DIFF),
+                .any(|t| t == crate::changes_tab::READING_DIFF),
             "{:?}",
             pane(&test)
         );
@@ -1724,8 +1735,9 @@ mod tests {
         );
 
         // Focus in the diff.
-        let rows_top = pane_top(&test) + 80.;
-        test.click_cursor((400., f64::from(rows_top)));
+        // Below the strip, the summary and the bar; right of the file list.
+        let rows_top = pane_top(&test) + 130.;
+        test.click_cursor((600., f64::from(rows_top)));
         test.sync_and_update();
         press_chord(&mut test, Action::NextChange);
         assert_eq!(scrolled_y(view), top_for(0));
@@ -1750,5 +1762,303 @@ mod tests {
         );
         click_named(&mut test, cairn_ui::PREVIOUS_CHANGE_LABEL);
         assert_eq!(scrolled_y(view), top_for(1));
+    }
+
+    /// Row `n`'s change set with `files` files, `file-{k:05}.rs`, in place of its one.
+    fn answer_with(n: usize, files: usize) -> ChangeSet {
+        let mut answer = answer_for(n, Vec::new());
+        let template = answer.files.remove(0);
+        answer.files = (0..files)
+            .map(|k| {
+                let path = format!("file-{k:05}.rs");
+                ChangedFile {
+                    old_path: RepoPath::from(path.as_str()),
+                    new_path: RepoPath::from(path.as_str()),
+                    ..template.clone()
+                }
+            })
+            .collect();
+        answer
+    }
+
+    /// Row 2 chosen, a change set of `files` files arrived for it, and the Changes tab shown.
+    fn changes_tab_over(test: &mut TestingRunner, view: View, files: usize) {
+        click_row(test, 2);
+        let mut diff = view.diff;
+        test.run_in(|| {
+            diff.write()
+                .changes_arrived(Comparison::Commit(oid(2)), answer_with(2, files))
+        });
+        click_label(test, DetailTab::Changes.caption());
+        for _ in 0..3 {
+            test.sync_and_update();
+        }
+    }
+
+    fn file_queries(submitted: &Submitted) -> Vec<crate::worker::FileQuery> {
+        submitted
+            .borrow()
+            .iter()
+            .filter_map(|request| match request {
+                Request::FileDiff(query) => Some(query.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn path_of(query: &crate::worker::FileQuery) -> String {
+        match &query.target {
+            crate::worker::FileTarget::Committed { file, .. } => {
+                file.new_path.display().into_owned()
+            }
+            crate::worker::FileTarget::WorkingTree { path, .. } => path.display().into_owned(),
+        }
+    }
+
+    /// C10, R5.4 through the window: the Changes tab shows the commit's one-line summary —
+    /// author, short id, date, subject — its files in a list, and, with no file chosen, the
+    /// first file's diff asked for, as Fork selects the first file (Finding 5); the answer is
+    /// drawn beside the list. Caught by: no summary, no list, or a tab that waits for a file
+    /// to be chosen elsewhere.
+    #[test]
+    fn the_changes_tab_shows_the_summary_the_files_and_the_first_files_diff() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        changes_tab_over(&mut test, view, 3);
+        let shown = pane(&test);
+        let [author, id, date, subject] =
+            cairn_ui::summary_parts(&answer_for(2, Vec::new()).details.unwrap());
+        for part in [&author, &id, &date, &subject] {
+            assert!(
+                shown.contains(part),
+                "the summary lacks {part:?}: {shown:?}"
+            );
+        }
+        for k in 0..3 {
+            let path = format!("file-{k:05}.rs");
+            assert!(shown.contains(&path), "the list lacks {path}: {shown:?}");
+        }
+        let asked = file_queries(&submitted);
+        assert_eq!(
+            asked.iter().map(path_of).collect::<Vec<_>>(),
+            ["file-00000.rs"],
+            "the first file was not chosen, or was asked twice"
+        );
+        let mut diff = view.diff;
+        let query = asked[0].clone();
+        test.run_in(|| {
+            diff.write().file_arrived(
+                &query,
+                Some(cairn_model::ShownDiff::new(
+                    text_answer(2, 40),
+                    query.options.context,
+                )),
+            )
+        });
+        test.sync_and_update();
+        test.sync_and_update();
+        assert!(
+            pane_rows(&test).iter().any(|t| t == "LINE 5"),
+            "{:?}",
+            pane_rows(&test)
+        );
+    }
+
+    /// C10, R5.4 and the QA brief's "a list operation, not a diff operation": typing in the
+    /// filter over 55,184 files asks a worker which match — handing it the window's own change
+    /// set, shared, not a copy — and the UI thread filters nothing: the list is unchanged until
+    /// the answer, then shows the files it names and no others, one viewport of them. Caught
+    /// by: filtering on the UI thread (the list changes before any answer), a copied change
+    /// set, or rows drawn for files the answer left out.
+    #[test]
+    fn typing_in_the_filter_asks_a_worker_and_the_list_draws_its_answer() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        changes_tab_over(&mut test, view, 55_184);
+        let list_rows = |test: &TestingRunner| -> Vec<String> {
+            pane(test)
+                .into_iter()
+                .filter(|t| t.starts_with("file-") && t.ends_with(".rs"))
+                .collect()
+        };
+        let before = list_rows(&test);
+        assert!(!before.is_empty() && before.len() < 40, "{}", before.len());
+
+        let field = test
+            .find(|node, element| {
+                Paragraph::try_downcast(element)
+                    .filter(|paragraph| {
+                        paragraph
+                            .spans
+                            .iter()
+                            .any(|span| span.text.as_ref() == cairn_ui::FILTER_PLACEHOLDER)
+                    })
+                    .map(|_| node.layout().area.center())
+            })
+            .expect("the filter field");
+        test.click_cursor((f64::from(field.x), f64::from(field.y)));
+        test.sync_and_update();
+        let asked_before = submitted.borrow().len();
+        test.write_text("01234");
+        for _ in 0..3 {
+            test.sync_and_update();
+        }
+        let filters: Vec<(String, bool)> = submitted.borrow()[asked_before..]
+            .iter()
+            .filter_map(|request| match request {
+                Request::FilterFiles { text, files, .. } => {
+                    let shared = match view.diff.peek().changes() {
+                        Some((_, crate::diff_state::Answer::Ready(kept))) => {
+                            std::sync::Arc::ptr_eq(kept, files)
+                        }
+                        _ => false,
+                    };
+                    Some((text.clone(), shared))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            filters.last(),
+            Some(&("01234".to_owned(), true)),
+            "the filter was not asked of a worker with the window's own change set: {filters:?}"
+        );
+        assert_eq!(
+            list_rows(&test),
+            before,
+            "the list changed before any answer"
+        );
+
+        let mut diff = view.diff;
+        let of = Comparison::Commit(oid(2));
+        test.run_in(|| diff.write().filter_arrived(of, "0123", vec![1]));
+        test.sync_and_update();
+        assert_eq!(
+            list_rows(&test),
+            before,
+            "a superseded text's answer was drawn"
+        );
+        test.run_in(|| diff.write().filter_arrived(of, "01234", vec![1234, 11234]));
+        test.sync_and_update();
+        test.sync_and_update();
+        assert_eq!(list_rows(&test), ["file-01234.rs", "file-11234.rs"]);
+    }
+
+    /// C10 and the QA brief: a file chosen in the Changes tab's list asks its diff and lets go
+    /// of the last one's — the query it replaces is no longer wanted, so its answer, if it
+    /// still arrives, is never drawn, and the diff thread's epoch for the lane has moved on
+    /// (`worker::diff_tests`' `a_superseded_diff_kills_its_git` shows that kills its `git`).
+    /// Caught by: a list that reports nothing, or a choice that leaves the last query wanted.
+    #[test]
+    fn a_file_chosen_in_the_list_supersedes_the_last_ones_diff() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        changes_tab_over(&mut test, view, 2);
+        let first = file_queries(&submitted)[0].clone();
+        click_label(&mut test, "file-00001.rs");
+        test.sync_and_update();
+        let asked = file_queries(&submitted);
+        assert_eq!(
+            asked.iter().map(path_of).collect::<Vec<_>>(),
+            ["file-00000.rs", "file-00001.rs"]
+        );
+        assert!(
+            !view.diff.peek().wants_file(&first),
+            "the first file's diff is still wanted"
+        );
+        assert!(view.diff.peek().wants_file(&asked[1]));
+        assert_eq!(view.diff.peek().file_index(), Some(1));
+    }
+
+    /// R6.1, the QA brief's "genuinely shared": side-by-side is one setting for every diff
+    /// view, kept for the session — it holds across another file and another commit — and
+    /// toggling it asks git nothing, since it draws the same answer another way. Caught by: a
+    /// per-view setting, one the next file forgets, or a toggle that asks again.
+    #[test]
+    fn side_by_side_is_one_setting_for_every_diff_and_asks_nothing() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        changes_tab_over(&mut test, view, 2);
+        let query = file_queries(&submitted)[0].clone();
+        answer_file(&mut test, view, &query, 40);
+        let headers = |test: &TestingRunner| {
+            pane_rows(test)
+                .iter()
+                .filter(|t| t.starts_with("@@ -3,"))
+                .count()
+        };
+        assert_eq!(headers(&test), 1, "unified draws one header per hunk");
+
+        let before = submitted.borrow().len();
+        click_named(&mut test, cairn_ui::SIDE_BY_SIDE_LABEL);
+        test.sync_and_update();
+        assert!(view.diff_settings.read().side_by_side());
+        assert!(
+            requests_since(&submitted, before).is_empty(),
+            "toggling side-by-side asked git again"
+        );
+        assert_eq!(
+            headers(&test),
+            2,
+            "side by side, the header is in each column"
+        );
+
+        click_label(&mut test, "file-00001.rs");
+        click_row(&mut test, 3);
+        assert!(
+            view.diff_settings.read().side_by_side(),
+            "the setting was not kept"
+        );
+    }
+
+    /// R6.8, R6.9: Load Diff on a file past the limits asks it again with `load_anyway`, and
+    /// while it is shown a setting changed keeps it loaded; another file starts unloaded.
+    /// Caught by: Load Diff asking nothing, a context change that drops the load (the notice
+    /// would come back), or a load that leaks to the next file.
+    #[test]
+    fn load_diff_asks_the_file_again_past_the_limits() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        changes_tab_over(&mut test, view, 2);
+        let query = file_queries(&submitted)[0].clone();
+        let mut diff = view.diff;
+        let large = cairn_model::FileDiff {
+            file: answer_with(2, 1).files.remove(0),
+            content: cairn_model::DiffContent::TooLarge {
+                crossed: cairn_model::SizeLimit::Bytes {
+                    limit: 1_048_576,
+                    measured: 2_532_736,
+                },
+                loadable: true,
+            },
+        };
+        test.run_in(|| {
+            diff.write().file_arrived(
+                &query,
+                Some(cairn_model::ShownDiff::new(large, query.options.context)),
+            )
+        });
+        test.sync_and_update();
+        assert!(
+            pane(&test)
+                .iter()
+                .any(|t| t == cairn_ui::TOO_LARGE_TO_DISPLAY)
+        );
+        click_label(&mut test, cairn_ui::LOAD_DIFF_CAPTION);
+        let loaded = last_file_query(&submitted);
+        assert_eq!(path_of(&loaded), path_of(&query));
+        assert!(
+            loaded.options.load_anyway,
+            "Load Diff did not ask past the limits"
+        );
+
+        click_named(&mut test, cairn_ui::MORE_LINES_LABEL);
+        assert!(
+            last_file_query(&submitted).options.load_anyway,
+            "a setting dropped the load"
+        );
+
+        click_label(&mut test, "file-00001.rs");
+        let next = last_file_query(&submitted);
+        assert_eq!(path_of(&next), "file-00001.rs");
+        assert!(
+            !next.options.load_anyway,
+            "the load leaked to the next file"
+        );
     }
 }

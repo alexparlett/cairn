@@ -5,7 +5,9 @@
 //! only for the selection it names (PRD R4.4).
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use cairn_model::ShownDiff;
 use cairn_model::{
     ChangeSet, ChangedFile, CommandRecord, Context, FileDiff, HistoryRow, Oid, RemoteSummary,
     RepoPath,
@@ -120,21 +122,38 @@ pub struct Retired(Box<RetiredAnswers>);
 /// Boxed, so a request carrying them is a pointer wide.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RetiredAnswers {
-    changes: Option<ChangeSet>,
+    changes: Option<Arc<ChangeSet>>,
     diffs: Vec<FileDiff>,
+    shown: Vec<ShownDiff>,
 }
 
 impl Retired {
-    /// What is let go of: a change set, and file diffs. `None` when that is nothing.
-    pub fn of(changes: Option<ChangeSet>, diffs: Vec<FileDiff>) -> Option<Self> {
-        (changes.is_some() || !diffs.is_empty())
-            .then(|| Self(Box::new(RetiredAnswers { changes, diffs })))
+    /// What is let go of: a change set, file diffs, and a diff as the view drew it (its rows'
+    /// indexes with it). `None` when that is nothing.
+    pub fn of(
+        changes: Option<Arc<ChangeSet>>,
+        diffs: Vec<FileDiff>,
+        shown: Vec<ShownDiff>,
+    ) -> Option<Self> {
+        (changes.is_some() || !diffs.is_empty() || !shown.is_empty()).then(|| {
+            Self(Box::new(RetiredAnswers {
+                changes,
+                diffs,
+                shown,
+            }))
+        })
     }
 
     /// The change set let go of, for a test that checks what was handed over.
     #[cfg(test)]
     pub fn changes(&self) -> Option<&ChangeSet> {
-        self.0.changes.as_ref()
+        self.0.changes.as_deref()
+    }
+
+    /// The diffs as drawn let go of, for a test that checks what was handed over.
+    #[cfg(test)]
+    pub fn shown(&self) -> &[ShownDiff] {
+        &self.0.shown
     }
 }
 
@@ -162,6 +181,15 @@ pub enum Request {
     ExpandAll {
         of: Comparison,
         options: DiffOptions,
+    },
+    /// Which of `files`' files hold `text` in a path (the Changes tab's filter, R5.4),
+    /// answered by [`Update::FilteredFiles`]: a pass over every path, so run on a worker and
+    /// never on the UI thread. Numbered in the file-filter lane, so the next keystroke
+    /// supersedes it and nothing else does; `files` is the window's own change set, shared.
+    FilterFiles {
+        of: Comparison,
+        files: Arc<ChangeSet>,
+        text: String,
     },
     /// The configured remotes, answered by [`Update::Remotes`].
     ListRemotes,
@@ -207,6 +235,7 @@ impl Request {
             Self::OpenHistory { .. } | Self::MoreHistory { .. } => Some(QueryLane::History),
             Self::Changes { .. } => Some(QueryLane::Changes),
             Self::FileDiff(_) | Self::ExpandAll { .. } => Some(QueryLane::FileDiff),
+            Self::FilterFiles { .. } => Some(QueryLane::FileFilter),
             Self::ListRemotes
             | Self::ConfiguredContext
             | Self::Fetch { .. }
@@ -273,11 +302,20 @@ pub enum Update {
     /// What `of` changed (R2.1, R2.2): its files, the commit's details when one commit was
     /// named, and how the rename search went.
     Changes { of: Comparison, changes: ChangeSet },
-    /// One file's diff as `query` asked for it; `None` where the working tree's `git diff`
-    /// of the path prints nothing (a clean path).
+    /// One file's diff as `query` asked for it, prepared for the views on the worker that
+    /// answered it (both rows' indexes, the widest line; phase 07) so the window only keeps
+    /// it; `None` where the working tree's `git diff` of the path prints nothing (a clean
+    /// path).
     FileDiff {
         query: FileQuery,
-        diff: Option<FileDiff>,
+        /// Boxed: a prepared diff is far larger than any other update.
+        diff: Option<Box<ShownDiff>>,
+    },
+    /// The files of `of`'s change set that hold `text` in a path, by index, in order.
+    FilteredFiles {
+        of: Comparison,
+        text: String,
+        files: Vec<u32>,
     },
     /// Expand All's answer: files of `of`'s change set in its order, appended to what
     /// came before; `complete` says no more follow. One batch, complete, until phase 08
@@ -317,6 +355,18 @@ mod tests {
             (Request::Changes { of: commit }, QueryLane::Changes),
             (Request::FileDiff(file.clone()), QueryLane::FileDiff),
             (
+                Request::FilterFiles {
+                    of: commit,
+                    files: Arc::new(ChangeSet {
+                        files: Vec::new(),
+                        details: None,
+                        renames: cairn_model::RenameDetection::default(),
+                    }),
+                    text: "src".to_owned(),
+                },
+                QueryLane::FileFilter,
+            ),
+            (
                 Request::ExpandAll {
                     of: commit,
                     options: DiffOptions::default(),
@@ -337,6 +387,7 @@ mod tests {
             Request::Retire(Retired(Box::new(RetiredAnswers {
                 changes: None,
                 diffs: Vec::new(),
+                shown: Vec::new(),
             }))),
             Request::Close,
         ] {

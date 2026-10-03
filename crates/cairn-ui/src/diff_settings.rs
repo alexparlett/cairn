@@ -1,6 +1,6 @@
 //! The settings every diff view shares (PRD R6.1, R6.3, R6.7): how much context, the entire
-//! file or not, whitespace ignored or not. One value for the session, held by the
-//! application; not remembered across sessions (issue #29).
+//! file or not, whitespace ignored or not, unified or side-by-side. One value for the
+//! session, held by the application; not remembered across sessions (issue #29).
 
 use cairn_model::Context;
 
@@ -12,6 +12,9 @@ pub struct DiffSettings {
     lines: u32,
     entire_file: bool,
     ignore_whitespace: bool,
+    /// Side-by-side rather than unified (R6.1): a way of drawing the same answer, so changing
+    /// it asks git nothing.
+    side_by_side: bool,
     /// Whether the user has moved the context this session: until they have, the context
     /// follows the configuration's `diff.context` once the engine has read it.
     chosen: bool,
@@ -24,6 +27,7 @@ impl Default for DiffSettings {
             lines: Context::DEFAULT_LINES,
             entire_file: false,
             ignore_whitespace: false,
+            side_by_side: false,
             chosen: false,
         }
     }
@@ -49,6 +53,11 @@ impl DiffSettings {
 
     pub fn ignore_whitespace(self) -> bool {
         self.ignore_whitespace
+    }
+
+    /// Whether diffs are drawn side by side; unified by default (R6.1).
+    pub fn side_by_side(self) -> bool {
+        self.side_by_side
     }
 
     /// The user's `git diff` context, read from their configuration: taken as the session's
@@ -99,6 +108,10 @@ impl DiffSettings {
     pub fn toggle_ignore_whitespace(&mut self) {
         self.ignore_whitespace = !self.ignore_whitespace;
     }
+
+    pub fn toggle_side_by_side(&mut self) {
+        self.side_by_side = !self.side_by_side;
+    }
 }
 
 #[cfg(test)]
@@ -143,6 +156,21 @@ mod tests {
         assert!(settings.more_lines());
         assert!(!settings.configured(Context::Lines(9)));
         assert_eq!(settings.context(), Context::Lines(2));
+    }
+
+    /// R6.1: unified by default; side-by-side toggles and changes nothing git is asked —
+    /// the context and whitespace stay as they were. Caught by: starting side by side, or a
+    /// toggle that moves another setting.
+    #[test]
+    fn side_by_side_starts_off_and_toggles_alone() {
+        let mut settings = DiffSettings::default();
+        assert!(!settings.side_by_side());
+        let before = (settings.context(), settings.ignore_whitespace());
+        settings.toggle_side_by_side();
+        assert!(settings.side_by_side());
+        assert_eq!((settings.context(), settings.ignore_whitespace()), before);
+        settings.toggle_side_by_side();
+        assert!(!settings.side_by_side());
     }
 
     #[test]

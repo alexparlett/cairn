@@ -1,5 +1,5 @@
-//! Headless tests for the unified diff view and the bar over it (PRD R6.2-R6.7, criteria
-//! C9 for unified rows and C11).
+//! Headless tests for the diff view, unified and side by side, and the bar over it (PRD
+//! R6.1-R6.7, R6.9, criteria C9 and C11).
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -7,14 +7,13 @@ use std::rc::Rc;
 use cairn_model::{
     ByteRange, ChangeStatus, ChangedFile, ChangedRange, Context, DiffContent, DiffLine,
     DisplayOverlay, FileDiff, FileMode, FunctionContext, IntraLineHighlight, LineNumber, LineSpan,
-    RepoPath, Similarity, TextDiff, UnifiedRow, UnifiedRows, split_lines,
+    RepoPath, ShownDiff, Similarity, TextDiff, UnifiedRow, UnifiedRows, split_lines,
 };
 use cairn_ui::diff_palette::{ADDED_EMPHASIS, CURRENT_CHANGE, REMOVED_EMPHASIS};
 use cairn_ui::{
-    DIFF_ROW_HEIGHT, DiffHeader, DiffSettings, ENTIRE_FILE_LABEL, FEWER_LINES_LABEL,
+    DIFF_ROW_HEIGHT, DiffHeader, DiffSettings, DiffView, ENTIRE_FILE_LABEL, FEWER_LINES_LABEL,
     HIDDEN_CHANGES_NOTICE, HeaderAction, IGNORE_WHITESPACE_LABEL, MORE_LINES_LABEL,
-    NEXT_CHANGE_LABEL, NO_NEWLINE_AT_END, PREVIOUS_CHANGE_LABEL, SIDE_BY_SIDE_LABEL, ShownDiff,
-    UnifiedDiffView,
+    NEXT_CHANGE_LABEL, NO_NEWLINE_AT_END, PREVIOUS_CHANGE_LABEL, SIDE_BY_SIDE_LABEL,
 };
 use freya::prelude::*;
 use freya_testing::{TestingNode, TestingRunner};
@@ -74,13 +73,21 @@ struct Fixture {
 }
 
 fn launch(shown: ShownDiff) -> TestingRunner {
+    launch_as(shown, false)
+}
+
+fn launch_side_by_side(shown: ShownDiff) -> TestingRunner {
+    launch_as(shown, true)
+}
+
+fn launch_as(shown: ShownDiff, side_by_side: bool) -> TestingRunner {
     let (mut test, _) = TestingRunner::new(
-        || {
+        move || {
             let fixture = use_consume::<Fixture>();
             let scroll = use_scroll_controller(ScrollConfig::default);
             rect()
                 .expanded()
-                .child(UnifiedDiffView::new(fixture.shown, scroll))
+                .child(DiffView::new(fixture.shown, scroll).side_by_side(side_by_side))
                 .into_element()
         },
         (WIDTH, HEIGHT).into(),
@@ -511,11 +518,11 @@ fn glyph_colours(test: &TestingRunner, name: &str) -> Vec<Color> {
     colours
 }
 
-/// R6.2, R6.3, C11: the bar holds previous and next change, every toggle, and side-by-side
-/// disabled, each found by the name assistive technology reads; each enabled button reports
-/// its action, fewer lines is disabled at one line and both line buttons while the entire
-/// file is shown. Caught by: a button wired to another action, fewer lines pressable at the
-/// floor, side-by-side reporting anything.
+/// R6.2, R6.3, C11: the bar holds previous and next change and every toggle, side-by-side
+/// among them (phase 07), each found by the name assistive technology reads; each enabled
+/// button reports its action, fewer lines is disabled at one line and both line buttons while
+/// the entire file is shown. Caught by: a button wired to another action, fewer lines
+/// pressable at the floor, side-by-side still disabled.
 #[test]
 fn the_bar_reports_each_button_and_holds_fewer_lines_at_one() {
     let mut at_one = DiffSettings::default();
@@ -538,8 +545,9 @@ fn the_bar_reports_each_button_and_holds_fewer_lines_at_one() {
             HeaderAction::IgnoreWhitespace,
             HeaderAction::MoreLines,
             HeaderAction::EntireFile,
+            HeaderAction::SideBySide,
         ],
-        "fewer lines at one, or side-by-side, reported a press"
+        "fewer lines at one reported a press, or side-by-side did not"
     );
 
     let mut entire = DiffSettings::default();
@@ -571,6 +579,7 @@ fn every_button_is_a_named_glyph_and_an_active_toggle_is_lit_in_the_accent() {
     let mut on = DiffSettings::default();
     on.toggle_ignore_whitespace();
     on.toggle_entire_file();
+    on.toggle_side_by_side();
     let (test, _) = launch_header(move || DiffHeader::new(file("src/lib.rs"), on));
     let drawn = labels(&test);
     for name in EVERY_BUTTON {
@@ -580,7 +589,10 @@ fn every_button_is_a_named_glyph_and_an_active_toggle_is_lit_in_the_accent() {
         );
         let colours = glyph_colours(&test, name);
         assert!(!colours.is_empty(), "{name:?} draws no glyph");
-        if name == IGNORE_WHITESPACE_LABEL || name == ENTIRE_FILE_LABEL {
+        if name == IGNORE_WHITESPACE_LABEL
+            || name == ENTIRE_FILE_LABEL
+            || name == SIDE_BY_SIDE_LABEL
+        {
             assert!(
                 colours.iter().all(|colour| *colour == CURRENT_CHANGE),
                 "{name:?} is on and its glyph is not the accent: {colours:?}"
@@ -672,7 +684,7 @@ fn the_horizontal_extent_is_the_widest_lines_wherever_the_view_is() {
         ),
         Context::EntireFile,
     );
-    let width = shown.content_width();
+    let width = cairn_ui::content_width(&shown);
     assert!(
         width > WIDTH,
         "the fixture's widest line is narrower than the view"
@@ -712,4 +724,339 @@ fn the_horizontal_extent_is_the_widest_lines_wherever_the_view_is() {
     );
     let end = row_widths(&test);
     assert!(end.iter().all(|w| *w == width), "{end:?} against {width}");
+}
+
+/// The rows a side-by-side view built: one per distinct top edge among its row-high rects.
+fn built_side_rows(test: &TestingRunner) -> usize {
+    let mut tops: Vec<i32> = test.find_many(|node, element| {
+        let area = node.layout().area;
+        Rect::try_downcast(element)
+            .filter(|_| area.height() == DIFF_ROW_HEIGHT)
+            .map(|_| area.min_y().round() as i32)
+    });
+    tops.sort_unstable();
+    tops.dedup();
+    tops.len()
+}
+
+/// Every paragraph drawn, with whether it is visible and which column it is in.
+fn side_paragraphs(test: &TestingRunner) -> Vec<(String, bool, bool)> {
+    test.find_many(|node, element| {
+        Paragraph::try_downcast(element).map(|paragraph| {
+            let text: String = paragraph
+                .spans
+                .iter()
+                .map(|span| span.text.as_ref())
+                .collect();
+            (
+                text,
+                node.is_visible(),
+                node.layout().area.min_x() < WIDTH / 2.,
+            )
+        })
+    })
+}
+
+/// C9 for side-by-side rows, the twin of `only_a_viewport_of_diff_rows_is_built_however_long_
+/// the_file`: over a 1,000-line and a 100,000-line file drawn whole and side by side, the view
+/// builds one viewport of rows at the top, scrolled deep and scrolled to the end — the same
+/// number at each — its length is the file's real row count (one header and one row per line,
+/// a replaced line and its replacement sharing one), counted from the file and not from a
+/// second projection, and the end is the last line, in both columns. Caught by: a plain
+/// list, two scroll views, a length that drops or adds a row, or pairing that builds a row
+/// per changed line.
+#[test]
+fn only_a_viewport_of_side_by_side_rows_is_built_however_long_the_file() {
+    let viewport_rows = (HEIGHT / DIFF_ROW_HEIGHT).ceil() as usize;
+    let within_a_viewport = |test: &TestingRunner, place: &str| {
+        let count = built_side_rows(test);
+        assert!(
+            count >= viewport_rows && count <= viewport_rows + 2,
+            "{count} rows were built for a {viewport_rows}-row viewport {place}"
+        );
+        count
+    };
+    let mut built = Vec::new();
+    for lines in [1_000u32, 100_000] {
+        let shown = ShownDiff::new(long_file(lines), Context::EntireFile);
+        assert_eq!(
+            shown.rows(true),
+            lines as usize + 1,
+            "side by side, the entire file is not one header and a row per line"
+        );
+        let mut test = launch_side_by_side(shown);
+        built.push(within_a_viewport(&test, &format!("at the top of {lines}")));
+        let top = side_paragraphs(&test);
+        assert!(
+            top.iter()
+                .any(|(text, visible, left)| *visible && *left && text.starts_with("@@ -1,"))
+                && top
+                    .iter()
+                    .any(|(text, visible, left)| *visible && !*left && text.starts_with("@@ -1,")),
+            "the hunk's header is not at the top of each column: {top:?}"
+        );
+
+        let deep = lines as usize * 3 / 5;
+        test.scroll(
+            (100., 100.),
+            (0., -(deep as f64 * f64::from(DIFF_ROW_HEIGHT))),
+        );
+        built.push(within_a_viewport(
+            &test,
+            &format!("at row {deep} of {lines}"),
+        ));
+        let line = format!("line {}", deep - 1);
+        assert!(
+            side_paragraphs(&test)
+                .iter()
+                .any(|(text, visible, _)| *visible && *text == line),
+            "scrolling to row {deep} did not build {line:?}"
+        );
+
+        test.scroll(
+            (100., 100.),
+            (0., -(f64::from(lines) * f64::from(DIFF_ROW_HEIGHT) * 2.)),
+        );
+        built.push(within_a_viewport(&test, &format!("at the end of {lines}")));
+        let last = format!("line {}", lines - 1);
+        let end = side_paragraphs(&test);
+        for left in [true, false] {
+            assert!(
+                end.iter()
+                    .any(|(text, visible, column)| *visible && *column == left && *text == last),
+                "the end of the view is not the last line in the {} column: {:?}",
+                if left { "left" } else { "right" },
+                end.iter().rev().take(4).collect::<Vec<_>>()
+            );
+        }
+    }
+    let (short, long) = built.split_at(3);
+    assert_eq!(
+        short, long,
+        "a longer file built a different number of rows: {built:?}"
+    );
+}
+
+/// One side-by-side row read with its colour ignored: each column's number, marker and text,
+/// or `None` for a column that is filler.
+type SideRow = (
+    Option<(String, String, String)>,
+    Option<(String, String, String)>,
+);
+
+/// The side-by-side rows on screen, top to bottom, each column read apart. A column with no
+/// text (only its blank number) is filler.
+fn read_side_rows(test: &TestingRunner) -> Vec<SideRow> {
+    let mut pieces: Vec<(i32, f32, String)> = test.find_many(|node, element| {
+        let area = node.layout().area;
+        let at = (area.min_y() / DIFF_ROW_HEIGHT).floor() as i32;
+        if let Some(label) = Label::try_downcast(element) {
+            return Some((at, area.min_x(), label.text.to_string()));
+        }
+        Paragraph::try_downcast(element).map(|paragraph| {
+            let text: String = paragraph
+                .spans
+                .iter()
+                .map(|span| span.text.as_ref())
+                .collect();
+            (at, area.min_x(), format!("¶{text}"))
+        })
+    });
+    pieces.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    let mut rows: Vec<SideRow> = Vec::new();
+    let mut at = None;
+    let mut columns: [Vec<String>; 2] = [Vec::new(), Vec::new()];
+    let read = |parts: &mut Vec<String>| {
+        let parts = std::mem::take(parts);
+        if !parts.iter().any(|part| part.starts_with('¶')) {
+            assert!(
+                parts.iter().all(String::is_empty),
+                "a filler column drew {parts:?}"
+            );
+            return None;
+        }
+        let number = parts.first().cloned().unwrap_or_default();
+        let (marker, text) = match &parts[1..] {
+            [text] => (String::new(), text.clone()),
+            [marker, text] => (marker.clone(), text.clone()),
+            other => panic!("a column of {other:?}"),
+        };
+        Some((number, marker, text.trim_start_matches('¶').to_owned()))
+    };
+    for (row, x, text) in pieces.into_iter().chain([(i32::MAX, 0., String::new())]) {
+        if at.is_some_and(|current| current != row) {
+            let [left, right] = &mut columns;
+            rows.push((read(left), read(right)));
+        }
+        if row == i32::MAX {
+            break;
+        }
+        at = Some(row);
+        columns[usize::from(x >= WIDTH / 2.)].push(text);
+    }
+    rows
+}
+
+fn cell(number: &str, marker: &str, text: &str) -> Option<(String, String, String)> {
+    Some((number.to_owned(), marker.to_owned(), text.to_owned()))
+}
+
+/// R1.4, R6.1, R6.4, L11 side by side: the i-th removed line beside the i-th added one, the
+/// shorter side's rows filler, one number per column, a marker per line so a row reads the
+/// same with its colour ignored, the hunk header with git's function context in both
+/// columns, a context line in both, and git's end-of-file marker in the column of the side
+/// whose last line did not end. Here the sides differ in length both ways, and a whole side
+/// of one change is empty. Caught by: pairing by position in the hunk rather than in the
+/// change, filler drawn as a blank line with a number, the header in one column only, or a
+/// marker in the wrong column.
+#[test]
+fn side_by_side_pairs_lines_fills_the_shorter_side_and_reads_without_colour() {
+    let text = TextDiff::new(
+        split_lines(b"fn f() {\n    a();\n    b();\n}\nx\ny"),
+        split_lines(b"fn f() {\n    A();\n}\nnew\nx\nY"),
+        vec![
+            change((1, 2), (1, 1)),
+            change((4, 0), (3, 1)),
+            change((5, 1), (5, 1)),
+        ],
+    );
+    let overlay = DisplayOverlay::none().with_function_context(FunctionContext::read_at(
+        Context::lines(9),
+        vec![(LineNumber::from_index(0), b"fn f() {".to_vec())],
+    ));
+    let test = launch_side_by_side(ShownDiff::new(text_diff(text, overlay), Context::lines(9)));
+    let header = "@@ -1,6 +1,6 @@ fn f() {";
+    assert_eq!(
+        read_side_rows(&test),
+        [
+            (cell("", "", header), cell("", "", header)),
+            (cell("1", " ", "fn f() {"), cell("1", " ", "fn f() {")),
+            (cell("2", "-", "    a();"), cell("2", "+", "    A();")),
+            (cell("3", "-", "    b();"), None),
+            (cell("4", " ", "}"), cell("3", " ", "}")),
+            (None, cell("4", "+", "new")),
+            (cell("5", " ", "x"), cell("5", " ", "x")),
+            (cell("6", "-", "y"), cell("6", "+", "Y")),
+            (
+                cell("", "", NO_NEWLINE_AT_END),
+                cell("", "", NO_NEWLINE_AT_END)
+            ),
+        ]
+    );
+}
+
+/// R6.1, Fork's equal panes (Finding 11): the two columns are equal and together fill the
+/// view whatever the lines' lengths, each with its own gutter; a sideways scroll slides both
+/// columns' text by the same distance while each gutter stays put, and the view's extent is
+/// the widest line's overflow past its column. Caught by: columns sized to their text (one
+/// side pushed off screen), a gutter that scrolls away, or the sides scrolled apart.
+#[test]
+fn side_by_side_columns_are_equal_halves_and_slide_together() {
+    let wide = "w".repeat(300);
+    let text = TextDiff::new(
+        split_lines(format!("a\n{wide}\nc\n").as_bytes()),
+        split_lines(format!("a\n{wide}!\nc\n").as_bytes()),
+        vec![change((1, 1), (1, 1))],
+    );
+    let mut test = launch_side_by_side(ShownDiff::new(
+        text_diff(text, DisplayOverlay::none()),
+        Context::lines(3),
+    ));
+    // Each column: the widest row-high rect whose top is the changed row's, left and right.
+    let column_widths = |test: &TestingRunner| -> Vec<(f32, f32)> {
+        let mut columns: Vec<(f32, f32)> = test.find_many(|node, element| {
+            let area = node.layout().area;
+            Rect::try_downcast(element)
+                .filter(|_| {
+                    area.height() == DIFF_ROW_HEIGHT
+                        && (area.min_y() - 2. * DIFF_ROW_HEIGHT).abs() < 0.5
+                        && area.width() > WIDTH * 0.49
+                        && area.width() < WIDTH * 0.55
+                })
+                .map(|_| (area.min_x(), area.width()))
+        });
+        columns.sort_by(|a, b| a.0.total_cmp(&b.0));
+        columns.dedup();
+        columns
+    };
+    let columns = column_widths(&test);
+    assert_eq!(columns.len(), 2, "{columns:?}");
+    assert!((columns[0].1 - columns[1].1).abs() < 0.5, "{columns:?}");
+    assert!(
+        columns[0].1 * 2. <= WIDTH && columns[0].1 * 2. > WIDTH - 4.,
+        "{columns:?}"
+    );
+
+    let positions = |test: &TestingRunner| -> (Vec<f32>, Vec<f32>) {
+        let numbers = test.find_many(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == "2")
+                .map(|_| node.layout().area.min_x())
+        });
+        let texts = test.find_many(|node, element| {
+            Paragraph::try_downcast(element)
+                .filter(|paragraph| {
+                    paragraph
+                        .spans
+                        .first()
+                        .is_some_and(|span| span.text.starts_with("www"))
+                })
+                .map(|_| node.layout().area.min_x())
+        });
+        (numbers, texts)
+    };
+    let (numbers, texts) = positions(&test);
+    assert_eq!(
+        (numbers.len(), texts.len()),
+        (2, 2),
+        "{numbers:?} {texts:?}"
+    );
+    test.scroll((WIDTH as f64 / 2., 40.), (-200., 0.));
+    test.sync_and_update();
+    let (moved_numbers, moved_texts) = positions(&test);
+    assert_eq!(moved_numbers, numbers, "a gutter scrolled away");
+    let slid: Vec<f32> = texts.iter().zip(&moved_texts).map(|(a, b)| a - b).collect();
+    assert!(slid[0] > 0. && (slid[0] - slid[1]).abs() < 0.5, "{slid:?}");
+}
+
+/// R6.9, phase 06 QA's obligation: a file loaded past the limits with one line of several
+/// mebibytes draws that line cut at the long-line limit with the marker after it, in either
+/// view, so a row costs at most the limit's text however long the line, and the horizontal
+/// extent is the cut's, not the line's. Caught by: a row that draws the whole line, a cut
+/// with no marker, or an extent measured from the line's length.
+#[test]
+fn a_line_past_the_limit_is_drawn_cut_with_its_marker_in_both_views() {
+    let long = "x".repeat(4 * 1024 * 1024);
+    let text = TextDiff::new(
+        vec![DiffLine::terminated("short")],
+        vec![DiffLine::terminated(long)],
+        vec![change((0, 1), (0, 1))],
+    );
+    let shown = ShownDiff::new(text_diff(text, DisplayOverlay::none()), Context::lines(3));
+    let cut = cairn_model::LINE_CUT_BYTES;
+    let bound = 2. * 20. + 200. + (cut + cairn_ui::LINE_CUT_MARKER.len()) as f32 * 7.;
+    assert!(
+        cairn_ui::content_width(&shown) < bound,
+        "the extent is {} for a line drawn to {cut} bytes",
+        cairn_ui::content_width(&shown)
+    );
+    for side_by_side in [false, true] {
+        let test = launch_as(shown.clone(), side_by_side);
+        let drawn: Vec<Vec<String>> = test.find_many(|_, element| {
+            Paragraph::try_downcast(element).map(|paragraph| {
+                paragraph
+                    .spans
+                    .iter()
+                    .map(|span| span.text.to_string())
+                    .collect()
+            })
+        });
+        let line = drawn
+            .iter()
+            .find(|spans| spans.first().is_some_and(|text| text.starts_with("xxx")))
+            .unwrap_or_else(|| panic!("the long line is not drawn: {drawn:?}"));
+        assert_eq!(line.len(), 2, "no marker after the cut: {:?}", line.len());
+        assert_eq!(line[0].len(), cut, "side by side: {side_by_side}");
+        assert_eq!(line[1], cairn_ui::LINE_CUT_MARKER);
+    }
 }

@@ -8,6 +8,7 @@
 //! | `ConfiguredContext` | `cairn-diff`, whose handle is opened again when the configuration moves, and which sends the context again each time |
 //! | `ListRemotes`, `CommandLog`, `Close`, `Fetch` | `cairn-repository` (a fetch is forwarded on to the network lane) |
 //! | `Retire` | `cairn-repository`, which frees what it is handed |
+//! | file filter (`FilterFiles`) | `cairn-repository`, whose pages are bounded, so a keystroke never waits behind a diff |
 //! | `CancelFetch` | none: the fetch's control, from the caller's thread |
 //!
 //! [`route`] is the table, applied to every request as it is submitted: it hands each one
@@ -23,7 +24,11 @@
 
 #[cfg(test)]
 use super::epoch::QueryLane;
-use super::request::{DiffQuery, FileQuery, Request, Retired};
+use std::sync::Arc;
+
+use cairn_model::ChangeSet;
+
+use super::request::{Comparison, DiffQuery, FileQuery, Request, Retired};
 
 /// A thread a repository's requests are served on.
 #[cfg(test)]
@@ -39,7 +44,7 @@ pub(super) enum Thread {
 #[cfg(test)]
 pub(super) const fn thread_of(lane: QueryLane) -> Thread {
     match lane {
-        QueryLane::History => Thread::Repository,
+        QueryLane::History | QueryLane::FileFilter => Thread::Repository,
         QueryLane::Changes | QueryLane::FileDiff => Thread::Diff,
     }
 }
@@ -62,6 +67,12 @@ pub(super) enum RepositoryJob {
         remote: String,
     },
     CommandLog,
+    /// Which files of a change set a filter's text leaves.
+    Filter {
+        of: Comparison,
+        files: Arc<ChangeSet>,
+        text: String,
+    },
     /// Answers to free; the job does nothing else.
     Retire(Retired),
     Close,
@@ -107,6 +118,9 @@ pub(super) fn route(request: Request) -> Routed {
             Routed::Diff(DiffQuery::File(FileQuery { target, options }))
         }
         Request::ExpandAll { of, options } => Routed::Diff(DiffQuery::All { of, options }),
+        Request::FilterFiles { of, files, text } => {
+            Routed::Repository(RepositoryJob::Filter { of, files, text })
+        }
         Request::ListRemotes => Routed::Repository(RepositoryJob::ListRemotes),
         Request::ConfiguredContext => Routed::ConfiguredContext,
         Request::Fetch { remote } => Routed::Repository(RepositoryJob::Fetch { remote }),
@@ -131,6 +145,9 @@ pub(super) fn unroute(routed: Routed) -> Request {
         Routed::Repository(RepositoryJob::ListRemotes) => Request::ListRemotes,
         Routed::Repository(RepositoryJob::Fetch { remote }) => Request::Fetch { remote },
         Routed::Repository(RepositoryJob::CommandLog) => Request::CommandLog,
+        Routed::Repository(RepositoryJob::Filter { of, files, text }) => {
+            Request::FilterFiles { of, files, text }
+        }
         Routed::Repository(RepositoryJob::Retire(retired)) => Request::Retire(retired),
         Routed::Repository(RepositoryJob::Close) => Request::Close,
         Routed::Diff(DiffQuery::Changes(of)) => Request::Changes { of },
@@ -163,6 +180,15 @@ mod tests {
                 of: commit,
                 options: DiffOptions::default(),
             },
+            Request::FilterFiles {
+                of: commit,
+                files: Arc::new(cairn_model::ChangeSet {
+                    files: Vec::new(),
+                    details: None,
+                    renames: cairn_model::RenameDetection::default(),
+                }),
+                text: "lib".to_owned(),
+            },
             Request::ListRemotes,
             Request::ConfiguredContext,
             Request::Fetch {
@@ -172,11 +198,12 @@ mod tests {
             Request::CommandLog,
             Request::Retire(
                 Retired::of(
-                    Some(cairn_model::ChangeSet {
+                    Some(Arc::new(cairn_model::ChangeSet {
                         files: Vec::new(),
                         details: None,
                         renames: cairn_model::RenameDetection::default(),
-                    }),
+                    })),
+                    Vec::new(),
                     Vec::new(),
                 )
                 .unwrap_or_else(|| unreachable!("a change set is something to retire")),
@@ -195,6 +222,7 @@ mod tests {
         assert_eq!(thread_of(QueryLane::History), Thread::Repository);
         assert_eq!(thread_of(QueryLane::Changes), Thread::Diff);
         assert_eq!(thread_of(QueryLane::FileDiff), Thread::Diff);
+        assert_eq!(thread_of(QueryLane::FileFilter), Thread::Repository);
         for request in every_request() {
             let lane = request.lane();
             let routed = route(request.clone());

@@ -1,7 +1,8 @@
 //! Request epochs, numbered per query lane, which double as the engine's cancel signal.
 //!
-//! Three lanes (PRD R4.1, packet decision L8): the history, the changes query and the
-//! file diff. A new query supersedes the older ones in its own lane only, with one
+//! Four lanes (PRD R4.1, packet decision L8, and phase 07's file filter): the history, the
+//! changes query, the file diff and the Changes tab's filter over a change set's files. A
+//! new query supersedes the older ones in its own lane only, with one
 //! exception — a changes query also supersedes the file-diff lane, since a file of the
 //! commit that was selected is no file of the one that is now. So a scroll never cancels a
 //! diff, a selection never cancels a scroll, and an operation, which is numbered in no
@@ -21,18 +22,27 @@ pub enum QueryLane {
     Changes,
     /// One file's diff, or every file's (Expand All).
     FileDiff,
+    /// Which of a change set's files a filter's text leaves (phase 07): a list operation,
+    /// numbered so a keystroke supersedes the filter of the one before it, and nothing else.
+    FileFilter,
 }
 
 impl QueryLane {
     /// Every lane, in the order of their counters.
     #[cfg(test)]
-    pub const ALL: [Self; 3] = [Self::History, Self::Changes, Self::FileDiff];
+    pub const ALL: [Self; 4] = [
+        Self::History,
+        Self::Changes,
+        Self::FileDiff,
+        Self::FileFilter,
+    ];
 
     fn index(self) -> usize {
         match self {
             Self::History => 0,
             Self::Changes => 1,
             Self::FileDiff => 2,
+            Self::FileFilter => 3,
         }
     }
 
@@ -43,6 +53,7 @@ impl QueryLane {
             Self::History => &[Self::History],
             Self::Changes => &[Self::Changes, Self::FileDiff],
             Self::FileDiff => &[Self::FileDiff],
+            Self::FileFilter => &[Self::FileFilter],
         }
     }
 }
@@ -58,7 +69,7 @@ pub struct Epoch {
 /// The current epoch of every lane, shared by cloning.
 #[derive(Debug, Clone, Default)]
 pub struct Epochs {
-    lanes: Arc<[AtomicU64; 3]>,
+    lanes: Arc<[AtomicU64; 4]>,
     stopping: Arc<AtomicBool>,
 }
 
@@ -208,6 +219,7 @@ mod tests {
         );
         assert_eq!(QueryLane::History.supersedes(), [QueryLane::History]);
         assert_eq!(QueryLane::FileDiff.supersedes(), [QueryLane::FileDiff]);
+        assert_eq!(QueryLane::FileFilter.supersedes(), [QueryLane::FileFilter]);
     }
 
     #[test]

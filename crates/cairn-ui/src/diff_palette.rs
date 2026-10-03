@@ -39,6 +39,9 @@ pub const DIFF_TEXT: Color = rgb((0xDD, 0xDD, 0xDD));
 pub const DIFF_MUTED: Color = rgb((0xA0, 0xA0, 0xA0));
 /// The line between the line-number gutter and the text: Fork's `#4B4B4B`, retuned.
 pub const GUTTER_SEPARATOR: Color = retuned((0x4B, 0x4B, 0x4B));
+/// A side-by-side column's filler, where its side has no line beside the other's: Fork's
+/// grey filler rows, `#424242` (Finding 25, Windows), retuned.
+pub const FILLER: Color = retuned((0x42, 0x42, 0x42));
 /// The header bar over the diff: Fork's `#333333`, retuned.
 pub const HEADER_BAR: Color = retuned((0x33, 0x33, 0x33));
 /// The change last moved to with previous or next change: Fork outlines its active chunk
@@ -120,6 +123,7 @@ mod tests {
         assert_eq!(REMOVED_EMPHASIS, Color::from_rgb(139, 46, 51));
         assert_eq!(ADDED_EMPHASIS, Color::from_rgb(36, 112, 46));
         assert_eq!(GUTTER_SEPARATOR, Color::from_rgb(55, 55, 55));
+        assert_eq!(FILLER, Color::from_rgb(46, 46, 46));
         assert_eq!(
             retuned(FORK_GROUND),
             GROUND,

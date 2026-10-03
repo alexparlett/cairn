@@ -565,7 +565,7 @@ fn labelled(name: &'static str, value: Element) -> Element {
         .into()
 }
 
-fn file_row(file: &ChangedFile) -> Element {
+pub(crate) fn file_row(file: &ChangedFile) -> Element {
     let colours = colours();
     let badge = match file.status {
         ChangeStatus::Added => colours.success,

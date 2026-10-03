@@ -1,6 +1,7 @@
 //! Cairn's component library.
 
 pub mod accelerators;
+mod changes_list;
 mod columns;
 mod commit_row;
 mod commit_tab;
@@ -9,16 +10,24 @@ mod date_text;
 mod detail_tabs;
 mod diff_header;
 mod diff_line_text;
+mod diff_notice;
 pub mod diff_palette;
+mod diff_row_parts;
 mod diff_settings;
 mod diff_view;
+mod file_filter;
 mod graph_cell;
 pub mod graph_geometry;
 mod history_list;
 pub mod lane_palette;
 mod message_lines;
+mod side_by_side_rows;
 mod toggle_glyphs;
+mod unified_rows;
 
+pub use changes_list::{
+    ChangesList, ChangesSummary, FILTER_PLACEHOLDER, NO_FILE_MATCHES, SUMMARY_HEIGHT, summary_parts,
+};
 pub use commit_row::{
     AUTHOR_WIDTH, COLUMN_GAP, CommitRow, DATE_WIDTH, HistoryHeader, ID_WIDTH, ROW_FONT_SIZE,
     ROW_PADDING,
@@ -36,10 +45,17 @@ pub use diff_header::{
     HeaderAction, IGNORE_WHITESPACE_LABEL, MORE_LINES_LABEL, NEXT_CHANGE_LABEL,
     PREVIOUS_CHANGE_LABEL, SIDE_BY_SIDE_LABEL,
 };
-pub use diff_line_text::{ShownLine, TAB_WIDTH, shown_line};
+pub use diff_line_text::{LINE_CUT_MARKER, ShownLine, TAB_WIDTH, shown_line};
+pub use diff_notice::{
+    BINARY_FILE, CONFLICTED, DiffNotice, DiffNoticeView, LFS_POINTER, LOAD_DIFF_CAPTION, NEW_SIDE,
+    NO_CHANGES_SHOWN, NO_CONTENT_CHANGE, OLD_SIDE, ONLY_WHITESPACE_CHANGED, SUBMODULE,
+    TOO_LARGE_TO_DISPLAY, header_lines, size_text, subproject_line, too_large_reason,
+};
 pub use diff_settings::DiffSettings;
 pub use diff_view::{
-    ChangeCursor, DIFF_ROW_HEIGHT, NO_NEWLINE_AT_END, ShownDiff, UnifiedDiffView, step_change,
+    ChangeCursor, DIFF_ROW_HEIGHT, DiffView, NO_NEWLINE_AT_END, content_width, step_change,
+    text_width,
 };
+pub use file_filter::ShownFiles;
 pub use graph_geometry::{LANE_WIDTH, MAX_DRAWN_LANES, ROW_HEIGHT, graph_width};
 pub use history_list::{HistoryList, PREFETCH_ROWS, RowRender, reveal_row};

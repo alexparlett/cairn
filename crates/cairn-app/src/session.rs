@@ -103,7 +103,20 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         // so an answer for another selection does not even wake what draws the diff.
         Update::Changes { of, changes } => {
             if diff.peek().wants_changes(of) {
-                diff.write().changes_arrived(of, changes);
+                let filtering = {
+                    let mut state = diff.write();
+                    state.changes_arrived(of, changes);
+                    // The filter's text, asked again for the change set that has arrived.
+                    state.filter_again()
+                };
+                if let Some(request) = filtering {
+                    (worker.submit)(request);
+                }
+            }
+        }
+        Update::FilteredFiles { of, text, files } => {
+            if diff.peek().wants_filter(of, &text) {
+                diff.write().filter_arrived(of, &text, files);
             }
         }
         Update::FileDiff {
@@ -111,7 +124,8 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             diff: answer,
         } => {
             if diff.peek().wants_file(&query) {
-                diff.write().file_arrived(&query, answer);
+                diff.write()
+                    .file_arrived(&query, answer.map(|shown| *shown));
             }
         }
         Update::FileDiffs {
@@ -216,6 +230,8 @@ mod tests {
                         remotes: State::create(Vec::new()),
                         refused: State::create(None),
                         diff: State::create(crate::diff_state::DiffState::default()),
+                        filter_text: State::create(String::new()),
+                        changes_list_width: State::create(crate::changes_tab::LIST_WIDTH),
                         history_scroll: ScrollController::new(0, 0, Vec::new()),
                         detail_tab: State::create(cairn_ui::DetailTab::default()),
                         pane_collapsed: State::create(false),
@@ -345,7 +361,10 @@ mod tests {
         let (test, mut view, asked) = launch(FetchStatus::Idle);
         let file_update = || Update::FileDiff {
             query: query.clone(),
-            diff: Some(diff.clone()),
+            diff: Some(Box::new(cairn_model::ShownDiff::new(
+                diff.clone(),
+                query.options.context,
+            ))),
         };
         let batch = || Update::FileDiffs {
             of,
@@ -363,7 +382,7 @@ mod tests {
         applying(&test, view, &asked, file_update());
         assert_eq!(
             test.run_in(|| view.diff.peek().file().map(|(_, a)| a.clone())),
-            Some(Answer::Ready(Some(cairn_ui::ShownDiff::new(
+            Some(Answer::Ready(Some(cairn_model::ShownDiff::new(
                 diff.clone(),
                 query.options.context
             )))),

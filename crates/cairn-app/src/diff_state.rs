@@ -8,13 +8,15 @@
 //! names anything but what is selected now — the selection cleared, or changed in a way
 //! that asked nothing new — so the files of one commit are never drawn under another.
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
+use cairn_model::ShownDiff;
 use cairn_model::{
     ChangeSet, ChangeStatus, ChangedFile, Context, DiffContent, FileDiff, RenameDetection, RepoPath,
 };
-use cairn_ui::ShownDiff;
+use cairn_ui::ShownFiles;
 
+use crate::file_filter::FileFilter;
 use crate::worker::{Comparison, DiffOptions, DiffQuery, FileQuery, Request, Retired};
 
 /// An answer the window is waiting for, has, or was told failed.
@@ -36,13 +38,19 @@ pub struct Expanded {
 /// The diff selection and its answers.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DiffState {
-    /// The commit or the pair selected, and what it changed.
-    changes: Option<(Comparison, Answer<ChangeSet>)>,
-    /// The file selected, and its diff as the view draws it, built once as it arrives —
-    /// `None` inside `Ready` for a clean working-tree path.
+    /// The commit or the pair selected, and what it changed — shared, so the Changes tab's
+    /// filter can read it on a worker (phase 07) without a copy.
+    changes: Option<(Comparison, Answer<Arc<ChangeSet>>)>,
+    /// The file selected, and its diff as the view draws it, prepared on the worker that
+    /// answered it — `None` inside `Ready` for a clean working-tree path.
     file: Option<(FileQuery, Answer<Option<ShownDiff>>)>,
     /// Expand All over a comparison, at some options, and what has arrived of it.
     expanded: Option<(Comparison, DiffOptions, Answer<Expanded>)>,
+    /// The Changes tab's filter over the selected change set's files (phase 07).
+    filter: FileFilter,
+    /// Where the file selected is in the change set, when it was chosen from it: what the
+    /// Changes tab's list highlights and moves from, kept rather than searched for.
+    file_index: Option<usize>,
 }
 
 impl DiffState {
@@ -57,10 +65,13 @@ impl DiffState {
         let changes = self.changes.replace((of, Answer::Waiting));
         let file = self.file.take();
         let expanded = self.expanded.take();
-        let mut diffs: Vec<FileDiff> = Vec::new();
+        self.file_index = None;
+        self.filter.changes_selected();
+        let mut shown_diffs: Vec<ShownDiff> = Vec::new();
         if let Some((_, Answer::Ready(Some(shown)))) = file {
-            diffs.push(shown.into_diff());
+            shown_diffs.push(shown);
         }
+        let mut diffs: Vec<FileDiff> = Vec::new();
         if let Some((_, _, Answer::Ready(Expanded { diffs: all, .. }))) = expanded {
             diffs.extend(all);
         }
@@ -69,7 +80,7 @@ impl DiffState {
             Answer::Waiting | Answer::Failed(_) => None,
         });
         let mut requests = vec![Request::Changes { of }];
-        requests.extend(Retired::of(changes, diffs).map(Request::Retire));
+        requests.extend(Retired::of(changes, diffs, shown_diffs).map(Request::Retire));
         requests
     }
 
@@ -84,7 +95,7 @@ impl DiffState {
         self.expanded = None;
         let mut requests = vec![Request::FileDiff(query)];
         if let Some((_, Answer::Ready(Some(shown)))) = replaced {
-            requests.extend(Retired::of(None, vec![shown.into_diff()]).map(Request::Retire));
+            requests.extend(Retired::of(None, Vec::new(), vec![shown]).map(Request::Retire));
         }
         requests
     }
@@ -100,6 +111,7 @@ impl DiffState {
     pub fn expand_all(&mut self, of: Comparison, options: DiffOptions) -> Request {
         self.expanded = Some((of, options, Answer::Waiting));
         self.file = None;
+        self.file_index = None;
         Request::ExpandAll { of, options }
     }
 
@@ -115,8 +127,18 @@ impl DiffState {
         *self = Self::default();
     }
 
-    pub fn changes(&self) -> Option<(Comparison, &Answer<ChangeSet>)> {
+    pub fn changes(&self) -> Option<(Comparison, &Answer<Arc<ChangeSet>>)> {
         self.changes.as_ref().map(|(of, answer)| (*of, answer))
+    }
+
+    /// Records that the file selected is the change set's file `index`.
+    pub fn chose_file_at(&mut self, index: usize) {
+        self.file_index = Some(index);
+    }
+
+    /// Where the file selected is in the change set, if it was chosen from it.
+    pub fn file_index(&self) -> Option<usize> {
+        self.file.as_ref().and(self.file_index)
     }
 
     pub fn file(&self) -> Option<(&FileQuery, &Answer<Option<ShownDiff>>)> {
@@ -145,6 +167,12 @@ impl DiffState {
     }
 }
 
+/// What the Changes tab's list shows of the selected change set: the view of the state the
+/// list is handed.
+pub fn answered_files(state: &DiffState) -> &ShownFiles {
+    state.filter.shown()
+}
+
 /// What [`answered_changes`] hands back while no change set is kept: nothing changed, and no
 /// commit.
 static NO_CHANGES: ChangeSet = ChangeSet {
@@ -163,7 +191,7 @@ static NO_CHANGES: ChangeSet = ChangeSet {
 /// Whether the selection's answer is ready is the pane's to check before drawing it.
 pub fn answered_changes(state: &DiffState) -> &ChangeSet {
     match &state.changes {
-        Some((_, Answer::Ready(changes))) => changes,
+        Some((_, Answer::Ready(changes))) => changes.as_ref(),
         Some((_, Answer::Waiting | Answer::Failed(_))) | None => &NO_CHANGES,
     }
 }
@@ -195,6 +223,41 @@ pub fn answered_file(state: &DiffState) -> &ShownDiff {
 }
 
 impl DiffState {
+    /// The filter's text is now `text`: what to ask of a worker, if anything — nothing for
+    /// the text already asked, an empty text, or a change set not yet here.
+    pub fn filter(&mut self, text: &str) -> Option<Request> {
+        let ready = match &self.changes {
+            Some((of, Answer::Ready(changes))) => Some((*of, changes)),
+            Some((_, Answer::Waiting | Answer::Failed(_))) | None => None,
+        };
+        self.filter.filter(text, ready)
+    }
+
+    /// The filter asked again with its text, for a change set that has just arrived.
+    pub fn filter_again(&mut self) -> Option<Request> {
+        let text = self.filter.text().to_owned();
+        self.filter(&text)
+    }
+
+    pub fn filter_text(&self) -> &str {
+        self.filter.text()
+    }
+
+    /// Whether the list shows the answer for the filter's text as it is.
+    pub fn filter_is_settled(&self) -> bool {
+        self.filter.is_settled()
+    }
+
+    pub fn wants_filter(&self, of: Comparison, text: &str) -> bool {
+        self.wants_changes(of) && self.filter.wants(of, text)
+    }
+
+    /// A filter's answer arrived; kept only if it names the change set selected and the text
+    /// asked last. Returns whether it was.
+    pub fn filter_arrived(&mut self, of: Comparison, text: &str, files: Vec<u32>) -> bool {
+        self.wants_changes(of) && self.filter.arrived(of, text, files)
+    }
+
     /// Whether an answer to `asked` is for what is selected now.
     pub fn wants(&self, asked: &DiffQuery) -> bool {
         match asked {
@@ -226,20 +289,19 @@ impl DiffState {
     pub fn changes_arrived(&mut self, of: Comparison, changes: ChangeSet) -> bool {
         match &mut self.changes {
             Some((selected, answer)) if *selected == of => {
-                *answer = Answer::Ready(changes);
+                *answer = Answer::Ready(Arc::new(changes));
                 true
             }
             Some(_) | None => false,
         }
     }
 
-    /// A file's diff arrived; kept only if exactly `query` is selected, and prepared for the
-    /// view there and then, at the context it was asked at — once, never per frame.
-    pub fn file_arrived(&mut self, query: &FileQuery, diff: Option<FileDiff>) -> bool {
+    /// A file's diff arrived, already prepared for the view on the worker that answered it;
+    /// kept only if exactly `query` is selected. Returns whether it was.
+    pub fn file_arrived(&mut self, query: &FileQuery, diff: Option<ShownDiff>) -> bool {
         match &mut self.file {
             Some((selected, answer)) if selected == query => {
-                *answer =
-                    Answer::Ready(diff.map(|diff| ShownDiff::new(diff, query.options.context)));
+                *answer = Answer::Ready(diff);
                 true
             }
             Some(_) | None => false,
@@ -385,7 +447,7 @@ mod tests {
         assert!(state.changes_arrived(commit(2), change_set("two")));
         assert_eq!(
             state.changes(),
-            Some((commit(2), &Answer::Ready(change_set("two"))))
+            Some((commit(2), &Answer::Ready(Arc::new(change_set("two")))))
         );
 
         state.clear();
@@ -556,7 +618,10 @@ mod tests {
             file: change_set("a.txt").files.remove(0),
             content: DiffContent::ModeChangeOnly,
         };
-        assert!(state.file_arrived(&first, Some(diff.clone())));
+        assert!(state.file_arrived(
+            &first,
+            Some(ShownDiff::new(diff.clone(), Context::default()))
+        ));
         assert_eq!(
             state.shown_file().map(ShownDiff::context),
             Some(Context::default())
@@ -567,8 +632,12 @@ mod tests {
         let requests = state.select_file(wider.clone());
         assert_eq!(requests.len(), 2, "{requests:?}");
         assert_eq!(requests[0], Request::FileDiff(wider.clone()));
-        assert!(matches!(&requests[1], Request::Retire(_)));
-        assert!(state.file_arrived(&wider, Some(diff)));
+        match &requests[1] {
+            // The diff as it was drawn, rows' indexes and all, freed off the UI thread.
+            Request::Retire(retired) => assert_eq!(retired.shown().len(), 1),
+            other => panic!("the second request is not a retirement: {other:?}"),
+        }
+        assert!(state.file_arrived(&wider, Some(ShownDiff::new(diff, Context::Lines(7)))));
         assert_eq!(
             state.shown_file().map(ShownDiff::context),
             Some(Context::Lines(7))

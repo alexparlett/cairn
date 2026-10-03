@@ -1,47 +1,47 @@
-//! The unified diff view (PRD R6.4, R6.5): one file's diff as `git diff` prints it, drawn
-//! row by row through the virtualising view.
+//! The diff view (PRD R6.1, R6.4, R6.5, R6.9): one file's diff as `git diff` prints it,
+//! drawn row by row through the virtualising view — unified (`unified_rows`) or side by side
+//! (`side_by_side_rows`), as the shared setting says, both from one prepared answer.
 //!
-//! **A row.** An old and a new line-number gutter, a thin separator, then — tinted for a
-//! changed line — a marker column (`-`, `+`, or blank) and the line. A removed line leaves
-//! the new gutter blank and an added one the old, so the gutter and the marker say what the
-//! tint says (L11). A hunk header is git's `@@ -a,b +c,d @@` and the function context git
-//! printed after it, in muted text at the same height with no band and no button (Fork,
-//! Finding 13); git's `\ No newline at end of file` is a muted row of its own. Every row has
-//! one height, [`DIFF_ROW_HEIGHT`], which is what keeps the list O(viewport).
+//! **What is built once, and what per row.** [`ShownDiff`] (`cairn-model`) is built once per
+//! answer, on the worker that answered it (phase 07): both rows' indexes, proportional to the
+//! changes, whether ignoring whitespace hides a change, the gutter's digits and the widest
+//! line as drawn (one pass over the drawn bytes, a line past the long-line limit counted to
+//! its cut). Toggling side-by-side therefore builds nothing. A frame builds the rows in view and nothing else: per row, a search of the
+//! index, one search of the intra-line ranges, and the line's drawn text — at most
+//! [`LINE_CUT_BYTES`](crate::LINE_CUT_BYTES) of it — never growing with the file, the line
+//! or the scroll offset. Every row has one height, [`DIFF_ROW_HEIGHT`].
 //!
-//! **What is built once, and what per row.** [`ShownDiff`] is built once per answer, when
-//! it arrives: the rows' index ([`UnifiedLayout`], proportional to the changes), whether
-//! ignoring whitespace hides a change, the gutter's digits and the widest line (one pass
-//! over the bytes). A frame then builds the rows in view and nothing else: per row, a search
-//! of the index, one search of the intra-line ranges, and the line's own text — work that
-//! grows with that line, never with the file or the scroll offset.
-//!
-//! **Horizontal extent.** Every row is as wide as the view, or as
-//! [`ShownDiff::content_width`] where that is wider — the widest line's columns at IBM Plex
-//! Mono's advance, an upper bound measured once — so the horizontal scrollbar does not
-//! change as rows scroll in and out (`the_horizontal_extent_is_the_widest_lines_wherever_the_
-//! view_is`). A line drawn wider than its columns predict (a glyph the font lacks, drawn by
-//! a wider fallback) can run past that extent. The gutter scrolls sideways with the text.
-//! Long lines scroll sideways, never wrap (wrap is issue #34).
+//! **Horizontal extent.** Unified: every row is as wide as the view, or as
+//! [`content_width`] where that is wider — the widest drawn line's columns at IBM
+//! Plex Mono's advance, an upper bound measured once — so the horizontal scrollbar does not
+//! change as rows scroll in and out. Side by side: each column is half the view and the
+//! extent is the widest line's overflow past its column (`side_by_side_rows`). A line drawn
+//! wider than its columns predict (a glyph the font lacks, drawn by a wider fallback) can run
+//! past that extent. Long lines scroll sideways, never wrap (wrap is issue #34).
 
 use std::ops::Range;
 
-use cairn_model::{
-    ByteRange, Context, DisplayOverlay, FileDiff, LineNumber, TextDiff, UnifiedLayout, UnifiedRow,
-};
+use cairn_model::{ChangeStops, DisplayOverlay, HunkHeader, ShownDiff};
 use freya::prelude::*;
 
 use crate::accelerators;
-use crate::diff_line_text::{shown_line, widest_columns};
-use crate::diff_palette::{
-    ADDED_EMPHASIS, ADDED_TINT, CURRENT_CHANGE, DIFF_FONT_FAMILY, DIFF_FONT_SIZE, DIFF_MUTED,
-    DIFF_TEXT, GROUND, GUTTER_SEPARATOR, MONO_ADVANCE_EM, REMOVED_EMPHASIS, REMOVED_TINT,
+use crate::diff_line_text::LINE_CUT_MARKER;
+use crate::diff_palette::GROUND;
+use crate::diff_row_parts::{
+    ADVANCE, MARKER_WIDTH, SEPARATOR_WIDTH, TEXT_END_PADDING, number_width,
 };
+use crate::side_by_side_rows::Columns;
+use crate::{side_by_side_rows, unified_rows};
 
 /// Every row of the diff is this tall: Fork's, measured — a 17 pt pitch for Menlo at 11 pt
 /// on the Mac (Finding 24, a vendor screenshot at 2×, May 2026), the hunk header the same.
 /// Fork's Windows pitch is not established at a known scale.
 pub const DIFF_ROW_HEIGHT: f32 = 17.0;
+
+/// [`DIFF_ROW_HEIGHT`] in whole pixels, for scroll arithmetic: a row's offset is computed in
+/// integers, which an `f32` cannot hold exactly past 2^24 pixels — about 987,000 rows.
+const ROW_PIXELS: i64 = 17;
+const _: () = assert!(ROW_PIXELS as f32 == DIFF_ROW_HEIGHT);
 
 /// git's marker for a line that did not end, drawn as its own row.
 pub const NO_NEWLINE_AT_END: &str = "\\ No newline at end of file";
@@ -49,107 +49,39 @@ pub const NO_NEWLINE_AT_END: &str = "\\ No newline at end of file";
 /// Rows a change moved to sits below the top of the view, so the line above it shows.
 const LEAD_ROWS: usize = 1;
 
-const ADVANCE: f32 = DIFF_FONT_SIZE * MONO_ADVANCE_EM;
-const NUMBER_PADDING: f32 = 6.0;
-const SEPARATOR_WIDTH: f32 = 1.0;
-const CURRENT_SEPARATOR_WIDTH: f32 = 3.0;
-const MARKER_WIDTH: f32 = 2.0 * ADVANCE + 6.0;
-const TEXT_END_PADDING: f32 = 24.0;
-
-/// One file's diff as the unified view draws it: built once when the answer arrives, at the
-/// context it was asked at.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ShownDiff {
-    diff: FileDiff,
-    context: Context,
-    /// `None` for a file that is not text.
-    layout: Option<UnifiedLayout>,
-    hides_changes: bool,
-    widest_columns: usize,
-    number_digits: usize,
+/// How wide a number column of `shown` is.
+pub(crate) fn number_column_width(shown: &ShownDiff) -> f32 {
+    number_width(shown.number_digits())
 }
 
-impl ShownDiff {
-    /// Builds what the view needs of `diff`, asked at `context`: proportional to its changes
-    /// and one pass over its bytes, never repeated per frame.
-    pub fn new(diff: FileDiff, context: Context) -> Self {
-        let (layout, hides_changes, widest_columns, number_digits) =
-            match (diff.text(), diff.overlay()) {
-                (Some(text), Some(overlay)) => (
-                    Some(UnifiedLayout::shown(text, overlay, context)),
-                    overlay.hides_a_change(text),
-                    widest_columns(text.old_lines().iter().chain(text.new_lines())),
-                    digits(text.old_lines().len().max(text.new_lines().len())),
-                ),
-                _ => (None, false, 0, 1),
-            };
-        Self {
-            diff,
-            context,
-            layout,
-            hides_changes,
-            widest_columns,
-            number_digits,
-        }
-    }
-
-    pub fn diff(&self) -> &FileDiff {
-        &self.diff
-    }
-
-    /// The answer itself, for a caller letting go of it.
-    pub fn into_diff(self) -> FileDiff {
-        self.diff
-    }
-
-    pub fn context(&self) -> Context {
-        self.context
-    }
-
-    /// The rows, for a text diff.
-    pub fn layout(&self) -> Option<&UnifiedLayout> {
-        self.layout.as_ref()
-    }
-
-    pub fn row_count(&self) -> usize {
-        self.layout.as_ref().map_or(0, UnifiedLayout::len)
-    }
-
-    /// Whether ignoring whitespace hides a change that is really there (R6.7) — false when
-    /// whitespace is not ignored, and false when ignoring it hides nothing.
-    pub fn hides_changes(&self) -> bool {
-        self.hides_changes
-    }
-
-    /// How wide every row is at least: the gutters, the marker column and the widest line.
-    pub fn content_width(&self) -> f32 {
-        gutter_width(self.number_digits)
-            + SEPARATOR_WIDTH
-            + MARKER_WIDTH
-            + self.widest_columns as f32 * ADVANCE
-            + TEXT_END_PADDING
-    }
-
-    fn number_width(&self) -> f32 {
-        number_width(self.number_digits)
-    }
-
-    /// The text diff and its overlay, for a file that is text.
-    fn text(&self) -> Option<(&TextDiff, &DisplayOverlay)> {
-        self.diff.text().zip(self.diff.overlay())
-    }
+/// How wide a line's text of `shown` is at most, marker column included — the widest drawn
+/// line, and the cut marker when a line is cut: what a side-by-side column slides through.
+pub fn text_width(shown: &ShownDiff) -> f32 {
+    let marker = if shown.has_cut_line() {
+        LINE_CUT_MARKER.chars().count()
+    } else {
+        0
+    };
+    MARKER_WIDTH + (shown.widest_columns() + marker) as f32 * ADVANCE + TEXT_END_PADDING
 }
 
-fn digits(count: usize) -> usize {
-    count.max(1).to_string().len()
+/// How wide every unified row of `shown` is at least: the gutters, the marker column and the
+/// widest drawn line.
+pub fn content_width(shown: &ShownDiff) -> f32 {
+    2.0 * number_column_width(shown) + SEPARATOR_WIDTH + text_width(shown)
 }
 
-fn number_width(digits: usize) -> f32 {
-    digits as f32 * ADVANCE + 2.0 * NUMBER_PADDING
-}
-
-fn gutter_width(digits: usize) -> f32 {
-    2.0 * number_width(digits)
+/// A hunk header as a row draws it: git's `@@ -a,b +c,d @@`, and after a space the function
+/// context git printed for a hunk starting there.
+pub(crate) fn header_words(header: HunkHeader, overlay: &DisplayOverlay) -> String {
+    let mut words = header.to_string();
+    if let Some(function) = overlay.function_context().of(header)
+        && !function.is_empty()
+    {
+        words.push(' ');
+        words.push_str(&String::from_utf8_lossy(function));
+    }
+    words
 }
 
 /// Where previous or next change last moved to, and the scroll it left the view at.
@@ -159,50 +91,55 @@ pub struct ChangeCursor {
     pub scrolled_y: i32,
 }
 
-/// One step of previous or next change (R6.2) over `layout`, the view scrolled to
+/// One step of previous or next change (R6.2) over `stops`, the view scrolled to
 /// `scrolled_y`: from `cursor` while the view is still where that step left it, otherwise
 /// from the top row in view — so the first press finds the first change at or below the
 /// top, even one already in view. The new cursor says which change, and the scroll that
 /// puts its first row [`LEAD_ROWS`] below the top; `None` when there is no change that way.
+/// Rows and pixels are whole numbers throughout, so the answer is exact however deep.
 pub fn step_change(
-    layout: &UnifiedLayout,
+    stops: &ChangeStops,
     cursor: Option<ChangeCursor>,
     scrolled_y: i32,
     forward: bool,
 ) -> Option<ChangeCursor> {
-    let held = cursor
-        .filter(|cursor| cursor.scrolled_y == scrolled_y && cursor.change < layout.change_count());
-    let top_row = (scrolled_y.saturating_neg().max(0) as f32 / DIFF_ROW_HEIGHT) as usize;
+    let held =
+        cursor.filter(|cursor| cursor.scrolled_y == scrolled_y && cursor.change < stops.len());
+    let top_row = usize::try_from((-i64::from(scrolled_y)).max(0) / ROW_PIXELS).unwrap_or(0);
     let change = match (held, forward) {
-        (Some(held), true) => Some(held.change + 1).filter(|next| *next < layout.change_count()),
+        (Some(held), true) => Some(held.change + 1).filter(|next| *next < stops.len()),
         (Some(held), false) => held.change.checked_sub(1),
-        (None, true) => layout.first_change_from(top_row),
-        (None, false) => layout.previous_change_before(top_row),
+        (None, true) => stops.first_from(top_row),
+        (None, false) => stops.last_before(top_row),
     }?;
-    let start = layout.change_row(change)?;
-    let top = start.saturating_sub(LEAD_ROWS) as f32 * DIFF_ROW_HEIGHT;
+    let start = stops.start(change)?;
+    let top = i64::try_from(start.saturating_sub(LEAD_ROWS))
+        .unwrap_or(i64::MAX)
+        .saturating_mul(ROW_PIXELS);
     Some(ChangeCursor {
         change,
-        scrolled_y: -(top as i32),
+        scrolled_y: i32::try_from(-top).unwrap_or(i32::MIN),
     })
 }
 
-/// The unified rows of one file's diff. `shown` is a handle, not a copy: rows are read from
-/// it as they are built. `scroll` is the application's, so previous and next change can move
-/// the view; `current` is the change they last moved to, marked in the gutter.
-pub struct UnifiedDiffView {
+/// One file's diff, unified or side by side. `shown` is a handle, not a copy: rows are read
+/// from it as they are built. `scroll` is the application's, so previous and next change can
+/// move the view; `current` is the change they last moved to, marked in the gutter.
+pub struct DiffView {
     shown: Readable<ShownDiff>,
     scroll: ScrollController,
     current: Option<Range<usize>>,
+    side_by_side: bool,
     key: DiffKey,
 }
 
-impl UnifiedDiffView {
+impl DiffView {
     pub fn new(shown: impl Into<Readable<ShownDiff>>, scroll: ScrollController) -> Self {
         Self {
             shown: shown.into(),
             scroll,
             current: None,
+            side_by_side: false,
             key: DiffKey::None,
         }
     }
@@ -212,26 +149,34 @@ impl UnifiedDiffView {
         self.current = current;
         self
     }
+
+    /// Side by side rather than unified (R6.1).
+    pub fn side_by_side(mut self, side_by_side: bool) -> Self {
+        self.side_by_side = side_by_side;
+        self
+    }
 }
 
-impl PartialEq for UnifiedDiffView {
+impl PartialEq for DiffView {
     fn eq(&self, other: &Self) -> bool {
         self.shown == other.shown
             && self.scroll == other.scroll
             && self.current == other.current
+            && self.side_by_side == other.side_by_side
             && self.key == other.key
     }
 }
 
-impl std::fmt::Debug for UnifiedDiffView {
+impl std::fmt::Debug for DiffView {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("UnifiedDiffView")
+        f.debug_struct("DiffView")
             .field("current", &self.current)
+            .field("side_by_side", &self.side_by_side)
             .finish_non_exhaustive()
     }
 }
 
-impl KeyExt for UnifiedDiffView {
+impl KeyExt for DiffView {
     fn write_key(&mut self) -> &mut DiffKey {
         &mut self.key
     }
@@ -240,39 +185,70 @@ impl KeyExt for UnifiedDiffView {
 /// What decides which rows are drawn, passed to the virtualising view: data captured in its
 /// builder is invisible to its diffing.
 #[derive(Clone)]
-struct RowsData {
-    shown: Readable<ShownDiff>,
-    rows: usize,
-    width: f32,
-    number_width: f32,
-    current: Option<Range<usize>>,
+pub(crate) struct RowsData {
+    pub(crate) shown: Readable<ShownDiff>,
+    pub(crate) rows: usize,
+    pub(crate) side_by_side: bool,
+    /// The unified rows' least width.
+    pub(crate) width: f32,
+    pub(crate) number_width: f32,
+    /// A line's text at its widest, marker column included.
+    pub(crate) text_width: f32,
+    /// The view's own width, which a side-by-side column is half of.
+    pub(crate) view_width: f32,
+    pub(crate) current: Option<Range<usize>>,
+    /// Read as a side-by-side row is built, for the sideways scroll its text slides by.
+    pub(crate) scroll: ScrollController,
 }
 
 impl PartialEq for RowsData {
     fn eq(&self, other: &Self) -> bool {
         self.rows == other.rows
+            && self.side_by_side == other.side_by_side
             && self.width == other.width
             && self.number_width == other.number_width
+            && self.text_width == other.text_width
+            && self.view_width == other.view_width
             && self.current == other.current
     }
 }
 
-impl Component for UnifiedDiffView {
+fn build_row(item: VirtualItem, data: &RowsData) -> Element {
+    if data.side_by_side {
+        side_by_side_rows::build(item, data)
+    } else {
+        unified_rows::build(item, data)
+    }
+}
+
+impl Component for DiffView {
     fn render(&self) -> impl IntoElement {
         let focus_id = use_a11y();
         let mut viewport = use_state(|| (0.0f32, 0.0f32));
+        let view_width = viewport.read().0;
         // Reading subscribes the view to the answer it draws.
         let data = {
             let shown = self.shown.read();
             RowsData {
                 shown: self.shown.clone(),
-                rows: shown.row_count(),
-                width: shown.content_width(),
-                number_width: shown.number_width(),
+                rows: shown.rows(self.side_by_side),
+                side_by_side: self.side_by_side,
+                width: content_width(&shown),
+                number_width: number_column_width(&shown),
+                text_width: text_width(&shown),
+                view_width,
                 current: self.current.clone(),
+                scroll: self.scroll,
             }
         };
-        let (rows, width) = (data.rows, data.width);
+        let rows = data.rows;
+        // How far the view scrolls sideways: past the unified rows' width, or through a
+        // side-by-side column's overflow.
+        let width = if data.side_by_side {
+            Columns::of(view_width, data.number_width, data.text_width, 0.0).row_width()
+        } else {
+            data.width
+        };
         let scroll = self.scroll;
 
         rect()
@@ -353,201 +329,11 @@ fn scroll_by_key(
     true
 }
 
-/// What a line row draws: its two numbers, its marker, its kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LineKind {
-    Context,
-    Removed,
-    Added,
-}
-
-fn build_row(item: VirtualItem, data: &RowsData) -> Element {
-    let row = rect()
-        .key(item.index)
-        .horizontal()
-        .content(Content::Flex)
-        // As wide as the view, or as the widest line where that is wider: the tint reaches
-        // the edge, and the extent is the answer's, whichever rows are built.
-        .width(Size::fill())
-        .min_width(Size::px(data.width))
-        .height(Size::px(item.size));
-    // Read, not peeked: the list redraws when the answer it shows is replaced.
-    let shown = data.shown.read();
-    let Some((text, overlay)) = shown.text() else {
-        return row.into();
-    };
-    let Some(drawn) = shown
-        .layout()
-        .and_then(|layout| layout.row(text, overlay, item.index))
-    else {
-        // The count and the answer can disagree for one frame; an empty row of the right
-        // height stands in.
-        return row.into();
-    };
-    let current = data
-        .current
-        .as_ref()
-        .is_some_and(|rows| rows.contains(&item.index));
-    let number_width = data.number_width;
-    match drawn {
-        UnifiedRow::Header(header) => {
-            let mut words = header.to_string();
-            if let Some(function) = overlay.function_context().of(header)
-                && !function.is_empty()
-            {
-                words.push(' ');
-                words.push_str(&String::from_utf8_lossy(function));
-            }
-            note_row(row, number_width, current, words)
-        }
-        UnifiedRow::Context { old, new, line } => line_row(
-            row,
-            number_width,
-            current,
-            (Some(old), Some(new)),
-            LineKind::Context,
-            line.bytes(),
-            &[],
-        ),
-        UnifiedRow::Removed { old, line } => line_row(
-            row,
-            number_width,
-            current,
-            (Some(old), None),
-            LineKind::Removed,
-            line.bytes(),
-            overlay.on_removed_line(old),
-        ),
-        UnifiedRow::Added { new, line } => line_row(
-            row,
-            number_width,
-            current,
-            (None, Some(new)),
-            LineKind::Added,
-            line.bytes(),
-            overlay.on_added_line(new),
-        ),
-        UnifiedRow::NoNewlineAtEnd => {
-            note_row(row, number_width, current, NO_NEWLINE_AT_END.to_owned())
-        }
-    }
-}
-
-/// The two numbers, right-aligned, on the diff's ground: a side the line is not on is blank.
-fn gutter(numbers: (Option<LineNumber>, Option<LineNumber>), number_width: f32) -> Rect {
-    let number = |at: Option<LineNumber>| {
-        label()
-            .width(Size::px(number_width))
-            .padding(Gaps::new(0., NUMBER_PADDING, 0., NUMBER_PADDING))
-            .text_align(TextAlign::End)
-            .max_lines(1)
-            .font_family(DIFF_FONT_FAMILY)
-            .font_size(DIFF_FONT_SIZE)
-            .color(DIFF_MUTED)
-            .text(
-                at.map(|line| line.one_based().to_string())
-                    .unwrap_or_default(),
-            )
-    };
-    rect()
-        .horizontal()
-        .height(Size::fill())
-        .cross_align(Alignment::Center)
-        .child(number(numbers.0))
-        .child(number(numbers.1))
-}
-
-fn separator(current: bool) -> Rect {
-    rect()
-        .width(Size::px(if current {
-            CURRENT_SEPARATOR_WIDTH
-        } else {
-            SEPARATOR_WIDTH
-        }))
-        .height(Size::fill())
-        .background(if current {
-            CURRENT_CHANGE
-        } else {
-            GUTTER_SEPARATOR
-        })
-}
-
-/// The row's text, in the diff's typeface, one line, never wrapped.
-fn line_text(words: String, colour: Color) -> Paragraph {
-    paragraph()
-        .span(words)
-        .font_family(DIFF_FONT_FAMILY)
-        .font_size(DIFF_FONT_SIZE)
-        .color(colour)
-        .max_lines(1)
-        .vertical_align(VerticalAlign::Center)
-        .height(Size::fill())
-}
-
-fn line_row(
-    row: Rect,
-    number_width: f32,
-    current: bool,
-    numbers: (Option<LineNumber>, Option<LineNumber>),
-    kind: LineKind,
-    bytes: &[u8],
-    ranges: &[ByteRange],
-) -> Element {
-    let (marker, tint, emphasis) = match kind {
-        LineKind::Context => (" ", GROUND, GROUND),
-        LineKind::Removed => ("-", REMOVED_TINT, REMOVED_EMPHASIS),
-        LineKind::Added => ("+", ADDED_TINT, ADDED_EMPHASIS),
-    };
-    let line = shown_line(bytes, ranges);
-    row.child(gutter(numbers, number_width))
-        .child(separator(current))
-        .child(
-            rect()
-                .horizontal()
-                .width(Size::flex(1.))
-                .height(Size::fill())
-                .cross_align(Alignment::Center)
-                .background(tint)
-                .child(
-                    label()
-                        .width(Size::px(MARKER_WIDTH))
-                        .padding(Gaps::new(0., 0., 0., 4.))
-                        .max_lines(1)
-                        .font_family(DIFF_FONT_FAMILY)
-                        .font_size(DIFF_FONT_SIZE)
-                        .color(DIFF_TEXT)
-                        .text(marker),
-                )
-                .child(
-                    line_text(line.text, DIFF_TEXT)
-                        .highlights(Some(line.highlights))
-                        .highlight_color(emphasis),
-                ),
-        )
-        .into()
-}
-
-/// A hunk header, or git's end-of-file marker: muted text where the line's text goes, no
-/// numbers, no tint, no band.
-fn note_row(row: Rect, number_width: f32, current: bool, words: String) -> Element {
-    row.child(gutter((None, None), number_width))
-        .child(separator(current))
-        .child(
-            rect()
-                .horizontal()
-                .width(Size::flex(1.))
-                .height(Size::fill())
-                .cross_align(Alignment::Center)
-                .child(rect().width(Size::px(MARKER_WIDTH)))
-                .child(line_text(words, DIFF_MUTED)),
-        )
-        .into()
-}
-
 #[cfg(test)]
 mod tests {
     use cairn_model::{
-        ChangeStatus, ChangedFile, ChangedRange, DiffContent, LineSpan, RepoPath, split_lines,
+        ChangeStatus, ChangedFile, ChangedRange, Context, DiffContent, DiffLine, FileDiff,
+        LineSpan, RepoPath, TextDiff, UnifiedLayout, UnifiedRow, split_lines,
     };
 
     use super::*;
@@ -604,28 +390,31 @@ mod tests {
         assert_eq!(layout.change_count(), 10);
         let row_of = |cursor: ChangeCursor| layout.change_row(cursor.change).expect("a change");
 
-        let first = step_change(layout, None, 0, true).expect("a first change");
+        let first = step_change(layout.stops(), None, 0, true).expect("a first change");
         assert_eq!(first.change, 0);
         assert_eq!(
             first.scrolled_y,
             -((row_of(first) - LEAD_ROWS) as f32 * DIFF_ROW_HEIGHT) as i32
         );
-        let second = step_change(layout, Some(first), first.scrolled_y, true).expect("a second");
+        let second =
+            step_change(layout.stops(), Some(first), first.scrolled_y, true).expect("a second");
         assert_eq!(second.change, 1);
-        let back = step_change(layout, Some(second), second.scrolled_y, false).expect("back");
+        let back =
+            step_change(layout.stops(), Some(second), second.scrolled_y, false).expect("back");
         assert_eq!(back.change, 0);
         assert_eq!(
-            step_change(layout, Some(back), back.scrolled_y, false),
+            step_change(layout.stops(), Some(back), back.scrolled_y, false),
             None
         );
 
         let mut cursor = back;
         for _ in 0..9 {
-            cursor = step_change(layout, Some(cursor), cursor.scrolled_y, true).expect("next");
+            cursor =
+                step_change(layout.stops(), Some(cursor), cursor.scrolled_y, true).expect("next");
         }
         assert_eq!(cursor.change, 9);
         assert_eq!(
-            step_change(layout, Some(cursor), cursor.scrolled_y, true),
+            step_change(layout.stops(), Some(cursor), cursor.scrolled_y, true),
             None
         );
 
@@ -634,11 +423,11 @@ mod tests {
         let sixth = layout.change_row(5).expect("a sixth change");
         let by_hand = -((sixth as f32) * DIFF_ROW_HEIGHT) as i32;
         assert_eq!(
-            step_change(layout, Some(cursor), by_hand, true).map(|c| c.change),
+            step_change(layout.stops(), Some(cursor), by_hand, true).map(|c| c.change),
             Some(5)
         );
         assert_eq!(
-            step_change(layout, Some(cursor), by_hand, false).map(|c| c.change),
+            step_change(layout.stops(), Some(cursor), by_hand, false).map(|c| c.change),
             Some(4)
         );
     }
@@ -697,10 +486,10 @@ mod tests {
                 }
             };
             let mut forward = Vec::new();
-            let mut cursor = step_change(layout, None, 0, true);
+            let mut cursor = step_change(layout.stops(), None, 0, true);
             while let Some(at) = cursor {
                 forward.push(stopped_at(at));
-                cursor = step_change(layout, Some(at), at.scrolled_y, true);
+                cursor = step_change(layout.stops(), Some(at), at.scrolled_y, true);
             }
             assert_eq!(forward, stops, "{:?}", shown.context());
             let last = layout.change_count().checked_sub(1).expect("a change");
@@ -711,11 +500,67 @@ mod tests {
             });
             while let Some(at) = cursor {
                 backward.push(stopped_at(at));
-                cursor = step_change(layout, Some(at), at.scrolled_y, false);
+                cursor = step_change(layout.stops(), Some(at), at.scrolled_y, false);
             }
             backward.reverse();
             assert_eq!(backward, stops, "{:?} backwards", shown.context());
         }
+    }
+
+    /// Phase 06 QA's obligation, met in phase 07: previous and next change compute rows and
+    /// pixels in whole numbers, so a change a million rows down is found from the row really
+    /// at the top and is put exactly one row below it. The scroll offsets here are odd past
+    /// 2^24 pixels, which an `f32` cannot hold: the old arithmetic took the top row for the
+    /// row above it (so previous change skipped the change just above the view) and put the
+    /// change a pixel off. Caught by: any step of the arithmetic done in `f32`.
+    #[test]
+    fn a_change_a_million_rows_down_is_stepped_to_exactly() {
+        let lines = 1_000_200u32;
+        let old: Vec<DiffLine> = (0..lines).map(|_| DiffLine::terminated("")).collect();
+        let mut new = old.clone();
+        // Two one-line edits: one near the top, one about a million rows down.
+        let (near, far) = (10u32, 999_998u32);
+        new[near as usize] = DiffLine::terminated("x");
+        new[far as usize] = DiffLine::terminated("y");
+        let text = TextDiff::new(
+            old,
+            new,
+            vec![
+                ChangedRange::new(LineSpan::at(near, 1), LineSpan::at(near, 1)),
+                ChangedRange::new(LineSpan::at(far, 1), LineSpan::at(far, 1)),
+            ],
+        );
+        let layout = UnifiedLayout::exact(&text, Context::EntireFile);
+        let start = layout.change_row(1).expect("the far change");
+        assert!(
+            start.is_multiple_of(2),
+            "the fixture needs an even start: {start}"
+        );
+        // The view's top is the row after the change's first: previous change goes to it.
+        let below = i32::try_from((start as i64 + 1) * ROW_PIXELS).expect("fits");
+        assert_ne!(
+            ((below as f32) / DIFF_ROW_HEIGHT) as usize,
+            start + 1,
+            "an f32 gets this top row right, so the test decides nothing"
+        );
+        let back = step_change(layout.stops(), None, -below, false).expect("a change above");
+        assert_eq!(
+            back.change, 1,
+            "previous change skipped the change above the view"
+        );
+        assert_eq!(
+            i64::from(back.scrolled_y),
+            -((start as i64 - 1) * ROW_PIXELS),
+            "the change is not exactly a row below the top"
+        );
+        assert!(matches!(
+            layout.row(&text, &DisplayOverlay::none(), start),
+            Some(UnifiedRow::Removed { .. })
+        ));
+        // And next change from just above it reaches it, to the pixel.
+        let above = back.scrolled_y + 1;
+        let next = step_change(layout.stops(), None, above, true).expect("the change below");
+        assert_eq!(next, back);
     }
 
     /// The answer's extent is measured once: every row is the gutters, the marker column
@@ -723,8 +568,11 @@ mod tests {
     #[test]
     fn the_width_is_the_widest_line_whatever_is_in_view() {
         let shown = every_tenth();
-        let expected =
-            gutter_width(3) + SEPARATOR_WIDTH + MARKER_WIDTH + 3.0 * ADVANCE + TEXT_END_PADDING;
-        assert_eq!(shown.content_width(), expected);
+        let expected = 2.0 * number_width(3)
+            + SEPARATOR_WIDTH
+            + MARKER_WIDTH
+            + 3.0 * ADVANCE
+            + TEXT_END_PADDING;
+        assert_eq!(content_width(&shown), expected);
     }
 }

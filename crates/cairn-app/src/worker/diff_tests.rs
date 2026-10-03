@@ -496,7 +496,7 @@ fn file_answer(
         _ => false,
     });
     match seen.last() {
-        Some(Update::FileDiff { diff, .. }) => diff.clone(),
+        Some(Update::FileDiff { diff, .. }) => diff.clone().map(|shown| shown.into_diff()),
         other => panic!("expected {query:?}'s diff, got {other:?}"),
     }
 }
@@ -944,8 +944,9 @@ fn a_retired_change_set_is_freed_on_the_worker_without_an_answer() {
     let ids = commits(&handle, &mut updates, 2);
     let of = Comparison::Commit(ids[1]);
     let kept = change_set(&handle, &mut updates, of);
-    let retired = super::request::Retired::of(Some(kept), Vec::new())
-        .unwrap_or_else(|| unreachable!("a change set is something to retire"));
+    let retired =
+        super::request::Retired::of(Some(std::sync::Arc::new(kept)), Vec::new(), Vec::new())
+            .unwrap_or_else(|| unreachable!("a change set is something to retire"));
 
     handle.submit(Request::Retire(retired));
     handle.submit(Request::ListRemotes);
@@ -990,4 +991,77 @@ fn the_configured_context_is_answered_through_the_boundary() {
         "a refused diff.context was answered: {seen:?}"
     );
     drop(handle);
+}
+
+/// Phase 07, R5.4: the Changes tab's filter is answered on a worker, through the real
+/// boundary, with the indices of the files whose path holds the text — in order, a rename by
+/// either name — and a filter superseded by the next keystroke is not answered, while a
+/// filter supersedes no diff. Here a change set of 55,184 files (the largest subject's
+/// count) is filtered twice in a row; only the second is answered, and with every match.
+/// Caught by: the filter run on the caller's thread, a superseded text answered (the list
+/// flickers through every keystroke), or the filter lane superseding a diff.
+#[test]
+fn a_filter_is_answered_on_a_worker_and_a_newer_one_supersedes_it() {
+    use std::sync::Arc;
+
+    let (handle, mut updates) = checkout();
+    let of = Comparison::Commit(commits(&handle, &mut updates, 1)[0]);
+    let files: Vec<ChangedFile> = (0..55_184)
+        .map(|n| {
+            let path = format!("dir{}/file-{n:05}.rs", n % 13);
+            ChangedFile {
+                status: ChangeStatus::Modified,
+                old_path: RepoPath::from(path.as_str()),
+                new_path: RepoPath::from(path.as_str()),
+                old_mode: None,
+                new_mode: None,
+                old_id: None,
+                new_id: None,
+            }
+        })
+        .collect();
+    let set = Arc::new(ChangeSet {
+        files,
+        details: None,
+        renames: cairn_model::RenameDetection::default(),
+    });
+    let expected: Vec<u32> = (0..55_184u32).filter(|n| n % 13 == 7).collect();
+
+    let changes = handle.submit(Request::Changes { of });
+    handle.submit(Request::FilterFiles {
+        of,
+        files: Arc::clone(&set),
+        text: "DIR".to_owned(),
+    });
+    handle.submit(Request::FilterFiles {
+        of,
+        files: Arc::clone(&set),
+        text: "dir7/".to_owned(),
+    });
+    // Until both the filter and the changes query asked before it have answered.
+    let (mut filtered, mut changed) = (false, false);
+    let seen = collect_until(&mut updates, |u| {
+        filtered |= matches!(u, Update::FilteredFiles { text, .. } if text == "dir7/");
+        changed |= answers_changes(u, of);
+        filtered && changed
+    });
+    assert!(
+        !seen
+            .iter()
+            .any(|u| matches!(u, Update::FilteredFiles { text, .. } if text == "DIR")),
+        "a superseded filter was answered: {:?}",
+        seen.len()
+    );
+    let answer = seen.iter().find_map(|u| match u {
+        Update::FilteredFiles {
+            of: answered,
+            files,
+            ..
+        } => Some((*answered, files)),
+        _ => None,
+    });
+    assert_eq!(answer, Some((of, &expected)));
+    // The changes query asked before the filters was answered: no lane but its own
+    // supersedes it.
+    assert!(changes.is_some());
 }

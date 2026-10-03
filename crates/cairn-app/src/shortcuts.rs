@@ -24,12 +24,13 @@ pub fn of_header(pressed: HeaderAction) -> Action {
         HeaderAction::FewerLines => Action::FewerLines,
         HeaderAction::MoreLines => Action::MoreLines,
         HeaderAction::EntireFile => Action::EntireFile,
+        HeaderAction::SideBySide => Action::ToggleSideBySide,
     }
 }
 
 /// Does `action` to `view`, asking through `submit` what it must — nothing while a
-/// credential prompt is up, which owns the keys until it is answered (Q3). Side-by-side
-/// acts from phase 07 and the second commit of a comparison from phase 08.
+/// credential prompt is up, which owns the keys until it is answered (Q3). The second commit
+/// of a comparison acts from phase 08.
 pub fn act(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
     let View {
         mut detail_tab,
@@ -55,7 +56,8 @@ pub fn act(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
             s.toggle_entire_file();
             true
         }),
-        Action::ToggleSideBySide | Action::ExtendSelection => {}
+        Action::ToggleSideBySide => diff_actions::toggle_side_by_side(view),
+        Action::ExtendSelection => {}
     }
 }
 

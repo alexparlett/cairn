@@ -12,7 +12,7 @@
 //!
 //! Every toggle is a button and none has a chord — Fork binds none (user decision,
 //! `docs/research/diff-engine/fork-shortcuts.md`); previous and next change also answer the
-//! detail pane's chords. Side-by-side is drawn disabled here and arrives in phase 07. With
+//! detail pane's chords. Side-by-side (phase 07) is lit while the shared setting is on. With
 //! whitespace ignored the bar says when that hides a change — only then (R6.7), a deliberate
 //! deviation from Fork, which hides them silently.
 
@@ -57,6 +57,7 @@ pub enum HeaderAction {
     FewerLines,
     MoreLines,
     EntireFile,
+    SideBySide,
 }
 
 /// The bar over one file's diff.
@@ -263,13 +264,12 @@ impl Component for DiffHeader {
                 true,
                 Some(HeaderAction::EntireFile),
             ))
-            // Side-by-side lands in phase 07.
             .child(button(
                 Glyph::SideBySide,
                 SIDE_BY_SIDE_LABEL,
-                false,
-                false,
-                None,
+                settings.side_by_side(),
+                true,
+                Some(HeaderAction::SideBySide),
             ))
     }
 

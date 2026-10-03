@@ -1,6 +1,7 @@
-//! What the diff view's controls do to the view state (PRD R6.2, R6.3, R6.7, R8): choosing
-//! a file, the settings every diff view shares, and previous and next change. On the UI
-//! thread; asking is a [`Request`] handed to the caller's submit, never a wait.
+//! What the diff view's controls do to the view state (PRD R6.1-R6.3, R6.7, R6.8, R8):
+//! choosing a file, the settings every diff view shares, Load Diff, and previous and next
+//! change. On the UI thread; asking is a [`Request`] handed to the caller's submit, never a
+//! wait.
 //!
 //! A setting is part of what a file's diff is asked with — the context git is asked at, and
 //! whether the whitespace-ignoring ranges are read — so a change of setting asks again,
@@ -74,9 +75,42 @@ pub fn choose_file(index: usize, view: View, submit: Option<&dyn Fn(Request)>) {
     if asked {
         return;
     }
-    let requests = diff.write().select_file(query);
+    let requests = {
+        let mut state = diff.write();
+        let requests = state.select_file(query);
+        state.chose_file_at(index);
+        requests
+    };
     reset_view(view);
     submit_all(requests, submit);
+}
+
+/// Load Diff (R6.8): the file shown asked again past R2.6's ceilings, up to the load-anyway
+/// ceiling, keeping where the view is. Its rows are then drawn with each line past the
+/// long-line limit cut (R6.9). Nothing when no file is shown or it was loaded already.
+pub fn load_anyway(view: View, submit: Option<&dyn Fn(Request)>) {
+    let View { mut diff, .. } = view;
+    let Some(mut query) = diff.peek().file().map(|(query, _)| query.clone()) else {
+        return;
+    };
+    if query.options.load_anyway {
+        return;
+    }
+    query.options.load_anyway = true;
+    let requests = diff.write().select_file(query);
+    submit_all(requests, submit);
+}
+
+/// Side-by-side or unified (R6.1): the same answer drawn another way, so nothing is asked
+/// again; the change last moved to is let go, since its rows are another view's.
+pub fn toggle_side_by_side(view: View) {
+    let View {
+        mut diff_settings,
+        mut change_cursor,
+        ..
+    } = view;
+    diff_settings.write().toggle_side_by_side();
+    change_cursor.set(None);
 }
 
 /// Asks the file shown again at the settings as they are now, keeping where the view is.
@@ -90,7 +124,9 @@ fn ask_again(view: View, submit: Option<&dyn Fn(Request)>) {
     let Some(mut query) = diff.peek().file().map(|(query, _)| query.clone()) else {
         return;
     };
-    let asked = options(*diff_settings.peek());
+    let mut asked = options(*diff_settings.peek());
+    // A file loaded past the limits stays loaded while its settings change.
+    asked.load_anyway = query.options.load_anyway;
     if query.options == asked {
         return;
     }
@@ -137,13 +173,17 @@ pub fn step(view: View, forward: bool) {
     if *detail_tab.peek() != cairn_ui::DetailTab::Changes || *pane_collapsed.peek() {
         return;
     }
+    let side_by_side = view.diff_settings.peek().side_by_side();
     let (_, scrolled_y): (i32, i32) = diff_scroll.into();
     let moved = {
         let state = diff.peek();
-        let Some(layout) = state.shown_file().and_then(|shown| shown.layout()) else {
+        let Some(stops) = state
+            .shown_file()
+            .and_then(|shown| shown.stops(side_by_side))
+        else {
             return;
         };
-        step_change(layout, *change_cursor.peek(), scrolled_y, forward)
+        step_change(stops, *change_cursor.peek(), scrolled_y, forward)
     };
     if let Some(moved) = moved {
         diff_scroll.scroll_to_y(moved.scrolled_y);

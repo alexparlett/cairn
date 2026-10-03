@@ -53,11 +53,11 @@ if [ -z "$floor_minor" ] || [ "2.$floor_minor" != "${first_version%.*}" ]; then
 fi
 
 # The filtered runs, as `<cargo target>|<test filters>|<floor>`. Each floor sits one under
-# the run's count when it was set (61 and 84), so a filter that silently matches less
+# the run's count when it was set (62 and 91), so a filter that silently matches less
 # fails; raise a floor as its run gains tests.
 RUNS=(
-  "--lib|diff:: reads::|60"
-  "--test diff_engine||83"
+  "--lib|diff:: reads::|61"
+  "--test diff_engine||90"
 )
 
 CACHE="${CAIRN_GIT_FLOOR_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/cairn/git-floor}"

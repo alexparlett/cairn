@@ -111,8 +111,9 @@ pub(super) fn file_diff(
 /// `docs/systems/diff.md`). A file a run's answer does not hold as the change set holds it
 /// — paired otherwise, which a hidden submodule's place in a cut-short rename search or a
 /// group's narrower paths can do, or called binary where gix called it text — is asked
-/// about on its own. `cancel` is checked between files while they are read, and polled
-/// while git runs.
+/// about on its own. `cancel` is checked between files while they are read, before each
+/// file asked about on its own, and between files as the answers are assembled, and
+/// polled while git runs.
 pub(super) fn file_diffs(
     repo: &Repository,
     cache: &mut gix::diff::blob::Platform,
@@ -211,6 +212,9 @@ pub(super) fn file_diffs(
         )?;
     }
     for (index, algorithm) in alone {
+        if cancel.is_cancelled() {
+            return Err(Error::ContentCancelled);
+        }
         let (Some(file), Some(Prepared::Text { old, new, .. })) =
             (set.files.get(index), prepared.get(index))
         else {
@@ -219,12 +223,15 @@ pub(super) fn file_diffs(
         readings.insert(index, asker.file(file, algorithm, old, new)?);
     }
 
-    Ok(set
-        .files
-        .iter()
-        .zip(prepared)
-        .enumerate()
-        .map(|(index, (file, prepared))| FileDiff {
+    // Each file's lines, ranges and intra-line highlights are built here, after git has
+    // answered: work proportional to the whole commit, so it is cancellable file by file
+    // like the reads before it.
+    let mut diffs = Vec::with_capacity(set.files.len());
+    for (index, (file, prepared)) in set.files.iter().zip(prepared).enumerate() {
+        if cancel.is_cancelled() {
+            return Err(Error::ContentCancelled);
+        }
+        diffs.push(FileDiff {
             file: file.clone(),
             content: match prepared {
                 Prepared::Done(content) => content,
@@ -232,8 +239,9 @@ pub(super) fn file_diffs(
                     text_content(old, new, readings.remove(&index), options)
                 }
             },
-        })
-        .collect())
+        });
+    }
+    Ok(diffs)
 }
 
 /// The change set and what reading each of its files decided, which a run over several

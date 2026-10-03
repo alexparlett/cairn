@@ -1168,3 +1168,60 @@ fn a_drivers_algorithm_applies_where_git_says_the_driver_does() {
         );
     }
 }
+
+/// A cancel that fires once the repository's log holds a finished patch read: from then
+/// on, every check says the query was superseded, so whatever Expand All does after git
+/// has answered is what notices it.
+struct AfterThePatchRead<'a>(&'a cairn_git::SharedRepository);
+
+impl cairn_git::Cancel for AfterThePatchRead<'_> {
+    fn is_cancelled(&self) -> bool {
+        self.0
+            .command_log()
+            .iter()
+            .any(|record| record.arguments.iter().any(|argument| argument == "-p"))
+    }
+}
+
+/// R2 (phase 04 QA): Expand All superseded after git has answered stops at the next file
+/// as it assembles the answers, rather than building every file's lines and highlights for
+/// nobody. The cancel fires only once git's one patch read over the commit is over, so no
+/// read is what notices it. Caught by: an assembly with no check between files, which ran
+/// to the end and answered.
+#[test]
+fn expand_all_superseded_while_its_answers_are_assembled_ends_there() {
+    let repo = repositories::discriminating(&[]);
+    let shared = ok(
+        cairn_git::SharedRepository::discover(repo.path()),
+        "the fixture opens",
+    );
+    let engine = shared.to_worker();
+    let mut session = ok(engine.diff_session(), "a diff session");
+    let request = ChangesRequest::commit(repo.rev("HEAD"));
+    let set = ok(
+        session.changes(super::git(), &request, &CancelSignal::new()),
+        "the changes query answers",
+    );
+    assert!(set.files.len() >= 2, "the commit must change several files");
+    let outcome = session.file_diffs(
+        super::git(),
+        &request,
+        &set,
+        &ContentOptions::default(),
+        &AfterThePatchRead(&shared),
+    );
+    assert!(
+        matches!(outcome, Err(Error::ContentCancelled)),
+        "Expand All was not ended after git answered: {:?}",
+        outcome.as_ref().map(Vec::len)
+    );
+    let reads: Vec<_> = shared
+        .command_log()
+        .into_iter()
+        .filter(|record| record.arguments.iter().any(|argument| argument == "-p"))
+        .collect();
+    assert!(
+        !reads.is_empty() && reads.iter().all(|record| !record.cancelled),
+        "a read noticed the cancel, not the assembly: {reads:?}"
+    );
+}

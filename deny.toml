@@ -40,7 +40,10 @@ allow = ["process", "signal"]
 # release `@ibm/plex-mono@2.5.0`, is a file embedded in the binary
 # (`crates/cairn-app/assets/fonts/`) under the SIL Open Font License 1.1, whose text ships
 # beside it as the licence requires. Its download was approved by the user (2026-10-03,
-# packet decision L16); another font file is the same kind of decision.
+# packet decision L16); another font file is the same kind of decision. What this file
+# cannot check, the guard does: the directory holds exactly `EMBEDDED_FONTS`
+# (`crates/cairn-guards/tests/invariants.rs`), each font beside its licence file
+# (`the_embedded_fonts_are_the_roster_each_with_its_licence`).
 #
 # Permissive only. Cairn ships as a binary, so a copyleft transitive dependency
 # is a licensing decision about the whole application, never a silent one.

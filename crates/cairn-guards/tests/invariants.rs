@@ -9,12 +9,12 @@ use cairn_guards::{
     calls_nullary_method, code_only, code_without_strings, code_without_test_modules,
     configures_process_environment, constructs_named_struct, constructs_process_command,
     constructs_struct, declared_dependencies, declares_publicly, derives_or_implements,
-    gate_command_assignments, gate_dispatch_arms, gate_full_sequence, gate_function_commands,
-    implements_type, job_env_entries, mentions_crate, names_a_literal_modifier, names_an_element,
-    names_gitoxide_mutation, production_char_literals, production_string_literals,
-    reads_enum_partially, reads_row_content_partially, renames_type, renders_in_a_macro, repo_root,
-    rust_sources, spawns_git, spells_a_chord, structs_with_a_field_naming, types_containing,
-    waits_on_work,
+    embedded_font_violations, gate_command_assignments, gate_dispatch_arms, gate_full_sequence,
+    gate_function_commands, implements_type, job_env_entries, mentions_crate,
+    names_a_literal_modifier, names_an_element, names_gitoxide_mutation, production_char_literals,
+    production_string_literals, reads_enum_partially, reads_row_content_partially, renames_type,
+    renders_in_a_macro, repo_root, rust_sources, spawns_git, spells_a_chord,
+    structs_with_a_field_naming, types_containing, waits_on_work,
 };
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
@@ -4770,6 +4770,63 @@ fn the_point_in_time_matcher_catches_the_shapes_it_claims() {
             point_in_time_state(line),
             None,
             "the point-in-time matcher fired on {line:?}"
+        );
+    }
+}
+
+/// Where the application's embedded fonts live.
+const FONTS_DIR: &str = "crates/cairn-app/assets/fonts";
+
+/// Every font embedded in the application, with the licence file it ships under. A row is a
+/// user decision (the font's download is one, packet decision L16): IBM Plex Mono Regular,
+/// SIL Open Font License 1.1, approved 2026-10-03.
+const EMBEDDED_FONTS: &[(&str, &str)] = &[("IBMPlexMono-Regular.ttf", "IBMPlexMono-LICENSE.txt")];
+
+/// A font file is a dependency `cargo deny` cannot see: the embedded fonts directory holds
+/// exactly the roster, each font with its licence file beside it (CLAUDE.md, Invariants;
+/// `deny.toml`'s `[licenses]` note). Caught by: another font dropped in beside the roster,
+/// a licence file deleted, or a roster row left behind by a font that went.
+#[test]
+fn the_embedded_fonts_are_the_roster_each_with_its_licence() {
+    let dir = repo_root().join(FONTS_DIR);
+    let entries =
+        std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("reading {}: {e}", dir.display()));
+    let files: Vec<String> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        !files.is_empty(),
+        "{FONTS_DIR} is empty, so this check compared nothing; the fonts moved"
+    );
+    let violations = embedded_font_violations(&files, EMBEDDED_FONTS);
+    assert!(
+        violations.is_empty(),
+        "{FONTS_DIR}: {violations:#?}. Embedding a font is a user decision: add its row to \
+         EMBEDDED_FONTS with its licence file beside it, and its note to deny.toml."
+    );
+}
+
+#[test]
+fn the_embedded_font_matcher_catches_the_shapes_it_claims() {
+    let roster = &[("Mono.ttf", "Mono-LICENSE.txt")][..];
+    let files = |names: &[&str]| names.iter().map(|n| (*n).to_owned()).collect::<Vec<_>>();
+    assert!(embedded_font_violations(&files(&["Mono.ttf", "Mono-LICENSE.txt"]), roster).is_empty());
+    for (case, present) in [
+        (
+            "a planted extra font",
+            &["Mono.ttf", "Mono-LICENSE.txt", "Other.ttf"][..],
+        ),
+        (
+            "a planted font of another format",
+            &["Mono.ttf", "Mono-LICENSE.txt", "Mono.otf"],
+        ),
+        ("a deleted licence", &["Mono.ttf"]),
+        ("a font gone from its row", &["Mono-LICENSE.txt"]),
+    ] {
+        assert!(
+            !embedded_font_violations(&files(present), roster).is_empty(),
+            "{case} passed"
         );
     }
 }

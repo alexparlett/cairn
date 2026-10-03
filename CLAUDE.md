@@ -255,6 +255,17 @@ Project invariants:
   dependency whose features matter — `nix`, whose `process` feature compiles the
   exec family — is pinned in `deny.toml` (`[[bans.features]]`, `exact`: `process`
   and `signal`), which `gate.sh --step deps` enforces.
+- **Every embedded font is a user decision, and ships beside its licence.** A font
+  file is a dependency `cargo deny` cannot see, so the roster is the guard's:
+  `crates/cairn-app/assets/fonts/` holds exactly the files `EMBEDDED_FONTS` names
+  in `crates/cairn-guards/tests/invariants.rs`, each font with its licence file
+  beside it. Twin: `the_embedded_fonts_are_the_roster_each_with_its_licence`
+  (matcher `embedded_font_violations`, self-test
+  `the_embedded_font_matcher_catches_the_shapes_it_claims`): another font
+  dropped in, a licence file deleted, or a row outliving its font fails.
+  Residual review obligation, `qa-checklist`'s: the guard reads file names, so
+  whether a licence file holds the right licence for its font, and whether that
+  licence permits embedding it, is a judgement.
 - **`cairn-ui` and `cairn-model` never name `gix` or `cairn_git`; `cairn-git`
   never names `freya` or `cairn_ui`.** Manifests alone would miss a re-export, so
   the twin reads source: `layers_never_name_the_crates_they_are_sealed_from`,

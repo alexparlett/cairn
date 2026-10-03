@@ -2278,6 +2278,35 @@ pub fn gate_full_sequence(gate: &str) -> Result<BTreeSet<String>, String> {
     Ok(full)
 }
 
+/// What is wrong with a directory of embedded fonts holding `files`, against `roster`: each
+/// row a font file and the licence file it ships under. A file the roster does not name —
+/// another font, a stray — is a font nobody decided to embed; a roster font missing is a
+/// row nobody is keeping; and a font whose licence file is gone ships without the text its
+/// licence requires beside it. Empty when the directory is exactly the roster.
+pub fn embedded_font_violations(files: &[String], roster: &[(&str, &str)]) -> Vec<String> {
+    let named = |file: &str| {
+        roster
+            .iter()
+            .any(|(font, licence)| *font == file || *licence == file)
+    };
+    let mut violations: Vec<String> = files
+        .iter()
+        .filter(|file| !named(file))
+        .map(|file| format!("`{file}` is not on the roster of embedded fonts and licences"))
+        .collect();
+    for (font, licence) in roster {
+        if !files.iter().any(|file| file == font) {
+            violations.push(format!("the roster names `{font}`, which is not there"));
+        }
+        if !files.iter().any(|file| file == licence) {
+            violations.push(format!(
+                "`{font}` has no licence beside it: `{licence}` is gone"
+            ));
+        }
+    }
+    violations
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

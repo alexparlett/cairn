@@ -358,9 +358,12 @@ git is given (`diff/changes.rs`'s `subject`). `ContentOptions` carries R2.6's li
    type change is a deletion and an addition), a side with no lines makes the other
    side's every line the change, and two sides with the same lines have none. Each
    of those starts no process, and `a_file_git_is_not_asked_about_still_reads_as_git_diff_shows_it`
-   holds them, under a diff driver with an `xfuncname` and without, to `git diff`'s
-   answer — function context included, which git prints none of for a hunk starting
-   at the first line — and to no process started.
+   holds them — additions, deletions, emptied and filled files under a diff driver
+   with an `xfuncname` and without, a rename that kept its blob (which git prints
+   with no hunk) and a type change (which git prints as a deletion and an addition,
+   read against git's two sections) — to `git diff`'s answer, function context
+   included, which git prints none of for a hunk starting at the first line, and to
+   no process started.
 
 That the size check really precedes the read is pinned deterministically rather
 than by timing: `the_size_ceiling_is_decided_before_the_content_is_read` builds a
@@ -471,7 +474,13 @@ place in a cut-short rename search can do, or called binary — and a file whose
 driver names its own algorithm (one call cannot pass two) are asked about on their
 own. `expand_all_answers_what_each_file_answers_alone` requires every answer equal
 to the per-file one, with and without `-w`, over the crafted, rewrite, submodule,
-attribute, whitespace and discriminating fixtures, the last with a driver algorithm.
+attribute, whitespace and discriminating fixtures, the last with a driver algorithm;
+`expand_all_runs_one_diff_tree_per_comparison` counts the `diff-tree` runs in the
+command log, which those equal answers cannot show; and
+`a_path_git_quotes_reads_as_git_diff_shows_it_alone_and_through_expand_all` and
+`a_renamed_files_driver_algorithm_is_its_old_paths` hold paths git quotes and a
+rename across a driver's boundary (the driver is the old path's, as in git's
+`run_diff`) to `git diff` alone and through Expand All.
 On git 2.40 and later, `git show` of a whole commit carries a driver's algorithm into
 every later file of the same output; Cairn answers each file as `git diff -- <path>`
 does instead (see the known limits).

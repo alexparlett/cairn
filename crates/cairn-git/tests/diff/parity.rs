@@ -260,6 +260,17 @@ fn assert_no_divergence(what: &str, tally: &Tally) {
 /// which is what makes a fixture able to tell them apart, and a comparison under them a
 /// test rather than a formality.
 fn discriminates(repo: &Repo, head: &str, one: &[&str], other: &[&str]) -> bool {
+    discriminates_under(repo, head, one, other, None)
+}
+
+/// [`discriminates`], for the files under `under` alone when it is given.
+fn discriminates_under(
+    repo: &Repo,
+    head: &str,
+    one: &[&str],
+    other: &[&str],
+    under: Option<&str>,
+) -> bool {
     let run = |flags: &[&str]| {
         let mut args: Vec<&str> = flags.to_vec();
         args.extend([
@@ -270,6 +281,9 @@ fn discriminates(repo: &Repo, head: &str, one: &[&str], other: &[&str]) -> bool 
             "HEAD^",
             head,
         ]);
+        if let Some(under) = under {
+            args.extend(["--", under]);
+        }
         repo.git(&args)
     };
     run(one) != run(other)
@@ -354,6 +368,18 @@ fn every_discriminating_file_reads_as_git_diff_shows_it_under_every_configuratio
                 ],
             ),
             "the fixture does not tell a driver's algorithm from diff.algorithm"
+        );
+        // The last configuration, a driver's algorithm alone, changes the driver's files.
+        assert!(
+            discriminates_under(
+                &probe,
+                &head,
+                &[],
+                &["-c", "diff.drv.algorithm=minimal"],
+                Some("drv"),
+            ),
+            "the fixture's drv/ files read the same under diff.drv.algorithm=minimal as \
+             under git's default, so that configuration decides nothing"
         );
     }
 
@@ -567,12 +593,14 @@ fn this_repositorys_history_reads_as_git_diff_shows_it_under_every_algorithm() {
     );
 }
 
-/// Expand All's one `git diff-tree` per comparison answers every file exactly as asking
-/// about each file alone does — with whitespace ignored and not, over renames and copies,
-/// hidden and listed submodules, a driver whose algorithm sends its files to be asked about
-/// alone, and the crafted edge cases. Caught by: a patch matched to the wrong file, the
-/// whole-comparison read asked with other detection than the change set's, or a file the
-/// answer does not hold dropped rather than asked about alone.
+/// Expand All answers every file exactly as asking about each file alone does — with
+/// whitespace ignored and not, over renames and copies, hidden and listed submodules, a
+/// driver whose algorithm sends its files to a read of their own, and the crafted edge
+/// cases. It decides the answers, not how many processes gave them: asking about every
+/// file alone passes it too, which is what
+/// `expand_all_runs_one_diff_tree_per_comparison` counts. Caught by: a patch matched to
+/// the wrong file, the whole-comparison read asked with other detection than the change
+/// set's, or a file the answer does not hold dropped rather than asked about alone.
 #[test]
 fn expand_all_answers_what_each_file_answers_alone() {
     let fixtures = [
@@ -642,10 +670,63 @@ fn expand_all_answers_what_each_file_answers_alone() {
     assert!(files >= 300, "only {files} files compared");
 }
 
+/// How many `git diff-tree` runs Expand All makes, read from the repository's command log:
+/// one for the whole comparison, and a second when whitespace is ignored — never one per
+/// file — over a fixture of seventy-odd text files, renames and copies among them, where
+/// every file is held by the one answer. Its answers are shown equal to the per-file ones
+/// by `expand_all_answers_what_each_file_answers_alone`; this is what that test cannot
+/// see. Caught by: every file sent to a read of its own, which answers the same.
+#[test]
+fn expand_all_runs_one_diff_tree_per_comparison() {
+    let repo = repositories::discriminating(&[]);
+    let shared = ok(
+        cairn_git::SharedRepository::discover(repo.path()),
+        "the fixture opens",
+    );
+    let engine = shared.to_worker();
+    let mut session = ok(engine.diff_session(), "a diff session");
+    let request = ChangesRequest::commit(repo.rev("HEAD"));
+    let set = ok(
+        session.changes(super::git(), &request, &CancelSignal::new()),
+        "the changes query answers",
+    );
+    assert!(set.files.len() >= 70, "only {} files", set.files.len());
+    let diff_trees = || {
+        shared
+            .command_log()
+            .iter()
+            .filter(|record| record.arguments.iter().any(|a| a == "diff-tree"))
+            .count()
+    };
+    for (ignore_whitespace, expected) in [(false, 1), (true, 2)] {
+        let before = diff_trees();
+        let options = ContentOptions {
+            ignore_whitespace,
+            load_anyway: true,
+            ..ContentOptions::default()
+        };
+        let all = ok(
+            session.file_diffs(super::git(), &request, &set, &options, &CancelSignal::new()),
+            "Expand All answers",
+        );
+        assert_eq!(all.len(), set.files.len());
+        assert_eq!(
+            diff_trees() - before,
+            expected,
+            "Expand All (ignoring whitespace: {ignore_whitespace}) ran another number of \
+             diff-tree than one per comparison"
+        );
+    }
+}
+
 /// The content query skips git where git has one answer: a file added or deleted, emptied
-/// or filled, under a diff driver with an `xfuncname` and without. Each still reads as `git
-/// diff` shows it, function context — which git prints none of for a hunk starting at the
-/// first line — included.
+/// or filled, under a diff driver with an `xfuncname` and without; a rename that kept its
+/// blob, which git prints with no hunk at all; and a type change, which git prints as a
+/// deletion of every old line and an addition of every new one — each of the last two
+/// first shown to be git's own answer. Each still reads as `git diff` shows it, function
+/// context — which git prints none of for a hunk starting at the first line — included,
+/// and no process starts. Caught by: git asked about any of them, or one of them answered
+/// otherwise than git does.
 #[test]
 fn a_file_git_is_not_asked_about_still_reads_as_git_diff_shows_it() {
     let repo = repositories::discriminating(&[]);
@@ -709,6 +790,99 @@ fn a_file_git_is_not_asked_about_still_reads_as_git_diff_shows_it() {
         }
     }
     assert_eq!(skipped, 16);
+
+    // A rename that kept its blob, and a type change (the crafted history's last commit
+    // turns `crlf.txt` into a link).
+    let kept = Repo::new("kept-blob");
+    kept.write("same.txt", b"one\ntwo\nthree\n");
+    kept.commit("seed");
+    kept.git(&["mv", "same.txt", "moved.txt"]);
+    kept.commit("rename, nothing else");
+    let crafted = repositories::crafted();
+    for (repo, path) in [(&kept, "moved.txt"), (&crafted, "crlf.txt")] {
+        let shared = ok(
+            cairn_git::SharedRepository::discover(repo.path()),
+            "the fixture opens",
+        );
+        let worker = shared.to_worker();
+        let (head, parent) = (repo.rev("HEAD"), repo.rev("HEAD^"));
+        let request = ChangesRequest::commit(head);
+        let set = ok(
+            worker.changes(super::git(), &request, &CancelSignal::new()),
+            "the changes query answers",
+        );
+        let file = some(
+            set.files
+                .iter()
+                .find(|file| file.new_path.display() == path),
+            "the file changed",
+        );
+        let porcelain = repo.git(&["diff", "-M", "HEAD^", "HEAD"]);
+        let sections = porcelain
+            .split("diff --git ")
+            .filter(|section| !section.is_empty())
+            .collect::<Vec<_>>();
+        match file.status {
+            ChangeStatus::Renamed(_) => {
+                assert_eq!(file.old_id, file.new_id, "{path} kept its blob");
+                assert!(
+                    sections.len() == 1
+                        && sections[0].contains("similarity index 100%")
+                        && !sections[0].contains("@@"),
+                    "git prints a rename that kept its blob otherwise: {porcelain}"
+                );
+            }
+            ChangeStatus::TypeChanged => {
+                assert!(
+                    sections.len() == 2
+                        && sections[0].contains("deleted file mode")
+                        && sections[1].contains("new file mode 120000"),
+                    "git prints a type change otherwise: {porcelain}"
+                );
+            }
+            other => panic!("{path} is {other:?}, not the change this checks"),
+        }
+        let before = shared.command_log().len();
+        let diff = ok(
+            worker.file_diff(
+                super::git(),
+                &request,
+                file,
+                &ContentOptions::default(),
+                &CancelSignal::new(),
+            ),
+            "a file diff",
+        );
+        assert_eq!(
+            shared.command_log().len(),
+            before,
+            "{path}: git was asked about a file with one answer"
+        );
+        let ours = cairn_view(&diff, Context::lines(3), false);
+        let theirs = git_view(repo, &parent.to_string(), &head.to_string(), file, 3, &[]);
+        assert_eq!(ours, theirs, "{path}");
+        if file.status == ChangeStatus::TypeChanged {
+            // git's two sections, read as one: every old line removed, every new one added.
+            let lines_of = |section: &str, marker: char| -> Vec<String> {
+                // Split at `\n` alone, so a CRLF line keeps its `\r` as git printed it.
+                section
+                    .split('\n')
+                    .skip_while(|line| !line.starts_with("@@"))
+                    .filter(|line| line.starts_with(marker) || line.starts_with('\\'))
+                    .map(str::to_owned)
+                    .collect()
+            };
+            let mut printed = lines_of(sections[0], '-');
+            printed.extend(lines_of(sections[1], '+'));
+            assert_eq!(ours.len(), 1, "{path}: one change of every line");
+            assert_eq!(ours[0].lines, printed, "{path} against git's two sections");
+        } else {
+            assert!(
+                ours.is_empty(),
+                "{path}: a rename that kept its blob has no hunk"
+            );
+        }
+    }
 }
 
 /// What the user's `git diff -U3` prints for `file` of `HEAD`, its paths given as literal

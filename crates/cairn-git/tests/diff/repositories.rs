@@ -897,6 +897,9 @@ pub fn discriminating(config: &[(&str, &str)]) -> Repo {
         }
         pairs.push((format!("random/large{n}.c"), joined(&old), joined(&new)));
     }
+    // A driver's file myers and minimal disagree on, so a driver naming minimal changes it.
+    let (old, new) = myers_and_minimal_disagree(&repo, &mut Seeded::new(20_261_005));
+    pairs.push(("drv/large.pl".to_owned(), old, new));
     pairs.push((
         "heuristic.py".to_owned(),
         b"def a():\n    one\n\ndef c():\n    three\n".to_vec(),
@@ -1015,23 +1018,14 @@ pub fn unusual_paths() -> Repo {
     repo
 }
 
-/// Two files renamed with an edit across the `drv` driver's boundary — `drv/in.pl` out to
-/// `out/in.pl`, and `out/out.pl` in to `drv/out.pl` — each long and changed enough that
-/// myers, which stops searching at its cost limit, and minimal give different answers; with
-/// `diff.drv.algorithm = minimal` configured, and `config` after it.
-pub fn renamed_across_a_driver(config: &[(&str, &str)]) -> Repo {
-    let repo = Repo::new("renamed-across-a-driver");
-    repo.config("diff.drv.algorithm", "minimal");
-    for (key, value) in config {
-        repo.config(key, value);
-    }
-    repo.write(".gitattributes", b"drv/** diff=drv\n");
-    // Whether myers stops short of minimal is a property of the content, so each pair is
-    // drawn until git itself shows the two algorithms disagree on it.
-    let mut random = Seeded::new(20_261_004);
-    let mut versions = Vec::new();
-    while versions.len() < 2 {
-        let old = random_lines(&mut random, 3000);
+/// A file's two versions that myers and minimal diff differently, drawn from `random`:
+/// 3,000 lines with 600 replaced, long and changed enough that myers stops searching at its
+/// cost limit — but whether it then stops short of minimal is a property of the content,
+/// so pairs are drawn until git itself, run in `repo` (and leaving nothing behind), shows
+/// the two algorithms disagree.
+fn myers_and_minimal_disagree(repo: &Repo, random: &mut Seeded) -> (Vec<u8>, Vec<u8>) {
+    loop {
+        let old = random_lines(random, 3000);
         let mut new = old.clone();
         for _ in 0..600 {
             let at = random.below(new.len());
@@ -1054,12 +1048,31 @@ pub fn renamed_across_a_driver(config: &[(&str, &str)]) -> Repo {
             )
             .1
         };
-        if under("myers") != under("minimal") {
-            versions.push((old, new));
+        let disagree = under("myers") != under("minimal");
+        repo.remove("probe/old");
+        repo.remove("probe/new");
+        if disagree {
+            return (old, new);
         }
     }
-    repo.remove("probe/old");
-    repo.remove("probe/new");
+}
+
+/// Two files renamed with an edit across the `drv` driver's boundary — `drv/in.pl` out to
+/// `out/in.pl`, and `out/out.pl` in to `drv/out.pl` — each long and changed enough that
+/// myers, which stops searching at its cost limit, and minimal give different answers; with
+/// `diff.drv.algorithm = minimal` configured, and `config` after it.
+pub fn renamed_across_a_driver(config: &[(&str, &str)]) -> Repo {
+    let repo = Repo::new("renamed-across-a-driver");
+    repo.config("diff.drv.algorithm", "minimal");
+    for (key, value) in config {
+        repo.config(key, value);
+    }
+    repo.write(".gitattributes", b"drv/** diff=drv\n");
+    let mut random = Seeded::new(20_261_004);
+    let versions = [
+        myers_and_minimal_disagree(&repo, &mut random),
+        myers_and_minimal_disagree(&repo, &mut random),
+    ];
     repo.write("drv/in.pl", &versions[0].0);
     repo.write("out/out.pl", &versions[1].0);
     repo.commit("seed");

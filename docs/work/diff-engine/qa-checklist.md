@@ -55,7 +55,8 @@ Beyond the PRD, phase 09 confirms:
       screen, no staging, no ref chips. Documenting the obvious next consumer as
       though it exists is the failure mode here.
 - [ ] **D1's amendment reads the same in `docs/design/engine.md` and in `CLAUDE.md`**, and the
-      filter driver's inherited environment is stated in both.
+      environment the filter driver runs with — the read's, as git hands it on — is
+      stated in both, with its residuals.
 - [ ] **The measured numbers are recorded with their hardware, commit ids and
       build profile**, and each rename gap against git is filed.
 - [ ] **Q1-Q3 in `brainstorm.md` are answered or carried as filed issues**, and

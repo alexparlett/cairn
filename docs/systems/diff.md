@@ -5,14 +5,15 @@ that exists, and behaviour is pinned by a test named beside it.
 
 **What exists is the model and the engine that fills it.** `cairn-model` can hold
 a file diff, project it into hunks and rows, and emit a unified patch from a
-selection of lines; `cairn-git` answers what a commit or a comparison changed and
-what one of those changes is, line by line, against a real repository. No
+selection of lines; `cairn-git` answers what a commit or a comparison changed,
+what one of those changes is, line by line, and one path's staged, unstaged or
+untracked diff in the working tree, against a real repository. No
 component draws one and nothing stages anything — the patch emitter still ships
 with no caller, deliberately (program decision L2 in
 `docs/work/daily-loop/brainstorm.md`), because its round-trip tests are what make
-a later staging packet a feature rather than a rewrite. **Working-tree diffs are
-not here**: everything below reads trees and blobs from the object database.
-Intent for this surface is `docs/design/diff.md` and `docs/design/ui.md`, under
+a later staging packet a feature rather than a rewrite. Which paths of a working
+tree changed — status — is not here: the working-tree query answers one path it is
+given. Intent for this surface is `docs/design/diff.md` and `docs/design/ui.md`, under
 decisions D1 (`docs/design/engine.md`), D3 (`docs/design/concurrency.md`), D5
 (`docs/design/platform.md`) and D6 (`docs/design/conflicts.md`), indexed in the
 spine `docs/design/cairn.md`; the commitment it was built against is
@@ -153,8 +154,8 @@ model-level pins and each has a hole a mutation walks through:
 
 ## What the engine answers
 
-Two queries in `cairn-git`, and git answers both (D1 in `docs/design/engine.md`,
-"Where git answers a read"). The **changes query** is answered by `git diff-tree
+Three queries in `cairn-git`, and git answers all three (D1 in
+`docs/design/engine.md`, "Where git answers a read" and "Reads see git's form"). The **changes query** is answered by `git diff-tree
 --raw` (decision E): which paths changed, with their statuses, modes, ids and every
 rename and copy pair, are git's own. The **content query** reads both versions of
 one file with gix and decides there what is not text; which of its lines changed —
@@ -162,7 +163,10 @@ exactly, and ignoring whitespace — and the function context of each hunk are
 `git diff-tree -p`'s (the content-parity decision, which amends packet decision
 L3; `docs/research/diff-engine/content-parity-spike.md`), and Cairn groups git's
 changes into hunks by git's own rule. No diff algorithm is written here but the
-intra-line highlights, and no gix type appears in a public signature.
+intra-line highlights, and no gix type appears in a public signature. The
+**working-tree query** answers one path's staged, unstaged or untracked diff with
+`git diff-index --cached`, `git diff-files` or `git diff --no-index`, and the side
+git reads from the working tree is git's form of the file (below).
 
 `DiffSession` (`crates/cairn-git/src/diff.rs`) holds gix's blob resource cache for
 a run of content queries. Building one reads the index and the attribute stack,
@@ -489,6 +493,143 @@ On git 2.40 and later, `git show` of a whole commit carries a driver's algorithm
 every later file of the same output; Cairn answers each file as `git diff -- <path>`
 does instead (see the known limits).
 
+### The working-tree query
+
+`Repository::working_tree_diff(&GitBinary, &RepoPath, WorkingTreeDiff, &ContentOptions,
+&impl Cancel)` (and `DiffSession::working_tree_diff`, on a session's repository) in
+`crates/cairn-git/src/diff/working_tree.rs`, over the read
+`crate::reads::working_tree_patch` in `crates/cairn-git/src/reads/working_tree.rs`.
+`WorkingTreeDiff` is `Staged` (`HEAD` against the index), `Unstaged` (the index
+against the working tree) or `Untracked` (nothing against the working tree). The
+answer is `Option<FileDiff>`: `None` exactly where the user's `git diff --cached
+-- <path>`, `git diff -- <path>` or `git diff --no-index /dev/null <path>` prints
+nothing — a clean path, one whose stat alone moved, a CRLF checkout of an LF file
+under `text=auto`, a submodule its `ignore` setting hides, an intent-to-add path's
+staged side.
+
+**What runs.** One read process per question:
+
+```text
+git -c diff.suppressBlankEmpty=false <verb> -z --raw --no-abbrev -p --full-index -U<n>
+    --no-ext-diff --no-textconv --no-color [-w] [--diff-algorithm=<a>]
+    [--ignore-submodules=<v>] <what> -- <path>
+```
+
+with `diff-index --cached --no-renames --end-of-options <HEAD or the empty tree>`,
+`diff-files --no-renames`, or `diff --no-index` and `/dev/null <path>`. The two
+plumbing verbs take `:(literal)<path>` and `:(exclude,glob)<path, escaped>/**`, so a
+directory of that name on the other side is not listed with it and a gitlink at the
+path still is (`:(exclude,literal)<path>/` excludes the gitlink too, on every git
+from 2.30.9). No `-a`: git decides what is binary, on git's form of the content. A
+second run with `-w` when the view asks to ignore whitespace and the file was
+modified; a `check-attr` before them when a driver may name its algorithm (2.40+),
+as for a commit; nothing else. Each runs with the read environment of
+`docs/systems/git-processes.md`. `diff-files` and `diff --no-index` run the path's
+clean filter driver as git's child — once for the diff, once more to hash the
+working tree for the patch's `index` line — with that environment plus what git
+sets for a filter (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_EXEC_PATH`, `GIT_PREFIX`,
+`GIT_CONFIG_PARAMETERS`, git's exec directory first on `PATH`), its stderr the
+read's bounded tail; `diff-index --cached` reads only objects. Every read of the
+index runs the repository's `core.fsmonitor`, and for a submodule `diff-files` runs
+`git status` inside it to say whether it is dirty. Pinned by
+`a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`
+(the git directory byte-identical after every query, staged, unstaged and
+untracked, with and without `-w`; no textconv, external diff, driver `command` or
+smudge filter run, the clean filter and the hook run; every logged verb one of the
+four) and `a_clean_filter_drivers_form_is_what_is_diffed_and_it_runs_under_git`
+(the driver's recorded environment carries the read's variables and not the test
+process's own).
+
+**git's form, by construction.** Cairn never reads a working-tree file's bytes for
+the diff. The side git read from the working tree is rebuilt from git's patch over
+the old side (`PatchText::new_side`): every line outside a hunk is the old side's,
+every context and added line the one git printed — so what Cairn holds is what git
+diffed, after the clean filter, `text=auto`/`eol`/`core.autocrlf`, `ident` and a
+working-tree encoding. The old side is the blob git names on its raw record, read
+by gix by that id; a staged diff's new side is the index's blob, likewise. Pinned by
+`a_text_auto_file_with_crlf_endings_is_no_change_and_an_edit_is_one_line` and the
+clean-filter test above (an upper-casing driver: the working tree is lower case,
+the lines held are upper case), each compared with `git diff`.
+
+**The stale-read guard** is `Error::ContentReadsDisagree`, three ways: every line git
+prints is checked against the side it belongs to; the rebuilt working-tree side is
+hashed (`gix::objs::compute_hash`, written nowhere) and must be the id git printed
+on the `index` line, which git computed from a second read of the file — so a file
+that changed between git's two reads is refused, not drawn
+(`content_that_changes_between_gits_reads_is_the_error_a_caller_retries`, with a
+clean filter whose output changes every run); and the `-w` run must name the same
+object for that side. The id is also what the answer reports as the new side's
+`new_id`: the object `git hash-object --path` would name.
+
+**What gix decides first**, from the index read fresh for every query
+(`open_index`, never the shared snapshot): a path with any stage but 0 is
+`DiffContent::Conflicted`, from both the staged and the unstaged query, and git is
+not asked (`a_conflicted_path_answers_conflicted`, where git itself prints `diff
+--cc` and "Unmerged path"); a sparse index — one with directory entries — is
+`Unsupported` with its reason (`a_sparse_index_is_unsupported_and_says_so`, skipped
+on a git before 2.32, which cannot write one); an intent-to-add entry's staged diff
+is `None`, because `git diff --cached` lists nothing for it where `diff-index
+--cached` lists an empty file added
+(`an_intent_to_add_path_is_new_unstaged_and_nothing_staged`); a bare repository is
+`Unsupported`. For these stand-in states the file carries the path and no mode or
+id. And the blobs' sizes come from their headers, so a blob past R2.6's ceiling is
+refused before git diffs it, git asked only for the raw record — except for a
+working-tree modification, whose record cannot tell an edit from a stat or a mode
+that alone moved: git is asked for its patch, under the ceiling, so a large file
+merely touched is no change and one merely made executable a mode change, as `git
+diff` shows them, and an edit to it is refused without its blob read
+(`a_large_file_whose_stat_or_mode_alone_moved_is_what_git_diff_shows`).
+
+**Each R3.4 state**: a deletion, a type change (one change of every line, the new
+side taken from git's addition section), a mode change alone (`ModeChangeOnly`,
+told by a patch section with no hunks and no `index` line), each staged and
+unstaged (`a_deleted_file_a_type_change_and_a_mode_change_answer_their_state`); a
+stat-only change, which `diff-files` lists with no patch, is `None`
+(`a_stat_dirty_file_is_no_change`); a submodule is `DiffContent::Submodule` with
+the commit each side names and `dirty` — git's `Subproject commit <id>-dirty`
+line, read from git — moved, dirty, both, and staged
+(`a_submodule_answers_its_commits_and_whether_it_is_dirty_as_git_diff_shows_it`).
+Plumbing reads no `diff.ignoreSubmodules`, so the query passes
+`--ignore-submodules=<value>` where porcelain would apply it — for a submodule with
+no `ignore` of its own in the configuration or `.gitmodules`, which beats it and
+which plumbing applies itself (`diff::submodules::working_tree_ignore`); the same
+test holds Cairn to `git diff` under each of `none`, `untracked`, `dirty` and
+`all`, and under a submodule's own setting.
+
+**R2.6 on the working tree** is judged on git's form, not on the file on disk: a
+clean filter may make a large file small (git-lfs) or a small one large. git's
+output is taken under a ceiling of twice what both sides could hold within the
+limit, counting a working-tree side at the limit (`Invocation::finish_within`, the
+runner's bounded stream); past it, git is ended and the answer is `TooLarge`,
+measured at the larger of the file on disk and the limit's next byte. Under it,
+the sizes of the held sides decide, then the line limits, then the LFS pointer
+check. `the_size_ceiling_is_judged_on_gits_form_of_the_working_tree` holds a file
+grown past the limit in the working tree, loading it anyway, a file a filter
+shrinks (diffed in its small form, as `git diff` shows it), one a filter grows
+(refused without the rest of git's output read) and an index blob past the limit.
+
+**Failures.** `git diff --no-index` exits 1 both when the sides differ and when it
+cannot read the file; the read takes status 1 as an answer only when a record for
+the path came with it, and otherwise surfaces git's failure. A clean filter marked
+`required` that fails is git's `fatal` and `Error::GitFailed`, whose message names
+the path; one not required makes git fall back to the unfiltered content, which is
+what Cairn shows, as `git diff` does
+(`a_failing_clean_filter_is_an_error_naming_the_path_or_what_git_shows`).
+
+**Parity, beyond the states.**
+`every_discriminating_file_reads_as_git_diff_shows_it_staged_and_unstaged` puts the
+discriminating fixture's commit back into the working tree — unstaged after `reset
+--mixed`, staged after `reset --soft` — and holds every changed file to `git diff`
+and `git diff --cached` under the default algorithm, patience, and histogram with a
+driver naming minimal, with and without `-w`, function context included;
+`staged_and_unstaged_edits_read_as_git_diff_shows_them` does the same for one file
+staged and edited again; `an_untracked_file_is_what_git_diff_no_index_shows` for
+plain text, no final newline, an empty file, a symlink, a binary file and a path
+holding `*` and a leading `-`;
+`a_staged_file_on_an_unborn_branch_and_beside_a_directory_is_that_file` for the
+empty tree and a file where `HEAD` had a directory. The same suite runs on git
+2.30.9 and 2.32.7 in `git-floor`.
+
 ### The display-only overlay
 
 **Ignoring whitespace** is `git diff -w`'s second set of ranges, over the same
@@ -759,7 +900,9 @@ follow it rather than passing a diff by value.
 
 `DiffContent` is what a file's diff turned out to be: `Text`, or one of the seven
 states that stand in place of rows (R1.2) — binary with both sizes, too large with
-the limit it crossed, an LFS pointer, a submodule with both commit ids, a mode
+the limit it crossed, an LFS pointer, a submodule with both commit ids and whether
+a working tree's checkout of it is dirty (false wherever the new side is a commit
+or the index), a mode
 change only, conflicted, or unsupported with its reason. `DiffLimits` carries
 R2.6's numbers (1 MiB, 50,000 lines, 2,048 bytes in a line, and the 64 MiB ceiling
 on loading one anyway) where both an engine and a view can read the same ones.
@@ -785,6 +928,23 @@ row of a ten-year monorepo would be paying for what no row draws.
 pinned by `an_offset_reads_the_way_git_writes_it`.
 
 ## Known limits
+
+- **The working-tree query answers one path, named by its caller.** It pairs no
+  rename (a path staged by `git mv` shows as added, as `git diff --cached -- <path>`
+  shows it), and `Untracked` answers `git diff --no-index` for the path whatever the
+  index holds: which paths are untracked is status's to say.
+- **A clean filter whose output differs run to run** is refused as
+  `ContentReadsDisagree` every time, since git's two reads of the file never agree.
+- **A failed clean filter that is not `required` is shown as git shows it**, the
+  unfiltered content diffed, without git's stderr warning, which is prose Cairn
+  never parses.
+- **A binary working-tree side's size is the file's on disk**, before any filter:
+  git prints no content for it.
+- **A sparse index is unsupported**, though git's plumbing would answer it; reading
+  one is gix's to do, and this query does not yet.
+- **The configuration is the handle's**, read when the repository was opened
+  (`diff.algorithm`, `diff.ignoreSubmodules`, the drivers' algorithms); the index
+  and the attributes are read fresh, by gix and by git, for every query.
 
 - **A kept last line that never ended, with lines added after it, makes a file
   whose run-on line is in the middle.** A selection that leaves the removal of an

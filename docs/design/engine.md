@@ -13,10 +13,13 @@ in `crates/cairn-git/src/reads/`. The changes query — which paths a commit or 
 comparison changed, with their renames and copies — is one, because rename and
 copy detection is where gix and git disagree; which lines of a changed file
 changed is another, because line diffing is too ("Where git answers a read",
-below). Besides those, the processes a read may start are the user's own clean
-filter driver ("Reads see git's form", below) and, through those `git` reads,
-the repository's `core.fsmonitor` hook, which git runs as it reads the index of
-a repository with a working tree, as the user's own `git diff` does. How every `git` process is built, run and ended is `processes.md`.
+below); and so is one path's working-tree diff, because only git's own read of
+the working tree is git's form of it ("Reads see git's form", below). Besides
+`git` itself, the programs a read may start are the user's own clean filter
+driver, which git runs on a read of the working tree, and the repository's
+`core.fsmonitor` hook, which git runs as it reads the index of a repository with
+a working tree — each exactly as the user's own `git diff` runs it. How every
+`git` process is built, run and ended is `processes.md`.
 
 Writes go to `git` because of hooks, not coverage. A client that does not run
 `pre-commit` and `commit-msg` is broken for a large share of users, and gix runs
@@ -108,28 +111,55 @@ live in one application, and they can disagree. Three obligations follow.
 ## Reads see git's form
 
 The bytes in the object database are not always what git would show, and a
-working-tree file is not always what git would store. gix can bridge both —
-`gix-filter`, behind the `attributes` feature — but it is wired up and verified
-per read, not granted by the split.
+working-tree file is not always what git would store.
 
 **Clean, on the way in.** A read converts working-tree content to git's form the
 way `git diff` does, running the clean filter driver the path's attributes name
-and the user's config defines — git-lfs, git-crypt, nbstripout. Refusing to run it
-would show those users a diff `git diff` does not, and would hand staging a patch
-built from content their filter exists to change.
+and the user's config defines — git-lfs, git-crypt, nbstripout — with line-ending
+conversion, `ident` and a working-tree encoding. Refusing to run it would show
+those users a diff `git diff` does not, and would hand staging a patch built from
+content their filter exists to change. git does the converting: a working-tree
+read is `git diff-files` (the index against the working tree) or, for a file git
+does not track, `git diff --no-index` against `/dev/null` — the one porcelain mode
+a read runs, because it reads no index and so has none to refresh — and the lines
+Cairn holds for the working-tree side are rebuilt from git's own patch over the
+old side, checked against the object id git names for that content. A staged
+diff (`git diff-index --cached`) reads only objects. gix reads the index, fresh
+for every query, for what git's answer does not say alone, and every blob git
+names.
 
 **Smudge, on the way out, is not applied.** Everything is compared in git's form,
 so an LFS-tracked file in a commit shows as its pointer, modelled as a state to
 display rather than as content (`diff.md`). Showing smudged content — an LFS
 file's real bytes — is the half this leaves unanswered.
 
-Running someone else's filter driver on a read has three residuals, stated rather
-than implied. The driver runs with Cairn's own inherited environment plus the
-repository's paths, because gix builds that process and not
-`ops::GitEnvironment`. Its stderr is Cairn's, inherited. And `textconv` never
-runs on a read, so a file with a textconv driver shows as binary where `git diff`
-shows text. Spec: `docs/prd/diff-engine.md` R3; evidence:
-`docs/research/diff-engine/gix-diff-api.md`.
+Running someone else's filter driver on a read has residuals, stated rather than
+implied:
+
+- **What runs it, and with what.** git starts the driver, as a child of the read's
+  own `git` process, so it runs with the environment Cairn built for that read —
+  the inherited roster and the `ALWAYS` table of `ops::GitEnvironment`, with the
+  read's `GIT_OPTIONAL_LOCKS=0` and `GIT_NO_LAZY_FETCH=1` and no askpass token —
+  plus what git sets for a filter (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_EXEC_PATH`,
+  `GIT_PREFIX`, `GIT_CONFIG_PARAMETERS`, and `PATH` with git's exec directory
+  first). The roster still hands it the user's `PATH`, `HOME` and the rest; that
+  is what makes git-lfs work, and it is the driver's to use.
+- **What it writes is its own.** A driver may keep a store of its own — git-lfs's
+  clean copies the file into `.git/lfs/objects`, as it does under the user's
+  `git diff` — which no read of Cairn's can prevent; git itself writes nothing.
+- **Its stderr is git's**, kept as the read's bounded tail and shown with a
+  failure. A driver that fails and is `required` fails the read, naming the path.
+  One that is not required makes git fall back to the unfiltered content with a
+  warning on stderr; Cairn shows the diff git shows, without that warning, since
+  stderr is prose it never parses.
+- **A submodule's checkout is looked into by git**: `diff-files` runs `git status`
+  inside it to say whether it is dirty, which may run that repository's own
+  fsmonitor and clean filters, as the user's `git diff` does.
+- **`textconv` never runs on a read**, so a file with a textconv driver shows as
+  binary where `git diff` shows text.
+
+Spec: `docs/prd/diff-engine.md` R3; as built: `docs/systems/diff.md`; evidence:
+`docs/research/diff-engine/content-parity-spike.md` section 3.
 
 ## The confirmation seal
 

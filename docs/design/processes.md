@@ -58,8 +58,10 @@ A **read** additionally gets:
 - **`GIT_OPTIONAL_LOCKS=0`**, so `git status` never refreshes the index behind the
   user's back. Only `status` honours it: porcelain `diff` and `describe --dirty`
   take `index.lock` to refresh anyway. So a read runs plumbing or `status`, never
-  another porcelain verb, and Cairn never refreshes the index as a side effect of
-  looking at it — a refresh, if one is ever wanted, is a write.
+  another porcelain verb but `diff --no-index`, which reads no index and so has
+  none to refresh — the one way git prints an untracked file in its own form
+  (`engine.md`, "Reads see git's form") — and Cairn never refreshes the index as a
+  side effect of looking at it; a refresh, if one is ever wanted, is a write.
 - **No askpass token.** A read never asks the user for anything, so the helper it
   could reach fails closed.
 

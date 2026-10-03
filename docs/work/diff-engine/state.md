@@ -8,7 +8,13 @@ and each hunk's function context now come from `git diff-tree -p`, closing the
 audit's F1 — and its QA (round 3) is fixed: opening refuses a bare repository git
 would refuse to find, a read's `core.fsmonitor` is documented parity, Expand All
 batches driver files per algorithm, and the parity and gate pins it asked for
-landed. Phase 03 next.** The diff model exists in
+landed. Phase 03 landed (2026-10-03, QA due): one path's staged, unstaged and
+untracked diff, answered by `git diff-index --cached`, `git diff-files` and `git
+diff --no-index` run as reads, the working-tree side rebuilt from git's patch so it
+is git's form of the file (clean filter driver run by git, with the read's
+environment), and every R3.4 state answered. One decision awaits the user: an
+untracked file is read with porcelain `git diff --no-index` (progress.md, phase
+03).** The diff model exists in
 `cairn-model`, and `cairn-git` answers R2's two queries: the changes query from
 `git diff-tree` through the process manager (decision E, PRD R2.1, R2.2, R2.9 and C14
 amended), honouring `diff.ignoreSubmodules` and `log.showRoot` as the user's `git log`
@@ -40,7 +46,11 @@ with D1, D3, D5 and D6 in `engine.md`, `concurrency.md`, `platform.md` and
 - **The patch always carries three lines of context**, whatever the view shows,
   and the emitter can never see the whitespace-ignoring ranges (L2, L4).
 - **A working-tree read may run the user's filter driver** (L6). D1 is amended for
-  it; the driver's inherited environment is a stated residual, not an oversight.
+  it in `docs/design/engine.md` and the root `CLAUDE.md`. As built, git runs it —
+  a child of the read's `git`, with the environment Cairn built for the read plus
+  what git sets for a filter — never gix; the residuals (the inherited roster it
+  still sees, a store of its own it writes, a non-required failure shown as git
+  shows it) are stated there.
 - **Queries are numbered per lane** (L8): history, changes, file diff. A changes
   query also supersedes the file-diff lane. Nothing else supersedes across lanes.
 - **The layout is Fork's** (L9), down to the context buttons and the hunk header
@@ -133,6 +143,13 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | `reads::diff_attributes` | git (crate-private) | `git check-attr --stdin -z diff`: whether a path's diff driver is one that names an algorithm. Run only on git 2.40+ when the configuration names one. |
 | `diff::algorithm` (`Algorithms`) | git (crate-private) | `diff.algorithm` as porcelain reads it, and drivers' algorithms from git 2.40. |
 | `Repository::commit_details` | git | One commit in the detail R5.3 draws, without a changes query. |
+| `DiffContent::Submodule { dirty }` | model | Phase 03: whether the working tree's checkout of a submodule has changes of its own (git's `-dirty`); false wherever the new side is a commit or the index. |
+| `WorkingTreeDiff` | git | Phase 03, R3.1: `Staged` (`HEAD` against the index), `Unstaged` (the index against the working tree), `Untracked` (nothing against the working tree). |
+| `Repository::working_tree_diff(&GitBinary, &RepoPath, WorkingTreeDiff, &ContentOptions, &impl Cancel)`, `DiffSession::working_tree_diff` | git | R3.1-R3.5 for one path: `Option<FileDiff>`, `None` where the user's `git diff [--cached]` / `git diff --no-index /dev/null` prints nothing. git computes the diff and reads the working tree; the working-tree side's lines are rebuilt from git's patch and checked against the object id git names for them; conflicted, sparse index and bare repository are stand-in states; a blob past R2.6's ceiling refused before git diffs it (a working-tree modification's patch still asked for, under the ceiling, to tell a stat or mode change alone from an edit). Blocks on one read (two with `-w`, plus `check-attr` for a driver algorithm on 2.40+). |
+| `reads::working_tree_patch`, `reads::WorkingTreeQuery`, `reads::Side`, `reads::WorkingTreeAnswer` | git (crate-private) | The read: `diff-index --cached` / `diff-files` with `:(literal)<path> :(exclude,glob)<path>/**`, or `diff --no-index -- /dev/null <path>`; `-z --raw -p --full-index`, no `-a`; at most one record and its sections; a ceiling on stdout (`PastCeiling`); `--no-index`'s status 1 an answer only with a record. |
+| `PatchText::new_side`, `new_index_id`, `submodule_targets`, `has_hunks`; `Parser::finish_listing` | git (crate-private) | The new side rebuilt from the old and git's patch, every printed line checked; the id on the `index` line; git's `Subproject commit` lines and `-dirty`; records and sections unmatched, for one path. |
+| `Invocation::finish_within` | git (crate-private, `process/`) | `finish` with a stdout ceiling: the crossing chunk withheld, the process ended, `GitOutputTooLarge`; what arrived before a failed exit is already the caller's. |
+| `diff::submodules::working_tree_ignore` | git (crate-private) | The `--ignore-submodules` value porcelain applies and plumbing does not read: `diff.ignoreSubmodules`, unless the submodule has an `ignore` of its own. |
 | `Error::ChangesCancelled`, `ContentCancelled`, `ContentReadsDisagree`, `DiffSetup`, `DiffFile`, `UnexpectedGitOutput`, `InvalidConfig` | git | What the caller of a diff query must handle; `TreeDiff` went with the gix tree walk. `ContentReadsDisagree` is the stale-read guard: git printed lines that are not the lines gix read; ask again. |
 
 ## Validation status
@@ -141,7 +158,7 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | --- | --- | --- | --- |
 | 01 diff model | landed | `scripts/gate.sh` PASS | `qa-checklist`, `test-coverage-auditor` and `responsiveness-reviewer`, adjudicated by `qa-confirm`; confirmed findings fixed or recorded as residuals in `docs/systems/diff.md` |
 | 02 engine, commits | landed 2026-09-18; changes query reworked onto `git diff-tree` 2026-10-03 (decision E) | `scripts/gate.sh` PASS, `git-floor` included | done over the reworked phase (2026-10-03), adjudicated by `qa-confirm`; confirmed findings fixed. C6 audit done (2026-10-03, adjudicated): F2-F7 fixed; F1 closed by the content-parity rework (landed 2026-10-03, `scripts/gate.sh` PASS with `git-floor`): R2.4 and R2.8 parity enforced under every algorithm and over real history. QA of the content rework (round 3, 2026-10-03): 21 raw, 16 confirmed by `qa-confirm`, S3 dismissed, S1/R2/G4 escalated and decided by the user; **phase 02 QA round 3 fixed** — every confirmed finding fixed or recorded (R2 above, for phase 08; G4 as issue #51), `scripts/gate.sh` PASS with `git-floor` |
-| 03 engine, working tree | not started | — | — |
+| 03 engine, working tree | landed 2026-10-03; QA due | `scripts/gate.sh` PASS, `git-floor` included | not yet: `/qa` has not reviewed it; the `diff --no-index` decision awaits the user |
 | 04 worker lanes | not started | — | — |
 | 05 detail pane | not started | — | — |
 | 06 unified diff view | not started | — | — |

@@ -193,15 +193,26 @@ Why each variable is there, with its evidence, is beside it in
   `sequence.editor` outranks `GIT_EDITOR` for the rebase todo list.
 - **`GIT_OPTIONAL_LOCKS=0` covers `git status` and nothing else.** Porcelain
   `diff` and `describe --dirty` refresh the index anyway. That is why a read in
-  `reads/` runs query plumbing or `status` only, as the module's own docs say where
-  `diff-engine` will read them.
-- **A read may run the repository's `core.fsmonitor` hook, and no other
-  program.** `diff-tree` and `check-attr` run it as they read the index of a
-  repository with a working tree (reproduced on 2.30.9 through 2.56.0), as the
-  user's own `git diff` does; no flag of theirs turns it off, and the user
-  decided to allow it as parity (`reads/mod.rs`, "What a read may run";
-  `the_content_query_writes_nothing_and_runs_nothing`). A planted repository
-  naming one is refused at open ("Where an invocation runs").
+  `reads/` runs query plumbing or `status` only — and `diff --no-index`, which
+  reads no index, for an untracked file's working-tree diff — as the module's own
+  docs say (`reads/mod.rs`, "What a read may run").
+- **A read may run the repository's `core.fsmonitor` hook and, on a read of the
+  working tree, the path's clean filter driver — no other program.**
+  `diff-tree`, `diff-index`, `diff-files` and `check-attr` run the hook as they
+  read the index of a repository with a working tree (reproduced on 2.30.9
+  through 2.56.0), as the user's own `git diff` does; no flag of theirs turns it
+  off, and the user decided to allow it as parity (`reads/mod.rs`, "What a read
+  may run"; `the_content_query_writes_nothing_and_runs_nothing`). A planted
+  repository naming one is refused at open ("Where an invocation runs").
+  `diff-files` and `diff --no-index` run the clean filter driver the path's
+  attributes name, as a child of the read's `git`, so with the read's
+  environment above plus what git sets for a filter (`GIT_DIR`,
+  `GIT_WORK_TREE`, `GIT_EXEC_PATH`, `GIT_PREFIX`, `GIT_CONFIG_PARAMETERS`, the
+  exec directory first on `PATH`), its stderr the read's bounded tail; and for
+  a submodule `diff-files` runs `git status` inside it, with that repository's
+  own hook and filters (`reads/working_tree.rs`;
+  `a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`,
+  `a_clean_filter_drivers_form_is_what_is_diffed_and_it_runs_under_git`).
 - **`GIT_NO_LAZY_FETCH=1` needs git 2.44; the floor is 2.30.** In a partial
   clone, a read that asks for an object only the promisor remote holds would
   fetch it — a pack written, the network reached. With the variable, git
@@ -904,7 +915,7 @@ names, not features; and `reads/` and `process/` are in
 by the user on 2026-10-02.
 
 What the guards cannot decide is stated in the root `CLAUDE.md` beside each
-invariant. That a read runs query plumbing or `status` is
+invariant. That a read runs query plumbing, `status` or `diff --no-index` is
 `destructive-ops-reviewer`'s check 10. These are `qa-checklist`'s item 7:
 
 - a process or a gix write reached through an alias, a trait object or a macro;

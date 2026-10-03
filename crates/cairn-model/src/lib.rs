@@ -36,7 +36,8 @@ pub use diff_function_context::FunctionContext;
 pub use diff_hunks::{Context, Hunk, HunkHeader, Hunks};
 pub use diff_overlay::{ByteRange, DisplayOverlay, IntraLineHighlight};
 pub use diff_rows::{
-    DrawnRanges, SideBySideRow, SideBySideRows, UnifiedLayout, UnifiedRow, UnifiedRows,
+    ChangeStops, DrawnRanges, SideBySideLayout, SideBySideRow, SideBySideRows, UnifiedLayout,
+    UnifiedRow, UnifiedRows,
 };
 pub use diff_text::{ChangedRange, DiffLine, LineNumber, LineSpan, TextDiff, split_lines};
 pub use graph::{EdgeKind, EdgeSegment, GraphRow, Lane};

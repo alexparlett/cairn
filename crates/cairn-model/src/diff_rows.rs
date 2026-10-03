@@ -11,6 +11,13 @@
 //! which differs from the old one under `-w` — and git's `\ No newline at end of file`
 //! after a line that did not end. A view drawing them with whitespace ignored groups the
 //! whitespace-ignoring ranges ([`UnifiedLayout::shown`]), as `git diff -w` does.
+//!
+//! The side-by-side rows (phase 07) are the same lines rearranged, under the same parity
+//! rule: the same hunks, the same headers, a context line from the new side drawn in both
+//! columns, the i-th removed line of a change beside its i-th added line, and git's
+//! end-of-file marker in the column of the side whose last line did not end. Read a
+//! side-by-side view's left column then its right one, change by change, and the result is
+//! `git diff`'s output line for line ([`SideBySideLayout::shown`]).
 
 use std::ops::Range;
 
@@ -49,8 +56,8 @@ enum Shape {
     /// Every removed line, then every added one, each side's last line followed by git's
     /// end-of-file marker when it did not end.
     Unified,
-    /// The removed and added lines paired, the shorter side padded. Its end-of-file marker
-    /// is phase 07's, which builds side-by-side.
+    /// The removed and added lines paired, the shorter side padded; one row after them for
+    /// git's end-of-file markers when either side's last line did not end.
     SideBySide,
 }
 
@@ -59,9 +66,9 @@ enum Shape {
 struct RowIndex {
     pieces: Vec<PieceAt>,
     rows: usize,
-    /// The first row of each change drawn, in order: what previous and next change move
-    /// between, found by search.
-    change_rows: Vec<Range<usize>>,
+    /// The rows of each change drawn, in order: what previous and next change move between,
+    /// found by search.
+    stops: ChangeStops,
 }
 
 impl RowIndex {
@@ -69,7 +76,7 @@ impl RowIndex {
         let mut index = Self {
             pieces: Vec::new(),
             rows: 0,
-            change_rows: Vec::new(),
+            stops: ChangeStops(Vec::new()),
         };
         let new_len = u32::try_from(text.new_lines().len()).unwrap_or(u32::MAX);
 
@@ -101,7 +108,7 @@ impl RowIndex {
                 index.push(Piece::Context { old, new, len: run }, run as usize);
                 let rows = rows_of_change(text, *change, shape);
                 if rows > 0 {
-                    index.change_rows.push(index.rows..index.rows + rows);
+                    index.stops.0.push(index.rows..index.rows + rows);
                 }
                 index.push(
                     Piece::Change {
@@ -128,9 +135,9 @@ impl RowIndex {
                 trailing as usize,
             );
             // A context run that ends the file ends both sides together, and git prints its
-            // last line from the new side, so the new side says whether it ended.
-            if shape == Shape::Unified
-                && trailing > 0
+            // last line from the new side, so the new side says whether it ended. Both shapes:
+            // side-by-side draws that one printed line in both columns, marker and all.
+            if trailing > 0
                 && new.saturating_add(trailing) == new_len
                 && unterminated_last(text.new_lines())
             {
@@ -197,7 +204,49 @@ fn rows_of_change(text: &TextDiff, change: ChangedRange, shape: Shape) -> usize 
             let (after_removed, after_added) = change_markers(text, change);
             removed + usize::from(after_removed) + added + usize::from(after_added)
         }
-        Shape::SideBySide => removed.max(added),
+        Shape::SideBySide => {
+            let (after_removed, after_added) = change_markers(text, change);
+            removed.max(added) + usize::from(after_removed || after_added)
+        }
+    }
+}
+
+/// The rows each drawn change takes, in order: what previous and next change move between.
+/// Every search here is a binary search over the changes, never a scan of the rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangeStops(Vec<Range<usize>>);
+
+impl ChangeStops {
+    /// How many changes the rows draw.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The first row of the `change`-th change drawn.
+    pub fn start(&self, change: usize) -> Option<usize> {
+        self.0.get(change).map(|rows| rows.start)
+    }
+
+    /// The rows the `change`-th change draws, git's end-of-file markers among them.
+    pub fn rows(&self, change: usize) -> Option<Range<usize>> {
+        self.0.get(change).cloned()
+    }
+
+    /// The first change that starts at `row` or below it.
+    pub fn first_from(&self, row: usize) -> Option<usize> {
+        let next = self.0.partition_point(|rows| rows.start < row);
+        (next < self.0.len()).then_some(next)
+    }
+
+    /// The last change that starts above `row`.
+    pub fn last_before(&self, row: usize) -> Option<usize> {
+        self.0
+            .partition_point(|rows| rows.start < row)
+            .checked_sub(1)
     }
 }
 
@@ -226,10 +275,14 @@ pub enum UnifiedRow<'a> {
 }
 
 /// One row of a side-by-side diff (R1.4, R6.4). `Removed` leaves the right side filler and
-/// `Added` leaves the left side filler, which is how the shorter side is padded.
+/// `Added` leaves the left side filler, which is how the shorter side is padded. Read every
+/// variant by name: a view that skipped one would draw nothing for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SideBySideRow<'a> {
     Header(HunkHeader),
+    /// A line both sides hold, drawn in both columns. `line` is the new side's — the line
+    /// git prints, which under `-w` may differ from the old side's in whitespace — as for
+    /// [`UnifiedRow::Context`].
     Context {
         old: LineNumber,
         new: LineNumber,
@@ -249,9 +302,16 @@ pub enum SideBySideRow<'a> {
         new: LineNumber,
         line: &'a DiffLine,
     },
+    /// git's `\ No newline at end of file`, in each column whose side's last line — just
+    /// above, or above that side's filler — did not end; the other column is filler. After a
+    /// context line that ends the file, both columns: git printed that one line for both.
+    NoNewlineAtEnd {
+        old: bool,
+        new: bool,
+    },
 }
 
-/// Which ranges a unified layout groups.
+/// Which ranges a layout groups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DrawnRanges {
     /// The exact changes: `git diff`.
@@ -283,23 +343,8 @@ impl UnifiedLayout {
     /// `git diff -U<n>`'s otherwise — each grouped with the inter-hunk context git's
     /// function context was read with, so every hunk starts where git's does.
     pub fn shown(text: &TextDiff, overlay: &DisplayOverlay, context: Context) -> Self {
-        let inter_hunk = overlay.function_context().inter_hunk_context();
-        match overlay.changes_ignoring_whitespace() {
-            Some(changes) => Self::over(
-                text,
-                changes,
-                context,
-                inter_hunk,
-                DrawnRanges::IgnoringWhitespace,
-            ),
-            None => Self::over(
-                text,
-                text.changes(),
-                context,
-                inter_hunk,
-                DrawnRanges::Exact,
-            ),
-        }
+        let (changes, inter_hunk, ranges) = shown_ranges(text, overlay);
+        Self::over(text, changes, context, inter_hunk, ranges)
     }
 
     fn over(
@@ -341,29 +386,30 @@ impl UnifiedLayout {
         self.index.piece_count()
     }
 
+    /// The rows each drawn change takes: what previous and next change move between.
+    pub fn stops(&self) -> &ChangeStops {
+        &self.index.stops
+    }
+
     /// How many changes the rows draw: what previous and next change move between.
     pub fn change_count(&self) -> usize {
-        self.index.change_rows.len()
+        self.index.stops.len()
     }
 
     /// The first row of the `change`-th change drawn.
     pub fn change_row(&self, change: usize) -> Option<usize> {
-        self.index.change_rows.get(change).map(|rows| rows.start)
+        self.index.stops.start(change)
     }
 
     /// The rows the `change`-th change draws: its removed and added lines, and git's
     /// end-of-file markers among them.
     pub fn change_rows(&self, change: usize) -> Option<Range<usize>> {
-        self.index.change_rows.get(change).cloned()
+        self.index.stops.rows(change)
     }
 
     /// The first change that starts at `row` or below it. A search, never a scan.
     pub fn first_change_from(&self, row: usize) -> Option<usize> {
-        let next = self
-            .index
-            .change_rows
-            .partition_point(|rows| rows.start < row);
-        (next < self.index.change_rows.len()).then_some(next)
+        self.index.stops.first_from(row)
     }
 
     /// The first change that starts below `row`. A search, never a scan.
@@ -373,10 +419,7 @@ impl UnifiedLayout {
 
     /// The last change that starts above `row`. A search, never a scan.
     pub fn previous_change_before(&self, row: usize) -> Option<usize> {
-        self.index
-            .change_rows
-            .partition_point(|rows| rows.start < row)
-            .checked_sub(1)
+        self.index.stops.last_before(row)
     }
 
     /// Row `row`, its line borrowed from `text` — the diff this layout was built from, with
@@ -388,11 +431,7 @@ impl UnifiedLayout {
         overlay: &'a DisplayOverlay,
         row: usize,
     ) -> Option<UnifiedRow<'a>> {
-        let changes = match self.ranges {
-            DrawnRanges::Exact => text.changes(),
-            DrawnRanges::IgnoringWhitespace => overlay.changes_ignoring_whitespace()?,
-        };
-        self.row_over(text, changes, row)
+        self.row_over(text, drawn_changes(text, overlay, self.ranges)?, row)
     }
 
     fn row_over<'a>(
@@ -450,6 +489,32 @@ impl UnifiedLayout {
     }
 }
 
+/// What a view shows of `text`: the overlay's whitespace-ignoring ranges when it holds them
+/// (`git diff -w`), the exact ones otherwise, and the inter-hunk context git's function
+/// context was read with — the one grouping both projections share.
+fn shown_ranges<'a>(
+    text: &'a TextDiff,
+    overlay: &'a DisplayOverlay,
+) -> (&'a [ChangedRange], u32, DrawnRanges) {
+    let inter_hunk = overlay.function_context().inter_hunk_context();
+    match overlay.changes_ignoring_whitespace() {
+        Some(changes) => (changes, inter_hunk, DrawnRanges::IgnoringWhitespace),
+        None => (text.changes(), inter_hunk, DrawnRanges::Exact),
+    }
+}
+
+/// The changes `ranges` names: the exact ones, or the overlay's whitespace-ignoring ones.
+fn drawn_changes<'a>(
+    text: &'a TextDiff,
+    overlay: &'a DisplayOverlay,
+    ranges: DrawnRanges,
+) -> Option<&'a [ChangedRange]> {
+    match ranges {
+        DrawnRanges::Exact => Some(text.changes()),
+        DrawnRanges::IgnoringWhitespace => overlay.changes_ignoring_whitespace(),
+    }
+}
+
 /// The unified rows of one diff at one context, addressed by row number: a
 /// [`UnifiedLayout`] beside the diff it borrows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -472,12 +537,7 @@ impl<'a> UnifiedRows<'a> {
     /// What a view shows: [`UnifiedLayout::shown`].
     pub fn shown(text: &'a TextDiff, overlay: &'a DisplayOverlay, context: Context) -> Self {
         let layout = UnifiedLayout::shown(text, overlay, context);
-        let changes = match layout.ranges() {
-            DrawnRanges::Exact => text.changes(),
-            DrawnRanges::IgnoringWhitespace => {
-                overlay.changes_ignoring_whitespace().unwrap_or_default()
-            }
-        };
+        let changes = drawn_changes(text, overlay, layout.ranges()).unwrap_or_default();
         Self {
             text,
             changes,
@@ -511,19 +571,45 @@ impl<'a> UnifiedRows<'a> {
     }
 }
 
-/// The side-by-side rows of one diff at one context, addressed by row number.
+/// The side-by-side rows of one diff at one context, indexed and owning nothing of the
+/// diff: [`UnifiedLayout`]'s twin, built once per answer and asked for rows against the diff
+/// it was built from. The same hunks as the unified layout at the same context and overlay,
+/// so both views of one answer group alike.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SideBySideRows<'a> {
-    text: &'a TextDiff,
+pub struct SideBySideLayout {
     hunks: Hunks,
     index: RowIndex,
+    ranges: DrawnRanges,
 }
 
-impl<'a> SideBySideRows<'a> {
-    pub fn new(text: &'a TextDiff, context: Context) -> Self {
-        let hunks = Hunks::of(text, context);
-        let index = RowIndex::build(text, text.changes(), &hunks, Shape::SideBySide);
-        Self { text, hunks, index }
+impl SideBySideLayout {
+    /// The exact changes at `context`, grouped with no inter-hunk context.
+    pub fn exact(text: &TextDiff, context: Context) -> Self {
+        Self::over(text, text.changes(), context, 0, DrawnRanges::Exact)
+    }
+
+    /// What a view shows of `text` at `context`, grouped as [`UnifiedLayout::shown`] groups
+    /// it: `git diff -w -U<n>`'s hunks when the overlay holds the whitespace-ignoring ranges,
+    /// `git diff -U<n>`'s otherwise.
+    pub fn shown(text: &TextDiff, overlay: &DisplayOverlay, context: Context) -> Self {
+        let (changes, inter_hunk, ranges) = shown_ranges(text, overlay);
+        Self::over(text, changes, context, inter_hunk, ranges)
+    }
+
+    fn over(
+        text: &TextDiff,
+        changes: &[ChangedRange],
+        context: Context,
+        inter_hunk_context: u32,
+        ranges: DrawnRanges,
+    ) -> Self {
+        let hunks = Hunks::of_ranges(text, changes, context, inter_hunk_context);
+        let index = RowIndex::build(text, changes, &hunks, Shape::SideBySide);
+        Self {
+            hunks,
+            index,
+            ranges,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -538,19 +624,48 @@ impl<'a> SideBySideRows<'a> {
         &self.hunks
     }
 
-    /// What the index costs, in entries; see [`UnifiedRows::index_size`].
+    /// Which ranges these rows draw.
+    pub fn ranges(&self) -> DrawnRanges {
+        self.ranges
+    }
+
+    /// What the index costs, in entries; see [`UnifiedLayout::index_size`].
     pub fn index_size(&self) -> usize {
         self.index.piece_count()
     }
 
-    pub fn row(&self, row: usize) -> Option<SideBySideRow<'a>> {
+    /// The rows each drawn change takes: what previous and next change move between.
+    pub fn stops(&self) -> &ChangeStops {
+        &self.index.stops
+    }
+
+    /// Row `row`, its lines borrowed from `text` — the diff this layout was built from, with
+    /// `overlay` its overlay. Another diff answers rows of no meaning, or none; it never
+    /// panics.
+    pub fn row<'a>(
+        &self,
+        text: &'a TextDiff,
+        overlay: &'a DisplayOverlay,
+        row: usize,
+    ) -> Option<SideBySideRow<'a>> {
+        self.row_over(text, drawn_changes(text, overlay, self.ranges)?, row)
+    }
+
+    fn row_over<'a>(
+        &self,
+        text: &'a TextDiff,
+        changes: &[ChangedRange],
+        row: usize,
+    ) -> Option<SideBySideRow<'a>> {
         let (piece, offset) = self.index.locate(row)?;
         match piece {
             Piece::Header { hunk } => Some(SideBySideRow::Header(
                 self.hunks.get(hunk as usize)?.header(),
             )),
-            // Side-by-side builds no end-of-file marker yet (phase 07); none is indexed.
-            Piece::NoNewline => None,
+            Piece::NoNewline => Some(SideBySideRow::NoNewlineAtEnd {
+                old: true,
+                new: true,
+            }),
             Piece::Context { old, new, .. } => {
                 let step = u32::try_from(offset).unwrap_or(u32::MAX);
                 let old = LineNumber::from_index(old.saturating_add(step));
@@ -558,13 +673,17 @@ impl<'a> SideBySideRows<'a> {
                 Some(SideBySideRow::Context {
                     old,
                     new,
-                    line: self.text.old_line(old)?,
+                    line: text.new_line(new)?,
                 })
             }
             Piece::Change { change } => {
-                let change = *self.text.changes().get(change as usize)?;
+                let change = *changes.get(change as usize)?;
                 let removed = change.removed.len() as usize;
                 let added = change.added.len() as usize;
+                if offset >= removed.max(added) {
+                    let (old, new) = change_markers(text, change);
+                    return (old || new).then_some(SideBySideRow::NoNewlineAtEnd { old, new });
+                }
                 let step = u32::try_from(offset).unwrap_or(u32::MAX);
                 let old =
                     LineNumber::from_index(change.removed.start().index().saturating_add(step));
@@ -572,23 +691,79 @@ impl<'a> SideBySideRows<'a> {
                 if offset < removed.min(added) {
                     Some(SideBySideRow::Replaced {
                         old,
-                        old_line: self.text.old_line(old)?,
+                        old_line: text.old_line(old)?,
                         new,
-                        new_line: self.text.new_line(new)?,
+                        new_line: text.new_line(new)?,
                     })
                 } else if offset < removed {
                     Some(SideBySideRow::Removed {
                         old,
-                        line: self.text.old_line(old)?,
+                        line: text.old_line(old)?,
                     })
                 } else {
                     Some(SideBySideRow::Added {
                         new,
-                        line: self.text.new_line(new)?,
+                        line: text.new_line(new)?,
                     })
                 }
             }
         }
+    }
+}
+
+/// The side-by-side rows of one diff at one context, addressed by row number: a
+/// [`SideBySideLayout`] beside the diff it borrows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SideBySideRows<'a> {
+    text: &'a TextDiff,
+    changes: &'a [ChangedRange],
+    layout: SideBySideLayout,
+}
+
+impl<'a> SideBySideRows<'a> {
+    /// The exact changes, grouped with no inter-hunk context.
+    pub fn new(text: &'a TextDiff, context: Context) -> Self {
+        Self {
+            text,
+            changes: text.changes(),
+            layout: SideBySideLayout::exact(text, context),
+        }
+    }
+
+    /// What a view shows: [`SideBySideLayout::shown`].
+    pub fn shown(text: &'a TextDiff, overlay: &'a DisplayOverlay, context: Context) -> Self {
+        let layout = SideBySideLayout::shown(text, overlay, context);
+        let changes = drawn_changes(text, overlay, layout.ranges()).unwrap_or_default();
+        Self {
+            text,
+            changes,
+            layout,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.layout.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.layout.is_empty()
+    }
+
+    pub fn hunks(&self) -> &Hunks {
+        self.layout.hunks()
+    }
+
+    pub fn layout(&self) -> &SideBySideLayout {
+        &self.layout
+    }
+
+    /// What the index costs, in entries; see [`UnifiedRows::index_size`].
+    pub fn index_size(&self) -> usize {
+        self.layout.index_size()
+    }
+
+    pub fn row(&self, row: usize) -> Option<SideBySideRow<'a>> {
+        self.layout.row_over(self.text, self.changes, row)
     }
 }
 
@@ -661,9 +836,81 @@ mod tests {
                 Some(SideBySideRow::Added { new, line }) => {
                     format!("- {} | | {}", new.one_based(), line.text())
                 }
+                Some(SideBySideRow::NoNewlineAtEnd { old, new }) => format!(
+                    "\\ | {} | {}",
+                    if old { "no newline" } else { "" },
+                    if new { "no newline" } else { "" }
+                ),
                 None => "<missing>".to_string(),
             })
             .collect()
+    }
+
+    /// The side-by-side rows read back into the lines `git diff` prints: each hunk's header,
+    /// its context, and each change's left column (removed lines, then the old side's
+    /// end-of-file marker) before its right column (added lines, then the new side's). A
+    /// marker after a context row is that one printed line's. In `unified_picture`'s form.
+    fn side_read_as_git_prints(rows: &SideBySideRows<'_>) -> Vec<String> {
+        const MARKER: &str = "\\ No newline at end of file";
+        let mut out = Vec::new();
+        let (mut left, mut right): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+        let mut in_change = false;
+        let flush = |out: &mut Vec<String>, left: &mut Vec<String>, right: &mut Vec<String>| {
+            out.append(left);
+            out.append(right);
+        };
+        for n in 0..rows.len() {
+            match rows.row(n) {
+                Some(SideBySideRow::Header(header)) => {
+                    flush(&mut out, &mut left, &mut right);
+                    in_change = false;
+                    out.push(header.to_string());
+                }
+                Some(SideBySideRow::Context { old, new, line }) => {
+                    flush(&mut out, &mut left, &mut right);
+                    in_change = false;
+                    out.push(format!(
+                        "{} {} | {}",
+                        old.one_based(),
+                        new.one_based(),
+                        line.text()
+                    ));
+                }
+                Some(SideBySideRow::Replaced {
+                    old,
+                    old_line,
+                    new,
+                    new_line,
+                }) => {
+                    in_change = true;
+                    left.push(format!("{}   |-{}", old.one_based(), old_line.text()));
+                    right.push(format!("  {} |+{}", new.one_based(), new_line.text()));
+                }
+                Some(SideBySideRow::Removed { old, line }) => {
+                    in_change = true;
+                    left.push(format!("{}   |-{}", old.one_based(), line.text()));
+                }
+                Some(SideBySideRow::Added { new, line }) => {
+                    in_change = true;
+                    right.push(format!("  {} |+{}", new.one_based(), line.text()));
+                }
+                Some(SideBySideRow::NoNewlineAtEnd { old, new }) if in_change => {
+                    if old {
+                        left.push(MARKER.to_owned());
+                    }
+                    if new {
+                        right.push(MARKER.to_owned());
+                    }
+                }
+                Some(SideBySideRow::NoNewlineAtEnd { old, new }) => {
+                    assert!(old && new, "a context line's marker is in both columns");
+                    out.push(MARKER.to_owned());
+                }
+                None => out.push("<missing>".to_owned()),
+            }
+        }
+        flush(&mut out, &mut left, &mut right);
+        out
     }
 
     /// A row that owned its line would allocate on every frame of a scroll. `Copy` is the
@@ -747,6 +994,165 @@ mod tests {
             9,
             "a side-by-side view built a row per changed line rather than per pair"
         );
+    }
+
+    /// Phase 07, git parity: a side-by-side view draws `git diff`'s lines and no others —
+    /// read column by column, change by change, it is the unified view's rows, at every
+    /// context, with whitespace ignored or not, with lines that did not end on either side,
+    /// grouped with the inter-hunk context. Caught by: a context line read from the old side
+    /// under `-w`, a marker dropped or put in the wrong column, the exact ranges drawn where
+    /// the overlay's were asked for, or hunks grouped without the inter-hunk context.
+    #[test]
+    fn side_by_side_read_column_by_column_is_what_git_diff_prints() {
+        let respaced = TextDiff::new(
+            split_lines(b"a\n  b\nc\nd\ne\nf\ng\nh\ni\nj\nk"),
+            split_lines(b"a\nb\nC\nd\ne\n f\ng\nH\nI\nj\nK\nL"),
+            vec![
+                change((1, 2), (1, 2)),
+                change((5, 1), (5, 1)),
+                change((7, 2), (7, 2)),
+                change((10, 1), (10, 2)),
+            ],
+        );
+        let ignoring = overlay_ignoring(vec![
+            change((2, 1), (2, 1)),
+            change((7, 2), (7, 2)),
+            change((10, 1), (10, 2)),
+        ]);
+        let grouped = |overlay: DisplayOverlay| {
+            overlay.with_function_context(
+                crate::FunctionContext::read_at(Context::lines(1), Vec::new())
+                    .with_inter_hunk_context(2),
+            )
+        };
+        let fixtures = [
+            (replaced(), DisplayOverlay::none()),
+            (respaced.clone(), DisplayOverlay::none()),
+            (respaced.clone(), ignoring.clone()),
+            (respaced, grouped(ignoring)),
+            (
+                TextDiff::new(
+                    split_lines(b"a\nb"),
+                    split_lines(b"a\nB"),
+                    vec![change((1, 1), (1, 1))],
+                ),
+                DisplayOverlay::none(),
+            ),
+            (
+                TextDiff::new(
+                    split_lines(b"a\nb\nc\nd"),
+                    split_lines(b"a\nX\n"),
+                    vec![change((1, 3), (1, 1))],
+                ),
+                DisplayOverlay::none(),
+            ),
+            (
+                TextDiff::new(
+                    split_lines(b"a\nb\n"),
+                    split_lines(b"A\nB\nC\nD"),
+                    vec![change((0, 2), (0, 4))],
+                ),
+                DisplayOverlay::none(),
+            ),
+            (
+                TextDiff::new(
+                    split_lines(b"A\nb"),
+                    split_lines(b"a\nb"),
+                    vec![change((0, 1), (0, 1))],
+                ),
+                DisplayOverlay::none(),
+            ),
+        ];
+        for (n, (text, overlay)) in fixtures.iter().enumerate() {
+            for context in [
+                Context::lines(1),
+                Context::lines(3),
+                Context::lines(8),
+                Context::EntireFile,
+            ] {
+                let unified = UnifiedRows::shown(text, overlay, context);
+                let side = SideBySideRows::shown(text, overlay, context);
+                assert_eq!(
+                    side_read_as_git_prints(&side),
+                    unified_picture(&unified),
+                    "fixture {n} at {context:?}: {:?}",
+                    side_picture(&side)
+                );
+                assert_eq!(side.hunks(), unified.hunks(), "fixture {n} at {context:?}");
+                assert_eq!(side.layout().ranges(), unified.layout().ranges());
+            }
+        }
+    }
+
+    /// Phase 07: git's end-of-file marker sits in the column of the side whose last line did
+    /// not end, on the row after the change's lines, with filler in the other column; after
+    /// a context line that ends the file it is in both. Every marker is a row the count holds,
+    /// and a change's marker row belongs to the change previous and next change stop at.
+    /// Caught by: no marker row, a marker in both columns for one side, or a count without it.
+    #[test]
+    fn side_by_side_puts_gits_marker_in_the_column_of_the_side_that_did_not_end() {
+        let shorter_old = TextDiff::new(
+            split_lines(b"a\nb"),
+            split_lines(b"a\nB\nC\n"),
+            vec![change((1, 1), (1, 2))],
+        );
+        let rows = SideBySideRows::new(&shorter_old, Context::lines(3));
+        assert_eq!(
+            side_picture(&rows),
+            vec![
+                "@@ -1,2 +1,3 @@",
+                "1 1 | a | a",
+                "2 2 | b | B",
+                "- 3 | | C",
+                "\\ | no newline | ",
+            ]
+        );
+        assert_eq!(rows.len(), 5);
+        assert_eq!(rows.layout().stops().rows(0), Some(2..5));
+
+        let context_at_end = TextDiff::new(
+            split_lines(b"A\nb"),
+            split_lines(b"a\nb"),
+            vec![change((0, 1), (0, 1))],
+        );
+        assert_eq!(
+            side_picture(&SideBySideRows::new(&context_at_end, Context::lines(3))),
+            vec![
+                "@@ -1,2 +1,2 @@",
+                "1 1 | A | a",
+                "2 2 | b | b",
+                "\\ | no newline | no newline",
+            ]
+        );
+    }
+
+    /// Phase 07, git parity under `-w`: a context line is the new side's in both columns, as
+    /// git prints it. Caught by: the old side's line on the left.
+    #[test]
+    fn a_side_by_side_context_line_is_the_new_sides_in_both_columns() {
+        let text = TextDiff::new(
+            split_lines(b"a\n  b\nc\n"),
+            split_lines(b"a\nb\nC\n"),
+            vec![change((1, 2), (1, 2))],
+        );
+        let overlay = overlay_ignoring(vec![change((2, 1), (2, 1))]);
+        let rows = SideBySideRows::shown(&text, &overlay, Context::lines(3));
+        assert_eq!(
+            side_picture(&rows),
+            vec![
+                "@@ -1,3 +1,3 @@",
+                "1 1 | a | a",
+                "2 2 | b | b",
+                "3 3 | c | C"
+            ]
+        );
+        let Some(SideBySideRow::Context { new, line, .. }) = rows.row(2) else {
+            panic!("row 2 is the respaced context line");
+        };
+        assert!(std::ptr::eq(
+            line,
+            text.new_line(new).expect("the new line")
+        ));
     }
 
     /// The other direction: more removed than added leaves filler on the right.

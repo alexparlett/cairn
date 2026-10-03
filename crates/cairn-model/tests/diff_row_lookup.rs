@@ -22,8 +22,8 @@
 //! cannot leak into each other's totals.
 
 use cairn_model::{
-    ChangedRange, Context, DiffLine, DisplayOverlay, LineSpan, SideBySideRows, TextDiff,
-    UnifiedLayout, UnifiedRows,
+    ChangedRange, Context, DiffLine, DisplayOverlay, LineSpan, SideBySideLayout, SideBySideRows,
+    TextDiff, UnifiedLayout, UnifiedRows,
 };
 
 /// A hundred thousand lines with one line replaced in the middle: at entire-file context
@@ -152,6 +152,32 @@ fn a_side_by_side_row_costs_no_allocation_however_long_the_diff_is() {
             rows.len(),
             info.count_total,
             info.bytes_total
+        );
+    }
+}
+
+/// Phase 07: the side-by-side view's own path, a kept [`SideBySideLayout`] asked against the
+/// diff and overlay it was built from, with whitespace ignored, allocates nothing either.
+#[test]
+fn a_row_of_a_kept_side_by_side_layout_costs_no_allocation_however_long_the_diff_is() {
+    let text = a_hundred_thousand_lines();
+    let overlay = DisplayOverlay::new(Some(text.changes().to_vec()), Vec::new());
+    let layout = SideBySideLayout::shown(&text, &overlay, Context::EntireFile);
+    assert_eq!(layout.len(), 100_001);
+    warm_up(|| {
+        layout.row(&text, &overlay, 0);
+    });
+
+    for row in probes(layout.len()) {
+        let mut found = None;
+        let info = allocation_counter::measure(|| {
+            found = layout.row(&text, &overlay, row);
+        });
+        assert!(found.is_some(), "row {row} answered nothing");
+        assert_eq!(
+            info.count_total, 0,
+            "asking a kept side-by-side layout for row {row} allocated {} times",
+            info.count_total
         );
     }
 }

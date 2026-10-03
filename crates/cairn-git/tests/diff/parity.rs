@@ -8,11 +8,15 @@
 //! file's paths, with the rename detection that pairs them — the command a user types — so
 //! it reads `diff.algorithm`, the drivers and the indent heuristic exactly as they do. Only
 //! `--no-ext-diff` and `--no-textconv` are added, since Cairn runs neither program (R2.3).
+//!
+//! Every comparison through [`compare_commit_at`] holds BOTH views to git's answer: the
+//! unified rows, and the side-by-side rows read column by column ([`side_by_side_view`]), so
+//! the parity bar is one bar for both (phase 07).
 
 use cairn_git::{CancelSignal, ChangesRequest, ContentOptions, DiffSession, Repository};
 use cairn_model::{
-    ChangeStatus, ChangedFile, Context, DiffContent, DrawnRanges, FileDiff, Oid, UnifiedRow,
-    UnifiedRows,
+    ChangeStatus, ChangedFile, Context, DiffContent, DrawnRanges, FileDiff, Oid, SideBySideRow,
+    SideBySideRows, UnifiedRow, UnifiedRows,
 };
 
 use super::repositories::{self, Repo};
@@ -167,6 +171,97 @@ pub fn cairn_view(diff: &FileDiff, context: Context, ignoring_whitespace: bool) 
     hunks
 }
 
+/// The same shape, read from the side-by-side rows a view draws at `context` —
+/// [`SideBySideRows::shown`] — column by column: each header with its function context, each
+/// context line (one row, drawn in both columns, printed once), and each change's left
+/// column (its removed lines, then the old side's end-of-file marker) before its right
+/// column (its added lines, then the new side's). Filler is nothing. A marker after a context
+/// row is that one printed line's, and must be in both columns.
+pub fn side_by_side_view(
+    diff: &FileDiff,
+    context: Context,
+    ignoring_whitespace: bool,
+) -> Vec<Hunk> {
+    let DiffContent::Text { text, overlay } = &diff.content else {
+        panic!("{} is not text: {:?}", diff.file.new_path, diff.content);
+    };
+    let rows = SideBySideRows::shown(text, overlay, context);
+    let drawn = if ignoring_whitespace {
+        DrawnRanges::IgnoringWhitespace
+    } else {
+        DrawnRanges::Exact
+    };
+    assert_eq!(rows.layout().ranges(), drawn, "{}", diff.file.new_path);
+    let lossy = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
+    let mut hunks: Vec<Hunk> = Vec::new();
+    let (mut left, mut right): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+    let mut in_change = false;
+    let flush = |hunks: &mut Vec<Hunk>, left: &mut Vec<String>, right: &mut Vec<String>| {
+        if let Some(hunk) = hunks.last_mut() {
+            hunk.lines.append(left);
+            hunk.lines.append(right);
+        }
+    };
+    for index in 0..rows.len() {
+        match some(rows.row(index), "a row below the count") {
+            SideBySideRow::Header(header) => {
+                flush(&mut hunks, &mut left, &mut right);
+                in_change = false;
+                hunks.push(Hunk {
+                    header: header.to_string(),
+                    function: overlay.function_context().of(header).map_or_else(
+                        || "<no function context read for this hunk>".to_owned(),
+                        |text| String::from_utf8_lossy(text).into_owned(),
+                    ),
+                    lines: Vec::new(),
+                });
+            }
+            SideBySideRow::Context { line, .. } => {
+                flush(&mut hunks, &mut left, &mut right);
+                in_change = false;
+                some(hunks.last_mut(), "a row before its header")
+                    .lines
+                    .push(format!(" {}", lossy(line.bytes())));
+            }
+            SideBySideRow::Replaced {
+                old_line, new_line, ..
+            } => {
+                in_change = true;
+                left.push(format!("-{}", lossy(old_line.bytes())));
+                right.push(format!("+{}", lossy(new_line.bytes())));
+            }
+            SideBySideRow::Removed { line, .. } => {
+                in_change = true;
+                left.push(format!("-{}", lossy(line.bytes())));
+            }
+            SideBySideRow::Added { line, .. } => {
+                in_change = true;
+                right.push(format!("+{}", lossy(line.bytes())));
+            }
+            SideBySideRow::NoNewlineAtEnd { old, new } => {
+                if in_change {
+                    if old {
+                        left.push(NO_NEWLINE.to_owned());
+                    }
+                    if new {
+                        right.push(NO_NEWLINE.to_owned());
+                    }
+                } else {
+                    assert!(
+                        old && new,
+                        "a context line's marker is drawn in both columns"
+                    );
+                    some(hunks.last_mut(), "a row before its header")
+                        .lines
+                        .push(NO_NEWLINE.to_owned());
+                }
+            }
+        }
+    }
+    flush(&mut hunks, &mut left, &mut right);
+    hunks
+}
+
 /// What a comparison found.
 #[derive(Debug, Default)]
 pub struct Tally {
@@ -247,9 +342,22 @@ pub fn compare_commit_at(
         let extra: &[&str] = if whitespace { &["-w"] } else { &[] };
         let theirs = git_view(repo, &parent, commit, file, git_context, extra);
         let ours = cairn_view(&diff, cairn, whitespace);
+        let side = side_by_side_view(&diff, cairn, whitespace);
         tally.files += 1;
         tally.hunks += theirs.len();
         tally.with_function += theirs.iter().filter(|h| !h.function.is_empty()).count();
+        if side != theirs {
+            let first = side.iter().zip(&theirs).find(|(a, b)| a != b).map_or_else(
+                || format!("{} hunks against git's {}", side.len(), theirs.len()),
+                |(a, b)| format!("Cairn {a:?}\n    git {b:?}"),
+            );
+            tally.divergent.push(format!(
+                "{} side by side in {commit} at {cairn:?} against git at {git_context:?}{}:\n    \
+                 {first}",
+                file.new_path,
+                if whitespace { " -w" } else { "" }
+            ));
+        }
         if ours != theirs {
             let first = ours.iter().zip(&theirs).find(|(a, b)| a != b).map_or_else(
                 || format!("{} hunks against git's {}", ours.len(), theirs.len()),

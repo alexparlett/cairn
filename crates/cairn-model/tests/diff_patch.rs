@@ -57,7 +57,10 @@ fn side_by_side_identities(text: &TextDiff, context: Context) -> Vec<(bool, u32)
             }
             Some(SideBySideRow::Removed { old, .. }) => identities.push((true, old.index())),
             Some(SideBySideRow::Added { new, .. }) => identities.push((false, new.index())),
-            Some(SideBySideRow::Header(_)) | Some(SideBySideRow::Context { .. }) | None => {}
+            Some(SideBySideRow::Header(_))
+            | Some(SideBySideRow::Context { .. })
+            | Some(SideBySideRow::NoNewlineAtEnd { .. })
+            | None => {}
         }
     }
     identities
@@ -158,18 +161,23 @@ fn a_selection_and_its_patch_are_the_same_in_every_view() {
                     .changes()
                     .iter()
                     .any(|change| !change.removed.is_empty() && !change.added.is_empty());
-                // The unified rows also hold git's `\ No newline at end of file` markers,
-                // which side-by-side does not draw yet (phase 07): they are not pairing.
+                // Both views also hold git's `\ No newline at end of file` markers — a row
+                // each in unified, one row per change (or per ending context line) in
+                // side-by-side — which are not pairing: lines are counted without them.
                 let markers = (0..unified.len())
                     .filter(|n| matches!(unified.row(*n), Some(UnifiedRow::NoNewlineAtEnd)))
                     .count();
+                let side_markers = (0..side.len())
+                    .filter(|n| matches!(side.row(*n), Some(SideBySideRow::NoNewlineAtEnd { .. })))
+                    .count();
                 let unified_lines = unified.len() - markers;
+                let side_lines = side.len() - side_markers;
                 assert!(
-                    unified_lines >= side.len(),
+                    unified_lines >= side_lines,
                     "{name} at {context:?}: pairing grew"
                 );
                 assert_eq!(
-                    unified_lines > side.len(),
+                    unified_lines > side_lines,
                     pairs,
                     "{name} at {context:?}: the two views' row counts do not follow the pairing"
                 );

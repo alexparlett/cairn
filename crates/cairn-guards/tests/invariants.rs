@@ -769,10 +769,14 @@ fn every_production_view_names_every_variant(name: &str) {
     );
 }
 
-/// The matcher, over the row enums' own shapes: a wildcard or catch-all beside a header arm,
-/// an `if let` or `let .. else` taking one kind of row, `matches!` over one, a glob of the
-/// variants and a rename — each caught for `UnifiedRow` and for `SideBySideRow` — and a
-/// match naming every variant, as the views write it, passes.
+/// The matcher, over the row enums' own shapes — every shape the `RowContent` invariant
+/// lists, spelled for `UnifiedRow` and for `SideBySideRow` alike: a wildcard (guarded, bound,
+/// in an or-pattern, behind an attribute, by reference) or a catch-all binding (plain, `ref`,
+/// `mut`, underscored, by reference) beside a header arm; `Some(_)` beside `Some(row)`, since
+/// a layout's `row()` hands one back as an `Option`; an `if let` (nested in an `Option` too),
+/// `while let`, let-chain or `let .. else` taking one kind of row; `matches!` over one, spaced
+/// or not; and an import of the variants (a glob, braced or not, one variant, grouped) or a
+/// rename. A match naming every variant, as the views write it, passes.
 #[test]
 fn the_diff_row_matcher_catches_the_shapes_it_claims() {
     for row in ["UnifiedRow", "SideBySideRow"] {
@@ -782,14 +786,80 @@ fn the_diff_row_matcher_catches_the_shapes_it_claims() {
                 format!("match drawn {{\n    {row}::Header(h) => h,\n    _ => return,\n}}"),
             ),
             (
+                "guarded wildcard",
+                format!("match drawn {{\n    {row}::Header(h) => a(h),\n    _ if x => b(),\n}}"),
+            ),
+            (
+                "bound wildcard",
+                format!(
+                    "match drawn {{\n    {row}::Header(h) => a(h),\n    rest @ _ => b(rest),\n}}"
+                ),
+            ),
+            (
+                "wildcard in an or-pattern",
+                format!("match drawn {{\n    {row}::Header(h) | _ => a(),\n}}"),
+            ),
+            (
+                "attributed wildcard",
+                format!(
+                    "match drawn {{\n    {row}::Header(h) => a(h),\n    #[allow(unreachable_patterns)]\n    _ => b(),\n}}"
+                ),
+            ),
+            (
                 "catch-all binding",
                 format!(
                     "match drawn {{\n    {row}::Header(h) => a(h),\n    other => b(other),\n}}"
                 ),
             ),
             (
+                "ref binding",
+                format!(
+                    "match drawn {{\n    {row}::Header(h) => a(h),\n    ref other => b(other),\n}}"
+                ),
+            ),
+            (
+                "mut binding",
+                format!(
+                    "match drawn {{\n    {row}::Header(h) => a(h),\n    mut other => b(other),\n}}"
+                ),
+            ),
+            (
+                "underscore binding",
+                format!("match drawn {{\n    {row}::Header(h) => a(h),\n    _rest => b(),\n}}"),
+            ),
+            (
+                "reference wildcard",
+                format!("match &drawn {{\n    &{row}::Header(ref h) => a(h),\n    &_ => b(),\n}}"),
+            ),
+            (
+                "reference binding",
+                format!(
+                    "match &drawn {{\n    &{row}::Header(ref h) => a(h),\n    &other => b(other),\n}}"
+                ),
+            ),
+            (
+                "wrapped wildcard",
+                format!(
+                    "match layout.row(t, o, 0) {{\n    Some({row}::Header(h)) => a(h),\n    Some(_) => b(),\n    None => c(),\n}}"
+                ),
+            ),
+            (
                 "if let",
                 format!("if let {row}::Removed {{ line, .. }} = drawn {{ draw(line) }}"),
+            ),
+            (
+                "nested if let",
+                format!("if let Some({row}::Header(h)) = layout.row(t, o, 0) {{ draw(h) }}"),
+            ),
+            (
+                "while let",
+                format!("while let Some({row}::Header(h)) = rows.next() {{ draw(h) }}"),
+            ),
+            (
+                "let chain",
+                format!(
+                    "if ready && let Some({row}::Header(h)) = layout.row(t, o, 0) {{\n    draw(h);\n}}"
+                ),
             ),
             (
                 "let else",
@@ -799,7 +869,23 @@ fn the_diff_row_matcher_catches_the_shapes_it_claims() {
                 "matches!",
                 format!("let header = matches!(drawn, Some({row}::Header(_)));"),
             ),
+            (
+                "spaced matches!",
+                format!("assert!(matches! (\n    drawn,\n    {row}::Header(..)\n));"),
+            ),
             ("glob import", format!("use cairn_model::{row}::*;")),
+            (
+                "braced glob import",
+                format!("use cairn_model::{row}::{{self, *}};"),
+            ),
+            (
+                "variant import",
+                format!("use cairn_model::{row}::Header;\nif let Header(h) = x {{}}"),
+            ),
+            (
+                "grouped variant import",
+                format!("use cairn_model::{{{row}::Header, ShownDiff}};"),
+            ),
             ("renamed import", format!("use cairn_model::{row} as Row;")),
         ];
         for (shape, source) in &caught {

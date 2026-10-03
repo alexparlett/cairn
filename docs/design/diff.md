@@ -82,8 +82,13 @@ shows, filters included (`engine.md`, "Reads see git's form"). Spec:
   The patch model is independent of either.
 - The header carries previous and next change, the path with its filename
   emphasised, and toggles for ignore whitespace, fewer lines, more lines, entire
-  file and side-by-side. Context starts at three lines and moves one line per
-  click, never below one.
+  file and side-by-side, each a button with no chord, as in Fork; previous and
+  next change also answer Fork's chords while the diff pane has focus. Context
+  starts where the user's own `git diff` starts it — `diff.context`, three by
+  default — and moves one line per click, never below one; hunks are grouped as
+  their `git diff` groups them, `diff.interHunkContext` included. Every row is what
+  `git diff` prints: a context line from the side git prints it from, and git's
+  end-of-file marker as a row of its own.
 - A hunk header is git's whole `@@` line — the function context git prints after
   it, by the path's diff driver, included — in muted text at normal row height,
   with no band and no buttons; staging acts on a selection, not on the header

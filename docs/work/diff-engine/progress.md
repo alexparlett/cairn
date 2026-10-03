@@ -3,6 +3,137 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-03 — Phase 06: the unified diff view, its font and colours, and the bar
+
+Packet mode, committed to `feature/diff-engine`. Landed; QA is due (the orchestrator
+runs it). As-built: `docs/systems/diff.md`, "The diff view"; the model's and engine's
+parts under "Rows are reached one at a time" and "The display-only overlay".
+
+**The user's decisions this phase followed (2026-10-03).** The font download approved;
+Fork's chords only (side-by-side, ignore whitespace, more/fewer lines and the entire file
+have no chord, buttons only; previous/next change is `Scope::Detail`); git parity for
+every drawn row, including function context and `-w`; the view's default context is the
+user's `diff.context`, with `diff.interHunkContext` matched; R6.3's one-line floor
+stands. PRD R6.3 amended inline; `docs/design/diff.md` rewritten where it said three.
+
+**The font.** `IBMPlexMono-Regular.ttf` (173,052 bytes, SHA-256
+`7c6fbddca4b700be918f5f6183d9bd4464fa427fe435f0b480d77fe2bb8c5a43`; family
+"IBM Plex Mono", font version 2.005, advance 600/1000 em read from `hmtx`) and the
+package's `LICENSE.txt` as `IBMPlexMono-LICENSE.txt` (SIL OFL 1.1 with IBM's Reserved
+Font Name "Plex", 4,456 bytes, SHA-256
+`7e6b2818edbd8f6a01ae80641cc8f16a51080d08fb4e532be3a0b6f74adb07da`), both in
+`crates/cairn-app/assets/fonts/`, extracted from `ibm-plex-mono.zip` (6,940,652 bytes,
+SHA-256 `6d23f01257663d8cc49a0d64c22ced630b79e0e2a0ac08a0da86e9a38bbc481c`) of the
+GitHub release <https://github.com/IBM/plex/releases/tag/%40ibm/plex-mono%402.5.0>
+(tag `@ibm/plex-mono@2.5.0`, published 2026-06-11), downloaded with `gh release
+download`. Regular only: nothing draws bold diff text. Embedded with
+`LaunchConfig::with_font` (verified in the fork at `caa46f8`, `freya-winit/src/config.rs`);
+no new crate; `deny.toml` records the file and its licence beside the licence policy,
+which reads crates only.
+
+**Git parity, closed in the model and the engine.**
+
+- *`-w` drew the wrong side.* `UnifiedRows` read a context line from the old side and
+  grouped only the exact ranges; `git diff -w` prints context from the new side
+  (`xdl_emit_diff` emits from `xdf2`; measured: ` b` for old `  b`) and groups the
+  whitespace-ignoring ranges. `UnifiedLayout::shown` groups the overlay's ranges when
+  present; every context row is the new side's line (the same bytes without `-w`).
+- *`\ No newline at end of file` was not a row.* git prints it after a removed, added or
+  context line that did not end (a context line's end read from the new side, which is
+  what git prints under `-w`); it is now `UnifiedRow::NoNewlineAtEnd`, counted in the
+  row total. Side-by-side builds none yet (phase 07).
+- *An entire file of no change drew the whole file*; `git diff -U<len>` prints nothing.
+  Phase 01's `the_entire_file_of_an_unchanged_file_is_still_one_hunk` is replaced by
+  `the_entire_file_of_an_unchanged_file_is_no_hunk_as_git_prints_none` (a file whose
+  every change ignoring whitespace hides is the case a view meets).
+- *`diff.context` and `diff.interHunkContext` were not read.* Both are porcelain's
+  (`git_diff_ui_config`; `diff-tree`/`diff-index`/`diff-files` call
+  `git_diff_basic_config`, read at v2.30.9 and v2.56.0). `diff/hunk_grouping.rs` reads them
+  as `git_config_int` does (a bare key, a non-number, a negative value refused, measured
+  with git 2.56: `fatal: bad numeric config value`); `Repository::configured_context` is
+  the view's starting context; the inter-hunk context rides in `FunctionContext` and
+  `Hunks::of_ranges` merges across twice the context plus it (`xdl_get_hunk`; measured:
+  `-c diff.interHunkContext=2 diff -U1` merges a gap of four, splits five). git is **not**
+  asked with `--inter-hunk-context`: it was passed at first, and dropping it left
+  `the_view_groups_hunks_as_the_users_git_diff_does` GREEN — a merged hunk starts where
+  its first part does, at a start git printed function context for, and the ranges do
+  not depend on grouping — so it was removed rather than kept unpinned.
+- `an_untracked_answer_is_the_same_under_hostile_presentation_settings` now expects the
+  answer to carry `diff.interHunkContext=10` (grouping, not presentation) and everything
+  else unchanged.
+
+**Parity evidence.** The parity tests now read the view's own projection
+(`UnifiedRows::shown`) instead of rebuilding one: every header with its function
+context, every line with its marker and side, every end-of-file marker.
+`the_view_draws_what_git_diff_draws_at_every_context_with_whitespace_ignored_or_not`:
+the whitespace fixture (32 files of whitespace-only and mixed edits, plus three new
+files whose last line did not end — one gaining its newline, one never ending and
+changed only in whitespace, one with a context line respaced beside a real edit) at
+`-U1`, `-U3`, `-U8`, with and without `-w`, against `git diff [-w] -U<n>`; it checks
+that git printed the marker and printed a context line the old side holds otherwise.
+`the_view_groups_hunks_as_the_users_git_diff_does`: a clone of the discriminating
+fixture with `diff.context=5` and `diff.interHunkContext=3` (shown first to group
+differently from git's default), against plain `git diff` and `git diff -w` at the
+configured context, and `git diff -U1`; `diff.context=0` opens at one;
+`diff.context=abc` is `InvalidConfig`. The existing comparisons (every algorithm, the
+indent heuristic, a driver's algorithm, function context at one, three, five and eight,
+this repository's history, the working-tree queries) pass through the same projection.
+All of it also passes under git 2.30.9 and 2.32.7 (`git-floor`).
+
+**The view.** As `docs/systems/diff.md` describes. Decisions taken without asking, each
+recorded there: the diff is drawn in the Changes tab for the file chosen in the Commit
+tab, a press switching tabs and an arrow not (phase 07 gives the tab its own list, phase
+08 opens a file in place); side-by-side lands disabled here, whole in phase 07; more and
+fewer lines are disabled while the entire file is shown, which leaving restores the lines;
+the change moved to is marked by a wider accent separator, and the first next-change from
+an unmoved view finds the first change at or below the top even when it is in view (the
+opposite is Fork's open bug, TrackerWin #2393); a tab is eight columns, a CRLF's `\r` is not
+drawn and other controls are drawn as control pictures (Skia draws a tab as a box —
+measured headlessly, as was Skia's UTF-16 indexing of highlights); a renamed file's old
+path is a tooltip on the bar's path; the gutter scrolls sideways with the text (Fork's
+behaviour there was not established); a refused `diff.context` sends nothing at open and
+each diff fails with the configuration's error; a file's diff replaced by another is
+retired to the repository thread like a change set; the Commit tab's id, parents and
+paths are drawn in Plex Mono too (R6.6).
+
+**C9 and C11 tests, each shown RED under the named mutation, then GREEN.**
+
+| Test | Decides | Mutation that turned it RED |
+| --- | --- | --- |
+| `only_a_viewport_of_diff_rows_is_built_however_long_the_file` (C9, unified) | one viewport of rows at the top, deep and at the end of 1,000 and 100,000 lines; the end is the projection's last row; the view's length is the projection's | `.length(rows - 1)` |
+| `a_row_reads_the_same_with_its_colour_ignored` | numbers, blank gutter, marker, header with function context, end-of-file row, read as text | the removed marker blank |
+| `intra_line_ranges_are_drawn_in_the_stronger_tint` (C11) | highlights at UTF-16 columns after a tab, in each side's emphasis; none on context | highlights dropped; the added emphasis swapped for the removed |
+| `ignoring_whitespace_hides_whitespace_only_changes_and_says_so_only_then` (C11) | `-w` draws no row for a whitespace-only change; the notice only when something is hidden | `hides_a_change` read as false |
+| `the_bar_reports_each_button_and_holds_fewer_lines_at_one` (C11) | every button's action; fewer lines disabled at one; line buttons disabled for the entire file; side-by-side reports nothing | fewer lines always enabled |
+| `the_bar_says_changes_are_hidden_only_when_they_are` (C11) | the notice follows the answer, not the toggle | notice on `settings.ignore_whitespace()` |
+| `the_horizontal_extent_is_the_widest_lines_wherever_the_view_is` | every row the widest line's width, at the top and the end | `min_width(0)` |
+| `the_bar_moves_the_context_a_line_at_a_time_and_asks_again_never_below_one` (C11, app) | each button re-asks at its options, the floor, the shared settings for the next file | `ignore_whitespace` dropped from the options |
+| `a_pressed_file_draws_its_diff_in_the_changes_tab_for_that_query_alone` | the press asks and shows the tab; an answer at other options is not drawn | the press not showing the tab; `file_arrived` keeping any query |
+| `previous_and_next_change_move_the_diff_while_the_pane_has_focus` | the Detail-scoped chords and the bar's buttons move one change; not heard from the history | the direction inverted |
+| `the_configured_context_is_where_the_session_starts_until_the_user_moves_it` | `diff.context` adopted and re-asked; ignored once the user moved | `configured` ignoring `chosen` |
+| `choosing_another_file_hands_the_last_diff_to_a_worker` | the replaced diff retired; the answer prepared at its own context | the replaced diff dropped in place |
+| `context_moves_a_line_at_a_time_and_never_below_one` | the floor in `DiffSettings` | `lines < 1` (through the app that mutant alone stays GREEN — the button is disabled at one, a second guard) |
+| model: `a_context_line_is_the_new_sides_as_git_prints_it`, `the_inter_hunk_context_widens_the_gap_that_merges`, `the_view_draws_the_exact_ranges_grouped_as_git_was_asked` | the `-w` side; the grouping | the old side read; the inter-hunk context dropped |
+| git: `the_view_groups_hunks_as_the_users_git_diff_does`, `the_view_draws_what_git_diff_draws_at_every_context_with_whitespace_ignored_or_not` | parity with the user's configuration and `-w` | `with_inter_hunk_context(0)`; the old side read |
+| ui: `a_range_after_a_wide_character_lands_in_utf16_units` | byte ranges to UTF-16 | counting UTF-8 units |
+
+**Per frame and per row** (the QA brief). Per answer, once, on the UI thread: the row
+index (proportional to the changes), `hides_a_change` (the same), and one pass over the
+bytes for the widest line. Per frame: only the rows in view are built (C9). Per row: a
+binary search of the index, a binary search of the intra-line pairs, the line's own text
+built (tab expansion and the UTF-16 mapping in one pass over that line), two numbers
+formatted, a header row's string; colours are constants, never a theme lookup. Nothing
+grows with the file or the scroll offset; a row grows with its own line, which R2.6 bounds
+by default and R6.9's truncation (phase 07) bounds for a loaded file. The horizontal
+extent is measured once (above), so the scrollbar does not change as the view scrolls.
+
+**Deferred.** Phase 07: side-by-side (its end-of-file marker included), the Changes
+tab's own list, filter and summary, R6.8's notices in full and R6.9's truncation.
+Phase 08: a file's diff in place in the Commit tab (which will take the press that now
+switches tabs). Open for QA's view: whether the per-answer preparation belongs on the
+worker for a 64 MiB loaded file; whether the gutter should stay put when scrolling
+sideways; `UnifiedRow` has no guard twin (stated in `docs/systems/diff.md`).
+
 ## 2026-10-03 — Phase 05: the user's answers on dates and encodings
 
 Packet mode, committed to `feature/diff-engine`. The two items the last entry left

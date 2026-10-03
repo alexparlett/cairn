@@ -225,7 +225,9 @@ being a feature and being a rewrite.
 - R6.2 The header holds previous-change and next-change controls, the path with
   its filename emphasised, and toggles for **ignore whitespace**, **fewer lines**,
   **more lines**, **entire file** and **side-by-side**.
-- R6.3 Context defaults to three lines and moves by one line per click, never
+- R6.3 Context defaults to three lines — the user's `diff.context` where it is set, and
+  hunks grouped with their `diff.interHunkContext`, as their `git diff` does (amended
+  2026-10, phase 06, git parity, see progress.md) — and moves by one line per click, never
   below one; **entire file** shows every line. Context is one setting for every
   diff view, kept for the session. Expanding a single gap is issue #32.
 - R6.4 A unified row carries an old and a new line-number gutter and a

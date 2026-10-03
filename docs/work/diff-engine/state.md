@@ -30,8 +30,15 @@ Changes tabs, the tab kept for the session — draws the Commit tab (author, com
 full timestamps at their offsets, full id, parent links, whole message, a virtualised
 file list with renames' both names and the cut-short notice); the accelerator table
 (R8) and its guarded invariant "no component names a literal modifier" landed, and
-`DiffContent` is held to the RowContent rule in production code. No file's diff is
-drawn yet (phase 06).** The diff model exists in
+`DiffContent` is held to the RowContent rule in production code. Phase 06 landed
+(2026-10-03), QA due: a file pressed in the Commit tab has its diff drawn in the
+Changes tab as the unified rows `git diff` prints (context lines from the new side,
+git's end-of-file marker, hunks grouped with the user's `diff.interHunkContext`, the
+whitespace-ignoring ranges under `-w`), through the virtualising view, under Fork's bar
+(previous/next change, ignore whitespace with its notice only when something is hidden,
+fewer/more lines never below one, entire file, side-by-side disabled until phase 07);
+the context starts at the user's `diff.context`; Fork's colours are retuned tokens; IBM
+Plex Mono Regular is embedded with its OFL licence.** The diff model exists in
 `cairn-model`, and `cairn-git` answers R2's two queries: the changes query from
 `git diff-tree` through the process manager (decision E, PRD R2.1, R2.2, R2.9 and C14
 amended), honouring `diff.ignoreSubmodules` and `log.showRoot` as the user's `git log`
@@ -204,6 +211,17 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | `View::{history_scroll, detail_tab, pane_collapsed, pane_height}`, `window::PANE_HEIGHT`, `diff_state::answered_changes` | app | Phase 05: session state of the pane; the change set as the Commit tab reads it. |
 | `names_a_literal_modifier`, `MODIFIER_IDENTS`, `MODIFIER_METHODS`, `MODIFIER_TEXT`, `reads_enum_partially` | guards | Phase 05: the R8.3 matcher; the RowContent matcher generalised to `DiffContent`. |
 | `spells_a_chord`, `production_char_literals`, `names_an_element`, `ELEMENT_BUILDERS` | guards | Phase 05 QA: chord text in string and char literals with escapes read; the accelerator table held to data and resolution. |
+| `UnifiedRow::NoNewlineAtEnd`, `UnifiedLayout` (`exact`, `shown`, `row`, `change_rows`, `first_change_from`, `next_change_after`, `previous_change_before`), `UnifiedRows::shown`, `DrawnRanges`, `Hunks::of_ranges`, `FunctionContext::with_inter_hunk_context`/`inter_hunk_context` | model | Phase 06: the unified rows as `git diff [-w]` prints them (context from the new side, the end-of-file marker, no hunk without a change), an owning layout a view keeps across frames, git's grouping with `diff.interHunkContext`. |
+| `Repository::configured_context`, `diff::hunk_grouping::Grouping` | git | Phase 06: `diff.context` (raised to one) and `diff.interHunkContext` read as porcelain reads them; a value git refuses is `InvalidConfig` for every content query; the inter-hunk context carried in each answer's function context. |
+| `ShownDiff`, `UnifiedDiffView`, `DIFF_ROW_HEIGHT`, `NO_NEWLINE_AT_END`, `ChangeCursor`, `step_change` | ui (`diff_view.rs`) | Phase 06: one file's diff prepared once per answer; its rows through `VirtualScrollView` at a fixed height; previous/next change from the view or the change last moved to. |
+| `DiffHeader`, `HeaderAction`, `*_CAPTION`, `HIDDEN_CHANGES_NOTICE`, `DIFF_HEADER_HEIGHT` | ui (`diff_header.rs`) | Phase 06: Fork's bar, buttons only, side-by-side disabled; the notice only when the answer hides a change. |
+| `DiffSettings` | ui (`diff_settings.rs`) | Phase 06: the shared session settings — lines (never below one), entire file, ignore whitespace — starting at the configured context until the user moves it. |
+| `diff_palette` (`REMOVED_TINT`, `ADDED_TINT`, `*_EMPHASIS`, `DIFF_TEXT`, `DIFF_MUTED`, `GUTTER_SEPARATOR`, `HEADER_BAR`, `CURRENT_CHANGE`, `GROUND`, `retuned`, `DIFF_FONT_FAMILY`, `DIFF_FONT_SIZE`, `MONO_ADVANCE_EM`) | ui | Phase 06: Fork's measured dark values retuned to Cairn's ground, and IBM Plex Mono. |
+| `shown_line`, `ShownLine`, `TAB_WIDTH`, `widest_columns` | ui (`diff_line_text.rs`) | Phase 06: a line's bytes as a row draws them (tabs to eight, control pictures, a CRLF `\r` hidden), its intra-line byte ranges carried to UTF-16 units. |
+| `CommitTab::on_file_pressed` | ui | Phase 06: a press distinct from an arrow. |
+| `Request::ConfiguredContext`, `Update::ConfiguredContext`, `RepositoryJob::ConfiguredContext` | app (`worker/`) | Phase 06: `diff.context` read on the repository thread at open; nothing sent for a refused value. |
+| `diff_actions` (`choose_file`, `change_settings`, `configured`, `step`, `options`), `shortcuts::of_header`, `View::{diff_settings, diff_scroll, change_cursor}`, `diff_state::answered_file`, `DiffState::shown_file` | app | Phase 06: choosing a file, the shared settings re-asking through the lane, previous/next change; `select_file` now returns the query and a `Retire` for the replaced diff. |
+| `detail_pane::{NO_FILE_CHOSEN, READING_DIFF, NO_CHANGES_SHOWN, ONLY_WHITESPACE_CHANGED}` | app | Phase 06: the Changes tab's sentences (replacing `CHANGES_NOT_BUILT`). |
 | `Error::ChangesCancelled`, `ContentCancelled`, `ContentReadsDisagree`, `DiffSetup`, `DiffFile`, `UnexpectedGitOutput`, `InvalidConfig`, `NotAWorkTreePath` | git | What the caller of a diff query must handle; `TreeDiff` went with the gix tree walk. `ContentReadsDisagree` is the stale-read guard: git printed lines that are not the lines gix read; ask again. `NotAWorkTreePath`: an untracked path that is empty, absolute or has a `.`/`..` component, refused before anything runs. |
 
 ## Validation status
@@ -215,7 +233,7 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | 03 engine, working tree | landed 2026-10-03; **phase 03 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 19 raw, 16 confirmed by `qa-confirm`, QC3 dismissed; every confirmed finding fixed test-first (`progress.md`); the `diff --no-index` exception accepted by the user (2026-10-03); a full read-verb roster guard is a candidate follow-up for the user |
 | 04 worker lanes | landed 2026-10-03; **phase 04 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 17 raw, 15 confirmed plus escalations; the user decided freshness ("stamp what git reads"); every confirmed finding fixed test-first, Expand All's per-file outcomes deferred to phase 08 — `progress.md` |
 | 05 detail pane | landed 2026-10-03; **phase 05 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 26 raw, 15 confirmed by `qa-confirm`, R3/G5 and one more dismissed; every confirmed finding fixed test-first and the user's six decisions applied (`progress.md`): dates in Fork's fixed English format, encodings through `encoding_rs` (user-approved) |
-| 06 unified diff view | not started | — | — |
+| 06 unified diff view | landed 2026-10-03; **phase 06 landed, QA due** | `scripts/gate.sh` PASS, `git-floor` included | due: `/qa` with `responsiveness-reviewer` and `test-coverage-auditor` fresh, plus the phase's QA brief |
 | 07 Changes tab and side-by-side | not started | — | — |
 | 08 expansion and compare | not started | — | — |
 | 09 QA | not started | — | — |
@@ -244,8 +262,12 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 - Commit explicit paths, never `git add -A`.
 - A new dependency, crate or invariant needs its row in
   `crates/cairn-guards/tests/invariants.rs` in the same commit, or the gate fails.
-- **Phase 06 needs a font file that is not in the repository yet.** Downloading it
-  is the user's call: ask, with the file, its source and its size, and do not
-  fetch it unprompted.
+- **The diff font is in the repository** (user-approved download, 2026-10-03):
+  `crates/cairn-app/assets/fonts/IBMPlexMono-Regular.ttf` (173,052 bytes, SHA-256
+  `7c6fbddca4b700be918f5f6183d9bd4464fa427fe435f0b480d77fe2bb8c5a43`) with
+  `IBMPlexMono-LICENSE.txt` (SIL OFL 1.1, 4,456 bytes, SHA-256
+  `7e6b2818edbd8f6a01ae80641cc8f16a51080d08fb4e532be3a0b6f74adb07da`), from
+  `ibm-plex-mono.zip` of IBM/plex's release `@ibm/plex-mono@2.5.0`. Another weight or
+  face is another download for the user to approve.
 - The remote is `github.com/alexparlett/cairn`. Issues and pull requests go there;
   every pull request is merged by the user, never by a session.

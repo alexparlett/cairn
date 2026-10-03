@@ -716,6 +716,7 @@ fn a_submodule_answers_its_commit_ids_rather_than_lines() {
         DiffContent::Submodule {
             old_target: Some(first),
             new_target: Some(second),
+            dirty: false,
         },
         "a submodule answers where it points, not lines"
     );

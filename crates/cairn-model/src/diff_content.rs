@@ -74,6 +74,10 @@ pub enum DiffContent {
     Submodule {
         old_target: Option<Oid>,
         new_target: Option<Oid>,
+        /// The new side is a working tree whose checkout of the submodule has changes of
+        /// its own — what `git diff` prints as `-dirty` after the commit (R3.4). Always
+        /// false where the new side is a commit or the index, which record no such thing.
+        dirty: bool,
     },
     /// The content is the same on both sides; only the mode moved.
     ModeChangeOnly,
@@ -148,6 +152,30 @@ mod tests {
         assert_eq!(limits.load_anyway_bytes, 64 * 1024 * 1024);
     }
 
+    /// A submodule whose checkout has changes of its own, at the commit the index
+    /// records, is a change `git diff` shows (`-dirty`), so it is a different answer
+    /// from the same submodule clean — never folded into "no change". Caught by: the
+    /// flag dropped from equality, or from the variant.
+    #[test]
+    fn a_dirty_submodule_is_a_different_answer_from_a_clean_one() {
+        let at = Oid::parse("07da224c7ec04501dfb451be161fa962effe1dc1").unwrap();
+        let clean = DiffContent::Submodule {
+            old_target: Some(at),
+            new_target: Some(at),
+            dirty: false,
+        };
+        let dirty = DiffContent::Submodule {
+            old_target: Some(at),
+            new_target: Some(at),
+            dirty: true,
+        };
+        assert_ne!(clean, dirty);
+        let DiffContent::Submodule { dirty: flagged, .. } = dirty else {
+            panic!("not a submodule: {dirty:?}");
+        };
+        assert!(flagged);
+    }
+
     /// Caught by: answering with a text diff for a state that has none, which would draw
     /// an empty file where a notice belongs.
     #[test]
@@ -171,6 +199,7 @@ mod tests {
             DiffContent::Submodule {
                 old_target: None,
                 new_target: None,
+                dirty: false,
             },
             DiffContent::ModeChangeOnly,
             DiffContent::Conflicted,

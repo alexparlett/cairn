@@ -506,6 +506,7 @@ fn prepare(
         return Ok(Prepared::Done(DiffContent::Submodule {
             old_target: file.old_id,
             new_target: file.new_id,
+            dirty: false,
         }));
     }
 

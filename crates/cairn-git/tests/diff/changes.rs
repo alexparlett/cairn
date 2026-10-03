@@ -799,3 +799,47 @@ fn in_a_partial_clone_a_rename_search_fails_rather_than_fetching() {
     );
     assert_eq!(packs(&clone_path.join(".git")), before, "the read fetched");
 }
+
+/// A shallow clone keeps its boundary commit's parent ids and drops the parents. git's
+/// own `git log` reads the shallow file and shows that commit as a root; so does the
+/// query, where comparing with the parent named in the commit would fail on an object
+/// the clone does not have. The commit above the boundary is compared as usual. Caught
+/// by: reading the first parent from the commit alone.
+#[test]
+fn a_shallow_clones_boundary_commit_is_compared_as_git_log_shows_it() {
+    let source = repositories::crafted();
+    let holder = Repo::new("shallow-holder");
+    let clone_path = holder.path().join("clone");
+    let url = format!("file://{}", source.path().display());
+    holder.git(&[
+        "clone",
+        "-q",
+        "--depth",
+        "2",
+        &url,
+        &clone_path.to_string_lossy(),
+    ]);
+    let clone = Repo::borrowed(&clone_path);
+    for commit in ["HEAD~1", "HEAD"] {
+        let id = hex(&clone, commit);
+        let found = changes_of(
+            &clone,
+            &ChangesRequest::commit(Oid::parse(&id).expect("an id")),
+        );
+        let (rows, _) = shown(&clone, &id);
+        assert_eq!(cairn_rows(&found.files, id.len()), rows, "{commit}");
+    }
+    let boundary = hex(&clone, "HEAD~1");
+    let found = changes_of(
+        &clone,
+        &ChangesRequest::commit(Oid::parse(&boundary).expect("an id")),
+    );
+    assert!(
+        found
+            .files
+            .iter()
+            .all(|file| matches!(file.status, ChangeStatus::Added)),
+        "the boundary is shown as a root: {:?}",
+        found.files
+    );
+}

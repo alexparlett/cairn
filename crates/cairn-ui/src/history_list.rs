@@ -30,6 +30,7 @@ pub struct HistoryList {
     on_select: EventHandler<RowId>,
     on_reach_end: EventHandler<()>,
     row: Callback<RowRender, Element>,
+    controller: Option<ScrollController>,
     key: DiffKey,
 }
 
@@ -42,8 +43,16 @@ impl HistoryList {
             on_select: EventHandler::new(|_| {}),
             on_reach_end: EventHandler::new(|()| {}),
             row: Callback::new(row),
+            controller: None,
             key: DiffKey::None,
         }
+    }
+
+    /// Scrolls the list through `controller` rather than one of its own, so its caller can
+    /// reveal a row the list did not choose (a parent link's, through [`reveal_row`]).
+    pub fn controller(mut self, controller: ScrollController) -> Self {
+        self.controller = Some(controller);
+        self
     }
 
     pub fn lanes(mut self, lanes: usize) -> Self {
@@ -76,6 +85,7 @@ impl PartialEq for HistoryList {
         self.rows == other.rows
             && self.lanes == other.lanes
             && self.selected == other.selected
+            && self.controller == other.controller
             && self.key == other.key
     }
 }
@@ -123,7 +133,9 @@ impl Component for HistoryList {
     fn render(&self) -> impl IntoElement {
         let list_id = use_a11y();
         let focus = use_focus(list_id);
-        let controller = use_scroll_controller(ScrollConfig::default);
+        // Resolved unconditionally, so the hook count holds whichever controller is used.
+        let own = use_scroll_controller(ScrollConfig::default);
+        let controller = self.controller.unwrap_or(own);
         // A hint, checked against the row at that index before use.
         let cursor = use_state(|| 0usize);
 
@@ -205,10 +217,15 @@ impl HistoryList {
             e.stop_propagation();
             cursor.set(next);
             on_select.call(id);
-            // The selected row usually has no element yet, so reveal by offset.
-            controller.scroll_to_offset(next as f32 * ROW_HEIGHT, ROW_HEIGHT, Direction::Vertical);
+            reveal_row(&mut controller, next);
         }
     }
+}
+
+/// Scrolls a history list driven by `controller` until row `index` is in view. By offset:
+/// the row usually has no element yet.
+pub fn reveal_row(controller: &mut ScrollController, index: usize) {
+    controller.scroll_to_offset(index as f32 * ROW_HEIGHT, ROW_HEIGHT, Direction::Vertical);
 }
 
 /// Where `key` moves a selection at `current`; `None` for a key this list does not own.

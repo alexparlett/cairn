@@ -31,14 +31,21 @@ pub(crate) enum Glyph {
     MoreLines,
     EntireFile,
     SideBySide,
+    /// A file in the Commit tab's list, closed: its diff opens under it when pressed (Fork's
+    /// Windows disclosure, Finding 4).
+    Closed,
+    /// A file opened in place.
+    Open,
 }
 
 impl Glyph {
     /// The glyph in `colour`, centred in its box.
     pub(crate) fn draw(self, colour: Color) -> Rect {
         let shape: Element = match self {
-            Self::PreviousChange => chevron(colour, true).into(),
-            Self::NextChange => chevron(colour, false).into(),
+            Self::PreviousChange => chevron(colour, Pointing::Up).into(),
+            Self::NextChange => chevron(colour, Pointing::Down).into(),
+            Self::Closed => chevron(colour, Pointing::Right).into(),
+            Self::Open => chevron(colour, Pointing::Down).into(),
             Self::IgnoreWhitespace => rect()
                 .width(Size::px(12.))
                 .height(Size::px(5.))
@@ -116,17 +123,27 @@ fn over_lines(sign: Element, colour: Color) -> Rect {
         .child(bar(colour, 12., STROKE))
 }
 
-/// A chevron: a square's two sides, turned a quarter of the way round.
-fn chevron(colour: Color, up: bool) -> Rect {
-    let sides = if up {
-        (STROKE, 0., 0., STROKE)
-    } else {
-        (0., STROKE, STROKE, 0.)
+/// Which way a chevron points.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pointing {
+    Up,
+    Down,
+    Right,
+}
+
+/// A chevron: a square's two sides, turned an eighth of the way round.
+fn chevron(colour: Color, pointing: Pointing) -> Rect {
+    // (top, right, bottom, left), and the nudge that centres the point in the box.
+    let (sides, (x, y)) = match pointing {
+        Pointing::Up => ((STROKE, 0., 0., STROKE), (0., 2.)),
+        Pointing::Down => ((0., STROKE, STROKE, 0.), (0., -2.)),
+        Pointing::Right => ((STROKE, STROKE, 0., 0.), (-2., 0.)),
     };
     rect()
         .width(Size::px(7.))
         .height(Size::px(7.))
-        .offset_y(if up { 2. } else { -2. })
+        .offset_x(x)
+        .offset_y(y)
         .border(stroke_border(colour, sides))
         .rotation(45.)
 }

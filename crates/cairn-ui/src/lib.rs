@@ -15,6 +15,7 @@ pub mod diff_palette;
 mod diff_row_parts;
 mod diff_settings;
 mod diff_view;
+mod expansion;
 mod file_filter;
 mod graph_cell;
 pub mod graph_geometry;
@@ -34,8 +35,9 @@ pub use commit_row::{
     ROW_PADDING,
 };
 pub use commit_tab::{
-    AUTHOR_CAPTION, COMMITTER_CAPTION, CommitTab, DETAIL_ROW_HEIGHT, ID_CAPTION, NO_FILES,
-    PARENTS_CAPTION, cut_short_notice, file_text, status_letter,
+    AUTHOR_CAPTION, COLLAPSE_ALL_CAPTION, COMMITTER_CAPTION, CommitTab, DETAIL_ROW_HEIGHT,
+    EXPAND_ALL_CAPTION, ID_CAPTION, NO_FILES, PARENTS_CAPTION, READING_DIFF, budget_notice,
+    cut_short_notice, file_text, status_letter,
 };
 pub use credential_prompt::CredentialPrompt;
 pub use detail_tabs::{
@@ -50,15 +52,16 @@ pub use diff_line_text::{ShownLine, TAB_WIDTH, cut_marker, shown_line};
 pub use diff_notice::{
     BINARY_FILE, CONFLICTED, COPIED_MODE_CHANGED, COPIED_WITHOUT_CHANGES, DiffNotice,
     DiffNoticeView, LFS_POINTER, LOAD_DIFF_CAPTION, MODE_CHANGED, NEW_SIDE, NO_CHANGES_SHOWN,
-    NO_CONTENT_CHANGE, OLD_SIDE, ONLY_WHITESPACE_CHANGED, RENAMED_MODE_CHANGED,
-    RENAMED_WITHOUT_CHANGES, SUBMODULE, TOO_LARGE_TO_DISPLAY, header_lines, size_text,
-    subproject_line, too_large_reason,
+    NO_CONTENT_CHANGE, NoticeRow, NoticeTone, OLD_SIDE, ONLY_WHITESPACE_CHANGED,
+    RENAMED_MODE_CHANGED, RENAMED_WITHOUT_CHANGES, SUBMODULE, TOO_LARGE_TO_DISPLAY, header_lines,
+    notice_rows, size_text, subproject_line, too_large_reason,
 };
 pub use diff_settings::DiffSettings;
 pub use diff_view::{
     ChangeCursor, DIFF_ROW_HEIGHT, DiffView, NO_NEWLINE_AT_END, content_width, step_change,
     text_width,
 };
+pub use expansion::{Expansion, Opened};
 pub use file_filter::ShownFiles;
 pub use graph_geometry::{LANE_WIDTH, MAX_DRAWN_LANES, ROW_HEIGHT, graph_width};
 pub use history_list::{HistoryList, PREFETCH_ROWS, RowRender, reveal_row};

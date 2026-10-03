@@ -11,8 +11,8 @@ use cairn_model::{
 use cairn_ui::{
     BINARY_FILE, CONFLICTED, COPIED_MODE_CHANGED, COPIED_WITHOUT_CHANGES, DiffNotice,
     DiffNoticeView, LFS_POINTER, LOAD_DIFF_CAPTION, MODE_CHANGED, NEW_SIDE, NO_CHANGES_SHOWN,
-    NO_CONTENT_CHANGE, OLD_SIDE, ONLY_WHITESPACE_CHANGED, RENAMED_MODE_CHANGED,
-    RENAMED_WITHOUT_CHANGES, SUBMODULE, TOO_LARGE_TO_DISPLAY, size_text,
+    NO_CONTENT_CHANGE, NoticeRow, OLD_SIDE, ONLY_WHITESPACE_CHANGED, RENAMED_MODE_CHANGED,
+    RENAMED_WITHOUT_CHANGES, SUBMODULE, TOO_LARGE_TO_DISPLAY, notice_rows, size_text,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -360,4 +360,126 @@ fn a_text_diff_with_rows_has_no_notice() {
         },
     );
     assert_eq!(DiffNotice::of(&diff), None);
+}
+
+/// Every sample of each state that is not text, for the tests that hold two drawings of a
+/// notice to one another.
+fn every_notice_sample() -> Vec<ShownDiff> {
+    let unchanged = TextDiff::new(
+        vec![DiffLine::terminated("same")],
+        vec![DiffLine::terminated("same")],
+        Vec::new(),
+    );
+    let respaced = TextDiff::new(
+        vec![DiffLine::terminated("  a")],
+        vec![DiffLine::terminated("a")],
+        vec![cairn_model::ChangedRange::new(
+            cairn_model::LineSpan::at(0, 1),
+            cairn_model::LineSpan::at(0, 1),
+        )],
+    );
+    let pointer = "version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 12\n";
+    let mut gitlink = file(ChangeStatus::Modified);
+    gitlink.old_mode = Some(FileMode::Submodule);
+    gitlink.new_mode = Some(FileMode::Submodule);
+    let mut chmod = file(ChangeStatus::Modified);
+    chmod.new_mode = Some(FileMode::Executable);
+    let mut moved = file(ChangeStatus::Copied(Similarity::from_percent(100)));
+    moved.new_mode = Some(FileMode::Executable);
+    let too_large = |loadable: bool, measured: u64| DiffContent::TooLarge {
+        crossed: SizeLimit::Bytes {
+            limit: 1_048_576,
+            measured,
+        },
+        loadable,
+    };
+    vec![
+        shown(
+            file(ChangeStatus::Modified),
+            DiffContent::Binary {
+                old_size: 2_048,
+                new_size: 1_048_576,
+            },
+        ),
+        shown(
+            file(ChangeStatus::Added),
+            DiffContent::Binary {
+                old_size: 0,
+                new_size: 10,
+            },
+        ),
+        shown(file(ChangeStatus::Modified), too_large(true, 2_532_736)),
+        shown(file(ChangeStatus::Modified), too_large(false, 75_812_045)),
+        shown(
+            file(ChangeStatus::Modified),
+            DiffContent::LfsPointer {
+                old: Some(pointer.to_owned()),
+                new: Some(pointer.replace("abc", "def")),
+            },
+        ),
+        shown(
+            gitlink,
+            DiffContent::Submodule {
+                old_target: Some(oid(1)),
+                new_target: Some(oid(2)),
+                dirty: true,
+            },
+        ),
+        shown(chmod, DiffContent::ModeChangeOnly),
+        shown(moved, DiffContent::ModeChangeOnly),
+        shown(
+            file(ChangeStatus::Renamed(Similarity::from_percent(100))),
+            DiffContent::Text {
+                text: unchanged.clone(),
+                overlay: DisplayOverlay::none(),
+            },
+        ),
+        shown(file(ChangeStatus::Modified), DiffContent::Conflicted),
+        shown(
+            file(ChangeStatus::Modified),
+            DiffContent::Unsupported {
+                reason: "the index is a sparse index".to_owned(),
+            },
+        ),
+        shown(
+            file(ChangeStatus::Modified),
+            DiffContent::Text {
+                text: unchanged,
+                overlay: DisplayOverlay::none(),
+            },
+        ),
+        shown(
+            file(ChangeStatus::Modified),
+            DiffContent::Text {
+                text: respaced,
+                overlay: DisplayOverlay::new(Some(Vec::new()), Vec::new()),
+            },
+        ),
+    ]
+}
+
+/// Phase 08: a notice standing in place of a file's rows under its row in the Commit tab
+/// (`cairn_ui::notice_rows`, one row each) says exactly the words the Changes tab's notice
+/// draws, in the same order, for every state — Load Diff only where it is offered. Caught
+/// by: a state given other words in place (a submodule called binary under its row), a
+/// side's size or caption dropped, or Load Diff offered past the ceiling.
+#[test]
+fn every_notice_says_the_same_words_in_place_as_in_the_changes_tab() {
+    for sample in every_notice_sample() {
+        let notice = DiffNotice::of(&sample)
+            .unwrap_or_else(|| panic!("no notice for {:?}", sample.diff().content));
+        let (drawn, _) = draw(&sample);
+        let in_place: Vec<String> = notice_rows(&notice)
+            .into_iter()
+            .flat_map(|row| match row {
+                NoticeRow::Title(words) | NoticeRow::Muted(words) => vec![words],
+                NoticeRow::Side { caption, text, .. } => {
+                    std::iter::once(caption.to_owned()).chain(text).collect()
+                }
+                NoticeRow::Git { text, .. } => vec![text],
+                NoticeRow::LoadDiff => vec![LOAD_DIFF_CAPTION.to_owned()],
+            })
+            .collect();
+        assert_eq!(in_place, drawn, "{notice:?}");
+    }
 }

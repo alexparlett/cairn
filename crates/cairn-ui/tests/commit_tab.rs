@@ -10,7 +10,8 @@ use cairn_model::{
 use cairn_ui::accelerators::{self, Action, Os, Scope};
 use cairn_ui::{
     AUTHOR_CAPTION, COLLAPSE_CAPTION, COMMITTER_CAPTION, CommitTab, DETAIL_ROW_HEIGHT, DetailTab,
-    DetailTabs, EXPAND_CAPTION, ID_CAPTION, NO_FILES, PARENTS_CAPTION, cut_short_notice,
+    DetailTabs, EXPAND_ALL_CAPTION, EXPAND_CAPTION, ID_CAPTION, NO_FILES, PARENTS_CAPTION,
+    cut_short_notice,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -210,8 +211,8 @@ fn the_commit_tab_shows_every_field_r5_3_names() {
 
 /// T3, R5.3: the message is the rows git shows for it, row for row and nothing between —
 /// the blank lines before and after it gone, each line without its trailing whitespace or
-/// `\r`, blank lines inside it kept, a tab expanded — between the last parent and the
-/// first file. Caught by: popping only one trailing empty line, keeping the leading blank
+/// `\r`, blank lines inside it kept, a tab expanded — between the last parent and Expand
+/// All above the first file. Caught by: popping only one trailing empty line, keeping the leading blank
 /// lines or a `\r`, dropping a blank line inside, or drawing the tab raw.
 #[test]
 fn the_message_is_the_rows_git_log_shows_for_it() {
@@ -226,8 +227,10 @@ fn the_message_is_the_rows_git_log_shows_for_it() {
         .iter()
         .position(|text| text == "docs/old-name.md → docs/new-name.md")
         .unwrap_or_else(|| panic!("no first file: {shown:?}"));
-    // Between them: the message, then the first file's badge.
-    let message: Vec<&str> = shown[after_parents..files - 1]
+    // Between them: the message, Expand All above the files (phase 08), then the first
+    // file's badge.
+    assert_eq!(shown[files - 2], EXPAND_ALL_CAPTION, "{shown:?}");
+    let message: Vec<&str> = shown[after_parents..files - 2]
         .iter()
         .map(String::as_str)
         .collect();

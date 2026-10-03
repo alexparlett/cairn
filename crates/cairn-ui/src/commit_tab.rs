@@ -9,6 +9,14 @@
 //! line is never wrapped, as git never re-wraps one; a line wider than the pane scrolls
 //! sideways rather than being cut.
 //!
+//! A file's diff opens in place under its row (phase 08, R5.3; Fork, Finding 4): a file
+//! pressed reports it, and the caller opens or closes it; what an opened file draws — its rows,
+//! unified or side by side as the shared setting says, the notice that stands in their place,
+//! or that it is being read or could not be — is read from an [`Expansion`] and drawn as more
+//! rows of the same list, at the same height, so a commit with any number of files open still
+//! builds one viewport of rows. Above the files, Fork's Expand All (Collapse All while any file
+//! is open) and, when Expand All stopped at its line budget, how many files it left collapsed.
+//!
 //! No avatar and no ref chips (L9), and the tab never asks for anything: a parent link
 //! reports the parent and the caller decides what pressing it reaches. The commit's id, its
 //! parents and the files' paths are drawn in the diff's typeface, IBM Plex Mono (R6.6).
@@ -19,11 +27,38 @@ use std::rc::Rc;
 use cairn_model::{ChangeSet, ChangeStatus, ChangedFile, Oid, Signature};
 use freya::prelude::*;
 
-use crate::diff_palette::DIFF_FONT_FAMILY;
+use crate::diff_header::HIDDEN_CHANGES_NOTICE;
+use crate::diff_notice::{DiffNotice, NoticeRow, NoticeTone, grouped, notice_rows};
+use crate::diff_palette::{
+    ADDED_EMPHASIS, DIFF_FONT_FAMILY, DIFF_FONT_SIZE, DIFF_MUTED, DIFF_TEXT, REMOVED_EMPHASIS,
+};
+use crate::diff_view::{RowGeometry, draw_row};
+use crate::expansion::{Expansion, Item, Opened};
+use crate::toggle_glyphs::Glyph;
 use crate::{accelerators, date_text, message_lines};
 
-/// Every row of the tab is this tall: a fixed size is what keeps the list O(viewport).
+/// Every row of the tab is this tall — a file opened in place's rows too, its diff's among
+/// them: a fixed size is what keeps the list O(viewport), and the virtualising view lays
+/// rows of one size out without a walk (the Commit tab's one pitch, Cairn's; the Changes tab's
+/// diff keeps Fork's 17 px, `DIFF_ROW_HEIGHT`).
 pub const DETAIL_ROW_HEIGHT: f32 = 24.0;
+
+/// Fork's control above the files that opens every file (Finding 4).
+pub const EXPAND_ALL_CAPTION: &str = "Expand All";
+/// What it turns into while any file is open.
+pub const COLLAPSE_ALL_CAPTION: &str = "Collapse All";
+/// Said under a file opened in place while its diff is on its way.
+pub const READING_DIFF: &str = "Reading the diff…";
+
+/// Said beside Expand All when it stopped with its line budget spent (R5.3): how many of the
+/// commit's files it left collapsed.
+pub fn budget_notice(collapsed: usize) -> String {
+    format!(
+        "Expand All stopped at its line budget: {} file{} left collapsed.",
+        grouped(collapsed as u64),
+        if collapsed == 1 { "" } else { "s" }
+    )
+}
 
 const FONT_SIZE: f32 = 13.0;
 const SUBJECT_FONT_SIZE: f32 = 15.0;
@@ -100,6 +135,8 @@ enum Line {
     Body(String),
     CutShort(usize),
     NoFiles,
+    /// Expand All, above the files, and what it stopped at.
+    FilesBar,
 }
 
 /// The rows above the files, for `changes`. Proportional to the message, never to the
@@ -141,6 +178,8 @@ fn header_lines(changes: &ChangeSet) -> Vec<Line> {
     }
     if changes.files.is_empty() {
         lines.push(Line::NoFiles);
+    } else {
+        lines.push(Line::FilesBar);
     }
     lines
 }
@@ -183,16 +222,21 @@ fn cached_header(cache: &HeaderCache, changes: &ChangeSet) -> Rc<Vec<Line>> {
 }
 
 /// The Commit tab over one change set. `changes` is a handle, not a copy: the files are read
-/// by index as rows are built, so a commit of any size costs one viewport per frame.
+/// by index as rows are built, so a commit of any size costs one viewport per frame; so is
+/// `expansion`, what each file opened in place draws.
 ///
 /// The tab takes focus when it is pressed or reached with Tab, and while it has it, ↑ and ↓
 /// move the current file — Fork's previous and next file (user decision 6), keys of the
 /// focused list rather than chords. A chord pressed here is left for whoever hears it.
 pub struct CommitTab {
     changes: Readable<ChangeSet>,
+    expansion: Readable<Expansion>,
+    side_by_side: bool,
     on_parent: EventHandler<Oid>,
     on_file: EventHandler<usize>,
     on_file_pressed: EventHandler<usize>,
+    on_expand_all: EventHandler<bool>,
+    on_load: EventHandler<usize>,
     key: DiffKey,
 }
 
@@ -200,11 +244,28 @@ impl CommitTab {
     pub fn new(changes: impl Into<Readable<ChangeSet>>) -> Self {
         Self {
             changes: changes.into(),
+            expansion: Readable::from_value(Expansion::new()),
+            side_by_side: false,
             on_parent: EventHandler::new(|_| {}),
             on_file: EventHandler::new(|_| {}),
             on_file_pressed: EventHandler::new(|_| {}),
+            on_expand_all: EventHandler::new(|_| {}),
+            on_load: EventHandler::new(|_| {}),
             key: DiffKey::None,
         }
+    }
+
+    /// What the files opened in place draw, by their index in the change set.
+    pub fn expansion(mut self, expansion: impl Into<Readable<Expansion>>) -> Self {
+        self.expansion = expansion.into();
+        self
+    }
+
+    /// Draw opened files side by side rather than unified: the one setting every diff view
+    /// shares (R6.1; users report Fork's Commit-tab diffs follow it, Finding 4).
+    pub fn side_by_side(mut self, side_by_side: bool) -> Self {
+        self.side_by_side = side_by_side;
+        self
     }
 
     /// A parent link was pressed. Whether that parent can be reached is the caller's to
@@ -215,16 +276,29 @@ impl CommitTab {
     }
 
     /// A file became the current one — pressed, or reached with ↑ or ↓ — by its index in the
-    /// change set's files. What that shows is the caller's (its diff, from phase 06).
+    /// change set's files.
     pub fn on_file(mut self, on_file: impl Into<EventHandler<usize>>) -> Self {
         self.on_file = on_file.into();
         self
     }
 
     /// A file was pressed — after [`Self::on_file`] reports it current — as distinct from
-    /// reached with an arrow. What a press opens is the caller's (phase 06: its diff).
+    /// reached with an arrow: Fork opens a pressed file in place, and closes an open one
+    /// (Finding 4). Which it does is the caller's.
     pub fn on_file_pressed(mut self, on_file_pressed: impl Into<EventHandler<usize>>) -> Self {
         self.on_file_pressed = on_file_pressed.into();
+        self
+    }
+
+    /// Expand All (`true`) or Collapse All (`false`) was pressed.
+    pub fn on_expand_all(mut self, on_expand_all: impl Into<EventHandler<bool>>) -> Self {
+        self.on_expand_all = on_expand_all.into();
+        self
+    }
+
+    /// Load Diff was pressed under the file opened in place at this index (R6.8).
+    pub fn on_load(mut self, on_load: impl Into<EventHandler<usize>>) -> Self {
+        self.on_load = on_load.into();
         self
     }
 }
@@ -232,7 +306,10 @@ impl CommitTab {
 // Hand-written: `EventHandler` never compares equal, and its identity is stable.
 impl PartialEq for CommitTab {
     fn eq(&self, other: &Self) -> bool {
-        self.changes == other.changes && self.key == other.key
+        self.changes == other.changes
+            && self.expansion == other.expansion
+            && self.side_by_side == other.side_by_side
+            && self.key == other.key
     }
 }
 
@@ -252,13 +329,26 @@ impl KeyExt for CommitTab {
 #[derive(Clone)]
 struct TabContent {
     changes: Readable<ChangeSet>,
+    expansion: Readable<Expansion>,
     lines: Rc<Vec<Line>>,
     files: usize,
+    /// The rows the opened files add, read as the tab renders: a file opening or closing
+    /// changes the list's length.
+    added: usize,
+    side_by_side: bool,
     on_parent: EventHandler<Oid>,
     on_file: EventHandler<usize>,
     on_file_pressed: EventHandler<usize>,
+    on_expand_all: EventHandler<bool>,
+    on_load: EventHandler<usize>,
     /// The tab's focus target, which a pressed row takes.
     tab_id: AccessibilityId,
+}
+
+impl TabContent {
+    fn length(&self) -> usize {
+        self.lines.len() + self.files + self.added
+    }
 }
 
 impl PartialEq for TabContent {
@@ -266,6 +356,8 @@ impl PartialEq for TabContent {
         // The header is cached, so an unchanged one is the same allocation: no compare.
         (Rc::ptr_eq(&self.lines, &other.lines) || self.lines == other.lines)
             && self.files == other.files
+            && self.added == other.added
+            && self.side_by_side == other.side_by_side
             && self.tab_id == other.tab_id
     }
 }
@@ -278,6 +370,10 @@ struct TabData {
     /// The current file, by index into the files; drawn highlighted.
     current: Option<usize>,
     cursor: State<Option<usize>>,
+    /// The tab's width, which a side-by-side diff's columns are halves of.
+    view_width: f32,
+    /// Read as a side-by-side row is built, for the sideways scroll its text slides by.
+    scroll: ScrollController,
 }
 
 /// One commit's list. Keyed by the commit, so another commit is a list of its own: it opens
@@ -306,12 +402,15 @@ impl Component for TabBody {
         let focus = use_focus(tab_id);
         let controller = use_scroll_controller(ScrollConfig::default);
         let cursor = use_state(|| None::<usize>);
+        let mut width = use_state(|| 0.0f32);
         let data = TabData {
             content: self.content.clone(),
             current: *cursor.read(),
             cursor,
+            view_width: *width.read(),
+            scroll: controller,
         };
-        let length = data.content.lines.len() + data.content.files;
+        let length = data.content.length();
         let border = colours().border_focus;
 
         rect()
@@ -320,6 +419,7 @@ impl Component for TabBody {
             .a11y_focusable(true)
             .a11y_role(AccessibilityRole::List)
             .on_key_down(keyboard(&data, controller))
+            .on_sized(move |e: Event<SizedEventData>| width.set_if_modified(e.area.width()))
             .maybe(focus() == Focus::Keyboard, |el| {
                 el.border(Border::new().fill(border).width(1.))
             })
@@ -344,6 +444,7 @@ fn keyboard(
     mut controller: ScrollController,
 ) -> impl FnMut(Event<KeyboardEventData>) + 'static {
     let (files, header) = (data.content.files, data.content.lines.len());
+    let (expansion, side_by_side) = (data.content.expansion.clone(), data.content.side_by_side);
     let mut cursor = data.cursor;
     let on_file = data.content.on_file.clone();
     move |e: Event<KeyboardEventData>| {
@@ -363,8 +464,10 @@ fn keyboard(
         e.stop_propagation();
         cursor.set(Some(next));
         on_file.call(next);
+        // Past the rows the files opened above it add.
+        let row = header + expansion.peek().position(next, side_by_side);
         controller.scroll_to_offset(
-            (header + next) as f32 * DETAIL_ROW_HEIGHT,
+            row as f32 * DETAIL_ROW_HEIGHT,
             DETAIL_ROW_HEIGHT,
             Direction::Vertical,
         );
@@ -386,13 +489,19 @@ impl Component for CommitTab {
                 identity,
             )
         };
+        let added = self.expansion.read().added_rows(self.side_by_side);
         let content = TabContent {
             changes: self.changes.clone(),
+            expansion: self.expansion.clone(),
             lines,
             files,
+            added,
+            side_by_side: self.side_by_side,
             on_parent: self.on_parent.clone(),
             on_file: self.on_file.clone(),
             on_file_pressed: self.on_file_pressed.clone(),
+            on_expand_all: self.on_expand_all.clone(),
+            on_load: self.on_load.clone(),
             tab_id,
         };
 
@@ -417,31 +526,184 @@ fn build_row(item: VirtualItem, data: &TabData) -> Element {
         .main_align(Alignment::Center)
         .padding(Gaps::new(0., PADDING, 0., PADDING));
     let content = &data.content;
-    let Some(index) = item.index.checked_sub(content.lines.len()) else {
+    let Some(at) = item.index.checked_sub(content.lines.len()) else {
         return match content.lines.get(item.index) {
+            Some(Line::FilesBar) => row.child(files_bar(content)).into(),
             Some(line) => row.child(header_row(line, &content.on_parent)).into(),
             None => row.into(),
         };
     };
+    // Read, not peeked: the list redraws when a file opens, closes or is answered.
+    let placed = content.expansion.read().item(at, content.side_by_side);
+    match placed {
+        Item::File(index) => file_item(row, index, data),
+        Item::Under { file, row: under } => under_row(item, file, under, data),
+    }
+}
+
+/// A changed file's own row: its disclosure, status letter and path; pressed, it becomes the
+/// current file and is reported pressed.
+fn file_item(row: Rect, index: usize, data: &TabData) -> Element {
+    let content = &data.content;
     // Read, not peeked: the list redraws when the answer it shows is replaced.
     let Some(drawn) = content.changes.read().files.get(index).map(file_row) else {
         // The count and the files can disagree for one frame; an empty row of the right
         // height stands in.
         return row.into();
     };
+    let open = content.expansion.read().is_open(index);
     let (tab_id, mut cursor, on_file) = (content.tab_id, data.cursor, content.on_file.clone());
     let on_file_pressed = content.on_file_pressed.clone();
-    row.maybe(data.current == Some(index), |el| {
-        el.background(colours().surface_secondary)
-    })
-    .on_press(move |_| {
-        tab_id.request_focus();
-        cursor.set(Some(index));
-        on_file.call(index);
-        on_file_pressed.call(index);
-    })
-    .child(drawn)
-    .into()
+    row.horizontal()
+        .cross_align(Alignment::Center)
+        .maybe(data.current == Some(index), |el| {
+            el.background(colours().surface_secondary)
+        })
+        .on_press(move |_| {
+            tab_id.request_focus();
+            cursor.set(Some(index));
+            on_file.call(index);
+            on_file_pressed.call(index);
+        })
+        .child(if open { Glyph::Open } else { Glyph::Closed }.draw(colours().text_secondary))
+        .child(drawn)
+        .into()
+}
+
+/// Row `under` of what the file opened in place at `file` draws under its own row.
+fn under_row(item: VirtualItem, file: usize, under: usize, data: &TabData) -> Element {
+    let content = &data.content;
+    let plain = |text: Label| -> Element {
+        rect()
+            .key(item.index)
+            .min_width(Size::fill())
+            .height(Size::px(item.size))
+            .main_align(Alignment::Center)
+            .padding(Gaps::new(0., PADDING, 0., PADDING))
+            .child(text)
+            .into()
+    };
+    let expansion = content.expansion.read();
+    let Some(opened) = expansion.get(file) else {
+        // Closed between the count and this row, for one frame.
+        return plain(label());
+    };
+    match opened {
+        Opened::Reading => plain(text(READING_DIFF, FONT_SIZE, colours().text_placeholder)),
+        Opened::Failed(message) => plain(text(message.clone(), FONT_SIZE, colours().error)),
+        Opened::Shown(shown) => {
+            if let Some(notice) = DiffNotice::of(shown) {
+                let rows = notice_rows(&notice);
+                return match rows.get(under) {
+                    Some(NoticeRow::LoadDiff) => {
+                        let on_load = content.on_load.clone();
+                        rect()
+                            .key(item.index)
+                            .height(Size::px(item.size))
+                            .main_align(Alignment::Center)
+                            .padding(Gaps::new(0., PADDING, 0., PADDING))
+                            .child(
+                                Button::new()
+                                    .compact()
+                                    .on_press(move |_| on_load.call(file))
+                                    .child(crate::diff_notice::LOAD_DIFF_CAPTION),
+                            )
+                            .into()
+                    }
+                    Some(row) => plain(notice_line(row)),
+                    None => plain(label()),
+                };
+            }
+            let hides = shown.hides_changes();
+            if hides && under == 0 {
+                return plain(text(HIDDEN_CHANGES_NOTICE, FONT_SIZE, DIFF_MUTED));
+            }
+            let geometry = RowGeometry::of(
+                shown,
+                content.side_by_side,
+                data.view_width,
+                None,
+                data.scroll,
+            );
+            draw_row(
+                item.index,
+                under - usize::from(hides),
+                item.size,
+                shown,
+                &geometry,
+            )
+        }
+    }
+}
+
+/// One row of a notice standing in place of an opened file's rows: the words the Changes tab's
+/// notice draws, a line each.
+fn notice_line(row: &NoticeRow) -> Label {
+    let tone = |tone: &NoticeTone| match tone {
+        NoticeTone::Old => REMOVED_EMPHASIS,
+        NoticeTone::New => ADDED_EMPHASIS,
+        NoticeTone::Plain => DIFF_TEXT,
+    };
+    match row {
+        NoticeRow::Title(words) => text(words.clone(), FONT_SIZE, DIFF_TEXT),
+        NoticeRow::Muted(words) => text(words.clone(), CAPTION_FONT_SIZE + 1., DIFF_MUTED),
+        NoticeRow::Side {
+            caption,
+            tone: side,
+            text: words,
+        } => label()
+            .max_lines(1)
+            .font_size(CAPTION_FONT_SIZE + 1.)
+            .color(tone(side))
+            .text(match words {
+                Some(words) => format!("{caption}  {words}"),
+                None => (*caption).to_owned(),
+            }),
+        NoticeRow::Git {
+            text: words,
+            tone: line,
+        } => text(words.clone(), DIFF_FONT_SIZE, tone(line)).font_family(DIFF_FONT_FAMILY),
+        NoticeRow::LoadDiff => text(crate::diff_notice::LOAD_DIFF_CAPTION, FONT_SIZE, DIFF_TEXT),
+    }
+}
+
+/// Expand All, right-aligned above the files as Fork places it (Finding 4) — Collapse All
+/// while any file is open — and, when Expand All stopped at its line budget, how many files
+/// it left collapsed.
+fn files_bar(content: &TabContent) -> Element {
+    let (any_open, stopped, collapsed) = {
+        let expansion = content.expansion.read();
+        (
+            !expansion.is_empty(),
+            expansion.stopped_at_budget(),
+            content.files.saturating_sub(expansion.len()),
+        )
+    };
+    let on_expand_all = content.on_expand_all.clone();
+    rect()
+        .horizontal()
+        .content(Content::Flex)
+        .width(Size::fill())
+        .cross_align(Alignment::Center)
+        .spacing(GAP)
+        .child(rect().width(Size::flex(1.)).maybe_child(stopped.then(|| {
+            text(
+                budget_notice(collapsed),
+                FONT_SIZE,
+                colours().text_secondary,
+            )
+        })))
+        .child(
+            Button::new()
+                .compact()
+                .on_press(move |_| on_expand_all.call(!any_open))
+                .child(if any_open {
+                    COLLAPSE_ALL_CAPTION
+                } else {
+                    EXPAND_ALL_CAPTION
+                }),
+        )
+        .into()
 }
 
 fn colours() -> ColorsSheet {
@@ -514,6 +776,8 @@ fn header_row(line: &Line, on_parent: &EventHandler<Oid>) -> Element {
             text(cut_short_notice(*needed), FONT_SIZE, colours.warning).into()
         }
         Line::NoFiles => text(NO_FILES, FONT_SIZE, colours.text_placeholder).into(),
+        // Drawn by the list, which holds what it reads (`files_bar`).
+        Line::FilesBar => rect().into(),
     }
 }
 

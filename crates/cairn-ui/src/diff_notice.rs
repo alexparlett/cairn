@@ -150,6 +150,122 @@ impl DiffNotice {
     }
 }
 
+/// How a line of a notice is coloured: a side's own colour, or the diff's text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoticeTone {
+    Old,
+    New,
+    Plain,
+}
+
+/// One row of a notice where it must be drawn as rows of one height: under a file opened in
+/// place in the Commit tab (R5.3), whose list is one virtualised list of equal rows. The same
+/// words [`DiffNoticeView`] draws, from the same [`DiffNotice`], one line each
+/// (`every_notice_says_the_same_words_in_place_as_in_the_changes_tab`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoticeRow {
+    /// What the state is.
+    Title(String),
+    /// Muted words under it: a size, a reason, nothing shown.
+    Muted(String),
+    /// A side's caption, Fork's "Old" or "New", and what that side holds when it is one line.
+    Side {
+        caption: &'static str,
+        tone: NoticeTone,
+        text: Option<String>,
+    },
+    /// A line git prints, in the diff's typeface.
+    Git { text: String, tone: NoticeTone },
+    /// Load Diff, for a file past the limits that can be loaded.
+    LoadDiff,
+}
+
+/// `notice` as rows, in the order [`DiffNoticeView`] draws its words. One match naming every
+/// state, so a state added does not compile until it is given rows.
+pub fn notice_rows(notice: &DiffNotice) -> Vec<NoticeRow> {
+    let title = |text: &str| NoticeRow::Title(text.to_owned());
+    let mut rows = Vec::new();
+    match notice {
+        DiffNotice::Binary { old, new } => {
+            rows.push(title(BINARY_FILE));
+            for (caption, tone, size) in [
+                (OLD_SIDE, NoticeTone::Old, old),
+                (NEW_SIDE, NoticeTone::New, new),
+            ] {
+                if let Some(size) = size {
+                    rows.push(NoticeRow::Side {
+                        caption,
+                        tone,
+                        text: Some(size_text(*size)),
+                    });
+                }
+            }
+        }
+        DiffNotice::TooLarge { crossed, loadable } => {
+            rows.push(title(TOO_LARGE_TO_DISPLAY));
+            rows.push(NoticeRow::Muted(too_large_reason(*crossed, *loadable)));
+            if *loadable {
+                rows.push(NoticeRow::LoadDiff);
+            }
+        }
+        DiffNotice::LfsPointer { old, new } => {
+            rows.push(title(LFS_POINTER));
+            for (caption, tone, pointer) in [
+                (OLD_SIDE, NoticeTone::Old, old),
+                (NEW_SIDE, NoticeTone::New, new),
+            ] {
+                if let Some(pointer) = pointer {
+                    rows.push(NoticeRow::Side {
+                        caption,
+                        tone,
+                        text: None,
+                    });
+                    rows.extend(pointer.lines().map(|line| NoticeRow::Git {
+                        text: line.to_owned(),
+                        tone: NoticeTone::Plain,
+                    }));
+                }
+            }
+        }
+        DiffNotice::Submodule { old, new, dirty } => {
+            rows.push(title(SUBMODULE));
+            if let Some(id) = old {
+                rows.push(NoticeRow::Git {
+                    text: format!("-{}", subproject_line(*id, false)),
+                    tone: NoticeTone::Old,
+                });
+            }
+            if let Some(id) = new {
+                rows.push(NoticeRow::Git {
+                    text: format!("+{}", subproject_line(*id, *dirty)),
+                    tone: NoticeTone::New,
+                });
+            }
+        }
+        DiffNotice::NoContentChange {
+            title: words,
+            lines,
+        } => {
+            rows.push(title(words));
+            rows.extend(lines.iter().map(|line| NoticeRow::Git {
+                text: line.clone(),
+                tone: NoticeTone::Plain,
+            }));
+        }
+        DiffNotice::Conflicted => rows.push(title(CONFLICTED)),
+        DiffNotice::Unsupported { reason } => rows.push(title(reason)),
+        DiffNotice::NothingShown { hides_changes } => rows.push(NoticeRow::Muted(
+            if *hides_changes {
+                ONLY_WHITESPACE_CHANGED
+            } else {
+                NO_CHANGES_SHOWN
+            }
+            .to_owned(),
+        )),
+    }
+    rows
+}
+
 /// git's extended header lines for `file` — `old mode`/`new mode`, then `similarity index`
 /// and `rename from`/`rename to` (or `copy from`/`copy to`) — as `git diff` prints them;
 /// none for a file that is neither renamed, copied nor changed in mode.

@@ -16,14 +16,14 @@
 //! the new side's, in both columns; git's `\ No newline at end of file` stands in the column
 //! of the side whose last line did not end.
 
-use cairn_model::{ByteRange, LineNumber, SideBySideRow};
+use cairn_model::{ByteRange, LineNumber, ShownDiff, SideBySideRow};
 use freya::prelude::*;
 
 use crate::diff_palette::{DIFF_MUTED, FILLER, GUTTER_SEPARATOR};
 use crate::diff_row_parts::{
     LineKind, MARKER_WIDTH, SEPARATOR_WIDTH, line_text, marker, number, separator, words,
 };
-use crate::diff_view::{NO_NEWLINE_AT_END, RowsData, header_words};
+use crate::diff_view::{NO_NEWLINE_AT_END, RowGeometry, header_words};
 
 /// The rule between the two columns.
 pub(crate) const MIDDLE_WIDTH: f32 = SEPARATOR_WIDTH;
@@ -73,7 +73,14 @@ enum Cell<'a> {
     Filler,
 }
 
-pub(crate) fn build(item: VirtualItem, data: &RowsData) -> Element {
+/// Row `index` of `shown`'s side-by-side rows, `size` tall, keyed by `key`.
+pub(crate) fn build(
+    key: usize,
+    index: usize,
+    size: f32,
+    shown: &ShownDiff,
+    data: &RowGeometry,
+) -> Element {
     let (scrolled_x, _): (i32, i32) = data.scroll.into();
     let columns = Columns::of(
         data.view_width,
@@ -82,18 +89,16 @@ pub(crate) fn build(item: VirtualItem, data: &RowsData) -> Element {
         scrolled_x as f32,
     );
     let row = rect()
-        .key(item.index)
+        .key(key)
         .horizontal()
         .width(Size::px(columns.row_width()))
-        .height(Size::px(item.size));
-    // Read, not peeked: the list redraws when the answer it shows is replaced.
-    let shown = data.shown.read();
+        .height(Size::px(size));
     let Some((text, overlay)) = shown.text() else {
         return row.into();
     };
     let Some(drawn) = shown
         .side_by_side_layout()
-        .and_then(|layout| layout.row(text, overlay, item.index))
+        .and_then(|layout| layout.row(text, overlay, index))
     else {
         // The count and the answer can disagree for one frame.
         return row.into();
@@ -101,7 +106,7 @@ pub(crate) fn build(item: VirtualItem, data: &RowsData) -> Element {
     let current = data
         .current
         .as_ref()
-        .is_some_and(|rows| rows.contains(&item.index));
+        .is_some_and(|rows| rows.contains(&index));
     let note = |present: bool| {
         if present {
             Cell::Note(NO_NEWLINE_AT_END.to_owned())
@@ -181,7 +186,7 @@ pub(crate) fn build(item: VirtualItem, data: &RowsData) -> Element {
 
 /// One column: its number, the separator, and its text area clipped to the column, the text
 /// slid by the sideways scroll.
-fn column(cell: Cell<'_>, columns: Columns, data: &RowsData, current: bool) -> Rect {
+fn column(cell: Cell<'_>, columns: Columns, data: &RowGeometry, current: bool) -> Rect {
     let (at, tint, content): (Option<LineNumber>, Option<Color>, Option<Rect>) = match cell {
         Cell::Line {
             at,

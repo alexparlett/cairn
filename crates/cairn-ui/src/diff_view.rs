@@ -186,12 +186,11 @@ impl KeyExt for DiffView {
     }
 }
 
-/// What decides which rows are drawn, passed to the virtualising view: data captured in its
-/// builder is invisible to its diffing.
+/// Where a row's parts go and how it is marked — everything a row is drawn with but the answer
+/// it reads: what the diff view hands its rows, and what the Commit tab hands a file opened in
+/// place under its row, so both draw one row the same way.
 #[derive(Clone)]
-pub(crate) struct RowsData {
-    pub(crate) shown: Readable<ShownDiff>,
-    pub(crate) rows: usize,
+pub(crate) struct RowGeometry {
     pub(crate) side_by_side: bool,
     /// The unified rows' least width.
     pub(crate) width: f32,
@@ -205,10 +204,30 @@ pub(crate) struct RowsData {
     pub(crate) scroll: ScrollController,
 }
 
-impl PartialEq for RowsData {
+impl RowGeometry {
+    /// The geometry of `shown`'s rows in a view `view_width` wide scrolled by `scroll`.
+    pub(crate) fn of(
+        shown: &ShownDiff,
+        side_by_side: bool,
+        view_width: f32,
+        current: Option<Range<usize>>,
+        scroll: ScrollController,
+    ) -> Self {
+        Self {
+            side_by_side,
+            width: content_width(shown),
+            number_width: number_column_width(shown),
+            text_width: text_width(shown),
+            view_width,
+            current,
+            scroll,
+        }
+    }
+}
+
+impl PartialEq for RowGeometry {
     fn eq(&self, other: &Self) -> bool {
-        self.rows == other.rows
-            && self.side_by_side == other.side_by_side
+        self.side_by_side == other.side_by_side
             && self.width == other.width
             && self.number_width == other.number_width
             && self.text_width == other.text_width
@@ -217,11 +236,34 @@ impl PartialEq for RowsData {
     }
 }
 
+/// What decides which rows are drawn, passed to the virtualising view: data captured in its
+/// builder is invisible to its diffing.
+#[derive(Clone, PartialEq)]
+struct RowsData {
+    shown: Readable<ShownDiff>,
+    rows: usize,
+    geometry: RowGeometry,
+}
+
 fn build_row(item: VirtualItem, data: &RowsData) -> Element {
-    if data.side_by_side {
-        side_by_side_rows::build(item, data)
+    // Read, not peeked: the list redraws when the answer it shows is replaced.
+    let shown = data.shown.read();
+    draw_row(item.index, item.index, item.size, &shown, &data.geometry)
+}
+
+/// Row `row` of `shown`, `size` tall and keyed by `key`, unified or side by side as `geometry`
+/// says.
+pub(crate) fn draw_row(
+    key: usize,
+    row: usize,
+    size: f32,
+    shown: &ShownDiff,
+    geometry: &RowGeometry,
+) -> Element {
+    if geometry.side_by_side {
+        side_by_side_rows::build(key, row, size, shown, geometry)
     } else {
-        unified_rows::build(item, data)
+        unified_rows::build(key, row, size, shown, geometry)
     }
 }
 
@@ -236,22 +278,23 @@ impl Component for DiffView {
             RowsData {
                 shown: self.shown.clone(),
                 rows: shown.rows(self.side_by_side),
-                side_by_side: self.side_by_side,
-                width: content_width(&shown),
-                number_width: number_column_width(&shown),
-                text_width: text_width(&shown),
-                view_width,
-                current: self.current.clone(),
-                scroll: self.scroll,
+                geometry: RowGeometry::of(
+                    &shown,
+                    self.side_by_side,
+                    view_width,
+                    self.current.clone(),
+                    self.scroll,
+                ),
             }
         };
         let rows = data.rows;
         // How far the view scrolls sideways: past the unified rows' width, or through a
         // side-by-side column's overflow.
-        let width = if data.side_by_side {
-            Columns::of(view_width, data.number_width, data.text_width, 0.0).row_width()
+        let geometry = &data.geometry;
+        let width = if geometry.side_by_side {
+            Columns::of(view_width, geometry.number_width, geometry.text_width, 0.0).row_width()
         } else {
-            data.width
+            geometry.width
         };
         let scroll = self.scroll;
 

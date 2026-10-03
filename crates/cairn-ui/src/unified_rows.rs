@@ -6,31 +6,36 @@
 //! button (Fork, Finding 13); git's `\ No newline at end of file` is a muted row of its own.
 //! The gutter scrolls sideways with the text.
 
-use cairn_model::{ByteRange, LineNumber, UnifiedRow};
+use cairn_model::{ByteRange, LineNumber, ShownDiff, UnifiedRow};
 use freya::prelude::*;
 
 use crate::diff_palette::DIFF_MUTED;
 use crate::diff_row_parts::{LineKind, MARKER_WIDTH, line_text, marker, number, separator, words};
-use crate::diff_view::{NO_NEWLINE_AT_END, RowsData, header_words};
+use crate::diff_view::{NO_NEWLINE_AT_END, RowGeometry, header_words};
 
-pub(crate) fn build(item: VirtualItem, data: &RowsData) -> Element {
+/// Row `index` of `shown`'s unified rows, `size` tall, keyed by `key`.
+pub(crate) fn build(
+    key: usize,
+    index: usize,
+    size: f32,
+    shown: &ShownDiff,
+    data: &RowGeometry,
+) -> Element {
     let row = rect()
-        .key(item.index)
+        .key(key)
         .horizontal()
         .content(Content::Flex)
         // As wide as the view, or as the widest line where that is wider: the tint reaches
         // the edge, and the extent is the answer's, whichever rows are built.
         .width(Size::fill())
         .min_width(Size::px(data.width))
-        .height(Size::px(item.size));
-    // Read, not peeked: the list redraws when the answer it shows is replaced.
-    let shown = data.shown.read();
+        .height(Size::px(size));
     let Some((text, overlay)) = shown.text() else {
         return row.into();
     };
     let Some(drawn) = shown
         .layout()
-        .and_then(|layout| layout.row(text, overlay, item.index))
+        .and_then(|layout| layout.row(text, overlay, index))
     else {
         // The count and the answer can disagree for one frame; an empty row of the right
         // height stands in.
@@ -39,7 +44,7 @@ pub(crate) fn build(item: VirtualItem, data: &RowsData) -> Element {
     let current = data
         .current
         .as_ref()
-        .is_some_and(|rows| rows.contains(&item.index));
+        .is_some_and(|rows| rows.contains(&index));
     let number_width = data.number_width;
     match drawn {
         UnifiedRow::Header(header) => {

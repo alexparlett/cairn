@@ -274,7 +274,9 @@ mod tests {
         let of = Comparison::Commit(commits(&handle, &mut updates, 1)[0]);
         let (test, mut view, asked) = launch(FetchStatus::Idle);
 
-        handle.submit(test.run_in(|| view.diff.write().select_changes(of)));
+        for request in test.run_in(|| view.diff.write().select_changes(of)) {
+            handle.submit(request);
+        }
         test.run_in(|| view.diff.write().clear());
         applying(&test, view, &asked, changes_answer(&mut updates, of));
         assert_eq!(
@@ -283,7 +285,9 @@ mod tests {
             "a change set was drawn with nothing selected"
         );
 
-        handle.submit(test.run_in(|| view.diff.write().select_changes(of)));
+        for request in test.run_in(|| view.diff.write().select_changes(of)) {
+            handle.submit(request);
+        }
         applying(&test, view, &asked, changes_answer(&mut updates, of));
         let kept = test.run_in(|| {
             view.diff

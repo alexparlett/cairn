@@ -896,3 +896,25 @@ fn a_working_tree_diff_answers_through_the_boundary() {
     );
     drop(handle);
 }
+
+/// R2: a change set handed back to the worker is freed there without an answer, and the
+/// repository thread goes on serving: the next request asked after it is answered first.
+/// Caught by: a retirement answered with an update, or one that ends the thread.
+#[test]
+fn a_retired_change_set_is_freed_on_the_worker_without_an_answer() {
+    let (handle, mut updates) = checkout();
+    let ids = commits(&handle, &mut updates, 2);
+    let of = Comparison::Commit(ids[1]);
+    let kept = change_set(&handle, &mut updates, of);
+    let retired = super::request::Retired::of(Some(kept), Vec::new())
+        .unwrap_or_else(|| unreachable!("a change set is something to retire"));
+
+    handle.submit(Request::Retire(retired));
+    handle.submit(Request::ListRemotes);
+    let seen = collect_until(&mut updates, |u| matches!(u, Update::Remotes { .. }));
+    assert_eq!(
+        seen.len(),
+        1,
+        "the retirement was answered, or the thread stopped serving: {seen:?}"
+    );
+}

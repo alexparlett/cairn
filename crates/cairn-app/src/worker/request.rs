@@ -111,6 +111,33 @@ impl DiffQuery {
     }
 }
 
+/// Answers the window has let go of, handed to a worker thread to be freed there rather than
+/// on the UI thread: dropping a change set of 55,184 files took 1.2-2.0 ms (release build,
+/// measured 2026-10-03, R2) — more than a frame can spare, for nothing the window draws.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Retired(Box<RetiredAnswers>);
+
+/// Boxed, so a request carrying them is a pointer wide.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RetiredAnswers {
+    changes: Option<ChangeSet>,
+    diffs: Vec<FileDiff>,
+}
+
+impl Retired {
+    /// What is let go of: a change set, and file diffs. `None` when that is nothing.
+    pub fn of(changes: Option<ChangeSet>, diffs: Vec<FileDiff>) -> Option<Self> {
+        (changes.is_some() || !diffs.is_empty())
+            .then(|| Self(Box::new(RetiredAnswers { changes, diffs })))
+    }
+
+    /// The change set let go of, for a test that checks what was handed over.
+    #[cfg(test)]
+    pub fn changes(&self) -> Option<&ChangeSet> {
+        self.0.changes.as_ref()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
     /// Starts a walk at `HEAD`, abandoning any walk already open.
@@ -155,6 +182,9 @@ pub enum Request {
         )
     )]
     CommandLog,
+    /// Frees answers the window no longer keeps, on the repository thread. Superseding
+    /// nothing, and answered by nothing.
+    Retire(Retired),
     /// Closes the repository: stops any walk, ends every `git` running in it
     /// and waits a bounded time for their reaps — on the worker, never the
     /// caller — then lets every worker thread go, which ends the update
@@ -176,6 +206,7 @@ impl Request {
             | Self::Fetch { .. }
             | Self::CancelFetch
             | Self::CommandLog
+            | Self::Retire(_)
             | Self::Close => None,
         }
     }
@@ -291,6 +322,10 @@ mod tests {
             },
             Request::CancelFetch,
             Request::CommandLog,
+            Request::Retire(Retired(Box::new(RetiredAnswers {
+                changes: None,
+                diffs: Vec::new(),
+            }))),
             Request::Close,
         ] {
             assert_eq!(operation.lane(), None, "{operation:?}");

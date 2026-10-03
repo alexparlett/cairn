@@ -36,9 +36,12 @@ pub fn choose(id: RowId, view: View, submit: Option<&dyn Fn(Request)>) {
     if asked {
         return;
     }
-    let request = diff.write().select_changes(of);
+    // The query, then the answers it replaces, which are freed on a worker.
+    let requests = diff.write().select_changes(of);
     if let Some(submit) = submit {
-        submit(request);
+        for request in requests {
+            submit(request);
+        }
     }
 }
 

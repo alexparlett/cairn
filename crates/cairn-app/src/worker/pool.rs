@@ -665,6 +665,8 @@ fn serve(
                     records: shared.command_log(),
                 },
             ),
+            // Freed here, off the UI thread, which is the whole of the job.
+            RepositoryJob::Retire(retired) => drop(retired),
             // The epochs were stopped as it was sent; the closing is the caller's.
             RepositoryJob::Close => break,
         }

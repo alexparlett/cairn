@@ -6,6 +6,7 @@
 //! | changes (`Changes`) | `cairn-diff` |
 //! | file diff (`FileDiff`, `ExpandAll`) | `cairn-diff` |
 //! | `ListRemotes`, `CommandLog`, `Close`, `Fetch` | `cairn-repository` (a fetch is forwarded on to the network lane) |
+//! | `Retire` | `cairn-repository`, which frees what it is handed |
 //! | `CancelFetch` | none: the fetch's control, from the caller's thread |
 //!
 //! [`route`] is the table, applied to every request as it is submitted: it hands each one
@@ -21,7 +22,7 @@
 
 #[cfg(test)]
 use super::epoch::QueryLane;
-use super::request::{DiffQuery, FileQuery, Request};
+use super::request::{DiffQuery, FileQuery, Request, Retired};
 
 /// A thread a repository's requests are served on.
 #[cfg(test)]
@@ -56,8 +57,12 @@ pub(super) enum Page {
 pub(super) enum RepositoryJob {
     History(Page),
     ListRemotes,
-    Fetch { remote: String },
+    Fetch {
+        remote: String,
+    },
     CommandLog,
+    /// Answers to free; the job does nothing else.
+    Retire(Retired),
     Close,
 }
 
@@ -100,6 +105,7 @@ pub(super) fn route(request: Request) -> Routed {
         Request::ListRemotes => Routed::Repository(RepositoryJob::ListRemotes),
         Request::Fetch { remote } => Routed::Repository(RepositoryJob::Fetch { remote }),
         Request::CommandLog => Routed::Repository(RepositoryJob::CommandLog),
+        Request::Retire(retired) => Routed::Repository(RepositoryJob::Retire(retired)),
         Request::Close => Routed::Repository(RepositoryJob::Close),
         Request::CancelFetch => Routed::CancelFetch,
     }
@@ -119,6 +125,7 @@ pub(super) fn unroute(routed: Routed) -> Request {
         Routed::Repository(RepositoryJob::ListRemotes) => Request::ListRemotes,
         Routed::Repository(RepositoryJob::Fetch { remote }) => Request::Fetch { remote },
         Routed::Repository(RepositoryJob::CommandLog) => Request::CommandLog,
+        Routed::Repository(RepositoryJob::Retire(retired)) => Request::Retire(retired),
         Routed::Repository(RepositoryJob::Close) => Request::Close,
         Routed::Diff(DiffQuery::Changes(of)) => Request::Changes { of },
         Routed::Diff(DiffQuery::File(query)) => Request::FileDiff(query),
@@ -155,6 +162,17 @@ mod tests {
             },
             Request::CancelFetch,
             Request::CommandLog,
+            Request::Retire(
+                Retired::of(
+                    Some(cairn_model::ChangeSet {
+                        files: Vec::new(),
+                        details: None,
+                        renames: cairn_model::RenameDetection::default(),
+                    }),
+                    Vec::new(),
+                )
+                .unwrap_or_else(|| unreachable!("a change set is something to retire")),
+            ),
             Request::Close,
         ]
     }

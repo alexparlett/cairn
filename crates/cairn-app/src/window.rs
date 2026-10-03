@@ -1134,12 +1134,19 @@ mod tests {
         );
 
         click_row(&mut test, 3);
-        assert_eq!(
-            submitted.borrow().last(),
-            Some(&Request::Changes {
-                of: Comparison::Commit(oid(3))
-            })
-        );
+        // The query, then the answer it replaces, handed to the worker to free (R2).
+        match &submitted.borrow()[1..] {
+            [asked, Request::Retire(retired)] => {
+                assert_eq!(
+                    *asked,
+                    Request::Changes {
+                        of: Comparison::Commit(oid(3))
+                    }
+                );
+                assert_eq!(retired.changes(), Some(&answer_for(2, Vec::new())));
+            }
+            other => panic!("expected the query and a retirement, got {other:?}"),
+        }
         let shown = pane(&test);
         assert!(shown.iter().any(|t| t == READING), "{shown:?}");
         assert!(
@@ -1281,8 +1288,14 @@ mod tests {
         test.sync_and_update();
         test.sync_and_update();
         assert_eq!(*view.selected.read(), Some(RowId::Commit(oid(45))));
+        let asked: Vec<Request> = submitted
+            .borrow()
+            .iter()
+            .filter(|request| !matches!(request, Request::Retire(_)))
+            .cloned()
+            .collect();
         assert_eq!(
-            submitted.borrow().last(),
+            asked.last(),
             Some(&Request::Changes {
                 of: Comparison::Commit(oid(45))
             })

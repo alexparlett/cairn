@@ -10,7 +10,7 @@
 
 use cairn_model::{ChangeSet, FileDiff, RenameDetection};
 
-use crate::worker::{Comparison, DiffOptions, DiffQuery, FileQuery, Request};
+use crate::worker::{Comparison, DiffOptions, DiffQuery, FileQuery, Request, Retired};
 
 /// An answer the window is waiting for, has, or was told failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,11 +51,28 @@ impl DiffState {
     /// Selects a commit or a pair: its change set is awaited, and the file and Expand All
     /// that were selected go — the changes query supersedes the file-diff lane, so their
     /// answers will not come, and they were of another commit anyway.
-    pub fn select_changes(&mut self, of: Comparison) -> Request {
-        self.changes = Some((of, Answer::Waiting));
-        self.file = None;
-        self.expanded = None;
-        Request::Changes { of }
+    ///
+    /// Returns what to submit, in order: the query, then — when answers were kept — a
+    /// [`Request::Retire`] handing them to a worker, so a large change set is not freed on
+    /// the UI thread (R2: 1.2-2.0 ms for 55,184 files).
+    pub fn select_changes(&mut self, of: Comparison) -> Vec<Request> {
+        let changes = self.changes.replace((of, Answer::Waiting));
+        let file = self.file.take();
+        let expanded = self.expanded.take();
+        let mut diffs: Vec<FileDiff> = Vec::new();
+        if let Some((_, Answer::Ready(Some(diff)))) = file {
+            diffs.push(diff);
+        }
+        if let Some((_, _, Answer::Ready(Expanded { diffs: all, .. }))) = expanded {
+            diffs.extend(all);
+        }
+        let changes = changes.and_then(|(_, answer)| match answer {
+            Answer::Ready(changes) => Some(changes),
+            Answer::Waiting | Answer::Failed(_) => None,
+        });
+        let mut requests = vec![Request::Changes { of }];
+        requests.extend(Retired::of(changes, diffs).map(Request::Retire));
+        requests
     }
 
     /// Selects one file's diff. Expand All goes: it shares the file-diff lane.
@@ -253,6 +270,37 @@ mod tests {
         }
     }
 
+    /// R2: choosing another commit hands the change set kept for the last one — and its file
+    /// and Expand All diffs — to a worker after the query, rather than dropping them on the
+    /// UI thread; a selection with nothing ready retires nothing. Caught by: assigning the
+    /// new selection over the old (which drops it here), or retiring before asking.
+    #[test]
+    fn choosing_another_commit_hands_the_last_ones_answers_to_a_worker() {
+        let mut state = DiffState::default();
+        assert_eq!(
+            state.select_changes(commit(1)),
+            [Request::Changes { of: commit(1) }],
+            "nothing was kept, so nothing is retired"
+        );
+        assert!(state.changes_arrived(commit(1), change_set("one")));
+        let requests = state.select_changes(commit(2));
+        assert_eq!(requests.len(), 2, "{requests:?}");
+        assert_eq!(requests[0], Request::Changes { of: commit(2) });
+        match &requests[1] {
+            Request::Retire(retired) => {
+                assert_eq!(retired.changes(), Some(&change_set("one")));
+            }
+            other => panic!("the second request is not a retirement: {other:?}"),
+        }
+        assert_eq!(state.changes(), Some((commit(2), &Answer::Waiting)));
+
+        // An answer still on its way, or one that failed, holds nothing to free.
+        assert_eq!(
+            state.select_changes(commit(3)),
+            [Request::Changes { of: commit(3) }]
+        );
+    }
+
     /// R4.4: an answer naming another commit is never kept — not after the selection moved
     /// on, and not after it was cleared without asking anything new. Caught by: keeping
     /// whatever arrives (the previous commit's files drawn under the new one).
@@ -261,7 +309,7 @@ mod tests {
         let mut state = DiffState::default();
         assert_eq!(
             state.select_changes(commit(1)),
-            Request::Changes { of: commit(1) }
+            [Request::Changes { of: commit(1) }]
         );
         state.select_changes(commit(2));
         assert!(!state.wants_changes(commit(1)));

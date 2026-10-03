@@ -34,6 +34,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         mut prompt,
         mut remotes,
         mut refused,
+        mut diff,
         ..
     } = view;
     match update {
@@ -93,6 +94,36 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                 prompt.set(Some(PromptView { id, text }));
             } else {
                 (worker.refuse)(id);
+            }
+        }
+        // Each kept only for the selection it names (PRD R4.4); checked before the write,
+        // so an answer for another selection does not even wake what draws the diff.
+        Update::Changes { of, changes } => {
+            if diff.peek().wants_changes(of) {
+                diff.write().changes_arrived(of, changes);
+            }
+        }
+        Update::FileDiff {
+            query,
+            diff: answer,
+        } => {
+            if diff.peek().wants_file(&query) {
+                diff.write().file_arrived(&query, answer);
+            }
+        }
+        Update::FileDiffs {
+            of,
+            options,
+            diffs,
+            complete,
+        } => {
+            if diff.peek().wants_expansion(of, options) {
+                diff.write().expansion_arrived(of, options, diffs, complete);
+            }
+        }
+        Update::DiffFailed { query, message } => {
+            if diff.peek().wants(&query) {
+                diff.write().failed(&query, message);
             }
         }
     }
@@ -181,6 +212,7 @@ mod tests {
                         prompt: State::create(None),
                         remotes: State::create(Vec::new()),
                         refused: State::create(None),
+                        diff: State::create(crate::diff_state::DiffState::default()),
                     }
                 })
             },
@@ -220,6 +252,47 @@ mod tests {
                 },
             );
         });
+    }
+
+    /// C8, R4.4, through the real boundary: an answer naming another selection is never
+    /// drawn, even when its epoch is still current — the selection was cleared without
+    /// asking anything new, so the change set arrives through the worker under a current
+    /// epoch and only the window's own check can refuse it. The negative follows: asked
+    /// again and selected, it is kept. Mutation that reddens it: this arm storing whatever
+    /// change set arrives rather than asking `DiffState` whether it names the selection
+    /// (each of `DiffState`'s two checks alone is decided by `diff_state`'s own tests).
+    #[test]
+    fn an_answer_naming_another_selection_is_never_drawn() {
+        use crate::diff_state::Answer;
+        use crate::worker::{Comparison, changes_answer, checkout, commits};
+
+        let (handle, mut updates) = checkout();
+        let of = Comparison::Commit(commits(&handle, &mut updates, 1)[0]);
+        let (test, mut view, asked) = launch(FetchStatus::Idle);
+
+        handle.submit(test.run_in(|| view.diff.write().select_changes(of)));
+        test.run_in(|| view.diff.write().clear());
+        applying(&test, view, &asked, changes_answer(&mut updates, of));
+        assert_eq!(
+            test.run_in(|| view.diff.peek().changes().map(|(of, _)| of)),
+            None,
+            "a change set was drawn with nothing selected"
+        );
+
+        handle.submit(test.run_in(|| view.diff.write().select_changes(of)));
+        applying(&test, view, &asked, changes_answer(&mut updates, of));
+        let kept = test.run_in(|| {
+            view.diff
+                .peek()
+                .changes()
+                .map(|(of, answer)| (of, matches!(answer, Answer::Ready(_))))
+        });
+        assert_eq!(
+            kept,
+            Some((of, true)),
+            "the answer for the selection was not kept"
+        );
+        drop(handle);
     }
 
     /// A fetch the close itself ended may still have moved refs. Caught by: reloading

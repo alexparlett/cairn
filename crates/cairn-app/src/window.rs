@@ -6,6 +6,7 @@ use cairn_model::{HistoryRow, RemoteSummary, RowContent, RowId, Secret};
 use cairn_ui::{CommitRow, CredentialPrompt, HistoryHeader, HistoryList, ROW_HEIGHT, RowRender};
 use freya::prelude::*;
 
+use crate::diff_state::DiffState;
 use crate::fetch_state::{FetchRefusal, FetchStatus, PromptView};
 use crate::history_state::{Progress, Status};
 use crate::worker::{Replier, Reply, Request};
@@ -23,6 +24,8 @@ pub struct View {
     pub remotes: State<Vec<RemoteSummary>>,
     /// A fetch the worker refused, until another is asked for.
     pub refused: State<Option<FetchRefusal>>,
+    /// The diff selection and the answers kept for it; drawn from phase 05 on.
+    pub diff: State<DiffState>,
 }
 
 impl std::fmt::Debug for View {
@@ -368,6 +371,7 @@ mod tests {
                         url: Some("https://git.example.com/ada/engine".to_owned()),
                     }]),
                     refused: State::create(None),
+                    diff: State::create(DiffState::default()),
                 })
             },
             1.,

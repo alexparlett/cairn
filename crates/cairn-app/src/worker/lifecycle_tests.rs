@@ -40,8 +40,8 @@ const FETCH: [&str; 5] = [
 /// is answered, and counted in `probes`; `fetch` does what the test says,
 /// with `$DIR` naming this directory. An invocation in a repository names it
 /// ahead of the verb (`--git-dir=`, `--work-tree=`), which the stub skips.
-struct StubGit {
-    directory: PathBuf,
+pub(super) struct StubGit {
+    pub(super) directory: PathBuf,
 }
 
 impl StubGit {
@@ -51,6 +51,12 @@ impl StubGit {
 
     /// A stub whose `--version` reports `version`.
     fn reporting(version: &str, fetch: &str) -> Self {
+        Self::answering(version, "fetch", fetch)
+    }
+
+    /// A stub whose `--version` reports `version` and whose `verb` does what
+    /// `body` says; every other verb fails.
+    pub(super) fn answering(version: &str, verb: &str, body: &str) -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let directory = std::env::temp_dir().join(format!(
             "cairn-app-stub-{}-{}",
@@ -66,7 +72,7 @@ impl StubGit {
             "#!/bin/sh\nDIR='{}'\n\
              while case \"$1\" in --git-dir=*|--work-tree=*) true ;; *) false ;; esac; do shift; done\n\
              case \"$1\" in\n--version)\n  echo probed >> \"$DIR/probes\"\n  \
-             echo 'git version {version}'\n  ;;\nfetch)\n{fetch}\n  ;;\n*)\n  exit 1\n  ;;\nesac\n",
+             echo 'git version {version}'\n  ;;\n{verb})\n{body}\n  ;;\n*)\n  exit 1\n  ;;\nesac\n",
             directory.display()
         );
         if let Err(error) = std::fs::write(&git, script) {
@@ -104,7 +110,7 @@ impl StubGit {
 
     /// A launch whose `PATH` is this directory, with a `HOME` and, when given,
     /// a runtime directory for the askpass channel.
-    fn startup(&self, around: Option<(&Home, &RuntimeDir)>) -> Startup {
+    pub(super) fn startup(&self, around: Option<(&Home, &RuntimeDir)>) -> Startup {
         let path = self.directory.clone().into_os_string();
         let home = around.map(|(home, _)| home.path.clone().into_os_string());
         let runtime = around.map(|(_, runtime)| runtime.path.clone().into_os_string());
@@ -164,7 +170,7 @@ const HANGS_WITH_A_GRANDCHILD: &str = "  echo $$ > \"$DIR/leader\"\n  /bin/sleep
 /// The processes in group `group` that are still alive — not yet exited, or
 /// exited and waiting to be reaped is not "alive" — read from `/proc`.
 #[cfg(target_os = "linux")]
-fn alive_in_group(group: i32) -> Vec<i32> {
+pub(super) fn alive_in_group(group: i32) -> Vec<i32> {
     let Ok(entries) = std::fs::read_dir("/proc") else {
         panic!("/proc is not readable");
     };

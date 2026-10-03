@@ -1,6 +1,7 @@
 //! The Cairn binary.
 
 mod closing;
+mod diff_state;
 mod fetch_state;
 mod history_state;
 mod repository_path;
@@ -15,6 +16,7 @@ use cairn_model::{HistoryRow, RemoteSummary, RowId};
 use freya::prelude::*;
 
 use closing::Closing;
+use diff_state::DiffState;
 use fetch_state::{FetchStatus, PromptView};
 use history_state::Progress;
 use window::View;
@@ -47,6 +49,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let prompt = use_state(|| None::<PromptView>);
     let remotes = use_state(Vec::<RemoteSummary>::new);
     let refused = use_state(|| None);
+    let diff = use_state(DiffState::default);
     let view = View {
         rows,
         progress,
@@ -55,6 +58,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         prompt,
         remotes,
         refused,
+        diff,
     };
 
     let opened = use_hook(|| {

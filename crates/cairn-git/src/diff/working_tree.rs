@@ -218,31 +218,40 @@ impl<C: Cancel> Asker<'_, C> {
     }
 
     fn answer(&self, sizes: Sizes) -> Result<Option<FileDiff>, Error> {
-        // R2.6: a blob too large to draw is refused before git diffs it. Git is asked only
-        // whether the path changed at all, and how.
-        if sizes.largest_known() > self.ceiling {
-            return match self.ask(false, true, HEADER_ROOM)? {
-                WorkingTreeAnswer::Unlisted => Ok(None),
-                WorkingTreeAnswer::Listed { file, .. } => Ok(Some(FileDiff {
-                    file: self.named(file, None),
-                    content: self.too_large(sizes.largest_known()),
-                })),
-                WorkingTreeAnswer::PastCeiling { file } => Ok(Some(self.past_ceiling(file))),
-            };
-        }
         // What git prints is at most every line of both sides with a marker before each,
         // so twice the two sides' bytes; a working-tree side counts at the ceiling, and
-        // output past that much means the side is past it.
-        let output = sizes
-            .old
-            .unwrap_or(self.ceiling)
-            .saturating_add(sizes.new.unwrap_or(self.ceiling))
+        // output past that much means a side is past it.
+        let within = |side: Option<u64>| side.unwrap_or(self.ceiling).min(self.ceiling);
+        let output = within(sizes.old)
+            .saturating_add(within(sizes.new))
             .saturating_mul(2)
             .saturating_add(HEADER_ROOM);
+        // R2.6: a blob too large to draw is refused before git diffs it, git asked only
+        // whether the path changed and how. Only a working-tree modification needs the
+        // patch after all, since its record cannot tell an edit from a stat or a mode
+        // that alone moved — and `git diff` shows those as nothing and a mode change.
+        if sizes.largest_known() > self.ceiling {
+            match self.ask(false, true, HEADER_ROOM)? {
+                WorkingTreeAnswer::Unlisted => return Ok(None),
+                WorkingTreeAnswer::Listed { file, .. }
+                    if self.working_tree() && file.status == ChangeStatus::Modified => {}
+                WorkingTreeAnswer::Listed { file, .. } => {
+                    return Ok(Some(FileDiff {
+                        file: self.named(file, None),
+                        content: self.too_large(sizes.largest_known()),
+                    }));
+                }
+                WorkingTreeAnswer::PastCeiling { file } => {
+                    return Ok(Some(self.past_ceiling(file, sizes)));
+                }
+            }
+        }
         match self.ask(false, false, output)? {
             WorkingTreeAnswer::Unlisted => Ok(None),
-            WorkingTreeAnswer::PastCeiling { file } => Ok(Some(self.past_ceiling(file))),
-            WorkingTreeAnswer::Listed { file, sections } => self.decide(file, &sections, output),
+            WorkingTreeAnswer::PastCeiling { file } => Ok(Some(self.past_ceiling(file, sizes))),
+            WorkingTreeAnswer::Listed { file, sections } => {
+                self.decide(file, &sections, sizes, output)
+            }
         }
     }
 
@@ -251,6 +260,7 @@ impl<C: Cancel> Asker<'_, C> {
         &self,
         file: ChangedFile,
         sections: &[PatchText],
+        sizes: Sizes,
         output: u64,
     ) -> Result<Option<FileDiff>, Error> {
         // git printed no patch: a stat-only change `diff-files` lists, which the user's
@@ -293,6 +303,14 @@ impl<C: Cancel> Asker<'_, C> {
             return Ok(Some(FileDiff {
                 file,
                 content: DiffContent::ModeChangeOnly,
+            }));
+        }
+
+        // A side already known to be past the ceiling is not read.
+        if sizes.largest_known() > self.ceiling {
+            return Ok(Some(FileDiff {
+                file: self.named(file, None),
+                content: self.too_large(sizes.largest_known()),
             }));
         }
 
@@ -513,14 +531,22 @@ impl<C: Cancel> Asker<'_, C> {
     }
 
     /// git printed more than both sides could hold within the ceiling, so a side is past
-    /// it: the measurement is the file on disk, and at least one byte past the ceiling
-    /// where a filter made git's form larger than that.
-    fn past_ceiling(&self, file: Option<ChangedFile>) -> FileDiff {
+    /// it: the measurement is the largest side known — a blob's, or the file on disk — and
+    /// at least one byte past the ceiling where a filter made git's form larger than that.
+    fn past_ceiling(&self, file: Option<ChangedFile>, sizes: Sizes) -> FileDiff {
         let file = match file {
             Some(file) => self.named(file, None),
             None => stand_in_file(self.path),
         };
-        let measured = self.size_on_disk().max(self.ceiling.saturating_add(1));
+        let on_disk = if self.working_tree() {
+            self.size_on_disk()
+        } else {
+            0
+        };
+        let measured = sizes
+            .largest_known()
+            .max(on_disk)
+            .max(self.ceiling.saturating_add(1));
         FileDiff {
             file,
             content: self.too_large(measured),

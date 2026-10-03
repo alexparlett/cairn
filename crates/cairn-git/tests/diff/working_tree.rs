@@ -1247,3 +1247,51 @@ fn every_discriminating_file_reads_as_git_diff_shows_it_staged_and_unstaged() {
         }
     }
 }
+
+/// A file past the ceiling in the index whose working tree changed only its stat, or only
+/// its mode, is what `git diff` shows — nothing, and a mode change — not "too large": the
+/// raw record alone cannot tell a stat-only change from an edit, so git is asked for the
+/// patch, under the ceiling. Caught by: answering from the raw record whenever the index
+/// side is past the ceiling.
+#[test]
+fn a_large_file_whose_stat_or_mode_alone_moved_is_what_git_diff_shows() {
+    let repo = base("large-unchanged");
+    let small = ContentOptions {
+        limits: cairn_model::DiffLimits {
+            max_bytes: 4096,
+            ..cairn_model::DiffLimits::default()
+        },
+        ..ContentOptions::default()
+    };
+    let big: String = (0..2000).map(|n| format!("{n}\n")).collect();
+    repo.write("touched.txt", big.as_bytes());
+    repo.write("moded.txt", big.as_bytes());
+    repo.write("edited.txt", big.as_bytes());
+    repo.commit("three large files");
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    repo.write("touched.txt", big.as_bytes());
+    repo.chmod("moded.txt", 0o755);
+    repo.write("edited.txt", format!("{big}one more\n").as_bytes());
+    let raw = repo.git(&["diff-files", "--name-only"]);
+    assert!(
+        raw.contains("touched.txt"),
+        "the fixture is not stat-dirty: {raw:?}"
+    );
+
+    let touched = ask_with(&repo, "touched.txt", WorkingTreeDiff::Unstaged, &small);
+    assert_eq!(touched, None);
+    let moded = some(
+        ask_with(&repo, "moded.txt", WorkingTreeDiff::Unstaged, &small),
+        "the mode change",
+    );
+    assert_eq!(moded.content, DiffContent::ModeChangeOnly);
+    let edited = some(
+        ask_with(&repo, "edited.txt", WorkingTreeDiff::Unstaged, &small),
+        "the edit",
+    );
+    assert!(
+        matches!(edited.content, DiffContent::TooLarge { .. }),
+        "{edited:?}"
+    );
+    same_as_git(&repo, "touched.txt", WorkingTreeDiff::Unstaged, &touched);
+}

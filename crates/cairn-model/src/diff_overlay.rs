@@ -1,12 +1,12 @@
 //! What a view draws over a text diff, and a patch must never see.
 //!
-//! Two display-only things live here, both by decision L4: the second set of changed
-//! ranges that comparing lines with their whitespace removed produces, and the byte
-//! ranges inside a pair of lines that differ. Neither is part of [`crate::TextDiff`], so
-//! neither is reachable from the patch emitter, which takes a `TextDiff` and nothing else
-//! (R1.7).
+//! Three display-only things live here: by decision L4, the second set of changed ranges
+//! that comparing lines with their whitespace removed produces, and the byte ranges inside
+//! a pair of lines that differ; and git's function context, the text a hunk header shows
+//! after its closing `@@`. None is part of [`crate::TextDiff`], so none is reachable from
+//! the patch emitter, which takes a `TextDiff` and nothing else (R1.7).
 
-use crate::{ChangedRange, LineNumber, LineSpan, TextDiff};
+use crate::{ChangedRange, FunctionContext, LineNumber, LineSpan, TextDiff};
 
 /// A half-open run of bytes inside one line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -51,6 +51,9 @@ pub struct DisplayOverlay {
     /// Indices into `highlights`, ordered by the added line, so a lookup from either side
     /// is a search rather than a scan however many pairs there are.
     by_added: Vec<u32>,
+    /// git's text after a hunk header's `@@`, for the exact hunks and the
+    /// whitespace-ignoring ones alike: it depends only on where a hunk starts.
+    function_context: FunctionContext,
 }
 
 impl DisplayOverlay {
@@ -78,7 +81,21 @@ impl DisplayOverlay {
             ignoring_whitespace,
             highlights,
             by_added,
+            function_context: FunctionContext::none(),
         }
+    }
+
+    /// The same overlay, carrying git's function context.
+    pub fn with_function_context(mut self, function_context: FunctionContext) -> Self {
+        self.function_context = function_context;
+        self
+    }
+
+    /// The text git prints after each hunk header's `@@`, by where the hunk starts — for a
+    /// hunk of the exact ranges or of the whitespace-ignoring ones, since git's text for a
+    /// hunk depends only on its start.
+    pub fn function_context(&self) -> &FunctionContext {
+        &self.function_context
     }
 
     /// The ranges a whitespace-ignoring view draws instead of the exact ones, when the
@@ -310,6 +327,30 @@ mod tests {
             "the removed line's number found a highlight on the added side"
         );
         assert_eq!(overlay.highlights().len(), 2);
+    }
+
+    /// Caught by: `with_function_context` dropping what it was given, or replacing the
+    /// rest of the overlay.
+    #[test]
+    fn an_overlay_carries_the_function_context_it_was_given_and_nothing_else_moves() {
+        use crate::{Context, HunkHeader};
+        let plain = DisplayOverlay::new(Some(vec![change((1, 1), (1, 1))]), Vec::new());
+        assert!(plain.function_context().is_empty());
+        let carried = plain
+            .clone()
+            .with_function_context(FunctionContext::read_at(
+                Context::lines(3),
+                vec![(LineNumber::from_index(0), b"fn f()".to_vec())],
+            ));
+        let header = HunkHeader {
+            old: LineSpan::at(0, 4),
+            new: LineSpan::at(0, 4),
+        };
+        assert_eq!(carried.function_context().of(header), Some(&b"fn f()"[..]));
+        assert_eq!(
+            carried.changes_ignoring_whitespace(),
+            plain.changes_ignoring_whitespace()
+        );
     }
 
     #[test]

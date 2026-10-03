@@ -299,8 +299,10 @@ impl Repository {
     /// while each runs, and a superseded query answers [`Error::ContentCancelled`]. Lines
     /// git printed that are not the content it named are [`Error::ContentReadsDisagree`]
     /// — the file changed while git read it: ask again. A failure of git's, such as a
-    /// required clean filter that failed, is [`Error::GitFailed`] with git's diagnostic,
-    /// which names the path.
+    /// required clean filter that failed or whose program does not exist, is
+    /// [`Error::GitFailed`] with git's diagnostic. An untracked path that is not relative
+    /// to the top of the working tree is [`Error::NotAWorkTreePath`], and one that is
+    /// neither a file nor a symlink is answered `Unsupported`, both before git runs.
     pub fn working_tree_diff(
         &self,
         git: &GitBinary,

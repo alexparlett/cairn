@@ -126,8 +126,10 @@ pub(crate) enum WorkingTreeAnswer {
 /// Asks git for one path's working-tree diff. `cancel` is polled while git runs: a
 /// superseded query ends the process and answers [`Error::ContentCancelled`], and one
 /// already superseded starts nothing. A failure is [`Error::GitFailed`], with git's own
-/// diagnostic — a required clean filter that failed among them, naming the path — and
-/// output this parser does not know is [`Error::UnexpectedGitOutput`].
+/// diagnostic, its exit status and stderr — a required clean filter that failed, or whose
+/// program does not exist, among them — and output this parser does not know is
+/// [`Error::UnexpectedGitOutput`]. An untracked path that is not work-tree-relative is
+/// [`Error::NotAWorkTreePath`] before git runs ([`work_tree_relative`]).
 pub(crate) fn working_tree_patch(
     git: &GitBinary,
     repo: &Repository,

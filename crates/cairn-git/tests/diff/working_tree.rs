@@ -461,28 +461,41 @@ fn a_long_running_filter_process_is_sent_only_clean_and_its_form_is_diffed() {
     same_as_git(&repo, "staged.pf", WorkingTreeDiff::Staged, &staged);
 }
 
-/// The QA brief's failing driver: a required clean filter that exits non-zero is an error
-/// naming the path, from every read that runs it — never an empty diff; one that is not
-/// required is what git does with it, the unfiltered content diffed, exactly as `git diff`
-/// shows it. Caught by: a failed read answered as no change.
+/// The QA brief's failing driver: a required clean filter that exits non-zero, or whose
+/// program does not exist, is git's failure with its diagnostic — `fatal`, status 128, and
+/// what git said on stderr — from every read that runs it, never an empty diff; one that
+/// is not required is what git does with it, the unfiltered content diffed, exactly as
+/// `git diff` shows it. Caught by: a failed read answered as no change, or git's
+/// diagnostic dropped from the error (the message names the path anyway, through the
+/// arguments, so only the stderr decides that).
 #[test]
-fn a_failing_clean_filter_is_an_error_naming_the_path_or_what_git_shows() {
+fn a_failing_clean_filter_is_gits_failure_with_its_diagnostic_or_what_git_shows() {
     let repo = base("failing");
     let failing = script(&repo, "fail.sh", "#!/bin/sh\ncat >/dev/null\nexit 3\n");
     repo.write("required.req", b"x\ny\n");
+    repo.write("missing.gone", b"x\ny\n");
     repo.write("optional.opt", b"x\ny\n");
     repo.commit("before the filters");
     repo.config("filter.req.clean", &failing.display().to_string());
     repo.config("filter.req.required", "true");
+    repo.config("filter.gone.clean", "/nonexistent/cairn-clean-filter");
+    repo.config("filter.gone.required", "true");
     repo.config("filter.opt.clean", &failing.display().to_string());
-    repo.write(".gitattributes", b"*.req filter=req\n*.opt filter=opt\n");
+    repo.write(
+        ".gitattributes",
+        b"*.req filter=req\n*.gone filter=gone\n*.opt filter=opt\n",
+    );
     repo.write("required.req", b"x\nz\n");
+    repo.write("missing.gone", b"x\nz\n");
     repo.write("optional.opt", b"x\nz\n");
     repo.write("new.req", b"q\n");
+    repo.write("new.gone", b"q\n");
 
     for (path, which) in [
         ("required.req", WorkingTreeDiff::Unstaged),
         ("new.req", WorkingTreeDiff::Untracked),
+        ("missing.gone", WorkingTreeDiff::Unstaged),
+        ("new.gone", WorkingTreeDiff::Untracked),
     ] {
         let outcome = engine(&repo).working_tree_diff(
             super::git(),
@@ -492,10 +505,13 @@ fn a_failing_clean_filter_is_an_error_naming_the_path_or_what_git_shows() {
             &CancelSignal::new(),
         );
         match outcome {
-            Err(error @ Error::GitFailed { .. }) => assert!(
-                error.to_string().contains(path),
-                "the error does not name {path}: {error}"
-            ),
+            Err(Error::GitFailed { status, stderr, .. }) => {
+                assert_eq!(status.code(), Some(128), "{which:?} {path}: git's fatal");
+                assert!(
+                    !stderr.trim().is_empty(),
+                    "{which:?} {path}: git's diagnostic was dropped"
+                );
+            }
             other => panic!("{which:?} {path}: expected git's failure, got {other:?}"),
         }
     }

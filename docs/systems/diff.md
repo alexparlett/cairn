@@ -637,10 +637,10 @@ shrinks (diffed in its small form, as `git diff` shows it), one a filter grows
 **Failures.** `git diff --no-index` exits 1 both when the sides differ and when it
 cannot read the file; the read takes status 1 as an answer only when a record for
 the path came with it, and otherwise surfaces git's failure. A clean filter marked
-`required` that fails is git's `fatal` and `Error::GitFailed`, whose message names
-the path; one not required makes git fall back to the unfiltered content, which is
-what Cairn shows, as `git diff` does
-(`a_failing_clean_filter_is_an_error_naming_the_path_or_what_git_shows`).
+`required` that fails, or whose program does not exist, is git's `fatal` (status
+128) and `Error::GitFailed`, carrying git's diagnostic on stderr; one not required
+makes git fall back to the unfiltered content, which is what Cairn shows, as `git
+diff` does (`a_failing_clean_filter_is_gits_failure_with_its_diagnostic_or_what_git_shows`).
 
 **Parity, beyond the states.**
 `every_discriminating_file_reads_as_git_diff_shows_it_staged_and_unstaged` puts the

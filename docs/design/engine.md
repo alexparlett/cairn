@@ -150,10 +150,10 @@ implied:
   clean copies the file into `.git/lfs/objects`, as it does under the user's
   `git diff` — which no read of Cairn's can prevent; git itself writes nothing.
 - **Its stderr is git's**, kept as the read's bounded tail and shown with a
-  failure. A driver that fails and is `required` fails the read, naming the path.
-  One that is not required makes git fall back to the unfiltered content with a
-  warning on stderr; Cairn shows the diff git shows, without that warning, since
-  stderr is prose it never parses.
+  failure. A driver that fails and is `required` fails the read, with git's
+  diagnostic. One that is not required makes git fall back to the unfiltered
+  content with a warning on stderr; Cairn shows the diff git shows, without that
+  warning, since stderr is prose it never parses.
 - **A submodule's checkout is looked into by git**: `diff-files` runs `git status`
   inside it to say whether it is dirty, which may run that repository's own
   fsmonitor and clean filters, as the user's `git diff` does.

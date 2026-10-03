@@ -273,8 +273,10 @@ Project invariants:
   matcher (`reads_enum_partially`) by `every_view_of_a_file_diff_names_every_state`
   (self-test `the_diff_content_matcher_catches_the_shapes_it_claims`), over every
   crate's `src/` but `cairn-model`'s and `cairn-guards`', in production code only:
-  test modules, files a parent declares under `#[cfg(test)]`, and `tests/` are left
-  out, since a test asserting one state is a check rather than a view; that a test
+  test modules, files a parent declares under `#[cfg(test)]` at the top of the
+  file and through no other declaration (`#[cfg(not(test))] mod x;` keeps `x`
+  scanned; self-tested in `the_diff_content_matcher_catches_the_shapes_it_claims`),
+  and `tests/` are left out, since a test asserting one state is a check rather than a view; that a test
   helper of this kind is not used to draw is the same review's.
 - **Only `cairn-git/src/ops/` mutates a repository**, whether through gitoxide or
   a `git` subprocess. Primary enforcement is the type: a `git` invocation is

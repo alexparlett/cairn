@@ -609,11 +609,13 @@ const DIFF_CONTENT_EXEMPT: &[&str] = &["cairn-model", "cairn-guards"];
 
 /// Module files a parent declares under `#[cfg(test)]` (`#[cfg(test)] mod diff_tests;`): test
 /// code that carries no `#[cfg(test)]` marker of its own for [`code_without_test_modules`] to
-/// find.
+/// find. Only a declaration at the top of its file (brace depth 0) names a file beside it —
+/// one inside `mod outer { .. }` names `outer/x.rs`, and one inside a test module is test
+/// code already — and a file that any other declaration in the same parent also names
+/// (`#[cfg(not(test))] mod x;`) is not test-only, so it stays scanned.
 fn test_only_module_files(
     sources: &[(std::path::PathBuf, String)],
 ) -> BTreeSet<std::path::PathBuf> {
-    const MARKER: &str = "#[cfg(test)]";
     let mut files = BTreeSet::new();
     for (path, source) in sources {
         let Some(parent) = path.parent() else {
@@ -626,37 +628,59 @@ fn test_only_module_files(
             Some(stem) if !owns_its_directory => parent.join(stem),
             _ => parent.to_path_buf(),
         };
-        let code = code_without_strings(source);
-        let mut rest = code.as_str();
-        while let Some(at) = rest.find(MARKER) {
-            rest = &rest[at + MARKER.len()..];
-            let mut item = rest.trim_start();
-            if let Some(after) = item.strip_prefix("pub") {
-                item = after.trim_start();
-                if item.starts_with('(') {
-                    item = item
-                        .split_once(')')
-                        .map_or("", |(_, after)| after.trim_start());
-                }
-            }
-            let Some(after) = item.strip_prefix("mod ") else {
-                continue;
-            };
-            let name: String = after
-                .trim_start()
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-                .collect();
-            let declared_without_body = after.trim_start()[name.len()..]
-                .trim_start()
-                .starts_with(';');
-            if !name.is_empty() && declared_without_body {
-                files.insert(dir.join(format!("{name}.rs")));
-                files.insert(dir.join(&name).join("mod.rs"));
-            }
+        let (test_only, otherwise) = top_level_module_declarations(&code_without_strings(source));
+        for name in test_only.difference(&otherwise) {
+            files.insert(dir.join(format!("{name}.rs")));
+            files.insert(dir.join(name).join("mod.rs"));
         }
     }
     files
+}
+
+/// The body-less `mod name;` declarations at brace depth 0 of `code` (strings and comments
+/// already blanked): those `#[cfg(test)]` stands directly before, give or take a
+/// visibility, and the rest.
+fn top_level_module_declarations(code: &str) -> (BTreeSet<String>, BTreeSet<String>) {
+    const MARKER: &str = "#[cfg(test)]";
+    let bytes = code.as_bytes();
+    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let (mut test_only, mut otherwise) = (BTreeSet::new(), BTreeSet::new());
+    let mut depth = 0usize;
+    for (at, byte) in bytes.iter().enumerate() {
+        match byte {
+            b'{' => depth += 1,
+            b'}' => depth = depth.saturating_sub(1),
+            b'm' if depth == 0
+                && code[at..].starts_with("mod")
+                && (at == 0 || !is_ident(bytes[at - 1]))
+                && bytes.get(at + 3).is_some_and(u8::is_ascii_whitespace) =>
+            {
+                let after = code[at + 3..].trim_start();
+                let name: String = after
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                if name.is_empty() || !after[name.len()..].trim_start().starts_with(';') {
+                    continue;
+                }
+                let mut before = code[..at].trim_end();
+                if before.ends_with(')')
+                    && let Some(open) = before.rfind("pub(")
+                {
+                    before = before[..open].trim_end();
+                } else if let Some(rest) = before.strip_suffix("pub") {
+                    before = rest.trim_end();
+                }
+                if before.ends_with(MARKER) {
+                    test_only.insert(name);
+                } else {
+                    otherwise.insert(name);
+                }
+            }
+            _ => {}
+        }
+    }
+    (test_only, otherwise)
 }
 
 /// `cairn_model::DiffContent` is read the way `RowContent` is: by naming every state.
@@ -778,6 +802,36 @@ fn the_diff_content_matcher_catches_the_shapes_it_claims() {
     }
     assert!(!found.contains(Path::new("crates/x/src/worker/pool.rs")));
     assert!(!found.contains(Path::new("crates/x/src/view/tests.rs")));
+
+    // G2: a declaration inside another module's braces names no file beside its parent,
+    // and a file another declaration also names is not test-only — each would otherwise
+    // leave a production file unscanned.
+    let sources = vec![
+        (
+            std::path::PathBuf::from("crates/x/src/nested.rs"),
+            "mod outer {\n    #[cfg(test)]\n    mod inner;\n}\n".to_owned(),
+        ),
+        (
+            std::path::PathBuf::from("crates/x/src/twice.rs"),
+            "#[cfg(test)]\nmod both;\n#[cfg(not(test))]\nmod both;\n#[cfg(test)]\npub(crate) mod only;\n"
+                .to_owned(),
+        ),
+    ];
+    let found = test_only_module_files(&sources);
+    for production in [
+        "crates/x/src/nested/inner.rs",
+        "crates/x/src/nested/outer/inner.rs",
+        "crates/x/src/twice/both.rs",
+    ] {
+        assert!(
+            !found.contains(Path::new(production)),
+            "{production} was taken for test-only: {found:?}"
+        );
+    }
+    assert!(
+        found.contains(Path::new("crates/x/src/twice/only.rs")),
+        "a test-only declaration beside a doubled one was missed: {found:?}"
+    );
 }
 
 const OPS_DIR: &str = "crates/cairn-git/src/ops";

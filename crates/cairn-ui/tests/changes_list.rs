@@ -9,8 +9,8 @@ use cairn_model::{
     Signature, Timestamp,
 };
 use cairn_ui::{
-    ChangesList, DETAIL_ROW_HEIGHT, FILTER_PLACEHOLDER, FILTERING, NO_FILE_MATCHES, ShownFiles,
-    summary_parts,
+    ChangesList, ChangesSummary, DETAIL_ROW_HEIGHT, DIFF_HEADER_HEIGHT, FILTER_PLACEHOLDER,
+    FILTERING, NO_FILE_MATCHES, SUMMARY_HEIGHT, ShownFiles, summary_parts,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -237,6 +237,45 @@ fn the_summary_is_author_short_id_date_and_subject() {
             "Subject line".to_owned(),
         ]
     );
+}
+
+/// The summary strip is 30 px, the diff bar's height (the user's decision, 2026-10-03), so
+/// the two strips of the Changes tab line up. Measured as drawn: what follows the summary
+/// starts 30 px down. Caught by: the 28 px strip it replaced, or one sized by its text.
+#[test]
+fn the_summary_strip_is_as_tall_as_the_diff_bar() {
+    let signature = Signature {
+        name: "Ada".to_owned(),
+        email: "ada@example.com".to_owned(),
+        time: Timestamp::new(1_700_000_000, 0),
+    };
+    let details = CommitDetails {
+        id: Oid::from_bytes(&[0xab; 20]).unwrap(),
+        parents: Vec::new(),
+        author: signature.clone(),
+        committer: signature,
+        message: "Subject line\n".to_owned(),
+    };
+    let (mut test, _) = TestingRunner::new(
+        move || {
+            rect()
+                .width(Size::fill())
+                .child(ChangesSummary::new(details.clone()))
+                .child(label().text("below the summary"))
+                .into_element()
+        },
+        (WIDTH, HEIGHT).into(),
+        |_| {},
+        1.,
+    );
+    test.sync_and_update();
+    let below: Vec<f32> = test.find_many(|node, element| {
+        Label::try_downcast(element)
+            .filter(|label| label.text == "below the summary")
+            .map(|_| node.layout().area.min_y())
+    });
+    assert_eq!(below, [30.], "the summary is not 30 px tall");
+    assert_eq!(SUMMARY_HEIGHT, DIFF_HEADER_HEIGHT);
 }
 
 fn labels(test: &TestingRunner) -> Vec<String> {

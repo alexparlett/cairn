@@ -38,8 +38,9 @@ pub fn filter_count(shown: usize, total: usize) -> String {
         if total == 1 { "" } else { "s" }
     )
 }
-/// The summary line's height.
-pub const SUMMARY_HEIGHT: f32 = 28.0;
+/// The summary line's height: the diff bar's, 30 px, so the tab's two strips line up (the
+/// user's decision, 2026-10-03).
+pub const SUMMARY_HEIGHT: f32 = crate::diff_header::DIFF_HEADER_HEIGHT;
 
 const FONT_SIZE: f32 = 13.0;
 

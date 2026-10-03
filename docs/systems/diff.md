@@ -1544,6 +1544,7 @@ number) and `docs/research/diff-engine/fork-shortcuts.md`.
 | Diff text size (`DIFF_FONT_SIZE`) | 11 px | Fork-measured: Mac's default diff font is Menlo 11 pt (Finding 17, two screenshots four years apart) with a 6.6 pt advance (Finding 24); a macOS point is a logical pixel, and Plex Mono's 0.6 em advance at 11 px is the same 6.6. Fork's Windows size and face are not established. |
 | Row pitch (`DIFF_ROW_HEIGHT`) | 17 px, a hunk header the same | Fork-measured: 17 pt on the Mac (Finding 24, a vendor screenshot at 2×, May 2026). Windows' 30–31 px is at an unknown display scale, so not used. |
 | Bar height (`DIFF_HEADER_HEIGHT`) | 30 px | Cairn-chosen: Fork's bar is not measured in the research; 30 lines up with the detail pane's strip above it. |
+| Changes tab summary strip (`SUMMARY_HEIGHT`) | 30 px, the bar's height | User's decision, 2026-10-03 (it was 28 px), so the tab's two strips line up (`the_summary_strip_is_as_tall_as_the_diff_bar`). |
 | The bar's buttons | chevrons; `⎵`; `−`, `+`, `↕` over lines; a split rectangle | Fork-measured: Finding 10 (vendor screenshots, Mac and Windows, 2025–2026), word wrap and invisibles left out (not in this packet). Drawn from plain shapes, not Fork's artwork. |
 | An active toggle | its glyph in the accent, not filled | Fork-measured: the vendor, Tracker #2623 (Finding 10). |
 | Tooltips and names | "Ignore whitespaces", "Decrease number of visible lines", "Increase number of visible lines", "Show entire file" | Fork-measured: Finding 10. |

@@ -66,12 +66,7 @@ pub fn shown_line(bytes: &[u8], ranges: &[ByteRange]) -> ShownLine {
     let whole = bytes.len();
     let (bytes, cut) = drawn_bytes(bytes);
     let ranges = if cut {
-        // In order, as the engine answers them: those that start before the cut.
-        let kept = ranges
-            .iter()
-            .take_while(|range| (range.start as usize) < bytes.len())
-            .count();
-        ranges.get(..kept).unwrap_or_default()
+        ranges_before_cut(ranges, bytes.len())
     } else {
         ranges
     };
@@ -161,6 +156,16 @@ pub fn shown_line(bytes: &[u8], ranges: &[ByteRange]) -> ShownLine {
     }
 }
 
+/// The ranges a line cut after `drawn` bytes reads: in order, as the engine answers them,
+/// those that start before the cut — a prefix, found by stopping at the first range past it.
+fn ranges_before_cut(ranges: &[ByteRange], drawn: usize) -> &[ByteRange] {
+    let kept = ranges
+        .iter()
+        .take_while(|range| (range.start as usize) < drawn)
+        .count();
+    ranges.get(..kept).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,7 +245,7 @@ mod tests {
 
     /// R6.9: a line longer than the long-line limit is drawn to the limit, never past it,
     /// with its ranges past the cut left out. Caught by: drawing the whole line (a
-    /// multi-mebibyte row), or reading ranges past the cut.
+    /// multi-mebibyte row).
     #[test]
     fn a_line_past_the_limit_is_drawn_to_the_limit() {
         let long = "a".repeat(3 * 1024 * 1024);
@@ -251,5 +256,40 @@ mod tests {
         assert_eq!(shown.highlights, [(10, 12)]);
         let at_limit = "a".repeat(cairn_model::LINE_CUT_BYTES);
         assert_eq!(shown_line(at_limit.as_bytes(), &[]).cut, 0);
+    }
+
+    /// The ranges a cut line reads are those that start before its cut and no others —
+    /// however many the engine answered past it — so its work is bounded by the cut. A
+    /// range past the cut would draw nothing anyway, which is why this is pinned on the
+    /// slice read rather than on what is drawn. Caught by: reading every range.
+    #[test]
+    fn a_cut_line_reads_only_the_ranges_before_its_cut() {
+        let cut = cairn_model::LINE_CUT_BYTES;
+        let mut ranges = vec![range(10, 12), range(2_000, 2_100)];
+        ranges.extend((0..10_000u32).map(|n| range(3_000 + 4 * n, 3_002 + 4 * n)));
+        let read = ranges_before_cut(&ranges, cut);
+        assert_eq!(read.len(), 2, "ranges past the cut were read");
+        assert_eq!(read, [range(10, 12), range(2_000, 2_100)]);
+        assert!(read.iter().all(|r| (r.start as usize) < cut));
+        assert!(ranges_before_cut(&ranges, 5).is_empty());
+    }
+
+    /// The marker's N is the bytes not drawn, in bytes: when a character straddling the cut
+    /// is left out whole, its bytes before the cut are among them. Caught by: counting from
+    /// the limit rather than from what is drawn, which undercounts by the character's head.
+    #[test]
+    fn the_marker_counts_every_byte_not_drawn() {
+        let cut = cairn_model::LINE_CUT_BYTES;
+        for (character, starts_at) in [("é", cut - 1), ("€", cut - 2), ("😀", cut - 3)] {
+            let line = format!("{}{character}{}", "a".repeat(starts_at), "b".repeat(100));
+            let shown = shown_line(line.as_bytes(), &[]);
+            assert_eq!(shown.text.len(), starts_at, "{character}");
+            assert_eq!(
+                shown.cut,
+                line.len() - shown.text.len(),
+                "{character}: the marker does not count every byte not drawn"
+            );
+            assert_eq!(shown.cut, character.len() + 100, "{character}");
+        }
     }
 }

@@ -162,7 +162,7 @@ fn built_files(test: &TestingRunner) -> Vec<(String, bool)> {
 }
 
 /// C10, R5.3: the author and the committer, each with name, email and the full timestamp at
-/// its own offset as git prints it; the full id; each parent as its short id; and the
+/// its own offset; the full id; each parent as its short id; and the
 /// files, a rename showing both names (the message, row for row:
 /// `the_message_is_the_rows_git_log_shows_for_it`). Caught by: dropping the
 /// committer, rendering a date in UTC or without its offset, abbreviating the id, dropping
@@ -177,9 +177,10 @@ fn the_commit_tab_shows_every_field_r5_3_names() {
         COMMITTER_CAPTION.to_owned(),
         "Ada Lovelace <ada@example.com>".to_owned(),
         "Grace Hopper <grace@example.com>".to_owned(),
-        // `git log --format=fuller`'s AuthorDate and CommitDate for these moments.
-        "Wed Nov 15 03:43:20 2023 +0530".to_owned(),
-        "Tue Nov 14 14:13:20 2023 -0800".to_owned(),
+        // The author's and the committer's moments, each at its own offset, as Fork shows a
+        // date (user decision 1): one instant, two offsets, two different days.
+        "15 Nov 2023 03:43:20 +05:30".to_owned(),
+        "14 Nov 2023 14:13:20 -08:00".to_owned(),
         ID_CAPTION.to_owned(),
         oid(77).hex().as_str().to_owned(),
         PARENTS_CAPTION.to_owned(),

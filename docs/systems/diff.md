@@ -1162,13 +1162,17 @@ by this tab.
 
 **The tab itself** (`cairn_ui::CommitTab`, `crates/cairn-ui/src/commit_tab.rs`), in
 Fork's order: AUTHOR and COMMITTER in two columns, each `Name <email>` and the full
-timestamp at its own offset in git's default date format
-(`Tue Nov 14 21:43:20 2023 -0030`, `date_text::git_default`, pinned against `git log`
-by `a_timestamp_reads_as_git_prints_it_at_its_own_offset`) — the user decided on
-2026-10-03 to replace it with a localized long date like Fork's, the offset still
-shown, which waits on their sign-off for the locale data it needs (`progress.md`); a
-commit recorded before 1970 shows its true instant, by the user's decision, since git
-disagrees with itself there (`a_timestamp_before_the_epoch_reads_as_its_true_instant`);
+timestamp at its own offset as Fork's Windows build shows it — `14 Nov 2023 21:43:20
+-00:30`: a two-digit day, the English month's abbreviation, a 24-hour time to the
+second and the offset as `±HH:MM` (`date_text::long_date`, pinned against GNU `date`
+by `a_timestamp_reads_as_fork_shows_it_at_its_own_offset`, Fork's own
+`25 Nov 2020 01:11:30 +01:00` among its rows). The user's decision of 2026-10-03:
+Fork's presentation rather than git's default format, fixed and in English, since a
+localized one needs locale data no dependency of Cairn's carries; the day's padding is
+inferred (Fork's one example has a two-digit day; its Windows build is .NET, whose `dd`
+pads). A commit recorded before 1970 shows its true instant, also the user's decision,
+since git disagrees with itself there
+(`a_timestamp_before_the_epoch_reads_as_its_true_instant`);
 the full 40-digit id beside SHA; each parent's 7-digit short id beside PARENTS, as a
 link (no PARENTS row for a root commit); a rule; the message as `git log` shows it
 (`message_lines::shown_lines`) — the blank lines before and after it gone, each line

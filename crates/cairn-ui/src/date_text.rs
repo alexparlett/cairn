@@ -15,24 +15,21 @@ pub fn utc_minutes(author_time: i64) -> String {
 
 const SECONDS_PER_DAY: i64 = 86_400;
 
-const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-/// `time` as git's default date format prints it — `git log`, `git show` — at the offset it
-/// was recorded with: `Tue Nov 14 21:43:20 2023 -0030`. The day of the month is not padded,
-/// because git's is not. Total over every timestamp.
-pub fn git_default(time: Timestamp) -> String {
-    let local = time.seconds.saturating_add(i64::from(time.offset_seconds));
+/// `time` as Fork shows a commit's date on Windows — `25 Nov 2020 01:11:30 +01:00` — at the
+/// offset it was recorded with, so the instant and the offset both survive (user decision 1,
+/// 2026-10-03: Fork's presentation, not git's, and in English, which needs no locale data).
+/// The day is two digits, as the hours are: Fork's one example has a two-digit day, and its
+/// Windows build is .NET, whose `dd` pads. Total over every timestamp.
+pub fn long_date(time: Timestamp) -> String {
+    let offset = i64::from(time.offset_seconds);
+    let local = time.seconds.saturating_add(offset);
     let days = local.div_euclid(SECONDS_PER_DAY);
     let second_of_day = local.rem_euclid(SECONDS_PER_DAY);
     let (year, month, day) = civil_from_days(days);
-    // 1970-01-01 was a Thursday.
-    let weekday = usize::try_from((days + 4).rem_euclid(7))
-        .ok()
-        .and_then(|at| WEEKDAYS.get(at))
-        .unwrap_or(&"???");
     let month_name = usize::try_from(month - 1)
         .ok()
         .and_then(|at| MONTHS.get(at))
@@ -40,10 +37,13 @@ pub fn git_default(time: Timestamp) -> String {
     let hour = second_of_day / 3600;
     let minute = (second_of_day % 3600) / 60;
     let second = second_of_day % 60;
+    let sign = if offset < 0 { '-' } else { '+' };
+    let east = offset.unsigned_abs();
 
     format!(
-        "{weekday} {month_name} {day} {hour:02}:{minute:02}:{second:02} {year} {}",
-        time.offset()
+        "{day:02} {month_name} {year:04} {hour:02}:{minute:02}:{second:02} {sign}{:02}:{:02}",
+        east / 3600,
+        (east % 3600) / 60
     )
 }
 
@@ -103,31 +103,35 @@ mod tests {
         assert!(high.len() > "1970-01-01 00:00".len());
     }
 
-    /// Reference values from `git log -1 --format=%ad` (git 2.56.0) on commits made with
-    /// `GIT_AUTHOR_DATE` at each moment and offset. Caught by: rendering in UTC (every
-    /// offset-bearing case moves), padding the day, or a weekday off by one.
+    /// User decision 1 (2026-10-03): Fork's Windows presentation, `25 Nov 2020 01:11:30
+    /// +01:00` (`docs/research/diff-engine/fork-detail-and-diff-ui.md`, Finding 3) — Fork's
+    /// own example is the first row. Every row is the instant at the offset it was recorded
+    /// with, the reference from GNU `date -d @<seconds> '+%d %b %Y %H:%M:%S %:z'` in a zone
+    /// of that offset. Caught by: rendering in UTC (every offset-bearing case moves), the
+    /// offset without its colon or its sign, an unpadded day, or a 12-hour clock.
     #[test]
-    fn a_timestamp_reads_as_git_prints_it_at_its_own_offset() {
-        for (seconds, offset_seconds, git) in [
+    fn a_timestamp_reads_as_fork_shows_it_at_its_own_offset() {
+        for (seconds, offset_seconds, shown) in [
+            (1_606_263_090, 3600, "25 Nov 2020 01:11:30 +01:00"),
             (
                 1_700_000_000,
                 5 * 3600 + 30 * 60,
-                "Wed Nov 15 03:43:20 2023 +0530",
+                "15 Nov 2023 03:43:20 +05:30",
             ),
-            (1_700_000_000, -8 * 3600, "Tue Nov 14 14:13:20 2023 -0800"),
-            (1_700_000_000, -30 * 60, "Tue Nov 14 21:43:20 2023 -0030"),
-            (1_704_067_199, 14 * 3600, "Mon Jan 1 13:59:59 2024 +1400"),
-            (1_709_251_200, -12 * 3600, "Thu Feb 29 12:00:00 2024 -1200"),
-            (951_782_400, 0, "Tue Feb 29 00:00:00 2000 +0000"),
+            (1_700_000_000, -8 * 3600, "14 Nov 2023 14:13:20 -08:00"),
+            (1_700_000_000, -30 * 60, "14 Nov 2023 21:43:20 -00:30"),
+            (1_704_067_199, 14 * 3600, "01 Jan 2024 13:59:59 +14:00"),
+            (1_709_251_200, -12 * 3600, "29 Feb 2024 12:00:00 -12:00"),
+            (951_782_400, 0, "29 Feb 2000 00:00:00 +00:00"),
             (
                 1_759_276_800,
                 5 * 3600 + 45 * 60,
-                "Wed Oct 1 05:45:00 2025 +0545",
+                "01 Oct 2025 05:45:00 +05:45",
             ),
         ] {
             assert_eq!(
-                git_default(Timestamp::new(seconds, offset_seconds)),
-                git,
+                long_date(Timestamp::new(seconds, offset_seconds)),
+                shown,
                 "{seconds} at {offset_seconds}s east of UTC"
             );
         }
@@ -135,27 +139,23 @@ mod tests {
 
     /// User decision 2: a commit recorded before 1970 shows its true instant — git itself
     /// does not agree with itself there (`%ad` prints nothing, `fuller` clamps to the epoch,
-    /// some commands refuse the commit). Reference values from GNU `date -d @<seconds>` in
-    /// a zone of each offset. Caught by: truncating division in place of `div_euclid` and
-    /// `rem_euclid`, which puts a negative instant on the wrong day with a negative hour —
-    /// most visibly the epoch itself under a negative offset, which falls back into 1969.
+    /// some commands refuse the commit). Reference values from GNU `date`, as above. Caught
+    /// by: truncating division in place of `div_euclid` and `rem_euclid`, which puts a
+    /// negative instant on the wrong day with a negative hour — most visibly the epoch
+    /// itself under a negative offset, which falls back into 1969.
     #[test]
     fn a_timestamp_before_the_epoch_reads_as_its_true_instant() {
-        for (seconds, offset_seconds, date) in [
-            (-1, 0, "Wed Dec 31 23:59:59 1969 +0000"),
-            (0, -3600, "Wed Dec 31 23:00:00 1969 -0100"),
-            (-1, -30 * 60, "Wed Dec 31 23:29:59 1969 -0030"),
-            (
-                -86_401,
-                5 * 3600 + 30 * 60,
-                "Wed Dec 31 05:29:59 1969 +0530",
-            ),
-            (-1_000_000_000, -8 * 3600, "Sun Apr 24 14:13:20 1938 -0800"),
-            (-2_208_988_800, 0, "Mon Jan 1 00:00:00 1900 +0000"),
+        for (seconds, offset_seconds, shown) in [
+            (-1, 0, "31 Dec 1969 23:59:59 +00:00"),
+            (0, -3600, "31 Dec 1969 23:00:00 -01:00"),
+            (-1, -30 * 60, "31 Dec 1969 23:29:59 -00:30"),
+            (-86_401, 5 * 3600 + 30 * 60, "31 Dec 1969 05:29:59 +05:30"),
+            (-1_000_000_000, -8 * 3600, "24 Apr 1938 14:13:20 -08:00"),
+            (-2_208_988_800, 0, "01 Jan 1900 00:00:00 +00:00"),
         ] {
             assert_eq!(
-                git_default(Timestamp::new(seconds, offset_seconds)),
-                date,
+                long_date(Timestamp::new(seconds, offset_seconds)),
+                shown,
                 "{seconds} at {offset_seconds}s east of UTC"
             );
         }
@@ -165,7 +165,7 @@ mod tests {
     fn a_timestamp_at_the_extremes_renders_rather_than_panicking() {
         for seconds in [i64::MIN, i64::MAX] {
             for offset in [i32::MIN, 0, i32::MAX] {
-                assert!(!git_default(Timestamp::new(seconds, offset)).is_empty());
+                assert!(!long_date(Timestamp::new(seconds, offset)).is_empty());
             }
         }
     }

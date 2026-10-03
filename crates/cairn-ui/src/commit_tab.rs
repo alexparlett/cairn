@@ -113,8 +113,8 @@ fn header_lines(changes: &ChangeSet) -> Vec<Line> {
             committer: details.committer.clone(),
         });
         lines.push(Line::Dates {
-            author: date_text::git_default(details.author.time),
-            committer: date_text::git_default(details.committer.time),
+            author: date_text::long_date(details.author.time),
+            committer: date_text::long_date(details.committer.time),
         });
         lines.push(Line::Id(details.id.hex().as_str().to_owned()));
         if !details.parents.is_empty() {

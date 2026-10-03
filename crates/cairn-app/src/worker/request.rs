@@ -155,6 +155,12 @@ impl Retired {
     pub fn shown(&self) -> &[ShownDiff] {
         &self.0.shown
     }
+
+    /// The file diffs let go of, for a test that checks what was handed over.
+    #[cfg(test)]
+    pub fn diffs(&self) -> &[FileDiff] {
+        &self.0.diffs
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -330,6 +336,50 @@ pub enum Update {
     /// only for the selection it names, and `message` is display text. A query that was
     /// superseded is not a failure and sends nothing.
     DiffFailed { query: DiffQuery, message: String },
+    /// An answer whose query was superseded before the window read it — a change set, a
+    /// file's prepared diff (up to 64 MiB, both layouts), Expand All's batch — handed back
+    /// unread rather than dropped where the epoch filter sees it, which is the UI thread's
+    /// task: the window hands it straight back to a worker to free ([`Request::Retire`]).
+    /// Never drawn. Sent by no worker: [`super::Updates::next`] makes it out of a stale
+    /// answer.
+    Superseded(Retired),
+}
+
+impl Update {
+    /// What a superseded answer holds that is worth a worker's freeing, handed over unread: a
+    /// change set, a file's prepared diff, Expand All's batch. `None` for everything else —
+    /// a page of rows, a filter's indices, a failure — which is small, or (a fetch's and a
+    /// prompt's news) carries no epoch and is never superseded. No arm defaults, so a new
+    /// update does not compile until it is placed.
+    pub(super) fn into_retired(self) -> Option<Retired> {
+        match self {
+            Self::Changes { changes, .. } => {
+                Retired::of(Some(Arc::new(changes)), Vec::new(), Vec::new())
+            }
+            Self::FileDiff { diff, .. } => Retired::of(
+                None,
+                Vec::new(),
+                diff.map(|shown| *shown).into_iter().collect(),
+            ),
+            Self::FileDiffs { diffs, .. } => Retired::of(None, diffs, Vec::new()),
+            Self::Superseded(retired) => Some(retired),
+            Self::Rows { .. }
+            | Self::Failed { .. }
+            | Self::WorkerLost { .. }
+            | Self::Remotes { .. }
+            | Self::ConfiguredContext { .. }
+            | Self::FetchStarted { .. }
+            | Self::FetchProgress { .. }
+            | Self::FetchFinished { .. }
+            | Self::FetchCancelled { .. }
+            | Self::FetchFailed { .. }
+            | Self::FetchRefused { .. }
+            | Self::Prompt { .. }
+            | Self::CommandLog { .. }
+            | Self::FilteredFiles { .. }
+            | Self::DiffFailed { .. } => None,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -1,13 +1,15 @@
 //! Applying a worker's update to the view state: the one place an `Update`
 //! becomes what the window draws. On the UI thread, so nothing here waits.
 
+use std::sync::Arc;
+
 use freya::prelude::*;
 
 use crate::PAGE_ROWS;
 use crate::fetch_state::{FetchRefusal, FetchStatus, PromptView};
 use crate::history_state::{self, Progress};
 use crate::window::View;
-use crate::worker::{PromptId, Request, Update};
+use crate::worker::{PromptId, Request, Retired, Update};
 
 /// What applying an update may ask of the worker: a request, and the refusal
 /// of a prompt the window will not show. Two plain callbacks, never a struct
@@ -100,7 +102,8 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             }
         }
         // Each kept only for the selection it names (PRD R4.4); checked before the write,
-        // so an answer for another selection does not even wake what draws the diff.
+        // so an answer for another selection does not even wake what draws the diff. One not
+        // kept is handed to a worker to free (`retire`), as a superseded one is.
         Update::Changes { of, changes } => {
             if diff.peek().wants_changes(of) {
                 let filtering = {
@@ -112,6 +115,11 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                 if let Some(request) = filtering {
                     (worker.submit)(request);
                 }
+            } else {
+                retire(
+                    Retired::of(Some(Arc::new(changes)), Vec::new(), Vec::new()),
+                    worker,
+                );
             }
         }
         Update::FilteredFiles { of, text, files } => {
@@ -123,9 +131,14 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             query,
             diff: answer,
         } => {
+            let answer = answer.map(|shown| *shown);
             if diff.peek().wants_file(&query) {
-                diff.write()
-                    .file_arrived(&query, answer.map(|shown| *shown));
+                diff.write().file_arrived(&query, answer);
+            } else {
+                retire(
+                    Retired::of(None, Vec::new(), answer.into_iter().collect()),
+                    worker,
+                );
             }
         }
         Update::FileDiffs {
@@ -136,6 +149,8 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         } => {
             if diff.peek().wants_expansion(of, options) {
                 diff.write().expansion_arrived(of, options, diffs, complete);
+            } else {
+                retire(Retired::of(None, diffs, Vec::new()), worker);
             }
         }
         Update::DiffFailed { query, message } => {
@@ -143,6 +158,16 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                 diff.write().failed(&query, message);
             }
         }
+        Update::Superseded(retired) => retire(Some(retired), worker),
+    }
+}
+
+/// Hands answers the window will not keep to a worker to free, rather than freeing them here
+/// on the UI thread: a file's prepared diff is up to 64 MiB in both layouts, a change set
+/// tens of thousands of files. `Request::Retire` only sends.
+fn retire(retired: Option<Retired>, worker: &Worker<'_>) {
+    if let Some(retired) = retired {
+        (worker.submit)(Request::Retire(retired));
     }
 }
 
@@ -423,6 +448,114 @@ mod tests {
             Some(Answer::Failed("git failed".to_owned())),
             "the selected file's failure was not kept"
         );
+    }
+
+    /// R1 (phase 07 QA): an answer the window will not keep is freed on a worker, never on
+    /// the UI thread — a file's prepared diff is up to 64 MiB in both layouts, a change set
+    /// 55,184 files. One the epoch filter caught arrives as `Update::Superseded` and is
+    /// handed straight back; one naming another selection is handed back from its own arm.
+    /// Both go as a `Request::Retire`, which only sends. Caught by: either dropped in place.
+    #[test]
+    fn an_answer_the_window_will_not_keep_is_handed_to_a_worker_to_free() {
+        use cairn_model::{
+            ChangeSet, ChangeStatus, ChangedFile, DiffContent, FileDiff, FileMode, Oid,
+            RenameDetection, RepoPath, ShownDiff,
+        };
+
+        use crate::worker::{Comparison, DiffOptions, FileQuery, FileTarget, Retired};
+
+        let of = Comparison::Commit(Oid::from_bytes(&[1; 20]).unwrap());
+        let file = ChangedFile {
+            status: ChangeStatus::Modified,
+            old_path: RepoPath::from("a.txt"),
+            new_path: RepoPath::from("a.txt"),
+            old_mode: Some(FileMode::Regular),
+            new_mode: Some(FileMode::Executable),
+            old_id: Some(Oid::from_bytes(&[2; 20]).unwrap()),
+            new_id: Some(Oid::from_bytes(&[2; 20]).unwrap()),
+        };
+        let diff = FileDiff {
+            file: file.clone(),
+            content: DiffContent::ModeChangeOnly,
+        };
+        let shown = ShownDiff::new(diff.clone(), DiffOptions::default().context);
+        let query = FileQuery {
+            target: FileTarget::Committed { of, file },
+            options: DiffOptions::default(),
+        };
+        let changes = ChangeSet {
+            files: Vec::new(),
+            details: None,
+            renames: RenameDetection::default(),
+        };
+        let retired = |asked: &Asked| -> Vec<Retired> {
+            asked
+                .submitted
+                .borrow_mut()
+                .drain(..)
+                .map(|request| match request {
+                    Request::Retire(retired) => retired,
+                    other => panic!("expected a retirement, got {other:?}"),
+                })
+                .collect()
+        };
+        let (test, view, asked) = launch(FetchStatus::Idle);
+
+        // Caught by the epoch filter: handed back as it came.
+        let stale = Retired::of(None, Vec::new(), vec![shown.clone()])
+            .unwrap_or_else(|| unreachable!("a diff is something"));
+        applying(&test, view, &asked, Update::Superseded(stale.clone()));
+        assert_eq!(retired(&asked), [stale]);
+
+        // Naming nothing selected: each payload handed back from its own arm.
+        applying(
+            &test,
+            view,
+            &asked,
+            Update::FileDiff {
+                query: query.clone(),
+                diff: Some(Box::new(shown.clone())),
+            },
+        );
+        let handed = retired(&asked);
+        assert_eq!(handed.len(), 1, "an unwanted file diff was not retired");
+        assert_eq!(handed[0].shown(), [shown]);
+
+        applying(
+            &test,
+            view,
+            &asked,
+            Update::Changes {
+                of,
+                changes: changes.clone(),
+            },
+        );
+        let handed = retired(&asked);
+        assert_eq!(handed.len(), 1, "an unwanted change set was not retired");
+        assert_eq!(handed[0].changes(), Some(&changes));
+
+        applying(
+            &test,
+            view,
+            &asked,
+            Update::FileDiffs {
+                of,
+                options: DiffOptions::default(),
+                diffs: vec![diff.clone()],
+                complete: true,
+            },
+        );
+        let handed = retired(&asked);
+        assert_eq!(
+            handed.len(),
+            1,
+            "an unwanted Expand All batch was not retired"
+        );
+        assert_eq!(handed[0].diffs(), [diff]);
+
+        // A clean working-tree path's answer holds nothing to free, so nothing is sent.
+        applying(&test, view, &asked, Update::FileDiff { query, diff: None });
+        assert!(retired(&asked).is_empty());
     }
 
     /// A fetch the close itself ended may still have moved refs. Caught by: reloading

@@ -502,7 +502,10 @@ pub struct Updates {
 
 impl Updates {
     /// The next update worth rendering, or `None` once every worker has gone.
-    /// Epochless updates are never dropped.
+    /// Epochless updates are never dropped. A superseded answer is not rendered: one holding
+    /// something large comes back as [`Update::Superseded`], so the window hands it to a
+    /// worker to free rather than freeing it here, on the task the UI thread drives; the
+    /// rest is dropped.
     pub async fn next(&mut self) -> Option<Update> {
         loop {
             match self.inbox.try_recv() {
@@ -516,6 +519,9 @@ impl Updates {
                 }) => {
                     if self.epochs.is_current(epoch) {
                         return Some(update);
+                    }
+                    if let Some(retired) = update.into_retired() {
+                        return Some(Update::Superseded(retired));
                     }
                 }
                 Err(TryRecvError::Empty) => Woken(&self.wake).await,
@@ -1258,6 +1264,107 @@ mod tests {
             arrive(&mut updates),
             ["the file diff asked last", "changes, again", "page, again"]
         );
+    }
+
+    /// R1 (phase 07 QA): a superseded answer that holds something large — a file's
+    /// prepared diff, a change set, Expand All's batch — is not dropped here, on the task
+    /// the UI thread drives, but handed back as `Update::Superseded` for the window to send
+    /// to a worker to free; one holding nothing worth a worker is still dropped, and the
+    /// current answer still arrives after it. Caught by: a stale answer dropped in place,
+    /// or handed back drawn as if current.
+    #[test]
+    fn a_superseded_answer_comes_back_to_be_freed_on_a_worker() {
+        use cairn_model::{
+            ChangeSet, ChangeStatus, ChangedFile, DiffContent, FileDiff, Oid, RenameDetection,
+            RepoPath, ShownDiff,
+        };
+
+        use crate::worker::request::{Comparison, DiffOptions, FileQuery, FileTarget};
+
+        let (epochs, outbox, mut updates) = inbox_only();
+        let of = Comparison::Commit(Oid::from_bytes(&[1; 20]).unwrap());
+        let file = ChangedFile {
+            status: ChangeStatus::Modified,
+            old_path: RepoPath::from("a.txt"),
+            new_path: RepoPath::from("a.txt"),
+            old_mode: None,
+            new_mode: None,
+            old_id: None,
+            new_id: None,
+        };
+        let diff = FileDiff {
+            file: file.clone(),
+            content: DiffContent::ModeChangeOnly,
+        };
+        let shown = ShownDiff::new(diff.clone(), DiffOptions::default().context);
+        let query = FileQuery {
+            target: FileTarget::Committed { of, file },
+            options: DiffOptions::default(),
+        };
+        let changes = ChangeSet {
+            files: Vec::new(),
+            details: None,
+            renames: RenameDetection::default(),
+        };
+
+        let stale_file = epochs.bump(QueryLane::FileDiff);
+        let stale_changes = epochs.bump(QueryLane::Changes);
+        outbox.send(
+            Some(stale_file),
+            Update::FileDiff {
+                query: query.clone(),
+                diff: Some(Box::new(shown.clone())),
+            },
+        );
+        outbox.send(
+            Some(stale_file),
+            Update::FileDiffs {
+                of,
+                options: DiffOptions::default(),
+                diffs: vec![diff.clone()],
+                complete: true,
+            },
+        );
+        outbox.send(
+            Some(stale_file),
+            Update::Failed {
+                message: "nothing to free".to_owned(),
+            },
+        );
+        outbox.send(
+            Some(stale_changes),
+            Update::Changes {
+                of,
+                changes: changes.clone(),
+            },
+        );
+        let fresh = epochs.bump(QueryLane::Changes);
+        outbox.send(
+            Some(fresh),
+            Update::Changes {
+                of,
+                changes: changes.clone(),
+            },
+        );
+
+        match block_on(updates.next()) {
+            Some(Update::Superseded(retired)) => assert_eq!(retired.shown(), [shown]),
+            other => panic!("expected the stale file diff handed back, got {other:?}"),
+        }
+        match block_on(updates.next()) {
+            Some(Update::Superseded(retired)) => assert_eq!(retired.diffs(), [diff]),
+            other => panic!("expected the stale batch handed back, got {other:?}"),
+        }
+        match block_on(updates.next()) {
+            Some(Update::Superseded(retired)) => {
+                assert_eq!(retired.changes(), Some(&changes));
+            }
+            other => panic!("expected the stale change set handed back, got {other:?}"),
+        }
+        match block_on(updates.next()) {
+            Some(Update::Changes { .. }) => {}
+            other => panic!("expected the current change set, got {other:?}"),
+        }
     }
 
     /// The negative for the test above: dropping everything must fail it.

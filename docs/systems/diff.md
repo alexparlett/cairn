@@ -1326,7 +1326,15 @@ kept, a `Request::Retire` carrying them — the change set, a file's diff, Expan
 diffs — which `selection::choose` submits after the query and the repository thread
 frees, answering nothing
 (`choosing_another_commit_hands_the_last_ones_answers_to_a_worker`,
-`a_retired_change_set_is_freed_on_the_worker_without_an_answer`).
+`a_retired_change_set_is_freed_on_the_worker_without_an_answer`). An answer the window
+never keeps goes the same way (phase 07 QA, R1): `Updates::next` hands a superseded
+change set, file diff or Expand All batch back as `Update::Superseded` rather than
+dropping it on the task the UI thread drives (`Update::into_retired`; a superseded
+page, filter answer or failure is small and still dropped there), and `session::apply`
+sends it, and any such answer naming another selection, straight on as a
+`Request::Retire`, which only sends
+(`a_superseded_answer_comes_back_to_be_freed_on_a_worker`,
+`an_answer_the_window_will_not_keep_is_handed_to_a_worker_to_free`).
 
 **Parent links** (`detail_pane::follow_parent`). A parent loaded in the history is
 selected — its changes asked for through `selection::choose` — and its row brought

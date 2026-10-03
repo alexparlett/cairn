@@ -25,12 +25,12 @@ pub(super) fn changes(
             let details = crate::commit::details_of(&commit, id)?;
             // A root commit is compared with the empty tree (L5), which makes its diff the
             // whole of its content rather than nothing at all — and so is a shallow
-            // clone's boundary commit, whose parents the clone does not have: git's own
-            // `git log` reads the shallow file and shows it as a root. A merge is compared
-            // with its first parent, like any other commit.
+            // clone's boundary commit, whose parents the clone does not have and which
+            // its details list none of, as git's own `git log` shows it (`details_of`).
+            // A merge is compared with its first parent, like any other commit.
             let old = match details.parents.first() {
-                Some(parent) if !is_shallow_boundary(inner, id)? => *parent,
-                Some(_) | None => model_id(&gix::ObjectId::empty_tree(inner.object_hash()))?,
+                Some(parent) => *parent,
+                None => model_id(&gix::ObjectId::empty_tree(inner.object_hash()))?,
             };
             (old, *id, Some(details))
         }
@@ -58,17 +58,6 @@ pub(super) fn changes(
         files,
         details,
     })
-}
-
-/// Whether the repository's shallow file lists `id`: a commit whose parents were cut
-/// off when the clone was made.
-fn is_shallow_boundary(repo: &gix::Repository, id: &Oid) -> Result<bool, Error> {
-    let shallow = repo.shallow_commits().map_err(|source| Error::ReadCommit {
-        id: id.to_string(),
-        source: Box::new(source),
-    })?;
-    let wanted = object_id(id)?;
-    Ok(shallow.is_some_and(|commits| commits.iter().any(|commit| *commit == wanted)))
 }
 
 fn find_commit<'repo>(repo: &'repo gix::Repository, id: &Oid) -> Result<gix::Commit<'repo>, Error> {

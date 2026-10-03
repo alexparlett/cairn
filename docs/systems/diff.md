@@ -195,7 +195,9 @@ What runs, in order (`crates/cairn-git/src/diff/changes.rs`):
    come from the same read, and its first parent is what it is compared with —
    or the empty tree, for a root commit and for a shallow clone's boundary commit,
    whose parents the clone does not have and which git's own `git log` shows as a
-   root (`a_shallow_clones_boundary_commit_is_compared_as_git_log_shows_it`).
+   root — so its details list no parents, as `git log --format=%P` shows none, and
+   the details query (`Repository::commit_details`) agrees
+   (`a_shallow_clones_boundary_commit_is_compared_as_git_log_shows_it`).
 2. **The user's configuration is read, the way git reads it**
    (`crates/cairn-git/src/diff/renames.rs`). Plumbing reads neither key the way
    the user's own `git log` and `git show` do — `diff.renames` not at all, and
@@ -392,10 +394,6 @@ read.
   With detection off, only trees are read, and the clone answers.
   `in_a_partial_clone_a_rename_search_fails_rather_than_fetching` pins both. Older
   git may fetch.
-- **A shallow clone's boundary commit keeps its parents in its details.** The
-  changes query compares it with the empty tree, as `git log` does, but
-  `CommitDetails::parents` is read from the commit object, which names parents the
-  clone does not have, where `git log --format=%P` shows none. Not pinned.
 - **`diff.ignoreSubmodules` is not applied.** It is porcelain configuration, which
   `diff-tree` does not read, and it can hide a submodule's change from the user's
   own `git log`; the query lists it. Not pinned.
@@ -547,7 +545,8 @@ deserves a guard of its own is a question for the packet's QA phase.
 
 `CommitDetails` is R1.8: the author and the committer as separate `Signature`s,
 each with a name, an email and a `Timestamp` that keeps its own offset; the whole
-message, with `subject()` and `body()` reading it; and the parents in git's order.
+message, with `subject()` and `body()` reading it; and the parents in git's order,
+none for a shallow clone's boundary commit, whose parents the clone lacks.
 It sits beside `CommitSummary` rather than replacing it — a history row draws a
 subject and one name, and carrying a committer, an offset and a whole message per
 row of a ten-year monorepo would be paying for what no row draws.

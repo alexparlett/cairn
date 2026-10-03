@@ -24,14 +24,20 @@ impl Repository {
 }
 
 /// Shared with the changes query, which reads the same commit to find its first parent.
+///
+/// The parents are the ones git shows: a shallow clone's boundary commit names parents
+/// the clone does not have, and git's own `git log` reads the shallow file and shows
+/// none (`%P` is empty), so neither does this.
 pub(crate) fn details_of(commit: &gix::Commit<'_>, id: &Oid) -> Result<CommitDetails, Error> {
     let read = |source: Box<dyn std::error::Error + Send + Sync>| Error::ReadCommit {
         id: id.to_string(),
         source,
     };
     let mut parents = Vec::new();
-    for parent in commit.parent_ids() {
-        parents.push(model_id(&parent)?);
+    if !is_shallow_boundary(commit.repo, commit.id).map_err(|e| read(Box::new(e)))? {
+        for parent in commit.parent_ids() {
+            parents.push(model_id(&parent)?);
+        }
     }
     let author = signature_of(commit.author().map_err(|e| read(Box::new(e)))?, id)?;
     let committer = signature_of(commit.committer().map_err(|e| read(Box::new(e)))?, id)?;
@@ -45,6 +51,17 @@ pub(crate) fn details_of(commit: &gix::Commit<'_>, id: &Oid) -> Result<CommitDet
         committer,
         message: message.to_string(),
     })
+}
+
+/// Whether the repository's shallow file lists `id`: a commit whose parents were cut
+/// off when the clone was made.
+fn is_shallow_boundary(
+    repo: &gix::Repository,
+    id: gix::ObjectId,
+) -> Result<bool, gix::shallow::read::Error> {
+    Ok(repo
+        .shallow_commits()?
+        .is_some_and(|commits| commits.iter().any(|commit| *commit == id)))
 }
 
 fn signature_of(signature: gix::actor::SignatureRef<'_>, id: &Oid) -> Result<Signature, Error> {

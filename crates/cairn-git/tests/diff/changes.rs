@@ -801,10 +801,12 @@ fn in_a_partial_clone_a_rename_search_fails_rather_than_fetching() {
 }
 
 /// A shallow clone keeps its boundary commit's parent ids and drops the parents. git's
-/// own `git log` reads the shallow file and shows that commit as a root; so does the
-/// query, where comparing with the parent named in the commit would fail on an object
-/// the clone does not have. The commit above the boundary is compared as usual. Caught
-/// by: reading the first parent from the commit alone.
+/// own `git log` reads the shallow file and shows that commit as a root, with no
+/// parents at all; so does the query — its file list and its details' parents, which
+/// the separate details query agrees with — where comparing with the parent named in
+/// the commit would fail on an object the clone does not have. The commit above the
+/// boundary is compared as usual and keeps its parent. Caught by: reading the first
+/// parent, or the parents, from the commit alone.
 #[test]
 fn a_shallow_clones_boundary_commit_is_compared_as_git_log_shows_it() {
     let source = repositories::crafted();
@@ -828,7 +830,35 @@ fn a_shallow_clones_boundary_commit_is_compared_as_git_log_shows_it() {
         );
         let (rows, _) = shown(&clone, &id);
         assert_eq!(cairn_rows(&found.files, id.len()), rows, "{commit}");
+        let parents = some(found.details, "a commit's details").parents;
+        let shown_parents: Vec<Oid> = clone
+            .git(&["log", "-1", "--format=%P", &id])
+            .split_whitespace()
+            .map(|parent| Oid::parse(parent).expect("an id"))
+            .collect();
+        assert_eq!(
+            parents, shown_parents,
+            "{commit}'s parents, as git log shows them"
+        );
+        let engine = ok(Repository::discover(clone.path()), "the clone opens");
+        assert_eq!(
+            ok(
+                engine.commit_details(&Oid::parse(&id).expect("an id")),
+                "details"
+            )
+            .parents,
+            shown_parents,
+            "{commit}'s parents from the details query"
+        );
     }
+    assert_eq!(
+        clone
+            .git(&["log", "-1", "--format=%P", "HEAD"])
+            .split_whitespace()
+            .count(),
+        1,
+        "the commit above the boundary has its parent, so the fixture shows both cases"
+    );
     let boundary = hex(&clone, "HEAD~1");
     let found = changes_of(
         &clone,

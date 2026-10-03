@@ -9,7 +9,7 @@ use cairn_git::{ChangeSet, ChangesRequest, Repository};
 use cairn_model::{ChangeStatus, ChangedFile, FileMode, Oid};
 
 use super::repositories::{self, Repo};
-use super::{git, ok, some};
+use super::{git, ok, since, some};
 
 /// One changed path, spelled the way `git diff-tree --raw` spells one, so both sides of
 /// the comparison are the same shape.
@@ -918,15 +918,6 @@ fn a_shallow_clones_boundary_commit_is_compared_as_git_log_shows_it() {
         "the boundary is shown as a root: {:?}",
         found.files
     );
-}
-
-/// Git `2.<minor>.0`, to compare the git in use against.
-fn since(minor: u32) -> cairn_git::ops::GitVersion {
-    cairn_git::ops::GitVersion {
-        major: 2,
-        minor,
-        patch: 0,
-    }
 }
 
 /// `git log --raw` for one commit in the repository at `git_dir`, named explicitly, as

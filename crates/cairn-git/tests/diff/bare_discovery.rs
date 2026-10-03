@@ -10,16 +10,7 @@ use cairn_git::{CancelSignal, ChangesRequest, Error, SharedRepository};
 use cairn_model::Oid;
 
 use super::repositories::{Repo, empty_home};
-use super::{git, ok};
-
-/// Git `2.<minor>.0`.
-fn since(minor: u32) -> cairn_git::ops::GitVersion {
-    cairn_git::ops::GitVersion {
-        major: 2,
-        minor,
-        patch: 0,
-    }
-}
+use super::{git, ok, since};
 
 /// A working tree with a commit, a linked worktree beside it, and a bare repository
 /// planted inside it — a clone of it whose configuration points its working tree at the

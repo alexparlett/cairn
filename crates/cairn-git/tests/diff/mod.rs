@@ -37,6 +37,15 @@ pub fn git() -> &'static cairn_git::ops::GitBinary {
     })
 }
 
+/// Git `2.<minor>.0`, to compare the git in use against.
+pub fn since(minor: u32) -> cairn_git::ops::GitVersion {
+    cairn_git::ops::GitVersion {
+        major: 2,
+        minor,
+        patch: 0,
+    }
+}
+
 pub fn some<T>(value: Option<T>, what: &str) -> T {
     match value {
         Some(value) => value,

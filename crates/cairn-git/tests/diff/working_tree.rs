@@ -668,9 +668,22 @@ fn a_submodule_answers_its_commits_and_whether_it_is_dirty_as_git_diff_shows_it(
 
 /// C7, a sparse index: unsupported, and said so — for a path inside the sparse cone and
 /// one outside it — rather than an answer read from an index Cairn does not read. Skipped
-/// on a git that cannot write one (before 2.32).
+/// on a git that cannot write one (before 2.32), and only there: on any other git, a
+/// sparse checkout that cannot be set up is a failure, never a skip. The index is written
+/// by `sparse-checkout init --cone --sparse-index`, deprecated in git's documentation but
+/// the one spelling that writes a sparse index on every git from 2.32: `set --cone
+/// --sparse-index` writes none on 2.32.7 (reproduced; `set` takes those options from a
+/// later release), where `init` does on 2.32.7 and 2.56.0 alike.
 #[test]
 fn a_sparse_index_is_unsupported_and_says_so() {
+    if super::git().version() < super::since(32) {
+        eprintln!(
+            "SKIPPED a_sparse_index_is_unsupported_and_says_so: git {} cannot write a sparse \
+             index",
+            super::git().version()
+        );
+        return;
+    }
     let repo = base("sparse");
     repo.write("in/a", b"a\n");
     repo.write("out/b", b"b\n");
@@ -680,15 +693,12 @@ fn a_sparse_index_is_unsupported_and_says_so() {
         &[],
         None,
     );
-    if !status.success() {
-        eprintln!(
-            "SKIPPED a_sparse_index_is_unsupported_and_says_so: git {} cannot write a sparse \
-             index ({})",
-            super::git().version(),
-            stderr.trim()
-        );
-        return;
-    }
+    assert!(
+        status.success(),
+        "git {} could not write a sparse index: {}",
+        super::git().version(),
+        stderr.trim()
+    );
     repo.git(&["sparse-checkout", "set", "in"]);
     // A sparse index carries the `sdir` extension (`Documentation/gitformat-index.txt`).
     let index = ok(std::fs::read(repo.path().join(".git/index")), "the index");

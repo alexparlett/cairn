@@ -44,8 +44,8 @@ fn content_of(
     // mode outright, so this is decided before anything is read.
     if file.old_mode == Some(FileMode::Submodule) || file.new_mode == Some(FileMode::Submodule) {
         return Ok(DiffContent::Submodule {
-            old_commit: file.old_id,
-            new_commit: file.new_id,
+            old_target: file.old_id,
+            new_target: file.new_id,
         });
     }
 

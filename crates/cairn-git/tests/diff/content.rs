@@ -585,8 +585,8 @@ fn a_submodule_answers_its_commit_ids_rather_than_lines() {
     assert_eq!(
         diff.content,
         DiffContent::Submodule {
-            old_commit: Some(first),
-            new_commit: Some(second),
+            old_target: Some(first),
+            new_target: Some(second),
         },
         "a submodule answers where it points, not lines"
     );

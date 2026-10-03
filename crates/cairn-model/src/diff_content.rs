@@ -68,9 +68,12 @@ pub enum DiffContent {
         old: Option<String>,
         new: Option<String>,
     },
+    /// A submodule, which a tree records as the commit it points at: the commit on each
+    /// side, `None` where the submodule did not exist. Named `*_target`, not `*_commit`:
+    /// `new_commit` is a gitoxide write the mutation guard bans by name everywhere.
     Submodule {
-        old_commit: Option<Oid>,
-        new_commit: Option<Oid>,
+        old_target: Option<Oid>,
+        new_target: Option<Oid>,
     },
     /// The content is the same on both sides; only the mode moved.
     ModeChangeOnly,
@@ -166,8 +169,8 @@ mod tests {
                 new: Some("version https://git-lfs.github.com/spec/v1".into()),
             },
             DiffContent::Submodule {
-                old_commit: None,
-                new_commit: None,
+                old_target: None,
+                new_target: None,
             },
             DiffContent::ModeChangeOnly,
             DiffContent::Conflicted,

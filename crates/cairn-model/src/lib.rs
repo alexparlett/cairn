@@ -35,7 +35,9 @@ pub use diff_content::{DiffContent, DiffLimits, FileDiff, SizeLimit};
 pub use diff_function_context::FunctionContext;
 pub use diff_hunks::{Context, Hunk, HunkHeader, Hunks};
 pub use diff_overlay::{ByteRange, DisplayOverlay, IntraLineHighlight};
-pub use diff_rows::{SideBySideRow, SideBySideRows, UnifiedRow, UnifiedRows};
+pub use diff_rows::{
+    DrawnRanges, SideBySideRow, SideBySideRows, UnifiedLayout, UnifiedRow, UnifiedRows,
+};
 pub use diff_text::{ChangedRange, DiffLine, LineNumber, LineSpan, TextDiff, split_lines};
 pub use graph::{EdgeKind, EdgeSegment, GraphRow, Lane};
 pub use history::{HistoryRow, RowContent, RowId};

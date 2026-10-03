@@ -3,7 +3,7 @@
 use std::fmt;
 use std::ops::Range;
 
-use crate::{LineSpan, TextDiff};
+use crate::{ChangedRange, LineSpan, TextDiff};
 
 /// How much unchanged text a hunk shows around its changes (R1.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,12 +103,38 @@ pub struct Hunks {
 }
 
 impl Hunks {
+    /// The exact changes of `text` grouped at `context`, as `git diff -U<n>` groups them with
+    /// no `diff.interHunkContext`.
     pub fn of(text: &TextDiff, context: Context) -> Self {
+        Self::of_ranges(text, text.changes(), context, 0)
+    }
+
+    /// `changes` — the exact ranges of `text`, or the whitespace-ignoring ones a view draws
+    /// instead — grouped as git groups them at `context` with `inter_hunk_context`
+    /// (`diff.interHunkContext`, `--inter-hunk-context`): two changes share a hunk when no
+    /// more than twice the context plus the inter-hunk context separates them. A hunk's
+    /// [`Hunk::changes`] indexes `changes`. Nothing to group is no hunk, at any context,
+    /// as git prints no hunk for a file with no change to show.
+    pub fn of_ranges(
+        text: &TextDiff,
+        changes: &[ChangedRange],
+        context: Context,
+        inter_hunk_context: u32,
+    ) -> Self {
         let old_len = u32::try_from(text.old_lines().len()).unwrap_or(u32::MAX);
         let new_len = u32::try_from(text.new_lines().len()).unwrap_or(u32::MAX);
         let hunks = match context {
-            Context::EntireFile => entire_file(text, old_len, new_len),
-            Context::Lines(count) => grouped(text, old_len, new_len, count.max(1)),
+            Context::EntireFile => entire_file(changes, old_len, new_len),
+            Context::Lines(count) => grouped(
+                changes,
+                old_len,
+                new_len,
+                count
+                    .max(1)
+                    .saturating_mul(2)
+                    .saturating_add(inter_hunk_context),
+                count.max(1),
+            ),
         };
         Self { hunks, context }
     }
@@ -130,13 +156,14 @@ impl Hunks {
     }
 }
 
-/// One hunk holding the whole file, which is what `entire file` shows. A file with nothing
-/// on either side has no hunk at all: there is no line to draw.
-fn entire_file(text: &TextDiff, old_len: u32, new_len: u32) -> Vec<Hunk> {
-    if old_len == 0 && new_len == 0 {
+/// One hunk holding the whole file, which is what `entire file` shows — git's answer at a
+/// context as long as the file. A file with no change has no hunk at all, as git prints
+/// none for it however much context it is asked for.
+fn entire_file(changes: &[ChangedRange], old_len: u32, new_len: u32) -> Vec<Hunk> {
+    if changes.is_empty() {
         return Vec::new();
     }
-    let changes = u32::try_from(text.changes().len()).unwrap_or(u32::MAX);
+    let changes = u32::try_from(changes.len()).unwrap_or(u32::MAX);
     vec![Hunk {
         old: LineSpan::at(0, old_len),
         new: LineSpan::at(0, new_len),
@@ -144,10 +171,17 @@ fn entire_file(text: &TextDiff, old_len: u32, new_len: u32) -> Vec<Hunk> {
     }]
 }
 
-/// git's rule: two changes share a hunk when no more than twice the context separates
-/// them, which is exactly when their context runs would touch.
-fn grouped(text: &TextDiff, old_len: u32, new_len: u32, context: u32) -> Vec<Hunk> {
-    let changes = text.changes();
+/// git's rule (`xdl_get_hunk`): two changes share a hunk when the unchanged lines between
+/// them, counted on the old side, are no more than `max_gap` — twice the context plus the
+/// inter-hunk context — which with no inter-hunk context is exactly when their context runs
+/// would touch.
+fn grouped(
+    changes: &[ChangedRange],
+    old_len: u32,
+    new_len: u32,
+    max_gap: u32,
+    context: u32,
+) -> Vec<Hunk> {
     let mut hunks: Vec<Hunk> = Vec::new();
     let mut first = 0usize;
     while first < changes.len() {
@@ -158,7 +192,7 @@ fn grouped(text: &TextDiff, old_len: u32, new_len: u32, context: u32) -> Vec<Hun
                 .start()
                 .index()
                 .saturating_sub(current.removed.end().index());
-            if gap > context.saturating_mul(2) {
+            if gap > max_gap {
                 break;
             }
             last += 1;
@@ -392,18 +426,61 @@ mod tests {
         );
     }
 
-    /// An entire-file view still shows a file nothing changed in, all of it as context.
+    /// Git parity (phase 06): `git diff -U<n>` prints no hunk for a file with no change to
+    /// show, however large `n` is — a rename that kept its content, or a file whose every
+    /// change ignoring whitespace hides — so the entire file of one is no hunk either. This
+    /// replaced phase 01's rule that drew such a file whole. Caught by: an entire-file hunk
+    /// built over no change.
     #[test]
-    fn the_entire_file_of_an_unchanged_file_is_still_one_hunk() {
+    fn the_entire_file_of_an_unchanged_file_is_no_hunk_as_git_prints_none() {
         let text = text(5, 5, Vec::new());
-        let hunks = Hunks::of(&text, Context::EntireFile);
+        assert!(Hunks::of(&text, Context::EntireFile).is_empty());
+        assert!(Hunks::of_ranges(&text, &[], Context::EntireFile, 4).is_empty());
+    }
+
+    /// git's `diff.interHunkContext`: changes further apart than twice the context still
+    /// share a hunk while the gap is within twice the context plus it, and only then.
+    /// Measured against git 2.56: `git -c diff.interHunkContext=2 diff -U1` over a gap of
+    /// four merges, over a gap of five separates. Caught by: ignoring the inter-hunk
+    /// context, or adding it once per side.
+    #[test]
+    fn the_inter_hunk_context_widens_the_gap_that_merges() {
+        let four = text(32, 32, vec![change((2, 1), (2, 1)), change((7, 1), (7, 1))]);
+        assert_eq!(
+            Hunks::of_ranges(&four, four.changes(), Context::lines(1), 0).len(),
+            2
+        );
+        let merged = Hunks::of_ranges(&four, four.changes(), Context::lines(1), 2);
+        assert_eq!(
+            merged.len(),
+            1,
+            "a gap of four separated at -U1 with two more"
+        );
+        assert_eq!(merged.get(0).expect("one").old, LineSpan::at(1, 8));
+
+        let five = text(32, 32, vec![change((2, 1), (2, 1)), change((8, 1), (8, 1))]);
+        assert_eq!(
+            Hunks::of_ranges(&five, five.changes(), Context::lines(1), 2).len(),
+            2,
+            "a gap of five merged at -U1 with two more"
+        );
+    }
+
+    /// The ranges grouped are the ones given, and a hunk indexes them: a view drawing the
+    /// whitespace-ignoring ranges groups those, not the exact ones. Caught by: grouping
+    /// `text.changes()` whatever was passed.
+    #[test]
+    fn the_ranges_given_are_the_ones_grouped() {
+        let text = text(
+            32,
+            32,
+            vec![change((2, 1), (2, 1)), change((20, 1), (20, 1))],
+        );
+        let shown = [change((20, 1), (20, 1))];
+        let hunks = Hunks::of_ranges(&text, &shown, Context::lines(3), 0);
         assert_eq!(hunks.len(), 1);
         let hunk = hunks.get(0).expect("one hunk");
-        assert_eq!(
-            hunk.changes,
-            0..0,
-            "a hunk claimed changes the diff has none of"
-        );
-        assert_eq!(hunk.old, LineSpan::at(0, 5));
+        assert_eq!(hunk.changes, 0..1, "the hunk indexed another set of ranges");
+        assert_eq!(hunk.old, LineSpan::at(17, 7));
     }
 }

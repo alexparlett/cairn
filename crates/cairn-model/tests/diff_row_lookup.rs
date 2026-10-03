@@ -22,7 +22,8 @@
 //! cannot leak into each other's totals.
 
 use cairn_model::{
-    ChangedRange, Context, DiffLine, LineSpan, SideBySideRows, TextDiff, UnifiedRows,
+    ChangedRange, Context, DiffLine, DisplayOverlay, LineSpan, SideBySideRows, TextDiff,
+    UnifiedLayout, UnifiedRows,
 };
 
 /// A hundred thousand lines with one line replaced in the middle: at entire-file context
@@ -89,6 +90,33 @@ fn a_unified_row_costs_no_allocation_however_long_the_diff_is() {
             rows.len(),
             info.count_total,
             info.bytes_total
+        );
+    }
+}
+
+/// The view's own path (phase 06): a layout kept across frames, asked for a row against
+/// the diff and overlay it was built from, with whitespace ignored — the ranges it reads
+/// come from the overlay — allocates nothing either.
+#[test]
+fn a_row_of_a_kept_layout_costs_no_allocation_however_long_the_diff_is() {
+    let text = a_hundred_thousand_lines();
+    let overlay = DisplayOverlay::new(Some(text.changes().to_vec()), Vec::new());
+    let layout = UnifiedLayout::shown(&text, &overlay, Context::EntireFile);
+    assert_eq!(layout.len(), 100_002);
+    warm_up(|| {
+        layout.row(&text, &overlay, 0);
+    });
+
+    for row in probes(layout.len()) {
+        let mut found = None;
+        let info = allocation_counter::measure(|| {
+            found = layout.row(&text, &overlay, row);
+        });
+        assert!(found.is_some(), "row {row} answered nothing");
+        assert_eq!(
+            info.count_total, 0,
+            "asking a kept layout for row {row} allocated {} times",
+            info.count_total
         );
     }
 }

@@ -36,7 +36,10 @@ fn unified_identities(text: &TextDiff, context: Context) -> Vec<(bool, u32)> {
         .filter_map(|row| match rows.row(row) {
             Some(UnifiedRow::Removed { old, .. }) => Some((true, old.index())),
             Some(UnifiedRow::Added { new, .. }) => Some((false, new.index())),
-            Some(UnifiedRow::Header(_)) | Some(UnifiedRow::Context { .. }) | None => None,
+            Some(UnifiedRow::Header(_))
+            | Some(UnifiedRow::Context { .. })
+            | Some(UnifiedRow::NoNewlineAtEnd)
+            | None => None,
         })
         .collect()
 }
@@ -155,12 +158,18 @@ fn a_selection_and_its_patch_are_the_same_in_every_view() {
                     .changes()
                     .iter()
                     .any(|change| !change.removed.is_empty() && !change.added.is_empty());
+                // The unified rows also hold git's `\ No newline at end of file` markers,
+                // which side-by-side does not draw yet (phase 07): they are not pairing.
+                let markers = (0..unified.len())
+                    .filter(|n| matches!(unified.row(*n), Some(UnifiedRow::NoNewlineAtEnd)))
+                    .count();
+                let unified_lines = unified.len() - markers;
                 assert!(
-                    unified.len() >= side.len(),
+                    unified_lines >= side.len(),
                     "{name} at {context:?}: pairing grew"
                 );
                 assert_eq!(
-                    unified.len() > side.len(),
+                    unified_lines > side.len(),
                     pairs,
                     "{name} at {context:?}: the two views' row counts do not follow the pairing"
                 );

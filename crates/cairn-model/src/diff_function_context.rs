@@ -21,6 +21,11 @@ pub struct FunctionContext {
     context: Option<Context>,
     /// Sorted by start, one entry per start. An empty text is git printing none.
     by_start: Vec<(LineNumber, Vec<u8>)>,
+    /// The user's `diff.interHunkContext`: how many more unchanged lines than twice the
+    /// context their `git diff` merges two hunks across. It moves no start this type is
+    /// keyed by — a merged hunk starts where its first part does — but a view grouping the
+    /// hunks these texts head must group with it, or its hunks are not git's.
+    inter_hunk_context: u32,
 }
 
 impl FunctionContext {
@@ -47,7 +52,20 @@ impl FunctionContext {
         Self {
             context: Some(normalised(context)),
             by_start: kept,
+            inter_hunk_context: 0,
         }
+    }
+
+    /// The same text, with the user's `diff.interHunkContext`, which a view groups the hunks
+    /// these are looked up for with.
+    pub fn with_inter_hunk_context(mut self, lines: u32) -> Self {
+        self.inter_hunk_context = lines;
+        self
+    }
+
+    /// The user's `diff.interHunkContext`; zero when nothing was read.
+    pub fn inter_hunk_context(&self) -> u32 {
+        self.inter_hunk_context
     }
 
     /// The context these were read at, `None` when nothing was.
@@ -133,10 +151,25 @@ mod tests {
         assert_eq!(context.len(), 3);
     }
 
+    /// Caught by: dropping the inter-hunk context on the way through, which a view then
+    /// groups without.
+    #[test]
+    fn the_inter_hunk_context_read_with_is_kept() {
+        let read = FunctionContext::read_at(Context::lines(3), vec![at(4, "fn f()")])
+            .with_inter_hunk_context(5);
+        assert_eq!(read.inter_hunk_context(), 5);
+        assert_eq!(read.of(header(4, 7)), Some(&b"fn f()"[..]));
+        assert_eq!(
+            FunctionContext::read_at(Context::lines(3), Vec::new()).inter_hunk_context(),
+            0
+        );
+    }
+
     #[test]
     fn nothing_read_answers_nothing() {
         let none = FunctionContext::none();
         assert_eq!(none.context(), None);
+        assert_eq!(none.inter_hunk_context(), 0);
         assert!(none.is_empty());
         assert_eq!(none.of(header(0, 1)), None);
     }

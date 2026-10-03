@@ -9,10 +9,10 @@ use cairn_guards::{
     calls_nullary_method, code_only, code_without_strings, code_without_test_modules,
     configures_process_environment, constructs_named_struct, constructs_process_command,
     constructs_struct, declared_dependencies, declares_publicly, derives_or_implements,
-    gate_dispatch_arms, gate_full_sequence, implements_type, job_env_entries, mentions_crate,
-    names_gitoxide_mutation, reads_row_content_partially, renames_type, renders_in_a_macro,
-    repo_root, rust_sources, spawns_git, structs_with_a_field_naming, types_containing,
-    waits_on_work,
+    gate_command_assignments, gate_dispatch_arms, gate_full_sequence, gate_function_commands,
+    implements_type, job_env_entries, mentions_crate, names_gitoxide_mutation,
+    reads_row_content_partially, renames_type, renders_in_a_macro, repo_root, rust_sources,
+    spawns_git, structs_with_a_field_naming, types_containing, waits_on_work,
 };
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
@@ -3492,6 +3492,13 @@ fn the_workflow_env_matcher_reads_only_the_jobs_own_block() {
     let in_the_job = "jobs:\n  gate:\n    runs-on: x\n    # why\n    env:\n      # why\n      \
                       CAIRN_REQUIRE_SSH_FIXTURE: 1\n      OTHER: 2\n    steps:\n      - run: a\n";
     assert!(finds(in_the_job), "the job's own env was not read");
+    let after_a_scalar = "jobs:\n  gate:\n    env:\n      NOTE: |\n        text\n\n        more\n      \
+                          CAIRN_REQUIRE_SSH_FIXTURE: 1\n    steps: []\n";
+    assert_eq!(
+        job_env_entries(after_a_scalar, "gate"),
+        vec!["NOTE: |".to_owned(), wanted.to_owned()],
+        "an entry after a block scalar's body, blank line included, was not read as one"
+    );
     assert_eq!(
         job_env_entries(in_the_job, "gate"),
         vec![wanted.to_owned(), "OTHER: 2".to_owned()],
@@ -3524,6 +3531,29 @@ fn the_workflow_env_matcher_reads_only_the_jobs_own_block() {
         (
             "an env after the job ends",
             "jobs:\n  gate:\n    steps: []\n  other:\n    env:\n      \
+             CAIRN_REQUIRE_SSH_FIXTURE: 1\n",
+        ),
+        (
+            "a key named like the job outside `jobs:`",
+            "on:\n  gate:\n    env:\n      CAIRN_REQUIRE_SSH_FIXTURE: 1\njobs:\n  gate:\n    \
+             steps: []\n",
+        ),
+        (
+            "no `jobs:` at all",
+            "  gate:\n    env:\n      CAIRN_REQUIRE_SSH_FIXTURE: 1\n",
+        ),
+        (
+            "a block scalar's body in the job's env",
+            "jobs:\n  gate:\n    env:\n      NOTE: |\n        CAIRN_REQUIRE_SSH_FIXTURE: 1\n    \
+             steps: []\n",
+        ),
+        (
+            "a folded scalar's body with a chomping indicator",
+            "jobs:\n  gate:\n    env:\n      NOTE: >- # why\n        CAIRN_REQUIRE_SSH_FIXTURE: 1\n",
+        ),
+        (
+            "a nested map under an entry",
+            "jobs:\n  gate:\n    env:\n      OTHER: 1\n      MAP:\n        \
              CAIRN_REQUIRE_SSH_FIXTURE: 1\n",
         ),
     ] {
@@ -3574,6 +3604,107 @@ fn the_local_full_gate_runs_every_step_but_the_day_loops() {
              sequence, or exempt it in LOCAL_FULL_GATE_EXEMPT with the reason."
         );
     }
+}
+
+/// `scripts/gate.sh` with no arguments is the merge bar only while two things hold that the
+/// sequence reading cannot see: the default is the full run (`FAST=0`, set once at the top
+/// and changed only by `--fast`), and no merge-bar step's command is the literal `skip`,
+/// which passes it without running anything. Every dispatch arm but the day loop's names
+/// at least one `*_CMD` variable, and every value given each one is a command.
+#[test]
+fn the_full_gate_is_the_default_and_no_merge_bar_step_is_skipped() {
+    let gate = std::fs::read_to_string(repo_root().join("scripts/gate.sh"))
+        .unwrap_or_else(|e| panic!("reading scripts/gate.sh: {e}"));
+    let assignments: Vec<&str> = gate
+        .lines()
+        .filter(|line| line.trim_start().starts_with("FAST="))
+        .collect();
+    assert_eq!(
+        assignments
+            .iter()
+            .map(|line| line.trim())
+            .collect::<Vec<_>>(),
+        ["FAST=0", "FAST=1"],
+        "scripts/gate.sh sets FAST other than once to 0 and once, for --fast, to 1"
+    );
+    assert_eq!(
+        assignments[0], "FAST=0",
+        "the default FAST=0 is not at the top level of scripts/gate.sh"
+    );
+    let default_at = gate.lines().position(|line| line == "FAST=0");
+    let parsing_at = gate
+        .lines()
+        .position(|line| line.trim() == "if [ \"$#\" -ne 0 ]; then");
+    assert!(
+        matches!((default_at, parsing_at), (Some(a), Some(b)) if a < b),
+        "FAST=0 is not set before the arguments are read"
+    );
+
+    let arms = gate_dispatch_arms(&gate)
+        .unwrap_or_else(|e| panic!("scripts/gate.sh's dispatch arms cannot be read: {e}"));
+    let commands = gate_command_assignments(&gate);
+    let mut checked = 0usize;
+    for (step, function) in &arms {
+        if LOCAL_FULL_GATE_EXEMPT.contains(&step.as_str()) {
+            continue;
+        }
+        let variables = gate_function_commands(&gate, function);
+        assert!(
+            !variables.is_empty(),
+            "the merge-bar step `{step}` runs `{function}`, which names no *_CMD variable, so \
+             whether it is skipped cannot be read"
+        );
+        for variable in variables {
+            let values = commands
+                .get(&variable)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            assert!(
+                !values.is_empty(),
+                "`{function}` runs ${variable}, which scripts/gate.sh never sets"
+            );
+            for value in values {
+                assert!(
+                    value != "skip" && !value.trim().is_empty(),
+                    "the merge-bar step `{step}` is set to {value:?} ({variable}), so the \
+                     merge bar would pass it without running it"
+                );
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked >= 8, "only {checked} step commands were checked");
+}
+
+/// The two readings the default-and-skip guard rests on.
+#[test]
+fn the_gate_command_readers_catch_the_shapes_they_claim() {
+    let script = "A_CMD=\"cargo fmt\"   # why\nB_CMD=skip\nC_CMD='skip' # why\n  D_CMD=\"x\"\n\
+                  lower_CMD=x\nE_CMD=\"first\"\nE_CMD=\"\"\n\
+                  run_a() { run_cmd \"a\" \"$A_CMD\"; }\nrun_b() {\n  step b\n  run_body \"b\" \
+                  \"${B_CMD}\" \"$C_CMD\"\n}\nrun_c() { :; }\n";
+    let found = gate_command_assignments(script);
+    let values = |name: &str| found.get(name).cloned().unwrap_or_default();
+    assert_eq!(
+        values("A_CMD"),
+        ["cargo fmt"],
+        "a quoted value and a comment"
+    );
+    assert_eq!(values("B_CMD"), ["skip"], "a bare word");
+    assert_eq!(values("C_CMD"), ["skip"], "single quotes");
+    assert_eq!(values("E_CMD"), ["first", ""], "every assignment, in order");
+    assert!(
+        !found.contains_key("D_CMD") && !found.contains_key("lower_CMD"),
+        "an indented assignment or a lower-case name was read as a step command: {found:?}"
+    );
+    assert_eq!(gate_function_commands(script, "run_a"), ["A_CMD"]);
+    assert_eq!(
+        gate_function_commands(script, "run_b"),
+        ["B_CMD", "C_CMD"],
+        "a definition over several lines, braced and plain references"
+    );
+    assert!(gate_function_commands(script, "run_c").is_empty());
+    assert!(gate_function_commands(script, "run_missing").is_empty());
 }
 
 /// The two readings the local-gate guard rests on, against the shapes they claim.

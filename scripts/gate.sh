@@ -5,8 +5,9 @@
 #   scripts/gate.sh --step <name>   one named check (used by CI)
 #
 # A step left empty FAILS loudly rather than skipping: a check that silently opts
-# out is not a gate. Set a variable to the literal string "skip" only for a step
-# that genuinely does not apply, and record why in the comment beside it.
+# out is not a gate. The literal string "skip" passes a step without running it, so
+# no merge-bar step may be set to it, and FAST=0 stays the default below
+# (the_full_gate_is_the_default_and_no_merge_bar_step_is_skipped).
 set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 1

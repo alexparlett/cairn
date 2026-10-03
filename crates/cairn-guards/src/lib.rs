@@ -1,6 +1,6 @@
 //! Matchers and repository walking for the invariant guards.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// Resolved from this crate's manifest, not the process working directory.
@@ -1625,42 +1625,168 @@ pub fn spawns_git(source: &str) -> Vec<usize> {
 }
 
 /// The entries of one job's own `env:` block in a GitHub Actions workflow, trimmed — the
-/// variables every step of that job sees. A job is the block from its two-space-indented
-/// key (`  gate:`) to the next two-space-indented key; its `env:` is the one indented four
-/// spaces directly under it, so a workflow-level `env:`, another job's, and a step's own
-/// (`        env:`, which only that step sees) are none of them. Comments and blank lines
-/// are not entries.
+/// variables every step of that job sees. A job is a two-space-indented key (`  gate:`)
+/// inside the top-level `jobs:` block — never a key of the same spelling under `on:` or
+/// anywhere else — running to the next key at two spaces or less; its `env:` is the one
+/// indented four spaces directly under it, so a workflow-level `env:`, another job's, and a
+/// step's own (`        env:`, which only that step sees) are none of them. An entry is a
+/// line at the env block's own indent (its first entry's); a line deeper than that is a
+/// value's continuation — the body of a block scalar (`X: |`) or a nested map — and is
+/// none, nor is the body of a block scalar anywhere in the job read as a key. Comments
+/// and blank lines are not entries.
 pub fn job_env_entries(workflow: &str, job: &str) -> Vec<String> {
     let indent = |line: &str| line.len() - line.trim_start().len();
     let meaningful = |line: &str| {
         let trimmed = line.trim();
         !trimmed.is_empty() && !trimmed.starts_with('#')
     };
-    let header = format!("  {job}:");
-    let mut lines = workflow
-        .lines()
-        .skip_while(|line| line.trim_end() != header);
-    if lines.next().is_none() {
+    // A key whose value is a block scalar (`|`, `>`, with a chomping or indentation
+    // indicator, and a comment after it), whose body is every deeper line after it.
+    let opens_block_scalar = |line: &str| {
+        let value = line
+            .split_once(": ")
+            .map(|(_, value)| value)
+            .or_else(|| line.trim_start().strip_prefix("- "))
+            .unwrap_or_default();
+        let value = value.split(" #").next().unwrap_or_default().trim();
+        value.starts_with(['|', '>'])
+            && value[1..]
+                .chars()
+                .all(|c| c == '-' || c == '+' || c.is_ascii_digit())
+    };
+    let lines: Vec<&str> = workflow.lines().collect();
+    let Some(jobs) = lines.iter().position(|line| line.trim_end() == "jobs:") else {
         return Vec::new();
-    }
-    let body: Vec<&str> = lines
-        .take_while(|line| !(meaningful(line) && indent(line) <= 2))
+    };
+    let jobs_block: Vec<&str> = lines[jobs + 1..]
+        .iter()
+        .take_while(|line| !(meaningful(line) && indent(line) == 0))
+        .copied()
         .collect();
+    let header = format!("  {job}:");
+    let mut scalar: Option<usize> = None;
+    let mut at = None;
+    for (index, line) in jobs_block.iter().enumerate() {
+        if let Some(opened) = scalar {
+            if !meaningful(line) || indent(line) > opened {
+                continue;
+            }
+            scalar = None;
+        }
+        if line.trim_end() == header {
+            at = Some(index);
+            break;
+        }
+        if meaningful(line) && opens_block_scalar(line) {
+            scalar = Some(indent(line));
+        }
+    }
+    let Some(at) = at else {
+        return Vec::new();
+    };
     let mut entries = Vec::new();
     let mut in_env = false;
-    for line in body {
+    let mut entry_indent: Option<usize> = None;
+    let mut scalar: Option<usize> = None;
+    for line in &jobs_block[at + 1..] {
+        if let Some(opened) = scalar {
+            if !meaningful(line) || indent(line) > opened {
+                continue;
+            }
+            scalar = None;
+        }
         if !meaningful(line) {
             continue;
         }
+        if indent(line) <= 2 {
+            break;
+        }
         if indent(line) == 4 {
             in_env = line.trim_end() == "    env:";
-            continue;
+            entry_indent = None;
+        } else if in_env {
+            let level = *entry_indent.get_or_insert(indent(line));
+            if indent(line) == level {
+                entries.push(line.trim().to_owned());
+            }
         }
-        if in_env && indent(line) > 4 {
-            entries.push(line.trim().to_owned());
+        if opens_block_scalar(line) {
+            scalar = Some(indent(line));
         }
     }
     entries
+}
+
+/// Every value `scripts/gate.sh` assigns a step command variable (`NAME_CMD=...`) at the
+/// top level, by variable, in order: the value with its quotes taken off (`"..."`,
+/// `'...'`, or a bare word), a trailing comment left off.
+pub fn gate_command_assignments(gate: &str) -> BTreeMap<String, Vec<String>> {
+    let mut found: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for line in gate.lines() {
+        let Some((name, rest)) = line.split_once('=') else {
+            continue;
+        };
+        if !(name.ends_with("_CMD")
+            && name
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
+        {
+            continue;
+        }
+        let value = match rest.chars().next() {
+            Some(quote @ ('"' | '\'')) => {
+                rest[1..].split(quote).next().unwrap_or_default().to_owned()
+            }
+            _ => rest
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_owned(),
+        };
+        found.entry(name.to_owned()).or_default().push(value);
+    }
+    found
+}
+
+/// The step command variables (`$NAME_CMD`, `${NAME_CMD}`) `function`'s definition in
+/// `scripts/gate.sh` names — from `function() {` to its closing `}`, on one line or
+/// several. Empty when there is no such definition.
+pub fn gate_function_commands(gate: &str, function: &str) -> Vec<String> {
+    let opening = format!("{function}()");
+    let mut body = String::new();
+    let mut inside = false;
+    for line in gate.lines() {
+        if !inside {
+            let Some(rest) = line.trim_start().strip_prefix(&opening) else {
+                continue;
+            };
+            inside = true;
+            body.push_str(rest);
+            if rest.trim_end().ends_with('}') {
+                break;
+            }
+            continue;
+        }
+        body.push('\n');
+        body.push_str(line);
+        if line.trim() == "}" {
+            break;
+        }
+    }
+    let mut names = Vec::new();
+    let mut rest = body.as_str();
+    while let Some(at) = rest.find('$') {
+        rest = &rest[at + 1..];
+        let name: String = rest
+            .trim_start_matches('{')
+            .chars()
+            .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
+            .collect();
+        if name.ends_with("_CMD") && !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
 }
 
 /// The body of `scripts/gate.sh`'s default dispatch arm, line by line after its `*)`.

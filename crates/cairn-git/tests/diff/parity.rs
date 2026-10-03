@@ -1187,26 +1187,95 @@ fn the_view_draws_what_git_diff_draws_at_every_context_with_whitespace_ignored_o
     );
 }
 
+/// Phase 06 QA (T1): a `diff.context` or a `diff.interHunkContext` git refuses refuses every
+/// content query — one file, Expand All and one path of the working tree — as the user's
+/// own `git diff` refuses to run; none falls back to git's default. Caught by: the grouping
+/// read with `.unwrap_or(..)` a default in any of the three.
+#[test]
+fn a_grouping_git_refuses_refuses_every_content_query() {
+    let repo = repositories::whitespace();
+    let head = repo.rev("HEAD");
+    let request = ChangesRequest::commit(head);
+    let options = ContentOptions::default();
+    for (key, value) in [("diff.context", "abc"), ("diff.interHunkContext", "-1")] {
+        repo.config(key, value);
+        assert!(
+            repo.try_git(&["diff", "HEAD^", "HEAD"], &[], None).is_err(),
+            "git diff runs under {key}={value}, so refusing it is not git's answer"
+        );
+        let engine = ok(Repository::discover(repo.path()), "the fixture opens");
+        let mut session = ok(engine.diff_session(), "a diff session");
+        let set = ok(
+            session.changes(super::git(), &request, &CancelSignal::new()),
+            "the changes query answers",
+        );
+        let file = some(set.files.first(), "a changed file");
+        let refused = |what: &str, outcome: Result<(), cairn_git::Error>| {
+            assert!(
+                matches!(outcome, Err(cairn_git::Error::InvalidConfig { .. })),
+                "{what} under {key}={value}: {outcome:?}"
+            );
+        };
+        refused(
+            "a file diff",
+            session
+                .file_diff(super::git(), &request, file, &options, &CancelSignal::new())
+                .map(drop),
+        );
+        refused(
+            "Expand All",
+            session
+                .file_diffs(super::git(), &request, &set, &options, &CancelSignal::new())
+                .map(drop),
+        );
+        refused(
+            "a working-tree diff",
+            engine
+                .working_tree_diff(
+                    super::git(),
+                    &file.new_path,
+                    cairn_git::WorkingTreeDiff::Unstaged,
+                    &options,
+                    &CancelSignal::new(),
+                )
+                .map(drop),
+        );
+        repo.git(&["config", "--unset", key]);
+    }
+}
+
 /// Phase 06, the user's grouping: with `diff.context` and `diff.interHunkContext` set, the
 /// context a view opens at is `diff.context` (`Repository::configured_context`), and the
 /// view's rows at it are plain `git diff`'s — which reads both keys — with whitespace
-/// ignored and without, and at an explicit `-U1` still grouped across the inter-hunk
-/// context. The fixture is first shown to group differently under the key, so agreeing is
-/// not agreeing about nothing. Caught by: opening at three whatever `diff.context` says, or
-/// dropping `diff.interHunkContext` between the configuration and the view's grouping.
+/// ignored and without, and at an explicit `-U1`, with and without `-w`, still grouped
+/// across the inter-hunk context; Expand All answers each file as it is answered alone,
+/// grouping included. The fixture is first shown to group differently under the key at
+/// each of those four, so agreeing is not agreeing about nothing. Caught by: opening at
+/// three whatever `diff.context` says, dropping `diff.interHunkContext` between the
+/// configuration and the view's grouping, or Expand All carrying no inter-hunk context.
 #[test]
 fn the_view_groups_hunks_as_the_users_git_diff_does() {
     let source = repositories::discriminating(&[]);
     let repo = Repo::shared_clone_of(source.path(), "grouping");
     let head = repo.git(&["rev-parse", "HEAD"]).trim().to_owned();
-    let plain = repo.git(&["diff", "-U1", "HEAD^", "HEAD"]);
     repo.config("diff.context", "5");
     repo.config("diff.interHunkContext", "3");
-    assert_ne!(
-        repo.git(&["diff", "-U1", "HEAD^", "HEAD"]),
-        plain,
-        "diff.interHunkContext=3 groups this fixture as git's default does"
-    );
+    // At every context and whitespace setting compared below — plain `git diff` at the
+    // configured five, and `-U1` — with and without `-w`, the key changes git's grouping.
+    for flags in [&[][..], &["-w"], &["-U1"], &["-U1", "-w"]] {
+        let printed = |prefix: &[&str]| {
+            let mut args = prefix.to_vec();
+            args.push("diff");
+            args.extend_from_slice(flags);
+            args.extend(["HEAD^", "HEAD"]);
+            repo.git(&args)
+        };
+        assert_ne!(
+            printed(&[]),
+            printed(&["-c", "diff.interHunkContext=0"]),
+            "{flags:?}: diff.interHunkContext=3 groups this fixture as git's default does"
+        );
+    }
 
     let engine = ok(Repository::discover(repo.path()), "the fixture opens");
     let opened_at = ok(engine.configured_context(), "diff.context reads");
@@ -1218,8 +1287,48 @@ fn the_view_groups_hunks_as_the_users_git_diff_does() {
         assert!(tally.files >= 70, "only {} files compared", tally.files);
         assert!(tally.with_function > 0, "no function context compared");
     }
-    let tally = compare_commit(&repo, &mut session, &head, 1, false);
-    assert_no_divergence("-U1 under diff.interHunkContext=3", &tally);
+    for whitespace in [false, true] {
+        let tally = compare_commit(&repo, &mut session, &head, 1, whitespace);
+        assert_no_divergence(
+            &format!("-U1 -w={whitespace} under diff.interHunkContext=3"),
+            &tally,
+        );
+    }
+
+    // Expand All carries the same grouping as each file asked alone (QA T2).
+    let request = ChangesRequest::commit(ok(Oid::parse(&head), "a commit id"));
+    let set = ok(
+        session.changes(super::git(), &request, &CancelSignal::new()),
+        "the changes query answers",
+    );
+    let options = ContentOptions::default();
+    let all = ok(
+        session.file_diffs(super::git(), &request, &set, &options, &CancelSignal::new()),
+        "Expand All answers",
+    );
+    assert_eq!(all.len(), set.files.len());
+    let mut grouped = 0;
+    for (expanded, file) in all.iter().zip(&set.files) {
+        let alone = ok(
+            session.file_diff(super::git(), &request, file, &options, &CancelSignal::new()),
+            "a file diff",
+        );
+        assert_eq!(
+            expanded, &alone,
+            "{:?}: Expand All against alone",
+            file.new_path
+        );
+        if let DiffContent::Text { overlay, .. } = &expanded.content {
+            assert_eq!(
+                overlay.function_context().inter_hunk_context(),
+                3,
+                "{:?}: Expand All dropped diff.interHunkContext",
+                file.new_path
+            );
+            grouped += 1;
+        }
+    }
+    assert!(grouped >= 70, "only {grouped} text files compared");
 
     repo.config("diff.context", "0");
     let engine = ok(Repository::discover(repo.path()), "the fixture opens");

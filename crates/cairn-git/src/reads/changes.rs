@@ -6,7 +6,11 @@
 //! given neither `--textconv` nor `--ext-diff` and `--raw` reads no content but what rename
 //! detection compares. Detection is passed explicitly, as `-M` or `-C` with `-l<limit>`, or
 //! `--no-renames`: plumbing does not read `diff.renames` at all, and the caller decides
-//! what the user's configuration asks for (`crate::diff`).
+//! what the user's configuration asks for (`crate::diff`). So it is with the submodules
+//! `diff.ignoreSubmodules` hides, which plumbing does not read either: the caller asks for
+//! none of them (`--ignore-submodules=all`) or names those to leave out
+//! (`:(exclude,literal)` pathspecs after `--`), so that git never queues them — before
+//! rename detection, as `git log` hides them.
 //!
 //! It reads commits and trees, and — when detection is on and the exact stage leaves
 //! something to compare — the blobs it compares. In a blob-less partial clone those blobs
@@ -19,6 +23,9 @@
 //! The answer is parsed from the `-z` records as they arrive, never from stderr: the
 //! rename-limit warning git prints there is prose in the user's language, and whether the
 //! limit cut detection short is decided from the answer instead (`crate::diff`).
+
+use std::ffi::OsString;
+use std::os::unix::ffi::OsStringExt as _;
 
 use cairn_model::{ChangeStatus, ChangedFile, FileMode, Oid, RepoPath, Similarity};
 
@@ -35,6 +42,20 @@ pub(crate) enum Detection {
     Renames { limit: u32 },
     /// `-C -l<limit>`: renames, and copies from files the same change modified.
     Copies { limit: u32 },
+}
+
+/// Which gitlinks a changes query asks `git` not to queue, before rename detection sees
+/// them: what the user's `diff.ignoreSubmodules` hides from their own `git log`, which
+/// `diff-tree` never reads (`crate::diff`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Submodules<'a> {
+    /// What `diff-tree` lists: every gitlink but one whose own `submodule.<name>.ignore`
+    /// is `all`.
+    AsListed,
+    /// `--ignore-submodules=all`: no gitlink at all.
+    HideEvery,
+    /// An `:(exclude,literal)` pathspec for each of these paths.
+    Excluding(&'a [RepoPath]),
 }
 
 impl Detection {
@@ -61,19 +82,13 @@ pub(crate) fn changes(
     old: &Oid,
     new: &Oid,
     detection: Detection,
+    submodules: Submodules<'_>,
     cancel: &impl Cancel,
 ) -> Result<Vec<ChangedFile>, Error> {
     if cancel.is_cancelled() {
         return Err(Error::ChangesCancelled { changed: 0 });
     }
-    let mut arguments: Vec<String> = ["diff-tree", "-r", "-z", "--raw", "--no-abbrev"]
-        .into_iter()
-        .map(str::to_owned)
-        .collect();
-    arguments.extend(detection.arguments());
-    arguments.push("--end-of-options".to_owned());
-    arguments.push(old.to_string());
-    arguments.push(new.to_string());
+    let arguments = arguments(old, new, detection, submodules);
 
     let mut records = RawRecords::default();
     let outcome = git
@@ -83,12 +98,51 @@ pub(crate) fn changes(
         .start()?
         .records(cancel, |record| records.push(record), |_| {});
     match outcome {
-        Ok(_) => records.finish(&arguments.join(" ")),
+        Ok(_) => records.finish(
+            &arguments
+                .iter()
+                .map(|argument| argument.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
         Err(Error::GitReadCancelled { .. }) => Err(Error::ChangesCancelled {
             changed: records.files.len(),
         }),
         Err(other) => Err(other),
     }
+}
+
+/// The query's arguments: `diff-tree` — query plumbing, which writes nothing — in its raw
+/// form and never with `--textconv` or `--ext-diff`, the detection spelled out, the two
+/// trees after `--end-of-options`, and any pathspec after `--`.
+fn arguments(
+    old: &Oid,
+    new: &Oid,
+    detection: Detection,
+    submodules: Submodules<'_>,
+) -> Vec<OsString> {
+    let mut arguments: Vec<OsString> = ["diff-tree", "-r", "-z", "--raw", "--no-abbrev"]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+    arguments.extend(detection.arguments().into_iter().map(OsString::from));
+    if submodules == Submodules::HideEvery {
+        arguments.push("--ignore-submodules=all".into());
+    }
+    arguments.push("--end-of-options".into());
+    arguments.push(old.to_string().into());
+    arguments.push(new.to_string().into());
+    if let Submodules::Excluding(paths) = submodules
+        && !paths.is_empty()
+    {
+        arguments.push("--".into());
+        for path in paths {
+            let mut pathspec = b":(exclude,literal)".to_vec();
+            pathspec.extend_from_slice(path.as_bytes());
+            arguments.push(OsString::from_vec(pathspec));
+        }
+    }
+    arguments
 }
 
 /// The `--raw -z` format, record by record: a metadata record

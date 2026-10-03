@@ -537,3 +537,60 @@ pub fn signed_by_two_people() -> Repo {
     .unwrap_or_else(|e| panic!("committing: {e}"));
     repo
 }
+
+/// Submodules — gitlinks, mode `160000` — beside an inexact rename, in two commits.
+///
+/// `.gitmodules` names `s` after its path and `t` as `named`; `u` is a gitlink it does not
+/// name at all. The second commit moves `s` and `t` to another commit, adds `u`, and
+/// renames `a.txt` to `b.txt` with an edit — one deletion against one addition, which a
+/// `diff.renameLimit` of 1 lets git search only when the added gitlink is not counted.
+/// The gitlinks point at this repository's own first commit and its parent-less twin, so
+/// nothing is fetched and no submodule is checked out; they are staged by
+/// `git update-index`, because `git add --all` would drop a gitlink whose directory is
+/// missing. `config` is applied before anything is committed.
+pub fn submodules(config: &[(&str, &str)]) -> Repo {
+    let repo = Repo::new("submodules");
+    for (key, value) in config {
+        repo.config(key, value);
+    }
+    let commit = |message: &str, stamp: i64| {
+        let stamp = format!("{stamp} +0000");
+        repo.try_git(
+            &["commit", "--quiet", "--allow-empty", "-m", message],
+            &[("GIT_AUTHOR_DATE", &stamp), ("GIT_COMMITTER_DATE", &stamp)],
+            None,
+        )
+        .unwrap_or_else(|e| panic!("committing {message:?}: {e}"));
+    };
+    let gitlink = |path: &str, id: &str| {
+        repo.git(&[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{id},{path}"),
+        ]);
+    };
+    commit("targets", EPOCH - 120);
+    let first = repo.git(&["rev-parse", "HEAD"]).trim().to_owned();
+    commit("another target", EPOCH - 60);
+    let second = repo.git(&["rev-parse", "HEAD"]).trim().to_owned();
+
+    repo.write("a.txt", &variation(20, ""));
+    repo.write(
+        ".gitmodules",
+        b"[submodule \"s\"]\n\tpath = s\n\turl = ../s\n[submodule \"named\"]\n\tpath = t\n\turl = ../t\n",
+    );
+    repo.git(&["add", "a.txt", ".gitmodules"]);
+    gitlink("s", &first);
+    gitlink("t", &first);
+    commit("seed", EPOCH);
+
+    repo.git(&["mv", "a.txt", "b.txt"]);
+    repo.write("b.txt", &variation(20, "one more line\n"));
+    repo.git(&["add", "b.txt"]);
+    gitlink("s", &second);
+    gitlink("t", &second);
+    gitlink("u", &second);
+    commit("move them", EPOCH + 60);
+    repo
+}

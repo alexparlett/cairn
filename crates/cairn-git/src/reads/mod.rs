@@ -69,7 +69,7 @@
 
 mod changes;
 
-pub(crate) use changes::{Detection, changes};
+pub(crate) use changes::{Detection, Submodules, changes};
 
 /// The read as the diff thread will run it: built here from a `GitBinary` copy
 /// that thread holds, run on that thread, stopped by an epoch, answering `-z`
@@ -84,7 +84,7 @@ mod diff_engine_path_forward {
 
     use cairn_model::{ChangeStatus, Oid};
 
-    use super::{Detection, changes};
+    use super::{Detection, Submodules, changes};
     use crate::ops::{Askpass, GitBinary, GitEnvironment};
     use crate::{Cancel, Error, SharedRepository};
 
@@ -231,8 +231,16 @@ mod diff_engine_path_forward {
         let answered = std::thread::spawn(move || {
             let repo = shared.to_worker();
             let detection = Detection::Renames { limit: 1000 };
-            changes(&thread_git, &repo, &old, &new, detection, &query)
-                .map(|files| (files, shared.command_log()))
+            changes(
+                &thread_git,
+                &repo,
+                &old,
+                &new,
+                detection,
+                Submodules::AsListed,
+                &query,
+            )
+            .map(|files| (files, shared.command_log()))
         })
         .join()
         .unwrap_or_else(|_| panic!("the diff thread panicked"))
@@ -317,6 +325,7 @@ mod diff_engine_path_forward {
             &old,
             &new,
             Detection::Renames { limit: 0 },
+            Submodules::AsListed,
             &query,
         );
         let elapsed = started.elapsed();
@@ -360,6 +369,7 @@ mod diff_engine_path_forward {
             &head,
             &head,
             Detection::Off,
+            Submodules::AsListed,
             &query,
         );
         assert!(

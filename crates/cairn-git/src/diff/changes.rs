@@ -7,7 +7,7 @@
 //! root. Plumbing reads `log.showRoot` no more than it reads `diff.renames`, so it is read
 //! here; a comparison of two commits is `git diff`'s answer, which does not read it.
 
-use cairn_model::Oid;
+use cairn_model::{ChangedFile, Oid, RepoPath};
 
 use crate::object_id::{model_id, object_id};
 use crate::ops::GitBinary;
@@ -15,7 +15,9 @@ use crate::{Cancel, Error, Repository};
 
 use super::git_config::{invalid, last_value, parse_bool};
 use super::renames::Configured;
+use super::submodules::Hiding;
 use super::{ChangeSet, ChangesRequest, Subject};
+use crate::reads::{Detection, Submodules};
 
 pub(super) fn changes(
     git: &GitBinary,
@@ -49,6 +51,9 @@ pub(super) fn changes(
     };
 
     let search = Configured::read(inner)?.search(git.version());
+    // Read before anything is answered: `git log` refuses a value it does not accept
+    // whatever the commit changed.
+    let hiding = Hiding::read(inner, repo.workdir().is_some())?;
     // `log.showRoot` is read for every commit, as `git log` reads it — a value git refuses
     // is refused whether or not the commit is a root — and never for a comparison.
     let root_hidden = match &details {
@@ -65,7 +70,15 @@ pub(super) fn changes(
             details,
         });
     }
-    let mut files = crate::reads::changes(git, repo, &old, &new, search.detection(), cancel)?;
+    let first = match hiding {
+        Hiding::EveryGitlink => Submodules::HideEvery,
+        Hiding::Nothing | Hiding::GitlinksExcept(_) => Submodules::AsListed,
+    };
+    let detection = search.detection();
+    let mut files = crate::reads::changes(git, repo, &old, &new, detection, first, cancel)?;
+    if matches!(hiding, Hiding::GitlinksExcept(_)) {
+        files = hide_submodules(git, repo, (&old, &new), detection, &hiding, files, cancel)?;
+    }
 
     // git lists paths in its own tree order, with a pair under its destination. The answer
     // is sorted here by a key that is total — a destination path, then the source it came
@@ -81,6 +94,58 @@ pub(super) fn changes(
         files,
         details,
     })
+}
+
+/// The answer with the gitlinks `hiding` hides taken out, as the user's `git log` never
+/// queued them (`diff/submodules.rs`). With detection off a gitlink can only be its own
+/// row, so dropping those rows is exact. With detection on, a hidden gitlink still counted
+/// against `diff.renameLimit` in this answer, so the query is asked again with each hidden
+/// path excluded by a pathspec — unless one of them is also a directory another changed
+/// path sits under (a submodule replaced by a directory of the same name), which a
+/// pathspec cannot exclude without the paths under it; then the rows are dropped, and the
+/// residual is stated in `docs/systems/diff.md`.
+fn hide_submodules(
+    git: &GitBinary,
+    repo: &Repository,
+    (old, new): (&Oid, &Oid),
+    detection: Detection,
+    hiding: &Hiding,
+    files: Vec<ChangedFile>,
+    cancel: &impl Cancel,
+) -> Result<Vec<ChangedFile>, Error> {
+    let mut hidden: Vec<RepoPath> = files
+        .iter()
+        .flat_map(|file| hiding.hidden_paths(file))
+        .cloned()
+        .collect();
+    if hidden.is_empty() {
+        return Ok(files);
+    }
+    hidden.sort();
+    hidden.dedup();
+    let encloses_another = hidden.iter().any(|path| {
+        let mut directory = path.as_bytes().to_vec();
+        directory.push(b'/');
+        files.iter().any(|file| {
+            file.old_path.as_bytes().starts_with(&directory)
+                || file.new_path.as_bytes().starts_with(&directory)
+        })
+    });
+    if detection == Detection::Off || encloses_another {
+        return Ok(files
+            .into_iter()
+            .filter(|file| hiding.hidden_paths(file).is_empty())
+            .collect());
+    }
+    crate::reads::changes(
+        git,
+        repo,
+        old,
+        new,
+        detection,
+        Submodules::Excluding(&hidden),
+        cancel,
+    )
 }
 
 /// `log.showRoot`, as `git log` reads it (`git_config_bool`): true unless the user set it

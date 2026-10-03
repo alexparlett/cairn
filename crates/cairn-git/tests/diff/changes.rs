@@ -480,6 +480,8 @@ fn a_configuration_git_refuses_is_refused() {
         ("diff.renameLimit", "many"),
         ("diff.renameLimit", "4294967296"),
         ("log.showRoot", "bogus"),
+        ("diff.ignoreSubmodules", "ALL"),
+        ("diff.ignoreSubmodules", "some"),
     ] {
         // Set once the history is built: `git commit` refuses the value too.
         let repo = repositories::rewrites(&[]);
@@ -1125,4 +1127,206 @@ fn the_root_commit_is_shown_as_log_show_root_says() {
         "git log shows the boundary as a root: {rows:?}"
     );
     assert_eq!(cairn_rows(&found.files, boundary.len()), rows);
+}
+
+/// `diff.ignoreSubmodules`, which the user's own `git log` and `git diff` read and plumbing
+/// does not, against `git log --raw` (and, for a comparison, `git diff --raw`) under each
+/// way a user sets it — globally, per submodule in the configuration (keyed by the name
+/// `.gitmodules` gives, never by the path), per submodule in the working tree's
+/// `.gitmodules`, and an override back to `all` — with `diff.renameLimit` at 1, so that an
+/// added gitlink git log never counted would cut the rename search short if the query
+/// counted it. Caught by: the key ignored (every gitlink listed); `--ignore-submodules=all`
+/// passed whatever a submodule's own setting says (the `none` cases); a list filtered
+/// after git answered (the rename shown unpaired, and the cut-short reported, where git log
+/// pairs it); a per-submodule setting looked up by path rather than by name; or the global
+/// applied when it is not `all`.
+#[test]
+fn a_submodule_is_listed_as_diff_ignore_submodules_shows_it() {
+    struct Case {
+        config: &'static [(&'static str, &'static str)],
+        gitmodules: Option<&'static str>,
+        shown: &'static [&'static str],
+    }
+    let cases = [
+        Case {
+            config: &[],
+            gitmodules: None,
+            shown: &["s", "t", "u"],
+        },
+        Case {
+            config: &[("diff.ignoreSubmodules", "dirty")],
+            gitmodules: None,
+            shown: &["s", "t", "u"],
+        },
+        Case {
+            config: &[("diff.ignoreSubmodules", "all")],
+            gitmodules: None,
+            shown: &[],
+        },
+        Case {
+            config: &[
+                ("diff.ignoreSubmodules", "all"),
+                ("submodule.s.ignore", "none"),
+            ],
+            gitmodules: None,
+            shown: &["s"],
+        },
+        Case {
+            config: &[
+                ("diff.ignoreSubmodules", "all"),
+                ("submodule.t.ignore", "none"),
+            ],
+            gitmodules: None,
+            shown: &[],
+        },
+        Case {
+            config: &[
+                ("diff.ignoreSubmodules", "all"),
+                ("submodule.named.ignore", "untracked"),
+            ],
+            gitmodules: None,
+            shown: &["t"],
+        },
+        Case {
+            config: &[("diff.ignoreSubmodules", "all")],
+            gitmodules: Some(
+                "[submodule \"s\"]\n\tpath = s\n\tignore = dirty\n\
+                 [submodule \"named\"]\n\tpath = t\n",
+            ),
+            shown: &["s"],
+        },
+        Case {
+            config: &[
+                ("diff.ignoreSubmodules", "all"),
+                ("submodule.s.ignore", "all"),
+            ],
+            gitmodules: Some("[submodule \"s\"]\n\tpath = s\n\tignore = none\n"),
+            shown: &[],
+        },
+        Case {
+            config: &[
+                ("diff.ignoreSubmodules", "none"),
+                ("submodule.s.ignore", "all"),
+            ],
+            gitmodules: None,
+            shown: &["t", "u"],
+        },
+    ];
+    let mut paired = 0;
+    for case in &cases {
+        let mut config = vec![("diff.renameLimit", "1")];
+        config.extend_from_slice(case.config);
+        let repo = repositories::submodules(&config);
+        if let Some(text) = case.gitmodules {
+            // The working tree's file, unstaged: what git reads, and not the commit's.
+            repo.write(".gitmodules", text.as_bytes());
+        }
+        let label = format!("{:?} with .gitmodules {:?}", case.config, case.gitmodules);
+        let head = hex(&repo, "HEAD");
+        let found = changes_of(
+            &repo,
+            &ChangesRequest::commit(Oid::parse(&head).expect("an id")),
+        );
+        let (rows, stderr) = shown(&repo, &head);
+        assert_eq!(cairn_rows(&found.files, head.len()), rows, "{label}");
+        assert_eq!(
+            found.renames.needed_limit,
+            warned_limit(&stderr),
+            "{label}: git said {stderr:?}"
+        );
+        let mut gitlinks: Vec<&str> = rows
+            .iter()
+            .filter(|row| row.new_mode == "160000")
+            .map(|row| row.new_path.as_str())
+            .collect();
+        gitlinks.sort_unstable();
+        assert_eq!(gitlinks, case.shown, "{label}: the fixture decides nothing");
+        paired += usize::from(rows.iter().any(|row| row.status.starts_with('R')));
+
+        let old = hex(&repo, "HEAD~1");
+        let between = changes_of(
+            &repo,
+            &ChangesRequest::between(
+                Oid::parse(&old).expect("an id"),
+                Oid::parse(&head).expect("an id"),
+            ),
+        );
+        assert_eq!(
+            cairn_rows(&between.files, head.len()),
+            rows_of(&repo.git(&["diff", "--raw", "--no-abbrev", &old, &head])),
+            "{label}: a comparison is git diff's"
+        );
+    }
+    assert!(
+        (1..cases.len()).contains(&paired),
+        "the rename was paired in {paired} cases, so the limit never decided anything"
+    );
+}
+
+/// A submodule whose own setting git refuses makes the user's `git log` refuse the
+/// commit, and the query too — `diff-tree` reads that setting itself, so it is asked
+/// rather than told to hide every gitlink. Caught by: `--ignore-submodules=all` passed
+/// whenever the global is `all`, which never reads the setting and answers.
+#[test]
+fn a_submodule_setting_git_refuses_is_refused() {
+    let repo = repositories::submodules(&[]);
+    repo.config("diff.ignoreSubmodules", "all");
+    repo.config("submodule.s.ignore", "bogus");
+    let head = hex(&repo, "HEAD");
+    let (status, _, _) = repo.run(&["log", "-1", "--raw", "--format=", &head], &[], None);
+    assert!(
+        !status.success(),
+        "git log answers, so this decides nothing"
+    );
+    let refused = try_changes(
+        &repo,
+        &ChangesRequest::commit(Oid::parse(&head).expect("an id")),
+    );
+    assert!(
+        matches!(refused, Err(Error::GitFailed { .. })),
+        "{refused:?}"
+    );
+}
+
+/// A bare repository has no working tree, so git reads no `.gitmodules` at all, and no
+/// submodule has a setting of its own: under `diff.ignoreSubmodules=all` every gitlink is
+/// hidden, whatever `HEAD`'s `.gitmodules` says. Caught by: reading `.gitmodules` from the
+/// tree where git has no working tree to read it from.
+#[test]
+fn a_bare_repository_reads_no_gitmodules() {
+    let source = repositories::submodules(&[]);
+    source.write(
+        ".gitmodules",
+        b"[submodule \"s\"]\n\tpath = s\n\tignore = none\n",
+    );
+    source.git(&["add", ".gitmodules"]);
+    source.git(&["commit", "--quiet", "-m", "show s"]);
+    let holder = Repo::new("bare-submodules");
+    let bare = holder.path().join("bare.git");
+    holder.git(&[
+        "clone",
+        "--quiet",
+        "--bare",
+        &source.path().display().to_string(),
+        &bare.display().to_string(),
+    ]);
+    let repo = Repo::borrowed(&bare);
+    repo.config("diff.ignoreSubmodules", "all");
+    let commit = hex(&repo, "HEAD~1");
+    let found = changes_of(
+        &repo,
+        &ChangesRequest::commit(Oid::parse(&commit).expect("an id")),
+    );
+    let (rows, _) = shown(&repo, &commit);
+    assert!(
+        rows.iter().all(|row| row.new_mode != "160000"),
+        "git log in a bare repository hides every gitlink: {rows:?}"
+    );
+    assert_eq!(cairn_rows(&found.files, commit.len()), rows);
+    // The same commit in the source, which has a working tree and so reads its file.
+    let (with_tree, _) = shown(&source, &commit);
+    assert!(
+        with_tree.iter().any(|row| row.new_path == "s"),
+        "the source shows s, so the bare case decides something: {with_tree:?}"
+    );
 }

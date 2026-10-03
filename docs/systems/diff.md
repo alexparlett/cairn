@@ -225,6 +225,36 @@ What runs, in order (`crates/cairn-git/src/diff/changes.rs`):
    `the_file_list_is_sorted_by_path_and_never_shuffles` runs the query twice and
    requires both, and requires the key to separate every pair.
 
+**A submodule is listed as `diff.ignoreSubmodules` says**
+(`crates/cairn-git/src/diff/submodules.rs`). Plumbing never reads that key, and with it
+`all` the user's own `git log`, `git show` and `git diff` list no change to a submodule —
+a gitlink added, deleted, or changed as a gitlink on both sides; never a type change —
+unless the submodule's own `submodule.<name>.ignore` says otherwise. That own setting is
+the configuration's, else `.gitmodules`'s; the name is the one `.gitmodules` gives the
+path, the last to claim it; and `.gitmodules` is the working tree's file when there is
+one, else the index's, else `HEAD`'s — never the commit being shown — and none in a bare
+repository or while it is unmerged. `diff-tree` already applies a submodule's own
+setting, so what differs is a submodule with none under a global `all`. Hiding those
+after git answers would not match: git hides them before rename detection, so they never
+count against `diff.renameLimit`, and an added gitlink can push a search `git log` runs
+past the limit. So the query asks git not to queue them: `--ignore-submodules=all` when
+no submodule has a setting of its own — exact, since a gitlink's own setting can then
+only be unset or `all`; never otherwise, because that flag overrides a submodule's
+`none`. Otherwise the first answer's hidden gitlinks are dropped, which is exact with
+detection off, and with detection on the query is asked again with each excluded by an
+`:(exclude,literal)` pathspec. Only `all` hides anything from a list of changed paths;
+the bare key or any spelling but `all`, `dirty`, `untracked` and `none` is
+`Error::InvalidConfig`, as `git log` refuses it; a submodule setting git refuses is
+read by `diff-tree` itself, which then fails as `git log` does. Each rule was read from
+git's source at v2.30.0 and v2.56.0 and reproduced against both. Pinned by
+`a_submodule_is_listed_as_diff_ignore_submodules_shows_it` (nine settings — unset,
+`dirty`, `all`, a submodule's own `none` by name and by path, `untracked` by name, the
+working tree's `.gitmodules`, an own `all` over a `.gitmodules` `none`, and `none` with
+an own `all` — each against `git log --raw` and `git diff --raw`, with
+`diff.renameLimit=1` so a gitlink counted against the limit leaves the rename unpaired),
+`a_submodule_setting_git_refuses_is_refused`, `a_bare_repository_reads_no_gitmodules`,
+and `a_configuration_git_refuses_is_refused`.
+
 **A root commit is shown as `log.showRoot` says.** With the key true — git's default,
 and what the bare key means — a root commit's diff is its whole content (L5); with it
 false, the user's own `git log` and `git show` print no diff for a root commit, and the
@@ -409,9 +439,19 @@ read.
   With detection off, only trees are read, and the clone answers.
   `in_a_partial_clone_a_rename_search_fails_rather_than_fetching` pins both. Older
   git may fetch.
-- **`diff.ignoreSubmodules` is not applied.** It is porcelain configuration, which
-  `diff-tree` does not read, and it can hide a submodule's change from the user's
-  own `git log`; the query lists it. Not pinned.
+- **A submodule replaced by a directory of its own name, under a hidden-submodule
+  setting with an exception, is filtered rather than excluded.** When
+  `diff.ignoreSubmodules=all` hides a gitlink, some other submodule has a setting of
+  its own, and rename detection is on, the hidden gitlink is excluded by a pathspec —
+  but a pathspec naming `s` also excludes everything under a directory `s/`, so when
+  the same commit puts files there the gitlink's row is dropped from the answer
+  instead, and the search git ran still counted it against `diff.renameLimit`. Not
+  pinned: it needs all four at once.
+- **`.gitmodules` is parsed by gix.** A file git's own config parser refuses but gix
+  reads — a syntax gix tolerates — can be answered under `diff.ignoreSubmodules=all`
+  where the user's `git log` refuses the commit. A file gix cannot parse, or one
+  holding a value git's submodule parser dies on, takes the cautious path, where
+  `diff-tree` reads the file itself and refuses as `git log` does.
 - **A copy cannot be reverse-applied — by git either.** `git apply -R` of
   `copy from A / copy to B` re-creates A from B and refuses because A is still
   there. `gits_own_copy_patch_cannot_be_reversed_either` pins that git's own patch

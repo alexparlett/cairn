@@ -16,6 +16,7 @@ mod content;
 mod git_config;
 mod intraline;
 mod renames;
+mod submodules;
 mod whitespace;
 
 use cairn_model::{ChangedFile, CommitDetails, DiffLimits, FileDiff, Oid};

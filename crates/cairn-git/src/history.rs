@@ -1,6 +1,7 @@
 //! History requests, cursors and pages.
 
 mod session;
+mod walk;
 
 use std::sync::Arc;
 
@@ -28,12 +29,11 @@ impl Default for HistoryOrder {
 }
 
 impl HistoryOrder {
-    fn sorting(self) -> gix::revision::walk::Sorting {
+    fn sorting(self) -> gix::traverse::commit::simple::Sorting {
+        use gix::traverse::commit::simple::{CommitTimeOrder, Sorting};
         match self {
-            Self::CommitTime => gix::revision::walk::Sorting::ByCommitTime(
-                gix::traverse::commit::simple::CommitTimeOrder::NewestFirst,
-            ),
-            Self::GraphOrder => gix::revision::walk::Sorting::BreadthFirst,
+            Self::CommitTime => Sorting::ByCommitTime(CommitTimeOrder::NewestFirst),
+            Self::GraphOrder => Sorting::BreadthFirst,
         }
     }
 }
@@ -171,14 +171,7 @@ fn read_page(
     }
     let target = skip.saturating_add(request.limit);
 
-    let mut walk = repo
-        .inner()
-        .rev_walk(tips.iter().copied())
-        .sorting(order.sorting())
-        .all()
-        .map_err(|source| Error::Walk {
-            source: Box::new(source),
-        })?;
+    let mut walk = walk::open(repo.inner(), &tips, order)?;
 
     let mut assigner = LaneAssigner::with_window(window);
     let mut page = Page {
@@ -204,12 +197,10 @@ fn read_page(
         })?;
 
         let id = model_id(&info.id)?;
-        let mut parents = Vec::with_capacity(info.parent_ids.len());
-        for parent in info.parent_ids.iter() {
-            parents.push(model_id(parent)?);
-        }
+        let parents = parents_of(&info)?;
         if walked >= skip && walked < target {
-            page.summaries.push(summary_of(&info, &id, &parents)?);
+            page.summaries
+                .push(summary_of_commit(repo.inner(), &id, &parents)?);
             decoded += 1;
         }
         walked += 1;
@@ -248,7 +239,7 @@ fn read_page(
 
 /// Whether anything remains after `target`. One walk step, no object read.
 fn next_cursor(
-    walk: &mut gix::revision::Walk<'_>,
+    walk: &mut walk::CommitWalk<'_>,
     next: HistoryCursor,
     cancel: &impl Cancel,
     so_far: usize,
@@ -288,6 +279,14 @@ impl Page {
             graph,
         });
     }
+}
+
+/// The parents the walk read, which are the ones git shows (`walk`).
+fn parents_of(info: &gix::traverse::commit::Info) -> Result<Vec<Oid>, Error> {
+    info.parent_ids
+        .iter()
+        .map(|parent| model_id(parent))
+        .collect()
 }
 
 struct Resolved {
@@ -347,20 +346,7 @@ fn walk_tips(repo: &gix::Repository, tips: &[Oid]) -> Result<Tips, Error> {
     Ok(object_ids.into())
 }
 
-/// The one place a walk step reads a commit object.
-fn summary_of(
-    info: &gix::revision::walk::Info<'_>,
-    id: &Oid,
-    parents: &[Oid],
-) -> Result<CommitSummary, Error> {
-    let commit = info.object().map_err(|source| Error::ReadCommit {
-        id: id.to_string(),
-        source: Box::new(source),
-    })?;
-    summary_from(&commit, id, parents)
-}
-
-/// By id: by the time a session hands out a row, the walk's `Info` is gone.
+/// The one place a walk step reads a commit object, by id: the walk hands over ids only.
 fn summary_of_commit(
     repo: &gix::Repository,
     id: &Oid,
@@ -489,21 +475,14 @@ mod tests {
                     inner.object_cache_size(cache);
                     let started = Instant::now();
                     let mut walked = 0usize;
-                    let mut walk = inner
-                        .rev_walk(vec![inner.head_id().unwrap().detach()])
-                        .sorting(order.sorting())
-                        .all()
-                        .unwrap();
+                    let head = inner.head_id().unwrap().detach();
+                    let mut walk = walk::open(&inner, &[head], order).unwrap();
                     let mut assigner = LaneAssigner::new();
                     while walked < limit {
                         let Some(next) = walk.next() else { break };
                         let info = next.unwrap();
                         let id = model_id(&info.id).unwrap();
-                        let parents: Vec<Oid> = info
-                            .parent_ids
-                            .iter()
-                            .map(|p| model_id(p).unwrap())
-                            .collect();
+                        let parents: Vec<Oid> = parents_of(&info).unwrap();
                         if lay_out {
                             assigner.push(id, parents);
                         }

@@ -2,7 +2,8 @@
 
 use cairn_model::{CommitDetails, Oid, Signature, Timestamp};
 
-use crate::object_id::{model_id, object_id};
+use crate::object_id::object_id;
+use crate::shallow::ShallowBoundary;
 use crate::{Error, Repository};
 
 impl Repository {
@@ -27,18 +28,16 @@ impl Repository {
 ///
 /// The parents are the ones git shows: a shallow clone's boundary commit names parents
 /// the clone does not have, and git's own `git log` reads the shallow file and shows
-/// none (`%P` is empty), so neither does this.
+/// none (`%P` is empty), so neither does this (`crate::shallow`).
 pub(crate) fn details_of(commit: &gix::Commit<'_>, id: &Oid) -> Result<CommitDetails, Error> {
     let read = |source: Box<dyn std::error::Error + Send + Sync>| Error::ReadCommit {
         id: id.to_string(),
         source,
     };
-    let mut parents = Vec::new();
-    if !is_shallow_boundary(commit.repo, commit.id).map_err(|e| read(Box::new(e)))? {
-        for parent in commit.parent_ids() {
-            parents.push(model_id(&parent)?);
-        }
-    }
+    let named: Vec<gix::ObjectId> = commit.parent_ids().map(|parent| parent.detach()).collect();
+    let parents = ShallowBoundary::read(commit.repo)
+        .map_err(|e| read(Box::new(e)))?
+        .parents_of(&commit.id, named.iter().map(|parent| parent.as_ref()))?;
     let author = signature_of(commit.author().map_err(|e| read(Box::new(e)))?, id)?;
     let committer = signature_of(commit.committer().map_err(|e| read(Box::new(e)))?, id)?;
     // `message_raw`, not `message`: R5.3 shows the message as written, and `message`
@@ -51,17 +50,6 @@ pub(crate) fn details_of(commit: &gix::Commit<'_>, id: &Oid) -> Result<CommitDet
         committer,
         message: message.to_string(),
     })
-}
-
-/// Whether the repository's shallow file lists `id`: a commit whose parents were cut
-/// off when the clone was made.
-fn is_shallow_boundary(
-    repo: &gix::Repository,
-    id: gix::ObjectId,
-) -> Result<bool, gix::shallow::read::Error> {
-    Ok(repo
-        .shallow_commits()?
-        .is_some_and(|commits| commits.iter().any(|commit| *commit == id)))
 }
 
 fn signature_of(signature: gix::actor::SignatureRef<'_>, id: &Oid) -> Result<Signature, Error> {

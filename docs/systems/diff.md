@@ -623,7 +623,8 @@ deserves a guard of its own is a question for the packet's QA phase.
 `CommitDetails` is R1.8: the author and the committer as separate `Signature`s,
 each with a name, an email and a `Timestamp` that keeps its own offset; the whole
 message, with `subject()` and `body()` reading it; and the parents in git's order,
-none for a shallow clone's boundary commit, whose parents the clone lacks.
+none for a shallow clone's boundary commit, whose parents the clone lacks — read from
+the shallow file by `crates/cairn-git/src/shallow.rs`, as the history walk reads it.
 It sits beside `CommitSummary` rather than replacing it — a history row draws a
 subject and one name, and carrying a committer, an offset and a whole message per
 row of a ten-year monorepo would be paying for what no row draws.

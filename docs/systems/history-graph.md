@@ -31,7 +31,9 @@ One commit crosses four crates and changes shape three times.
 1. **`gix` hands over a walk entry.** `Repository::history_session`
    (`crates/cairn-git/src/history/session.rs`) opens one gitoxide revision walk
    and keeps it for the life of a scroll. Each step yields an id and its parent
-   ids, read from the walk rather than from a decoded object.
+   ids, read from the walk rather than from a decoded object — the parents git
+   shows, which in a shallow clone are not always the ones the object names
+   (see "A shallow clone" below).
 2. **`LaneAssigner` turns ids into a picture.**
    `crates/cairn-model/src/lane_assignment.rs` takes `(id, parent_ids)` in walk
    order and produces a `GraphRow`: the commit's `Lane`, and every `EdgeSegment`
@@ -161,6 +163,32 @@ cancelled cold query reports how far it got and discards the page; a cancelled
 *session* keeps its progress, so the next call continues rather than re-walks
 (`a_cancelled_query_stops_walking_and_says_where`,
 `cancelling_a_session_stops_the_walk_and_keeps_its_progress`).
+
+**A shallow clone is walked as git walks it.** A boundary commit — one the
+clone's `shallow` file lists — names parents in its object that the clone does
+not have, and git reads the file as grafts: the commit has no parents, so `git
+log --format=%P` prints nothing for it and `--graph` draws it as a root, while
+a parent the clone DOES have, reached through another branch, is still shown.
+gix's own `rev_walk` handles the file otherwise: it hands the boundary commit
+over with the parents its object names, and skips the next appearance of each
+of those ids whichever commit names it — so a merge-shaped history cloned with
+`--depth` loses a commit its sibling branch reaches, and the lane assigner holds
+a lane open for a parent that never arrives. Both routes therefore walk through
+`crates/cairn-git/src/history/walk.rs`: gitoxide's `Simple` traversal itself,
+reading every commit through a `Grafted` object source that serves a boundary
+commit with its `parent` header lines removed — git's graft, applied where the
+object is read — and with no commit-graph in a shallow repository, which git
+does not read there either (`commit_graph_compatible`). The shallow file is
+read once per walk (`crates/cairn-git/src/shallow.rs`, which
+`Repository::commit_details` reads too). With no parents a boundary commit is a
+root to the assigner, so its line ends there and no lane stays reserved below
+it. Pinned against `git log --format='%H %P'` at four depths of one history — a
+lone tip, a merge cut at the boundary, two boundaries on two branches, and a
+boundary whose parent the clone has through a sibling — on both routes, with
+the graph required to be the one git's parents lay out
+(`a_shallow_clones_boundary_commits_have_the_parents_git_log_shows`,
+`crates/cairn-git/tests/history.rs`); the header rewrite by
+`only_the_headers_parent_lines_are_removed`.
 
 Order is `HistoryOrder::CommitTime` by default, chosen by measurement; neither
 it nor `GraphOrder` is topological, which is why the assigner must be total over

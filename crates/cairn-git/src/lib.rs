@@ -12,6 +12,7 @@ mod reads;
 mod refs;
 mod remotes;
 mod repository;
+mod shallow;
 
 pub use cancel::{Cancel, CancelSignal};
 pub use diff::{ChangeSet, ChangesRequest, ContentOptions, DiffSession, RenameDetection};

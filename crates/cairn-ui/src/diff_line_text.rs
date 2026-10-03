@@ -6,7 +6,9 @@
 //! 2026-10-03), so the row does what the terminal does:
 //!
 //! - a tab moves to the next multiple of [`TAB_WIDTH`] columns, as `git diff` in a terminal
-//!   and `git log`'s message lines (`message_lines`) show it;
+//!   and `git log`'s message lines (`message_lines`) show it, the columns before it counted
+//!   as a terminal counts them (`crate::columns`: two for a wide character, none for a
+//!   combining mark);
 //! - a carriage return ending the line — a CRLF file's — is not drawn, as a terminal shows
 //!   nothing for it;
 //! - any other C0 control byte and DEL are drawn as their Unicode control pictures
@@ -21,6 +23,8 @@
 //! line — never to the file, never to where the view is scrolled.
 
 use cairn_model::{ByteRange, DiffLine};
+
+use crate::columns::columns;
 
 /// The column a tab moves to a multiple of.
 pub const TAB_WIDTH: usize = 8;
@@ -84,12 +88,12 @@ pub fn shown_line(bytes: &[u8], ranges: &[ByteRange]) -> ShownLine {
                     };
                     text.push(picture);
                     units += picture.len_utf16();
-                    column += 1;
+                    column += columns(picture);
                 }
                 other => {
                     text.push(other);
                     units += other.len_utf16();
-                    column += 1;
+                    column += columns(other);
                 }
             }
         }
@@ -98,7 +102,7 @@ pub fn shown_line(bytes: &[u8], ranges: &[ByteRange]) -> ShownLine {
             settle(at, units, &mut next_end);
             text.push('\u{fffd}');
             units += 1;
-            column += 1;
+            column += columns('\u{fffd}');
             at += chunk.invalid().len();
         }
     }
@@ -115,7 +119,8 @@ pub fn shown_line(bytes: &[u8], ranges: &[ByteRange]) -> ShownLine {
 }
 
 /// At least as many columns as the widest of `lines` draws: a byte draws at most one
-/// column and a tab at most [`TAB_WIDTH`]. One pass over the bytes, done once per answer
+/// column (a two-column character is at least three bytes) and a tab at most
+/// [`TAB_WIDTH`]. One pass over the bytes, done once per answer
 /// so the view's width does not change as it scrolls.
 pub fn widest_columns<'a>(lines: impl Iterator<Item = &'a DiffLine>) -> usize {
     lines
@@ -161,6 +166,26 @@ mod tests {
         let shown = shown_line(line, &[range(6, 7), range(2, 6)]);
         assert_eq!(shown.text, "é😀x");
         assert_eq!(shown.highlights, [(3, 4), (1, 3)]);
+    }
+
+    /// A tab stop is counted in terminal columns (the user's decision, 2026-10-03): a wide
+    /// character — an emoji, a CJK ideograph, a kana outside the old table — takes two, a
+    /// combining mark none. Each line here is what `git diff` prints in a terminal. Caught
+    /// by: counting every character as one column, or a hand-rolled table that misses one.
+    #[test]
+    fn a_tab_after_a_wide_or_combining_character_stops_where_a_terminal_stops() {
+        for (line, shown) in [
+            ("😀\tx", "😀      x"),
+            ("🚀\tx", "🚀      x"),
+            ("日本\tx", "日本    x"),
+            ("\u{1b000}\tx", "\u{1b000}      x"),
+            ("e\u{301}\tx", "e\u{301}       x"),
+            ("\u{e01}\u{e48}\tx", "\u{e01}\u{e48}       x"),
+        ] {
+            assert_eq!(shown_line(line.as_bytes(), &[]).text, shown, "{line:?}");
+        }
+        // A control drawn as its picture takes the picture's one column.
+        assert_eq!(shown_line(b"\x01\tx", &[]).text, "\u{2401}       x");
     }
 
     #[test]

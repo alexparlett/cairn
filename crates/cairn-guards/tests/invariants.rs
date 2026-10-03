@@ -27,7 +27,9 @@ const DEPENDENCY_ALLOWLIST: &[(&str, &[&str])] = &[
         "cairn-git",
         &["cairn-model", "encoding_rs", "gix", "nix", "thiserror"],
     ),
-    ("cairn-ui", &["cairn-model", "freya"]),
+    // `unicode-width`: a tab stops where a terminal stops it, after wide and combining
+    // characters (user-approved 2026-10-03, choosing "terminal widths").
+    ("cairn-ui", &["cairn-model", "freya", "unicode-width"]),
     (
         "cairn-app",
         &[

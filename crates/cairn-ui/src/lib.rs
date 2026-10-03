@@ -1,6 +1,7 @@
 //! Cairn's component library.
 
 pub mod accelerators;
+mod columns;
 mod commit_row;
 mod commit_tab;
 mod credential_prompt;

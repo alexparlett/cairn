@@ -10,8 +10,11 @@
 //! - blank lines before the first line with text are not printed, and neither are blank
 //!   lines after the last (a line of whitespace alone is blank); blank lines between are;
 //! - a tab becomes spaces to the next multiple of eight columns, counted from the start
-//!   of the message's line, a wide character (CJK) counting two (`--expand-tabs`, on by
-//!   default for these formats).
+//!   of the message's line in terminal columns (`crate::columns`): a wide character — CJK,
+//!   an emoji — counting two and a combining mark none (`--expand-tabs`, on by default for
+//!   these formats).
+
+use crate::columns::columns;
 
 /// The columns git expands a tab to.
 const TAB_WIDTH: usize = 8;
@@ -51,53 +54,10 @@ fn expand_tabs(line: &str) -> String {
             column += spaces;
         } else {
             out.push(c);
-            column += width(c);
+            column += columns(c);
         }
     }
     out
-}
-
-/// Columns `c` takes on a terminal, as git's `utf8_width` counts them: none for a combining
-/// mark or a zero-width character, two for an East Asian wide or full-width one, one
-/// otherwise. The main ranges of Unicode's East Asian Width table, not the whole of it: a
-/// character outside them that git counts as two is a stated limit of the tab expansion.
-fn width(c: char) -> usize {
-    let point = u32::from(c);
-    let zero = [
-        0x0300..=0x036f,
-        0x0483..=0x0489,
-        0x0591..=0x05bd,
-        0x1ab0..=0x1aff,
-        0x1dc0..=0x1dff,
-        0x200b..=0x200f,
-        0x20d0..=0x20ff,
-        0xfe00..=0xfe0f,
-        0xfe20..=0xfe2f,
-    ];
-    let wide = [
-        0x1100..=0x115f,
-        0x2e80..=0x303e,
-        0x3041..=0x33ff,
-        0x3400..=0x4dbf,
-        0x4e00..=0x9fff,
-        0xa000..=0xa4cf,
-        0xac00..=0xd7a3,
-        0xf900..=0xfaff,
-        0xfe30..=0xfe4f,
-        0xff00..=0xff60,
-        0xffe0..=0xffe6,
-        0x1f300..=0x1f64f,
-        0x1f900..=0x1f9ff,
-        0x20000..=0x2fffd,
-        0x30000..=0x3fffd,
-    ];
-    if zero.iter().any(|range| range.contains(&point)) {
-        0
-    } else if wide.iter().any(|range| range.contains(&point)) {
-        2
-    } else {
-        1
-    }
 }
 
 #[cfg(test)]
@@ -135,6 +95,13 @@ mod tests {
             (
                 "Teach the engine\r\n\r\n\r\nSigned-off-by: A <a@x>  \r\n\r\n",
                 &["Teach the engine", "", "", "Signed-off-by: A <a@x>"],
+            ),
+            // Tab stops after characters a terminal draws two columns wide and none wide,
+            // where the old hand-rolled table counted one: a rocket, a kana from the
+            // supplement, a Thai tone mark.
+            (
+                "🚀\tz\n\u{1b000}\tz\n\u{e01}\u{e48}\tz\n",
+                &["🚀      z", "\u{1b000}      z", "\u{e01}\u{e48}       z"],
             ),
             (
                 "subj\u{b}\n\u{c}\nmid\u{a0}\nend\n\u{b}\n",

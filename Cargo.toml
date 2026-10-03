@@ -31,6 +31,12 @@ thiserror = "2"
 # build under gix-filter at this version; `cairn-git/src/commit_encoding.rs` layers glibc
 # iconv's mappings over the WHATWG tables where the two differ.
 encoding_rs = "0.8.41"
+# How many terminal columns a character takes — two for an emoji or a CJK ideograph, none
+# for a combining mark — so a tab in a diff line or a commit message stops where a
+# terminal running `git diff` or `git log` stops it (user-approved 2026-10-03, choosing
+# "terminal widths"). Character widths only: `cjk` (ambiguous characters as two) is off,
+# as a terminal outside an East Asian locale counts them. No dependencies of its own.
+unicode-width = { version = "0.2.2", default-features = false }
 # Sends SIGTERM to a git child on cancel, from safe code: `std` can only
 # SIGKILL, and git removes its lock files on SIGTERM alone (issue #19).
 # `signal` is the `kill(2)` wrapper, `process` the `Pid` it takes. `process`

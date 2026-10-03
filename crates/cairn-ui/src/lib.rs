@@ -6,6 +6,11 @@ mod commit_tab;
 mod credential_prompt;
 mod date_text;
 mod detail_tabs;
+mod diff_header;
+mod diff_line_text;
+pub mod diff_palette;
+mod diff_settings;
+mod diff_view;
 mod graph_cell;
 pub mod graph_geometry;
 mod history_list;
@@ -23,6 +28,16 @@ pub use commit_tab::{
 pub use credential_prompt::CredentialPrompt;
 pub use detail_tabs::{
     COLLAPSE_CAPTION, DETAIL_STRIP_HEIGHT, DetailTab, DetailTabs, EXPAND_CAPTION,
+};
+pub use diff_header::{
+    DIFF_HEADER_HEIGHT, DiffHeader, ENTIRE_FILE_CAPTION, FEWER_LINES_CAPTION,
+    HIDDEN_CHANGES_NOTICE, HeaderAction, IGNORE_WHITESPACE_CAPTION, MORE_LINES_CAPTION,
+    NEXT_CHANGE_CAPTION, PREVIOUS_CHANGE_CAPTION, SIDE_BY_SIDE_CAPTION,
+};
+pub use diff_line_text::{ShownLine, TAB_WIDTH, shown_line};
+pub use diff_settings::DiffSettings;
+pub use diff_view::{
+    ChangeCursor, DIFF_ROW_HEIGHT, NO_NEWLINE_AT_END, ShownDiff, UnifiedDiffView, step_change,
 };
 pub use graph_geometry::{LANE_WIDTH, MAX_DRAWN_LANES, ROW_HEIGHT, graph_width};
 pub use history_list::{HistoryList, PREFETCH_ROWS, RowRender, reveal_row};

@@ -10,7 +10,8 @@
 //! sideways rather than being cut.
 //!
 //! No avatar and no ref chips (L9), and the tab never asks for anything: a parent link
-//! reports the parent and the caller decides what pressing it reaches.
+//! reports the parent and the caller decides what pressing it reaches. The commit's id, its
+//! parents and the files' paths are drawn in the diff's typeface, IBM Plex Mono (R6.6).
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -18,6 +19,7 @@ use std::rc::Rc;
 use cairn_model::{ChangeSet, ChangeStatus, ChangedFile, Oid, Signature};
 use freya::prelude::*;
 
+use crate::diff_palette::DIFF_FONT_FAMILY;
 use crate::{accelerators, date_text, message_lines};
 
 /// Every row of the tab is this tall: a fixed size is what keeps the list O(viewport).
@@ -190,6 +192,7 @@ pub struct CommitTab {
     changes: Readable<ChangeSet>,
     on_parent: EventHandler<Oid>,
     on_file: EventHandler<usize>,
+    on_file_pressed: EventHandler<usize>,
     key: DiffKey,
 }
 
@@ -199,6 +202,7 @@ impl CommitTab {
             changes: changes.into(),
             on_parent: EventHandler::new(|_| {}),
             on_file: EventHandler::new(|_| {}),
+            on_file_pressed: EventHandler::new(|_| {}),
             key: DiffKey::None,
         }
     }
@@ -214,6 +218,13 @@ impl CommitTab {
     /// change set's files. What that shows is the caller's (its diff, from phase 06).
     pub fn on_file(mut self, on_file: impl Into<EventHandler<usize>>) -> Self {
         self.on_file = on_file.into();
+        self
+    }
+
+    /// A file was pressed — after [`Self::on_file`] reports it current — as distinct from
+    /// reached with an arrow. What a press opens is the caller's (phase 06: its diff).
+    pub fn on_file_pressed(mut self, on_file_pressed: impl Into<EventHandler<usize>>) -> Self {
+        self.on_file_pressed = on_file_pressed.into();
         self
     }
 }
@@ -245,6 +256,7 @@ struct TabContent {
     files: usize,
     on_parent: EventHandler<Oid>,
     on_file: EventHandler<usize>,
+    on_file_pressed: EventHandler<usize>,
     /// The tab's focus target, which a pressed row takes.
     tab_id: AccessibilityId,
 }
@@ -380,6 +392,7 @@ impl Component for CommitTab {
             files,
             on_parent: self.on_parent.clone(),
             on_file: self.on_file.clone(),
+            on_file_pressed: self.on_file_pressed.clone(),
             tab_id,
         };
 
@@ -417,6 +430,7 @@ fn build_row(item: VirtualItem, data: &TabData) -> Element {
         return row.into();
     };
     let (tab_id, mut cursor, on_file) = (content.tab_id, data.cursor, content.on_file.clone());
+    let on_file_pressed = content.on_file_pressed.clone();
     row.maybe(data.current == Some(index), |el| {
         el.background(colours().surface_secondary)
     })
@@ -424,6 +438,7 @@ fn build_row(item: VirtualItem, data: &TabData) -> Element {
         tab_id.request_focus();
         cursor.set(Some(index));
         on_file.call(index);
+        on_file_pressed.call(index);
     })
     .child(drawn)
     .into()
@@ -456,7 +471,9 @@ fn header_row(line: &Line, on_parent: &EventHandler<Oid>) -> Element {
         ),
         Line::Id(id) => labelled(
             ID_CAPTION,
-            text(id.clone(), FONT_SIZE, colours.text_primary).into(),
+            text(id.clone(), FONT_SIZE, colours.text_primary)
+                .font_family(DIFF_FONT_FAMILY)
+                .into(),
         ),
         Line::Parents(parents) => labelled(
             PARENTS_CAPTION,
@@ -477,6 +494,7 @@ fn header_row(line: &Line, on_parent: &EventHandler<Oid>) -> Element {
                                 FONT_SIZE,
                                 colours.text_highlight,
                             )
+                            .font_family(DIFF_FONT_FAMILY)
                             .text_decoration(TextDecoration::Underline),
                         )
                         .into()
@@ -564,7 +582,7 @@ fn file_row(file: &ChangedFile) -> Element {
                 .width(Size::px(BADGE_WIDTH))
                 .font_weight(FontWeight::BOLD),
         )
-        .child(text(file_text(file), FONT_SIZE, colours.text_primary))
+        .child(text(file_text(file), FONT_SIZE, colours.text_primary).font_family(DIFF_FONT_FAMILY))
         .into()
 }
 

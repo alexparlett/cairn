@@ -251,7 +251,7 @@ the bare key or any spelling but `all`, `dirty`, `untracked` and `none` is
 `Error::InvalidConfig`, as `git log` refuses it; a submodule setting git refuses is
 read by `diff-tree` itself, which then fails as `git log` does. Each rule was read from
 git's source at v2.30.0 and v2.56.0 and reproduced against both. Pinned by
-`a_submodule_is_listed_as_diff_ignore_submodules_shows_it` (nine settings — unset,
+`a_submodule_is_listed_as_diff_ignore_submodules_shows_it` (every setting — unset,
 `dirty`, `all`, a submodule's own `none` by name and by path, `untracked` by name, the
 working tree's `.gitmodules`, an own `all` over a `.gitmodules` `none`, and `none` with
 an own `all` — each against `git log --raw` and `git diff --raw`, with
@@ -551,9 +551,10 @@ read.
   `git diff` of its two blobs, since git prints it as two files): the crafted
   history at one and three lines (`every_crafted_file_diff_is_the_one_git_prints`);
   a seeded fixture the four algorithms, the indent heuristic and a driver's
-  algorithm are first shown to disagree on, under nine configurations
+  algorithm are first shown to disagree on, under every configuration in the test's
+  `CONFIGURATIONS` table
   (`every_discriminating_file_reads_as_git_diff_shows_it_under_every_configuration`);
-  up to the last 150 non-merge commits of this repository under each algorithm,
+  this repository's recent non-merge commits under each algorithm,
   in a clone sharing its objects so no configuration is written to the checkout
   (`this_repositorys_history_reads_as_git_diff_shows_it_under_every_algorithm`); and
   `git diff -w` over whitespace-only, real and mixed edits, with R6.7's notice
@@ -611,8 +612,8 @@ read.
   gix that changed that default draws a notice instead of starting a program.
 - **A content query costs one or two `git` processes** — two with whitespace
   ignored, one more for `check-attr` when a driver algorithm may apply — where it
-  cost none: on the bench repository about 17 ms for the largest subject, against
-  9 ms in process (`docs/work/diff-engine/progress.md`).
+  cost none; what that costs on the bench repository's largest subject, against the
+  in-process diff, is measured in `docs/research/diff-engine/content-parity-spike.md`.
 - **A whole commit's output under a driver algorithm is not `git show`'s.** From
   git 2.40, git applies a driver's algorithm by changing its own diff options, so in
   one `git show` or `git diff` of several files every file after one with a driver

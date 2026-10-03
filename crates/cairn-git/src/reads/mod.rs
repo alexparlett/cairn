@@ -75,9 +75,16 @@
 //! A read can carry no askpass token — its invocation has nowhere to hold one —
 //! so a read that reached a credential prompt fails closed rather than asking
 //! the user. It parses only output `git` does not translate (`-z` records,
-//! `--raw`, porcelain v2), and classifies a failure by exit status and the
-//! repository's state, never by matching stderr, which is prose in the user's
-//! language.
+//! `--raw`, porcelain v2, and a patch's text — `diff-tree -p`'s headers and
+//! marked lines, which are format, not prose), and classifies a failure by exit
+//! status and the repository's state, never by matching stderr, which is prose
+//! in the user's language. A patch's one line of text rather than format,
+//! `\ No newline at end of file`, is read by its first byte alone, so it is safe
+//! whatever its words: git prints it untranslated (`diff.c` at v2.30.0 and
+//! v2.56.0), and the parser counts the lines each hunk header owes, so a line
+//! starting with `\` is taken only right after a hunk's line, where nothing else
+//! git prints can start with it — anywhere else it is refused
+//! (`a_no_newline_marker_belongs_to_the_line_before_it`, in `patches.rs`).
 //!
 //! Who pins what: the read's environment is built in `process/` and spelled
 //! out by its tests; that only this module and `ops/` name the runner is

@@ -59,8 +59,9 @@ Line diffing is the second case. A diff algorithm leaves choices open — where 
 inserted block sits among equal lines, which of two equally short scripts to
 print — and gix's diff makes some of them differently from git's even under the
 same algorithm and indent heuristic, lacks patience altogether, and ignores the
-algorithm a diff driver names; on this repository's own history it placed nine
-files' hunks somewhere `git diff -U3` does not. Comparing lines with their
+algorithm a diff driver names; on this repository's own history it placed some
+files' hunks somewhere `git diff -U3` does not
+(`docs/research/diff-engine/content-parity-spike.md`). Comparing lines with their
 whitespace removed diverges the same way, and the text git prints after a hunk
 header's `@@` — the enclosing function, by the path's `xfuncname` — is git's
 alone. So a file's changed ranges, its whitespace-ignoring ranges and each hunk's

@@ -7,7 +7,7 @@
 //!
 //! ```text
 //! git [--literal-pathspecs] -c diff.suppressBlankEmpty=false diff-tree -r -z --raw
-//!     --no-abbrev -p -U<n> --no-ext-diff --no-textconv --no-color [-a] [-w]
+//!     --no-abbrev -p --full-index -U<n> --no-ext-diff --no-textconv --no-color [-a] [-w]
 //!     [--diff-algorithm=<algorithm>] <detection> --end-of-options <old> <new> [-- <paths>]
 //! ```
 //!

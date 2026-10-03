@@ -19,7 +19,7 @@
 # network; a machine without them FAILS this step, naming what is missing, rather than
 # skipping it. Nothing is installed anywhere else.
 #
-# Three tests skip on these gits by design, and each run prints every test it skipped, so a
+# Four tests skip on these gits by design, and each run prints every test it skipped, so a
 # skip is read rather than counted as a pass:
 #   - in_a_partial_clone_a_rename_search_fails_rather_than_fetching, on a git older than
 #     2.44, which ignores GIT_NO_LAZY_FETCH. It fails instead if
@@ -27,6 +27,8 @@
 #   - a_bare_repository_is_answered_under_safe_bare_repository_explicit and
 #     a_planted_bare_repository_is_refused_at_open_and_runs_nothing (its refusal half), on
 #     a git older than 2.38, which has no safe.bareRepository.
+#   - a_sparse_index_is_unsupported_and_says_so, on a git older than 2.32, which cannot
+#     write a sparse index (2.30.9 here).
 # Each filtered run must also list at least as many tests as its floor below, so a filter
 # that stops matching — a module renamed, a test binary split — fails rather than running
 # nothing and passing.
@@ -51,11 +53,11 @@ if [ -z "$floor_minor" ] || [ "2.$floor_minor" != "${first_version%.*}" ]; then
 fi
 
 # The filtered runs, as `<cargo target>|<test filters>|<floor>`. Each floor sits one under
-# the run's count when it was set (50 and 53), so a filter that silently matches less
+# the run's count when it was set (60 and 77), so a filter that silently matches less
 # fails; raise a floor as its run gains tests.
 RUNS=(
-  "--lib|diff:: reads::|49"
-  "--test diff_engine||52"
+  "--lib|diff:: reads::|59"
+  "--test diff_engine||76"
 )
 
 CACHE="${CAIRN_GIT_FLOOR_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/cairn/git-floor}"

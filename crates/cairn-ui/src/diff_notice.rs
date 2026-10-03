@@ -28,10 +28,18 @@ pub const BINARY_FILE: &str = "Binary file";
 pub const LFS_POINTER: &str = "Git LFS pointer";
 /// Said over a submodule's two commits.
 pub const SUBMODULE: &str = "Submodule";
-/// Said over git's mode lines and rename lines, for a change with no content to draw.
+/// Said over git's mode lines, for a change with no content to draw (and over a rename's
+/// lines when its mode moved too).
 pub const NO_CONTENT_CHANGE: &str = "No change to the file's content";
-/// Said for a conflicted path (R3.4).
-pub const CONFLICTED: &str = "This file is conflicted";
+/// Said over git's rename lines for a rename with no content or mode change (the user's
+/// words, 2026-10-03).
+pub const RENAMED_WITHOUT_CHANGES: &str = "Renamed without changes";
+/// Said over git's copy lines for a copy with no content or mode change, in the rename's form.
+pub const COPIED_WITHOUT_CHANGES: &str = "Copied without changes";
+/// Said for a conflicted path (R3.4), in the user's words (2026-10-03): git's own "Unmerged
+/// path", and why no diff is drawn.
+pub const CONFLICTED: &str =
+    "Unmerged path — conflicts must be resolved before a diff can be shown";
 /// Said for a file whose diff has no change to show and hides none: a working-tree path git
 /// shows nothing for, or a file whose content did not change.
 pub const NO_CHANGES_SHOWN: &str = "No changes to show.";
@@ -63,8 +71,9 @@ pub enum DiffNotice {
         dirty: bool,
     },
     /// git's own header lines for a change with no content to draw: a mode change, a rename
-    /// or copy with no content change, or both.
+    /// or copy with no content change, or both — under `title`.
     NoContentChange {
+        title: &'static str,
         lines: Vec<String>,
     },
     Conflicted,
@@ -88,9 +97,10 @@ impl DiffNotice {
         match &diff.content {
             DiffContent::Text { .. } if shown.row_count() > 0 => None,
             DiffContent::Text { .. } => Some(match header_lines(file) {
-                lines if !lines.is_empty() && !shown.hides_changes() => {
-                    Self::NoContentChange { lines }
-                }
+                lines if !lines.is_empty() && !shown.hides_changes() => Self::NoContentChange {
+                    title: no_content_title(file),
+                    lines,
+                },
                 _ => Self::NothingShown {
                     hides_changes: shown.hides_changes(),
                 },
@@ -117,6 +127,7 @@ impl DiffNotice {
                 dirty: *dirty,
             }),
             DiffContent::ModeChangeOnly => Some(Self::NoContentChange {
+                title: no_content_title(file),
                 lines: header_lines(file),
             }),
             DiffContent::Conflicted => Some(Self::Conflicted),
@@ -152,20 +163,43 @@ pub fn header_lines(file: &cairn_model::ChangedFile) -> Vec<String> {
     lines
 }
 
+/// What a change with no content to draw is called: a rename or a copy whose mode did not
+/// move either is renamed or copied "without changes"; anything else has no change to its
+/// content.
+fn no_content_title(file: &cairn_model::ChangedFile) -> &'static str {
+    if file.mode_changed() {
+        return NO_CONTENT_CHANGE;
+    }
+    match file.status {
+        ChangeStatus::Renamed(_) => RENAMED_WITHOUT_CHANGES,
+        ChangeStatus::Copied(_) => COPIED_WITHOUT_CHANGES,
+        ChangeStatus::Added
+        | ChangeStatus::Deleted
+        | ChangeStatus::Modified
+        | ChangeStatus::TypeChanged => NO_CONTENT_CHANGE,
+    }
+}
+
 fn mode_digits(mode: FileMode) -> String {
     mode.octal().to_owned()
 }
 
-/// A size as Fork shows one: in KB, and in bytes; under a KB, in bytes alone.
+/// A size as Fork shows one, in kilobytes and in bytes (Finding 22); under a kilobyte, in
+/// bytes alone. Fork's sample does not settle whether its KB is 1,000 or 1,024 bytes, so the
+/// unit is said honestly: KiB, 1,024 bytes (the user's decision, 2026-10-03).
 pub fn size_text(bytes: u64) -> String {
     if bytes < 1024 {
         return format!("{} bytes", grouped(bytes));
     }
-    format!("{:.1} KB ({} bytes)", bytes as f64 / 1024.0, grouped(bytes))
+    format!(
+        "{:.1} KiB ({} bytes)",
+        bytes as f64 / 1024.0,
+        grouped(bytes)
+    )
 }
 
 /// `n` with its thousands grouped by commas.
-fn grouped(n: u64) -> String {
+pub(crate) fn grouped(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, digit) in digits.chars().enumerate() {
@@ -341,7 +375,10 @@ impl Component for DiffNoticeView {
                         git_line(format!("+{}", subproject_line(id, *dirty)), ADDED_EMPHASIS)
                     })),
             ),
-            DiffNotice::NoContentChange { lines } => body.child(title(NO_CONTENT_CHANGE)).child(
+            DiffNotice::NoContentChange {
+                title: words,
+                lines,
+            } => body.child(title(*words)).child(
                 rect().spacing(2.).children(
                     lines
                         .iter()
@@ -379,7 +416,7 @@ mod tests {
         assert_eq!(grouped(999), "999");
         assert_eq!(grouped(1_000), "1,000");
         assert_eq!(grouped(2_532_736), "2,532,736");
-        assert_eq!(size_text(2_048), "2.0 KB (2,048 bytes)");
+        assert_eq!(size_text(2_048), "2.0 KiB (2,048 bytes)");
         assert_eq!(size_text(4), "4 bytes");
         assert_eq!(
             too_large_reason(

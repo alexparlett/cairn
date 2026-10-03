@@ -9,7 +9,8 @@ use cairn_model::{
     Signature, Timestamp,
 };
 use cairn_ui::{
-    ChangesList, DETAIL_ROW_HEIGHT, FILTER_PLACEHOLDER, NO_FILE_MATCHES, ShownFiles, summary_parts,
+    ChangesList, DETAIL_ROW_HEIGHT, FILTER_PLACEHOLDER, FILTERING, NO_FILE_MATCHES, ShownFiles,
+    summary_parts,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -236,4 +237,62 @@ fn the_summary_is_author_short_id_date_and_subject() {
             "Subject line".to_owned(),
         ]
     );
+}
+
+fn labels(test: &TestingRunner) -> Vec<String> {
+    test.find_many(|_, element| Label::try_downcast(element).map(|l| l.text.to_string()))
+}
+
+/// The user's decision (2026-10-03): whenever a filter is active the list says how many of
+/// the change set's files it shows — "Showing N of M files" — so a file hidden by a filter
+/// kept from the last commit is never taken for one this commit did not touch; with no
+/// filter it says nothing, and while a new change set's first answer is on its way it says
+/// it is filtering rather than "no file matches". At 55,184 paths the counts are the
+/// answer's length and the change set's, read as they are: nothing on the UI thread walks
+/// the list to count it. Caught by: no line, a line with no filter, counts taken from the
+/// rows built, or "0 of M" and "no file matches" said before any answer.
+#[test]
+fn an_active_filter_says_how_many_files_it_shows_of_how_many() {
+    let (mut test, fixture, _) = launch(change_set(S1_FILES), ShownFiles::All);
+    assert!(
+        !labels(&test).iter().any(|l| l.starts_with("Showing")),
+        "a count with no filter: {:?}",
+        labels(&test)
+    );
+    let (mut filter, mut shown) = (fixture.filter, fixture.shown);
+    let every_other: Vec<u32> = (0..S1_FILES as u32).step_by(2).collect();
+    test.run_in(|| {
+        filter.set("file".to_owned());
+        shown.set(ShownFiles::Filtered(every_other.clone()));
+    });
+    test.sync_and_update();
+    assert!(
+        labels(&test)
+            .iter()
+            .any(|l| l == "Showing 27,592 of 55,184 files"),
+        "{:?}",
+        labels(&test)
+    );
+
+    test.run_in(|| shown.set(ShownFiles::Waiting));
+    test.sync_and_update();
+    let waiting = labels(&test);
+    assert!(waiting.iter().any(|l| l == FILTERING), "{waiting:?}");
+    assert!(!waiting.iter().any(|l| l == NO_FILE_MATCHES), "{waiting:?}");
+    assert!(
+        !waiting.iter().any(|l| l.starts_with("Showing")),
+        "{waiting:?}"
+    );
+
+    test.run_in(|| shown.set(ShownFiles::Filtered(vec![3])));
+    test.sync_and_update();
+    assert!(
+        labels(&test)
+            .iter()
+            .any(|l| l == "Showing 1 of 55,184 files")
+    );
+    test.run_in(|| filter.set(String::new()));
+    test.run_in(|| shown.set(ShownFiles::All));
+    test.sync_and_update();
+    assert!(!labels(&test).iter().any(|l| l.starts_with("Showing")));
 }

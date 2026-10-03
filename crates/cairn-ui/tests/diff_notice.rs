@@ -93,8 +93,16 @@ fn every_state_that_is_not_text_draws_its_notice() {
     for wanted in [BINARY_FILE, OLD_SIDE, NEW_SIDE] {
         assert!(binary.iter().any(|l| l == wanted), "{wanted}: {binary:?}");
     }
-    assert!(binary.contains(&size_text(2_048)), "{binary:?}");
-    assert!(binary.contains(&size_text(1_048_576)), "{binary:?}");
+    // KiB, labelled as such: Fork's sample (Finding 22) does not settle the base.
+    assert!(
+        binary.iter().any(|l| l == "2.0 KiB (2,048 bytes)"),
+        "{binary:?}"
+    );
+    assert!(
+        binary.iter().any(|l| l == "1024.0 KiB (1,048,576 bytes)"),
+        "{binary:?}"
+    );
+    assert_eq!(size_text(1_048_576), "1024.0 KiB (1,048,576 bytes)");
     // An added binary has no old side to size.
     let (added, _) = draw(&shown(
         file(ChangeStatus::Added),
@@ -192,6 +200,15 @@ fn every_state_that_is_not_text_draws_its_notice() {
             overlay: DisplayOverlay::none(),
         },
     ));
+    // The user's words for a rename with no content change (2026-10-03), git's lines under.
+    assert!(
+        renamed.iter().any(|l| l == "Renamed without changes"),
+        "{renamed:?}"
+    );
+    assert!(
+        !renamed.iter().any(|l| l == NO_CONTENT_CHANGE),
+        "{renamed:?}"
+    );
     for wanted in [
         "similarity index 100%",
         "rename from old/name.bin",
@@ -204,7 +221,9 @@ fn every_state_that_is_not_text_draws_its_notice() {
         file(ChangeStatus::Modified),
         DiffContent::Conflicted,
     ));
-    assert!(conflicted.iter().any(|l| l == CONFLICTED), "{conflicted:?}");
+    let unmerged = "Unmerged path — conflicts must be resolved before a diff can be shown";
+    assert!(conflicted.iter().any(|l| l == unmerged), "{conflicted:?}");
+    assert_eq!(CONFLICTED, unmerged);
     let reason = "the index is a sparse index, which Cairn does not read yet";
     let (sparse, _) = draw(&shown(
         file(ChangeStatus::Modified),

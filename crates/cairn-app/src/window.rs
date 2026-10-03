@@ -53,7 +53,7 @@ pub struct View {
     pub change_cursor: State<Option<ChangeCursor>>,
     /// The Changes tab's filter, as typed; kept for the session.
     pub filter_text: State<String>,
-    /// The Changes tab's file list's width as last dragged.
+    /// The Changes tab's file list's share of the pane as last dragged, in percent.
     pub changes_list_width: State<f32>,
 }
 
@@ -1865,10 +1865,11 @@ mod tests {
 
     /// C10, R5.4 and the QA brief's "a list operation, not a diff operation": typing in the
     /// filter over 55,184 files asks a worker which match — handing it the window's own change
-    /// set, shared, not a copy — and the UI thread filters nothing: the list is unchanged until
-    /// the answer, then shows the files it names and no others, one viewport of them. Caught
-    /// by: filtering on the UI thread (the list changes before any answer), a copied change
-    /// set, or rows drawn for files the answer left out.
+    /// set, shared, not a copy — and the UI thread filters nothing: until the answer the list
+    /// says it is filtering and shows no file, then shows the files it names and no others, one
+    /// viewport of them, under "Showing N of M files". Caught by: filtering on the UI thread
+    /// (files shown before any answer), a copied change set, or rows drawn for files the
+    /// answer left out.
     #[test]
     fn typing_in_the_filter_asks_a_worker_and_the_list_draws_its_answer() {
         let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
@@ -1921,25 +1922,28 @@ mod tests {
             Some(&("01234".to_owned(), true)),
             "the filter was not asked of a worker with the window's own change set: {filters:?}"
         );
-        assert_eq!(
-            list_rows(&test),
-            before,
-            "the list changed before any answer"
-        );
+        // No answer yet: the list says it is filtering and shows no file — it neither keeps
+        // every file counted as matched nor filters anything itself.
+        assert!(list_rows(&test).is_empty(), "{:?}", list_rows(&test));
+        assert!(pane(&test).iter().any(|t| t == cairn_ui::FILTERING));
 
         let mut diff = view.diff;
         let of = Comparison::Commit(oid(2));
         test.run_in(|| diff.write().filter_arrived(of, "0123", vec![1]));
         test.sync_and_update();
-        assert_eq!(
-            list_rows(&test),
-            before,
+        assert!(
+            list_rows(&test).is_empty(),
             "a superseded text's answer was drawn"
         );
         test.run_in(|| diff.write().filter_arrived(of, "01234", vec![1234, 11234]));
         test.sync_and_update();
         test.sync_and_update();
         assert_eq!(list_rows(&test), ["file-01234.rs", "file-11234.rs"]);
+        assert!(
+            pane(&test).iter().any(|t| t == "Showing 2 of 55,184 files"),
+            "{:?}",
+            pane(&test)
+        );
     }
 
     /// C10 and the QA brief: a file chosen in the Changes tab's list asks its diff and lets go
@@ -2059,6 +2063,62 @@ mod tests {
         assert!(
             !next.options.load_anyway,
             "the load leaked to the next file"
+        );
+    }
+
+    /// Where the Changes tab's splitter sits: the x of the one handle-thin, pane-tall rect.
+    fn list_split(test: &TestingRunner) -> f32 {
+        let top = pane_top(test);
+        test.find(|node, element| {
+            let area = node.layout().area;
+            Rect::try_downcast(element)
+                .filter(|_| {
+                    area.width() == ResizableContext::HANDLE_SIZE
+                        && area.height() > 60.
+                        && area.min_y() > top
+                })
+                .map(|_| area.center().x)
+        })
+        .unwrap_or_else(|| panic!("no splitter in the Changes tab"))
+    }
+
+    /// The user's decision (2026-10-03): the Changes tab's file list opens at about 35% of the
+    /// pane, a drag never takes it below about 200 px, and the width dragged to is kept for
+    /// the session — across another tab shown and back. Caught by: a fixed pixel width, no
+    /// floor, or a width forgotten when the tab is shown again.
+    #[test]
+    fn the_file_list_opens_at_a_third_of_the_pane_and_keeps_its_dragged_width() {
+        let (mut test, view, _) = launch((0..10).map(row).collect(), received(10, true));
+        changes_tab_over(&mut test, view, 3);
+        let opened = list_split(&test);
+        assert!(
+            (opened - 0.35 * 800.).abs() < 8.,
+            "the list opened {opened} px wide in an 800 px pane"
+        );
+
+        let y = f64::from(pane_top(&test) + 120.);
+        test.press_cursor((f64::from(opened), y));
+        test.move_cursor((f64::from(opened) - 40., y));
+        test.sync_and_update();
+        test.move_cursor((20., y));
+        test.sync_and_update();
+        test.release_cursor((20., y));
+        test.sync_and_update();
+        let narrowest = list_split(&test);
+        assert!(
+            (190. ..230.).contains(&narrowest),
+            "a drag took the list to {narrowest} px, past its 200 px floor"
+        );
+
+        click_label(&mut test, DetailTab::Commit.caption());
+        click_label(&mut test, DetailTab::Changes.caption());
+        for _ in 0..3 {
+            test.sync_and_update();
+        }
+        assert!(
+            (list_split(&test) - narrowest).abs() < 2.,
+            "the width dragged to, {narrowest}, was not kept: {}",
+            list_split(&test)
         );
     }
 }

@@ -1022,8 +1022,9 @@ fn side_by_side_columns_are_equal_halves_and_slide_together() {
 /// R6.9, phase 06 QA's obligation: a file loaded past the limits with one line of several
 /// mebibytes draws that line cut at the long-line limit with the marker after it, in either
 /// view, so a row costs at most the limit's text however long the line, and the horizontal
-/// extent is the cut's, not the line's. Caught by: a row that draws the whole line, a cut
-/// with no marker, or an extent measured from the line's length.
+/// extent is the cut's, not the line's; the marker says how many bytes are not drawn. Caught
+/// by: a row that draws the whole line, a cut with no marker, a marker that miscounts, or an
+/// extent measured from the line's length.
 #[test]
 fn a_line_past_the_limit_is_drawn_cut_with_its_marker_in_both_views() {
     let long = "x".repeat(4 * 1024 * 1024);
@@ -1034,7 +1035,7 @@ fn a_line_past_the_limit_is_drawn_cut_with_its_marker_in_both_views() {
     );
     let shown = ShownDiff::new(text_diff(text, DisplayOverlay::none()), Context::lines(3));
     let cut = cairn_model::LINE_CUT_BYTES;
-    let bound = 2. * 20. + 200. + (cut + cairn_ui::LINE_CUT_MARKER.len()) as f32 * 7.;
+    let bound = 2. * 20. + 200. + (cut + cairn_ui::cut_marker(64 << 20).len()) as f32 * 7.;
     assert!(
         cairn_ui::content_width(&shown) < bound,
         "the extent is {} for a line drawn to {cut} bytes",
@@ -1057,6 +1058,8 @@ fn a_line_past_the_limit_is_drawn_cut_with_its_marker_in_both_views() {
             .unwrap_or_else(|| panic!("the long line is not drawn: {drawn:?}"));
         assert_eq!(line.len(), 2, "no marker after the cut: {:?}", line.len());
         assert_eq!(line[0].len(), cut, "side by side: {side_by_side}");
-        assert_eq!(line[1], cairn_ui::LINE_CUT_MARKER);
+        // The user's marker (2026-10-03): how many of the line's bytes are not drawn.
+        assert_eq!(line[1], " … 4,192,256 more bytes");
+        assert_eq!(4 * 1024 * 1024 - cut, 4_192_256);
     }
 }

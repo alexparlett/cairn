@@ -6,8 +6,9 @@
 //! lane so the next keystroke supersedes it) and its answer, the matching files' indices, is
 //! kept only if it names the change set and the text selected now. Until it arrives the list
 //! keeps showing the last answer for the same change set — a narrower or wider filter of the
-//! same files — and, for another change set, nothing, so no index of one change set is ever
-//! read against another.
+//! same files — and, for another change set or the first text typed, waits
+//! (`ShownFiles::Waiting`), so no index of one change set is ever read against another and
+//! no file is counted as matched before an answer says so.
 
 use std::sync::Arc;
 
@@ -45,7 +46,7 @@ impl FileFilter {
         self.shown = if self.text.is_empty() {
             ShownFiles::All
         } else {
-            ShownFiles::Filtered(Vec::new())
+            ShownFiles::Waiting
         };
     }
 
@@ -75,6 +76,11 @@ impl FileFilter {
             return None;
         }
         self.asked = Some((of, self.text.clone()));
+        // Every file was shown: until the first answer, the list says it is filtering rather
+        // than counting every file as matched.
+        if self.shown == ShownFiles::All {
+            self.shown = ShownFiles::Waiting;
+        }
         Some(Request::FilterFiles {
             of,
             files: Arc::clone(files),
@@ -182,7 +188,7 @@ mod tests {
 
         // Another commit: nothing of the last one's is shown, and its own is asked.
         filter.changes_selected();
-        assert_eq!(filter.shown(), &ShownFiles::Filtered(Vec::new()));
+        assert_eq!(filter.shown(), &ShownFiles::Waiting);
         assert!(filter.filter("r", Some((commit(2), &set))).is_some());
 
         // Nothing ready: nothing to ask yet.

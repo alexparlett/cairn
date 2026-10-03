@@ -17,6 +17,8 @@ pub enum ShownFiles {
     #[default]
     All,
     Filtered(Vec<u32>),
+    /// A filter's first answer for this change set is on its way: nothing to show yet.
+    Waiting,
 }
 
 impl ShownFiles {
@@ -25,6 +27,7 @@ impl ShownFiles {
         match self {
             Self::All => total,
             Self::Filtered(indices) => indices.len(),
+            Self::Waiting => 0,
         }
     }
 
@@ -33,6 +36,7 @@ impl ShownFiles {
         match self {
             Self::All => Some(row),
             Self::Filtered(indices) => indices.get(row).map(|index| *index as usize),
+            Self::Waiting => None,
         }
     }
 
@@ -45,6 +49,7 @@ impl ShownFiles {
                 let wanted = u32::try_from(index).ok()?;
                 indices.binary_search(&wanted).ok()
             }
+            Self::Waiting => None,
         }
     }
 }

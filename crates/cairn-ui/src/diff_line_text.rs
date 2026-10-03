@@ -27,7 +27,7 @@
 //! [`DiffLimits::MAX_LINE_BYTES`] — and drawn whole it would cost its whole length per row
 //! built (a 64 MiB line is 64 MiB of text for one row) and a horizontal extent of hundreds of
 //! millions of pixels. So a row draws at most `cairn_model::LINE_CUT_BYTES` of a line, ending
-//! on a character (`cairn_model::drawn_bytes`), followed by [`LINE_CUT_MARKER`] in the muted
+//! on a character (`cairn_model::drawn_bytes`), followed by [`cut_marker`] in the muted
 //! colour, which says that the rest is not drawn.
 
 use cairn_model::{ByteRange, TAB_STOP, drawn_bytes};
@@ -37,8 +37,14 @@ use crate::columns::columns;
 /// The column a tab moves to a multiple of: `git diff` in a terminal.
 pub const TAB_WIDTH: usize = TAB_STOP;
 
-/// Drawn after a line cut at [`LINE_CUT_BYTES`], in the muted colour (R6.9).
-pub const LINE_CUT_MARKER: &str = " … line truncated";
+/// Drawn after a line cut at the long-line limit, in the muted colour (R6.9): how many of the
+/// line's bytes are not drawn (the user's words, 2026-10-03).
+pub fn cut_marker(bytes_not_drawn: usize) -> String {
+    format!(
+        " … {} more bytes",
+        crate::diff_notice::grouped(bytes_not_drawn as u64)
+    )
+}
 
 /// A line as a row draws it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,8 +52,9 @@ pub struct ShownLine {
     pub text: String,
     /// The intra-line ranges, as UTF-16 ranges of `text`; empty ones dropped.
     pub highlights: Vec<(usize, usize)>,
-    /// Whether the line was longer than the long-line limit and `text` is its start only.
-    pub cut: bool,
+    /// How many of the line's bytes are not drawn: none, or what lies past the long-line
+    /// limit when `text` is the line's start only.
+    pub cut: usize,
 }
 
 /// `bytes` as a row draws them, with `ranges` (byte ranges of `bytes`) carried into the text.
@@ -56,6 +63,7 @@ pub struct ShownLine {
 /// ranges that start before the cut are read, so the work is bounded by the cut whatever the
 /// line's length.
 pub fn shown_line(bytes: &[u8], ranges: &[ByteRange]) -> ShownLine {
+    let whole = bytes.len();
     let (bytes, cut) = drawn_bytes(bytes);
     let ranges = if cut {
         // In order, as the engine answers them: those that start before the cut.
@@ -149,7 +157,7 @@ pub fn shown_line(bytes: &[u8], ranges: &[ByteRange]) -> ShownLine {
     ShownLine {
         text,
         highlights,
-        cut,
+        cut: whole - bytes.len(),
     }
 }
 
@@ -237,10 +245,11 @@ mod tests {
     fn a_line_past_the_limit_is_drawn_to_the_limit() {
         let long = "a".repeat(3 * 1024 * 1024);
         let shown = shown_line(long.as_bytes(), &[range(10, 12), range(5_000, 5_002)]);
-        assert!(shown.cut);
+        assert_eq!(shown.cut, 3 * 1024 * 1024 - cairn_model::LINE_CUT_BYTES);
+        assert_eq!(cut_marker(shown.cut), " … 3,143,680 more bytes");
         assert_eq!(shown.text.len(), cairn_model::LINE_CUT_BYTES);
         assert_eq!(shown.highlights, [(10, 12)]);
         let at_limit = "a".repeat(cairn_model::LINE_CUT_BYTES);
-        assert!(!shown_line(at_limit.as_bytes(), &[]).cut);
+        assert_eq!(shown_line(at_limit.as_bytes(), &[]).cut, 0);
     }
 }

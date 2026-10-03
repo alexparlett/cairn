@@ -24,6 +24,20 @@ use crate::file_filter::ShownFiles;
 pub const FILTER_PLACEHOLDER: &str = "Filter";
 /// Said in place of the list when the filter leaves no file.
 pub const NO_FILE_MATCHES: &str = "No file matches the filter.";
+/// Said under the filter while its first answer for a change set is on its way.
+pub const FILTERING: &str = "Filtering…";
+
+/// Said under an active filter (the user's decision, 2026-10-03): how many of the change
+/// set's `total` files the list shows, so a file hidden by a filter kept from the last commit
+/// is not taken for one this commit did not touch.
+pub fn filter_count(shown: usize, total: usize) -> String {
+    format!(
+        "Showing {} of {} file{}",
+        crate::diff_notice::grouped(shown as u64),
+        crate::diff_notice::grouped(total as u64),
+        if total == 1 { "" } else { "s" }
+    )
+}
 /// The summary line's height.
 pub const SUMMARY_HEIGHT: f32 = 28.0;
 
@@ -115,12 +129,15 @@ impl Component for ChangesList {
         let list_id = use_a11y();
         let focus = use_focus(list_id);
         let controller = use_scroll_controller(ScrollConfig::default);
-        // Reading subscribes the list to the answers it draws.
-        let (rows, identity) = {
+        // Reading subscribes the list to the answers it draws. Both counts are lengths, read
+        // as they are: nothing here walks the files.
+        let (rows, total, waiting, identity) = {
             let changes = self.changes.read();
             let shown = self.shown.read();
             (
                 shown.len(changes.files.len()),
+                changes.files.len(),
+                *shown == ShownFiles::Waiting,
                 changes.details.as_ref().map(|details| details.id),
             )
         };
@@ -135,7 +152,18 @@ impl Component for ChangesList {
         let colours = get_theme_or_default().read().colors().clone();
         let filtering = !self.filter.read().is_empty();
 
-        let list: Element = if rows == 0 && filtering {
+        let count = filtering.then(|| {
+            label()
+                .text(if waiting {
+                    FILTERING.to_owned()
+                } else {
+                    filter_count(rows, total)
+                })
+                .max_lines(1)
+                .font_size(12.)
+                .color(colours.text_secondary)
+        });
+        let list: Element = if rows == 0 && filtering && !waiting {
             rect()
                 .expanded()
                 .center()
@@ -169,7 +197,8 @@ impl Component for ChangesList {
                             .placeholder(FILTER_PLACEHOLDER)
                             .compact()
                             .width(Size::fill()),
-                    ),
+                    )
+                    .maybe_child(count),
             )
             .child(
                 rect()

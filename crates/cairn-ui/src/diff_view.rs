@@ -25,7 +25,7 @@ use cairn_model::{ChangeStops, DisplayOverlay, HunkHeader, ShownDiff};
 use freya::prelude::*;
 
 use crate::accelerators;
-use crate::diff_line_text::LINE_CUT_MARKER;
+use crate::diff_line_text::cut_marker;
 use crate::diff_palette::GROUND;
 use crate::diff_row_parts::{
     ADVANCE, MARKER_WIDTH, SEPARATOR_WIDTH, TEXT_END_PADDING, number_width,
@@ -58,7 +58,11 @@ pub(crate) fn number_column_width(shown: &ShownDiff) -> f32 {
 /// line, and the cut marker when a line is cut: what a side-by-side column slides through.
 pub fn text_width(shown: &ShownDiff) -> f32 {
     let marker = if shown.has_cut_line() {
-        LINE_CUT_MARKER.chars().count()
+        // At most the marker for the most a line can lose: a file is loaded only to the
+        // load-anyway ceiling, so no line is cut by more.
+        cut_marker(cairn_model::DiffLimits::LOAD_ANYWAY_BYTES as usize)
+            .chars()
+            .count()
     } else {
         0
     };

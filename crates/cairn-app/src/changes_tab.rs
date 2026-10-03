@@ -32,10 +32,12 @@ use crate::{diff_actions, selection, shortcuts};
 pub const NO_FILE_CHOSEN: &str = "Choose a file to see its diff.";
 /// Said while the chosen file's diff is on its way.
 pub const READING_DIFF: &str = "Reading the diff…";
-/// The file list's width until its splitter is dragged.
-pub const LIST_WIDTH: f32 = 300.0;
-const LIST_MIN_WIDTH: f32 = 140.0;
-const DIFF_MIN_WIDTH: f32 = 240.0;
+/// The file list's share of the pane until its splitter is dragged, in percent (the user's
+/// decision, 2026-10-03: about a third).
+pub const LIST_WIDTH: f32 = 35.0;
+/// The least a drag, or a narrowing window, leaves the file list (the user's decision).
+const LIST_MIN_PIXELS: f32 = 200.0;
+const DIFF_MIN_PIXELS: f32 = 240.0;
 
 pub struct ChangesTab {
     view: View,
@@ -127,8 +129,10 @@ impl Component for ChangesTab {
         });
 
         let mut width = view.changes_list_width;
-        // Peeked: the width only matters when the split is laid out anew.
-        let list_width = *width.peek();
+        // Peeked: the share only matters when the split is laid out anew. Both panels are
+        // proportional, so the list keeps its share as the window changes; each has a floor
+        // in pixels that a drag and a narrowing window both honour.
+        let list_share = *width.peek();
         rect()
             .expanded()
             .content(Content::Flex)
@@ -138,14 +142,14 @@ impl Component for ChangesTab {
                     ResizableContainer::new()
                         .direction(Direction::Horizontal)
                         .panel(
-                            ResizablePanel::new(PanelSize::px(list_width))
-                                .min_size(LIST_MIN_WIDTH)
+                            ResizablePanel::new(PanelSize::percent(list_share))
+                                .min_pixels(LIST_MIN_PIXELS)
                                 .on_resized(move |dragged: f32| width.set(dragged))
                                 .child(list),
                         )
                         .panel(
-                            ResizablePanel::new(PanelSize::percent(100.))
-                                .min_pixels(DIFF_MIN_WIDTH)
+                            ResizablePanel::new(PanelSize::percent(100. - list_share))
+                                .min_pixels(DIFF_MIN_PIXELS)
                                 .child(diff_side(view, self.submit.clone())),
                         ),
                 ),

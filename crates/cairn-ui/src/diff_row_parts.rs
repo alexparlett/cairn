@@ -8,7 +8,7 @@
 use cairn_model::{ByteRange, LineNumber};
 use freya::prelude::*;
 
-use crate::diff_line_text::{LINE_CUT_MARKER, shown_line};
+use crate::diff_line_text::{cut_marker, shown_line};
 use crate::diff_palette::{
     ADDED_EMPHASIS, ADDED_TINT, CURRENT_CHANGE, DIFF_FONT_FAMILY, DIFF_FONT_SIZE, DIFF_MUTED,
     DIFF_TEXT, GROUND, GUTTER_SEPARATOR, MONO_ADVANCE_EM, REMOVED_EMPHASIS, REMOVED_TINT,
@@ -112,8 +112,8 @@ pub(crate) fn line_text(bytes: &[u8], ranges: &[ByteRange], emphasis: Color) -> 
     let drawn = words(line.text, DIFF_TEXT)
         .highlights(Some(line.highlights))
         .highlight_color(emphasis);
-    if line.cut {
-        drawn.span(Span::new(LINE_CUT_MARKER).color(DIFF_MUTED))
+    if line.cut > 0 {
+        drawn.span(Span::new(cut_marker(line.cut)).color(DIFF_MUTED))
     } else {
         drawn
     }

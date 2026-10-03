@@ -188,7 +188,11 @@ worktree root is set, and a root also makes the cache read every resource's cont
 from the working tree instead of by its id, so the session builds the stack itself
 (`Repository::attributes_only` with `WorktreeThenIdMapping`, `IdMapping` in a bare
 repository) and hands it to `gix::diff::resource_cache` with no root: the blobs still
-come from the object database. `gix::diff::resource_cache` builds it with
+come from the object database. Its index is `index_or_empty`: where there is no index
+file — a bare repository, or one whose index was removed — git reads no in-tree
+attributes at all, never `HEAD`'s, on 2.30.9, 2.32.7 and 2.56.0, where gix's own
+cache would load `HEAD`'s tree
+(`where_git_reads_no_attributes_the_commit_reads_none`). `gix::diff::resource_cache` builds it with
 `skip_internal_diff_if_external_is_configured` off, so a `diff.<driver>.command` in
 the user's config is read and never started. Both are checked by running a diff
 over a path that has a textconv *and* an external diff command configured, each a
@@ -765,10 +769,12 @@ read.
 
 ### Known limits of the engine
 
-- **The configuration is gix's view of it, as of when the repository was opened.**
-  The two rename keys are read from the configuration gix loaded, so a change the
-  user makes while Cairn has the repository open is not seen until it is opened
-  again — as for every other key gix reads, `diff.algorithm` among them. And gix
+- **The configuration is gix's view of it, as of when the handle was opened.** The
+  two rename keys are read from the configuration gix loaded, as is every other key
+  gix reads, `diff.algorithm` among them. A handle does not see a later edit; the
+  application's diff thread opens its handle again when a configuration file moves
+  ("In the application", below), and a caller holding a handle of its own must do
+  the same. And gix
   reads from Cairn's own environment, which may carry `GIT_CONFIG_GLOBAL`,
   `GIT_CONFIG_COUNT` and the rest, where the `git` process's environment carries
   none of them (`docs/systems/git-processes.md`); since detection and the limit are
@@ -997,33 +1003,112 @@ found, and reached directly from `RepositoryHandle::submit` by the routing table
 file diff is served before a waiting changes query (it was asked after it, or the
 changes query would have superseded it), a request superseded while it waited is
 dropped unserved, and the thread blocks on its queue whenever nothing waits
-(`the_newest_request_per_lane_is_served_the_file_diff_first`). The query's epoch
+(`the_newest_request_per_lane_is_served_the_file_diff_first`). One thread serves
+both lanes, so a file diff asked while a changes query RUNS waits for it to end —
+only a newer changes query cancels the one running — and a changes query waiting
+while file diffs keep arriving waits behind each: a sustained click through files
+postpones the change set of a commit selected before the clicks (which a newer
+selection supersedes anyway). The query's epoch
 is the `Cancel` every engine call is handed, so the runner's poll ends a
 superseded read's process group — a click through a file list kills each file's
 one to three `git` processes rather than queueing them
 (`a_superseded_diff_kills_its_git`, a stub `git` whose `diff-tree` hangs with a
 grandchild; `a_click_through_files_answers_the_last_file_only`). Expand All is
 one engine call, `DiffSession::file_diffs`, which checks the epoch between files
-and while each read runs, so a newer file diff or changes query ends it at the
-next file. A content query whose reads disagree (`ContentReadsDisagree`) is asked
-again, up to `READ_ATTEMPTS` in all and never once superseded, and then shown as
-a failure (`a_disagreeing_read_is_asked_again_a_bounded_number_of_times`).
+as it reads them, before each file it asks git about on its own, between files as
+it assembles the answers, and while each read runs, so a newer file diff or
+changes query ends it at the next file wherever it is
+(`expand_all_superseded_while_its_answers_are_assembled_ends_there`, in
+`cairn-git`; `expand_all_answers_every_file_through_the_boundary`). A
+working-tree query whose reads disagree (`ContentReadsDisagree`: the file changed
+between git's two reads of it) is asked again, up to `READ_ATTEMPTS` in all and
+never once superseded, and then shown as a failure
+(`a_disagreeing_read_is_asked_again_a_bounded_number_of_times`); a commit's
+content cannot change between reads, so a disagreement there is shown at once.
+Expand All answers all or nothing: one file that fails fails the batch. A read git fails is sent as `DiffFailed` naming the
+query (`a_failed_read_is_sent_as_a_failure_naming_its_query`).
 
-**What the thread keeps** (PRD R4.5). The `DiffSession` — gix's blob resource
-cache — is opened on first use and kept across commits; the engine reads the index
-and the attributes afresh for every working-tree query. gix builds a session's
-attribute stack from the index as it stands when the session opens, so the thread
-stats the index file before each query and, when it has moved, reopens the session
-and lets go of every kept answer (`what_is_kept_is_let_go_when_the_index_moves`).
-Answers already given for commits and comparisons are kept,
-bounded by count and by size (`what_is_kept_is_bounded_by_count_and_by_size`): a
-change set keyed by its `Comparison`, a file's diff by its whole `FileQuery` —
-the comparison, both paths, modes and blob ids, and the options
-(`a_kept_answer_is_found_only_under_everything_it_was_asked_with`). Working-tree
-answers are never kept (`a_working_tree_answer_is_never_kept`), and neither is
-Expand All's. The object cache is the handle's own `Repository::OBJECT_CACHE_BYTES`,
-not gix's tree-diff sizing helper: the trees are compared by `git diff-tree`, so
-gix walks no tree here for that cache to pay for.
+**What the thread keeps** (PRD R4.5, amended). The `DiffSession` — gix's blob
+resource cache — is opened on first use and kept across commits, and answers already
+given for commits and comparisons are kept, bounded by count and by size
+(`crates/cairn-app/src/worker/diff_answers.rs`;
+`what_is_kept_is_bounded_by_count_and_by_size`): a change set keyed by its
+`Comparison`, a file's diff by its whole `FileQuery` — the comparison, both paths,
+modes and blob ids, and the options
+(`a_kept_answer_is_found_only_under_everything_it_was_asked_with`). The size counted
+is the lines' bytes and each line's own size, the changed ranges, the overlay's
+whitespace-ignoring ranges and highlights, and the function context at the 80 bytes
+xdiff keeps of each — an upper bound on that last, since the overlay keeps its text
+private (`the_budget_counts_ranges_and_the_overlay_too`). Working-tree answers are
+never kept (`a_working_tree_answer_is_never_kept`), and neither is Expand All's; the
+engine reads the index and the attributes afresh for every working-tree query.
+
+A kept answer is kept only while everything git and gix read to give it is as it
+was. Before each query the thread stamps those files
+(`crates/cairn-app/src/worker/diff_freshness.rs`, over `cairn_git::DiffInputs`) —
+each file's modification and change times to the nanosecond, its length, inode and
+device, or that it is missing — in three tiers
+(`each_tier_lets_go_of_what_its_move_makes_stale`):
+
+- **The configuration**: every file git or gix reads it from — the system file, the
+  XDG and global files as Cairn's environment names them and as `git`'s (which
+  carries `HOME` and `XDG_CONFIG_HOME` but no `GIT_CONFIG_*` file variable) names
+  them, `$GIT_DIR/config`, `config.worktree`, every `include.path` and
+  `includeIf.*.path` target whether or not it exists or its condition holds, and
+  `HEAD` where a condition names the branch
+  (`every_configuration_file_git_reads_is_named_even_one_that_does_not_exist`).
+  When one moves, the thread opens its repository handle again by the route the
+  application opened it (`SharedRepository::reopen_for`, the same bare-repository
+  check, the same registry and log;
+  `opening_again_reads_the_configuration_afresh_and_refuses_another_repository`)
+  and lets everything kept go; the history thread keeps its own handle. A reopen
+  that fails — a configuration git would refuse, or the path now naming another
+  repository (`Error::RepositoryReplaced`) — fails the query, and the next tries
+  again (`a_configuration_edit_reaches_the_next_answer`: an include target created,
+  `diff.algorithm` edited, `diff.renames` reaching the next change set).
+- **What every path reads**: `info/attributes`, `core.attributesFile` (else the XDG
+  `git/attributes`), the system `gitattributes` and the working tree's
+  `.gitmodules` — and what the index holds of them, `cairn_git::StagedInputs`: every
+  `.gitattributes` entry and `.gitmodules` (else `HEAD`'s), by path, stage and blob.
+  The index file changes on every stat refresh, so its stamp and `HEAD` only say
+  when to read `StagedInputs` again, and they are compared by value
+  (`the_index_is_compared_by_what_it_holds_not_by_its_file`;
+  `a_stat_only_index_refresh_keeps_what_is_kept`). When any moves, the session and
+  every kept answer go.
+- **What one path reads**: the working tree's `.gitattributes` in each directory
+  above it. A file's diff records the directories above both its paths; a change
+  set records them for every path git's rename search could pair — added, deleted,
+  renamed and copied files, and modified ones when copies are searched — since an
+  attribute decides whether a file is scored as text (an unstaged `-diff` turns a
+  CRLF file's rename into a deletion and an addition, on git 2.30.9, 2.32.7 and
+  2.56.0). A hit re-stamps them and lets the answer go when one moved; the session
+  records the directories it has read and goes when one of them moved, since gix's
+  attribute stack keeps the top of the tree for its life
+  (`the_session_goes_when_a_directory_it_read_moved`;
+  `an_unstaged_attribute_edit_reaches_a_kept_answer_and_a_new_one`).
+
+**A stamp taken while its file could still change unseen matches nothing.** A
+filesystem keeps times only so finely, so a file changed twice within that grain can
+show one stamp for two contents. Each query stamps against the time it started; a
+file whose modification or change time is within `SETTLING` (two seconds, FAT's
+grain) of that is unsettled, an answer read under an unsettled stamp is answered and
+not kept, and whatever such a stamp covers is read afresh by the next query
+(`a_stamp_taken_while_its_file_may_still_change_matches_nothing`). The same rule makes
+a stamp taken after a read safe — a change after the query started is unsettled —
+which is how a change set's directories, known only from its answer, and a reopened
+handle's configuration, stamped against when the reopen began, are trusted.
+
+What it costs, measured on the bench repository (`~/Development/bench/rust`, release
+build): a query's configuration, global and index stamps and `HEAD`, about 6 µs; a
+file diff's directories, 1-4 µs; when the index or `HEAD` moved, the index read
+again — about 14-20 ms for its 62,892 entries, gix's own load — and its attribute
+entries compared in under 0.1 ms. A change set's directories cost more: 0.6 ms to
+stamp M1's 5,590 searched paths (231 directories) and 0.14 ms to check them on a
+hit, 5.4 ms and 1.5 ms for S1's 55,184 (2,490 directories), against the 35 ms the
+query itself takes; the first stamp on a cold page cache took 75 ms. The object
+cache is the handle's own `Repository::OBJECT_CACHE_BYTES`, not gix's tree-diff
+sizing helper: the trees are compared by `git diff-tree`, so gix walks no tree here
+for that cache to pay for.
 
 **The window keeps an answer only for its selection**
 (`crates/cairn-app/src/diff_state.rs`). `DiffState` holds the comparison
@@ -1051,15 +1136,20 @@ pinned by `an_offset_reads_the_way_git_writes_it`.
 
 ## Known limits
 
-- **A kept answer does not see an unstaged attribute edit.** The key holds
-  everything Cairn asks a commit's diff with; the configuration the engine reads is
-  the handle's, read when the repository was opened, so the two are refreshed
-  together by reopening; and a moved index lets every kept answer go. What `git`
-  itself reads as it runs from outside the index is not covered: the working
-  tree's attributes (a driver's algorithm, its function-context pattern, `-diff`),
-  `.gitmodules` and the drivers' configuration. Edited while the repository is
-  open and not staged, they are seen by the next query not already answered, and
-  not by one that is.
+- **A kept answer is as fresh as the files the thread can name.** Every file git or
+  gix reads for a commit's diff is stamped before each query ("In the application"),
+  with these residuals. A git built with a system configuration directory other than
+  `/etc` (or `GIT_CONFIG_SYSTEM`) reads a system file gix never reads and the thread
+  never stamps — the residual `docs/systems/git-processes.md` already states for
+  opening; an edit to it is not seen by a kept answer, nor by gix at all. Where
+  Cairn's environment names a global file (`GIT_CONFIG_GLOBAL`) other than the one
+  `git`'s environment reads, both files are stamped, but the includes of the one
+  only `git` reads are not named. An include path spelled with `%(prefix)` is not
+  resolved, so not stamped. The process's own environment (`GIT_CONFIG_COUNT`,
+  `GIT_CONFIG_PARAMETERS`) cannot change under it. A filesystem coarser than the
+  two seconds `SETTLING` allows, or a file whose times are in the future, is never
+  trusted rather than trusted wrongly: answers under it are not kept. And the
+  history thread keeps the configuration of its first open: it reads no diff key.
 - **The working-tree query answers one path, named by its caller.** It pairs no
   rename (a path staged by `git mv` shows as added, as `git diff --cached -- <path>`
   shows it), and `Untracked` answers `git diff --no-index` for the path whatever the
@@ -1073,9 +1163,10 @@ pinned by `an_offset_reads_the_way_git_writes_it`.
   git prints no content for it.
 - **A sparse index is unsupported**, though git's plumbing would answer it; reading
   one is gix's to do, and this query does not yet.
-- **The configuration is the handle's**, read when the repository was opened
-  (`diff.algorithm`, `diff.ignoreSubmodules`, the drivers' algorithms); the index
-  and the attributes are read fresh, by gix and by git, for every query.
+- **The configuration is the handle's**, read when it was opened (`diff.algorithm`,
+  `diff.ignoreSubmodules`, the drivers' algorithms); the application's diff thread
+  opens its handle again when a configuration file moves. The index and the
+  attributes are read fresh, by gix and by git, for every working-tree query.
 
 - **A kept last line that never ended, with lines added after it, makes a file
   whose run-on line is in the middle.** A selection that leaves the removal of an

@@ -295,8 +295,7 @@ FILE, and it is a guard, not a convention — see below.
   (`worker/diff_lane.rs`). `route` applies it to every request as it is
   submitted and hands each thread its own job type, so neither thread forwards
   the other's work (`every_query_is_served_on_the_thread_its_lane_is_routed_to`).
-  It replaced `WORKERS_PER_REPOSITORY`, whose assertion asked for exactly this
-  routing decision. A second thread costs the first almost nothing: measured by
+  A second thread costs the first almost nothing: measured by
   `measures_concurrent_walks_against_a_named_repository` (`#[ignore]`d),
   concurrent walks scale 2.1x, 4.2x and 7.9x at 2, 4 and 8 threads with
   single-walk time flat. How the diff thread schedules, caches and retries is in

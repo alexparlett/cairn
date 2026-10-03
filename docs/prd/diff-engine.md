@@ -185,7 +185,13 @@ being a feature and being a rewrite.
   the path, the options), and the window draws an answer only against the
   selection it names.
 - R4.5 Answers for commits and comparisons may be cached, keyed by tree or blob ids
-  and options, because they never go stale. Working-tree answers are never cached.
+  and options — and by what else git reads to give them, since they DO go stale
+  (amended 2026-10, phase 04 QA, see progress.md): the configuration, the attribute
+  files every path reads, `.gitmodules`, the index's and `HEAD`'s attributes and
+  `.gitmodules`, and the working tree's `.gitattributes` above the answer's paths.
+  A cached answer is used only while every one of those is as it was when the answer
+  was read, and one read while any of them could still change unseen is not cached.
+  Working-tree answers are never cached.
 - R4.6 The UI thread never waits on any of this; the existing invariant holds
   unchanged.
 

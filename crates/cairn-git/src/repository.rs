@@ -22,6 +22,11 @@ pub struct SharedRepository {
     inner: gix::ThreadSafeRepository,
     git_dir: PathBuf,
     workdir: Option<PathBuf>,
+    /// The path it was opened from, which [`SharedRepository::reopen_for`] opens again.
+    opened_from: PathBuf,
+    /// Taken before anything was read, so a file changed while it was being opened has a
+    /// time no earlier than this.
+    opened_at: std::time::SystemTime,
     /// The `git` invocations running in it and the log of those that are
     /// over, shared with every worker handle made from it.
     processes: Arc<Processes>,
@@ -68,6 +73,7 @@ impl SharedRepository {
     ) -> Result<Self, Error> {
         use gix::sec::trust::DefaultForLevel as _;
 
+        let opened_at = std::time::SystemTime::now();
         // The path the check searched to, opened as it is: searching again could stop
         // somewhere else (`crate::bare_discovery::find`).
         let found = crate::bare_discovery::find(path, version, environment)?;
@@ -94,8 +100,46 @@ impl SharedRepository {
             git_dir: inner.git_dir().to_owned(),
             workdir: inner.work_dir().map(Path::to_owned),
             inner,
+            opened_from: path.to_owned(),
+            opened_at,
             processes: Arc::default(),
         })
+    }
+
+    /// A worker handle on this repository opened afresh — by the route
+    /// [`SharedRepository::discover_for`] took, from the same path, as the `git` in use
+    /// decides it — so that what gix read at open, the configuration above all, is read
+    /// again. It shares this repository's registry and log, so closing the repository ends
+    /// what runs in it and the log holds it. The git directory found must be this one's:
+    /// anything else is [`Error::RepositoryReplaced`], and the old handle stays the one to
+    /// use. It reads, so it is a worker's call; [`SharedRepository::opened_at`]'s time for
+    /// it is the caller's to take before calling.
+    pub fn reopen_for(
+        &self,
+        git: &GitBinary,
+        environment: impl Fn(&str) -> Option<OsString>,
+    ) -> Result<Repository, Error> {
+        let fresh = Self::discover_as(&self.opened_from, git.version(), &environment)?;
+        if fresh.git_dir != self.git_dir {
+            return Err(Error::RepositoryReplaced {
+                path: self.opened_from.clone(),
+                was: self.git_dir.clone(),
+                now: fresh.git_dir,
+            });
+        }
+        let mut inner = fresh.inner.to_thread_local();
+        inner.object_cache_size_if_unset(Repository::OBJECT_CACHE_BYTES);
+        Ok(Repository {
+            inner,
+            workdir: fresh.workdir,
+            processes: Arc::clone(&self.processes),
+        })
+    }
+
+    /// When opening began: no file this handle read can have changed before it unseen by a
+    /// stamp taken after, unless its time is earlier than this.
+    pub fn opened_at(&self) -> std::time::SystemTime {
+        self.opened_at
     }
 
     /// Call once per worker thread and keep it: each call rebuilds the object cache and pack snapshot.

@@ -8,6 +8,18 @@ pub enum Error {
     #[error("no git repository at {path}")]
     NotARepository { path: PathBuf },
 
+    /// Opening a repository again from the path it was opened from found another git
+    /// directory there: the repository the application holds is not the one that path now
+    /// names, so nothing read from the new one may be answered as the old one's.
+    #[error(
+        "{path} now names the repository at {now}, not the one at {was} the application opened"
+    )]
+    RepositoryReplaced {
+        path: PathBuf,
+        was: PathBuf,
+        now: PathBuf,
+    },
+
     #[error("failed to open the repository at {path}: {source}")]
     Open {
         path: PathBuf,

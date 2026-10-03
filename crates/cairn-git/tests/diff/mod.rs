@@ -7,6 +7,7 @@ mod bare_discovery;
 mod bench;
 mod changes;
 mod content;
+mod inputs;
 mod parity;
 mod patches;
 mod working_tree;

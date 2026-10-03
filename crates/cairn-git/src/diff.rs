@@ -17,10 +17,13 @@ mod algorithm;
 mod changes;
 mod content;
 mod git_config;
+mod inputs;
 mod intraline;
 mod renames;
 mod submodules;
 mod working_tree;
+
+pub use inputs::{DiffInputs, StagedInputs};
 
 use cairn_model::{ChangeSet, ChangedFile, Context, DiffLimits, FileDiff, Oid, RepoPath};
 

@@ -1209,7 +1209,7 @@ involved: the exceptions roster stays empty.
 date in the user's chosen format and the subject (`cairn_ui::ChangesSummary`,
 `summary_parts`; no avatar) — then, behind a draggable splitter (the list opening at 35%
 of the pane, never dragged or squeezed below 200 px, its share kept for the session:
-`the_file_list_opens_at_a_third_of_the_pane_and_keeps_its_dragged_width`), the changed
+`the_file_list_opens_at_35_percent_of_the_pane_and_keeps_its_dragged_width`), the changed
 files on the left under a filter field and one file's diff on the right. A component of its own, mounted only while the tab is
 shown. The list (`cairn_ui::ChangesList`) is one `VirtualScrollView` of fixed rows over a
 `Readable` of the change set and one of the filter's answer (`cairn_ui::ShownFiles`, every

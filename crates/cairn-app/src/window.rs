@@ -2087,7 +2087,7 @@ mod tests {
     /// the session — across another tab shown and back. Caught by: a fixed pixel width, no
     /// floor, or a width forgotten when the tab is shown again.
     #[test]
-    fn the_file_list_opens_at_a_third_of_the_pane_and_keeps_its_dragged_width() {
+    fn the_file_list_opens_at_35_percent_of_the_pane_and_keeps_its_dragged_width() {
         let (mut test, view, _) = launch((0..10).map(row).collect(), received(10, true));
         changes_tab_over(&mut test, view, 3);
         let opened = list_split(&test);

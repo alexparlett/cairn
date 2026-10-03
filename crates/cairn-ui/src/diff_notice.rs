@@ -233,14 +233,29 @@ pub(crate) fn grouped(n: u64) -> String {
 }
 
 /// A size in mebibytes as a notice says one: whole where it is whole (`64 MiB`), else to a
-/// tenth (`72.3 MiB`), as [`size_text`] gives kibibytes.
+/// tenth (`72.3 MiB`), as [`size_text`] gives kibibytes — and where a tenth would round a size
+/// that is not whole to one that is (`64.0 MiB` for 64 MiB and a byte), to as many more places
+/// as it takes to read as what it is, seven at most (`64.000001 MiB`, `63.999999 MiB`), trailing
+/// zeros dropped. Counted in whole numbers, so no size is misread by a float.
 pub fn mib_text(bytes: u64) -> String {
     const MIB: u64 = 1024 * 1024;
-    if bytes.is_multiple_of(MIB) {
-        format!("{} MiB", bytes / MIB)
-    } else {
-        format!("{:.1} MiB", bytes as f64 / MIB as f64)
+    let (whole, part) = (bytes / MIB, bytes % MIB);
+    if part == 0 {
+        return format!("{whole} MiB");
     }
+    // Seven places always tell a part of 1 to MIB - 1 bytes from whole: the rounding moves the
+    // fraction by at most 5e-8, and a byte is about 9.5e-7 of a MiB.
+    let mut places = 1u32;
+    let fraction = loop {
+        let scale = 10u64.pow(places);
+        let rounded = (part * scale + MIB / 2) / MIB;
+        if (rounded != 0 && rounded != scale) || places == 7 {
+            break rounded;
+        }
+        places += 1;
+    };
+    let digits = format!("{fraction:0width$}", width = places as usize);
+    format!("{whole}.{} MiB", digits.trim_end_matches('0'))
 }
 
 /// Why a file is too large, in the measurement the limit fired on, and whether it can be
@@ -494,6 +509,49 @@ mod tests {
                 false
             )
             .ends_with("too large to load")
+        );
+    }
+
+    /// Phase 05's obligation carried into phase 08: a file just past the 64 MiB ceiling never
+    /// reads as the ceiling itself. A tenth is kept wherever it says the size honestly; where
+    /// it would round to a whole number of MiB — "64.0 MiB" for 64 MiB and one byte — the
+    /// size is given to as many places as it takes to read as more (or less) than whole.
+    /// Caught by: rounding to a tenth unconditionally ("64.0 MiB — larger than the 64 MiB
+    /// Cairn can load"), or dropping the fraction ("64 MiB").
+    #[test]
+    fn a_size_just_past_the_ceiling_never_reads_as_the_ceiling() {
+        const MIB: u64 = 1024 * 1024;
+        let ceiling = DiffLimits::LOAD_ANYWAY_BYTES;
+        assert_eq!(mib_text(ceiling + 1), "64.000001 MiB");
+        assert_eq!(mib_text(ceiling + 100), "64.0001 MiB");
+        assert_eq!(mib_text(ceiling + MIB / 20), "64.05 MiB");
+        assert_eq!(mib_text(ceiling + MIB / 10), "64.1 MiB");
+        assert_eq!(mib_text(64 * MIB - 1), "63.999999 MiB");
+        for measured in [
+            ceiling + 1,
+            ceiling + 7,
+            ceiling + 1_000,
+            ceiling + MIB / 21,
+        ] {
+            let said = too_large_reason(
+                SizeLimit::Bytes {
+                    limit: 1_048_576,
+                    measured,
+                },
+                false,
+            );
+            let size = said.split(" MiB").next().unwrap_or_default();
+            assert!(
+                size.parse::<f64>().is_ok_and(|read| read > 64.0),
+                "{measured} bytes read as {said:?}"
+            );
+        }
+        // Whole numbers throughout: a byte past a tebibyte is still told from whole.
+        assert_eq!(mib_text((1 << 40) | 1), "1048576.000001 MiB");
+        assert_eq!(
+            mib_text(75_812_045),
+            "72.3 MiB",
+            "a tenth wherever it is honest"
         );
     }
 }

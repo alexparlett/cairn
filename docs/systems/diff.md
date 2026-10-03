@@ -278,6 +278,10 @@ boundary), with `a_configuration_git_refuses_is_refused` holding a refused value
 The configuration readers — the last value across every file, `git_config_bool`,
 `git_parse_int` — are `crates/cairn-git/src/diff/git_config.rs`.
 
+`ChangeSet` and `RenameDetection` are `cairn-model` types (`crates/cairn-model/src/change_set.rs`),
+so a change set crosses the worker boundary and reaches a view as it is, and a view can
+draw R2.2's notice without naming the engine.
+
 **How detection went** is `RenameDetection`: whether it was on, whether copies
 were, the limit git applied (`None` for none), and `needed_limit`, which is R2.2's
 "the answer says so". `RenameDetection::was_cut_short()` is true when

@@ -16,9 +16,7 @@ mod repository;
 mod shallow;
 
 pub use cancel::{Cancel, CancelSignal};
-pub use diff::{
-    ChangeSet, ChangesRequest, ContentOptions, DiffSession, RenameDetection, WorkingTreeDiff,
-};
+pub use diff::{ChangesRequest, ContentOptions, DiffSession, WorkingTreeDiff};
 pub use error::{Error, RefusedWrite};
 pub use history::{HistoryCursor, HistoryOrder, HistoryPage, HistoryRequest, HistorySession};
 pub use repository::{CLOSE_BOUND, Repository, SharedRepository};

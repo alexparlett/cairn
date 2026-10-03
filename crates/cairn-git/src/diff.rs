@@ -22,7 +22,7 @@ mod renames;
 mod submodules;
 mod working_tree;
 
-use cairn_model::{ChangedFile, CommitDetails, Context, DiffLimits, FileDiff, Oid, RepoPath};
+use cairn_model::{ChangeSet, ChangedFile, Context, DiffLimits, FileDiff, Oid, RepoPath};
 
 use crate::ops::GitBinary;
 use crate::{Cancel, Error, Repository};
@@ -58,46 +58,6 @@ impl ChangesRequest {
             subject: Subject::Between { old, new },
         }
     }
-}
-
-/// How rename and copy detection went, so a view can say when it was cut short (R2.2).
-///
-/// Detection is what the user's `diff.renames` asks for — off, renames, or renames and
-/// copies — searched by git under `diff.renameLimit`, exactly as their own `git show` would.
-/// Whether the limit cut the search short is decided from git's answer, never from its
-/// stderr (`diff/renames.rs`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct RenameDetection {
-    /// False when `diff.renames` is off, and then every other field is empty.
-    pub enabled: bool,
-    /// Copies are detected only when `diff.renames` asks for them.
-    pub copies: bool,
-    /// The limit git applied: `diff.renameLimit`, or git's own default when it is not set.
-    /// `None` when nothing limited the search.
-    pub limit: Option<u32>,
-    /// When the limit stopped git's exhaustive search: the limit that would have let it
-    /// run, which is the number git's own warning asks the user to raise it to.
-    pub needed_limit: Option<usize>,
-}
-
-impl RenameDetection {
-    /// Whether `diff.renameLimit` stopped the search before it was exhaustive — the fact
-    /// git prints as "exhaustive rename detection was skipped due to too many files". The
-    /// answer then holds only the pairs git's cheap stages found, as git's own does.
-    pub fn was_cut_short(self) -> bool {
-        self.needed_limit.is_some()
-    }
-}
-
-/// What a commit or a comparison changed (R2.1).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChangeSet {
-    /// Sorted by path, a rename or a copy under its destination. The order is total, so
-    /// two runs of the same query list the same files in the same places.
-    pub files: Vec<ChangedFile>,
-    /// Present when one commit was named, absent for a comparison of two (R2.1, R7.3).
-    pub details: Option<CommitDetails>,
-    pub renames: RenameDetection,
 }
 
 /// What a content query is allowed to read, and what it should compute (R2.6, R2.8).

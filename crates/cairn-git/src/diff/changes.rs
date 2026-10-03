@@ -7,7 +7,7 @@
 //! root. Plumbing reads `log.showRoot` no more than it reads `diff.renames`, so it is read
 //! here; a comparison of two commits is `git diff`'s answer, which does not read it.
 
-use cairn_model::{ChangedFile, CommitDetails, Oid, RepoPath};
+use cairn_model::{ChangeSet, ChangedFile, CommitDetails, Oid, RepoPath};
 
 use crate::object_id::{model_id, object_id};
 use crate::ops::GitBinary;
@@ -16,7 +16,7 @@ use crate::{Cancel, Error, Repository};
 use super::git_config::{invalid, last_value, parse_bool};
 use super::renames::Configured;
 use super::submodules::Hiding;
-use super::{ChangeSet, ChangesRequest, Subject};
+use super::{ChangesRequest, Subject};
 use crate::reads::{Detection, Submodules};
 
 pub(super) fn changes(

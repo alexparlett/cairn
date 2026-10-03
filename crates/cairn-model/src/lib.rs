@@ -2,6 +2,7 @@
 //! the record of a `git` invocation the engine's command log keeps.
 
 mod askpass;
+mod change_set;
 mod changed_file;
 mod command_log;
 mod commit_details;
@@ -25,6 +26,7 @@ mod repo_path;
 mod secret;
 
 pub use askpass::{AskpassToken, HELPER_PROGRAM, SOCKET_VARIABLE, TOKEN_VARIABLE};
+pub use change_set::{ChangeSet, RenameDetection};
 pub use changed_file::{ChangeStatus, ChangedFile, FileMode, Similarity};
 pub use command_log::{CommandExit, CommandRecord};
 pub use commit_details::{CommitDetails, Signature, Timestamp};

@@ -5,8 +5,8 @@
 //! configuration names, the limit git applies, the commits compared, and every record.
 
 use cairn_git::{CancelSignal, Error};
-use cairn_git::{ChangeSet, ChangesRequest, Repository};
-use cairn_model::{ChangeStatus, ChangedFile, FileMode, Oid};
+use cairn_git::{ChangesRequest, Repository};
+use cairn_model::{ChangeSet, ChangeStatus, ChangedFile, FileMode, Oid};
 
 use super::repositories::{self, Repo};
 use super::{git, ok, since, some};
@@ -304,7 +304,7 @@ fn rename_and_copy_detection_follow_the_users_configuration() {
     );
     assert_eq!(
         found.renames,
-        cairn_git::RenameDetection::default(),
+        cairn_model::RenameDetection::default(),
         "detection was off"
     );
     assert!(

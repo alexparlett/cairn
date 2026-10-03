@@ -29,9 +29,8 @@
 //! v2.30.0, v2.31.0, v2.32.0, v2.33.0 and v2.56.0, and the version that links decides the
 //! tests (`crates/cairn-git/tests/diff/changes.rs`).
 
-use cairn_model::{ChangeStatus, ChangedFile};
+use cairn_model::{ChangeStatus, ChangedFile, RenameDetection};
 
-use super::RenameDetection;
 use super::git_config::{invalid, last_value, parse_bool, parse_int};
 use crate::Error;
 use crate::ops::GitVersion;

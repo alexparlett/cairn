@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 
 use cairn_model::{
-    ChangeStatus, ChangedFile, ChangedRange, Context, DiffContent, DiffLimits, DiffLine,
+    ChangeSet, ChangeStatus, ChangedFile, ChangedRange, Context, DiffContent, DiffLimits, DiffLine,
     DisplayOverlay, FileDiff, FileMode, FunctionContext, LineNumber, LineSpan, Oid, RepoPath,
     SizeLimit, TextDiff, split_lines,
 };
@@ -33,9 +33,9 @@ use crate::reads::{
 };
 use crate::{Cancel, Error, Repository};
 
+use super::ContentOptions;
 use super::algorithm::{Algorithms, PathAlgorithm};
 use super::submodules::Hiding;
-use super::{ChangeSet, ContentOptions};
 
 /// A Git LFS pointer names its own version first; the format caps a pointer at 1 KiB.
 const LFS_PREFIX: &[u8] = b"version https://git-lfs.github.com/spec/";

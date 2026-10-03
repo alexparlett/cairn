@@ -16,8 +16,8 @@
 
 use std::time::{Duration, Instant};
 
-use cairn_git::{CancelSignal, ChangeSet, ChangesRequest, ContentOptions, DiffSession, Repository};
-use cairn_model::{ChangeStatus, ChangedFile, DiffContent, Oid, SizeLimit};
+use cairn_git::{CancelSignal, ChangesRequest, ContentOptions, DiffSession, Repository};
+use cairn_model::{ChangeSet, ChangeStatus, ChangedFile, DiffContent, Oid, SizeLimit};
 
 /// The subjects `measured-baseline.md` chose, with git's own warm median beside each so a
 /// run reads as a comparison rather than as a number on its own.

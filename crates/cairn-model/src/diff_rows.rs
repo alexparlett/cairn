@@ -1048,6 +1048,46 @@ mod tests {
         assert_eq!(rows.layout().ranges(), DrawnRanges::Exact);
     }
 
+    /// The `-w` twin of the test above (phase 06 QA, T6): the whitespace-ignoring ranges are
+    /// grouped with the inter-hunk context too — `git diff -w` reads
+    /// `diff.interHunkContext` as plain `git diff` does. The exact ranges hold a third,
+    /// whitespace-only change between the two real ones, which `-w` hides; so the two
+    /// shown hunks merge across the gap only by the inter-hunk context. Caught by: grouping
+    /// the whitespace-ignoring ranges without it.
+    #[test]
+    fn the_whitespace_ignoring_ranges_are_grouped_with_the_inter_hunk_context_too() {
+        let text = TextDiff::new(
+            (0..20)
+                .map(|n| DiffLine::terminated(format!("l{n}")))
+                .collect(),
+            (0..20)
+                .map(|n| {
+                    DiffLine::terminated(match n {
+                        2 | 7 => format!("L{n}"),
+                        5 => format!(" l{n}"),
+                        _ => format!("l{n}"),
+                    })
+                })
+                .collect(),
+            vec![
+                change((2, 1), (2, 1)),
+                change((5, 1), (5, 1)),
+                change((7, 1), (7, 1)),
+            ],
+        );
+        let ignoring = vec![change((2, 1), (2, 1)), change((7, 1), (7, 1))];
+        let apart = overlay_ignoring(ignoring.clone());
+        let rows = UnifiedRows::shown(&text, &apart, Context::lines(1));
+        assert_eq!(rows.hunks().len(), 2, "{:?}", unified_picture(&rows));
+        let overlay = overlay_ignoring(ignoring).with_function_context(
+            crate::FunctionContext::read_at(Context::lines(1), Vec::new())
+                .with_inter_hunk_context(2),
+        );
+        let rows = UnifiedRows::shown(&text, &overlay, Context::lines(1));
+        assert_eq!(rows.hunks().len(), 1, "{:?}", unified_picture(&rows));
+        assert_eq!(rows.layout().ranges(), DrawnRanges::IgnoringWhitespace);
+    }
+
     /// git prints `\ No newline at end of file` after a removed, an added or a context line
     /// that did not end — the row the patch shows. Caught by: dropping the marker, putting
     /// it after the wrong side, or reading a context line's end from the old side.

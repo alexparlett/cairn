@@ -3,6 +3,142 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-03 — phase 02 QA, round 3: the content rework's findings fixed
+
+The content-parity rework's QA: 21 raw findings, 16 confirmed by a fresh
+`qa-confirm`, S3 dismissed. Three were escalated and the user decided them, with a
+fourth decision on S2:
+
+1. **S1, security — refuse at open, git's exact rule.** gix never reads
+   `safe.bareRepository`, so a bare repository planted in a cloned working tree
+   (`core.worktree=..`, `core.bare=false`, a `core.fsmonitor`) opened, and since D1
+   names every repository to git with `--git-dir` — the spelling git never checks —
+   `diff-tree` and `check-attr` ran the planted program where the user's own git
+   refuses the repository; fetch was reachable too (`core.sshCommand`,
+   `credential.helper`).
+2. **S2 and Q5 — allow `core.fsmonitor` on a read, and document it.** `diff-tree`
+   (raw and patch) and `check-attr` run the repository's hook as they read the
+   index, on every git from 2.30.9 to 2.56.0, as the user's own `git diff` does.
+3. **R2 — Expand All's memory is phase 08's.** Recorded in `state.md` (open
+   questions): every changed blob and the whole parsed patch are held unbounded,
+   and phase 08 bounds them with the line budget.
+4. **G4 — file an issue**: a test that newly starts skipping on a floor git is
+   reported but does not fail, and `VERSIONS`/`RUNS` in `scripts/git-floor.sh` are
+   unpinned. Issue #51, with a per-version expected-skip roster proposed.
+
+### What changed, commit by commit
+
+- **S1** (`8574d5a`). `crates/cairn-git/src/bare_discovery.rs`: before gix opens
+  anything, git's discovery walk is replayed from the physical path; a stop at a
+  directory that is itself a git directory (not one holding a `.git`) is a bare
+  repository found by searching, and it is refused with
+  `Error::BareRepositoryFoundBySearching` where that git refuses it. The rule was
+  read from `setup.c` at v2.37.0 (no setting), v2.38.0, v2.39.0 to v2.43.5, v2.44.0,
+  v2.44.1, v2.45.0, v2.50.0 to v2.56.0 and `Documentation/BreakingChanges.adoc`, and
+  reproduced with 2.30.9, 2.32.7, 2.39.5, 2.40.0 and 2.56.0: no refusal before
+  2.38; every such repository refused under `explicit` from 2.38 to 2.43; a directory
+  named `.git` allowed in 2.44; a path holding `/.git/worktrees/` or `/.git/modules/`
+  allowed too from 2.45; `explicit` the default from git 3.0. The setting is read
+  from the protected configuration only — system, XDG and global files (or
+  `GIT_CONFIG_GLOBAL`), includes followed but `includeIf "gitdir:"` not, then
+  `GIT_CONFIG_COUNT` and `GIT_CONFIG_PARAMETERS` (old and new style, parsed as
+  `parse_config_env_list` does) — never the repository's own; every value is
+  checked whenever the walk stops at a bare repository (git dies on any value but
+  `explicit` or `all`, the bare key included, even for an implicit one), the last
+  winning. `SharedRepository::discover_for(path, &GitBinary, environment)` is the
+  application's open, given the git found at startup and the launching
+  environment (`Startup::parent`); `discover` applies git 2.45's rule with the
+  process environment. Repositories that pass are named with `--git-dir` as before;
+  the separate-git-dir test stays green. Pins:
+  `a_bare_repository_found_by_searching_opens_exactly_where_git_opens_it` (seven
+  shapes under eight settings, the repositories' own configuration saying
+  `explicit` throughout, Cairn opening exactly where `git rev-parse` does),
+  `a_planted_bare_repository_is_refused_at_open_and_runs_nothing` (the planted
+  hook runs on a read without the setting, as under git, and never under it;
+  its refusal half skips before 2.38),
+  `a_planted_bare_repository_is_refused_as_the_launchs_git_refuses_it` in the
+  application, and five unit tests in `bare_discovery.rs`. Mutations, each RED:
+  the check disabled; the command line ignored; the worktree exemption dropped;
+  includes not followed; the application opening through `discover`.
+- **S2 and Q5** (`530e2c8`). The "runs no program" claims in
+  `reads/attributes.rs`, the `patches.rs` header, `reads/mod.rs` ("What a read may
+  run", which now names the hook as the one program a read may run),
+  `docs/design/engine.md`, `docs/systems/diff.md`, `docs/systems/git-processes.md`
+  and the packet's QA checklist corrected.
+  `the_content_query_writes_nothing_and_runs_nothing` configures `core.fsmonitor`
+  as the accepted program — the git directory still byte-identical, every other
+  program's mark absent, the hook's present — and requires `check-attr` in the
+  command log on 2.40 and later (and absent before).
+- **G1** (`a723bf6`). `gate_dispatch_arms` reads every line between
+  `case "$SELECTED_STEP" in` and `esac` and is an `Err` for anything but a plain
+  `name) run_x ;;` arm or the exact default arm; `ci_runs_every_merge_bar_gate_step`
+  now reads the arms through it too. The reviewer's escape — git-floor's arm
+  rewritten (`"$@"`, a trailing comment, an alternation) and dropped from the full
+  run — passed both gate guards before and fails both now.
+- **C6, C2, C1** (`d81de71`).
+  `a_path_git_quotes_reads_as_git_diff_shows_it_alone_and_through_expand_all`
+  (a space, a quote, a tab, a newline, a backslash, `é`, `[ab]`, a leading `-`, and
+  a rename between two such paths; the changes query against
+  `git diff --name-status -z`); RED when patches are keyed by the `diff --git`
+  line's paths, which the older Expand All test passed.
+  `a_renamed_files_driver_algorithm_is_its_old_paths` (in and out of `drv/` under
+  `diff.drv.algorithm=minimal`, git's old-path rule shown on git itself); RED with
+  the driver looked up by the new path, per file or in Expand All.
+  `under_ignored_whitespace_a_context_line_not_the_new_sides_refuses_the_reading`;
+  RED with the context line's new-side check deleted.
+- **D1-D4** (`0c55d63`). The reads module names patch text among what it parses and
+  why the `\ ` marker is safe (git prints it untranslated, and it is taken only
+  right after a hunk's line); the patch command shows `--full-index`; the engine
+  design cites the spike instead of "nine files"; the diff system doc cites test
+  names and the spike instead of counts and timings.
+- **C3, C5, C4** (`5bb2204`). `expand_all_runs_one_diff_tree_per_comparison` counts
+  the `diff-tree` runs in the command log (RED, 72 against 1, with every file sent
+  alone — the `if false &&` fallback the equal-answers test passed); that test's
+  doc no longer claims what it cannot see. The discriminating fixture gained
+  `drv/large.pl`, drawn until git shows myers and minimal disagree on it, and the
+  configuration `diff.drv.algorithm=minimal` is shown to change the driver's files
+  (RED when a minimal driver is ignored). The skip test holds a rename that kept its
+  blob and a type change, each first shown to be git's own answer.
+- **G3, G2** (`53f7fe6`).
+  `the_full_gate_is_the_default_and_no_merge_bar_step_is_skipped`: `FAST` is set
+  exactly to 0 at the top, before the arguments are read, and to 1 for `--fast`, and
+  no merge-bar step's `*_CMD` is `skip` (RED for `FAST=1`, a skipped `git-floor`, a
+  skipped `deps`); readers `gate_command_assignments` and `gate_function_commands`
+  with their self-test. `job_env_entries` finds the job only under the top-level
+  `jobs:`, reads entries at the env block's own indent, and skips block-scalar
+  bodies; six new self-test shapes.
+- **R1** (`2ca214b`). Expand All asks the files whose drivers name an algorithm in
+  one `diff-tree -p` per distinct algorithm over their paths
+  (`reads::Scope::Paths`, the algorithm passed), not one process per file; the
+  answers are unchanged (every Expand All parity test green on 2.30.9, 2.32.7,
+  2.39.5, 2.40.0, 2.56.0), and the run count is pinned (two, four with `-w`, on the
+  driver fixture, where it was nineteen).
+
+### Decided here, without the user
+
+- The S1 rule follows the version of the git Cairn found, band by band, since the
+  user's git refuses differently by version; one fixed rule would have diverged on
+  2.38-2.44 or below 2.38.
+- The protected configuration is read with gix-config from the files and the
+  environment, not filtered from the repository's snapshot: the snapshot evaluates
+  `includeIf "gitdir:"` against the repository, which git's protected read does not,
+  and gix reads no `GIT_CONFIG_PARAMETERS`, so that is parsed here.
+- The environment the check reads is the launching one (what the user's own git,
+  run from the same place, reads), not the inherited roster Cairn's git runs with.
+- Residuals, stated in `docs/systems/git-processes.md`: the system file is gix's
+  guess, not the path compiled into the found git; an `includeIf "hasconfig:"` in a
+  global file is not followed; other keys of `GIT_CONFIG_PARAMETERS` are not
+  validated; a pre-3.0 git built `WITH_BREAKING_CHANGES` reads as defaulting to
+  `all`. Each touches only the user's own protected configuration, never one a
+  repository can plant.
+- The no-write test asserts the fsmonitor hook DID run, so the doc's claim is
+  pinned, not just tolerated.
+- `skip` is refused for every step but the day loop's `test-fast`, and the gate's
+  header comment now says so.
+
+`scripts/gate.sh` PASS, all eight steps, `git-floor` on 2.30.9 and 2.32.7 skipping
+only the three tests its header names (`git-floor.sh`).
+
 ## 2026-10-03 — content parity: a file's changed lines come from git
 
 The user decided after the spike (`docs/research/diff-engine/content-parity-spike.md`,

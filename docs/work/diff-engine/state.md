@@ -5,7 +5,10 @@ The cross-session cheat sheet. Every session updates this before ending.
 **Status: phase 02's rework landed and the C6 audit is done; the content-parity
 rework landed (2026-10-03) — a file's changed lines, its whitespace-ignoring lines
 and each hunk's function context now come from `git diff-tree -p`, closing the
-audit's F1 — and its QA is due. Phase 03 next.** The diff model exists in
+audit's F1 — and its QA (round 3) is fixed: opening refuses a bare repository git
+would refuse to find, a read's `core.fsmonitor` is documented parity, Expand All
+batches driver files per algorithm, and the parity and gate pins it asked for
+landed. Phase 03 next.** The diff model exists in
 `cairn-model`, and `cairn-git` answers R2's two queries: the changes query from
 `git diff-tree` through the process manager (decision E, PRD R2.1, R2.2, R2.9 and C14
 amended), honouring `diff.ignoreSubmodules` and `log.showRoot` as the user's `git log`
@@ -50,6 +53,17 @@ with D1, D3, D5 and D6 in `engine.md`, `concurrency.md`, `platform.md` and
 
 Q1-Q3 in `brainstorm.md`, lettered Q so they cannot be confused with the
 program's O1-O6.
+
+**For phase 08: Expand All is unbounded in memory (QA round 3, R2; the user
+decided on 2026-10-03 that phase 08 bounds it).** `DiffSession::file_diffs` reads
+every changed file's two blobs into lines before it asks git anything, and holds the
+whole parsed patch of each `diff-tree -p` run (every section's body bytes) until
+every file is answered — so a commit that changes thousands of large text files
+holds all of them at once, whatever the view shows. Phase 08 must bound it with the
+line budget: decide which files the budget admits BEFORE any blob is read (the
+headers give sizes without inflating), and read, ask git and answer per batch —
+streaming or paging the patch per batch rather than parsing one answer for the
+whole comparison — so the memory is the batch's, not the commit's.
 
 **For phases 04 and 05: "cut short" has no `cairn-model` type yet.** `ChangeSet`
 and `RenameDetection` are `cairn-git` types, and `cairn-ui` may not name
@@ -126,7 +140,7 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | Phase | Status | Gate | QA |
 | --- | --- | --- | --- |
 | 01 diff model | landed | `scripts/gate.sh` PASS | `qa-checklist`, `test-coverage-auditor` and `responsiveness-reviewer`, adjudicated by `qa-confirm`; confirmed findings fixed or recorded as residuals in `docs/systems/diff.md` |
-| 02 engine, commits | landed 2026-09-18; changes query reworked onto `git diff-tree` 2026-10-03 (decision E) | `scripts/gate.sh` PASS, `git-floor` included | done over the reworked phase (2026-10-03), adjudicated by `qa-confirm`; confirmed findings fixed. C6 audit done (2026-10-03, adjudicated): F2-F7 fixed; F1 closed by the content-parity rework (landed 2026-10-03, `scripts/gate.sh` PASS with `git-floor`): R2.4 and R2.8 parity enforced under every algorithm and over real history. **QA of the content rework due** |
+| 02 engine, commits | landed 2026-09-18; changes query reworked onto `git diff-tree` 2026-10-03 (decision E) | `scripts/gate.sh` PASS, `git-floor` included | done over the reworked phase (2026-10-03), adjudicated by `qa-confirm`; confirmed findings fixed. C6 audit done (2026-10-03, adjudicated): F2-F7 fixed; F1 closed by the content-parity rework (landed 2026-10-03, `scripts/gate.sh` PASS with `git-floor`): R2.4 and R2.8 parity enforced under every algorithm and over real history. QA of the content rework (round 3, 2026-10-03): 21 raw, 16 confirmed by `qa-confirm`, S3 dismissed, S1/R2/G4 escalated and decided by the user; **phase 02 QA round 3 fixed** — every confirmed finding fixed or recorded (R2 above, for phase 08; G4 as issue #51), `scripts/gate.sh` PASS with `git-floor` |
 | 03 engine, working tree | not started | — | — |
 | 04 worker lanes | not started | — | — |
 | 05 detail pane | not started | — | — |

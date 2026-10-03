@@ -5,7 +5,8 @@
 //!
 //! Each is built from plain shapes — rectangles, borders, one rotation — and never from an
 //! icon font: IBM Plex Mono has no `⎵` and no chevron, and a font the system may lack would
-//! draw a box. The one character drawn is `↕`, which Plex Mono carries. Every glyph is drawn
+//! draw a box. The one character drawn is `↕`, which Plex Mono carries (the entire file's and
+//! the comparison's swap). Every glyph is drawn
 //! in one colour, which is how the bar says a toggle is on (Fork's accent) and a button is
 //! disabled. A glyph says nothing to assistive technology: the button carries its name
 //! (`DiffHeader`), so its meaning never rests on the shape.
@@ -36,6 +37,8 @@ pub(crate) enum Glyph {
     Closed,
     /// A file opened in place.
     Open,
+    /// The comparison's base and tip swapped (Fork's swap-direction control, Finding 7).
+    Swap,
 }
 
 impl Glyph {
@@ -45,6 +48,13 @@ impl Glyph {
             Self::PreviousChange => chevron(colour, Pointing::Up).into(),
             Self::NextChange => chevron(colour, Pointing::Down).into(),
             Self::Closed => chevron(colour, Pointing::Right).into(),
+            Self::Swap => label()
+                .text("↕")
+                .font_family(DIFF_FONT_FAMILY)
+                .font_size(14.)
+                .line_height(1.)
+                .color(colour)
+                .into(),
             Self::Open => chevron(colour, Pointing::Down).into(),
             Self::IgnoreWhitespace => rect()
                 .width(Size::px(12.))

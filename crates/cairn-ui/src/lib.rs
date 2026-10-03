@@ -27,8 +27,9 @@ mod toggle_glyphs;
 mod unified_rows;
 
 pub use changes_list::{
-    ChangesList, ChangesSummary, FILTER_PLACEHOLDER, FILTERING, NO_FILE_MATCHES, SUMMARY_HEIGHT,
-    filter_count, summary_parts,
+    BASE_CAPTION, ChangesList, ChangesSummary, ComparisonHeader, FILTER_PLACEHOLDER, FILTERING,
+    NO_FILE_MATCHES, SUMMARY_HEIGHT, SWAP_LABEL, TIP_CAPTION, comparison_parts, filter_count,
+    summary_parts,
 };
 pub use commit_row::{
     AUTHOR_WIDTH, COLUMN_GAP, CommitRow, DATE_WIDTH, HistoryHeader, ID_WIDTH, ROW_FONT_SIZE,

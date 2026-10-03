@@ -11,7 +11,7 @@
 //! The summary is Fork's (Finding 2): who wrote the commit, its short id, its date and its
 //! subject, on one line — no avatar (L9).
 
-use cairn_model::{ChangeSet, CommitDetails, Oid};
+use cairn_model::{ChangeSet, CommitDetails, CommitSummary, Oid};
 use freya::prelude::*;
 
 use crate::accelerators;
@@ -19,6 +19,7 @@ use crate::commit_tab::{DETAIL_ROW_HEIGHT, file_row};
 use crate::date_text;
 use crate::diff_palette::DIFF_FONT_FAMILY;
 use crate::file_filter::ShownFiles;
+use crate::toggle_glyphs::Glyph;
 
 /// The filter field's placeholder.
 pub const FILTER_PLACEHOLDER: &str = "Filter";
@@ -380,5 +381,133 @@ impl Component for ChangesSummary {
                     .width(Size::flex(1.))
                     .text_overflow(TextOverflow::Ellipsis),
             )
+    }
+}
+
+/// Said before a comparison's base, the lower of the two rows (R7.2): the commit the diff runs
+/// from, its lines the removed ones.
+pub const BASE_CAPTION: &str = "Base";
+/// Said before a comparison's tip: the commit the diff runs to, its lines the added ones.
+pub const TIP_CAPTION: &str = "Tip";
+/// The swap control's name, which assistive technology reads and its tooltip says.
+pub const SWAP_LABEL: &str = "Swap base and tip";
+
+/// A commit as a comparison's header names it: its short id, its author and its subject.
+pub fn comparison_parts(commit: &CommitSummary) -> [String; 3] {
+    [
+        short(commit.id),
+        commit.author_name.clone(),
+        commit.summary.clone(),
+    ]
+}
+
+/// The Changes tab's header over a comparison of two commits (R7.3): both commits named, one
+/// per line — the base, then the tip — with Fork's swap control at its right (Finding 7).
+pub struct ComparisonHeader {
+    base: CommitSummary,
+    tip: CommitSummary,
+    on_swap: EventHandler<()>,
+    key: DiffKey,
+}
+
+impl ComparisonHeader {
+    pub fn new(base: CommitSummary, tip: CommitSummary) -> Self {
+        Self {
+            base,
+            tip,
+            on_swap: EventHandler::new(|_| {}),
+            key: DiffKey::None,
+        }
+    }
+
+    /// The swap control was pressed: what it reverses is the caller's.
+    pub fn on_swap(mut self, on_swap: impl Into<EventHandler<()>>) -> Self {
+        self.on_swap = on_swap.into();
+        self
+    }
+}
+
+impl PartialEq for ComparisonHeader {
+    fn eq(&self, other: &Self) -> bool {
+        self.base == other.base && self.tip == other.tip && self.key == other.key
+    }
+}
+
+impl std::fmt::Debug for ComparisonHeader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ComparisonHeader")
+            .field("base", &self.base.id)
+            .field("tip", &self.tip.id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl KeyExt for ComparisonHeader {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for ComparisonHeader {
+    fn render(&self) -> impl IntoElement {
+        let colours = get_theme_or_default().read().colors().clone();
+        let part = |text: String, colour: Color| {
+            label()
+                .text(text)
+                .max_lines(1)
+                .font_size(FONT_SIZE)
+                .color(colour)
+        };
+        let line = |caption: &'static str, commit: &CommitSummary| -> Element {
+            let [id, author, subject] = comparison_parts(commit);
+            rect()
+                .horizontal()
+                .content(Content::Flex)
+                .width(Size::fill())
+                .height(Size::px(SUMMARY_HEIGHT))
+                .cross_align(Alignment::Center)
+                .spacing(12.)
+                .child(part(caption.to_owned(), colours.text_placeholder).width(Size::px(32.)))
+                .child(part(id, colours.text_secondary).font_family(DIFF_FONT_FAMILY))
+                .child(part(author, colours.text_primary))
+                .child(
+                    part(subject, colours.text_primary)
+                        .width(Size::flex(1.))
+                        .text_overflow(TextOverflow::Ellipsis),
+                )
+                .into()
+        };
+        let on_swap = self.on_swap.clone();
+        rect()
+            .horizontal()
+            .content(Content::Flex)
+            .width(Size::fill())
+            .height(Size::px(2. * SUMMARY_HEIGHT))
+            .cross_align(Alignment::Center)
+            .padding(Gaps::new(0., 12., 0., 12.))
+            .spacing(8.)
+            .child(
+                rect()
+                    .width(Size::flex(1.))
+                    .child(line(BASE_CAPTION, &self.base))
+                    .child(line(TIP_CAPTION, &self.tip)),
+            )
+            .child(
+                TooltipContainer::new(Tooltip::new_text(SWAP_LABEL)).child(
+                    Button::new()
+                        .compact()
+                        .on_press(move |_: Event<PressEventData>| on_swap.call(()))
+                        // The button takes its name from its first child's value.
+                        .child(
+                            Glyph::Swap
+                                .draw(colours.text_primary)
+                                .a11y_builder(move |node| node.set_value(SWAP_LABEL)),
+                        ),
+                ),
+            )
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
     }
 }

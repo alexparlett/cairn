@@ -187,6 +187,20 @@ impl Chord {
             Trigger::Press => None,
         }
     }
+
+    /// The key event that holds a pointer chord's modifiers down, for a press to complete it;
+    /// `None` for a chord completed by a key. Like [`Self::key_press`], for headless tests
+    /// only, so a test holds ⌘ or Ctrl through the table rather than by spelling it.
+    pub fn press_hold(&self) -> Option<(Key, Code, Modifiers)> {
+        match self.trigger {
+            Trigger::Press => Some((
+                Key::Named(NamedKey::Unidentified),
+                Code::Unidentified,
+                self.held,
+            )),
+            Trigger::Named(_) | Trigger::Physical(_) => None,
+        }
+    }
 }
 
 /// The action a key press is on this platform, if it is one heard in `heard`.
@@ -230,9 +244,117 @@ pub fn resolve_press_on(platform: Os, held: Modifiers) -> Option<Action> {
         .find(|action| chord(*action, platform).is_some_and(|chord| chord.is_press(held)))
 }
 
+/// What the keyboard says is held, kept from the key presses and releases the window hears,
+/// so a pointer press can be resolved against the table: a press carries no modifiers in this
+/// build of the toolkit, so ⌘-click and Ctrl-click (`Action::ExtendSelection`) are read from
+/// this. It answers actions, never which modifier is down, so nothing that holds one can
+/// branch on a modifier by another name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HeldKeys(Modifiers);
+
+impl HeldKeys {
+    /// A key went down (`down`) or came up. The event's own modifiers are what is held, with
+    /// the key itself counted in while it goes down and out as it comes up when it is a
+    /// modifier key — a platform may report a modifier key's event before the state it
+    /// changes.
+    pub fn heard(&mut self, event: &KeyboardEventData, down: bool) {
+        let own = match event.key {
+            Key::Named(NamedKey::Control) => Modifiers::CONTROL,
+            Key::Named(NamedKey::Shift) => Modifiers::SHIFT,
+            Key::Named(NamedKey::Alt) => Modifiers::ALT,
+            Key::Named(NamedKey::Meta) => Modifiers::META,
+            _ => Modifiers::empty(),
+        };
+        let held = chord_modifiers(event.modifiers);
+        self.0 = if down { held | own } else { held - own };
+    }
+
+    /// The action a primary pointer press is while these keys are held, on this platform.
+    pub fn press(&self) -> Option<Action> {
+        self.press_on(Os::current())
+    }
+
+    /// [`Self::press`], on `platform`.
+    pub fn press_on(&self, platform: Os) -> Option<Action> {
+        resolve_press_on(platform, self.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Phase 05's obligation to phase 08: a pointer press carries no modifiers, so the second
+    /// commit of a comparison is resolved from the keys the window heard — the command key
+    /// held makes a press `ExtendSelection` on each platform, and its release, another key, a
+    /// lock or an extra Shift do not; the key's own press counts before its state does.
+    /// Caught by: a press read with no keys held (the gesture never resolves), the other
+    /// platform's command key, a release not let go of (every later click extends), or a
+    /// modifier key's own press ignored until a second event.
+    #[test]
+    fn a_press_resolves_against_the_keys_the_window_heard() {
+        let key = |key: Key, modifiers: Modifiers| KeyboardEventData {
+            key,
+            code: Code::Unidentified,
+            modifiers,
+        };
+        for (platform, command, named) in [
+            (Os::Linux, Modifiers::CONTROL, NamedKey::Control),
+            (Os::MacOs, Modifiers::META, NamedKey::Meta),
+        ] {
+            let mut held = HeldKeys::default();
+            assert_eq!(held.press_on(platform), None);
+            // The command key's own press, reported before the state it sets.
+            held.heard(&key(Key::Named(named), Modifiers::empty()), true);
+            assert_eq!(held.press_on(platform), Some(Action::ExtendSelection));
+            // A lock changes nothing; Shift as well is another chord.
+            held.heard(
+                &key(
+                    Key::Named(NamedKey::CapsLock),
+                    command | Modifiers::CAPS_LOCK,
+                ),
+                true,
+            );
+            assert_eq!(held.press_on(platform), Some(Action::ExtendSelection));
+            held.heard(&key(Key::Named(NamedKey::Shift), command), true);
+            assert_eq!(held.press_on(platform), None);
+            held.heard(
+                &key(Key::Named(NamedKey::Shift), command | Modifiers::SHIFT),
+                false,
+            );
+            assert_eq!(held.press_on(platform), Some(Action::ExtendSelection));
+            // Released, reported while its state still says held.
+            held.heard(&key(Key::Named(named), command), false);
+            assert_eq!(held.press_on(platform), None);
+        }
+        // What a headless test holds for the press chord resolves it, and its release lets go.
+        for platform in PLATFORMS {
+            let Some((key, code, modifiers)) =
+                chord(Action::ExtendSelection, platform).and_then(|c| c.press_hold())
+            else {
+                panic!("the extending chord is a press");
+            };
+            let mut held = HeldKeys::default();
+            held.heard(&KeyboardEventData::new(key.clone(), code, modifiers), true);
+            assert_eq!(held.press_on(platform), Some(Action::ExtendSelection));
+            held.heard(
+                &KeyboardEventData::new(key, code, Modifiers::empty()),
+                false,
+            );
+            assert_eq!(held.press_on(platform), None);
+        }
+        assert_eq!(
+            chord(Action::NextChange, Os::Linux).and_then(|c| c.press_hold()),
+            None
+        );
+        // Linux's command key on macOS is not macOS's.
+        let mut held = HeldKeys::default();
+        held.heard(
+            &key(Key::Named(NamedKey::Control), Modifiers::CONTROL),
+            true,
+        );
+        assert_eq!(held.press_on(Os::MacOs), None);
+    }
 
     const PLATFORMS: [Os; 2] = [Os::Linux, Os::MacOs];
     const SCOPES: [Scope; 2] = [Scope::Window, Scope::Detail];

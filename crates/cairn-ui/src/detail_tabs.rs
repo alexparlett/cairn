@@ -36,6 +36,7 @@ pub const EXPAND_CAPTION: &str = "Expand";
 pub struct DetailTabs {
     selected: DetailTab,
     collapsed: bool,
+    unavailable: Option<DetailTab>,
     on_tab: EventHandler<DetailTab>,
     on_collapse: EventHandler<bool>,
     key: DiffKey,
@@ -46,6 +47,7 @@ impl DetailTabs {
         Self {
             selected,
             collapsed: false,
+            unavailable: None,
             on_tab: EventHandler::new(|_| {}),
             on_collapse: EventHandler::new(|_| {}),
             key: DiffKey::None,
@@ -54,6 +56,13 @@ impl DetailTabs {
 
     pub fn collapsed(mut self, collapsed: bool) -> Self {
         self.collapsed = collapsed;
+        self
+    }
+
+    /// A tab that cannot be shown now, drawn disabled and pressed for nothing: the Commit tab
+    /// while two commits are selected (R7.3; Fork's Windows build disables it, Finding 7).
+    pub fn unavailable(mut self, unavailable: Option<DetailTab>) -> Self {
+        self.unavailable = unavailable;
         self
     }
 
@@ -75,6 +84,7 @@ impl PartialEq for DetailTabs {
     fn eq(&self, other: &Self) -> bool {
         self.selected == other.selected
             && self.collapsed == other.collapsed
+            && self.unavailable == other.unavailable
             && self.key == other.key
     }
 }
@@ -102,6 +112,7 @@ impl Component for DetailTabs {
         let muted = colours.read().colors().text_placeholder;
         let accent = colours.read().colors().text_highlight;
         let surface = colours.read().colors().surface_tertiary;
+        let disabled = colours.read().colors().disabled;
 
         let collapsed = self.collapsed;
         let on_collapse = self.on_collapse.clone();
@@ -128,6 +139,7 @@ impl Component for DetailTabs {
             )
             .children(DetailTab::ALL.into_iter().map(|tab| -> Element {
                 let shown = tab == self.selected && !collapsed;
+                let available = self.unavailable != Some(tab);
                 let on_tab = self.on_tab.clone();
                 rect()
                     .key(tab.caption())
@@ -148,13 +160,23 @@ impl Component for DetailTabs {
                                 .alignment(BorderAlignment::Inner),
                         )
                     })
-                    .on_press(move |_| on_tab.call(tab))
+                    .on_press(move |_| {
+                        if available {
+                            on_tab.call(tab);
+                        }
+                    })
                     .child(
                         label()
                             .text(tab.caption())
                             .max_lines(1)
                             .font_size(TAB_FONT_SIZE)
-                            .color(if shown { primary } else { muted }),
+                            .color(if !available {
+                                disabled
+                            } else if shown {
+                                primary
+                            } else {
+                                muted
+                            }),
                     )
                     .into()
             }))

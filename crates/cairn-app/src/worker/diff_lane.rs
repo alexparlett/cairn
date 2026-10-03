@@ -58,6 +58,10 @@ use super::startup::Startup;
 pub(super) enum DiffJob {
     /// A query, numbered in its lane; boxed, since it carries a file's paths and ids.
     Query { epoch: Epoch, query: Box<DiffQuery> },
+    /// Send `diff.context` now, and again each time the handle is opened afresh because the
+    /// configuration moved: the diff thread's handle is the one that follows the
+    /// configuration, so it is the one whose reading is the user's current `git diff`.
+    ConfiguredContext,
     /// The repository is closing, or every handle to it has gone: serve nothing more.
     Stop,
 }
@@ -140,12 +144,20 @@ fn serve_handle(
     let inputs = repo.diff_inputs();
     let mut freshness = Freshness::opened(&inputs, opened_at);
     let mut kept = Kept::default();
+    // A handle opened afresh read the configuration afresh: the context it reads now is
+    // the one the user's `git diff` shows, sent before the query that found the move.
+    if waiting.context_wanted {
+        send_configured_context(repo, serving.outbox);
+    }
     loop {
         let (epoch, query) = match carried.take() {
             Some(carried) => carried,
             None => {
                 if !waiting.gather(serving.jobs) || serving.epochs.is_stopping() {
                     return Ended::Stopped;
+                }
+                if std::mem::take(&mut waiting.context_due) {
+                    send_configured_context(repo, serving.outbox);
                 }
                 match waiting.next(serving.epochs) {
                     Some(next) => next,
@@ -174,6 +186,15 @@ fn serve_handle(
             settled: checked.settled,
         };
         served.answer(query, &mut kept);
+    }
+}
+
+/// `diff.context` as this handle reads it. A value git refuses sends nothing: the views keep
+/// the context they have, and every diff asked fails with the configuration's error, as the
+/// user's `git diff` does.
+fn send_configured_context(repo: &Repository, outbox: &Outbox) {
+    if let Ok(context) = repo.configured_context() {
+        outbox.send(None, Update::ConfiguredContext { context });
     }
 }
 
@@ -238,6 +259,10 @@ struct Waiting {
     changes: Option<(Epoch, DiffQuery)>,
     file: Option<(Epoch, DiffQuery)>,
     stopped: bool,
+    /// The configured context was asked for: it is sent again on every handle opened.
+    context_wanted: bool,
+    /// The configured context is to be sent before the next query is served.
+    context_due: bool,
 }
 
 impl Waiting {
@@ -273,6 +298,10 @@ impl Waiting {
     fn take(&mut self, job: DiffJob) {
         match job {
             DiffJob::Stop => self.stopped = true,
+            DiffJob::ConfiguredContext => {
+                self.context_wanted = true;
+                self.context_due = true;
+            }
             DiffJob::Query { epoch, query } => match *query {
                 query @ DiffQuery::Changes(_) => self.changes = Some((epoch, query)),
                 query @ (DiffQuery::File(_) | DiffQuery::All { .. }) => {

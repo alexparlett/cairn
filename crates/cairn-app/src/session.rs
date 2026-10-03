@@ -724,4 +724,120 @@ mod tests {
         );
         assert_eq!(asked.submitted.borrow().len(), 1);
     }
+
+    /// Phase 06 QA (T7), through the real boundary: `diff.context` and
+    /// `diff.interHunkContext` edited mid-session reach the next answer — the context
+    /// adopted while the user has not moved it, the grouping always — and once the user has
+    /// moved the context, a `diff.context` edit is read and sent but not adopted, while the
+    /// inter-hunk context still applies. Caught by: the configured context read once, on a
+    /// handle the configuration's freshness never reopens.
+    #[test]
+    fn a_configuration_edit_mid_session_reaches_the_next_answer() {
+        use cairn_model::Context;
+
+        use crate::diff_state::Answer;
+        use crate::worker::{Configurable, FileQuery, FileTarget, next_update};
+
+        let repository = Configurable::new("diff-context-edit");
+        let (handle, mut updates) = repository.open();
+        let (test, view, asked) = launch(FetchStatus::Idle);
+
+        // Applies updates, handing on whatever applying them asked, until `done` holds of
+        // the state and what arrived; returns what arrived.
+        let mut pump = |done: &dyn Fn(&[Update]) -> bool| -> Vec<Update> {
+            let mut seen = Vec::new();
+            loop {
+                for request in asked.submitted.borrow_mut().drain(..) {
+                    handle.submit(request);
+                }
+                if done(&seen) {
+                    return seen;
+                }
+                let update = next_update(&mut updates);
+                seen.push(update.clone());
+                applying(&test, view, &asked, update);
+            }
+        };
+        // The inter-hunk context of the answer shown, when it is the one asked at `context`
+        // with whitespace `ignoring` or not.
+        let shown_at = |context: Context, ignoring: bool| -> Option<u32> {
+            test.run_in(|| {
+                let state = view.diff.peek();
+                match state.file() {
+                    Some((query, Answer::Ready(Some(shown))))
+                        if query.options.context == context
+                            && query.options.ignore_whitespace == ignoring =>
+                    {
+                        shown
+                            .diff()
+                            .overlay()
+                            .map(|overlay| overlay.function_context().inter_hunk_context())
+                    }
+                    _ => None,
+                }
+            })
+        };
+        let configured = |seen: &[Update]| -> Vec<Context> {
+            seen.iter()
+                .filter_map(|update| match update {
+                    Update::ConfiguredContext { context } => Some(*context),
+                    _ => None,
+                })
+                .collect()
+        };
+        let settings = || test.run_in(|| view.diff_settings.peek().context());
+        let change = |change: fn(&mut cairn_ui::DiffSettings) -> bool| {
+            let submit = |request| asked.submitted.borrow_mut().push(request);
+            test.run_in(|| crate::diff_actions::change_settings(view, Some(&submit), change));
+        };
+
+        // At open: git's default, since nothing is configured.
+        asked
+            .submitted
+            .borrow_mut()
+            .push(Request::ConfiguredContext);
+        let seen = pump(&|seen| !configured(seen).is_empty());
+        assert_eq!(configured(&seen), [Context::Lines(3)]);
+        let query = FileQuery {
+            target: FileTarget::Committed {
+                of: repository.of,
+                file: repository.file.clone(),
+            },
+            options: crate::diff_actions::options(test.run_in(|| *view.diff_settings.peek())),
+        };
+        let mut diff = view.diff;
+        let asked_first = test.run_in(|| diff.write().select_file(query));
+        asked.submitted.borrow_mut().extend(asked_first);
+        pump(&|_| shown_at(Context::Lines(3), false).is_some());
+        assert_eq!(shown_at(Context::Lines(3), false), Some(0));
+
+        // Edited while the context is unmoved: the next answer, asked for anything, follows.
+        repository.configure("[diff]\n\tcontext = 5\n\tinterHunkContext = 2\n");
+        change(|settings| {
+            settings.toggle_ignore_whitespace();
+            true
+        });
+        let seen = pump(&|_| shown_at(Context::Lines(5), true).is_some());
+        assert!(configured(&seen).contains(&Context::Lines(5)), "{seen:?}");
+        assert_eq!(settings(), Context::Lines(5));
+        assert_eq!(shown_at(Context::Lines(5), true), Some(2));
+
+        // Moved by the user: a later diff.context is read and sent, and not adopted; the
+        // inter-hunk context still applies.
+        change(cairn_ui::DiffSettings::more_lines);
+        pump(&|_| shown_at(Context::Lines(6), true).is_some());
+        repository.configure("[diff]\n\tcontext = 7\n\tinterHunkContext = 4\n");
+        change(|settings| {
+            settings.toggle_ignore_whitespace();
+            true
+        });
+        let seen = pump(&|_| shown_at(Context::Lines(6), false) == Some(4));
+        assert!(configured(&seen).contains(&Context::Lines(7)), "{seen:?}");
+        assert_eq!(
+            settings(),
+            Context::Lines(6),
+            "the configuration moved a context the user chose"
+        );
+        drop(handle);
+    }
 }

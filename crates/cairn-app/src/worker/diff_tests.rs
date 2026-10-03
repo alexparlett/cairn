@@ -69,6 +69,44 @@ fn answers_changes(update: &Update, of: Comparison) -> bool {
     matches!(update, Update::Changes { of: answered, .. } if *answered == of)
 }
 
+/// The next update past the boundary — the epoch filter already behind it — for a test of
+/// the window's side, which may not wait itself; a failure naming the wait if none comes.
+pub(crate) fn next_update(updates: &mut Updates) -> Update {
+    match next_by(updates, Instant::now() + WAIT, &[]) {
+        Some(update) => update,
+        None => panic!("the update stream ended"),
+    }
+}
+
+/// A repository of this checkout's objects whose configuration a test may edit, and a
+/// commit in it that modified a text file, with that file: for the window's tests of a
+/// configuration edit, which may not wait themselves.
+pub(crate) struct Configurable {
+    fixture: BorrowedRepository,
+    pub(crate) of: Comparison,
+    pub(crate) file: ChangedFile,
+}
+
+impl Configurable {
+    pub(crate) fn new(name: &str) -> Self {
+        let (head, of, file, _) = two_rust_files();
+        let fixture = BorrowedRepository::new(&format!("cairn-{name}-{}", std::process::id()));
+        fixture.point_main_at(&head.to_string());
+        settle();
+        Self { fixture, of, file }
+    }
+
+    /// The boundary over the repository, with this process's `git`.
+    pub(crate) fn open(&self) -> (RepositoryHandle, Updates) {
+        opened(&self.fixture.fixture.path)
+    }
+
+    /// Appends `text` to `$GIT_DIR/config`.
+    pub(crate) fn configure(&self, text: &str) {
+        append(&self.fixture.fixture.path.join(".git").join("config"), text);
+    }
+}
+
 /// The next answer naming `of`'s change set, as it leaves the boundary — the epoch filter
 /// already behind it — for a test of the window's side, which may not wait itself.
 pub(crate) fn changes_answer(updates: &mut Updates, of: Comparison) -> Update {

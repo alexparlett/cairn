@@ -21,7 +21,7 @@ mod wake;
 
 pub use askpass::{PromptId, Reply};
 #[cfg(test)]
-pub(crate) use diff_tests::{changes_answer, checkout, commits};
+pub(crate) use diff_tests::{Configurable, changes_answer, checkout, commits, next_update};
 pub use discovery::Discovery;
 #[cfg(test)]
 pub use pool::idle_handle;

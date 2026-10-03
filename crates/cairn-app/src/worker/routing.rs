@@ -5,7 +5,8 @@
 //! | history (`OpenHistory`, `MoreHistory`) | `cairn-repository`, which owns the live walk |
 //! | changes (`Changes`) | `cairn-diff` |
 //! | file diff (`FileDiff`, `ExpandAll`) | `cairn-diff` |
-//! | `ListRemotes`, `ConfiguredContext`, `CommandLog`, `Close`, `Fetch` | `cairn-repository` (a fetch is forwarded on to the network lane) |
+//! | `ConfiguredContext` | `cairn-diff`, whose handle is opened again when the configuration moves, and which sends the context again each time |
+//! | `ListRemotes`, `CommandLog`, `Close`, `Fetch` | `cairn-repository` (a fetch is forwarded on to the network lane) |
 //! | `Retire` | `cairn-repository`, which frees what it is handed |
 //! | `CancelFetch` | none: the fetch's control, from the caller's thread |
 //!
@@ -57,7 +58,6 @@ pub(super) enum Page {
 pub(super) enum RepositoryJob {
     History(Page),
     ListRemotes,
-    ConfiguredContext,
     Fetch {
         remote: String,
     },
@@ -72,6 +72,10 @@ pub(super) enum RepositoryJob {
 pub(super) enum Routed {
     Repository(RepositoryJob),
     Diff(DiffQuery),
+    /// `diff.context`, read on the diff thread — the one whose handle follows the
+    /// configuration — now and again whenever that handle is opened afresh. Not a query:
+    /// numbered in no lane, superseding nothing.
+    ConfiguredContext,
     /// Never queued: it reaches the fetch directly, ahead of any page.
     CancelFetch,
 }
@@ -82,7 +86,7 @@ impl Routed {
     pub(super) fn thread(&self) -> Option<Thread> {
         match self {
             Self::Repository(_) => Some(Thread::Repository),
-            Self::Diff(_) => Some(Thread::Diff),
+            Self::Diff(_) | Self::ConfiguredContext => Some(Thread::Diff),
             Self::CancelFetch => None,
         }
     }
@@ -104,7 +108,7 @@ pub(super) fn route(request: Request) -> Routed {
         }
         Request::ExpandAll { of, options } => Routed::Diff(DiffQuery::All { of, options }),
         Request::ListRemotes => Routed::Repository(RepositoryJob::ListRemotes),
-        Request::ConfiguredContext => Routed::Repository(RepositoryJob::ConfiguredContext),
+        Request::ConfiguredContext => Routed::ConfiguredContext,
         Request::Fetch { remote } => Routed::Repository(RepositoryJob::Fetch { remote }),
         Request::CommandLog => Routed::Repository(RepositoryJob::CommandLog),
         Request::Retire(retired) => Routed::Repository(RepositoryJob::Retire(retired)),
@@ -125,7 +129,6 @@ pub(super) fn unroute(routed: Routed) -> Request {
             Request::MoreHistory { rows }
         }
         Routed::Repository(RepositoryJob::ListRemotes) => Request::ListRemotes,
-        Routed::Repository(RepositoryJob::ConfiguredContext) => Request::ConfiguredContext,
         Routed::Repository(RepositoryJob::Fetch { remote }) => Request::Fetch { remote },
         Routed::Repository(RepositoryJob::CommandLog) => Request::CommandLog,
         Routed::Repository(RepositoryJob::Retire(retired)) => Request::Retire(retired),
@@ -133,6 +136,7 @@ pub(super) fn unroute(routed: Routed) -> Request {
         Routed::Diff(DiffQuery::Changes(of)) => Request::Changes { of },
         Routed::Diff(DiffQuery::File(query)) => Request::FileDiff(query),
         Routed::Diff(DiffQuery::All { of, options }) => Request::ExpandAll { of, options },
+        Routed::ConfiguredContext => Request::ConfiguredContext,
         Routed::CancelFetch => Request::CancelFetch,
     }
 }
@@ -200,7 +204,12 @@ mod tests {
                     Some(thread_of(lane)),
                     "{request:?} is in the {lane:?} lane"
                 ),
-                // An operation: the repository thread's, or the fetch control's.
+                // The configured context: the diff thread's, since its handle is the one the
+                // configuration's freshness opens again (phase 06 QA, T7).
+                None if request == Request::ConfiguredContext => {
+                    assert_eq!(routed.thread(), Some(Thread::Diff));
+                }
+                // Any other operation: the repository thread's, or the fetch control's.
                 None => assert_ne!(routed.thread(), Some(Thread::Diff), "{request:?}"),
             }
         }

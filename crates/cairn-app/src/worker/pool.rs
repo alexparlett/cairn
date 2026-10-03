@@ -441,6 +441,9 @@ impl RepositoryHandle {
                 }
                 let _ = self.jobs.send((epoch, job));
             }
+            Routed::ConfiguredContext => {
+                let _ = self.diff.send(DiffJob::ConfiguredContext);
+            }
             Routed::Diff(query) => {
                 if let Some(epoch) = epoch {
                     let _ = self.diff.send(DiffJob::Query {
@@ -482,6 +485,7 @@ pub fn idle_handle() -> (RepositoryHandle, impl Fn() -> Vec<Request>) {
             .map(|(_, job)| unroute(Routed::Repository(job)));
         let diffs = diff_incoming.try_iter().filter_map(|job| match job {
             DiffJob::Query { query, .. } => Some(unroute(Routed::Diff(*query))),
+            DiffJob::ConfiguredContext => Some(unroute(Routed::ConfiguredContext)),
             DiffJob::Stop => None,
         });
         repository.chain(diffs).collect()
@@ -656,13 +660,6 @@ fn serve(
                     remotes: repo.remotes(),
                 },
             ),
-            // A value git refuses sends nothing: the views keep git's default, and every
-            // diff asked fails with the configuration's error, as the user's `git diff` does.
-            RepositoryJob::ConfiguredContext => {
-                if let Ok(context) = repo.configured_context() {
-                    outbox.send(None, Update::ConfiguredContext { context });
-                }
-            }
             RepositoryJob::Fetch { remote } => {
                 threads.perform(Operation::Fetch { remote }, outbox);
             }

@@ -166,7 +166,9 @@ pub enum Request {
     /// The configured remotes, answered by [`Update::Remotes`].
     ListRemotes,
     /// The context the user's `git diff` shows — `diff.context` — answered by
-    /// [`Update::ConfiguredContext`]: where the diff views' context starts (phase 06).
+    /// [`Update::ConfiguredContext`]: where the diff views' context starts (phase 06), and
+    /// answered again whenever the diff thread opens its handle afresh because the
+    /// configuration moved, so an edit reaches a session that has not moved its context.
     ConfiguredContext,
     /// Fetches `remote` (a configured name or a URL) in the network lane;
     /// its progress and outcome arrive as the `Fetch*` updates, or
@@ -231,7 +233,8 @@ pub enum Update {
     WorkerLost { message: String },
     /// The default remote first, when there is one.
     Remotes { remotes: Vec<RemoteSummary> },
-    /// `diff.context` as the user's `git diff` reads it, raised to one. Not sent when the
+    /// `diff.context` as the user's `git diff` reads it, raised to one: once asked, and again
+    /// each time the configuration moves under the diff thread. Not sent when the
     /// configuration holds a value git refuses: every diff then fails saying so, as the
     /// user's own `git diff` does.
     ConfiguredContext { context: Context },

@@ -493,6 +493,20 @@ mod tests {
         test.sync_and_update();
     }
 
+    /// Presses the button assistive technology reads as `name`: the diff bar's buttons are
+    /// glyphs, named rather than captioned.
+    fn click_named(test: &mut TestingRunner, name: &str) {
+        let centre = test
+            .find(|node, element| {
+                Rect::try_downcast(element)
+                    .filter(|rect| rect.accessibility.builder.value() == Some(name))
+                    .map(|_| node.layout().area.center())
+            })
+            .unwrap_or_else(|| panic!("no button is named {name:?}"));
+        test.click_cursor((f64::from(centre.x), f64::from(centre.y)));
+        test.sync_and_update();
+    }
+
     fn texts(test: &TestingRunner) -> Vec<String> {
         test.find_many(|_, element| Label::try_downcast(element).map(|l| l.text.to_string()))
     }
@@ -1603,9 +1617,9 @@ mod tests {
         let query = last_file_query(&submitted);
         answer_file(&mut test, view, &query, 40);
 
-        let context_after = |test: &mut TestingRunner, caption: &str| {
+        let context_after = |test: &mut TestingRunner, name: &str| {
             let before = submitted.borrow().len();
-            click_label(test, caption);
+            click_named(test, name);
             test.sync_and_update();
             requests_since(&submitted, before)
         };
@@ -1621,35 +1635,32 @@ mod tests {
                 .collect()
         };
         assert_eq!(
-            asked(context_after(&mut test, cairn_ui::FEWER_LINES_CAPTION)),
+            asked(context_after(&mut test, cairn_ui::FEWER_LINES_LABEL)),
             [(Context::Lines(2), false)]
         );
         assert_eq!(
-            asked(context_after(&mut test, cairn_ui::FEWER_LINES_CAPTION)),
+            asked(context_after(&mut test, cairn_ui::FEWER_LINES_LABEL)),
             [(Context::Lines(1), false)]
         );
         assert_eq!(
-            asked(context_after(&mut test, cairn_ui::FEWER_LINES_CAPTION)),
+            asked(context_after(&mut test, cairn_ui::FEWER_LINES_LABEL)),
             [],
             "the context went below one line"
         );
         assert_eq!(
-            asked(context_after(&mut test, cairn_ui::MORE_LINES_CAPTION)),
+            asked(context_after(&mut test, cairn_ui::MORE_LINES_LABEL)),
             [(Context::Lines(2), false)]
         );
         assert_eq!(
-            asked(context_after(
-                &mut test,
-                cairn_ui::IGNORE_WHITESPACE_CAPTION
-            )),
+            asked(context_after(&mut test, cairn_ui::IGNORE_WHITESPACE_LABEL)),
             [(Context::Lines(2), true)]
         );
         assert_eq!(
-            asked(context_after(&mut test, cairn_ui::ENTIRE_FILE_CAPTION)),
+            asked(context_after(&mut test, cairn_ui::ENTIRE_FILE_LABEL)),
             [(Context::EntireFile, true)]
         );
         assert_eq!(
-            asked(context_after(&mut test, cairn_ui::ENTIRE_FILE_CAPTION)),
+            asked(context_after(&mut test, cairn_ui::ENTIRE_FILE_LABEL)),
             [(Context::Lines(2), true)],
             "leaving the entire file forgot the lines"
         );
@@ -1731,13 +1742,13 @@ mod tests {
             Some(1)
         );
 
-        click_label(&mut test, cairn_ui::NEXT_CHANGE_CAPTION);
+        click_named(&mut test, cairn_ui::NEXT_CHANGE_LABEL);
         assert_eq!(
             scrolled_y(view),
             top_for(2),
             "the bar's next change did not move"
         );
-        click_label(&mut test, cairn_ui::PREVIOUS_CHANGE_CAPTION);
+        click_named(&mut test, cairn_ui::PREVIOUS_CHANGE_LABEL);
         assert_eq!(scrolled_y(view), top_for(1));
     }
 }

@@ -38,8 +38,10 @@ use crate::diff_palette::{
     DIFF_TEXT, GROUND, GUTTER_SEPARATOR, MONO_ADVANCE_EM, REMOVED_EMPHASIS, REMOVED_TINT,
 };
 
-/// Every row of the diff is this tall.
-pub const DIFF_ROW_HEIGHT: f32 = 20.0;
+/// Every row of the diff is this tall: Fork's, measured — a 17 pt pitch for Menlo at 11 pt
+/// on the Mac (Finding 24, a vendor screenshot at 2×, May 2026), the hunk header the same.
+/// Fork's Windows pitch is not established at a known scale.
+pub const DIFF_ROW_HEIGHT: f32 = 17.0;
 
 /// git's marker for a line that did not end, drawn as its own row.
 pub const NO_NEWLINE_AT_END: &str = "\\ No newline at end of file";

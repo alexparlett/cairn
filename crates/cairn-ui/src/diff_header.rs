@@ -2,6 +2,14 @@
 //! previous and next change on the left, the path in the middle with its file name
 //! emphasised, the view's toggles on the right. No statistics and no file actions.
 //!
+//! **The buttons are Fork's** (Finding 10; the user's decision, 2026-10-03): a glyph each
+//! (`toggle_glyphs`), drawn in the accent colour — the theme's `text_highlight` — while its
+//! toggle is on, never filled; and each button's name, which assistive technology reads and
+//! its tooltip shows, is Fork's tooltip where one is recorded ([`IGNORE_WHITESPACE_LABEL`],
+//! [`FEWER_LINES_LABEL`], [`MORE_LINES_LABEL`], [`ENTIRE_FILE_LABEL`]) and Cairn's own
+//! otherwise ([`PREVIOUS_CHANGE_LABEL`], [`NEXT_CHANGE_LABEL`], [`SIDE_BY_SIDE_LABEL`]), so
+//! no meaning rests on the glyph alone.
+//!
 //! Every toggle is a button and none has a chord — Fork binds none (user decision,
 //! `docs/research/diff-engine/fork-shortcuts.md`); previous and next change also answer the
 //! detail pane's chords. Side-by-side is drawn disabled here and arrives in phase 07. With
@@ -11,24 +19,34 @@
 use cairn_model::{ChangeStatus, ChangedFile};
 use freya::prelude::*;
 
-use crate::diff_palette::{DIFF_FONT_FAMILY, HEADER_BAR};
+use crate::diff_palette::{DIFF_FONT_FAMILY, DIFF_FONT_SIZE, HEADER_BAR};
 use crate::diff_settings::DiffSettings;
+use crate::toggle_glyphs::Glyph;
 
-/// The bar's height: the detail pane strip's.
+/// The bar's height: the detail pane strip's. Fork's own bar height is not established by
+/// the research; Cairn's is chosen to line up with the strip above it.
 pub const DIFF_HEADER_HEIGHT: f32 = 30.0;
 
-pub const PREVIOUS_CHANGE_CAPTION: &str = "↑";
-pub const NEXT_CHANGE_CAPTION: &str = "↓";
-pub const IGNORE_WHITESPACE_CAPTION: &str = "Ignore whitespace";
-pub const FEWER_LINES_CAPTION: &str = "Fewer lines";
-pub const MORE_LINES_CAPTION: &str = "More lines";
-pub const ENTIRE_FILE_CAPTION: &str = "Entire file";
-pub const SIDE_BY_SIDE_CAPTION: &str = "Side-by-side";
+/// Previous change's name and tooltip. Fork's tooltip is not recorded; Cairn's own.
+pub const PREVIOUS_CHANGE_LABEL: &str = "Previous change";
+/// Next change's name and tooltip. Fork's tooltip is not recorded; Cairn's own.
+pub const NEXT_CHANGE_LABEL: &str = "Next change";
+/// Fork's tooltip (Finding 10: the vendor's GIF, Mac 1.0.69).
+pub const IGNORE_WHITESPACE_LABEL: &str = "Ignore whitespaces";
+/// Fork's tooltip (Finding 10: named in Tracker #911 and TrackerWin #1046).
+pub const FEWER_LINES_LABEL: &str = "Decrease number of visible lines";
+/// Fork's tooltip (Finding 10: the vendor's GIF, Mac 1.0.69).
+pub const MORE_LINES_LABEL: &str = "Increase number of visible lines";
+/// Fork's tooltip (Finding 10: the vendor's screenshot, TrackerWin #792).
+pub const ENTIRE_FILE_LABEL: &str = "Show entire file";
+/// Side-by-side's name and tooltip. Fork's header toggle's tooltip is not recorded (its quick
+/// look's eye button reads "Show diff side-by-side (spacebar)", another control); Cairn's
+/// own, in the words Fork's release notes use for the view.
+pub const SIDE_BY_SIDE_LABEL: &str = "Side-by-side diff";
 /// Said in the bar while ignoring whitespace hides a change that is really there.
 pub const HIDDEN_CHANGES_NOTICE: &str = "Ignoring whitespace hides some changes";
 
-const PATH_FONT_SIZE: f32 = 12.0;
-const CAPTION_FONT_SIZE: f32 = 12.0;
+const NOTICE_FONT_SIZE: f32 = 12.0;
 
 /// What a press in the bar asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,23 +131,49 @@ fn split_path(path: &str) -> (&str, &str) {
 impl Component for DiffHeader {
     fn render(&self) -> impl IntoElement {
         let colours = get_theme_or_default();
-        let (primary, muted, warning) = {
+        let (primary, muted, warning, accent, disabled) = {
             let sheet = colours.read();
             let sheet = sheet.colors();
-            (sheet.text_primary, sheet.text_placeholder, sheet.warning)
+            (
+                sheet.text_primary,
+                sheet.text_placeholder,
+                sheet.warning,
+                sheet.text_highlight,
+                sheet.disabled,
+            )
         };
         let settings = self.settings;
-        let action = |which: HeaderAction| {
+        // One button of the bar: its glyph in the accent while its toggle is on, its name for
+        // assistive technology and in its tooltip. A disabled button reports nothing.
+        let button = |glyph: Glyph,
+                      name: &'static str,
+                      active: bool,
+                      enabled: bool,
+                      which: Option<HeaderAction>| {
+            let colour = if !enabled {
+                disabled
+            } else if active {
+                accent
+            } else {
+                primary
+            };
             let on_action = self.on_action.clone();
-            move |_: Event<PressEventData>| on_action.call(which)
-        };
-        let toggle = |caption: &'static str, active: bool, enabled: bool, which: HeaderAction| {
-            let button = Button::new()
-                .compact()
-                .enabled(enabled)
-                .on_press(action(which))
-                .child(label().text(caption).font_size(CAPTION_FONT_SIZE));
-            if active { button.filled() } else { button }
+            TooltipContainer::new(Tooltip::new_text(name)).child(
+                Button::new()
+                    .compact()
+                    .enabled(enabled)
+                    .on_press(move |_: Event<PressEventData>| {
+                        if let Some(which) = which {
+                            on_action.call(which);
+                        }
+                    })
+                    // The button takes its name from its first child's value.
+                    .child(
+                        glyph
+                            .draw(colour)
+                            .a11y_builder(move |node| node.set_value(name)),
+                    ),
+            )
         };
 
         let path = self.file.new_path.display().into_owned();
@@ -143,7 +187,7 @@ impl Component for DiffHeader {
                 paragraph()
                     .max_lines(1)
                     .font_family(DIFF_FONT_FAMILY)
-                    .font_size(PATH_FONT_SIZE)
+                    .font_size(DIFF_FONT_SIZE)
                     .text_overflow(TextOverflow::Ellipsis)
                     .span(Span::new(directory.to_owned()).color(muted))
                     .span(Span::new(name.to_owned()).color(primary)),
@@ -169,61 +213,64 @@ impl Component for DiffHeader {
             .padding(Gaps::new(0., 8., 0., 8.))
             .spacing(4.)
             .background(HEADER_BAR)
-            .child(
-                TooltipContainer::new(Tooltip::new_text("Previous change")).child(toggle(
-                    PREVIOUS_CHANGE_CAPTION,
-                    false,
-                    true,
-                    HeaderAction::PreviousChange,
-                )),
-            )
-            .child(
-                TooltipContainer::new(Tooltip::new_text("Next change")).child(toggle(
-                    NEXT_CHANGE_CAPTION,
-                    false,
-                    true,
-                    HeaderAction::NextChange,
-                )),
-            )
+            .child(button(
+                Glyph::PreviousChange,
+                PREVIOUS_CHANGE_LABEL,
+                false,
+                true,
+                Some(HeaderAction::PreviousChange),
+            ))
+            .child(button(
+                Glyph::NextChange,
+                NEXT_CHANGE_LABEL,
+                false,
+                true,
+                Some(HeaderAction::NextChange),
+            ))
             .child(shown_path)
             .maybe_child(self.hiding.then(|| {
                 label()
                     .text(HIDDEN_CHANGES_NOTICE)
                     .max_lines(1)
-                    .font_size(CAPTION_FONT_SIZE)
+                    .font_size(NOTICE_FONT_SIZE)
                     .color(warning)
             }))
-            .child(toggle(
-                IGNORE_WHITESPACE_CAPTION,
+            .child(button(
+                Glyph::IgnoreWhitespace,
+                IGNORE_WHITESPACE_LABEL,
                 settings.ignore_whitespace(),
                 true,
-                HeaderAction::IgnoreWhitespace,
+                Some(HeaderAction::IgnoreWhitespace),
             ))
-            .child(toggle(
-                FEWER_LINES_CAPTION,
+            .child(button(
+                Glyph::FewerLines,
+                FEWER_LINES_LABEL,
                 false,
                 settings.can_show_fewer_lines(),
-                HeaderAction::FewerLines,
+                Some(HeaderAction::FewerLines),
             ))
-            .child(toggle(
-                MORE_LINES_CAPTION,
+            .child(button(
+                Glyph::MoreLines,
+                MORE_LINES_LABEL,
                 false,
                 settings.can_show_more_lines(),
-                HeaderAction::MoreLines,
+                Some(HeaderAction::MoreLines),
             ))
-            .child(toggle(
-                ENTIRE_FILE_CAPTION,
+            .child(button(
+                Glyph::EntireFile,
+                ENTIRE_FILE_LABEL,
                 settings.entire_file(),
                 true,
-                HeaderAction::EntireFile,
+                Some(HeaderAction::EntireFile),
             ))
-            .child(
-                Button::new().compact().enabled(false).child(
-                    label()
-                        .text(SIDE_BY_SIDE_CAPTION)
-                        .font_size(CAPTION_FONT_SIZE),
-                ),
-            )
+            // Side-by-side lands in phase 07.
+            .child(button(
+                Glyph::SideBySide,
+                SIDE_BY_SIDE_LABEL,
+                false,
+                false,
+                None,
+            ))
     }
 
     fn render_key(&self) -> DiffKey {

@@ -42,15 +42,20 @@ pub const GUTTER_SEPARATOR: Color = retuned((0x4B, 0x4B, 0x4B));
 /// The header bar over the diff: Fork's `#333333`, retuned.
 pub const HEADER_BAR: Color = retuned((0x33, 0x33, 0x33));
 /// The change last moved to with previous or next change: Fork outlines its active chunk
-/// in the system accent; Cairn's accent is the theme's `text_highlight`, `rgb(96, 145, 224)`,
-/// which the detail pane's strip already marks its tab with.
+/// in the system accent (Finding 25, Mac, `#126CFB`); Cairn has no system accent to read, so
+/// its accent is the dark theme's `text_highlight`, `rgb(96, 145, 224)` — Cairn's choice —
+/// which the detail pane's strip already marks its tab with and the diff bar lights an
+/// active toggle with. A copy, so a row reads no theme; pinned equal to the theme's.
 pub const CURRENT_CHANGE: Color = rgb((96, 145, 224));
 
 /// The diff's typeface: IBM Plex Mono, embedded by the application with its licence (L16).
 /// Diff text, ids and paths are drawn in it.
 pub const DIFF_FONT_FAMILY: &str = "IBM Plex Mono";
-/// The diff's text size. Fork's Mac default is Menlo at 11 pt.
-pub const DIFF_FONT_SIZE: f32 = 12.0;
+/// The diff's text size: Fork's, measured. Fork's Mac default diff font is Menlo at 11 pt
+/// (Finding 17: `Menlo-Regular - 11.0` in two screenshots four years apart) with a 6.6 pt
+/// advance (Finding 24); a point on macOS is a logical pixel, and IBM Plex Mono's 0.6 em
+/// advance at 11 px is the same 6.6. Fork's Windows size is not established.
+pub const DIFF_FONT_SIZE: f32 = 11.0;
 /// IBM Plex Mono's advance, as a fraction of its size: every glyph is 600 of 1000 units
 /// wide (read from the font's `hmtx` table).
 pub const MONO_ADVANCE_EM: f32 = 0.6;
@@ -145,5 +150,12 @@ mod tests {
             }
         }
         assert!(contrast(DIFF_MUTED, GROUND) >= 4.5);
+    }
+
+    /// The accent is the dark theme's, as its doc says: the change moved to and an active
+    /// toggle are lit in one colour. Caught by: a hand-typed accent drifting from the theme.
+    #[test]
+    fn the_current_change_is_the_themes_accent() {
+        assert_eq!(CURRENT_CHANGE, freya::prelude::DARK_COLORS.text_highlight);
     }
 }

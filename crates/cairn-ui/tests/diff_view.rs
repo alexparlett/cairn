@@ -9,15 +9,15 @@ use cairn_model::{
     DisplayOverlay, FileDiff, FileMode, FunctionContext, IntraLineHighlight, LineNumber, LineSpan,
     RepoPath, Similarity, TextDiff, UnifiedRow, UnifiedRows, split_lines,
 };
-use cairn_ui::diff_palette::{ADDED_EMPHASIS, REMOVED_EMPHASIS};
+use cairn_ui::diff_palette::{ADDED_EMPHASIS, CURRENT_CHANGE, REMOVED_EMPHASIS};
 use cairn_ui::{
-    DIFF_ROW_HEIGHT, DiffHeader, DiffSettings, ENTIRE_FILE_CAPTION, FEWER_LINES_CAPTION,
-    HIDDEN_CHANGES_NOTICE, HeaderAction, IGNORE_WHITESPACE_CAPTION, MORE_LINES_CAPTION,
-    NEXT_CHANGE_CAPTION, NO_NEWLINE_AT_END, PREVIOUS_CHANGE_CAPTION, SIDE_BY_SIDE_CAPTION,
-    ShownDiff, UnifiedDiffView,
+    DIFF_ROW_HEIGHT, DiffHeader, DiffSettings, ENTIRE_FILE_LABEL, FEWER_LINES_LABEL,
+    HIDDEN_CHANGES_NOTICE, HeaderAction, IGNORE_WHITESPACE_LABEL, MORE_LINES_LABEL,
+    NEXT_CHANGE_LABEL, NO_NEWLINE_AT_END, PREVIOUS_CHANGE_LABEL, SIDE_BY_SIDE_LABEL, ShownDiff,
+    UnifiedDiffView,
 };
 use freya::prelude::*;
-use freya_testing::TestingRunner;
+use freya_testing::{TestingNode, TestingRunner};
 
 const WIDTH: f32 = 900.;
 const HEIGHT: f32 = 400.;
@@ -423,6 +423,17 @@ fn ignoring_whitespace_hides_whitespace_only_changes_and_says_so_only_then() {
     assert!(!nothing_hidden.hides_changes(), "ignoring hid nothing here");
 }
 
+/// Every button of the bar, left to right, by name.
+const EVERY_BUTTON: [&str; 7] = [
+    PREVIOUS_CHANGE_LABEL,
+    NEXT_CHANGE_LABEL,
+    IGNORE_WHITESPACE_LABEL,
+    FEWER_LINES_LABEL,
+    MORE_LINES_LABEL,
+    ENTIRE_FILE_LABEL,
+    SIDE_BY_SIDE_LABEL,
+];
+
 fn launch_header(
     header: impl Fn() -> DiffHeader + 'static,
 ) -> (TestingRunner, Rc<RefCell<Vec<HeaderAction>>>) {
@@ -430,6 +441,7 @@ fn launch_header(
     let reported = pressed.clone();
     let (mut test, _) = TestingRunner::new(
         move || {
+            use_init_theme(dark_theme);
             let reported = reported.clone();
             rect()
                 .expanded()
@@ -448,38 +460,75 @@ fn labels(test: &TestingRunner) -> Vec<String> {
     test.find_many(|_, element| Label::try_downcast(element).map(|l| l.text.to_string()))
 }
 
-fn click(test: &mut TestingRunner, caption: &str) {
+/// The value a rect hands its button as the button's name, if it hands one.
+macro_rules! named {
+    ($element:expr) => {
+        Rect::try_downcast($element)
+            .and_then(|rect| rect.accessibility.builder.value().map(str::to_owned))
+    };
+}
+
+/// Every name the bar's buttons carry, in order.
+fn names(test: &TestingRunner) -> Vec<String> {
+    test.find_many(|_, element| named!(element))
+}
+
+/// Presses the button named `name` — by what assistive technology reads, not by a glyph.
+fn click(test: &mut TestingRunner, name: &str) {
     let centre = test
         .find(|node, element| {
-            Label::try_downcast(element)
-                .filter(|label| label.text == caption)
+            named!(element)
+                .filter(|value| value == name)
                 .map(|_| node.layout().area.center())
         })
-        .unwrap_or_else(|| panic!("no button reads {caption:?}: {:?}", labels(test)));
+        .unwrap_or_else(|| panic!("no button is named {name:?}: {:?}", names(test)));
     test.click_cursor((f64::from(centre.x), f64::from(centre.y)));
     test.sync_and_update();
 }
 
+/// Every colour the glyph of the button named `name` is drawn in: its shapes' fills and
+/// borders, and its characters.
+fn glyph_colours(test: &TestingRunner, name: &str) -> Vec<Color> {
+    fn walk(node: TestingNode, into: &mut Vec<Color>) {
+        let element = node.element();
+        if let Some(rect) = Rect::try_downcast(element.as_ref()) {
+            into.extend(rect.style.background.as_color());
+            into.extend(rect.style.borders.iter().map(|border| border.fill));
+        }
+        if let Some(label) = Label::try_downcast(element.as_ref()) {
+            into.extend(label.text_style_data.color.and_then(|fill| fill.as_color()));
+        }
+        for child in node.children() {
+            walk(child, into);
+        }
+    }
+    let glyph = test
+        .find(|node, element| named!(element).filter(|value| value == name).map(|_| node))
+        .unwrap_or_else(|| panic!("no button is named {name:?}: {:?}", names(test)));
+    let mut colours = Vec::new();
+    walk(glyph, &mut colours);
+    colours.retain(|colour| *colour != Color::TRANSPARENT);
+    colours
+}
+
 /// R6.2, R6.3, C11: the bar holds previous and next change, every toggle, and side-by-side
-/// disabled; each enabled button reports its action, fewer lines is disabled at one line and
-/// both line buttons while the entire file is shown. Caught by: a button wired to another
-/// action, fewer lines pressable at the floor, side-by-side reporting anything.
+/// disabled, each found by the name assistive technology reads; each enabled button reports
+/// its action, fewer lines is disabled at one line and both line buttons while the entire
+/// file is shown. Caught by: a button wired to another action, fewer lines pressable at the
+/// floor, side-by-side reporting anything.
 #[test]
 fn the_bar_reports_each_button_and_holds_fewer_lines_at_one() {
     let mut at_one = DiffSettings::default();
     at_one.fewer_lines();
     at_one.fewer_lines();
     let (mut test, pressed) = launch_header(move || DiffHeader::new(file("src/lib.rs"), at_one));
-    for caption in [
-        PREVIOUS_CHANGE_CAPTION,
-        NEXT_CHANGE_CAPTION,
-        IGNORE_WHITESPACE_CAPTION,
-        FEWER_LINES_CAPTION,
-        MORE_LINES_CAPTION,
-        ENTIRE_FILE_CAPTION,
-        SIDE_BY_SIDE_CAPTION,
-    ] {
-        click(&mut test, caption);
+    assert_eq!(
+        names(&test),
+        EVERY_BUTTON,
+        "the bar's buttons, in Fork's order"
+    );
+    for name in EVERY_BUTTON {
+        click(&mut test, name);
     }
     assert_eq!(
         pressed.borrow().as_slice(),
@@ -496,10 +545,69 @@ fn the_bar_reports_each_button_and_holds_fewer_lines_at_one() {
     let mut entire = DiffSettings::default();
     entire.toggle_entire_file();
     let (mut test, pressed) = launch_header(move || DiffHeader::new(file("src/lib.rs"), entire));
-    click(&mut test, FEWER_LINES_CAPTION);
-    click(&mut test, MORE_LINES_CAPTION);
-    click(&mut test, ENTIRE_FILE_CAPTION);
+    click(&mut test, FEWER_LINES_LABEL);
+    click(&mut test, MORE_LINES_LABEL);
+    click(&mut test, ENTIRE_FILE_LABEL);
     assert_eq!(pressed.borrow().as_slice(), [HeaderAction::EntireFile]);
+}
+
+/// The backgrounds of the bar's buttons, left to right.
+fn button_backgrounds(test: &TestingRunner) -> Vec<Option<Color>> {
+    test.find_many(|_, element| {
+        Rect::try_downcast(element)
+            .filter(|rect| rect.accessibility.builder.role() == AccessibilityRole::Button)
+            .map(|rect| rect.style.background.as_color())
+    })
+}
+
+/// The user's decision (2026-10-03), Fork's bar: every button is a glyph whose name — Fork's
+/// tooltip where one is recorded — is read by assistive technology rather than drawn as a
+/// caption; a toggle that is on has its glyph drawn wholly in the accent (the theme's
+/// `text_highlight`, which `CURRENT_CHANGE` copies) and is not filled, and a toggle that is
+/// off, or a plain button, draws none of it. Caught by: a caption drawn in place of a glyph,
+/// a button with no name, an active toggle filled, or its glyph not lit.
+#[test]
+fn every_button_is_a_named_glyph_and_an_active_toggle_is_lit_in_the_accent() {
+    let mut on = DiffSettings::default();
+    on.toggle_ignore_whitespace();
+    on.toggle_entire_file();
+    let (test, _) = launch_header(move || DiffHeader::new(file("src/lib.rs"), on));
+    let drawn = labels(&test);
+    for name in EVERY_BUTTON {
+        assert!(
+            !drawn.iter().any(|text| text == name),
+            "{name:?} is drawn as a caption: {drawn:?}"
+        );
+        let colours = glyph_colours(&test, name);
+        assert!(!colours.is_empty(), "{name:?} draws no glyph");
+        if name == IGNORE_WHITESPACE_LABEL || name == ENTIRE_FILE_LABEL {
+            assert!(
+                colours.iter().all(|colour| *colour == CURRENT_CHANGE),
+                "{name:?} is on and its glyph is not the accent: {colours:?}"
+            );
+        } else {
+            assert!(
+                !colours.contains(&CURRENT_CHANGE),
+                "{name:?} is not on and its glyph is lit: {colours:?}"
+            );
+        }
+    }
+    let backgrounds = button_backgrounds(&test);
+    assert_eq!(backgrounds.len(), EVERY_BUTTON.len(), "{backgrounds:?}");
+    assert_eq!(
+        backgrounds.get(2),
+        backgrounds.get(4),
+        "an active toggle is filled: {backgrounds:?}"
+    );
+
+    let (test, _) =
+        launch_header(move || DiffHeader::new(file("src/lib.rs"), DiffSettings::default()));
+    for name in EVERY_BUTTON {
+        assert!(
+            !glyph_colours(&test, name).contains(&CURRENT_CHANGE),
+            "{name:?} is lit with nothing on"
+        );
+    }
 }
 
 /// R6.7: the notice is drawn when the answer hides a change and not otherwise, whatever the

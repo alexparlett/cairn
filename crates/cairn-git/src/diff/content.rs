@@ -33,7 +33,7 @@ use crate::reads::{
 };
 use crate::{Cancel, Error, Repository};
 
-use super::algorithm::Algorithms;
+use super::algorithm::{Algorithms, PathAlgorithm};
 use super::submodules::Hiding;
 use super::{ChangeSet, ContentOptions};
 
@@ -80,7 +80,7 @@ pub(super) fn file_diff(
                 let algorithm = Algorithms::read(repo.inner(), git.version())?
                     .for_old_paths(git, repo, &[&file.old_path], cancel)?
                     .pop()
-                    .flatten();
+                    .and_then(PathAlgorithm::flag);
                 let asker = Asker {
                     git,
                     repo,
@@ -102,13 +102,17 @@ pub(super) fn file_diff(
 }
 
 /// Every file of a change set, for Expand All: decided file by file as [`file_diff`]
-/// decides one, with the lines of every text file git has to read asked of git in ONE
-/// `diff-tree -p` over the whole comparison, with the changes query's own detection, so git
-/// pairs and lists exactly what that query listed. A file that answer does not hold as the
-/// change set holds it — paired otherwise, which a hidden submodule's place in a cut-short
-/// rename search can do, or called binary where gix called it text — and a file whose
-/// driver names its own algorithm are each asked about on their own. `cancel` is checked
-/// between files while they are read, and polled while git runs.
+/// decides one, with the lines of every text file git has to read asked of git in as few
+/// `diff-tree -p` runs as the algorithms allow — ONE over the whole comparison for every
+/// file diffed with `diff.algorithm`, with the changes query's own detection, so git pairs
+/// and lists exactly what that query listed; and one per distinct algorithm the files'
+/// diff drivers name, over those files' paths, since one run cannot pass two algorithms
+/// (and a run that leaves a driver to apply its own carries it into every later file,
+/// `docs/systems/diff.md`). A file a run's answer does not hold as the change set holds it
+/// — paired otherwise, which a hidden submodule's place in a cut-short rename search or a
+/// group's narrower paths can do, or called binary where gix called it text — is asked
+/// about on its own. `cancel` is checked between files while they are read, and polled
+/// while git runs.
 pub(super) fn file_diffs(
     repo: &Repository,
     cache: &mut gix::diff::blob::Platform,
@@ -138,14 +142,19 @@ pub(super) fn file_diffs(
         .filter_map(|index| set.files.get(*index))
         .map(|file| &file.old_path)
         .collect();
-    let flags = algorithms.for_old_paths(git, repo, &old_paths, cancel)?;
-    let mut alone: Vec<(usize, Option<Algorithm>)> = Vec::new();
+    let chosen = algorithms.for_old_paths(git, repo, &old_paths, cancel)?;
     let mut together: Vec<usize> = Vec::new();
-    for (index, flag) in asking.iter().zip(flags) {
-        if flag == Some(algorithms.configured()) {
-            together.push(*index);
-        } else {
-            alone.push((*index, flag));
+    // Each driver algorithm in the order it was first met, with its files.
+    let mut by_driver: Vec<(Algorithm, Vec<usize>)> = Vec::new();
+    for (index, path_algorithm) in asking.iter().zip(chosen) {
+        match path_algorithm {
+            PathAlgorithm::Configured(_) => together.push(*index),
+            PathAlgorithm::Driver(algorithm) => {
+                match by_driver.iter_mut().find(|(held, _)| *held == algorithm) {
+                    Some((_, group)) => group.push(*index),
+                    None => by_driver.push((algorithm, vec![*index])),
+                }
+            }
         }
     }
 
@@ -156,7 +165,12 @@ pub(super) fn file_diffs(
         options,
         cancel,
     };
+    let held = Held {
+        set,
+        prepared: &prepared,
+    };
     let mut readings: BTreeMap<usize, (Reading, Option<Reading>)> = BTreeMap::new();
+    let mut alone: Vec<(usize, Option<Algorithm>)> = Vec::new();
     if !together.is_empty() {
         let hiding = Hiding::read(repo.inner(), repo.workdir().is_some())?;
         let comparison = Scope::Comparison {
@@ -167,44 +181,34 @@ pub(super) fn file_diffs(
             },
         };
         let configured = Some(algorithms.configured());
-        let ask = |ignore_whitespace: bool| {
-            let query = asker.query(configured, ignore_whitespace, comparison);
-            patches(git, repo, &query, cancel).map(by_paths)
+        asker.many(
+            &held,
+            &together,
+            (comparison, configured),
+            configured,
+            &mut readings,
+            &mut alone,
+        )?;
+    }
+    for (algorithm, group) in &by_driver {
+        let files: Vec<&ChangedFile> = group
+            .iter()
+            .filter_map(|index| set.files.get(*index))
+            .collect();
+        let scope = Scope::Paths {
+            files: &files,
+            detection: detection_of(set),
         };
-        let exact = ask(false)?;
-        let ignoring = if options.ignore_whitespace {
-            Some(ask(true)?)
-        } else {
-            None
-        };
-        for index in together {
-            let (Some(file), Some(Prepared::Text { old, new, .. })) =
-                (set.files.get(index), prepared.get(index))
-            else {
-                continue;
-            };
-            let Found::Text(exact_text) = lookup(&exact, file) else {
-                alone.push((index, configured));
-                continue;
-            };
-            let ignoring_text = match ignoring.as_ref().map(|ignoring| lookup(ignoring, file)) {
-                None => None,
-                Some(Found::Text(text)) => Some(Some(text)),
-                // Every change was whitespace, which git says by leaving the file out.
-                Some(Found::Left | Found::Unprinted) => Some(None),
-                Some(Found::Unusable) => {
-                    alone.push((index, configured));
-                    continue;
-                }
-            };
-            let exact = against(file, exact_text, old, new, false)?;
-            let ignoring = match ignoring_text {
-                None => None,
-                Some(None) => Some(Reading::default()),
-                Some(Some(text)) => Some(against(file, text, old, new, true)?),
-            };
-            readings.insert(index, (exact, ignoring));
-        }
+        // Alone, a driver's file passes no flag and git applies the driver itself, as the
+        // user's `git diff -- <path>` does; the group's run names the same algorithm.
+        asker.many(
+            &held,
+            group,
+            (scope, Some(*algorithm)),
+            None,
+            &mut readings,
+            &mut alone,
+        )?;
     }
     for (index, algorithm) in alone {
         let (Some(file), Some(Prepared::Text { old, new, .. })) =
@@ -230,6 +234,13 @@ pub(super) fn file_diffs(
             },
         })
         .collect())
+}
+
+/// The change set and what reading each of its files decided, which a run over several
+/// files is read against.
+struct Held<'a> {
+    set: &'a ChangeSet,
+    prepared: &'a [Prepared],
 }
 
 /// The changes query's detection, as its answer reports it: what `diff.renames` asked for,
@@ -296,6 +307,60 @@ impl<C: Cancel> Asker<'_, C> {
             ignore_whitespace,
             scope,
         }
+    }
+
+    /// One run over several files (`indices` of the change set), `-w` beside it when the
+    /// caller asked for the whitespace-ignoring reading: each file the answer holds as the
+    /// change set does gets its readings; any other is left in `alone`, to be asked about
+    /// on its own with `alone_algorithm`.
+    fn many(
+        &self,
+        held: &Held<'_>,
+        indices: &[usize],
+        (scope, algorithm): (Scope<'_>, Option<Algorithm>),
+        alone_algorithm: Option<Algorithm>,
+        readings: &mut BTreeMap<usize, (Reading, Option<Reading>)>,
+        alone: &mut Vec<(usize, Option<Algorithm>)>,
+    ) -> Result<(), Error> {
+        let ask = |ignore_whitespace: bool| {
+            let query = self.query(algorithm, ignore_whitespace, scope);
+            patches(self.git, self.repo, &query, self.cancel).map(by_paths)
+        };
+        let exact = ask(false)?;
+        let ignoring = if self.options.ignore_whitespace {
+            Some(ask(true)?)
+        } else {
+            None
+        };
+        for &index in indices {
+            let (Some(file), Some(Prepared::Text { old, new, .. })) =
+                (held.set.files.get(index), held.prepared.get(index))
+            else {
+                continue;
+            };
+            let Found::Text(exact_text) = lookup(&exact, file) else {
+                alone.push((index, alone_algorithm));
+                continue;
+            };
+            let ignoring_text = match ignoring.as_ref().map(|ignoring| lookup(ignoring, file)) {
+                None => None,
+                Some(Found::Text(text)) => Some(Some(text)),
+                // Every change was whitespace, which git says by leaving the file out.
+                Some(Found::Left | Found::Unprinted) => Some(None),
+                Some(Found::Unusable) => {
+                    alone.push((index, alone_algorithm));
+                    continue;
+                }
+            };
+            let exact = against(file, exact_text, old, new, false)?;
+            let ignoring = match ignoring_text {
+                None => None,
+                Some(None) => Some(Reading::default()),
+                Some(Some(text)) => Some(against(file, text, old, new, true)?),
+            };
+            readings.insert(index, (exact, ignoring));
+        }
+        Ok(())
     }
 
     /// One file asked of git on its own: the exact reading, and the whitespace-ignoring

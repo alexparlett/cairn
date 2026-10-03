@@ -31,14 +31,14 @@
 //!   `diff.indentHeuristic` plumbing does read, so nothing is passed for it.
 //! - `-c diff.suppressBlankEmpty=false`: plumbing reads that key, and with it set a blank
 //!   context line loses its leading space, which would read as a line of no kind.
-//! - `--literal-pathspecs` (a global option, before the verb) for a file's own paths, so a
-//!   path holding `*` or `?` names that path alone. Not for the whole-comparison form, whose
-//!   only pathspecs are the `:(exclude,literal)` magic the changes query's submodule rule
-//!   needs, which literal pathspecs would switch off.
+//! - `--literal-pathspecs` (a global option, before the verb) for a file's own paths, or a
+//!   group's, so a path holding `*` or `?` names that path alone. Not for the
+//!   whole-comparison form, whose only pathspecs are the `:(exclude,literal)` magic the
+//!   changes query's submodule rule needs, which literal pathspecs would switch off.
 //! - `-a` for one file: the caller has already decided the file is text, by git's rules
-//!   (R2.5), so git is not asked to decide it again. The whole-comparison form leaves it off,
-//!   so a binary file costs git a line rather than a diff, and a file git and the caller
-//!   disagree about is asked about on its own.
+//!   (R2.5), so git is not asked to decide it again. The whole-comparison and group forms
+//!   leave it off, so a binary file costs git a line rather than a diff, and a file git and
+//!   the caller disagree about is asked about on its own.
 //! - `--raw -z` in the same call: the raw records come first, each file's patch after them
 //!   in the same order (a type change's patch is two sections, a deletion and an addition),
 //!   which is how each patch is matched to the file it is about — never by parsing the
@@ -119,6 +119,14 @@ pub(crate) enum Scope<'a> {
     Comparison {
         detection: Detection,
         submodules: Submodules<'a>,
+    },
+    /// Some files of the comparison — those that share an algorithm Expand All could not
+    /// ask the whole comparison with — by their paths, read literally, under the changes
+    /// query's detection. A file whose pair or status that answer does not hold as the
+    /// change set does is the caller's to ask about alone.
+    Paths {
+        files: &'a [&'a ChangedFile],
+        detection: Detection,
     },
 }
 
@@ -337,7 +345,7 @@ pub(crate) fn patches(
 
 fn arguments(query: &PatchQuery<'_>) -> Vec<OsString> {
     let mut arguments: Vec<OsString> = Vec::new();
-    if matches!(query.scope, Scope::File(_)) {
+    if matches!(query.scope, Scope::File(_) | Scope::Paths { .. }) {
         arguments.push("--literal-pathspecs".into());
     }
     arguments.extend(
@@ -385,6 +393,9 @@ fn arguments(query: &PatchQuery<'_>) -> Vec<OsString> {
                 arguments.push("--ignore-submodules=all".into());
             }
         }
+        Scope::Paths { detection, .. } => {
+            arguments.extend(detection.arguments().into_iter().map(OsString::from));
+        }
     }
     arguments.push("--end-of-options".into());
     arguments.push(query.old.to_string().into());
@@ -406,6 +417,18 @@ fn arguments(query: &PatchQuery<'_>) -> Vec<OsString> {
                     let mut pathspec = b":(exclude,literal)".to_vec();
                     pathspec.extend_from_slice(excluded.as_bytes());
                     arguments.push(OsString::from_vec(pathspec));
+                }
+            }
+        }
+        Scope::Paths { files, .. } => {
+            arguments.push("--".into());
+            let mut named: Vec<&RepoPath> = Vec::with_capacity(files.len() * 2);
+            for file in files {
+                for path in [&file.new_path, &file.old_path] {
+                    if !named.contains(&path) {
+                        named.push(path);
+                        arguments.push(self::path(path));
+                    }
                 }
             }
         }
@@ -912,6 +935,46 @@ mod tests {
         assert!(arguments.iter().any(|a| a == "-U5"));
         assert!(arguments.windows(2).any(|pair| pair == ["-C", "-l7"]));
         assert!(arguments.ends_with(&["--".into(), ":(exclude,literal)sub".into()]));
+    }
+
+    /// A group of files is read like the comparison — its detection, no `-a`, so a file git
+    /// calls binary is the caller's to ask about alone — but by their paths, read
+    /// literally, each named once. Caught by: a path read with magic, a pair's old path
+    /// left out (which unpairs the rename), or `-a` forced on files git was not asked to
+    /// judge.
+    #[test]
+    fn a_group_read_names_every_path_once_literally_with_the_comparisons_detection() {
+        let (old, new) = (Oid::parse(OLD).unwrap(), Oid::parse(NEW).unwrap());
+        let renamed = file(
+            ":(glob)from",
+            "to",
+            ChangeStatus::Renamed(cairn_model::Similarity::from_percent(90)),
+        );
+        let modified = file("to", "to", ChangeStatus::Modified);
+        let group = [&renamed, &modified];
+        let asked = PatchQuery {
+            old: &old,
+            new: &new,
+            context: 3,
+            algorithm: Some(Algorithm::Patience),
+            ignore_whitespace: false,
+            scope: Scope::Paths {
+                files: &group,
+                detection: Detection::Renames { limit: 0 },
+            },
+        };
+        let arguments = strings(arguments(&asked));
+        assert_eq!(arguments[0], "--literal-pathspecs", "{arguments:?}");
+        assert!(!arguments.iter().any(|a| a == "-a"), "{arguments:?}");
+        assert!(
+            arguments.windows(2).any(|pair| pair == ["-M", "-l0"]),
+            "{arguments:?}"
+        );
+        assert!(arguments.iter().any(|a| a == "--diff-algorithm=patience"));
+        assert!(
+            arguments.ends_with(&["--".into(), "to".into(), ":(glob)from".into()]),
+            "{arguments:?}"
+        );
     }
 
     #[test]

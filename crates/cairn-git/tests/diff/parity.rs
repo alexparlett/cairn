@@ -671,51 +671,79 @@ fn expand_all_answers_what_each_file_answers_alone() {
 }
 
 /// How many `git diff-tree` runs Expand All makes, read from the repository's command log:
-/// one for the whole comparison, and a second when whitespace is ignored — never one per
-/// file — over a fixture of seventy-odd text files, renames and copies among them, where
-/// every file is held by the one answer. Its answers are shown equal to the per-file ones
-/// by `expand_all_answers_what_each_file_answers_alone`; this is what that test cannot
-/// see. Caught by: every file sent to a read of its own, which answers the same.
+/// one for the whole comparison, one more for each distinct algorithm the files' diff
+/// drivers name (git 2.40 and later; none before), and all of it twice when whitespace is
+/// ignored — never one per file — over a fixture of seventy-odd text files, renames and
+/// copies among them, without a driver algorithm and with one naming patience for its
+/// seventeen-odd `drv/` files. Its answers are shown equal to the per-file ones by
+/// `expand_all_answers_what_each_file_answers_alone`; this is what that test cannot see.
+/// Caught by: every file sent to a read of its own, or each driver file, which answer the
+/// same.
 #[test]
 fn expand_all_runs_one_diff_tree_per_comparison() {
-    let repo = repositories::discriminating(&[]);
-    let shared = ok(
-        cairn_git::SharedRepository::discover(repo.path()),
-        "the fixture opens",
-    );
-    let engine = shared.to_worker();
-    let mut session = ok(engine.diff_session(), "a diff session");
-    let request = ChangesRequest::commit(repo.rev("HEAD"));
-    let set = ok(
-        session.changes(super::git(), &request, &CancelSignal::new()),
-        "the changes query answers",
-    );
-    assert!(set.files.len() >= 70, "only {} files", set.files.len());
-    let diff_trees = || {
-        shared
-            .command_log()
-            .iter()
-            .filter(|record| record.arguments.iter().any(|a| a == "diff-tree"))
-            .count()
-    };
-    for (ignore_whitespace, expected) in [(false, 1), (true, 2)] {
-        let before = diff_trees();
-        let options = ContentOptions {
-            ignore_whitespace,
-            load_anyway: true,
-            ..ContentOptions::default()
+    let drivers_read = super::git().version()
+        >= cairn_git::ops::GitVersion {
+            major: 2,
+            minor: 40,
+            patch: 0,
         };
-        let all = ok(
-            session.file_diffs(super::git(), &request, &set, &options, &CancelSignal::new()),
-            "Expand All answers",
+    let configurations: [(&[(&str, &str)], usize); 2] = [
+        (&[], 1),
+        (
+            &[
+                ("diff.algorithm", "histogram"),
+                ("diff.drv.algorithm", "patience"),
+            ],
+            if drivers_read { 2 } else { 1 },
+        ),
+    ];
+    for (config, runs) in configurations {
+        let repo = repositories::discriminating(config);
+        let shared = ok(
+            cairn_git::SharedRepository::discover(repo.path()),
+            "the fixture opens",
         );
-        assert_eq!(all.len(), set.files.len());
-        assert_eq!(
-            diff_trees() - before,
-            expected,
-            "Expand All (ignoring whitespace: {ignore_whitespace}) ran another number of \
-             diff-tree than one per comparison"
+        let engine = shared.to_worker();
+        let mut session = ok(engine.diff_session(), "a diff session");
+        let request = ChangesRequest::commit(repo.rev("HEAD"));
+        let set = ok(
+            session.changes(super::git(), &request, &CancelSignal::new()),
+            "the changes query answers",
         );
+        assert!(set.files.len() >= 70, "only {} files", set.files.len());
+        let drivers = set
+            .files
+            .iter()
+            .filter(|file| file.old_path.display().starts_with("drv/"))
+            .count();
+        assert!(drivers >= 10, "only {drivers} files under the driver");
+        let diff_trees = || {
+            shared
+                .command_log()
+                .iter()
+                .filter(|record| record.arguments.iter().any(|a| a == "diff-tree"))
+                .count()
+        };
+        for ignore_whitespace in [false, true] {
+            let before = diff_trees();
+            let options = ContentOptions {
+                ignore_whitespace,
+                load_anyway: true,
+                ..ContentOptions::default()
+            };
+            let all = ok(
+                session.file_diffs(super::git(), &request, &set, &options, &CancelSignal::new()),
+                "Expand All answers",
+            );
+            assert_eq!(all.len(), set.files.len());
+            let expected = if ignore_whitespace { 2 * runs } else { runs };
+            assert_eq!(
+                diff_trees() - before,
+                expected,
+                "Expand All under {config:?} (ignoring whitespace: {ignore_whitespace}) ran \
+                 another number of diff-tree than one per comparison and per driver algorithm"
+            );
+        }
     }
 }
 

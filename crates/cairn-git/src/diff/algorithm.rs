@@ -29,6 +29,26 @@ const DRIVERS_FROM: GitVersion = GitVersion {
     patch: 0,
 };
 
+/// Which algorithm git diffs one path with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PathAlgorithm {
+    /// `diff.algorithm`, or git's default: passed as `--diff-algorithm`.
+    Configured(Algorithm),
+    /// The one the path's diff driver names, which beats `diff.algorithm`.
+    Driver(Algorithm),
+}
+
+impl PathAlgorithm {
+    /// The flag a read of this path alone passes: none for a driver's, which `diff-tree`
+    /// then applies itself, as the user's `git diff -- <path>` does.
+    pub(super) fn flag(self) -> Option<Algorithm> {
+        match self {
+            Self::Configured(algorithm) => Some(algorithm),
+            Self::Driver(_) => None,
+        }
+    }
+}
+
 /// The algorithms the user's configuration asks for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Algorithms {
@@ -92,31 +112,36 @@ impl Algorithms {
         self.configured
     }
 
-    /// The algorithm flag for each file, by its old path: `None` where the path's driver
-    /// names an algorithm, which `diff-tree` then applies itself. Starts a process only
-    /// when some driver names one.
+    /// The algorithm git diffs each file with, by its old path: the driver's where the
+    /// path's driver names one, `diff.algorithm` otherwise. Starts a process only when
+    /// some driver names one.
     pub(super) fn for_old_paths(
         &self,
         git: &GitBinary,
         repo: &Repository,
         paths: &[&RepoPath],
         cancel: &impl Cancel,
-    ) -> Result<Vec<Option<Algorithm>>, Error> {
+    ) -> Result<Vec<PathAlgorithm>, Error> {
         if self.drivers.is_empty() {
-            return Ok(vec![Some(self.configured); paths.len()]);
+            return Ok(vec![
+                PathAlgorithm::Configured(self.configured);
+                paths.len()
+            ]);
         }
         Ok(diff_attributes(git, repo, paths, cancel)?
             .into_iter()
             .map(|attribute| match attribute {
-                DiffAttribute::Driver(name)
-                    if self.drivers.iter().any(|(driver, _)| driver == &name) =>
-                {
-                    None
+                DiffAttribute::Driver(name) => self
+                    .drivers
+                    .iter()
+                    .find(|(driver, _)| driver == &name)
+                    .map_or(
+                        PathAlgorithm::Configured(self.configured),
+                        |(_, algorithm)| PathAlgorithm::Driver(*algorithm),
+                    ),
+                DiffAttribute::Unspecified | DiffAttribute::Set | DiffAttribute::Unset => {
+                    PathAlgorithm::Configured(self.configured)
                 }
-                DiffAttribute::Driver(_)
-                | DiffAttribute::Unspecified
-                | DiffAttribute::Set
-                | DiffAttribute::Unset => Some(self.configured),
             })
             .collect())
     }

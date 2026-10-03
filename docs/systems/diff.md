@@ -467,11 +467,15 @@ opened (`docs/systems/git-processes.md`, "Where an invocation runs").
 a change set, decided as one file is, but asks git ONCE for the whole comparison:
 `diff-tree -p` with the change set's own detection (`-M`/`-C` and the `-l` git
 applied, `--ignore-submodules=all` where the user hides every gitlink), no
-pathspec, and no `-a`, so a binary file costs git a line. Each text file's patch is
-found by its paths and checked to be the same change between the same blobs; a file
-the answer does not hold that way — paired otherwise, which a hidden submodule's
-place in a cut-short rename search can do, or called binary — and a file whose
-driver names its own algorithm (one call cannot pass two) are asked about on their
+pathspec, and no `-a`, so a binary file costs git a line. The files whose diff
+drivers name an algorithm of their own (git 2.40 and later) are asked in one more
+`diff-tree -p` per distinct algorithm — that algorithm passed, the group's paths as
+literal pathspecs, the same detection — since one call cannot pass two algorithms,
+and one that leaves a driver to apply its own carries it into every later file (the
+known limit below). Each text file's patch is found by its paths and checked to be
+the same change between the same blobs; a file a run's answer does not hold that
+way — paired otherwise, which a hidden submodule's place in a cut-short rename
+search or a group's narrower paths can do, or called binary — is asked about on its
 own. `expand_all_answers_what_each_file_answers_alone` requires every answer equal
 to the per-file one, with and without `-w`, over the crafted, rewrite, submodule,
 attribute, whitespace and discriminating fixtures, the last with a driver algorithm;

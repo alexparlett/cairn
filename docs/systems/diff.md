@@ -1207,7 +1207,8 @@ involved: the exceptions roster stays empty.
 **The Changes tab** (`crates/cairn-app/src/changes_tab.rs`, phase 07, R5.4), Fork's
 (Findings 5 and 19): a one-line summary — the author's name, the short id, the author
 date in the user's chosen format and the subject (`cairn_ui::ChangesSummary`,
-`summary_parts`; no avatar) — then, behind a draggable splitter (the list opening at 35%
+`summary_parts`; no avatar), on a strip as tall as the diff bar's 30 px
+(`the_summary_strip_is_as_tall_as_the_diff_bar`) — then, behind a draggable splitter (the list opening at 35%
 of the pane, never dragged or squeezed below 200 px, its share kept for the session:
 `the_file_list_opens_at_35_percent_of_the_pane_and_keeps_its_dragged_width`), the changed
 files on the left under a filter field and one file's diff on the right. A component of its own, mounted only while the tab is
@@ -1228,7 +1229,11 @@ commit is never taken for one this commit did not touch
 (`an_active_filter_says_how_many_files_it_shows_of_how_many`, at 55,184 paths). The text
 is kept for the session, and a change set arriving asks again with it; a file chosen
 before the filter hid it stays shown on the right. Case is ignored as Unicode reads it, so
-`É` finds `é` (`case_is_ignored_as_unicode_reads_it`). With no file chosen, the first
+`É` finds `é` (`case_is_ignored_as_unicode_reads_it`); a known limit, accepted by the user
+(2026-10-03): `str::to_lowercase` is a mapping rather than a case fold, so `İ` lowercases
+to `i` and a combining dot and "istanbul" does not find `İstanbul.txt`
+(`the_dotted_capital_i_is_a_known_limit`). A copy is found by either path, as a rename is
+(`a_copy_is_found_by_the_path_it_was_copied_from`). With no file chosen, the first
 file the list shows is chosen, as Fork selects the first file by default
 (`the_changes_tab_shows_the_summary_the_files_and_the_first_files_diff`). A file pressed,
 or reached with ↑ or ↓ while the list has focus — through the files it SHOWS, stopping at
@@ -1466,11 +1471,15 @@ the diff thread, 20 ms to prepare, 1.5 ms (3.2 ms side by side) a frame.
 **A line past the long-line limit is drawn cut** (R6.9, `cairn_model::drawn_bytes`,
 `cairn_ui::cut_marker`). Only a diff loaded past the limits holds one; drawn whole, a
 64 MiB line would be 64 MiB of text each time its row is built. A row draws at most the
-long-line limit's 2,048 bytes of a line, ending on a character, then " … N more bytes" in
-the muted colour, N the bytes not drawn (" … 4,192,256 more bytes" for a 4 MiB line); its intra-line ranges past the cut are not read; and the widest line is
-measured to its cut, so the horizontal extent is bounded too
+long-line limit's 2,048 bytes of a line, ending on a character — a two-, three- or
+four-byte character straddling the cut left out whole — then " … N more bytes" in the
+muted colour, N the bytes not drawn, a straddling character's head among them
+(" … 4,192,256 more bytes" for a 4 MiB line; `the_marker_counts_every_byte_not_drawn`);
+its intra-line ranges past the cut are not read (`a_cut_line_reads_only_the_ranges_before_its_cut`);
+and the widest line is measured to its cut, so the horizontal extent is bounded too
 (`a_line_past_the_limit_is_drawn_cut_with_its_marker_in_both_views`, a 4 MiB line in each
-view; `a_line_past_the_limit_is_cut_at_the_limit_on_a_character`).
+view; `a_line_past_the_limit_is_cut_at_the_limit_on_a_character`, at every character
+width and at 2,049 bytes).
 
 **Per frame and per row.** A frame builds the rows in view and nothing else. Per row: a
 search of the layout's index, one search of the intra-line pairs per side, the line's
@@ -1587,7 +1596,11 @@ number) and `docs/research/diff-engine/fork-shortcuts.md`.
 | Cut line marker | " … N more bytes", muted, N the bytes not drawn | User decision (2026-10-03). Fork refuses such lines rather than cutting them (Finding 21). |
 | Changes tab summary | author, short id, author date, subject | Fork-measured: Finding 2 (avatar, author, abbreviated SHA, date, subject); no avatar (L9); the date in the user's chosen format. |
 | Changes tab list | filter field at the top, status letter and path, first file chosen | Fork-measured: Finding 5 (filter, badge, name; first file selected by default). |
-| Filter matching | the text anywhere in a path, a rename by either name, no wildcards, case ignored as Unicode reads it | Fork-measured in part: file name, extension or path expression, no wildcards (the vendor, TrackerWin #152 and Tracker #1482). Unicode case folding (`str::to_lowercase`, no dependency): user decision (2026-10-03). |
+| Filter matching | the text anywhere in a path, a rename or a copy by either name, no wildcards, case ignored as Unicode reads it | Fork-measured in part: file name, extension or path expression, no wildcards (the vendor, TrackerWin #152 and Tracker #1482). Unicode case folding (`str::to_lowercase`, no dependency): user decision (2026-10-03). |
+| Filter's known limit | `İ` (U+0130) lowercases to `i` and a combining dot, so "istanbul" does not find `İstanbul.txt` | User's decision, 2026-10-03: accepted, `to_lowercase` kept rather than a case-folding table (`the_dotted_capital_i_is_a_known_limit`). |
+| Filter's words | "Filter" placeholder; "Filtering…" while the first answer is on its way; "No file matches the filter." | User's decision, 2026-10-03: kept as built (Cairn's words; Fork's are not recorded). |
+| No file chosen | "Choose a file to see its diff." | User's decision, 2026-10-03: kept as built. |
+| Diff side minimum width (`DIFF_MIN_PIXELS`) | 240 px | User's decision, 2026-10-03: kept as built. |
 | Filter persistence | the text kept across commits for the session; a file chosen before the filter hid it stays shown; "Showing N of M files" whenever a filter is active | User decision (2026-10-03): the count line keeps a sticky filter from being mistaken for a commit that touched fewer files. |
 | File list width | 35% of the pane until dragged, never below 200 px, its share kept for the session | User decision (2026-10-03). Fork's split is draggable (Finding 5); its default width is not established. |
 

@@ -41,7 +41,8 @@ whitespace-ignoring ranges under `-w`), through the virtualising view, under For
 (previous/next change, ignore whitespace with its notice only when something is hidden,
 fewer/more lines never below one, entire file, side-by-side disabled until phase 07);
 the context starts at the user's `diff.context`; Fork's colours are retuned tokens; IBM
-Plex Mono Regular is embedded with its OFL licence. Phase 07 landed (2026-10-03; QA due):
+Plex Mono Regular is embedded with its OFL licence. Phase 07 landed (2026-10-03) and its QA
+is fixed (the user's decisions recorded in `progress.md`):
 the Changes tab is Fork's — a one-line summary, the changed files behind a filter answered
 on the repository thread in a lane of its own, the first file chosen by default, one
 file's diff — side-by-side is drawn (two equal columns in the one virtualising view, the
@@ -109,6 +110,14 @@ file shown, and says "Showing N of M files" while active; side-by-side stays as 
 "Renamed without changes", "Unmerged path — conflicts must be resolved before a diff can be
 shown", sizes in KiB; the cut marker " … N more bytes"; the file list at 35% of the pane,
 never below 200 px. Recorded in `docs/systems/diff.md`'s table and `progress.md`.
+
+**The user's decisions in phase 07's QA (2026-10-03): applied.** A mode-only change is
+"Mode changed", a rename or copy whose mode moved "Renamed, mode changed" ("Copied, mode
+changed"); past the 64 MiB ceiling the notice says "72.3 MiB — larger than the 64 MiB Cairn
+can load"; the summary strip is the diff bar's 30 px; the `İ` case-folding edge of
+`to_lowercase` is an accepted known limit; "Copied without changes", "Filtering…", "No file
+matches the filter.", the "Filter" placeholder, "Choose a file to see its diff.", the
+240 px diff-side minimum and no logo on the too-large notice are kept as built.
 
 Q1-Q3 in `brainstorm.md`, lettered Q so they cannot be confused with the
 program's O1-O6.
@@ -251,22 +260,46 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | `diff_actions` (`choose_file`, `change_settings`, `configured`, `step`, `options`), `shortcuts::of_header`, `View::{diff_settings, diff_scroll, change_cursor}`, `diff_state::answered_file`, `DiffState::shown_file` | app | Phase 06: choosing a file, the shared settings re-asking through the lane, previous/next change; `select_file` now returns the query and a `Retire` for the replaced diff. |
 | `detail_pane::{NO_FILE_CHOSEN, READING_DIFF, NO_CHANGES_SHOWN, ONLY_WHITESPACE_CHANGED}` | app | Phase 06: the Changes tab's sentences (replacing `CHANGES_NOT_BUILT`). Phase 07: moved to `changes_tab` and `cairn_ui::diff_notice`. |
 | `Error::ChangesCancelled`, `ContentCancelled`, `ContentReadsDisagree`, `DiffSetup`, `DiffFile`, `UnexpectedGitOutput`, `InvalidConfig`, `NotAWorkTreePath` | git | What the caller of a diff query must handle; `TreeDiff` went with the gix tree walk. `ContentReadsDisagree` is the stale-read guard: git printed lines that are not the lines gix read; ask again. `NotAWorkTreePath`: an untracked path that is empty, absolute or has a `.`/`..` component, refused before anything runs. |
-| `SideBySideLayout`, `SideBySideRows::shown`, `SideBySideRow::NoNewlineAtEnd { old, new }`, `ChangeStops`, `UnifiedLayout::stops` | model (`diff_rows.rs`) | Phase 07: side-by-side rows as `git diff` prints them — the unified grouping, a context line from the new side in both columns, git's marker in the column of the side that did not end; the changes previous/next change search, for either layout. |
-| `ShownDiff`, `drawn_bytes`, `widest_drawn_columns`, `LINE_CUT_BYTES`, `TAB_STOP` | model (`diff_shown.rs`) | Phase 07: one answer prepared for both views, built on the diff thread; R6.9's cut at the long-line limit on a character; the widest drawn line. |
-| `ChangeSet::files_matching` | model | Phase 07: the Changes tab's filter — the text in a path, a rename by either name, case folded as Unicode reads it (user decision) — stopping when told. |
-| `DiffView`, `content_width`, `text_width` | ui (`diff_view.rs`) | Phase 07: one file's diff, unified or side by side (`.side_by_side`); the pixel widths of a prepared diff. |
-| `unified_rows::build`, `side_by_side_rows::{build, Columns}`, `diff_row_parts` | ui (private) | Phase 07: a unified row; a side-by-side row of two equal columns sliding together; the shared pieces (number, separator, marker, line text with its cut marker). |
-| `DiffNotice`, `DiffNoticeView`, `TOO_LARGE_TO_DISPLAY`, `LOAD_DIFF_CAPTION`, `BINARY_FILE`, `LFS_POINTER`, `SUBMODULE`, `NO_CONTENT_CHANGE`, `CONFLICTED`, `NO_CHANGES_SHOWN`, `ONLY_WHITESPACE_CHANGED`, `OLD_SIDE`, `NEW_SIDE`, `header_lines`, `size_text`, `too_large_reason`, `subproject_line` | ui (`diff_notice.rs`) | Phase 07, R6.8: what stands in place of rows, every state named; Load Diff reported through `on_load`. |
-| `cut_marker`, `ShownLine::cut` | ui (`diff_line_text.rs`) | Phase 07, R6.9: the muted " … N more bytes" after a cut line, N the bytes not drawn (user decision). |
-| `ShownFiles::Waiting`, `FILTERING`, `filter_count`, `RENAMED_WITHOUT_CHANGES`, `COPIED_WITHOUT_CHANGES` | ui | Phase 07, the user's decisions: the filter's first answer awaited; "Showing N of M files"; the rename notice's title. |
-| `ChangesList`, `ChangesSummary`, `summary_parts`, `FILTER_PLACEHOLDER`, `NO_FILE_MATCHES`, `SUMMARY_HEIGHT` | ui (`changes_list.rs`) | Phase 07, R5.4: the filtered, virtualised file list with ↑/↓, and Fork's one-line summary. |
-| `ShownFiles` | ui (`file_filter.rs`) | Phase 07: every file, or a filter's indices; rows to files and back. |
-| `DiffSettings::{side_by_side, toggle_side_by_side}`, `HeaderAction::SideBySide`, `diff_palette::FILLER` | ui | Phase 07, R6.1: the shared setting, the bar's button enabled, Fork's filler grey retuned. |
-| `QueryLane::FileFilter`, `Request::FilterFiles`, `Update::FilteredFiles`, `RepositoryJob::Filter`, `Retired::of(changes, diffs, shown)` | app (`worker/`) | Phase 07: the filter's lane, on the repository thread; `Update::FileDiff` carries a boxed `ShownDiff`; a retired change set is an `Arc`. |
-| `ChangesTab`, `LIST_WIDTH`, `NO_FILE_CHOSEN`, `READING_DIFF` | app (`changes_tab.rs`) | Phase 07: the Changes tab — summary, list, diff side — with the effects that ask the filter and choose the first file. |
-| `FileFilter`, `DiffState::{filter, filter_again, filter_arrived, wants_filter, filter_text, filter_is_settled, chose_file_at, file_index}`, `diff_state::answered_files` | app | Phase 07: the filter as the window keeps it, inside `DiffState`, for the change set selected now. |
-| `diff_actions::{load_anyway, toggle_side_by_side}`, `View::{filter_text, changes_list_width}` | app | Phase 07: Load Diff; the side-by-side toggle; the tab's session state. |
-| `every_view_of_a_diff_row_names_every_kind_of_row`, `the_diff_row_matcher_catches_the_shapes_it_claims`, `every_production_view_names_every_variant` | guards | Phase 07: `reads_enum_partially` over `UnifiedRow` and `SideBySideRow`. |
+| `SideBySideLayout`, `SideBySideRows::shown`, `SideBySideRow::NoNewlineAtEnd { old, new }` | model (`src/diff_rows.rs`) | Phase 07: side-by-side rows as `git diff` prints them — the unified grouping, a context line from the new side in both columns, git's marker in the column of the side that did not end. |
+| `ChangeStops`, `UnifiedLayout::stops` | model (`src/diff_rows.rs`) | Phase 07: the changes previous/next change search, for either layout. |
+| `ShownDiff` | model (`src/diff_shown.rs`) | Phase 07: one answer prepared for both views — both layouts, the widest drawn line, the gutter's digits — built on the diff thread. |
+| `drawn_bytes`, `LINE_CUT_BYTES` | model (`src/diff_shown.rs`) | Phase 07, R6.9: the cut at the long-line limit, on a character. |
+| `widest_drawn_columns`, `TAB_STOP` | model (`src/diff_shown.rs`) | Phase 07: the widest line counted to its cut; the tab stop it counts by. |
+| `ChangeSet::files_matching` | model (`src/change_set.rs`) | Phase 07: the Changes tab's filter — the text in a path, a rename or a copy by either name, case folded as Unicode reads it (user decision; `İ` an accepted limit, phase 07 QA) — stopping when told. |
+| `DiffView`, `content_width`, `text_width` | ui (`src/diff_view.rs`) | Phase 07: one file's diff, unified or side by side (`.side_by_side`); the pixel widths of a prepared diff. |
+| `unified_rows::build` | ui (private, `src/unified_rows.rs`) | Phase 07: a unified row. |
+| `side_by_side_rows::{build, Columns}` | ui (private, `src/side_by_side_rows.rs`) | Phase 07: a side-by-side row of two equal columns sliding together. |
+| `diff_row_parts` | ui (private, `src/diff_row_parts.rs`) | Phase 07: the pieces both rows share — number, separator, marker, line text with its cut marker. |
+| `DiffNotice`, `DiffNoticeView` | ui (`src/diff_notice.rs`) | Phase 07, R6.8: what stands in place of rows, every state named; Load Diff reported through `on_load`. |
+| `TOO_LARGE_TO_DISPLAY`, `LOAD_DIFF_CAPTION`, `too_large_reason`, `mib_text` | ui (`src/diff_notice.rs`) | Phase 07: the too-large notice, Fork's words; past the 64 MiB ceiling the file's size and the ceiling in MiB (`mib_text`, phase 07 QA, the user's words). |
+| `BINARY_FILE`, `OLD_SIDE`, `NEW_SIDE`, `size_text` | ui (`src/diff_notice.rs`) | Phase 07: a binary's two sizes in KiB and bytes under Fork's "Old" and "New". |
+| `LFS_POINTER`, `SUBMODULE`, `subproject_line` | ui (`src/diff_notice.rs`) | Phase 07: an LFS pointer's label; a submodule's label and git's `Subproject commit` line. |
+| `header_lines`, `MODE_CHANGED`, `RENAMED_WITHOUT_CHANGES`, `COPIED_WITHOUT_CHANGES`, `RENAMED_MODE_CHANGED`, `COPIED_MODE_CHANGED`, `NO_CONTENT_CHANGE` | ui (`src/diff_notice.rs`) | Phase 07: git's mode, rename and copy lines for a change with no content to draw, and its title in the user's words (phase 07 QA: "Mode changed", "Renamed, mode changed", "Copied, mode changed"); `NO_CONTENT_CHANGE` for none of those, which no answer reaches today. |
+| `CONFLICTED`, `NO_CHANGES_SHOWN`, `ONLY_WHITESPACE_CHANGED` | ui (`src/diff_notice.rs`) | Phase 07: the unmerged path's sentence (user decision); a text diff with no row, or with every change whitespace being ignored. |
+| `cut_marker`, `ShownLine::cut` | ui (`src/diff_line_text.rs`) | Phase 07, R6.9: the muted " … N more bytes" after a cut line, N the bytes not drawn (user decision). |
+| `ranges_before_cut` | ui (private, `src/diff_line_text.rs`) | Phase 07 QA (T1): the intra-line ranges a cut line reads, those before the cut, a prefix. |
+| `ChangesList`, `FILTER_PLACEHOLDER`, `NO_FILE_MATCHES` | ui (`src/changes_list.rs`) | Phase 07, R5.4: the filtered, virtualised file list with ↑/↓. |
+| `FILTERING`, `filter_count` | ui (`src/changes_list.rs`) | Phase 07, the user's decisions: "Filtering…" while the first answer is awaited; "Showing N of M files". |
+| `ChangesSummary`, `summary_parts`, `SUMMARY_HEIGHT` | ui (`src/changes_list.rs`) | Phase 07: Fork's one-line summary; the strip the diff bar's 30 px (phase 07 QA, user decision). |
+| `ShownFiles` (`All`, `Filtered`, `Waiting`) | ui (`src/file_filter.rs`) | Phase 07: every file, a filter's indices, or the first answer awaited; rows to files and back. |
+| `DiffSettings::{side_by_side, toggle_side_by_side}` | ui (`src/diff_settings.rs`) | Phase 07, R6.1: the shared side-by-side setting. |
+| `HeaderAction::SideBySide` | ui (`src/diff_header.rs`) | Phase 07: the bar's side-by-side button, enabled. |
+| `diff_palette::FILLER` | ui (`src/diff_palette.rs`) | Phase 07: Fork's filler grey, retuned. |
+| `QueryLane::FileFilter` | app (`src/worker/epoch.rs`) | Phase 07: the filter's lane, superseded only by the next keystroke. |
+| `Request::FilterFiles`, `Update::FilteredFiles` | app (`src/worker/request.rs`) | Phase 07: the filter asked of a worker with the window's own change set, and its indices. |
+| `RepositoryJob::Filter` | app (`src/worker/routing.rs`) | Phase 07: the filter routed to the repository thread. |
+| `filter_files` | app (private, `src/worker/pool.rs`) | Phase 07: the filter run on the repository thread, stopping when its epoch is superseded. |
+| `Retired::of(changes, diffs, shown)`, `Update::FileDiff { diff: Option<Box<ShownDiff>> }` | app (`src/worker/request.rs`) | Phase 07: a retired change set is an `Arc`, a retired diff its prepared form; the file diff arrives prepared and boxed. |
+| `Update::Superseded`, `Update::into_retired` | app (`src/worker/request.rs`) | Phase 07 QA (R1): a superseded answer's large payload handed back unread by `Updates::next` (`src/worker/pool.rs`), for the window to retire. |
+| `session::retire` | app (private, `src/session.rs`) | Phase 07 QA (R1): a superseded answer, or one naming another selection, sent to a worker to free as a `Request::Retire`. |
+| `ChangesTab`, `LIST_WIDTH`, `NO_FILE_CHOSEN`, `READING_DIFF` | app (`src/changes_tab.rs`) | Phase 07: the Changes tab — summary, list, diff side — with the effects that ask the filter and choose the first file. |
+| `FileFilter` | app (`src/file_filter.rs`) | Phase 07: the filter as the window keeps it, for the change set selected now. |
+| `DiffState::{filter, filter_again, filter_arrived, wants_filter, filter_text, filter_is_settled}`, `diff_state::answered_files` | app (`src/diff_state.rs`) | Phase 07: the filter inside `DiffState`, asked and answered for the change set selected now. |
+| `DiffState::{chose_file_at, file_index}` | app (`src/diff_state.rs`) | Phase 07: where the file chosen is in the change set, kept rather than searched for. |
+| `diff_actions::{load_anyway, toggle_side_by_side}` | app (`src/diff_actions.rs`) | Phase 07: Load Diff; the side-by-side toggle. |
+| `View::{filter_text, changes_list_width}` | app (`src/window.rs`) | Phase 07: the tab's session state. |
+| `every_view_of_a_diff_row_names_every_kind_of_row`, `every_production_view_names_every_variant`, `the_diff_row_matcher_catches_the_shapes_it_claims` | guards (`tests/invariants.rs`) | Phase 07: `reads_enum_partially` over `UnifiedRow` and `SideBySideRow`; the self-test spells every `RowContent` shape for both (phase 07 QA, Q1). |
+| `every_notice_says_what_git_diff_says_of_the_same_file` | app (`tests/notice_parity.rs`) | Phase 07 QA (T4): every non-text notice, from a real repository through the engine and `ShownDiff`, compared with `git show`. |
 
 ## Validation status
 
@@ -278,7 +311,7 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | 04 worker lanes | landed 2026-10-03; **phase 04 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 17 raw, 15 confirmed plus escalations; the user decided freshness ("stamp what git reads"); every confirmed finding fixed test-first, Expand All's per-file outcomes deferred to phase 08 — `progress.md` |
 | 05 detail pane | landed 2026-10-03; **phase 05 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 26 raw, 15 confirmed by `qa-confirm`, R3/G5 and one more dismissed; every confirmed finding fixed test-first and the user's six decisions applied (`progress.md`): dates in Fork's fixed English format, encodings through `encoding_rs` (user-approved) |
 | 06 unified diff view | landed 2026-10-03; **phase 06 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 15 raw plus 1 found, 14 confirmed by `qa-confirm`, C4 dismissed; every confirmed finding fixed test-first or recorded for phase 07, and the user's four decisions applied (`progress.md`), `unicode-width` user-approved |
-| 07 Changes tab and side-by-side | landed 2026-10-03, **QA due** | `scripts/gate.sh` PASS, `git-floor` included | due (the orchestrator runs it) |
+| 07 Changes tab and side-by-side | landed 2026-10-03; **phase 07 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 15 raw, 12 confirmed by `qa-confirm`, T3 and T8 dismissed with evidence; every confirmed finding fixed test-first and the user's decisions on the notices, the summary strip and the `İ` limit applied (`progress.md`) |
 | 08 expansion and compare | not started | — | — |
 | 09 QA | not started | — | — |
 

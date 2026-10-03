@@ -3,6 +3,78 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-03 — Phase 07 QA: fixed, and the user's decisions on the notices applied
+
+Packet mode, committed to `feature/diff-engine`. The QA round over phase 07: 15 raw
+findings, 12 confirmed by `qa-confirm`, T3 and T8 dismissed with evidence. Every confirmed
+finding is fixed test-first below, and the user's decisions (2026-10-03) are applied and
+recorded in `docs/systems/diff.md`'s table "Measured from Fork, or chosen by Cairn" as
+"user's decision, 2026-10-03".
+
+**The user's decisions.** A mode-only change is titled "Mode changed" (it was "No change to
+the file's content", which was also every mode change's title); a rename with a mode change
+"Renamed, mode changed", a copy with one "Copied, mode changed" (by analogy); "Renamed
+without changes" and "Copied without changes" stay. Past the 64 MiB ceiling the too-large
+notice states the size and the ceiling — "72.3 MiB — larger than the 64 MiB Cairn can load"
+— where it said "75,812,045 bytes, more than the limit of 1,048,576 bytes; too large to
+load", naming the drawing limit the engine reports on a first ask rather than the ceiling
+that refused the load (the sentence now names `DiffLimits::LOAD_ANYWAY_BYTES`, the ceiling
+every file diff is asked with). The summary strip is 30 px, the diff bar's height (it was
+28). Kept as built: "Copied without changes", "Filtering…", "No file matches the filter.",
+the "Filter" placeholder, "Choose a file to see its diff.", the 240 px diff-side minimum,
+no logo on the too-large notice. The `İ` edge of `str::to_lowercase` ("istanbul" does not
+find `İstanbul.txt`) is an accepted known limit, stated in `ChangeSet::files_matching`'s
+doc comment and `docs/systems/diff.md`, and pinned.
+
+**Fixes, each shown RED first (a test written before the change, or a mutation of the
+code it pins), then GREEN.**
+
+| Item | Test | RED |
+| --- | --- | --- |
+| Decisions, notices | `every_state_that_is_not_text_draws_its_notice` (adds the mode-only, rename-and-mode, copy-and-mode and copy titles, and the past-ceiling sentence at both limits the engine can name) | before the change: the past-ceiling line read "75,812,045 bytes, more than the limit of 1,048,576 bytes; too large to load"; then the mode-only notice titled "No change to the file's content" |
+| T6, title | the same test's copy case ("Copied without changes", `copy from`/`copy to`) | the `Copied` arm returning the rename's title |
+| Decision, sizes | `sizes_and_reasons_read_as_numbers_with_their_thousands_grouped` (`mib_text`, the sentence) | — (new function, pinned with the sentence) |
+| Decision, strip | `the_summary_strip_is_as_tall_as_the_diff_bar` (what follows the summary starts 30 px down) | before the change: 28 px |
+| T2 | `a_line_past_the_limit_is_cut_at_the_limit_on_a_character`, now a three-byte character at `LINE_CUT_BYTES - 2` and a four-byte one at `- 3` | `saturating_sub(3)` → `(1)` (the `€` case, 2,047 drawn for 2,046) and → `(2)` (the `😀` case) |
+| T3 (bound) | the same test: a 2,049-byte ASCII line cut to 2,048, written as R2.6's number | the early return widened to `LINE_CUT_BYTES + 1` (the line drawn whole) |
+| T5 | `the_marker_counts_every_byte_not_drawn`: on each straddle `cut == whole - drawn`, the character's head counted | the count taken from the limit (`whole - min(whole, LINE_CUT_BYTES)`): 101 for 102 |
+| T6, filter | `a_copy_is_found_by_the_path_it_was_copied_from` | `Copied(_) => false` (no match on the source path) |
+| T1 | `a_cut_line_reads_only_the_ranges_before_its_cut`, over `ranges_before_cut` (extracted from `shown_line`), 10,002 ranges of which two start before the cut; the old test's clause "reading ranges past the cut", which could not fail, is dropped from its doc | reading every range (the slice's length 10,002 for 2) |
+| İ | `the_dotted_capital_i_is_a_known_limit` | — (pins accepted behaviour) |
+| R1 | `a_superseded_answer_comes_back_to_be_freed_on_a_worker` (pool) and `an_answer_the_window_will_not_keep_is_handed_to_a_worker_to_free` (session) | before the change: `Updates::next` dropped the stale file diff, batch and change set in place; `session::apply` submitted nothing for an unwanted one |
+| T4 | `every_notice_says_what_git_diff_says_of_the_same_file` (`crates/cairn-app/tests/notice_parity.rs`) | passed on the fixed code; then each of: the mode lines dropped from `header_lines`, `copy` spelled `rename`, a submodule drawn as a binary, `Subproject commit:` misspelled, the binary's sizes swapped, the old "No change to the file's content" title — each failed it |
+| Q1 | `the_diff_row_matcher_catches_the_shapes_it_claims`, now every `RowContent` shape for both row enums (`ref`/`mut`/underscored/reference catch-alls, `&_`, `Some(_)` beside `Some(row)`, `while let`, a let-chain, guarded, bound, or-pattern and attributed wildcards, nested `if let`, spaced `matches!`, every import form) | — (coverage only: the matcher already caught each) |
+
+**R1 as built.** A superseded answer holding something large — a change set, a file's
+prepared diff, Expand All's batch — comes out of `Updates::next` as `Update::Superseded`
+(`Update::into_retired`, no arm defaulting) instead of being dropped on the task the UI
+thread drives; a superseded page, filter answer or failure is small and still dropped
+there. `session::apply` hands that, and any such answer naming another selection, to the
+repository thread as a `Request::Retire` (`session::retire`), which only sends: the UI
+thread still never waits. While the window is closing a retirement sent after the close
+fails to send and is dropped where it is, which costs nothing the window will draw.
+
+**T4 as built.** An integration test of `cairn-app`, the one crate linking the engine and
+the views, so it may run `git` itself (the guards hold `src/` to `process/` alone): one
+commit built by real `git` with `diff.renames=copies` holds a mode-only change, a rename
+and a copy with no content change, a rename whose mode moved, a submodule bump (a gitlink,
+no checkout), a binary, an LFS pointer and a file past 1 MiB; each is read by the engine,
+prepared with `ShownDiff::new`, turned into its notice and compared with `git show`'s
+section for the same file — the whole extended header line for line, the two `Subproject
+commit` lines, each pointer side, the blob sizes from `git cat-file -s`.
+
+**Q2.** The `DiffContent`/`UnifiedRow`/`SideBySideRow` test-helper residual moved in
+`.claude/agents/qa-checklist.md` from item 11 (Keyboard modifiers) to item 1
+(Invariants), where the exhaustive-read invariant it is the residual of is reviewed.
+
+**Q3.** `the_file_list_opens_at_a_third_of_the_pane_and_keeps_its_dragged_width` is now
+`the_file_list_opens_at_35_percent_of_the_pane_and_keeps_its_dragged_width`; its citation
+in `docs/systems/diff.md` follows. The earlier entry below keeps the old name: this log is
+never retro-edited (`docs/CLAUDE.md`).
+
+**Q4.** `state.md`'s phase 07 symbol rows are split by concern, each with its defining
+file.
+
 ## 2026-10-03 — Phase 07: the user's decisions on the Cairn-chosen behaviours, applied
 
 Packet mode, committed to `feature/diff-engine`. The user decided each Cairn-chosen item

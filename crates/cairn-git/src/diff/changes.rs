@@ -1,5 +1,11 @@
 //! The changes query: which commits to compare, read by gix; what changed between them,
 //! answered by `git diff-tree` (decision E); and the answer put in a total order.
+//!
+//! A root commit is shown as the user's own `git log` and `git show` show it: with its
+//! whole content when `log.showRoot` is true, which is git's default, and with no diff at
+//! all when it is false — and so is a shallow clone's boundary commit, which git shows as a
+//! root. Plumbing reads `log.showRoot` no more than it reads `diff.renames`, so it is read
+//! here; a comparison of two commits is `git diff`'s answer, which does not read it.
 
 use cairn_model::Oid;
 
@@ -7,6 +13,7 @@ use crate::object_id::{model_id, object_id};
 use crate::ops::GitBinary;
 use crate::{Cancel, Error, Repository};
 
+use super::git_config::{invalid, last_value, parse_bool};
 use super::renames::Configured;
 use super::{ChangeSet, ChangesRequest, Subject};
 
@@ -42,6 +49,22 @@ pub(super) fn changes(
     };
 
     let search = Configured::read(inner)?.search(git.version());
+    // `log.showRoot` is read for every commit, as `git log` reads it — a value git refuses
+    // is refused whether or not the commit is a root — and never for a comparison.
+    let root_hidden = match &details {
+        Some(details) => !shows_root_diff(inner)? && details.parents.is_empty(),
+        None => false,
+    };
+    if root_hidden {
+        if cancel.is_cancelled() {
+            return Err(Error::ChangesCancelled { changed: 0 });
+        }
+        return Ok(ChangeSet {
+            files: Vec::new(),
+            renames: search.outcome(&[]),
+            details,
+        });
+    }
     let mut files = crate::reads::changes(git, repo, &old, &new, search.detection(), cancel)?;
 
     // git lists paths in its own tree order, with a pair under its destination. The answer
@@ -58,6 +81,17 @@ pub(super) fn changes(
         files,
         details,
     })
+}
+
+/// `log.showRoot`, as `git log` reads it (`git_config_bool`): true unless the user set it
+/// false, and [`Error::InvalidConfig`] for a value git refuses.
+fn shows_root_diff(repo: &gix::Repository) -> Result<bool, Error> {
+    let config = repo.config_snapshot();
+    match last_value(config.plumbing(), "log", None, "showRoot") {
+        None => Ok(true),
+        Some(value) => parse_bool(value.as_ref().map(|value| value.as_slice()))
+            .ok_or_else(|| invalid("log.showRoot", value)),
+    }
 }
 
 fn find_commit<'repo>(repo: &'repo gix::Repository, id: &Oid) -> Result<gix::Commit<'repo>, Error> {

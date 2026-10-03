@@ -32,6 +32,7 @@
 use cairn_model::{ChangeStatus, ChangedFile};
 
 use super::RenameDetection;
+use super::git_config::{invalid, last_value, parse_bool, parse_int};
 use crate::Error;
 use crate::ops::GitVersion;
 use crate::reads::Detection;
@@ -83,8 +84,8 @@ impl Configured {
     pub(super) fn read(repo: &gix::Repository) -> Result<Self, Error> {
         let config = repo.config_snapshot();
         let file = config.plumbing();
-        let renames = last_value(file, "renames");
-        let limit = last_value(file, "renameLimit");
+        let renames = last_value(file, "diff", None, "renames");
+        let limit = last_value(file, "diff", None, "renameLimit");
 
         let mode = match renames {
             None => Mode::Renames,
@@ -192,26 +193,6 @@ fn distinct_sources(files: &[ChangedFile], counts: impl Fn(ChangeStatus) -> bool
     paths.len()
 }
 
-fn invalid(key: &str, value: Option<gix::bstr::BString>) -> Error {
-    Error::InvalidConfig {
-        key: key.to_owned(),
-        value: value.map_or_else(
-            || "(no value)".to_owned(),
-            |value| String::from_utf8_lossy(&value).into_owned(),
-        ),
-    }
-}
-
-/// The last value `diff.<name>` is given, across every file in git's order: `Some(None)` for
-/// the bare key, which git reads as `true`, and `None` when it is not set at all. A
-/// subsection (`[diff "x"]`) is a different key.
-fn last_value(file: &gix::config::File, name: &str) -> Option<Option<gix::bstr::BString>> {
-    file.sections_by_name("diff")?
-        .filter(|section| section.header().subsection_name().is_none())
-        .filter_map(|section| section.value_implicit(name))
-        .last()
-}
-
 /// `git_config_rename`: the bare key and every true value is renames, `copies` and `copy`
 /// are copies, every false value is off; `None` for anything git would refuse.
 pub(super) fn parse_renames(value: Option<&[u8]>) -> Option<Mode> {
@@ -221,96 +202,11 @@ pub(super) fn parse_renames(value: Option<&[u8]>) -> Option<Mode> {
     if value.eq_ignore_ascii_case(b"copies") || value.eq_ignore_ascii_case(b"copy") {
         return Some(Mode::Copies);
     }
-    Some(if parse_bool(value)? {
+    Some(if parse_bool(Some(value))? {
         Mode::Renames
     } else {
         Mode::Off
     })
-}
-
-/// `git_parse_maybe_bool` for a value that is present: the words, then any integer git
-/// accepts, non-zero meaning true.
-fn parse_bool(value: &[u8]) -> Option<bool> {
-    if value.is_empty() {
-        return Some(false);
-    }
-    for word in [&b"true"[..], b"yes", b"on"] {
-        if value.eq_ignore_ascii_case(word) {
-            return Some(true);
-        }
-    }
-    for word in [&b"false"[..], b"no", b"off"] {
-        if value.eq_ignore_ascii_case(word) {
-            return Some(false);
-        }
-    }
-    parse_int(value).map(|number| number != 0)
-}
-
-/// `git_parse_int`: C's `strtoimax` in base 0 — leading whitespace, a sign, `0x` for hex
-/// and a leading `0` for octal — then nothing, or one of the unit suffixes `k`, `m`, `g`,
-/// and the result within an `int`, whose smallest accepted value is `-INT_MAX`.
-pub(super) fn parse_int(value: &[u8]) -> Option<i64> {
-    let max = i64::from(i32::MAX);
-    let mut rest = value;
-    while let [first, tail @ ..] = rest
-        && matches!(first, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r')
-    {
-        rest = tail;
-    }
-    let negative = match rest.first() {
-        Some(b'-') => {
-            rest = &rest[1..];
-            true
-        }
-        Some(b'+') => {
-            rest = &rest[1..];
-            false
-        }
-        _ => false,
-    };
-    let hex_digits = rest
-        .strip_prefix(b"0x")
-        .or_else(|| rest.strip_prefix(b"0X"))
-        .filter(|digits| digits.first().is_some_and(u8::is_ascii_hexdigit));
-    let (radix, digits) = match hex_digits {
-        Some(digits) => (16, digits),
-        None if rest.first() == Some(&b'0') => (8, rest),
-        None => (10, rest),
-    };
-    let length = digits
-        .iter()
-        .take_while(|byte| char::from(**byte).is_digit(radix))
-        .count();
-    if length == 0 {
-        return None;
-    }
-    let (number, suffix) = digits.split_at(length);
-    let mut magnitude: u128 = 0;
-    for digit in number {
-        let digit = char::from(*digit).to_digit(radix)?;
-        // Far past an `int` already: git's `strtoimax` would report ERANGE or its range
-        // check would refuse it, and either is a refusal.
-        magnitude = magnitude
-            .checked_mul(u128::from(radix))?
-            .checked_add(u128::from(digit))?;
-        if magnitude > u128::from(u64::MAX) {
-            return None;
-        }
-    }
-    let factor: u128 = match suffix {
-        [] => 1,
-        [unit] if unit.eq_ignore_ascii_case(&b'k') => 1 << 10,
-        [unit] if unit.eq_ignore_ascii_case(&b'm') => 1 << 20,
-        [unit] if unit.eq_ignore_ascii_case(&b'g') => 1 << 30,
-        _ => return None,
-    };
-    let scaled = magnitude.checked_mul(factor)?;
-    if scaled > max as u128 {
-        return None;
-    }
-    let scaled = i64::try_from(scaled).ok()?;
-    Some(if negative { -scaled } else { scaled })
 }
 
 #[cfg(test)]
@@ -368,43 +264,6 @@ mod tests {
         }
         for value in ["copied", "maybe", "1x", "true ", "0x", "08", "99999999999"] {
             assert_eq!(parse_renames(Some(value.as_bytes())), None, "{value}");
-        }
-    }
-
-    /// `git_parse_int` over the forms `strtoimax` in base 0 accepts and the ones the range
-    /// and suffix checks refuse.
-    #[test]
-    fn an_integer_reads_the_way_git_parse_int_does() {
-        let cases: &[(&str, Option<i64>)] = &[
-            ("1000", Some(1000)),
-            ("+5", Some(5)),
-            ("-5", Some(-5)),
-            ("  \t12", Some(12)),
-            ("0", Some(0)),
-            ("010", Some(8)),
-            ("0x1F", Some(31)),
-            ("0X1f", Some(31)),
-            ("1k", Some(1024)),
-            ("2M", Some(2 << 20)),
-            ("1g", Some(1 << 30)),
-            ("2147483647", Some(2_147_483_647)),
-            ("-2147483647", Some(-2_147_483_647)),
-            ("2147483648", None),
-            ("-2147483648", None),
-            ("2g", None),
-            ("", None),
-            ("k", None),
-            ("12 ", None),
-            ("12kb", None),
-            ("1.5", None),
-            ("08", None),
-            ("0x", None),
-            ("0xg", None),
-            ("ten", None),
-            ("99999999999999999999999999", None),
-        ];
-        for (value, expected) in cases {
-            assert_eq!(parse_int(value.as_bytes()), *expected, "{value:?}");
         }
     }
 

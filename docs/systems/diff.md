@@ -225,6 +225,21 @@ What runs, in order (`crates/cairn-git/src/diff/changes.rs`):
    `the_file_list_is_sorted_by_path_and_never_shuffles` runs the query twice and
    requires both, and requires the key to separate every pair.
 
+**A root commit is shown as `log.showRoot` says.** With the key true — git's default,
+and what the bare key means — a root commit's diff is its whole content (L5); with it
+false, the user's own `git log` and `git show` print no diff for a root commit, and the
+query answers an empty file list with the commit's details, starting no process. A
+shallow clone's boundary commit is a root for this as for everything else. The key is
+read for every one-commit query, parsed as `git_config_bool`, so a value git refuses is
+`Error::InvalidConfig` whether or not the commit is a root, as `git log` refuses it; a
+comparison of two commits is `git diff`'s answer, which reads no `log.*` key, and is the
+same under every value. Pinned by `the_root_commit_is_shown_as_log_show_root_says`
+(unset, true, false, `0`, `no` and the bare key, each against `git log --raw` and
+`git show --raw`, a commit with a parent and a comparison unchanged, and a shallow
+boundary), with `a_configuration_git_refuses_is_refused` holding a refused value.
+The configuration readers — the last value across every file, `git_config_bool`,
+`git_parse_int` — are `crates/cairn-git/src/diff/git_config.rs`.
+
 **How detection went** is `RenameDetection`: whether it was on, whether copies
 were, the limit git applied (`None` for none), and `needed_limit`, which is R2.2's
 "the answer says so". `RenameDetection::was_cut_short()` is true when

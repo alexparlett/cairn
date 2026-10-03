@@ -479,6 +479,7 @@ fn a_configuration_git_refuses_is_refused() {
         ("diff.renames", "1x"),
         ("diff.renameLimit", "many"),
         ("diff.renameLimit", "4294967296"),
+        ("log.showRoot", "bogus"),
     ] {
         // Set once the history is built: `git commit` refuses the value too.
         let repo = repositories::rewrites(&[]);
@@ -1014,4 +1015,114 @@ fn a_bare_repository_is_answered_under_safe_bare_repository_explicit() {
     let expected = shown_in(&holder, &bare_text, &head, &explicit);
     assert!(!expected.is_empty(), "the head commit changes something");
     assert_eq!(cairn_rows(&found.files, head.len()), expected);
+}
+
+/// The rows of `git show --raw` for one commit: the other porcelain a user reads a commit
+/// through, which reads `log.showRoot` as `git log` does.
+fn shown_by_show(repo: &Repo, commit: &str) -> Vec<Row> {
+    rows_of(&repo.git(&["show", "--raw", "--no-abbrev", "--format=", commit]))
+}
+
+/// `log.showRoot`, which the user's own `git log` and `git show` read and plumbing does
+/// not: unset, true or the bare key, a root commit's diff is its whole content; false, it
+/// is no diff at all — for a shallow clone's boundary commit too, which git shows as a
+/// root. A commit with a parent, and a comparison of two commits, are the same under every
+/// value; and a comparison does not refuse a value `git log` refuses, since `git diff`
+/// never reads it. Caught by: the key ignored (a root always diffed), read as git's
+/// opposite default, the bare key read as false, or applied to a comparison.
+#[test]
+fn the_root_commit_is_shown_as_log_show_root_says() {
+    let values: &[Option<&str>] = &[
+        None,
+        Some("true"),
+        Some("false"),
+        Some("0"),
+        Some("no"),
+        Some("BARE"),
+    ];
+    let (mut whole, mut nothing) = (0, 0);
+    for value in values {
+        let repo = repositories::crafted();
+        match value {
+            None => {}
+            Some("BARE") => append_config(&repo, "[log]\n\tshowRoot\n"),
+            Some(value) => repo.config("log.showRoot", value),
+        }
+        let root = repo
+            .git(&["rev-list", "--max-parents=0", "HEAD"])
+            .trim()
+            .to_owned();
+        let head = hex(&repo, "HEAD");
+        for commit in [&root, &head] {
+            let found = changes_of(
+                &repo,
+                &ChangesRequest::commit(Oid::parse(commit).expect("an id")),
+            );
+            let (rows, _) = shown(&repo, commit);
+            assert_eq!(
+                cairn_rows(&found.files, commit.len()),
+                rows,
+                "log.showRoot={value:?} on {commit}"
+            );
+            assert_eq!(rows, shown_by_show(&repo, commit), "git show agrees");
+            assert!(found.details.is_some(), "the details are there either way");
+            if commit == &root {
+                if rows.is_empty() {
+                    nothing += 1;
+                } else {
+                    whole += 1;
+                }
+            } else {
+                assert!(!rows.is_empty(), "a commit with a parent is always diffed");
+            }
+        }
+        let between = changes_of(
+            &repo,
+            &ChangesRequest::between(
+                Oid::parse(&root).expect("an id"),
+                Oid::parse(&head).expect("an id"),
+            ),
+        );
+        assert_eq!(
+            cairn_rows(&between.files, head.len()),
+            rows_of(&repo.git(&["diff", "--raw", "--no-abbrev", &root, &head])),
+            "a comparison is git diff's, whatever log.showRoot={value:?} says"
+        );
+    }
+    assert_eq!((whole, nothing), (3, 3), "each value decided something");
+
+    let repo = repositories::crafted();
+    repo.config("log.showRoot", "bogus");
+    let root =
+        Oid::parse(repo.git(&["rev-list", "--max-parents=0", "HEAD"]).trim()).expect("an id");
+    let head = Oid::parse(&hex(&repo, "HEAD")).expect("an id");
+    assert!(
+        try_changes(&repo, &ChangesRequest::between(root, head)).is_ok(),
+        "git diff does not read log.showRoot, so a comparison does not refuse it"
+    );
+
+    let source = repositories::crafted();
+    let holder = Repo::new("shallow-root-holder");
+    let clone_path = holder.path().join("clone");
+    holder.git(&[
+        "clone",
+        "-q",
+        "--depth",
+        "1",
+        &format!("file://{}", source.path().display()),
+        &clone_path.to_string_lossy(),
+    ]);
+    let clone = Repo::borrowed(&clone_path);
+    clone.config("log.showRoot", "false");
+    let boundary = hex(&clone, "HEAD");
+    let found = changes_of(
+        &clone,
+        &ChangesRequest::commit(Oid::parse(&boundary).expect("an id")),
+    );
+    let (rows, _) = shown(&clone, &boundary);
+    assert!(
+        rows.is_empty(),
+        "git log shows the boundary as a root: {rows:?}"
+    );
+    assert_eq!(cairn_rows(&found.files, boundary.len()), rows);
 }

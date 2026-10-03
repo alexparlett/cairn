@@ -13,6 +13,7 @@
 
 mod changes;
 mod content;
+mod git_config;
 mod intraline;
 mod renames;
 mod whitespace;

@@ -193,9 +193,12 @@ Why each variable is there, with its evidence, is beside it in
   `sequence.editor` outranks `GIT_EDITOR` for the rebase todo list.
 - **`GIT_OPTIONAL_LOCKS=0` covers `git status` and nothing else.** Porcelain
   `diff` and `describe --dirty` refresh the index anyway. That is why a read in
-  `reads/` runs query plumbing or `status` only — and `diff --no-index`, which
-  reads no index, for an untracked file's working-tree diff — as the module's own
-  docs say (`reads/mod.rs`, "What a read may run").
+  `reads/` runs query plumbing or `status` only — and, as the one porcelain
+  exception the user accepted, `diff --no-index -- /dev/null <path>` for an
+  untracked file's working-tree diff, which reads no index, with its presentation
+  settings pinned to git's defaults by `-c` — as the module's own docs say
+  (`reads/mod.rs`, "What a read may run"); `destructive-ops-reviewer` check 10
+  names it.
 - **A read may run the repository's `core.fsmonitor` hook and, on a read of the
   working tree, the path's clean filter driver — no other program.**
   `diff-tree`, `diff-index`, `diff-files` and `check-attr` run the hook as they

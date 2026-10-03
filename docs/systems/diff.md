@@ -516,7 +516,19 @@ git -c diff.suppressBlankEmpty=false <verb> -z --raw --no-abbrev -p --full-index
 ```
 
 with `diff-index --cached --no-renames --end-of-options <HEAD or the empty tree>`,
-`diff-files --no-renames`, or `diff --no-index` and `/dev/null <path>`. The two
+`diff-files --no-renames`, or `diff --no-index` and `/dev/null <path>` — porcelain,
+the one exception to a read's plumbing-only rule (accepted by the user, with the
+evidence in `crates/cairn-git/src/reads/mod.rs`). Being porcelain it reads the user's
+presentation settings, so the `--no-index` read also sets each back to git's default
+with `-c` (`NO_INDEX_PRESENTATION` in `reads/working_tree.rs`: `diff.noprefix`,
+`diff.mnemonicPrefix`, `diff.srcPrefix`, `diff.dstPrefix`, `core.quotePath`,
+`diff.interHunkContext`, `diff.relative`, `diff.orderFile`,
+`diff.suppressBlankEmpty` — each found by experiment to change its output on git
+2.30.9, 2.32.7 or 2.56.0, the rest already decided by a flag), and keeps what decides
+git's form of the file (`core.autocrlf`, `core.eol`, the attributes, the filter
+drivers); `an_untracked_answer_is_the_same_under_hostile_presentation_settings` sets
+all of them hostile, with colour forced and an external diff configured, and the
+answer is unchanged and still `git diff --no-index`'s. The two
 plumbing verbs take `:(literal)<path>` and `:(exclude,glob)<path, escaped>/**`, so a
 directory of that name on the other side is not listed with it and a gitlink at the
 path still is (`:(exclude,literal)<path>/` excludes the gitlink too, on every git

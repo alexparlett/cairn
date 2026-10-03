@@ -3,6 +3,68 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-03 — `git diff --no-index` accepted, and its presentation pinned
+
+**The user decided (2026-10-03):** an untracked file is read with porcelain `git diff
+--no-index -- /dev/null <path>`, accepted as a named exception to the reads rule
+(query plumbing or `status` only). The phase 03 entry below asked for it.
+
+What finishing it took:
+
+- `crates/cairn-git/src/reads/mod.rs`, "What a read may run", names it as the single
+  porcelain exception, why (no plumbing prints an untracked file in git's form;
+  putting it in an index to ask is a write) and the evidence (whole-`.git`
+  snapshots on 2.30.9, 2.32.7 and 2.56.0, and the tests that hold the git directory
+  byte-identical after each such read).
+- `.claude/agents/destructive-ops-reviewer.md` check 10 names that one mode as
+  accepted, built only by `reads::working_tree_patch`, and says any other `git diff`
+  — without `--no-index`, against anything but `/dev/null` and the one path, or
+  built elsewhere — is still a finding. No guard enumerates read verbs (searched
+  `crates/cairn-guards`), so none changed.
+- **Porcelain reads presentation settings plumbing does not.** By experiment
+  (`git diff --no-index -z --raw --no-abbrev -p --full-index -U3 --no-ext-diff
+  --no-textconv --no-color`, an untracked file with a blank line, a tab, a trailing
+  space and a path holding a space and `é`, the output's bytes hashed per key, on
+  2.30.9, 2.32.7 and 2.56.0), of `diff.noprefix`, `diff.mnemonicPrefix`,
+  `diff.srcPrefix`, `diff.dstPrefix`, `diff.context` (0 and 10),
+  `diff.interHunkContext`, `diff.suppressBlankEmpty`, `color.ui`, `color.diff`,
+  `color.diff.meta`, `diff.colorMoved`, `diff.wsErrorHighlight`, `diff.relative`,
+  `core.quotePath`, `diff.external`, `diff.orderFile`, `diff.indentHeuristic`,
+  `diff.algorithm`, `core.whitespace`, `diff.renames`, `core.abbrev`,
+  `diff.statGraphWidth`, `diff.dirstat`, `pager.diff`, `core.pager`,
+  `log.showSignature`, `diff.submodule`, `diff.ignoreSubmodules`,
+  `diff.autoRefreshIndex`, `core.safecrlf` and `core.autocrlf`, the ones that
+  changed the output were `diff.noprefix`, `diff.mnemonicPrefix`,
+  `diff.srcPrefix`/`diff.dstPrefix` (2.56 only; they arrived in 2.45) and
+  `core.quotePath` — and `core.autocrlf`, on stderr only (its warning). The rest are
+  already decided by a flag (`-U`, `--no-color`, `--no-ext-diff`, `--no-textconv`,
+  `--no-abbrev`, `--full-index`) or cannot act on one all-added file.
+- **Neutralised** on the `--no-index` read with `-c`, as git's defaults
+  (`NO_INDEX_PRESENTATION` in `reads/working_tree.rs`): `diff.noprefix=false`,
+  `diff.mnemonicPrefix=false`, `diff.srcPrefix=a/`, `diff.dstPrefix=b/`,
+  `core.quotePath=true`, `diff.interHunkContext=0`, `diff.relative=false`,
+  `diff.orderFile=/dev/null`, `diff.suppressBlankEmpty=false` — the four that
+  changed it, and the presentation keys that would once a file had context or a
+  second hunk. With them set, the output hashed identically with these set hostile at
+  once — the nine, `diff.context=0`, `color.ui` and `color.diff` `always`,
+  `diff.colorMoved`, `diff.wsErrorHighlight`, `diff.external`, `core.abbrev=4` — on
+  all three gits. **Kept** as parity: `core.autocrlf`,
+  `core.eol`, `core.safecrlf`, the attributes and the filter drivers (they decide git's
+  form of the file); `diff.algorithm` and `diff.indentHeuristic` (no flag is passed
+  for an untracked file, whose one change is every line under any algorithm);
+  `-U<n>` stays the view's context. Plumbing reads keep only
+  `-c diff.suppressBlankEmpty=false`, as before.
+- Pins: `an_untracked_answer_is_the_same_under_hostile_presentation_settings` (every
+  neutralised key hostile, colour forced, `diff.context=0`, an external diff
+  configured: the answer equals the calm one and the user's own `git diff
+  --no-index`'s lines, the program did not run, and the logged read carries each
+  default it pins) and `each_read_is_plumbing_that_names_exactly_its_path_and_runs_no_program`
+  (every `-c` on the argument vector). Mutations: `--no-color` dropped — the
+  integration test RED; the neutralising `-c`s dropped — both tests RED; restored,
+  GREEN. The working-tree suite passes on 2.30.9, 2.32.7 and 2.56.0.
+- `docs/systems/diff.md`, `docs/systems/git-processes.md`, root `CLAUDE.md` and
+  `state.md` say the same; `scripts/git-floor.sh`'s `diff_engine` floor raised to 77.
+
 ## 2026-10-03 — phase 03: one path's working-tree diffs, through git
 
 Packet mode, on `feature/diff-engine`. R3.1-R3.5 and C7 built; C15's amendment

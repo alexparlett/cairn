@@ -143,8 +143,10 @@ copy is a different version from the fork that links.
   of it (`reads::working_tree_patch`: `git diff-index --cached`, `git
   diff-files`, `git diff --no-index`) — and each such read is a named function in
   `cairn-git/src/reads/`, run as a read invocation: query plumbing (never a plumbing writer such as
-  `update-ref`, `update-index` or `write-tree`), `status`, or `diff --no-index`
-  (porcelain, but it reads no index, so there is none to refresh) only,
+  `update-ref`, `update-index` or `write-tree`), `status`, or — the one porcelain
+  exception, accepted by the user, for an untracked file — `diff --no-index --
+  /dev/null <path>` (it reads no index, so there is none to refresh; its
+  presentation settings are pinned by `-c`) only,
   `GIT_OPTIONAL_LOCKS=0`, `GIT_NO_LAZY_FETCH=1`, no askpass token. Everywhere gix
   agrees with git, a read spawns no process — that is the whole reason the split
   pays. D1 is amended for the programs git itself starts on a read, each exactly

@@ -32,7 +32,8 @@
 //!   `diff --no-index` reads no index at all.
 //! - `diff-files` and `diff --no-index` run the clean filter driver of the path, through
 //!   git, with the read's environment (`crate::process`) and what git adds for a filter;
-//!   git runs it once for the diff and once for the hash of its `index` line. The driver is
+//!   git runs it once for the diff and once for the hash of its `index` line (a `-w` read
+//!   four times on git 2.56.0, twice on 2.30.9 and 2.32.7; a raw-only read, none). The driver is
 //!   the user's program, and what it does is its own — git-lfs's clean stores the object in
 //!   `.git/lfs/objects`, exactly as it does under the user's `git diff`. `diff-index
 //!   --cached` reads only objects and runs none.

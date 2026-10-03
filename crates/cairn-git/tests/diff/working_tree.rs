@@ -1120,6 +1120,61 @@ fn content_that_changes_between_gits_reads_is_the_error_a_caller_retries() {
     }
 }
 
+/// The stale-read guard's third check: the whitespace-ignoring answer is a second git
+/// process, and the working tree it read must be the object the first one named. A clean
+/// filter whose output is stable within one git process but not across two — the first
+/// process's reads (two on every git: the diff, then the hash for its `index` line) see the
+/// file as it is, every later read sees a trailing space on its last line — makes the `-w`
+/// read's lines agree with the lines held (that line is far from the edit, and under `-w`
+/// unchanged, so never printed) while it names another object. The exact answer alone is
+/// drawn; asked with `-w`, the answer is the error a caller retries. Caught by: the `-w`
+/// read's `index` line not compared with the object already named.
+#[test]
+fn a_whitespace_ignoring_read_of_other_content_is_the_error_a_caller_retries() {
+    let repo = base("unstable-across");
+    let counter = repo.path().join("counter");
+    let body = format!(
+        "#!/bin/sh\necho x >> '{counter}'\nn=$(wc -l < '{counter}')\n\
+         if [ $(( (n - 1) / 2 )) -eq 0 ]; then exec cat; else exec sed '$ s/$/ /'; fi\n",
+        counter = counter.display()
+    );
+    let program = script(&repo, "generation.sh", &body);
+    let original: String = (1..=20).map(|n| format!("l{n}\n")).collect();
+    repo.write("f.gen", original.as_bytes());
+    repo.commit("before the filter");
+    repo.config("filter.generation.clean", &program.display().to_string());
+    repo.write(".gitattributes", b"*.gen filter=generation\n");
+    repo.write("f.gen", original.replacen("l1\n", "X\n", 1).as_bytes());
+
+    let exact = some(
+        ask(&repo, "f.gen", WorkingTreeDiff::Unstaged),
+        "the exact answer",
+    );
+    assert_eq!(lines(&exact).1.last().map(String::as_str), Some("l20"));
+    let read = ok(std::fs::read_to_string(&counter), "the counter");
+    assert_eq!(
+        read.lines().count(),
+        2,
+        "one git process read the file twice"
+    );
+
+    ok(std::fs::remove_file(&counter), "resetting the counter");
+    let outcome = engine(&repo).working_tree_diff(
+        super::git(),
+        &RepoPath::new("f.gen"),
+        WorkingTreeDiff::Unstaged,
+        &ContentOptions {
+            ignore_whitespace: true,
+            ..ContentOptions::default()
+        },
+        &CancelSignal::new(),
+    );
+    match outcome {
+        Err(Error::ContentReadsDisagree { path, .. }) => assert_eq!(path, "f.gen"),
+        other => panic!("expected the stale-read error, got {other:?}"),
+    }
+}
+
 /// R3.5 against the programs a read must not run: with a textconv that caches, an external
 /// diff, a driver's `command` and a smudge filter configured, and `core.fsmonitor` naming a
 /// hook, every query on every kind of side leaves the git directory byte-identical and runs

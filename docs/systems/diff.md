@@ -538,7 +538,8 @@ modified; a `check-attr` before them when a driver may name its algorithm (2.40+
 as for a commit; nothing else. Each runs with the read environment of
 `docs/systems/git-processes.md`. `diff-files` and `diff --no-index` run the path's
 clean filter driver as git's child — once for the diff, once more to hash the
-working tree for the patch's `index` line — with that environment plus what git
+working tree for the patch's `index` line (a `-w` read, four times on git 2.56.0;
+a raw-only read, never) — with that environment plus what git
 sets for a filter (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_EXEC_PATH`, `GIT_PREFIX`,
 `GIT_CONFIG_PARAMETERS`, git's exec directory first on `PATH`), its stderr the
 read's bounded tail; `diff-index --cached` reads only objects. Every read of the
@@ -570,7 +571,9 @@ on the `index` line, which git computed from a second read of the file — so a 
 that changed between git's two reads is refused, not drawn
 (`content_that_changes_between_gits_reads_is_the_error_a_caller_retries`, with a
 clean filter whose output changes every run); and the `-w` run must name the same
-object for that side. The id is also what the answer reports as the new side's
+object for that side
+(`a_whitespace_ignoring_read_of_other_content_is_the_error_a_caller_retries`, with a
+filter stable within one git process and not across two). The id is also what the answer reports as the new side's
 `new_id`: the object `git hash-object --path` would name.
 
 **What gix decides first**, from the index read fresh for every query

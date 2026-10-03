@@ -86,7 +86,14 @@ WARNING tier:
    the repository — refs, objects, the index, the working tree, config — is
    built with `GitBinary::write_invocation`, and every function in
    `crates/cairn-git/src/reads/` runs query plumbing or `git status` and
-   nothing else: a read runs with `GIT_OPTIONAL_LOCKS=0`, which only `status`
+   nothing else — with one accepted exception (the user's decision of
+   2026-10-03): `git diff --no-index -- /dev/null <path>`, built only by
+   `reads::working_tree_patch` for an untracked file, with `--no-ext-diff`,
+   `--no-textconv` and its presentation settings pinned by `-c`. It reads no
+   index, so it has none to refresh. The exception is that mode alone: `git
+   diff` without `--no-index`, or `--no-index` against anything but
+   `/dev/null` and the one path, or built anywhere else, is still a finding.
+   A read runs with `GIT_OPTIONAL_LOCKS=0`, which only `status`
    honours, so a porcelain `diff` or `describe --dirty` built as a read still
    rewrites the index, and a plumbing writer (`update-ref`, `update-index`,
    `read-tree`, `write-tree`, `hash-object -w`, `commit-tree`) built as a read

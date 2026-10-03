@@ -3,6 +3,110 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-03 — Phase 03 QA: every confirmed finding fixed, test-first
+
+**The round:** 19 raw findings over phase 03 (working-tree diffs), 16 confirmed by
+`qa-confirm`, QC3 dismissed with evidence. TC6 and DO1 were treated as critical under
+the user's parity rule (a divergence from what git shows is a critical bug). Each fix
+below was written test-first: the test shown RED on the code before it (or, for a
+test-coverage finding, RED under the mutation the finding named), then GREEN, on git
+2.30.9, 2.32.7 and 2.56.0. Every git behaviour a fix relies on was reproduced on those
+three, not taken from memory.
+
+- **GI1** — `a_sparse_index_is_unsupported_and_says_so` skipped whenever `sparse-checkout
+  init` failed, on any git. RED: init sabotaged on 2.56.0, the test passed with
+  `SKIPPED`. Now it skips only below 2.32 (`since`, moved to `tests/diff/mod.rs`, its
+  third user) and asserts the setup succeeded; the sabotage fails it. The deprecated
+  `init --cone --sparse-index` stays: `set --cone --sparse-index` writes no sparse
+  index on 2.32.7 (no `sdir` extension), where `init` does on 2.32.7 and 2.56.0.
+- **TC6** — a staged mode-only change of a file past the ceiling answered `TooLarge`
+  (RED: `TooLarge { 4096, 8890 }`); `git diff --cached` shows `old mode`/`new mode`, and
+  a commit answers `ModeChangeOnly`. The raw-only arm now answers `ModeChangeOnly` for a
+  modification naming one non-null blob under two modes
+  (`a_large_file_whose_stat_or_mode_alone_moved_is_what_git_diff_shows`, extended to the
+  staged side and checked against `git diff --cached`).
+- **DO1** — an untracked file named `-` read as standard input: an empty file added
+  (RED: no hunks, where `git diff --no-index -- /dev/null ./-` shows its lines).
+  Reproduced: git prints the operand verbatim — `./-` on the `-z` raw record and in
+  the patch headers — and resolves the attributes of `./<p>` as those of `<p>`; but it
+  passes the operand to a clean filter as its `%f`, so `./sub/x` hands a driver a name
+  the user's `git diff --no-index -- /dev/null sub/x` does not. **Decided without
+  asking, for parity:** only `-` is respelled `./-` (git's own advice in
+  `diff-no-index.c`), every other path passed as itself; the record for `./-` is named
+  `-` again (`no_index_operand`, `one_for`). Files `-` and `-x` added to
+  `an_untracked_file_is_what_git_diff_no_index_shows`.
+- **TC2** — `side.unwrap_or(self.ceiling)` was untested. New
+  `a_working_tree_side_is_counted_at_the_limit_so_a_large_one_within_it_is_read`: a
+  220,000-byte untracked file and a 220,000-byte unstaged edit of a 6-byte indexed
+  file, default limits, each equal to git's. Mutation `unwrap_or(0)`: RED for both.
+- **TC1** — the third stale-read check (the `-w` read names the same object) was
+  untested. Filter invocations, reproduced: an exact `diff-files -p --full-index` runs
+  the clean filter twice on all three gits, a `-w` one twice on 2.30.9 and 2.32.7 and
+  four times on 2.56.0, a raw-only one never. New
+  `a_whitespace_ignoring_read_of_other_content_is_the_error_a_caller_retries`: a filter
+  whose output gains a trailing space on line 20 from the third read on (stable within
+  one process), an edit on line 1; the `-w` read's printed lines agree, its id does
+  not. Mutation `if false && …`: RED (`Ok(Some(..))`).
+- **TC3** — the `.saturating_mul(2)` boundary. New
+  `a_rewrite_of_every_line_within_the_limit_is_read_whole`: a staged rewrite of 40,000
+  one-byte lines a side, each side just under half a 160,002-byte limit. Mutation
+  `.saturating_mul(1)`: RED (`TooLarge { 160002, 160003 }`).
+- **TC5** — new `line_endings_at_the_edges_read_as_git_diff_shows_them`, staged and
+  unstaged: an edit beside an unterminated last line, a change to the final newline
+  alone (both ways), a `-text` CRLF file edited mid-file, each `same_as_git`. Mutation
+  of `PatchText::new_side` building every context line terminated: RED.
+- **DO2, DO4, DO5** — `--no-index` reads whatever it is given. RED: an absolute path
+  and `../<dir>/outside` answered the contents of a file outside the working tree;
+  `./plain`, `dir/./inner`, `dir/../plain` answered; a named pipe gave no answer in
+  30 s. Reproduced: git 2.56.0 waits on a FIFO for a writer, 2.30.9 and 2.32.7 print a
+  gitlink record for it and fail (`cannot hash`), and every git diffs `/dev/null`
+  against `<dir>/null` for a directory. Now `reads::work_tree_relative` refuses an
+  empty or absolute path or a `.`/`..` component as `Error::NotAWorkTreePath` (a new
+  variant) before anything runs, and a path that is neither a regular file nor a
+  symlink by `symlink_metadata` is `Unsupported` before git starts
+  (`an_untracked_path_outside_the_working_tree_or_not_a_file_is_refused_before_git_runs`,
+  `only_a_work_tree_relative_path_is_read_untracked`). Check 10 of
+  `destructive-ops-reviewer` reworded to what the code enforces.
+- **DO3** — `filter.<driver>.process` (what `git lfs install` configures) runs on
+  `diff-files` and `--no-index`. **A fixture, not a residual:** a pkt-line filter
+  server in POSIX `sh` and `dd` (no dependency, no test binary).
+  `a_long_running_filter_process_is_sent_only_clean_and_its_form_is_diffed`: a staged
+  read starts it not at all; the working-tree reads send it `command=clean` and
+  nothing else, and every answer is git's. A pin of behaviour already right, so no
+  RED. Documented in `reads/mod.rs`, `reads/working_tree.rs`, `engine.md` ("Reads see
+  git's form"), the root `CLAUDE.md` D1 bullet and `docs/systems/diff.md`.
+- **TC4** — "naming the path" could not fail: `GitFailed`'s message carries the argv.
+  RED: with git's stderr blanked in `working_tree_patch`, the old test still passed.
+  Renamed `a_failing_clean_filter_is_gits_failure_with_its_diagnostic_or_what_git_shows`
+  (it replaces `a_failing_clean_filter_is_an_error_naming_the_path_or_what_git_shows`,
+  cited in an earlier entry): status 128 and a non-empty stderr, which the blanking
+  fails; and a `required` filter whose program does not exist (exit 128 on all three)
+  is an error, never no change. The `working_tree_patch` and
+  `Repository::working_tree_diff` docs say "git's failure with its diagnostic".
+- **GI2** — new guard `the_one_porcelain_read_is_diff_no_index_in_the_working_tree_read`
+  (self-test `the_porcelain_read_matcher_catches_the_shapes_it_claims`, over the new
+  `cairn_guards::production_string_literals`): in `reads/` production code the exact
+  literal `"diff"` — plain, byte or raw — appears only in `reads/working_tree.rs`,
+  once, with `"--no-index"` the next literal on its line, and `"/dev/null"` in that
+  file. Its first run found four other `"diff"`s: two error labels in `reads/patches.rs`
+  (relabelled `"a working-tree read"`) and the `diff` attribute's two lines in
+  `reads/attributes.rs`, excused by the roster `DIFF_ATTRIBUTE_LINES` (file and exact
+  line, each row required to still match). RED: a planted `["diff", "--no-index"]` in
+  `reads/changes.rs` failed it. Scoped now, as asked: a verb built at run time
+  (`format!`, `concat!`, bytes) is the stated review obligation (`reads/mod.rs`, root
+  `CLAUDE.md`, check 10). **Candidate follow-up for the user:** a full roster guard
+  over every verb a read runs.
+- **GI3, GI4, QC1, QC2** — the mode is written exactly, `git diff --no-index --
+  /dev/null <path>` with `<path>` work-tree-relative and `./-` for `-`, in the root
+  `CLAUDE.md`, `reads/mod.rs`, `process/binary.rs` and `docs/qa-gate.md`; the driver's
+  environment names `GIT_ASKPASS`, `SSH_ASKPASS` and `CAIRN_ASKPASS_SOCKET` (a driver
+  can reach the socket, and with no token fails closed) in `CLAUDE.md`, `engine.md`
+  and `git-processes.md`; and "`GIT_DIR`/`GIT_WORK_TREE` reach the driver" is now
+  conditional on Cairn naming the repository (full trust) in `CLAUDE.md`, `engine.md`,
+  `git-processes.md` and `diff.md` — reproduced: with `--git-dir`/`--work-tree` the
+  driver sees both, left to discovery it sees neither, on all three gits.
+- `scripts/git-floor.sh`'s floors raised to one under the new counts (60 and 83).
+
 ## 2026-10-03 — `git diff --no-index` accepted, and its presentation pinned
 
 **The user decided (2026-10-03):** an untracked file is read with porcelain `git diff

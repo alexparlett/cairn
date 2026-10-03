@@ -80,7 +80,12 @@ fn git_diff(repo: &Repo, path: &str, which: WorkingTreeDiff, extra: &[&str]) -> 
     match which {
         WorkingTreeDiff::Staged => args.extend(["--cached", "--", path]),
         WorkingTreeDiff::Unstaged => args.extend(["--", path]),
-        WorkingTreeDiff::Untracked => args.extend(["--no-index", "--", "/dev/null", path]),
+        // A path that is `-` is standard input to `--no-index`; git's own advice is to spell
+        // it `./-`, which is what the user types.
+        WorkingTreeDiff::Untracked => {
+            let spelled = if path == "-" { "./-" } else { path };
+            args.extend(["--no-index", "--", "/dev/null", spelled]);
+        }
     }
     porcelain(repo, &args)
 }
@@ -771,8 +776,11 @@ fn an_intent_to_add_path_is_new_unstaged_and_nothing_staged() {
 
 /// The untracked shapes `git diff --no-index` has answers for: plain text, no final
 /// newline, an empty file, a symlink (its target), a binary file, and paths git would read
-/// as options or globs. Caught by: a symlink followed, a missing newline marker, a path read
-/// as a pathspec or an option.
+/// as options, globs or standard input — a file named `-`, which `--no-index` reads as
+/// stdin unless it is spelled `./-`, holds its own lines, as the user's `git diff
+/// --no-index -- /dev/null ./-` shows them. Caught by: a symlink followed, a missing
+/// newline marker, a path read as a pathspec or an option, or `-` passed as itself (an
+/// empty file added, read from Cairn's empty stdin).
 #[test]
 fn an_untracked_file_is_what_git_diff_no_index_shows() {
     let repo = base("untracked");
@@ -782,6 +790,8 @@ fn an_untracked_file_is_what_git_diff_no_index_shows() {
     repo.symlink("link", "plain.txt");
     repo.write("bin.dat", b"a\0b\n");
     repo.write("-dash *.txt", b"x\n");
+    repo.write("-", b"dash\nalone\n");
+    repo.write("-x", b"option\n");
     let paths = [
         "plain.txt",
         "no-eol.txt",
@@ -789,6 +799,8 @@ fn an_untracked_file_is_what_git_diff_no_index_shows() {
         "link",
         "bin.dat",
         "-dash *.txt",
+        "-",
+        "-x",
     ];
     let queries: Vec<(&str, WorkingTreeDiff)> = paths
         .iter()
@@ -817,6 +829,22 @@ fn an_untracked_file_is_what_git_diff_no_index_shows() {
     assert!(
         git_diff(&repo, "bin.dat", WorkingTreeDiff::Untracked, &[]).contains("Binary files"),
         "git does not call it binary"
+    );
+    let dash = some(answers[6].clone(), "the file named -");
+    assert_eq!(
+        lines(&dash).1,
+        ["dash", "alone"],
+        "not the file's own lines"
+    );
+    assert_eq!(
+        dash.file.new_path,
+        RepoPath::new("-"),
+        "the path asked about"
+    );
+    assert_eq!(dash.file.old_path, RepoPath::new("-"));
+    assert!(
+        porcelain(&repo, &["diff", "--no-index", "--", "/dev/null", "./-"]).contains("+dash\n"),
+        "the user's git does not read ./- as the file"
     );
 }
 

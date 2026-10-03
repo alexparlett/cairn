@@ -18,7 +18,8 @@
 //! [`NO_INDEX_PRESENTATION`], the user's presentation settings that porcelain reads and
 //! plumbing does not — with `<verb> <what>` one of `diff-index --cached --no-renames --end-of-options <commit>`
 //! and `:(literal)<path> :(exclude,glob)<path, escaped>/**` as the pathspec; `diff-files
-//! --no-renames` with that pathspec; or `diff --no-index` with `/dev/null <path>`. The
+//! --no-renames` with that pathspec; or `diff --no-index` with `/dev/null <path>`, the path
+//! spelled `./-` when it is `-` (`no_index_operand`), which git reads as stdin. The
 //! exclusion keeps a path that is a directory on one side (`d` a file in the index, `d/x`
 //! in `HEAD`) to the one record asked about, as `git diff -- d` would not.
 //!
@@ -141,6 +142,11 @@ pub(crate) fn working_tree_patch(
             .join(" ")
     };
     let mut parser = Parser::default();
+    // `--no-index` prints the path as it was given, so the record for `-` names `./-`.
+    let printed = match query.side {
+        Side::Untracked => RepoPath::new(no_index_operand(query.path)),
+        Side::Staged { .. } | Side::Unstaged => query.path.clone(),
+    };
     let outcome = git
         .read_invocation()
         .in_repository(repo)
@@ -161,7 +167,7 @@ pub(crate) fn working_tree_patch(
             return Ok(WorkingTreeAnswer::PastCeiling {
                 file: parser
                     .records_so_far()
-                    .and_then(|files| one_for(files, query.path).ok().flatten()),
+                    .and_then(|files| one_for(files, query.path, &printed).ok().flatten()),
             });
         }
         Err(other) => return Err(other),
@@ -171,7 +177,7 @@ pub(crate) fn working_tree_patch(
         record,
     };
     let (files, sections) = parser.finish_listing(query.raw_only).map_err(unexpected)?;
-    let Some(file) = one_for(files, query.path).map_err(unexpected)? else {
+    let Some(file) = one_for(files, query.path, &printed).map_err(unexpected)? else {
         if let Some(Err(error)) = failure {
             return Err(error);
         }
@@ -186,18 +192,43 @@ pub(crate) fn working_tree_patch(
     Ok(WorkingTreeAnswer::Listed { file, sections })
 }
 
-/// The one record git printed for `path`, if it printed one; `Err` for a record about any
-/// other path, or a second one.
-fn one_for(files: Vec<ChangedFile>, path: &RepoPath) -> Result<Option<ChangedFile>, String> {
+/// The one record git printed for `path` — under `printed`, the spelling git was given,
+/// and named `path` again — if it printed one; `Err` for a record about any other path, or
+/// a second one.
+fn one_for(
+    files: Vec<ChangedFile>,
+    path: &RepoPath,
+    printed: &RepoPath,
+) -> Result<Option<ChangedFile>, String> {
     let mut files = files.into_iter();
     let first = files.next();
     if files.next().is_some() {
         return Err("more than one record for one path".to_owned());
     }
     match first {
-        Some(file) if &file.new_path == path && &file.old_path == path => Ok(Some(file)),
+        Some(mut file) if &file.new_path == printed && &file.old_path == printed => {
+            file.new_path = path.clone();
+            file.old_path = path.clone();
+            Ok(Some(file))
+        }
         Some(file) => Err(format!("a record for {}", file.new_path)),
         None => Ok(None),
+    }
+}
+
+/// The path as `git diff --no-index` is given it: as itself, except `-`, which git reads
+/// as standard input and whose own spelling, in git's advice (`diff-no-index.c`), is
+/// `./-`. Only `-` is respelled: git passes the operand to the clean filter driver as its
+/// `%f`, so a path given as `./<path>` would hand the driver a name the user's own `git
+/// diff --no-index -- /dev/null <path>` does not (reproduced with git 2.30.9 and 2.56.0),
+/// where `./-` is the spelling the user must type too. git prints the operand verbatim, on
+/// the raw record and the patch headers alike (2.30.9, 2.32.7 and 2.56.0), and reads the
+/// attributes of `./<path>` as those of `<path>`.
+fn no_index_operand(path: &RepoPath) -> Vec<u8> {
+    if path.as_bytes() == b"-" {
+        b"./-".to_vec()
+    } else {
+        path.as_bytes().to_vec()
     }
 }
 
@@ -300,7 +331,7 @@ fn arguments(query: &WorkingTreeQuery<'_>) -> Vec<OsString> {
         }
         Side::Untracked => {
             arguments.extend(["--", "/dev/null"].map(OsString::from));
-            arguments.push(OsString::from_vec(query.path.as_bytes().to_vec()));
+            arguments.push(OsString::from_vec(no_index_operand(query.path)));
         }
     }
     arguments
@@ -408,6 +439,13 @@ mod tests {
             untracked[untracked.len() - 3..],
             ["--", "/dev/null", "dir/*.txt"]
         );
+        let dash = RepoPath::new("-");
+        let stdin_named = strings(arguments(&query(Side::Untracked, &dash)));
+        assert_eq!(
+            stdin_named[stdin_named.len() - 3..],
+            ["--", "/dev/null", "./-"],
+            "`-` alone is standard input to --no-index"
+        );
         for read in [&staged, &unstaged, &untracked] {
             for refused in [
                 "--textconv",
@@ -476,9 +514,8 @@ mod tests {
              @@ -2,3 +2,3 @@\n two\n-three\n+THREE\n four\n"
         );
         let (files, sections) = listing(output.as_bytes());
-        let file = one_for(files, &RepoPath::new("plain.txt"))
-            .unwrap()
-            .unwrap();
+        let plain = RepoPath::new("plain.txt");
+        let file = one_for(files, &plain, &plain).unwrap().unwrap();
         assert_eq!(file.new_id.map(|id| id.to_string()), Some(NULL.to_owned()));
         assert_eq!(sections.len(), 1);
         assert_eq!(sections[0].new_index_id(), Some(Oid::parse(NEW).unwrap()));
@@ -568,18 +605,32 @@ mod tests {
             old_id: None,
             new_id: None,
         };
-        assert!(one_for(vec![record(ChangeStatus::Added, "d/x")], &path).is_err());
+        assert!(one_for(vec![record(ChangeStatus::Added, "d/x")], &path, &path).is_err());
         assert!(
             one_for(
                 vec![
                     record(ChangeStatus::Added, "d"),
                     record(ChangeStatus::Deleted, "d")
                 ],
+                &path,
                 &path
             )
             .is_err()
         );
-        assert_eq!(one_for(Vec::new(), &path), Ok(None));
+        assert_eq!(one_for(Vec::new(), &path, &path), Ok(None));
+        // `-` is given to `--no-index` as `./-`, and its record is named `-` again; a
+        // record for `-` itself is not the one asked for.
+        let dash = RepoPath::new("-");
+        let spelled = RepoPath::new(no_index_operand(&dash));
+        assert_eq!(spelled, RepoPath::new("./-"));
+        let named = one_for(vec![record(ChangeStatus::Added, "./-")], &dash, &spelled);
+        assert_eq!(
+            named.map(|file| file.map(|file| file.new_path)),
+            Ok(Some(dash.clone()))
+        );
+        assert!(one_for(vec![record(ChangeStatus::Added, "-")], &dash, &spelled).is_err());
+        assert_eq!(no_index_operand(&RepoPath::new("-x")), b"-x");
+        assert_eq!(no_index_operand(&RepoPath::new("d/-")), b"d/-");
 
         let modified = record(ChangeStatus::Modified, "d");
         assert!(sections_fit(&modified, 0).is_ok(), "a stat-only change");

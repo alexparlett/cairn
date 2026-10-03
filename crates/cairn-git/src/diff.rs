@@ -1,18 +1,25 @@
 //! What a commit, or a pair of commits, changed — and what one of those changes looks like
 //! line by line.
 //!
-//! Two queries (R2), both reads and neither spawning a process. The **changes query**
-//! walks two trees and answers the changed files; the **content query** takes one of those
-//! files and answers its [`FileDiff`]. gix computes both (decision L3): nothing here
-//! implements a diff algorithm, and no gix type reaches a public signature.
+//! Two queries (R2). The **changes query** answers the changed files, and `git diff-tree`
+//! answers it (decision E, `docs/design/engine.md`, "Where git answers a read"): which
+//! paths changed, their statuses, modes and ids and every rename and copy pair are git's
+//! own, under the rename detection the user's configuration asks for. It is the one diff
+//! query that starts a process, through `crate::reads`. The **content query** takes one of
+//! those files and answers its [`FileDiff`], computed by gix (decision L3) without a
+//! process. gix also reads the commits a changes query names and the user's
+//! configuration; nothing here implements a diff algorithm, and no gix type reaches a
+//! public signature.
 
 mod changes;
 mod content;
 mod intraline;
+mod renames;
 mod whitespace;
 
 use cairn_model::{ChangedFile, CommitDetails, DiffLimits, FileDiff, Oid};
 
+use crate::ops::GitBinary;
 use crate::{Cancel, Error, Repository};
 
 /// Which two versions a changes query compares.
@@ -50,29 +57,30 @@ impl ChangesRequest {
 
 /// How rename and copy detection went, so a view can say when it was cut short (R2.2).
 ///
-/// The counts are gix's own, reported as plain numbers rather than as its type. `limit` is
-/// `diff.renameLimit` as it was in force — zero means the user turned the limit off.
+/// Detection is what the user's `diff.renames` asks for — off, renames, or renames and
+/// copies — searched by git under `diff.renameLimit`, exactly as their own `git show` would.
+/// Whether the limit cut the search short is decided from git's answer, never from its
+/// stderr (`diff/renames.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RenameDetection {
-    /// False when `diff.renames` is off, and then every other field is zero.
+    /// False when `diff.renames` is off, and then every other field is empty.
     pub enabled: bool,
     /// Copies are detected only when `diff.renames` asks for them.
     pub copies: bool,
-    pub limit: usize,
-    /// Similarity comparisons actually made.
-    pub similarity_checks: usize,
-    /// Rename comparisons the limit did not allow. Non-zero means the answer holds only
-    /// the renames the cheap stages found.
-    pub renames_skipped_for_limit: usize,
-    /// Copy comparisons the limit did not allow.
-    pub copies_skipped_for_limit: usize,
+    /// The limit git applied: `diff.renameLimit`, or git's own default when it is not set.
+    /// `None` when nothing limited the search.
+    pub limit: Option<u32>,
+    /// When the limit stopped git's exhaustive search: the limit that would have let it
+    /// run, which is the number git's own warning asks the user to raise it to.
+    pub needed_limit: Option<usize>,
 }
 
 impl RenameDetection {
     /// Whether `diff.renameLimit` stopped the search before it was exhaustive — the fact
-    /// git prints as "exhaustive rename detection was skipped due to too many files".
+    /// git prints as "exhaustive rename detection was skipped due to too many files". The
+    /// answer then holds only the pairs git's cheap stages found, as git's own does.
     pub fn was_cut_short(self) -> bool {
-        self.renames_skipped_for_limit > 0 || self.copies_skipped_for_limit > 0
+        self.needed_limit.is_some()
     }
 }
 
@@ -140,17 +148,15 @@ impl Repository {
 }
 
 impl DiffSession<'_> {
-    /// What changed between the two versions the request names (R2.1, R2.2).
-    ///
-    /// `cancel` is polled once per change, so a superseded query stops its walk rather than
-    /// finishing it and throwing the answer away. Rename detection runs its similarity
-    /// comparisons between those polls and is bounded by `diff.renameLimit` instead (R2.9).
+    /// What changed between the two versions the request names: [`Repository::changes`],
+    /// on this session's repository.
     pub fn changes(
         &mut self,
+        git: &GitBinary,
         request: &ChangesRequest,
         cancel: &impl Cancel,
     ) -> Result<ChangeSet, Error> {
-        changes::changes(self.repo, &mut self.cache, request, cancel)
+        self.repo.changes(git, request, cancel)
     }
 
     /// What one changed file's change turned out to be (R2.3 through R2.8).
@@ -164,14 +170,22 @@ impl DiffSession<'_> {
 }
 
 impl Repository {
-    /// One changes query, on a session of its own. Use [`Repository::diff_session`] when
-    /// more than one query is coming.
+    /// What changed between the two versions the request names (R2.1, R2.2), as
+    /// `git diff-tree` run by `git` answers it, sorted by a total key.
+    ///
+    /// It runs one `git` process, a read, in this repository (`crate::reads`); `git` is the
+    /// binary the application found at startup, and the call blocks until it ends, so it is
+    /// a worker's call. `cancel` is polled while it runs: once it says the query was
+    /// superseded, the process is ended rather than waited for and the answer is
+    /// [`Error::ChangesCancelled`] (R2.9). A commit that cannot be read is
+    /// [`Error::ReadCommit`] and starts no process; `git` failing is [`Error::GitFailed`].
     pub fn changes(
         &self,
+        git: &GitBinary,
         request: &ChangesRequest,
         cancel: &impl Cancel,
     ) -> Result<ChangeSet, Error> {
-        self.diff_session()?.changes(request, cancel)
+        changes::changes(git, self, request, cancel)
     }
 
     /// One content query, on a session of its own.

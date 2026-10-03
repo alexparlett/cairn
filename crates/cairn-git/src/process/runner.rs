@@ -355,14 +355,6 @@ impl<K: Kind> Invocation<K> {
     /// succeeded, since a cancelled one may have been cut off inside it. On an
     /// `Err`, the records already handed on are a prefix of an answer that did
     /// not complete, for the caller to discard.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the first `-z` read arrives with diff-engine's changes query; tests drive \
-                      it today"
-        )
-    )]
     pub(crate) fn records(
         self,
         cancel: &impl Cancel,

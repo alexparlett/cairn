@@ -5,9 +5,9 @@
 //! git shows means asking git — the changes query, whose rename and copy
 //! detection is where the two disagree — the read is a function here, built
 //! with [`crate::ops::GitBinary`]'s read builder, and the runner is reached from
-//! nowhere else but `ops/`. Empty until `diff-engine` adds its first function;
-//! the module exists so that the guard suite can name it as one of the runner's
-//! two callers.
+//! nowhere else but `ops/`. One function today: [`changes`], `git diff-tree`
+//! for the changes query (`diff-engine`, decision E), which `crate::diff`
+//! calls.
 //!
 //! # What a read may run
 //!
@@ -67,12 +67,14 @@
 //! plumbing or `status` is a review obligation: a token scan cannot tell `diff-tree` from
 //! `diff` in an argument list built at run time.
 
-/// The path `diff-engine` takes, proved against what shipped: a read built here
-/// in `reads/` from a `GitBinary` copy the diff thread holds, run on that
-/// thread, stopped by an epoch, answering `-z` records. `changes` is the shape
-/// of that packet's first function (`git diff-tree -r -M -z --raw`); it is
-/// declared inside this test module because nothing in the product calls a read
-/// yet.
+mod changes;
+
+pub(crate) use changes::{Detection, changes};
+
+/// The read as the diff thread will run it: built here from a `GitBinary` copy
+/// that thread holds, run on that thread, stopped by an epoch, answering `-z`
+/// records. Proved before `diff-engine` built [`changes`] as a sketch of it,
+/// and kept against the real function.
 #[cfg(test)]
 mod diff_engine_path_forward {
     use std::path::{Path, PathBuf};
@@ -80,8 +82,11 @@ mod diff_engine_path_forward {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
+    use cairn_model::{ChangeStatus, Oid};
+
+    use super::{Detection, changes};
     use crate::ops::{Askpass, GitBinary, GitEnvironment};
-    use crate::{Cancel, Error, Repository, SharedRepository};
+    use crate::{Cancel, Error, SharedRepository};
 
     /// What the worker's epoch is: a counter the UI advances, and a query that
     /// carries the value it started under and is superseded once they differ.
@@ -94,34 +99,6 @@ mod diff_engine_path_forward {
         fn is_cancelled(&self) -> bool {
             self.current.load(Ordering::Acquire) != self.started_under
         }
-    }
-
-    /// The read: one named function, plumbing only, `-z` records handed over as
-    /// they arrive. A fresh `GitBinary` copy and a thread-local `Repository`
-    /// are all it needs.
-    fn changes(
-        git: &GitBinary,
-        repo: &Repository,
-        from: &str,
-        to: &str,
-        cancel: &impl Cancel,
-        mut record: impl FnMut(&[u8]),
-    ) -> Result<(), Error> {
-        git.read_invocation()
-            .in_repository(repo)
-            .args([
-                "diff-tree",
-                "-r",
-                "-M",
-                "-z",
-                "--raw",
-                "--end-of-options",
-                from,
-                to,
-            ])
-            .start()?
-            .records(cancel, &mut record, |_| {})
-            .map(|_| ())
     }
 
     fn git_in(
@@ -219,10 +196,14 @@ mod diff_engine_path_forward {
         }
     }
 
+    fn commit_id(fixture: &Fixture, spec: &str) -> Oid {
+        Oid::parse(&fixture.git(&["rev-parse", spec], None)).unwrap_or_else(|e| panic!("{e}"))
+    }
+
     /// A rename with an edit, between two commits: the answer `gix` and `git`
     /// can differ on, and the reason a read here runs `git` at all.
     #[test]
-    fn a_read_built_here_and_run_on_a_threads_own_copy_answers_z_records() {
+    fn a_read_built_here_and_run_on_a_threads_own_copy_answers_git_s_pairs() {
         let fixture = Fixture::new("rename");
         let body: String = (0..40).map(|n| format!("line {n}\n")).collect();
         std::fs::write(fixture.repo.join("old name"), &body).unwrap_or_else(|e| panic!("{e}"));
@@ -236,6 +217,7 @@ mod diff_engine_path_forward {
         .unwrap_or_else(|e| panic!("{e}"));
         fixture.git(&["add", "."], None);
         fixture.git(&["commit", "-q", "-m", "two"], None);
+        let (old, new) = (commit_id(&fixture, "HEAD~1"), commit_id(&fixture, "HEAD"));
 
         let shared = SharedRepository::discover(&fixture.repo).unwrap_or_else(|e| panic!("{e}"));
         let git = fixture.binary();
@@ -248,24 +230,30 @@ mod diff_engine_path_forward {
         let thread_git = git.clone();
         let answered = std::thread::spawn(move || {
             let repo = shared.to_worker();
-            let mut records = Vec::new();
-            changes(&thread_git, &repo, "HEAD~1", "HEAD", &query, |record| {
-                records.push(String::from_utf8_lossy(record).into_owned());
-            })
-            .map(|()| (records, shared.command_log()))
+            let detection = Detection::Renames { limit: 1000 };
+            changes(&thread_git, &repo, &old, &new, detection, &query)
+                .map(|files| (files, shared.command_log()))
         })
         .join()
         .unwrap_or_else(|_| panic!("the diff thread panicked"))
         .unwrap_or_else(|error| panic!("{error}"));
 
-        let (records, log) = answered;
-        assert_eq!(records.len(), 3, "{records:?}");
+        let (files, log) = answered;
+        assert_eq!(files.len(), 1, "{files:?}");
         assert!(
-            records[0].starts_with(':') && records[0].contains(" R"),
-            "not a rename: {records:?}"
+            matches!(files[0].status, ChangeStatus::Renamed(_)),
+            "not a rename: {files:?}"
         );
-        assert_eq!(records[1], "old name", "a space in a path survives -z");
-        assert_eq!(records[2], "new\tname", "a tab in a path survives -z");
+        assert_eq!(
+            files[0].old_path.as_bytes(),
+            b"old name",
+            "a space in a path survives -z"
+        );
+        assert_eq!(
+            files[0].new_path.as_bytes(),
+            b"new\tname",
+            "a tab in a path survives -z"
+        );
         assert_eq!(log.len(), 1, "the read is booked once: {log:?}");
         assert_eq!(
             log[0].arguments.first().map(String::as_str),
@@ -274,22 +262,36 @@ mod diff_engine_path_forward {
         assert!(!log[0].cancelled);
     }
 
-    /// The same read superseded: the epoch moves while a slow consumer holds
-    /// the answer back, `git` is stopped rather than waited for, the caller
-    /// hears a cancelled read, and nothing is left running.
-    #[test]
-    fn a_read_superseded_by_a_newer_epoch_stops_git_and_reports_a_cancelled_read() {
-        const ENTRIES: usize = 60_000;
-        let fixture = Fixture::new("superseded");
-        let blob = |content: &str| fixture.git(&["hash-object", "-w", "--stdin"], Some(content));
-        let (before, after) = (blob("before\n"), blob("after\n"));
-        let tree = |blob: &str| {
-            let listing: String = (0..ENTRIES)
-                .map(|n| format!("100644 blob {blob}\tf-{n:06}\n"))
+    /// Writes `count` files named `prefix-N` whose lines are all different, so
+    /// every pair of a deletion and an addition is compared in full.
+    fn write_files(fixture: &Fixture, prefix: &str, salt: usize, count: usize) {
+        for n in 0..count {
+            let body: String = (0..40)
+                .map(|line| format!("line {} of {prefix}\n", n * salt + line))
                 .collect();
-            fixture.git(&["mktree"], Some(&listing))
-        };
-        let (from, to) = (tree(&before), tree(&after));
+            std::fs::write(fixture.repo.join(format!("{prefix}-{n:05}")), body)
+                .unwrap_or_else(|e| panic!("{e}"));
+        }
+    }
+
+    /// The same read superseded while `git` is still searching: an exhaustive
+    /// rename search over thousands of deletions against thousands of additions,
+    /// which takes `git` seconds. The epoch moves, `git` is stopped rather than
+    /// waited for — the command log says it was ended, which a cancel that lost
+    /// the race to `git`'s own exit never says — the caller hears a cancelled
+    /// query, and nothing is left running.
+    #[test]
+    fn a_changes_query_superseded_by_a_newer_epoch_stops_git_and_reports_it() {
+        const FILES: usize = 4_000;
+        let fixture = Fixture::new("superseded");
+        write_files(&fixture, "old", 7_919, FILES);
+        fixture.git(&["add", "."], None);
+        fixture.git(&["commit", "-q", "-m", "one"], None);
+        fixture.git(&["rm", "-q", "-r", "."], None);
+        write_files(&fixture, "new", 104_729, FILES);
+        fixture.git(&["add", "."], None);
+        fixture.git(&["commit", "-q", "-m", "two"], None);
+        let (old, new) = (commit_id(&fixture, "HEAD~1"), commit_id(&fixture, "HEAD"));
 
         let shared = SharedRepository::discover(&fixture.repo).unwrap_or_else(|e| panic!("{e}"));
         let git = fixture.binary();
@@ -299,32 +301,71 @@ mod diff_engine_path_forward {
             started_under: 0,
         };
         let repo = shared.to_worker();
-        let mut seen = 0_usize;
-        let started = Instant::now();
-        let outcome = changes(&git, &repo, &from, &to, &query, |_| {
-            seen += 1;
-            if seen == 1 {
-                // A newer query supersedes this one while the consumer is slow:
-                // `git` is blocked writing into a pipe nobody is emptying.
+        // A newer query supersedes this one once `git` is well into its search.
+        let superseding = {
+            let epochs = Arc::clone(&epochs);
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(100));
                 epochs.fetch_add(1, Ordering::Release);
-                std::thread::sleep(Duration::from_millis(300));
-            }
-        });
+            })
+        };
+        let started = Instant::now();
+        // No limit: the search is exhaustive, so `git` has seconds of work.
+        let outcome = changes(
+            &git,
+            &repo,
+            &old,
+            &new,
+            Detection::Renames { limit: 0 },
+            &query,
+        );
         let elapsed = started.elapsed();
+        superseding
+            .join()
+            .unwrap_or_else(|_| panic!("the superseding thread panicked"));
 
         assert!(
-            matches!(outcome, Err(Error::GitReadCancelled { .. })),
-            "expected a cancelled read, got {outcome:?}"
+            matches!(outcome, Err(Error::ChangesCancelled { .. })),
+            "expected a cancelled query, got {outcome:?}"
         );
-        assert!(seen < ENTRIES, "the whole answer was read ({seen} records)");
-        assert!(elapsed < Duration::from_secs(5), "took {elapsed:?}");
+        assert!(elapsed < Duration::from_secs(2), "took {elapsed:?}");
         let log = shared.command_log();
         assert_eq!(log.len(), 1, "{log:?}");
-        assert!(log[0].cancelled, "{log:?}");
+        assert!(log[0].cancelled, "git finished before the cancel: {log:?}");
         assert_eq!(
             shared.end_invocations(Duration::from_secs(1)),
             0,
             "left running"
         );
+    }
+
+    /// A query superseded before it starts never starts `git` at all.
+    #[test]
+    fn a_changes_query_superseded_before_it_starts_runs_nothing() {
+        let fixture = Fixture::new("before");
+        std::fs::write(fixture.repo.join("a"), "a\n").unwrap_or_else(|e| panic!("{e}"));
+        fixture.git(&["add", "."], None);
+        fixture.git(&["commit", "-q", "-m", "one"], None);
+        let head = commit_id(&fixture, "HEAD");
+
+        let shared = SharedRepository::discover(&fixture.repo).unwrap_or_else(|e| panic!("{e}"));
+        let epochs = Arc::new(AtomicU64::new(1));
+        let query = Epoch {
+            current: epochs,
+            started_under: 0,
+        };
+        let outcome = changes(
+            &fixture.binary(),
+            &shared.to_worker(),
+            &head,
+            &head,
+            Detection::Off,
+            &query,
+        );
+        assert!(
+            matches!(outcome, Err(Error::ChangesCancelled { changed: 0 })),
+            "{outcome:?}"
+        );
+        assert!(shared.command_log().is_empty(), "a process was started");
     }
 }

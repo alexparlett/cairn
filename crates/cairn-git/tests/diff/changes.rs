@@ -1,11 +1,15 @@
-//! C5: the changes query against git's own detection, under the same configuration.
+//! C5: the changes query against git's own detection, under the same configuration — and
+//! against what the user's own `git log` shows under their configuration, which is what
+//! decision E promises. Since `git diff-tree` answers the query, what these decide is that
+//! Cairn asks git the right question and reads the answer whole: the detection the
+//! configuration names, the limit git applies, the commits compared, and every record.
 
 use cairn_git::{CancelSignal, Error};
 use cairn_git::{ChangeSet, ChangesRequest, Repository};
 use cairn_model::{ChangeStatus, ChangedFile, FileMode, Oid};
 
 use super::repositories::{self, Repo};
-use super::{ok, some};
+use super::{git, ok, some};
 
 /// One changed path, spelled the way `git diff-tree --raw` spells one, so both sides of
 /// the comparison are the same shape.
@@ -26,13 +30,52 @@ fn null_id(width: usize) -> String {
     "0".repeat(width)
 }
 
-/// `git diff-tree -r --raw <flags> <revs>`, parsed. Lines that do not start with `:` are
-/// the commit-id header git prints when it is given one commit.
+/// `git diff-tree -r --raw <flags> <revs>`, parsed.
 fn git_rows(repo: &Repo, flags: &[&str], revs: &[&str]) -> Vec<Row> {
     let mut args = vec!["diff-tree", "-r", "--raw", "--no-abbrev", "--no-ext-diff"];
     args.extend_from_slice(flags);
     args.extend_from_slice(revs);
-    let out = repo.git(&args);
+    rows_of(&repo.git(&args))
+}
+
+/// What the user's own `git log` shows for one commit — porcelain, so it reads
+/// `diff.renames` and `diff.renameLimit` itself — with git's stderr, where its rename-limit
+/// warning is. The fixtures' paths need no quoting, so the plain `--raw` form is enough.
+fn shown(repo: &Repo, commit: &str) -> (Vec<Row>, String) {
+    let (status, stdout, stderr) = repo.run(
+        &[
+            "log",
+            "-1",
+            "--raw",
+            "--no-abbrev",
+            "--format=",
+            "--diff-merges=first-parent",
+            commit,
+        ],
+        &[],
+        None,
+    );
+    assert!(status.success(), "git log failed: {stderr}");
+    (rows_of(&stdout), stderr)
+}
+
+/// The limit git's warning asks the user to raise `diff.renameLimit` to, when it printed
+/// one — read in the C locale, as a test's oracle and never by the product.
+fn warned_limit(stderr: &str) -> Option<usize> {
+    if !stderr.contains("rename detection was skipped") {
+        return None;
+    }
+    let after = some(
+        stderr.split("at least ").nth(1),
+        "the warning names a limit",
+    );
+    let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
+    Some(ok(digits.parse(), "the warning's limit is a number"))
+}
+
+/// Raw lines parsed; lines that do not start with `:` (the commit-id header git prints
+/// when it is given one commit) are skipped.
+fn rows_of(out: &str) -> Vec<Row> {
     let mut rows: Vec<Row> = out
         .lines()
         .filter_map(|line| line.strip_prefix(':'))
@@ -96,12 +139,14 @@ fn cairn_rows(files: &[ChangedFile], width: usize) -> Vec<Row> {
     rows
 }
 
+/// One query on a freshly opened repository, so it reads the configuration as it is now.
 fn changes_of(repo: &Repo, request: &ChangesRequest) -> ChangeSet {
+    ok(try_changes(repo, request), "the changes query answers")
+}
+
+fn try_changes(repo: &Repo, request: &ChangesRequest) -> Result<ChangeSet, Error> {
     let engine = ok(Repository::discover(repo.path()), "the fixture opens");
-    ok(
-        engine.changes(request, &CancelSignal::new()),
-        "the changes query answers",
-    )
+    engine.changes(git(), request, &CancelSignal::new())
 }
 
 fn hex(repo: &Repo, spec: &str) -> String {
@@ -252,10 +297,10 @@ fn rename_and_copy_detection_follow_the_users_configuration() {
         git_rows(&off, &["--no-renames"], &[&rename]),
         "with diff.renames off, a rename is a delete and an add"
     );
-    assert!(
-        !found.renames.enabled,
-        "detection was off: {:?}",
-        found.renames
+    assert_eq!(
+        found.renames,
+        cairn_git::RenameDetection::default(),
+        "detection was off"
     );
     assert!(
         found
@@ -282,6 +327,7 @@ fn rename_and_copy_detection_follow_the_users_configuration() {
     );
     assert!(found.renames.enabled && !found.renames.copies);
     assert!(!found.renames.was_cut_short());
+    assert_eq!(found.renames.limit, Some(1000), "git's own default");
 
     let copies = repositories::rewrites(&[("diff.renames", "copies")]);
     let copy = hex(&copies, "HEAD");
@@ -302,34 +348,156 @@ fn rename_and_copy_detection_follow_the_users_configuration() {
     assert!(found.renames.copies, "{:?}", found.renames);
 }
 
-/// R2.2's second half: when `diff.renameLimit` stops the search, the answer says so.
+/// R2.2's second half: when `diff.renameLimit` stops the search, the answer says so — and
+/// says so exactly when git's own `git log` warns that it did, naming the limit git's
+/// warning names. Over renames and copies, a limit either side of each boundary, the stage
+/// that pairs exact renames ahead of the limit and the one that pairs by name ahead of it.
+/// Caught by: reading the limit from the wrong config, counting the sources the exact
+/// stage paired on a git that culls them (`exact and inexact` at a limit of 2), `>=` for
+/// `>`, or an answer that differs from git's at any of these.
 #[test]
-fn a_rename_limit_that_cuts_detection_short_is_reported() {
-    let limited = repositories::rewrites(&[("diff.renames", "true"), ("diff.renameLimit", "1")]);
-    let rename = hex(&limited, "HEAD~1");
-    let found = changes_of(
-        &limited,
-        &ChangesRequest::commit(Oid::parse(&rename).expect("an id")),
-    );
+fn a_rename_limit_that_cuts_detection_short_is_reported_exactly_when_git_warns() {
+    let cases: &[(&str, &str, &str)] = &[
+        ("true", "1", "HEAD~1"),
+        ("true", "2", "HEAD~1"),
+        ("true", "3", "HEAD~1"),
+        ("true", "1", "HEAD"),
+        ("copies", "3", "HEAD~1"),
+        ("copies", "4", "HEAD~1"),
+        ("copies", "1", "HEAD"),
+        ("copies", "2", "HEAD"),
+    ];
+    let mut cut = 0;
+    for (renames, limit, commit) in cases {
+        let repo = repositories::limits(&[("diff.renames", renames), ("diff.renameLimit", limit)]);
+        let id = hex(&repo, commit);
+        let found = changes_of(
+            &repo,
+            &ChangesRequest::commit(Oid::parse(&id).expect("an id")),
+        );
+        let (rows, stderr) = shown(&repo, &id);
+        let case = format!("diff.renames={renames} diff.renameLimit={limit} on {commit}");
+        assert_eq!(cairn_rows(&found.files, id.len()), rows, "{case}");
+        assert_eq!(
+            found.renames.needed_limit,
+            warned_limit(&stderr),
+            "{case}: git said {stderr:?}, Cairn said {:?}",
+            found.renames
+        );
+        assert_eq!(
+            found.renames.limit,
+            Some(limit.parse().expect("a limit")),
+            "{case}"
+        );
+        cut += usize::from(found.renames.was_cut_short());
+    }
     assert!(
-        found.renames.was_cut_short(),
-        "a limit of one cannot cover four deletions against four additions: {:?}",
-        found.renames
+        (1..cases.len()).contains(&cut),
+        "every case or none was cut short ({cut}), so the boundary was never crossed"
     );
-    assert_eq!(found.renames.limit, 1);
+}
 
-    let ample = repositories::rewrites(&[("diff.renames", "true"), ("diff.renameLimit", "1000")]);
-    let rename = hex(&ample, "HEAD~1");
-    let found = changes_of(
-        &ample,
-        &ChangesRequest::commit(Oid::parse(&rename).expect("an id")),
+/// Decision E's promise, read through the configuration: for each way a user can spell
+/// `diff.renames` and `diff.renameLimit` — unset, the words, numbers git reads as booleans,
+/// the bare key, unit suffixes and bases — the files the query lists are the ones the
+/// user's own `git log` shows, commit by commit, root included. Caught by: plumbing's
+/// defaults standing in for the user's (no renames at all), a parser that differs from
+/// git's on any spelling, or the bare key read as unset or false.
+#[test]
+fn the_answer_is_what_git_log_shows_under_each_configuration() {
+    let renames: &[Option<&str>] = &[
+        None,
+        Some("false"),
+        Some("true"),
+        Some("copies"),
+        Some("Copy"),
+        Some("yes"),
+        Some("off"),
+        Some("0"),
+        Some("2"),
+        Some(""),
+        Some("BARE"),
+    ];
+    let limits: &[Option<&str>] = &[
+        None,
+        Some("1"),
+        Some("0"),
+        Some("-1"),
+        Some("1k"),
+        Some("0x1"),
+    ];
+    let mut compared = 0;
+    for value in renames {
+        let repo = repositories::rewrites(&[]);
+        match value {
+            None => {}
+            Some("BARE") => append_config(&repo, "[diff]\n\trenames\n"),
+            Some(value) => repo.config("diff.renames", value),
+        }
+        for limit in limits {
+            // Each query opens the repository afresh, so it reads the config as set here.
+            let _ = repo.try_git(&["config", "--unset-all", "diff.renameLimit"], &[], None);
+            if let Some(limit) = limit {
+                repo.config("diff.renameLimit", limit);
+            }
+            for commit in ["HEAD~2", "HEAD~1", "HEAD"] {
+                let id = hex(&repo, commit);
+                let found = changes_of(
+                    &repo,
+                    &ChangesRequest::commit(Oid::parse(&id).expect("an id")),
+                );
+                let (rows, stderr) = shown(&repo, &id);
+                assert_eq!(
+                    cairn_rows(&found.files, id.len()),
+                    rows,
+                    "diff.renames={value:?} diff.renameLimit={limit:?} on {commit}"
+                );
+                assert_eq!(found.renames.needed_limit, warned_limit(&stderr));
+                compared += 1;
+            }
+        }
+    }
+    assert_eq!(compared, renames.len() * limits.len() * 3);
+}
+
+fn append_config(repo: &Repo, text: &str) {
+    use std::io::Write;
+    let path = repo.path().join(".git/config");
+    let mut file = ok(
+        std::fs::OpenOptions::new().append(true).open(&path),
+        "the repository's config opens",
     );
-    assert!(
-        !found.renames.was_cut_short(),
-        "the same commit under git's own limit is not cut short: {:?}",
-        found.renames
-    );
-    assert_eq!(found.renames.limit, 1000);
+    ok(file.write_all(text.as_bytes()), "the config is written");
+}
+
+/// A value git refuses is refused here too, rather than read as something it is not: the
+/// user's own `git log` fails on it, so there is no answer of git's to show.
+#[test]
+fn a_configuration_git_refuses_is_refused() {
+    for (key, value) in [
+        ("diff.renames", "maybe"),
+        ("diff.renames", "1x"),
+        ("diff.renameLimit", "many"),
+        ("diff.renameLimit", "4294967296"),
+    ] {
+        // Set once the history is built: `git commit` refuses the value too.
+        let repo = repositories::rewrites(&[]);
+        let id = hex(&repo, "HEAD~1");
+        repo.config(key, value);
+        let (status, _, stderr) = repo.run(&["log", "-1", "--raw", "--format=", &id], &[], None);
+        assert!(
+            !status.success(),
+            "git accepts {key}={value}, so this case decides nothing: {stderr}"
+        );
+        let refused = try_changes(
+            &repo,
+            &ChangesRequest::commit(Oid::parse(&id).expect("an id")),
+        );
+        assert!(
+            matches!(&refused, Err(Error::InvalidConfig { key: k, .. }) if k == key),
+            "{key}={value}: {refused:?}"
+        );
+    }
 }
 
 /// R2.1's order, which a view depends on and gix does not provide: the same query twice
@@ -355,57 +523,51 @@ fn the_file_list_is_sorted_by_path_and_never_shuffles() {
     );
 }
 
-/// R2.9: the walk stops rather than finishing and throwing the answer away.
+/// R2.9 from outside the crate: a query already superseded answers that it was cancelled
+/// and starts no process. Superseding one while `git` runs, and the process ending, is
+/// `a_changes_query_superseded_by_a_newer_epoch_stops_git_and_reports_it` in
+/// `crates/cairn-git/src/reads/mod.rs`, where the command log can be read.
 #[test]
-fn a_cancelled_changes_query_stops_walking() {
-    struct StopsAfter(std::cell::Cell<usize>);
-    impl cairn_git::Cancel for StopsAfter {
-        fn is_cancelled(&self) -> bool {
-            let seen = self.0.get();
-            self.0.set(seen + 1);
-            seen >= 2
-        }
-    }
-
-    let repo = repositories::rewrites(&[("diff.renames", "false")]);
-    let engine = Repository::discover(repo.path()).expect("the fixture opens");
+fn a_cancelled_changes_query_answers_cancelled() {
+    let repo = repositories::rewrites(&[]);
+    let shared = cairn_git::SharedRepository::discover(repo.path()).expect("the fixture opens");
+    let engine = shared.to_worker();
     let seed = Oid::parse(&hex(&repo, "HEAD~2")).expect("an id");
-    let request = ChangesRequest::commit(seed);
-
-    let whole = engine
-        .changes(&request, &CancelSignal::new())
-        .expect("uncancelled");
+    let cancelled = CancelSignal::new();
+    cancelled.cancel();
+    let error = engine
+        .changes(git(), &ChangesRequest::commit(seed), &cancelled)
+        .unwrap_err();
     assert!(
-        whole.files.len() > 3,
-        "the fixture has files to stop short of"
+        matches!(error, Error::ChangesCancelled { changed: 0 }),
+        "a cancelled query must say so: {error:?}"
     );
-
-    let counter = StopsAfter(std::cell::Cell::new(0));
-    let error = engine.changes(&request, &counter).unwrap_err();
-    let Error::ChangesCancelled { changed } = error else {
-        panic!("a cancelled query must say so: {error:?}");
-    };
-    assert!(
-        changed < whole.files.len(),
-        "the walk ran to the end anyway: {changed} of {}",
-        whole.files.len()
-    );
-    assert!(
-        counter.0.get() <= whole.files.len(),
-        "the flag was polled after the break"
-    );
+    assert!(shared.command_log().is_empty(), "git was started anyway");
 }
 
-/// R2.10, and the failure a view has to draw something for.
+/// R2.10, and the failure a view has to draw something for: on either side of a
+/// comparison, and before any process starts.
 #[test]
 fn a_commit_that_is_not_there_is_refused() {
     let repo = repositories::crafted();
-    let engine = Repository::discover(repo.path()).expect("the fixture opens");
+    let shared = cairn_git::SharedRepository::discover(repo.path()).expect("the fixture opens");
+    let engine = shared.to_worker();
     let missing = Oid::parse("1234567890abcdef1234567890abcdef12345678").expect("an id");
-    let error = engine
-        .changes(&ChangesRequest::commit(missing), &CancelSignal::new())
-        .unwrap_err();
-    assert!(matches!(error, Error::ReadCommit { .. }), "got {error:?}");
+    let head = Oid::parse(&hex(&repo, "HEAD")).expect("an id");
+    for request in [
+        ChangesRequest::commit(missing),
+        ChangesRequest::between(missing, head),
+        ChangesRequest::between(head, missing),
+    ] {
+        let error = engine
+            .changes(git(), &request, &CancelSignal::new())
+            .unwrap_err();
+        assert!(matches!(error, Error::ReadCommit { .. }), "got {error:?}");
+    }
+    assert!(
+        shared.command_log().is_empty(),
+        "git was started for a missing commit"
+    );
 }
 
 /// R1.8 and R5.3: every field the Commit tab draws, against what git prints for the same
@@ -488,4 +650,152 @@ fn every_mode_git_records_reaches_the_model() {
         "a file that became a symlink is a type change: {:?}",
         found.files
     );
+}
+
+/// Every file under `dir`, by path, with its bytes.
+fn snapshot(dir: &std::path::Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    let mut files = std::collections::BTreeMap::new();
+    let mut pending = vec![dir.to_owned()];
+    while let Some(next) = pending.pop() {
+        for entry in ok(std::fs::read_dir(&next), "a directory reads") {
+            let path = ok(entry, "an entry").path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                let bytes = ok(std::fs::read(&path), "a file reads");
+                files.insert(path, bytes);
+            }
+        }
+    }
+    files
+}
+
+/// The query writes nothing: not the index — though the working tree is stat-dirty, so a
+/// refresh would rewrite it — not a ref, not an object, and not the textconv cache a
+/// `diff.<driver>.cachetextconv` would fill under `--textconv`. The whole git directory is
+/// byte-identical afterwards, under copies, a rename search and a root commit, and the
+/// configured textconv program never ran. Caught by: porcelain `git diff` or `git log`
+/// in place of `diff-tree` (an index refresh, or the notes ref), `--textconv` passed, or
+/// a read built as a write.
+#[test]
+fn the_changes_query_writes_nothing() {
+    let repo = repositories::attributes();
+    repo.config("diff.renames", "copies");
+    repo.config("diff.trap.cachetextconv", "true");
+    // A copy and a rename for the search to find, beside the driver's files: the copy's
+    // source is edited in the same commit, which is where `-C` looks for one.
+    let body: String = (0..30)
+        .map(|n| format!("line {n} of the source\n"))
+        .collect();
+    repo.write("source.txt", body.as_bytes());
+    repo.commit("a source");
+    repo.write("source-copy.txt", body.as_bytes());
+    repo.write("source.txt", format!("{body}edited\n").as_bytes());
+    repo.git(&["mv", "plain.txt", "moved.txt"]);
+    repo.commit("copy and rename");
+    // Stat-dirty: same bytes, a new mtime, so a refresh would have something to record.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    repo.write("trap.txt", b"watched\nby a program, changed\n");
+    let before = snapshot(&repo.path().join(".git"));
+
+    let head = Oid::parse(&hex(&repo, "HEAD")).expect("an id");
+    let root = Oid::parse(&hex(&repo, "HEAD~3")).expect("an id");
+    let found = changes_of(&repo, &ChangesRequest::commit(head));
+    assert!(
+        found.files.iter().any(ChangedFile::is_copy)
+            && found.files.iter().any(ChangedFile::is_rename),
+        "the search found nothing to write about: {:?}",
+        found.files
+    );
+    let _ = changes_of(&repo, &ChangesRequest::commit(root));
+    let _ = changes_of(&repo, &ChangesRequest::between(root, head));
+
+    assert_eq!(
+        snapshot(&repo.path().join(".git")),
+        before,
+        "the git directory changed under a read"
+    );
+    assert!(
+        !repo.path().join(".git/refs/notes").exists(),
+        "a textconv cache was written"
+    );
+    assert!(!repositories::trap_ran(&repo), "the textconv program ran");
+    repositories::run_trap(&repo);
+    assert!(
+        repositories::trap_ran(&repo),
+        "the trap cannot run at all, so its not running above decides nothing"
+    );
+}
+
+/// The packs under a repository's object store, by name: a lazy fetch adds one.
+fn packs(git_dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(git_dir.join("objects/pack"))
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// In a blob-less partial clone a rename search needs blobs only the promisor holds, and a
+/// read never fetches them (`crate::reads`): the query fails, as `git` fails, and no pack is
+/// written — where the user's own `git log` would fetch and show the pairs. With detection
+/// off, nothing but trees is read, and the same clone answers. Git older than 2.44 ignores
+/// `GIT_NO_LAZY_FETCH` and may fetch; there this says so and decides nothing, unless CI
+/// demands a git that honours it.
+#[test]
+fn in_a_partial_clone_a_rename_search_fails_rather_than_fetching() {
+    let honoured = cairn_git::ops::GitVersion {
+        major: 2,
+        minor: 44,
+        patch: 0,
+    };
+    if git().version() < honoured {
+        assert!(
+            std::env::var_os("CAIRN_REQUIRE_NO_LAZY_FETCH").is_none(),
+            "git {} ignores GIT_NO_LAZY_FETCH (it needs 2.44)",
+            git().version()
+        );
+        eprintln!(
+            "SKIPPED in_a_partial_clone_a_rename_search_fails_rather_than_fetching: git {} \
+             ignores GIT_NO_LAZY_FETCH",
+            git().version()
+        );
+        return;
+    }
+    let source = repositories::limits(&[]);
+    source.config("uploadpack.allowFilter", "true");
+    let holder = Repo::new("partial-holder");
+    let clone_path = holder.path().join("clone");
+    let url = format!("file://{}", source.path().display());
+    holder.git(&[
+        "clone",
+        "-q",
+        "--no-checkout",
+        "--filter=blob:none",
+        &url,
+        &clone_path.to_string_lossy(),
+    ]);
+    let clone = Repo::borrowed(&clone_path);
+    let id = Oid::parse(&hex(&clone, "HEAD~1")).expect("an id");
+    let before = packs(&clone_path.join(".git"));
+
+    let searched = try_changes(&clone, &ChangesRequest::commit(id));
+    assert!(
+        matches!(searched, Err(Error::GitFailed { .. })),
+        "a rename search over blobs the clone lacks did not fail: {searched:?}"
+    );
+    assert_eq!(packs(&clone_path.join(".git")), before, "the read fetched");
+
+    clone.config("diff.renames", "false");
+    let listed = changes_of(&clone, &ChangesRequest::commit(id));
+    assert_eq!(
+        cairn_rows(&listed.files, 40),
+        git_rows(&clone, &["--no-renames"], &[&id.to_string()]),
+    );
+    assert_eq!(packs(&clone_path.join(".git")), before, "the read fetched");
 }

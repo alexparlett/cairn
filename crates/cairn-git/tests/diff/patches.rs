@@ -33,7 +33,11 @@ fn no_lines() -> TextDiff {
 fn diffs_of(engine: &Repository, commit: &Oid) -> Vec<FileDiff> {
     let mut session = ok(engine.diff_session(), "a diff session");
     let files = ok(
-        session.changes(&ChangesRequest::commit(*commit), &CancelSignal::new()),
+        session.changes(
+            super::git(),
+            &ChangesRequest::commit(*commit),
+            &CancelSignal::new(),
+        ),
         "the changes query answers",
     )
     .files;

@@ -1,4 +1,4 @@
-//! The reporter behind C14, and the measurement that answers Q3.
+//! The reporter behind C14, and the check that M1's rename pairs are git's.
 //!
 //! Not an assertion: a timing check in CI is flaky and bound to a machine, which is why
 //! `history-graph`'s A7 was not automated either. This prints numbers; the numbers go into
@@ -62,7 +62,7 @@ const TOO_LARGE_SUBJECT: (&str, &str, &str, f64) = (
     163.0,
 );
 
-const RUNS: usize = 5;
+const RUNS: usize = 7;
 
 fn median(mut taken: Vec<Duration>) -> Duration {
     taken.sort_unstable();
@@ -118,9 +118,75 @@ fn file_at<'a>(set: &'a ChangeSet, path: &str) -> &'a ChangedFile {
 
 fn changes(session: &mut DiffSession<'_>, id: &Oid) -> ChangeSet {
     super::ok(
-        session.changes(&ChangesRequest::commit(*id), &CancelSignal::new()),
+        session.changes(
+            super::git(),
+            &ChangesRequest::commit(*id),
+            &CancelSignal::new(),
+        ),
         "the changes query answers",
     )
+}
+
+/// Every rename pair `git diff-tree -M` finds for `commit` against its first parent, with
+/// its score, read from git directly: the pairs the query has to equal.
+fn git_pairs(path: &str, commit: &str) -> Vec<(String, String, String)> {
+    let repo = super::repositories::Repo::borrowed(std::path::Path::new(path));
+    let out = repo.git(&[
+        "diff-tree",
+        "-r",
+        "-M",
+        "-z",
+        "--raw",
+        "--no-abbrev",
+        &format!("{commit}^1"),
+        commit,
+    ]);
+    let records: Vec<&str> = out.split('\0').collect();
+    let mut pairs = Vec::new();
+    let mut at = 0;
+    while at < records.len() {
+        let Some(meta) = records[at].strip_prefix(':') else {
+            at += 1;
+            continue;
+        };
+        let status = meta.rsplit(' ').next().unwrap_or_default().to_owned();
+        if status.starts_with('R') || status.starts_with('C') {
+            pairs.push((
+                status,
+                records[at + 1].to_owned(),
+                records[at + 2].to_owned(),
+            ));
+            at += 3;
+        } else {
+            at += 2;
+        }
+    }
+    pairs.sort();
+    pairs
+}
+
+fn cairn_pairs(set: &ChangeSet) -> Vec<(String, String, String)> {
+    let mut pairs: Vec<_> = set
+        .files
+        .iter()
+        .filter_map(|file| {
+            let status = match file.status {
+                ChangeStatus::Renamed(similarity) => format!("R{:03}", similarity.percent()),
+                ChangeStatus::Copied(similarity) => format!("C{:03}", similarity.percent()),
+                ChangeStatus::Added
+                | ChangeStatus::Deleted
+                | ChangeStatus::Modified
+                | ChangeStatus::TypeChanged => return None,
+            };
+            Some((
+                status,
+                file.old_path.display().into_owned(),
+                file.new_path.display().into_owned(),
+            ))
+        })
+        .collect();
+    pairs.sort();
+    pairs
 }
 
 #[test]
@@ -133,14 +199,23 @@ fn measures_the_diff_queries_against_a_named_repository() {
         !cfg!(debug_assertions)
     );
 
-    eprintln!("changes query, a session per query (what a cold worker pays):");
+    eprintln!(
+        "git {} at {}\n",
+        super::git().version(),
+        super::git().path().display()
+    );
+    eprintln!(
+        "changes query (gix reads the commit and the config, `git diff-tree` answers), \
+         warm, after one run to warm up:"
+    );
+    let mut session = engine.diff_session().expect("a diff session");
     for (name, hex, bar, git_ms) in CHANGES_SUBJECTS {
         let id = Oid::parse(hex).expect("an id");
+        let _ = changes(&mut session, &id);
         let mut taken = Vec::new();
         let mut files = 0usize;
         for _ in 0..RUNS {
             let started = Instant::now();
-            let mut session = engine.diff_session().expect("a diff session");
             let set = changes(&mut session, &id);
             taken.push(started.elapsed());
             files = set.files.len();
@@ -149,35 +224,29 @@ fn measures_the_diff_queries_against_a_named_repository() {
         eprintln!("    {files} changed files");
     }
 
-    eprintln!("\nchanges query, on a session already open (what phase 04's worker pays):");
-    let mut session = engine.diff_session().expect("a diff session");
-    for (name, hex, bar, git_ms) in CHANGES_SUBJECTS {
-        let id = Oid::parse(hex).expect("an id");
-        let mut taken = Vec::new();
-        for _ in 0..RUNS {
-            let started = Instant::now();
-            let _ = changes(&mut session, &id);
-            taken.push(started.elapsed());
-        }
-        report(name, taken, Some(*bar), *git_ms);
-    }
-
-    // Q3: how far gix's rename detection is from git's on the largest rollup.
+    // M1: the pairs are git's, every one of them, because git found them.
     let m1 = Oid::parse(CHANGES_SUBJECTS[2].1).expect("an id");
     let set = changes(&mut session, &m1);
     let (renames, exact) = pairs(&set);
+    let expected = git_pairs(&path, CHANGES_SUBJECTS[2].1);
     eprintln!(
-        "\nQ3, rename pairs on 5a3292f163d:\n  \
-         gix {renames} renames ({exact} of them at 100%), git {GIT_RENAMES_ON_M1} \
-         ({} inexact)\n  gap {}",
-        GIT_INEXACT_RENAMES_ON_M1,
-        renames as i64 - GIT_RENAMES_ON_M1 as i64
+        "\nrename pairs on 5a3292f163d:\n  Cairn {renames} renames ({exact} of them at 100%), \
+         git {GIT_RENAMES_ON_M1} ({GIT_INEXACT_RENAMES_ON_M1} inexact) in the baseline, \
+         {} pairs from git diff-tree now",
+        expected.len()
     );
     eprintln!(
         "  detection: {:?}\n  cut short: {}",
         set.renames,
         set.renames.was_cut_short()
     );
+    assert_eq!(renames, GIT_RENAMES_ON_M1, "M1's rename count is not git's");
+    assert_eq!(
+        cairn_pairs(&set),
+        expected,
+        "M1's pairs are not git diff-tree's"
+    );
+    eprintln!("  every pair, source, destination and score, equals git's");
 
     eprintln!("\ncontent query:");
     let (name, hex, path, bar, git_ms) = CONTENT_SUBJECT;

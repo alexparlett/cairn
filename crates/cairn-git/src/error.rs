@@ -23,22 +23,27 @@ pub enum Error {
     #[error("the repository at {path} has no commits yet")]
     UnbornHead { path: PathBuf },
 
-    /// A changes query was cancelled; `changed` is how many files it had collected.
-    /// Not a failure to report as one: the caller asked for this by superseding it.
+    /// A changes query was cancelled — superseded before or while `git diff-tree` ran, which
+    /// is then ended — and `changed` is how many files it had read of git's answer. Not a
+    /// failure to report as one: the caller asked for this by superseding it.
     #[error("the changes query was cancelled after {changed} files")]
     ChangesCancelled { changed: usize },
+
+    /// `git` answered a read in a shape Cairn does not read — a record cut off, or a status
+    /// or a mode git does not print for the question asked. Nothing of the answer is used:
+    /// a guess could put a wrong row in front of the user.
+    #[error("git {arguments} answered with a record Cairn cannot read: {record}")]
+    UnexpectedGitOutput { arguments: String, record: String },
+
+    /// A configuration value git itself refuses, so the user's own `git log` and
+    /// `git show` refuse to answer too until it is changed. `value` is as configured.
+    #[error("the configuration value {key} = {value} is not one git accepts")]
+    InvalidConfig { key: String, value: String },
 
     /// The diff machinery could not be built for this repository — the index or the
     /// attribute stack could not be read. No query ran.
     #[error("failed to prepare the repository for diffing: {source}")]
     DiffSetup {
-        #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
-
-    /// Two trees could not be compared. Usually a corrupt or missing object.
-    #[error("failed to compare the trees: {source}")]
-    TreeDiff {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },

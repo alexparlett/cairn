@@ -118,6 +118,7 @@ fn changed(repo: &Repo, commit: &str) -> Vec<ChangedFile> {
     let engine = ok(Repository::discover(repo.path()), "the fixture opens");
     ok(
         engine.changes(
+            super::git(),
             &ChangesRequest::commit(ok(Oid::parse(commit), "an id")),
             &CancelSignal::new(),
         ),

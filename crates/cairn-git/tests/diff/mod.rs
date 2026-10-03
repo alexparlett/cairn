@@ -18,6 +18,22 @@ pub fn ok<T, E: std::fmt::Display>(result: Result<T, E>, what: &str) -> T {
     }
 }
 
+/// The `git` Cairn itself would find on this machine, found once for the whole binary: what
+/// the changes query runs (decision E). Its environment is the one the application builds,
+/// so it reads the same configuration the engine's gix handle does.
+pub fn git() -> &'static cairn_git::ops::GitBinary {
+    static GIT: std::sync::OnceLock<cairn_git::ops::GitBinary> = std::sync::OnceLock::new();
+    GIT.get_or_init(|| {
+        ok(
+            cairn_git::ops::GitBinary::discover(&cairn_git::ops::Askpass::new(
+                "/nonexistent/cairn-askpass",
+                None,
+            )),
+            "git is found",
+        )
+    })
+}
+
 pub fn some<T>(value: Option<T>, what: &str) -> T {
     match value {
         Some(value) => value,

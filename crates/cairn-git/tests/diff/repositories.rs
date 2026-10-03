@@ -64,6 +64,22 @@ impl Repo {
         env: &[(&str, &str)],
         stdin: Option<&[u8]>,
     ) -> Result<String, String> {
+        let (status, stdout, stderr) = self.run(args, env, stdin);
+        if status.success() {
+            Ok(stdout)
+        } else {
+            Err(format!("{status} {stderr}"))
+        }
+    }
+
+    /// git's exit status, stdout and stderr whatever it did, for a test that reads git's
+    /// own warnings as its oracle (in the C locale, so they are git's English).
+    pub fn run(
+        &self,
+        args: &[&str],
+        env: &[(&str, &str)],
+        stdin: Option<&[u8]>,
+    ) -> (std::process::ExitStatus, String, String) {
         let mut command = Command::new("git");
         command
             .current_dir(&self.path)
@@ -71,6 +87,7 @@ impl Repo {
             // Isolate from the machine's git config, e.g. a global `commit.gpgsign`.
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("LC_ALL", "C")
             .env("GIT_AUTHOR_NAME", "A U Thor")
             .env("GIT_AUTHOR_EMAIL", "author@example.com")
             .env("GIT_COMMITTER_NAME", "C O Mitter")
@@ -99,12 +116,11 @@ impl Repo {
         let output = child
             .wait_with_output()
             .unwrap_or_else(|e| panic!("waiting for git {args:?}: {e}"));
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        if output.status.success() {
-            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-        } else {
-            Err(format!("{} {stderr}", output.status))
-        }
+        (
+            output.status,
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
     }
 
     pub fn write(&self, rela: &str, content: &[u8]) {
@@ -408,6 +424,50 @@ pub fn rewrites(config: &[(&str, &str)]) -> Repo {
     repo.write("src/file6-copy.txt", &variation(6, ""));
     repo.write("src/file6.txt", &variation(6, "edited\n"));
     repo.commit("copy");
+    repo
+}
+
+/// What `diff.renameLimit` decides, in two commits after a seed.
+///
+/// `exact and inexact`: three files moved unchanged — paired by git's exact stage, before
+/// any limit — and two moved with an edit to a different name, which only the exhaustive
+/// stage can pair: two sources against two destinations, so a limit of 2 lets the search
+/// run and a limit of 1 cuts it short, and a git that still counted the exactly paired
+/// sources would cut it short at 2 as well. `basename`: one file moved with an edit under
+/// its own name, which git pairs by name ahead of the limit, and one moved to a new name.
+pub fn limits(config: &[(&str, &str)]) -> Repo {
+    let repo = Repo::new("limits");
+    for (key, value) in config {
+        repo.config(key, value);
+    }
+    for (path, seed) in [
+        ("exact/e0.txt", 10),
+        ("exact/e1.txt", 11),
+        ("exact/e2.txt", 12),
+        ("old/a.txt", 13),
+        ("old/b.txt", 14),
+        ("old/x.txt", 15),
+        ("old/y.txt", 16),
+    ] {
+        repo.write(path, &variation(seed, ""));
+    }
+    repo.commit("seed");
+
+    for n in 0..3 {
+        repo.remove(&format!("exact/e{n}.txt"));
+        repo.write(&format!("moved/f{n}.txt"), &variation(10 + n, ""));
+    }
+    repo.remove("old/a.txt");
+    repo.remove("old/b.txt");
+    repo.write("new/c.txt", &variation(13, "more\n"));
+    repo.write("new/d.txt", &variation(14, "more\n"));
+    repo.commit("exact and inexact");
+
+    repo.remove("old/x.txt");
+    repo.remove("old/y.txt");
+    repo.write("new/x.txt", &variation(15, "more\n"));
+    repo.write("new/z.txt", &variation(16, "more\n"));
+    repo.commit("basename");
     repo
 }
 

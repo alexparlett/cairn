@@ -1,11 +1,20 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use cairn_model::CommandRecord;
 
 use crate::Error;
+pub use crate::process::CLOSE_BOUND;
+use crate::process::Processes;
 
 pub struct SharedRepository {
     inner: gix::ThreadSafeRepository,
     git_dir: PathBuf,
     workdir: Option<PathBuf>,
+    /// The `git` invocations running in it and the log of those that are
+    /// over, shared with every worker handle made from it.
+    processes: Arc<Processes>,
 }
 
 impl std::fmt::Debug for SharedRepository {
@@ -34,6 +43,7 @@ impl SharedRepository {
             git_dir: inner.git_dir().to_owned(),
             workdir: inner.work_dir().map(Path::to_owned),
             inner,
+            processes: Arc::default(),
         })
     }
 
@@ -44,7 +54,33 @@ impl SharedRepository {
         Repository {
             inner,
             workdir: self.workdir.clone(),
+            processes: Arc::clone(&self.processes),
         }
+    }
+
+    /// Ends every `git` invocation running in this repository the way a
+    /// cancel does — `SIGTERM` to each one's process group, `SIGKILL` after
+    /// the grace — and waits up to `bound` for them all to be reaped; what
+    /// closing the repository runs, with [`crate::CLOSE_BOUND`]. Returns how
+    /// many were still running when it stopped waiting: zero unless one
+    /// outlived the bound. Any invocation started in this repository
+    /// afterwards is ended as soon as it starts, since the repository is
+    /// closing.
+    ///
+    /// A write that outlasts the grace is `SIGKILL`ed, which can strand its
+    /// lock files; its cancellation lists them to whoever drives it, but on a
+    /// close nobody may be left to show them.
+    ///
+    /// It waits, so it is a worker's call, never the UI thread's.
+    pub fn end_invocations(&self, bound: Duration) -> usize {
+        self.processes.end_all(bound)
+    }
+
+    /// Every `git` invocation this repository has run that is over, oldest
+    /// first, as far back as the log keeps: one record each, however it
+    /// ended.
+    pub fn command_log(&self) -> Vec<CommandRecord> {
+        self.processes.log()
     }
 
     pub fn git_dir(&self) -> &Path {
@@ -60,6 +96,7 @@ impl SharedRepository {
 pub struct Repository {
     inner: gix::Repository,
     workdir: Option<PathBuf>,
+    processes: Arc<Processes>,
 }
 
 impl std::fmt::Debug for Repository {
@@ -90,6 +127,11 @@ impl Repository {
 
     pub(crate) fn inner(&self) -> &gix::Repository {
         &self.inner
+    }
+
+    /// The registry and log every handle on this repository shares.
+    pub(crate) fn processes(&self) -> &Arc<Processes> {
+        &self.processes
     }
 }
 

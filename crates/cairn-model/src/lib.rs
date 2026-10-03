@@ -1,6 +1,8 @@
-//! Commit, ref, graph and lane types shared by the engine and the UI.
+//! Commit, ref, graph and lane types shared by the engine and the UI, and the
+//! record of a `git` invocation the engine's command log keeps.
 
 mod askpass;
+mod command_log;
 mod confirm;
 mod graph;
 mod history;
@@ -11,6 +13,7 @@ mod remote;
 mod secret;
 
 pub use askpass::{AskpassToken, HELPER_PROGRAM, SOCKET_VARIABLE, TOKEN_VARIABLE};
+pub use command_log::{CommandExit, CommandRecord};
 pub use confirm::Confirmed;
 pub use graph::{EdgeKind, EdgeSegment, GraphRow, Lane};
 pub use history::{HistoryRow, RowContent, RowId};

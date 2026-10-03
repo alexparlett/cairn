@@ -839,16 +839,28 @@ fn is_catch_all(alternative: &str) -> bool {
 /// 1-based lines where `source` builds a `std::process::Command`: `Command::new`, however
 /// qualified, spaced or wrapped. Another type's `new` (`GitCommand::new`) is not matched.
 pub fn constructs_process_command(source: &str) -> Vec<usize> {
+    calls_associated_function(source, "Command", "new")
+}
+
+/// 1-based lines where `source` names the associated function `function` of the type `name` —
+/// `Name::function`, however qualified, spaced or wrapped, called or passed as a value. Another
+/// type's function of the same name (`GitCommand::new` for `Command`) is not matched, and neither
+/// is a longer function name (`Name::new_with`).
+pub fn calls_associated_function(source: &str, name: &str, function: &str) -> Vec<usize> {
     let code = code_without_strings(source);
     let bytes = code.as_bytes();
     let mut lines = BTreeSet::new();
-    for offset in ident_offsets(&code, "Command") {
-        let mut at = skip_whitespace(bytes, offset + "Command".len());
+    for offset in ident_offsets(&code, name) {
+        let mut at = skip_whitespace(bytes, offset + name.len());
         if !code[at..].starts_with("::") {
             continue;
         }
         at = skip_whitespace(bytes, at + 2);
-        if code[at..].starts_with("new") && bytes.get(at + 3).is_none_or(|b| !is_ident_byte(*b)) {
+        if code[at..].starts_with(function)
+            && bytes
+                .get(at + function.len())
+                .is_none_or(|b| !is_ident_byte(*b))
+        {
             lines.insert(line_at(&code, offset));
         }
     }
@@ -862,19 +874,96 @@ const ENVIRONMENT_METHODS: &[&str] = &["env", "envs", "env_clear", "env_remove"]
 /// however wrapped or spaced. `env!(..)` and `std::env::var_os(..)` are not method calls and
 /// are not matched; neither is a function merely named `env`.
 pub fn configures_process_environment(source: &str) -> Vec<usize> {
+    calls_method(source, ENVIRONMENT_METHODS)
+}
+
+/// 1-based lines where `source` calls a method named in `names` — `.name(`, with or without
+/// arguments, however spaced or wrapped. A free function or a definition of the same name is
+/// not a method call and is not matched, and neither is a longer identifier.
+pub fn calls_method(source: &str, names: &[&str]) -> Vec<usize> {
+    method_calls(source, names, false)
+}
+
+/// [`calls_method`] for calls with no arguments only — `.name()`, however spaced or wrapped.
+/// For a method with an innocent namesake that takes arguments: `Child::wait()` beside
+/// `Condvar::wait(guard)`, `Command::spawn()` beside `thread::Builder::spawn(f)`.
+pub fn calls_nullary_method(source: &str, names: &[&str]) -> Vec<usize> {
+    method_calls(source, names, true)
+}
+
+fn method_calls(source: &str, names: &[&str], nullary_only: bool) -> Vec<usize> {
     let code = code_without_strings(source);
     let bytes = code.as_bytes();
     let mut lines = BTreeSet::new();
-    for name in ENVIRONMENT_METHODS {
+    for name in names {
         for offset in ident_offsets(&code, name) {
             let before = code[..offset].trim_end();
-            let after = skip_whitespace(bytes, offset + name.len());
-            if before.ends_with('.') && bytes.get(after) == Some(&b'(') {
+            let after = offset + name.len();
+            let called = if nullary_only {
+                takes_no_arguments(&code, after)
+            } else {
+                bytes.get(skip_whitespace(bytes, after)) == Some(&b'(')
+            };
+            if before.ends_with('.') && called {
                 lines.insert(line_at(&code, offset));
             }
         }
     }
     lines.into_iter().collect()
+}
+
+/// 1-based lines where `source` declares `name` with unrestricted visibility — `pub struct
+/// Name`, `pub fn name`, `pub enum`, `pub trait`, `pub type`, `pub const`, `pub static`,
+/// `pub mod` — or re-exports it with a bare `pub use`. A restricted visibility (`pub(crate)`,
+/// `pub(super)`, `pub(in ..)`) is not matched: it does not reach another crate.
+pub fn declares_publicly(source: &str, name: &str) -> Vec<usize> {
+    const ITEM_KEYWORDS: &[&str] = &[
+        "struct", "fn", "enum", "trait", "type", "const", "static", "mod", "union",
+    ];
+    let code = code_without_strings(source);
+    let mut lines = BTreeSet::new();
+    for offset in ident_offsets(&code, name) {
+        let before = code[..offset].trim_end();
+        let declared = ITEM_KEYWORDS.iter().any(|keyword| {
+            before.ends_with(keyword)
+                && before[..before.len() - keyword.len()]
+                    .bytes()
+                    .next_back()
+                    .is_none_or(|b| !is_ident_byte(b))
+                && unrestricted_pub_before(&before[..before.len() - keyword.len()])
+        });
+        if declared {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+    // A `use` statement runs to its `;` and holds none inside, however its groups nest.
+    for start in ident_offsets(&code, "use") {
+        let end = code[start..]
+            .find(';')
+            .map_or(code.len(), |end| start + end);
+        let Some(&at) = ident_offsets(&code[start..end], name).first() else {
+            continue;
+        };
+        if unrestricted_pub_before(&code[..start]) {
+            lines.insert(line_at(&code, start + at));
+        }
+    }
+    lines.into_iter().collect()
+}
+
+/// Whether `before` — the text ahead of an item keyword — ends in a bare `pub`, allowing the
+/// qualifiers that may sit between them (`pub const fn`, `pub unsafe fn`, `pub async fn`).
+fn unrestricted_pub_before(before: &str) -> bool {
+    let mut head = before.trim_end();
+    for qualifier in ["const", "async", "unsafe", "extern"] {
+        if let Some(rest) = head.strip_suffix(qualifier)
+            && rest.bytes().next_back().is_none_or(|b| !is_ident_byte(b))
+        {
+            head = rest.trim_end();
+        }
+    }
+    head.strip_suffix("pub")
+        .is_some_and(|rest| rest.bytes().next_back().is_none_or(|b| !is_ident_byte(b)))
 }
 
 /// Keywords a type name follows when it is being declared or implemented, not built.
@@ -1299,6 +1388,226 @@ pub fn renders_in_a_macro(source: &str, idents: &[&str]) -> Vec<usize> {
         }
     }
     lines.into_iter().collect()
+}
+
+/// gitoxide's mutation API, enumerated from the vendored gix 0.87.1 source (and the sub-crates
+/// its lockfile pins: gix-ref 0.67.1, gix-index 0.55.0, gix-object 0.64.1, gix-odb 0.84.0,
+/// gix-lock 24.0.0, gix-tempfile 24.0.0, gix-fs 0.22.1, gix-worktree 0.56.0, gix-worktree-state
+/// 0.34.1, gix-pack 0.74.2, gix-merge 0.20.1, gix-note 0.1.1), never from memory. Each entry is
+/// something that writes to a repository on disk — refs and reflogs, objects, the index, the
+/// working tree, lock and temporary files, a new or cloned repository — or the one entry point
+/// to such a write. Paths cite `gix-0.87.1/src/` unless another crate is named.
+///
+/// Identifiers matched wherever they appear, because nothing that reads has their name:
+pub const GITOXIDE_MUTATION_IDENTS: &[&str] = &[
+    // Objects. repository/object.rs: `write_object` :250, `write_blob` :289,
+    // `write_blob_stream` :308, `commit_as` :361, `new_commit` :483, `new_commit_as` :499.
+    "write_object",
+    "write_blob",
+    "write_blob_stream",
+    "commit_as",
+    "new_commit",
+    "new_commit_as",
+    // The object-database `Write` trait, implemented for `Repository` (repository/impls.rs:109)
+    // and every store that hits disk (gix-object traits/mod.rs:15, :22, :40).
+    "write_buf",
+    "write_buf_with_known_id",
+    "write_stream_with_known_id",
+    // A blob written from a working-tree file (filter.rs:220).
+    "worktree_file_to_object",
+    // Merges write the merged blobs, and the virtual base's trees and commits
+    // (repository/merge.rs:126, :181, :241, :253).
+    "merge_trees",
+    "merge_commits",
+    "virtual_merge_base",
+    "virtual_merge_base_with_graph",
+    // Tree editing: the editor and its in-memory edits are the entry to `Editor::write`
+    // (object/tree/editor.rs:185), whose name `.write(` is matched below (repository/object.rs:22;
+    // editor.rs:162, :179).
+    "edit_tree",
+    "upsert",
+    "remove_leaf",
+    // Refs and reflogs (repository/reference.rs:15, :136, :147, :157; reference/edits.rs:30;
+    // repository/branch.rs:77, which also rewrites `.git/config` under a lock).
+    "tag_reference",
+    "edit_reference",
+    "edit_references",
+    "edit_references_as",
+    "set_target_id",
+    "delete_local_branches",
+    // The index, written back after a status (status/iter/types.rs:87).
+    "write_changes",
+    // Notes (note.rs:180).
+    "replace_at_ref",
+    // Clone and fetch: checkout of a clone (clone/checkout.rs:73), and the network paths, off in
+    // Cairn's feature set today but named so turning them on is no hole (clone/fetch/mod.rs:106,
+    // :427; remote/connection/fetch/mod.rs:141).
+    "main_worktree",
+    "fetch_only",
+    "fetch_then_checkout",
+    "prepare_fetch",
+    "prepare_clone",
+    "prepare_clone_bare",
+    "PrepareFetch",
+    "PrepareCheckout",
+    // A new repository (lib.rs:341; init.rs:65).
+    "init_bare",
+    "init_opts",
+    // Packs (gix-pack multi_index/write.rs:87; bundle/write/mod.rs:63, :175;
+    // index/write/mod.rs:99).
+    "write_from_index_paths",
+    "write_to_directory",
+    "write_to_directory_eagerly",
+    "write_data_iter_to_stream",
+    // Lock and temporary files (gix-lock acquire.rs:73, :92, :122, :142; gix-tempfile
+    // lib.rs:222, :231, :241, :250).
+    "acquire_to_update_resource",
+    "acquire_to_update_resource_with_permissions",
+    "acquire_to_hold_resource",
+    "acquire_to_hold_resource_with_permissions",
+    "writable_at",
+    "writable_at_with_permissions",
+    "mark_at",
+    "mark_at_with_permissions",
+    // A working-tree stack that creates directories and unlinks what is in the way
+    // (gix-worktree stack/state/mod.rs:63), and probe files written into a directory
+    // (gix-fs capabilities.rs:63).
+    "for_checkout",
+    "probe_dir",
+];
+
+/// Names that write only when called — `.name(` or `::name(` — because as a path segment or a
+/// plain identifier they are also read vocabulary (`gix::traverse::commit::..`, `gix::tag`,
+/// `gix::reference::iter`, a local named `reference`):
+pub const GITOXIDE_MUTATION_CALLS: &[&str] = &[
+    // repository/object.rs:461 and :337; repository/reference.rs:79; also gix-ref's
+    // `Transaction::commit` (store/file/transaction/commit.rs:28) and gix-lock's `commit`.
+    "commit",
+    "tag",
+    "reference",
+    // reference/edits.rs:61.
+    "delete",
+    // Tree editing from a `Tree` (object/tree/editor.rs:81).
+    "edit",
+    // gix-ref store/file/transaction/mod.rs:70, prepare.rs:232, :439.
+    "transaction",
+    "prepare",
+    "rollback",
+    // Fetch's last step, which writes the pack and the refs (receive_pack.rs:73).
+    "receive",
+    // A signed commit, written (object/commit.rs:240).
+    "signed",
+    // A clone kept on disk (clone/access.rs:105, clone/checkout.rs:166).
+    "persist",
+    // The one entry to notes, whose `replace` and `remove` (note.rs:159, :217) share their names
+    // with std's collections and strings; Cairn reads no notes, so a note read would be built in
+    // `ops/` beside the writes.
+    "notes",
+];
+
+/// Names that write when called as a METHOD — `.name(` — and are something else as a path call:
+/// `std::fs::write(..)`, `gix::worktree::archive::write_stream(..)`. The index file's `write`
+/// (gix-index file/write.rs:67), a tree editor's (object/tree/editor.rs:185, :274) and the
+/// object-database `Write` trait's (gix-object traits/mod.rs:9, :30); `write_to` serialises onto
+/// any writer, the index's and the ref log's among them. In `cairn-git`, which does not link the
+/// toolkit, nothing else called `.write(` is in use outside `ops/`.
+pub const GITOXIDE_MUTATION_METHODS: &[&str] = &["write", "write_to", "write_stream"];
+
+/// Paths whose naming means a write: modules and re-exports that hold only write vocabulary
+/// (lib.rs:141 `lock`, :155 `tempfile`; gix-ref store/file/transaction; worktree/mod.rs:8
+/// `state`, the checkout; merge.rs:1 and note.rs:6 `plumbing`; gix-fs `symlink` and `dir`), and
+/// the `Write` trait's re-exports (prelude.rs:2), so a fully qualified trait call is seen too.
+pub const GITOXIDE_MUTATION_PATHS: &[&[&str]] = &[
+    &["gix", "lock"],
+    &["gix", "tempfile"],
+    &["refs", "transaction"],
+    &["worktree", "state"],
+    &["merge", "plumbing"],
+    &["note", "plumbing"],
+    &["gix", "fs", "symlink"],
+    &["gix", "fs", "dir"],
+    &["gix", "prelude"],
+    &["objs", "Write"],
+];
+
+/// Paths that write when they end there — `gix::init(..)`, `use gix::init;` — and are a read
+/// namespace when the path goes on (`gix::init::Error`): lib.rs:332, init.rs:49, create.rs:170,
+/// gix-fs capabilities.rs:53.
+pub const GITOXIDE_MUTATION_PATH_ENDS: &[&[&str]] = &[
+    &["gix", "init"],
+    &["ThreadSafeRepository", "init"],
+    &["create", "into"],
+    &["Capabilities", "probe"],
+];
+
+/// Every gitoxide mutation API `source` names, as `line: what`, over its code with comments
+/// and strings blanked. The rosters above are the whole definition.
+pub fn names_gitoxide_mutation(source: &str) -> Vec<String> {
+    let code = code_without_strings(source);
+    let bytes = code.as_bytes();
+    let mut found = BTreeSet::new();
+    for ident in GITOXIDE_MUTATION_IDENTS {
+        for offset in ident_offsets(&code, ident) {
+            found.insert((line_at(&code, offset), (*ident).to_owned()));
+        }
+    }
+    for name in GITOXIDE_MUTATION_CALLS {
+        for offset in ident_offsets(&code, name) {
+            let before = code[..offset].trim_end();
+            let called = bytes.get(skip_whitespace(bytes, offset + name.len())) == Some(&b'(');
+            if called && (before.ends_with('.') || before.ends_with("::")) {
+                found.insert((line_at(&code, offset), format!("{name}(..)")));
+            }
+        }
+    }
+    for line in calls_method(&code, GITOXIDE_MUTATION_METHODS) {
+        found.insert((line, ".write*(..)".to_owned()));
+    }
+    for path in GITOXIDE_MUTATION_PATHS {
+        for (start, _) in path_offsets(&code, path) {
+            found.insert((line_at(&code, start), path.join("::")));
+        }
+    }
+    for path in GITOXIDE_MUTATION_PATH_ENDS {
+        for (start, end) in path_offsets(&code, path) {
+            if !code[skip_whitespace(bytes, end)..].starts_with("::") {
+                found.insert((line_at(&code, start), path.join("::")));
+            }
+        }
+    }
+    found
+        .into_iter()
+        .map(|(line, what)| format!("{line}: {what}"))
+        .collect()
+}
+
+/// Where `segments` appear in `code` as one path — `a::b::c`, whitespace allowed around each
+/// `::` — as (start, end) byte offsets.
+fn path_offsets(code: &str, segments: &[&str]) -> Vec<(usize, usize)> {
+    let bytes = code.as_bytes();
+    let Some((first, rest)) = segments.split_first() else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    'start: for start in ident_offsets(code, first) {
+        let mut at = start + first.len();
+        for segment in rest {
+            let separator = skip_whitespace(bytes, at);
+            if !code[separator..].starts_with("::") {
+                continue 'start;
+            }
+            let next = skip_whitespace(bytes, separator + 2);
+            let end = next + segment.len();
+            if !code[next..].starts_with(segment)
+                || bytes.get(end).is_some_and(|b| is_ident_byte(*b))
+            {
+                continue 'start;
+            }
+            at = end;
+        }
+        found.push((start, at));
+    }
+    found
 }
 
 /// 1-based lines where `source` spawns a `git` subprocess, matched on the literal program name.

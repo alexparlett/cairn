@@ -1,6 +1,6 @@
 ---
 name: destructive-ops-reviewer
-description: Reviews repository mutations for whether the user was actually told what they were about to lose. Dispatch on any diff under crates/cairn-git/src/ops/, or any new call site that reaches one. Spawn it FRESH, never the implementer. Read-only.
+description: Reviews repository mutations for whether the user was actually told what they were about to lose. Dispatch on any diff under crates/cairn-git/src/ops/ or crates/cairn-git/src/process/, or any new call site that reaches one. Spawn it FRESH, never the implementer. Read-only.
 tools: Read, Grep, Glob, Bash
 maxTurns: 20
 ---
@@ -19,10 +19,16 @@ yourself entirely on the half no check can reach — whether the English handed 
 ## Scope gate, run this FIRST
 
 Apply `docs/qa-gate.md`'s Review diff scope rule. If nothing under
-`crates/cairn-git/src/ops/` changed and no changed file constructs a `Confirmed`
-or calls into `ops`, report "out of scope" and STOP. A change to the `git`
-subprocess environment (`crates/cairn-git/src/ops/environment.rs`) IS in scope
-even when no operation changed: check 9 owns it.
+`crates/cairn-git/src/ops/`, `crates/cairn-git/src/process/` or
+`crates/cairn-git/src/reads/` changed and no
+changed file constructs a `Confirmed` or a `WriteAuthority`, or calls into
+`ops`, report "out of scope" and STOP. A change to the `git` subprocess
+environment (`crates/cairn-git/src/process/environment.rs`) IS in scope even
+when no operation changed: check 9 owns it. A new or changed read in `reads/` IS in scope: check 10 owns it, and a read
+that calls into `ops` or builds a `Confirmed` need not exist for it to matter.
+So is a change to the write seal
+(`crates/cairn-git/src/ops/authority.rs`, the read and write builders in
+`process/binary.rs`): check 10 owns it.
 
 ## Checks
 
@@ -66,7 +72,7 @@ WARNING tier:
    omits the acknowledged prompt, so the operation log cannot later show the user
    what they agreed to.
 9. **The environment roster is wrong.** `GitEnvironment`'s `INHERITED` table in
-   `crates/cairn-git/src/ops/environment.rs` is the whole environment every
+   `crates/cairn-git/src/process/environment.rs` is the whole environment every
    `git` sees; the guard pins that it is the ONLY environment, not that it is
    the right one. For each entry added: is it something git, a credential
    helper, ssh or a hook needs, with the reason beside it? For each entry
@@ -75,6 +81,28 @@ WARNING tier:
    socket, a corporate CA bundle? A `GIT_*` variable inherited is a finding on
    its own: an override the launching shell set is exactly what the roster
    exists to keep out. Evidence: quote the entry and the reason.
+
+10. **A write built as a read.** Every invocation in `ops/` that can change
+   the repository — refs, objects, the index, the working tree, config — is
+   built with `GitBinary::write_invocation`, and every function in
+   `crates/cairn-git/src/reads/` runs query plumbing or `git status` and
+   nothing else: a read runs with `GIT_OPTIONAL_LOCKS=0`, which only `status`
+   honours, so a porcelain `diff` or `describe --dirty` built as a read still
+   rewrites the index, and a plumbing writer (`update-ref`, `update-index`,
+   `read-tree`, `write-tree`, `hash-object -w`, `commit-tree`) built as a read
+   writes whatever it writes; and plumbing flags can write too — `--textconv`
+   with `diff.<driver>.cachetextconv` creates `refs/notes/textconv/<driver>`
+   and objects, `--ext-diff` runs a configured program — so a read passes
+   neither. The compiler and
+   `the_runner_is_named_only_by_ops_and_reads` decide that a read path cannot
+   build a write; whether the verb a read runs is really a read is this
+   check. So is the read in a partial clone: a read carries
+   `GIT_NO_LAZY_FETCH=1`, which git older than 2.44 ignores, so on such a git
+   a read that touches an object the clone lacks fetches it from the promisor
+   remote — a pack written, the network reached (the 2.30 floor stays, by the
+   user's decision). Whether a new read could touch a missing object, and
+   what it does on an old git if so, is this check. Evidence: quote the
+   argument list.
 
 Distinguish what the diff CHANGED from what it inherited: pre-existing debt next
 to the change is a note, not a blocking finding. If a check here duplicates a

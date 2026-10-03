@@ -37,22 +37,22 @@
 //!
 //! Progress is git's own: `--progress` makes it write its meters to stderr
 //! even with no terminal, and [`FetchInProgress::finish`] hands each redrawn
-//! line to the caller as it arrives. Cancelling ends the process
-//! ([`FetchCancel`]): `SIGTERM`, which git cleans its lock files up on, then
-//! `SIGKILL` if it is still there after the grace period (`ProcessKill::kill`
-//! has the numbers). Whatever `*.lock` files are under the git directory
+//! line to the caller as it arrives. It runs on the runner every invocation
+//! runs on (`docs/systems/git-processes.md`): its own process group, a thread
+//! per pipe. Cancelling ends that group ([`FetchCancel`]): `SIGTERM`, which
+//! git cleans its lock files up on, then `SIGKILL` if it is still there after
+//! the grace period. Whatever `*.lock` files are under the git directory
 //! afterwards — a `SIGKILL` that landed mid ref-update, a lock from an
 //! earlier crash, or one another git holds this instant, which a listing
 //! cannot tell apart — travel on the [`Error::GitCancelled`] so the banner
-//! can name them and say when acting on them is safe (`super::stranded_locks`).
-
-use std::path::PathBuf;
+//! can name them and say when acting on them is safe (`super::stranded_locks`);
+//! the runner lists them after the reap, because a fetch is a write.
 
 use cairn_model::AskpassToken;
 
-use super::{GitBinary, Invalidated, Performed, refspec_policy, stranded_locks};
-use crate::ops::cli::{ProcessKill, Running};
-use crate::{Error, Repository};
+use super::{GitBinary, Invalidated, Performed, WriteAuthority, refspec_policy};
+use crate::process::{Invocation, KillHandle, Write};
+use crate::{CancelSignal, Error, Repository};
 
 /// Starts `git fetch --progress --no-prune-tags <remote>` in `repo`, with
 /// `token` as the operation's askpass authorisation when there is a channel
@@ -72,8 +72,10 @@ pub fn fetch(
     token: Option<&AskpassToken>,
 ) -> Result<FetchInProgress, Error> {
     refspec_policy::check(repo.git_dir(), remote)?;
+    // A write: it moves remote-tracking refs and adds objects, and it is the
+    // one invocation that may ask the user for a credential.
     let mut command = git
-        .command()
+        .write_invocation(WriteAuthority::new())
         .in_repository(repo)
         .args(ARGUMENTS)
         .arg(remote);
@@ -81,10 +83,8 @@ pub fn fetch(
         command = command.authorized_by(token);
     }
     Ok(FetchInProgress {
-        running: command.stream()?,
+        invocation: command.start()?,
         remote: remote.to_owned(),
-        git_dir: repo.git_dir().to_owned(),
-        common_dir: repo.inner().common_dir().to_owned(),
     })
 }
 
@@ -96,18 +96,17 @@ const ARGUMENTS: [&str; 4] = ["fetch", "--progress", "--no-prune-tags", "--end-o
 /// A fetch that has been started; see [`fetch`].
 #[derive(Debug)]
 pub struct FetchInProgress {
-    running: Running,
-    remote: String,
-    /// Where a cancel looks for what it stranded; paths rather than the
+    /// Holds the repository's git and common directories, where a cancel or a
+    /// failure looks for lock files (`in_repository`); paths rather than the
     /// repository, which belongs to the thread that opened it.
-    git_dir: PathBuf,
-    common_dir: PathBuf,
+    invocation: Invocation<Write>,
+    remote: String,
 }
 
 impl FetchInProgress {
     /// A handle that cancels this fetch from another thread.
     pub fn canceller(&self) -> FetchCancel {
-        FetchCancel(self.running.killer())
+        FetchCancel(self.invocation.kill_handle())
     }
 
     /// Streams git's progress to `progress`, one line per redraw, until the
@@ -120,30 +119,32 @@ impl FetchInProgress {
     /// carrying every `*.lock` left under the git directory once git is gone;
     /// anything git refused is [`Error::GitFailed`] carrying its stderr —
     /// which is where "could not read Username ...: terminal prompts
-    /// disabled" arrives when no credential could be had.
+    /// disabled" arrives when no credential could be had — and the lock files
+    /// present. Dropped instead of finished, the fetch is ended and reaped on
+    /// a thread of the runner's.
+    ///
+    /// The cancel is [`FetchCancel`]'s alone, so the signal the runner polls
+    /// here is one nobody holds; and stdout, where `git fetch` writes nothing
+    /// a person or Cairn reads, is drained and dropped.
     pub fn finish(self, progress: impl FnMut(&str)) -> Result<Performed, Error> {
-        match self.running.finish(progress) {
-            Ok(_) => Ok(Performed::new(
-                format!("fetched {}", self.remote),
-                Invalidated::refs().and(Invalidated::objects()),
-            )),
-            // Searched after the reap, so a lock git removed on its way out is not
-            // reported; the runner knows a process, not a repository.
-            Err(Error::GitCancelled { arguments, .. }) => Err(Error::GitCancelled {
-                arguments,
-                stranded_locks: stranded_locks::stranded_locks(&self.git_dir, &self.common_dir),
-            }),
-            Err(error) => Err(error),
-        }
+        self.invocation
+            .finish(&CancelSignal::new(), |_| {}, progress)
+            .map(|_| {
+                Performed::new(
+                    format!("fetched {}", self.remote),
+                    Invalidated::refs().and(Invalidated::objects()),
+                )
+            })
     }
 }
 
-/// Cancels a running fetch by ending the `git` process (`SIGTERM`, then
-/// `SIGKILL` after the grace period). Cloneable and `Send`, so the thread
-/// waiting in [`FetchInProgress::finish`] need not be the one deciding to
-/// stop; the waiter still reaps the process, and never blocks the caller.
+/// Cancels a running fetch by ending its `git` and everything it started
+/// (`SIGTERM` to the process group, then `SIGKILL` after the grace period).
+/// Cloneable and `Send`, so the thread waiting in [`FetchInProgress::finish`]
+/// need not be the one deciding to stop; the waiter still reaps the process,
+/// and the cancel never blocks the caller.
 #[derive(Debug, Clone)]
-pub struct FetchCancel(ProcessKill);
+pub struct FetchCancel(KillHandle);
 
 impl FetchCancel {
     pub fn cancel(&self) {
@@ -156,8 +157,8 @@ impl FetchCancel {
 /// pruning tests in `tests/fetch.rs`.
 #[cfg(all(test, unix))]
 mod tests {
-    use super::super::stub_git::{StubGit, discover_retrying};
     use super::*;
+    use crate::process::stub_git::{StubGit, discover_retrying, printed_environment};
 
     /// Nothing for prune — git reads `fetch.prune` itself — and `--no-prune-tags`
     /// always, before `--end-of-options` and the remote.
@@ -184,5 +185,133 @@ mod tests {
                 "-origin",
             ]
         );
+    }
+
+    /// Fetch runs with the write environment the tests in `ops/authority.rs`
+    /// spell out — no `GIT_OPTIONAL_LOCKS`, the editor pinned — and with the
+    /// token it was given, or none: the stub prints what it was given, on
+    /// stderr, which is what a fetch hands on as progress.
+    #[test]
+    fn a_fetch_runs_with_the_write_environment_and_its_token() {
+        let stub = StubGit::with_git(
+            "if [ \"$1\" = --version ]; then echo 'git version 2.30.0'; exit 0; fi\n\
+             /usr/bin/env >&2",
+        );
+        let environment = stub.environment();
+        let path = environment
+            .get("PATH")
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap();
+        let git = discover_retrying(environment).unwrap();
+        let repo = Repository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let printed = |token: Option<&AskpassToken>| {
+            let mut seen = String::new();
+            fetch(&git, &repo, "origin", token)
+                .unwrap()
+                .finish(|line| {
+                    seen.push_str(line);
+                    seen.push('\n');
+                })
+                .unwrap();
+            printed_environment(&seen)
+        };
+        let base = [
+            ("GIT_ASKPASS", StubGit::HELPER),
+            ("GIT_EDITOR", "false"),
+            ("GIT_SEQUENCE_EDITOR", "false"),
+            ("GIT_TERMINAL_PROMPT", "0"),
+            ("PATH", path.as_str()),
+            ("SSH_ASKPASS", StubGit::HELPER),
+            ("SSH_ASKPASS_REQUIRE", "force"),
+        ];
+        let spelled = |extra: &[(&str, &str)]| {
+            base.iter()
+                .chain(extra)
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+
+        assert_eq!(printed(None), spelled(&[]));
+        let token = AskpassToken::new("fetch-token");
+        assert_eq!(
+            printed(Some(&token)),
+            spelled(&[("CAIRN_ASKPASS_TOKEN", "fetch-token")])
+        );
+    }
+
+    /// G17, the engine half's last clause: a fetch run with an askpass token is
+    /// logged once, as what it was given and what it said, and its record holds
+    /// neither the token nor any value of the environment git ran with. Decisive
+    /// because the stub writes the environment it was given to a file beside
+    /// itself, which must show the token and every value looked for — so each
+    /// was there to leak — while what it says on stderr, which the log keeps,
+    /// is a line of progress.
+    #[test]
+    fn a_fetch_with_a_token_is_logged_once_without_the_token_or_the_environment() {
+        let stub = StubGit::with_git_from(|directory| {
+            format!(
+                "if [ \"$1\" = --version ]; then echo 'git version 2.30.0'; exit 0; fi\n\
+                 /usr/bin/env > '{}'; echo 'Receiving objects: 100%, done.' >&2",
+                directory.join("environment-seen").display()
+            )
+        });
+        let home = format!("/nonexistent/home-g17-{}", std::process::id());
+        let language = "xx_G17.UTF-8";
+        let environment = stub.environment_with(|name| match name {
+            "HOME" => Some(home.clone().into()),
+            "LANG" => Some(language.into()),
+            _ => None,
+        });
+        let path = environment
+            .get("PATH")
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap();
+        let git = discover_retrying(environment).unwrap();
+        let repo = Repository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let token = AskpassToken::new(format!("g17-token-{}", std::process::id()));
+
+        fetch(&git, &repo, "origin", Some(&token))
+            .unwrap()
+            .finish(|_| {})
+            .unwrap();
+
+        let seen = printed_environment(
+            &std::fs::read_to_string(stub.directory().join("environment-seen")).unwrap(),
+        );
+        let values = [
+            ("CAIRN_ASKPASS_TOKEN", token.as_str()),
+            ("HOME", home.as_str()),
+            ("LANG", language),
+            ("PATH", path.as_str()),
+            ("GIT_ASKPASS", StubGit::HELPER),
+        ];
+        for (name, value) in values {
+            assert_eq!(
+                seen.get(name).map(String::as_str),
+                Some(value),
+                "git was not given {name}, so its absence below decides nothing"
+            );
+        }
+        let log = repo.processes().log();
+        assert_eq!(log.len(), 1, "one fetch, recorded {} times", log.len());
+        let record = &log[0];
+        assert_eq!(
+            record.arguments,
+            [
+                "fetch",
+                "--progress",
+                "--no-prune-tags",
+                "--end-of-options",
+                "origin"
+            ]
+        );
+        assert_eq!(record.stderr, "Receiving objects: 100%, done.");
+        let rendered = format!("{record:?}");
+        for (name, value) in values {
+            assert!(
+                !rendered.contains(value),
+                "the log's record carries {name}'s value: {rendered}"
+            );
+        }
     }
 }

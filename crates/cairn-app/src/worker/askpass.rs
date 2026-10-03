@@ -53,7 +53,7 @@ pub(super) struct AcceptorStop {
 /// How long [`AcceptorStop::stop`] keeps waking the acceptor before giving up
 /// on an acknowledgement — an acceptor blocked on a prompt the window still
 /// holds the answering end of cannot leave until that end goes.
-const STOP_DEADLINE: Duration = Duration::from_secs(1);
+pub(super) const STOP_DEADLINE: Duration = Duration::from_secs(1);
 
 /// Between wake-ups. Each is one connection in the listener's backlog until the
 /// acceptor takes it, so the deadline and this together must stay well under

@@ -123,19 +123,23 @@ never enters `cairn-git` and never enters application state.
   URL, key path or host. Presentation only; no outcome depends on it
   (`the_spellings_git_and_ssh_use_are_told_apart`,
   `the_subject_is_the_first_quoted_span`).
-- **The environment** (`crates/cairn-git/src/ops/environment.rs`, and
-  `ops/askpass.rs`). `GitEnvironment::new(parent, &Askpass)` sets, on every
-  invocation, `GIT_TERMINAL_PROMPT=0` and `SSH_ASKPASS_REQUIRE=force` (the
-  `ALWAYS` table), `GIT_ASKPASS` and `SSH_ASKPASS` to the helper, and
-  `CAIRN_ASKPASS_SOCKET` when the `Askpass` names a socket; there is no
-  environment without an `Askpass`. `GitEnvironment::command` applies
-  `CAIRN_ASKPASS_TOKEN` per invocation, from `GitCommand::authorized_by`,
-  because the token is the invocation's. Pinned by
-  `the_environment_is_exactly_the_deliberate_entries` (the whole set, spelled
-  out), `the_token_is_set_on_the_invocation_and_only_when_given`, and the stub
-  `git` in `ops/cli.rs` that prints what it was given
-  (`the_child_sees_the_built_environment_and_nothing_inherited`,
-  `an_authorised_invocation_carries_its_token_and_only_that_one`).
+- **The environment** (`crates/cairn-git/src/process/environment.rs`, and
+  `process/askpass.rs`; the environment's home, its read and write profiles
+  and the seal that chooses between them are `docs/systems/git-processes.md`).
+  `GitEnvironment::new(parent, &Askpass)` sets, on every invocation,
+  `GIT_TERMINAL_PROMPT=0` and `SSH_ASKPASS_REQUIRE=force` (the `ALWAYS` table,
+  which also pins the editor), `GIT_ASKPASS` and `SSH_ASKPASS` to the helper,
+  and `CAIRN_ASKPASS_SOCKET` when the `Askpass` names a socket; there is no
+  environment without an `Askpass`. `CAIRN_ASKPASS_TOKEN` is applied per
+  invocation, from `GitCommand::authorized_by`, because the token is the
+  invocation's — and only on a write: a read has nowhere to hold one. Pinned
+  by `the_environment_is_exactly_the_deliberate_entries` (the whole set,
+  spelled out), `a_write_is_the_base_with_its_token_only_when_given`, and the
+  stub `git` that prints what it was given
+  (`a_read_sees_exactly_the_read_environment_and_nothing_inherited` in
+  `process/cli.rs`, `an_authorised_write_carries_its_token_and_only_that_one`
+  in `ops/authority.rs`, `a_fetch_runs_with_the_write_environment_and_its_token`
+  in `ops/fetch.rs`).
   `SSH_ASKPASS_REQUIRE=force` needs OpenSSH 8.4 (2020-09); on an older one the
   variable is ignored and a passphrase goes to the terminal Cairn was launched
   from, or fails closed without one (O5 addendum). By decision D2 (amended
@@ -155,42 +159,26 @@ never enters `cairn-git` and never enters application state.
   purpose**: a fetch moves only remote-tracking refs, in the reflog wherever
   the repository keeps one (a bare repository logs nothing by default, and
   the old tip's commits survive until `gc` either way); the module docs say
-  so. The runner underneath (`GitCommand::stream` in
-  `ops/cli.rs`) reads the pipe on a thread of its own, because git's children
-  — `ssh`, `git-remote-https`, the helper — inherit it and outlive a killed
-  git; a cancel returns once git itself is reaped, and the reader ends when
-  the last child lets the pipe go. Pinned by the stub-git tests
-  `a_streamed_invocation_hands_stderr_on_a_redraw_at_a_time` and
-  `a_kill_from_another_thread_ends_a_hung_invocation_and_reaps_it`, and end
-  to end by `crates/cairn-git/tests/fetch.rs` (below). A clean exit is
-  reported as the success it was even when a cancel raced it
-  (`a_kill_after_a_clean_exit_reports_the_success`).
+  so. Fetch is a write invocation on the runner every `git` runs on, so how
+  its process is spawned, read, cancelled and reaped is
+  `docs/systems/git-processes.md`, not restated here: git leads a process
+  group of its own, so a cancel reaches `ssh`, `git-remote-https` and the
+  helper with it; a cancel is `SIGTERM` to that group, then `SIGKILL` after
+  `TERMINATION_GRACE` (two seconds), because git removes the lock files it
+  holds on `SIGTERM` and cannot on `SIGKILL` (issue #19); and a clean exit
+  that a cancel raced is reported as the success it was — where the runner
+  saw it exit before the signal; one that exits in the microseconds between
+  the last look and the `SIGTERM` is reported cancelled. A failed fetch
+  names the lock files present under the git directory, as every failed
+  write does (`a_failed_fetch_names_the_lock_files_present_and_only_those`
+  in `tests/fetch.rs`). What fetch adds is only its arguments and its
+  outcome. Pinned end to end by
+  `crates/cairn-git/tests/fetch.rs` (below), every one of whose cancels is
+  bounded under two seconds, which only a git that acted on the `SIGTERM`
+  meets.
 
-  **A cancel is `SIGTERM` first** (issue #19), sent through `nix`'s safe
-  `kill(2)` wrapper — the one thing that crate is linked for — because git
-  removes the lock files it holds on `SIGTERM` and cannot on `SIGKILL`, which
-  is all `std` can send. The thread waiting in `finish` polls the process
-  every `EXIT_POLL` and escalates to `SIGKILL` once `TERMINATION_GRACE` (two
-  seconds: git's handler exits in milliseconds, so that is margin for a
-  loaded machine, and short enough that "cancelled" still arrives while the
-  user is looking) has passed with git still running, from whichever loop
-  it is waiting in; the same poll sends the `SIGTERM` itself if the
-  cancelling thread could not take the lock, so a cancel is never lost, and
-  no signal goes to a child that has already been reaped, whose pid the
-  system may have handed on. Pinned over stub gits that report the signal
-  they got: `a_cancel_sends_sigterm_first_and_a_process_that_exits_on_it_is_not_killed`
-  (a `SIGKILL` runs no trap, so "terminated" on stderr is `SIGTERM` and
-  nothing else, and the wait ends inside the grace period),
-  `a_process_that_ignores_sigterm_is_killed_once_the_grace_period_has_passed`
-  (the stub outlives the grace period, so it ignored the first signal, under
-  a deadline so a runner that never escalates fails rather than hangs),
-  `a_cancel_that_lands_after_stderr_closed_is_still_escalated_to_sigkill`,
-  `a_kill_that_misses_the_lock_is_finished_by_the_waiter` and
-  `a_cancel_after_the_reap_signals_nothing`; and over real git by the
-  under-two-seconds bound on every end-to-end cancel, which only a git that
-  acted on the `SIGTERM` meets.
-
-  **What a cancel finds is reported.** Once git is reaped, `finish` lists
+  **What a cancel finds is reported.** Once git is reaped, the runner lists,
+  because a fetch is a write,
   every `*.lock` under the git directory and, for a linked worktree, the
   common directory — the top level, all of `refs/`, and the three places
   under `objects/` where git locks a file it rewrites whole (the multi-pack
@@ -208,9 +196,10 @@ never enters `cairn-git` and never enters application state.
   in `tests/fetch.rs` cancels a real git hung on a remote that never answers,
   with locks planted as a crash would leave them, and reads back exactly
   those — then none once they are gone; that the search runs after the reap
-  rather than before is stated in `FetchInProgress::finish` and not pinned,
-  since no fixture can hold a real git mid ref-write at the instant of a
-  cancel. The worker hands the paths on as `Update::FetchCancelled::stranded_locks`
+  rather than before is pinned on the runner, against a stub that takes
+  300 ms to remove its lock (`a_cancelled_write_lists_its_locks_only_once_it_is_reaped`
+  in `ops/authority.rs`), since no fixture can hold a real git mid ref-write
+  at the instant of a cancel. The worker hands the paths on as `Update::FetchCancelled::stranded_locks`
   (`a_cancelled_fetch_carries_the_lock_files_it_stranded`, and the planted
   lock in `cancelling_a_fetch_that_waits_on_a_prompt_ends_it_as_cancelled`),
   the session into `FetchStatus::Cancelled`
@@ -225,8 +214,8 @@ never enters `cairn-git` and never enters application state.
   `crates/cairn-app/src/fetch_state.rs`, and the window test
   `the_fetch_button_fetches_the_default_remote_and_becomes_cancel_while_running`). Listing only: removing a lock
   another process may still hold is a decision for a confirmed operation
-  that does not exist yet, and a FAILED fetch whose stderr says `cannot lock
-  ref` is not yet read for the lock it names — both remain on issue #19.
+  that does not exist yet (issue #19); a FAILED fetch names the lock files
+  present in its error, which the banner does not yet draw (issue #44).
   "Not destructive" is kept true against the user's configuration
   by one flag and one refusal (issue #17, decided 2026-09-17). `fetch.prune`
   and `remote.<name>.prune` are honoured exactly as `git fetch` honours them
@@ -323,9 +312,11 @@ never enters `cairn-git` and never enters application state.
   copied, and the window wraps it in `Secret::from_string` at once.
 - **The application** (`crates/cairn-app/src/worker/`). Three threads per open
   repository, each with its own sender, so the update stream ends only when all
-  have gone. `startup.rs`: on the repository thread, before anything else, the
-  channel is opened under `$XDG_RUNTIME_DIR`, the environment built around its
-  socket, and `git` found — a missing runtime directory or a helper that is not
+  have gone. `git` itself is found once per application, as it starts
+  (`discovery.rs`; `docs/systems/git-processes.md`). `startup.rs`: on the
+  repository thread, once the repository is open, the channel is opened under
+  `$XDG_RUNTIME_DIR` and that `git` pointed at its socket
+  (`GitBinary::with_environment`) — a missing runtime directory or a helper that is not
   built beside the executable is kept as a reason, not a refusal: fetching still
   works wherever a helper or agent answers (L7), and a fetch that then fails
   says why nothing could have asked
@@ -337,20 +328,23 @@ never enters `cairn-git` and never enters application state.
   and waits on the window's `Reply` — `Provide { prompt, secret }` or
   `Refuse { prompt }` — over a channel of its own (never a `Request`, which
   derives `Debug`), handing the secret to `Prompt::answer` by reference and
-  dropping it. `operations.rs`: the operations thread runs the fetch with a
+  dropping it. `network_lane.rs`: the network lane runs the fetch with a
   token from `Channel::begin`, forwards every progress line as
   `Update::FetchProgress`, and ends with `FetchFinished`, `FetchCancelled` or
   `FetchFailed`, each carrying `refreshed` — whether a ref moved, told by
   comparing `ref_tips` before and after, on every outcome, since a fetch that
   failed or was killed may have moved some. `Request::CancelFetch` never
   queues: the handle reaches the fetch's `FetchControl` directly (one fetch
-  at a time; a cancel that lands before git runs is kept and applied the
+  at a time, a second refused with a reason the window draws; a cancel that
+  lands before git runs is kept and applied the
   moment it does; `FetchStarted` goes out only once the kill handle is
   installed). Operations carry no epoch, so a scroll cannot supersede a fetch
   nor a fetch a scroll. The token is retired before the outcome goes out, so
   a helper orphaned by a killed git is refused at the channel rather than
-  accepted afterwards. On shutdown the
-  repository thread kills any fetch, closes the operations queue and wakes the
+  accepted afterwards. On shutdown — the window's `Request::Close`, or every
+  handle gone — the repository thread closes the network lane's queue, ends
+  and reaps every `git` running in the repository through its registry
+  (`docs/systems/git-processes.md`, "Closing"), and wakes the
   acceptor by connecting to its own socket (the one thing that returns a
   blocking `accept`), on a clean exit and on unwinding alike; a prompt still
   waiting is refused. The wake is retried until the acceptor acknowledges it
@@ -502,19 +496,25 @@ Known limits, described rather than pinned:
 - `$XDG_RUNTIME_DIR` is required, so a session without one (macOS today) gets
   no channel and named failures rather than a fallback directory, a policy for
   the user to set (issue #24).
-- A cancel ends `git` (`SIGTERM`, then `SIGKILL` after two seconds) and
-  returns; its children (`ssh`, the helper) end on their own when the
-  dialog's refusal releases them or their pipes break. The runner's reader
-  thread lives until then. A `SIGKILL` that lands while git is updating
+- A cancel ends `git` and its process group (`SIGTERM`, then `SIGKILL`
+  after two seconds) — `ssh` and the helper with it — and returns once the
+  group is reaped (`docs/systems/git-processes.md`). A `SIGKILL` that lands while git is updating
   refs can still leave a `*.lock`; the cancel names every lock file it
   finds, and removing one is the user's by hand once they know no other git
   is running — nothing in Cairn removes a lock yet, since the process
-  holding it might not be Cairn's, and a failed fetch that trips over one
-  does not yet name it (issue #19).
-- On process exit (the window closing) the socket directory under
-  `$XDG_RUNTIME_DIR` is left behind if the threads did not get to unwind: a
-  runtime directory is a tmpfs cleared at logout, and the names are per pid
-  and random, so nothing collides. Not probed with a display (issue #27).
+  holding it might not be Cairn's (issue #19). A failed fetch names the lock
+  files present in its error (`GitFailed::present_locks`), but the banner
+  draws only git's first `fatal:`/`error:` line, so the list does not reach
+  the user (issue #44).
+- Closing the window closes the repository first: every `git` in it is
+  ended and reaped, the acceptor stopped and the socket directory removed,
+  and only then does the window go (`docs/systems/git-processes.md`,
+  "Closing"). Checked by hand on a desktop session with the credential
+  dialog up: no `git`, no helper, no socket directory and no lock left. A
+  window forced closed after `worker::CLOSE_PATIENCE`, or a crash, can
+  still leave the directory under `$XDG_RUNTIME_DIR`: a runtime directory is
+  a tmpfs cleared at logout, and the names are per pid and random, so
+  nothing collides.
 - A stalled network is only interrupted by the cancel; nothing times a fetch
   out.
 - What a large fetch costs the window — one update per progress redraw, a
@@ -601,7 +601,7 @@ Taken inside the phases, none reopening the above:
   are missing is the silent degradation D1 forbids.
 - `Invalidated` lives in `cairn-git::ops`, not `cairn-model`: only the worker
   reads it, and it describes the engine's own caches.
-- Three threads per repository (repository, operations, acceptor): a fetch
+- Three threads per repository (repository, network lane, acceptor): a fetch
   blocked on the helper blocked on the acceptor would deadlock on one thread.
   Operations carry no epoch.
 - The secret crosses the worker boundary as `worker::Reply` over its own
@@ -625,7 +625,7 @@ record was the deleted progress log.
   packet's history was scanned at the merge bar and nothing was ever
   committed.
 - The stub-`git` tests (`crates/cairn-git/tests/git_binary.rs`,
-  `crates/cairn-git/src/ops/stub_git.rs`) retry on `ETXTBSY`: a fork in a
+  `crates/cairn-git/src/process/stub_git.rs`) retry on `ETXTBSY`: a fork in a
   parallel test inherits a still-open write descriptor to a stub for
   microseconds. The stub exists twice because the runner is crate-private.
 - A test that mutates a committed file to see a guard go red must snapshot

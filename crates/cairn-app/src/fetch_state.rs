@@ -97,6 +97,17 @@ impl FetchStatus {
     }
 }
 
+/// A fetch the worker would not start, because one was already in flight
+/// (PRD R7.2): drawn until another fetch is asked for, beside whatever the
+/// fetch in flight is showing, which the refusal leaves as it was.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchRefusal {
+    /// The remote the refused fetch was for.
+    pub remote: String,
+    /// Why, as display text: which fetch is in flight, and how far it has got.
+    pub reason: String,
+}
+
 /// A prompt the window is showing, until it is answered or withdrawn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptView {

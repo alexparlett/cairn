@@ -27,6 +27,12 @@ env:
   # and a passing test's stderr is hidden, so a skip would read `ok`. Here the
   # server is installed below and the fixture is REQUIRED: a skip is a red test.
   CAIRN_REQUIRE_SSH_FIXTURE: 1
+  # `a_read_in_a_partial_clone_does_not_fetch_a_missing_object`
+  # (crates/cairn-git/src/ops/authority.rs) is the only behavioural pin of
+  # GIT_NO_LAZY_FETCH and skips on a git older than 2.44, which ignores the
+  # variable. A skip reads `ok`, so here it is a red test: the runner image's
+  # git must stay new enough.
+  CAIRN_REQUIRE_NO_LAZY_FETCH: 1
 
 jobs:
   gate:

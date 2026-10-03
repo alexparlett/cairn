@@ -6,8 +6,10 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use super::{Askpass, GitCommand, GitEnvironment};
-use crate::Error;
+use super::cli::{GitCommand, Read, Write};
+use super::{Askpass, GitEnvironment};
+use crate::ops::WriteAuthority;
+use crate::{CancelSignal, Error};
 
 /// The program name searched for on `PATH`.
 const PROGRAM: &str = "git";
@@ -103,10 +105,42 @@ impl GitBinary {
         &self.environment
     }
 
-    /// An invocation of this `git`, ready for its arguments. Crate-private: the
-    /// public surface is named operations, never a raw verb.
-    pub(crate) fn command(&self) -> GitCommand<'_> {
-        GitCommand::new(&self.path, &self.environment)
+    /// This `git` — found and checked once — run with `environment` from now
+    /// on, in place of the one it was found with. For an application that
+    /// finds `git` once, as it starts, and only later knows the askpass
+    /// channel each repository's invocations are to be pointed at: the answer
+    /// is copied, never searched for or probed again. The program stays the
+    /// one found, by its absolute path, whatever `environment`'s `PATH` says;
+    /// that `PATH` is still what `git` and its helpers then search.
+    pub fn with_environment(&self, environment: GitEnvironment) -> Self {
+        Self {
+            path: self.path.clone(),
+            version: self.version,
+            environment,
+        }
+    }
+
+    /// A read of this `git`, ready for its arguments: optional locks off and
+    /// no askpass token, ever (`environment.rs`). For `crate::reads`, whose
+    /// functions each run plumbing or `status`, and for `crate::ops`. Never
+    /// public: the public surface is named operations, not a raw verb.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "reads/ is empty until diff-engine adds its first read, and the probe \
+                      builds its read before there is a GitBinary"
+        )
+    )]
+    pub(crate) fn read_invocation(&self) -> GitCommand<'_, Read> {
+        GitCommand::new(&self.path, &self.environment, Read)
+    }
+
+    /// A write of this `git`, ready for its arguments. Only `crate::ops` can
+    /// call it, because only `ops` can construct the [`WriteAuthority`] it
+    /// consumes; the write carries it, so a `Write` cannot exist without one.
+    pub(crate) fn write_invocation(&self, authority: WriteAuthority) -> GitCommand<'_, Write> {
+        GitCommand::new(&self.path, &self.environment, Write::new(authority))
     }
 }
 
@@ -143,8 +177,20 @@ fn is_executable(path: &Path) -> bool {
     path.is_file()
 }
 
+/// The most of `git --version`'s stdout the probe reads: one line, a few
+/// dozen bytes from any git there is. More is not a version, and is refused
+/// rather than held.
+const PROBE_CEILING: usize = 4096;
+
+/// `git --version`, as a read on the runner: the one invocation outside `ops/`
+/// and `reads/`, because it runs before there is a [`GitBinary`] to build one
+/// from. Nothing cancels it — it is startup's, and git answers it at once — so
+/// its cancel signal is one nobody holds.
 fn probe(path: &Path, environment: &GitEnvironment) -> Result<GitVersion, Error> {
-    let output = GitCommand::new(path, environment).arg("--version").run()?;
+    let output = GitCommand::new(path, environment, Read)
+        .arg("--version")
+        .start()?
+        .collect(&CancelSignal::new(), PROBE_CEILING, |_| {})?;
     let text = output.stdout_text();
     GitVersion::parse(&text).ok_or_else(|| Error::GitVersionUnreadable {
         path: path.to_owned(),

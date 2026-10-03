@@ -4,17 +4,20 @@
 use freya::prelude::*;
 
 use crate::PAGE_ROWS;
-use crate::fetch_state::{FetchStatus, PromptView};
+use crate::fetch_state::{FetchRefusal, FetchStatus, PromptView};
 use crate::history_state::{self, Progress};
 use crate::window::View;
 use crate::worker::{PromptId, Request, Update};
 
 /// What applying an update may ask of the worker: a request, and the refusal
 /// of a prompt the window will not show. Two plain callbacks, never a struct
-/// holding the answering end: nothing may hold that.
+/// holding the answering end: nothing may hold that. `closing` says the
+/// window has asked the repository to close, so nothing is to be asked of it
+/// again.
 pub struct Worker<'a> {
     pub submit: &'a dyn Fn(Request),
     pub refuse: &'a dyn Fn(PromptId),
+    pub closing: bool,
 }
 
 /// Applies `update` to `view`. A fetch ending takes down any dialog and
@@ -30,6 +33,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         mut fetch,
         mut prompt,
         mut remotes,
+        mut refused,
         ..
     } = view;
     match update {
@@ -78,6 +82,12 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             fetch.set(FetchStatus::Failed { remote, message });
             reload_if(refreshed, rows, progress, worker);
         }
+        // Beside the fetch in flight, which it leaves as it was; the next press clears it.
+        Update::FetchRefused { remote, reason } => {
+            refused.set(Some(FetchRefusal { remote, reason }));
+        }
+        // Answered for whoever asks; no view draws the log in this packet (PRD R8.3).
+        Update::CommandLog { .. } => {}
         Update::Prompt { id, text } => {
             if fetch.read().is_in_flight() {
                 prompt.set(Some(PromptView { id, text }));
@@ -88,14 +98,16 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
     }
 }
 
-/// The refs moved: the rows on screen are of the old ones.
+/// The refs moved: the rows on screen are of the old ones — unless the window
+/// is closing, when the history stays as it is: the worker that would answer
+/// has stopped, and clearing every row on the way out is work for nothing.
 fn reload_if(
     refreshed: bool,
     mut rows: State<Vec<cairn_model::HistoryRow>>,
     mut progress: State<Progress>,
     worker: &Worker<'_>,
 ) {
-    if !refreshed {
+    if !refreshed || worker.closing {
         return;
     }
     rows.write().clear();
@@ -168,6 +180,7 @@ mod tests {
                         fetch: State::create(fetch),
                         prompt: State::create(None),
                         remotes: State::create(Vec::new()),
+                        refused: State::create(None),
                     }
                 })
             },
@@ -178,6 +191,16 @@ mod tests {
     }
 
     fn applying(test: &TestingRunner, view: View, asked: &Rc<Asked>, update: Update) {
+        applying_while(test, view, asked, update, false);
+    }
+
+    fn applying_while(
+        test: &TestingRunner,
+        view: View,
+        asked: &Rc<Asked>,
+        update: Update,
+        closing: bool,
+    ) {
         let submit = {
             let asked = Rc::clone(asked);
             move |request| asked.submitted.borrow_mut().push(request)
@@ -193,9 +216,46 @@ mod tests {
                 &Worker {
                     submit: &submit,
                     refuse: &refuse,
+                    closing,
                 },
             );
         });
+    }
+
+    /// A fetch the close itself ended may still have moved refs. Caught by: reloading
+    /// anyway — every row cleared on the UI thread and a request sent to a worker that has
+    /// stopped, so the history vanishes behind "Reading history…" while the window closes.
+    #[test]
+    fn a_fetch_ended_by_the_close_leaves_the_history_as_it_is() {
+        // However it ended: the close may land just as a fetch finishes or fails.
+        for ending in [
+            Update::FetchFinished {
+                remote: "origin".to_owned(),
+                refreshed: true,
+            },
+            Update::FetchCancelled {
+                remote: "origin".to_owned(),
+                refreshed: true,
+                stranded_locks: Vec::new(),
+            },
+            Update::FetchFailed {
+                remote: "origin".to_owned(),
+                refreshed: true,
+                message: "some local refs could not be updated".to_owned(),
+            },
+        ] {
+            let (test, view, asked) = launch(running());
+            applying_while(&test, view, &asked, ending.clone(), true);
+            assert_eq!(
+                view.rows.read().len(),
+                3,
+                "the rows were cleared on the way out: {ending:?}"
+            );
+            assert!(
+                asked.submitted.borrow().is_empty(),
+                "a closing repository was asked for its history again: {ending:?}"
+            );
+        }
     }
 
     fn running() -> FetchStatus {
@@ -353,6 +413,33 @@ mod tests {
         );
         assert_eq!(*view.prompt.read(), None);
         assert_eq!(asked.refused.borrow().as_slice(), [id]);
+    }
+
+    /// PRD R7.2, the hop between the worker and the window: a refusal lands in the view
+    /// for the banner, and the fetch in flight is left as it was. Caught by: dropping the
+    /// update, or letting it end or replace the fetch that is running.
+    #[test]
+    fn a_refused_fetch_is_kept_for_the_window_and_the_fetch_in_flight_is_untouched() {
+        let (test, view, asked) = launch(running());
+        applying(
+            &test,
+            view,
+            &asked,
+            Update::FetchRefused {
+                remote: "origin".to_owned(),
+                reason: "a fetch of origin is already running".to_owned(),
+            },
+        );
+        assert_eq!(
+            *view.refused.read(),
+            Some(FetchRefusal {
+                remote: "origin".to_owned(),
+                reason: "a fetch of origin is already running".to_owned(),
+            })
+        );
+        assert_eq!(*view.fetch.read(), running(), "the fetch in flight changed");
+        assert!(asked.submitted.borrow().is_empty());
+        assert!(asked.refused.borrow().is_empty());
     }
 
     #[test]

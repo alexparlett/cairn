@@ -173,6 +173,23 @@ pub fn wait_for_no_process_pointed_at(socket: &Path, timeout: std::time::Duratio
     }
 }
 
+/// Polls [`processes_pointed_at`] until it names something or `timeout` passes.
+///
+/// `spawn` returns once the child has begun its `exec`, which is a moment before the
+/// kernel has recorded the new program's environment: read in that moment,
+/// `/proc/<pid>/environ` is empty. A positive control that read it once, straight after
+/// `spawn`, failed under load (CI at `49ece74`, and on `main` before this change).
+pub fn wait_for_a_process_pointed_at(socket: &Path, timeout: std::time::Duration) -> Vec<u32> {
+    let started = std::time::Instant::now();
+    loop {
+        let seen = processes_pointed_at(socket);
+        if !seen.is_empty() || started.elapsed() > timeout {
+            return seen;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 /// Caught by: the scan matching nothing, which would make every "nothing left
 /// behind" assertion pass vacuously.
 #[test]
@@ -184,7 +201,7 @@ fn a_process_carrying_the_socket_in_its_environment_is_seen_until_it_is_gone() {
         .env(cairn_model::SOCKET_VARIABLE, socket)
         .spawn()
         .unwrap_or_else(|e| panic!("could not spawn sleep: {e}"));
-    let seen = processes_pointed_at(socket);
+    let seen = wait_for_a_process_pointed_at(socket, std::time::Duration::from_secs(2));
     assert_eq!(seen, [child.id()], "the scan does not see a live process");
     let _ = child.kill();
     let _ = child.wait();

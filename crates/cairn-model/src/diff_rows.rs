@@ -12,6 +12,8 @@
 //! after a line that did not end. A view drawing them with whitespace ignored groups the
 //! whitespace-ignoring ranges ([`UnifiedLayout::shown`]), as `git diff -w` does.
 
+use std::ops::Range;
+
 use crate::{
     ChangedRange, Context, DiffLine, DisplayOverlay, HunkHeader, Hunks, LineNumber, TextDiff,
 };
@@ -59,7 +61,7 @@ struct RowIndex {
     rows: usize,
     /// The first row of each change drawn, in order: what previous and next change move
     /// between, found by search.
-    change_rows: Vec<usize>,
+    change_rows: Vec<Range<usize>>,
 }
 
 impl RowIndex {
@@ -99,7 +101,7 @@ impl RowIndex {
                 index.push(Piece::Context { old, new, len: run }, run as usize);
                 let rows = rows_of_change(text, *change, shape);
                 if rows > 0 {
-                    index.change_rows.push(index.rows);
+                    index.change_rows.push(index.rows..index.rows + rows);
                 }
                 index.push(
                     Piece::Change {
@@ -346,23 +348,34 @@ impl UnifiedLayout {
 
     /// The first row of the `change`-th change drawn.
     pub fn change_row(&self, change: usize) -> Option<usize> {
-        self.index.change_rows.get(change).copied()
+        self.index.change_rows.get(change).map(|rows| rows.start)
+    }
+
+    /// The rows the `change`-th change draws: its removed and added lines, and git's
+    /// end-of-file markers among them.
+    pub fn change_rows(&self, change: usize) -> Option<Range<usize>> {
+        self.index.change_rows.get(change).cloned()
+    }
+
+    /// The first change that starts at `row` or below it. A search, never a scan.
+    pub fn first_change_from(&self, row: usize) -> Option<usize> {
+        let next = self
+            .index
+            .change_rows
+            .partition_point(|rows| rows.start < row);
+        (next < self.index.change_rows.len()).then_some(next)
     }
 
     /// The first change that starts below `row`. A search, never a scan.
     pub fn next_change_after(&self, row: usize) -> Option<usize> {
-        let next = self
-            .index
-            .change_rows
-            .partition_point(|start| *start <= row);
-        (next < self.index.change_rows.len()).then_some(next)
+        self.first_change_from(row.saturating_add(1))
     }
 
     /// The last change that starts above `row`. A search, never a scan.
     pub fn previous_change_before(&self, row: usize) -> Option<usize> {
         self.index
             .change_rows
-            .partition_point(|start| *start < row)
+            .partition_point(|rows| rows.start < row)
             .checked_sub(1)
     }
 
@@ -1151,6 +1164,15 @@ mod tests {
             );
         }
         assert_eq!(starts.len(), 3);
+        assert_eq!(layout.first_change_from(starts[1]), Some(1));
+        assert_eq!(layout.first_change_from(starts[1] + 1), Some(2));
+        assert_eq!(layout.first_change_from(rows.len()), None);
+        assert_eq!(
+            layout.change_rows(0),
+            Some(starts[0]..starts[0] + 2),
+            "a one-line edit is a removed and an added row"
+        );
+        assert_eq!(layout.change_rows(3), None);
         assert_eq!(layout.next_change_after(0), Some(0));
         assert_eq!(layout.next_change_after(starts[0]), Some(1));
         assert_eq!(layout.next_change_after(starts[2]), None);

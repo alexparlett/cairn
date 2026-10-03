@@ -31,10 +31,12 @@ impl Scratch {
         }
     }
 
-    /// Where the repository keeps its objects, which the scratch reads through.
+    /// Where the repository keeps its objects, which the scratch reads through. git prints
+    /// the common directory relative to the repository it ran in, or absolute, as it
+    /// pleases; `--path-format=absolute` would settle it, from git 2.31 only.
     fn alternate(&self) -> PathBuf {
-        let common = self.plain(&["rev-parse", "--path-format=absolute", "--git-common-dir"]);
-        PathBuf::from(common.trim()).join("objects")
+        let common = self.plain(&["rev-parse", "--git-common-dir"]);
+        self.repo.join(common.trim()).join("objects")
     }
 
     fn plain(&self, args: &[&str]) -> String {

@@ -41,6 +41,10 @@ fn git_rows(repo: &Repo, flags: &[&str], revs: &[&str]) -> Vec<Row> {
 /// What the user's own `git log` shows for one commit — porcelain, so it reads
 /// `diff.renames` and `diff.renameLimit` itself — with git's stderr, where its rename-limit
 /// warning is. The fixtures' paths need no quoting, so the plain `--raw` form is enough.
+/// A merge is shown against its first parent with `-m --first-parent`, which every git
+/// from the 2.30 floor reads that way; `--diff-merges=first-parent` would say the same
+/// from git 2.31 only (both checked against 2.30, 2.32 and 2.56, on a merge, under
+/// `log.diffMerges=separate` too).
 fn shown(repo: &Repo, commit: &str) -> (Vec<Row>, String) {
     let (status, stdout, stderr) = repo.run(
         &[
@@ -49,7 +53,8 @@ fn shown(repo: &Repo, commit: &str) -> (Vec<Row>, String) {
             "--raw",
             "--no-abbrev",
             "--format=",
-            "--diff-merges=first-parent",
+            "-m",
+            "--first-parent",
             commit,
         ],
         &[],
@@ -327,7 +332,12 @@ fn rename_and_copy_detection_follow_the_users_configuration() {
     );
     assert!(found.renames.enabled && !found.renames.copies);
     assert!(!found.renames.was_cut_short());
-    assert_eq!(found.renames.limit, Some(1000), "git's own default");
+    let default = if git().version() >= since(33) {
+        1000
+    } else {
+        400
+    };
+    assert_eq!(found.renames.limit, Some(default), "git's own default");
 
     let copies = repositories::rewrites(&[("diff.renames", "copies")]);
     let copy = hex(&copies, "HEAD");
@@ -392,7 +402,10 @@ fn a_rename_limit_that_cuts_detection_short_is_reported_exactly_when_git_warns()
         assert_eq!(cairn_rows(&found.files, id.len()), rows, "{case}");
         let count = |status: &str| rows.iter().filter(|row| row.status == status).count();
         let limit_value: usize = limit.parse().expect("a limit");
-        if *renames == "true" && count("D") * count("A") == limit_value * limit_value {
+        // Only where nothing was paired is the answer's count git's on every version: git
+        // 2.30 also counts the deletions its exact stage paired.
+        let unpaired = count("D") * count("A");
+        if *name == "dissimilar" && *renames == "true" && unpaired == limit_value * limit_value {
             at_the_square += 1;
             assert!(
                 !found.renames.was_cut_short(),
@@ -907,6 +920,15 @@ fn a_shallow_clones_boundary_commit_is_compared_as_git_log_shows_it() {
     );
 }
 
+/// Git `2.<minor>.0`, to compare the git in use against.
+fn since(minor: u32) -> cairn_git::ops::GitVersion {
+    cairn_git::ops::GitVersion {
+        major: 2,
+        minor,
+        patch: 0,
+    }
+}
+
 /// `git log --raw` for one commit in the repository at `git_dir`, named explicitly, as
 /// the oracle for a repository git's discovery would not find.
 fn shown_in(holder: &Repo, git_dir: &str, commit: &str, env: &[(&str, &str)]) -> Vec<Row> {
@@ -991,9 +1013,18 @@ fn a_repository_whose_working_tree_sits_inside_another_is_the_one_asked() {
 /// query run inside one by discovery exits 128 on every commit. The query names the
 /// repository it opened, which is the explicit spelling the setting asks for, and
 /// answers what `git --git-dir=<it> log` shows. Caught by: an invocation left to
-/// discovery.
+/// discovery. The setting arrived in git 2.38; an older git has nothing to refuse, and
+/// there this says so and decides nothing.
 #[test]
 fn a_bare_repository_is_answered_under_safe_bare_repository_explicit() {
+    if git().version() < since(38) {
+        eprintln!(
+            "SKIPPED a_bare_repository_is_answered_under_safe_bare_repository_explicit: git {} \
+             has no safe.bareRepository",
+            git().version()
+        );
+        return;
+    }
     let source = repositories::crafted();
     let holder = Repo::new("bare-holder");
     let bare = holder.path().join("bare.git");

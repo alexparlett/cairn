@@ -153,12 +153,16 @@ model-level pins and each has a hole a mutation walks through:
 
 ## What the engine answers
 
-Two queries in `cairn-git`. The **changes query** is answered by `git diff-tree`
-(decision E; D1 in `docs/design/engine.md`, "Where git answers a read"): which paths
-changed, with their statuses, modes, ids and every rename and copy pair, are git's
-own. It is the one diff query that starts a process. The **content query** is
-computed by gix, in process, and Cairn only groups what gix returns (decision L3).
-No diff algorithm is written here, and no gix type appears in a public signature.
+Two queries in `cairn-git`, and git answers both (D1 in `docs/design/engine.md`,
+"Where git answers a read"). The **changes query** is answered by `git diff-tree
+--raw` (decision E): which paths changed, with their statuses, modes, ids and every
+rename and copy pair, are git's own. The **content query** reads both versions of
+one file with gix and decides there what is not text; which of its lines changed —
+exactly, and ignoring whitespace — and the function context of each hunk are
+`git diff-tree -p`'s (the content-parity decision, which amends packet decision
+L3; `docs/research/diff-engine/content-parity-spike.md`), and Cairn groups git's
+changes into hunks by git's own rule. No diff algorithm is written here but the
+intra-line highlights, and no gix type appears in a public signature.
 
 `DiffSession` (`crates/cairn-git/src/diff.rs`) holds gix's blob resource cache for
 a run of content queries. Building one reads the index and the attribute stack,
@@ -324,8 +328,14 @@ patch, write nothing either. Which command runs, and that it carries no
 
 ### The content query
 
-`Repository::file_diff(&ChangedFile, &ContentOptions) -> FileDiff` (R2.3 through
-R2.8). It decides in this order, and the order is the point:
+`DiffSession::file_diff(&GitBinary, &ChangesRequest, &ChangedFile, &ContentOptions,
+&impl Cancel) -> FileDiff` (R2.3 through R2.9), with `Repository::file_diff` the same
+on a session of its own. The request is the one the file's change set answered: its
+two commits — a commit and its first parent, the empty tree for a root — are what
+git is given (`diff/changes.rs`'s `subject`). `ContentOptions` carries R2.6's limits,
+`load_anyway`, `ignore_whitespace` and `context`, the context the view groups at
+(three lines by default). It decides in this order, and the order is the point
+(`crates/cairn-git/src/diff/content.rs`):
 
 1. **A submodule** answers its two commit ids. gix's blob platform refuses the mode
    outright, so this is settled before anything is asked of it.
@@ -341,7 +351,16 @@ R2.8). It decides in this order, and the order is the point:
    git's form of the content, without splitting it into lines.
 6. **A Git LFS pointer** is recognised when every side that exists begins
    `version https://git-lfs.github.com/spec/` and is at most 1 KiB.
-7. Otherwise the file is diffed as text.
+7. Otherwise both versions are split into lines (`split_lines`, which splits as
+   git does: on `\n` alone, a `\r` kept, a last line that never ended marked), and
+   **git says which changed** — unless git has only one answer: a file added,
+   deleted or changed in type is one change of every line (git's own patch for a
+   type change is a deletion and an addition), a side with no lines makes the other
+   side's every line the change, and two sides with the same lines have none. Each
+   of those starts no process, and `a_file_git_is_not_asked_about_still_reads_as_git_diff_shows_it`
+   holds them, under a diff driver with an `xfuncname` and without, to `git diff`'s
+   answer — function context included, which git prints none of for a hunk starting
+   at the first line — and to no process started.
 
 That the size check really precedes the read is pinned deterministically rather
 than by timing: `the_size_ceiling_is_decided_before_the_content_is_read` builds a
@@ -352,44 +371,129 @@ possible without reading it, and asking for it anyway (`load_anyway`) fails, whi
 is what stops the first half from being a claim about a file that could have been
 read either way.
 
-**The tokens keep their terminators.** `gix::diff::blob::sources::byte_lines` is
-what the exact diff is computed over, so a last line that lost its newline, and a
-CRLF ending that became LF, are changes — exactly as git sees them. gix's own
-`interned_input()` strips terminators and would lose both. `split_lines` splits the
-same buffer the same way, so there is one `DiffLine` per token on each side and
-every range lands inside its own side.
+**The read.** `crate::reads::patches` (`crates/cairn-git/src/reads/patches.rs`)
+runs, as a read invocation (`GIT_OPTIONAL_LOCKS=0`, `GIT_NO_LAZY_FETCH=1`, no
+askpass token):
 
-**The algorithm is the user's, and so is the indent heuristic.** `prepare_diff`
-resolves `diff.<driver>.algorithm`, then `diff.algorithm`, then gix's default, and
-`diff_with_slider_heuristics` is `Diff::compute` followed by `postprocess_lines`,
-which is git's `--indent-heuristic`. `diff.algorithm = patience`, the one algorithm
-gix lacks, needs no handling of Cairn's own: gix opens a repository leniently and
-falls back to histogram itself, which is what R2.4 asks for.
+```text
+git --literal-pathspecs -c diff.suppressBlankEmpty=false diff-tree -r -z --raw
+    --no-abbrev -p --full-index -U<n> --no-ext-diff --no-textconv --no-color -a [-w]
+    [--diff-algorithm=<algorithm>] <detection> --end-of-options <old> <new> -- <new path> [<old path>]
+```
 
-**What `TextDiff::new` requires of its producer, gix gives for free.** Its
-`HunkIter` advances both sides over the same unchanged tokens, so the unchanged run
-between two changes is the same length on both sides by construction, and a hunk's
-range cannot reach past its side. Nothing is converted or clamped at the seam; the
-`debug_assert!`s have not fired over any fixture, the Cairn checkout's own history,
-or the bench repository.
+- `-U<n>` is the view's context, never zero: at zero git trims the tail the two
+  sides share before it diffs (`trim_common_tail`), which changes the script; at
+  any context of one or more the script is the one `git diff -U3` shows. The entire
+  file asks at one.
+- Each change is read as a **maximal run of `-` and `+` lines**, never from the `@@`
+  headers, which group changes at the context. `\ No newline at end of file` is read
+  by its first byte and marks the line before it.
+- **Every line git prints is checked against the lines gix read**: a removed line
+  against the old side, an added one against the new, a context line against the
+  new side (git prints context from it) and, unless whitespace is ignored, the old.
+  A difference — bytes, newline, or a line past the end — is
+  `Error::ContentReadsDisagree`, which names the file and what differed and which a
+  caller answers by asking again; nothing of either read is drawn. Hunks whose gaps
+  differ between the two sides are refused the same way, so a `TextDiff` built from
+  git's answer always meets its own preconditions.
+- The **detection pairs the file's paths**: `-M` for a rename, `-C
+  --find-copies-harder` for a copy (so the source is a candidate whether or not it
+  changed), `--no-renames` otherwise; both paths are the pathspec, read literally
+  (`--literal-pathspecs` is a global option, before the verb). A copy whose source
+  also changed answers two files; `--raw -z` in the same call says which patch is
+  which, in order, and the one whose kind, paths and blobs are the change set's is
+  taken.
+- `-c diff.suppressBlankEmpty=false`, since plumbing reads that key and with it a
+  blank context line loses its marker. `-a`, since the file is already known to be
+  text by git's rules.
+- **The algorithm is the user's `git diff`'s** (`crates/cairn-git/src/diff/algorithm.rs`).
+  Plumbing never reads `diff.algorithm`, so it is read here — the last value, git's
+  four names in any case and `default`, a value git refuses or the bare key
+  `Error::InvalidConfig` — and passed as `--diff-algorithm`, always in that long
+  spelling. From git 2.40 a diff driver's `diff.<driver>.algorithm` beats it for a
+  path whose OLD side's `diff` attribute names the driver (`run_diff` looks the
+  driver up by `one->path`), and `diff-tree` applies a driver's algorithm only when
+  no `--diff-algorithm` is given — so for such a path no flag is passed. Whether a
+  driver applies is asked of git itself, `crate::reads::diff_attributes`
+  (`git check-attr --stdin -z diff`, the paths on stdin): the same `git_check_attr`
+  `git diff` makes, so the working tree's `.gitattributes`, the index's, the
+  `info` file and `core.attributesFile` are read where git reads them. It runs only
+  when the git in use reads driver algorithms and the configuration names one git
+  parses — never otherwise. Before 2.40 git has no such key; neither has the query.
+  `diff.indentHeuristic` plumbing reads itself, so nothing is passed. Pinned by
+  `every_discriminating_file_reads_as_git_diff_shows_it_under_every_configuration`
+  and `a_drivers_algorithm_applies_where_git_says_the_driver_does` (a driver handed
+  files by an uncommitted `.gitattributes`, with `check-attr` required to run from
+  2.40 and not before), and the configuration's reading by
+  `diff_algorithm_is_read_the_way_git_diff_reads_it` and
+  `a_drivers_algorithm_counts_from_git_2_40_when_git_can_use_it`.
+- **Ignoring whitespace** is the same read with `-w` (R2.8). git leaves a file whose
+  every change is whitespace out — from its raw records too on git 2.56, from its
+  patches alone on 2.30 through 2.40, which list it and print nothing — so its
+  absence is that answer, no changes; a listed file is matched to its patch by the
+  blobs on its `index` line (`--full-index`) so that a patch left out does not hand
+  the next file's to it.
+- **Function context**: the text after each header's closing `@@`, taken verbatim
+  from git's own header. git finds it by searching the old side backwards from the
+  line above where the hunk starts, so it depends on where a hunk starts and so on
+  the context — which is why the read runs at the view's. It reaches the model as
+  `FunctionContext` (below).
+
+`cancel` is polled by the runner on every tick, so a superseded content query ends
+its `git` and answers `Error::ContentCancelled`; one already superseded starts
+nothing (`a_content_read_superseded_by_a_newer_epoch_stops_git_and_reports_it`,
+over a `minimal` diff of two 60,000-line files that takes git seconds, and
+`a_content_read_superseded_before_it_starts_runs_nothing`, both in
+`crates/cairn-git/src/reads/mod.rs`). Which flags the read passes is pinned on its
+argument vector (`a_file_read_is_diff_tree_with_a_patch_and_never_runs_a_program`,
+`the_read_is_check_attr_of_diff_with_its_paths_on_stdin`), and that it writes and
+runs nothing by the outcome: `the_content_query_writes_nothing_and_runs_nothing`
+configures a caching textconv, `diff.external`, a driver `command`, a clean and a
+smudge filter and a driver algorithm, leaves the working tree stat-dirty and
+content-dirty, runs every file's query and Expand All with and without `-w`, and
+requires the git directory byte-identical and no program's mark — then runs the
+programs by hand.
+
+**Expand All.** `DiffSession::file_diffs(.., &ChangeSet, ..)` answers every file of
+a change set, decided as one file is, but asks git ONCE for the whole comparison:
+`diff-tree -p` with the change set's own detection (`-M`/`-C` and the `-l` git
+applied, `--ignore-submodules=all` where the user hides every gitlink), no
+pathspec, and no `-a`, so a binary file costs git a line. Each text file's patch is
+found by its paths and checked to be the same change between the same blobs; a file
+the answer does not hold that way — paired otherwise, which a hidden submodule's
+place in a cut-short rename search can do, or called binary — and a file whose
+driver names its own algorithm (one call cannot pass two) are asked about on their
+own. `expand_all_answers_what_each_file_answers_alone` requires every answer equal
+to the per-file one, with and without `-w`, over the crafted, rewrite, submodule,
+attribute, whitespace and discriminating fixtures, the last with a driver algorithm.
+On git 2.40 and later, `git show` of a whole commit carries a driver's algorithm into
+every later file of the same output; Cairn answers each file as `git diff -- <path>`
+does instead (see the known limits).
 
 ### The display-only overlay
 
-**Ignoring whitespace** compares lines with every ASCII whitespace byte removed,
-which is git's `-w`, and the key is one token per line — so a range over the keys
-indexes the original lines one for one and nothing has to be mapped back. The lines
-drawn are always the original bytes; only which ranges are marked changes. A blank
-line keeps its place with an empty key rather than being dropped, which is what
-stops every later range from shifting by one.
+**Ignoring whitespace** is `git diff -w`'s second set of ranges, over the same
+original lines; only which ranges are marked changes.
 
-**Intra-line highlighting** is always on (L4). The i-th removed line of a change is
-paired with its i-th added line, which is the pairing a side-by-side view draws, and
-the two are diffed at word granularity: a run of word bytes (ASCII alphanumeric,
-`_`, or any byte at or above `0x80`, which keeps a multi-byte character whole), a
-run of spacing, or one other byte. Myers, and no indent heuristic, on imara's own
-advice about character diffs. A pair where either line is over the long-line limit
-is skipped (R2.7). Both sides share one interner and one `Diff` across the file, so
-a file of ten thousand changed pairs reuses two allocations.
+**Function context** is `cairn_model::FunctionContext`: what git printed after each
+hunk header's `@@`, keyed by the line the hunk starts at on the old side, with the
+context it was read at. Its text depends on the start alone, so the exact hunks and
+the whitespace-ignoring ones share one; `FunctionContext::of(HunkHeader)` answers
+`Some` — empty where git prints none — for a hunk starting where git printed one,
+and `None` where it printed none, which a hunk grouped at another context than the
+query's mostly gets. Pinned against `git diff` at one, three, five and eight lines
+of context, with git's default rule and a driver's capturing `xfuncname`, by
+`the_function_context_is_git_diffs_at_every_context`.
+
+**Intra-line highlighting** is always on (L4) and stays gix's: git has no
+equivalent. The i-th removed line of a change is paired with its i-th added line,
+which is the pairing a side-by-side view draws, and the two are diffed at word
+granularity: a run of word bytes (ASCII alphanumeric, `_`, or any byte at or above
+`0x80`, which keeps a multi-byte character whole), a run of spacing, or one other
+byte. Myers, and no indent heuristic, on imara's own advice about character diffs.
+A pair where either line is over the long-line limit is skipped (R2.7). Both sides
+share one interner and one `Diff` across the file, so a file of ten thousand changed
+pairs reuses two allocations.
 
 ### What decides the engine, and what it decides against
 
@@ -435,9 +539,20 @@ read.
   equals porcelain `git log --raw`'s and its `needed_limit` equals git's warning;
   `a_configuration_git_refuses_is_refused` holds a value git refuses to
   `Error::InvalidConfig`.
-- **C6** (`every_crafted_file_diff_is_the_one_git_prints`) compares the unified
-  projection with `git diff -U3` of the same two **blobs** — two blobs rather than
-  two commits and a path, so rename detection cannot change what is compared.
+- **C6** (`crates/cairn-git/tests/diff/parity.rs`) compares the unified projection,
+  each header with its function context, with the user's own porcelain `git diff`
+  for the file's paths and the detection that pairs them (a type change against
+  `git diff` of its two blobs, since git prints it as two files): the crafted
+  history at one and three lines (`every_crafted_file_diff_is_the_one_git_prints`);
+  a seeded fixture the four algorithms, the indent heuristic and a driver's
+  algorithm are first shown to disagree on, under nine configurations
+  (`every_discriminating_file_reads_as_git_diff_shows_it_under_every_configuration`);
+  up to the last 150 non-merge commits of this repository under each algorithm,
+  in a clone sharing its objects so no configuration is written to the checkout
+  (`this_repositorys_history_reads_as_git_diff_shows_it_under_every_algorithm`); and
+  `git diff -w` over whitespace-only, real and mixed edits, with R6.7's notice
+  (`ignoring_whitespace_reads_as_git_diff_w_shows_it`). No divergence is allowed in
+  any. Dropping `--diff-algorithm`, or asking at `-U0`, turns them red.
 
 ### Known limits of the engine
 
@@ -488,12 +603,30 @@ read.
 - **`Operation::ExternalCommand` is answered, not asserted unreachable.** It cannot
   happen while the cache is built as above; answering it as `Unsupported` means a
   gix that changed that default draws a notice instead of starting a program.
+- **A content query costs one or two `git` processes** — two with whitespace
+  ignored, one more for `check-attr` when a driver algorithm may apply — where it
+  cost none: on the bench repository about 17 ms for the largest subject, against
+  9 ms in process (`docs/work/diff-engine/progress.md`).
+- **A whole commit's output under a driver algorithm is not `git show`'s.** From
+  git 2.40, git applies a driver's algorithm by changing its own diff options, so in
+  one `git show` or `git diff` of several files every file after one with a driver
+  algorithm is diffed with that algorithm too (reproduced with 2.40.0 and 2.56.0).
+  Cairn answers each file as `git diff <old> <new> -- <path>` does, which is the
+  same for every file of the commit whatever its order.
+- **`diff.context` and `diff.interHunkContext` are not read.** The view's context is
+  its own setting (R6.3), and hunks merge at twice the context, as `git diff` does
+  when neither key is set. A user who sets either sees `git diff` group hunks
+  otherwise than Cairn; the changed lines are the same.
+- **A diff driver named `set`, `unset` or `unspecified`** reads, through
+  `git check-attr`, as that state of the attribute rather than as a driver.
 
 ## What a view may see and a patch may not
 
 Ignoring whitespace computes a **second** set of changed ranges, for display only
-(decision L4), and intra-line highlighting computes byte ranges inside paired
-lines. Both live in `DisplayOverlay`, beside `TextDiff` rather than inside it.
+(decision L4), intra-line highlighting computes byte ranges inside paired
+lines, and git's function context is the text a header shows after its `@@`. All
+three live in `DisplayOverlay`, beside `TextDiff` rather than inside it, so the
+patch is the same bytes whatever git printed there.
 
 That separation is R1.7, and it is the whole reason the two are different types:
 `emit_patch` takes a `&TextDiff`, which has no room for either, so reaching the
@@ -645,5 +778,7 @@ pinned by `an_offset_reads_the_way_git_writes_it`.
 - **A path is written unquoted.** git quotes an unusual path in its own output and
   `git apply` accepts either form, so this is not a correctness problem for the
   paths git can carry; a path holding a newline or a tab is not handled.
-- **No function context after the second `@@`.** git writes the enclosing
-  declaration there and ignores it on apply; Cairn writes nothing.
+- **No function context after the second `@@` of a patch.** git writes the
+  enclosing declaration there and ignores it on apply; the emitter writes nothing,
+  and the view's header rows take theirs from the overlay, which the emitter cannot
+  see.

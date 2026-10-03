@@ -11,7 +11,9 @@ differs from git's. Every mutation goes through the `git` binary, invoked from
 showing what git shows means asking git, and each such read is a named function
 in `crates/cairn-git/src/reads/`. The changes query — which paths a commit or a
 comparison changed, with their renames and copies — is one, because rename and
-copy detection is where gix and git disagree ("Where git answers a read", below). Besides those, the one process a
+copy detection is where gix and git disagree; which lines of a changed file
+changed is another, because line diffing is too ("Where git answers a read",
+below). Besides those, the one process a
 read may start is the user's own clean filter driver ("Reads see git's form",
 below). How every `git` process is built, run and ended is `processes.md`.
 
@@ -50,8 +52,24 @@ no basename stage, and even where gix searches exhaustively its similarity
 measure and its pairing pick different pairs from git's. So the changes query
 runs `git diff-tree`, at git's own cost — a few tens of milliseconds a
 selection, under a hundred on the worst subject for renames and about 130 when
-copies are detected too — and gix keeps everything it
-agrees with git on: history, content diffs, and the model they feed.
+copies are detected too.
+
+Line diffing is the second case. A diff algorithm leaves choices open — where an
+inserted block sits among equal lines, which of two equally short scripts to
+print — and gix's diff makes some of them differently from git's even under the
+same algorithm and indent heuristic, lacks patience altogether, and ignores the
+algorithm a diff driver names; on this repository's own history it placed nine
+files' hunks somewhere `git diff -U3` does not. Comparing lines with their
+whitespace removed diverges the same way, and the text git prints after a hunk
+header's `@@` — the enclosing function, by the path's `xfuncname` — is git's
+alone. So a file's changed ranges, its whitespace-ignoring ranges and each hunk's
+function context come from `git diff-tree -p`, asked at the context the view
+shows, with the algorithm the user's `git diff` would use and every printed line
+checked against the lines gix read; one call per comparison answers every file
+at once. gix keeps what it agrees with git on, or what git has no answer for:
+history, reading both versions of a file and deciding what is not text (binary,
+too large, LFS, submodule) before anything is diffed, intra-line highlights, the
+patch emitter and the model they feed.
 
 Each such read is a named function in `reads/`, runs under a read's environment
 — no optional locks, no askpass token — and is cancelled by its query's epoch

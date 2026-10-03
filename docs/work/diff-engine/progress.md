@@ -3,6 +3,158 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-03 — content parity: a file's changed lines come from git
+
+The user decided after the spike (`docs/research/diff-engine/content-parity-spike.md`,
+"Decided from it"): the content query's changed ranges, its whitespace-ignoring
+ranges and each hunk's function context come from `git diff-tree -p` run as a read;
+gix keeps the blob reads, the size, binary and LFS pre-checks, intra-line highlights
+and the patch emitter. **This amends packet decision L3** ("gix computes the diff;
+Cairn groups it"), which stays as written in `brainstorm.md`, a historical record;
+PRD R2.4, R2.8, R2.9, R6.4 and C6 are amended inline, each marked "(amended 2026-10,
+content parity, see progress.md)". C6's "crafted fixtures with unambiguous edits" is
+now parity on any edit, under every algorithm and over real history. F1 of the C6
+audit is closed by it.
+
+### What shipped
+
+- `cairn_model::FunctionContext`, carried by `DisplayOverlay`
+  (`with_function_context`, `function_context`): git's text after each hunk
+  header's `@@`, keyed by the line the hunk starts at on the old side, with the
+  context it was read at. Display-only, so the emitter's patches are unchanged.
+- `crate::reads::patches` (`crates/cairn-git/src/reads/patches.rs`): `git
+  --literal-pathspecs -c diff.suppressBlankEmpty=false diff-tree -r -z --raw
+  --no-abbrev -p --full-index -U<n> --no-ext-diff --no-textconv --no-color -a [-w]
+  [--diff-algorithm=X] <detection> --end-of-options <old> <new> -- <paths>`, parsed
+  as maximal runs, every printed line checked against gix's lines. One file, or a
+  whole comparison (Expand All).
+- `crate::reads::diff_attributes` (`reads/attributes.rs`): `git check-attr --stdin
+  -z diff`, run only when the git in use reads driver algorithms (2.40+) and the
+  configuration names one git parses.
+- `crate::diff::algorithm`: `diff.algorithm` read as porcelain does
+  (`Error::InvalidConfig` for a value git refuses), the drivers' algorithms from 2.40.
+- API: `ContentOptions.context` (the view's context, default three lines);
+  `DiffSession::file_diff` and `Repository::file_diff` now take `&GitBinary`, the
+  `&ChangesRequest` the file came from and `&impl Cancel`; new
+  `DiffSession::file_diffs(&GitBinary, &ChangesRequest, &ChangeSet, ..)` for Expand
+  All; `Error::ContentCancelled` and `Error::ContentReadsDisagree { path, detail }`
+  (the stale-read guard, which a caller retries).
+- Deleted: `crates/cairn-git/src/diff/whitespace.rs` (Cairn's own whitespace pass)
+  and the gix line diff of the content query (`exact_changes`, `changed_ranges`).
+  `GitCommand::input` lost its test-only `expect(dead_code)`: `check-attr` feeds it.
+
+### Parity evidence (git 2.56.0; the same suites on 2.30.9, 2.32.7, 2.39.5, 2.40.0)
+
+| Suite | Compared | Divergences |
+| --- | --- | --- |
+| Discriminating fixture, 9 configurations (unset; myers; minimal; patience; histogram; heuristic off; histogram + heuristic off; histogram with `diff.drv.algorithm=patience`; `diff.drv.algorithm=minimal`) at `-U3` | 720 files, 3,673 hunks, 3,052 with function context | 0 |
+| This repository's history, last 50 non-merge commits (all there are), each of myers, minimal, patience, histogram | 596 files and 1,157-1,158 hunks per algorithm | 0 |
+| Function context at `-U1`, `-U3`, `-U5`, `-U8`, default rule and a capturing `xfuncname` | 80 files per context | 0 |
+| `git diff -w`, seeded whitespace-only, mixed and real edits, and the discriminating fixture | 34 + 80 files | 0 |
+| Crafted history (C6) at `-U3` and `-U1` | every text file of every commit | 0 |
+| Files git is not asked about (added, deleted, emptied, filled; under a driver and not) at `-U1`, `-U3` | 16, no process started | 0 |
+| Expand All against per-file, with and without `-w`, seven fixtures | at least 300 files | 0 |
+
+Each comparison is against porcelain `git diff` for the file's paths with the
+detection that pairs them, so it reads `diff.algorithm`, the drivers and the indent
+heuristic as the user does. The discriminating fixture is first shown to
+discriminate: each algorithm's answer differs from myers', patience's from
+histogram's, the heuristic's from its absence, and — on a git that reads one — a
+driver's algorithm from `diff.algorithm`.
+
+**Mutations, each run and reverted:** dropping the `--diff-algorithm` flag turns
+the discriminating suite (minimal: 2 of 80 files), the history replay (minimal: 8
+of 596) and Expand All red. Asking at `-U0` turns the discriminating, history,
+function-context and `-w` suites red (72 of 80, 291 of 596, 72 of 80, 17 of 34
+files). The parser's unit tests are the stale-read guard's: a removed, context or
+added line that differs, a lost newline and a side that ends early each refuse the
+reading, and `lines_git_printed_that_were_not_read_are_the_error_a_caller_retries`
+maps that to `Error::ContentReadsDisagree`.
+
+### C14, re-measured
+
+Same machine and repository (AMD Ryzen 7 9800X3D, 60.4 GiB, NVMe, rust-lang/rust at
+`c999cef531e`); `git version 2.56.0`; `cargo test --release`, warm, one run to warm
+up then the median of seven; the reporter in `crates/cairn-git/tests/diff/bench.rs`.
+
+| Subject | Cairn now (git ranges) | min / max | Cairn before (gix ranges) | git baseline | Bar | |
+| --- | --- | --- | --- | --- | --- | --- |
+| F7 `3b09522c34b`, loaded | **17.513 ms** | 16.801 / 22.088 | 9.024 ms | 9.8 ms | 100 ms | MET |
+| F7, refused on the byte ceiling | 0.027 ms | 0.025 / 0.032 | 0.004 ms | — | — | — |
+| F1 `6a6e8446b97`, refused | 0.007 ms | 0.004 / 0.029 | 0.002 ms | — | — | — |
+| F1, Load Diff | **186.859 ms** | 185.959 / 195.281 | 128.4 ms | 163.0 ms | — | recorded |
+| Expand All, S7 `f0845adb0c1` (1,017 text files, one `diff-tree -p`) | **61.090 ms** | 60.823 / 62.653 | — | — | — | recorded |
+
+The changes query is unchanged (S7 7.808 ms, S1 33.611 ms, M1 81.494 ms; M1's 2,774
+pairs all git's). F7's bar is met with five times its margin; the content query now
+costs git's own diff plus the gix read Cairn keeps. Expand All's 61 ms covers gix
+reading and splitting all 1,017 files' blobs, git's one patch over the commit
+(the spike measured 31.7 ms for the process), parsing and checking it, and the
+intra-line highlights.
+
+### Decisions made here without asking
+
+- **git is asked at the view's context, not at `-U1`.** The function context of a
+  hunk depends on where it starts, so on the context, and cannot be derived from a
+  `-U1` answer (a function line between `-U1`'s start and `-U3`'s changes it). One
+  read at `-U<n>` (n ≥ 1, the entire file asking at one) answers the ranges — the
+  same script at every context of one or more, which the spike measured and the
+  replay re-checks — and the headers for exactly the hunks the view draws. A context
+  change is a new content query (phase 06). `-U0` stays refused.
+- **Driver detection asks git** (`check-attr`), rather than gix's attribute stack,
+  so which paths a driver covers is git's answer by construction; it runs only in
+  the rare case it can matter. For a path whose driver names an algorithm no flag
+  is passed, as decided; for the rest `--diff-algorithm` is always the long form.
+  Behaviour reproduced on 2.30.9, 2.32.7, 2.39.5 (driver algorithm ignored, porcelain
+  and plumbing alike) and 2.40.0, 2.56.0 (honoured, by the OLD path's attribute).
+- **Each file is answered as `git diff -- <path>` answers it**, not as a whole
+  `git show` does: from 2.40 git applies a driver's algorithm by changing its own
+  options, so in one multi-file output every later file inherits it (reproduced on
+  2.40.0 and 2.56.0, porcelain and plumbing). Expand All passes the algorithm
+  explicitly to its one call, which switches drivers off for it, and asks about each
+  driver-algorithm file alone. Recorded as a known limit in `docs/systems/diff.md`.
+- **git is not asked where it has one answer**: added, deleted and type-changed
+  files, a side with no lines, and two sides with the same lines (a rename that kept
+  its blob). A type change is one change of every line, since git's own patch for it
+  is a deletion and an addition.
+- **`-w` on older gits**: 2.30 through 2.40 list a whitespace-only file and print no
+  patch for it, where 2.56 leaves it out of the raw records too. The read adds
+  `--full-index` and matches such a file to a patch only by the blobs on its `index`
+  line; absent or unprinted under `-w` is "no changes".
+- **`--literal-pathspecs` is a global option**, before the verb (`diff-tree` refuses
+  it after); verified with a path holding `*` beside one the glob would match, on
+  every git above. The whole-comparison read does not pass it: its only pathspecs
+  are the `:(exclude,literal)` magic of the changes query's submodule rule.
+- `scripts/git-floor.sh`'s test-count floors raised to 49 and 52, one under the
+  runs' new counts.
+
+### Residuals and follow-ups
+
+- **Phase 03** (working tree): the spike's mechanism carries over —
+  `diff-files -p -U<n>` and `diff-index -p -U<n> [--cached] HEAD`, with the held
+  lines git's clean-filtered, EOL-converted form; `diff-files` runs the clean filter
+  (spike section 3), which L6 already allows. `reads::patches` takes trees today; a
+  working-tree scope is its next arm.
+- **Phase 04**: every content query now starts a process and blocks on it, so it is
+  a diff-thread call with its epoch; `ContentOptions.context` is part of the cache
+  key R4.5 allows; `Error::ContentReadsDisagree` is retried, `ContentCancelled` is
+  not an error to show.
+- **Phase 06**: a context change asks the engine again, since function context
+  belongs to the context it was read at (`FunctionContext::of` answers `None` for a
+  hunk git printed no header at). Under `-w`, git prints a context line from the NEW
+  side, which may differ from the old in its whitespace; `UnifiedRows` draws context
+  from the old side and has no rows over the whitespace-ignoring ranges yet — the
+  parity test builds them over the new side. `diff.context` and
+  `diff.interHunkContext` are not read (a known limit).
+- **Phase 08**: `DiffSession::file_diffs` is Expand All's call; its one `diff-tree`
+  diffs every file git would show, including ones Cairn refuses as too large, so a
+  commit holding a very large text file pays git's time for it (cancellable). The
+  line budget may want to pass a subset — today it takes the whole change set.
+- CI's `git floor` job runs 2.30.9 and 2.32.7, so the before-2.40 branch of the
+  driver rule is decided there and the 2.40+ branch on the gate's own git; 2.39.5 and
+  2.40.0 were run by hand here, not by the gate.
+- QA is due: `/qa` has not reviewed this change.
+
 ## 2026-10-03 — the C6 audit, the gate's integrity, and a shallow clone's history
 
 The C6 audit and a gate-integrity review raised findings that a fresh `qa-confirm`

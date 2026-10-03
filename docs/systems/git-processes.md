@@ -52,6 +52,10 @@ crates/cairn-git/src/
   reads/        each read `git` answers, one named function each; its tests run a read
                 built from a `GitBinary` copy, on a thread, stopped by an epoch
     changes.rs      changes — `git diff-tree -r -z --raw`, the changes query (docs/systems/diff.md)
+    patches.rs      patches — `git diff-tree -p`, a file's changed ranges and function context
+                    for the content query, one file or a whole comparison (docs/systems/diff.md)
+    attributes.rs   diff_attributes — `git check-attr --stdin -z diff`, whether a path's diff
+                    driver names its own algorithm (docs/systems/diff.md)
 ```
 
 `process` is a private module (`mod process;` in `lib.rs`). The application

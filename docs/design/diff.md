@@ -43,11 +43,15 @@ submodule with both commit ids, a mode change only, conflicted, or unsupported
 with its reason — and the view shows that state. A too-large file is refused
 before it is read, never after the window has stalled on it.
 
-gix computes each file's diff; Cairn groups it. No diff algorithm is written
-here, and gix types stop at the seam. Which files a commit or a comparison
-changed, with their renames and copies, comes from `git` itself, because that is
-where gix's answer differs from git's (`engine.md`, "Where git answers a
-read"). A working-tree diff shows what `git diff`
+A diff shows what the user's own `git diff` shows. Which files a commit or a
+comparison changed, with their renames and copies, and which lines of each
+changed — under the user's algorithm, a diff driver's, and the indent heuristic,
+with and without whitespace — come from `git` itself, because those are where
+gix's answers differ from git's (`engine.md`, "Where git answers a read"); gix
+reads both versions and decides what is not text, and Cairn groups git's changes
+into hunks by git's own rule. No diff algorithm is written here but the
+intra-line highlights git has no equivalent of, and gix types stop at the
+seam. A working-tree diff shows what `git diff`
 shows, filters included (`engine.md`, "Reads see git's form"). Spec:
 `docs/prd/diff-engine.md` R1-R3.
 
@@ -80,8 +84,9 @@ shows, filters included (`engine.md`, "Reads see git's form"). Spec:
   emphasised, and toggles for ignore whitespace, fewer lines, more lines, entire
   file and side-by-side. Context starts at three lines and moves one line per
   click, never below one.
-- A hunk header is git's `@@` line in muted text at normal row height, with no
-  band and no buttons; staging acts on a selection, not on the header
+- A hunk header is git's whole `@@` line — the function context git prints after
+  it, by the path's diff driver, included — in muted text at normal row height,
+  with no band and no buttons; staging acts on a selection, not on the header
   (`ui.md`, "Staging gestures").
 - Intra-line highlighting is word-level (token granularity) and always on.
 - Colours are **solid tints**, starting from Fork's measured dark values and

@@ -109,9 +109,15 @@ being a feature and being a rewrite.
   returns its file diff. Both versions are read in git's form through gix's
   resource cache in its to-git mode: no textconv program and no external diff
   program runs on any read.
-- R2.4 **gix computes the diff** (L3): the algorithm is the user's
-  `diff.algorithm` (one gix lacks falls back to histogram), with git's indent
-  heuristic, over lines that keep their terminators. Cairn converts gix's changed
+- R2.4 **git computes the diff** (amended 2026-10, content parity, see progress.md): a file's changed ranges are
+  `git diff-tree -p`'s, run as a read at the context the view shows (never zero),
+  each change read as a maximal run of removed and added lines and checked line by
+  line against the lines gix read, so the unified projection equals the user's own
+  `git diff` for any edit. The algorithm is the one their `git diff` uses — a diff
+  driver's `diff.<driver>.algorithm` where git reads one, otherwise
+  `diff.algorithm`, otherwise myers — and the indent heuristic is git's as
+  configured. Hunk headers carry git's function context, taken from git's own
+  header at the view's context. Lines keep their terminators; Cairn converts git's
   ranges into model types at the seam and implements no diff algorithm of its own.
 - R2.5 Binary detection follows git: the `diff` and `binary` attributes,
   `core.bigFileThreshold`, and a NUL byte in the first 8,000 bytes.
@@ -127,14 +133,14 @@ being a feature and being a rewrite.
   and added lines, at token granularity (words, whitespace runs, punctuation), and
   is always on (L4). It is skipped for a pair where either line is over the
   long-line limit.
-- R2.8 **Ignoring whitespace** computes the second set of changed ranges by
-  comparing lines with all whitespace removed, which is git's `-w`. The lines drawn
+- R2.8 **Ignoring whitespace** takes the second set of changed ranges from the
+  same read with `-w`, so they are `git diff -w`'s (amended 2026-10, content parity, see progress.md). The lines drawn
   are always the original bytes.
 - R2.9 A query can be cancelled: a superseded changes query ends its `git`
   process through its query's epoch, rename detection included, rather than
   waiting for it (amended 2026-10, decision E, see progress.md), and work that
-  spans files checks between files. A single file's content diff runs to
-  completion, bounded by R2.6.
+  spans files checks between files. A content query's `git` read is ended
+  through its query's epoch the same way (amended 2026-10, content parity, see progress.md).
 - R2.10 Failures are `cairn_git::Error` variants naming what the caller must
   handle.
 
@@ -215,7 +221,8 @@ being a feature and being a rewrite.
   diff view, kept for the session. Expanding a single gap is issue #32.
 - R6.4 A unified row carries an old and a new line-number gutter and a
   plus-or-minus marker column; a side-by-side row carries a number gutter per
-  side. A hunk header row shows git's `@@ -a,b +c,d @@` in muted text at normal
+  side. A hunk header row shows git's `@@ -a,b +c,d @@` with the function context
+  git prints after it (amended 2026-10, content parity, see progress.md) in muted text at normal
   row height, with no band and no buttons. Every row has the same height, and a
   long line scrolls horizontally rather than wrapping (wrap is issue #34).
 - R6.5 Added and removed rows take **solid tints**, starting from Fork's measured
@@ -287,7 +294,7 @@ here and does not restate them.
 | C3 | The same patches applied with `--reverse --cached` onto the commit restore the parent's content | integration test |
 | C4 | A selection survives unified rows, side-by-side rows, every context size and entire-file mode unchanged, and the emitter's output depends on none of them | model unit tests |
 | C5 | The changes query agrees with git's own detection under the same config on fixtures: paths, statuses, rename and copy pairs and modes, including a merge commit against its first parent, a root commit, copies when configured, and a rename limit that cuts detection short; and the commit details it returns match git's for the same commit, including the committer, both timestamps with their offsets, and the whole message | integration tests comparing against `git` |
-| C6 | On crafted fixtures with unambiguous edits, the content query's unified projection equals `git diff -U3`; binary detection agrees with git for the `-diff` attribute, the `binary` attribute and a NUL byte; each too-large limit fires, and the size limit fires before the content is read | integration tests |
+| C6 | On crafted fixtures and on content where the algorithms disagree, under every algorithm, the indent heuristic off and a driver's algorithm, and over the repository's own history, the content query's unified projection equals `git diff -U3` — headers with their function context, and lines — on any edit, and ignoring whitespace equals `git diff -w` (amended 2026-10, content parity, see progress.md); binary detection agrees with git for the `-diff` attribute, the `binary` attribute and a NUL byte; each too-large limit fires, and the size limit fires before the content is read | integration tests |
 | C7 | Staged, unstaged and untracked diffs of a path equal `git diff --cached`, `git diff` and `git diff --no-index` on fixtures including a `text=auto` file with CRLF endings and a path under a configured clean filter driver; every R3.4 state is answered; the index file is byte-identical after every query | integration tests |
 | C8 | A scroll does not cancel a diff and a diff does not cancel a scroll; a changes query supersedes the file-diff lane; a superseded answer is never drawn; an answer naming another selection is never drawn | worker tests through the real boundary |
 | C9 | The diff view over a 1,000-line and a 100,000-line file builds one viewport of rows, at the top and scrolled deep, in unified and in side-by-side | headless `freya-testing` test, the twin of `only_a_viewport_of_rows_is_built_however_long_the_history` |

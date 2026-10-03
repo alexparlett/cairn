@@ -2,14 +2,17 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 02's rework landed, its QA findings are fixed and the C6 audit is
-done (2026-10-03), except F1: gix's hunks diverge from `git diff`'s, a spike is
-measuring what moving the content query's ranges to git costs, and the user decides
-after it. Phase 03 next.** The diff model exists in `cairn-model`,
-and `cairn-git` answers R2's two queries: the changes query from `git diff-tree`
-through the process manager (decision E, PRD R2.1, R2.2, R2.9 and C14 amended),
-honouring `diff.ignoreSubmodules` and `log.showRoot` as the user's `git log` does,
-the content query from gix. The full gate's `git-floor` step, and CI's `git floor`
+**Status: phase 02's rework landed and the C6 audit is done; the content-parity
+rework landed (2026-10-03) — a file's changed lines, its whitespace-ignoring lines
+and each hunk's function context now come from `git diff-tree -p`, closing the
+audit's F1 — and its QA is due. Phase 03 next.** The diff model exists in
+`cairn-model`, and `cairn-git` answers R2's two queries: the changes query from
+`git diff-tree` through the process manager (decision E, PRD R2.1, R2.2, R2.9 and C14
+amended), honouring `diff.ignoreSubmodules` and `log.showRoot` as the user's `git log`
+does; the content query reads both versions with gix and asks `git diff-tree -p` which
+lines changed (the content-parity decision, amending L3; PRD R2.4, R2.8, R2.9, R6.4 and
+C6 amended), with parity to `git diff` enforced by tests under every algorithm and
+over real history. The full gate's `git-floor` step, and CI's `git floor`
 job, run the diff tests on git 2.30 and 2.32 built from source. Why decision E, and the evidence: the 2026-09-30 and
 2026-10-03 entries in `progress.md`,
 `docs/research/diff-engine/rename-parity-spike.md` and
@@ -25,8 +28,12 @@ with D1, D3, D5 and D6 in `engine.md`, `concurrency.md`, `platform.md` and
   changed ranges — and hunks, rows and patches are pure projections of it (L2).
   A changed line is identified by its line number on its own side, so a selection
   is presentation-independent.
-- **gix computes the diff; Cairn groups it** (L3). No diff algorithm is written
-  here, and gix types stop at the seam.
+- **git computes the diff; Cairn groups it** (L3, amended by the content-parity
+  decision recorded in `progress.md`, 2026-10-03: `git diff-tree -p` answers a
+  file's changed lines, its whitespace-ignoring lines and its function context; gix
+  reads the blobs, decides what is not text and computes intra-line highlights). No
+  diff algorithm is written here but those highlights, and gix types stop at the
+  seam.
 - **The patch always carries three lines of context**, whatever the view shows,
   and the emitter can never see the whitespace-ignoring ranges (L2, L4).
 - **A working-tree read may run the user's filter driver** (L6). D1 is amended for
@@ -80,7 +87,8 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | `split_lines` | model | Splits content into lines the way git's diff does, keeping a last line that never ended. |
 | `ByteRange` | model | A half-open run of bytes inside one line. |
 | `IntraLineHighlight` | model | Where a paired removed and added line differ inside themselves. |
-| `DisplayOverlay` | model | Display-only: the whitespace-ignoring ranges and the intra-line highlights. Beside `TextDiff`, never inside it (R1.7). |
+| `DisplayOverlay` | model | Display-only: the whitespace-ignoring ranges, the intra-line highlights and git's function context (`with_function_context`, `function_context`). Beside `TextDiff`, never inside it (R1.7). |
+| `FunctionContext` | model | git's text after each hunk header's `@@`, keyed by the hunk's old-side start, with the context it was read at; `of(HunkHeader)` answers `None` for a start git printed no header at. |
 | `DiffLimits` | model | R2.6's ceilings: 1 MiB, 50,000 lines, 2,048 bytes in a line, 64 MiB to load anyway. |
 | `SizeLimit` | model | Which ceiling a file crossed, and what it measured. |
 | `DiffContent` | model | Text, or one of the seven states that stand in place of rows. |
@@ -96,7 +104,7 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | `ChangesRequest` | git | What to compare: one commit against its first parent (the empty tree for a root), or two commits tip against tip. |
 | `ChangeSet` | git | What a commit or a comparison changed: the files sorted by a total key, the commit's details when one commit was named, and how rename detection went. |
 | `RenameDetection` | git | Whether detection was on and found copies, the limit git applied, and `needed_limit` / `was_cut_short()`: R2.2's "the answer says so", decided from git's answer and the limit, never from stderr. |
-| `ContentOptions` | git | R2.6's limits, whether to load past them anyway, and whether to compute the whitespace-ignoring ranges. |
+| `ContentOptions` | git | R2.6's limits, whether to load past them anyway, whether to compute the whitespace-ignoring ranges, and `context`, the view's context, which git is asked at. |
 | `DiffSession` | git | Holds gix's resource cache for a run of content queries; its `changes` is `Repository::changes`. Borrows the repository and is not `Send`, like `HistorySession`. |
 | `Repository::changes(&GitBinary, ..)` | git | R2.1, R2.2, R2.9, R2.10: gix reads the commits and the configuration — the two rename keys, `diff.ignoreSubmodules`, `log.showRoot` — and `git diff-tree` answers. Blocks on one read process (two when a hidden submodule must be excluded from a rename search); `Cancel` polled every runner tick ends it. A root commit under `log.showRoot=false` answers no files and starts no process. |
 | `reads::changes`, `reads::Detection`, `reads::Submodules` | git (crate-private) | The read: `git diff-tree -r -z --raw --no-abbrev` with detection spelled out, the submodules to leave out (`--ignore-submodules=all`, or `:(exclude,literal)` pathspecs), `-z` records parsed into `ChangedFile`s, a superseded query answering `ChangesCancelled`. |
@@ -104,16 +112,20 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | `diff::submodules` (`Hiding`) | git (crate-private) | What `diff.ignoreSubmodules` and each submodule's own `ignore` hide from the user's `git log`, with `.gitmodules` read where git reads it. |
 | `diff::git_config` | git (crate-private) | The last value of a key across the configuration, `git_config_bool`, `git_parse_int`. |
 | `GitCommand::in_repository` | git (crate-private, `process/`) | Now names the repository to git — `--git-dir` and `--work-tree` ahead of the verb — for a repository gix trusts fully; one it trusts less is left to git's discovery, so `safe.directory` still decides it. |
-| `Repository::file_diff` | git | R2.3 through R2.8, on a session of its own. |
+| `DiffSession::file_diff(&GitBinary, &ChangesRequest, &ChangedFile, &ContentOptions, &impl Cancel)`, `Repository::file_diff` | git | R2.3 through R2.9: gix reads both versions and decides what is not text; `git diff-tree -p` (a read) says which lines changed, with `-w` too when asked, every printed line checked against gix's. Blocks on one or two processes (three with `check-attr`); git is not asked where it has one answer (added, deleted, type-changed, an empty side, identical lines). |
+| `DiffSession::file_diffs(&GitBinary, &ChangesRequest, &ChangeSet, ..)` | git | Expand All: every file of a change set, the text files' lines from ONE `diff-tree -p` over the comparison with the change set's detection; a file that answer does not hold as the change set does, or whose driver names its own algorithm, is asked about alone. Equal to the per-file answers. |
+| `reads::patches`, `reads::PatchQuery`, `reads::Scope`, `reads::Algorithm`, `reads::Reading` | git (crate-private) | The patch read and its parser: maximal runs of `-`/`+` lines, git's function context per hunk, the stale-read check. |
+| `reads::diff_attributes` | git (crate-private) | `git check-attr --stdin -z diff`: whether a path's diff driver is one that names an algorithm. Run only on git 2.40+ when the configuration names one. |
+| `diff::algorithm` (`Algorithms`) | git (crate-private) | `diff.algorithm` as porcelain reads it, and drivers' algorithms from git 2.40. |
 | `Repository::commit_details` | git | One commit in the detail R5.3 draws, without a changes query. |
-| `Error::ChangesCancelled`, `DiffSetup`, `DiffFile`, `UnexpectedGitOutput`, `InvalidConfig` | git | What the caller of a diff query must handle; `TreeDiff` went with the gix tree walk. |
+| `Error::ChangesCancelled`, `ContentCancelled`, `ContentReadsDisagree`, `DiffSetup`, `DiffFile`, `UnexpectedGitOutput`, `InvalidConfig` | git | What the caller of a diff query must handle; `TreeDiff` went with the gix tree walk. `ContentReadsDisagree` is the stale-read guard: git printed lines that are not the lines gix read; ask again. |
 
 ## Validation status
 
 | Phase | Status | Gate | QA |
 | --- | --- | --- | --- |
 | 01 diff model | landed | `scripts/gate.sh` PASS | `qa-checklist`, `test-coverage-auditor` and `responsiveness-reviewer`, adjudicated by `qa-confirm`; confirmed findings fixed or recorded as residuals in `docs/systems/diff.md` |
-| 02 engine, commits | landed 2026-09-18; changes query reworked onto `git diff-tree` 2026-10-03 (decision E) | `scripts/gate.sh` PASS, `git-floor` included | done over the reworked phase (2026-10-03), adjudicated by `qa-confirm`; confirmed findings fixed. C6 audit done (2026-10-03, adjudicated): F2-F7 fixed; **F1 open** — gix's hunks diverge from `git diff -U3`, awaiting the spike and the user's decision; no R2.4 test until then |
+| 02 engine, commits | landed 2026-09-18; changes query reworked onto `git diff-tree` 2026-10-03 (decision E) | `scripts/gate.sh` PASS, `git-floor` included | done over the reworked phase (2026-10-03), adjudicated by `qa-confirm`; confirmed findings fixed. C6 audit done (2026-10-03, adjudicated): F2-F7 fixed; F1 closed by the content-parity rework (landed 2026-10-03, `scripts/gate.sh` PASS with `git-floor`): R2.4 and R2.8 parity enforced under every algorithm and over real history. **QA of the content rework due** |
 | 03 engine, working tree | not started | — | — |
 | 04 worker lanes | not started | — | — |
 | 05 detail pane | not started | — | — |

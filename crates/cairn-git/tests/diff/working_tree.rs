@@ -884,6 +884,53 @@ fn staged_and_unstaged_edits_read_as_git_diff_shows_them() {
     }
 }
 
+/// Line endings at the edges, staged and unstaged: an edit near a last line with no
+/// newline (which git prints as context, marked), a change to the final newline alone,
+/// each way, and a CRLF file kept as it is (`-text`) edited mid-file, its `\r` part of each
+/// line — every answer what `git diff --cached` and `git diff` show. Caught by: a context
+/// line rebuilt as terminated whatever git printed (the rebuilt side is not the object git
+/// named), a final newline read from the old side, or a `\r` dropped.
+#[test]
+fn line_endings_at_the_edges_read_as_git_diff_shows_them() {
+    let repo = base("edges");
+    repo.write(".gitattributes", b"*.crlf -text\n");
+    repo.write("noeol.txt", b"one\ntwo\nthree\nfour\nfive");
+    repo.write("eol.txt", b"a\nb\nc");
+    repo.write("kept.crlf", b"a\r\nb\r\nc\r\nd\r\ne\r\n");
+    repo.commit("the edges");
+    repo.write("noeol.txt", b"one\ntwo\nTHREE\nfour\nfive");
+    repo.write("eol.txt", b"a\nb\nc\n");
+    repo.write("kept.crlf", b"a\r\nB\r\nc\r\nd\r\ne\r\n");
+    repo.git(&["add", "noeol.txt", "eol.txt", "kept.crlf"]);
+    repo.write("noeol.txt", b"one\nTWO\nTHREE\nfour\nfive");
+    repo.write("eol.txt", b"a\nb\nc");
+    repo.write("kept.crlf", b"a\r\nB\r\nc\r\nD\r\ne\r\n");
+
+    let paths = ["noeol.txt", "eol.txt", "kept.crlf"];
+    let mut queries = Vec::new();
+    for path in paths {
+        queries.push((path, WorkingTreeDiff::Staged));
+        queries.push((path, WorkingTreeDiff::Unstaged));
+    }
+    let answers = answers_writing_nothing(&repo, &queries);
+    for ((path, which), answer) in queries.iter().zip(&answers) {
+        let diff = some(answer.clone(), &format!("{which:?} {path}"));
+        let new = some(diff.text(), "a text answer").new_lines().to_vec();
+        match (*path, which) {
+            ("noeol.txt" | "eol.txt", WorkingTreeDiff::Unstaged) => assert!(
+                new.last().is_some_and(|line| !line.ends_with_newline()),
+                "{which:?} {path}: the last line has no newline"
+            ),
+            ("eol.txt", _) => assert!(new.last().is_some_and(DiffLine::ends_with_newline)),
+            ("kept.crlf", WorkingTreeDiff::Staged) => {
+                assert_eq!(lines(&diff).1[1], "B\r", "the \\r is part of the line");
+            }
+            _ => {}
+        }
+        same_as_git(&repo, path, *which, answer);
+    }
+}
+
 /// An unborn branch: the staged diff is against the empty tree, as `git diff --cached`
 /// compares it; and a path that is a file in the index where `HEAD` had a directory is
 /// that one file. Caught by: asking for `HEAD` on an unborn branch (git fails), or a

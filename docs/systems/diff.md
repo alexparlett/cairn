@@ -640,9 +640,13 @@ discriminating fixture's commit back into the working tree — unstaged after `r
 and `git diff --cached` under the default algorithm, patience, and histogram with a
 driver naming minimal, with and without `-w`, function context included;
 `staged_and_unstaged_edits_read_as_git_diff_shows_them` does the same for one file
-staged and edited again; `an_untracked_file_is_what_git_diff_no_index_shows` for
-plain text, no final newline, an empty file, a symlink, a binary file and a path
-holding `*` and a leading `-`, and files named `-x` and `-` (the last given to git as `./-`, since `--no-index` reads `-` as stdin, and its record named `-` again);
+staged and edited again; `line_endings_at_the_edges_read_as_git_diff_shows_them`,
+staged and unstaged, for an edit beside a last line with no newline, a change to the
+final newline alone, each way, and a CRLF file kept under `-text` edited mid-file;
+`an_untracked_file_is_what_git_diff_no_index_shows` for plain text, no final newline,
+an empty file, a symlink, a binary file, a path holding `*` and a leading `-`, and
+files named `-x` and `-` (the last given to git as `./-`, since `--no-index` reads `-`
+as stdin, and its record named `-` again);
 `a_staged_file_on_an_unborn_branch_and_beside_a_directory_is_that_file` for the
 empty tree and a file where `HEAD` had a directory. The same suite runs on git
 2.30.9 and 2.32.7 in `git-floor`.

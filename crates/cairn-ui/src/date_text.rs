@@ -133,6 +133,34 @@ mod tests {
         }
     }
 
+    /// User decision 2: a commit recorded before 1970 shows its true instant — git itself
+    /// does not agree with itself there (`%ad` prints nothing, `fuller` clamps to the epoch,
+    /// some commands refuse the commit). Reference values from GNU `date -d @<seconds>` in
+    /// a zone of each offset. Caught by: truncating division in place of `div_euclid` and
+    /// `rem_euclid`, which puts a negative instant on the wrong day with a negative hour —
+    /// most visibly the epoch itself under a negative offset, which falls back into 1969.
+    #[test]
+    fn a_timestamp_before_the_epoch_reads_as_its_true_instant() {
+        for (seconds, offset_seconds, date) in [
+            (-1, 0, "Wed Dec 31 23:59:59 1969 +0000"),
+            (0, -3600, "Wed Dec 31 23:00:00 1969 -0100"),
+            (-1, -30 * 60, "Wed Dec 31 23:29:59 1969 -0030"),
+            (
+                -86_401,
+                5 * 3600 + 30 * 60,
+                "Wed Dec 31 05:29:59 1969 +0530",
+            ),
+            (-1_000_000_000, -8 * 3600, "Sun Apr 24 14:13:20 1938 -0800"),
+            (-2_208_988_800, 0, "Mon Jan 1 00:00:00 1900 +0000"),
+        ] {
+            assert_eq!(
+                git_default(Timestamp::new(seconds, offset_seconds)),
+                date,
+                "{seconds} at {offset_seconds}s east of UTC"
+            );
+        }
+    }
+
     #[test]
     fn a_timestamp_at_the_extremes_renders_rather_than_panicking() {
         for seconds in [i64::MIN, i64::MAX] {

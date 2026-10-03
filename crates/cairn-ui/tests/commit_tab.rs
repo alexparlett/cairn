@@ -39,8 +39,23 @@ fn file(n: usize) -> ChangedFile {
     }
 }
 
-const MESSAGE: &str = "Teach the engine to count\n\nThe first paragraph of the body.\n\
-                       A second line of it.\n\nSigned-off-by: Ada Lovelace <ada@example.com>\n";
+/// Blank lines before and after, CRLF lines, trailing whitespace and a tab: what git trims
+/// and expands before it shows a message.
+const MESSAGE: &str = "\n  \nTeach the engine to count\r\n\r\nThe first paragraph of the body.\r\n\
+                       \tA tabbed line of it.  \n\n\nSigned-off-by: Ada Lovelace \
+                       <ada@example.com>\n\n \n";
+
+/// `git log --format=fuller` (git 2.56) on a commit whose message is [`MESSAGE`], each line
+/// without the four spaces git indents it by.
+const GIT_SHOWS: [&str; 7] = [
+    "Teach the engine to count",
+    "",
+    "The first paragraph of the body.",
+    "        A tabbed line of it.",
+    "",
+    "",
+    "Signed-off-by: Ada Lovelace <ada@example.com>",
+];
 
 fn details(id: Oid, parents: Vec<Oid>, message: &str) -> CommitDetails {
     CommitDetails {
@@ -146,8 +161,9 @@ fn built_files(test: &TestingRunner) -> Vec<(String, bool)> {
 }
 
 /// C10, R5.3: the author and the committer, each with name, email and the full timestamp at
-/// its own offset as git prints it; the full id; each parent as its short id; every line of
-/// the message; and the files, a rename showing both names. Caught by: dropping the
+/// its own offset as git prints it; the full id; each parent as its short id; and the
+/// files, a rename showing both names (the message, row for row:
+/// `the_message_is_the_rows_git_log_shows_for_it`). Caught by: dropping the
 /// committer, rendering a date in UTC or without its offset, abbreviating the id, dropping
 /// a parent or the body, or a rename showing only its new name.
 #[test]
@@ -155,7 +171,7 @@ fn the_commit_tab_shows_every_field_r5_3_names() {
     let (test, _, _) = launch(change_set(0));
     let shown = texts(&test);
 
-    let mut expected = vec![
+    let expected = vec![
         AUTHOR_CAPTION.to_owned(),
         COMMITTER_CAPTION.to_owned(),
         "Ada Lovelace <ada@example.com>".to_owned(),
@@ -172,20 +188,12 @@ fn the_commit_tab_shows_every_field_r5_3_names() {
         "src/file-000001.rs".to_owned(),
         "src/file-000002.rs".to_owned(),
     ];
-    expected.extend(
-        MESSAGE
-            .lines()
-            .filter(|line| !line.is_empty())
-            .map(str::to_owned),
-    );
     for text in expected {
         assert!(
             shown.contains(&text),
             "the Commit tab does not show {text:?}; it shows {shown:?}"
         );
     }
-    // The id is the whole 40 digits, not a prefix of them.
-    assert_eq!(oid(77).hex().as_str().len(), 40);
     for status in ["R", "A", "D"] {
         assert!(
             shown.iter().any(|t| t == status),
@@ -196,6 +204,32 @@ fn the_commit_tab_shows_every_field_r5_3_names() {
         !shown.iter().any(|t| t == "src/file-000000.rs"),
         "the rename's new name stands alone, without its old one: {shown:?}"
     );
+}
+
+/// T3, R5.3: the message is the rows git shows for it, row for row and nothing between —
+/// the blank lines before and after it gone, each line without its trailing whitespace or
+/// `\r`, blank lines inside it kept, a tab expanded — between the last parent and the
+/// first file. Caught by: popping only one trailing empty line, keeping the leading blank
+/// lines or a `\r`, dropping a blank line inside, or drawing the tab raw.
+#[test]
+fn the_message_is_the_rows_git_log_shows_for_it() {
+    let (test, _, _) = launch(change_set(0));
+    let shown = texts(&test);
+    let after_parents = shown
+        .iter()
+        .position(|text| *text == oid(11).short().as_str())
+        .unwrap_or_else(|| panic!("no second parent: {shown:?}"))
+        + 1;
+    let files = shown
+        .iter()
+        .position(|text| text == "docs/old-name.md → docs/new-name.md")
+        .unwrap_or_else(|| panic!("no first file: {shown:?}"));
+    // Between them: the message, then the first file's badge.
+    let message: Vec<&str> = shown[after_parents..files - 1]
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(message, GIT_SHOWS);
 }
 
 /// R5.5, the twin of `only_a_viewport_of_rows_is_built_however_long_the_history`: the
@@ -231,6 +265,21 @@ fn only_a_viewport_of_files_is_built_however_many_the_commit_touched() {
             "scrolling to file {deep} of {files} did not build it: {scrolled:?}"
         );
         built.push(scrolled.len());
+
+        // And the very end: the last file is reachable, which a list told to be only as
+        // long as the files (forgetting the header's rows) would cut off.
+        test.scroll(
+            (100., 100.),
+            (0., -((files + 100) as f64 * f64::from(DETAIL_ROW_HEIGHT))),
+        );
+        let last = format!("src/file-{:06}.rs", files + 2);
+        let at_end = built_files(&test);
+        assert!(
+            at_end
+                .iter()
+                .any(|(text, visible)| *visible && *text == last),
+            "scrolling to the end of {files} files did not build the last, {last}: {at_end:?}"
+        );
     }
     assert!(
         built.windows(2).all(|pair| pair[0] == pair[1]),
@@ -275,6 +324,36 @@ fn a_cut_short_rename_search_is_said_above_the_files() {
     let (test, _, _) = launch(cut);
     assert!(shows(&test, &notice), "{:?}", texts(&test));
     assert!(notice.contains("2774"));
+    // Above the files, not among or below them.
+    let top_of = |text: &str| {
+        test.find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == text)
+                .map(|_| node.layout().area.min_y())
+        })
+        .unwrap_or_else(|| panic!("no label reads {text:?}"))
+    };
+    assert!(
+        top_of(&notice) < top_of("docs/old-name.md → docs/new-name.md"),
+        "the notice is not above the files"
+    );
+
+    // A search that had a limit and stayed under it was not cut short.
+    let mut limited = change_set(0);
+    limited.renames = RenameDetection {
+        enabled: true,
+        copies: false,
+        limit: Some(1000),
+        needed_limit: None,
+    };
+    let (test, _, _) = launch(limited);
+    assert!(
+        !texts(&test)
+            .iter()
+            .any(|text| text.contains("diff.renameLimit")),
+        "a limit that was not reached is said to have cut the search: {:?}",
+        texts(&test)
+    );
 
     let mut empty = change_set(0);
     empty.files.clear();

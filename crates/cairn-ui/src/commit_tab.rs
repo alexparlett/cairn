@@ -17,7 +17,7 @@ use std::rc::Rc;
 use cairn_model::{ChangeSet, ChangeStatus, ChangedFile, Oid, Signature};
 use freya::prelude::*;
 
-use crate::date_text;
+use crate::{date_text, message_lines};
 
 /// Every row of the tab is this tall: a fixed size is what keeps the list O(viewport).
 pub const DETAIL_ROW_HEIGHT: f32 = 24.0;
@@ -51,7 +51,8 @@ pub fn cut_short_notice(needed_limit: usize) -> String {
     )
 }
 
-/// The letter git's `--name-status` prints for `status`.
+/// The bare letter Fork draws for `status` (user decision 5, 2026-10-03): git's
+/// `--name-status` letter without the similarity score git prints after `R` and `C`.
 pub fn status_letter(status: ChangeStatus) -> &'static str {
     match status {
         ChangeStatus::Added => "A",
@@ -117,13 +118,11 @@ fn header_lines(changes: &ChangeSet) -> Vec<Line> {
             lines.push(Line::Parents(details.parents.clone()));
         }
         lines.push(Line::Rule);
-        let mut message: Vec<&str> = details.message.split('\n').collect();
-        // git ends a message with a newline; the empty line after it is not part of it.
-        if message.last() == Some(&"") {
-            message.pop();
-        }
-        for (n, line) in message.into_iter().enumerate() {
-            let text = line.trim_end_matches('\r').to_owned();
+        // The lines `git log` shows, not the bytes stored: git trims and expands them.
+        for (n, text) in message_lines::shown_lines(&details.message)
+            .into_iter()
+            .enumerate()
+        {
             lines.push(if n == 0 {
                 Line::Subject(text)
             } else {
@@ -480,6 +479,24 @@ mod tests {
         );
         assert!(!merge.iter().any(|line| matches!(line, Line::CutShort(_))));
         assert!(!merge.contains(&Line::NoFiles));
+    }
+
+    /// T6, user decision 5: each status is its bare letter, as Fork draws it — a rename and
+    /// a copy without the similarity git's `--name-status` prints after the letter. Caught
+    /// by: a letter swapped between two statuses, or a score appended.
+    #[test]
+    fn every_status_is_its_bare_letter() {
+        let similar = Similarity::from_percent(87);
+        for (status, letter) in [
+            (ChangeStatus::Added, "A"),
+            (ChangeStatus::Deleted, "D"),
+            (ChangeStatus::Modified, "M"),
+            (ChangeStatus::TypeChanged, "T"),
+            (ChangeStatus::Renamed(similar), "R"),
+            (ChangeStatus::Copied(similar), "C"),
+        ] {
+            assert_eq!(status_letter(status), letter, "{status:?}");
+        }
     }
 
     #[test]

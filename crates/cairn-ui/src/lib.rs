@@ -10,6 +10,7 @@ mod graph_cell;
 pub mod graph_geometry;
 mod history_list;
 pub mod lane_palette;
+mod message_lines;
 
 pub use commit_row::{
     AUTHOR_WIDTH, COLUMN_GAP, CommitRow, DATE_WIDTH, HistoryHeader, ID_WIDTH, ROW_FONT_SIZE,

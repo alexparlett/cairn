@@ -150,10 +150,13 @@ being a feature and being a rewrite.
   index), its **unstaged** diff (the index against the working tree) or an
   **untracked** file's diff (nothing against the working tree), each as a file
   diff under R1.
-- R3.2 Working-tree content is converted to git's form through gix's filter
-  pipeline: line endings, `ident`, working-tree encoding, and the clean filter
-  driver that the path's attributes name and the user's config defines, exactly
-  as `git diff` converts it (L6, D1 as amended). No textconv program runs.
+- R3.2 Working-tree content is converted to git's form by git itself, as a read
+  (`git diff-files`, or `git diff --no-index` for an untracked file): line endings,
+  `ident`, working-tree encoding, and the clean filter driver that the path's
+  attributes name and the user's config defines, exactly as `git diff` converts
+  it (L6, D1 as amended), the lines Cairn holds rebuilt from git's patch. No
+  textconv program runs. (Amended 2026-10, phase 03: not gix's filter pipeline,
+  so the driver runs under git; see progress.md.)
 - R3.3 The index and the attributes are read fresh for every working-tree query.
   Nothing about a working tree is cached across queries.
 - R3.4 A deleted file, a type change, a mode-only change, a conflicted path (no
@@ -303,7 +306,7 @@ here and does not restate them.
 | C12 | A modifier-click selects two commits, the comparison is tip against tip with the lower row as base, and swap reverses it | headless test |
 | C13 | Every R8.2 action resolves through the accelerator table, and no component names a literal modifier | unit test, plus the guard from R8.3 |
 | C14 | On rust-lang/rust at `c999cef531e`, on the machine recorded in `measured-baseline.md`, warm, in a release build: the changes query finishes within 100 ms on `f0845adb0c1`, 500 ms on `cf2dff2b1e3` and 500 ms on `5a3292f163d`; the content query finishes within 100 ms on `3b09522c34b`; `6a6e8446b97` answers too large without reading its content, and its Load Diff time is recorded; the rename pairs on `5a3292f163d` match git's (amended 2026-10, decision E, see progress.md: they are git's own, so no gap may be filed); the window stays responsive while the two heaviest subjects load | an `#[ignore]`d reporter driven by `CAIRN_BENCH_REPO` for the engine numbers, and a check by hand for the window, all recorded in `progress.md` |
-| C15 | D1's amendment is in `docs/design/engine.md` and `CLAUDE.md`, and the filter driver's inherited environment is stated there as a residual | review |
+| C15 | D1's amendment is in `docs/design/engine.md` and `CLAUDE.md`, and the environment the filter driver runs with — the read's, as git hands it on (amended 2026-10, phase 03, see progress.md) — is stated there with its residuals | review |
 | C16 | `scripts/gate.sh` passes | the gate |
 
 C14 is deliberately not automated, for the reason `history-graph`'s A7 was not: a

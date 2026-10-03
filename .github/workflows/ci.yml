@@ -22,23 +22,26 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
-  # The SSH acceptance criteria (crates/cairn-git/tests/fetch.rs, against the
-  # sshd fixture in tests/remotes/ssh.rs) skip by name where sshd cannot run,
-  # and a passing test's stderr is hidden, so a skip would read `ok`. Here the
-  # server is installed below and the fixture is REQUIRED: a skip is a red test.
-  CAIRN_REQUIRE_SSH_FIXTURE: 1
-  # `a_read_in_a_partial_clone_does_not_fetch_a_missing_object`
-  # (crates/cairn-git/src/ops/authority.rs) is the only behavioural pin of
-  # GIT_NO_LAZY_FETCH and skips on a git older than 2.44, which ignores the
-  # variable. A skip reads `ok`, so here it is a red test: the runner image's
-  # git must stay new enough.
-  CAIRN_REQUIRE_NO_LAZY_FETCH: 1
 
 jobs:
   gate:
     name: gate
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # On this job, not the workflow: the git-floor job runs gits older than 2.44,
+    # where the partial-clone pins skip by design.
+    env:
+      # The SSH acceptance criteria (crates/cairn-git/tests/fetch.rs, against the
+      # sshd fixture in tests/remotes/ssh.rs) skip by name where sshd cannot run,
+      # and a passing test's stderr is hidden, so a skip would read `ok`. Here the
+      # server is installed below and the fixture is REQUIRED: a skip is a red test.
+      CAIRN_REQUIRE_SSH_FIXTURE: 1
+      # `a_read_in_a_partial_clone_does_not_fetch_a_missing_object`
+      # (crates/cairn-git/src/ops/authority.rs) is the only behavioural pin of
+      # GIT_NO_LAZY_FETCH and skips on a git older than 2.44, which ignores the
+      # variable. A skip reads `ok`, so here it is a red test: the runner image's
+      # git must stay new enough.
+      CAIRN_REQUIRE_NO_LAZY_FETCH: 1
     steps:
       # Full history: cairn-git's engine tests read this checkout as a repository.
       - uses: actions/checkout@v4
@@ -112,3 +115,54 @@ jobs:
       - name: Run doctests
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: scripts/gate.sh --step test-doc
+
+  # cairn-git's real-git diff tests against the oldest gits Cairn supports — the
+  # 2.30 floor and 2.32, the last before 2.33 — built from source by
+  # scripts/git-floor.sh, so the version branches the changes query takes are
+  # checked against the gits they are for rather than read from git's source. Its
+  # own job: building git and the engine tests need none of the gate's graphics
+  # stack, and CAIRN_REQUIRE_NO_LAZY_FETCH must not reach it.
+  git-floor:
+    name: git floor
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      # Full history: cairn-git's engine tests read this checkout as a repository.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # A C toolchain, make and zlib's headers build git; nothing else is needed for
+      # cairn-git's tests.
+      - name: Install build inputs
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y build-essential zlib1g-dev
+
+      - name: Set up toolchain
+        id: toolchain
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          echo "version=$(rustc --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-git-floor-${{ runner.os }}-${{ steps.toolchain.outputs.version }}-${{ hashFiles('Cargo.lock') }}
+
+      # The built gits, keyed by the script that pins their versions and commits.
+      - name: Cache the built gits
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/git-floor
+          key: git-floor-${{ runner.os }}-${{ hashFiles('scripts/git-floor.sh') }}
+
+      - name: Run the diff tests on the oldest supported gits
+        env:
+          CAIRN_GIT_FLOOR_CACHE: ${{ runner.temp }}/git-floor
+        run: scripts/gate.sh --step git-floor

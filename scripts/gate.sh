@@ -25,6 +25,12 @@ TEST_FULL_CMD="cargo test --workspace --all-targets"
 # --all-targets never runs doctests, and cairn-model's compile-fail pins on the
 # secret type ARE doctests. Its own step, so a red test-full does not hide it.
 TEST_DOC_CMD="cargo test --workspace --doc"
+# cairn-git's real-git diff tests against the oldest gits Cairn supports, built from
+# source (scripts/git-floor.sh). CI runs it as its own job, which is what the guard
+# ci_runs_every_merge_bar_gate_step holds it to. It is not in the local full sequence
+# below: it fetches git's source over the network and builds two gits, so run it
+# locally by name, `scripts/gate.sh --step git-floor`, when the floor is the point.
+GIT_FLOOR_CMD="scripts/git-floor.sh"
 
 FAST=0
 SELECTED_STEP=""
@@ -98,6 +104,7 @@ run_test_full() {
   run_body "test-full" "$TEST_FULL_CMD"
 }
 run_test_doc()  { run_cmd "test-doc"  "$TEST_DOC_CMD"; }
+run_git_floor() { run_cmd "git-floor" "$GIT_FLOOR_CMD"; }
 
 finish() {
   echo
@@ -116,6 +123,7 @@ if [ -n "$SELECTED_STEP" ]; then
     test-fast) run_test_fast ;;
     test-full) run_test_full ;;
     test-doc) run_test_doc ;;
+    git-floor) run_git_floor ;;
     *)
       echo "unknown gate step: $SELECTED_STEP" >&2
       exit 2

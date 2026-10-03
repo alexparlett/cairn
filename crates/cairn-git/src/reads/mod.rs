@@ -87,8 +87,11 @@
 //! L6, D1 as amended (`docs/design/engine.md`, "Reads see git's form"): `git
 //! diff-files` and `git diff --no-index` convert the file to git's form as the
 //! user's `git diff` does, so git starts the driver the path's attributes name
-//! and the configuration defines, with the read's environment plus what git
-//! sets for a filter. And `diff-files`, asked about a submodule whose checkout
+//! and the configuration defines — a `filter.<driver>.clean` command, or the
+//! long-running `filter.<driver>.process` that `git lfs install` configures,
+//! started once per read and sent `command=clean` and nothing else
+//! (`a_long_running_filter_process_is_sent_only_clean_and_its_form_is_diffed`)
+//! — with the read's environment plus what git sets for a filter. And `diff-files`, asked about a submodule whose checkout
 //! it must look into, runs `git status` inside it — again what `git diff`
 //! does — which may run that repository's own fsmonitor and clean filters
 //! ([`working_tree_patch`] says what each read runs). Nothing else a read starts

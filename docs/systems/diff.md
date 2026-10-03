@@ -537,7 +537,11 @@ second run with `-w` when the view asks to ignore whitespace and the file was
 modified; a `check-attr` before them when a driver may name its algorithm (2.40+),
 as for a commit; nothing else. Each runs with the read environment of
 `docs/systems/git-processes.md`. `diff-files` and `diff --no-index` run the path's
-clean filter driver as git's child — once for the diff, once more to hash the
+clean filter driver as git's child — a `filter.<driver>.clean` command, or a
+long-running `filter.<driver>.process` (what `git lfs install` configures), started
+once per read and sent `command=clean` alone
+(`a_long_running_filter_process_is_sent_only_clean_and_its_form_is_diffed`, a pkt-line
+server in `sh` and `dd`, compared with `git diff`) — once for the diff, once more to hash the
 working tree for the patch's `index` line (a `-w` read, four times on git 2.56.0;
 a raw-only read, never) — with that environment plus what git
 sets for a filter (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_EXEC_PATH`, `GIT_PREFIX`,

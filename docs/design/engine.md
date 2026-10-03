@@ -116,7 +116,9 @@ working-tree file is not always what git would store.
 **Clean, on the way in.** A read converts working-tree content to git's form the
 way `git diff` does, running the clean filter driver the path's attributes name
 and the user's config defines — git-lfs, git-crypt, nbstripout — with line-ending
-conversion, `ident` and a working-tree encoding. Refusing to run it would show
+conversion, `ident` and a working-tree encoding. The driver may be a `clean`
+command run per file or a long-running `process` — what `git lfs install`
+configures — which git starts once per read and sends only `command=clean`. Refusing to run it would show
 those users a diff `git diff` does not, and would hand staging a patch built from
 content their filter exists to change. git does the converting: a working-tree
 read is `git diff-files` (the index against the working tree) or, for a file git

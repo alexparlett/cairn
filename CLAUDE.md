@@ -152,7 +152,9 @@ copy is a different version from the fork that links.
   pays. D1 is amended for the programs git itself starts on a read, each exactly
   as the user's own `git diff` starts it: the repository's `core.fsmonitor` hook,
   as git reads the index of a repository with a working tree; and, on a read of
-  the working tree, the path's clean filter driver — git-lfs, git-crypt — which
+  the working tree, the path's clean filter driver — git-lfs, git-crypt; a
+  `clean` command, or the long-running `filter.<driver>.process` git-lfs
+  installs, which git sends only `command=clean` — which
   converts the file to git's form (and, for a submodule, `git status` inside it,
   with that repository's own hook and filters). The driver runs as a child of the
   read's `git`, so with the environment Cairn built for that read (the inherited

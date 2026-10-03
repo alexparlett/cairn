@@ -364,6 +364,103 @@ fn a_clean_filter_drivers_form_is_what_is_diffed_and_it_runs_under_git() {
     );
 }
 
+/// A long-running filter process (`filter.<driver>.process`, gitattributes' "Long Running
+/// Filter Process", what `git lfs install` configures): a pkt-line server in POSIX `sh` and
+/// `dd`, upper-casing what git sends it and recording each command. It advertises clean and
+/// smudge, and records every command git sends after the handshake.
+const PROCESS_FILTER: &str = r#"#!/bin/sh
+log="$1"; work="$2"
+read_pkt() {
+  hex=$(dd bs=1 count=4 2>/dev/null)
+  [ -z "$hex" ] && exit 0
+  if [ "$hex" = "0000" ]; then len=-1; return; fi
+  len=$(( 0x$hex - 4 ))
+  dd bs=1 count=$len 2>/dev/null > "$work/pkt"
+}
+write_text() { printf '%04x%s\n' $(( ${#1} + 5 )) "$1"; }
+flush() { printf '0000'; }
+read_pkt; read_pkt; read_pkt
+write_text git-filter-server; write_text version=2; flush
+while read_pkt && [ "$len" -ge 0 ]; do :; done
+write_text capability=clean; write_text capability=smudge; flush
+while :; do
+  read_pkt; cat "$work/pkt" >> "$log"
+  while read_pkt && [ "$len" -ge 0 ]; do :; done
+  : > "$work/in"
+  while read_pkt && [ "$len" -ge 0 ]; do cat "$work/pkt" >> "$work/in"; done
+  tr 'a-z' 'A-Z' < "$work/in" > "$work/out"
+  write_text status=success; flush
+  size=$(wc -c < "$work/out")
+  if [ "$size" -gt 0 ]; then printf '%04x' $(( size + 4 )); cat "$work/out"; fi
+  flush; flush
+done
+"#;
+
+/// D1 as amended, for the driver git-lfs installs: a `filter.<driver>.process` runs on the
+/// reads of the working tree — `diff-files` and `diff --no-index` — and git sends it
+/// `command=clean` and nothing else, so its form is what is diffed, as `git diff` shows
+/// it; a staged read starts it not at all. Caught by: a working-tree side read without
+/// git's conversion (lower case), or a read that makes git smudge.
+#[test]
+fn a_long_running_filter_process_is_sent_only_clean_and_its_form_is_diffed() {
+    let repo = base("process-filter");
+    let program = script(&repo, "process.sh", PROCESS_FILTER);
+    let work = repo.path().join("process-filter");
+    ok(
+        std::fs::create_dir_all(&work),
+        "the filter's scratch directory",
+    );
+    let log = repo.path().join("process.log");
+    repo.write("tracked.pf", b"hello\nworld\n");
+    repo.commit("before the filter");
+    repo.config(
+        "filter.p.process",
+        &format!("{} {} {}", program.display(), log.display(), work.display()),
+    );
+    repo.write(".gitattributes", b"*.pf filter=p\n");
+    repo.write("staged.pf", b"one\ntwo\n");
+    repo.git(&["add", "staged.pf"]);
+    repo.write("tracked.pf", b"hello\nthere\n");
+    repo.write("untracked.pf", b"lower\ncase\n");
+    let _ = std::fs::remove_file(&log);
+
+    let staged = ok(
+        engine(&repo).working_tree_diff(
+            super::git(),
+            &RepoPath::new("staged.pf"),
+            WorkingTreeDiff::Staged,
+            &ContentOptions::default(),
+            &CancelSignal::new(),
+        ),
+        "the staged diff",
+    );
+    assert!(!log.exists(), "a staged read started the filter process");
+    let answers = answers_writing_nothing(
+        &repo,
+        &[
+            ("tracked.pf", WorkingTreeDiff::Unstaged),
+            ("untracked.pf", WorkingTreeDiff::Untracked),
+        ],
+    );
+    let sent = ok(std::fs::read_to_string(&log), "the filter's record");
+    assert!(
+        !sent.is_empty() && sent.lines().all(|line| line == "command=clean"),
+        "git sent the filter process {sent:?}"
+    );
+    let tracked = some(answers[0].clone(), "the filtered edit");
+    assert_eq!(lines(&tracked).1, ["HELLO", "THERE"]);
+    let untracked = some(answers[1].clone(), "the untracked file");
+    assert_eq!(lines(&untracked).1, ["LOWER", "CASE"]);
+    same_as_git(&repo, "tracked.pf", WorkingTreeDiff::Unstaged, &answers[0]);
+    same_as_git(
+        &repo,
+        "untracked.pf",
+        WorkingTreeDiff::Untracked,
+        &answers[1],
+    );
+    same_as_git(&repo, "staged.pf", WorkingTreeDiff::Staged, &staged);
+}
+
 /// The QA brief's failing driver: a required clean filter that exits non-zero is an error
 /// naming the path, from every read that runs it — never an empty diff; one that is not
 /// required is what git does with it, the unfiltered content diffed, exactly as `git diff`

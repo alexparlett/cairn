@@ -126,14 +126,18 @@ impl Repository {
         // resource's CONTENT from the working tree rather than by its id. So the stack is
         // built here in git's order and the cache gets no root: the blobs still come from
         // the object database, by id, and only the attributes from the working tree. A
-        // bare repository has no working tree, and reads the index's (or `HEAD`'s).
+        // bare repository has no working tree, and reads the index's. Where there is no
+        // index file — a bare repository, a repository whose index was removed — git
+        // reads no in-tree attributes at all, never `HEAD`'s (reproduced on 2.30.9,
+        // 2.32.7 and 2.56.0), so the session's index is an empty one, not `HEAD`'s tree
+        // as `Repository::diff_resource_cache` would load.
         let source = if self.workdir().is_some() {
             gix::worktree::stack::state::attributes::Source::WorktreeThenIdMapping
         } else {
             gix::worktree::stack::state::attributes::Source::IdMapping
         };
         let index = repo
-            .index_or_load_from_head_or_empty()
+            .index_or_empty()
             .map_err(|source| setup(Box::new(source)))?;
         let attributes = repo
             .attributes_only(&index, source)

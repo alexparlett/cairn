@@ -328,6 +328,58 @@ fn binary_detection_reads_the_attributes_where_git_reads_them() {
     assert!(verdict("no-diff.txt"), "the committed -diff was lost");
 }
 
+/// R2.5 where git reads NO attributes: a repository with no index file, and a bare one,
+/// read none from `HEAD`'s tree — on every git from the floor up — so a `-diff` committed
+/// there leaves the file text, as `git show` prints it. Caught by: a session that falls
+/// back to `HEAD`'s tree for its attributes (`index_or_load_from_head_or_empty`), which
+/// answered both binary without asking git.
+#[test]
+fn where_git_reads_no_attributes_the_commit_reads_none() {
+    let repo = repositories::attributes();
+    let head = repo.git(&["rev-parse", "HEAD"]).trim().to_owned();
+    repo.remove(".gitattributes");
+    repo.remove(".git/index");
+    assert!(
+        !binary_to_git_show(&repo, &head, "no-diff.txt"),
+        "the fixture is not git's"
+    );
+    let verdicts = binary_verdicts(&repo, &head);
+    assert!(
+        verdicts.contains(&("no-diff.txt".to_owned(), false)),
+        "with no index file, HEAD's -diff was read: {verdicts:?}"
+    );
+
+    let bare = Repo::new("attributes-bare");
+    bare.git(&[
+        "fetch",
+        "--quiet",
+        "--update-head-ok",
+        &repo.path().display().to_string(),
+        "main:main",
+    ]);
+    bare.git(&["config", "core.bare", "true"]);
+    let bare = Repo::borrowed(&bare.path().join(".git"));
+    let engine = ok(
+        Repository::discover(bare.path()),
+        "the bare repository opens",
+    );
+    let file = some(
+        changed(&bare, &head)
+            .into_iter()
+            .find(|file| file.new_path.display() == "no-diff.txt"),
+        "the file changed",
+    );
+    let diff = ok(
+        engine.content(&head, &file, &ContentOptions::default()),
+        "a file diff",
+    );
+    assert_eq!(
+        matches!(diff.content, DiffContent::Binary { .. }),
+        binary_to_git_show(&bare, &head, "no-diff.txt"),
+        "a bare repository's attributes are not where git reads them"
+    );
+}
+
 /// R2.3: neither a textconv nor an external diff program runs, whatever the config says.
 #[test]
 fn neither_a_textconv_nor_an_external_diff_program_is_started() {

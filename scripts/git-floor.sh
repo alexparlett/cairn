@@ -128,19 +128,20 @@ for entry in "${VERSIONS[@]}"; do
   echo "== git-floor: cairn-git's diff tests against $found"
   for run in "${RUNS[@]}"; do
     IFS='|' read -r target filters floor <<<"$run"
+    label="$target${filters:+ $filters}"
     # shellcheck disable=SC2086 # the target and the filters are words, split on purpose
     if ! listed=$(env -u CAIRN_REQUIRE_NO_LAZY_FETCH PATH="$prefix/bin:$PATH" \
       cargo test -q -p cairn-git $target -- --list $filters); then
-      echo "git-floor: could not list the tests of '$target $filters'" >&2
+      echo "git-floor: could not list the tests of '$label'" >&2
       fail=1
       continue
     fi
     count=$(printf '%s\n' "$listed" | grep -c ': test$')
     if [ "$count" -lt "$floor" ] || [ "$count" -eq 0 ]; then
-      echo "git-floor: '$target $filters' lists $count tests, under its floor of $floor" >&2
+      echo "git-floor: '$label' lists $count tests, under its floor of $floor" >&2
       fail=1
     fi
-    echo "git-floor: '$target $filters' lists $count tests (floor $floor)"
+    echo "git-floor: '$label' lists $count tests (floor $floor)"
     log="$LOGS/run.log"
     # --show-output prints a passing test's stderr, which is where a skip says so.
     # shellcheck disable=SC2086
@@ -150,9 +151,9 @@ for entry in "${VERSIONS[@]}"; do
     fi
     skipped=$(grep -o 'SKIPPED [^:]*: .*' "$log" | sort -u)
     if [ -n "$skipped" ]; then
-      skipped_report+="on $found, '$target $filters' skipped:"$'\n'"$skipped"$'\n'
+      skipped_report+="on $found, '$label' skipped:"$'\n'"$skipped"$'\n'
     else
-      skipped_report+="on $found, '$target $filters' skipped nothing"$'\n'
+      skipped_report+="on $found, '$label' skipped nothing"$'\n'
     fi
   done
 done

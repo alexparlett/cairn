@@ -3,6 +3,57 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-03 — Phase 05: the user's answers on dates and encodings
+
+Packet mode, committed to `feature/diff-engine`. The two items the last entry left
+waiting, decided by the user the same day.
+
+**Dates: Fork's Windows format, fixed and in English, no dependency.**
+`date_text::long_date` replaces `git_default`: `25 Nov 2020 01:11:30 +01:00`, Fork's own
+example (`fork-detail-and-diff-ui.md`, Finding 3) — a two-digit day, the English month's
+abbreviation, a 24-hour time to the second, the offset as `±HH:MM` (`-00:30` for half an
+hour west), at the offset the commit recorded, for the author and the committer alike.
+The day's padding is inferred, not seen: Fork's one example has a two-digit day, and its
+Windows build is .NET, whose `dd` pads. The tests that pinned git's format against
+`git log` are replaced by `a_timestamp_reads_as_fork_shows_it_at_its_own_offset`, eight
+instants against GNU `date -d @<seconds> '+%d %b %Y %H:%M:%S %:z'` in a zone of each
+offset (RED on the old `git_default`), and the pre-1970 test kept under the new format
+(RED with `/` for `div_euclid`). The Commit tab's component test now expects
+`15 Nov 2023 03:43:20 +05:30` and `14 Nov 2023 14:13:20 -08:00`.
+
+**Encodings: `encoding_rs`, user-approved 2026-10-03.** Added to `cairn-git` at the
+version already locked (0.8.41, in the build under `gix-filter`); its allowlist row in
+`layer_dependencies_are_allowlisted`; `deny.toml` needed nothing (its licence,
+`(Apache-2.0 OR MIT) AND BSD-3-Clause`, is allowed; `gate.sh --step deps` passes).
+Before writing the quirks, every 1- and 2-byte sequence (and GB18030's 4-byte codes
+`0x81308130`-`0x8439fe39`) was decoded by glibc's iconv and by `encoding_rs` in a scratch
+harness, per encoding. What differed, and what was done:
+
+- Shift_JIS (glibc's JIS reading): `0x5c`/`0x7e` are `¥`/`‾`; `0x8160`, `0x8161`, `0x817c`,
+  `0x8191`, `0x8192`, `0x81ca` are JIS's characters, not Microsoft's; glibc refuses lone
+  `0x80`/`0xa0`/`0xfd-0xff` and lead bytes `0x87` and `0xeb-0xfc`. All taken as glibc's:
+  zero differences remain. CP932: only the lone bytes; zero remain.
+- GB18030: `0xa3a0` and eighteen 4-byte codes read as private-use points by glibc, and lone
+  `0x80`/`0xff` refused: all taken; zero remain over the measured range.
+- EUC-JP: the same six codes, taken; glibc reads lone C1 bytes and some codes
+  `encoding_rs` refuses, and refuses NEC/IBM rows it reads — residual.
+- KOI8-R, ISO-8859-2..8, 10, 13-16, IBM866, windows-1256: identical. KOI8-U (`0xae`,
+  `0xbe`) and Mac Roman (`0xc6`, `0xf0`): remapped. windows-125x/874: the WHATWG table
+  reads undefined bytes as C1 controls glibc refuses — refused. ISO-8859-9/-11: the WHATWG
+  standard reads them as windows-1254/874 — C1 kept. TIS-620: C1 bytes refused.
+- GBK/GB2312, EUC-KR (UHC), Big5 (HKSCS): differences remain — residuals in
+  `docs/systems/diff.md`, with ISO-2022-JP unmeasured, UTF-16 read raw, and libiconv
+  (macOS) not compared.
+
+`the_text_of_an_encoded_commit_is_the_text_git_prints` gained Shift_JIS (with `¥`, `‾`,
+the six codes and a trail byte of `0x5c`), CP932, Shift_JIS with a NEC code glibc refuses
+(raw), EUC-JP (with JIS X 0212's `é` and the six codes), KOI8-R, KOI8-U, GB18030 (2- and
+4-byte), ISO-8859-9's C1 bytes, windows-1251 with an undefined byte (raw) and Mac Roman,
+against `git log` on git 2.56, 2.30 and 2.32: RED before the dependency (`�R�c���Y`
+against `山田太郎`), GREEN after; RED again with the Shift_JIS remap or refusal dropped,
+or the windows refusal dropped. `each_encoding_reads_as_glibc_reads_it` pins each quirk
+against `iconv` output.
+
 ## 2026-10-03 — Phase 05 QA fixed, and the user's decisions on it
 
 Packet mode, committed to `feature/diff-engine`. The QA round over phase 05: 26 raw

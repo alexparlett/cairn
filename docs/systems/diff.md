@@ -1319,17 +1319,31 @@ pinned by `an_offset_reads_the_way_git_writes_it`.
 2026-10-03; `crates/cairn-git/src/commit_encoding.rs`). git converts a whole commit
 from the encoding its `encoding` header names before printing any of it — no header
 means UTF-8 — and prints the object's bytes unconverted when the conversion fails: a
-byte the encoding leaves undefined anywhere in the object, or an encoding iconv does
-not know. `CommitEncoding::of_commit` decides as git does, and both the details and the
-history row read every field through it: ISO-8859-1 under any of the names glibc's
-iconv accepts and as `Latin-1`, which git renames to it; windows-1252, refused as git
-refuses it when one of its five undefined bytes is anywhere in the object; anything
-else as UTF-8, invalid sequences as U+FFFD, as a UTF-8 terminal shows git's raw bytes.
-`i18n.logOutputEncoding` (and `i18n.commitEncoding`, its fallback) changes only which
-bytes git writes for the same characters — measured — so a view that draws characters
-has nothing to apply. Pinned against `git log`'s `%an`, `%ae`, `%cn`, `%ce`, `%s` and
-`%B` on crafted commits, one per way git reads a commit's text, by
-`the_text_of_an_encoded_commit_is_the_text_git_prints`.
+sequence the encoding refuses anywhere in the object, or an encoding iconv does not
+know. `CommitEncoding::of_commit` decides as git does, and both the details and the
+history row read every field through it. ISO-8859-1 (under any name glibc's iconv
+accepts, and `Latin-1`, which git renames to it) is decoded as itself; US-ASCII is
+UTF-8 either way; every other encoding goes through `encoding_rs` (a dependency the
+user approved on 2026-10-03), whose WHATWG tables differ from glibc's where a `Quirk`
+puts glibc's reading back: a windows code page's undefined bytes refused, ISO-8859-9
+and ISO-8859-11 keeping their C1 controls and TIS-620 refusing them (the WHATWG
+standard reads all three as windows code pages), Shift_JIS under JIS's names reading
+`0x5c` and `0x7e` as `¥` and `‾` and six JIS X 0208 codes as JIS does and refusing the
+rows JIS X 0208 leaves empty, CP932 refusing the lone bytes glibc refuses, EUC-JP's six
+codes, GB18030's private-use codes and lone `0x80`/`0xff`, KOI8-U's two box
+drawings and Mac Roman's two characters. Measured 2026-10-03 by decoding every 1- and
+2-byte sequence, and GB18030's 4-byte codes from `0x81308130` to `0x8439fe39`, with
+glibc's iconv and with `encoding_rs`: after the quirks, Shift_JIS, CP932, GB18030 (over
+that range), KOI8-R and KOI8-U, the ISO-8859 family, the windows code pages, IBM866 and
+Mac Roman read alike. Anything else — a UTF-16 header, the WHATWG standard's
+`replacement` labels, a name neither knows — reads as UTF-8, invalid sequences as
+U+FFFD, as a UTF-8 terminal shows git's raw bytes. `i18n.logOutputEncoding` (and
+`i18n.commitEncoding`, its fallback) changes only which bytes git writes for the same
+characters — measured — so a view that draws characters has nothing to apply. Pinned
+against `git log`'s `%an`, `%ae`, `%cn`, `%ce`, `%s` and `%B` on crafted commits, one
+per way git reads a commit's text, by
+`the_text_of_an_encoded_commit_is_the_text_git_prints`, and quirk by quirk against
+`iconv` by `each_encoding_reads_as_glibc_reads_it`.
 
 ## Known limits
 
@@ -1347,11 +1361,16 @@ has nothing to apply. Pinned against `git log`'s `%an`, `%ae`, `%cn`, `%ce`, `%s
   two seconds `SETTLING` allows, or a file whose times are in the future, is never
   trusted rather than trusted wrongly: answers under it are not kept. And the
   history thread keeps the configuration of its first open: it reads no diff key.
-- **A commit in an encoding other than ISO-8859-1 or windows-1252 reads as UTF-8.**
-  git converts Shift_JIS, EUC-JP, KOI8-R and the rest through iconv; decoding them
-  here needs a dependency (`encoding_rs` is in the build already, under `gix-filter`,
-  but not a dependency of Cairn's), which is the user's to decide. Until then such a
-  commit's text shows U+FFFD where git shows letters.
+- **A commit's encoding is read as glibc's iconv reads it, and only as far as was
+  measured.** Where `encoding_rs` and glibc still differ, Cairn's text is not git's:
+  EUC-JP sequences glibc reads and `encoding_rs` refuses (lone C1 bytes, some JIS X 0212
+  codes) send the object to its raw bytes where git converts it, and some it reads that
+  glibc refuses (NEC's and IBM's rows) are converted where git prints raw; GBK and
+  GB2312 decode the user-defined and GBK-only codes glibc refuses; EUC-KR is read as the
+  WHATWG standard's UHC, Big5 with HKSCS where glibc has private-use points, and
+  ISO-2022-JP was not measured; GB18030's 4-byte codes past `0x8439fe39` were not
+  compared; a UTF-16 commit reads as UTF-8 where iconv would convert it; and the parity
+  is with glibc — on macOS, git's iconv is libiconv, whose tables were not compared.
 - **The message's tab expansion counts a character's width from a table of Unicode's
   main wide and zero-width ranges**, not git's whole one: a tab after a wide character
   outside them lands a column or two from where `git log` puts it.

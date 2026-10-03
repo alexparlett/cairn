@@ -587,6 +587,80 @@ fn ref_tips_follow_the_refs_git_writes() {
     );
 }
 
+// ── Where the repository is ─────────────────────────────────────────────────
+
+/// A repository whose git directory lives apart from its working tree
+/// (`core.worktree`), and whose working tree sits inside another repository's:
+/// asked from that working tree, git's own discovery finds the ENCLOSING
+/// repository, which has no `origin`. Cairn names the repository it opened, so
+/// the fetch lands in the git directory Cairn opened and the enclosing
+/// repository is untouched. Caught by: an invocation left to git's discovery
+/// from the working tree, which fails the fetch on the enclosing repository.
+#[test]
+fn a_fetch_lands_in_the_repository_opened_when_its_working_tree_sits_inside_another() {
+    let source = fixtures::braided(3);
+    let enclosing = fixtures::unborn();
+    let inner = enclosing.path().join("inner");
+    std::fs::create_dir_all(&inner).unwrap_or_else(|e| panic!("{e}"));
+    let holder = fixtures::unborn();
+    let git_dir = holder.path().join("separate.git");
+    let git_dir_text = git_dir.display().to_string();
+    let in_separate = |args: &[&str]| {
+        let mut all = vec!["--git-dir", git_dir_text.as_str()];
+        all.extend_from_slice(args);
+        holder.git(&all)
+    };
+    holder.git(&["init", "--quiet", "--bare", &git_dir_text]);
+    in_separate(&["config", "core.bare", "false"]);
+    in_separate(&["config", "core.worktree", &inner.display().to_string()]);
+    in_separate(&[
+        "remote",
+        "add",
+        "origin",
+        &source.path().display().to_string(),
+    ]);
+    in_separate(&["config", "credential.helper", ""]);
+    let discovered_origin = std::process::Command::new("git")
+        .current_dir(&inner)
+        .args(["remote", "get-url", "origin"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .unwrap_or_else(|e| panic!("could not run git: {e}"));
+    assert!(
+        !discovered_origin.status.success(),
+        "git's discovery from the working tree must find the enclosing repository, \
+         which has no origin, or this test proves nothing"
+    );
+
+    let serving = Serving::serving(refusing());
+    let git = GitBinary::discover_with(environment(&serving, holder.path(), None))
+        .unwrap_or_else(|e| panic!("no usable git: {e}"));
+    let repo = Repository::discover(&git_dir).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        repo.workdir()
+            .map(|path| std::fs::canonicalize(path).unwrap_or_default()),
+        Some(std::fs::canonicalize(&inner).unwrap_or_else(|e| panic!("{e}"))),
+        "gix reads core.worktree"
+    );
+    fetch(&git, &repo, "origin", None)
+        .unwrap_or_else(|e| panic!("fetch did not start: {e}"))
+        .finish(|_| {})
+        .unwrap_or_else(|e| panic!("the fetch failed: {e}"));
+
+    assert_eq!(
+        in_separate(&["rev-parse", "refs/remotes/origin/main"]).trim(),
+        head_of(&source),
+        "the fetch did not land in the repository Cairn opened"
+    );
+    assert_eq!(
+        enclosing.git(&["for-each-ref"]),
+        "",
+        "the enclosing repository was written to"
+    );
+    assert_eq!(serving.prompts(), Vec::<String>::new());
+}
+
 // ── Pruning ─────────────────────────────────────────────────────────────────
 
 /// A clone of `source` that has fetched once and then grown a remote-tracking

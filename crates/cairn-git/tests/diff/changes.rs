@@ -843,3 +843,145 @@ fn a_shallow_clones_boundary_commit_is_compared_as_git_log_shows_it() {
         found.files
     );
 }
+
+/// `git log --raw` for one commit in the repository at `git_dir`, named explicitly, as
+/// the oracle for a repository git's discovery would not find.
+fn shown_in(holder: &Repo, git_dir: &str, commit: &str, env: &[(&str, &str)]) -> Vec<Row> {
+    let (status, stdout, stderr) = holder.run(
+        &[
+            "--git-dir",
+            git_dir,
+            "log",
+            "-1",
+            "--raw",
+            "--no-abbrev",
+            "--format=",
+            commit,
+        ],
+        env,
+        None,
+    );
+    assert!(status.success(), "git log failed: {stderr}");
+    rows_of(&stdout)
+}
+
+/// A repository whose git directory lives apart from its working tree (`core.worktree`),
+/// with that working tree inside another repository's: run from the working tree, git's
+/// discovery finds the ENCLOSING repository and answers "bad object" for every commit of
+/// this one. The query names the repository it opened, so it answers what that
+/// repository's own `git log` shows. Caught by: an invocation left to discovery.
+#[test]
+fn a_repository_whose_working_tree_sits_inside_another_is_the_one_asked() {
+    let enclosing = repositories::crafted();
+    let inner = enclosing.path().join("inner");
+    ok(std::fs::create_dir_all(&inner), "the inner working tree");
+    let holder = Repo::new("separate-holder");
+    let git_dir = holder.path().join("separate.git");
+    let git_dir_text = git_dir.display().to_string();
+    let inner_text = inner.display().to_string();
+    let in_separate = |args: &[&str]| {
+        let mut all = vec![
+            "--git-dir",
+            git_dir_text.as_str(),
+            "--work-tree",
+            &inner_text,
+        ];
+        all.extend_from_slice(args);
+        holder.git(&all)
+    };
+    holder.git(&["init", "--quiet", "--bare", &git_dir_text]);
+    holder.git(&["--git-dir", &git_dir_text, "config", "core.bare", "false"]);
+    holder.git(&[
+        "--git-dir",
+        &git_dir_text,
+        "config",
+        "core.worktree",
+        &inner_text,
+    ]);
+    ok(std::fs::write(inner.join("a.txt"), "one\n"), "a file");
+    in_separate(&["add", "a.txt"]);
+    in_separate(&["commit", "--quiet", "-m", "first"]);
+    ok(std::fs::write(inner.join("a.txt"), "two\n"), "a file");
+    ok(std::fs::write(inner.join("b.txt"), "new\n"), "a file");
+    in_separate(&["add", "a.txt", "b.txt"]);
+    in_separate(&["commit", "--quiet", "-m", "second"]);
+    let head = in_separate(&["rev-parse", "HEAD"]).trim().to_owned();
+    let inner_repo = Repo::borrowed(&inner);
+    assert!(
+        inner_repo
+            .try_git(&["cat-file", "-e", &head], &[], None)
+            .is_err(),
+        "git's discovery from the working tree must find the enclosing repository, or \
+         this test proves nothing"
+    );
+
+    let found = changes_of(
+        &Repo::borrowed(&git_dir),
+        &ChangesRequest::commit(Oid::parse(&head).expect("an id")),
+    );
+    let expected = shown_in(&holder, &git_dir_text, &head, &[]);
+    assert_eq!(expected.len(), 2, "{expected:?}");
+    assert_eq!(cairn_rows(&found.files, head.len()), expected);
+}
+
+/// Under `safe.bareRepository=explicit` git refuses to discover a bare repository, so a
+/// query run inside one by discovery exits 128 on every commit. The query names the
+/// repository it opened, which is the explicit spelling the setting asks for, and
+/// answers what `git --git-dir=<it> log` shows. Caught by: an invocation left to
+/// discovery.
+#[test]
+fn a_bare_repository_is_answered_under_safe_bare_repository_explicit() {
+    let source = repositories::crafted();
+    let holder = Repo::new("bare-holder");
+    let bare = holder.path().join("bare.git");
+    let bare_text = bare.display().to_string();
+    holder.git(&[
+        "clone",
+        "--quiet",
+        "--bare",
+        &source.path().display().to_string(),
+        &bare_text,
+    ]);
+    let home = holder.path().join("home");
+    ok(std::fs::create_dir_all(&home), "a home");
+    let global = home.join(".gitconfig");
+    ok(
+        std::fs::write(&global, "[safe]\n\tbareRepository = explicit\n"),
+        "a global configuration",
+    );
+    let global_text = global.display().to_string();
+    let explicit = [("GIT_CONFIG_GLOBAL", global_text.as_str())];
+    assert!(
+        Repo::borrowed(&bare)
+            .try_git(&["log", "-1"], &explicit, None)
+            .is_err(),
+        "git discovers the bare repository anyway, so this test proves nothing"
+    );
+
+    let home_text = home.clone().into_os_string();
+    let binary = ok(
+        cairn_git::ops::GitBinary::discover_with(cairn_git::ops::GitEnvironment::new(
+            |name| match name {
+                "PATH" => std::env::var_os("PATH"),
+                "HOME" => Some(home_text.clone()),
+                _ => None,
+            },
+            &cairn_git::ops::Askpass::new("/nonexistent/cairn-askpass", None),
+        )),
+        "git is found",
+    );
+    let engine = ok(Repository::discover(&bare), "the bare repository opens");
+    assert!(engine.workdir().is_none(), "the fixture is bare");
+    let head = hex(&Repo::borrowed(&bare), "HEAD");
+    let found = ok(
+        engine.changes(
+            &binary,
+            &ChangesRequest::commit(Oid::parse(&head).expect("an id")),
+            &CancelSignal::new(),
+        ),
+        "the query answers in a bare repository",
+    );
+    let expected = shown_in(&holder, &bare_text, &head, &explicit);
+    assert!(!expected.is_empty(), "the head commit changes something");
+    assert_eq!(cairn_rows(&found.files, head.len()), expected);
+}

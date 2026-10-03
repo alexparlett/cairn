@@ -160,8 +160,10 @@ mod tests {
     use super::*;
     use crate::process::stub_git::{StubGit, discover_retrying, printed_environment};
 
-    /// Nothing for prune — git reads `fetch.prune` itself — and `--no-prune-tags`
-    /// always, before `--end-of-options` and the remote.
+    /// The repository named ahead of the verb (`process/cli.rs`), so the fetch lands
+    /// in the repository Cairn opened; then nothing for prune — git reads
+    /// `fetch.prune` itself — and `--no-prune-tags` always, before
+    /// `--end-of-options` and the remote.
     #[test]
     fn the_arguments_leave_prune_to_git_forbid_pruning_tags_and_end_the_options() {
         let stub = StubGit::with_git(
@@ -175,14 +177,25 @@ mod tests {
             .unwrap()
             .finish(|line| seen.push(line.to_owned()))
             .unwrap();
+        let named = |option: &str, path: &std::path::Path| {
+            format!("{option}{}", std::fs::canonicalize(path).unwrap().display())
+        };
+        let canonical = |line: &String| match line.split_once('=') {
+            Some((option, path)) if option.starts_with("--") => {
+                named(&format!("{option}="), std::path::Path::new(path))
+            }
+            _ => line.clone(),
+        };
         assert_eq!(
-            seen,
+            seen.iter().map(canonical).collect::<Vec<_>>(),
             [
-                "fetch",
-                "--progress",
-                "--no-prune-tags",
-                "--end-of-options",
-                "-origin",
+                named("--git-dir=", repo.git_dir()),
+                named("--work-tree=", repo.workdir().unwrap()),
+                "fetch".to_owned(),
+                "--progress".to_owned(),
+                "--no-prune-tags".to_owned(),
+                "--end-of-options".to_owned(),
+                "-origin".to_owned(),
             ]
         );
     }

@@ -38,7 +38,8 @@ const FETCH: [&str; 5] = [
 
 /// A directory holding one stub `git`, removed when the test ends. `--version`
 /// is answered, and counted in `probes`; `fetch` does what the test says,
-/// with `$DIR` naming this directory.
+/// with `$DIR` naming this directory. An invocation in a repository names it
+/// ahead of the verb (`--git-dir=`, `--work-tree=`), which the stub skips.
 struct StubGit {
     directory: PathBuf,
 }
@@ -62,7 +63,9 @@ impl StubGit {
         }
         let git = directory.join("git");
         let script = format!(
-            "#!/bin/sh\nDIR='{}'\ncase \"$1\" in\n--version)\n  echo probed >> \"$DIR/probes\"\n  \
+            "#!/bin/sh\nDIR='{}'\n\
+             while case \"$1\" in --git-dir=*|--work-tree=*) true ;; *) false ;; esac; do shift; done\n\
+             case \"$1\" in\n--version)\n  echo probed >> \"$DIR/probes\"\n  \
              echo 'git version {version}'\n  ;;\nfetch)\n{fetch}\n  ;;\n*)\n  exit 1\n  ;;\nesac\n",
             directory.display()
         );

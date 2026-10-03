@@ -230,6 +230,51 @@ Pinned:
     Each configures an editor that records it ran and then hangs. Each verb
     fails within the deadline, the editor never runs, and `HEAD` does not move.
 
+## Where an invocation runs
+
+`GitCommand::in_repository(repo)` runs the invocation in the repository's
+working tree, or the git directory of a bare one, and **names the repository
+to git** ahead of the verb: `--git-dir=<git dir>` and, when there is one,
+`--work-tree=<working tree>`, both absolute (`repository_location` in
+`process/cli.rs`). Left to its own discovery from that directory, git can
+read a different repository from the one Cairn opened: a working tree whose
+git directory lives elsewhere (`core.worktree`) and which sits inside
+another repository's working tree is discovered as that enclosing
+repository, and under `safe.bareRepository=explicit` git refuses to discover
+a bare repository at all. `GIT_DIR` and `GIT_WORK_TREE` from the launching
+environment are never inherited, so the options are the only place either
+comes from.
+
+An explicitly named git directory is one git does not check the ownership
+of: `safe.directory` guards discovery only (reproduced with git 2.56 under
+`GIT_TEST_ASSUME_DIFFERENT_OWNER=1`, where `git log` refuses with "dubious
+ownership" and the same command given `--git-dir` answers). So the options
+are given only for a repository gix opened with full trust
+(`gix::Repository::git_dir_trust`), which is gix's reading of git's rule —
+the git directory and the working tree owned by the user, or listed under
+`safe.directory` in the configuration git protects. A repository opened with
+reduced trust is left to git's discovery, as before naming existed, so git's
+own check decides it.
+
+The command log and an error report the verb and its arguments, not the
+location: a repository's log is its own, and the record's directory says
+where it ran.
+
+Pinned: `a_trusted_repository_is_named_to_git_ahead_of_the_verb` (a stub
+`git` prints its arguments) and
+`a_repository_trusted_less_than_fully_is_left_to_gits_discovery`, in
+`process/cli.rs`; against real git,
+`a_repository_whose_working_tree_sits_inside_another_is_the_one_asked` and
+`a_bare_repository_is_answered_under_safe_bare_repository_explicit`
+(`crates/cairn-git/tests/diff/changes.rs`), and
+`a_fetch_lands_in_the_repository_opened_when_its_working_tree_sits_inside_another`
+(`crates/cairn-git/tests/fetch.rs`), each of which fails with the options
+removed. Residual, stated rather than implied: no fixture can make a
+repository its own user does not own, so that a less-than-fully-trusted
+repository reaches git's own check is pinned at the function, not end to
+end; and where gix's trust and git's ownership rule disagree — gix trusting
+a repository git would refuse — the options skip git's check for it.
+
 ## The runner
 
 `GitCommand::start()` spawns the process and hands back an `Invocation<K>`,

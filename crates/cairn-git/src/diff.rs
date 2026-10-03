@@ -17,6 +17,7 @@ mod algorithm;
 mod changes;
 mod content;
 mod git_config;
+mod hunk_grouping;
 mod inputs;
 mod intraline;
 mod renames;
@@ -300,6 +301,14 @@ impl Repository {
         cancel: &impl Cancel,
     ) -> Result<Option<FileDiff>, Error> {
         working_tree::working_tree_diff(self, git, path, which, options, cancel)
+    }
+
+    /// The context the user's `git diff` shows when it is given no `-U`: `diff.context`, or
+    /// three, raised to one (R6.3's floor) — what a diff view opens at (phase 06). Read from
+    /// the configuration gix loaded, as porcelain reads it; a value the user's `git diff`
+    /// refuses is [`Error::InvalidConfig`]. Reads no object and starts no process.
+    pub fn configured_context(&self) -> Result<Context, Error> {
+        hunk_grouping::Grouping::read(self.inner()).map(|grouping| Context::lines(grouping.context))
     }
 
     /// One content query, on a session of its own: [`DiffSession::file_diff`].

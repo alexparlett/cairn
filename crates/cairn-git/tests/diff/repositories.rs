@@ -1322,6 +1322,24 @@ pub fn whitespace() -> Repo {
     let mut real_new = real.clone();
     real_new[10] = "    bravo_step(different);".to_owned();
     pairs.push(("only-real.c".to_owned(), joined(&real), joined(&real_new)));
+    // Last lines that did not end (phase 06): a real edit beside a last line that gained
+    // its newline; a last line, never ended, changed only in whitespace; and a context line
+    // changed in whitespace beside a real edit, above an unended last line.
+    pairs.push((
+        "eof-gained.c".to_owned(),
+        b"x\ny\nz".to_vec(),
+        b"X\ny\nz\n".to_vec(),
+    ));
+    pairs.push((
+        "eof-space.c".to_owned(),
+        b"a\nb\nc".to_vec(),
+        b"a\nb\nc ".to_vec(),
+    ));
+    pairs.push((
+        "eof-context.c".to_owned(),
+        b"a\n  b\nc\nd\ne".to_vec(),
+        b"A\nb\nc\nd\ne".to_vec(),
+    ));
     for (path, old, _) in &pairs {
         repo.write(path, old);
     }

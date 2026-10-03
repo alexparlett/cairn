@@ -37,6 +37,7 @@ use crate::{Cancel, Error, Repository};
 
 use super::algorithm::{Algorithms, PathAlgorithm};
 use super::content::{crossed_line_limit, git_context, lfs_pointer, text_content};
+use super::hunk_grouping::Grouping;
 use super::submodules::working_tree_ignore;
 use super::{ContentOptions, WorkingTreeDiff};
 
@@ -56,6 +57,8 @@ pub(super) fn working_tree_diff(
     if cancel.is_cancelled() {
         return Err(Error::ContentCancelled);
     }
+    // Read first, as `git diff` reads its configuration before it diffs anything.
+    let grouping = Grouping::read(repo.inner())?;
     if repo.workdir().is_none() {
         return Ok(Some(stand_in(
             path,
@@ -163,6 +166,7 @@ pub(super) fn working_tree_diff(
         side,
         algorithm,
         ignore_submodules,
+        inter_hunk_context: grouping.inter_hunk_context,
         ceiling: if options.load_anyway {
             options.limits.load_anyway_bytes
         } else {
@@ -196,6 +200,8 @@ struct Asker<'a, C: Cancel> {
     side: Side<'a>,
     algorithm: Option<crate::reads::Algorithm>,
     ignore_submodules: Option<&'static str>,
+    /// The user's `diff.interHunkContext`, read once for the query.
+    inter_hunk_context: u32,
     /// R2.6's byte ceiling, or the load-anyway one.
     ceiling: u64,
 }
@@ -439,7 +445,7 @@ impl<C: Cancel> Asker<'_, C> {
         };
         Ok(Some(FileDiff {
             file,
-            content: text_content(old, new, readings, self.options),
+            content: text_content(old, new, readings, self.options, self.inter_hunk_context),
         }))
     }
 

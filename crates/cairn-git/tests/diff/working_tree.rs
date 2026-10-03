@@ -1783,7 +1783,37 @@ fn an_untracked_answer_is_the_same_under_hostile_presentation_settings() {
         ),
         "the untracked answer",
     );
-    assert_eq!(hostile, calm, "a presentation setting changed the answer");
+    // Every setting but one is presentation and changes nothing. `diff.interHunkContext`
+    // is how the user's `git diff` groups hunks, which the answer carries for the view to
+    // group with (phase 06); the lines, ranges and texts it holds are the same.
+    let (hostile_diff, calm_diff) = (
+        some(hostile.as_ref(), "an answer"),
+        some(calm.as_ref(), "an answer"),
+    );
+    assert_eq!(
+        hostile_diff.file, calm_diff.file,
+        "a presentation setting changed the file"
+    );
+    assert_eq!(
+        hostile_diff.text(),
+        calm_diff.text(),
+        "a presentation setting changed the lines"
+    );
+    let (hostile_overlay, calm_overlay) = (
+        some(hostile_diff.overlay(), "an overlay"),
+        some(calm_diff.overlay(), "an overlay"),
+    );
+    assert_eq!(hostile_overlay.highlights(), calm_overlay.highlights());
+    assert_eq!(
+        hostile_overlay.changes_ignoring_whitespace(),
+        calm_overlay.changes_ignoring_whitespace()
+    );
+    assert_eq!(
+        hostile_overlay.function_context().len(),
+        calm_overlay.function_context().len()
+    );
+    assert_eq!(hostile_overlay.function_context().inter_hunk_context(), 10);
+    assert_eq!(calm_overlay.function_context().inter_hunk_context(), 0);
     assert!(!trap_mark.exists(), "the external diff program ran");
     let diff = some(hostile, "an answer");
     assert_eq!(lines(&diff).1, ["a", "", "b", "\tc", "d "]);

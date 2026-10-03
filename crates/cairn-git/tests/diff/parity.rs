@@ -11,7 +11,7 @@
 
 use cairn_git::{CancelSignal, ChangesRequest, ContentOptions, DiffSession, Repository};
 use cairn_model::{
-    ChangeStatus, ChangedFile, Context, DiffContent, FileDiff, Oid, TextDiff, UnifiedRow,
+    ChangeStatus, ChangedFile, Context, DiffContent, DrawnRanges, FileDiff, Oid, UnifiedRow,
     UnifiedRows,
 };
 
@@ -42,26 +42,29 @@ fn detection(file: &ChangedFile) -> &'static [&'static str] {
 }
 
 /// What the user's `git diff -U<context>` prints for `file` between `old` and `new`, with
-/// `extra` flags (`-w`). A type change is printed by git as a deletion and an addition,
-/// which Cairn draws as one change of every line, so for one the two blobs are compared.
+/// `extra` flags (`-w`) — or plain `git diff`, at the user's `diff.context`, for `None`. A
+/// type change is printed by git as a deletion and an addition, which Cairn draws as one
+/// change of every line, so for one the two blobs are compared.
 pub fn git_view(
     repo: &Repo,
     old: &str,
     new: &str,
     file: &ChangedFile,
-    context: u32,
+    context: Option<u32>,
     extra: &[&str],
 ) -> Vec<Hunk> {
-    let unified = format!("-U{context}");
-    let mut args = vec![
-        "diff",
-        unified.as_str(),
+    let unified = context.map(|context| format!("-U{context}"));
+    let mut args = vec!["diff"];
+    if let Some(unified) = &unified {
+        args.push(unified.as_str());
+    }
+    args.extend([
         "--no-ext-diff",
         "--no-textconv",
         "--no-color",
         "--src-prefix=a/",
         "--dst-prefix=b/",
-    ];
+    ]);
     args.extend_from_slice(extra);
     let (old_path, new_path) = (file.old_path.display(), file.new_path.display());
     let blobs;
@@ -116,34 +119,27 @@ pub fn hunks_of(out: &str) -> Vec<Hunk> {
     hunks
 }
 
-/// The same shape, built from the unified projection a view draws at `context`, each header
-/// carrying the function context the overlay holds for it. With `ignoring_whitespace`, the
-/// projection is over the whitespace-ignoring ranges and a context line is the new side's,
-/// which is the side git prints it from.
+/// The same shape, read from the unified rows a view draws at `context` —
+/// [`UnifiedRows::shown`], the projection the diff view itself draws — each header carrying
+/// the function context the overlay holds for it. `ignoring_whitespace` says which ranges
+/// the diff was asked for, and the rows are required to draw those: the whitespace-ignoring
+/// ones grouped as `git diff -w` groups them, every context line the new side's, and git's
+/// `\ No newline at end of file` where the projection puts it.
 pub fn cairn_view(diff: &FileDiff, context: Context, ignoring_whitespace: bool) -> Vec<Hunk> {
     let DiffContent::Text { text, overlay } = &diff.content else {
         panic!("{} is not text: {:?}", diff.file.new_path, diff.content);
     };
-    let shown;
-    let drawn: &TextDiff = if ignoring_whitespace {
-        shown = TextDiff::new(
-            text.old_lines().to_vec(),
-            text.new_lines().to_vec(),
-            some(
-                overlay.changes_ignoring_whitespace(),
-                "the whitespace-ignoring ranges",
-            )
-            .to_vec(),
-        );
-        &shown
+    let rows = UnifiedRows::shown(text, overlay, context);
+    let drawn = if ignoring_whitespace {
+        DrawnRanges::IgnoringWhitespace
     } else {
-        text
+        DrawnRanges::Exact
     };
-    let rows = UnifiedRows::new(drawn, context);
+    assert_eq!(rows.layout().ranges(), drawn, "{}", diff.file.new_path);
     let mut hunks: Vec<Hunk> = Vec::new();
     for index in 0..rows.len() {
         let row = some(rows.row(index), "a row below the count");
-        let (marker, line) = match row {
+        let text = match row {
             UnifiedRow::Header(header) => {
                 hunks.push(Hunk {
                     header: header.to_string(),
@@ -155,16 +151,18 @@ pub fn cairn_view(diff: &FileDiff, context: Context, ignoring_whitespace: bool) 
                 });
                 continue;
             }
-            UnifiedRow::Context { new, .. } => (' ', some(drawn.new_line(new), "a new line")),
-            UnifiedRow::Removed { line, .. } => ('-', line),
-            UnifiedRow::Added { line, .. } => ('+', line),
+            UnifiedRow::Context { line, .. } => {
+                format!(" {}", String::from_utf8_lossy(line.bytes()))
+            }
+            UnifiedRow::Removed { line, .. } => {
+                format!("-{}", String::from_utf8_lossy(line.bytes()))
+            }
+            UnifiedRow::Added { line, .. } => format!("+{}", String::from_utf8_lossy(line.bytes())),
+            UnifiedRow::NoNewlineAtEnd => NO_NEWLINE.to_owned(),
         };
-        let hunk = some(hunks.last_mut(), "a row before its header");
-        hunk.lines
-            .push(format!("{marker}{}", String::from_utf8_lossy(line.bytes())));
-        if !line.ends_with_newline() {
-            hunk.lines.push(NO_NEWLINE.to_owned());
-        }
+        some(hunks.last_mut(), "a row before its header")
+            .lines
+            .push(text);
     }
     hunks
 }
@@ -197,6 +195,27 @@ pub fn compare_commit(
     context: u32,
     whitespace: bool,
 ) -> Tally {
+    compare_commit_at(
+        repo,
+        session,
+        commit,
+        Context::lines(context),
+        Some(context),
+        whitespace,
+    )
+}
+
+/// [`compare_commit`], with Cairn's view at `cairn` and git's at `-U<n>` for `Some(n)` or at
+/// the user's `diff.context` for `None` — plain `git diff`, reading every key of the
+/// repository's configuration as the user's own does.
+pub fn compare_commit_at(
+    repo: &Repo,
+    session: &mut DiffSession<'_>,
+    commit: &str,
+    cairn: Context,
+    git_context: Option<u32>,
+    whitespace: bool,
+) -> Tally {
     let id = ok(Oid::parse(commit), "a commit id");
     let request = ChangesRequest::commit(id);
     let set = ok(
@@ -213,7 +232,7 @@ pub fn compare_commit(
     let options = ContentOptions {
         load_anyway: true,
         ignore_whitespace: whitespace,
-        context: Context::lines(context),
+        context: cairn,
         ..ContentOptions::default()
     };
     let mut tally = Tally::default();
@@ -226,8 +245,8 @@ pub fn compare_commit(
             continue;
         }
         let extra: &[&str] = if whitespace { &["-w"] } else { &[] };
-        let theirs = git_view(repo, &parent, commit, file, context, extra);
-        let ours = cairn_view(&diff, Context::lines(context), whitespace);
+        let theirs = git_view(repo, &parent, commit, file, git_context, extra);
+        let ours = cairn_view(&diff, cairn, whitespace);
         tally.files += 1;
         tally.hunks += theirs.len();
         tally.with_function += theirs.iter().filter(|h| !h.function.is_empty()).count();
@@ -237,7 +256,7 @@ pub fn compare_commit(
                 |(a, b)| format!("Cairn {a:?}\n    git {b:?}"),
             );
             tally.divergent.push(format!(
-                "{} in {commit} at -U{context}{}:\n    {first}",
+                "{} in {commit} at {cairn:?} against git at {git_context:?}{}:\n    {first}",
                 file.new_path,
                 if whitespace { " -w" } else { "" }
             ));
@@ -811,7 +830,7 @@ fn a_file_git_is_not_asked_about_still_reads_as_git_diff_shows_it() {
             );
             assert_eq!(
                 cairn_view(&diff, Context::lines(context), false),
-                git_view(&repo, &parent, &head, file, context, &[]),
+                git_view(&repo, &parent, &head, file, Some(context), &[]),
                 "{path} at -U{context}"
             );
             skipped += 1;
@@ -887,7 +906,14 @@ fn a_file_git_is_not_asked_about_still_reads_as_git_diff_shows_it() {
             "{path}: git was asked about a file with one answer"
         );
         let ours = cairn_view(&diff, Context::lines(3), false);
-        let theirs = git_view(repo, &parent.to_string(), &head.to_string(), file, 3, &[]);
+        let theirs = git_view(
+            repo,
+            &parent.to_string(),
+            &head.to_string(),
+            file,
+            Some(3),
+            &[],
+        );
         assert_eq!(ours, theirs, "{path}");
         if file.status == ChangeStatus::TypeChanged {
             // git's two sections, read as one: every old line removed, every new one added.
@@ -1120,4 +1146,95 @@ fn a_renamed_files_driver_algorithm_is_its_old_paths() {
         );
     }
     assert_eq!(alone_and_expanded_read_as_git_diff(&repo, &[]), 2);
+}
+
+/// Phase 06, the view's rows against `git diff`: at one, three and eight lines of context,
+/// with whitespace ignored and without, every header, function context, line — a context
+/// line the new side's under `-w` — and `\ No newline at end of file` is what the user's
+/// `git diff [-w] -U<n>` prints. The fixture holds whitespace-only edits next to real ones,
+/// and last lines that did not end on either side, one of them changed only in whitespace;
+/// that git printed the marker, and printed a context line under `-w` that the old side
+/// holds otherwise, is checked, so the comparison is not over content where neither
+/// arises. Caught by: drawing a context line from the old side, dropping or misplacing the
+/// marker, or grouping the exact ranges when whitespace is ignored.
+#[test]
+fn the_view_draws_what_git_diff_draws_at_every_context_with_whitespace_ignored_or_not() {
+    let repo = repositories::whitespace();
+    let engine = ok(Repository::discover(repo.path()), "the fixture opens");
+    let mut session = ok(engine.diff_session(), "a diff session");
+    let head = repo.git(&["rev-parse", "HEAD"]).trim().to_owned();
+    for context in [1, 3, 8] {
+        for whitespace in [false, true] {
+            let tally = compare_commit(&repo, &mut session, &head, context, whitespace);
+            assert_no_divergence(&format!("-U{context} -w={whitespace}"), &tally);
+            assert!(tally.files >= 30, "only {} files compared", tally.files);
+        }
+    }
+
+    let printed = |args: &[&str]| -> String {
+        let mut all = vec!["diff", "--no-ext-diff", "--no-textconv", "HEAD^", "HEAD"];
+        all.extend_from_slice(args);
+        repo.git(&all)
+    };
+    assert!(
+        printed(&["--", "eof-gained.c"]).contains(NO_NEWLINE),
+        "git printed no end-of-file marker, so none was compared"
+    );
+    let ignoring = printed(&["-w", "--", "eof-context.c"]);
+    assert!(
+        ignoring.lines().any(|line| line == " b"),
+        "git -w printed no context line that differs from the old side's:\n{ignoring}"
+    );
+}
+
+/// Phase 06, the user's grouping: with `diff.context` and `diff.interHunkContext` set, the
+/// context a view opens at is `diff.context` (`Repository::configured_context`), and the
+/// view's rows at it are plain `git diff`'s — which reads both keys — with whitespace
+/// ignored and without, and at an explicit `-U1` still grouped across the inter-hunk
+/// context. The fixture is first shown to group differently under the key, so agreeing is
+/// not agreeing about nothing. Caught by: opening at three whatever `diff.context` says, or
+/// dropping `diff.interHunkContext` between the configuration and the view's grouping.
+#[test]
+fn the_view_groups_hunks_as_the_users_git_diff_does() {
+    let source = repositories::discriminating(&[]);
+    let repo = Repo::shared_clone_of(source.path(), "grouping");
+    let head = repo.git(&["rev-parse", "HEAD"]).trim().to_owned();
+    let plain = repo.git(&["diff", "-U1", "HEAD^", "HEAD"]);
+    repo.config("diff.context", "5");
+    repo.config("diff.interHunkContext", "3");
+    assert_ne!(
+        repo.git(&["diff", "-U1", "HEAD^", "HEAD"]),
+        plain,
+        "diff.interHunkContext=3 groups this fixture as git's default does"
+    );
+
+    let engine = ok(Repository::discover(repo.path()), "the fixture opens");
+    let opened_at = ok(engine.configured_context(), "diff.context reads");
+    assert_eq!(opened_at, Context::Lines(5));
+    let mut session = ok(engine.diff_session(), "a diff session");
+    for whitespace in [false, true] {
+        let tally = compare_commit_at(&repo, &mut session, &head, opened_at, None, whitespace);
+        assert_no_divergence(&format!("diff.context, -w={whitespace}"), &tally);
+        assert!(tally.files >= 70, "only {} files compared", tally.files);
+        assert!(tally.with_function > 0, "no function context compared");
+    }
+    let tally = compare_commit(&repo, &mut session, &head, 1, false);
+    assert_no_divergence("-U1 under diff.interHunkContext=3", &tally);
+
+    repo.config("diff.context", "0");
+    let engine = ok(Repository::discover(repo.path()), "the fixture opens");
+    assert_eq!(
+        ok(engine.configured_context(), "diff.context reads"),
+        Context::Lines(1),
+        "diff.context=0 opened below R6.3's one-line floor"
+    );
+    repo.config("diff.context", "abc");
+    let engine = ok(Repository::discover(repo.path()), "the fixture opens");
+    assert!(
+        matches!(
+            engine.configured_context(),
+            Err(cairn_git::Error::InvalidConfig { .. })
+        ),
+        "a diff.context git refuses was read"
+    );
 }

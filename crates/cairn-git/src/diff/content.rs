@@ -35,6 +35,7 @@ use crate::{Cancel, Error, Repository};
 
 use super::ContentOptions;
 use super::algorithm::{Algorithms, PathAlgorithm};
+use super::hunk_grouping::Grouping;
 use super::submodules::Hiding;
 
 /// A Git LFS pointer names its own version first; the format caps a pointer at 1 KiB.
@@ -73,6 +74,9 @@ pub(super) fn file_diff(
     if cancel.is_cancelled() {
         return Err(Error::ContentCancelled);
     }
+    // Read first, as `git diff` reads its configuration before it diffs anything: a value
+    // it refuses refuses every file.
+    let grouping = Grouping::read(repo.inner())?;
     let content = match prepare(repo, cache, file, options)? {
         Prepared::Done(content) => content,
         Prepared::Text { old, new, asks_git } => {
@@ -92,7 +96,7 @@ pub(super) fn file_diff(
             } else {
                 None
             };
-            text_content(old, new, readings, options)
+            text_content(old, new, readings, options, grouping.inter_hunk_context)
         }
     };
     Ok(FileDiff {
@@ -123,6 +127,7 @@ pub(super) fn file_diffs(
     options: &ContentOptions,
     cancel: &impl Cancel,
 ) -> Result<Vec<FileDiff>, Error> {
+    let grouping = Grouping::read(repo.inner())?;
     let mut prepared = Vec::with_capacity(set.files.len());
     for file in &set.files {
         if cancel.is_cancelled() {
@@ -235,9 +240,13 @@ pub(super) fn file_diffs(
             file: file.clone(),
             content: match prepared {
                 Prepared::Done(content) => content,
-                Prepared::Text { old, new, .. } => {
-                    text_content(old, new, readings.remove(&index), options)
-                }
+                Prepared::Text { old, new, .. } => text_content(
+                    old,
+                    new,
+                    readings.remove(&index),
+                    options,
+                    grouping.inter_hunk_context,
+                ),
             },
         });
     }
@@ -453,12 +462,14 @@ fn against(
 
 /// The exact answer, and the display-only overlay beside it. `readings` is git's, exact
 /// and whitespace-ignoring; `None` is a file git was not asked about, whose one possible
-/// answer is every line of one side against every line of the other.
+/// answer is every line of one side against every line of the other. The function context
+/// carries the user's `diff.interHunkContext`, which a view groups the hunks with.
 pub(super) fn text_content(
     old: Vec<DiffLine>,
     new: Vec<DiffLine>,
     readings: Option<(Reading, Option<Reading>)>,
     options: &ContentOptions,
+    inter_hunk_context: u32,
 ) -> DiffContent {
     let (exact, ignoring) = match readings {
         Some(readings) => readings,
@@ -476,7 +487,8 @@ pub(super) fn text_content(
     let text = TextDiff::new(old, new, exact.changes);
     let highlights = super::intraline::highlights(&text, options.limits.max_line_bytes);
     let function_context =
-        FunctionContext::read_at(Context::Lines(git_context(options.context)), starts);
+        FunctionContext::read_at(Context::Lines(git_context(options.context)), starts)
+            .with_inter_hunk_context(inter_hunk_context);
     DiffContent::Text {
         text,
         overlay: DisplayOverlay::new(ignoring_changes, highlights)

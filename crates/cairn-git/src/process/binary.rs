@@ -122,7 +122,8 @@ impl GitBinary {
 
     /// A read of this `git`, ready for its arguments: optional locks off and
     /// no askpass token, ever (`environment.rs`). For `crate::reads`, whose
-    /// functions each run plumbing, `status` or `diff --no-index`, and for
+    /// functions each run plumbing, `status` or `git diff --no-index --
+    /// /dev/null <path>` (`<path>` work-tree-relative, `./-` for `-`), and for
     /// `crate::ops`. Never
     /// public: the public surface is named operations, not a raw verb.
     pub(crate) fn read_invocation(&self) -> GitCommand<'_, Read> {

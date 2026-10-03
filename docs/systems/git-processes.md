@@ -194,8 +194,10 @@ Why each variable is there, with its evidence, is beside it in
 - **`GIT_OPTIONAL_LOCKS=0` covers `git status` and nothing else.** Porcelain
   `diff` and `describe --dirty` refresh the index anyway. That is why a read in
   `reads/` runs query plumbing or `status` only — and, as the one porcelain
-  exception the user accepted, `diff --no-index -- /dev/null <path>` for an
-  untracked file's working-tree diff, which reads no index, with its presentation
+  exception the user accepted, `git diff --no-index -- /dev/null <path>` for an
+  untracked file's working-tree diff, `<path>` work-tree-relative (no absolute,
+  `.` or `..` component, refused before git runs) and `./-` for `-`, which reads
+  no index, with its presentation
   settings pinned to git's defaults by `-c` — as the module's own docs say
   (`reads/mod.rs`, "What a read may run"); `destructive-ops-reviewer` check 10
   names it.
@@ -209,9 +211,13 @@ Why each variable is there, with its evidence, is beside it in
   repository naming one is refused at open ("Where an invocation runs").
   `diff-files` and `diff --no-index` run the clean filter driver the path's
   attributes name, as a child of the read's `git`, so with the read's
-  environment above plus what git sets for a filter (`GIT_DIR`,
-  `GIT_WORK_TREE`, `GIT_EXEC_PATH`, `GIT_PREFIX`, `GIT_CONFIG_PARAMETERS`, the
-  exec directory first on `PATH`), its stderr the read's bounded tail; and for
+  environment above — `GIT_ASKPASS`, `SSH_ASKPASS` and, where the application
+  listens, `CAIRN_ASKPASS_SOCKET` among it, so a driver can reach the socket
+  but, with no token, fails closed — plus what git sets for a filter
+  (`GIT_EXEC_PATH`, `GIT_PREFIX`, `GIT_CONFIG_PARAMETERS`, the exec directory
+  first on `PATH`, and `GIT_DIR` and `GIT_WORK_TREE` when the repository is
+  named to git — full trust, "Where an invocation runs" — and not when it is
+  left to discovery), its stderr the read's bounded tail; and for
   a submodule `diff-files` runs `git status` inside it, with that repository's
   own hook and filters (`reads/working_tree.rs`;
   `a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`,

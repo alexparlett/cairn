@@ -144,8 +144,10 @@ copy is a different version from the fork that links.
   diff-files`, `git diff --no-index`) — and each such read is a named function in
   `cairn-git/src/reads/`, run as a read invocation: query plumbing (never a plumbing writer such as
   `update-ref`, `update-index` or `write-tree`), `status`, or — the one porcelain
-  exception, accepted by the user, for an untracked file — `diff --no-index --
-  /dev/null <path>` (it reads no index, so there is none to refresh; its
+  exception, accepted by the user, for an untracked file — `git diff --no-index
+  -- /dev/null <path>`, `<path>` work-tree-relative (no absolute, `.` or `..`
+  component, refused before git runs) and given as `./-` when it is `-`, which
+  git reads as stdin (it reads no index, so there is none to refresh; its
   presentation settings are pinned by `-c`) only,
   `GIT_OPTIONAL_LOCKS=0`, `GIT_NO_LAZY_FETCH=1`, no askpass token. Everywhere gix
   agrees with git, a read spawns no process — that is the whole reason the split
@@ -158,9 +160,13 @@ copy is a different version from the fork that links.
   converts the file to git's form (and, for a submodule, `git status` inside it,
   with that repository's own hook and filters). The driver runs as a child of the
   read's `git`, so with the environment Cairn built for that read (the inherited
-  roster, the `ALWAYS` table, the read's two variables, no askpass token) plus
-  what git sets for a filter (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_EXEC_PATH`,
-  `GIT_PREFIX`, `GIT_CONFIG_PARAMETERS`, git's exec directory first on `PATH`).
+  roster, the `ALWAYS` table, `GIT_ASKPASS` and `SSH_ASKPASS` naming Cairn's
+  helper and, while the application listens for it, `CAIRN_ASKPASS_SOCKET` — so
+  a driver can reach the socket, but carrying no token it fails closed — the
+  read's two variables, no askpass token) plus what git sets for a filter
+  (`GIT_EXEC_PATH`, `GIT_PREFIX`, `GIT_CONFIG_PARAMETERS`, git's exec directory
+  first on `PATH`, and `GIT_DIR` and `GIT_WORK_TREE` when Cairn names the
+  repository to git, which it does for one opened with full trust).
   Residuals, stated in `docs/design/engine.md` ("Reads see git's form"): that
   environment still hands the driver the user's `PATH`, `HOME` and the rest; a
   store the driver keeps is its own to write (git-lfs's `.git/lfs/objects`); a

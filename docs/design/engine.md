@@ -122,7 +122,8 @@ configures — which git starts once per read and sends only `command=clean`. Re
 those users a diff `git diff` does not, and would hand staging a patch built from
 content their filter exists to change. git does the converting: a working-tree
 read is `git diff-files` (the index against the working tree) or, for a file git
-does not track, `git diff --no-index` against `/dev/null` — the one porcelain mode
+does not track, `git diff --no-index -- /dev/null <path>`, the path relative to
+the top of the working tree (`./-` for `-`) — the one porcelain mode
 a read runs, because it reads no index and so has none to refresh — and the lines
 Cairn holds for the working-tree side are rebuilt from git's own patch over the
 old side, checked against the object id git names for that content. A staged
@@ -140,11 +141,15 @@ implied:
 
 - **What runs it, and with what.** git starts the driver, as a child of the read's
   own `git` process, so it runs with the environment Cairn built for that read —
-  the inherited roster and the `ALWAYS` table of `ops::GitEnvironment`, with the
-  read's `GIT_OPTIONAL_LOCKS=0` and `GIT_NO_LAZY_FETCH=1` and no askpass token —
-  plus what git sets for a filter (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_EXEC_PATH`,
-  `GIT_PREFIX`, `GIT_CONFIG_PARAMETERS`, and `PATH` with git's exec directory
-  first). The roster still hands it the user's `PATH`, `HOME` and the rest; that
+  the inherited roster and the `ALWAYS` table of `ops::GitEnvironment`, with
+  `GIT_ASKPASS` and `SSH_ASKPASS` naming Cairn's helper and, while the
+  application listens for it, `CAIRN_ASKPASS_SOCKET`, and the read's
+  `GIT_OPTIONAL_LOCKS=0` and `GIT_NO_LAZY_FETCH=1` and no askpass token — so a
+  driver can reach the helper's socket, but without a token it fails closed —
+  plus what git sets for a filter (`GIT_EXEC_PATH`, `GIT_PREFIX`,
+  `GIT_CONFIG_PARAMETERS`, and `PATH` with git's exec directory first; and
+  `GIT_DIR` and `GIT_WORK_TREE` when Cairn names the repository to git, which
+  it does for a repository opened with full trust, and otherwise not). The roster still hands it the user's `PATH`, `HOME` and the rest; that
   is what makes git-lfs work, and it is the driver's to use.
 - **What it writes is its own.** A driver may keep a store of its own — git-lfs's
   clean copies the file into `.git/lfs/objects`, as it does under the user's

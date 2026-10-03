@@ -20,8 +20,10 @@
 //! # What a read may run
 //!
 //! **Query plumbing, or `git status`, and one named porcelain exception: `git
-//! diff --no-index -- /dev/null <path>`, for an untracked file** (accepted by
-//! the user on 2026-10-03). Why: an untracked file's git form — after the clean
+//! diff --no-index -- /dev/null <path>`, for an untracked file, `<path>`
+//! work-tree-relative and given as `./-` when it is `-`** (accepted by the user
+//! on 2026-10-03; [`working_tree::work_tree_relative`] refuses an empty or
+//! absolute path, or one with a `.` or `..` component, before git runs). Why: an untracked file's git form — after the clean
 //! filter driver and the line-ending conversion its attributes name — has no
 //! plumbing that prints it. `diff-files` and `diff-index` list only what the
 //! index holds, and putting the path in an index to ask them is a write; `git

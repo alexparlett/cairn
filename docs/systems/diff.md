@@ -516,7 +516,8 @@ git -c diff.suppressBlankEmpty=false <verb> -z --raw --no-abbrev -p --full-index
 ```
 
 with `diff-index --cached --no-renames --end-of-options <HEAD or the empty tree>`,
-`diff-files --no-renames`, or `diff --no-index` and `/dev/null <path>` — porcelain,
+`diff-files --no-renames`, or `diff --no-index` and `/dev/null <path>` — `<path>`
+relative to the top of the working tree, and `./-` for the path `-` — porcelain,
 the one exception to a read's plumbing-only rule (accepted by the user, with the
 evidence in `crates/cairn-git/src/reads/mod.rs`). Being porcelain it reads the user's
 presentation settings, so the `--no-index` read also sets each back to git's default
@@ -537,16 +538,17 @@ second run with `-w` when the view asks to ignore whitespace and the file was
 modified; a `check-attr` before them when a driver may name its algorithm (2.40+),
 as for a commit; nothing else. Each runs with the read environment of
 `docs/systems/git-processes.md`. `diff-files` and `diff --no-index` run the path's
-clean filter driver as git's child — a `filter.<driver>.clean` command, or a
-long-running `filter.<driver>.process` (what `git lfs install` configures), started
-once per read and sent `command=clean` alone
-(`a_long_running_filter_process_is_sent_only_clean_and_its_form_is_diffed`, a pkt-line
-server in `sh` and `dd`, compared with `git diff`) — once for the diff, once more to hash the
+clean filter driver as git's child — once for the diff, once more to hash the
 working tree for the patch's `index` line (a `-w` read, four times on git 2.56.0;
-a raw-only read, never) — with that environment plus what git
-sets for a filter (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_EXEC_PATH`, `GIT_PREFIX`,
-`GIT_CONFIG_PARAMETERS`, git's exec directory first on `PATH`), its stderr the
-read's bounded tail; `diff-index --cached` reads only objects. Every read of the
+a raw-only read, never). A long-running `filter.<driver>.process` (what `git lfs
+install` configures) is started once per read and sent `command=clean` for each,
+and nothing else
+(`a_long_running_filter_process_is_sent_only_clean_and_its_form_is_diffed`, a
+pkt-line server in `sh` and `dd`, compared with `git diff`). The driver runs with
+that environment plus what git sets for a filter (`GIT_DIR` and `GIT_WORK_TREE`
+only when the repository is named to git, which it is when opened with full trust;
+`GIT_EXEC_PATH`, `GIT_PREFIX`, `GIT_CONFIG_PARAMETERS`, git's exec directory first
+on `PATH`), its stderr the read's bounded tail; `diff-index --cached` reads only objects. Every read of the
 index runs the repository's `core.fsmonitor`, and for a submodule `diff-files` runs
 `git status` inside it to say whether it is dirty. Pinned by
 `a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`

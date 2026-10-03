@@ -11,9 +11,9 @@ use cairn_guards::{
     constructs_struct, declared_dependencies, declares_publicly, derives_or_implements,
     gate_command_assignments, gate_dispatch_arms, gate_full_sequence, gate_function_commands,
     implements_type, job_env_entries, mentions_crate, names_gitoxide_mutation,
-    production_string_literals, reads_row_content_partially, renames_type, renders_in_a_macro,
-    repo_root, rust_sources, spawns_git, structs_with_a_field_naming, types_containing,
-    waits_on_work,
+    production_string_literals, reads_enum_partially, reads_row_content_partially, renames_type,
+    renders_in_a_macro, repo_root, rust_sources, spawns_git, structs_with_a_field_naming,
+    types_containing, waits_on_work,
 };
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
@@ -603,6 +603,182 @@ fn the_row_content_matcher_catches_the_shapes_it_claims() {
 }
 
 /// Where every repository mutation lives, and the only module that may build a write.
+/// Crates that may read `DiffContent` however they like: its owner, and this suite's fixtures.
+const DIFF_CONTENT_EXEMPT: &[&str] = &["cairn-model", "cairn-guards"];
+
+/// Module files a parent declares under `#[cfg(test)]` (`#[cfg(test)] mod diff_tests;`): test
+/// code that carries no `#[cfg(test)]` marker of its own for [`code_without_test_modules`] to
+/// find.
+fn test_only_module_files(
+    sources: &[(std::path::PathBuf, String)],
+) -> BTreeSet<std::path::PathBuf> {
+    const MARKER: &str = "#[cfg(test)]";
+    let mut files = BTreeSet::new();
+    for (path, source) in sources {
+        let Some(parent) = path.parent() else {
+            continue;
+        };
+        let owns_its_directory = path
+            .file_name()
+            .is_some_and(|name| name == "mod.rs" || name == "lib.rs" || name == "main.rs");
+        let dir = match path.file_stem() {
+            Some(stem) if !owns_its_directory => parent.join(stem),
+            _ => parent.to_path_buf(),
+        };
+        let code = code_without_strings(source);
+        let mut rest = code.as_str();
+        while let Some(at) = rest.find(MARKER) {
+            rest = &rest[at + MARKER.len()..];
+            let mut item = rest.trim_start();
+            if let Some(after) = item.strip_prefix("pub") {
+                item = after.trim_start();
+                if item.starts_with('(') {
+                    item = item
+                        .split_once(')')
+                        .map_or("", |(_, after)| after.trim_start());
+                }
+            }
+            let Some(after) = item.strip_prefix("mod ") else {
+                continue;
+            };
+            let name: String = after
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            let declared_without_body = after.trim_start()[name.len()..]
+                .trim_start()
+                .starts_with(';');
+            if !name.is_empty() && declared_without_body {
+                files.insert(dir.join(format!("{name}.rs")));
+                files.insert(dir.join(&name).join("mod.rs"));
+            }
+        }
+    }
+    files
+}
+
+/// `cairn_model::DiffContent` is read the way `RowContent` is: by naming every state.
+/// Every variant is something a view has to draw (R6.8), and a wildcard arm compiles the
+/// day a ninth state lands and draws nothing for it. Production code only — test modules,
+/// `#[cfg(test)]` module files and `tests/` are left out, since a test that asserts one
+/// state (`matches!(content, DiffContent::Binary { .. })`) is a check, not a view.
+#[test]
+fn every_view_of_a_file_diff_names_every_state() {
+    const DIFF_CONTENT: &str = "DiffContent";
+    let crates_dir = repo_root().join("crates");
+    let entries = std::fs::read_dir(&crates_dir)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", crates_dir.display()));
+    let mut crates: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().join("Cargo.toml").is_file())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    crates.sort();
+    for exempt in DIFF_CONTENT_EXEMPT {
+        assert!(
+            crates.iter().any(|krate| krate == exempt),
+            "DIFF_CONTENT_EXEMPT names `{exempt}`, which is not a crate under crates/"
+        );
+    }
+
+    let mut readers = 0usize;
+    for krate in crates
+        .iter()
+        .filter(|krate| !DIFF_CONTENT_EXEMPT.contains(&krate.as_str()))
+    {
+        let src = format!("crates/{krate}/src");
+        if !repo_root().join(&src).is_dir() {
+            continue;
+        }
+        let sources = rust_sources(&src);
+        let test_only = test_only_module_files(&sources);
+        for (path, source) in &sources {
+            if test_only.contains(path) {
+                continue;
+            }
+            let production = code_without_test_modules(&code_without_strings(source));
+            if mentions_crate(&production, DIFF_CONTENT).is_empty() {
+                continue;
+            }
+            readers += 1;
+            let hits = reads_enum_partially(&production, DIFF_CONTENT);
+            assert!(
+                hits.is_empty(),
+                "{}:{} reads a `DiffContent` through a wildcard arm, a catch-all binding, \
+                 `if let`, `let .. else` or `matches!`. Every state is something a view draws; \
+                 match each one by name (CLAUDE.md, Invariants).",
+                path.display(),
+                hits[0]
+            );
+        }
+    }
+    assert!(
+        readers > 0,
+        "no production file outside {DIFF_CONTENT_EXEMPT:?} names `DiffContent`, so this guard \
+         checked nothing. If diffs are read some other way now, move the guard with them."
+    );
+}
+
+#[test]
+fn the_diff_content_matcher_catches_the_shapes_it_claims() {
+    let caught = [
+        (
+            "wildcard arm",
+            "match diff.content {\n    DiffContent::Text { text, .. } => draw(text),\n    _ => {}\n}",
+        ),
+        (
+            "catch-all binding",
+            "match &diff.content {\n    DiffContent::Binary { .. } => a(),\n    other => b(other),\n}",
+        ),
+        (
+            "if let",
+            "if let DiffContent::Text { text, .. } = &diff.content { draw(text) }",
+        ),
+        (
+            "let else",
+            "let DiffContent::Text { text, .. } = diff.content else { return };",
+        ),
+        (
+            "matches!",
+            "let text = matches!(diff.content, DiffContent::Text { .. });",
+        ),
+        ("glob import", "use cairn_model::DiffContent::*;"),
+        ("renamed import", "use cairn_model::DiffContent as State;"),
+    ];
+    for (shape, source) in caught {
+        assert!(
+            !reads_enum_partially(source, "DiffContent").is_empty(),
+            "the matcher missed the {shape} shape: {source:?}"
+        );
+    }
+    let total = "match content {\n    DiffContent::Text { .. } => 1,\n    DiffContent::Binary { .. }\n    | DiffContent::ModeChangeOnly => 0,\n}";
+    assert!(reads_enum_partially(total, "DiffContent").is_empty());
+
+    let sources = vec![
+        (
+            std::path::PathBuf::from("crates/x/src/worker/mod.rs"),
+            "mod pool;\n#[cfg(test)]\nmod diff_tests;\n#[cfg(test)]\npub(crate) use diff_tests::{a};\n".to_owned(),
+        ),
+        (
+            std::path::PathBuf::from("crates/x/src/view.rs"),
+            "#[cfg(test)]\nmod tests {\n}\n#[cfg(test)]\npub mod fixtures;\n".to_owned(),
+        ),
+    ];
+    let found = test_only_module_files(&sources);
+    for expected in [
+        "crates/x/src/worker/diff_tests.rs",
+        "crates/x/src/view/fixtures.rs",
+    ] {
+        assert!(
+            found.contains(Path::new(expected)),
+            "{expected} not seen as test-only: {found:?}"
+        );
+    }
+    assert!(!found.contains(Path::new("crates/x/src/worker/pool.rs")));
+    assert!(!found.contains(Path::new("crates/x/src/view/tests.rs")));
+}
+
 const OPS_DIR: &str = "crates/cairn-git/src/ops";
 
 /// Where every `git` process is built, spawned, waited on and read, and nowhere else.

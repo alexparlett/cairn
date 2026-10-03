@@ -561,13 +561,19 @@ const ROW_CONTENT: &str = "RowContent";
 /// `if let`/`while let`/let-chain/`let .. else` over it, `matches!` over it, or an import of
 /// its variants or of it under another name.
 pub fn reads_row_content_partially(source: &str) -> Vec<usize> {
+    reads_enum_partially(source, ROW_CONTENT)
+}
+
+/// [`reads_row_content_partially`] for any enum a view must read by naming every variant —
+/// `RowContent`, and `DiffContent`, whose every state is something a view draws (R6.8).
+pub fn reads_enum_partially(source: &str, name: &str) -> Vec<usize> {
     let code = code_without_strings(source);
     let bytes = code.as_bytes();
-    let names_row_content = |text: &str| !ident_offsets(text, ROW_CONTENT).is_empty();
+    let names_the_enum = |text: &str| !ident_offsets(text, name).is_empty();
     let mut lines = BTreeSet::new();
 
-    for offset in ident_offsets(&code, ROW_CONTENT) {
-        let rest = code[offset + ROW_CONTENT.len()..].trim_start();
+    for offset in ident_offsets(&code, name) {
+        let rest = code[offset + name.len()..].trim_start();
         let glob = rest
             .strip_prefix("::")
             .is_some_and(|r| r.trim_start().starts_with('*'));
@@ -592,7 +598,7 @@ pub fn reads_row_content_partially(source: &str) -> Vec<usize> {
             continue;
         }
         let end = balanced_end(bytes, at);
-        if names_row_content(&code[at..end]) {
+        if names_the_enum(&code[at..end]) {
             lines.insert(line_at(&code, offset));
         }
     }
@@ -601,7 +607,7 @@ pub fn reads_row_content_partially(source: &str) -> Vec<usize> {
         let Some(assign) = depth_zero_assignment(bytes, offset + "let".len()) else {
             continue;
         };
-        if !names_row_content(&code[offset..assign]) {
+        if !names_the_enum(&code[offset..assign]) {
             continue;
         }
         let before = code[..offset].trim_end();
@@ -623,14 +629,14 @@ pub fn reads_row_content_partially(source: &str) -> Vec<usize> {
             continue;
         };
         let arms = match_arm_patterns(&code, open);
-        if !arms.iter().any(|(_, pattern)| names_row_content(pattern)) {
+        if !arms.iter().any(|(_, pattern)| names_the_enum(pattern)) {
             continue;
         }
         let wrappers: BTreeSet<&str> = arms
             .iter()
             .flat_map(|(_, pattern)| split_depth_zero(strip_guard(pattern), b'|'))
             .filter_map(|alternative| wrapped(alternative))
-            .filter(|(_, inner)| names_row_content(inner))
+            .filter(|(_, inner)| names_the_enum(inner))
             .map(|(head, _)| head)
             .collect();
         for (at, pattern) in arms {

@@ -252,7 +252,8 @@ Project invariants:
   over the whole crate directory (`src/` and `tests/` alike), matching aliased
   imports and qualified paths, with the debris hook echoing the same rule in
   milliseconds.
-- **Outside `cairn-model`, a `RowContent` is read by naming every variant.** No
+- **Outside `cairn-model`, a `RowContent` — and, in production code, a
+  `DiffContent` — is read by naming every variant.** No
   `_ =>`, catch-all binding (`other`, `ref x`, `&_`) or `Some(_)`-beside-
   `Some(RowContent::..)` arm in a match that names it, no `if let`, `while let`,
   let-chain or `let .. else` over it, no `matches!` over it, and no `use` that
@@ -264,7 +265,13 @@ Project invariants:
   `the_row_content_matcher_catches_the_shapes_it_claims`. Residual review
   obligation: the matcher reads spellings, so a helper that returns
   `Option<&CommitSummary>` and is then read partially, or a `type` alias for
-  `RowContent`, is `qa-checklist`'s to catch.
+  `RowContent`, is `qa-checklist`'s to catch. `DiffContent` is held to the same
+  matcher (`reads_enum_partially`) by `every_view_of_a_file_diff_names_every_state`
+  (self-test `the_diff_content_matcher_catches_the_shapes_it_claims`), over every
+  crate's `src/` but `cairn-model`'s and `cairn-guards`', in production code only:
+  test modules, files a parent declares under `#[cfg(test)]`, and `tests/` are left
+  out, since a test asserting one state is a check rather than a view; that a test
+  helper of this kind is not used to draw is the same review's.
 - **Only `cairn-git/src/ops/` mutates a repository**, whether through gitoxide or
   a `git` subprocess. Primary enforcement is the type: a `git` invocation is
   built as a read or a write (`GitBinary::read_invocation`,

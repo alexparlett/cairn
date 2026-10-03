@@ -14,7 +14,12 @@ diff --no-index` run as reads, the working-tree side rebuilt from git's patch so
 is git's form of the file (clean filter driver run by git, with the read's
 environment), and every R3.4 state answered. The user accepted `git diff
 --no-index` for an untracked file as the one porcelain exception to the reads rule
-(2026-10-03), its presentation settings pinned by `-c`.** The diff model exists in
+(2026-10-03), its presentation settings pinned by `-c`. Phase 04 landed
+(2026-10-03), QA due: queries are numbered per lane (history, changes, file diff), the
+changes and file-diff lanes run on a `cairn-diff` thread routed to at submit time, a
+superseded diff's `git` is killed by its epoch, and every answer names the selection it
+answers, which `DiffState` checks before the window keeps it; nothing selects or draws
+a diff yet (phase 05).** The diff model exists in
 `cairn-model`, and `cairn-git` answers R2's two queries: the changes query from
 `git diff-tree` through the process manager (decision E, PRD R2.1, R2.2, R2.9 and C14
 amended), honouring `diff.ignoreSubmodules` and `log.showRoot` as the user's `git log`
@@ -75,12 +80,20 @@ headers give sizes without inflating), and read, ask git and answer per batch �
 streaming or paging the patch per batch rather than parsing one answer for the
 whole comparison — so the memory is the batch's, not the commit's.
 
-**For phases 04 and 05: "cut short" has no `cairn-model` type yet.** `ChangeSet`
-and `RenameDetection` are `cairn-git` types, and `cairn-ui` may not name
-`cairn-git`. Whatever crosses the seam to draw R2.2's notice — that the rename
-search was cut short, and the `needed_limit` to raise `diff.renameLimit` to — needs
-a `cairn-model` counterpart, which the phase that carries a change set across the
-worker boundary (04) or draws it (05) must decide.
+**"Cut short" across the seam: decided in phase 04.** `ChangeSet` and
+`RenameDetection` (with `was_cut_short()` and `needed_limit`) moved to `cairn-model`,
+so the change set crosses the worker boundary as it is and phase 05 draws R2.2's
+notice from it without naming the engine.
+
+**For phase 05: what phase 04 left to wire.** `DiffState::select_changes`,
+`select_file` and `expand_all` return the `Request` to submit; nothing calls them yet
+(the commit list's selection is phase 05's to wire), and `FileTarget`/`WorkingSide`
+are re-exported from `worker` for tests only until the window names them. The window
+draws an `Answer` per selection: `Waiting`, `Ready`, or `Failed` with display text.
+
+**For phase 08: Expand All's lane is ready to page.** `Update::FileDiffs` carries
+`complete`, and `DiffState::expansion_arrived` appends batches; today the diff thread
+sends one batch, complete, from one `DiffSession::file_diffs` call.
 
 **Q3 is answered and closed by decision E.** gix paired 231 renames on
 `5a3292f163d` where git pairs 2,774; the changes query now asks git, and the bench
@@ -126,8 +139,8 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | `apply_patch`, `apply_patch_in_reverse`, `PatchApplyError` | model | The reference applier, written from the format and independent of the emitter. Public so `cairn-git`'s round-trip tests can reach it. |
 | `Timestamp`, `Signature`, `CommitDetails` | model | R1.8: both signatures with their offsets, the whole message, the parents. |
 | `ChangesRequest` | git | What to compare: one commit against its first parent (the empty tree for a root), or two commits tip against tip. |
-| `ChangeSet` | git | What a commit or a comparison changed: the files sorted by a total key, the commit's details when one commit was named, and how rename detection went. |
-| `RenameDetection` | git | Whether detection was on and found copies, the limit git applied, and `needed_limit` / `was_cut_short()`: R2.2's "the answer says so", decided from git's answer and the limit, never from stderr. |
+| `ChangeSet` | model (moved from git in phase 04) | What a commit or a comparison changed: the files sorted by a total key, the commit's details when one commit was named, and how rename detection went. |
+| `RenameDetection` | model (moved from git in phase 04) | Whether detection was on and found copies, the limit git applied, and `needed_limit` / `was_cut_short()`: R2.2's "the answer says so", decided from git's answer and the limit, never from stderr. |
 | `ContentOptions` | git | R2.6's limits, whether to load past them anyway, whether to compute the whitespace-ignoring ranges, and `context`, the view's context, which git is asked at. |
 | `DiffSession` | git | Holds gix's resource cache for a run of content queries; its `changes` is `Repository::changes`. Borrows the repository and is not `Send`, like `HistorySession`. |
 | `Repository::changes(&GitBinary, ..)` | git | R2.1, R2.2, R2.9, R2.10: gix reads the commits and the configuration — the two rename keys, `diff.ignoreSubmodules`, `log.showRoot` — and `git diff-tree` answers. Blocks on one read process (two when a hidden submodule must be excluded from a rename search); `Cancel` polled every runner tick ends it. A root commit under `log.showRoot=false` answers no files and starts no process. |
@@ -150,6 +163,12 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | `PatchText::new_side`, `new_index_id`, `submodule_targets`, `has_hunks`; `Parser::finish_listing` | git (crate-private) | The new side rebuilt from the old and git's patch, every printed line checked; the id on the `index` line; git's `Subproject commit` lines and `-dirty`; records and sections unmatched, for one path. |
 | `Invocation::finish_within` | git (crate-private, `process/`) | `finish` with a stdout ceiling: the crossing chunk withheld, the process ended, `GitOutputTooLarge`; what arrived before a failed exit is already the caller's. |
 | `diff::submodules::working_tree_ignore` | git (crate-private) | The `--ignore-submodules` value porcelain applies and plumbing does not read: `diff.ignoreSubmodules`, unless the submodule has an `ignore` of its own. |
+| `QueryLane`, `Epoch`, `Epochs::bump(lane)`, `Superseded` | app (`worker/epoch.rs`) | Phase 04, R4.1: epochs numbered per lane; `QueryLane::supersedes` is the rule (a changes query also supersedes the file-diff lane); `Superseded` is the `Cancel` for walks and diff reads alike. |
+| `route`, `Routed`, `RepositoryJob`, `Page`, `thread_of` | app (`worker/routing.rs`) | Phase 04, R4.2: the routing table, applied in `submit`; history to `cairn-repository`, changes and file diff to `cairn-diff`. `thread_of`/`Thread` are the lanes' half, test-only. |
+| `serve_diffs`, `DiffJob`, `READ_ATTEMPTS`, `Answers`, `Kept` | app (`worker/diff_lane.rs`) | Phase 04, R4.2-R4.5: the diff thread; newest request per lane, file diff first, blocks when idle; a disagreeing read asked again up to three times; commit/comparison answers kept, bounded, keyed by everything asked; all kept state let go when the index moves. |
+| `Comparison`, `WorkingSide`, `DiffOptions`, `FileTarget`, `FileQuery`, `DiffQuery` | app (`worker/request.rs`) | Phase 04, R4.4: what a diff request names and its answer names back. |
+| `Request::Changes`/`FileDiff`/`ExpandAll`, `Update::Changes`/`FileDiff`/`FileDiffs`/`DiffFailed`, `Request::lane()` | app (`worker/request.rs`) | Phase 04: the diff boundary; `lane()` replaced `is_query()`. A superseded query sends nothing. |
+| `DiffState`, `Answer`, `Expanded` | app (`src/diff_state.rs`) | Phase 04, R4.4: the diff selection in `View::diff`; an answer is kept only when it names what is selected now. |
 | `Error::ChangesCancelled`, `ContentCancelled`, `ContentReadsDisagree`, `DiffSetup`, `DiffFile`, `UnexpectedGitOutput`, `InvalidConfig`, `NotAWorkTreePath` | git | What the caller of a diff query must handle; `TreeDiff` went with the gix tree walk. `ContentReadsDisagree` is the stale-read guard: git printed lines that are not the lines gix read; ask again. `NotAWorkTreePath`: an untracked path that is empty, absolute or has a `.`/`..` component, refused before anything runs. |
 
 ## Validation status
@@ -159,7 +178,7 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | 01 diff model | landed | `scripts/gate.sh` PASS | `qa-checklist`, `test-coverage-auditor` and `responsiveness-reviewer`, adjudicated by `qa-confirm`; confirmed findings fixed or recorded as residuals in `docs/systems/diff.md` |
 | 02 engine, commits | landed 2026-09-18; changes query reworked onto `git diff-tree` 2026-10-03 (decision E) | `scripts/gate.sh` PASS, `git-floor` included | done over the reworked phase (2026-10-03), adjudicated by `qa-confirm`; confirmed findings fixed. C6 audit done (2026-10-03, adjudicated): F2-F7 fixed; F1 closed by the content-parity rework (landed 2026-10-03, `scripts/gate.sh` PASS with `git-floor`): R2.4 and R2.8 parity enforced under every algorithm and over real history. QA of the content rework (round 3, 2026-10-03): 21 raw, 16 confirmed by `qa-confirm`, S3 dismissed, S1/R2/G4 escalated and decided by the user; **phase 02 QA round 3 fixed** — every confirmed finding fixed or recorded (R2 above, for phase 08; G4 as issue #51), `scripts/gate.sh` PASS with `git-floor` |
 | 03 engine, working tree | landed 2026-10-03; **phase 03 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 19 raw, 16 confirmed by `qa-confirm`, QC3 dismissed; every confirmed finding fixed test-first (`progress.md`); the `diff --no-index` exception accepted by the user (2026-10-03); a full read-verb roster guard is a candidate follow-up for the user |
-| 04 worker lanes | not started | — | — |
+| 04 worker lanes | **phase 04 landed, QA due** (2026-10-03) | `scripts/gate.sh` PASS, `git-floor` included | due — C8's tests and the mutation that reddens each are in `progress.md` |
 | 05 detail pane | not started | — | — |
 | 06 unified diff view | not started | — | — |
 | 07 Changes tab and side-by-side | not started | — | — |

@@ -70,8 +70,14 @@ On the application's side, in `crates/cairn-app/src/`:
   worker/discovery.rs     Discovery — git found once per application, on cairn-discovery
   worker/startup.rs       Startup, Backend — a repository's channel, and git pointed at it
   worker/network_lane.rs  the network lane's loop: Operation, Lane, FetchControl, Refusal
-  worker/pool.rs          the repository thread: serves Request::Close and Request::CommandLog,
-                          spawns the network lane's cairn-network thread, Threads::drop
+  worker/pool.rs          the repository thread: serves the history lane, Request::Close and
+                          Request::CommandLog, spawns the cairn-diff and cairn-network
+                          threads, Threads::drop
+  worker/routing.rs       the routing table: which thread serves each request, applied as it
+                          is submitted
+  worker/epoch.rs         epochs numbered per query lane, each a read's Cancel
+  worker/diff_lane.rs     the diff thread's loop: the changes and file-diff lanes, whose reads
+                          a superseding query ends (docs/systems/diff.md, "In the application")
   worker/request.rs       Request and Update, the boundary's messages
   closing.rs              Closing — the window's close hook, which asks and never waits
 ```
@@ -811,8 +817,11 @@ runs on the UI thread:
    `Closing::requested` (`closing.rs`). The first time, it submits
    `Request::Close` and keeps the window open. `RepositoryHandle::submit`
    stops the epochs — an atomic store, so a page being walked is abandoned at
-   its next poll — and queues the close, which `serve` breaks on.
-2. On the repository thread, `Threads::drop` closes the network lane's queue
+   its next poll and a diff's read is ended at the runner's next tick — and
+   queues the close, which `serve` breaks on.
+2. On the repository thread, `Threads::drop` tells the diff thread to stop
+   (the window's handles hold its queue open, so it is told rather than left
+   to see the queue close), closes the network lane's queue
    and calls `SharedRepository::end_invocations(CLOSE_BOUND)`: every `git` in
    the registry is ended the way a cancel ends it, and the thread waits up to
    `CLOSE_BOUND` for their reaps. The registry is the one authority here — a

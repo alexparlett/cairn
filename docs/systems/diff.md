@@ -7,7 +7,9 @@ that exists, and behaviour is pinned by a test named beside it.
 a file diff, project it into hunks and rows, and emit a unified patch from a
 selection of lines; `cairn-git` answers what a commit or a comparison changed,
 what one of those changes is, line by line, and one path's staged, unstaged or
-untracked diff in the working tree, against a real repository. No
+untracked diff in the working tree, against a real repository; and the
+application asks those queries on a thread of their own and keeps each answer for
+the selection it names ("In the application", below). No
 component draws one and nothing stages anything — the patch emitter still ships
 with no caller, deliberately (program decision L2 in
 `docs/work/daily-loop/brainstorm.md`), because its round-trip tests are what make
@@ -950,6 +952,80 @@ added later. Today the model itself is the only reader; when the views land, C11
 ("every R6.8 state draws its notice") is what decides it, and whether that
 deserves a guard of its own is a question for the packet's QA phase.
 
+## In the application
+
+The window asks for diffs through the worker boundary
+(`crates/cairn-app/src/worker/`), as it asks for history pages, and never waits
+on one.
+
+**Requests and answers name their target** (PRD R4.4,
+`crates/cairn-app/src/worker/request.rs`). `Request::Changes { of }` asks what a
+`Comparison` — one commit, or two tip against tip — changed, and
+`Update::Changes { of, changes }` answers with the `ChangeSet`.
+`Request::FileDiff(FileQuery)` asks for one file's diff: a `FileTarget`
+(`Committed { of, file }`, the `ChangedFile` exactly as the change set named it,
+or `WorkingTree { path, side }`) and the `DiffOptions` the view chose — the
+context git is asked at, whether to compute the whitespace-ignoring ranges, and
+whether to load past R2.6's byte ceiling; the ceilings themselves are fixed.
+`Update::FileDiff { query, diff }` answers with the same query, `diff` being
+`None` where the working tree's `git diff` of the path prints nothing.
+`Request::ExpandAll { of, options }` asks for every file of a change set, answered
+by `Update::FileDiffs { of, options, diffs, complete }`; today that is one batch,
+complete. A failure is `Update::DiffFailed { query, message }`, naming what was
+asked. A superseded query sends nothing: `ChangesCancelled`, `ContentCancelled`
+and `GitReadCancelled` are not failures, and nothing is sent once the query's
+epoch is no longer current.
+
+**Lanes and the diff thread** (PRD R4.1-R4.3). The changes query is numbered in
+the changes lane and a file diff or Expand All in the file-diff lane; a changes
+query supersedes both, a file diff only the file-diff lane, and neither a page
+nor a fetch (`docs/systems/history-graph.md`, "The worker boundary"). Both lanes
+are served on `cairn-diff` (`worker/diff_lane.rs`), started beside the repository
+thread with a thread-local handle of its own and the `GitBinary` the application
+found, and reached directly from `RepositoryHandle::submit` by the routing table
+(`worker/routing.rs`). Each lane holds only its newest waiting request; a waiting
+file diff is served before a waiting changes query (it was asked after it, or the
+changes query would have superseded it), a request superseded while it waited is
+dropped unserved, and the thread blocks on its queue whenever nothing waits
+(`the_newest_request_per_lane_is_served_the_file_diff_first`). The query's epoch
+is the `Cancel` every engine call is handed, so the runner's poll ends a
+superseded read's process group — a click through a file list kills each file's
+one to three `git` processes rather than queueing them
+(`a_superseded_diff_kills_its_git`, a stub `git` whose `diff-tree` hangs with a
+grandchild; `a_click_through_files_answers_the_last_file_only`). Expand All is
+one engine call, `DiffSession::file_diffs`, which checks the epoch between files
+and while each read runs, so a newer file diff or changes query ends it at the
+next file. A content query whose reads disagree (`ContentReadsDisagree`) is asked
+again, up to `READ_ATTEMPTS` in all and never once superseded, and then shown as
+a failure (`a_disagreeing_read_is_asked_again_a_bounded_number_of_times`).
+
+**What the thread keeps** (PRD R4.5). The `DiffSession` — gix's blob resource
+cache — is opened on first use and kept across commits; the engine reads the index
+and the attributes afresh for every working-tree query. gix builds a session's
+attribute stack from the index as it stands when the session opens, so the thread
+stats the index file before each query and, when it has moved, reopens the session
+and lets go of every kept answer (`what_is_kept_is_let_go_when_the_index_moves`).
+Answers already given for commits and comparisons are kept,
+bounded by count and by size (`what_is_kept_is_bounded_by_count_and_by_size`): a
+change set keyed by its `Comparison`, a file's diff by its whole `FileQuery` —
+the comparison, both paths, modes and blob ids, and the options
+(`a_kept_answer_is_found_only_under_everything_it_was_asked_with`). Working-tree
+answers are never kept (`a_working_tree_answer_is_never_kept`), and neither is
+Expand All's. The object cache is the handle's own `Repository::OBJECT_CACHE_BYTES`,
+not gix's tree-diff sizing helper: the trees are compared by `git diff-tree`, so
+gix walks no tree here for that cache to pay for.
+
+**The window keeps an answer only for its selection**
+(`crates/cairn-app/src/diff_state.rs`). `DiffState` holds the comparison
+selected, the file selected and an Expand All, each with its `Answer` —
+waiting, ready or failed — and `session::apply` stores an answer only when
+`DiffState` says it names what is selected now. Selecting a comparison lets go of
+the file and the expansion, whose lane it supersedes. That is a second filter
+behind the epoch: it refuses an answer whose epoch is still current but whose
+selection has gone, such as one that arrives after the selection was cleared
+(`an_answer_naming_another_selection_is_never_drawn`, through the real worker).
+Nothing draws the state yet, and no click selects anything.
+
 ## What a commit's details carry
 
 `CommitDetails` is R1.8: the author and the committer as separate `Signature`s,
@@ -965,6 +1041,15 @@ pinned by `an_offset_reads_the_way_git_writes_it`.
 
 ## Known limits
 
+- **A kept answer does not see an unstaged attribute edit.** The key holds
+  everything Cairn asks a commit's diff with; the configuration the engine reads is
+  the handle's, read when the repository was opened, so the two are refreshed
+  together by reopening; and a moved index lets every kept answer go. What `git`
+  itself reads as it runs from outside the index is not covered: the working
+  tree's attributes (a driver's algorithm, its function-context pattern, `-diff`),
+  `.gitmodules` and the drivers' configuration. Edited while the repository is
+  open and not staged, they are seen by the next query not already answered, and
+  not by one that is.
 - **The working-tree query answers one path, named by its caller.** It pairs no
   rename (a path staged by `git mv` shows as added, as `git diff --cached -- <path>`
   shows it), and `Untracked` answers `git diff --no-index` for the path whatever the

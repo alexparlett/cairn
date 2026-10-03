@@ -3,6 +3,112 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-03 — Phase 04 landed: lanes, a diff thread, answers that name their selection
+
+Packet mode, committed to `feature/diff-engine`. The phase doc predates the
+process-manager packet; the code as it stood won over its description of it.
+`WORKERS_PER_REPOSITORY`, `Request::is_query`, the single `Epochs` counter and
+`serve()`'s shape (a total match whose non-history arms ended in `continue`, the
+paging after it the history path) were each replaced deliberately:
+
+- **Epochs per lane** (`worker/epoch.rs`): `QueryLane` history, changes, file diff;
+  `Epoch` carries its lane; `QueryLane::supersedes` is the whole rule (a changes query
+  bumps the file-diff lane first, then its own). `Superseded` is the engine's `Cancel`
+  for walks and diff reads alike. `Request::lane()` replaced `is_query()`.
+- **Routing** (`worker/routing.rs`): `route` is the table, applied in `submit` on the
+  caller's thread, handing the repository thread a `RepositoryJob` and the diff thread a
+  `DiffJob` — neither forwards the other's work, so a diff asked mid-page reaches the
+  diff thread at once. `thread_of` states the lanes' half and a test holds `route` to it.
+- **`serve()`** now matches `RepositoryJob`, every arm its own; the history path is
+  `Scroll::page`.
+- **The diff thread** (`worker/diff_lane.rs`, `cairn-diff`): started by `Threads::start`
+  with a `GitBinary` copy and its own handle; told to stop by `Threads::drop`, since the
+  window's handles hold its queue open. `Waiting` keeps the newest request per lane,
+  serves the file diff first, drops a request superseded while it waited, and blocks on
+  `recv` whenever nothing waits (no busy poll).
+- **Requests, updates, state**: `Request::Changes`/`FileDiff`/`ExpandAll`,
+  `Update::Changes`/`FileDiff`/`FileDiffs`/`DiffFailed`, each answer naming its
+  `Comparison`, `FileQuery` (target and `DiffOptions`) or both; `DiffState`
+  (`src/diff_state.rs`) in `View::diff`, applied by `session::apply` only for the
+  selection it names.
+
+**Decisions taken without asking, each a design input from QA on phases 02-03:**
+
+1. **`ChangeSet` and `RenameDetection` moved to `cairn-model`** (state.md's open
+   question for phases 04/05). An update must carry the change set and phase 05 must
+   draw "cut short" without naming the engine; moving the types (plain data, no gix)
+   beats a duplicate that could drift. `cairn-git` uses them from the model.
+2. **`ContentReadsDisagree` is asked again, `READ_ATTEMPTS` (3) in all, never once
+   superseded**, then sent as `Update::DiffFailed`. A filter whose output varies run to
+   run therefore costs three reads and shows an error; it never loops.
+3. **Cancellation is silent**: `ChangesCancelled`, `ContentCancelled` and
+   `GitReadCancelled` send nothing, and nothing is sent once the epoch is not current.
+4. **The answer cache** keys a change set by `Comparison` and a file diff by its whole
+   `FileQuery` (comparison, the `ChangedFile` with both paths, modes and blob ids, and
+   `DiffOptions`: context, whitespace, load-anyway). Bounded: 16 change sets / 100,000
+   files; 64 file diffs / 32 MiB of lines. Never a working-tree answer, never Expand
+   All's. **Config**: the engine's configuration is the handle's (read at open); the
+   cache lives no longer than the handle, so both refresh on reopen — the thread does
+   not reopen on its own, and does not key on config. **Attributes**: gix builds a
+   session's attribute stack from the index at open, so the thread stats the index file
+   before each query and, when it moved, reopens the `DiffSession` and lets every kept
+   answer go (`fix(app)` commit). Residual, in `docs/systems/diff.md` "Known limits":
+   an UNSTAGED edit to the working tree's `.gitattributes`, `.gitmodules` or a driver's
+   configuration is not seen by an answer already kept (it is by the next query). The
+   "resolved algorithm" is in the key implicitly: `diff.algorithm` is the handle's
+   config, and a driver's algorithm comes from attributes (above).
+5. **The object cache stays the handle's 4 MiB** (`Repository::OBJECT_CACHE_BYTES`),
+   not gix's `compute_object_cache_size_for_tree_diffs`: the phase doc asked for the
+   helper when gix compared trees; under decision E git does, and that helper sizes
+   for a tree walk gix no longer makes (about 10 MB per 10k index entries).
+6. **Expand All is one batch in the file-diff lane**, its change set from the cache or
+   asked first. `DiffSession::file_diffs` checks the epoch between files and polls it
+   while each read runs — that is the "yield between files": a newer file diff or
+   changes query supersedes it there and kills its read. `Update::FileDiffs` already
+   carries `complete` and `DiffState` appends batches, so phase 08 can page it without
+   changing the boundary. Memory is unchanged from the engine's (phase 08's to bound).
+7. **Two filters, both kept**: the epoch at `Updates::next` drops a superseded answer
+   on arrival; `DiffState` drops one whose epoch is current but whose selection has
+   gone (cleared without a new request). `session::apply` asks `DiffState::wants_*`
+   before it writes, so a dropped answer does not even notify a subscriber.
+8. **Selection is not wired to a click** — phase 05 wires `DiffState::select_changes`
+   to the commit list; nothing asks for a diff in the running app yet (no git spawned
+   per click for nothing drawn).
+9. Test helpers: `BorrowedRepository` moved from `pool.rs`'s tests to `fetch_tests.rs`;
+   `StubGit::answering` generalises the stub to any verb; `collect_until` takes `FnMut`.
+   The window-side C8 test lives in `session.rs` because the waiting guard forbids
+   `freya` inside `worker/` and waiting outside it; it waits through
+   `worker::{checkout, commits, changes_answer}` (test-only).
+
+**C8, each test with the mutation that reddens it, shown RED then GREEN** (mutation
+applied to a copy, the test run, the file restored):
+
+| Test | Decides | Mutation | RED |
+| --- | --- | --- | --- |
+| `a_scroll_does_not_cancel_a_diff` | a page asked mid-changes-query leaves the change set to arrive | one counter (`QueryLane::index` → 0) | timed out, no `Changes` |
+| `a_diff_does_not_cancel_a_scroll` | a changes query and a file diff asked mid-page leave the page to arrive | one counter | timed out, no `Rows` |
+| `a_changes_query_supersedes_the_file_diff_in_flight` | the file diff asked before a changes query never arrives | `Changes.supersedes()` = `[Changes]` | the `FileDiff` arrived |
+| `a_file_diff_does_not_supersede_the_changes_query` | the negative: both arrive | `FileDiff.supersedes()` adds `Changes`; also one counter | timed out |
+| `an_answer_superseded_in_its_lane_is_dropped_on_arrival` (pool) | answers that finished after supersession are dropped, per lane, others kept | `Updates::next` without `is_current`; one counter; `Changes` not superseding the file diff | each RED |
+| `a_superseded_diff_kills_its_git` | the superseded `diff-tree`'s group (leader and grandchild) is gone and its log record `cancelled` | engine handed `CancelSignal::new()` | the second read never started: the first was queued behind, not killed (20 s) |
+| `an_answer_naming_another_selection_is_never_drawn` (session) | an answer under a current epoch for a cleared selection is not kept; asked again it is | `session::apply` storing whatever arrives | RED |
+| `a_fetch_still_supersedes_nothing` | a page and a change set asked before a fetch both arrive | `Request::Fetch` numbered in the changes lane | timed out |
+| `a_click_through_files_answers_the_last_file_only` | six file diffs asked back to back answer the last only | (behaviour; deciding mutations are the pool and kill tests) | — |
+
+Units beside them: `each_lane_supersedes_itself_and_a_changes_query_the_file_diff_too`
+(RED under one counter, M2, M7), `every_query_is_numbered_in_its_lane_and_operations_in_none`
+(RED under the fetch mutation), `every_query_is_served_on_the_thread_its_lane_is_routed_to`,
+`the_newest_request_per_lane_is_served_the_file_diff_first`,
+`a_disagreeing_read_is_asked_again_a_bounded_number_of_times`,
+`a_kept_answer_is_found_only_under_everything_it_was_asked_with`,
+`a_working_tree_answer_is_never_kept`, `what_is_kept_is_bounded_by_count_and_by_size`,
+`what_is_kept_is_let_go_when_the_index_moves` (RED with renewal disabled), and
+`diff_state`'s four (`wants_changes` always true: RED). Fifteen repeated runs of the
+worker tests: no flake.
+
+**Gate:** `scripts/gate.sh` PASS, all eight steps, `git-floor` included (no cairn-git
+test was added, so its floors are unchanged). QA is due: the orchestrator runs it.
+
 ## 2026-10-03 — Phase 03 QA: every confirmed finding fixed, test-first
 
 **The round:** 19 raw findings over phase 03 (working-tree diffs), 16 confirmed by

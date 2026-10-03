@@ -30,7 +30,10 @@ Cairn's to end).
 The engine can also answer what a commit or a pair of commits changed — `git
 diff-tree`'s answer, run as a read — and what one of those files' change is, line
 by line, and one path's staged, unstaged or untracked diff in the working tree
-(`docs/systems/diff.md`), with nothing drawing it yet. Nothing else
+(`docs/systems/diff.md`), with nothing drawing it yet; the worker asks those
+queries on a diff thread of its own, numbered per lane so a scroll and a diff
+never cancel each other, and the window keeps each answer only for the
+selection it names. Nothing else
 mutates a repository, and there is no repository picker: one repository, named
 on the command line.
 
@@ -39,11 +42,11 @@ on the command line.
 | Path | What lives there |
 | --- | --- |
 | `docs/` | `qa-gate.md` (QA contract), `design/` intent, `prd/` per-packet specs, `systems/` as-built, `work/` in-flight dirs, `research/` evidence (deferred work goes to GitHub issues; `backlog/` is the no-remote fallback) — findings promote research → brainstorm → design/prd → systems (contract: `docs/CLAUDE.md`) |
-| `crates/cairn-model/` | The vocabulary crossing the seam: `Oid`, `RefName`, `CommitSummary`, `CommitDetails`, the `Confirmed` token. Plain data, plus the pure algorithms that produce some of it — the layout one (`LaneAssigner`) and the diff model (`TextDiff` and the hunk, row and patch projections of it, `Selection`, `emit_patch` and the reference `apply_patch`; `docs/systems/diff.md`) — and `Secret`, the one type that holds a credential. Depends on nothing but `zeroize` (for that type) — not `gix`, not `freya`, not the other crates. |
+| `crates/cairn-model/` | The vocabulary crossing the seam: `Oid`, `RefName`, `CommitSummary`, `CommitDetails`, `ChangeSet`, the `Confirmed` token. Plain data, plus the pure algorithms that produce some of it — the layout one (`LaneAssigner`) and the diff model (`TextDiff` and the hunk, row and patch projections of it, `Selection`, `emit_patch` and the reference `apply_patch`; `docs/systems/diff.md`) — and `Secret`, the one type that holds a credential. Depends on nothing but `zeroize` (for that type) — not `gix`, not `freya`, not the other crates. |
 | `crates/cairn-git/` | The repository engine: gitoxide-backed reads — the history walk, and under `src/diff/` the queries answering what a commit changed (asked of `git diff-tree` through `src/reads/`), what one file's change is, and one path's working-tree diff — and under `src/ops/` every write, delegating to the `git` binary per design decision D1. Every `git` process is built in the crate-private `src/process/` — `GitBinary` (startup discovery and the 2.30 floor), `GitEnvironment` (the explicitly built environment, the only place a `Command` is built), `Askpass` (where git and ssh are sent for a secret), the runner, which streams and can kill a process, and each repository's registry of running invocations and its command log — and an invocation is typed a read or a write, a write needing the `WriteAuthority` only `ops/` can construct. `src/ops/` holds `fetch`, the first verb (not destructive, so it takes no `Confirmed`), and the confirmation-seal placeholder, and re-exports what the application needs of `process/`; `src/reads/` is where each read `git` answers lives, one named function each: today `changes`, `git diff-tree` for the changes query, whose rename and copy pairs gix and git disagree on; `patches`, `git diff-tree -p` for the content query's changed lines and function context, whose line diff gix and git disagree on too; `diff_attributes`, `git check-attr`, which says whether a path's diff driver names its own algorithm; and `working_tree_patch`, one path's staged, unstaged or untracked diff (`git diff-index --cached`, `git diff-files`, `git diff --no-index`), which reads the working tree through git so its side is git's form of the file. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
 | `crates/cairn-askpass/` | The askpass helper binary `git` and `ssh` run to ask for a secret, and the library half — the `Channel` the application listens on. Links `cairn-model` and `zeroize` only: it runs in a process holding a plaintext secret. Never names the engine, the toolkit or a logging crate. |
 | `crates/cairn-ui/` | Freya components. Render `cairn-model` values, report intent through `EventHandler` props. Must never depend on `gix` or `cairn-git`, and must never touch the filesystem. |
-| `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. `src/worker/` is everything that may wait: `git` found once per application (`discovery.rs`), each repository's threads (`pool.rs`), the network lane (`network_lane.rs`) and the askpass acceptor; `src/closing.rs` is the window's close hook, which asks the worker to close and never waits. |
+| `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. `src/worker/` is everything that may wait: `git` found once per application (`discovery.rs`), each repository's threads (`pool.rs`), the routing table from query lane to thread (`routing.rs`) and the per-lane epochs (`epoch.rs`), the diff thread (`diff_lane.rs`), the network lane (`network_lane.rs`) and the askpass acceptor; `src/diff_state.rs` is the diff selection and the answers kept for it; `src/closing.rs` is the window's close hook, which asks the worker to close and never waits. |
 | `crates/cairn-guards/` | Test-only. The deterministic enforcement twins for the Invariants below; nothing depends on it. |
 | `scripts/`, `.githooks/`, `.github/` | The enforcement layer (contract: `docs/qa-gate.md`). |
 
@@ -190,12 +193,19 @@ copy is a different version from the fork that links.
   runner);
   `cairn-app` decides where the blocking work runs and hands results back as
   values (decision D3: one `cairn_git::SharedRepository` — gitoxide's
-  `ThreadSafeRepository` — per repository, a worker taking its thread-local
-  handle once, every QUERY carrying an epoch so a superseded query is abandoned
-  rather than rendered; an operation such as fetch carries none, so a scroll
-  and a fetch cannot supersede each other). The epoch IS the cancel signal the
-  engine polls, so superseding a query stops its walk rather than discarding
-  its answer; a fetch is cancelled by killing its process instead. A repository is somebody's 10-year
+  `ThreadSafeRepository` — per repository, each worker thread taking its
+  thread-local handle once, routed to by an explicit table — the history lane
+  on the repository thread that owns the live walk, the changes and file-diff
+  lanes on a diff thread of their own — and every QUERY carrying an epoch
+  numbered in its lane, so a superseded query is abandoned rather than
+  rendered; a query supersedes only its own lane, except that a changes query
+  also supersedes the file diff, and an operation such as fetch carries none,
+  so a scroll, a diff and a fetch cannot supersede one another; and every diff
+  answer names the selection it answers, which the window checks before it
+  keeps it). The epoch IS the cancel signal the
+  engine polls, so superseding a query stops its walk, or ends its `git`
+  read's process group, rather than discarding its answer; a fetch is
+  cancelled by killing its process instead. A repository is somebody's 10-year
   monorepo: any design that assumes a query is fast is wrong.
 - **A scroll keeps its walk open.** gitoxide's walk cannot be resumed from a
   value, so a cursor resumes by replaying — which makes page *k* cost `k x limit`
@@ -488,7 +498,9 @@ Project invariants:
   close hook — `Closing::requested`, which lives in the render-side
   `crates/cairn-app/src/closing.rs` and is scanned, but calls `submit` — whose
   `Request::Close` arm stops the epochs with an atomic store and queues the
-  close, and whose `CancelFetch` arm takes `FetchControl`'s mutex and calls
+  close, whose query arms bump their lanes' atomic counters and send to the
+  thread the routing table names over an unbounded channel, and whose
+  `CancelFetch` arm takes `FetchControl`'s mutex and calls
   `KillHandle::kill`; `worker::open`, called from `main.rs`'s `use_hook`,
   and the `Replier` closure it returns; `Updates::next`, `Wake::poll`, `Drop for Updates` (an atomic
   store, when the stream's task is dropped); and

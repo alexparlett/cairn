@@ -135,11 +135,15 @@ fn only_a_viewport_of_diff_rows_is_built_however_long_the_file() {
             unreachable!("a text diff")
         };
         let projection = UnifiedRows::shown(text, overlay, Context::EntireFile);
+        // Counted from the file, not from a second projection: the entire file is one
+        // header and every line once, plus the added side of each of its one-line changes.
+        let changes = (lines / 50) as usize;
         assert_eq!(
             shown.row_count(),
-            projection.len(),
-            "the view's length is not the projection's"
+            lines as usize + changes + 1,
+            "the entire file is not one header and every line"
         );
+        assert_eq!(projection.len(), shown.row_count());
         let last_text = match projection.row(projection.len() - 1) {
             Some(UnifiedRow::Context { line, .. }) => line.text().into_owned(),
             other => panic!("the last row of an entire file is a context line: {other:?}"),
@@ -331,22 +335,25 @@ fn highlighted(test: &TestingRunner) -> Vec<Highlighted> {
 }
 
 /// C11: intra-line ranges are drawn — in the stronger tint of their line's side, at the
-/// columns they cover after a tab is expanded — and a context line has none. Caught by:
-/// dropping the ranges, swapping the two sides' tints, or passing byte offsets through.
+/// columns they cover after a tab is expanded — and a context line, or an added line with
+/// no pair, has none. The paired lines sit at different numbers on their sides and carry
+/// different ranges, so each side's ranges are looked up by its own line. Caught by:
+/// dropping the ranges, swapping the two sides' tints, passing byte offsets through, or
+/// looking a removed line up among the added lines' pairs (or the other way about).
 #[test]
 fn intra_line_ranges_are_drawn_in_the_stronger_tint() {
     let text = TextDiff::new(
         split_lines(b"same\n\tlet x = 1;\n"),
-        split_lines(b"same\n\tlet y = 1;\n"),
-        vec![change((1, 1), (1, 1))],
+        split_lines(b"same\nfresh\n\tlet yy = 1;\n"),
+        vec![change((1, 1), (1, 2))],
     );
     let overlay = DisplayOverlay::new(
         None,
         vec![IntraLineHighlight {
             removed_line: LineNumber::from_index(1),
-            added_line: LineNumber::from_index(1),
+            added_line: LineNumber::from_index(2),
             on_removed: vec![ByteRange::new(5, 6)],
-            on_added: vec![ByteRange::new(5, 6)],
+            on_added: vec![ByteRange::new(5, 7)],
         }],
     );
     let test = launch(ShownDiff::new(text_diff(text, overlay), Context::lines(3)));
@@ -359,9 +366,13 @@ fn intra_line_ranges_are_drawn_in_the_stronger_tint() {
     let removed = find("        let x = 1;");
     assert_eq!(removed.1, [(12, 13)]);
     assert_eq!(removed.2, REMOVED_EMPHASIS);
-    let added = find("        let y = 1;");
-    assert_eq!(added.1, [(12, 13)]);
+    let added = find("        let yy = 1;");
+    assert_eq!(added.1, [(12, 14)]);
     assert_eq!(added.2, ADDED_EMPHASIS);
+    assert!(
+        find("fresh").1.is_empty(),
+        "an unpaired added line was highlighted"
+    );
     assert!(find("same").1.is_empty(), "a context line was highlighted");
 }
 

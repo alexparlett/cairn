@@ -745,7 +745,7 @@ mod tests {
         if version.minor < 38 && version.major == 2 {
             eprintln!(
                 "SKIPPED a_planted_bare_repository_is_refused_as_the_launchs_git_refuses_it: \
-                 git {version:?} has no safe.bareRepository"
+                 git {version} has no safe.bareRepository"
             );
             return;
         }

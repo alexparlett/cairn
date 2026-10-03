@@ -243,17 +243,17 @@ fn a_bare_repository_found_by_searching_opens_exactly_where_git_opens_it() {
     assert_eq!(
         under(explicit_setting, "the planted repository"),
         version < since(38),
-        "git {version:?} and the planted repository"
+        "git {version} and the planted repository"
     );
     assert_eq!(
         under(explicit_setting, "a .git directory entered"),
         version < since(38) || version >= since(44),
-        "git {version:?} and a .git directory"
+        "git {version} and a .git directory"
     );
     assert_eq!(
         under(explicit_setting, "a linked worktree's git directory"),
         version < since(38) || version >= since(45),
-        "git {version:?} and a worktree's git directory"
+        "git {version} and a worktree's git directory"
     );
     for setting in [
         "unset (only the repositories' own say explicit)",
@@ -303,7 +303,7 @@ fn a_planted_bare_repository_is_refused_at_open_and_runs_nothing() {
 
     if git().version() < since(38) {
         eprintln!(
-            "SKIPPED a_planted_bare_repository_is_refused_at_open_and_runs_nothing: git {:?} \
+            "SKIPPED a_planted_bare_repository_is_refused_at_open_and_runs_nothing: git {} \
              has no safe.bareRepository, and opens the planted repository whatever is set",
             git().version()
         );

@@ -147,6 +147,44 @@ impl Hiding {
     }
 }
 
+/// The `--ignore-submodules` value the user's `git diff` applies to `path` and plumbing
+/// does not: `diff.ignoreSubmodules`, which only porcelain reads, unless the path's
+/// submodule has an `ignore` of its own — `submodule.<name>.ignore` in the configuration or
+/// in `.gitmodules` — which beats it, and which `diff-files` and `diff-index` apply
+/// themselves. Passing the flag would override that setting too, so it is passed only
+/// where there is none. A value porcelain refuses is [`Error::InvalidConfig`], as
+/// [`Hiding::read`] refuses it; a `.gitmodules` git might refuse to read is left to git.
+/// Reproduced with git 2.30.9 and 2.56.0 against `git diff` for a moved, a dirty and an
+/// untracked-content submodule under each value, and under each with a setting of its own
+/// (`docs/work/diff-engine/progress.md`, phase 03).
+pub(super) fn working_tree_ignore(
+    repo: &gix::Repository,
+    path: &RepoPath,
+) -> Result<Option<&'static str>, Error> {
+    let config = repo.config_snapshot();
+    let file = config.plumbing();
+    let global = match last_value(file, "diff", None, "ignoreSubmodules") {
+        None => return Ok(None),
+        Some(Some(value)) => match value.as_bytes() {
+            b"all" => "all",
+            b"dirty" => "dirty",
+            b"untracked" => "untracked",
+            b"none" => "none",
+            _ => return Err(invalid("diff.ignoreSubmodules", Some(value))),
+        },
+        Some(None) => return Err(invalid("diff.ignoreSubmodules", None)),
+    };
+    let modules = Modules::read(repo);
+    if modules.git_may_refuse {
+        return Ok(None);
+    }
+    let own = modules.path_name.get(path.as_bytes()).is_some_and(|name| {
+        last_value(file, "submodule", Some(name.as_slice()), "ignore").is_some()
+            || modules.ignore.contains_key(name)
+    });
+    Ok((!own).then_some(global))
+}
+
 /// What `.gitmodules` says, as git's `parse_config` reads it.
 #[derive(Debug, Default)]
 struct Modules {

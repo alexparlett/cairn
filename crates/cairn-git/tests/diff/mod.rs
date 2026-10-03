@@ -9,6 +9,7 @@ mod changes;
 mod content;
 mod parity;
 mod patches;
+mod working_tree;
 
 /// `unwrap` and `expect` are denied outside a test function, and a helper shared by several
 /// tests is not one. These say the same thing with a message that names what failed, which

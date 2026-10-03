@@ -5,18 +5,30 @@
 //! git shows means asking git — the changes query, whose rename and copy
 //! detection is where the two disagree — the read is a function here, built
 //! with [`crate::ops::GitBinary`]'s read builder, and the runner is reached from
-//! nowhere else but `ops/`. Three functions today, all for `crate::diff`:
+//! nowhere else but `ops/`. Four functions today, all for `crate::diff`:
 //! [`changes`], `git diff-tree --raw` for the changes query (`diff-engine`,
 //! decision E); [`patches`], `git diff-tree -p` for the content query's
 //! changed ranges and function context, which gix's line diff placed
 //! differently from git's (the content-parity decision of 2026-10-03,
-//! `docs/research/diff-engine/content-parity-spike.md`); and
+//! `docs/research/diff-engine/content-parity-spike.md`);
 //! [`diff_attributes`], `git check-attr diff`, which says whether a path's
-//! diff driver names an algorithm of its own.
+//! diff driver names an algorithm of its own; and [`working_tree_patch`], one
+//! path's staged, unstaged or untracked diff — `git diff-index --cached`,
+//! `git diff-files`, `git diff --no-index` — which reads the working tree
+//! through git, so its side is git's form of the file (`diff-engine` phase 03).
 //!
 //! # What a read may run
 //!
-//! **Query plumbing, or `git status`, and nothing else.** A read runs with
+//! **Query plumbing, or `git status`, and one porcelain mode that reads no
+//! index: `git diff --no-index`.** An untracked file's git form — after the
+//! clean filter driver and line-ending conversion its attributes name — has no
+//! plumbing that prints it: `diff-files` and `diff-index` list only what the
+//! index holds, and adding the path to an index is a write. `git diff
+//! --no-index` reads no index, so it has none to refresh, and writes nothing
+//! (reproduced with git 2.30.9, 2.32.7 and 2.56.0 against a snapshot of the git
+//! directory; `a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`
+//! pins it). It is the one porcelain verb a read runs, only in that mode, and
+//! only from [`working_tree_patch`]. A read runs with
 //! `GIT_OPTIONAL_LOCKS=0`, so that looking at a repository never refreshes its
 //! index behind the user's back or holds `index.lock` while their own
 //! `git commit` needs it. But only `status` honours that variable: porcelain
@@ -52,11 +64,22 @@
 //! it is: the hook is the user's, or one their repository's configuration
 //! names, and with `GIT_OPTIONAL_LOCKS=0` the read still writes nothing
 //! (`the_content_query_writes_nothing_and_runs_nothing` configures one and
-//! requires the git directory byte-identical). Nothing else a read starts may
-//! run a program: no textconv, external diff, driver `command`, clean or smudge
-//! filter (the same test). A planted repository naming a hook is the
-//! opening's to refuse, as git refuses it (`crate::bare_discovery`), not the
-//! read's.
+//! requires the git directory byte-identical). A planted repository naming a
+//! hook is the opening's to refuse, as git refuses it (`crate::bare_discovery`),
+//! not the read's.
+//!
+//! **A read of the working tree also runs the path's clean filter driver** —
+//! L6, D1 as amended (`docs/design/engine.md`, "Reads see git's form"): `git
+//! diff-files` and `git diff --no-index` convert the file to git's form as the
+//! user's `git diff` does, so git starts the driver the path's attributes name
+//! and the configuration defines, with the read's environment plus what git
+//! sets for a filter. And `diff-files`, asked about a submodule whose checkout
+//! it must look into, runs `git status` inside it — again what `git diff`
+//! does — which may run that repository's own fsmonitor and clean filters
+//! ([`working_tree_patch`] says what each read runs). Nothing else a read starts
+//! may run a program: no textconv, external diff, driver `command` or smudge
+//! filter, and no clean filter on a read of trees
+//! (`the_content_query_writes_nothing_and_runs_nothing`).
 //!
 //! **A read never lazily fetches — on git 2.44 or later.** In a partial
 //! clone, asking for an object only the promisor remote holds fetches it,
@@ -91,18 +114,20 @@
 //! `the_runner_is_named_only_by_ops_and_reads`; that a read cannot build a
 //! write is the compiler's, because only `ops/` can construct the
 //! `WriteAuthority` a write needs. That each function here runs query
-//! plumbing or `status` is a review obligation: a token scan cannot tell `diff-tree` from
-//! `diff` in an argument list built at run time.
+//! plumbing, `status` or `diff --no-index` is a review obligation: a token scan cannot
+//! tell `diff-tree` from `diff` in an argument list built at run time.
 
 mod attributes;
 mod changes;
 mod patches;
+mod working_tree;
 
 pub(crate) use attributes::{DiffAttribute, diff_attributes};
 pub(crate) use changes::{Detection, Submodules, changes};
 #[cfg(test)]
 pub(crate) use patches::parse as parse_patches;
 pub(crate) use patches::{Algorithm, FilePatch, PatchQuery, PatchText, Reading, Scope, patches};
+pub(crate) use working_tree::{Side, WorkingTreeAnswer, WorkingTreeQuery, working_tree_patch};
 
 /// The read as the diff thread will run it: built here from a `GitBinary` copy
 /// that thread holds, run on that thread, stopped by an epoch, answering `-z`

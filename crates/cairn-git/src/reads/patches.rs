@@ -97,7 +97,7 @@ impl Algorithm {
 
     /// Always the long spelling: `--minimal` alone combines with a diff driver's algorithm
     /// where `--diff-algorithm=minimal` replaces it.
-    fn flag(self) -> &'static str {
+    pub(super) fn flag(self) -> &'static str {
         match self {
             Self::Myers => "--diff-algorithm=myers",
             Self::Minimal => "--diff-algorithm=minimal",
@@ -205,6 +205,114 @@ impl PatchText {
     /// git printed `Binary files .. differ` instead of a diff.
     pub(crate) fn is_binary(&self) -> bool {
         self.binary
+    }
+
+    /// Whether git printed a hunk: a section with none is a header alone — a mode change
+    /// with the content unchanged, or an empty file added or deleted.
+    pub(crate) fn has_hunks(&self) -> bool {
+        !self.hunks.is_empty()
+    }
+
+    /// The new side's object id from the `index <old>..<new>` line, when git printed one
+    /// naming a side that exists. For a side git read from the working tree this is the
+    /// id of the content in git's form — clean-filtered and converted, exactly what it
+    /// diffed — computed by git and written nowhere (`--full-index` without `-w`).
+    pub(crate) fn new_index_id(&self) -> Option<Oid> {
+        let index = self.index.as_deref()?;
+        let at = index.windows(2).position(|pair| pair == b"..")?;
+        let hex = std::str::from_utf8(index.get(at + 2..)?).ok()?;
+        let id = Oid::parse(hex).ok()?;
+        (!id.as_bytes().iter().all(|byte| *byte == 0)).then_some(id)
+    }
+
+    /// The commit a submodule's side names — the `Subproject commit <id>` line git prints
+    /// for a gitlink — on the old side, the new side, and whether the new side's line
+    /// carries git's `-dirty` mark, which it prints when the submodule's checkout has
+    /// changes of its own. `None` for a side git printed no such line for.
+    pub(crate) fn submodule_targets(&self) -> (Option<Oid>, Option<Oid>, bool) {
+        let (mut old, mut new, mut dirty) = (None, None, false);
+        for line in &self.lines {
+            let bytes = self.body.get(line.bytes.clone()).unwrap_or_default();
+            let Some(rest) = bytes.strip_prefix(b"Subproject commit ") else {
+                continue;
+            };
+            let (hex, marked) = match rest.strip_suffix(b"-dirty") {
+                Some(hex) => (hex, true),
+                None => (rest, false),
+            };
+            let Some(id) = std::str::from_utf8(hex)
+                .ok()
+                .and_then(|hex| Oid::parse(hex).ok())
+            else {
+                continue;
+            };
+            match line.kind {
+                LineKind::Removed => old = Some(id),
+                LineKind::Added => {
+                    new = Some(id);
+                    dirty = marked;
+                }
+                LineKind::Context => {}
+            }
+        }
+        (old, new, dirty)
+    }
+
+    /// The new side git diffed, rebuilt from the old side it diffed against and this
+    /// patch, and the reading of the patch against both: every line outside a hunk is
+    /// the old side's — a line git does not print is one it found unchanged, its newline
+    /// included — and every context and added line is the one git printed. So the lines
+    /// held are git's own form of the new side by construction, whatever git did to read
+    /// it (a clean filter, line-ending conversion, a working-tree encoding). Every line
+    /// git printed is then checked against the two sides as [`PatchText::read_against`]
+    /// checks it: a removed or context line that is not the old side's is `Err`, and so
+    /// is a hunk out of step with the one before.
+    pub(crate) fn new_side(&self, old: &[DiffLine]) -> Result<(Vec<DiffLine>, Reading), String> {
+        let mut new: Vec<DiffLine> = Vec::with_capacity(old.len());
+        let mut at_old = 0usize;
+        for hunk in &self.hunks {
+            let start = hunk.old.start().index() as usize;
+            let unchanged = old.get(at_old..start).ok_or_else(|| {
+                format!(
+                    "the hunk at old line {} is out of step with the one before",
+                    hunk.old.start().one_based()
+                )
+            })?;
+            new.extend_from_slice(unchanged);
+            at_old = start;
+            if new.len() != hunk.new.start().index() as usize {
+                return Err(format!(
+                    "the hunk at new line {} does not start where the old side's unchanged \
+                     lines end",
+                    hunk.new.start().one_based()
+                ));
+            }
+            for line in self.lines.get(hunk.lines.clone()).unwrap_or_default() {
+                let bytes = self.body.get(line.bytes.clone()).unwrap_or_default();
+                let printed = if line.terminated {
+                    DiffLine::terminated(bytes)
+                } else {
+                    DiffLine::unterminated(bytes)
+                };
+                match line.kind {
+                    LineKind::Context => {
+                        new.push(printed);
+                        at_old += 1;
+                    }
+                    LineKind::Removed => at_old += 1,
+                    LineKind::Added => new.push(printed),
+                }
+            }
+        }
+        let rest = old.get(at_old..).ok_or_else(|| {
+            format!(
+                "git printed line {at_old} of the old side, which has {} lines",
+                old.len()
+            )
+        })?;
+        new.extend_from_slice(rest);
+        let reading = self.read_against(old, &new, false)?;
+        Ok((new, reading))
     }
 
     /// The changes, as maximal runs of removed and added lines, and each hunk's function
@@ -443,7 +551,7 @@ fn path(path: &RepoPath) -> OsString {
 /// Reads the answer as it arrives: NUL-terminated raw records up to the empty one that
 /// separates them from the patches, then the patches line by line.
 #[derive(Debug, Default)]
-struct Parser {
+pub(super) struct Parser {
     in_patches: bool,
     pending: Vec<u8>,
     records: RawRecords,
@@ -457,7 +565,7 @@ struct Parser {
 }
 
 impl Parser {
-    fn push(&mut self, mut chunk: &[u8]) {
+    pub(super) fn push(&mut self, mut chunk: &[u8]) {
         while !chunk.is_empty() && self.malformed.is_none() {
             let terminator = if self.in_patches { b'\n' } else { 0 };
             let Some(end) = chunk.iter().position(|byte| *byte == terminator) else {
@@ -603,17 +711,38 @@ impl Parser {
         self.after_body_line = false;
     }
 
-    /// The files, each with its patch. `Err` is the first thing that did not parse.
-    ///
-    /// Under `-w` (`whitespace_ignored`), git before the version that leaves such a file
-    /// out of its raw records as well lists a modified file whose every change is
-    /// whitespace and prints no patch for it — reproduced with git 2.30.9, 2.39.5 and 2.40.0,
-    /// where 2.56 lists nothing. So there, a modified file whose mode did not change is
-    /// matched to the next patch only when that patch's `index` line names its two blobs,
-    /// and is otherwise one git printed nothing for. A type change, a rename, a copy, an
-    /// addition, a deletion and a mode change always have a patch: each has header lines git
-    /// must show.
-    fn finish(mut self, whitespace_ignored: bool) -> Result<Vec<FilePatch>, String> {
+    /// The raw records and the patch sections git printed, as two lists, without
+    /// matching one to the other — for a read of one path, whose answer is at most one
+    /// record, and whose sections are told apart by how many there are
+    /// (`crate::reads::working_tree`). `Err` is the first thing that did not parse.
+    /// `raw_only` is an answer asked without `-p`, whose records end the output.
+    pub(super) fn finish_listing(
+        mut self,
+        raw_only: bool,
+    ) -> Result<(Vec<ChangedFile>, Vec<PatchText>), String> {
+        self.flush()?;
+        let files = self
+            .records
+            .finish("diff")
+            .map_err(|error| error.to_string())?;
+        if !files.is_empty() && !self.in_patches && !raw_only {
+            return Err("raw records with no patches after them".to_owned());
+        }
+        Ok((files, self.sections))
+    }
+
+    /// The raw records, once git has printed all of them (the empty record that ends them
+    /// has arrived) — what an answer cut off by a ceiling still says about its file.
+    pub(super) fn records_so_far(&mut self) -> Option<Vec<ChangedFile>> {
+        if !self.in_patches {
+            return None;
+        }
+        std::mem::take(&mut self.records).finish("diff").ok()
+    }
+
+    /// Reads what is left of the output after its last newline, and refuses an answer
+    /// that did not parse or ended inside a hunk.
+    fn flush(&mut self) -> Result<(), String> {
         if !self.pending.is_empty() {
             let rest = std::mem::take(&mut self.pending);
             if self.in_patches {
@@ -625,12 +754,27 @@ impl Parser {
                 ));
             }
         }
-        if let Some(malformed) = self.malformed {
+        if let Some(malformed) = self.malformed.take() {
             return Err(malformed);
         }
         if self.owed != (0, 0) {
             return Err("a hunk cut off before its last line".to_owned());
         }
+        Ok(())
+    }
+
+    /// The files, each with its patch. `Err` is the first thing that did not parse.
+    ///
+    /// Under `-w` (`whitespace_ignored`), git before the version that leaves such a file
+    /// out of its raw records as well lists a modified file whose every change is
+    /// whitespace and prints no patch for it — reproduced with git 2.30.9, 2.39.5 and 2.40.0,
+    /// where 2.56 lists nothing. So there, a modified file whose mode did not change is
+    /// matched to the next patch only when that patch's `index` line names its two blobs,
+    /// and is otherwise one git printed nothing for. A type change, a rename, a copy, an
+    /// addition, a deletion and a mode change always have a patch: each has header lines git
+    /// must show.
+    fn finish(mut self, whitespace_ignored: bool) -> Result<Vec<FilePatch>, String> {
+        self.flush()?;
         let files = self
             .records
             .finish("diff-tree")

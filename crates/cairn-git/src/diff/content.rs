@@ -278,7 +278,7 @@ fn same_file(found: &ChangedFile, held: &ChangedFile) -> bool {
 
 /// The context `git` is asked at: the view's, never less than one, and one for the entire
 /// file, whose one hunk starts at the first line, where git prints no function context.
-fn git_context(context: Context) -> u32 {
+pub(super) fn git_context(context: Context) -> u32 {
     context.line_count().unwrap_or(1).max(1)
 }
 
@@ -446,7 +446,7 @@ fn against(
 /// The exact answer, and the display-only overlay beside it. `readings` is git's, exact
 /// and whitespace-ignoring; `None` is a file git was not asked about, whose one possible
 /// answer is every line of one side against every line of the other.
-fn text_content(
+pub(super) fn text_content(
     old: Vec<DiffLine>,
     new: Vec<DiffLine>,
     readings: Option<(Reading, Option<Reading>)>,
@@ -672,7 +672,7 @@ fn byte_size(data: gix::diff::blob::platform::resource::Data<'_>) -> u64 {
 
 /// R2.6's two line rules, over git's form of the content. Measured without splitting the
 /// file into lines, so refusing a file costs a scan and no allocation.
-fn crossed_line_limit(old: &[u8], new: &[u8], limits: &DiffLimits) -> Option<SizeLimit> {
+pub(super) fn crossed_line_limit(old: &[u8], new: &[u8], limits: &DiffLimits) -> Option<SizeLimit> {
     let mut lines = 0u32;
     let mut longest = 0u32;
     for side in [old, new] {
@@ -704,7 +704,7 @@ fn crossed_line_limit(old: &[u8], new: &[u8], limits: &DiffLimits) -> Option<Siz
 /// `Some` only when every side that exists is a pointer: a file that became a pointer, or
 /// stopped being one, is a content change with one real side, and drawing it as a pointer
 /// would hide that side's lines.
-fn lfs_pointer(old: &[u8], new: &[u8]) -> Option<DiffContent> {
+pub(super) fn lfs_pointer(old: &[u8], new: &[u8]) -> Option<DiffContent> {
     let read = |side: &[u8]| -> Option<Option<String>> {
         if side.is_empty() {
             return Some(None);

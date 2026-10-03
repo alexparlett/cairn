@@ -90,7 +90,7 @@ pub fn git_view(
     hunks_of(&section)
 }
 
-fn hunks_of(out: &str) -> Vec<Hunk> {
+pub fn hunks_of(out: &str) -> Vec<Hunk> {
     let mut hunks: Vec<Hunk> = Vec::new();
     for line in out.split_inclusive('\n') {
         let line = line.strip_suffix('\n').unwrap_or(line);

@@ -20,8 +20,9 @@ mod git_config;
 mod intraline;
 mod renames;
 mod submodules;
+mod working_tree;
 
-use cairn_model::{ChangedFile, CommitDetails, Context, DiffLimits, FileDiff, Oid};
+use cairn_model::{ChangedFile, CommitDetails, Context, DiffLimits, FileDiff, Oid, RepoPath};
 
 use crate::ops::GitBinary;
 use crate::{Cancel, Error, Repository};
@@ -118,6 +119,20 @@ pub struct ContentOptions {
     pub context: Context,
 }
 
+/// Which of a path's working-tree diffs to answer (R3.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkingTreeDiff {
+    /// `HEAD` against the index: what `git diff --cached -- <path>` shows. Against the empty
+    /// tree on an unborn branch, as git compares it.
+    Staged,
+    /// The index against the working tree: what `git diff -- <path>` shows.
+    Unstaged,
+    /// Nothing against the working tree: what `git diff --no-index /dev/null <path>` shows
+    /// for a file git does not track. Which files are untracked is status's to say (R3.6);
+    /// this answers the one named, whatever the index holds.
+    Untracked,
+}
+
 /// A run of diff queries over one repository, holding gix's resource cache for the length
 /// of it.
 ///
@@ -197,6 +212,20 @@ impl DiffSession<'_> {
         )
     }
 
+    /// One path's working-tree diff (R3): [`Repository::working_tree_diff`], on this
+    /// session's repository.
+    pub fn working_tree_diff(
+        &mut self,
+        git: &GitBinary,
+        path: &RepoPath,
+        which: WorkingTreeDiff,
+        options: &ContentOptions,
+        cancel: &impl Cancel,
+    ) -> Result<Option<FileDiff>, Error> {
+        self.repo
+            .working_tree_diff(git, path, which, options, cancel)
+    }
+
     /// Every file of `changes`, the change set `request` answered, in its order — what
     /// Expand All shows. Each is decided as [`DiffSession::file_diff`] decides it, but the
     /// lines of every text file git has to compare come from ONE `git diff-tree -p` over the
@@ -242,6 +271,45 @@ impl Repository {
         cancel: &impl Cancel,
     ) -> Result<ChangeSet, Error> {
         changes::changes(git, self, request, cancel)
+    }
+
+    /// One path's staged, unstaged or untracked diff (R3.1 through R3.5), or `None` where
+    /// the user's `git diff` of it — `--cached`, plain, or `--no-index` against
+    /// `/dev/null` — shows nothing: a clean path, one whose stat alone moved, a file whose
+    /// working-tree form is its index's after the clean filter and line-ending conversion,
+    /// a submodule its `ignore` setting hides, an intent-to-add path's staged diff.
+    ///
+    /// git computes the diff and reads the working tree (`git diff-index --cached`, `git
+    /// diff-files`, `git diff --no-index`, each run as a read), converting it to git's form
+    /// as the user's `git diff` does, the path's clean filter driver included; the lines of
+    /// a working-tree side are rebuilt from git's patch, so they are that form, and are
+    /// checked against the object id git names for them. Every other answer is a state
+    /// rather than an error (R3.4): [`DiffContent::Conflicted`](cairn_model::DiffContent)
+    /// for a path the index holds unmerged (never diffed against one stage),
+    /// `Unsupported` for a sparse index or a bare repository, `ModeChangeOnly`, `Submodule`
+    /// with the commit each side names and whether the checkout is dirty, and the states
+    /// R2.6 and R2.5 name. For the stand-in states the file carries the path and no mode or
+    /// id. The new side's id is the object id of the content git read — the working tree's
+    /// in git's form, computed and written nowhere — or absent where the answer did not
+    /// read it (a side refused as too large).
+    ///
+    /// The index and the attributes are read fresh for every call (R3.3) and nothing is
+    /// written (R3.5). It blocks on one `git` process, two with whitespace ignored, and one
+    /// more where a diff driver may name an algorithm (`check-attr`); `cancel` is polled
+    /// while each runs, and a superseded query answers [`Error::ContentCancelled`]. Lines
+    /// git printed that are not the content it named are [`Error::ContentReadsDisagree`]
+    /// — the file changed while git read it: ask again. A failure of git's, such as a
+    /// required clean filter that failed, is [`Error::GitFailed`] with git's diagnostic,
+    /// which names the path.
+    pub fn working_tree_diff(
+        &self,
+        git: &GitBinary,
+        path: &RepoPath,
+        which: WorkingTreeDiff,
+        options: &ContentOptions,
+        cancel: &impl Cancel,
+    ) -> Result<Option<FileDiff>, Error> {
+        working_tree::working_tree_diff(self, git, path, which, options, cancel)
     }
 
     /// One content query, on a session of its own: [`DiffSession::file_diff`].

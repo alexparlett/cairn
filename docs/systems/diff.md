@@ -1164,30 +1164,69 @@ by this tab.
 Fork's order: AUTHOR and COMMITTER in two columns, each `Name <email>` and the full
 timestamp at its own offset in git's default date format
 (`Tue Nov 14 21:43:20 2023 -0030`, `date_text::git_default`, pinned against `git log`
-by `a_timestamp_reads_as_git_prints_it_at_its_own_offset`); the full 40-digit id
-beside SHA; each parent's 7-digit short id beside PARENTS, as a link (no PARENTS row
-for a root commit); a rule; every line of the message as written — the subject in a
-larger bold face, no line re-wrapped, the newline git ends a message with not a line
-of its own; a rule; git's own "exhaustive rename detection was skipped" warning with
-the `diff.renameLimit` git asks for, when the search was cut short; and one row per
-changed file, its `--name-status` letter in a colour and as a letter, and its path —
+by `a_timestamp_reads_as_git_prints_it_at_its_own_offset`) — the user decided on
+2026-10-03 to replace it with a localized long date like Fork's, the offset still
+shown, which waits on their sign-off for the locale data it needs (`progress.md`); a
+commit recorded before 1970 shows its true instant, by the user's decision, since git
+disagrees with itself there (`a_timestamp_before_the_epoch_reads_as_its_true_instant`);
+the full 40-digit id beside SHA; each parent's 7-digit short id beside PARENTS, as a
+link (no PARENTS row for a root commit); a rule; the message as `git log` shows it
+(`message_lines::shown_lines`) — the blank lines before and after it gone, each line
+without its trailing spaces, tabs or `\r`, blank lines inside kept, a tab expanded to
+the next multiple of eight columns, the first line the subject in a larger bold face,
+no line re-wrapped (`a_message_reads_line_for_line_as_git_log_shows_it`, against
+`git log --format=fuller`; `the_message_is_the_rows_git_log_shows_for_it`, row for
+row through the tab); a rule; git's own "exhaustive rename detection was skipped"
+warning with the `diff.renameLimit` git asks for, when the search was cut short, above
+the files, and nothing when a limit was set and not reached; and one row per changed
+file, its status as a bare letter in a colour — `A`, `D`, `M`, `T`, `R`, `C`, as Fork
+draws it, by the user's decision: git's `--name-status` letter without the similarity
+score it prints after `R` and `C` (`every_status_is_its_bare_letter`) — and its path,
 both paths, `old → new`, for a rename or a copy
 (`the_commit_tab_shows_every_field_r5_3_names`;
 `a_cut_short_rename_search_is_said_above_the_files`). No avatar, no ref chips, no
 network call. The author and the committer are both drawn always, as git's `fuller`
-format draws them.
+format draws them — the user's decision, where Fork appears to omit an identical
+committer. A person's `Name <email>` and a date are cut with an ellipsis where their
+half of the pane is narrower than they are; nothing else in the tab is cut.
+
+**The file list has focus of its own** (user decision 6, Fork's model). The tab takes
+focus when a file row is pressed or when Tab reaches it, and draws a focus border when
+reached from the keyboard; while it has focus, ↑ and ↓ move the current file — drawn
+highlighted, brought into view, reported through `CommitTab::on_file` by its index in
+the change set — and stop at either end
+(`the_focused_file_list_moves_the_current_file_with_the_arrows`). Tab and Shift-Tab
+move focus between the views that take it, Freya's own focus order: from the history,
+past the strip's Collapse control, into the files, and back
+(`tab_moves_the_arrows_between_the_history_and_the_commits_files`). A chord pressed
+there is not an arrow (`accelerators::is_chord`). Another commit is another list, with
+no file current.
 
 **It is one virtualised list** (R5.5). Header, message lines and files are rows of one
 `VirtualScrollView` at a fixed `DETAIL_ROW_HEIGHT`, so a commit touching 55,184 paths
-builds one viewport of rows at the top and scrolled deep
+builds one viewport of rows at the top, scrolled deep and at its very end, where the
+last file is built and visible
 (`only_a_viewport_of_files_is_built_however_many_the_commit_touched`). The tab is
 handed a `Readable` over the window's `DiffState` (`diff_state::answered_changes`),
-not a copy of the change set: per render it builds the header — proportional to the
-message, never to the files — and each file row reads its file by index. A line wider
-than the pane scrolls sideways rather than being cut, so a long path or message line
-is never truncated; the sideways extent is the widest row built. The list is keyed by
-the commit, so another commit opens at its top, and every row it built is replaced
-(`another_commits_answer_replaces_every_row_of_the_last`).
+not a copy of the change set: each file row reads its file by index, and the header —
+proportional to the message, never to the files — is built once per commit and cached
+on the commit's id, the cut-short limit and whether there are files, so a write to the
+diff state that leaves the commit as it was (a file's diff arriving, from phase 06)
+redraws the tab without building or comparing the header again
+(`the_header_is_built_once_per_commit_however_often_the_state_is_written`). A line
+wider than the pane scrolls sideways rather than being cut, so a long path or message
+line is never truncated; the sideways extent is the widest row built. The list is
+keyed by the commit, so another commit opens at its top, and every row it built is
+replaced (`another_commits_answer_replaces_every_row_of_the_last`).
+
+**A replaced answer is freed off the UI thread** (R2). Dropping a change set of 55,184
+files measured 1.2-2.0 ms in a release build (2026-10-03), more than a frame spares.
+`DiffState::select_changes` therefore returns the query and then, when answers were
+kept, a `Request::Retire` carrying them — the change set, a file's diff, Expand All's
+diffs — which `selection::choose` submits after the query and the repository thread
+frees, answering nothing
+(`choosing_another_commit_hands_the_last_ones_answers_to_a_worker`,
+`a_retired_change_set_is_freed_on_the_worker_without_an_answer`).
 
 **Parent links** (`detail_pane::follow_parent`). A parent loaded in the history is
 selected — its changes asked for through `selection::choose` — and its row brought
@@ -1200,49 +1239,64 @@ frame.
 ## The accelerator table
 
 As-built for PRD R8 and decision D5 (`crates/cairn-ui/src/accelerators.rs`). Every
-shortcut is an `Action` mapped by `accelerators::chord(action, os)` to one `Chord`
-per `Os` — macOS, and Linux for every other platform. The table is data: one match
-naming every action. A chord holds its modifiers exactly (caps lock and num lock are
-ignored, an extra Shift is not), and is completed by a key that names itself (an
-arrow, matched by the key), by a key where it sits (a digit or a letter, matched by
-its physical position, since Option turns `1` into `¡` on macOS), or by a primary
-pointer press.
+shortcut is an `Action` mapped by `accelerators::chord(action, os)` to at most one
+`Chord` per `Os` — macOS, and Linux for every other platform — and by
+`accelerators::heard_in(action)` to the `Scope` it is heard in: `Window`, wherever
+focus is, or `Detail`, only while focus is inside the detail pane. The table is data:
+one match naming every action for the chord, one for the scope. A chord holds its
+modifiers exactly (the lock keys are ignored, an extra Shift is not, for a key and a
+pointer press alike), and is completed by a key that names itself (an arrow, matched by
+the key), by a key where it sits (a digit, matched by its physical position, since
+Option turns `1` into `¡` on macOS), or by a primary pointer press.
 
-| Action | Linux | macOS |
-| --- | --- | --- |
-| previous / next change | Ctrl+↑ / Ctrl+↓ | ⌘↑ / ⌘↓ |
-| previous / next file | Alt+↑ / Alt+↓ | ⌥↑ / ⌥↓ |
-| toggle side-by-side | Ctrl+Alt+S | ⌘⌥S |
-| toggle ignore whitespace | Ctrl+Alt+I | ⌘⌥I |
-| more lines / fewer lines | Ctrl+Alt+] / Ctrl+Alt+[ | ⌘⌥] / ⌘⌥[ |
-| entire file | Ctrl+Alt+E | ⌘⌥E |
-| extend the selection to a second commit | Ctrl+press | ⌘+press |
-| Commit tab / Changes tab | Ctrl+Alt+1 / Ctrl+Alt+2 | ⌘⌥1 / ⌘⌥2 |
+The chords are Fork's and only Fork's — the user's decision of 2026-10-03, from
+`docs/research/diff-engine/fork-shortcuts.md`:
 
-Fork's chords where Fork documents one (change navigation, the tabs, the second
-commit); Cairn's own elsewhere, chosen clear of the desktop's and of the staging keys
-a later packet takes from Fork. Every chord holds a modifier: an unmodified key
+| Action | Linux | macOS | Heard |
+| --- | --- | --- | --- |
+| previous / next change | Ctrl+↑ / Ctrl+↓ | ⌘↑ / ⌘↓ | in the detail pane |
+| Commit tab / Changes tab | Ctrl+Alt+1 / Ctrl+Alt+2 | ⌘⌥1 / ⌘⌥2 | anywhere |
+| extend the selection to a second commit | Ctrl+press | ⌘+press | anywhere |
+| toggle side-by-side, toggle ignore whitespace, more lines, fewer lines, entire file | none | none | — |
+
+Change navigation is scoped to the pane so a text field elsewhere keeps those keys (⌘↑
+is the start of the document on macOS). The 3 beside the tab chords is kept for a File
+Tree tab and is nothing yet. Fork binds no chord to the four diff toggles or the entire
+file, so they are actions without one, reached from the diff's header (phase 06). The
+previous and next file are not chords at all: they are the focused file list's own ↑
+and ↓, with Tab and Shift-Tab moving focus, as Fork does (the detail pane, above). No
+collapse chord: the user's decision. Every chord holds a modifier: an unmodified key
 belongs to whatever has focus.
 
-**The contract.** A component asks `accelerators::resolve_key` which action a key
-press is, and never reads the held keys itself; the module's public surface speaks
-actions and chords, never a modifier a caller could branch on — but for
-`Chord::key_press`, which hands a chord's keys to a headless test so it presses a
-chord through the table rather than spelling one. The window resolves
-every key press through it wherever focus is (`on_global_key_down` on its root) and
-acts in `crates/cairn-app/src/shortcuts.rs`, one arm per action: the two tab chords
-show their tab, opening a collapsed pane; the others resolve today and act once the
-view they move exists (phases 06-08). The history list leaves a key the table
-resolves alone, so Ctrl+↓ is "next change", not "next commit"
+**The contract.** A component asks `accelerators::resolve_key(event, scope)` which
+action a key press is in a scope, or `accelerators::is_chord(event)` whether it is any
+action's chord, and never reads the held keys itself; the module's public surface
+speaks actions, scopes and chords, never a modifier a caller could branch on — but for
+`Chord::key_press`, which hands a chord's keys to a headless test so it presses a chord
+through the table rather than spelling one. The window hears `Scope::Window` on every
+key press (`on_global_key_down` on its root); the detail pane hears `Scope::Detail` on
+the key presses that reach it from whatever inside it has focus (its root's
+`on_key_down`); both act in `crates/cairn-app/src/shortcuts.rs`, one arm per action,
+and nothing acts while a credential prompt is up, since the dialog owns the keys until
+it is answered (`no_accelerator_acts_while_a_credential_prompt_is_up`). The two tab
+chords show their tab, opening a collapsed pane; the others resolve today and act once
+the view they move exists (phases 06-08). The history list and the file list leave a
+chord alone whichever scope hears it, so Ctrl+↓ is "next change", never "next commit"
 (`an_accelerators_chord_does_not_move_the_selection`). Pinned by
-`every_action_resolves_through_the_table_on_every_platform`,
+`the_table_is_forks_chords_and_no_others` (the whole table, spelled out per platform),
+`every_chord_resolves_to_its_action_in_its_scope_only`,
 `chords_are_distinct_and_every_one_holds_a_modifier`,
 `the_command_key_is_the_platforms_own`,
 `a_chord_needs_exactly_its_modifiers_and_ignores_the_locks`,
-`a_physical_chord_is_matched_by_where_the_key_sits`, and
-`the_tab_chords_resolve_through_the_table` through the window. That no component names
-a literal modifier is the guard `no_component_names_a_literal_modifier` (root
-`CLAUDE.md`, Invariants).
+`a_physical_chord_is_matched_by_where_the_key_sits`,
+`a_chord_of_either_scope_is_a_chord`,
+`the_change_chords_and_the_arrows_belong_to_the_focused_pane` (a pane hearing
+`Scope::Detail` as the window's does), and `the_tab_chords_resolve_through_the_table`
+through the window. That the window's detail pane hears the change chords is not
+observable until phase 06 gives them something to do. That no component names a
+literal modifier is the guard `no_component_names_a_literal_modifier`, and that the
+table holds data and resolution only is `the_accelerator_table_holds_data_and_resolution_only`
+(root `CLAUDE.md`, Invariants).
 
 ## What a commit's details carry
 
@@ -1256,6 +1310,22 @@ subject and one name, and carrying a committer, an offset and a whole message pe
 row of a ten-year monorepo would be paying for what no row draws.
 `Timestamp::offset` spells the offset the way git writes it, `+0530` or `-0800`,
 pinned by `an_offset_reads_the_way_git_writes_it`.
+
+**Names, addresses and messages are the characters git shows** (user decision 4,
+2026-10-03; `crates/cairn-git/src/commit_encoding.rs`). git converts a whole commit
+from the encoding its `encoding` header names before printing any of it — no header
+means UTF-8 — and prints the object's bytes unconverted when the conversion fails: a
+byte the encoding leaves undefined anywhere in the object, or an encoding iconv does
+not know. `CommitEncoding::of_commit` decides as git does, and both the details and the
+history row read every field through it: ISO-8859-1 under any of the names glibc's
+iconv accepts and as `Latin-1`, which git renames to it; windows-1252, refused as git
+refuses it when one of its five undefined bytes is anywhere in the object; anything
+else as UTF-8, invalid sequences as U+FFFD, as a UTF-8 terminal shows git's raw bytes.
+`i18n.logOutputEncoding` (and `i18n.commitEncoding`, its fallback) changes only which
+bytes git writes for the same characters — measured — so a view that draws characters
+has nothing to apply. Pinned against `git log`'s `%an`, `%ae`, `%cn`, `%ce`, `%s` and
+`%B` on crafted commits, one per way git reads a commit's text, by
+`the_text_of_an_encoded_commit_is_the_text_git_prints`.
 
 ## Known limits
 
@@ -1273,6 +1343,14 @@ pinned by `an_offset_reads_the_way_git_writes_it`.
   two seconds `SETTLING` allows, or a file whose times are in the future, is never
   trusted rather than trusted wrongly: answers under it are not kept. And the
   history thread keeps the configuration of its first open: it reads no diff key.
+- **A commit in an encoding other than ISO-8859-1 or windows-1252 reads as UTF-8.**
+  git converts Shift_JIS, EUC-JP, KOI8-R and the rest through iconv; decoding them
+  here needs a dependency (`encoding_rs` is in the build already, under `gix-filter`,
+  but not a dependency of Cairn's), which is the user's to decide. Until then such a
+  commit's text shows U+FFFD where git shows letters.
+- **The message's tab expansion counts a character's width from a table of Unicode's
+  main wide and zero-width ranges**, not git's whole one: a tab after a wide character
+  outside them lands a column or two from where `git log` puts it.
 - **The working-tree query answers one path, named by its caller.** It pairs no
   rename (a path staged by `git mv` shows as added, as `git diff --cached -- <path>`
   shows it), and `Untracked` answers `git diff --no-index` for the path whatever the

@@ -512,7 +512,9 @@ Project invariants:
   `crates/cairn-app/src/closing.rs` and is scanned, but calls `submit` — whose
   `Request::Close` arm stops the epochs with an atomic store and queues the
   close, whose query arms bump their lanes' atomic counters and send to the
-  thread the routing table names over an unbounded channel, and whose
+  thread the routing table names over an unbounded channel, whose operation
+  arms (`Request::Retire`, a replaced change set handed to the repository
+  thread to free, among them) only send over one, and whose
   `CancelFetch` arm takes `FetchControl`'s mutex and calls
   `KillHandle::kill`; `worker::open`, called from `main.rs`'s `use_hook`,
   and the `Replier` closure it returns; `Updates::next`, `Wake::poll`, `Drop for Updates` (an atomic
@@ -622,7 +624,7 @@ Project invariants:
     iteration from any other. Its sibling: a Commit-tab parent link finds its
     parent with `selection::loaded_row`, a scan of every loaded row, once per
     press on the UI thread — and the Commit tab builds its header (proportional
-    to the commit's message, never to its files) on every render of the tab.
+    to the commit's message, never to its files) once per commit, cached on its id.
 
   Whether the virtualizing view really builds only what its viewport shows is
   pinned by a second, behavioural twin:

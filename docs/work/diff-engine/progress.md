@@ -3,6 +3,112 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-03 — Phase 05 QA fixed, and the user's decisions on it
+
+Packet mode, committed to `feature/diff-engine`. The QA round over phase 05: 26 raw
+findings, 15 confirmed by `qa-confirm`; R3, G5 and one more dismissed; the escalations
+answered by the user (below). Each fix was made test-first: the test was shown RED on
+the code before the fix (or, for a pin of behaviour already right, RED under the named
+mutation) and GREEN after. A note for whoever repeats a mutation: put the file back
+with a fresh modification time, or cargo keeps the mutated build.
+
+**The user's decisions (2026-10-03).**
+
+1. *Dates: Fork's localized long date, the offset still shown.* **Not implemented —
+   waiting on the user's sign-off.** Fork's Mac presentation is a localized long date
+   with the time and `GMT+1`; its Windows one is `25 Nov 2020 01:11:30 +01:00`
+   (`fork-detail-and-diff-ui.md`, Finding 3). Month names and the field order in the
+   user's locale need locale data no crate in the workspace carries (the lock holds no
+   ICU or CLDR crate; `jiff`, under `gix-date`, formats in English only), so it needs
+   a new dependency, which is the user's to add. The tab keeps git's default format
+   until then, and its tests and doc lines that pin it against `git log` stay.
+2. *Pre-1970: the true instant.* Pinned by
+   `a_timestamp_before_the_epoch_reads_as_its_true_instant` (six instants from GNU
+   `date`, the epoch under `-0100` falling back into 1969 among them); RED with `/`
+   and `%` for `div_euclid` and `rem_euclid`.
+3. *Committer always shown; no collapse chord.* As built; recorded in
+   `docs/systems/diff.md`.
+4. *Re-encode like git.* Measured on git 2.56 with glibc: git converts the whole
+   object (names, addresses and message) from the `encoding` header's charset, prints
+   the bytes unconverted when any byte fails or iconv does not know the name, renames
+   `latin-1` to `ISO-8859-1` (`fallback_encoding`), and `i18n.logOutputEncoding` (or
+   `i18n.commitEncoding`) changes only the output bytes for the same characters.
+   `crates/cairn-git/src/commit_encoding.rs` decodes ISO-8859-1 and windows-1252 by
+   hand — no dependency, no gix feature — with git's failure rule, and both
+   `commit_details` and the history row read through it.
+   `the_text_of_an_encoded_commit_is_the_text_git_prints` compares eight crafted
+   commits with `git log`'s `%an %ae %cn %ce %s %B`: RED before (`Ren� M�ller �`
+   against `René Müller \u{80}`), GREEN after; it also caught `Latin-1`, which iconv
+   refuses and git renames. Other encodings (Shift_JIS, EUC-JP, ...) still read as
+   UTF-8: glibc maps Shift_JIS `0x5c` to `¥` where the WHATWG table `encoding_rs`
+   follows maps it to `\`, so even that crate (in the build under `gix-filter`) would
+   need iconv's quirks layered on; a known limit in `docs/systems/diff.md`, and an
+   option for the user.
+5. *Bare status letters, like Fork.* `every_status_is_its_bare_letter` pins all six;
+   RED with `T` drawn as `M`.
+6. *Fork's chords.* The table keeps previous/next change (Ctrl+↑/↓, ⌘↑/↓), now
+   `Scope::Detail` — heard only from inside the detail pane — the tab chords with the
+   3 kept for a File Tree tab, and Ctrl/⌘-press. `PreviousFile`/`NextFile` are gone
+   from the roster: the Commit tab takes focus (pressed, or reached with Tab) and moves
+   its current file with plain ↑/↓ (`CommitTab::on_file`); Freya's own Tab/Shift-Tab
+   moves focus between views. The four diff toggles and the entire file keep their
+   actions with no chord. T1, `the_table_is_forks_chords_and_no_others`, spells the
+   table per platform: RED with `Os::Linux => (CONTROL, SHIFT)` and with the Commit
+   tab on `Digit3`.
+
+**Confirmed fixes.**
+
+- **T3 (critical, parity).** The tab popped one trailing empty line; git drops every
+  blank line before and after a message, trims each line's trailing spaces, tabs and
+  `\r` (not `\v`, `\f` or a no-break space), and expands tabs to eight columns
+  counted from the message's line, a wide character counting two (all measured).
+  `message_lines::shown_lines`; `the_message_is_the_rows_git_log_shows_for_it`
+  compares the tab's rows with git's, unfiltered: RED on the old loop, GREEN after.
+- **T8.** `resolve_press_on(Linux, CONTROL | SHIFT)` and `| ALT` are `None`, a lock is
+  ignored: RED with `contains` in `is_press`.
+- **T2.** The 55,184-file test scrolls to the end and requires the last file built
+  and visible: RED with `.length(files)`.
+- **T7.** A limit that cut nothing says nothing, and the notice sits above the files:
+  RED when the limit alone raises the notice.
+- **R1.** The header is cached on the commit's id (with the cut-short limit and
+  whether there are files): `the_header_is_built_once_per_commit_however_often_the_
+  state_is_written` counts builds; RED when the cache never hits.
+- **R2.** Measured in a release build, 2026-10-03: dropping a 55,184-file `ChangeSet`
+  took 1.22-1.46 ms built on the same thread and 1.27-1.99 ms built on another (seven
+  runs each; paths of about 60 bytes). Past 1 ms, so `select_changes` now returns the
+  query and a `Request::Retire` with the replaced answers, which the repository
+  thread frees; `choosing_another_commit_hands_the_last_ones_answers_to_a_worker` is
+  RED when the old answers are dropped in place.
+- **G1.** The modifier matcher reads char literals, decodes `\u{..}`/`\x..`, and
+  knows `Shift-`, `Alt-`, `Option-`, `Control-`, `Meta-`, `Super-`, `Ctrl-`, `Cmd-`,
+  `Command+`, `Opt+`; a self-test case each. A planted `'⌘'` and a planted
+  `"Shift-click"` in `commit_tab.rs` turn `no_component_names_a_literal_modifier`
+  RED; dropping the char scan or the escapes turns the self-test RED.
+- **G2.** `test_only_module_files` takes a `#[cfg(test)] mod x;` only at brace depth 0
+  and not when another declaration names `x`; RED for each shape under its mutation.
+- **G3.** A guard rather than prose alone: `the_accelerator_table_holds_data_and_
+  resolution_only` (no `ELEMENT_BUILDERS` name, no chord-spelling literal), with
+  matcher self-test; RED on a planted `fn hint() -> Element`. Stated in `CLAUDE.md`
+  and `qa-checklist` item 11.
+- **G4/Q1.** The lock keys joined the roster (`CAPS_LOCK`, `NUM_LOCK`, `SCROLL_LOCK`,
+  `CapsLock`, `NumLock`, `ScrollLock`); `keyboard-types` is cited without a version.
+- **Q2.** The ellipsis on the people and date columns is named in
+  `docs/systems/diff.md`.
+- **Q3.** `shortcuts::act` does nothing while `View::prompt` holds a prompt:
+  `no_accelerator_acts_while_a_credential_prompt_is_up` presses the chord with focus
+  in the dialog's text, out of the field; RED without the check.
+- **Q4.** The decisions are recorded here and in `docs/systems/diff.md`.
+- **T9.** The vacuous `assert_eq!(oid(77).hex().as_str().len(), 40)` is gone.
+
+**Decided without asking** (each recorded where it lives): the message's tabs are
+expanded as git's `medium`/`fuller` formats expand them, from a table of Unicode's main
+wide and zero-width ranges (a known limit); the history row re-encodes as the details
+do, so the two never disagree; the strip's Collapse control stays focusable, so Tab
+from the history passes it before the files; the window's `Scope::Detail` wiring is
+pinned in `cairn-ui` (a pane hearing it as the window's does), since the change
+chords do nothing in the window until phase 06; `accelerators::scope` is named
+`heard_in`, because the waiting-primitive roster holds `scope`.
+
 ## 2026-10-03 — CI flakes in the process manager's tests: three test assumptions, no product race
 
 Packet mode, committed to `feature/diff-engine`. Three `cairn-git` unit tests from the

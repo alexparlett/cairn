@@ -58,6 +58,11 @@ impl ChangeSet {
     /// finds `é`) — the user's decision of 2026-10-03, since whether Fork ignores case is not
     /// established; a path that is not UTF-8 is read as git's lossy reading of it is. A pass
     /// over every path, so the application runs it on a worker.
+    ///
+    /// A known limit, accepted (the user's decision, 2026-10-03): `str::to_lowercase` is a
+    /// mapping, not a case fold, so a character whose lowercase is longer than itself folds
+    /// apart from what it is typed as — `İ` (U+0130) lowercases to `i̇`, an `i` and a combining
+    /// dot, so "istanbul" does not find `İstanbul.txt` (`the_dotted_capital_i_is_a_known_limit`).
     pub fn files_matching(
         &self,
         text: &str,
@@ -188,6 +193,32 @@ mod tests {
         assert_eq!(changes.files_matching("σigma", keep), Some(vec![1]));
         assert_eq!(changes.files_matching("CAFÉ", keep), Some(vec![3]));
         assert_eq!(changes.files_matching("FILE.TXT", keep), Some(vec![2]));
+    }
+
+    /// A copy is found by its source's path as a rename is, though its destination holds
+    /// none of the text. Caught by: a copy matched by its new path alone.
+    #[test]
+    fn a_copy_is_found_by_the_path_it_was_copied_from() {
+        let mut copied = file("lib/vendored.rs");
+        copied.old_path = RepoPath::from("src/original.rs");
+        copied.status = ChangeStatus::Copied(Similarity::from_percent(100));
+        let changes = set(vec![file("src/lib.rs"), copied]);
+        let keep = || true;
+        assert_eq!(changes.files_matching("original", keep), Some(vec![1]));
+        assert_eq!(changes.files_matching("vendored", keep), Some(vec![1]));
+        assert_eq!(changes.files_matching("src/", keep), Some(vec![0, 1]));
+    }
+
+    /// The accepted limit of folding case with `str::to_lowercase` (the user's decision,
+    /// 2026-10-03), pinned so a change to the fold is seen: `İ` lowercases to `i` and a
+    /// combining dot, so "istanbul" does not find `İstanbul.txt`, though typing the path's
+    /// own capital does.
+    #[test]
+    fn the_dotted_capital_i_is_a_known_limit() {
+        let changes = set(vec![file("docs/İstanbul.txt")]);
+        let keep = || true;
+        assert_eq!(changes.files_matching("istanbul", keep), Some(vec![]));
+        assert_eq!(changes.files_matching("İstanbul", keep), Some(vec![0]));
     }
 
     /// A newer filter stops the one running: it is asked between files, at the start and

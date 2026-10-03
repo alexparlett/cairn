@@ -180,8 +180,10 @@ mod tests {
     use crate::{ChangeStatus, ChangedFile, ChangedRange, DiffContent, LineSpan, RepoPath};
 
     /// R6.9: a line longer than the long-line limit is drawn to the limit, never past it,
-    /// ending on a character; at the limit exactly nothing is cut. Caught by: drawing the
-    /// whole line, or cutting inside a character.
+    /// ending on a character — a two-, three- or four-byte character straddling the cut is
+    /// left out whole; at the limit exactly nothing is cut, and one byte past it is cut to
+    /// it. Caught by: drawing the whole line, cutting inside a character (backing off fewer
+    /// than three continuation bytes), or the cut drifting from R2.6's 2,048 bytes.
     #[test]
     fn a_line_past_the_limit_is_cut_at_the_limit_on_a_character() {
         let long = vec![b'a'; 3 * 1024 * 1024];
@@ -189,11 +191,29 @@ mod tests {
         assert!(cut);
         assert_eq!(drawn.len(), LINE_CUT_BYTES);
 
-        let straddling = format!("{}é{}", "a".repeat(LINE_CUT_BYTES - 1), "b".repeat(10));
-        let (drawn, cut) = drawn_bytes(straddling.as_bytes());
-        assert!(cut);
-        assert_eq!(drawn.len(), LINE_CUT_BYTES - 1);
-        assert!(std::str::from_utf8(drawn).is_ok());
+        // Each character starts so that its last byte is the first past the cut: two bytes
+        // at the cut less one, three at less two, four at less three.
+        for (character, starts_at) in [
+            ("é", LINE_CUT_BYTES - 1),
+            ("€", LINE_CUT_BYTES - 2),
+            ("😀", LINE_CUT_BYTES - 3),
+        ] {
+            let straddling = format!("{}{character}{}", "a".repeat(starts_at), "b".repeat(10));
+            assert!(straddling.is_char_boundary(starts_at));
+            assert!(!straddling.is_char_boundary(LINE_CUT_BYTES));
+            let (drawn, cut) = drawn_bytes(straddling.as_bytes());
+            assert!(cut, "{character}");
+            assert_eq!(drawn.len(), starts_at, "{character} was not left out whole");
+            assert!(std::str::from_utf8(drawn).is_ok(), "{character}");
+        }
+
+        // R2.6's number, written out, so the cut cannot drift from it unseen.
+        let (drawn, cut) = drawn_bytes(&[b'a'; 2_049]);
+        assert!(cut, "a line one byte past the limit is drawn whole");
+        assert_eq!(drawn.len(), 2_048);
+        let (drawn, cut) = drawn_bytes(&[b'a'; 2_048]);
+        assert!(!cut);
+        assert_eq!(drawn.len(), 2_048);
 
         assert!(!drawn_bytes("a".repeat(LINE_CUT_BYTES).as_bytes()).1);
     }

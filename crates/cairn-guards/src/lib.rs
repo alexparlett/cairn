@@ -555,12 +555,14 @@ fn takes_no_arguments(code: &str, at: usize) -> bool {
 }
 
 /// Every spelling of a keyboard modifier the toolkit offers a render file (D5, PRD R8.3),
-/// read from the vendored `keyboard-types` 0.8.3 and Freya's `ModifiersExt`: the held-keys
-/// type and its helper trait, the event field that carries them, the type's constants
-/// (`Modifiers::CONTROL`), the modifier keys themselves (`NamedKey::Control`,
-/// `Code::ControlLeft`) and the platform helpers that pick one. Whole identifiers, so an
-/// alias is caught on its import line and a qualified path on its last segment. `Fn`, the
-/// function key, is matched only after `::`: bare, it is Rust's closure trait.
+/// read from the vendored `keyboard-types` (the version `Cargo.lock` pins) and Freya's
+/// `ModifiersExt`: the held-keys type and its helper trait, the event field that carries
+/// them, the type's constants (`Modifiers::CONTROL`), the modifier keys themselves
+/// (`NamedKey::Control`, `Code::ControlLeft`), the lock keys (`CAPS_LOCK`, `NamedKey::NumLock`,
+/// `Code::ScrollLock`: a component reading one is reading the held keys) and the platform
+/// helpers that pick one. Whole identifiers, so an alias is caught on its import line and a
+/// qualified path on its last segment. `Fn`, the function key, is matched only after `::`:
+/// bare, it is Rust's closure trait.
 pub const MODIFIER_IDENTS: &[&str] = &[
     // The type, its OS-aware helper trait and what it offers, and the event's field.
     "Modifiers",
@@ -580,6 +582,9 @@ pub const MODIFIER_IDENTS: &[&str] = &[
     "SUPER",
     "SYMBOL",
     "SYMBOL_LOCK",
+    "CAPS_LOCK",
+    "NUM_LOCK",
+    "SCROLL_LOCK",
     // `NamedKey`'s modifier keys.
     "Alt",
     "AltGraph",
@@ -591,6 +596,10 @@ pub const MODIFIER_IDENTS: &[&str] = &[
     "Super",
     "Symbol",
     "SymbolLock",
+    // The lock keys, `NamedKey`'s and `Code`'s alike.
+    "CapsLock",
+    "NumLock",
+    "ScrollLock",
     // `Code`'s.
     "AltLeft",
     "AltRight",
@@ -607,14 +616,17 @@ pub const MODIFIER_IDENTS: &[&str] = &[
 pub const MODIFIER_METHODS: &[&str] = &["alt", "ctrl", "meta", "shift"];
 
 /// A modifier written for a person to read: a key name in a label or a tooltip, which is a
-/// chord a component spelled for one platform.
+/// chord a component spelled for one platform — joined by `+` or by `-`, as both are
+/// written (`Shift+click`, `Shift-click`), and in a string or a char literal alike.
 pub const MODIFIER_TEXT: &[&str] = &[
-    "Ctrl", "Cmd", "⌘", "⌥", "⌃", "⇧", "Alt+", "Control+", "Meta+", "Option+", "Shift+", "Super+",
+    "Ctrl", "Cmd", "⌘", "⌥", "⌃", "⇧", "Alt+", "Control+", "Meta+", "Option+", "Opt+", "Shift+",
+    "Super+", "Command+", "Alt-", "Control-", "Meta-", "Option-", "Shift-", "Super-", "Ctrl-",
+    "Cmd-",
 ];
 
 /// 1-based lines where the production code of `source` (test modules blanked) names a
 /// keyboard modifier: an identifier of [`MODIFIER_IDENTS`], `::Fn`, a nullary call of one of
-/// [`MODIFIER_METHODS`], or a string literal holding one of [`MODIFIER_TEXT`].
+/// [`MODIFIER_METHODS`], or a literal spelling a chord ([`spells_a_chord`]).
 pub fn names_a_literal_modifier(source: &str) -> Vec<usize> {
     let code = code_without_test_modules(&code_without_strings(source));
     let mut lines = BTreeSet::new();
@@ -637,19 +649,171 @@ pub fn names_a_literal_modifier(source: &str) -> Vec<usize> {
             }
         }
     }
-    // `code_only` copies a string's bytes one `char` each, so a literal's non-ASCII text
-    // arrives Latin-1-widened; the spellings are widened the same way to meet it. The
-    // `⌘` case of the matcher's self-test fails if either side stops doing so.
-    let widened: Vec<String> = MODIFIER_TEXT
-        .iter()
-        .map(|spelling| spelling.bytes().map(char::from).collect())
-        .collect();
-    for (line, text) in production_string_literals(source) {
-        if widened
-            .iter()
-            .any(|spelling| text.contains(spelling.as_str()))
-        {
+    lines.extend(spells_a_chord(source));
+    lines.into_iter().collect()
+}
+
+/// 1-based lines where a production string or char literal of `source` holds one of
+/// [`MODIFIER_TEXT`] once its escapes are read — `'⌘'`, `"\u{2318}1"` and `"\x41lt+1"`
+/// spell a chord as surely as `"⌘1"` does.
+pub fn spells_a_chord(source: &str) -> Vec<usize> {
+    let mut lines = BTreeSet::new();
+    let literals = production_string_literals(source)
+        .into_iter()
+        // A string's bytes arrive one `char` each (`code_only`); put them back together.
+        .map(|(line, text)| (line, narrowed(&text)))
+        .chain(production_char_literals(source));
+    for (line, text) in literals {
+        let text = unescaped(&text);
+        if MODIFIER_TEXT.iter().any(|spelling| text.contains(spelling)) {
             lines.insert(line);
+        }
+    }
+    lines.into_iter().collect()
+}
+
+/// `text` whose every `char` is one byte widened, as `code_only` copies a string, read back
+/// as the UTF-8 it was.
+fn narrowed(text: &str) -> String {
+    let bytes: Vec<u8> = text
+        .chars()
+        .map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?'))
+        .collect();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// A literal's text with its escapes read: `\u{..}`, `\x..`, the one-letter escapes, and a
+/// line continuation. An escape that does not parse is kept as written.
+fn unescaped(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('u') if chars.peek() == Some(&'{') => {
+                chars.next();
+                let digits: String = chars.by_ref().take_while(|c| *c != '}').collect();
+                match u32::from_str_radix(&digits.replace('_', ""), 16)
+                    .ok()
+                    .and_then(char::from_u32)
+                {
+                    Some(decoded) => out.push(decoded),
+                    None => out.push_str(&format!("\\u{{{digits}}}")),
+                }
+            }
+            Some('x') => {
+                let digits: String = chars.by_ref().take(2).collect();
+                match u8::from_str_radix(&digits, 16) {
+                    Ok(byte) => out.push(char::from(byte)),
+                    Err(_) => out.push_str(&format!("\\x{digits}")),
+                }
+            }
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('r') => out.push('\r'),
+            Some('0') => out.push('\0'),
+            // A line continuation: the newline and the indentation after it are not text.
+            Some('\n') => {
+                while chars.peek().is_some_and(|c| c.is_whitespace()) {
+                    chars.next();
+                }
+            }
+            Some(other) => out.push(other),
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+/// Every char literal of `source` outside comments and `#[cfg(test)]` modules, as (1-based
+/// line, its text between the apostrophes as written, escapes not interpreted). A lifetime
+/// is not one, and neither is an apostrophe inside a string.
+pub fn production_char_literals(source: &str) -> Vec<(usize, String)> {
+    let code = code_only(source);
+    let strings_blanked = code_without_strings(source);
+    let tests_blanked = code_without_test_modules(&strings_blanked);
+    // A line a test module blanked: it had code, and has none left.
+    let in_test: Vec<bool> = strings_blanked
+        .lines()
+        .zip(tests_blanked.lines())
+        .map(|(before, after)| !before.trim().is_empty() && after.trim().is_empty())
+        .collect();
+    let bytes = code.as_bytes();
+    let mut found = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            // Strings are stepped over whole, raw ones by their closing quote and hashes.
+            b'r' if bytes.get(i + 1).is_some_and(|b| *b == b'"' || *b == b'#')
+                && (i == 0
+                    || !is_ident_byte(bytes[i - 1])
+                    || (bytes[i - 1] == b'b' && (i < 2 || !is_ident_byte(bytes[i - 2])))) =>
+            {
+                let hashes = bytes[i + 1..].iter().take_while(|&&c| c == b'#').count();
+                if bytes.get(i + 1 + hashes) != Some(&b'"') {
+                    i += 1;
+                    continue;
+                }
+                let mut end = i + hashes + 2;
+                while end < bytes.len()
+                    && !(bytes[end] == b'"'
+                        && bytes[end + 1..].iter().take_while(|&&c| c == b'#').count() >= hashes)
+                {
+                    end += 1;
+                }
+                i = end + hashes + 1;
+            }
+            b'"' => {
+                let mut end = i + 1;
+                while end < bytes.len() && bytes[end] != b'"' {
+                    end += if bytes[end] == b'\\' { 2 } else { 1 };
+                }
+                i = end + 1;
+            }
+            b'\'' => match char_literal_end(bytes, i) {
+                Some(end) => {
+                    let line = line_at(&code, i);
+                    if !in_test.get(line - 1).copied().unwrap_or(false) {
+                        found.push((line, code[i + 1..end].to_owned()));
+                    }
+                    i = end + 1;
+                }
+                None => i += 1,
+            },
+            _ => i += 1,
+        }
+    }
+    found
+}
+
+/// What a render file names when it builds an element: Freya's element constructors and
+/// the types and traits a component is made of. The accelerator table holds data and the
+/// resolution of a press against it, so naming one of these there is a view in the table.
+pub const ELEMENT_BUILDERS: &[&str] = &[
+    "rect",
+    "label",
+    "paragraph",
+    "svg",
+    "image",
+    "Element",
+    "IntoElement",
+    "Component",
+    "Button",
+    "Label",
+    "Rect",
+];
+
+/// 1-based lines where the production code of `source` (test modules blanked) names one of
+/// [`ELEMENT_BUILDERS`].
+pub fn names_an_element(source: &str) -> Vec<usize> {
+    let code = code_without_test_modules(&code_without_strings(source));
+    let mut lines = BTreeSet::new();
+    for ident in ELEMENT_BUILDERS {
+        for offset in ident_offsets(&code, ident) {
+            lines.insert(line_at(&code, offset));
         }
     }
     lines.into_iter().collect()

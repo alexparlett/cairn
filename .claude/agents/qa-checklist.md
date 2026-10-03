@@ -113,7 +113,11 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
     the guard `no_component_names_a_literal_modifier` reads spellings, so what it
     cannot see is yours — a modifier reached through a `type` alias declared
     outside the render crates, a macro, or a raw bit pattern compared without
-    naming the type; a public function of the accelerator table that hands out a
+    naming the type; anything in the accelerator table but data and the
+    resolution of a press against it — an element or a chord-spelling label there
+    is a finding even where `the_accelerator_table_holds_data_and_resolution_only`
+    does not see it (an element built through a helper of another name); a public
+    function of the accelerator table that hands out a
     modifier or a "is Ctrl held" predicate a component could branch on under
     another name (its surface speaks actions and chords only; `Chord::key_press`
     is for headless tests, and a render path calling it is a finding); a key event

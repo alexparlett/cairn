@@ -541,27 +541,41 @@ Project invariants:
   short, and whether a list is virtualized.
 
 - **No component names a literal modifier** (decision D5, PRD R8.3). Every
-  keyboard shortcut is an `Action` mapped to one chord per platform in the
-  accelerator table, `crates/cairn-ui/src/accelerators.rs`; a component asks
-  `accelerators::resolve_key` which action a key press is and never reads the
-  held keys itself, so a `Ctrl` that is wrong on macOS cannot be written into a
-  component. Twin: `no_component_names_a_literal_modifier`, over every file of
-  `crates/cairn-ui/src` and `crates/cairn-app/src` (test modules blanked) but the
-  table, which must exist and in which the matcher must find a modifier (so a
-  blind matcher fails); matcher `names_a_literal_modifier` in
-  `crates/cairn-guards/src/lib.rs`, whose rosters are read from the vendored
-  `keyboard-types` 0.8.3 and Freya's `ModifiersExt`: the type `Modifiers`, the
-  trait and its `ctrl_or_meta`/`ctrl_or_alt`, the event's `modifiers` field, the
-  type's constants (`CONTROL`, `META`, ...), the modifier keys of `NamedKey` and
-  `Code` (`Control`, `ShiftLeft`, ..., and `::Fn`), the nullary predicates
-  `.ctrl()`/`.alt()`/`.shift()`/`.meta()`, and a string literal spelling a chord
-  for a person (`Ctrl`, `Cmd`, `⌘`, `⌥`, `Shift+`, ...). Matcher self-test:
+  keyboard shortcut is an `Action` mapped to at most one chord per platform, and
+  to the scope it is heard in, in the accelerator table,
+  `crates/cairn-ui/src/accelerators.rs`; a component asks
+  `accelerators::resolve_key` which action a key press is (or `is_chord`, to leave
+  one alone) and never reads the held keys itself, so a `Ctrl` that is wrong on
+  macOS cannot be written into a component. Twin:
+  `no_component_names_a_literal_modifier`, over every file of `crates/cairn-ui/src`
+  and `crates/cairn-app/src` (test modules blanked) but the table, which must exist
+  and in which the matcher must find a modifier (so a blind matcher fails); matcher
+  `names_a_literal_modifier` in `crates/cairn-guards/src/lib.rs`, whose rosters are
+  read from the vendored `keyboard-types` (the version `Cargo.lock` pins) and
+  Freya's `ModifiersExt`: the type `Modifiers`, the trait and its
+  `ctrl_or_meta`/`ctrl_or_alt`, the event's `modifiers` field, the type's
+  constants (`CONTROL`, `META`, ..., and the locks `CAPS_LOCK`, `NUM_LOCK`,
+  `SCROLL_LOCK`, `FN_LOCK`, `SYMBOL_LOCK`), the modifier and lock keys of
+  `NamedKey` and `Code` (`Control`, `ShiftLeft`, `CapsLock`, ..., and `::Fn`),
+  the nullary predicates `.ctrl()`/`.alt()`/`.shift()`/`.meta()`, and a string
+  or char literal spelling a chord for a person once its `\u{..}` and `\x..`
+  escapes are read (`spells_a_chord`: `Ctrl`, `Cmd`, `⌘`, `⌥`, `Shift+`,
+  `Shift-`, `Command+`, `Opt+`, ...). Matcher self-test:
   `the_modifier_matcher_catches_the_shapes_it_claims` — an aliased import of the
   type, a qualified path, a constant defined beside a component, a glob of the
-  key type's variants, a predicate reached by inference. Residual review
-  obligations, `qa-checklist`'s: the matcher reads spellings, so a modifier
-  reached through a `type` alias declared outside the render crates, a macro, or
-  a raw bit pattern compared without naming the type is not seen; the table's
+  key type's variants, a predicate reached by inference, `'⌘'`, an escaped
+  `⌘`, each hyphenated spelling. **The table itself holds data and the
+  resolution of a press, nothing a person reads**: an element built there or a
+  chord spelled out in a literal would be a view inside the one file the
+  modifier guard exempts. Twin: `the_accelerator_table_holds_data_and_resolution_only`
+  — the table's production code names none of `ELEMENT_BUILDERS` (`rect`,
+  `label`, `Element`, `Component`, `Button`, ...; matcher `names_an_element`,
+  self-test `the_element_matcher_catches_the_shapes_it_claims`) and no literal of
+  it spells a chord. Residual review obligations, `qa-checklist`'s (its item
+  11): the matchers read spellings, so a modifier reached through a `type` alias
+  declared outside the render crates, a macro, or a raw bit pattern compared
+  without naming the type is not seen, nor is an element the table builds
+  through a helper named otherwise; the table's
   public surface must keep speaking actions and chords, never a modifier or a
   "held" predicate a component could branch on under another name — the one
   exception, `Chord::key_press`, hands a chord's keys to headless tests, and a

@@ -10,10 +10,11 @@ use cairn_guards::{
     configures_process_environment, constructs_named_struct, constructs_process_command,
     constructs_struct, declared_dependencies, declares_publicly, derives_or_implements,
     gate_command_assignments, gate_dispatch_arms, gate_full_sequence, gate_function_commands,
-    implements_type, job_env_entries, mentions_crate, names_a_literal_modifier,
-    names_gitoxide_mutation, production_string_literals, reads_enum_partially,
-    reads_row_content_partially, renames_type, renders_in_a_macro, repo_root, rust_sources,
-    spawns_git, structs_with_a_field_naming, types_containing, waits_on_work,
+    implements_type, job_env_entries, mentions_crate, names_a_literal_modifier, names_an_element,
+    names_gitoxide_mutation, production_char_literals, production_string_literals,
+    reads_enum_partially, reads_row_content_partially, renames_type, renders_in_a_macro, repo_root,
+    rust_sources, spawns_git, spells_a_chord, structs_with_a_field_naming, types_containing,
+    waits_on_work,
 };
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
@@ -3215,6 +3216,34 @@ fn the_modifier_matcher_catches_the_shapes_it_claims() {
             "a chord in a constant",
             "const HINT: &str = \"Shift+click to compare\";",
         ),
+        ("the command key as a char", "const COMMAND: char = '⌘';"),
+        ("the option key as a char", "if c == '⌥' {}"),
+        ("a char escape", "const COMMAND: char = '\\u{2318}';"),
+        (
+            "a unicode escape in a string",
+            "label().text(\"\\u{2318}1\")",
+        ),
+        ("a byte escape in a string", "label().text(\"\\x41lt+1\")"),
+        ("a raw string", "label().text(r#\"Ctrl+1\"#)"),
+        ("Shift, hyphenated", "label().text(\"Shift-click\")"),
+        ("Alt, hyphenated", "label().text(\"Alt-drag\")"),
+        ("Option, hyphenated", "label().text(\"Option-click\")"),
+        ("Control, hyphenated", "label().text(\"Control-click\")"),
+        ("Meta, hyphenated", "label().text(\"Meta-x\")"),
+        ("Super, hyphenated", "label().text(\"Super-key\")"),
+        ("Ctrl, hyphenated", "label().text(\"Ctrl-c\")"),
+        ("Cmd, hyphenated", "label().text(\"Cmd-k\")"),
+        ("Command, spelled out", "label().text(\"Command+K\")"),
+        ("Opt, abbreviated", "label().text(\"Opt+drag\")"),
+        (
+            "a lock key's constant",
+            "if held.contains(Modifiers::CAPS_LOCK) {}",
+        ),
+        (
+            "num lock as a key",
+            "if e.key == Key::Named(NamedKey::NumLock) {}",
+        ),
+        ("scroll lock as a code", "if e.code == Code::ScrollLock {}"),
     ];
     for (shape, source) in caught {
         assert!(
@@ -3249,7 +3278,23 @@ fn the_modifier_matcher_catches_the_shapes_it_claims() {
             "a test module",
             "#[cfg(test)]\nmod tests {\n    const HELD: Modifiers = Modifiers::CONTROL;\n}",
         ),
+        (
+            "a char literal in a test module",
+            "#[cfg(test)]\nmod tests {\n    const COMMAND: char = '⌘';\n}",
+        ),
         ("a plain key", "Key::Named(NamedKey::ArrowDown) => Some(0),"),
+        (
+            "a lifetime",
+            "fn caption(text: &'static str) -> Label { label() }",
+        ),
+        (
+            "an apostrophe in a string",
+            "label().text(\"don't shift-click\")",
+        ),
+        (
+            "a hyphen in a word",
+            "label().text(\"Alternative-text and Metadata\")",
+        ),
     ];
     for (shape, source) in ignored {
         assert_eq!(
@@ -3258,6 +3303,74 @@ fn the_modifier_matcher_catches_the_shapes_it_claims() {
             "the modifier matcher fired on the {shape} shape: {source:?}"
         );
     }
+}
+
+/// The accelerator table holds data and the resolution of a press against it, and nothing
+/// a person reads (CLAUDE.md, Invariants; G3): an element built there, or a chord spelled
+/// out in a literal, would be a view inside the one file the modifier guard exempts — the
+/// place a `Ctrl` label could hide from it.
+#[test]
+fn the_accelerator_table_holds_data_and_resolution_only() {
+    let (_, table) = rust_sources("crates/cairn-ui/src")
+        .into_iter()
+        .find(|(path, _)| path == Path::new(ACCELERATOR_TABLE))
+        .unwrap_or_else(|| panic!("{ACCELERATOR_TABLE} does not exist; move this guard with it"));
+    let elements = names_an_element(&table);
+    assert!(
+        elements.is_empty(),
+        "{ACCELERATOR_TABLE}:{} builds or names an element. The table maps actions to chords \
+         and resolves a press; drawing belongs in a component, which asks the table.",
+        elements[0]
+    );
+    let spelled = spells_a_chord(&table);
+    assert!(
+        spelled.is_empty(),
+        "{ACCELERATOR_TABLE}:{} spells a chord for a person to read. A shortcut's text is a \
+         view; the table holds the chord as data.",
+        spelled[0]
+    );
+}
+
+#[test]
+fn the_element_matcher_catches_the_shapes_it_claims() {
+    for (shape, source) in [
+        ("a container", "fn hint() { rect().child(x); }"),
+        ("a label", "let caption = label().text(\"x\");"),
+        (
+            "an element type",
+            "pub fn hint(action: Action) -> Element { todo() }",
+        ),
+        ("a component", "impl Component for Hint {}"),
+        ("a button", "Button::new()"),
+        ("into an element", "fn hint() -> impl IntoElement {}"),
+    ] {
+        assert!(
+            !names_an_element(source).is_empty(),
+            "the element matcher missed the {shape} shape: {source:?}"
+        );
+    }
+    for (shape, source) in [
+        ("a comment", "// a label for a person, drawn in a rect"),
+        ("a word in a string", "const WHAT: &str = \"rect label\";"),
+        ("a longer identifier", "let labels = relabel(rectangle);"),
+        (
+            "a test module",
+            "#[cfg(test)]\nmod tests {\n    fn f() { rect(); }\n}",
+        ),
+    ] {
+        assert_eq!(
+            names_an_element(source),
+            Vec::<usize>::new(),
+            "the element matcher fired on the {shape} shape: {source:?}"
+        );
+    }
+    // The char-literal reader the chord matcher stands on: test modules and lifetimes out.
+    assert_eq!(
+        production_char_literals(
+            "const A: char = 'x';\n#[cfg(test)]\nmod t { const B: char = 'y'; }\nfn f<'a>(s: &'a str) {}"
+        ),
+        vec![(1, "x".to_owned())]
+    );
 }
 
 #[test]

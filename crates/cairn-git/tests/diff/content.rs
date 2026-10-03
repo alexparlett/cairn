@@ -227,14 +227,15 @@ fn both_versions_of_a_file_are_the_bytes_git_stores() {
 /// and for a binary file the two sizes Cairn answers, which must be the blobs' as `git
 /// cat-file -s` reads them (a binary's sizes are all a view can show of it).
 fn binary_verdicts(repo: &Repo, head: &str) -> Vec<(String, bool)> {
-    let engine = Repository::discover(repo.path()).expect("the fixture opens");
-    let mut session = engine.diff_session().expect("a diff session");
+    let engine = ok(Repository::discover(repo.path()), "the fixture opens");
+    let mut session = ok(engine.diff_session(), "a diff session");
     let mut seen = Vec::new();
     for file in changed(repo, head) {
         let path = file.new_path.display().into_owned();
-        let diff = session
-            .file_diff(&file, &ContentOptions::default())
-            .expect("a file diff");
+        let diff = ok(
+            session.file_diff(&file, &ContentOptions::default()),
+            "a file diff",
+        );
         let binary_to_git = repo
             .git(&[
                 "diff",

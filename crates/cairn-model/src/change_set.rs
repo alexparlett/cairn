@@ -54,15 +54,16 @@ impl ChangeSet {
     /// The Changes tab's filter (R5.4), as Cairn reads Fork's: the text anywhere in a file's
     /// path — a file name, an extension or a piece of a path, no wildcards (the vendor,
     /// TrackerWin #152, 22 Jun 2019; Tracker #1482, 7 Oct 2021) — and for a rename or a copy
-    /// in either of its paths, ignoring the case of ASCII letters. Whether Fork ignores case
-    /// is not established; that is Cairn's choice. A pass over every path, so the application
-    /// runs it on a worker.
+    /// in either of its paths, ignoring case as Unicode reads it (`str::to_lowercase`, so `É`
+    /// finds `é`) — the user's decision of 2026-10-03, since whether Fork ignores case is not
+    /// established; a path that is not UTF-8 is read as git's lossy reading of it is. A pass
+    /// over every path, so the application runs it on a worker.
     pub fn files_matching(
         &self,
         text: &str,
         mut keep_going: impl FnMut() -> bool,
     ) -> Option<Vec<u32>> {
-        let wanted = text.as_bytes();
+        let wanted = Folded::of(text);
         let mut matched = Vec::new();
         for (index, file) in self.files.iter().enumerate() {
             if index % BETWEEN_CHECKS == 0 && !keep_going() {
@@ -75,8 +76,8 @@ impl ChangeSet {
                 | ChangeStatus::Modified
                 | ChangeStatus::TypeChanged => false,
             };
-            if holds(file.new_path.as_bytes(), wanted)
-                || (paired && holds(file.old_path.as_bytes(), wanted))
+            if wanted.found_in(file.new_path.as_bytes())
+                || (paired && wanted.found_in(file.old_path.as_bytes()))
             {
                 matched.push(u32::try_from(index).unwrap_or(u32::MAX));
             }
@@ -85,12 +86,37 @@ impl ChangeSet {
     }
 }
 
-/// Whether `wanted` occurs in `path`, ASCII letters compared without their case.
-fn holds(path: &[u8], wanted: &[u8]) -> bool {
-    wanted.is_empty()
-        || path
-            .windows(wanted.len())
-            .any(|window| window.eq_ignore_ascii_case(wanted))
+/// A filter's text with its case folded, and how to find it in a path.
+struct Folded {
+    text: String,
+    ascii: bool,
+}
+
+impl Folded {
+    fn of(text: &str) -> Self {
+        Self {
+            text: text.to_lowercase(),
+            ascii: text.is_ascii(),
+        }
+    }
+
+    /// Whether the text occurs in `path`, case folded on both sides. An ASCII text in an
+    /// ASCII path is compared in place; anything else is read and lowercased first, which
+    /// allocates only for such a path.
+    fn found_in(&self, path: &[u8]) -> bool {
+        if self.text.is_empty() {
+            return true;
+        }
+        if self.ascii && path.is_ascii() {
+            let wanted = self.text.as_bytes();
+            return path
+                .windows(wanted.len())
+                .any(|window| window.eq_ignore_ascii_case(wanted));
+        }
+        String::from_utf8_lossy(path)
+            .to_lowercase()
+            .contains(&self.text)
+    }
 }
 
 #[cfg(test)]
@@ -118,7 +144,7 @@ mod tests {
         }
     }
 
-    /// Fork's filter: a file name, an extension or a piece of a path, no wildcards, ASCII case
+    /// Fork's filter: a file name, an extension or a piece of a path, no wildcards, case
     /// ignored; a rename by either name; an empty filter keeps everything. Caught by: matching
     /// the name alone (a directory is a path expression), a case-sensitive match, or a rename
     /// found only by its new name.
@@ -140,6 +166,28 @@ mod tests {
         assert_eq!(changes.files_matching("SRC/UI", keep), Some(vec![2]));
         assert_eq!(changes.files_matching("old_name", keep), Some(vec![3]));
         assert_eq!(changes.files_matching("*.rs", keep), Some(vec![]));
+    }
+
+    /// The user's decision (2026-10-03): case is ignored as Unicode reads it, not ASCII
+    /// alone — `É` finds `é`, `ÉCOLE` finds `école`, `Σ` finds `σ` — and a path that is not
+    /// UTF-8 is still searched. Caught by: an ASCII-only fold, which leaves `É` and `é` apart.
+    #[test]
+    fn case_is_ignored_as_unicode_reads_it() {
+        let changes = set(vec![
+            file("docs/école/Résumé.md"),
+            file("src/ΣIGMA.rs"),
+            file("plain/file.txt"),
+            ChangedFile {
+                new_path: RepoPath::new(b"bytes/\xffCaf\xc3\xa9.bin".to_vec()),
+                ..file("unused")
+            },
+        ]);
+        let keep = || true;
+        assert_eq!(changes.files_matching("É", keep), Some(vec![0, 3]));
+        assert_eq!(changes.files_matching("ÉCOLE/RÉSUMÉ", keep), Some(vec![0]));
+        assert_eq!(changes.files_matching("σigma", keep), Some(vec![1]));
+        assert_eq!(changes.files_matching("CAFÉ", keep), Some(vec![3]));
+        assert_eq!(changes.files_matching("FILE.TXT", keep), Some(vec![2]));
     }
 
     /// A newer filter stops the one running: it is asked between files, at the start and

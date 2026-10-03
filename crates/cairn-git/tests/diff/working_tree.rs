@@ -15,7 +15,8 @@ use cairn_git::{
     CancelSignal, ContentOptions, Error, Repository, SharedRepository, WorkingTreeDiff,
 };
 use cairn_model::{
-    ChangeStatus, Context, DiffContent, DiffLine, FileDiff, FileMode, RepoPath, SizeLimit,
+    ChangeStatus, Context, DiffContent, DiffLimits, DiffLine, FileDiff, FileMode, RepoPath,
+    SizeLimit,
 };
 
 use super::parity::{Hunk, cairn_view, hunks_of};
@@ -1013,6 +1014,77 @@ fn the_size_ceiling_is_judged_on_gits_form_of_the_working_tree() {
         matches!(staged_big.content, DiffContent::TooLarge { .. }),
         "the index's large blob was diffed: {staged_big:?}"
     );
+}
+
+/// R2.6's ceiling on git's output counts a side Cairn has not measured — the working tree,
+/// which only git reads — at the size limit, so an untracked file and a large edit of a
+/// small indexed file, each well inside the DEFAULT limits, are read whole and are what
+/// `git diff` shows. Caught by: an unmeasured side counted as nothing (git ended once its
+/// output passes the room for the headers, and the file answered too large).
+#[test]
+fn a_working_tree_side_is_counted_at_the_limit_so_a_large_one_within_it_is_read() {
+    let repo = base("unmeasured");
+    let body: String = (0..20_000).map(|n| format!("line {n:05}\n")).collect();
+    assert!(body.len() > 200 * 1024 && (body.len() as u64) < DiffLimits::MAX_BYTES);
+    repo.write("small.txt", b"small\n");
+    repo.commit("a small file");
+    repo.write("small.txt", body.as_bytes());
+    repo.write("new.txt", body.as_bytes());
+    for (path, which) in [
+        ("new.txt", WorkingTreeDiff::Untracked),
+        ("small.txt", WorkingTreeDiff::Unstaged),
+    ] {
+        let answer = ask(&repo, path, which);
+        let diff = some(answer.clone(), "an answer");
+        assert!(
+            diff.text().is_some(),
+            "{which:?} {path}: {:?}",
+            diff.content
+        );
+        assert_eq!(lines(&diff).1.len(), 20_000, "{which:?} {path}");
+        same_as_git(&repo, path, which, &answer);
+    }
+}
+
+/// The ceiling on git's output is twice both sides, since git prints every line of a
+/// rewrite with a marker before it: a staged rewrite of every line, both sides just under
+/// half the size limit and every line short — where the markers weigh most — is read
+/// whole and is what `git diff --cached` shows. Caught by: the output allowed only the two
+/// sides' bytes (git ended mid-patch, and the file answered too large).
+#[test]
+fn a_rewrite_of_every_line_within_the_limit_is_read_whole() {
+    let repo = base("rewrite");
+    let lines_per_side = 40_000;
+    let old = "a\n".repeat(lines_per_side);
+    let new = "b\n".repeat(lines_per_side);
+    let limits = DiffLimits {
+        max_bytes: 2 * old.len() as u64 + 2,
+        ..DiffLimits::default()
+    };
+    assert!(old.len() as u64 * 2 < limits.max_bytes && lines_per_side < 50_000);
+    repo.write("rewrite.txt", old.as_bytes());
+    repo.commit("every line a");
+    repo.write("rewrite.txt", new.as_bytes());
+    repo.git(&["add", "rewrite.txt"]);
+    let options = ContentOptions {
+        limits,
+        ..ContentOptions::default()
+    };
+    let answer = ask_with(&repo, "rewrite.txt", WorkingTreeDiff::Staged, &options);
+    let diff = some(answer.clone(), "the rewrite");
+    assert!(diff.text().is_some(), "{:?}", diff.content);
+    let (old_lines, new_lines) = lines(&diff);
+    assert_eq!(
+        (old_lines.len(), new_lines.len()),
+        (lines_per_side, lines_per_side)
+    );
+    let theirs = hunks_of(&git_diff(
+        &repo,
+        "rewrite.txt",
+        WorkingTreeDiff::Staged,
+        &[],
+    ));
+    assert_eq!(cairn_view(&diff, Context::lines(3), false), theirs);
 }
 
 /// The stale-read guard on the working tree: a clean filter whose output changes every

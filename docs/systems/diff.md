@@ -586,7 +586,12 @@ on a git before 2.32, which cannot write one); an intent-to-add entry's staged d
 is `None`, because `git diff --cached` lists nothing for it where `diff-index
 --cached` lists an empty file added
 (`an_intent_to_add_path_is_new_unstaged_and_nothing_staged`); a bare repository is
-`Unsupported`. For these stand-in states the file carries the path and no mode or
+`Unsupported`. An untracked path must be relative to the top of the working tree —
+empty, absolute, or with a `.` or `..` component, it is `Error::NotAWorkTreePath`,
+since `--no-index` reads whatever it is given — and must be a regular file or a
+symlink by its own metadata: a named pipe (which git 2.56 waits on for a writer),
+another special file or a directory is `Unsupported`, with git never started
+(`an_untracked_path_outside_the_working_tree_or_not_a_file_is_refused_before_git_runs`). For these stand-in states the file carries the path and no mode or
 id. And the blobs' sizes come from their headers, so a blob past R2.6's ceiling is
 refused before git diffs it, git asked only for the raw record — except for a
 working-tree modification, whose record cannot tell an edit from a stat or a mode

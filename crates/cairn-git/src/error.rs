@@ -65,6 +65,12 @@ pub enum Error {
     #[error("git {arguments} answered with a record Cairn cannot read: {record}")]
     UnexpectedGitOutput { arguments: String, record: String },
 
+    /// A working-tree query was asked about a path that is not relative to the working
+    /// tree as git holds one: empty, absolute, or with a `.` or `..` component. Nothing
+    /// was read and no `git` ran — such a path could name a file outside the working tree.
+    #[error("{path:?} is not a path inside the working tree, relative to its top")]
+    NotAWorkTreePath { path: String },
+
     /// A configuration value git itself refuses, so the user's own `git log` and
     /// `git show` refuse to answer too until it is changed. `value` is as configured.
     #[error("the configuration value {key} = {value} is not one git accepts")]

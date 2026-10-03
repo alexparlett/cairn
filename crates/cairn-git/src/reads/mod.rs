@@ -142,7 +142,9 @@ pub(crate) use changes::{Detection, Submodules, changes};
 #[cfg(test)]
 pub(crate) use patches::parse as parse_patches;
 pub(crate) use patches::{Algorithm, FilePatch, PatchQuery, PatchText, Reading, Scope, patches};
-pub(crate) use working_tree::{Side, WorkingTreeAnswer, WorkingTreeQuery, working_tree_patch};
+pub(crate) use working_tree::{
+    Side, WorkingTreeAnswer, WorkingTreeQuery, work_tree_relative, working_tree_patch,
+};
 
 /// The read as the diff thread will run it: built here from a `GitBinary` copy
 /// that thread holds, run on that thread, stopped by an epoch, answering `-z`

@@ -30,7 +30,8 @@ use gix::bstr::ByteSlice as _;
 use crate::object_id::{model_id, object_id};
 use crate::ops::GitBinary;
 use crate::reads::{
-    PatchText, Reading, Side, WorkingTreeAnswer, WorkingTreeQuery, working_tree_patch,
+    PatchText, Reading, Side, WorkingTreeAnswer, WorkingTreeQuery, work_tree_relative,
+    working_tree_patch,
 };
 use crate::{Cancel, Error, Repository};
 
@@ -62,6 +63,12 @@ pub(super) fn working_tree_diff(
                 reason: "a bare repository has no working tree".to_owned(),
             },
         )));
+    }
+    if which == WorkingTreeDiff::Untracked {
+        work_tree_relative(path)?;
+        if let Some(reason) = not_a_file(repo, path) {
+            return Ok(Some(stand_in(path, DiffContent::Unsupported { reason })));
+        }
     }
     let inner = repo.inner();
 
@@ -571,6 +578,33 @@ impl<C: Cancel> Asker<'_, C> {
             path: self.path.to_string(),
             detail,
         }
+    }
+}
+
+/// Why an untracked path is not something git can be asked to diff: it is neither a
+/// regular file nor a symlink. git 2.56 reads a named pipe until a writer closes it — a read
+/// that never ends — git 2.30.9 and 2.32.7 print a gitlink record for one and fail, and every
+/// git diffs `/dev/null` against `<dir>/null` when given a directory (reproduced on all
+/// three). Decided from the path's own metadata, not followed through a symlink, which git
+/// reads as its target's name; `None` where the path is a file or a symlink, or cannot be
+/// read, which git then reports.
+fn not_a_file(repo: &Repository, path: &RepoPath) -> Option<String> {
+    use std::os::unix::ffi::OsStrExt as _;
+    let workdir = repo.workdir()?;
+    let metadata =
+        std::fs::symlink_metadata(workdir.join(std::ffi::OsStr::from_bytes(path.as_bytes())))
+            .ok()?;
+    let kind = metadata.file_type();
+    if kind.is_file() || kind.is_symlink() {
+        None
+    } else if kind.is_dir() {
+        Some("a directory, which is not one file to diff".to_owned())
+    } else {
+        Some(
+            "not a regular file or a symlink (a named pipe, a socket or a device), which git \
+             does not diff"
+                .to_owned(),
+        )
     }
 }
 

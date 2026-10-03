@@ -1352,6 +1352,97 @@ fn a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmoni
     assert!(ran.is_ok_and(|status| status.success()) && trap_mark.exists());
 }
 
+/// An untracked file is asked for by a path relative to the top of the working tree, and
+/// is a file or a symlink: a path that is empty, absolute or has a `.` or `..` component is
+/// refused before anything is read — `--no-index` would read a file outside the working
+/// tree — and a named pipe or a directory is `Unsupported`, said before git runs (git 2.56
+/// waits on a pipe for a writer, git 2.30.9 and 2.32.7 print a gitlink record for it and
+/// fail, and every git diffs `/dev/null` against `<dir>/null` in a directory). Caught by:
+/// the path handed to git as given, or git asked about what is not a file.
+#[test]
+fn an_untracked_path_outside_the_working_tree_or_not_a_file_is_refused_before_git_runs() {
+    let repo = base("not-a-file");
+    let holder = Repo::new("outside-holder");
+    let outside = holder.path().join("outside");
+    ok(
+        std::fs::write(&outside, b"outside\n"),
+        "a file outside the repository",
+    );
+    repo.write("plain", b"plain\n");
+    repo.write("dir/inner", b"inner\n");
+    let fifo = std::process::Command::new("mkfifo")
+        .arg(repo.path().join("pipe"))
+        .status();
+    assert!(fifo.is_ok_and(|status| status.success()), "mkfifo");
+    let shared = ok(SharedRepository::discover(repo.path()), "the fixture opens");
+    let ask_shared = |path: &RepoPath| {
+        let cancel = CancelSignal::new();
+        let (sent, answered) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let answer = shared.to_worker().working_tree_diff(
+                    super::git(),
+                    path,
+                    WorkingTreeDiff::Untracked,
+                    &ContentOptions::default(),
+                    &cancel,
+                );
+                let _ = sent.send(answer);
+            });
+            match answered.recv_timeout(std::time::Duration::from_secs(30)) {
+                Ok(answer) => answer,
+                Err(_) => {
+                    cancel.cancel();
+                    panic!("the untracked read of {path} did not return: git waits on it")
+                }
+            }
+        })
+    };
+
+    let mut refused = vec![
+        String::new(),
+        outside.display().to_string(),
+        "./plain".to_owned(),
+        "dir/./inner".to_owned(),
+        "dir/../plain".to_owned(),
+        "..".to_owned(),
+        ".".to_owned(),
+    ];
+    let beside = some(holder.path().file_name(), "a name").to_string_lossy();
+    refused.push(format!("../{beside}/outside"));
+    for path in &refused {
+        match ask_shared(&RepoPath::new(path.as_bytes())) {
+            Err(Error::NotAWorkTreePath { path: named }) => assert_eq!(&named, path),
+            other => panic!("{path:?} answered {other:?}"),
+        }
+    }
+    for path in ["pipe", "dir"] {
+        let answer = ok(ask_shared(&RepoPath::new(path)), "an answer");
+        let diff = some(answer, "an answer for what is not a file");
+        let DiffContent::Unsupported { reason } = &diff.content else {
+            panic!("{path} answered {diff:?}");
+        };
+        assert!(!reason.is_empty(), "{path}");
+        assert_eq!(diff.file.new_path, RepoPath::new(path));
+    }
+    assert!(
+        shared.command_log().is_empty(),
+        "a git ran: {:?}",
+        shared.command_log()
+    );
+    // The same paths are asked about as git holds them, and answered.
+    let plain = some(
+        ok(ask_shared(&RepoPath::new("plain")), "the plain file"),
+        "an answer",
+    );
+    assert_eq!(lines(&plain).1, ["plain"]);
+    let inner = some(
+        ok(ask_shared(&RepoPath::new("dir/inner")), "the inner file"),
+        "an answer",
+    );
+    assert_eq!(lines(&inner).1, ["inner"]);
+}
+
 /// A query superseded before it starts runs nothing, and a bare repository has no working
 /// tree to diff — said so, not an error.
 #[test]

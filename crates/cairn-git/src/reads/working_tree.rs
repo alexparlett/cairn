@@ -134,6 +134,9 @@ pub(crate) fn working_tree_patch(
     if cancel.is_cancelled() {
         return Err(Error::ContentCancelled);
     }
+    if query.side == Side::Untracked {
+        work_tree_relative(query.path)?;
+    }
     let arguments = arguments(query);
     let described = || {
         arguments
@@ -214,6 +217,26 @@ fn one_for(
         }
         Some(file) => Err(format!("a record for {}", file.new_path)),
         None => Ok(None),
+    }
+}
+
+/// `Ok` for a path as git holds one in a working tree: relative to its top, with no `.` or
+/// `..` component. `git diff --no-index` reads whatever path it is given, so anything else
+/// — empty, absolute, `../x`, `a/../../x` — could name a file outside the working tree,
+/// and is [`Error::NotAWorkTreePath`] before anything is read.
+pub(crate) fn work_tree_relative(path: &RepoPath) -> Result<(), Error> {
+    let bytes = path.as_bytes();
+    let refused = bytes.is_empty()
+        || bytes.first() == Some(&b'/')
+        || bytes
+            .split(|byte| *byte == b'/')
+            .any(|component| component == b"." || component == b"..");
+    if refused {
+        Err(Error::NotAWorkTreePath {
+            path: path.to_string(),
+        })
+    } else {
+        Ok(())
     }
 }
 
@@ -459,6 +482,43 @@ mod tests {
                 assert!(!read.iter().any(|a| a == refused), "{refused} in {read:?}");
             }
             assert!(!read.iter().any(|a| a == "diff") || read.iter().any(|a| a == "--no-index"));
+        }
+    }
+
+    /// Only a path relative to the top of the working tree, with no `.` or `..` component,
+    /// is given to `--no-index`. Caught by: a component compared as a prefix (`..x` and
+    /// `.hidden` are names), or a leading or embedded `..` let through.
+    #[test]
+    fn only_a_work_tree_relative_path_is_read_untracked() {
+        for refused in [
+            "",
+            "/",
+            "/etc/passwd",
+            ".",
+            "..",
+            "./x",
+            "../x",
+            "a/..",
+            "a/../../x",
+            "a/./b",
+            "a/.",
+        ] {
+            match work_tree_relative(&RepoPath::new(refused)) {
+                Err(Error::NotAWorkTreePath { path }) => assert_eq!(path, refused),
+                other => panic!("{refused:?} answered {other:?}"),
+            }
+        }
+        for kept in [
+            "x",
+            "-",
+            ".hidden",
+            "..x",
+            "x..",
+            "a/.b/c",
+            "a/b...",
+            "dir/*.txt",
+        ] {
+            assert!(work_tree_relative(&RepoPath::new(kept)).is_ok(), "{kept:?}");
         }
     }
 

@@ -8,7 +8,7 @@
 //! names anything but what is selected now — the selection cleared, or changed in a way
 //! that asked nothing new — so the files of one commit are never drawn under another.
 
-use cairn_model::{ChangeSet, FileDiff};
+use cairn_model::{ChangeSet, FileDiff, RenameDetection};
 
 use crate::worker::{Comparison, DiffOptions, DiffQuery, FileQuery, Request};
 
@@ -43,7 +43,7 @@ pub struct DiffState {
     not(test),
     expect(
         dead_code,
-        reason = "selection is wired to the commit list and drawn from phase 05 on; the \
+        reason = "a file and Expand All are selected and drawn from phase 06 on; their \
                   answers already land here"
     )
 )]
@@ -89,6 +89,29 @@ impl DiffState {
         self.expanded
             .as_ref()
             .map(|(of, options, answer)| (*of, *options, answer))
+    }
+}
+
+/// What [`answered_changes`] hands back while no change set is kept: nothing changed, and no
+/// commit.
+static NO_CHANGES: ChangeSet = ChangeSet {
+    files: Vec::new(),
+    details: None,
+    renames: RenameDetection {
+        enabled: false,
+        copies: false,
+        limit: None,
+        needed_limit: None,
+    },
+};
+
+/// The change set kept for the selection, or an empty one while none is: the view of the
+/// state the Commit tab is handed, which reads the files by index rather than copying them.
+/// Whether the selection's answer is ready is the pane's to check before drawing it.
+pub fn answered_changes(state: &DiffState) -> &ChangeSet {
+    match &state.changes {
+        Some((_, Answer::Ready(changes))) => changes,
+        Some((_, Answer::Waiting | Answer::Failed(_))) | None => &NO_CHANGES,
     }
 }
 

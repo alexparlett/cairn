@@ -213,6 +213,10 @@ mod tests {
                         remotes: State::create(Vec::new()),
                         refused: State::create(None),
                         diff: State::create(crate::diff_state::DiffState::default()),
+                        history_scroll: ScrollController::new(0, 0, Vec::new()),
+                        detail_tab: State::create(cairn_ui::DetailTab::default()),
+                        pane_collapsed: State::create(false),
+                        pane_height: State::create(crate::window::PANE_HEIGHT),
                     }
                 })
             },

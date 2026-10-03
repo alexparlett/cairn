@@ -1,11 +1,14 @@
 //! The Cairn binary.
 
 mod closing;
+mod detail_pane;
 mod diff_state;
 mod fetch_state;
 mod history_state;
 mod repository_path;
+mod selection;
 mod session;
+mod shortcuts;
 mod status_text;
 mod window;
 mod worker;
@@ -13,6 +16,7 @@ mod worker;
 use std::rc::Rc;
 
 use cairn_model::{HistoryRow, RemoteSummary, RowId};
+use cairn_ui::DetailTab;
 use freya::prelude::*;
 
 use closing::Closing;
@@ -50,6 +54,11 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let remotes = use_state(Vec::<RemoteSummary>::new);
     let refused = use_state(|| None);
     let diff = use_state(DiffState::default);
+    let history_scroll = use_scroll_controller(ScrollConfig::default);
+    // Session state: the tab and the pane's shape outlive every selection (R5.2).
+    let detail_tab = use_state(DetailTab::default);
+    let pane_collapsed = use_state(|| false);
+    let pane_height = use_state(|| window::PANE_HEIGHT);
     let view = View {
         rows,
         progress,
@@ -59,6 +68,10 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         remotes,
         refused,
         diff,
+        history_scroll,
+        detail_tab,
+        pane_collapsed,
+        pane_height,
     };
 
     let opened = use_hook(|| {

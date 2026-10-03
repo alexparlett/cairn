@@ -30,10 +30,14 @@ Cairn's to end).
 The engine can also answer what a commit or a pair of commits changed — `git
 diff-tree`'s answer, run as a read — and what one of those files' change is, line
 by line, and one path's staged, unstaged or untracked diff in the working tree
-(`docs/systems/diff.md`), with nothing drawing it yet; the worker asks those
+(`docs/systems/diff.md`); the worker asks those
 queries on a diff thread of its own, numbered per lane so a scroll and a diff
 never cancel each other, and the window keeps each answer only for the
-selection it names. Nothing else
+selection it names. Choosing a commit asks what it changed, and the detail pane
+under the list — behind a draggable, collapsible splitter, with Commit and
+Changes tabs — draws its author, committer, id, parents, message and changed
+files in the Commit tab; no file's diff is drawn yet. Keyboard shortcuts
+resolve through one accelerator table (`cairn_ui::accelerators`). Nothing else
 mutates a repository, and there is no repository picker: one repository, named
 on the command line.
 
@@ -46,7 +50,7 @@ on the command line.
 | `crates/cairn-git/` | The repository engine: gitoxide-backed reads — the history walk, and under `src/diff/` the queries answering what a commit changed (asked of `git diff-tree` through `src/reads/`), what one file's change is, and one path's working-tree diff — and under `src/ops/` every write, delegating to the `git` binary per design decision D1. Every `git` process is built in the crate-private `src/process/` — `GitBinary` (startup discovery and the 2.30 floor), `GitEnvironment` (the explicitly built environment, the only place a `Command` is built), `Askpass` (where git and ssh are sent for a secret), the runner, which streams and can kill a process, and each repository's registry of running invocations and its command log — and an invocation is typed a read or a write, a write needing the `WriteAuthority` only `ops/` can construct. `src/ops/` holds `fetch`, the first verb (not destructive, so it takes no `Confirmed`), and the confirmation-seal placeholder, and re-exports what the application needs of `process/`; `src/reads/` is where each read `git` answers lives, one named function each: today `changes`, `git diff-tree` for the changes query, whose rename and copy pairs gix and git disagree on; `patches`, `git diff-tree -p` for the content query's changed lines and function context, whose line diff gix and git disagree on too; `diff_attributes`, `git check-attr`, which says whether a path's diff driver names its own algorithm; and `working_tree_patch`, one path's staged, unstaged or untracked diff (`git diff-index --cached`, `git diff-files`, `git diff --no-index`), which reads the working tree through git so its side is git's form of the file. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
 | `crates/cairn-askpass/` | The askpass helper binary `git` and `ssh` run to ask for a secret, and the library half — the `Channel` the application listens on. Links `cairn-model` and `zeroize` only: it runs in a process holding a plaintext secret. Never names the engine, the toolkit or a logging crate. |
 | `crates/cairn-ui/` | Freya components. Render `cairn-model` values, report intent through `EventHandler` props. `src/accelerators.rs` is the accelerator table, the one render file that names a modifier. Must never depend on `gix` or `cairn-git`, and must never touch the filesystem. |
-| `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. `src/worker/` is everything that may wait: `git` found once per application (`discovery.rs`), each repository's threads (`pool.rs`), the routing table from query lane to thread (`routing.rs`) and the per-lane epochs (`epoch.rs`), the diff thread (`diff_lane.rs`), the network lane (`network_lane.rs`) and the askpass acceptor; `src/diff_state.rs` is the diff selection and the answers kept for it; `src/closing.rs` is the window's close hook, which asks the worker to close and never waits. |
+| `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. `src/worker/` is everything that may wait: `git` found once per application (`discovery.rs`), each repository's threads (`pool.rs`), the routing table from query lane to thread (`routing.rs`) and the per-lane epochs (`epoch.rs`), the diff thread (`diff_lane.rs`), the network lane (`network_lane.rs`) and the askpass acceptor; `src/diff_state.rs` is the diff selection and the answers kept for it; `src/selection.rs` chooses a row and asks what it changed; `src/detail_pane.rs` draws the pane for the selection now; `src/shortcuts.rs` is what each accelerator does; `src/closing.rs` is the window's close hook, which asks the worker to close and never waits. |
 | `crates/cairn-guards/` | Test-only. The deterministic enforcement twins for the Invariants below; nothing depends on it. |
 | `scripts/`, `.githooks/`, `.github/` | The enforcement layer (contract: `docs/qa-gate.md`). |
 
@@ -599,7 +603,10 @@ Project invariants:
     design and unreachable while rows only append; the row that arrives ABOVE
     another is what enters it, which is what the working-tree row will do. Named
     here rather than left implicit, because a token scan cannot tell this
-    iteration from any other.
+    iteration from any other. Its sibling: a Commit-tab parent link finds its
+    parent with `selection::loaded_row`, a scan of every loaded row, once per
+    press on the UI thread — and the Commit tab builds its header (proportional
+    to the commit's message, never to its files) on every render of the tab.
 
   Whether the virtualizing view really builds only what its viewport shows is
   pinned by a second, behavioural twin:

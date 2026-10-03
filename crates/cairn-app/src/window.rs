@@ -3,14 +3,26 @@
 use std::rc::Rc;
 
 use cairn_model::{HistoryRow, RemoteSummary, RowContent, RowId, Secret};
-use cairn_ui::{CommitRow, CredentialPrompt, HistoryHeader, HistoryList, ROW_HEIGHT, RowRender};
+use cairn_ui::accelerators;
+use cairn_ui::{
+    CommitRow, CredentialPrompt, DETAIL_STRIP_HEIGHT, DetailTab, HistoryHeader, HistoryList,
+    ROW_HEIGHT, RowRender,
+};
 use freya::prelude::*;
 
+use crate::detail_pane::DetailPane;
 use crate::diff_state::DiffState;
 use crate::fetch_state::{FetchRefusal, FetchStatus, PromptView};
 use crate::history_state::{Progress, Status};
 use crate::worker::{Replier, Reply, Request};
-use crate::{PAGE_ROWS, status_text};
+use crate::{PAGE_ROWS, selection, shortcuts, status_text};
+
+/// The detail pane's height until the splitter is dragged.
+pub const PANE_HEIGHT: f32 = 260.0;
+/// The least a drag leaves the pane; pulled past it, the pane collapses (Fork's gesture).
+const PANE_MIN_HEIGHT: f32 = 90.0;
+/// The least the commit list keeps when the window is squeezed.
+const LIST_MIN_HEIGHT: f32 = 80.0;
 
 /// The view state the window is drawn from. Handles, not values: the window
 /// subscribes to what it reads.
@@ -24,8 +36,15 @@ pub struct View {
     pub remotes: State<Vec<RemoteSummary>>,
     /// A fetch the worker refused, until another is asked for.
     pub refused: State<Option<FetchRefusal>>,
-    /// The diff selection and the answers kept for it; drawn from phase 05 on.
+    /// The diff selection and the answers kept for it.
     pub diff: State<DiffState>,
+    /// The commit list's scroll, shared so a parent link can bring its row into view.
+    pub history_scroll: ScrollController,
+    /// The detail pane's tab, kept for the session (R5.2).
+    pub detail_tab: State<DetailTab>,
+    pub pane_collapsed: State<bool>,
+    /// The pane's height as last dragged; read when the pane is laid out again.
+    pub pane_height: State<f32>,
 }
 
 impl std::fmt::Debug for View {
@@ -53,9 +72,28 @@ pub fn window(
     let prompt = view.prompt.read().clone();
     let refused = view.refused.read().clone();
 
+    let list = rect()
+        .width(Size::fill())
+        .height(Size::fill())
+        .child(HistoryHeader::new())
+        .child(match status_text::placeholder(&status, has_rows) {
+            Some(message) => notice(message, opened),
+            None => history(view, lanes, submit.clone()),
+        })
+        .maybe(has_rows, |el| match &status {
+            Status::Failed(message) => el.child(banner(message.clone(), true)),
+            _ => el,
+        });
+
     rect()
         .expanded()
         .theme_background()
+        // Every shortcut resolves through the accelerator table, wherever focus is (R8).
+        .on_global_key_down(move |e: Event<KeyboardEventData>| {
+            if let Some(action) = accelerators::resolve_key(&e) {
+                shortcuts::act(action, view);
+            }
+        })
         .child(title_bar(
             opened,
             &counted,
@@ -74,16 +112,49 @@ pub fn window(
                 .as_ref()
                 .map(|refusal| banner(status_text::refusal_line(refusal), false)),
         )
-        .child(HistoryHeader::new())
-        .child(match status_text::placeholder(&status, has_rows) {
-            Some(message) => notice(message, opened),
-            None => history(view.rows, lanes, view.selected, view.progress, submit),
-        })
-        .maybe(has_rows, |el| match &status {
-            Status::Failed(message) => el.child(banner(message.clone(), true)),
-            _ => el,
-        })
+        .child(split(list, DetailPane::new(view, submit).into(), view))
         .maybe_child(prompt.map(|prompt| dialog(prompt, &fetch, view.prompt, answer)))
+        .into()
+}
+
+/// The commit list over the detail pane, behind a draggable splitter (R5.1); a collapsed
+/// pane keeps only its strip, under a list that takes the rest.
+fn split(list: Rect, pane: Element, view: View) -> Element {
+    let View {
+        mut pane_collapsed,
+        mut pane_height,
+        ..
+    } = view;
+    if *pane_collapsed.read() {
+        return rect()
+            .expanded()
+            .content(Content::Flex)
+            .child(list.height(Size::flex(1.)))
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::px(DETAIL_STRIP_HEIGHT))
+                    .child(pane),
+            )
+            .into();
+    }
+    // Peeked: the height only matters when the pane is laid out anew, and reading it would
+    // redraw the window on every step of a drag.
+    let height = *pane_height.peek();
+    ResizableContainer::new()
+        .direction(Direction::Vertical)
+        .panel(
+            ResizablePanel::new(PanelSize::percent(100.))
+                .min_pixels(LIST_MIN_HEIGHT)
+                .child(list),
+        )
+        .panel(
+            ResizablePanel::new(PanelSize::px(height))
+                .min_size(PANE_MIN_HEIGHT)
+                .on_resized(move |dragged: f32| pane_height.set(dragged))
+                .on_collapse(move |()| pane_collapsed.set(true))
+                .child(pane),
+        )
         .into()
 }
 
@@ -118,14 +189,10 @@ fn dialog(
         .into()
 }
 
-fn history(
-    rows: State<Vec<HistoryRow>>,
-    lanes: usize,
-    mut selected: State<Option<RowId>>,
-    mut progress: State<Progress>,
-    submit: Option<Rc<dyn Fn(Request)>>,
-) -> Element {
-    HistoryList::new(rows, move |render: RowRender| {
+fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Element {
+    let mut progress = view.progress;
+    let choosing = submit.clone();
+    HistoryList::new(view.rows, move |render: RowRender| {
         // No wildcard arm: a new row kind must fail to compile here.
         match render.row.content {
             RowContent::Commit(commit) => CommitRow::new(commit, render.row.graph, render.lanes)
@@ -134,8 +201,10 @@ fn history(
         }
     })
     .lanes(lanes)
-    .selected(*selected.read())
-    .on_select(move |id: RowId| selected.set(Some(id)))
+    .selected(*view.selected.read())
+    .controller(view.history_scroll)
+    // Choosing a row asks what it changed; the pane draws the answer for that row alone.
+    .on_select(move |id: RowId| selection::choose(id, view, choosing.as_deref()))
     .on_reach_end(move |()| {
         // `wants_more` debounces: every `submit` supersedes. `peek`, not `read`: reading here
         // subscribes the window to the progress it writes, and loops.
@@ -281,8 +350,17 @@ fn banner(message: String, alarming: bool) -> Element {
 mod tests {
     use std::cell::RefCell;
 
-    use cairn_model::{CommitSummary, EdgeSegment, GraphRow, Lane, Oid};
+    use cairn_model::{
+        ChangeSet, ChangeStatus, ChangedFile, CommitDetails, CommitSummary, EdgeSegment, FileMode,
+        GraphRow, Lane, Oid, RenameDetection, RepoPath, Signature, Timestamp,
+    };
+    use cairn_ui::accelerators::Action;
+    use cairn_ui::{COLLAPSE_CAPTION, EXPAND_CAPTION};
     use freya_testing::TestingRunner;
+    use freya_testing::prelude::{KeyboardEventName, PlatformEvent};
+
+    use crate::detail_pane::{CHANGES_NOT_BUILT, NOTHING_SELECTED, READING};
+    use crate::worker::Comparison;
 
     use crate::fetch_state::{FetchStatus, PromptView};
 
@@ -298,10 +376,16 @@ mod tests {
         row_in_lane(n, 0)
     }
 
-    fn row_in_lane(n: usize, lane: usize) -> HistoryRow {
+    /// Row `n`'s id; its first byte differs between rows, so its short id does too.
+    fn oid(n: usize) -> Oid {
         let mut bytes = [0u8; 20];
+        bytes[0] = 0x10 + (n % 200) as u8;
         bytes[12..20].copy_from_slice(&(n as u64).to_be_bytes());
-        let id = Oid::from_bytes(&bytes).unwrap();
+        Oid::from_bytes(&bytes).unwrap()
+    }
+
+    fn row_in_lane(n: usize, lane: usize) -> HistoryRow {
+        let id = oid(n);
         HistoryRow {
             content: RowContent::Commit(CommitSummary {
                 id,
@@ -372,6 +456,10 @@ mod tests {
                     }]),
                     refused: State::create(None),
                     diff: State::create(DiffState::default()),
+                    history_scroll: ScrollController::new(0, 0, Vec::new()),
+                    detail_tab: State::create(DetailTab::default()),
+                    pane_collapsed: State::create(false),
+                    pane_height: State::create(PANE_HEIGHT),
                 })
             },
             1.,
@@ -923,5 +1011,327 @@ mod tests {
             "{:?}",
             texts(&test)
         );
+    }
+
+    /// Row `n`'s change set: its details, with `parents`, and one file named for it.
+    fn answer_for(n: usize, parents: Vec<Oid>) -> ChangeSet {
+        let signature = |name: &str| Signature {
+            name: name.to_owned(),
+            email: format!("{}@example.com", name.to_lowercase()),
+            time: Timestamp::new(1_700_000_000, 0),
+        };
+        ChangeSet {
+            files: vec![ChangedFile {
+                status: ChangeStatus::Modified,
+                old_path: RepoPath::from(format!("file-of-{n}.rs").as_str()),
+                new_path: RepoPath::from(format!("file-of-{n}.rs").as_str()),
+                old_mode: Some(FileMode::Regular),
+                new_mode: Some(FileMode::Regular),
+                old_id: None,
+                new_id: None,
+            }],
+            details: Some(CommitDetails {
+                id: oid(n),
+                parents,
+                author: signature("Ada"),
+                committer: signature("Grace"),
+                message: format!("subject of {n}\n"),
+            }),
+            renames: RenameDetection::default(),
+        }
+    }
+
+    fn arrives(test: &mut TestingRunner, view: View, n: usize, parents: Vec<Oid>) {
+        let mut diff = view.diff;
+        let of = Comparison::Commit(oid(n));
+        test.run_in(|| diff.write().changes_arrived(of, answer_for(n, parents)));
+        test.sync_and_update();
+        test.sync_and_update();
+    }
+
+    /// The top of the detail pane: where its strip's Changes tab sits (the history's column
+    /// headings have a "Commit" of their own).
+    fn pane_top(test: &TestingRunner) -> f32 {
+        test.find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == DetailTab::Changes.caption())
+                .map(|_| node.layout().area.min_y())
+        })
+        .unwrap()
+    }
+
+    /// The labels drawn in the detail pane.
+    fn pane(test: &TestingRunner) -> Vec<String> {
+        let top = pane_top(test);
+        test.find_many(|node, element| {
+            Label::try_downcast(element)
+                .filter(|_| node.layout().area.min_y() > top && node.is_visible())
+                .map(|label| label.text.to_string())
+        })
+    }
+
+    fn click_row(test: &mut TestingRunner, n: usize) {
+        click_label(test, &format!("commit {n}"));
+        test.sync_and_update();
+    }
+
+    fn press_chord(test: &mut TestingRunner, action: Action) {
+        let chord = accelerators::chord(action, accelerators::Os::current());
+        let (key, code, modifiers) = chord.key_press().unwrap();
+        test.send_event(PlatformEvent::Keyboard {
+            name: KeyboardEventName::KeyDown,
+            key,
+            code,
+            modifiers,
+        });
+        test.sync_and_update();
+        test.sync_and_update();
+    }
+
+    /// R4.4 at the place it is drawn, through the window: choosing a row asks what it changed
+    /// and the Commit tab draws that row's answer alone — not the last row's while the next
+    /// one's is on its way, and not one the diff state holds for a row no longer selected.
+    /// Choosing the same row again asks nothing new. Caught by: a pane that draws whatever
+    /// change set is kept, or a selection that does not ask.
+    #[test]
+    fn the_commit_tab_draws_the_answer_for_the_row_selected_and_no_other() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        assert!(
+            pane(&test).iter().any(|t| t == NOTHING_SELECTED),
+            "{:?}",
+            pane(&test)
+        );
+
+        click_row(&mut test, 2);
+        let two = Comparison::Commit(oid(2));
+        assert_eq!(
+            submitted.borrow().as_slice(),
+            [Request::Changes { of: two }]
+        );
+        assert!(
+            pane(&test).iter().any(|t| t == READING),
+            "{:?}",
+            pane(&test)
+        );
+
+        arrives(&mut test, view, 2, Vec::new());
+        assert!(
+            pane(&test).iter().any(|t| t == "subject of 2"),
+            "{:?}",
+            pane(&test)
+        );
+        assert!(
+            pane(&test).iter().any(|t| t == "file-of-2.rs"),
+            "{:?}",
+            pane(&test)
+        );
+
+        click_row(&mut test, 2);
+        assert_eq!(
+            submitted.borrow().len(),
+            1,
+            "choosing the same row asked again"
+        );
+
+        click_row(&mut test, 3);
+        assert_eq!(
+            submitted.borrow().last(),
+            Some(&Request::Changes {
+                of: Comparison::Commit(oid(3))
+            })
+        );
+        let shown = pane(&test);
+        assert!(shown.iter().any(|t| t == READING), "{shown:?}");
+        assert!(
+            !shown
+                .iter()
+                .any(|t| t == "subject of 2" || t == "file-of-2.rs"),
+            "the last row's answer is drawn under the next: {shown:?}"
+        );
+
+        // The diff state answered for row 3, but the window has row 4 selected: whatever is
+        // kept is another selection's, and is not drawn.
+        arrives(&mut test, view, 3, Vec::new());
+        let mut selected = view.selected;
+        selected.set(Some(RowId::Commit(oid(4))));
+        test.sync_and_update();
+        let shown = pane(&test);
+        assert!(
+            !shown
+                .iter()
+                .any(|t| t == "subject of 3" || t == "file-of-3.rs"),
+            "row 3's answer is drawn with row 4 selected: {shown:?}"
+        );
+    }
+
+    /// C10, R5.2: Commit is the default tab, and the tab chosen is kept for the session —
+    /// across another row chosen, and across a collapse, which leaves the strip to open the
+    /// pane again. Caught by: a selection resetting the tab, or a collapse forgetting it.
+    #[test]
+    fn the_tab_chosen_is_kept_across_selections_and_a_collapse() {
+        let (mut test, view, _) = launch((0..10).map(row).collect(), received(10, true));
+        assert_eq!(*view.detail_tab.read(), DetailTab::Commit);
+
+        click_label(&mut test, DetailTab::Changes.caption());
+        assert!(
+            pane(&test).iter().any(|t| t == CHANGES_NOT_BUILT),
+            "{:?}",
+            pane(&test)
+        );
+
+        click_row(&mut test, 1);
+        click_row(&mut test, 5);
+        assert_eq!(*view.detail_tab.read(), DetailTab::Changes);
+        assert!(
+            pane(&test).iter().any(|t| t == CHANGES_NOT_BUILT),
+            "{:?}",
+            pane(&test)
+        );
+
+        let open_top = pane_top(&test);
+        click_label(&mut test, COLLAPSE_CAPTION);
+
+        assert!(*view.pane_collapsed.read());
+        assert!(
+            pane_top(&test) > open_top,
+            "the collapsed pane did not give the list its room"
+        );
+        assert!(!texts(&test).iter().any(|t| t == CHANGES_NOT_BUILT));
+
+        click_label(&mut test, EXPAND_CAPTION);
+        assert_eq!(*view.detail_tab.read(), DetailTab::Changes);
+        assert!(
+            pane(&test).iter().any(|t| t == CHANGES_NOT_BUILT),
+            "{:?}",
+            pane(&test)
+        );
+    }
+
+    /// C13: the tab chords resolve through the accelerator table and act in the window, a
+    /// collapsed pane opening for the tab asked for. Caught by: a window that resolves no
+    /// chord, or acts on one by its literal keys.
+    #[test]
+    fn the_tab_chords_resolve_through_the_table() {
+        let (mut test, view, _) = launch((0..10).map(row).collect(), received(10, true));
+        press_chord(&mut test, Action::ShowChangesTab);
+        assert_eq!(*view.detail_tab.read(), DetailTab::Changes);
+
+        let mut collapsed = view.pane_collapsed;
+        collapsed.set(true);
+        test.sync_and_update();
+        press_chord(&mut test, Action::ShowCommitTab);
+        assert_eq!(*view.detail_tab.read(), DetailTab::Commit);
+        assert!(
+            !*view.pane_collapsed.read(),
+            "the chord left the pane collapsed"
+        );
+        assert!(
+            pane(&test).iter().any(|t| t == NOTHING_SELECTED),
+            "{:?}",
+            pane(&test)
+        );
+    }
+
+    /// R5.3: a loaded parent's link selects its row, asks what it changed and brings it into
+    /// view; an unloaded parent's does nothing visible (reaching it is issue #3). Caught by:
+    /// a link that selects whatever is at some index, or one that asks for a parent the
+    /// list cannot show.
+    #[test]
+    fn a_parent_link_selects_a_loaded_parent_and_ignores_an_unloaded_one() {
+        let (mut test, view, submitted) = launch((0..60).map(row).collect(), received(60, true));
+        click_row(&mut test, 1);
+        let unloaded = Oid::from_bytes(&[0xee; 20]).unwrap();
+        arrives(&mut test, view, 1, vec![oid(45), unloaded]);
+        let before = (submitted.borrow().len(), *view.selected.read());
+
+        let link = |test: &TestingRunner, short: String| {
+            let top = pane_top(test);
+            test.find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == short && node.layout().area.min_y() > top)
+                    .map(|_| node.layout().area.center())
+            })
+            .unwrap()
+        };
+        let centre = link(&test, unloaded.short().as_str().to_owned());
+        test.click_cursor((f64::from(centre.x), f64::from(centre.y)));
+        test.sync_and_update();
+        assert_eq!(
+            (submitted.borrow().len(), *view.selected.read()),
+            before,
+            "an unloaded parent's link changed something"
+        );
+        assert!(pane(&test).iter().any(|t| t == "subject of 1"));
+
+        let row_45_visible = |test: &TestingRunner| {
+            test.find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == "commit 45")
+                    .map(|_| node.is_visible() && node.layout().area.max_y() <= pane_top(test))
+            })
+            .unwrap_or(false)
+        };
+        assert!(
+            !row_45_visible(&test),
+            "the parent's row was in view already"
+        );
+
+        let centre = link(&test, oid(45).short().as_str().to_owned());
+        test.click_cursor((f64::from(centre.x), f64::from(centre.y)));
+        test.sync_and_update();
+        test.sync_and_update();
+        assert_eq!(*view.selected.read(), Some(RowId::Commit(oid(45))));
+        assert_eq!(
+            submitted.borrow().last(),
+            Some(&Request::Changes {
+                of: Comparison::Commit(oid(45))
+            })
+        );
+        assert!(
+            row_45_visible(&test),
+            "the parent's row was not brought into view"
+        );
+    }
+
+    /// R5.1: the splitter between the list and the pane drags, and the height dragged to is
+    /// the one the pane opens at again after a collapse. Caught by: a fixed pane, or one
+    /// that forgets its height when it collapses.
+    #[test]
+    fn the_splitter_drags_and_the_pane_keeps_its_height() {
+        let (mut test, view, _) = launch((0..10).map(row).collect(), received(10, true));
+        let top = pane_top(&test);
+        // The handle: the one full-width rect as thin as Freya's splitter.
+        let handle = test
+            .find(|node, element| {
+                let area = node.layout().area;
+                Rect::try_downcast(element)
+                    .filter(|_| {
+                        area.height() == ResizableContext::HANDLE_SIZE && area.width() > 700.
+                    })
+                    .map(|_| f64::from(area.center().y))
+            })
+            .unwrap();
+        test.press_cursor((300., handle));
+        test.move_cursor((300., handle - 80.));
+        test.sync_and_update();
+        test.move_cursor((300., handle - 120.));
+        test.sync_and_update();
+        test.release_cursor((300., handle - 120.));
+        test.sync_and_update();
+        let dragged = pane_top(&test);
+        assert!(
+            dragged < top - 60.,
+            "dragging the splitter up did not grow the pane: {top} then {dragged}"
+        );
+
+        click_label(&mut test, COLLAPSE_CAPTION);
+        click_label(&mut test, EXPAND_CAPTION);
+        test.sync_and_update();
+        assert!(
+            (pane_top(&test) - dragged).abs() < 2.,
+            "the pane opened at {} rather than where it was dragged to, {dragged}",
+            pane_top(&test)
+        );
+        assert!(*view.pane_height.read() > PANE_HEIGHT);
     }
 }

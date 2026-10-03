@@ -261,6 +261,73 @@ fn a_file_past_big_file_threshold_is_binary_as_git_says() {
     );
 }
 
+/// Whether `git show` of `head` calls `path` binary: the porcelain the user reads a commit
+/// with, which reads the attributes where `git diff` does.
+fn binary_to_git_show(repo: &Repo, head: &str, path: &str) -> bool {
+    repo.git(&[
+        "show",
+        "--no-ext-diff",
+        "--no-color",
+        "--format=",
+        head,
+        "--",
+        path,
+    ])
+    .contains("Binary files")
+}
+
+/// R2.5 where git reads the attributes: a commit's diff takes them from the working tree's
+/// `.gitattributes` first, the index's where the working tree has none, and
+/// `$GIT_DIR/info/attributes` above both — never from the index alone. An unstaged `-diff`
+/// makes a text file binary; an unstaged edit that drops a committed `-diff` makes a binary
+/// one text; `info/attributes` does the first too. Each answer is a fresh repository's,
+/// nothing kept, against `git diff` and `git show` of the same commit. Caught by: a session
+/// whose attribute stack reads the index alone (gix's default without a worktree root),
+/// which answered the first case as text — and failed, since git's lines said binary — and
+/// the second as binary without asking git.
+#[test]
+fn binary_detection_reads_the_attributes_where_git_reads_them() {
+    let repo = repositories::attributes();
+    let head = repo.git(&["rev-parse", "HEAD"]).trim().to_owned();
+    let committed = std::fs::read(repo.path().join(".gitattributes"))
+        .unwrap_or_else(|e| panic!("reading the committed attributes: {e}"));
+    let verdict = |path: &str| -> bool {
+        let verdicts = binary_verdicts(&repo, &head);
+        let cairn = some(
+            verdicts.iter().find(|(seen, _)| seen == path),
+            "the path changed in the commit",
+        )
+        .1;
+        assert_eq!(
+            cairn,
+            binary_to_git_show(&repo, &head, path),
+            "{path}: Cairn and git show disagree"
+        );
+        cairn
+    };
+
+    let mut unstaged = committed.clone();
+    unstaged.extend_from_slice(b"plain.txt -diff\n");
+    repo.write(".gitattributes", &unstaged);
+    assert!(verdict("plain.txt"), "an unstaged -diff was not seen");
+
+    let without_no_diff: Vec<u8> = String::from_utf8_lossy(&committed)
+        .lines()
+        .filter(|line| !line.starts_with("no-diff.txt"))
+        .flat_map(|line| format!("{line}\n").into_bytes())
+        .collect();
+    repo.write(".gitattributes", &without_no_diff);
+    assert!(
+        !verdict("no-diff.txt"),
+        "a committed -diff the working tree dropped still made the file binary"
+    );
+
+    repo.write(".gitattributes", &committed);
+    repo.write(".git/info/attributes", b"plain.txt -diff\n");
+    assert!(verdict("plain.txt"), "info/attributes was not read");
+    assert!(verdict("no-diff.txt"), "the committed -diff was lost");
+}
+
 /// R2.3: neither a textconv nor an external diff program runs, whatever the config says.
 #[test]
 fn neither_a_textconv_nor_an_external_diff_program_is_started() {

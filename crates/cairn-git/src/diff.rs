@@ -116,17 +116,38 @@ impl std::fmt::Debug for DiffSession<'_> {
 impl Repository {
     /// Opens a run of diff queries. Keep it for as long as the queries keep coming.
     pub fn diff_session(&self) -> Result<DiffSession<'_>, Error> {
+        let setup = |source: Box<dyn std::error::Error + Send + Sync>| Error::DiffSetup { source };
+        let repo = self.inner();
+        // What `Repository::diff_resource_cache` builds, but for where the attributes come
+        // from. git reads a diff's attributes in the check-in direction — the working
+        // tree's `.gitattributes` first, the index's where the working tree has none —
+        // and so does `git diff-tree`, run with a working tree; gix reads the working
+        // tree's only when a worktree ROOT is set, and a root also makes it read every
+        // resource's CONTENT from the working tree rather than by its id. So the stack is
+        // built here in git's order and the cache gets no root: the blobs still come from
+        // the object database, by id, and only the attributes from the working tree. A
+        // bare repository has no working tree, and reads the index's (or `HEAD`'s).
+        let source = if self.workdir().is_some() {
+            gix::worktree::stack::state::attributes::Source::WorktreeThenIdMapping
+        } else {
+            gix::worktree::stack::state::attributes::Source::IdMapping
+        };
+        let index = repo
+            .index_or_load_from_head_or_empty()
+            .map_err(|source| setup(Box::new(source)))?;
+        let attributes = repo
+            .attributes_only(&index, source)
+            .map_err(|source| setup(Box::new(source)))?
+            .detach();
         // `ToGit` is the mode that never runs a textconv program, and the one git's own
-        // rename detection uses (R2.3). No worktree root: this packet's queries read trees.
-        let cache = self
-            .inner()
-            .diff_resource_cache(
-                gix::diff::blob::pipeline::Mode::ToGit,
-                gix::diff::blob::pipeline::WorktreeRoots::default(),
-            )
-            .map_err(|source| Error::DiffSetup {
-                source: Box::new(source),
-            })?;
+        // rename detection uses (R2.3).
+        let cache = gix::diff::resource_cache(
+            repo,
+            gix::diff::blob::pipeline::Mode::ToGit,
+            attributes,
+            gix::diff::blob::pipeline::WorktreeRoots::default(),
+        )
+        .map_err(|source| setup(Box::new(source)))?;
         Ok(DiffSession { repo: self, cache })
     }
 }

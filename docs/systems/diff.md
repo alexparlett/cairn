@@ -178,7 +178,17 @@ a one-shot session over it for a caller with a single question, and
 needs no cache. Like `HistorySession` the session borrows the repository and is not
 `Send`, so it lives on the worker that owns that handle. The cache is created in
 `pipeline::Mode::ToGit` with no worktree roots, which is the mode that never runs a
-textconv program, and `gix::diff::resource_cache` builds it with
+textconv program; its attribute stack is built in git's check-in order — the working
+tree's `.gitattributes` first, the index's where the working tree has none, and
+`$GIT_DIR/info/attributes` and `core.attributesFile` beside them — which is where
+`git diff` and `git show` of a commit read a commit's attributes, an unstaged edit
+included (`binary_detection_reads_the_attributes_where_git_reads_them`). gix's own
+`Repository::diff_resource_cache` reads the working tree's attributes only when a
+worktree root is set, and a root also makes the cache read every resource's content
+from the working tree instead of by its id, so the session builds the stack itself
+(`Repository::attributes_only` with `WorktreeThenIdMapping`, `IdMapping` in a bare
+repository) and hands it to `gix::diff::resource_cache` with no root: the blobs still
+come from the object database. `gix::diff::resource_cache` builds it with
 `skip_internal_diff_if_external_is_configured` off, so a `diff.<driver>.command` in
 the user's config is read and never started. Both are checked by running a diff
 over a path that has a textconv *and* an external diff command configured, each a

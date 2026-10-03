@@ -48,10 +48,11 @@ pub use diff_header::{
 };
 pub use diff_line_text::{ShownLine, TAB_WIDTH, cut_marker, shown_line};
 pub use diff_notice::{
-    BINARY_FILE, CONFLICTED, COPIED_WITHOUT_CHANGES, DiffNotice, DiffNoticeView, LFS_POINTER,
-    LOAD_DIFF_CAPTION, NEW_SIDE, NO_CHANGES_SHOWN, NO_CONTENT_CHANGE, OLD_SIDE,
-    ONLY_WHITESPACE_CHANGED, RENAMED_WITHOUT_CHANGES, SUBMODULE, TOO_LARGE_TO_DISPLAY,
-    header_lines, size_text, subproject_line, too_large_reason,
+    BINARY_FILE, CONFLICTED, COPIED_MODE_CHANGED, COPIED_WITHOUT_CHANGES, DiffNotice,
+    DiffNoticeView, LFS_POINTER, LOAD_DIFF_CAPTION, MODE_CHANGED, NEW_SIDE, NO_CHANGES_SHOWN,
+    NO_CONTENT_CHANGE, OLD_SIDE, ONLY_WHITESPACE_CHANGED, RENAMED_MODE_CHANGED,
+    RENAMED_WITHOUT_CHANGES, SUBMODULE, TOO_LARGE_TO_DISPLAY, header_lines, size_text,
+    subproject_line, too_large_reason,
 };
 pub use diff_settings::DiffSettings;
 pub use diff_view::{

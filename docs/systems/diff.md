@@ -1427,11 +1427,11 @@ and looked at from a real fixture repository as well):
 | State | Drawn |
 | --- | --- |
 | Binary | "Binary file", Fork's "Old" and "New" over each side's size in KiB and bytes (`2.0 KiB (2,048 bytes)`; bytes alone under a KiB); an absent side (added, deleted) has none |
-| Too large | Fork's "Changes are too large to display", the measurement the limit fired on, and Fork's "Load Diff" while a load is offered; past the 64 MiB ceiling "too large to load" and no button |
+| Too large | Fork's "Changes are too large to display", the measurement the limit fired on, and Fork's "Load Diff" while a load is offered; past the 64 MiB ceiling the file's size and the ceiling in MiB — "72.3 MiB — larger than the 64 MiB Cairn can load" (`too_large_reason`, `mib_text`) — and no button |
 | Git LFS pointer | "Git LFS pointer" over each side's pointer text, the old above the new |
 | Submodule | "Submodule" over git's `-Subproject commit <id>` and `+Subproject commit <id>` lines, `-dirty` after the new where the working tree's checkout has changes; never "binary" |
-| Mode only | git's `old mode` and `new mode` lines, under "No change to the file's content" |
-| Rename or copy, no content change | "Renamed without changes" ("Copied without changes") over git's `similarity index`, `rename from`/`rename to` (`copy from`/`copy to`) lines; when the mode moved too, the mode lines first under "No change to the file's content" |
+| Mode only | git's `old mode` and `new mode` lines, under "Mode changed" |
+| Rename or copy, no content change | "Renamed without changes" ("Copied without changes") over git's `similarity index`, `rename from`/`rename to` (`copy from`/`copy to`) lines; when the mode moved too, git's mode lines first, under "Renamed, mode changed" ("Copied, mode changed") |
 | Conflicted, unsupported | "Unmerged path — conflicts must be resolved before a diff can be shown"; the engine's reason |
 | Text with no row | "No changes to show.", or the whitespace sentence when ignoring whitespace hides every change |
 
@@ -1557,10 +1557,14 @@ number) and `docs/research/diff-engine/fork-shortcuts.md`.
 | Side-by-side sideways scroll | both columns' text slides together; each gutter stays | User decision (2026-10-03), kept as built: Fork's panes are two text controls whose sideways scroll is not established; Cairn's are one view (the no-plain-`ScrollView` invariant), so one scroll moves both. |
 | Side-by-side `-`/`+` markers | a marker column per side | User decision (2026-10-03), kept as built: Fork's is an opt-in preference (Finding 12); Cairn draws it always, as in unified, so meaning never rests on colour (L11). |
 | End-of-file marker side by side | a row after the change, in the column of the side that did not end | User decision (2026-10-03), kept as built: git has no side-by-side form; Fork's is not recorded. |
-| Too large | "Changes are too large to display", "Load Diff" | Fork-measured: Finding 21 (Windows screenshot, TrackerWin #2245). The line under it giving the measurement, and "too large to load" past the ceiling, are Cairn's. |
+| Too large | "Changes are too large to display", "Load Diff" | Fork-measured: Finding 21 (Windows screenshot, TrackerWin #2245). The line under it giving the measurement is Cairn's. |
+| Too large, past the 64 MiB ceiling | "72.3 MiB — larger than the 64 MiB Cairn can load": the file's size to a tenth of a MiB and the ceiling, no Load Diff, no logo | User's decision, 2026-10-03 (the sentence replaced "N bytes, more than the limit of 1,048,576 bytes; too large to load", which named the drawing limit rather than the one that refused the load). The ceiling said is `DiffLimits::LOAD_ANYWAY_BYTES`, the one every file diff is asked with. No logo kept as built: user's decision, 2026-10-03. |
 | Binary | "Old"/"New" over each size in KiB and bytes | Fork-measured: Finding 22 (Windows 1.28 screenshot: the size in KB and bytes). The research does not record the sample's numbers, so it does not settle whether Fork's KB is 1,000 or 1,024 bytes: user decision (2026-10-03), labelled honestly as KiB, 1,024 bytes; bytes alone under a KiB. "Binary file" kept, user decision. |
-| LFS pointer, submodule, mode only | the pointer text under "Git LFS pointer"; git's own lines under "Submodule", "No change to the file's content" | User decision (2026-10-03): "Git LFS pointer" and "Submodule" kept. Fork's LFS and submodule views show downloaded content, chips and a commit graph (Finding 22), more than R6.8 asks; git's own lines are the parity answer. |
-| Rename with no content change | "Renamed without changes" over git's rename lines | User decision (2026-10-03). "Copied without changes", for a copy, follows the same form — Cairn's, by analogy. |
+| LFS pointer, submodule | the pointer text under "Git LFS pointer"; git's own lines under "Submodule" | User decision (2026-10-03): "Git LFS pointer" and "Submodule" kept. Fork's LFS and submodule views show downloaded content, chips and a commit graph (Finding 22), more than R6.8 asks; git's own lines are the parity answer. |
+| Mode only | git's mode lines under "Mode changed" | User's decision, 2026-10-03 (it replaced "No change to the file's content"). |
+| Rename with no content change | "Renamed without changes" over git's rename lines | User decision (2026-10-03). |
+| Copy with no content change | "Copied without changes" over git's copy lines | User's decision, 2026-10-03: kept as built, the rename's form. |
+| Rename or copy whose mode moved too | "Renamed, mode changed" ("Copied, mode changed") over git's mode lines, then its rename (copy) lines | User's decision, 2026-10-03; the copy's by analogy with the rename's. |
 | Conflicted | "Unmerged path — conflicts must be resolved before a diff can be shown" | User decision (2026-10-03): git's own "Unmerged path", and why no diff is drawn. |
 | Cut line marker | " … N more bytes", muted, N the bytes not drawn | User decision (2026-10-03). Fork refuses such lines rather than cutting them (Finding 21). |
 | Changes tab summary | author, short id, author date, subject | Fork-measured: Finding 2 (avatar, author, abbreviated SHA, date, subject); no avatar (L9); the date in the user's chosen format. |

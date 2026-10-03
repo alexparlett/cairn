@@ -9,9 +9,10 @@ use cairn_model::{
     Oid, RepoPath, ShownDiff, Similarity, SizeLimit, TextDiff,
 };
 use cairn_ui::{
-    BINARY_FILE, CONFLICTED, DiffNotice, DiffNoticeView, LFS_POINTER, LOAD_DIFF_CAPTION, NEW_SIDE,
-    NO_CHANGES_SHOWN, NO_CONTENT_CHANGE, OLD_SIDE, ONLY_WHITESPACE_CHANGED, SUBMODULE,
-    TOO_LARGE_TO_DISPLAY, size_text,
+    BINARY_FILE, CONFLICTED, COPIED_MODE_CHANGED, COPIED_WITHOUT_CHANGES, DiffNotice,
+    DiffNoticeView, LFS_POINTER, LOAD_DIFF_CAPTION, MODE_CHANGED, NEW_SIDE, NO_CHANGES_SHOWN,
+    NO_CONTENT_CHANGE, OLD_SIDE, ONLY_WHITESPACE_CHANGED, RENAMED_MODE_CHANGED,
+    RENAMED_WITHOUT_CHANGES, SUBMODULE, TOO_LARGE_TO_DISPLAY, size_text,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -127,19 +128,29 @@ fn every_state_that_is_not_text_draws_its_notice() {
         "{large:?}"
     );
     assert_eq!(loads, 1, "Load Diff did not report its press");
-    let (past, loads) = draw(&shown(
-        file(ChangeStatus::Modified),
-        DiffContent::TooLarge {
-            crossed: SizeLimit::Bytes {
-                limit: 67_108_864,
-                measured: 70_000_000,
+    // Past the 64 MiB ceiling: the file's size and the ceiling, in MiB (the user's words,
+    // 2026-10-03) — whichever limit the engine names, since the first ask names the drawing
+    // limit and only a load anyway names the ceiling.
+    for limit in [1_048_576, 67_108_864] {
+        let (past, loads) = draw(&shown(
+            file(ChangeStatus::Modified),
+            DiffContent::TooLarge {
+                crossed: SizeLimit::Bytes {
+                    limit,
+                    measured: 75_812_045,
+                },
+                loadable: false,
             },
-            loadable: false,
-        },
-    ));
-    assert!(past.iter().any(|l| l == TOO_LARGE_TO_DISPLAY), "{past:?}");
-    assert!(!past.iter().any(|l| l == LOAD_DIFF_CAPTION), "{past:?}");
-    assert_eq!(loads, 0);
+        ));
+        assert!(past.iter().any(|l| l == TOO_LARGE_TO_DISPLAY), "{past:?}");
+        assert!(
+            past.iter()
+                .any(|l| l == "72.3 MiB — larger than the 64 MiB Cairn can load"),
+            "{past:?}"
+        );
+        assert!(!past.iter().any(|l| l == LOAD_DIFF_CAPTION), "{past:?}");
+        assert_eq!(loads, 0);
+    }
 
     let pointer = "version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 12345\n";
     let (lfs, _) = draw(&shown(
@@ -184,7 +195,10 @@ fn every_state_that_is_not_text_draws_its_notice() {
     chmod.old_path = chmod.new_path.clone();
     chmod.new_mode = Some(FileMode::Executable);
     let (mode, _) = draw(&shown(chmod, DiffContent::ModeChangeOnly));
-    assert!(mode.iter().any(|l| l == NO_CONTENT_CHANGE), "{mode:?}");
+    // The user's words for a mode-only change (2026-10-03).
+    assert!(mode.iter().any(|l| l == "Mode changed"), "{mode:?}");
+    assert_eq!(MODE_CHANGED, "Mode changed");
+    assert!(!mode.iter().any(|l| l == NO_CONTENT_CHANGE), "{mode:?}");
     assert!(mode.iter().any(|l| l == "old mode 100644"), "{mode:?}");
     assert!(mode.iter().any(|l| l == "new mode 100755"), "{mode:?}");
 
@@ -216,6 +230,70 @@ fn every_state_that_is_not_text_draws_its_notice() {
     ] {
         assert!(renamed.iter().any(|l| l == wanted), "{wanted}: {renamed:?}");
     }
+
+    // A copy with no content change, in the rename's form (Cairn's, by analogy).
+    let (copied, _) = draw(&shown(
+        file(ChangeStatus::Copied(Similarity::from_percent(100))),
+        DiffContent::Text {
+            text: unchanged.clone(),
+            overlay: DisplayOverlay::none(),
+        },
+    ));
+    assert!(
+        copied.iter().any(|l| l == "Copied without changes"),
+        "{copied:?}"
+    );
+    assert_eq!(COPIED_WITHOUT_CHANGES, "Copied without changes");
+    assert!(
+        !copied.iter().any(|l| l == RENAMED_WITHOUT_CHANGES),
+        "a copy titled as a rename: {copied:?}"
+    );
+    for wanted in [
+        "similarity index 100%",
+        "copy from old/name.bin",
+        "copy to new/name.bin",
+    ] {
+        assert!(copied.iter().any(|l| l == wanted), "{wanted}: {copied:?}");
+    }
+
+    // A rename or a copy whose mode moved too: the user's words (2026-10-03, the copy's by
+    // analogy), git's mode lines first, as `git diff` prints them.
+    for (status, title, word) in [
+        (
+            ChangeStatus::Renamed(Similarity::from_percent(100)),
+            "Renamed, mode changed",
+            "rename",
+        ),
+        (
+            ChangeStatus::Copied(Similarity::from_percent(100)),
+            "Copied, mode changed",
+            "copy",
+        ),
+    ] {
+        let mut moved = file(status);
+        moved.new_mode = Some(FileMode::Executable);
+        let (drawn, _) = draw(&shown(moved, DiffContent::ModeChangeOnly));
+        assert!(drawn.iter().any(|l| l == title), "{title}: {drawn:?}");
+        let lines: Vec<String> = drawn
+            .iter()
+            .skip_while(|l| *l != title)
+            .skip(1)
+            .cloned()
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                "old mode 100644".to_owned(),
+                "new mode 100755".to_owned(),
+                "similarity index 100%".to_owned(),
+                format!("{word} from old/name.bin"),
+                format!("{word} to new/name.bin"),
+            ],
+            "{drawn:?}"
+        );
+    }
+    assert_eq!(RENAMED_MODE_CHANGED, "Renamed, mode changed");
+    assert_eq!(COPIED_MODE_CHANGED, "Copied, mode changed");
 
     let (conflicted, _) = draw(&shown(
         file(ChangeStatus::Modified),

@@ -14,6 +14,8 @@ mod session;
 mod shortcuts;
 mod status_text;
 mod window;
+#[cfg(test)]
+mod window_check;
 mod worker;
 
 use std::rc::Rc;

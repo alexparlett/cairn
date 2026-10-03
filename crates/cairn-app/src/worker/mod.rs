@@ -25,6 +25,12 @@ pub use askpass::{PromptId, Reply};
 pub(crate) use diff_tests::{Configurable, changes_answer, checkout, commits, next_update};
 pub use discovery::Discovery;
 #[cfg(test)]
+pub(crate) use expand_all::EXPAND_ALL_LINES;
+#[cfg(test)]
+pub(crate) use fetch_tests::update_within;
+#[cfg(test)]
+pub use pool::Updates;
+#[cfg(test)]
 pub use pool::idle_handle;
 pub use pool::{CLOSE_PATIENCE, Replier, RepositoryHandle, open};
 #[cfg(test)]

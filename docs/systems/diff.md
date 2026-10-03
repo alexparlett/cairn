@@ -1430,7 +1430,16 @@ line, counted from the file), and the last line at the end in both columns
 `crates/cairn-ui/src/diff_notice.rs`; R6.8, C11). `DiffNotice::of` reads a prepared diff by
 naming every state; each draws words that cannot be taken for another state's, git's
 own where git has them (`every_state_that_is_not_text_draws_its_notice`, each state built
-and looked at from a real fixture repository as well):
+and looked at from a real fixture repository as well). Their parity with git is pinned end
+to end by an integration test, which may run `git` itself,
+`every_notice_says_what_git_diff_says_of_the_same_file`
+(`crates/cairn-app/tests/notice_parity.rs`): one commit, built by real `git` with
+`diff.renames=copies`, holding a mode-only change, a rename and a copy with no content
+change, a rename whose mode moved, a submodule bump, a binary, an LFS pointer and a file
+past the drawing limit, each read by the engine, prepared with `ShownDiff::new` and turned
+into its notice, and compared with `git show` of the same file — the extended header line
+for line, the `Subproject commit` lines (never "binary"), each pointer side as git prints
+it, the blob sizes. What each state draws:
 
 | State | Drawn |
 | --- | --- |

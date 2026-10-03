@@ -22,7 +22,14 @@ answers, which `DiffState` checks before the window keeps it; a commit's diff re
 its attributes where git does (the working tree first, nothing from `HEAD`), and the
 diff thread keeps an answer only while every file git read for it is as it was — the
 user's decision "stamp what git reads" — opening its handle again when the
-configuration moves; nothing selects or draws a diff yet (phase 05).** The diff model exists in
+configuration moves. Phase 05 landed (2026-10-03), QA due: choosing a commit asks
+its changes, and the detail pane under the list — draggable, collapsible, Commit and
+Changes tabs, the tab kept for the session — draws the Commit tab (author, committer,
+full timestamps at their offsets, full id, parent links, whole message, a virtualised
+file list with renames' both names and the cut-short notice); the accelerator table
+(R8) and its guarded invariant "no component names a literal modifier" landed, and
+`DiffContent` is held to the RowContent rule in production code. No file's diff is
+drawn yet (phase 06).** The diff model exists in
 `cairn-model`, and `cairn-git` answers R2's two queries: the changes query from
 `git diff-tree` through the process manager (decision E, PRD R2.1, R2.2, R2.9 and C14
 amended), honouring `diff.ignoreSubmodules` and `log.showRoot` as the user's `git log`
@@ -181,6 +188,16 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | `Comparison`, `WorkingSide`, `DiffOptions`, `FileTarget`, `FileQuery`, `DiffQuery` | app (`worker/request.rs`) | Phase 04, R4.4: what a diff request names and its answer names back. |
 | `Request::Changes`/`FileDiff`/`ExpandAll`, `Update::Changes`/`FileDiff`/`FileDiffs`/`DiffFailed`, `Request::lane()` | app (`worker/request.rs`) | Phase 04: the diff boundary; `lane()` replaced `is_query()`. A superseded query sends nothing. |
 | `DiffState`, `Answer`, `Expanded` | app (`src/diff_state.rs`) | Phase 04, R4.4: the diff selection in `View::diff`; an answer is kept only when it names what is selected now. |
+| `cairn_ui::accelerators` (`Action`, `Os`, `Chord`, `chord`, `resolve_key`, `resolve_key_on`, `resolve_press_on`) | ui | Phase 05, R8: the accelerator table; one chord per action per platform; `Chord::key_press` is for headless tests only. |
+| `CommitTab`, `DETAIL_ROW_HEIGHT`, `cut_short_notice`, `status_letter`, `file_text` | ui (`commit_tab.rs`) | Phase 05, R5.3/R5.5: the Commit tab as one fixed-row virtualised list over a `Readable<ChangeSet>`; `on_parent`. |
+| `DetailTab`, `DetailTabs`, `DETAIL_STRIP_HEIGHT` | ui (`detail_tabs.rs`) | Phase 05, R5.2: the strip, its tabs and the collapse control. |
+| `HistoryList::controller`, `reveal_row` | ui (`history_list.rs`) | Phase 05: the list scrolled by a shared controller, so a parent link reveals its row; a key the table resolves is left alone. |
+| `date_text::git_default` | ui (private) | Phase 05: git's default date format at the recorded offset. |
+| `selection::{comparison_of, choose, loaded_row}` | app (`src/selection.rs`) | Phase 05: a row chosen asks its changes through `DiffState`; `comparison_of` names every `RowId`. |
+| `DetailPane`, `NOTHING_SELECTED`, `READING`, `CHANGES_NOT_BUILT`, `NOT_ONE_COMMIT` | app (`src/detail_pane.rs`) | Phase 05: the pane, drawing an answer only for the selection now. |
+| `shortcuts::act` | app (`src/shortcuts.rs`) | Phase 05: what each `Action` does; the diff actions are placed and act from phases 06-08. |
+| `View::{history_scroll, detail_tab, pane_collapsed, pane_height}`, `window::PANE_HEIGHT`, `diff_state::answered_changes` | app | Phase 05: session state of the pane; the change set as the Commit tab reads it. |
+| `names_a_literal_modifier`, `MODIFIER_IDENTS`, `MODIFIER_METHODS`, `MODIFIER_TEXT`, `reads_enum_partially` | guards | Phase 05: the R8.3 matcher; the RowContent matcher generalised to `DiffContent`. |
 | `Error::ChangesCancelled`, `ContentCancelled`, `ContentReadsDisagree`, `DiffSetup`, `DiffFile`, `UnexpectedGitOutput`, `InvalidConfig`, `NotAWorkTreePath` | git | What the caller of a diff query must handle; `TreeDiff` went with the gix tree walk. `ContentReadsDisagree` is the stale-read guard: git printed lines that are not the lines gix read; ask again. `NotAWorkTreePath`: an untracked path that is empty, absolute or has a `.`/`..` component, refused before anything runs. |
 
 ## Validation status
@@ -191,7 +208,7 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | 02 engine, commits | landed 2026-09-18; changes query reworked onto `git diff-tree` 2026-10-03 (decision E) | `scripts/gate.sh` PASS, `git-floor` included | done over the reworked phase (2026-10-03), adjudicated by `qa-confirm`; confirmed findings fixed. C6 audit done (2026-10-03, adjudicated): F2-F7 fixed; F1 closed by the content-parity rework (landed 2026-10-03, `scripts/gate.sh` PASS with `git-floor`): R2.4 and R2.8 parity enforced under every algorithm and over real history. QA of the content rework (round 3, 2026-10-03): 21 raw, 16 confirmed by `qa-confirm`, S3 dismissed, S1/R2/G4 escalated and decided by the user; **phase 02 QA round 3 fixed** — every confirmed finding fixed or recorded (R2 above, for phase 08; G4 as issue #51), `scripts/gate.sh` PASS with `git-floor` |
 | 03 engine, working tree | landed 2026-10-03; **phase 03 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 19 raw, 16 confirmed by `qa-confirm`, QC3 dismissed; every confirmed finding fixed test-first (`progress.md`); the `diff --no-index` exception accepted by the user (2026-10-03); a full read-verb roster guard is a candidate follow-up for the user |
 | 04 worker lanes | landed 2026-10-03; **phase 04 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 17 raw, 15 confirmed plus escalations; the user decided freshness ("stamp what git reads"); every confirmed finding fixed test-first, Expand All's per-file outcomes deferred to phase 08 — `progress.md` |
-| 05 detail pane | not started | — | — |
+| 05 detail pane | landed 2026-10-03; **phase 05 landed, QA due** | `scripts/gate.sh` PASS, `git-floor` included | due: `responsiveness-reviewer`, `gate-integrity-reviewer`, `test-coverage-auditor`, `qa-checklist`, adjudicated by `qa-confirm` |
 | 06 unified diff view | not started | — | — |
 | 07 Changes tab and side-by-side | not started | — | — |
 | 08 expansion and compare | not started | — | — |

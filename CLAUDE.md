@@ -729,4 +729,5 @@ same fork and rev as `freya`): `crates/cairn-ui/tests/` for components, and
   found once, the network lane and its refusal, and closing.
   `diff.md`: how a change to a file is described — one exact answer, its hunk,
   row and patch projections, the reference applier that checks the emitter,
-  and the two engine queries that fill it from a repository. No view yet.
+  and the two engine queries that fill it from a repository; the detail pane
+  and its Commit tab as built; and the accelerator table's contract.

@@ -3,6 +3,103 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-03 — Phase 05: the detail pane, the Commit tab and the accelerator table
+
+Packet mode, committed to `feature/diff-engine`. QA is the orchestrator's, after this
+entry (the phase doc's STEP 1 and STEP 3 were overridden for this session: context read
+directly, no subagents).
+
+**Shipped.** Choosing a row (`selection::choose`) sets the selection and asks
+`DiffState::select_changes`, submitting `Request::Changes`; the same row again asks
+nothing unless its answer failed. The detail pane (`detail_pane.rs`, a component of its
+own) sits under the list in Freya's `ResizableContainer` — draggable, 90 px minimum,
+collapsed by the strip's control or by dragging 24 px past the minimum, reopened at its
+last dragged height — with Commit (default) and Changes tabs kept in `View::detail_tab`
+for the session. The Commit tab (`cairn_ui::CommitTab`) is ONE fixed-row
+`VirtualScrollView`: AUTHOR/COMMITTER columns (`Name <email>`, full timestamp in git's
+default date format at its own offset), SHA (40 digits), PARENTS (7-digit links), the
+message line by line (subject larger and bold, nothing re-wrapped), git's cut-short
+rename warning with the `diff.renameLimit` needed, and one row per file (its
+`--name-status` letter, both names for a rename or a copy). The accelerator table
+(`cairn_ui::accelerators`) maps the twelve R8.2 actions to one chord per `Os`; the
+window resolves every key press through it (`on_global_key_down`) and acts in
+`shortcuts::act`: the tab chords act now, the diff actions resolve and act from phases
+06-08. The history list leaves a key the table resolves alone.
+
+**C10 (the parts this phase lands) and C13, each test's mutation RED then GREEN**
+(every mutation applied with `sed`, the test run, the file restored; GREEN after):
+
+| Test | Decides | Mutation that turned it RED |
+| --- | --- | --- |
+| `the_commit_tab_shows_every_field_r5_3_names` (`crates/cairn-ui/tests/commit_tab.rs`) | both people, both timestamps as `git log --format=fuller` prints them, the full id, both parents, every message line, a rename's two names, status letters | committer drawn as the author ("does not show Grace Hopper"); timestamps rendered in UTC ("does not show Wed Nov 15 03:43:20 2023 +0530") |
+| `only_a_viewport_of_files_is_built_however_many_the_commit_touched` | R5.5 at 1,000 and 55,184 files, top and deep | item size 1 px: "467 file rows were built for a 20-row viewport" |
+| `a_cut_short_rename_search_is_said_above_the_files`, `a_parent_link_reports_its_parent`, `another_commits_answer_replaces_every_row_of_the_last`, `the_strip_reports_its_tabs_and_its_collapse` | the notice, the link's own parent, no stale rows, the strip | — (shape tests; the window tests below carry the mutations) |
+| `the_commit_tab_draws_the_answer_for_the_row_selected_and_no_other` (`window.rs`) | R4.4 at the draw site: the answer of the row selected now and no other | the pane's selection filter removed: "row 3's answer is drawn with row 4 selected" |
+| `the_tab_chosen_is_kept_across_selections_and_a_collapse` | C10's kept tab | `choose` resetting the tab to Commit |
+| `a_parent_link_selects_a_loaded_parent_and_ignores_an_unloaded_one` | loaded parent selected, asked for and revealed; unloaded does nothing | reveal removed ("not brought into view"); an unloaded parent following index 0 ("changed something") |
+| `the_splitter_drags_and_the_pane_keeps_its_height` | R5.1's splitter and the remembered height | — (drag driven headlessly through the real handle) |
+| `every_action_resolves_through_the_table_on_every_platform` (`accelerators.rs`) | C13: every action, both platforms, resolves back | the Changes-tab chord set to the Commit tab's: "does not resolve to it" |
+| `a_chord_needs_exactly_its_modifiers_and_ignores_the_locks`, `chords_are_distinct_and_every_one_holds_a_modifier`, `the_command_key_is_the_platforms_own`, `a_physical_chord_is_matched_by_where_the_key_sits` | the matching rule | `contains` for equality: Ctrl+Shift+↓ resolved to NextChange |
+| `the_tab_chords_resolve_through_the_table` (`window.rs`) | C13 through the window | the ShowChangesTab arm emptied |
+| `an_accelerators_chord_does_not_move_the_selection` (`history_list.rs`) | the list leaves the table's chords alone | the resolve check disabled: Ctrl+↓ moved the commit selection |
+
+**The guard (R8.3), RED shown.** `no_component_names_a_literal_modifier` over every file
+of `crates/cairn-ui/src` and `crates/cairn-app/src`, test modules blanked, but
+`crates/cairn-ui/src/accelerators.rs` (which must exist, and in which the matcher must
+find a modifier). Planted `pub const PLANTED: freya::prelude::Modifiers =
+freya::prelude::Modifiers::CONTROL;` in `detail_tabs.rs`: RED ("detail_tabs.rs:185
+names a keyboard modifier"); planted `(Ctrl+Alt+2 for Changes)` in a `detail_pane.rs`
+string: RED (line 22); removed: GREEN. The self-test covers an aliased import of the
+type, a constant through the alias, a qualified path, a constant defined beside a
+component, a constant of the key type, an aliased `NamedKey`, a glob of its variants, a
+physical modifier key, the OS-aware helper and its trait, predicates by inference and
+wrapped, `::Fn`, and chords spelled in strings (Linux and macOS); and ignores Rust's
+`Fn` trait, a resolved action, comments, identifiers containing a name, `.alt(text)`,
+words in strings, a test module and a plain key. Found while writing it: the guards'
+`code_only` copies a string's bytes one `char` each, so non-ASCII literal text arrives
+Latin-1-widened; the matcher widens its spellings the same way (the `⌘` self-test case
+fails if either side changes). The shared helper was left as it is: changing it is a
+change to every guard.
+
+**DiffContent: generalised, not accepted in writing.** The first readers outside
+`cairn-model` landed in phase 04 (`worker/diff_answers.rs`, an exhaustive match). The
+RowContent matcher is now `reads_enum_partially(source, name)`, and
+`every_view_of_a_file_diff_names_every_state` holds every crate's `src/` but
+`cairn-model`'s and `cairn-guards'` to it for `DiffContent`, in production code only —
+test modules, files declared under `#[cfg(test)] mod x;` (`test_only_module_files`) and
+`tests/` left out, since `matches!(diff, DiffContent::Binary { .. })` in a test is an
+assertion. RED: `diff_answers.rs`'s seven named states collapsed to `_ => 0` failed it
+at line 179. Residual (qa-checklist item 11): a test helper a view could call.
+
+**Decisions made without asking** (Fork's behaviour where the research left it open):
+
+- **Both people always.** Fork may omit the committer when it equals the author (OPEN in
+  the research); Cairn draws both, as R5.3 says and as `git log --format=fuller` does.
+- **Dates in git's default format** at the recorded offset, unpadded day
+  (`Tue Nov 14 21:43:20 2023 -0030`): the parity rule over Fork's localized format.
+- **The whole tab scrolls as one list** (Fork's Commit tab is one scrolling area), with
+  fixed rows: message lines are never wrapped (git never re-wraps one) and a long line or
+  path scrolls sideways instead of being truncated — Fork trims a path from the start;
+  Freya has no start-ellipsis, and truncating would hide data.
+- **No PARENTS row for a root commit**; an empty commit says "No files changed."
+- **Collapsing**: Fork collapses with a chord (⌘D / Ctrl+Shift+D, 2026); the table gets
+  none here — Ctrl+Shift+D is Fork-Windows' discard, which the staging packet will want —
+  so the strip's Collapse/Expand control and Fork's drag-past-the-edge gesture collapse
+  it, and a collapsed pane keeps its strip. A tab pressed, or a tab chord, opens it.
+- **Chords Fork does not document** (previous/next file Alt+↑/↓, ⌥↑/↓; side-by-side
+  Ctrl+Alt+S; ignore whitespace Ctrl+Alt+I; more/fewer lines Ctrl+Alt+] / [; entire file
+  Ctrl+Alt+E; ⌘⌥ on macOS). ⌘⌥=/- were avoided (macOS accessibility zoom), ⌘⌥W
+  (close all windows). Digits and letters are matched by physical key. The table is
+  `docs/systems/diff.md`, "The accelerator table".
+- **Choosing the row already chosen asks nothing new** unless its answer failed.
+- **Two tabs as two actions** (Show Commit tab, Show Changes tab), as Fork's ⌘⌥1/⌘⌥2,
+  for R8.2's "switch tab".
+
+**Deferred, as planned:** a file expanded in place, Expand All and its budget (08); the
+Changes tab's contents (07); diff rows and the diff actions' effects (06-08); the
+modifier-press for a second commit (08 — pointer events carry no modifiers in the fork,
+so 08 tracks them through the table).
+
 ## 2026-10-03 — Phase 04 QA: every confirmed finding fixed, test-first; freshness is "stamp what git reads"
 
 Packet mode, committed to `feature/diff-engine`. **The round:** 17 raw findings over

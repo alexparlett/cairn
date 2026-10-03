@@ -9,8 +9,9 @@ selection of lines; `cairn-git` answers what a commit or a comparison changed,
 what one of those changes is, line by line, and one path's staged, unstaged or
 untracked diff in the working tree, against a real repository; and the
 application asks those queries on a thread of their own and keeps each answer for
-the selection it names ("In the application", below). No
-component draws one and nothing stages anything — the patch emitter still ships
+the selection it names ("In the application", below). The window draws a
+commit's details and its changed files in the detail pane's Commit tab ("The
+detail pane", below); no component draws a file's diff yet, and nothing stages anything — the patch emitter still ships
 with no caller, deliberately (program decision L2 in
 `docs/work/daily-loop/brainstorm.md`), because its round-trip tests are what make
 a later staging packet a feature rather than a rewrite. Which paths of a working
@@ -1119,7 +1120,129 @@ the file and the expansion, whose lane it supersedes. That is a second filter
 behind the epoch: it refuses an answer whose epoch is still current but whose
 selection has gone, such as one that arrives after the selection was cleared
 (`an_answer_naming_another_selection_is_never_drawn`, through the real worker).
-Nothing draws the state yet, and no click selects anything.
+Choosing a row of the history (`crates/cairn-app/src/selection.rs`, `choose`) sets
+the selection and asks `DiffState::select_changes` for its comparison, submitting the
+`Request::Changes` it returns; choosing the row already chosen asks nothing new unless
+its answer failed. The row's comparison is `selection::comparison_of`, a match naming
+every `RowId` variant, so a row that is not a commit does not compile until it says
+what it compares. A file and Expand All are not selected by anything yet (phases
+06-08).
+
+## The detail pane
+
+As-built for PRD R5.1-R5.3 and R5.5 (Expand All and a file expanded in place are
+phase 08's; the Changes tab's contents phase 07's). The layout is Fork's (decision L9).
+
+**Where it sits** (`crates/cairn-app/src/window.rs`, `split`). Below the commit list,
+in a Freya `ResizableContainer`: the list a proportional panel that keeps at least
+80 px, the pane a pixel panel opening at `PANE_HEIGHT` and dragged no smaller than
+90 px; dragging it 24 px past that collapses it, Fork's gesture, as does the strip's
+Collapse control. A collapsed pane keeps its strip of tabs under a list that takes
+the rest, and opens again from the strip's Expand control, a tab pressed, or a tab's
+chord; it opens at the height it was last dragged to
+(`the_splitter_drags_and_the_pane_keeps_its_height`). No plain `ScrollView` is
+involved: the exceptions roster stays empty.
+
+**The tabs** (`cairn_ui::DetailTabs`, `crates/cairn-ui/src/detail_tabs.rs`). Commit,
+the default, and Changes, as text tabs with no count, the shown one underlined. The
+tab chosen is the window's `View::detail_tab`, created once per window, so it is kept
+across every selection and every collapse for the session
+(`the_tab_chosen_is_kept_across_selections_and_a_collapse`). The Changes tab says it is
+not built yet.
+
+**What the Commit tab draws, and when** (`crates/cairn-app/src/detail_pane.rs`). The
+pane is a component of its own, so an answer arriving redraws it and not the window.
+With nothing selected it says so; otherwise it draws the change set only when
+`DiffState` holds the answer for the comparison of the row selected NOW — whatever it
+holds for any other is not drawn, even if it is ready
+(`the_commit_tab_draws_the_answer_for_the_row_selected_and_no_other`). While the
+answer is on its way it says it is reading; a failure is drawn in the error colour;
+a change set with no details (a comparison of two commits, phase 08) is not described
+by this tab.
+
+**The tab itself** (`cairn_ui::CommitTab`, `crates/cairn-ui/src/commit_tab.rs`), in
+Fork's order: AUTHOR and COMMITTER in two columns, each `Name <email>` and the full
+timestamp at its own offset in git's default date format
+(`Tue Nov 14 21:43:20 2023 -0030`, `date_text::git_default`, pinned against `git log`
+by `a_timestamp_reads_as_git_prints_it_at_its_own_offset`); the full 40-digit id
+beside SHA; each parent's 7-digit short id beside PARENTS, as a link (no PARENTS row
+for a root commit); a rule; every line of the message as written — the subject in a
+larger bold face, no line re-wrapped, the newline git ends a message with not a line
+of its own; a rule; git's own "exhaustive rename detection was skipped" warning with
+the `diff.renameLimit` git asks for, when the search was cut short; and one row per
+changed file, its `--name-status` letter in a colour and as a letter, and its path —
+both paths, `old → new`, for a rename or a copy
+(`the_commit_tab_shows_every_field_r5_3_names`;
+`a_cut_short_rename_search_is_said_above_the_files`). No avatar, no ref chips, no
+network call. The author and the committer are both drawn always, as git's `fuller`
+format draws them.
+
+**It is one virtualised list** (R5.5). Header, message lines and files are rows of one
+`VirtualScrollView` at a fixed `DETAIL_ROW_HEIGHT`, so a commit touching 55,184 paths
+builds one viewport of rows at the top and scrolled deep
+(`only_a_viewport_of_files_is_built_however_many_the_commit_touched`). The tab is
+handed a `Readable` over the window's `DiffState` (`diff_state::answered_changes`),
+not a copy of the change set: per render it builds the header — proportional to the
+message, never to the files — and each file row reads its file by index. A line wider
+than the pane scrolls sideways rather than being cut, so a long path or message line
+is never truncated; the sideways extent is the widest row built. The list is keyed by
+the commit, so another commit opens at its top, and every row it built is replaced
+(`another_commits_answer_replaces_every_row_of_the_last`).
+
+**Parent links** (`detail_pane::follow_parent`). A parent loaded in the history is
+selected — its changes asked for through `selection::choose` — and its row brought
+into view through the list's shared `ScrollController` (`cairn_ui::reveal_row`); a
+parent not loaded does nothing visible, since reaching it is issue #3
+(`a_parent_link_selects_a_loaded_parent_and_ignores_an_unloaded_one`). Finding the
+parent scans the loaded rows once per press (`selection::loaded_row`), never per
+frame.
+
+## The accelerator table
+
+As-built for PRD R8 and decision D5 (`crates/cairn-ui/src/accelerators.rs`). Every
+shortcut is an `Action` mapped by `accelerators::chord(action, os)` to one `Chord`
+per `Os` — macOS, and Linux for every other platform. The table is data: one match
+naming every action. A chord holds its modifiers exactly (caps lock and num lock are
+ignored, an extra Shift is not), and is completed by a key that names itself (an
+arrow, matched by the key), by a key where it sits (a digit or a letter, matched by
+its physical position, since Option turns `1` into `¡` on macOS), or by a primary
+pointer press.
+
+| Action | Linux | macOS |
+| --- | --- | --- |
+| previous / next change | Ctrl+↑ / Ctrl+↓ | ⌘↑ / ⌘↓ |
+| previous / next file | Alt+↑ / Alt+↓ | ⌥↑ / ⌥↓ |
+| toggle side-by-side | Ctrl+Alt+S | ⌘⌥S |
+| toggle ignore whitespace | Ctrl+Alt+I | ⌘⌥I |
+| more lines / fewer lines | Ctrl+Alt+] / Ctrl+Alt+[ | ⌘⌥] / ⌘⌥[ |
+| entire file | Ctrl+Alt+E | ⌘⌥E |
+| extend the selection to a second commit | Ctrl+press | ⌘+press |
+| Commit tab / Changes tab | Ctrl+Alt+1 / Ctrl+Alt+2 | ⌘⌥1 / ⌘⌥2 |
+
+Fork's chords where Fork documents one (change navigation, the tabs, the second
+commit); Cairn's own elsewhere, chosen clear of the desktop's and of the staging keys
+a later packet takes from Fork. Every chord holds a modifier: an unmodified key
+belongs to whatever has focus.
+
+**The contract.** A component asks `accelerators::resolve_key` which action a key
+press is, and never reads the held keys itself; the module's public surface speaks
+actions and chords, never a modifier a caller could branch on — but for
+`Chord::key_press`, which hands a chord's keys to a headless test so it presses a
+chord through the table rather than spelling one. The window resolves
+every key press through it wherever focus is (`on_global_key_down` on its root) and
+acts in `crates/cairn-app/src/shortcuts.rs`, one arm per action: the two tab chords
+show their tab, opening a collapsed pane; the others resolve today and act once the
+view they move exists (phases 06-08). The history list leaves a key the table
+resolves alone, so Ctrl+↓ is "next change", not "next commit"
+(`an_accelerators_chord_does_not_move_the_selection`). Pinned by
+`every_action_resolves_through_the_table_on_every_platform`,
+`chords_are_distinct_and_every_one_holds_a_modifier`,
+`the_command_key_is_the_platforms_own`,
+`a_chord_needs_exactly_its_modifiers_and_ignores_the_locks`,
+`a_physical_chord_is_matched_by_where_the_key_sits`, and
+`the_tab_chords_resolve_through_the_table` through the window. That no component names
+a literal modifier is the guard `no_component_names_a_literal_modifier` (root
+`CLAUDE.md`, Invariants).
 
 ## What a commit's details carry
 

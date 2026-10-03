@@ -9,9 +9,9 @@ use cairn_guards::{
     calls_nullary_method, code_only, code_without_strings, code_without_test_modules,
     configures_process_environment, constructs_named_struct, constructs_process_command,
     constructs_struct, declared_dependencies, declares_publicly, derives_or_implements,
-    implements_type, mentions_crate, names_gitoxide_mutation, reads_row_content_partially,
-    renames_type, renders_in_a_macro, repo_root, rust_sources, spawns_git,
-    structs_with_a_field_naming, types_containing, waits_on_work,
+    implements_type, job_env_entries, mentions_crate, names_gitoxide_mutation,
+    reads_row_content_partially, renames_type, renders_in_a_macro, repo_root, rust_sources,
+    spawns_git, structs_with_a_field_naming, types_containing, waits_on_work,
 };
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
@@ -3377,8 +3377,10 @@ fn ci_runs_every_merge_bar_gate_step() {
 
 /// The partial-clone pin of `GIT_NO_LAZY_FETCH` skips on a git older than 2.44, which ignores
 /// the variable, and a passing test's stderr is hidden, so `CAIRN_REQUIRE_NO_LAZY_FETCH` is
-/// what turns that skip into a failure on the merge bar. Pinned here: CI sets it, and the
-/// test still reads it in its skip branch (without that, setting it would change nothing).
+/// what turns that skip into a failure on the merge bar. Pinned here: CI sets it in the
+/// `gate` job's own `env:`, which every step of that job sees — not in another job, and not
+/// on one step, where `test-full` would not see it — and the test still reads it in its
+/// skip branch (without that, setting it would change nothing).
 #[test]
 fn the_partial_clone_pin_is_required_in_ci() {
     let root = repo_root();
@@ -3389,10 +3391,12 @@ fn the_partial_clone_pin_is_required_in_ci() {
     let authority = read("crates/cairn-git/src/ops/authority.rs");
 
     assert!(
-        ci.lines()
-            .any(|line| line.trim() == "CAIRN_REQUIRE_NO_LAZY_FETCH: 1"),
-        ".github/workflows/ci.yml no longer sets `CAIRN_REQUIRE_NO_LAZY_FETCH: 1`, so the \
-         partial-clone test of GIT_NO_LAZY_FETCH would skip silently on a git older than 2.44."
+        job_env_entries(&ci, "gate")
+            .iter()
+            .any(|entry| entry == "CAIRN_REQUIRE_NO_LAZY_FETCH: 1"),
+        ".github/workflows/ci.yml's `gate` job no longer sets `CAIRN_REQUIRE_NO_LAZY_FETCH: 1` \
+         in its own `env:`, so the partial-clone test of GIT_NO_LAZY_FETCH would skip silently \
+         on a git older than 2.44."
     );
     let test = authority
         .split("fn a_read_in_a_partial_clone_does_not_fetch_a_missing_object()")
@@ -3409,7 +3413,8 @@ fn the_partial_clone_pin_is_required_in_ci() {
 /// The ssh acceptance criteria (`crates/cairn-git/tests/fetch.rs`) skip where the fixture's
 /// `sshd` cannot run, and a passing test's stderr is hidden, so `CAIRN_REQUIRE_SSH_FIXTURE`
 /// is what turns a skip into a failure. Pinned here: CI sets it unconditionally (it
-/// installs the server), the gate's `test-full` step sets it wherever the fixture would
+/// installs the server) in the `gate` job's own `env:`, which every step of that job sees,
+/// the gate's `test-full` step sets it wherever the fixture would
 /// find an `sshd`, and the gate looks for one in every directory the fixture does — a
 /// directory dropped from the gate alone would bring the silent skip back on that machine.
 /// Each is a line-level check, so none can pass on an empty read.
@@ -3424,10 +3429,12 @@ fn the_ssh_criteria_are_required_wherever_they_can_run() {
     let fixture = read("crates/cairn-git/tests/remotes/ssh.rs");
 
     assert!(
-        ci.lines()
-            .any(|line| line.trim() == "CAIRN_REQUIRE_SSH_FIXTURE: 1"),
-        ".github/workflows/ci.yml no longer sets `CAIRN_REQUIRE_SSH_FIXTURE: 1`, so the ssh \
-         acceptance criteria would skip silently in CI wherever the fixture cannot run."
+        job_env_entries(&ci, "gate")
+            .iter()
+            .any(|entry| entry == "CAIRN_REQUIRE_SSH_FIXTURE: 1"),
+        ".github/workflows/ci.yml's `gate` job no longer sets `CAIRN_REQUIRE_SSH_FIXTURE: 1` \
+         in its own `env:`, so the ssh acceptance criteria would skip silently in CI wherever \
+         the fixture cannot run."
     );
     assert!(
         ci.lines().any(|line| line.contains("openssh-server")),
@@ -3471,6 +3478,61 @@ fn the_ssh_criteria_are_required_wherever_they_can_run() {
             "the ssh fixture looks for sshd in {dir} but scripts/gate.sh's \
              require_ssh_fixture_where_possible does not, so on a machine whose sshd is only \
              there the gate would not require the fixture and the criteria would skip silently."
+        );
+    }
+}
+
+/// The two `CAIRN_REQUIRE_*` pins read a job's own `env:` block; this is that reading,
+/// against the shapes it must refuse as well as the one it must find.
+#[test]
+fn the_workflow_env_matcher_reads_only_the_jobs_own_block() {
+    let wanted = "CAIRN_REQUIRE_SSH_FIXTURE: 1";
+    let finds = |workflow: &str| {
+        job_env_entries(workflow, "gate")
+            .iter()
+            .any(|entry| entry == wanted)
+    };
+    let in_the_job = "jobs:\n  gate:\n    runs-on: x\n    # why\n    env:\n      # why\n      \
+                      CAIRN_REQUIRE_SSH_FIXTURE: 1\n      OTHER: 2\n    steps:\n      - run: a\n";
+    assert!(finds(in_the_job), "the job's own env was not read");
+    assert_eq!(
+        job_env_entries(in_the_job, "gate"),
+        vec![wanted.to_owned(), "OTHER: 2".to_owned()],
+        "comments are not entries, and every entry is read"
+    );
+
+    for (shape, workflow) in [
+        (
+            "the workflow's env",
+            "env:\n  CAIRN_REQUIRE_SSH_FIXTURE: 1\njobs:\n  gate:\n    steps:\n      - run: a\n",
+        ),
+        (
+            "another job's env",
+            "jobs:\n  gate:\n    steps:\n      - run: a\n  git-floor:\n    env:\n      \
+             CAIRN_REQUIRE_SSH_FIXTURE: 1\n",
+        ),
+        (
+            "one step's env",
+            "jobs:\n  gate:\n    steps:\n      - name: Run full test suite\n        env:\n          \
+             CAIRN_REQUIRE_SSH_FIXTURE: 1\n        run: a\n",
+        ),
+        (
+            "a comment",
+            "jobs:\n  gate:\n    env:\n      # CAIRN_REQUIRE_SSH_FIXTURE: 1\n    steps: []\n",
+        ),
+        (
+            "a job whose name only starts the same",
+            "jobs:\n  gate-extra:\n    env:\n      CAIRN_REQUIRE_SSH_FIXTURE: 1\n",
+        ),
+        (
+            "an env after the job ends",
+            "jobs:\n  gate:\n    steps: []\n  other:\n    env:\n      \
+             CAIRN_REQUIRE_SSH_FIXTURE: 1\n",
+        ),
+    ] {
+        assert!(
+            !finds(workflow),
+            "the env matcher counted {shape} as the gate job's own: {workflow:?}"
         );
     }
 }

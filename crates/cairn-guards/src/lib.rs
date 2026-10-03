@@ -1624,6 +1624,45 @@ pub fn spawns_git(source: &str) -> Vec<usize> {
         .collect()
 }
 
+/// The entries of one job's own `env:` block in a GitHub Actions workflow, trimmed — the
+/// variables every step of that job sees. A job is the block from its two-space-indented
+/// key (`  gate:`) to the next two-space-indented key; its `env:` is the one indented four
+/// spaces directly under it, so a workflow-level `env:`, another job's, and a step's own
+/// (`        env:`, which only that step sees) are none of them. Comments and blank lines
+/// are not entries.
+pub fn job_env_entries(workflow: &str, job: &str) -> Vec<String> {
+    let indent = |line: &str| line.len() - line.trim_start().len();
+    let meaningful = |line: &str| {
+        let trimmed = line.trim();
+        !trimmed.is_empty() && !trimmed.starts_with('#')
+    };
+    let header = format!("  {job}:");
+    let mut lines = workflow
+        .lines()
+        .skip_while(|line| line.trim_end() != header);
+    if lines.next().is_none() {
+        return Vec::new();
+    }
+    let body: Vec<&str> = lines
+        .take_while(|line| !(meaningful(line) && indent(line) <= 2))
+        .collect();
+    let mut entries = Vec::new();
+    let mut in_env = false;
+    for line in body {
+        if !meaningful(line) {
+            continue;
+        }
+        if indent(line) == 4 {
+            in_env = line.trim_end() == "    env:";
+            continue;
+        }
+        if in_env && indent(line) > 4 {
+            entries.push(line.trim().to_owned());
+        }
+    }
+    entries
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

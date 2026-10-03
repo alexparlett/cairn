@@ -673,6 +673,122 @@ pub fn signed_by_two_people() -> Repo {
     repo
 }
 
+/// What one crafted commit exercises, the encoding its header names (`None`: no header),
+/// and its author's name, its committer's name and its message, as bytes.
+type EncodedCommit = (
+    &'static str,
+    Option<&'static str>,
+    &'static [u8],
+    &'static [u8],
+    &'static [u8],
+);
+
+/// One commit per way git reads a commit's text, each naming the encoding it was written
+/// in (or not), chained from a root commit so a history walk reaches every one; written
+/// byte for byte with `git hash-object`, since `git commit` would re-encode them. Returns
+/// the repository and the crafted commits, oldest first, each with what it exercises.
+///
+/// ISO-8859-1 under two of the names iconv knows it by, and as `Latin-1`, a name iconv
+/// refuses and git renames to it; with C1 control bytes that windows-1252 would read as
+/// letters; windows-1252 with its letters in `0x80..=0x9f`; and the ways git prints a
+/// commit's bytes unconverted — a byte windows-1252 leaves undefined (in the message only,
+/// so the names show the whole object falls back), a high byte under US-ASCII, an encoding
+/// neither iconv nor git knows, and no header over bytes that are not UTF-8.
+pub fn encoded_commits() -> (Repo, Vec<(Oid, &'static str)>) {
+    let repo = Repo::new("encodings");
+    repo.write("f.txt", b"one\n");
+    let root = repo.commit("root");
+    let tree = repo.git(&["rev-parse", "HEAD^{tree}"]).trim().to_owned();
+    let cases: [EncodedCommit; 8] = [
+        (
+            "ISO-8859-1",
+            Some("ISO-8859-1"),
+            b"Ren\xe9 M\xfcller \x80",
+            b"Fran\xe7ois",
+            b"Caf\xe9 \xa4 \x80\x9f \xff\n\nThe body, \xe0 la carte.\n",
+        ),
+        (
+            "latin1, another of its names",
+            Some("latin1"),
+            b"J\xf6rg",
+            b"J\xf6rg",
+            b"\xc0 propos\n",
+        ),
+        (
+            "windows-1252",
+            Some("windows-1252"),
+            b"Ren\xe9 \x80",
+            b"Fran\xe7ois \x9f",
+            b"Caf\xe9 \x80 \x93quoted\x94 \x85\n\n\x96 a dash\n",
+        ),
+        (
+            "windows-1252 with a byte it leaves undefined",
+            Some("cp1252"),
+            b"Ren\xe9",
+            b"Ren\xe9",
+            b"undefined \x81 here\n",
+        ),
+        (
+            "US-ASCII with a high byte",
+            Some("US-ASCII"),
+            b"Ren\xe9",
+            b"Ren\xe9",
+            b"Caf\xe9\n",
+        ),
+        (
+            "an encoding iconv does not know",
+            Some("x-no-such-encoding"),
+            b"Ren\xe9",
+            b"Ren\xe9",
+            b"Caf\xe9\n",
+        ),
+        (
+            "a name iconv refuses and git renames",
+            Some("Latin-1"),
+            b"Ren\xe9",
+            b"Ren\xe9",
+            b"Caf\xe9\n",
+        ),
+        (
+            "no header over bytes that are not UTF-8",
+            None,
+            b"Ren\xe9",
+            b"Ren\xe9",
+            b"Caf\xe9 and caf\xc3\xa9\n",
+        ),
+    ];
+    let mut parent = root;
+    let mut made = Vec::new();
+    for (n, (what, encoding, author, committer, message)) in cases.into_iter().enumerate() {
+        let mut object = format!("tree {tree}\nparent {parent}\n").into_bytes();
+        let stamp = format!(" {} +0000\n", EPOCH + n as i64 * 60);
+        for (role, name) in [("author", author), ("committer", committer)] {
+            object.extend_from_slice(format!("{role} ").as_bytes());
+            object.extend_from_slice(name);
+            object.extend_from_slice(b" <");
+            object.extend_from_slice(name);
+            object.extend_from_slice(b"@example.com>");
+            object.extend_from_slice(stamp.as_bytes());
+        }
+        if let Some(encoding) = encoding {
+            object.extend_from_slice(format!("encoding {encoding}\n").as_bytes());
+        }
+        object.push(b'\n');
+        object.extend_from_slice(message);
+        let id = repo
+            .try_git(
+                &["hash-object", "-t", "commit", "-w", "--stdin"],
+                &[],
+                Some(&object),
+            )
+            .unwrap_or_else(|e| panic!("writing the {what} commit: {e}"));
+        parent = Oid::parse(id.trim()).unwrap_or_else(|e| panic!("{id:?} is not an id: {e}"));
+        made.push((parent, what));
+    }
+    repo.git(&["update-ref", "refs/heads/main", &parent.to_string()]);
+    (repo, made)
+}
+
 /// Submodules — gitlinks, mode `160000` — beside an inexact rename, in two commits.
 ///
 /// `.gitmodules` names `s` after its path and `t` as `named`; `u` is a gitlink it does not

@@ -9,6 +9,7 @@ use cairn_model::{CommitSummary, HistoryRow, LaneAssigner, Oid, RowContent};
 
 pub use session::HistorySession;
 
+use crate::commit_encoding::CommitEncoding;
 use crate::object_id::{model_id, object_id};
 use crate::{Cancel, Error, Repository};
 
@@ -370,15 +371,18 @@ fn summary_from(
         id: id.to_string(),
         source,
     };
-    let message = commit.message().map_err(|e| read(Box::new(e)))?;
-    let author = commit.author().map_err(|e| read(Box::new(e)))?;
+    // Decoded once: the encoding header, the author and the message are all read from it.
+    let decoded = commit.decode().map_err(|e| read(Box::new(e)))?;
+    // The characters git shows, as the Commit tab reads them (`crate::commit_encoding`).
+    let encoding = CommitEncoding::of_commit(commit, &decoded);
+    let author = decoded.author().map_err(|e| read(Box::new(e)))?;
     let time = author.time().map_err(|e| read(Box::new(e)))?;
     Ok(CommitSummary {
         id: *id,
         parents: parents.to_vec(),
-        summary: message.summary().into_owned().to_string(),
-        author_name: author.name.to_string(),
-        author_email: author.email.to_string(),
+        summary: encoding.text(&decoded.message().summary()),
+        author_name: encoding.text(author.name),
+        author_email: encoding.text(author.email),
         author_time: time.seconds,
     })
 }

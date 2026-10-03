@@ -669,6 +669,98 @@ fn the_commit_details_are_the_ones_git_records() {
     );
 }
 
+/// User decision 4 (2026-10-03): a commit's names, addresses and message are the
+/// characters git prints for them — re-encoded from the encoding the commit names, or the
+/// object's bytes as they are where git's conversion fails — in the Commit tab and in the
+/// history row alike. Caught by: decoding lossily as UTF-8 (every re-encoded case), reading
+/// ISO-8859-1 as windows-1252 (its C1 bytes), converting a field when another field's byte
+/// failed the object, or the history row and the details disagreeing.
+#[test]
+fn the_text_of_an_encoded_commit_is_the_text_git_prints() {
+    let (repo, commits) = repositories::encoded_commits();
+    let engine = ok(Repository::discover(repo.path()), "the fixture opens");
+    let page = ok(
+        engine.history(
+            &cairn_git::HistoryRequest::from_head(commits.len() + 1),
+            &CancelSignal::new(),
+        ),
+        "the history",
+    );
+    for (id, what) in &commits {
+        let hex = id.to_string();
+        let field = |format: &str| {
+            let (status, stdout, stderr) = repo.run(
+                &["log", "-1", &format!("--format={format}"), &hex],
+                &[],
+                None,
+            );
+            assert!(status.success(), "git log {format} {hex}: {stderr}");
+            stdout.trim_end_matches('\n').to_owned()
+        };
+        let details = ok(engine.commit_details(id), "the details");
+        assert_eq!(details.author.name, field("%an"), "{what}: the author");
+        assert_eq!(
+            details.author.email,
+            field("%ae"),
+            "{what}: the author's address"
+        );
+        assert_eq!(
+            details.committer.name,
+            field("%cn"),
+            "{what}: the committer"
+        );
+        assert_eq!(
+            details.committer.email,
+            field("%ce"),
+            "{what}: the committer's address"
+        );
+        assert_eq!(
+            details.message.trim_end_matches('\n'),
+            field("%B"),
+            "{what}: the message"
+        );
+
+        let row = some(
+            page.rows
+                .iter()
+                .find(|row| row.id() == cairn_model::RowId::Commit(*id)),
+            "the commit's row",
+        );
+        match &row.content {
+            cairn_model::RowContent::Commit(summary) => {
+                assert_eq!(summary.summary, field("%s"), "{what}: the row's subject");
+                assert_eq!(
+                    summary.author_name,
+                    field("%an"),
+                    "{what}: the row's author"
+                );
+                assert_eq!(
+                    summary.author_email,
+                    field("%ae"),
+                    "{what}: the row's address"
+                );
+            }
+        }
+    }
+    // The fixture decides something only if git really converted some and not others.
+    let shown = |id: &Oid| repo.git(&["log", "-1", "--format=%an", &id.to_string()]);
+    assert!(
+        shown(&commits[0].0).contains("René Müller \u{80}"),
+        "{}",
+        shown(&commits[0].0)
+    );
+    assert!(
+        shown(&commits[2].0).contains("René €"),
+        "{}",
+        shown(&commits[2].0)
+    );
+    assert!(
+        shown(&commits[3].0).contains('\u{fffd}'),
+        "{}",
+        shown(&commits[3].0)
+    );
+}
+
 /// The mode a file mode maps to is the one git spells, which the comparison above rests on.
 #[test]
 fn every_mode_git_records_reaches_the_model() {

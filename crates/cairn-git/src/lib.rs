@@ -3,6 +3,7 @@
 mod bare_discovery;
 mod cancel;
 mod commit;
+mod commit_encoding;
 mod diff;
 mod error;
 mod history;

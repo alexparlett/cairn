@@ -2,13 +2,15 @@
 
 use cairn_model::{CommitDetails, Oid, Signature, Timestamp};
 
+use crate::commit_encoding::CommitEncoding;
 use crate::object_id::object_id;
 use crate::shallow::ShallowBoundary;
 use crate::{Error, Repository};
 
 impl Repository {
     /// The whole record of one commit: both signatures with their offsets, every parent in
-    /// git's order, and the message exactly as written.
+    /// git's order, and the message exactly as written — in the characters git shows, read
+    /// through the encoding the commit names (`crate::commit_encoding`).
     ///
     /// Beside [`crate::HistoryPage`]'s `CommitSummary`, not instead of it: a row of a
     /// ten-year monorepo pays for a subject and one name, and this pays for everything.
@@ -38,28 +40,42 @@ pub(crate) fn details_of(commit: &gix::Commit<'_>, id: &Oid) -> Result<CommitDet
     let parents = ShallowBoundary::read(commit.repo)
         .map_err(|e| read(Box::new(e)))?
         .parents_of(&commit.id, named.iter().map(|parent| parent.as_ref()))?;
-    let author = signature_of(commit.author().map_err(|e| read(Box::new(e)))?, id)?;
-    let committer = signature_of(commit.committer().map_err(|e| read(Box::new(e)))?, id)?;
-    // `message_raw`, not `message`: R5.3 shows the message as written, and `message`
+    let decoded = commit.decode().map_err(|e| read(Box::new(e)))?;
+    let encoding = CommitEncoding::of_commit(commit, &decoded);
+    let author = signature_of(
+        decoded.author().map_err(|e| read(Box::new(e)))?,
+        encoding,
+        id,
+    )?;
+    let committer = signature_of(
+        decoded.committer().map_err(|e| read(Box::new(e)))?,
+        encoding,
+        id,
+    )?;
+    // The raw message, not `message()`: R5.3 shows the message as written, and `message()`
     // splits it into a summary and a body.
-    let message = commit.message_raw().map_err(|e| read(Box::new(e)))?;
     Ok(CommitDetails {
         id: *id,
         parents,
         author,
         committer,
-        message: message.to_string(),
+        message: encoding.text(decoded.message),
     })
 }
 
-fn signature_of(signature: gix::actor::SignatureRef<'_>, id: &Oid) -> Result<Signature, Error> {
+/// `signature` as git prints it: its name and address in the commit's encoding.
+fn signature_of(
+    signature: gix::actor::SignatureRef<'_>,
+    encoding: CommitEncoding,
+    id: &Oid,
+) -> Result<Signature, Error> {
     let time = signature.time().map_err(|source| Error::ReadCommit {
         id: id.to_string(),
         source: Box::new(source),
     })?;
     Ok(Signature {
-        name: signature.name.to_string(),
-        email: signature.email.to_string(),
+        name: encoding.text(signature.name),
+        email: encoding.text(signature.email),
         time: Timestamp::new(time.seconds, time.offset),
     })
 }

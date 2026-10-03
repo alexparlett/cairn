@@ -12,6 +12,7 @@
 //! No avatar and no ref chips (L9), and the tab never asks for anything: a parent link
 //! reports the parent and the caller decides what pressing it reaches.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use cairn_model::{ChangeSet, ChangeStatus, ChangedFile, Oid, Signature};
@@ -102,6 +103,8 @@ enum Line {
 /// The rows above the files, for `changes`. Proportional to the message, never to the
 /// files: those are read by index as they scroll into view.
 fn header_lines(changes: &ChangeSet) -> Vec<Line> {
+    #[cfg(test)]
+    tests::HEADER_BUILDS.with(|builds| builds.set(builds.get() + 1));
     let mut lines = Vec::new();
     if let Some(details) = &changes.details {
         lines.push(Line::Captions);
@@ -137,6 +140,43 @@ fn header_lines(changes: &ChangeSet) -> Vec<Line> {
     if changes.files.is_empty() {
         lines.push(Line::NoFiles);
     }
+    lines
+}
+
+/// Everything [`header_lines`] reads from a change set but the commit's own fields, which
+/// its id names: one commit's header is built once, however often the state it is read
+/// from is written (a file's diff arriving, from phase 06) without changing the commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HeaderKey {
+    commit: Option<Oid>,
+    needed_limit: Option<usize>,
+    no_files: bool,
+}
+
+impl HeaderKey {
+    fn of(changes: &ChangeSet) -> Self {
+        Self {
+            commit: changes.details.as_ref().map(|details| details.id),
+            needed_limit: changes.renames.needed_limit,
+            no_files: changes.files.is_empty(),
+        }
+    }
+}
+
+/// The header last built, and what it was built from.
+type HeaderCache = Rc<RefCell<Option<(HeaderKey, Rc<Vec<Line>>)>>>;
+
+/// The header for `changes`: the one in `cache` while its key still holds.
+fn cached_header(cache: &HeaderCache, changes: &ChangeSet) -> Rc<Vec<Line>> {
+    let key = HeaderKey::of(changes);
+    let mut cached = cache.borrow_mut();
+    if let Some((built_for, lines)) = cached.as_ref()
+        && *built_for == key
+    {
+        return lines.clone();
+    }
+    let lines = Rc::new(header_lines(changes));
+    *cached = Some((key, lines.clone()));
     lines
 }
 
@@ -196,21 +236,28 @@ struct TabData {
 
 impl PartialEq for TabData {
     fn eq(&self, other: &Self) -> bool {
-        self.lines == other.lines && self.files == other.files
+        // The header is cached, so an unchanged one is the same allocation: no compare.
+        (Rc::ptr_eq(&self.lines, &other.lines) || self.lines == other.lines)
+            && self.files == other.files
     }
 }
 
 impl Component for CommitTab {
     fn render(&self) -> impl IntoElement {
+        let cache: HeaderCache = use_hook(HeaderCache::default);
         // Reading subscribes the tab to the answer it draws.
         let (lines, files, identity) = {
             let changes = self.changes.read();
             let identity = changes.details.as_ref().map(|details| details.id);
-            (header_lines(&changes), changes.files.len(), identity)
+            (
+                cached_header(&cache, &changes),
+                changes.files.len(),
+                identity,
+            )
         };
         let data = TabData {
             changes: self.changes.clone(),
-            lines: Rc::new(lines),
+            lines,
             files,
             on_parent: self.on_parent.clone(),
         };
@@ -394,9 +441,17 @@ fn file_row(file: &ChangedFile) -> Element {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use cairn_model::{CommitDetails, FileMode, RenameDetection, RepoPath, Similarity, Timestamp};
+    use freya_testing::TestingRunner;
 
     use super::*;
+
+    thread_local! {
+        /// How many headers [`header_lines`] has built on this thread.
+        pub(super) static HEADER_BUILDS: Cell<usize> = const { Cell::new(0) };
+    }
 
     fn details(message: &str, parents: usize) -> CommitDetails {
         let signature = |name: &str| Signature {
@@ -479,6 +534,60 @@ mod tests {
         );
         assert!(!merge.iter().any(|line| matches!(line, Line::CutShort(_))));
         assert!(!merge.contains(&Line::NoFiles));
+    }
+
+    /// R1: a write to the state the tab reads that leaves the commit as it was — what a
+    /// file's diff arriving in the window's `DiffState` is — redraws the tab without
+    /// building its header again; another commit builds it once. Caught by: building the
+    /// header on every render, or caching it past a change of commit.
+    #[test]
+    fn the_header_is_built_once_per_commit_however_often_the_state_is_written() {
+        #[derive(Clone)]
+        struct Fixture {
+            state: State<(ChangeSet, u32)>,
+        }
+        let app = || {
+            let fixture = use_consume::<Fixture>();
+            let changes = fixture
+                .state
+                .into_readable()
+                .map(|(changes, _)| changes, |_| true);
+            rect()
+                .expanded()
+                .child(CommitTab::new(changes))
+                .into_element()
+        };
+        let (mut test, fixture) = TestingRunner::new(
+            app,
+            (600., 400.).into(),
+            |runner| {
+                runner.provide_root_context(|| Fixture {
+                    state: State::create((set(Some(details("one\n", 1)), 3, None), 0)),
+                })
+            },
+            1.,
+        );
+        test.sync_and_update();
+        let builds = || HEADER_BUILDS.with(Cell::get);
+        let first = builds();
+        assert!(first >= 1, "the header was never built");
+
+        let mut state = fixture.state;
+        for unrelated in 1..=3 {
+            state.write().1 = unrelated;
+            test.sync_and_update();
+        }
+        assert_eq!(builds(), first, "an unrelated write rebuilt the header");
+
+        let mut other = details("two\n", 1);
+        other.id = Oid::from_bytes(&[8; 20]).unwrap();
+        state.write().0 = set(Some(other), 3, None);
+        test.sync_and_update();
+        assert_eq!(
+            builds(),
+            first + 1,
+            "another commit did not rebuild the header once"
+        );
     }
 
     /// T6, user decision 5: each status is its bare letter, as Fork draws it — a rename and

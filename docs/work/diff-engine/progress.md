@@ -3,6 +3,98 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-03 — the C6 audit, the gate's integrity, and a shallow clone's history
+
+The C6 audit and a gate-integrity review raised findings that a fresh `qa-confirm`
+adjudicated. Fixed from commit `2e15d1c` up to this entry; `scripts/gate.sh` passes,
+`git-floor` included.
+
+### The C6 audit, F1-F7
+
+- **F1 — escalated, not fixed: gix's hunks diverge from `git diff`'s.** The content
+  query computes its ranges with gix (`diff_with_slider_heuristics` in
+  `crates/cairn-git/src/diff/content.rs`), and the adjudicator found answers that
+  differ from `git diff -U3`'s, which the user's standing rule makes a critical
+  parity bug. A spike is measuring what moving the ranges to git would cost, and the
+  user decides after it. Until then the algorithm is untouched and no test
+  discriminates `diff.algorithm` or the indent heuristic (R2.4): it would fail today.
+- **F2 — the load-anyway ceiling.** `past_the_load_anyway_ceiling_nothing_is_offered_or_read`,
+  over the truncated object with `load_anyway_bytes` either side of its size: not
+  offered without `load_anyway`, refused from the header with it, offered at exactly
+  the size. Mutations `loadable: true` and a `u64::MAX` load-anyway ceiling each turn
+  it red.
+- **F3 — both limits at exactly their value.** A side of exactly `max_lines` lines is
+  inside the limit (the unit test of `crossed_line_limit`), and a file of exactly
+  `max_bytes` is drawn while one byte less of ceiling refuses it
+  (`a_file_exactly_at_the_byte_ceiling_is_drawn`). Each `>` turned `>=` turns its test red.
+- **F4, F5 — git's binary rules.** The attributes fixture gained the `binary` macro
+  (`macro.dat`), a NUL at byte 7,999 (binary) and one at byte 8,000 in a file of short
+  lines (not binary), each compared with git as before; and
+  `a_file_past_big_file_threshold_is_binary_as_git_says` sets
+  `core.bigFileThreshold=1k` beside a text file a few KiB long. All agreed with git.
+- **F6 — a binary's sizes** are compared with `git cat-file -s` for every binary file
+  of both tests; `old_size: 0, new_size: 0` turns both red.
+- **F7 — a pure deletion inside a file.** `crafted()` gained `delete a line`, one
+  middle line of `long.txt` removed, before the two commits tests reach as `HEAD~1`
+  and `HEAD`; it runs through C1, C2 (which now requires a removal-only file among
+  its shapes), C3 and C6. gix's answer for it agreed with `git diff -U3`.
+
+### Gate integrity, G1-G6
+
+- **G1.** The two `CAIRN_REQUIRE_*` guards matched the variable on any line of the
+  workflow; they now read the `gate` job's own `env:` (`job_env_entries` in
+  `crates/cairn-guards/src/lib.rs`), and
+  `the_workflow_env_matcher_reads_only_the_jobs_own_block` shows a workflow-level,
+  another job's, a step's, and a commented-out setting each failing. Moving both
+  variables into a step and the other job turned both guards red.
+- **G2, G3.** `scripts/git-floor.sh` lists each filtered run first and fails under a
+  floor — decided here: one under the counts when set (29 for `--lib diff:: reads::`,
+  30 tests; 44 for `--test diff_engine`, 45) — and runs with `--show-output`, printing
+  each run's `SKIPPED` lines and restating them all at the end. Its header names the
+  two skips the floor's gits take: the partial-clone rename search below 2.44 and the
+  `safe.bareRepository` case below 2.38.
+- **G4 — the user decided the floor runs in the local full gate.** `scripts/gate.sh`
+  with no arguments now runs `git-floor` after `test-doc`, as it runs `deps`; `--fast`
+  skips both. The first run fetches and builds; the builds are cached after. Where a
+  build is needed the script first checks for a C compiler (`$CC`, now also passed to
+  `make`), `make` and zlib's headers, and fails naming what is missing with the
+  packages to install — a fresh Debian or Ubuntu needs `build-essential zlib1g-dev`,
+  which is what the CI job installs — and never skips. Twin:
+  `the_local_full_gate_runs_every_step_but_the_day_loops`, with the exemption roster
+  `LOCAL_FULL_GATE_EXEMPT` (`test-fast`) and the self-test
+  `the_gate_sequence_matcher_catches_the_shapes_it_claims`; it failed on the gate
+  before `run_git_floor` was added. Root `CLAUDE.md` and `docs/qa-gate.md` say so.
+  Run here from an empty cache, the full gate fetched and built both gits and their
+  diff tests passed, each run listing its two expected skips.
+- **G5.** git before 2.32 ignores `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM`, so the
+  fixtures ran under the machine's `~/.gitconfig` on the floor's gits. `Repo::run`,
+  the scratch index's runs (`tests/diff/scratch.rs`, decided here: same hazard,
+  same tests) and `tests/fixtures/mod.rs` now set `HOME` and `XDG_CONFIG_HOME` to a
+  checked-empty directory and `GIT_CONFIG_NOSYSTEM=1`. Shown on 2.30.9: a home whose
+  `.gitconfig` signs commits with a failing program broke eight diff tests without
+  the change and none with it.
+- **G6 — dismissed:** the oracle cannot reach `log.diffMerges`.
+
+### The history graph's shallow boundary — the user decided to fix it here
+
+The history query handed a shallow clone's boundary commit over with the parents its
+object names, where `git log --format=%P` prints none. The test written for it, against
+`git log --format='%H %P'` at depths 1 to 4 of one merge-shaped history, found a second
+divergence: at depth 4, where a boundary commit's parent is in the clone because a
+sibling branch reaches it, gix's walk left that commit out entirely — gix 0.87.1's
+`rev_walk` skips the next appearance of each cut-off parent id whichever commit names
+it. Decided here: both routes now walk `gix::traverse::commit::Simple` directly over an
+object source that serves a boundary commit with its `parent` lines removed, git's
+graft applied where the object is read (`crates/cairn-git/src/history/walk.rs`); no
+commit-graph is used in a shallow repository, as git's `commit_graph_compatible`
+refuses one there; an invalid `core.commitGraph` is still an error and a graph that
+will not open is walked without, as gix's walk decided both. The shallow file is read
+by `crates/cairn-git/src/shallow.rs`, which `commit_details` now shares. A boundary
+commit is a root to the lane assigner, so no lane waits below it; the test requires
+the graph to be the one git's parents lay out, and the oldest row to carry no line
+past it. Turning the graft off turns it red. As built: `docs/systems/history-graph.md`,
+"A shallow clone is walked as git walks it".
+
 ## 2026-10-03 — phase 02's QA: what it found, what was decided, what was fixed
 
 QA ran over `34bc907..HEAD`, the reworked phase. Its reviewers raised nineteen raw

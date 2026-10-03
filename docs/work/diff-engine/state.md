@@ -2,13 +2,15 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 02's rework landed and its QA findings are fixed (2026-10-03);
-phase 03 next, once the C6 audit is done.** The diff model exists in `cairn-model`,
+**Status: phase 02's rework landed, its QA findings are fixed and the C6 audit is
+done (2026-10-03), except F1: gix's hunks diverge from `git diff`'s, a spike is
+measuring what moving the content query's ranges to git costs, and the user decides
+after it. Phase 03 next.** The diff model exists in `cairn-model`,
 and `cairn-git` answers R2's two queries: the changes query from `git diff-tree`
 through the process manager (decision E, PRD R2.1, R2.2, R2.9 and C14 amended),
 honouring `diff.ignoreSubmodules` and `log.showRoot` as the user's `git log` does,
-the content query from gix. CI's `git floor` job runs the diff tests on git 2.30
-and 2.32 built from source. Why decision E, and the evidence: the 2026-09-30 and
+the content query from gix. The full gate's `git-floor` step, and CI's `git floor`
+job, run the diff tests on git 2.30 and 2.32 built from source. Why decision E, and the evidence: the 2026-09-30 and
 2026-10-03 entries in `progress.md`,
 `docs/research/diff-engine/rename-parity-spike.md` and
 `docs/research/diff-engine/git-process-survey.md`.
@@ -111,7 +113,7 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | Phase | Status | Gate | QA |
 | --- | --- | --- | --- |
 | 01 diff model | landed | `scripts/gate.sh` PASS | `qa-checklist`, `test-coverage-auditor` and `responsiveness-reviewer`, adjudicated by `qa-confirm`; confirmed findings fixed or recorded as residuals in `docs/systems/diff.md` |
-| 02 engine, commits | landed 2026-09-18; changes query reworked onto `git diff-tree` 2026-10-03 (decision E) | `scripts/gate.sh` PASS | done over the reworked phase (2026-10-03), adjudicated by `qa-confirm`; confirmed findings fixed. The C6 audit is still outstanding |
+| 02 engine, commits | landed 2026-09-18; changes query reworked onto `git diff-tree` 2026-10-03 (decision E) | `scripts/gate.sh` PASS, `git-floor` included | done over the reworked phase (2026-10-03), adjudicated by `qa-confirm`; confirmed findings fixed. C6 audit done (2026-10-03, adjudicated): F2-F7 fixed; **F1 open** — gix's hunks diverge from `git diff -U3`, awaiting the spike and the user's decision; no R2.4 test until then |
 | 03 engine, working tree | not started | — | — |
 | 04 worker lanes | not started | — | — |
 | 05 detail pane | not started | — | — |
@@ -136,10 +138,11 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
   `docs/research/diff-engine/ui-and-app-as-built.md` record what was verified, in
   which copy, and when.
 - `scripts/gate.sh` is the bar. Never an ad-hoc `&&` chain, never piped through
-  `tail`. Its `git-floor` step is outside the full sequence — it fetches git's
-  source and builds 2.30 and 2.32 — and CI runs it as its own job; to run it
-  locally against gits already built, point `CAIRN_GIT_FLOOR_CACHE` at a directory
-  holding `git-2.30.9/` and `git-2.32.7/` prefixes.
+  `tail`. Its full run includes `git-floor`, which builds git 2.30.9 and 2.32.7
+  into `~/.cache/cairn/git-floor` the first time (network, a C compiler, make and
+  zlib's headers) and reuses them after; `CAIRN_GIT_FLOOR_CACHE` points it at
+  another directory holding `git-2.30.9/` and `git-2.32.7/` prefixes. CI runs the
+  step as its own job.
 - Commit explicit paths, never `git add -A`.
 - A new dependency, crate or invariant needs its row in
   `crates/cairn-guards/tests/invariants.rs` in the same commit, or the gate fails.

@@ -185,7 +185,8 @@ impl Drop for Repo {
 /// The edge cases C2 names, each in a commit of its own so a test can reach it by subject.
 ///
 /// Commit order, oldest first: `seed`, `edits`, `endings`, `newlines`, `add and delete`,
-/// `rename with edits`, `mode change`, `type change`, `copy`.
+/// `rename with edits`, `far apart`, `crlf edit`, `mode and content`, `mode change`,
+/// `type change`. The last two stay last: tests reach them as `HEAD~1` and `HEAD`.
 pub fn crafted() -> Repo {
     let repo = Repo::new("crafted");
 
@@ -197,10 +198,13 @@ pub fn crafted() -> Repo {
     repo.write("keep.txt", b"kept\n");
     repo.write("one-line.txt", b"only\n");
     repo.write("empty.txt", b"");
+    let long: String = (1..=20).map(|n| format!("line {n}\n")).collect();
+    repo.write("long.txt", long.as_bytes());
     repo.commit("seed");
 
-    // Two changes far enough apart to be two hunks at three lines of context, and two
-    // close enough to merge into one.
+    // Three changes, at lines 1, 7 and 8. Six unchanged lines between the first two is
+    // exactly twice the context, so all three merge into ONE hunk at three lines of
+    // context (`far apart` below is the commit with two).
     repo.write(
         "plain.txt",
         b"ALPHA\nbravo\ncharlie\ndelta\necho\nfoxtrot\nGOLF\nHOTEL\n",
@@ -231,6 +235,27 @@ pub fn crafted() -> Repo {
     );
     repo.remove("plain.txt");
     repo.commit("rename with edits");
+
+    // Changes at lines 2 and 18, with fifteen unchanged lines between them: more than
+    // twice the context, so two hunks at three lines of context.
+    let far: String = (1..=20)
+        .map(|n| match n {
+            2 => "LINE 2\n".to_owned(),
+            18 => "LINE 18\n".to_owned(),
+            n => format!("line {n}\n"),
+        })
+        .collect();
+    repo.write("long.txt", far.as_bytes());
+    repo.commit("far apart");
+
+    // An edit inside a CRLF file, so its unchanged CRLF lines are the patch's context.
+    repo.write("crlf.txt", b"one\r\nTWO\r\nthree\r\n");
+    repo.commit("crlf edit");
+
+    // A mode change and an edit in one file: `old mode`/`new mode` beside a hunk.
+    repo.write("added.txt", b"brand\nnew\nand more\n");
+    repo.chmod("added.txt", 0o755);
+    repo.commit("mode and content");
 
     repo.chmod("one-line.txt", 0o755);
     repo.commit("mode change");
@@ -468,6 +493,32 @@ pub fn limits(config: &[(&str, &str)]) -> Repo {
     repo.write("new/x.txt", &variation(15, "more\n"));
     repo.write("new/z.txt", &variation(16, "more\n"));
     repo.commit("basename");
+    repo
+}
+
+/// Two deletions and two additions with nothing in common, in the commit after a seed:
+/// a search git runs pairs nothing, so the answer's unpaired counts are exactly what git
+/// counted — two sources by two destinations, which a `diff.renameLimit` of 2 lets run
+/// (four is not MORE than four) and a limit of 1 cuts short.
+pub fn dissimilar(config: &[(&str, &str)]) -> Repo {
+    let repo = Repo::new("dissimilar");
+    for (key, value) in config {
+        repo.config(key, value);
+    }
+    repo.write("gone/one.txt", &variation(30, ""));
+    repo.write("gone/two.txt", &variation(31, ""));
+    repo.commit("seed");
+    repo.remove("gone/one.txt");
+    repo.remove("gone/two.txt");
+    let unlike = |word: &str| -> Vec<u8> {
+        (0..40)
+            .map(|n| format!("{word} {n} shares nothing with what was deleted\n"))
+            .collect::<String>()
+            .into_bytes()
+    };
+    repo.write("came/three.txt", &unlike("zebra"));
+    repo.write("came/four.txt", &unlike("quokka"));
+    repo.commit("unrelated");
     repo
 }
 

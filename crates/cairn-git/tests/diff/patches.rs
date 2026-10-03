@@ -7,8 +7,8 @@
 
 use cairn_git::{CancelSignal, ChangesRequest, ContentOptions, Repository};
 use cairn_model::{
-    ChangeStatus, ChangedFile, DiffContent, FileDiff, LineNumber, Oid, Patch, Selection, TextDiff,
-    apply_patch, emit_patch,
+    ChangeStatus, ChangedFile, Context, DiffContent, FileDiff, Hunks, LineNumber, Oid, Patch,
+    Selection, TextDiff, apply_patch, emit_patch,
 };
 
 use super::ok;
@@ -122,6 +122,11 @@ fn parent_tree(repo: &Repo, commit: &str) -> String {
 
 /// C1 and C3 for one commit: forward from the parent's tree must give the commit's, and the
 /// same patches in reverse from the commit's tree must give the parent's.
+///
+/// Returns how many files were staged through a PATCH — not how many changed: a file the
+/// model has no patch for is staged directly, which proves nothing about the emitter, so a
+/// content query that answered every file as binary would still give the right trees. The
+/// callers' floors are on this count for that reason.
 fn round_trips(repo: &Repo, engine: &Repository, commit: &str) -> usize {
     let id = ok(Oid::parse(commit), "an id");
     let diffs = diffs_of(engine, &id);
@@ -131,9 +136,13 @@ fn round_trips(repo: &Repo, engine: &Repository, commit: &str) -> usize {
 
     let mut patch = Vec::new();
     let mut without_one = Vec::new();
+    let mut patched = 0usize;
     for diff in &diffs {
         match whole_patch(diff) {
-            Some(built) => patch.extend_from_slice(built.as_bytes()),
+            Some(built) => {
+                patch.extend_from_slice(built.as_bytes());
+                patched += 1;
+            }
             None => without_one.push(&diff.file),
         }
     }
@@ -189,7 +198,7 @@ fn round_trips(repo: &Repo, engine: &Repository, commit: &str) -> usize {
         before,
         "commit {commit}: reversing its patches did not restore the parent's tree"
     );
-    diffs.len()
+    patched
 }
 
 fn non_merge_commits(repo: &Repo) -> Vec<String> {
@@ -213,7 +222,10 @@ fn every_crafted_commit_round_trips_through_real_git_apply() {
     for commit in &commits {
         files += round_trips(&repo, &engine, commit);
     }
-    assert!(files >= 14, "only {files} files were staged");
+    assert!(
+        files >= 14,
+        "only {files} files were staged through a patch"
+    );
 }
 
 /// The same, over the rename and copy fixtures, where a patch carries `rename from` and
@@ -226,9 +238,14 @@ fn every_rewrite_commit_round_trips_through_real_git_apply() {
     ] {
         let repo = repositories::rewrites(config);
         let engine = Repository::discover(repo.path()).expect("the fixture opens");
+        let mut files = 0usize;
         for commit in non_merge_commits(&repo) {
-            round_trips(&repo, &engine, &commit);
+            files += round_trips(&repo, &engine, &commit);
         }
+        assert!(
+            files >= 12,
+            "{config:?}: only {files} files were staged through a patch"
+        );
     }
 }
 
@@ -250,7 +267,10 @@ fn every_commit_of_this_repository_round_trips_through_real_git_apply() {
     for commit in &commits {
         files += round_trips(&here, &engine, commit);
     }
-    assert!(files >= 50, "only {files} files were staged");
+    assert!(
+        files >= 50,
+        "only {files} files were staged through a patch"
+    );
 }
 
 /// A deterministic generator, so a failure names a seed that reproduces it.
@@ -354,6 +374,12 @@ fn a_seeded_selection_stages_what_its_patch_says_it_does() {
             let DiffContent::Text { text, .. } = &diff.content else {
                 continue;
             };
+            if Hunks::of(text, Context::Lines(Context::DEFAULT_LINES)).len() >= 2 {
+                shapes.push("two hunks");
+            }
+            if has_crlf_context(text) {
+                shapes.push("crlf context");
+            }
             shapes.push(match diff.file.status {
                 ChangeStatus::Added => "added",
                 ChangeStatus::Deleted => "deleted",
@@ -452,13 +478,39 @@ fn a_seeded_selection_stages_what_its_patch_says_it_does() {
 
     shapes.sort_unstable();
     shapes.dedup();
-    for wanted in ["added", "deleted", "modified", "rename"] {
+    for wanted in [
+        "added",
+        "deleted",
+        "modified",
+        "rename",
+        "mode change",
+        "two hunks",
+        "crlf context",
+    ] {
         assert!(
             shapes.contains(&wanted),
             "no {wanted} file reached the seeded selections: {shapes:?}"
         );
     }
     assert!(checked >= 100, "only {checked} selections were applied");
+}
+
+/// Whether a modified file keeps an unchanged CRLF line within a patch's context of a
+/// change: the line a patch must carry with its `\r` for `git apply` to find it.
+fn has_crlf_context(text: &TextDiff) -> bool {
+    let context = Context::DEFAULT_LINES;
+    !text.old_lines().is_empty()
+        && !text.new_lines().is_empty()
+        && text.changes().iter().any(|change| {
+            let start = change.removed.start().index();
+            let end = start + change.removed.len();
+            let first = start.saturating_sub(context);
+            let last = end.saturating_add(context);
+            (first..last)
+                .filter(|index| !(start..end).contains(index))
+                .filter_map(|index| text.old_line(LineNumber::from_index(index)))
+                .any(|line| line.bytes().ends_with(b"\r"))
+        })
 }
 
 /// Whether a selection holds any line that is actually part of a change; a selection of

@@ -352,32 +352,54 @@ fn rename_and_copy_detection_follow_the_users_configuration() {
 /// says so exactly when git's own `git log` warns that it did, naming the limit git's
 /// warning names. Over renames and copies, a limit either side of each boundary, the stage
 /// that pairs exact renames ahead of the limit and the one that pairs by name ahead of it.
+/// The `dissimilar` cases are where the count meets the square exactly: two unpaired
+/// deletions by two unpaired additions at a limit of 2 is a search git ran and paired
+/// nothing in, without a warning, and the same commit at a limit of 1 is one it skipped.
 /// Caught by: reading the limit from the wrong config, counting the sources the exact
 /// stage paired on a git that culls them (`exact and inexact` at a limit of 2), `>=` for
-/// `>`, or an answer that differs from git's at any of these.
+/// `>` (`dissimilar` at a limit of 2), or an answer that differs from git's at any of
+/// these.
 #[test]
 fn a_rename_limit_that_cuts_detection_short_is_reported_exactly_when_git_warns() {
-    let cases: &[(&str, &str, &str)] = &[
-        ("true", "1", "HEAD~1"),
-        ("true", "2", "HEAD~1"),
-        ("true", "3", "HEAD~1"),
-        ("true", "1", "HEAD"),
-        ("copies", "3", "HEAD~1"),
-        ("copies", "4", "HEAD~1"),
-        ("copies", "1", "HEAD"),
-        ("copies", "2", "HEAD"),
+    type Fixture = fn(&[(&str, &str)]) -> Repo;
+    let limits: Fixture = repositories::limits;
+    let dissimilar: Fixture = repositories::dissimilar;
+    let cases: &[(&str, Fixture, &str, &str, &str)] = &[
+        ("limits", limits, "true", "1", "HEAD~1"),
+        ("limits", limits, "true", "2", "HEAD~1"),
+        ("limits", limits, "true", "3", "HEAD~1"),
+        ("limits", limits, "true", "1", "HEAD"),
+        ("limits", limits, "copies", "3", "HEAD~1"),
+        ("limits", limits, "copies", "4", "HEAD~1"),
+        ("limits", limits, "copies", "1", "HEAD"),
+        ("limits", limits, "copies", "2", "HEAD"),
+        ("dissimilar", dissimilar, "true", "2", "HEAD"),
+        ("dissimilar", dissimilar, "true", "1", "HEAD"),
+        ("dissimilar", dissimilar, "copies", "2", "HEAD"),
+        ("dissimilar", dissimilar, "copies", "1", "HEAD"),
     ];
     let mut cut = 0;
-    for (renames, limit, commit) in cases {
-        let repo = repositories::limits(&[("diff.renames", renames), ("diff.renameLimit", limit)]);
+    let mut at_the_square = 0;
+    for (name, fixture, renames, limit, commit) in cases {
+        let repo = fixture(&[("diff.renames", renames), ("diff.renameLimit", limit)]);
         let id = hex(&repo, commit);
         let found = changes_of(
             &repo,
             &ChangesRequest::commit(Oid::parse(&id).expect("an id")),
         );
         let (rows, stderr) = shown(&repo, &id);
-        let case = format!("diff.renames={renames} diff.renameLimit={limit} on {commit}");
+        let case = format!("{name}: diff.renames={renames} diff.renameLimit={limit} on {commit}");
         assert_eq!(cairn_rows(&found.files, id.len()), rows, "{case}");
+        let count = |status: &str| rows.iter().filter(|row| row.status == status).count();
+        let limit_value: usize = limit.parse().expect("a limit");
+        if *renames == "true" && count("D") * count("A") == limit_value * limit_value {
+            at_the_square += 1;
+            assert!(
+                !found.renames.was_cut_short(),
+                "{case}: {:?}",
+                found.renames
+            );
+        }
         assert_eq!(
             found.renames.needed_limit,
             warned_limit(&stderr),
@@ -394,6 +416,10 @@ fn a_rename_limit_that_cuts_detection_short_is_reported_exactly_when_git_warns()
     assert!(
         (1..cases.len()).contains(&cut),
         "every case or none was cut short ({cut}), so the boundary was never crossed"
+    );
+    assert!(
+        at_the_square >= 1,
+        "no case met the square exactly, so `>` and `>=` are not told apart"
     );
 }
 
@@ -675,11 +701,15 @@ fn snapshot(dir: &std::path::Path) -> std::collections::BTreeMap<std::path::Path
 
 /// The query writes nothing: not the index — though the working tree is stat-dirty, so a
 /// refresh would rewrite it — not a ref, not an object, and not the textconv cache a
-/// `diff.<driver>.cachetextconv` would fill under `--textconv`. The whole git directory is
-/// byte-identical afterwards, under copies, a rename search and a root commit, and the
-/// configured textconv program never ran. Caught by: porcelain `git diff` or `git log`
-/// in place of `diff-tree` (an index refresh, or the notes ref), `--textconv` passed, or
-/// a read built as a write.
+/// `diff.<driver>.cachetextconv` would fill. The whole git directory is byte-identical
+/// afterwards, under copies, a rename search and a root commit, and the configured
+/// textconv program never ran. What this decides is the outcome, not the command: between
+/// two commits porcelain `git diff --raw` and `git log --raw`, and `--textconv` without a
+/// patch, write nothing here either, so which command and flags the query runs is pinned
+/// on its argument vector instead (`the_query_is_diff_tree_and_never_runs_a_program`, in
+/// `crates/cairn-git/src/reads/changes.rs`). Caught by: a query that does write during
+/// the read — a patch under `--textconv` (the notes ref and its objects), or one that
+/// started the configured textconv program.
 #[test]
 fn the_changes_query_writes_nothing() {
     let repo = repositories::attributes();

@@ -450,6 +450,74 @@ mod tests {
         assert!(parse(&[]).unwrap().is_empty());
     }
 
+    /// The changes query is `diff-tree` — query plumbing — in its raw form, and never with a
+    /// flag that runs a program the user configured or writes: `--textconv` (which, with a
+    /// patch and `diff.<driver>.cachetextconv`, writes a notes ref and objects) or
+    /// `--ext-diff`, or a patch at all. The two trees come after `--end-of-options` and a
+    /// pathspec only after `--`, under every detection and every way of leaving a submodule
+    /// out. Caught by: porcelain (`diff`, `log`, `show`) in place of the plumbing, or any of
+    /// those flags added — none of which the git directory itself can show between two
+    /// commits (`the_changes_query_writes_nothing`).
+    #[test]
+    fn the_query_is_diff_tree_and_never_runs_a_program() {
+        let (old, new) = (Oid::parse(OLD).unwrap(), Oid::parse(NEW).unwrap());
+        let excluded = [RepoPath::new("sub module"), RepoPath::new(":(glob)x")];
+        for detection in [
+            Detection::Off,
+            Detection::Renames { limit: 1000 },
+            Detection::Copies { limit: 0 },
+        ] {
+            for submodules in [
+                Submodules::AsListed,
+                Submodules::HideEvery,
+                Submodules::Excluding(&excluded),
+            ] {
+                let arguments: Vec<String> = arguments(&old, &new, detection, submodules)
+                    .into_iter()
+                    .map(|argument| argument.into_string().unwrap())
+                    .collect();
+                let case = format!("{detection:?} {submodules:?}: {arguments:?}");
+                assert_eq!(
+                    arguments[..5],
+                    ["diff-tree", "-r", "-z", "--raw", "--no-abbrev"]
+                );
+                for argument in &arguments {
+                    for refused in ["--textconv", "--ext-diff", "-p", "--patch", "-u"] {
+                        assert_ne!(argument, refused, "{case}");
+                    }
+                }
+                let trees = arguments
+                    .iter()
+                    .position(|argument| argument == "--end-of-options")
+                    .unwrap_or_else(|| panic!("{case}"));
+                assert_eq!(arguments[trees + 1..trees + 3], [OLD, NEW], "{case}");
+                let pathspecs = &arguments[trees + 3..];
+                match submodules {
+                    Submodules::Excluding(_) => assert_eq!(
+                        pathspecs,
+                        [
+                            "--",
+                            ":(exclude,literal)sub module",
+                            ":(exclude,literal):(glob)x"
+                        ],
+                        "{case}"
+                    ),
+                    Submodules::AsListed | Submodules::HideEvery => {
+                        assert!(pathspecs.is_empty(), "{case}");
+                    }
+                }
+                assert_eq!(
+                    arguments[..trees].contains(&"--ignore-submodules=all".to_owned()),
+                    submodules == Submodules::HideEvery,
+                    "{case}"
+                );
+            }
+        }
+        // Nothing to exclude is no pathspec at all, which would otherwise read as "nothing".
+        let none = arguments(&old, &new, Detection::Off, Submodules::Excluding(&[]));
+        assert!(!none.iter().any(|argument| argument == "--"));
+    }
+
     #[test]
     fn detection_is_spelled_the_way_diff_tree_takes_it() {
         assert_eq!(Detection::Off.arguments(), ["--no-renames"]);

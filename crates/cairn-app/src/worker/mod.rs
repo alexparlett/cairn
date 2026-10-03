@@ -26,6 +26,8 @@ pub use discovery::Discovery;
 #[cfg(test)]
 pub use pool::idle_handle;
 pub use pool::{CLOSE_PATIENCE, Replier, RepositoryHandle, open};
-pub use request::{Comparison, DiffOptions, DiffQuery, FileQuery, Request, Retired, Update};
 #[cfg(test)]
-pub use request::{FileTarget, WorkingSide};
+pub use request::WorkingSide;
+pub use request::{
+    Comparison, DiffOptions, DiffQuery, FileQuery, FileTarget, Request, Retired, Update,
+};

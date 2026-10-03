@@ -36,6 +36,12 @@ exact = true
 allow = ["process", "signal"]
 
 [licenses]
+# Not a crate, so not checked here: the diff's typeface, IBM Plex Mono Regular from IBM's
+# release `@ibm/plex-mono@2.5.0`, is a file embedded in the binary
+# (`crates/cairn-app/assets/fonts/`) under the SIL Open Font License 1.1, whose text ships
+# beside it as the licence requires. Its download was approved by the user (2026-10-03,
+# packet decision L16); another font file is the same kind of decision.
+#
 # Permissive only. Cairn ships as a binary, so a copyleft transitive dependency
 # is a licensing decision about the whole application, never a silent one.
 allow = [

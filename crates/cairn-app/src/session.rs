@@ -55,6 +55,9 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             progress.write().failed(message);
         }
         Update::Remotes { remotes: listed } => remotes.set(listed),
+        Update::ConfiguredContext { context } => {
+            crate::diff_actions::configured(context, view, worker.submit);
+        }
         Update::FetchStarted { remote } => fetch.write().started(remote),
         Update::FetchProgress { line } => fetch.write().progressed(line),
         Update::FetchFinished { remote, refreshed } => {
@@ -217,6 +220,9 @@ mod tests {
                         detail_tab: State::create(cairn_ui::DetailTab::default()),
                         pane_collapsed: State::create(false),
                         pane_height: State::create(crate::window::PANE_HEIGHT),
+                        diff_settings: State::create(cairn_ui::DiffSettings::default()),
+                        diff_scroll: ScrollController::new(0, 0, Vec::new()),
+                        change_cursor: State::create(None),
                     }
                 })
             },
@@ -357,7 +363,10 @@ mod tests {
         applying(&test, view, &asked, file_update());
         assert_eq!(
             test.run_in(|| view.diff.peek().file().map(|(_, a)| a.clone())),
-            Some(Answer::Ready(Some(diff.clone()))),
+            Some(Answer::Ready(Some(cairn_ui::ShownDiff::new(
+                diff.clone(),
+                query.options.context
+            )))),
             "the selected file's diff was not kept"
         );
 
@@ -647,5 +656,72 @@ mod tests {
             },
         );
         assert_eq!(view.remotes.read().len(), 1);
+    }
+
+    /// Phase 06: the user's `diff.context` is where the session's context starts; a file
+    /// already shown at git's default is asked again at it; once the user has moved the
+    /// context, a later reading of the configuration does not move it back. Caught by: a
+    /// context fixed at three, or one the configuration overrides after the user chose.
+    #[test]
+    fn the_configured_context_is_where_the_session_starts_until_the_user_moves_it() {
+        use cairn_model::{ChangeStatus, ChangedFile, Context, FileMode, Oid, RepoPath};
+
+        use crate::worker::{Comparison, FileQuery, FileTarget};
+
+        let (test, mut view, asked) = launch(FetchStatus::Idle);
+        let file = ChangedFile {
+            status: ChangeStatus::Modified,
+            old_path: RepoPath::from("a.txt"),
+            new_path: RepoPath::from("a.txt"),
+            old_mode: Some(FileMode::Regular),
+            new_mode: Some(FileMode::Regular),
+            old_id: None,
+            new_id: None,
+        };
+        let query = FileQuery {
+            target: FileTarget::Committed {
+                of: Comparison::Commit(Oid::from_bytes(&[1; 20]).unwrap()),
+                file,
+            },
+            options: crate::diff_actions::options(cairn_ui::DiffSettings::default()),
+        };
+        test.run_in(|| view.diff.write().select_file(query.clone()));
+
+        applying(
+            &test,
+            view,
+            &asked,
+            Update::ConfiguredContext {
+                context: Context::Lines(5),
+            },
+        );
+        assert_eq!(
+            test.run_in(|| view.diff_settings.peek().context()),
+            Context::Lines(5)
+        );
+        let mut again = query.clone();
+        again.options.context = Context::Lines(5);
+        assert_eq!(
+            asked.submitted.borrow().as_slice(),
+            [Request::FileDiff(again)]
+        );
+
+        test.run_in(|| {
+            view.diff_settings.write().more_lines();
+        });
+        applying(
+            &test,
+            view,
+            &asked,
+            Update::ConfiguredContext {
+                context: Context::Lines(9),
+            },
+        );
+        assert_eq!(
+            test.run_in(|| view.diff_settings.peek().context()),
+            Context::Lines(6),
+            "the configuration moved a context the user chose"
+        );
+        assert_eq!(asked.submitted.borrow().len(), 1);
     }
 }

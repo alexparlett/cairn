@@ -165,6 +165,9 @@ pub enum Request {
     },
     /// The configured remotes, answered by [`Update::Remotes`].
     ListRemotes,
+    /// The context the user's `git diff` shows — `diff.context` — answered by
+    /// [`Update::ConfiguredContext`]: where the diff views' context starts (phase 06).
+    ConfiguredContext,
     /// Fetches `remote` (a configured name or a URL) in the network lane;
     /// its progress and outcome arrive as the `Fetch*` updates, or
     /// [`Update::FetchRefused`] when a fetch is already in flight.
@@ -203,6 +206,7 @@ impl Request {
             Self::Changes { .. } => Some(QueryLane::Changes),
             Self::FileDiff(_) | Self::ExpandAll { .. } => Some(QueryLane::FileDiff),
             Self::ListRemotes
+            | Self::ConfiguredContext
             | Self::Fetch { .. }
             | Self::CancelFetch
             | Self::CommandLog
@@ -227,6 +231,10 @@ pub enum Update {
     WorkerLost { message: String },
     /// The default remote first, when there is one.
     Remotes { remotes: Vec<RemoteSummary> },
+    /// `diff.context` as the user's `git diff` reads it, raised to one. Not sent when the
+    /// configuration holds a value git refuses: every diff then fails saying so, as the
+    /// user's own `git diff` does.
+    ConfiguredContext { context: Context },
     /// git is running; a `CancelFetch` from here on has something to kill.
     FetchStarted { remote: String },
     /// One redraw of git's own progress meter, for the one fetch in flight.
@@ -317,6 +325,7 @@ mod tests {
         }
         for operation in [
             Request::ListRemotes,
+            Request::ConfiguredContext,
             Request::Fetch {
                 remote: "origin".to_owned(),
             },

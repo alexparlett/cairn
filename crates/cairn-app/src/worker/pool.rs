@@ -656,6 +656,13 @@ fn serve(
                     remotes: repo.remotes(),
                 },
             ),
+            // A value git refuses sends nothing: the views keep git's default, and every
+            // diff asked fails with the configuration's error, as the user's `git diff` does.
+            RepositoryJob::ConfiguredContext => {
+                if let Ok(context) = repo.configured_context() {
+                    outbox.send(None, Update::ConfiguredContext { context });
+                }
+            }
             RepositoryJob::Fetch { remote } => {
                 threads.perform(Operation::Fetch { remote }, outbox);
             }

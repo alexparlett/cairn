@@ -6,17 +6,31 @@
 //! [`Scope::Window`]: cairn_ui::accelerators::Scope::Window
 //! [`Scope::Detail`]: cairn_ui::accelerators::Scope::Detail
 
-use cairn_ui::DetailTab;
 use cairn_ui::accelerators::Action;
+use cairn_ui::{DetailTab, HeaderAction};
 use freya::prelude::*;
 
+use crate::diff_actions;
 use crate::window::View;
+use crate::worker::Request;
 
-/// Does `action` to `view` — nothing while a credential prompt is up, which owns the keys
-/// until it is answered (Q3). The diff view's actions resolve already and act once the view
-/// they move exists: the unified view (phase 06), the Changes tab (phase 07), and the
-/// second commit of a comparison (phase 08).
-pub fn act(action: Action, view: View) {
+/// The action a press in the diff's bar is: the bar's buttons and the chords are one set of
+/// actions, done in one place.
+pub fn of_header(pressed: HeaderAction) -> Action {
+    match pressed {
+        HeaderAction::PreviousChange => Action::PreviousChange,
+        HeaderAction::NextChange => Action::NextChange,
+        HeaderAction::IgnoreWhitespace => Action::ToggleIgnoreWhitespace,
+        HeaderAction::FewerLines => Action::FewerLines,
+        HeaderAction::MoreLines => Action::MoreLines,
+        HeaderAction::EntireFile => Action::EntireFile,
+    }
+}
+
+/// Does `action` to `view`, asking through `submit` what it must — nothing while a
+/// credential prompt is up, which owns the keys until it is answered (Q3). Side-by-side
+/// acts from phase 07 and the second commit of a comparison from phase 08.
+pub fn act(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
     let View {
         mut detail_tab,
         mut pane_collapsed,
@@ -29,14 +43,19 @@ pub fn act(action: Action, view: View) {
     match action {
         Action::ShowCommitTab => show(DetailTab::Commit, &mut detail_tab, &mut pane_collapsed),
         Action::ShowChangesTab => show(DetailTab::Changes, &mut detail_tab, &mut pane_collapsed),
-        Action::PreviousChange
-        | Action::NextChange
-        | Action::ToggleSideBySide
-        | Action::ToggleIgnoreWhitespace
-        | Action::MoreLines
-        | Action::FewerLines
-        | Action::EntireFile
-        | Action::ExtendSelection => {}
+        Action::PreviousChange => diff_actions::step(view, false),
+        Action::NextChange => diff_actions::step(view, true),
+        Action::ToggleIgnoreWhitespace => diff_actions::change_settings(view, submit, |s| {
+            s.toggle_ignore_whitespace();
+            true
+        }),
+        Action::MoreLines => diff_actions::change_settings(view, submit, |s| s.more_lines()),
+        Action::FewerLines => diff_actions::change_settings(view, submit, |s| s.fewer_lines()),
+        Action::EntireFile => diff_actions::change_settings(view, submit, |s| {
+            s.toggle_entire_file();
+            true
+        }),
+        Action::ToggleSideBySide | Action::ExtendSelection => {}
     }
 }
 

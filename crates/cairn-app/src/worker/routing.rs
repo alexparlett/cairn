@@ -5,7 +5,7 @@
 //! | history (`OpenHistory`, `MoreHistory`) | `cairn-repository`, which owns the live walk |
 //! | changes (`Changes`) | `cairn-diff` |
 //! | file diff (`FileDiff`, `ExpandAll`) | `cairn-diff` |
-//! | `ListRemotes`, `CommandLog`, `Close`, `Fetch` | `cairn-repository` (a fetch is forwarded on to the network lane) |
+//! | `ListRemotes`, `ConfiguredContext`, `CommandLog`, `Close`, `Fetch` | `cairn-repository` (a fetch is forwarded on to the network lane) |
 //! | `Retire` | `cairn-repository`, which frees what it is handed |
 //! | `CancelFetch` | none: the fetch's control, from the caller's thread |
 //!
@@ -57,6 +57,7 @@ pub(super) enum Page {
 pub(super) enum RepositoryJob {
     History(Page),
     ListRemotes,
+    ConfiguredContext,
     Fetch {
         remote: String,
     },
@@ -103,6 +104,7 @@ pub(super) fn route(request: Request) -> Routed {
         }
         Request::ExpandAll { of, options } => Routed::Diff(DiffQuery::All { of, options }),
         Request::ListRemotes => Routed::Repository(RepositoryJob::ListRemotes),
+        Request::ConfiguredContext => Routed::Repository(RepositoryJob::ConfiguredContext),
         Request::Fetch { remote } => Routed::Repository(RepositoryJob::Fetch { remote }),
         Request::CommandLog => Routed::Repository(RepositoryJob::CommandLog),
         Request::Retire(retired) => Routed::Repository(RepositoryJob::Retire(retired)),
@@ -123,6 +125,7 @@ pub(super) fn unroute(routed: Routed) -> Request {
             Request::MoreHistory { rows }
         }
         Routed::Repository(RepositoryJob::ListRemotes) => Request::ListRemotes,
+        Routed::Repository(RepositoryJob::ConfiguredContext) => Request::ConfiguredContext,
         Routed::Repository(RepositoryJob::Fetch { remote }) => Request::Fetch { remote },
         Routed::Repository(RepositoryJob::CommandLog) => Request::CommandLog,
         Routed::Repository(RepositoryJob::Retire(retired)) => Request::Retire(retired),
@@ -157,6 +160,7 @@ mod tests {
                 options: DiffOptions::default(),
             },
             Request::ListRemotes,
+            Request::ConfiguredContext,
             Request::Fetch {
                 remote: "origin".to_owned(),
             },

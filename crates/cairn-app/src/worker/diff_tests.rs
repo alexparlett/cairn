@@ -918,3 +918,38 @@ fn a_retired_change_set_is_freed_on_the_worker_without_an_answer() {
         "the retirement was answered, or the thread stopped serving: {seen:?}"
     );
 }
+
+/// Phase 06: the context the views open at is the user's `diff.context`, read on the
+/// repository thread and answered as a value; a value git refuses answers nothing, and the
+/// thread goes on serving. Caught by: a fixed three, or an answer for a refused value.
+#[test]
+fn the_configured_context_is_answered_through_the_boundary() {
+    let fixture = BorrowedRepository::new(&format!("cairn-diff-context-{}", std::process::id()));
+    let config = fixture.fixture.path.join(".git").join("config");
+    append(&config, "[diff]\n\tcontext = 5\n");
+    let (handle, mut updates) = opened(&fixture.fixture.path);
+    handle.submit(Request::ConfiguredContext);
+    let seen = collect_until(&mut updates, |u| {
+        matches!(u, Update::ConfiguredContext { .. })
+    });
+    assert_eq!(
+        seen.last(),
+        Some(&Update::ConfiguredContext {
+            context: cairn_model::Context::Lines(5)
+        })
+    );
+    drop(handle);
+
+    append(&config, "[diff]\n\tcontext = abc\n");
+    let (handle, mut updates) = opened(&fixture.fixture.path);
+    handle.submit(Request::ConfiguredContext);
+    handle.submit(Request::ListRemotes);
+    let seen = collect_until(&mut updates, |u| matches!(u, Update::Remotes { .. }));
+    assert!(
+        !seen
+            .iter()
+            .any(|u| matches!(u, Update::ConfiguredContext { .. })),
+        "a refused diff.context was answered: {seen:?}"
+    );
+    drop(handle);
+}

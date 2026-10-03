@@ -5,8 +5,8 @@ use std::rc::Rc;
 use cairn_model::{HistoryRow, RemoteSummary, RowContent, RowId, Secret};
 use cairn_ui::accelerators::{self, Scope};
 use cairn_ui::{
-    CommitRow, CredentialPrompt, DETAIL_STRIP_HEIGHT, DetailTab, HistoryHeader, HistoryList,
-    ROW_HEIGHT, RowRender,
+    ChangeCursor, CommitRow, CredentialPrompt, DETAIL_STRIP_HEIGHT, DetailTab, DiffSettings,
+    HistoryHeader, HistoryList, ROW_HEIGHT, RowRender,
 };
 use freya::prelude::*;
 
@@ -45,6 +45,12 @@ pub struct View {
     pub pane_collapsed: State<bool>,
     /// The pane's height as last dragged; read when the pane is laid out again.
     pub pane_height: State<f32>,
+    /// The settings every diff view shares, kept for the session (R6.1, R6.3).
+    pub diff_settings: State<DiffSettings>,
+    /// The diff view's scroll, shared so previous and next change can move it.
+    pub diff_scroll: ScrollController,
+    /// The change previous or next change last moved to.
+    pub change_cursor: State<Option<ChangeCursor>>,
 }
 
 impl std::fmt::Debug for View {
@@ -71,6 +77,7 @@ pub fn window(
     let fetch = view.fetch.read().clone();
     let prompt = view.prompt.read().clone();
     let refused = view.refused.read().clone();
+    let hearing = submit.clone();
 
     let list = rect()
         .width(Size::fill())
@@ -92,7 +99,7 @@ pub fn window(
         // wherever focus is; the detail pane hears its own (`detail_pane`).
         .on_global_key_down(move |e: Event<KeyboardEventData>| {
             if let Some(action) = accelerators::resolve_key(&e, Scope::Window) {
-                shortcuts::act(action, view);
+                shortcuts::act(action, view, hearing.as_deref());
             }
         })
         .child(title_bar(
@@ -360,7 +367,7 @@ mod tests {
     use freya_testing::TestingRunner;
     use freya_testing::prelude::{KeyboardEventName, PlatformEvent};
 
-    use crate::detail_pane::{CHANGES_NOT_BUILT, NOTHING_SELECTED, READING};
+    use crate::detail_pane::{NO_FILE_CHOSEN, NOTHING_SELECTED, READING};
     use crate::worker::Comparison;
 
     use crate::fetch_state::{FetchStatus, PromptView};
@@ -461,6 +468,9 @@ mod tests {
                     detail_tab: State::create(DetailTab::default()),
                     pane_collapsed: State::create(false),
                     pane_height: State::create(PANE_HEIGHT),
+                    diff_settings: State::create(DiffSettings::default()),
+                    diff_scroll: ScrollController::new(0, 0, Vec::new()),
+                    change_cursor: State::create(None),
                 })
             },
             1.,
@@ -1182,7 +1192,7 @@ mod tests {
 
         click_label(&mut test, DetailTab::Changes.caption());
         assert!(
-            pane(&test).iter().any(|t| t == CHANGES_NOT_BUILT),
+            pane(&test).iter().any(|t| t == NO_FILE_CHOSEN),
             "{:?}",
             pane(&test)
         );
@@ -1191,7 +1201,7 @@ mod tests {
         click_row(&mut test, 5);
         assert_eq!(*view.detail_tab.read(), DetailTab::Changes);
         assert!(
-            pane(&test).iter().any(|t| t == CHANGES_NOT_BUILT),
+            pane(&test).iter().any(|t| t == NO_FILE_CHOSEN),
             "{:?}",
             pane(&test)
         );
@@ -1204,12 +1214,12 @@ mod tests {
             pane_top(&test) > open_top,
             "the collapsed pane did not give the list its room"
         );
-        assert!(!texts(&test).iter().any(|t| t == CHANGES_NOT_BUILT));
+        assert!(!texts(&test).iter().any(|t| t == NO_FILE_CHOSEN));
 
         click_label(&mut test, EXPAND_CAPTION);
         assert_eq!(*view.detail_tab.read(), DetailTab::Changes);
         assert!(
-            pane(&test).iter().any(|t| t == CHANGES_NOT_BUILT),
+            pane(&test).iter().any(|t| t == NO_FILE_CHOSEN),
             "{:?}",
             pane(&test)
         );
@@ -1447,5 +1457,287 @@ mod tests {
             pane_top(&test)
         );
         assert!(*view.pane_height.read() > PANE_HEIGHT);
+    }
+
+    /// Row `n`'s one file, `file-of-{n}.rs`, as a text diff of `lines` lines with one line in
+    /// every ten replaced.
+    fn text_answer(n: usize, lines: u32) -> cairn_model::FileDiff {
+        use cairn_model::{
+            ChangedRange, DiffContent, DiffLine, DisplayOverlay, LineSpan, TextDiff,
+        };
+        let old: Vec<DiffLine> = (0..lines)
+            .map(|k| DiffLine::terminated(format!("line {k}")))
+            .collect();
+        let new: Vec<DiffLine> = (0..lines)
+            .map(|k| {
+                DiffLine::terminated(if k % 10 == 5 {
+                    format!("LINE {k}")
+                } else {
+                    format!("line {k}")
+                })
+            })
+            .collect();
+        let changes = (0..lines / 10)
+            .map(|k| ChangedRange::new(LineSpan::at(k * 10 + 5, 1), LineSpan::at(k * 10 + 5, 1)))
+            .collect();
+        cairn_model::FileDiff {
+            file: answer_for(n, Vec::new()).files.remove(0),
+            content: DiffContent::Text {
+                text: TextDiff::new(old, new, changes),
+                overlay: DisplayOverlay::none(),
+            },
+        }
+    }
+
+    /// The text paragraphs drawn in the pane: the diff's rows.
+    fn pane_rows(test: &TestingRunner) -> Vec<String> {
+        let top = pane_top(test);
+        test.find_many(|node, element| {
+            Paragraph::try_downcast(element)
+                .filter(|_| node.layout().area.min_y() > top && node.is_visible())
+                .map(|paragraph| {
+                    paragraph
+                        .spans
+                        .iter()
+                        .map(|span| span.text.as_ref())
+                        .collect()
+                })
+        })
+    }
+
+    /// The file query asked last.
+    fn last_file_query(submitted: &Submitted) -> crate::worker::FileQuery {
+        submitted
+            .borrow()
+            .iter()
+            .rev()
+            .find_map(|request| match request {
+                Request::FileDiff(query) => Some(query.clone()),
+                _ => None,
+            })
+            .expect("a file's diff was asked")
+    }
+
+    /// Row 2 chosen, its change set arrived, and its one file pressed in the Commit tab.
+    fn choose_the_file(test: &mut TestingRunner, view: View) {
+        click_row(test, 2);
+        arrives(test, view, 2, Vec::new());
+        click_label(test, "file-of-2.rs");
+        test.sync_and_update();
+    }
+
+    fn answer_file(
+        test: &mut TestingRunner,
+        view: View,
+        query: &crate::worker::FileQuery,
+        lines: u32,
+    ) {
+        let mut diff = view.diff;
+        test.run_in(|| {
+            diff.write()
+                .file_arrived(query, Some(text_answer(2, lines)))
+        });
+        test.sync_and_update();
+        test.sync_and_update();
+    }
+
+    /// Phase 06 wiring, R4.4: pressing a file in the Commit tab asks its diff at the
+    /// session's settings and shows the Changes tab, which says it is reading, then draws the
+    /// answer's rows under the bar naming the file — and an answer naming the file at other
+    /// options is not drawn. Caught by: a press that asks nothing, an answer drawn for a
+    /// query no longer selected, or a diff drawn from anything but `DiffState`.
+    #[test]
+    fn a_pressed_file_draws_its_diff_in_the_changes_tab_for_that_query_alone() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        choose_the_file(&mut test, view);
+        let query = last_file_query(&submitted);
+        assert_eq!(
+            query.options,
+            crate::diff_actions::options(DiffSettings::default())
+        );
+        assert_eq!(*view.detail_tab.read(), DetailTab::Changes);
+        assert!(
+            pane(&test)
+                .iter()
+                .any(|t| t == crate::detail_pane::READING_DIFF),
+            "{:?}",
+            pane(&test)
+        );
+
+        let mut stale = query.clone();
+        stale.options.ignore_whitespace = true;
+        answer_file(&mut test, view, &stale, 40);
+        assert!(
+            pane_rows(&test).iter().all(|t| !t.starts_with("@@")),
+            "an answer at other options was drawn"
+        );
+
+        answer_file(&mut test, view, &query, 40);
+        let rows = pane_rows(&test);
+        assert!(
+            rows.iter().any(|t| t == "file-of-2.rs"),
+            "the bar does not name the file: {rows:?}"
+        );
+        assert!(rows.iter().any(|t| t.starts_with("@@ -3,")), "{rows:?}");
+        assert!(rows.iter().any(|t| t == "LINE 5"), "{rows:?}");
+    }
+
+    fn requests_since(submitted: &Submitted, from: usize) -> Vec<Request> {
+        submitted.borrow()[from..]
+            .iter()
+            .filter(|request| !matches!(request, Request::Retire(_)))
+            .cloned()
+            .collect()
+    }
+
+    /// R6.2, R6.3, C11 through the window: each line button moves the context by one and asks
+    /// the file again at it, never below one line; the entire file and ignoring whitespace
+    /// ask again with theirs; every diff view shares the settings, so the next file chosen is
+    /// asked at them. Caught by: a step of more than one, a floor of zero, a setting that
+    /// changes what is drawn without asking git again, or one the next file forgets.
+    #[test]
+    fn the_bar_moves_the_context_a_line_at_a_time_and_asks_again_never_below_one() {
+        use cairn_model::Context;
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        choose_the_file(&mut test, view);
+        let query = last_file_query(&submitted);
+        answer_file(&mut test, view, &query, 40);
+
+        let context_after = |test: &mut TestingRunner, caption: &str| {
+            let before = submitted.borrow().len();
+            click_label(test, caption);
+            test.sync_and_update();
+            requests_since(&submitted, before)
+        };
+        let asked = |requests: Vec<Request>| -> Vec<(Context, bool)> {
+            requests
+                .into_iter()
+                .map(|request| match request {
+                    Request::FileDiff(query) => {
+                        (query.options.context, query.options.ignore_whitespace)
+                    }
+                    other => panic!("asked {other:?}"),
+                })
+                .collect()
+        };
+        assert_eq!(
+            asked(context_after(&mut test, cairn_ui::FEWER_LINES_CAPTION)),
+            [(Context::Lines(2), false)]
+        );
+        assert_eq!(
+            asked(context_after(&mut test, cairn_ui::FEWER_LINES_CAPTION)),
+            [(Context::Lines(1), false)]
+        );
+        assert_eq!(
+            asked(context_after(&mut test, cairn_ui::FEWER_LINES_CAPTION)),
+            [],
+            "the context went below one line"
+        );
+        assert_eq!(
+            asked(context_after(&mut test, cairn_ui::MORE_LINES_CAPTION)),
+            [(Context::Lines(2), false)]
+        );
+        assert_eq!(
+            asked(context_after(
+                &mut test,
+                cairn_ui::IGNORE_WHITESPACE_CAPTION
+            )),
+            [(Context::Lines(2), true)]
+        );
+        assert_eq!(
+            asked(context_after(&mut test, cairn_ui::ENTIRE_FILE_CAPTION)),
+            [(Context::EntireFile, true)]
+        );
+        assert_eq!(
+            asked(context_after(&mut test, cairn_ui::ENTIRE_FILE_CAPTION)),
+            [(Context::Lines(2), true)],
+            "leaving the entire file forgot the lines"
+        );
+        let settings = *view.diff_settings.read();
+        assert_eq!(settings.context(), Context::Lines(2));
+
+        // The next file is asked at the shared settings.
+        let mut answer = answer_for(2, Vec::new());
+        answer.files.push(ChangedFile {
+            old_path: RepoPath::from("second.rs"),
+            new_path: RepoPath::from("second.rs"),
+            ..answer.files[0].clone()
+        });
+        let mut diff = view.diff;
+        test.run_in(|| diff.write().select_changes(Comparison::Commit(oid(2))));
+        test.run_in(|| {
+            diff.write()
+                .changes_arrived(Comparison::Commit(oid(2)), answer)
+        });
+        test.sync_and_update();
+        press_chord(&mut test, Action::ShowCommitTab);
+        click_label(&mut test, "second.rs");
+        let next = last_file_query(&submitted);
+        assert_eq!(next.options.context, Context::Lines(2));
+        assert!(next.options.ignore_whitespace);
+    }
+
+    fn scrolled_y(view: View) -> i32 {
+        let (_, y): (i32, i32) = view.diff_scroll.into();
+        y
+    }
+
+    /// R6.2, R8 with the user's chords: next change moves the diff to the first change, then
+    /// one change at a time, and previous back — heard while focus is inside the detail
+    /// pane, and not from the history list. The bar's buttons do the same. Caught by: a
+    /// chord heard window-wide, one that does nothing, or buttons and chords that disagree.
+    #[test]
+    fn previous_and_next_change_move_the_diff_while_the_pane_has_focus() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        choose_the_file(&mut test, view);
+        let query = last_file_query(&submitted);
+        answer_file(&mut test, view, &query, 200);
+        let layout_row = |change: usize| {
+            view.diff
+                .peek()
+                .shown_file()
+                .and_then(|shown| shown.layout())
+                .and_then(|layout| layout.change_row(change))
+                .expect("a change")
+        };
+        let top_for =
+            |change: usize| -(((layout_row(change) - 1) as f32) * cairn_ui::DIFF_ROW_HEIGHT) as i32;
+
+        // Focus in the history list: the pane does not hear the chord.
+        click_row(&mut test, 2);
+        press_chord(&mut test, Action::NextChange);
+        assert_eq!(
+            scrolled_y(view),
+            0,
+            "a chord outside the pane moved the diff"
+        );
+
+        // Focus in the diff.
+        let rows_top = pane_top(&test) + 80.;
+        test.click_cursor((400., f64::from(rows_top)));
+        test.sync_and_update();
+        press_chord(&mut test, Action::NextChange);
+        assert_eq!(scrolled_y(view), top_for(0));
+        press_chord(&mut test, Action::NextChange);
+        press_chord(&mut test, Action::NextChange);
+        assert_eq!(scrolled_y(view), top_for(2));
+        press_chord(&mut test, Action::PreviousChange);
+        assert_eq!(scrolled_y(view), top_for(1));
+        assert_eq!(
+            view.change_cursor
+                .read()
+                .as_ref()
+                .map(|cursor| cursor.change),
+            Some(1)
+        );
+
+        click_label(&mut test, cairn_ui::NEXT_CHANGE_CAPTION);
+        assert_eq!(
+            scrolled_y(view),
+            top_for(2),
+            "the bar's next change did not move"
+        );
+        click_label(&mut test, cairn_ui::PREVIOUS_CHANGE_CAPTION);
+        assert_eq!(scrolled_y(view), top_for(1));
     }
 }

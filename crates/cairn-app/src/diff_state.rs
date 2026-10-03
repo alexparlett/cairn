@@ -8,7 +8,12 @@
 //! names anything but what is selected now — the selection cleared, or changed in a way
 //! that asked nothing new — so the files of one commit are never drawn under another.
 
-use cairn_model::{ChangeSet, FileDiff, RenameDetection};
+use std::sync::LazyLock;
+
+use cairn_model::{
+    ChangeSet, ChangeStatus, ChangedFile, Context, DiffContent, FileDiff, RenameDetection, RepoPath,
+};
+use cairn_ui::ShownDiff;
 
 use crate::worker::{Comparison, DiffOptions, DiffQuery, FileQuery, Request, Retired};
 
@@ -33,20 +38,13 @@ pub struct Expanded {
 pub struct DiffState {
     /// The commit or the pair selected, and what it changed.
     changes: Option<(Comparison, Answer<ChangeSet>)>,
-    /// The file selected, and its diff — `None` inside `Ready` for a clean working-tree path.
-    file: Option<(FileQuery, Answer<Option<FileDiff>>)>,
+    /// The file selected, and its diff as the view draws it, built once as it arrives —
+    /// `None` inside `Ready` for a clean working-tree path.
+    file: Option<(FileQuery, Answer<Option<ShownDiff>>)>,
     /// Expand All over a comparison, at some options, and what has arrived of it.
     expanded: Option<(Comparison, DiffOptions, Answer<Expanded>)>,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "a file and Expand All are selected and drawn from phase 06 on; their \
-                  answers already land here"
-    )
-)]
 impl DiffState {
     /// Selects a commit or a pair: its change set is awaited, and the file and Expand All
     /// that were selected go — the changes query supersedes the file-diff lane, so their
@@ -60,8 +58,8 @@ impl DiffState {
         let file = self.file.take();
         let expanded = self.expanded.take();
         let mut diffs: Vec<FileDiff> = Vec::new();
-        if let Some((_, Answer::Ready(Some(diff)))) = file {
-            diffs.push(diff);
+        if let Some((_, Answer::Ready(Some(shown)))) = file {
+            diffs.push(shown.into_diff());
         }
         if let Some((_, _, Answer::Ready(Expanded { diffs: all, .. }))) = expanded {
             diffs.extend(all);
@@ -75,14 +73,30 @@ impl DiffState {
         requests
     }
 
-    /// Selects one file's diff. Expand All goes: it shares the file-diff lane.
-    pub fn select_file(&mut self, query: FileQuery) -> Request {
-        self.file = Some((query.clone(), Answer::Waiting));
+    /// Selects one file's diff — another file, or the same one at other options. Expand All
+    /// goes: it shares the file-diff lane.
+    ///
+    /// Returns what to submit, in order: the query, then — when a diff was kept — a
+    /// [`Request::Retire`] handing it to a worker, as [`Self::select_changes`] does: a file
+    /// of fifty thousand lines is as many allocations to free.
+    pub fn select_file(&mut self, query: FileQuery) -> Vec<Request> {
+        let replaced = self.file.replace((query.clone(), Answer::Waiting));
         self.expanded = None;
-        Request::FileDiff(query)
+        let mut requests = vec![Request::FileDiff(query)];
+        if let Some((_, Answer::Ready(Some(shown)))) = replaced {
+            requests.extend(Retired::of(None, vec![shown.into_diff()]).map(Request::Retire));
+        }
+        requests
     }
 
     /// Asks for every file of `of`. The single file selected goes: it shares the lane.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Expand All is drawn in phase 08; its answers land here"
+        )
+    )]
     pub fn expand_all(&mut self, of: Comparison, options: DiffOptions) -> Request {
         self.expanded = Some((of, options, Answer::Waiting));
         self.file = None;
@@ -90,6 +104,13 @@ impl DiffState {
     }
 
     /// Nothing selected: whatever is still on its way is not drawn.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "nothing clears the selection until a row can be unselected"
+        )
+    )]
     pub fn clear(&mut self) {
         *self = Self::default();
     }
@@ -98,10 +119,25 @@ impl DiffState {
         self.changes.as_ref().map(|(of, answer)| (*of, answer))
     }
 
-    pub fn file(&self) -> Option<(&FileQuery, &Answer<Option<FileDiff>>)> {
+    pub fn file(&self) -> Option<(&FileQuery, &Answer<Option<ShownDiff>>)> {
         self.file.as_ref().map(|(query, answer)| (query, answer))
     }
 
+    /// The selected file's diff, when it has arrived and there is one.
+    pub fn shown_file(&self) -> Option<&ShownDiff> {
+        match self.file.as_ref() {
+            Some((_, Answer::Ready(Some(shown)))) => Some(shown),
+            Some((_, Answer::Ready(None) | Answer::Waiting | Answer::Failed(_))) | None => None,
+        }
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Expand All is drawn in phase 08; its answers land here"
+        )
+    )]
     pub fn expanded(&self) -> Option<(Comparison, DiffOptions, &Answer<Expanded>)> {
         self.expanded
             .as_ref()
@@ -130,6 +166,32 @@ pub fn answered_changes(state: &DiffState) -> &ChangeSet {
         Some((_, Answer::Ready(changes))) => changes,
         Some((_, Answer::Waiting | Answer::Failed(_))) | None => &NO_CHANGES,
     }
+}
+
+/// What [`answered_file`] hands back while no file's diff is kept: an empty one.
+static NO_DIFF: LazyLock<ShownDiff> = LazyLock::new(|| {
+    ShownDiff::new(
+        FileDiff {
+            file: ChangedFile {
+                status: ChangeStatus::Modified,
+                old_path: RepoPath::from(""),
+                new_path: RepoPath::from(""),
+                old_mode: None,
+                new_mode: None,
+                old_id: None,
+                new_id: None,
+            },
+            content: DiffContent::ModeChangeOnly,
+        },
+        Context::default(),
+    )
+});
+
+/// The selected file's diff, or an empty one while none is kept: the view of the state the
+/// diff view is handed, which reads its rows by index rather than copying them. Whether the
+/// selection's answer is ready is the pane's to check before drawing it.
+pub fn answered_file(state: &DiffState) -> &ShownDiff {
+    state.shown_file().unwrap_or(&NO_DIFF)
 }
 
 impl DiffState {
@@ -171,11 +233,13 @@ impl DiffState {
         }
     }
 
-    /// A file's diff arrived; kept only if exactly `query` is selected.
+    /// A file's diff arrived; kept only if exactly `query` is selected, and prepared for the
+    /// view there and then, at the context it was asked at — once, never per frame.
     pub fn file_arrived(&mut self, query: &FileQuery, diff: Option<FileDiff>) -> bool {
         match &mut self.file {
             Some((selected, answer)) if selected == query => {
-                *answer = Answer::Ready(diff);
+                *answer =
+                    Answer::Ready(diff.map(|diff| ShownDiff::new(diff, query.options.context)));
                 true
             }
             Some(_) | None => false,
@@ -471,6 +535,43 @@ mod tests {
         assert_eq!(
             state.file(),
             Some((&selected, &Answer::Failed("git failed".to_owned())))
+        );
+    }
+
+    /// R2 for a file: choosing another file — or the same at other options — hands the diff
+    /// kept for the last one to a worker after the query, and the answer kept is prepared at
+    /// the context it was asked at. Caught by: the replaced diff dropped on the UI thread, or
+    /// rows grouped at another context than git was asked at.
+    #[test]
+    fn choosing_another_file_hands_the_last_diff_to_a_worker() {
+        use cairn_model::{Context, DiffContent};
+        let mut state = DiffState::default();
+        let first = file_of(commit(1), "a.txt");
+        assert_eq!(
+            state.select_file(first.clone()),
+            [Request::FileDiff(first.clone())],
+            "nothing was kept, so nothing is retired"
+        );
+        let diff = FileDiff {
+            file: change_set("a.txt").files.remove(0),
+            content: DiffContent::ModeChangeOnly,
+        };
+        assert!(state.file_arrived(&first, Some(diff.clone())));
+        assert_eq!(
+            state.shown_file().map(ShownDiff::context),
+            Some(Context::default())
+        );
+
+        let mut wider = first.clone();
+        wider.options.context = Context::Lines(7);
+        let requests = state.select_file(wider.clone());
+        assert_eq!(requests.len(), 2, "{requests:?}");
+        assert_eq!(requests[0], Request::FileDiff(wider.clone()));
+        assert!(matches!(&requests[1], Request::Retire(_)));
+        assert!(state.file_arrived(&wider, Some(diff)));
+        assert_eq!(
+            state.shown_file().map(ShownDiff::context),
+            Some(Context::Lines(7))
         );
     }
 }

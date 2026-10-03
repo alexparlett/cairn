@@ -37,11 +37,17 @@
 //!
 //! The environment those files and variables are found through is the one Cairn was
 //! launched with: what the user's own `git`, run from the same place, reads. Residual
-//! review obligations, stated rather than implied: the system file is gix's guess at it
-//! (`/etc/gitconfig`, `GIT_CONFIG_SYSTEM`, and the installation file of the `git` on
-//! `PATH`), not the path compiled into the `git` Cairn found; an `includeIf "hasconfig:"`
-//! in a global file, which git can match there, is not followed; and a git built
-//! `WITH_BREAKING_CHANGES` before 3.0 defaults to `explicit` where this reads `all`.
+//! review obligations, stated rather than implied: the system file is `GIT_CONFIG_SYSTEM`
+//! or `/etc/gitconfig`, not the path compiled into the `git` Cairn found (the same file in
+//! a distribution's git, whose prefix is `/usr`; another file in a git built with another
+//! `sysconfdir`, which asking would mean running a process); an `includeIf "hasconfig:"`
+//! in a global file, which git can match there, is not followed; a command line git cannot
+//! parse is refused only where the search stops at a bare repository, while git refuses
+//! every command with it; and a git built `WITH_BREAKING_CHANGES` before 3.0 defaults to
+//! `explicit` where this reads `all`.
+//!
+//! The search that is checked is the search that opens: [`find`] hands back the path it
+//! stopped at, and `SharedRepository` opens exactly that, never searching again.
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt as _;
@@ -70,21 +76,33 @@ const EXPLICIT_BY_DEFAULT_FROM: GitVersion = version(3, 0);
 /// The setting's key, as git spells it.
 const KEY: &str = "safe.bareRepository";
 
-/// Refuses `start`'s repository when `git` at `version` would refuse to find it from
-/// there: [`Error::BareRepositoryFoundBySearching`] for one the setting refuses,
+/// The repository git's search from `start` stops at, as the path to hand gix to open
+/// exactly there — the `.git` of a working tree, or a git directory found as itself —
+/// physical and absolute, or the refusal git at `version` gives it:
+/// [`Error::NotARepository`] when the search finds nothing,
+/// [`Error::BareRepositoryFoundBySearching`] for a bare repository the setting refuses,
 /// [`Error::InvalidConfig`] for a value git dies on. `environment` answers what the
 /// launching environment holds for a name.
-pub(crate) fn check(
+///
+/// The repository opened is the one this search checked, never a second search's: two
+/// walks agree only while they take the same steps, and one that followed a link
+/// logically — `docs/guide -> ../guide` searched upwards into `docs/` — would open a bare
+/// repository planted there while this one passed the working tree above it.
+pub(crate) fn find(
     start: &Path,
     version: GitVersion,
     environment: &dyn Fn(&str) -> Option<OsString>,
-) -> Result<(), Error> {
-    if version < SETTING_FROM {
-        return Ok(());
-    }
-    let Some(found) = bare_repository_found_from(start) else {
-        return Ok(());
+) -> Result<PathBuf, Error> {
+    let stop = search(start).ok_or_else(|| Error::NotARepository {
+        path: start.to_owned(),
+    })?;
+    let found = match stop {
+        Stop::WorkTree(dot_git) => return Ok(dot_git),
+        Stop::GitDirectory(found) => found,
     };
+    if version < SETTING_FROM {
+        return Ok(found);
+    }
     // Read before the path is looked at, as git reads it (`get_allowed_bare_repo()` is the
     // condition's first operand): a value git dies on refuses an implicit one too.
     let explicit = match protected_setting(environment)? {
@@ -95,25 +113,39 @@ pub(crate) fn check(
     if explicit && !is_implicit(&found, version) {
         return Err(Error::BareRepositoryFoundBySearching { path: found });
     }
-    Ok(())
+    Ok(found)
 }
 
-/// The bare repository git's search from `start` stops at, if it stops at one: from the
-/// physical directory upwards (git searches from `getcwd`, which resolves links), the
-/// first directory with a `.git` that is a repository is a working tree, and the first
-/// that is itself a git directory is a bare repository. gix's search, which opened the
-/// repository, takes the same steps in the same order (`gix_discover::upwards`), and a
-/// directory named `.git` it checks as itself, which git also ends up doing.
-fn bare_repository_found_from(start: &Path) -> Option<PathBuf> {
+/// Where git's search stops.
+enum Stop {
+    /// A directory holding a `.git` that is a repository: the path is that `.git`.
+    WorkTree(PathBuf),
+    /// A directory that is itself a git directory: a bare repository found by searching.
+    GitDirectory(PathBuf),
+}
+
+/// Git's search from `start`: from the physical directory upwards (git searches from
+/// `getcwd`, which resolves links), the first directory with a `.git` that is a repository
+/// is a working tree, and the first that is itself a git directory is a bare repository; a
+/// directory named `.git` is checked as itself, which git also ends up doing. Like git, and
+/// like the search gix makes by default, it does not cross into another filesystem. `None`
+/// when it finds nothing, or `start` is not a directory that can be read.
+fn search(start: &Path) -> Option<Stop> {
+    use std::os::unix::fs::MetadataExt as _;
+
     let mut cursor = std::fs::canonicalize(start).ok()?;
+    let device = std::fs::metadata(&cursor).ok()?.dev();
     loop {
-        if cursor.file_name() != Some(OsStr::new(".git"))
-            && gix::discover::is_git(&cursor.join(".git")).is_ok()
-        {
+        if std::fs::metadata(&cursor).ok()?.dev() != device {
             return None;
         }
+        let dot_git = cursor.join(".git");
+        if cursor.file_name() != Some(OsStr::new(".git")) && gix::discover::is_git(&dot_git).is_ok()
+        {
+            return Some(Stop::WorkTree(dot_git));
+        }
         if gix::discover::is_git(&cursor).is_ok() {
-            return Some(cursor);
+            return Some(Stop::GitDirectory(cursor));
         }
         if !cursor.pop() {
             return None;
@@ -174,31 +206,32 @@ fn protected_setting(
 /// Every value the system and global files give the key, in git's order: system, then the
 /// XDG file, then `~/.gitconfig` (or `GIT_CONFIG_GLOBAL` for both), includes followed in
 /// place. A file that cannot be read or parsed is the refusal git gives it.
+///
+/// The system file is `GIT_CONFIG_SYSTEM`, or `/etc/gitconfig` (unless
+/// `GIT_CONFIG_NOSYSTEM`): gix's `Source::System`, which names a path and runs nothing.
+/// Not `Source::GitInstallation`, which finds its file by running the `git` on `PATH` —
+/// `git config -lz --show-origin` from the process's own environment, outside
+/// `GitEnvironment` — and which gix's own open never asks for.
 fn files_values(
     environment: &dyn Fn(&str) -> Option<OsString>,
 ) -> Result<Vec<Option<Vec<u8>>>, Error> {
     use gix::config::{File, Source, file::Metadata, file::includes, file::init};
 
     let mut lookup = |name: &str| environment(name);
-    let metas: Vec<Metadata> = [
-        Source::GitInstallation,
-        Source::System,
-        Source::Git,
-        Source::User,
-    ]
-    .into_iter()
-    .filter_map(|source| {
-        let path = source
-            .storage_location(&mut lookup)
-            .filter(|path| path.is_file())?;
-        Some(Metadata {
-            path: Some(path),
-            source,
-            level: 0,
-            trust: gix::sec::Trust::Full,
+    let metas: Vec<Metadata> = [Source::System, Source::Git, Source::User]
+        .into_iter()
+        .filter_map(|source| {
+            let path = source
+                .storage_location(&mut lookup)
+                .filter(|path| path.is_file())?;
+            Some(Metadata {
+                path: Some(path),
+                source,
+                level: 0,
+                trust: gix::sec::Trust::Full,
+            })
         })
-    })
-    .collect();
+        .collect();
     let home = environment("HOME").map(PathBuf::from);
     let options = init::Options {
         includes: includes::Options::follow_without_conditional(home.as_deref()),
@@ -238,10 +271,8 @@ fn command_line_values(
     };
     let mut values = Vec::new();
     if let Some(count) = environment("GIT_CONFIG_COUNT") {
-        let parsed: usize = count
-            .to_str()
-            .and_then(|text| text.parse().ok())
-            .ok_or_else(|| malformed("GIT_CONFIG_COUNT", &count))?;
+        let parsed =
+            entry_count(count.as_bytes()).map_err(|_| malformed("GIT_CONFIG_COUNT", &count))?;
         for index in 0..parsed {
             let key_name = format!("GIT_CONFIG_KEY_{index}");
             let value_name = format!("GIT_CONFIG_VALUE_{index}");
@@ -263,6 +294,65 @@ fn command_line_values(
         }
     }
     Ok(values)
+}
+
+/// Why git refuses a `GIT_CONFIG_COUNT`, in the words of its error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CountRefused {
+    /// "bogus count in GIT_CONFIG_COUNT": something other than a number, or after one.
+    Bogus,
+    /// "too many entries in GIT_CONFIG_COUNT": a number past `INT_MAX`.
+    TooMany,
+}
+
+/// `GIT_CONFIG_COUNT` as `git_config_from_parameters` reads it (git 2.31 on; before, it is
+/// not read, and before 2.38 nothing here is): C's `strtoul(text, &end, 10)`, then "bogus
+/// count" when anything is left after the number and "too many entries" past `INT_MAX`.
+/// So leading whitespace (C's `isspace`, in the C locale) and one sign are accepted; an
+/// empty value is zero entries, but whitespace or a sign alone is bogus, since `strtoul`
+/// then consumes nothing; a negative number is negated modulo `ULONG_MAX + 1`, which puts
+/// all but the last `INT_MAX` of them past `INT_MAX`; and a number past `ULONG_MAX`,
+/// either sign, is `ULONG_MAX`. Each verified against git 2.56; git 2.30.9 ignores the
+/// variable.
+fn entry_count(text: &[u8]) -> Result<usize, CountRefused> {
+    use std::ffi::{c_int, c_ulong};
+
+    let mut rest = text;
+    while let [first, tail @ ..] = rest
+        && is_space(*first)
+    {
+        rest = tail;
+    }
+    let negative = rest.first() == Some(&b'-');
+    if let [b'-' | b'+', tail @ ..] = rest {
+        rest = tail;
+    }
+    if rest.is_empty() {
+        // Nothing consumed: `end` is the start of the text, so only an empty one is a count.
+        return if text.is_empty() {
+            Ok(0)
+        } else {
+            Err(CountRefused::Bogus)
+        };
+    }
+    let mut value: Option<c_ulong> = Some(0);
+    for byte in rest {
+        if !byte.is_ascii_digit() {
+            return Err(CountRefused::Bogus);
+        }
+        value = value
+            .and_then(|value| value.checked_mul(10))
+            .and_then(|value| value.checked_add(c_ulong::from(byte - b'0')));
+    }
+    let value = match value {
+        None => c_ulong::MAX,
+        Some(value) if negative => value.wrapping_neg(),
+        Some(value) => value,
+    };
+    if value > c_ulong::from(c_int::MAX.unsigned_abs()) {
+        return Err(CountRefused::TooMany);
+    }
+    usize::try_from(value).map_err(|_| CountRefused::TooMany)
 }
 
 /// Whether a command-line key is `safe.bareRepository`, which git compares without case
@@ -400,7 +490,9 @@ mod tests {
     }
 
     /// A git before 2.38 has nothing to refuse, so nothing is read: even a configuration
-    /// git would die on opens. Caught by: checking on a git with no setting.
+    /// git would die on opens, from this checkout's git directory entered directly, which
+    /// a git with the setting reads it for and dies on. Caught by: checking on a git with
+    /// no setting.
     #[test]
     fn a_git_without_the_setting_refuses_nothing() {
         let environment = |name: &str| match name {
@@ -409,8 +501,19 @@ mod tests {
             "GIT_CONFIG_GLOBAL" => Some(OsString::from("/dev/null")),
             _ => None,
         };
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        assert!(check(root, at(2, 37, 7), &environment).is_ok());
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let git_dir = match search(root) {
+            Some(Stop::WorkTree(dot_git)) => {
+                gix::discover::path::from_gitdir_file(&dot_git).unwrap_or_else(|_| dot_git.clone())
+            }
+            _ => panic!("this checkout is not a working tree"),
+        };
+        assert!(matches!(search(&git_dir), Some(Stop::GitDirectory(_))));
+        assert!(find(&git_dir, at(2, 37, 7), &environment).is_ok());
+        assert!(matches!(
+            find(&git_dir, at(2, 38, 0), &environment),
+            Err(Error::InvalidConfig { .. })
+        ));
     }
 
     /// git's two values exactly, and a death on anything else. Caught by: a value read
@@ -465,6 +568,67 @@ mod tests {
             " 'a.b'",
         ] {
             assert_eq!(read(bogus), None, "{bogus:?} was accepted");
+        }
+    }
+
+    /// `GIT_CONFIG_COUNT` as git 2.56's `strtoul` reads it, each spelling's answer the one
+    /// git gave for it: accepted with leading whitespace and one sign, an empty value as
+    /// zero, a negative negated modulo 2^64 (on a 64-bit `long`), an overflow saturated,
+    /// and "bogus count" for anything left over and "too many entries" past `INT_MAX` —
+    /// the two errors told apart as git tells them. Caught by: `str::parse::<usize>`, which
+    /// refuses the whitespace, the empty value and the negatives git accepts, and takes a
+    /// count past `INT_MAX` as one.
+    #[test]
+    fn the_entry_count_is_read_as_gits_strtoul_reads_it() {
+        use CountRefused::{Bogus, TooMany};
+        let cases: &[(&[u8], Result<usize, CountRefused>)] = &[
+            (b"", Ok(0)),
+            (b"0", Ok(0)),
+            (b"1", Ok(1)),
+            (b"01", Ok(1)),
+            (b" 1", Ok(1)),
+            (b"\t1", Ok(1)),
+            (b"\n1", Ok(1)),
+            (b"\x0b1", Ok(1)),
+            (b"\r\x0c1", Ok(1)),
+            (b"+1", Ok(1)),
+            (b" +1", Ok(1)),
+            (b"-0", Ok(0)),
+            (b"2147483647", Ok(2_147_483_647)),
+            (b"1x", Err(Bogus)),
+            (b"1 ", Err(Bogus)),
+            (b"1\t", Err(Bogus)),
+            (b"0x1", Err(Bogus)),
+            (b"  ", Err(Bogus)),
+            (b"+", Err(Bogus)),
+            (b"-", Err(Bogus)),
+            (b"- 1", Err(Bogus)),
+            (b"+-1", Err(Bogus)),
+            (b"\xc2\xa01", Err(Bogus)),
+            (b"99999999999999999999999x", Err(Bogus)),
+            (b"-1", Err(TooMany)),
+            (b"2147483648", Err(TooMany)),
+            (b"4294967296", Err(TooMany)),
+            (b"99999999999999999999999", Err(TooMany)),
+            (b"-18446744073709551616", Err(TooMany)),
+            (b"-18446744071562067968", Err(TooMany)),
+        ];
+        for (text, expected) in cases {
+            let spelled = String::from_utf8_lossy(text);
+            assert_eq!(entry_count(text), *expected, "GIT_CONFIG_COUNT={spelled:?}");
+        }
+        // Where `long` is 64 bits, as on every target Cairn builds for: a negative within
+        // `INT_MAX` of 2^64 wraps to a count git accepts.
+        if std::ffi::c_ulong::BITS == 64 {
+            for (text, expected) in [
+                (&b"18446744073709551615"[..], Err(TooMany)),
+                (b"-18446744073709551615", Ok(1)),
+                (b"-18446744073709551614", Ok(2)),
+                (b"-18446744071562067969", Ok(2_147_483_647)),
+            ] {
+                let spelled = String::from_utf8_lossy(text);
+                assert_eq!(entry_count(text), expected, "GIT_CONFIG_COUNT={spelled:?}");
+            }
         }
     }
 

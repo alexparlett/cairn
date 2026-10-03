@@ -66,16 +66,30 @@ impl SharedRepository {
         version: GitVersion,
         environment: &dyn Fn(&str) -> Option<OsString>,
     ) -> Result<Self, Error> {
-        crate::bare_discovery::check(path, version, environment)?;
-        let inner = gix::ThreadSafeRepository::discover(path).map_err(|source| match source {
-            gix::discover::Error::Discover(_) => Error::NotARepository {
-                path: path.to_owned(),
-            },
-            other => Error::Open {
-                path: path.to_owned(),
-                source: Box::new(other),
-            },
-        })?;
+        use gix::sec::trust::DefaultForLevel as _;
+
+        // The path the check searched to, opened as it is: searching again could stop
+        // somewhere else (`crate::bare_discovery::find`).
+        let found = crate::bare_discovery::find(path, version, environment)?;
+        let not_a_repository = || Error::NotARepository {
+            path: path.to_owned(),
+        };
+        // What gix's own discovery does with the path it stops at: the trust its owner
+        // earns picks the options, and is the git directory's trust.
+        let trust = gix::sec::Trust::from_path_ownership(&found).map_err(|_| not_a_repository())?;
+        let options = gix::open::Options::default_for_level(trust)
+            .with(trust)
+            .open_path_as_is(true);
+        let inner =
+            gix::ThreadSafeRepository::open_opts(found, options).map_err(
+                |source| match source {
+                    gix::open::Error::NotARepository { .. } => not_a_repository(),
+                    other => Error::Open {
+                        path: path.to_owned(),
+                        source: Box::new(other),
+                    },
+                },
+            )?;
         Ok(Self {
             git_dir: inner.git_dir().to_owned(),
             workdir: inner.work_dir().map(Path::to_owned),

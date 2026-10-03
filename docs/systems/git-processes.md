@@ -282,14 +282,34 @@ where that version of git refuses it from the same directory
 v2.38.0 through v2.56.0): the search stops at a directory that is itself a
 git directory rather than one holding a `.git`; the setting is read only from
 the system file, the global ones (includes followed, `includeIf "gitdir:"`
-not) and the command line's `GIT_CONFIG_COUNT` and `GIT_CONFIG_PARAMETERS`,
-never the repository's own, and every value is checked, git dying on any but
-`explicit` and `all`; and what git calls implicit opens — nothing before
-2.38 (the setting does not exist), nothing from 2.38 to 2.43, a directory
-named `.git` in 2.44, and from 2.45 a linked worktree's or a submodule's git
-directory too. `SharedRepository::discover` applies git 2.45's rule with the
-process's own environment. A repository that passes is named to git as
-before.
+not) and the command line's `GIT_CONFIG_COUNT` (its count read as git's
+`strtoul` reads it — leading whitespace and a sign accepted, an empty value
+zero entries, "bogus count" and "too many entries" where git says them) and
+`GIT_CONFIG_PARAMETERS`, never the repository's own, and every value is
+checked, git dying on any but `explicit` and `all`; and what git calls
+implicit opens — nothing before 2.38 (the setting does not exist), nothing
+from 2.38 to 2.43, a directory named `.git` in 2.44, and from 2.45 a linked
+worktree's or a submodule's git directory too. `SharedRepository::discover`
+applies git 2.45's rule with the process's own environment. A repository
+that passes is named to git as before.
+
+The search that is checked is the search that opens. `bare_discovery::find`
+walks once, from the physical directory upwards as git does (and, as git and
+gix do by default, not into another filesystem), and hands back where it
+stopped — the `.git` of a working tree, or a git directory found as itself —
+and gix opens exactly that path (`ThreadSafeRepository::open_opts` with the
+path taken as it is, the options and trust gix's own discovery derives from
+its owner), never searching again. Two searches agree only while they take
+the same steps: gix's today switches to the physical path as git's does, but
+one that followed a link logically would climb from `docs/guide -> ../guide`
+into a bare repository planted as `docs/` while the check passed the working
+tree above it. So the paths a repository reports are physical — a repository
+opened through a link reports the directory the link leads to, as
+`git rev-parse` does. Reading the system file runs nothing: it is
+`GIT_CONFIG_SYSTEM` or `/etc/gitconfig`, gix's `Source::System`, never
+`Source::GitInstallation`, whose path gix-path finds by running the `git` on
+`PATH` (`git config -lz --show-origin`) outside `GitEnvironment` — which
+gix's own open never asks for either.
 
 The command log and an error report the verb and its arguments, not the
 location: a repository's log is its own, and the record's directory says
@@ -309,15 +329,22 @@ removed. The open's check is pinned against the git in use by
 every shape (the planted repository and a directory inside it, a `.git`
 directory entered, a linked worktree's git directory, the worktree, the
 working tree) under every way the setting is given or not, the repositories'
-own configuration saying `explicit` throughout, Cairn opening exactly where
-`git rev-parse` does — and
+own configuration saying `explicit` throughout, Cairn opening the same git
+directory `git rev-parse --absolute-git-dir` does, or refusing where it
+refuses; a link inside a planted bare repository to a directory of the
+working tree, and a link from outside to it, among the shapes, and four
+`GIT_CONFIG_COUNT` spellings git accepts among the settings — and
+`opening_reads_the_system_file_without_running_a_process` (the test binary
+run again with a recording `git` first on `PATH` and no
+`GIT_CONFIG_NOSYSTEM`, the recorder shown to record) and
 `a_planted_bare_repository_is_refused_at_open_and_runs_nothing` (the planted
 `core.fsmonitor` runs on a read without the setting, as it does under git,
 and never under it; skipped before 2.38), in
 `crates/cairn-git/tests/diff/bare_discovery.rs`; the version bands by
 `which_bare_repositories_are_implicit_follows_the_version_of_git` and the
 command line's parsing by
-`command_line_parameters_are_read_as_git_reads_them`, in
+`command_line_parameters_are_read_as_git_reads_them` and
+`the_entry_count_is_read_as_gits_strtoul_reads_it`, in
 `bare_discovery.rs`; and the application's open by
 `a_planted_bare_repository_is_refused_as_the_launchs_git_refuses_it`
 (`crates/cairn-app/src/worker/pool.rs`). Residual, stated rather than
@@ -326,15 +353,21 @@ repository its own user does not own, so that a less-than-fully-trusted
 repository reaches git's own check is pinned at the function, not end to
 end; and where gix's trust and git's ownership rule disagree — gix trusting
 a repository git would refuse — the options skip git's check for it. The
-`safe.bareRepository` check reads the system file where gix guesses it is
-(`/etc/gitconfig`, `GIT_CONFIG_SYSTEM`, the installation file of the `git` on
-`PATH`), not at the path compiled into the `git` Cairn found; does not follow
-an `includeIf "hasconfig:"` in a global file, which git can match there; does
-not check the other keys of `GIT_CONFIG_PARAMETERS` (a key git refuses makes
-it refuse every command anyway); and reads a git built
+`safe.bareRepository` check reads the system file at `GIT_CONFIG_SYSTEM` or
+`/etc/gitconfig`, not at the path compiled into the `git` Cairn found — the
+same file for a distribution's git (prefix `/usr`), another for a git built
+with another `sysconfdir` (a custom prefix, Homebrew's, Apple's), whose file
+only running a process could find; does not follow an
+`includeIf "hasconfig:"` in a global file, which git can match there; does
+not check the other keys of `GIT_CONFIG_PARAMETERS`, and reads either
+variable only where the search stops at a bare repository, while git refuses
+every command when it cannot parse one; and reads a git built
 `WITH_BREAKING_CHANGES` before 3.0 as defaulting to `all`. Each would show a
-divergence only in the user's own protected configuration, never one a
-repository can plant.
+divergence only in the user's own protected configuration or environment,
+never one a repository can plant. Not residual: whether the repository
+opened is the one checked — it is opened from the path the check searched
+to, and the shapes test fails when it is opened through a second, logical
+search instead, or when the one search is made logical.
 
 ## The runner
 

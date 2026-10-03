@@ -26,12 +26,21 @@ fn since(minor: u32) -> cairn_git::ops::GitVersion {
 /// enclosing one and names `core.fsmonitor`, the program every read with a working tree
 /// runs. Every repository's own configuration says `safe.bareRepository = explicit`, which
 /// git never reads from there.
+///
+/// And two links: a second bare clone planted as `docs/`, holding `guide -> ../guide`, a
+/// link to a plain directory of the working tree — so that the link's logical parent is
+/// the planted repository and its physical parent the working tree — and a link from
+/// outside the working tree to that same directory.
 struct Planted {
     work: Repo,
     worktree: PathBuf,
     planted: PathBuf,
     marker: PathBuf,
     head: Oid,
+    /// `docs/guide`, whose logical parent is the planted `docs/`.
+    linked: PathBuf,
+    /// A link beside the working tree to its `guide/`.
+    link: PathBuf,
 }
 
 impl Planted {
@@ -73,12 +82,35 @@ impl Planted {
         ]);
         in_planted(&["config", "safe.bareRepository", "explicit"]);
         work.config("safe.bareRepository", "explicit");
+        let docs = work.path().join("docs");
+        work.git(&[
+            "clone",
+            "--quiet",
+            "--bare",
+            &work_text,
+            &docs.display().to_string(),
+        ]);
+        let guide = work.path().join("guide");
+        ok(std::fs::create_dir(&guide), "making the linked directory");
+        let linked = docs.join("guide");
+        ok(
+            std::os::unix::fs::symlink("../guide", &linked),
+            "linking docs/guide to ../guide",
+        );
+        let link = work.path().with_extension("link");
+        let _ = std::fs::remove_file(&link);
+        ok(
+            std::os::unix::fs::symlink(&guide, &link),
+            "linking to the working tree from outside it",
+        );
         Self {
             work,
             worktree,
             planted,
             marker,
             head,
+            linked,
+            link,
         }
     }
 
@@ -92,6 +124,7 @@ impl Drop for Planted {
         let _ = std::fs::remove_dir_all(&self.worktree);
         let _ = std::fs::remove_file(&self.marker);
         let _ = std::fs::remove_file(self.work.path().with_extension("trap.sh"));
+        let _ = std::fs::remove_file(&self.link);
     }
 }
 
@@ -116,14 +149,32 @@ fn launch(extra: &[(&str, String)]) -> impl Fn(&str) -> Option<OsString> + use<>
     }
 }
 
-/// Whether the git in use, run from `directory` in that environment, finds a repository.
-fn git_opens(directory: &Path, extra: &[(&str, String)]) -> bool {
+/// The git directory the git in use, run from `directory` in that environment, opens —
+/// physical — or `None` when it finds none or refuses it.
+fn git_opens(directory: &Path, extra: &[(&str, String)]) -> Option<PathBuf> {
     let env: Vec<(&str, &str)> = extra
         .iter()
         .map(|(name, value)| (*name, value.as_str()))
         .collect();
-    let (status, _, _) = Repo::borrowed(directory).run(&["rev-parse", "--git-dir"], &env, None);
-    status.success()
+    let (status, stdout, _) =
+        Repo::borrowed(directory).run(&["rev-parse", "--absolute-git-dir"], &env, None);
+    status
+        .success()
+        .then(|| physical(Path::new(stdout.trim_end())))
+}
+
+/// `path` with every link resolved.
+fn physical(path: &Path) -> PathBuf {
+    ok(std::fs::canonicalize(path), "resolving a git directory")
+}
+
+/// `GIT_CONFIG_COUNT` spelled `count`, its one entry saying `explicit`.
+fn counted(count: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("GIT_CONFIG_COUNT", count.to_owned()),
+        ("GIT_CONFIG_KEY_0", "safe.bareRepository".to_owned()),
+        ("GIT_CONFIG_VALUE_0", "explicit".to_owned()),
+    ]
 }
 
 /// A configuration file in the working tree, removed with it.
@@ -135,14 +186,19 @@ fn written(holder: &Path, name: &str, text: &str) -> String {
 
 /// Every shape a repository can be found in, under every way the setting can be given and
 /// not given, opens in Cairn exactly where the git in use opens it from the same directory
-/// with the same configuration — the planted repository and a directory inside it, a
-/// `.git` directory and a directory inside it entered directly, a linked worktree's git
-/// directory, the worktree itself and the working tree — and on a git that has the setting
-/// the fixture is shown to tell the shapes apart. The repositories' own configuration says
-/// `explicit` throughout and is ignored, as git ignores it. Caught by: the setting read from
-/// the repository's configuration, from `includeIf "gitdir:"`, or not from the command
-/// line; a `.git` directory or a worktree's refused on a git that allows it, or allowed on
-/// one that refuses it; and a value git dies on accepted.
+/// with the same configuration — the same git directory, or a refusal where git refuses —
+/// for the planted repository and a directory inside it, a `.git` directory and a
+/// directory inside it entered directly, a linked worktree's git directory, the worktree
+/// itself and the working tree, a link inside a planted bare repository to a directory of
+/// the working tree, and a link from outside to the same directory; and on a git that has
+/// the setting the fixture is shown to tell the shapes apart. The repositories' own
+/// configuration says `explicit` throughout and is ignored, as git ignores it. Caught by:
+/// the setting read from the repository's configuration, from `includeIf "gitdir:"`, or
+/// not from the command line; `GIT_CONFIG_COUNT` read other than as git's `strtoul` reads
+/// it; a `.git` directory or a worktree's refused on a git that allows it, or allowed on
+/// one that refuses it; a value git dies on accepted; and the repository opened found by
+/// a search other than the one checked — one that follows the link logically opens the
+/// planted `docs/`, which git never reaches from there.
 #[test]
 fn a_bare_repository_found_by_searching_opens_exactly_where_git_opens_it() {
     let fixture = Planted::new("bare-discovery");
@@ -184,14 +240,12 @@ fn a_bare_repository_found_by_searching_opens_exactly_where_git_opens_it() {
                 "'safe.bareRepository=explicit'".to_owned(),
             )],
         ),
-        (
-            "explicit through GIT_CONFIG_COUNT",
-            vec![
-                ("GIT_CONFIG_COUNT", "1".to_owned()),
-                ("GIT_CONFIG_KEY_0", "safe.bareRepository".to_owned()),
-                ("GIT_CONFIG_VALUE_0", "explicit".to_owned()),
-            ],
-        ),
+        ("explicit through GIT_CONFIG_COUNT", counted("1")),
+        // git reads the count with `strtoul`: each of these is a count it accepts.
+        ("a count after whitespace", counted(" 1")),
+        ("a count with a plus sign", counted("+1")),
+        ("an empty count, which is none", counted("")),
+        ("a count of minus zero", counted("-0")),
     ];
     let shapes: Vec<(&str, PathBuf)> = vec![
         ("the planted repository", fixture.planted.clone()),
@@ -212,6 +266,14 @@ fn a_bare_repository_found_by_searching_opens_exactly_where_git_opens_it() {
         ),
         ("a linked worktree", fixture.worktree.clone()),
         ("a working tree", holder.to_owned()),
+        (
+            "a link in a planted repository to the working tree",
+            fixture.linked.clone(),
+        ),
+        (
+            "a link from outside to the working tree",
+            fixture.link.clone(),
+        ),
     ];
 
     let mut differ = Vec::new();
@@ -220,9 +282,13 @@ fn a_bare_repository_found_by_searching_opens_exactly_where_git_opens_it() {
         for (shape, directory) in &shapes {
             let expected = git_opens(directory, extra);
             let opened = SharedRepository::discover_for(directory, git(), launch(extra));
-            if opened.is_ok() != expected {
+            let cairn_opens = opened
+                .as_ref()
+                .ok()
+                .map(|shared| physical(shared.git_dir()));
+            if cairn_opens != expected {
                 differ.push(format!(
-                    "{shape}, {setting}: git opens it: {expected}, Cairn: {opened:?}"
+                    "{shape}, {setting}: git opens {expected:?}, Cairn {opened:?}"
                 ));
             }
             match (&opened, *setting) {
@@ -231,7 +297,7 @@ fn a_bare_repository_found_by_searching_opens_exactly_where_git_opens_it() {
                 (Err(other), _) => differ.push(format!("{shape}, {setting}: refused as {other}")),
                 (Ok(_), _) => {}
             }
-            seen.insert((*setting, *shape), expected);
+            seen.insert((*setting, *shape), expected.is_some());
         }
     }
     assert!(differ.is_empty(), "{}", differ.join("\n"));
@@ -263,6 +329,31 @@ fn a_bare_repository_found_by_searching_opens_exactly_where_git_opens_it() {
     }
     assert!(under(explicit_setting, "a working tree"));
     assert!(under(explicit_setting, "a linked worktree"));
+    // The link's logical parent is a repository git opens, and not the one it opens from
+    // the link: a search that followed the link logically would stop somewhere else.
+    let working = git_opens(holder, &[]);
+    assert!(working.is_some());
+    for directory in [&fixture.linked, &fixture.link] {
+        assert_eq!(
+            git_opens(directory, &[]),
+            working,
+            "{}",
+            directory.display()
+        );
+    }
+    let logical_parent = git_opens(&holder.join("docs"), &[]);
+    assert!(logical_parent.is_some() && logical_parent != working);
+    // The counts are read, not ignored: two are one entry, two are none.
+    for setting in ["a count after whitespace", "a count with a plus sign"] {
+        assert_eq!(
+            under(setting, "the planted repository"),
+            version < since(38),
+            "git {version}, {setting}"
+        );
+    }
+    for setting in ["an empty count, which is none", "a count of minus zero"] {
+        assert!(under(setting, "the planted repository"), "{setting}");
+    }
 }
 
 /// The attack the setting exists for, end to end: a bare repository planted inside a
@@ -332,4 +423,104 @@ fn a_planted_bare_repository_is_refused_at_open_and_runs_nothing() {
         "git opens the planted repository under explicit, so this test proves nothing"
     );
     assert!(!fixture.ran(), "git itself ran the planted program");
+}
+
+/// Where the child of [`opening_reads_the_system_file_without_running_a_process`] is told
+/// what to open, and where its recording `git` writes.
+const OPEN_TARGET: &str = "CAIRN_TEST_OPEN_TARGET";
+const RECORDED: &str = "CAIRN_TEST_RECORDED";
+
+/// Reading the configuration git protects runs no process: the system file is named, not
+/// asked of a `git` — which would run outside `GitEnvironment`, from the process's own
+/// `PATH` and environment. This test binary is run again with a `git` first on `PATH`
+/// that records every invocation, no `GIT_CONFIG_NOSYSTEM` (so the system file is
+/// looked for), and the global file saying `explicit`; the child opens the planted
+/// repository through `SharedRepository::discover`, the process's own environment, which
+/// refuses it having read every file, under git 2.45's rule whichever git is installed —
+/// and the recorder is shown to record by one invocation the child makes itself. Caught
+/// by: gix's `Source::GitInstallation`, whose path gix-path finds by running
+/// `git config -lz --show-origin`.
+#[test]
+fn opening_reads_the_system_file_without_running_a_process() {
+    if let Some(target) = std::env::var_os(OPEN_TARGET) {
+        let status = std::process::Command::new("git")
+            .arg("recorder-check")
+            .status();
+        assert!(status.is_ok(), "the recording git did not run: {status:?}");
+        let refused = SharedRepository::discover(PathBuf::from(target));
+        assert!(
+            matches!(refused, Err(Error::BareRepositoryFoundBySearching { .. })),
+            "the planted repository was not refused under the global file: {refused:?}"
+        );
+        return;
+    }
+    let fixture = Planted::new("bare-no-process");
+    let holder = fixture.work.path();
+    let explicit = written(holder, "explicit", "[safe]\n\tbareRepository = explicit\n");
+    let shim = holder.with_extension("shim");
+    let _ = std::fs::remove_dir_all(&shim);
+    ok(
+        std::fs::create_dir(&shim),
+        "making the recorder's directory",
+    );
+    let recorded = holder.with_extension("recorded");
+    let _ = std::fs::remove_file(&recorded);
+    let recorder = shim.join("git");
+    ok(
+        std::fs::write(
+            &recorder,
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$CAIRN_TEST_RECORDED\"\nexit 1\n",
+        ),
+        "writing the recording git",
+    );
+    ok(
+        std::fs::set_permissions(
+            &recorder,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        ),
+        "making the recording git executable",
+    );
+    let path = std::env::join_paths(
+        std::iter::once(shim.clone()).chain(
+            std::env::var_os("PATH")
+                .iter()
+                .flat_map(std::env::split_paths),
+        ),
+    );
+    let output = std::process::Command::new(ok(std::env::current_exe(), "this test binary"))
+        .args([
+            "--exact",
+            "diff::bare_discovery::opening_reads_the_system_file_without_running_a_process",
+            "--test-threads=1",
+        ])
+        .env_remove("GIT_CONFIG_NOSYSTEM")
+        .env_remove("GIT_CONFIG_SYSTEM")
+        .env_remove("GIT_CONFIG_PARAMETERS")
+        .env_remove("GIT_CONFIG_COUNT")
+        .env("PATH", ok(path, "joining PATH"))
+        .env("HOME", empty_home())
+        .env("XDG_CONFIG_HOME", empty_home())
+        .env("GIT_CONFIG_GLOBAL", &explicit)
+        .env(OPEN_TARGET, &fixture.planted)
+        .env(RECORDED, &recorded)
+        .output();
+    let output = ok(output, "running this test binary again");
+    let invocations = std::fs::read_to_string(&recorded).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&shim);
+    let _ = std::fs::remove_file(&recorded);
+    assert!(
+        output.status.success(),
+        "the child failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "the child ran no test:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        invocations, "recorder-check\n",
+        "opening the repository ran a process"
+    );
 }

@@ -3,6 +3,58 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-03 — S1 hardened: one search, git's count, no process
+
+A fresh security review of S1 (`8574d5a`) found no bypass, and three things to
+harden, all fixed in `32f7549`:
+
+- **Two walks, one check (warning).** The check validated the directory its own
+  walk found, then gix searched again and opened whatever it found; they agreed
+  only because gix-discover 0.55 switches to the physical path as git does.
+  `bare_discovery::find` now hands back where its one search stopped (the `.git`
+  of a working tree, or a git directory found as itself), and
+  `SharedRepository` opens exactly that path with gix's `open_opts`, the path
+  taken as it is and the options and trust gix's discovery derives from its
+  owner — the steps `discover_opts` takes after its own search. The search keeps
+  gix's default of not crossing into another filesystem. Ordinary repositories
+  open the same directory; the paths reported are physical (a repository opened
+  through a link reports where the link leads, as `git rev-parse` does).
+  `a_bare_repository_found_by_searching_opens_exactly_where_git_opens_it` now
+  compares the git directory Cairn opens with `git rev-parse
+  --absolute-git-dir`, not only whether each opens, over two new shapes: a bare
+  repository planted as `docs/` holding `guide -> ../guide`, opened at
+  `docs/guide`, and a link from outside the working tree to the same directory.
+  Mutations: opening through a second, logical search after the check — RED,
+  Cairn opening the planted `docs/` under every setting, `explicit` included,
+  where git opens the working tree; the one search made logical — RED; the old
+  shape (check, then `gix::ThreadSafeRepository::discover`) — green on gix 0.55,
+  which is the agreement the warning was about.
+- **`GIT_CONFIG_COUNT` parity (warning).** `str::parse::<usize>` refused what
+  git's `strtoul` accepts. `entry_count` reads it as git does, each answer taken
+  from git 2.56 by experiment: leading C whitespace and one sign accepted, an
+  empty value or `-0` zero entries, whitespace or a sign alone "bogus count",
+  anything after the number "bogus count", past `INT_MAX` "too many entries"
+  (`-1` included; a negative within `INT_MAX` of 2^64 wraps to a small count, as
+  on git), overflow saturating. git 2.30.9 ignores the variable (it arrived in
+  2.31), and no git before 2.38 is checked. Both of git's errors surface as
+  `Error::InvalidConfig` for `GIT_CONFIG_COUNT`, told apart by the internal
+  `CountRefused`. Pinned by `the_entry_count_is_read_as_gits_strtoul_reads_it`
+  and four accepted spellings in the shapes test against git itself (RED with
+  `str::parse`).
+- **A process outside `GitEnvironment` (note, confirmed).** `Source::GitInstallation`
+  made gix-path run `git config -lz --show-origin --name-only` from `PATH` with
+  the process's environment, once per process, wherever the setting was read
+  without `GIT_CONFIG_NOSYSTEM`; gix's own open never asks for it
+  (`git_binary: false`). A recording `git` on `PATH` saw it on the previous code
+  and not on this. Dropped: the system file is `Source::System`
+  (`GIT_CONFIG_SYSTEM` or `/etc/gitconfig`, the file this machine's git 2.56
+  names) and runs nothing. Pinned by
+  `opening_reads_the_system_file_without_running_a_process` (RED with
+  `GitInstallation` restored). Residual, stated in `docs/systems/git-processes.md`:
+  a git built with another `sysconfdir` has its system file unread, which only a
+  process could find — the residual the previous commit already stated, less
+  its "installation file of the `git` on `PATH`".
+
 ## 2026-10-03 — phase 02 QA, round 3: the content rework's findings fixed
 
 The content-parity rework's QA: 21 raw findings, 16 confirmed by a fresh

@@ -2,17 +2,29 @@
 //! commits, comparisons and the working tree alike (PRD R4.2, R4.3, R4.5; packet decision
 //! L8).
 //!
-//! It takes its own thread-local repository handle once, and keeps the [`DiffSession`] —
-//! gix's blob resource cache, reused across commits — and [`Answers`], the commit and
-//! comparison answers already given, until the index file moves ([`Kept`]). A working-tree answer is
-//! never kept, and the engine reads the index and the attributes afresh for every
-//! working-tree query.
+//! It takes its own thread-local repository handle, and keeps the [`DiffSession`] — gix's
+//! blob resource cache, reused across commits — and [`Answers`], the commit and comparison
+//! answers already given, for as long as what they were read from stays as it was. Before
+//! each query it stamps what git and gix read besides the commits
+//! ([`super::diff_freshness`]): a moved configuration opens this thread's handle again
+//! (the history thread keeps its own) and lets everything kept go; a moved global
+//! attribute file, `.gitmodules`, or a staged attribute edit lets the session and every
+//! answer go; and a moved `.gitattributes` above a kept answer's paths lets that answer
+//! go when it is next found, and the session when it read that directory. An answer read
+//! while a file it depends on could still change unseen is answered and not kept. A
+//! working-tree answer is never kept, and the engine reads the index and the attributes
+//! afresh for every working-tree query.
 //!
 //! **Scheduling.** Each lane holds at most one request: the newest, since a request is
 //! superseded by the next in its lane anyway ([`super::epoch`]). A waiting file diff is
 //! served before a waiting changes query (it was asked after it — a changes query would
 //! have superseded it otherwise), and a request superseded while it waited is dropped
-//! unserved. The thread blocks on its queue whenever nothing is waiting; it never spins.
+//! unserved. A file diff asked while a changes query RUNS waits for it to end: one thread
+//! serves both lanes, and only a newer changes query, never a file diff, cancels the one
+//! running. A changes query waiting while file diffs keep arriving waits behind each of
+//! them — a click through files postpones the change set of a commit selected before the
+//! clicks, which a newer selection then supersedes anyway. The thread blocks on its queue
+//! whenever nothing is waiting; it never spins.
 //!
 //! **Cancellation.** A query's epoch is its [`cairn_git::Cancel`]: the engine checks it
 //! between files and the runner polls it while each `git` read runs, so superseding a diff
@@ -23,6 +35,7 @@
 //! on arrival, never drawn.
 
 use std::sync::mpsc::{Receiver, TryRecvError};
+use std::time::SystemTime;
 
 use cairn_git::ops::GitBinary;
 use cairn_git::{
@@ -31,11 +44,14 @@ use cairn_git::{
 };
 use cairn_model::{ChangeSet, FileDiff};
 
+use super::diff_answers::{Answers, searched_paths};
+use super::diff_freshness::{Dependence, Directories, Freshness, Moved, SessionReads};
 use super::epoch::{Epoch, Epochs, Superseded};
 use super::pool::Outbox;
 use super::request::{
     Comparison, DiffOptions, DiffQuery, FileQuery, FileTarget, Update, WorkingSide,
 };
+use super::startup::Startup;
 
 /// What the diff thread is sent.
 #[derive(Debug)]
@@ -46,80 +62,173 @@ pub(super) enum DiffJob {
     Stop,
 }
 
-/// How many times a content query is asked when git printed lines that are not the lines
-/// Cairn read ([`Error::ContentReadsDisagree`]): the file changed between the two reads,
-/// which asking again settles, or a clean filter whose output differs run to run, which it
-/// never will. Past this the disagreement is shown, never looped on.
+/// How many times a working-tree query is asked when git printed lines that are not the
+/// lines Cairn read ([`Error::ContentReadsDisagree`]): the file changed between the two
+/// reads, which asking again settles, or a clean filter whose output differs run to run,
+/// which it never will. Past this the disagreement is shown, never looped on. A commit's
+/// content cannot change between reads, so a disagreement there is shown at once.
 pub(super) const READ_ATTEMPTS: usize = 3;
 
-/// The diff thread's loop: runs until it is told to stop or every sender is gone.
-pub(super) fn serve_diffs(
-    shared: &SharedRepository,
-    git: &GitBinary,
-    epochs: &Epochs,
-    jobs: &Receiver<DiffJob>,
-    outbox: &Outbox,
-) {
-    // Once, at the top of the thread: each call rebuilds the object cache and the pack
-    // snapshot, and `session` borrows it across turns.
-    let repo = shared.to_worker();
-    let mut kept = Kept::default();
-    let mut waiting = Waiting::default();
+/// What the thread is handed to serve with: the git it runs, the epochs it is cancelled
+/// by, its queue and outbox, and how the launching environment is read, which opening the
+/// repository again needs.
+pub(super) struct Serving<'a> {
+    pub(super) git: &'a GitBinary,
+    pub(super) startup: &'a Startup,
+    pub(super) epochs: &'a Epochs,
+    pub(super) jobs: &'a Receiver<DiffJob>,
+    pub(super) outbox: &'a Outbox,
+}
 
-    while waiting.gather(jobs) {
-        if epochs.is_stopping() {
-            break;
+/// The diff thread's loop: runs until it is told to stop or every sender is gone.
+pub(super) fn serve_diffs(shared: &SharedRepository, serving: &Serving<'_>) {
+    let mut waiting = Waiting::default();
+    // Each call rebuilds the object cache and the pack snapshot, so a handle is taken once
+    // and replaced only when the configuration moves.
+    let mut handle = shared.to_worker();
+    let mut opened_at = shared.opened_at();
+    let mut carried = None;
+    loop {
+        match serve_handle(&handle, opened_at, serving, &mut waiting, &mut carried) {
+            Ended::Stopped => return,
+            Ended::ConfigurationMoved => {
+                let started = SystemTime::now();
+                match shared.reopen_for(serving.git, |name| serving.startup.parent(name)) {
+                    Ok(fresh) => {
+                        handle = fresh;
+                        opened_at = started;
+                    }
+                    // What the user's own git would refuse to read: the query that found it
+                    // fails, and the next one tries again — the old handle's configuration
+                    // is stamped afresh against its own opening, so the file that moved
+                    // matches nothing and is found again.
+                    Err(error) => {
+                        if let Some((epoch, query)) = carried.take()
+                            && serving.epochs.is_current(epoch)
+                        {
+                            serving.outbox.send(
+                                Some(epoch),
+                                Update::DiffFailed {
+                                    query,
+                                    message: error.to_string(),
+                                },
+                            );
+                        }
+                    }
+                }
+            }
         }
-        let Some((epoch, query)) = waiting.next(epochs) else {
-            continue; // Everything that waited was superseded; the next turn blocks.
-        };
-        kept.renew_if_moved(IndexStamp::of(&repo));
-        let served = Served {
-            repo: &repo,
-            git,
-            epochs,
-            epoch,
-            cancel: epochs.watch(epoch),
-            outbox,
-        };
-        served.answer(query, &mut kept.session, &mut kept.answers);
     }
 }
 
-/// What the thread keeps between queries, and the index it was built against.
-///
-/// gix builds a session's attribute stack from the index as it stands when the session
-/// opens, and git reads a staged `.gitattributes` from it too; so when the index file
-/// moves, the session is reopened and the kept answers let go, and the next query reads
-/// the attributes as they are. One `stat` per query.
+/// Why serving on one handle ended.
+enum Ended {
+    Stopped,
+    /// The configuration moved under the query carried out; the handle is to be opened
+    /// again and that query served on the new one.
+    ConfigurationMoved,
+}
+
+/// Serves on one handle until the thread stops or the configuration moves.
+fn serve_handle(
+    repo: &Repository,
+    opened_at: SystemTime,
+    serving: &Serving<'_>,
+    waiting: &mut Waiting,
+    carried: &mut Option<(Epoch, DiffQuery)>,
+) -> Ended {
+    let inputs = repo.diff_inputs();
+    let mut freshness = Freshness::opened(&inputs, opened_at);
+    let mut kept = Kept::default();
+    loop {
+        let (epoch, query) = match carried.take() {
+            Some(carried) => carried,
+            None => {
+                if !waiting.gather(serving.jobs) || serving.epochs.is_stopping() {
+                    return Ended::Stopped;
+                }
+                match waiting.next(serving.epochs) {
+                    Some(next) => next,
+                    // Everything that waited was superseded; the next turn blocks.
+                    None => continue,
+                }
+            }
+        };
+        if !serving.epochs.is_current(epoch) {
+            continue;
+        }
+        let started = SystemTime::now();
+        let checked = freshness.check(repo, &inputs, started);
+        if kept.renew(checked.moved) {
+            *carried = Some((epoch, query));
+            return Ended::ConfigurationMoved;
+        }
+        let mut served = Served {
+            repo,
+            git: serving.git,
+            epochs: serving.epochs,
+            epoch,
+            cancel: serving.epochs.watch(epoch),
+            outbox: serving.outbox,
+            directories: Directories::new(&inputs, started),
+            settled: checked.settled,
+        };
+        served.answer(query, &mut kept);
+    }
+}
+
+/// What the thread keeps between queries on one handle.
 #[derive(Default)]
 struct Kept<'repo> {
-    built_against: IndexStamp,
     session: Option<DiffSession<'repo>>,
+    /// The directories whose attributes `session` has read, as they were.
+    reads: SessionReads,
     answers: Answers,
 }
 
-impl Kept<'_> {
-    fn renew_if_moved(&mut self, now: IndexStamp) {
-        if now != self.built_against {
-            self.session = None;
-            self.answers = Answers::default();
-            self.built_against = now;
+impl<'repo> Kept<'repo> {
+    /// Lets go of what `moved` says is no longer what git would answer; `true` when the
+    /// handle itself is to be opened again.
+    fn renew(&mut self, moved: Moved) -> bool {
+        match moved {
+            Moved::Nothing => false,
+            Moved::Answers => {
+                self.let_go();
+                false
+            }
+            Moved::Configuration => {
+                self.let_go();
+                true
+            }
         }
     }
-}
 
-/// The index file's modification time and length, or nothing when there is none to read
-/// (a bare repository, an unborn one with no index yet).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-struct IndexStamp(Option<(std::time::SystemTime, u64)>);
+    fn let_go(&mut self) {
+        self.session = None;
+        self.reads.clear();
+        self.answers = Answers::default();
+    }
 
-impl IndexStamp {
-    fn of(repo: &Repository) -> Self {
-        let read = std::fs::metadata(repo.git_dir().join("index"))
-            .ok()
-            .and_then(|meta| Some((meta.modified().ok()?, meta.len())));
-        Self(read)
+    /// The session, for paths whose attributes `read` stamps: kept while every directory
+    /// it has read among theirs is as it was, opened on first use and again after; one
+    /// that could not be opened is tried again on the next query that needs it.
+    fn session_for(
+        &mut self,
+        repo: &'repo Repository,
+        read: &Dependence,
+    ) -> Result<&mut DiffSession<'repo>, Error> {
+        if !self.reads.still_for(read) {
+            self.session = None;
+        }
+        let session = match self.session.take() {
+            Some(session) => session,
+            None => {
+                self.reads.clear();
+                repo.diff_session()?
+            }
+        };
+        self.reads.record(read);
+        Ok(self.session.insert(session))
     }
 }
 
@@ -191,35 +300,31 @@ impl Waiting {
 }
 
 /// One query being served, and where its answer goes.
-struct Served<'a> {
+struct Served<'a, 'i> {
     repo: &'a Repository,
     git: &'a GitBinary,
     epochs: &'a Epochs,
     epoch: Epoch,
     cancel: Superseded,
     outbox: &'a Outbox,
+    /// The working tree's `.gitattributes` as this query found them.
+    directories: Directories<'i>,
+    /// Every configuration and global stamp settled: an answer read now may be kept.
+    settled: bool,
 }
 
-impl<'a> Served<'a> {
-    fn answer(
-        &self,
-        query: DiffQuery,
-        session: &mut Option<DiffSession<'a>>,
-        answers: &mut Answers,
-    ) {
+impl<'a> Served<'a, '_> {
+    fn answer(&mut self, query: DiffQuery, kept: &mut Kept<'a>) {
         let outcome = match &query {
             DiffQuery::Changes(of) => self
-                .change_set(*of, answers)
+                .change_set(*of, &mut kept.answers)
                 .map(|changes| Update::Changes { of: *of, changes }),
-            DiffQuery::File(asked) => {
-                self.file_diff(asked, session, answers)
-                    .map(|diff| Update::FileDiff {
-                        query: asked.clone(),
-                        diff,
-                    })
-            }
+            DiffQuery::File(asked) => self.file_diff(asked, kept).map(|diff| Update::FileDiff {
+                query: asked.clone(),
+                diff,
+            }),
             DiffQuery::All { of, options } => {
-                self.every_file(*of, options, session, answers)
+                self.every_file(*of, options, kept)
                     .map(|diffs| Update::FileDiffs {
                         of: *of,
                         options: *options,
@@ -246,33 +351,45 @@ impl<'a> Served<'a> {
         }
     }
 
-    /// `of`'s change set, kept or asked of git; one too large to keep is still answered.
-    fn change_set(&self, of: Comparison, answers: &mut Answers) -> Result<ChangeSet, Error> {
-        if let Some(kept) = answers.change_set(of) {
+    /// `of`'s change set, kept or asked of git; one too large to keep, or read while what
+    /// it depends on could still change unseen, is still answered.
+    fn change_set(&mut self, of: Comparison, answers: &mut Answers) -> Result<ChangeSet, Error> {
+        let directories = &mut self.directories;
+        if let Some(kept) = answers.change_set(of, |read| directories.still(read)) {
             return Ok(kept.clone());
         }
         let changes = self.repo.changes(self.git, &request(of), &self.cancel)?;
-        answers.keep_change_set(of, changes.clone());
+        let read = self.directories.of(searched_paths(&changes));
+        if self.settled && read.is_settled() {
+            answers.keep_change_set(of, changes.clone(), read);
+        }
         Ok(changes)
     }
 
     fn file_diff(
-        &self,
+        &mut self,
         asked: &FileQuery,
-        session: &mut Option<DiffSession<'a>>,
-        answers: &mut Answers,
+        kept: &mut Kept<'a>,
     ) -> Result<Option<FileDiff>, Error> {
         let options = content_options(&asked.options);
         match &asked.target {
             FileTarget::Committed { of, file } => {
-                if let Some(kept) = answers.file_diff(asked) {
-                    return Ok(Some(kept.clone()));
+                let directories = &mut self.directories;
+                if let Some(diff) = kept
+                    .answers
+                    .file_diff(asked, |read| directories.still(read))
+                {
+                    return Ok(Some(diff.clone()));
                 }
-                let session = self.session(session)?;
-                let diff = asking_again(&self.cancel, || {
-                    session.file_diff(self.git, &request(*of), file, &options, &self.cancel)
-                })?;
-                answers.keep_file_diff(asked.clone(), diff.clone());
+                let read = self.directories.of([&file.old_path, &file.new_path]);
+                let session = kept.session_for(self.repo, &read)?;
+                // No second asking: a commit's content cannot change between two reads.
+                let diff =
+                    session.file_diff(self.git, &request(*of), file, &options, &self.cancel)?;
+                if self.settled && read.is_settled() {
+                    kept.answers
+                        .keep_file_diff(asked.clone(), diff.clone(), read);
+                }
                 Ok(Some(diff))
             }
             // Never kept: the working tree moves under it.
@@ -286,38 +403,27 @@ impl<'a> Served<'a> {
     /// Expand All: every file of `of`'s change set, in one engine call that checks the
     /// epoch between files and while each `git` read runs — so a newer file diff or
     /// changes query ends it at the next file or kills its read, rather than waiting
-    /// behind it. Not kept: phase 08 bounds and pages it.
+    /// behind it. Not kept: phase 08 bounds and pages it. A file whose reads disagree fails
+    /// the whole call today; phase 08 answers per file.
     fn every_file(
-        &self,
+        &mut self,
         of: Comparison,
         options: &DiffOptions,
-        session: &mut Option<DiffSession<'a>>,
-        answers: &mut Answers,
+        kept: &mut Kept<'a>,
     ) -> Result<Vec<FileDiff>, Error> {
-        let changes = self.change_set(of, answers)?;
-        let session = self.session(session)?;
+        let changes = self.change_set(of, &mut kept.answers)?;
+        let read = self.directories.of(changes
+            .files
+            .iter()
+            .flat_map(|file| [&file.old_path, &file.new_path]));
+        let session = kept.session_for(self.repo, &read)?;
         let options = content_options(options);
-        asking_again(&self.cancel, || {
-            session.file_diffs(self.git, &request(of), &changes, &options, &self.cancel)
-        })
-    }
-
-    /// The session kept for the life of the repository, opened on first use; one that
-    /// could not be opened is tried again on the next query that needs it.
-    fn session<'s>(
-        &self,
-        slot: &'s mut Option<DiffSession<'a>>,
-    ) -> Result<&'s mut DiffSession<'a>, Error> {
-        let session = match slot.take() {
-            Some(session) => session,
-            None => self.repo.diff_session()?,
-        };
-        Ok(slot.insert(session))
+        session.file_diffs(self.git, &request(of), &changes, &options, &self.cancel)
     }
 }
 
-/// Asks again while git's lines and Cairn's read of the same content disagree, up to
-/// [`READ_ATTEMPTS`] in all, and not once the query is superseded.
+/// Asks again while git's lines and Cairn's read of the same working-tree content
+/// disagree, up to [`READ_ATTEMPTS`] in all, and not once the query is superseded.
 fn asking_again<T>(
     cancel: &impl Cancel,
     mut ask: impl FnMut() -> Result<T, Error>,
@@ -368,264 +474,22 @@ fn content_options(options: &DiffOptions) -> ContentOptions {
     }
 }
 
-/// The commit and comparison answers already given (R4.5), newest last, each bounded.
-///
-/// Keyed by everything Cairn asks the answer with: a change set by its [`Comparison`] —
-/// commit ids, so the trees cannot move under it — and a file's diff by its whole
-/// [`FileQuery`]: the comparison, the [`cairn_model::ChangedFile`] (both paths, modes and
-/// blob ids) and the options (context, whitespace, loading past the ceiling). The
-/// configuration the engine reads — `diff.algorithm` and the drivers' algorithms,
-/// `diff.renames`, `diff.renameLimit`, `diff.ignoreSubmodules`, `log.showRoot` — is the
-/// repository handle's, read when the repository was opened; this cache lives no longer
-/// than that handle, so the two are refreshed together by reopening, and it is also let go
-/// whenever the index file moves ([`Kept`]), which a staged `.gitattributes` edit does.
-/// What `git` itself reads as it runs and an answer can depend on — the working tree's
-/// attributes (a diff driver's algorithm, its function-context pattern, `-diff`),
-/// `.gitmodules`, and the drivers' configuration — is NOT in the key: an unstaged edit to
-/// them while the repository is open is seen by the next query not already answered here,
-/// and not by one that is. Working-tree answers are never kept.
-#[derive(Debug, Default)]
-struct Answers {
-    change_sets: Vec<(Comparison, ChangeSet)>,
-    file_diffs: Vec<(FileQuery, FileDiff, usize)>,
-}
-
-/// How many change sets are kept, and how many of their files in all: a commit that
-/// renames tens of thousands of files is kept alone, or not at all.
-const KEPT_CHANGE_SETS: usize = 16;
-const KEPT_CHANGED_FILES: usize = 100_000;
-/// How many file diffs are kept, and roughly how many bytes of lines in all; an answer
-/// larger than the whole budget is not kept.
-const KEPT_FILE_DIFFS: usize = 64;
-const KEPT_DIFF_BYTES: usize = 32 * 1024 * 1024;
-
-impl Answers {
-    fn change_set(&self, of: Comparison) -> Option<&ChangeSet> {
-        self.change_sets
-            .iter()
-            .find(|(kept, _)| *kept == of)
-            .map(|(_, changes)| changes)
-    }
-
-    fn keep_change_set(&mut self, of: Comparison, changes: ChangeSet) {
-        self.change_sets.retain(|(kept, _)| *kept != of);
-        if changes.files.len() > KEPT_CHANGED_FILES {
-            return;
-        }
-        self.change_sets.push((of, changes));
-        while self.change_sets.len() > KEPT_CHANGE_SETS
-            || self
-                .change_sets
-                .iter()
-                .map(|(_, c)| c.files.len())
-                .sum::<usize>()
-                > KEPT_CHANGED_FILES
-        {
-            self.change_sets.remove(0);
-        }
-    }
-
-    fn file_diff(&self, asked: &FileQuery) -> Option<&FileDiff> {
-        self.file_diffs
-            .iter()
-            .find(|(kept, _, _)| kept == asked)
-            .map(|(_, diff, _)| diff)
-    }
-
-    fn keep_file_diff(&mut self, asked: FileQuery, diff: FileDiff) {
-        if !matches!(asked.target, FileTarget::Committed { .. }) {
-            return;
-        }
-        self.file_diffs.retain(|(kept, _, _)| *kept != asked);
-        let bytes = held_bytes(&diff);
-        if bytes > KEPT_DIFF_BYTES {
-            return;
-        }
-        self.file_diffs.push((asked, diff, bytes));
-        while self.file_diffs.len() > KEPT_FILE_DIFFS
-            || self.file_diffs.iter().map(|(_, _, b)| b).sum::<usize>() > KEPT_DIFF_BYTES
-        {
-            self.file_diffs.remove(0);
-        }
-    }
-}
-
-/// Roughly what a file's diff holds: its lines' bytes and each line's own size.
-fn held_bytes(diff: &FileDiff) -> usize {
-    let line = std::mem::size_of::<cairn_model::DiffLine>();
-    diff.text().map_or(0, |text| {
-        text.old_lines()
-            .iter()
-            .chain(text.new_lines())
-            .map(|l| l.bytes().len() + line)
-            .sum()
-    }) + std::mem::size_of::<FileDiff>()
-}
-
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
     use std::sync::mpsc::channel;
+    use std::time::Duration;
 
-    use cairn_model::{
-        ChangeStatus, ChangedFile, Context, DiffContent, DiffLine, Oid, RepoPath, TextDiff,
-    };
+    use cairn_model::Oid;
 
     use super::*;
+    use crate::worker::diff_answers::tests::{committed, text_diff};
+    use crate::worker::diff_freshness::SETTLING;
     use crate::worker::epoch::QueryLane;
+    use crate::worker::fetch_tests::BorrowedRepository;
 
     fn oid(n: u8) -> Oid {
         Oid::from_bytes(&[n; 20]).unwrap()
-    }
-
-    fn file(n: u8) -> ChangedFile {
-        ChangedFile {
-            status: ChangeStatus::Modified,
-            old_path: RepoPath::from("a.txt"),
-            new_path: RepoPath::from("a.txt"),
-            old_mode: Some(cairn_model::FileMode::Regular),
-            new_mode: Some(cairn_model::FileMode::Regular),
-            old_id: Some(oid(n)),
-            new_id: Some(oid(n + 1)),
-        }
-    }
-
-    fn committed(n: u8, options: DiffOptions) -> FileQuery {
-        FileQuery {
-            target: FileTarget::Committed {
-                of: Comparison::Commit(oid(n)),
-                file: file(n),
-            },
-            options,
-        }
-    }
-
-    fn text_diff(n: u8, bytes: usize) -> FileDiff {
-        FileDiff {
-            file: file(n),
-            content: DiffContent::Text {
-                text: TextDiff::new(
-                    Vec::new(),
-                    vec![DiffLine::terminated(vec![b'x'; bytes])],
-                    vec![cairn_model::ChangedRange::new(
-                        cairn_model::LineSpan::at(0, 0),
-                        cairn_model::LineSpan::at(0, 1),
-                    )],
-                ),
-                overlay: cairn_model::DisplayOverlay::default(),
-            },
-        }
-    }
-
-    fn changes(files: usize) -> ChangeSet {
-        ChangeSet {
-            files: (0..files).map(|_| file(1)).collect(),
-            details: None,
-            renames: cairn_model::RenameDetection::default(),
-        }
-    }
-
-    /// R4.5: a kept answer is found only under everything it was asked with. Caught by: a
-    /// key that leaves out the context or the whitespace option (the view would draw an
-    /// answer at another context, with function context git printed for other hunks), the
-    /// file (another file's lines), or the comparison.
-    #[test]
-    fn a_kept_answer_is_found_only_under_everything_it_was_asked_with() {
-        let mut answers = Answers::default();
-        let asked = committed(1, DiffOptions::default());
-        answers.keep_file_diff(asked.clone(), text_diff(1, 4));
-        assert_eq!(answers.file_diff(&asked), Some(&text_diff(1, 4)));
-
-        let mut other_context = asked.clone();
-        other_context.options.context = Context::lines(10);
-        let mut whitespace = asked.clone();
-        whitespace.options.ignore_whitespace = true;
-        let mut anyway = asked.clone();
-        anyway.options.load_anyway = true;
-        let mut other_file = asked.clone();
-        let mut other_commit = asked.clone();
-        if let FileTarget::Committed { of, file: f } = &mut other_file.target {
-            f.new_id = Some(oid(99));
-            let _ = of;
-        }
-        if let FileTarget::Committed { of, .. } = &mut other_commit.target {
-            *of = Comparison::Between {
-                old: oid(1),
-                new: oid(2),
-            };
-        }
-        for missed in [other_context, whitespace, anyway, other_file, other_commit] {
-            assert_eq!(answers.file_diff(&missed), None, "{missed:?}");
-        }
-    }
-
-    /// R4.5: working-tree answers are never kept. Caught by: keeping one, which would draw
-    /// the file as it was when first asked.
-    #[test]
-    fn a_working_tree_answer_is_never_kept() {
-        let mut answers = Answers::default();
-        let asked = FileQuery {
-            target: FileTarget::WorkingTree {
-                path: RepoPath::from("a.txt"),
-                side: WorkingSide::Unstaged,
-            },
-            options: DiffOptions::default(),
-        };
-        answers.keep_file_diff(asked.clone(), text_diff(1, 4));
-        assert_eq!(answers.file_diff(&asked), None);
-        assert!(answers.file_diffs.is_empty());
-    }
-
-    /// Caught by: an unbounded cache, which holds every diff ever viewed for the life of
-    /// the window.
-    #[test]
-    fn what_is_kept_is_bounded_by_count_and_by_size() {
-        let mut answers = Answers::default();
-        for n in 0..(KEPT_FILE_DIFFS as u8 + 8) {
-            answers.keep_file_diff(committed(n, DiffOptions::default()), text_diff(n, 1));
-        }
-        assert_eq!(answers.file_diffs.len(), KEPT_FILE_DIFFS);
-        assert_eq!(
-            answers.file_diff(&committed(0, DiffOptions::default())),
-            None,
-            "the oldest was not the one let go"
-        );
-
-        let mut answers = Answers::default();
-        answers.keep_file_diff(
-            committed(1, DiffOptions::default()),
-            text_diff(1, KEPT_DIFF_BYTES + 1),
-        );
-        assert!(
-            answers.file_diffs.is_empty(),
-            "an answer past the budget was kept"
-        );
-        answers.keep_file_diff(
-            committed(1, DiffOptions::default()),
-            text_diff(1, KEPT_DIFF_BYTES / 2),
-        );
-        answers.keep_file_diff(
-            committed(2, DiffOptions::default()),
-            text_diff(2, KEPT_DIFF_BYTES / 2),
-        );
-        assert_eq!(answers.file_diffs.len(), 1, "the budget was not enforced");
-
-        let mut answers = Answers::default();
-        for n in 0..(KEPT_CHANGE_SETS as u8 + 2) {
-            answers.keep_change_set(Comparison::Commit(oid(n)), changes(1));
-        }
-        assert_eq!(answers.change_sets.len(), KEPT_CHANGE_SETS);
-        answers.keep_change_set(Comparison::Commit(oid(200)), changes(KEPT_CHANGED_FILES));
-        assert_eq!(
-            answers.change_sets.len(),
-            1,
-            "the file budget was not enforced"
-        );
-        answers.keep_change_set(
-            Comparison::Commit(oid(201)),
-            changes(KEPT_CHANGED_FILES + 1),
-        );
-        assert!(answers.change_set(Comparison::Commit(oid(201))).is_none());
     }
 
     fn query(epochs: &Epochs, lane: QueryLane, n: u8) -> DiffJob {
@@ -695,10 +559,12 @@ mod tests {
         assert!(!Waiting::default().gather(&queue));
     }
 
-    /// The design input on stale reads: a disagreement is asked again, a bounded number of
-    /// times, and then shown; never once the query is superseded. Caught by: no retry (a
+    /// The design input on stale reads: a disagreement is asked again — three times in
+    /// all, so a file saved once mid-read settles on the third — and then shown; never once
+    /// the query is superseded. Caught by: no retry (`READ_ATTEMPTS` of one, under which a
     /// file saved mid-read shows an error), an unbounded one (a filter whose output varies
-    /// loops the thread for good), or retrying a superseded query.
+    /// loops the thread for good), or retrying a superseded query. The counts are written
+    /// out, not read from the constant, so lowering it fails here.
     #[test]
     fn a_disagreeing_read_is_asked_again_a_bounded_number_of_times() {
         let disagree = || Error::ContentReadsDisagree {
@@ -708,14 +574,14 @@ mod tests {
         let asked = Cell::new(0);
         let settled: Result<u8, Error> = asking_again(&cairn_git::CancelSignal::new(), || {
             asked.set(asked.get() + 1);
-            if asked.get() < READ_ATTEMPTS {
+            if asked.get() < 3 {
                 Err(disagree())
             } else {
                 Ok(7)
             }
         });
         assert!(matches!(settled, Ok(7)), "{settled:?}");
-        assert_eq!(asked.get(), READ_ATTEMPTS);
+        assert_eq!(asked.get(), 3);
 
         asked.set(0);
         let never: Result<u8, Error> = asking_again(&cairn_git::CancelSignal::new(), || {
@@ -723,7 +589,7 @@ mod tests {
             Err(disagree())
         });
         assert!(matches!(never, Err(Error::ContentReadsDisagree { .. })));
-        assert_eq!(asked.get(), READ_ATTEMPTS, "the retry is not bounded");
+        assert_eq!(asked.get(), 3, "the retry is not bounded at three");
 
         asked.set(0);
         let superseded = cairn_git::CancelSignal::new();
@@ -735,36 +601,113 @@ mod tests {
         assert_eq!(asked.get(), 1, "a superseded query was asked again");
     }
 
-    /// Caught by: keeping a session and answers built against an index that has since
-    /// moved — a staged `.gitattributes` edit (`-diff`, a driver) would not be seen until
-    /// the repository was reopened.
+    /// T3, as the stamp design pins it: what each tier's move lets go. A moved global
+    /// attribute file drops the session and every answer and keeps the handle; a moved
+    /// configuration drops them and asks for the handle to be opened again; a stat-only
+    /// rewrite of the index — what `git update-index --refresh` does — drops nothing.
+    /// Over a fixture of this checkout's objects, with real files and the real
+    /// `Freshness`, each query started past the settling time so every stamp is trusted.
+    /// Caught by: a renewal that keeps the session (gix's stack holds `info/attributes`
+    /// for its life), one that keeps the answers, keying the index on its file, or a
+    /// moved configuration answered on the old handle.
     #[test]
-    fn what_is_kept_is_let_go_when_the_index_moves() {
+    fn each_tier_lets_go_of_what_its_move_makes_stale() {
+        let fixture = BorrowedRepository::new(&format!("cairn-diff-tiers-{}", std::process::id()));
+        let checkout = cairn_git::SharedRepository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let head = checkout.to_worker().head_id().unwrap();
+        fixture.point_main_at(&head.to_string());
+        let dot = fixture.fixture.path.join(".git");
+        std::fs::copy(checkout.git_dir().join("index"), dot.join("index")).unwrap();
+
+        let repo = cairn_git::Repository::discover(&fixture.fixture.path).unwrap();
+        let inputs = repo.diff_inputs();
+        let past = || SystemTime::now() + SETTLING + Duration::from_secs(1);
+        let mut freshness = Freshness::opened(&inputs, past());
         let mut kept = Kept::default();
-        let stamp = |seconds: u64, len: u64| {
-            IndexStamp(Some((
-                std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds),
-                len,
-            )))
-        };
-        kept.renew_if_moved(stamp(1, 10));
-        kept.answers
-            .keep_file_diff(committed(1, DiffOptions::default()), text_diff(1, 4));
-        kept.renew_if_moved(stamp(1, 10));
-        assert_eq!(
-            kept.answers.file_diffs.len(),
-            1,
-            "an unmoved index let go of answers"
-        );
-        for moved in [stamp(2, 10), stamp(2, 11), IndexStamp(None)] {
-            kept.answers
-                .keep_file_diff(committed(1, DiffOptions::default()), text_diff(1, 4));
-            kept.renew_if_moved(moved);
-            assert!(
-                kept.answers.file_diffs.is_empty(),
-                "{moved:?} kept the answers"
+        fn fill<'r>(kept: &mut Kept<'r>, repo: &'r Repository) {
+            kept.session_for(repo, &Dependence::default()).unwrap();
+            kept.answers.keep_file_diff(
+                committed(1, DiffOptions::default()),
+                text_diff(1, 4),
+                Dependence::default(),
             );
         }
+        let held = |kept: &Kept<'_>| (kept.session.is_some(), kept.answers.counts().1);
+
+        assert_eq!(
+            freshness.check(&repo, &inputs, past()).moved,
+            Moved::Nothing
+        );
+        fill(&mut kept, &repo);
+        assert!(!kept.renew(freshness.check(&repo, &inputs, past()).moved));
+        assert_eq!(
+            held(&kept),
+            (true, 1),
+            "nothing moved, and something was let go"
+        );
+
+        // The index rewritten as a refresh writes it: a new file, the same entries.
+        let bytes = std::fs::read(dot.join("index")).unwrap();
+        std::fs::write(dot.join("index.lock"), &bytes).unwrap();
+        std::fs::rename(dot.join("index.lock"), dot.join("index")).unwrap();
+        assert!(!kept.renew(freshness.check(&repo, &inputs, past()).moved));
+        assert_eq!(
+            held(&kept),
+            (true, 1),
+            "a stat-only refresh let go of what was kept"
+        );
+
+        std::fs::create_dir_all(dot.join("info")).unwrap();
+        std::fs::write(dot.join("info/attributes"), "*.rs -diff\n").unwrap();
+        assert!(!kept.renew(freshness.check(&repo, &inputs, past()).moved));
+        assert_eq!(
+            held(&kept),
+            (false, 0),
+            "an info/attributes edit kept the session or answers"
+        );
+
+        fill(&mut kept, &repo);
+        let mut config = std::fs::read_to_string(dot.join("config")).unwrap();
+        config.push_str("[diff]\n\talgorithm = patience\n");
+        std::fs::write(dot.join("config"), config).unwrap();
+        assert!(
+            kept.renew(freshness.check(&repo, &inputs, past()).moved),
+            "a configuration edit did not ask for the handle to be opened again"
+        );
+        assert_eq!(held(&kept), (false, 0));
+    }
+
+    /// The session goes when a directory it read attributes from moved, and stays for one
+    /// it never read. Caught by: a session kept across a `.gitattributes` edit at the top
+    /// of the tree, which gix's stack never reads again.
+    #[test]
+    fn the_session_goes_when_a_directory_it_read_moved() {
+        let fixture =
+            BorrowedRepository::new(&format!("cairn-diff-session-{}", std::process::id()));
+        let repo = cairn_git::Repository::discover(&fixture.fixture.path).unwrap();
+        let inputs = repo.diff_inputs();
+        let past = || SystemTime::now() + SETTLING + Duration::from_secs(1);
+        let top = cairn_model::RepoPath::from("a.txt");
+        let mut kept = Kept::default();
+
+        let read = Directories::new(&inputs, past()).of([&top]);
+        kept.session_for(&repo, &read).unwrap();
+        let elsewhere = cairn_model::RepoPath::from("sub/b.txt");
+        std::fs::create_dir_all(fixture.fixture.path.join("sub")).unwrap();
+        std::fs::write(fixture.fixture.path.join("sub/.gitattributes"), "* -diff\n").unwrap();
+        // `sub` was never read by this session; the top of the tree was, and has not moved.
+        let read = Directories::new(&inputs, past()).of([&top]);
+        assert!(kept.reads.still_for(&read));
+        let read = Directories::new(&inputs, past()).of([&elsewhere]);
+        kept.session_for(&repo, &read).unwrap();
+        assert!(kept.session.is_some());
+
+        std::fs::write(fixture.fixture.path.join(".gitattributes"), "* -diff\n").unwrap();
+        let read = Directories::new(&inputs, past()).of([&top]);
+        assert!(
+            !kept.reads.still_for(&read),
+            "the top of the tree's edit was not seen"
+        );
     }
 
     /// Caught by: a working-tree request answered for another side of the path.

@@ -33,15 +33,13 @@ use cairn_git::{
 };
 
 use super::askpass::{AcceptorStop, Reply, STOP_DEADLINE, serve_prompts};
-use super::diff_lane::{DiffJob, serve_diffs};
+use super::diff_lane::{DiffJob, Serving, serve_diffs};
 use super::discovery::Discovery;
 use super::epoch::{Epoch, Epochs};
 use super::network_lane::{FetchControl, Lane, Operation, serve_network_lane};
 use super::request::{Request, Update};
 use super::routing::{Page, RepositoryJob, Routed, route};
-use super::startup::Backend;
-#[cfg(test)]
-use super::startup::Startup;
+use super::startup::{Backend, Startup};
 use super::wake::{Wake, Woken};
 
 /// What the window does with a credential prompt's answer; see [`Reply`].
@@ -101,6 +99,7 @@ pub fn open(
     let diff = DiffThread {
         jobs: diff_incoming,
         stop: diff_jobs.clone(),
+        startup: git.startup().clone(),
         outbox: Outbox {
             updates: Some(outgoing),
             wake: Arc::clone(&wake),
@@ -213,10 +212,12 @@ pub(super) fn open_with(
 
 /// What the diff thread is started with: its queue, which `open` made so the
 /// handle reaches it directly, a sender of the repository thread's own to
-/// stop it with, its outbox and the epochs it is cancelled by.
+/// stop it with, how the launching environment is read (which opening the
+/// repository again needs), its outbox and the epochs it is cancelled by.
 struct DiffThread {
     jobs: Receiver<DiffJob>,
     stop: Sender<DiffJob>,
+    startup: Startup,
     outbox: Outbox,
     epochs: Epochs,
 }
@@ -280,6 +281,7 @@ impl Threads {
         let DiffThread {
             jobs: diff_jobs,
             stop: diff_stop,
+            startup: diff_startup,
             outbox: diff_outbox,
             epochs,
         } = diff;
@@ -296,7 +298,14 @@ impl Threads {
             .name("cairn-diff".to_owned())
             .spawn(move || {
                 if let Some(outbox) = diff_exit.outbox.as_ref() {
-                    serve_diffs(&diff_shared, &diff_git, &epochs, &diff_jobs, outbox);
+                    let serving = Serving {
+                        git: &diff_git,
+                        startup: &diff_startup,
+                        epochs: &epochs,
+                        jobs: &diff_jobs,
+                        outbox,
+                    };
+                    serve_diffs(&diff_shared, &serving);
                 }
                 drop(diff_exit);
             });

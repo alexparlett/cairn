@@ -1,6 +1,8 @@
 //! Repository worker threads.
 
 mod askpass;
+mod diff_answers;
+mod diff_freshness;
 mod diff_lane;
 #[cfg(test)]
 mod diff_tests;

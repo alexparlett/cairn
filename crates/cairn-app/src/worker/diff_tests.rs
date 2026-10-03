@@ -13,8 +13,9 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use cairn_model::{ChangeSet, Oid};
+use cairn_model::{ChangeSet, ChangeStatus, ChangedFile, DiffContent, FileDiff, Oid};
 
+use super::diff_freshness::SETTLING;
 use super::discovery::Discovery;
 use super::fetch_tests::{BorrowedRepository, Home, RuntimeDir, WAIT, collect_until, next_by};
 use super::lifecycle_tests::StubGit;
@@ -402,5 +403,339 @@ fn a_fetch_still_supersedes_nothing() {
         );
         rows && changes && fetched
     });
+    drop(handle);
+}
+
+/// Every `diff-tree` the repository has run and finished, oldest first, by its arguments.
+fn diff_trees(handle: &RepositoryHandle, updates: &mut Updates) -> Vec<Vec<String>> {
+    handle.submit(Request::CommandLog);
+    let seen = collect_until(updates, |u| matches!(u, Update::CommandLog { .. }));
+    match seen.last() {
+        Some(Update::CommandLog { records }) => records
+            .iter()
+            .filter(|record| record.arguments.iter().any(|a| a == "diff-tree"))
+            .map(|record| record.arguments.clone())
+            .collect(),
+        other => panic!("expected the command log, got {other:?}"),
+    }
+}
+
+/// How many patch reads (`diff-tree -p`, a file's lines) and listings (`diff-tree --raw`
+/// alone, a change set) have run.
+fn reads(handle: &RepositoryHandle, updates: &mut Updates) -> (usize, usize) {
+    let runs = diff_trees(handle, updates);
+    let patches = runs.iter().filter(|a| a.iter().any(|a| a == "-p")).count();
+    (patches, runs.len() - patches)
+}
+
+/// The `--diff-algorithm` the newest patch read was given.
+fn last_algorithm(handle: &RepositoryHandle, updates: &mut Updates) -> String {
+    let runs = diff_trees(handle, updates);
+    runs.iter()
+        .rev()
+        .find(|a| a.iter().any(|a| a == "-p"))
+        .and_then(|a| a.iter().find_map(|a| a.strip_prefix("--diff-algorithm=")))
+        .map(str::to_owned)
+        .unwrap_or_else(|| panic!("no patch read named an algorithm: {runs:?}"))
+}
+
+/// `query`'s answer, asked and awaited; a failure is a panic naming it.
+fn file_answer(
+    handle: &RepositoryHandle,
+    updates: &mut Updates,
+    query: &FileQuery,
+) -> Option<FileDiff> {
+    handle.submit(Request::FileDiff(query.clone()));
+    let seen = collect_until(updates, |u| match u {
+        Update::FileDiff {
+            query: answered, ..
+        } => answered == query,
+        Update::DiffFailed { .. } => true,
+        _ => false,
+    });
+    match seen.last() {
+        Some(Update::FileDiff { diff, .. }) => diff.clone(),
+        other => panic!("expected {query:?}'s diff, got {other:?}"),
+    }
+}
+
+fn committed(of: Comparison, file: &ChangedFile) -> FileQuery {
+    FileQuery {
+        target: FileTarget::Committed {
+            of,
+            file: file.clone(),
+        },
+        options: DiffOptions::default(),
+    }
+}
+
+fn is_text(diff: &Option<FileDiff>) -> bool {
+    matches!(
+        diff,
+        Some(FileDiff {
+            content: DiffContent::Text { .. },
+            ..
+        })
+    )
+}
+
+fn is_binary(diff: &Option<FileDiff>) -> bool {
+    matches!(
+        diff,
+        Some(FileDiff {
+            content: DiffContent::Binary { .. },
+            ..
+        })
+    )
+}
+
+/// A commit of this checkout's history that modified at least two Rust files git has to
+/// compare line by line, and two of them: what an attribute edit can turn binary.
+fn two_rust_files() -> (Oid, Comparison, ChangedFile, ChangedFile) {
+    let (handle, mut updates) = checkout();
+    let ids = commits(&handle, &mut updates, 40);
+    for id in ids {
+        let of = Comparison::Commit(id);
+        let changes = change_set(&handle, &mut updates, of);
+        let modified: Vec<&ChangedFile> = changes
+            .files
+            .iter()
+            .filter(|f| f.status == ChangeStatus::Modified && f.new_path.display().ends_with(".rs"))
+            .collect();
+        if let [first, second, ..] = modified[..] {
+            let (first, second) = (first.clone(), second.clone());
+            let mut text = |file: &ChangedFile| {
+                is_text(&file_answer(&handle, &mut updates, &committed(of, file)))
+            };
+            if text(&first) && text(&second) {
+                return (id, of, first, second);
+            }
+        }
+    }
+    panic!("none of the last forty commits modified two Rust files");
+}
+
+/// The engine's answer for `query` in `repository`, asked on a handle and session of its
+/// own: nothing kept. Its parity with `git show` is pinned in `cairn-git`
+/// (`binary_detection_reads_the_attributes_where_git_reads_them`).
+fn uncached(repository: &Path, query: &FileQuery) -> FileDiff {
+    let FileTarget::Committed { of, file } = &query.target else {
+        panic!("{query:?} is not a commit's");
+    };
+    let git = match cairn_git::ops::GitBinary::discover(&cairn_git::ops::Askpass::new(
+        "/nonexistent/cairn-askpass",
+        None,
+    )) {
+        Ok(git) => git,
+        Err(error) => panic!("finding git: {error}"),
+    };
+    let request = match of {
+        Comparison::Commit(id) => cairn_git::ChangesRequest::commit(*id),
+        Comparison::Between { old, new } => cairn_git::ChangesRequest::between(*old, *new),
+    };
+    let engine = match cairn_git::Repository::discover(repository) {
+        Ok(engine) => engine,
+        Err(error) => panic!("opening {}: {error}", repository.display()),
+    };
+    match engine.file_diff(
+        &git,
+        &request,
+        file,
+        &cairn_git::ContentOptions::default(),
+        &cairn_git::CancelSignal::new(),
+    ) {
+        Ok(diff) => diff,
+        Err(error) => panic!("the engine's own answer: {error}"),
+    }
+}
+
+/// Past the settling time, so every file a fixture just wrote can be trusted by its stamp
+/// and what is read now is kept.
+fn settle() {
+    std::thread::sleep(SETTLING + Duration::from_millis(300));
+}
+
+fn write(path: &Path, content: &str) {
+    if let Some(parent) = path.parent()
+        && let Err(error) = std::fs::create_dir_all(parent)
+    {
+        panic!("making {}: {error}", parent.display());
+    }
+    if let Err(error) = std::fs::write(path, content) {
+        panic!("writing {}: {error}", path.display());
+    }
+}
+
+fn append(path: &Path, content: &str) {
+    let mut held = std::fs::read_to_string(path).unwrap_or_default();
+    held.push_str(content);
+    write(path, &held);
+}
+
+/// P2 and R4.5 as amended: an unstaged attribute edit reaches an answer already KEPT and
+/// one never asked — the working tree's `.gitattributes`, then `info/attributes` — each
+/// binary as the engine answers on a handle of its own, which is `git show`'s answer.
+/// The second identical ask, before either edit, runs no `git`: the answer was kept.
+/// Caught by: a hit that does not check the directories its answer read (the kept answer
+/// stays text), a renewal that keeps the session (its stack holds the top of the tree's
+/// attributes), or the global tier left out (`info/attributes` never seen).
+#[test]
+fn an_unstaged_attribute_edit_reaches_a_kept_answer_and_a_new_one() {
+    let (head, of, first, second) = two_rust_files();
+    let fixture = BorrowedRepository::new(&format!("cairn-diff-attributes-{}", std::process::id()));
+    fixture.point_main_at(&head.to_string());
+    let root = fixture.fixture.path.clone();
+    settle();
+    let (handle, mut updates) = opened(&root);
+    let (kept, other) = (committed(of, &first), committed(of, &second));
+
+    assert!(is_text(&file_answer(&handle, &mut updates, &kept)));
+    let before = reads(&handle, &mut updates);
+    assert!(is_text(&file_answer(&handle, &mut updates, &kept)));
+    assert_eq!(
+        reads(&handle, &mut updates),
+        before,
+        "the second ask was not answered from what was kept"
+    );
+
+    write(&root.join(".gitattributes"), "*.rs -diff\n");
+    let flipped = file_answer(&handle, &mut updates, &kept);
+    assert!(
+        is_binary(&flipped),
+        "the kept answer did not see -diff: {flipped:?}"
+    );
+    assert_eq!(flipped, Some(uncached(&root, &kept)));
+    let new = file_answer(&handle, &mut updates, &other);
+    assert!(is_binary(&new), "a new answer did not see -diff: {new:?}");
+    assert_eq!(new, Some(uncached(&root, &other)));
+
+    if let Err(error) = std::fs::remove_file(root.join(".gitattributes")) {
+        panic!("removing .gitattributes: {error}");
+    }
+    settle();
+    assert!(is_text(&file_answer(&handle, &mut updates, &kept)));
+    let before = reads(&handle, &mut updates);
+    assert!(is_text(&file_answer(&handle, &mut updates, &kept)));
+    assert_eq!(
+        reads(&handle, &mut updates),
+        before,
+        "the answer was not kept again"
+    );
+    write(&root.join(".git/info/attributes"), "*.rs -diff\n");
+    let flipped = file_answer(&handle, &mut updates, &kept);
+    assert!(
+        is_binary(&flipped),
+        "the kept answer did not see info/attributes: {flipped:?}"
+    );
+    assert_eq!(flipped, Some(uncached(&root, &kept)));
+    drop(handle);
+}
+
+/// P1 and R4.5 as amended: a configuration edit reaches the next answer, kept or not —
+/// an include target created where none was, an edit to `$GIT_DIR/config` itself, and
+/// `diff.renames` reaching the next change set. Caught by: answering on the handle opened
+/// first (whose configuration gix read once), or stamping only the files gix loaded (the
+/// include target did not exist).
+#[test]
+fn a_configuration_edit_reaches_the_next_answer() {
+    let (head, of, first, _) = two_rust_files();
+    let fixture = BorrowedRepository::new(&format!("cairn-diff-config-{}", std::process::id()));
+    fixture.point_main_at(&head.to_string());
+    let dot = fixture.fixture.path.join(".git");
+    append(&dot.join("config"), "[include]\n\tpath = later.config\n");
+    settle();
+    let (handle, mut updates) = opened(&fixture.fixture.path);
+    let kept = committed(of, &first);
+
+    assert!(is_text(&file_answer(&handle, &mut updates, &kept)));
+    let before = last_algorithm(&handle, &mut updates);
+    let (patches, _) = reads(&handle, &mut updates);
+    file_answer(&handle, &mut updates, &kept);
+    assert_eq!(
+        reads(&handle, &mut updates).0,
+        patches,
+        "the answer was not kept"
+    );
+    let mut others = ["histogram", "patience", "minimal", "myers"]
+        .into_iter()
+        .filter(|algorithm| *algorithm != before);
+    let (included, local) = match (others.next(), others.next()) {
+        (Some(included), Some(local)) => (included, local),
+        _ => unreachable!("three algorithms are not the one in use"),
+    };
+
+    write(
+        &dot.join("later.config"),
+        &format!("[diff]\n\talgorithm = {included}\n"),
+    );
+    assert!(is_text(&file_answer(&handle, &mut updates, &kept)));
+    assert_eq!(
+        last_algorithm(&handle, &mut updates),
+        included,
+        "a created include target was not read"
+    );
+
+    append(
+        &dot.join("config"),
+        &format!("[diff]\n\talgorithm = {local}\n"),
+    );
+    assert!(is_text(&file_answer(&handle, &mut updates, &kept)));
+    assert_eq!(
+        last_algorithm(&handle, &mut updates),
+        local,
+        "a config edit was not read"
+    );
+
+    let renamed = change_set(&handle, &mut updates, of).renames.enabled;
+    append(
+        &dot.join("config"),
+        &format!("[diff]\n\trenames = {}\n", !renamed),
+    );
+    assert_eq!(
+        change_set(&handle, &mut updates, of).renames.enabled,
+        !renamed,
+        "diff.renames did not reach the next change set"
+    );
+    drop(handle);
+}
+
+/// R4.5 as amended: a stat-only refresh of the index — a new file holding the same
+/// entries, as `git update-index --refresh` writes it — keeps what is kept, and asking
+/// again runs no `git`. Caught by: keying on the index file's stamp or its checksum,
+/// which every refresh moves.
+#[test]
+fn a_stat_only_index_refresh_keeps_what_is_kept() {
+    let (head, of, first, _) = two_rust_files();
+    let fixture = BorrowedRepository::new(&format!("cairn-diff-refresh-{}", std::process::id()));
+    fixture.point_main_at(&head.to_string());
+    let dot = fixture.fixture.path.join(".git");
+    let checkout = match cairn_git::SharedRepository::discover(env!("CARGO_MANIFEST_DIR")) {
+        Ok(shared) => shared.git_dir().join("index"),
+        Err(error) => panic!("opening the checkout: {error}"),
+    };
+    let index = match std::fs::read(&checkout) {
+        Ok(index) => index,
+        Err(error) => panic!("reading {}: {error}", checkout.display()),
+    };
+    if let Err(error) = std::fs::write(dot.join("index"), &index) {
+        panic!("writing the index: {error}");
+    }
+    settle();
+    let (handle, mut updates) = opened(&fixture.fixture.path);
+    let kept = committed(of, &first);
+
+    assert!(is_text(&file_answer(&handle, &mut updates, &kept)));
+    let before = reads(&handle, &mut updates);
+    if let Err(error) = std::fs::write(dot.join("index.lock"), &index)
+        .and_then(|()| std::fs::rename(dot.join("index.lock"), dot.join("index")))
+    {
+        panic!("refreshing the index: {error}");
+    }
+    assert!(is_text(&file_answer(&handle, &mut updates, &kept)));
+    assert_eq!(
+        reads(&handle, &mut updates),
+        before,
+        "a stat-only refresh let the kept answer go"
+    );
     drop(handle);
 }

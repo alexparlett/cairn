@@ -33,7 +33,11 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
 
 1. **Invariants** (any code change): the Invariants block in root CLAUDE.md, item
    by item, against the touched files. A new prose rule with no enforcement twin
-   in the same change is a finding.
+   in the same change is a finding. The exhaustive-read invariant's residual is
+   yours: every `match` over `DiffContent`, `UnifiedRow` or `SideBySideRow` in a
+   test helper that a view could call names every variant, since
+   `every_view_of_a_file_diff_names_every_state` and
+   `every_view_of_a_diff_row_names_every_kind_of_row` read production code only.
 2. **Architecture boundaries** (changes crossing a boundary named in CLAUDE.md's
    Architecture section): the owning side writes, the other side reads; no layer
    bypassed. Dispatch pointer: the matching domain reviewer from
@@ -122,11 +126,7 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
     another name (its surface speaks actions and chords only; `Chord::key_press`
     is for headless tests, and a render path calling it is a finding); a key event
     handled in `crates/cairn-ui/tests/` (unscanned); and whether a new chord is
-    right for each platform and clear of the desktop's and Fork's. Also: every
-    `match` over `DiffContent`, `UnifiedRow` or `SideBySideRow` in a test helper
-    that a view could call names every variant, since
-    `every_view_of_a_file_diff_names_every_state` and
-    `every_view_of_a_diff_row_names_every_kind_of_row` read production code only.
+    right for each platform and clear of the desktop's and Fork's.
 
 ## Review dispatch
 

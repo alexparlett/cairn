@@ -439,12 +439,17 @@ mod tests {
         fn no_thread(_: &str, _: Box<dyn FnOnce() + Send>) -> io::Result<()> {
             Err(io::Error::other("no thread"))
         }
-        // Says so, leaves a marker once the line is in the pipe, then hangs.
+        // Says so, leaves a marker once the line is in the pipe, then hangs,
+        // ignoring `SIGTERM`. The drop sends `SIGTERM` first, while the lock is
+        // free, and only then finds no thread and sends `SIGKILL`; a stub that
+        // died of the first would be recorded truly as `Signal(15)` whenever it
+        // was already a zombie at the reap — a race between the two signals that
+        // a loaded machine loses. Ignoring it leaves the `SIGKILL` the only end.
         let stub = StubGit::with_git_from(|directory| {
             format!(
                 "if [ \"$1\" = --version ]; then echo 'git version 2.30.0'; exit 0; fi\n\
                  PATH=/usr/bin:/bin; command -v sleep >/dev/null || exit 99; \
-                 echo hanging >&2; touch '{}'; sleep 30",
+                 trap '' TERM; echo hanging >&2; touch '{}'; sleep 30",
                 directory.join("spoke").display()
             )
         });

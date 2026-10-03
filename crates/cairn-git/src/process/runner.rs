@@ -792,10 +792,19 @@ mod tests {
     /// On `SIGTERM`: says so, ends its grandchild (quietly: the group signal may
     /// have ended it first), and exits as git does after removing its locks. The
     /// trap runs at once because the shell is in `wait`.
+    ///
+    /// It speaks on a copy of stderr (`3`) and sends the shell's own stderr to
+    /// `/dev/null`, so the lines a test reads are the script's alone. dash —
+    /// `/bin/sh` on Debian and Ubuntu, so on CI — reports a job its `wait` reaps
+    /// that a signal ended by the signal's name ("Terminated"), as busybox's ash
+    /// does; bash says nothing. The group `SIGTERM` reaches the grandchild and
+    /// the shell at once, and whether the `wait` reaps the dead grandchild before
+    /// the trap runs is the scheduler's choice: on a loaded machine it often
+    /// does, and the stub's stderr gains a line the script never wrote.
     const ENDING_ON_TERM: &str = "PATH=/usr/bin:/bin; command -v sleep >/dev/null || exit 99; \
-        sleep 30 & child=$!; \
-        trap 'echo terminated >&2; kill $child 2>/dev/null; exit 143' TERM; \
-        echo hanging >&2; wait $child";
+        exec 3>&2 2>/dev/null; sleep 30 & child=$!; \
+        trap 'echo terminated >&3; kill $child; exit 143' TERM; \
+        echo hanging >&3; wait $child";
 
     /// Ignores `SIGTERM` and hangs in one-second sleeps, so only `SIGKILL` ends it.
     const IGNORING_TERM: &str = "PATH=/usr/bin:/bin; command -v sleep >/dev/null || exit 99; \
@@ -1650,10 +1659,12 @@ mod tests {
     /// deciding by the exit status alone, as the old runner did.
     #[test]
     fn a_cancelled_process_that_exits_zero_after_the_signal_is_reported_cancelled() {
+        // The shell's own stderr kept out of the pipe, as in `ENDING_ON_TERM`
+        // and for the reason given there.
         let stub = stub(
             "PATH=/usr/bin:/bin; command -v sleep >/dev/null || exit 99; \
-             sleep 30 & child=$!; trap 'kill $child 2>/dev/null; exit 0' TERM; \
-             echo hanging >&2; wait $child",
+             exec 3>&2 2>/dev/null; sleep 30 & child=$!; trap 'kill $child; exit 0' TERM; \
+             echo hanging >&3; wait $child",
         );
         let (outcome, seen, _) = cancel_once_hanging(started(&stub), Cancelling::ByHandle);
         assert_eq!(seen, ["hanging"]);

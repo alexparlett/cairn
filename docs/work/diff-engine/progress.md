@@ -3,6 +3,51 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-03 — CI flakes in the process manager's tests: three test assumptions, no product race
+
+Packet mode, committed to `feature/diff-engine`. Three `cairn-git` unit tests from the
+process-manager packet failed in CI (runs 37127843216 attempt 1 and 37130080182 both
+attempts) and never locally. Each was classified from its log, its interleaving found,
+and reproduced before it was fixed. None is a product race: in every failure the runner
+did what `docs/systems/git-processes.md` says it does, and no documented behaviour changed.
+
+**`a_cancel_sends_sigterm_first_and_a_process_that_acts_on_it_is_not_killed` and
+`a_kill_that_misses_the_lock_returns_at_once_and_the_driver_finishes_it` — TEST.** Both
+saw `["hanging", "Terminated", "terminated"]`: the trap's own `terminated` is there, so
+the `SIGTERM` was sent (the second test's message, "the driver never sent the SIGTERM",
+misread it). The extra line is the shell's. CI's `/bin/sh` is dash, which reports a job
+its `wait $child` reaps that a signal ended by the signal's name; bash, `/bin/sh` here,
+says nothing (0 of 300 by hand). The group `SIGTERM` reaches the stub and its `sleep`
+together, and whether `wait` reaps the dead `sleep` before the trap runs is the
+scheduler's choice. Reproduced locally with busybox's ash (`/usr/lib/initcpio/busybox`,
+the same job report) as the stub's interpreter, two cores and six busy loops: 168/200
+and 173/200 failed, with CI's exact output; `a_cancelled_process_that_exits_zero_after_
+the_signal_is_reported_cancelled`, the same stub shape, had not yet failed in CI and
+failed 170/200 (`["hanging", "Terminated"]`). Fix: `ENDING_ON_TERM` and that test's stub
+speak on a copy of stderr (fd 3) and send the shell's own stderr to `/dev/null`, so the
+lines read are the script's alone; the assertions are unchanged. After, same harness:
+0/200 for each of the three and for `a_cancelled_process_that_exits_nonzero_is_reported_
+cancelled`. The assertions still decide: `terminate` sending `SIGKILL` turns both G9
+tests RED (`left: ["hanging"]`).
+
+**`a_drop_with_no_reaper_thread_is_logged_once` — TEST.** It allowed `Signal(9)` or
+`Unknown`; CI recorded `Signal(15)` (and phase 02 saw it once in six local runs). The
+drop asks for the end first — `SIGTERM` while the lock is free, as documented — and
+only then finds no thread and sends `SIGKILL` and reaps. The stub's shell dies of the
+`SIGTERM` (default disposition), and the kernel commits a process to a fatal signal's
+exit when it is sent, so the `SIGKILL` changes nothing; if the shell is a zombie by the
+reap the record says, truly, `Signal(15)`. A loaded runner loses that race. Reproduced
+deterministically by a failing reaper starter that sleeps 100 ms before it fails
+(a local experiment, not committed): 50/50 failed with CI's record exactly. Fix: the
+stub ignores `SIGTERM`, so the `SIGKILL` is the only end and the test still pins "the
+SIGKILL's end, or none seen yet". After, with the same delay: 0/50 idle, 0/200 loaded.
+
+**Stability, bash as `/bin/sh`, two cores under six busy loops, the committed code:**
+each of the four fixed tests 0/200 (`--exact`, eight test threads); the whole
+`cargo test -p cairn-git` on four cores under eight busy loops, five runs, all green.
+`docs/systems/git-processes.md` is unchanged: it describes the runner, which did not
+change.
+
 ## 2026-10-03 — Phase 05: the detail pane, the Commit tab and the accelerator table
 
 Packet mode, committed to `feature/diff-engine`. QA is the orchestrator's, after this

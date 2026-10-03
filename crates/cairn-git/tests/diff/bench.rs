@@ -351,7 +351,7 @@ fn measures_the_diff_queries_against_a_named_repository() {
     // Expand All over the edit-heavy subject: every file's content in one call, the lines
     // of every text file from one `git diff-tree -p` over the commit. No bar of its own in
     // the PRD; measured because phase 08 builds on it.
-    eprintln!("\nExpand All (one diff-tree -p for the whole commit):");
+    eprintln!("\nExpand All with no budget (every file, a page at a time):");
     let (name, hex, _, _) = CHANGES_SUBJECTS[0];
     let id = Oid::parse(hex).expect("an id");
     let request = ChangesRequest::commit(id);
@@ -383,4 +383,132 @@ fn measures_the_diff_queries_against_a_named_repository() {
     // No git figure beside it: the baseline measured no whole-commit patch.
     report(&format!("{name}, Expand All"), expanding, None, f64::NAN);
     eprintln!("    {} files, {text} of them text", set.files.len());
+}
+
+/// What one Expand All read cost: the time to its first page and to its last, how many pages
+/// and files, the lines its budget spent, and the slowest page.
+struct Expanded {
+    first: Duration,
+    total: Duration,
+    pages: usize,
+    files: usize,
+    failed: usize,
+    spent: u64,
+    slowest: Duration,
+}
+
+/// Expand All over `set` as the diff thread reads it: page after page under a budget of
+/// `limit` lines, until the budget is spent or every file is read.
+fn expand_all(
+    session: &mut DiffSession<'_>,
+    request: &ChangesRequest,
+    set: &ChangeSet,
+    limit: u64,
+) -> Expanded {
+    let offered: Vec<usize> = (0..set.files.len()).collect();
+    let mut budget = cairn_git::LineBudget::new(limit);
+    let started = Instant::now();
+    let mut first = None;
+    let (mut from, mut pages, mut files, mut failed) = (0, 0, 0, 0);
+    let mut slowest = Duration::ZERO;
+    while from < offered.len() && !budget.is_spent() {
+        let page_started = Instant::now();
+        let page = super::ok(
+            session.page(
+                super::git(),
+                request,
+                cairn_git::Offered {
+                    changes: set,
+                    files: &offered[from..],
+                },
+                Some(&mut budget),
+                &ContentOptions::default(),
+                &CancelSignal::new(),
+            ),
+            "a page answers",
+        );
+        slowest = slowest.max(page_started.elapsed());
+        first.get_or_insert_with(|| started.elapsed());
+        if page.taken == 0 {
+            break;
+        }
+        from += page.taken;
+        pages += 1;
+        files += page.files.len();
+        failed += page
+            .files
+            .iter()
+            .filter(|(_, outcome)| outcome.is_err())
+            .count();
+    }
+    Expanded {
+        first: first.unwrap_or_default(),
+        total: started.elapsed(),
+        pages,
+        files,
+        failed,
+        spent: budget.spent(),
+        slowest,
+    }
+}
+
+/// Q2, the Expand All budget, measured on the subjects of the bar: for each budget, how long
+/// Expand All takes to its first page and to its end on the heaviest commits, warm, in a
+/// release build — what the window waits for while it stays responsive. Prints; decides
+/// nothing (the choice and its reasons are in `progress.md`).
+#[test]
+#[ignore = "needs a large repository named by CAIRN_BENCH_REPO"]
+fn measures_expand_all_budgets_against_a_named_repository() {
+    let path = std::env::var("CAIRN_BENCH_REPO").expect("set CAIRN_BENCH_REPO");
+    let engine = Repository::discover(&path).expect("the bench repository opens");
+    let mut session = engine.diff_session().expect("a diff session");
+    eprintln!(
+        "repository {path}\n  release build: {}\n  git {}\n",
+        !cfg!(debug_assertions),
+        super::git().version()
+    );
+    let subjects = [
+        CHANGES_SUBJECTS[1],
+        CHANGES_SUBJECTS[2],
+        CHANGES_SUBJECTS[0],
+        (
+            "F7 3b09522c34b (about 10k changed lines)",
+            CONTENT_SUBJECT.1,
+            0,
+            f64::NAN,
+        ),
+        (
+            "F1 6a6e8446b97 (121k to 327k lines)",
+            TOO_LARGE_SUBJECT.1,
+            0,
+            f64::NAN,
+        ),
+    ];
+    for (name, hex, _, _) in subjects {
+        let id = Oid::parse(hex).expect("an id");
+        let request = ChangesRequest::commit(id);
+        let set = changes(&mut session, &id);
+        eprintln!("Expand All, {name}: {} files", set.files.len());
+        for limit in [10_000u64, 25_000, 50_000, 100_000, 200_000] {
+            let _ = expand_all(&mut session, &request, &set, limit);
+            let mut runs: Vec<Expanded> = (0..5)
+                .map(|_| expand_all(&mut session, &request, &set, limit))
+                .collect();
+            runs.sort_by_key(|run| run.total);
+            let run = &runs[runs.len() / 2];
+            eprintln!(
+                "  budget {limit:>7}: first page {:>8.2} ms, all {:>8.2} ms (min {:.2}, max \
+                 {:.2}), slowest page {:.2} ms, {} pages, {} files ({} failed), {} lines",
+                run.first.as_secs_f64() * 1000.0,
+                run.total.as_secs_f64() * 1000.0,
+                runs[0].total.as_secs_f64() * 1000.0,
+                runs[runs.len() - 1].total.as_secs_f64() * 1000.0,
+                run.slowest.as_secs_f64() * 1000.0,
+                run.pages,
+                run.files,
+                run.failed,
+                run.spent,
+            );
+        }
+    }
 }

@@ -307,6 +307,11 @@ mod tests {
         };
         assert_eq!(crossed_line_limit(b"a\nb\n", b"a\n", &limits), None);
         assert_eq!(
+            crossed_line_limit(b"a\nb\nc\n", b"a\n", &limits),
+            None,
+            "a side of exactly the limit's lines is inside it"
+        );
+        assert_eq!(
             crossed_line_limit(b"a\n", b"a\nb\nc\nd\n", &limits),
             Some(SizeLimit::Lines {
                 limit: 3,

@@ -185,8 +185,9 @@ impl Drop for Repo {
 /// The edge cases C2 names, each in a commit of its own so a test can reach it by subject.
 ///
 /// Commit order, oldest first: `seed`, `edits`, `endings`, `newlines`, `add and delete`,
-/// `rename with edits`, `far apart`, `crlf edit`, `mode and content`, `mode change`,
-/// `type change`. The last two stay last: tests reach them as `HEAD~1` and `HEAD`.
+/// `rename with edits`, `far apart`, `crlf edit`, `delete a line`, `mode and content`,
+/// `mode change`, `type change`. The last two stay last: tests reach them as `HEAD~1` and
+/// `HEAD`.
 pub fn crafted() -> Repo {
     let repo = Repo::new("crafted");
 
@@ -252,6 +253,19 @@ pub fn crafted() -> Repo {
     repo.write("crlf.txt", b"one\r\nTWO\r\nthree\r\n");
     repo.commit("crlf edit");
 
+    // A pure deletion inside a file: one middle line gone, nothing added, every line
+    // around it distinct, so there is exactly one way to say it.
+    let deleted: String = (1..=20)
+        .filter(|n| *n != 10)
+        .map(|n| match n {
+            2 => "LINE 2\n".to_owned(),
+            18 => "LINE 18\n".to_owned(),
+            n => format!("line {n}\n"),
+        })
+        .collect();
+    repo.write("long.txt", deleted.as_bytes());
+    repo.commit("delete a line");
+
     // A mode change and an edit in one file: `old mode`/`new mode` beside a hunk.
     repo.write("added.txt", b"brand\nnew\nand more\n");
     repo.chmod("added.txt", 0o755);
@@ -282,7 +296,7 @@ pub fn attributes() -> Repo {
 
     repo.write(
         ".gitattributes",
-        b"no-diff.txt -diff\nflagged.dat diff=flagged\ntrap.txt diff=trap\n",
+        b"no-diff.txt -diff\nflagged.dat diff=flagged\ntrap.txt diff=trap\nmacro.dat binary\n",
     );
     repo.config("diff.flagged.binary", "true");
     // Both of the programs gix knows how to run. Neither may be started: `Mode::ToGit`
@@ -296,6 +310,12 @@ pub fn attributes() -> Repo {
     repo.write("trap.txt", b"watched\nby a program\n");
     repo.write("nul.dat", b"before\x00after\n");
     repo.write("plain.txt", b"ordinary\n");
+    // `binary` is git's built-in macro for `-diff -merge -text`.
+    repo.write("macro.dat", b"text under\nthe binary macro\n");
+    // git looks for a NUL in the first 8,000 bytes and no further: one at byte 7,999 is
+    // the last it sees, one at byte 8,000 the first it does not.
+    repo.write("nul-at-7999.dat", &nul_at(7999, ""));
+    repo.write("nul-at-8000.txt", &nul_at(8000, ""));
     repo.commit("seed");
 
     repo.write(
@@ -309,8 +329,47 @@ pub fn attributes() -> Repo {
     repo.write("trap.txt", b"watched\nby a program, changed\n");
     repo.write("nul.dat", b"before\x00after, changed\n");
     repo.write("plain.txt", b"ordinary, changed\n");
+    repo.write("macro.dat", b"text under\nthe binary macro, changed\n");
+    repo.write("nul-at-7999.dat", &nul_at(7999, "changed\n"));
+    repo.write("nul-at-8000.txt", &nul_at(8000, "changed\n"));
     repo.commit("edits");
 
+    repo
+}
+
+/// Short lines of text with one NUL at byte `at`, then `tail` — every line well under the
+/// line-length ceiling, so the only thing that can make the file binary is the NUL.
+fn nul_at(at: usize, tail: &str) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(at + 64);
+    while bytes.len() < at {
+        let line = b"forty bytes of ordinary text on a line\n";
+        let room = at - bytes.len();
+        bytes.extend_from_slice(&line[..line.len().min(room)]);
+    }
+    bytes.push(0);
+    bytes.extend_from_slice(b" after the NUL\nmore text\n");
+    bytes.extend_from_slice(tail.as_bytes());
+    bytes
+}
+
+/// `core.bigFileThreshold` at 1 KiB: git calls a file past it binary without looking at
+/// its bytes. One text file of a few KiB past it, and one small file under it.
+pub fn big_file_threshold() -> Repo {
+    let repo = Repo::new("big-file-threshold");
+    repo.config("core.bigFileThreshold", "1k");
+    let text = |tail: &str| -> Vec<u8> {
+        let mut bytes: Vec<u8> = (0..64)
+            .flat_map(|n| format!("line {n} of plain text past the threshold\n").into_bytes())
+            .collect();
+        bytes.extend_from_slice(tail.as_bytes());
+        bytes
+    };
+    repo.write("past-the-threshold.txt", &text(""));
+    repo.write("under-the-threshold.txt", b"small\n");
+    repo.commit("seed");
+    repo.write("past-the-threshold.txt", &text("changed\n"));
+    repo.write("under-the-threshold.txt", b"small, changed\n");
+    repo.commit("edits");
     repo
 }
 

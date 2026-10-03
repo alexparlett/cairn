@@ -223,16 +223,14 @@ fn both_versions_of_a_file_are_the_bytes_git_stores() {
     assert!(seen_crlf, "no CRLF file reached the check");
 }
 
-/// R2.5: git's three ways of calling a file binary, and the one file that is none of them.
-#[test]
-fn binary_detection_agrees_with_git() {
-    let repo = repositories::attributes();
+/// Each changed file of `head` as git and Cairn read it: binary or not, which must agree,
+/// and for a binary file the two sizes Cairn answers, which must be the blobs' as `git
+/// cat-file -s` reads them (a binary's sizes are all a view can show of it).
+fn binary_verdicts(repo: &Repo, head: &str) -> Vec<(String, bool)> {
     let engine = Repository::discover(repo.path()).expect("the fixture opens");
     let mut session = engine.diff_session().expect("a diff session");
-    let head = repo.git(&["rev-parse", "HEAD"]).trim().to_owned();
-
     let mut seen = Vec::new();
-    for file in changed(&repo, &head) {
+    for file in changed(repo, head) {
         let path = file.new_path.display().into_owned();
         let diff = session
             .file_diff(&file, &ContentOptions::default())
@@ -243,7 +241,7 @@ fn binary_detection_agrees_with_git() {
                 "--no-ext-diff",
                 "--no-color",
                 &format!("{head}^"),
-                &head,
+                head,
                 "--",
                 &path,
             ])
@@ -253,19 +251,66 @@ fn binary_detection_agrees_with_git() {
             binary_to_cairn, binary_to_git,
             "{path}: Cairn says binary={binary_to_cairn}, git says binary={binary_to_git}"
         );
+        if let DiffContent::Binary { old_size, new_size } = diff.content {
+            let stored = |id: Option<Oid>| -> u64 {
+                id.map_or(0, |id| {
+                    ok(
+                        repo.git(&["cat-file", "-s", id.hex().as_str()])
+                            .trim()
+                            .parse(),
+                        "a size",
+                    )
+                })
+            };
+            assert_eq!(
+                (old_size, new_size),
+                (stored(file.old_id), stored(file.new_id)),
+                "{path}: the sizes of a binary file are not the blobs' (old, new)"
+            );
+        }
         seen.push((path, binary_to_cairn));
     }
     seen.sort();
+    seen
+}
+
+/// R2.5: git's ways of calling a file binary — the `-diff` attribute, a `diff` driver
+/// with `binary` set, the built-in `binary` macro, and a NUL in the first 8,000 bytes,
+/// at the last byte git looks at — and the files that are none of them, a NUL at the
+/// first byte git does NOT look at among them.
+#[test]
+fn binary_detection_agrees_with_git() {
+    let repo = repositories::attributes();
+    let head = repo.git(&["rev-parse", "HEAD"]).trim().to_owned();
     assert_eq!(
-        seen,
+        binary_verdicts(&repo, &head),
         vec![
             ("flagged.dat".to_owned(), true),
+            ("macro.dat".to_owned(), true),
             ("no-diff.txt".to_owned(), true),
+            ("nul-at-7999.dat".to_owned(), true),
+            ("nul-at-8000.txt".to_owned(), false),
             ("nul.dat".to_owned(), true),
             ("plain.txt".to_owned(), false),
             ("trap.txt".to_owned(), false),
         ],
-        "the fixture must exercise every rule and one file that breaks none of them"
+        "the fixture must exercise every rule and files that break none of them"
+    );
+}
+
+/// R2.5's last rule: `core.bigFileThreshold`, past which git calls a file binary without
+/// reading it, beside a file under it that is text.
+#[test]
+fn a_file_past_big_file_threshold_is_binary_as_git_says() {
+    let repo = repositories::big_file_threshold();
+    let head = repo.git(&["rev-parse", "HEAD"]).trim().to_owned();
+    assert_eq!(
+        binary_verdicts(&repo, &head),
+        vec![
+            ("past-the-threshold.txt".to_owned(), true),
+            ("under-the-threshold.txt".to_owned(), false),
+        ],
+        "the threshold must be crossed by one file and not the other"
     );
 }
 
@@ -444,6 +489,138 @@ fn the_size_ceiling_is_decided_before_the_content_is_read() {
     assert!(
         read_anyway.is_err(),
         "the truncated object read back fine, so refusing it proves nothing about reading"
+    );
+}
+
+/// R2.6's last ceiling: past `load_anyway_bytes` nothing is offered, and a caller asking
+/// anyway is refused before the content is read, told which ceiling it crossed. Over the
+/// truncated object, so an answer that read the content fails rather than passing, and
+/// with the ceiling set either side of the object's size. Caught by: `loadable` answered
+/// true past the ceiling, or the ceiling not applied to a load anyway.
+#[test]
+fn past_the_load_anyway_ceiling_nothing_is_offered_or_read() {
+    let (repo, blob) = repositories::truncated_object();
+    let engine = Repository::discover(repo.path()).expect("the fixture opens");
+    let mut session = engine.diff_session().expect("a diff session");
+    let head = repo.git(&["rev-parse", "HEAD"]).trim().to_owned();
+    let file = changed(&repo, &head)
+        .into_iter()
+        .find(|file| file.new_path.display() == "big.txt")
+        .expect("the big file changed");
+    let size: u64 = ok(
+        repo.git(&["cat-file", "-s", &blob]).trim().parse(),
+        "a size",
+    );
+    let limits = DiffLimits {
+        load_anyway_bytes: size - 1,
+        ..DiffLimits::default()
+    };
+    assert!(
+        limits.max_bytes < limits.load_anyway_bytes,
+        "the object must be past both ceilings, the drawing one first"
+    );
+    let ask = |load_anyway: bool, limits: DiffLimits| ContentOptions {
+        limits,
+        load_anyway,
+        ..ContentOptions::default()
+    };
+
+    let offered = session
+        .file_diff(&file, &ask(false, limits))
+        .expect("a file diff");
+    assert_eq!(
+        offered.content,
+        DiffContent::TooLarge {
+            crossed: SizeLimit::Bytes {
+                limit: limits.max_bytes,
+                measured: size
+            },
+            loadable: false,
+        },
+        "past the load-anyway ceiling, loading anyway is not offered"
+    );
+    let anyway = session
+        .file_diff(&file, &ask(true, limits))
+        .expect("asking anyway past the ceiling is answered from the header, never by reading");
+    assert_eq!(
+        anyway.content,
+        DiffContent::TooLarge {
+            crossed: SizeLimit::Bytes {
+                limit: limits.load_anyway_bytes,
+                measured: size
+            },
+            loadable: false,
+        },
+        "asking anyway past the load-anyway ceiling names that ceiling"
+    );
+
+    // The control: at exactly the object's size the same file is offered.
+    let at_size = DiffLimits {
+        load_anyway_bytes: size,
+        ..DiffLimits::default()
+    };
+    let offered = session
+        .file_diff(&file, &ask(false, at_size))
+        .expect("a file diff");
+    assert_eq!(
+        offered.content,
+        DiffContent::TooLarge {
+            crossed: SizeLimit::Bytes {
+                limit: at_size.max_bytes,
+                measured: size
+            },
+            loadable: true,
+        },
+        "a file exactly at the load-anyway ceiling can be loaded anyway"
+    );
+}
+
+/// R2.6's byte ceiling at its edge: a file exactly `max_bytes` long is inside it, and one
+/// byte less of ceiling refuses it. Caught by: `>` turned `>=`.
+#[test]
+fn a_file_exactly_at_the_byte_ceiling_is_drawn() {
+    let repo = Repo::new("exact-bytes");
+    repo.write("f.txt", b"one\n");
+    repo.commit("seed");
+    repo.write("f.txt", b"one\ntwo\nthree\n");
+    let head = repo.commit("grow");
+    let file = changed(&repo, head.hex().as_str())
+        .into_iter()
+        .next()
+        .expect("one file changed");
+    let new_id = some(file.new_id, "the new side");
+    let size: u64 = ok(
+        repo.git(&["cat-file", "-s", new_id.hex().as_str()])
+            .trim()
+            .parse(),
+        "a size",
+    );
+    let engine = Repository::discover(repo.path()).expect("the fixture opens");
+    let at = |max_bytes: u64| ContentOptions {
+        limits: DiffLimits {
+            max_bytes,
+            ..DiffLimits::default()
+        },
+        ..ContentOptions::default()
+    };
+
+    let drawn = engine.file_diff(&file, &at(size)).expect("a file diff");
+    assert!(
+        matches!(drawn.content, DiffContent::Text { .. }),
+        "a file exactly at the ceiling was refused: {:?}",
+        drawn.content
+    );
+    let refused = engine.file_diff(&file, &at(size - 1)).expect("a file diff");
+    assert_eq!(
+        refused.content,
+        DiffContent::TooLarge {
+            crossed: SizeLimit::Bytes {
+                limit: size - 1,
+                measured: size
+            },
+            loadable: true,
+        },
+        "one byte past the ceiling is refused"
     );
 }
 

@@ -380,6 +380,12 @@ fn a_seeded_selection_stages_what_its_patch_says_it_does() {
             if has_crlf_context(text) {
                 shapes.push("crlf context");
             }
+            if matches!(diff.file.status, ChangeStatus::Modified)
+                && !text.changes().is_empty()
+                && text.changes().iter().all(|change| change.is_removal())
+            {
+                shapes.push("removal only");
+            }
             shapes.push(match diff.file.status {
                 ChangeStatus::Added => "added",
                 ChangeStatus::Deleted => "deleted",
@@ -486,6 +492,7 @@ fn a_seeded_selection_stages_what_its_patch_says_it_does() {
         "mode change",
         "two hunks",
         "crlf context",
+        "removal only",
     ] {
         assert!(
             shapes.contains(&wanted),

@@ -19,13 +19,14 @@
 # network; a machine without them FAILS this step, naming what is missing, rather than
 # skipping it. Nothing is installed anywhere else.
 #
-# Two tests skip on these gits by design, and each run prints every test it skipped, so a
+# Three tests skip on these gits by design, and each run prints every test it skipped, so a
 # skip is read rather than counted as a pass:
 #   - in_a_partial_clone_a_rename_search_fails_rather_than_fetching, on a git older than
 #     2.44, which ignores GIT_NO_LAZY_FETCH. It fails instead if
 #     CAIRN_REQUIRE_NO_LAZY_FETCH is set, so that is removed from these runs' environment.
-#   - a_bare_repository_is_answered_under_safe_bare_repository_explicit, on a git older
-#     than 2.38, which has no safe.bareRepository.
+#   - a_bare_repository_is_answered_under_safe_bare_repository_explicit and
+#     a_planted_bare_repository_is_refused_at_open_and_runs_nothing (its refusal half), on
+#     a git older than 2.38, which has no safe.bareRepository.
 # Each filtered run must also list at least as many tests as its floor below, so a filter
 # that stops matching — a module renamed, a test binary split — fails rather than running
 # nothing and passing.

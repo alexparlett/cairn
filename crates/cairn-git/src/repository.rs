@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -5,8 +6,17 @@ use std::time::Duration;
 use cairn_model::CommandRecord;
 
 use crate::Error;
+use crate::ops::{GitBinary, GitVersion};
 pub use crate::process::CLOSE_BOUND;
 use crate::process::Processes;
+
+/// The rule [`SharedRepository::discover`] applies: git 2.45's, the newest band of
+/// `safe.bareRepository`'s rule, whose default is `all`.
+const NEWEST_RULE: GitVersion = GitVersion {
+    major: 2,
+    minor: 45,
+    patch: 0,
+};
 
 pub struct SharedRepository {
     inner: gix::ThreadSafeRepository,
@@ -27,9 +37,36 @@ impl std::fmt::Debug for SharedRepository {
 }
 
 impl SharedRepository {
-    /// Opens the repository containing `path`, walking upwards like `git`.
+    /// Opens the repository containing `path`, walking upwards like `git`, as the newest
+    /// `git` Cairn knows decides it in the environment Cairn was launched with: a bare
+    /// repository found by searching is refused under `safe.bareRepository = explicit`
+    /// ([`Error::BareRepositoryFoundBySearching`]). Where the `git` that will be asked is
+    /// known, [`SharedRepository::discover_for`] decides it as that version does.
     pub fn discover(path: impl AsRef<Path>) -> Result<Self, Error> {
-        let path = path.as_ref();
+        Self::discover_as(path.as_ref(), NEWEST_RULE, &|name| std::env::var_os(name))
+    }
+
+    /// Opens the repository containing `path` as `git` would find it from there:
+    /// walking upwards, and refusing a bare repository found by searching where that
+    /// version of git, reading the configuration `environment` leads to, refuses it
+    /// (`crate::bare_discovery`). `environment` answers what the launching environment
+    /// holds for a name — what the user's own `git`, run from the same place, reads.
+    /// Every `git` run in the repository afterwards is given its git directory
+    /// explicitly, so this is the one place git's own check is made.
+    pub fn discover_for(
+        path: impl AsRef<Path>,
+        git: &GitBinary,
+        environment: impl Fn(&str) -> Option<OsString>,
+    ) -> Result<Self, Error> {
+        Self::discover_as(path.as_ref(), git.version(), &environment)
+    }
+
+    fn discover_as(
+        path: &Path,
+        version: GitVersion,
+        environment: &dyn Fn(&str) -> Option<OsString>,
+    ) -> Result<Self, Error> {
+        crate::bare_discovery::check(path, version, environment)?;
         let inner = gix::ThreadSafeRepository::discover(path).map_err(|source| match source {
             gix::discover::Error::Discover(_) => Error::NotARepository {
                 path: path.to_owned(),

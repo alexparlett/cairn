@@ -3,6 +3,7 @@
 mod repositories;
 mod scratch;
 
+mod bare_discovery;
 mod bench;
 mod changes;
 mod content;

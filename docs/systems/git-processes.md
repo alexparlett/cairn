@@ -260,6 +260,30 @@ the git directory and the working tree owned by the user, or listed under
 reduced trust is left to git's discovery, as before naming existed, so git's
 own check decides it.
 
+Naming the git directory is also the explicit spelling git never refuses, so
+the one check git makes on a repository it found by searching — a bare one,
+under `safe.bareRepository = explicit` — is made when Cairn opens it, or a
+bare repository planted inside a cloned working tree would be read anyway,
+and the programs its configuration names (`core.fsmonitor` on every read,
+`core.sshCommand` and `credential.helper` on a fetch) run with it.
+`SharedRepository::discover_for(path, git, environment)` — the application's
+open, given the `git` found as it started and the launching environment —
+refuses such a repository with `Error::BareRepositoryFoundBySearching` (and
+a value git dies on with `Error::InvalidConfig`) before gix opens it, exactly
+where that version of git refuses it from the same directory
+(`crates/cairn-git/src/bare_discovery.rs`, read from git's `setup.c` at
+v2.38.0 through v2.56.0): the search stops at a directory that is itself a
+git directory rather than one holding a `.git`; the setting is read only from
+the system file, the global ones (includes followed, `includeIf "gitdir:"`
+not) and the command line's `GIT_CONFIG_COUNT` and `GIT_CONFIG_PARAMETERS`,
+never the repository's own, and every value is checked, git dying on any but
+`explicit` and `all`; and what git calls implicit opens — nothing before
+2.38 (the setting does not exist), nothing from 2.38 to 2.43, a directory
+named `.git` in 2.44, and from 2.45 a linked worktree's or a submodule's git
+directory too. `SharedRepository::discover` applies git 2.45's rule with the
+process's own environment. A repository that passes is named to git as
+before.
+
 The command log and an error report the verb and its arguments, not the
 location: a repository's log is its own, and the record's directory says
 where it ran.
@@ -273,11 +297,37 @@ Pinned: `a_trusted_repository_is_named_to_git_ahead_of_the_verb` (a stub
 (`crates/cairn-git/tests/diff/changes.rs`), and
 `a_fetch_lands_in_the_repository_opened_when_its_working_tree_sits_inside_another`
 (`crates/cairn-git/tests/fetch.rs`), each of which fails with the options
-removed. Residual, stated rather than implied: no fixture can make a
+removed. The open's check is pinned against the git in use by
+`a_bare_repository_found_by_searching_opens_exactly_where_git_opens_it` —
+every shape (the planted repository and a directory inside it, a `.git`
+directory entered, a linked worktree's git directory, the worktree, the
+working tree) under every way the setting is given or not, the repositories'
+own configuration saying `explicit` throughout, Cairn opening exactly where
+`git rev-parse` does — and
+`a_planted_bare_repository_is_refused_at_open_and_runs_nothing` (the planted
+`core.fsmonitor` runs on a read without the setting, as it does under git,
+and never under it; skipped before 2.38), in
+`crates/cairn-git/tests/diff/bare_discovery.rs`; the version bands by
+`which_bare_repositories_are_implicit_follows_the_version_of_git` and the
+command line's parsing by
+`command_line_parameters_are_read_as_git_reads_them`, in
+`bare_discovery.rs`; and the application's open by
+`a_planted_bare_repository_is_refused_as_the_launchs_git_refuses_it`
+(`crates/cairn-app/src/worker/pool.rs`). Residual, stated rather than
+implied: no fixture can make a
 repository its own user does not own, so that a less-than-fully-trusted
 repository reaches git's own check is pinned at the function, not end to
 end; and where gix's trust and git's ownership rule disagree — gix trusting
-a repository git would refuse — the options skip git's check for it.
+a repository git would refuse — the options skip git's check for it. The
+`safe.bareRepository` check reads the system file where gix guesses it is
+(`/etc/gitconfig`, `GIT_CONFIG_SYSTEM`, the installation file of the `git` on
+`PATH`), not at the path compiled into the `git` Cairn found; does not follow
+an `includeIf "hasconfig:"` in a global file, which git can match there; does
+not check the other keys of `GIT_CONFIG_PARAMETERS` (a key git refuses makes
+it refuse every command anyway); and reads a git built
+`WITH_BREAKING_CHANGES` before 3.0 as defaulting to `all`. Each would show a
+divergence only in the user's own protected configuration, never one a
+repository can plant.
 
 ## The runner
 

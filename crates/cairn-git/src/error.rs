@@ -15,6 +15,25 @@ pub enum Error {
         source: Box<dyn std::error::Error + Send + Sync>,
     },
 
+    /// The repository was found by searching upwards from the directory Cairn was asked to
+    /// open, and is a bare one that the user's `safe.bareRepository = explicit` tells their
+    /// own `git` to refuse — the protection against a bare repository planted inside a
+    /// cloned working tree, whose configuration names programs to run. It is not opened,
+    /// and no `git` runs in it. `path` is its git directory.
+    #[error(
+        "{path} is a bare repository found by searching, which git refuses because \
+         safe.bareRepository is explicit; it was not opened"
+    )]
+    BareRepositoryFoundBySearching { path: PathBuf },
+
+    /// The system or global configuration, which says whether a bare repository found by
+    /// searching may be opened, could not be read; git refuses to work until it can.
+    #[error("failed to read the system or global git configuration: {source}")]
+    ProtectedConfig {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
     /// `walked` is how many commits were laid out before stopping.
     #[error("the history query was cancelled after {walked} commits")]
     Cancelled { walked: usize },

@@ -130,19 +130,25 @@ pub fn open(
                     return;
                 }
             };
-            let shared = match SharedRepository::discover(&opening) {
-                Ok(shared) => Arc::new(shared),
-                Err(source) => {
-                    // No epoch: failing to open answers no request.
-                    outbox.send(
-                        None,
-                        Update::Failed {
-                            message: source.to_string(),
-                        },
-                    );
-                    return;
-                }
-            };
+            // As the git found above would find it: a bare repository planted in a
+            // working tree is refused here, as that git refuses it under
+            // `safe.bareRepository = explicit`, since every git run in it afterwards
+            // is given its git directory and checks nothing.
+            let startup = discovery.startup();
+            let shared =
+                match SharedRepository::discover_for(&opening, &git, |name| startup.parent(name)) {
+                    Ok(shared) => Arc::new(shared),
+                    Err(source) => {
+                        // No epoch: failing to open answers no request.
+                        outbox.send(
+                            None,
+                            Update::Failed {
+                                message: source.to_string(),
+                            },
+                        );
+                        return;
+                    }
+                };
             // This repository's channel, and git pointed at it.
             let backend = Backend::open(discovery.startup(), &git);
             let threads = Threads::start(
@@ -664,6 +670,7 @@ fn no_walk(error: Error) -> Update {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use std::path::PathBuf;
     use std::task::{Context, Poll, Waker};
     use std::time::Instant;
@@ -717,6 +724,95 @@ mod tests {
             block_on(updates.next()).is_none(),
             "the worker went on to serve the repository after refusing git"
         );
+    }
+
+    /// A bare repository planted inside a working tree — its configuration pointing its
+    /// working tree at the enclosing one, so that it would be read and its programs run —
+    /// is refused as it is opened when the launching environment's configuration says
+    /// `safe.bareRepository = explicit`, as that environment's own `git` refuses it, and
+    /// nothing is served behind the refusal; without the setting it opens, as git does.
+    /// Caught by: opening through `SharedRepository::discover`'s process environment
+    /// rather than the launch's, or not at all through the git found.
+    #[test]
+    fn a_planted_bare_repository_is_refused_as_the_launchs_git_refuses_it() {
+        let version = match cairn_git::ops::GitBinary::discover(&cairn_git::ops::Askpass::new(
+            "/nonexistent/cairn-askpass",
+            None,
+        )) {
+            Ok(git) => git.version(),
+            Err(error) => panic!("finding git: {error}"),
+        };
+        if version.minor < 38 && version.major == 2 {
+            eprintln!(
+                "SKIPPED a_planted_bare_repository_is_refused_as_the_launchs_git_refuses_it: \
+                 git {version:?} has no safe.bareRepository"
+            );
+            return;
+        }
+        let work = UnbornRepository::new("cairn-planted-bare");
+        let planted = work.path.join("evil.git");
+        for inside in ["objects/info", "objects/pack", "refs/heads", "refs/tags"] {
+            std::fs::create_dir_all(planted.join(inside))
+                .unwrap_or_else(|error| panic!("building the planted repository: {error}"));
+        }
+        std::fs::write(planted.join("HEAD"), "ref: refs/heads/main\n")
+            .unwrap_or_else(|error| panic!("writing HEAD: {error}"));
+        std::fs::write(
+            planted.join("config"),
+            "[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = ..\n",
+        )
+        .unwrap_or_else(|error| panic!("writing config: {error}"));
+        let home = work.path.join("home");
+        std::fs::create_dir_all(&home).unwrap_or_else(|error| panic!("a home: {error}"));
+        let path = std::env::var_os("PATH");
+        let launch = |explicit: bool| {
+            let (path, home) = (path.clone(), home.clone().into_os_string());
+            let global = if explicit {
+                let file = work.path.join("explicit.gitconfig");
+                std::fs::write(&file, "[safe]\n\tbareRepository = explicit\n")
+                    .unwrap_or_else(|error| panic!("writing the setting: {error}"));
+                file.into_os_string()
+            } else {
+                OsString::from("/dev/null")
+            };
+            Startup::new(
+                move |name| match name {
+                    "PATH" => path.clone(),
+                    "HOME" => Some(home.clone()),
+                    "GIT_CONFIG_NOSYSTEM" => Some(OsString::from("1")),
+                    "GIT_CONFIG_GLOBAL" => Some(global.clone()),
+                    _ => None,
+                },
+                PathBuf::from("/nonexistent/cairn-askpass"),
+            )
+        };
+
+        let (_handle, mut updates, _) = match open_with(&planted, launch(true)) {
+            Ok(opened) => opened,
+            Err(error) => panic!("starting the worker: {error}"),
+        };
+        match block_on(updates.next()) {
+            Some(Update::Failed { message }) => assert!(
+                message.contains("safe.bareRepository"),
+                "the refusal does not say why: {message}"
+            ),
+            other => panic!("expected the refusal, got {other:?}"),
+        }
+        assert!(
+            block_on(updates.next()).is_none(),
+            "the worker went on to serve the repository after refusing it"
+        );
+
+        let (handle, mut updates, _) = match open_with(&planted, launch(false)) {
+            Ok(opened) => opened,
+            Err(error) => panic!("starting the worker: {error}"),
+        };
+        handle.submit(Request::OpenHistory { rows: 8 });
+        match block_on(updates.next()) {
+            Some(Update::Rows { rows, complete }) => assert!(rows.is_empty() && complete),
+            other => panic!("without the setting the repository opens, got {other:?}"),
+        }
+        drop(handle);
     }
 
     /// `open` succeeds for a path with no repository above it.

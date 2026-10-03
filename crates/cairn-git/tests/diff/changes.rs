@@ -1009,12 +1009,15 @@ fn a_repository_whose_working_tree_sits_inside_another_is_the_one_asked() {
     assert_eq!(cairn_rows(&found.files, head.len()), expected);
 }
 
-/// Under `safe.bareRepository=explicit` git refuses to discover a bare repository, so a
-/// query run inside one by discovery exits 128 on every commit. The query names the
-/// repository it opened, which is the explicit spelling the setting asks for, and
-/// answers what `git --git-dir=<it> log` shows. Caught by: an invocation left to
-/// discovery. The setting arrived in git 2.38; an older git has nothing to refuse, and
-/// there this says so and decides nothing.
+/// A bare repository Cairn opened is named to every `git` it runs, so the configuration
+/// that `git` reads cannot turn it away: here the launching environment allows it (so it
+/// opens; `bare_discovery.rs` pins that the open refuses one the launch's own git would),
+/// while the home the query's `git` reads says `safe.bareRepository=explicit`, under which
+/// a query run inside it by discovery exits 128 on every commit. The query names the
+/// repository, the explicit spelling the setting asks for, and answers what
+/// `git --git-dir=<it> log` shows. Caught by: an invocation left to discovery. The setting
+/// arrived in git 2.38; an older git has nothing to refuse, and there this says so and
+/// decides nothing.
 #[test]
 fn a_bare_repository_is_answered_under_safe_bare_repository_explicit() {
     if git().version() < since(38) {

@@ -1,5 +1,6 @@
 //! Cairn's repository engine.
 
+mod bare_discovery;
 mod cancel;
 mod commit;
 mod diff;

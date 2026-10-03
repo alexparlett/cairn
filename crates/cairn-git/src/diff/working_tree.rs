@@ -229,12 +229,25 @@ impl<C: Cancel> Asker<'_, C> {
         // R2.6: a blob too large to draw is refused before git diffs it, git asked only
         // whether the path changed and how. Only a working-tree modification needs the
         // patch after all, since its record cannot tell an edit from a stat or a mode
-        // that alone moved — and `git diff` shows those as nothing and a mode change.
+        // that alone moved — and `git diff` shows those as nothing and a mode change. A
+        // staged record names both blobs, so one blob under two modes is the mode alone,
+        // which `git diff --cached` shows as its mode lines and a commit answers the same.
         if sizes.largest_known() > self.ceiling {
             match self.ask(false, true, HEADER_ROOM)? {
                 WorkingTreeAnswer::Unlisted => return Ok(None),
                 WorkingTreeAnswer::Listed { file, .. }
                     if self.working_tree() && file.status == ChangeStatus::Modified => {}
+                WorkingTreeAnswer::Listed { file, .. }
+                    if file.status == ChangeStatus::Modified
+                        && file.mode_changed()
+                        && not_null(file.old_id).is_some()
+                        && file.old_id == file.new_id =>
+                {
+                    return Ok(Some(FileDiff {
+                        file,
+                        content: DiffContent::ModeChangeOnly,
+                    }));
+                }
                 WorkingTreeAnswer::Listed { file, .. } => {
                     return Ok(Some(FileDiff {
                         file: self.named(file, None),

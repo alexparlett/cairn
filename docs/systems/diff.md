@@ -589,7 +589,9 @@ refused before git diffs it, git asked only for the raw record — except for a
 working-tree modification, whose record cannot tell an edit from a stat or a mode
 that alone moved: git is asked for its patch, under the ceiling, so a large file
 merely touched is no change and one merely made executable a mode change, as `git
-diff` shows them, and an edit to it is refused without its blob read
+diff` shows them, and an edit to it is refused without its blob read; and a staged
+record naming one blob under two modes is a mode change alone, `ModeChangeOnly`, as
+`git diff --cached` shows it and as a commit's answers
 (`a_large_file_whose_stat_or_mode_alone_moved_is_what_git_diff_shows`).
 
 **Each R3.4 state**: a deletion, a type change (one change of every line, the new

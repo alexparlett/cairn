@@ -1304,6 +1304,26 @@ fn a_large_file_whose_stat_or_mode_alone_moved_is_what_git_diff_shows() {
         "{edited:?}"
     );
     same_as_git(&repo, "touched.txt", WorkingTreeDiff::Unstaged, &touched);
+
+    // Staged, the mode change is a record whose two ids are one blob: `git diff --cached`
+    // shows the mode lines and no hunk, as a commit's mode-only change answers.
+    repo.git(&["add", "moded.txt"]);
+    let staged = some(
+        ask_with(&repo, "moded.txt", WorkingTreeDiff::Staged, &small),
+        "the staged mode change",
+    );
+    assert_eq!(staged.content, DiffContent::ModeChangeOnly, "{staged:?}");
+    assert_eq!(staged.file.new_mode, Some(FileMode::Executable));
+    assert_eq!(staged.file.old_id, staged.file.new_id);
+    let shown = git_diff(&repo, "moded.txt", WorkingTreeDiff::Staged, &[]);
+    assert!(
+        shown.contains("old mode 100644\nnew mode 100755\n") && !shown.contains("\n@@ "),
+        "git diff --cached does not show a mode change alone: {shown}"
+    );
+    assert_eq!(
+        ask_with(&repo, "moded.txt", WorkingTreeDiff::Unstaged, &small),
+        None
+    );
 }
 
 /// `git diff --no-index` is porcelain, and reads the user's presentation settings that the

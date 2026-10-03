@@ -3,6 +3,117 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-03 — Phase 07: the Changes tab, the states that are not text, side-by-side
+
+Packet mode, committed to `feature/diff-engine`. Landed; QA is due (the orchestrator runs
+it). As-built: `docs/systems/diff.md` — "Rows are reached one at a time" (side-by-side
+parity), "In the application" (the filter's lane), "The detail pane" (the Changes tab),
+"The diff view" (side by side, what stands in place of rows, Load Diff, the cut, and the
+table "Measured from Fork, or chosen by Cairn").
+
+**What shipped.** The Changes tab as Fork lays it out (R5.4): a one-line summary, the
+changed files on the left behind a filter, one file's diff on the right, the first file
+chosen by default, ↑/↓ in the focused list. The filter is a list operation run on the
+repository thread in a lane of its own (`QueryLane::FileFilter`, `Request::FilterFiles`,
+`ChangeSet::files_matching`), handed the window's own change set as an `Arc`; the window
+keeps only the answer for the change set and text asked last (`file_filter.rs`). Side by
+side (R6.1): `SideBySideLayout` in the model, two equal columns inside the one
+virtualising view (no plain `ScrollView`, the roster still empty), one shared setting kept
+for the session, the bar's button enabled. Every non-text state draws its notice (R6.8,
+`cairn_ui::DiffNotice`), with Fork's "Changes are too large to display" and "Load Diff";
+Load Diff asks the file again with `load_anyway` and keeps it loaded across a settings
+change. A line past the long-line limit is drawn cut with a muted marker (R6.9).
+
+**Phase 06 QA's four obligations, met.**
+
+- *R6.9's cut with Load Diff.* `cairn_model::drawn_bytes` cuts at the long-line limit
+  (2,048 bytes) on a character; a row draws at most that and `LINE_CUT_MARKER`; ranges past
+  the cut are not read; the widest line is measured to the cut. Measured (release build):
+  a 60 MiB one-line file loaded past the limits draws a frame in 18-63 µs, and its
+  horizontal extent is the cut's (about 14,000 px), not the line's.
+- *`ShownDiff` on the worker.* Moved to `cairn-model` (the worker partition may not name
+  `cairn_ui` — `the_ui_thread_never_waits_on_repository_work` refuses it, so the brief's
+  "worker/ may name cairn_ui" was not taken: the model already held both layouts' inputs,
+  and the pixel widths stayed in the UI as `content_width`/`text_width`) and built in
+  `worker/diff_lane.rs`; `Update::FileDiff` carries it boxed and `DiffState::file_arrived`
+  only keeps it. Measured: 2.4 ms for F1's Load Diff, 20 ms for 52 MiB of a million changed
+  lines — on the diff thread. A replaced one is retired whole (`Retired::shown`).
+- *Integer offsets in `step_change`.* Rows and pixels in `i64`;
+  `a_change_a_million_rows_down_is_stepped_to_exactly` RED on the `f32` code (previous
+  change skipped the change above the view).
+- *The row guard over `UnifiedRow` and `SideBySideRow`.*
+  `every_view_of_a_diff_row_names_every_kind_of_row` with
+  `the_diff_row_matcher_catches_the_shapes_it_claims`; root `CLAUDE.md` invariant and
+  `.claude/agents/qa-checklist.md` updated; RED on a planted `matches!` in each reader.
+
+**Load Diff on F1** (`6a6e8446b97`, `library/stdarch/intrinsics_data/arm_intrinsics.json`,
+1,890,602 → 5,245,383 bytes, longest line 66 bytes; bench repository read only), release
+build, this machine: refused in 0.04 ms; Load Diff answered by the engine in 188.8 ms
+(186.5 / 192.8, five runs); prepared in 2.4 ms on the diff thread; 334,688 unified and
+310,340 side-by-side rows; a frame after a scroll 1.4 ms unified, 2.0 ms side by side,
+headless. At the ceiling, on scratch files: 60 MiB in one line, 152.6 ms to answer; 52 MiB
+of a million changed lines, 989 ms to answer, 20 ms to prepare, 1.5 / 3.2 ms a frame. The
+64 MiB ceiling holds under measurement: the slowest answer is about a second off the UI
+thread, and the window's frames stay bounded — no stopping rule fired.
+
+**Parity.** `side_by_side_read_column_by_column_is_what_git_diff_prints` (model) and
+`parity.rs`'s `side_by_side_view`, which every `compare_commit_at` comparison now applies
+beside the unified view: the whitespace fixture at `-U1/-U3/-U8` with and without `-w`,
+the configured grouping, every algorithm, function context, and this repository's history
+— all GREEN, and RED (four files diverging under `-w`) with the context line read from the
+old side. A side-by-side context row is git's printed line (the new side's) in both
+columns; git's end-of-file marker is a row after the change, in the column of each side
+whose last line did not end.
+
+**Tests, each shown RED under the named mutation, then GREEN.**
+
+| Criterion | Test | RED |
+| --- | --- | --- |
+| C9 side by side | `only_a_viewport_of_side_by_side_rows_is_built_however_long_the_file` (1,000 and 100,000 lines; top, deep, end; real count `lines + 1` from the file; last line in both columns) | the view's length taken from the unified rows |
+| R6.1 | `side_by_side_pairs_lines_fills_the_shorter_side_and_reads_without_colour` | the header drawn in the left column only |
+| R6.1 | `side_by_side_columns_are_equal_halves_and_slide_together` | the text not slid by the sideways scroll |
+| R6.9 | `a_line_past_the_limit_is_drawn_cut_with_its_marker_in_both_views` (a 4 MiB line) | `drawn_bytes` bypassed in `shown_line` |
+| R6.9 | `a_line_past_the_limit_is_cut_at_the_limit_on_a_character`, `the_widest_line_is_counted_to_its_cut` | `drawn_bytes` never cutting |
+| C11 | `every_state_that_is_not_text_draws_its_notice` | a submodule titled "Binary file"; Load Diff offered past the ceiling |
+| C10 | `a_list_of_55184_files_builds_one_viewport_filtered_or_not`, `the_arrows_move_through_the_files_the_list_shows` | rows read by row number, ignoring the filter's answer |
+| C10 | `the_changes_tab_shows_the_summary_the_files_and_the_first_files_diff` | no file chosen by default |
+| C10 | `typing_in_the_filter_asks_a_worker_and_the_list_draws_its_answer` (55,184 files) | the filter's request never submitted |
+| C10 | `a_file_chosen_in_the_list_supersedes_the_last_ones_diff` | the chosen index not recorded |
+| R6.1 | `side_by_side_is_one_setting_for_every_diff_and_asks_nothing` | the toggle doing nothing |
+| R6.8 | `load_diff_asks_the_file_again_past_the_limits` | a settings change dropping `load_anyway` |
+| R5.4 | `the_filter_shows_the_answer_for_the_change_set_and_text_asked_last` | an answer kept without checking what was asked |
+| R5.4 | `a_filter_is_answered_on_a_worker_and_a_newer_one_supersedes_it` (55,184 paths) | the filter numbered in no lane |
+| Parity | `side_by_side_read_column_by_column_is_what_git_diff_prints`, `side_by_side_puts_gits_marker_in_the_column_of_the_side_that_did_not_end`, `a_side_by_side_context_line_is_the_new_sides_in_both_columns`, `parity.rs` through `side_by_side_view` | old-side context; no marker row |
+| Obligation | `a_change_a_million_rows_down_is_stepped_to_exactly` | the `f32` arithmetic |
+| Obligation | `every_view_of_a_diff_row_names_every_kind_of_row` | a planted `matches!` in each reader |
+
+Pins written without a mutation run: `a_row_of_a_kept_side_by_side_layout_costs_no_allocation_however_long_the_diff_is`,
+`both_projections_are_built_with_the_answer`, `a_text_diff_with_rows_has_no_notice`,
+`the_filter_field_takes_the_text_and_an_empty_answer_says_so`,
+`the_summary_is_author_short_id_date_and_subject`, `side_by_side_starts_off_and_toggles_alone`.
+
+**Looked at.** A fixture repository with every state — a 100% rename, a binary, a 2.2 MB
+text file, a mode-only change, an LFS pointer, a submodule moved — run through the engine
+(`DiffSession::file_diff`), prepared and drawn headlessly to images, each looked at: the
+submodule says "Submodule" and git's `Subproject commit` lines, never "binary"; the LFS
+pointer's two sides, side by side at first, overran the pane and were stacked; a binary
+under a KB read "0.0 KB" and now reads in bytes. The Changes tab drawn in the window,
+unified and side by side, was looked at too.
+
+**Decisions taken without asking, each recorded as Cairn-chosen** (the table in
+`docs/systems/diff.md`; the user's sign-off is asked in the report): the filter ignores
+ASCII case and keeps its text across commits; side by side, both columns' text slides
+together under one sideways scroll while the gutters stay, a `-`/`+` marker is drawn in
+each column, and git's end-of-file marker takes a row after the change; the notices' words
+beyond Fork's "Changes are too large to display", "Load Diff", "Old" and "New"; KB as 1,024
+bytes; the cut marker " … line truncated"; the list's 300 px default width; the first file
+chosen by default (Fork-measured, Finding 5); a file filtered out of the list stays shown.
+
+**Deferred to phase 08.** A file opening in place under its row in the Commit tab (so the
+side-by-side setting's reach into "the Commit tab's diff" is checked there; today the
+Changes tab is the one diff view), comparing two commits and its header, Expand All's
+budget and per-file outcomes.
+
 ## 2026-10-03 — Phase 06 QA: findings fixed, and the user's four decisions applied
 
 Packet mode, committed to `feature/diff-engine`. The QA round: 15 raw findings plus one

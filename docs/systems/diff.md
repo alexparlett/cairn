@@ -134,7 +134,23 @@ change's rows (`change_rows`, `first_change_from`, `next_change_after`,
 `previous_change_before`, by search), which previous and next change move between.
 `SideBySideRow` adds `Replaced`, which pairs the i-th removed line of a change
 with its i-th added line; when one side is shorter, the leftover rows are
-`Removed` or `Added`, and the other side is the filler.
+`Removed` or `Added`, and the other side is the filler. The side-by-side rows are
+held to the same parity rule as the unified ones (phase 07): `SideBySideLayout`, the
+owning twin of `UnifiedLayout`, groups the same ranges at the same context with the
+same inter-hunk context (`SideBySideLayout::shown`), a context row's `line` is the new
+side's — git's printed line, drawn in both columns
+(`a_side_by_side_context_line_is_the_new_sides_in_both_columns`) — and git's end-of-file
+marker is a row of its own, `NoNewlineAtEnd { old, new }`, after a change's lines with
+the marker in the column of each side whose last line did not end and filler in the
+other, or in both columns after a context line that ends the file
+(`side_by_side_puts_gits_marker_in_the_column_of_the_side_that_did_not_end`). Read
+column by column — each change's left column, then its right — the side-by-side rows
+are the unified rows line for line
+(`side_by_side_read_column_by_column_is_what_git_diff_prints`), and every parity test
+against `git diff` reads them so too (`parity.rs`'s `side_by_side_view`, inside
+`compare_commit_at`, so each comparison of the unified rows holds the side-by-side
+rows to the same answer). Both layouts expose their changes as `ChangeStops`, what
+previous and next change search.
 
 **Residuals, stated rather than implied, for the phases that draw this.** These are
 model-level pins and each has a hole a mutation walks through:
@@ -158,21 +174,20 @@ model-level pins and each has a hole a mutation walks through:
   answers and keeps every test green, while turning a handful of comparisons per row
   into one per index entry. Nothing here measures comparisons, so keeping the search
   a search is a review obligation, not a guarded fact.
-- *Building the projection costs what the file has changes.* Closed in phase 06:
-  `UnifiedLayout` owns its index, and the view builds it once per answer, when the answer
-  arrives (`cairn_ui::ShownDiff::new`, in `DiffState::file_arrived`), never per row or per
-  frame. It is built on the UI thread, in time proportional to the changes; moving it to
-  the worker is open if a measured answer ever makes that matter.
+- *Building the projection costs what the file has changes.* Closed in phase 06, and
+  moved off the UI thread in phase 07: both layouts own their indexes, and
+  `cairn_model::ShownDiff::new` builds them once per answer on the diff thread that
+  answered it (`worker/diff_lane.rs`), never per row, per frame or per toggle; the window
+  only keeps the value (`DiffState::file_arrived` takes a `ShownDiff`).
 - *A change maps to its rows* (phase 06): `UnifiedLayout::change_rows` and the searches
   beside it, pinned by `changes_are_found_by_the_row_they_start_on`.
-- *The row enums are `RowContent`-class, and still unguarded.* The one view that reads
-  `UnifiedRow` (`cairn_ui::diff_view`'s `build_row`) names every variant, and phase 06
-  added `NoNewlineAtEnd` without a wildcard to catch it; no guard holds the next reader
-  to that. Until one does, a partial read of `UnifiedRow` or `SideBySideRow` — a
-  wildcard arm, an `if let`, a `matches!` — is `qa-checklist`'s to catch. Phase 07, which
-  brings the second reader (side-by-side), owes the guard: the row-exhaustiveness matcher
-  (`reads_enum_partially`) extended to both enums. `SideBySideRow` has no reader yet and
-  no end-of-file marker: phase 07 draws side-by-side and owes both.
+- *The row enums are `RowContent`-class, and guarded* (phase 07). The views that read
+  them — `cairn_ui`'s `unified_rows::build` and `side_by_side_rows::build` — name every
+  variant, and `every_view_of_a_diff_row_names_every_kind_of_row` holds every production
+  reader to that with `reads_enum_partially` (self-test
+  `the_diff_row_matcher_catches_the_shapes_it_claims`). What the matcher cannot see — a
+  helper handing out one kind of row and read partially, a `type` alias — stays
+  `qa-checklist`'s.
 
 ## What the engine answers
 
@@ -994,12 +1009,10 @@ change only, conflicted, or unsupported with its reason. `DiffLimits` carries
 R2.6's numbers (1 MiB, 50,000 lines, 2,048 bytes in a line, and the 64 MiB ceiling
 on loading one anyway) where both an engine and a view can read the same ones.
 
-**Residual, stated rather than implied:** nothing guards that a reader of
-`DiffContent` names every variant the way the `RowContent` invariant does for a
-history row. A wildcard arm over it would compile and draw nothing for a state
-added later. Today the model itself is the only reader; when the views land, C11
-("every R6.8 state draws its notice") is what decides it, and whether that
-deserves a guard of its own is a question for the packet's QA phase.
+A reader of `DiffContent` names every variant, as the `RowContent` invariant has a
+history row read (`every_view_of_a_file_diff_names_every_state`, phase 05). Phase 07
+draws each state (C11; "The diff view", below): `cairn_ui::DiffNotice::of` reads a
+prepared diff by naming every state and says what stands in its place.
 
 ## In the application
 
@@ -1017,13 +1030,29 @@ or `WorkingTree { path, side }`) and the `DiffOptions` the view chose — the
 context git is asked at, whether to compute the whitespace-ignoring ranges, and
 whether to load past R2.6's byte ceiling; the ceilings themselves are fixed.
 `Update::FileDiff { query, diff }` answers with the same query, `diff` being
-`None` where the working tree's `git diff` of the path prints nothing.
+`None` where the working tree's `git diff` of the path prints nothing; since phase 07
+the diff arrives prepared for the views — a boxed `cairn_model::ShownDiff`, both row
+projections and the widest drawn line built on the diff thread — so the window keeps
+the value and builds nothing (`DiffState::file_arrived`). A diff the window lets go of
+travels back whole in a `Request::Retire`, indexes and all, and is freed on the
+repository thread (`choosing_another_file_hands_the_last_diff_to_a_worker`).
 `Request::ExpandAll { of, options }` asks for every file of a change set, answered
 by `Update::FileDiffs { of, options, diffs, complete }`; today that is one batch,
 complete. A failure is `Update::DiffFailed { query, message }`, naming what was
 asked. A superseded query sends nothing: `ChangesCancelled`, `ContentCancelled`
 and `GitReadCancelled` are not failures, and nothing is sent once the query's
 epoch is no longer current.
+
+**The Changes tab's filter** (phase 07, R5.4). `Request::FilterFiles { of, files, text }`
+asks which of a change set's files hold `text` in a path; `files` is the window's own
+change set, an `Arc` shared with `DiffState` rather than copied. It is numbered in a
+fourth lane, `QueryLane::FileFilter`, which supersedes itself and nothing else, and is
+routed to the repository thread, whose work between jobs is a bounded page, so a
+keystroke never waits behind a diff. There `ChangeSet::files_matching` makes one pass
+over the paths, asking the epoch every few thousand files, and answers
+`Update::FilteredFiles { of, text, files }`, the matching indices in order; a filter
+superseded by the next keystroke stops and sends nothing
+(`a_filter_is_answered_on_a_worker_and_a_newer_one_supersedes_it`, over 55,184 paths).
 
 **Lanes and the diff thread** (PRD R4.1-R4.3). The changes query is numbered in
 the changes lane and a file diff or Expand All in the file-diff lane; a changes
@@ -1175,13 +1204,38 @@ chord; it opens at the height it was last dragged to
 (`the_splitter_drags_and_the_pane_keeps_its_height`). No plain `ScrollView` is
 involved: the exceptions roster stays empty.
 
+**The Changes tab** (`crates/cairn-app/src/changes_tab.rs`, phase 07, R5.4), Fork's
+(Findings 5 and 19): a one-line summary — the author's name, the short id, the author
+date in the user's chosen format and the subject (`cairn_ui::ChangesSummary`,
+`summary_parts`; no avatar) — then, behind a draggable splitter (the list 300 px wide
+until dragged, kept for the session), the changed files on the left under a filter field
+and one file's diff on the right. A component of its own, mounted only while the tab is
+shown. The list (`cairn_ui::ChangesList`) is one `VirtualScrollView` of fixed rows over a
+`Readable` of the change set and one of the filter's answer (`cairn_ui::ShownFiles`, every
+file or the matching indices), so 55,184 files build one viewport of rows, filtered or not
+(`a_list_of_55184_files_builds_one_viewport_filtered_or_not`). Typing in the field writes
+the session's `View::filter_text`; an effect hands the text to `DiffState::filter`, which
+asks a worker (above) and keeps the answer only for the change set and text asked last —
+the last answer standing until the next arrives, nothing of another change set's ever
+read (`file_filter.rs`, `the_filter_shows_the_answer_for_the_change_set_and_text_asked_last`;
+through the window, `typing_in_the_filter_asks_a_worker_and_the_list_draws_its_answer`).
+A change set arriving asks again with the text as it is. With no file chosen, the first
+file the list shows is chosen, as Fork selects the first file by default
+(`the_changes_tab_shows_the_summary_the_files_and_the_first_files_diff`). A file pressed,
+or reached with ↑ or ↓ while the list has focus — through the files it SHOWS, stopping at
+either end (`the_arrows_move_through_the_files_the_list_shows`) — is chosen through
+`diff_actions::choose_file`, which asks its diff in the file-diff lane: the last file's
+query is superseded, its `git` killed by the epoch and its answer never drawn
+(`a_file_chosen_in_the_list_supersedes_the_last_ones_diff`). The list highlights the file
+chosen by the index `DiffState` records as it is chosen (`DiffState::file_index`), never
+by searching the change set.
+
 **The tabs** (`cairn_ui::DetailTabs`, `crates/cairn-ui/src/detail_tabs.rs`). Commit,
 the default, and Changes, as text tabs with no count, the shown one underlined. The
 tab chosen is the window's `View::detail_tab`, created once per window, so it is kept
 across every selection and every collapse for the session
-(`the_tab_chosen_is_kept_across_selections_and_a_collapse`). The Changes tab draws the
-diff of the file chosen in the Commit tab ("The diff view"); its own file list, filter
-and summary are phase 07's.
+(`the_tab_chosen_is_kept_across_selections_and_a_collapse`). A file pressed in the Commit
+tab is chosen and the Changes tab shown with it; the Changes tab is described above.
 
 **What the Commit tab draws, and when** (`crates/cairn-app/src/detail_pane.rs`). The
 pane is a component of its own, so an answer arriving redraws it and not the window.
@@ -1275,42 +1329,45 @@ frame.
 
 ## The diff view
 
-As-built for PRD R6.2-R6.7 in unified form (side-by-side and the non-text states'
-notices are phase 07's; a file opening in place under its row is phase 08's), with the
-user's decisions of phase 06: Fork's chords only, git parity for every row, and the
-user's own `diff.context` as the starting context.
+As-built for PRD R6.1-R6.9, unified and side by side (a file opening in place under its
+row in the Commit tab is phase 08's), with the user's decisions of phase 06: Fork's chords
+only, git parity for every row, and the user's own `diff.context` as the starting context.
 
-**Where it is drawn, and for what** (`crates/cairn-app/src/detail_pane.rs`,
-`changes_body`). A file pressed in the Commit tab is chosen (`diff_actions::choose_file`
-through `CommitTab::on_file`) and the Changes tab shown (`CommitTab::on_file_pressed`);
-a file reached with ↑ or ↓ is chosen without changing tab. Choosing asks its diff
-through `DiffState::select_file` at the session's settings, and the tab draws the bar and
+**Where it is drawn, and for what** (`crates/cairn-app/src/changes_tab.rs`, `diff_side`).
+A file chosen — pressed in the Commit tab (which shows the Changes tab), pressed or reached
+with ↑ or ↓ in the Changes tab's list, or chosen there by default — is asked through
+`DiffState::select_file` at the session's settings, and the diff side draws the bar and
 then — only for the answer naming that file at those settings — the rows, or what stands
-in their place: "Reading the diff…", a failure in the error colour, "No changes to show."
-(a clean working-tree path, or text with nothing to show), a sentence for a file whose
-every change is whitespace being ignored, and a one-line sentence for each non-text state
-until phase 07 draws them in full
+in their place: "Reading the diff…", a failure in the error colour, or the notice of a
+state that is not text ("What stands in place of rows", below)
 (`a_pressed_file_draws_its_diff_in_the_changes_tab_for_that_query_alone`). A diff
 replaced by another file's, or by the same file's at other settings, is handed to the
 repository thread to free, as a change set is
 (`choosing_another_file_hands_the_last_diff_to_a_worker`).
 
-**Built once per answer** (`cairn_ui::ShownDiff`). When the answer arrives,
-`DiffState::file_arrived` wraps it, at the context it was asked at: its
-`UnifiedLayout::shown` (proportional to its changes), whether ignoring whitespace hides
-a change (`DisplayOverlay::hides_a_change`, asked once, as its own doc requires), the
-gutter's digits and the widest line's columns (one pass over the bytes, an upper bound:
-a byte is at most a column and a tab at most eight). The view is handed a `Readable`
-over the window's `DiffState` (`diff_state::answered_file`), never a copy.
+**Built once per answer, on the worker** (`cairn_model::ShownDiff`, built in
+`worker/diff_lane.rs`). As the diff thread answers, it prepares the answer at the context
+it was asked at: both row projections (`UnifiedLayout::shown`, `SideBySideLayout::shown`,
+each proportional to the changes), whether ignoring whitespace hides a change
+(`DisplayOverlay::hides_a_change`, asked once, as its own doc requires), the gutter's
+digits and the widest line's columns as drawn (`widest_drawn_columns`: one pass over the
+drawn bytes, an upper bound — a byte is at most a column and a tab at most eight — and a
+line past the long-line limit counted to its cut). The window keeps the value; toggling
+side-by-side builds nothing. Measured in a release build on F1's Load Diff (1.9 MB to
+5.2 MB, 334,688 unified rows), preparation took 2.4 ms on the diff thread; on a 52 MiB
+file of a million changed lines, 20 ms — work the UI thread no longer does (phase 06's
+obligation; it was about 39 ms at 64 MiB on the UI thread). The view is handed a
+`Readable` over the window's `DiffState` (`diff_state::answered_file`), never a copy.
 
-**A row** (`cairn_ui::UnifiedDiffView`, `crates/cairn-ui/src/diff_view.rs`). Every row is
-`DIFF_ROW_HEIGHT` tall, through one `VirtualScrollView` with a fixed item size, so the
-view builds one viewport of rows at the top, scrolled deep and at the end of a 1,000-line
-and a 100,000-line file — the same number at each place for both — and the end is the
-projection's last row, so the view's length is the projection's
-(`only_a_viewport_of_diff_rows_is_built_however_long_the_file`, criterion C9 for
-unified rows, the twin of `only_a_viewport_of_rows_is_built_however_long_the_history`).
-A line row is the old and the new line number, right-aligned, a one-pixel separator,
+**A row** (`cairn_ui::DiffView`, `crates/cairn-ui/src/diff_view.rs`, drawing
+`unified_rows.rs` or `side_by_side_rows.rs` as the shared setting says, each from the
+pieces in `diff_row_parts.rs`). Every row is `DIFF_ROW_HEIGHT` tall, through one
+`VirtualScrollView` with a fixed item size, so the view builds one viewport of rows at the
+top, scrolled deep and at the end of a 1,000-line and a 100,000-line file — the same
+number at each place for both — and the end is the projection's last row, so the view's
+length is the projection's (`only_a_viewport_of_diff_rows_is_built_however_long_the_file`,
+criterion C9 for unified rows, the twin of
+`only_a_viewport_of_rows_is_built_however_long_the_history`). A unified line row is the old and the new line number, right-aligned, a one-pixel separator,
 then — tinted for a change, from the separator to the row's end — a marker column
 (`-`, `+`, blank) and the line. A removed line leaves the new gutter blank, an added one
 the old; so a row means the same with its colour ignored
@@ -1332,16 +1389,73 @@ rule; `a_tab_after_a_wide_or_combining_character_stops_where_a_terminal_stops`);
 `\r` not drawn; another C0 control or DEL as its Unicode control picture, which IBM Plex
 Mono 2.5 carries; invalid UTF-8 as one `U+FFFD` per invalid sequence.
 
-**Per frame and per row.** A frame builds the rows in view and nothing else. Per row: a
-search of the layout's index, one search of the intra-line pairs, the line's own text
-(its length, never the file's), two line numbers formatted and one header string for a
-header row. Nothing per row reads the theme: the colours are constants. None of it grows
-with the file or with the scroll offset. The line's text is not bounded by the view here:
-a loaded over-limit file's long line (R6.9) is drawn whole until phase 07 truncates it.
+**Side by side** (`side_by_side_rows.rs`, R6.1, Fork's Finding 11). Two columns of equal
+width inside the ONE virtualising view — never two scroll views, so the exceptions roster
+of plain `ScrollView`s stays empty — the old side on the left and the new on the right,
+each a line-number gutter, a separator and a text area: a context line in both columns,
+the i-th removed line beside the i-th added one, the shorter side's rows filler (Fork's
+grey, `FILLER`), the hunk header with git's function context at the top of each column,
+git's end-of-file marker in the column of the side that did not end, a `-`/`+` marker per
+changed line so a row reads the same with its colour ignored
+(`side_by_side_pairs_lines_fills_the_shorter_side_and_reads_without_colour`). Each column
+is half the view, so both sides are on screen together as Fork's equal panes are; a line
+wider than its column scrolls sideways, sliding the text of both columns together while
+each gutter stays where it is — every row is laid out at the scroll's offset, with a
+spacer as wide as the scroll ahead of the columns, and the view's horizontal extent is the
+widest line's overflow past its column
+(`side_by_side_columns_are_equal_halves_and_slide_together`). C9 for side-by-side rows:
+over a 1,000-line and a 100,000-line file drawn whole, one viewport of rows at the top,
+deep and at the end, the view's length the file's real row count (a header and a row per
+line, counted from the file), and the last line at the end in both columns
+(`only_a_viewport_of_side_by_side_rows_is_built_however_long_the_file`).
 
-**Horizontal extent.** Every row is as wide as the view, or as `ShownDiff::content_width`
-(the gutters, the marker column and the widest line's columns at the font's advance)
-where that is wider, measured once — so the horizontal scrollbar is the same whichever
+**What stands in place of rows** (`cairn_ui::DiffNotice`, `DiffNoticeView`,
+`crates/cairn-ui/src/diff_notice.rs`; R6.8, C11). `DiffNotice::of` reads a prepared diff by
+naming every state; each draws words that cannot be taken for another state's, git's
+own where git has them (`every_state_that_is_not_text_draws_its_notice`, each state built
+and looked at from a real fixture repository as well):
+
+| State | Drawn |
+| --- | --- |
+| Binary | "Binary file", Fork's "Old" and "New" over each side's size in KB and bytes (bytes alone under a KB); an absent side (added, deleted) has none |
+| Too large | Fork's "Changes are too large to display", the measurement the limit fired on, and Fork's "Load Diff" while a load is offered; past the 64 MiB ceiling "too large to load" and no button |
+| Git LFS pointer | "Git LFS pointer" over each side's pointer text, the old above the new |
+| Submodule | "Submodule" over git's `-Subproject commit <id>` and `+Subproject commit <id>` lines, `-dirty` after the new where the working tree's checkout has changes; never "binary" |
+| Mode only | git's `old mode` and `new mode` lines, under "No change to the file's content" |
+| Rename or copy, no content change | git's `similarity index`, `rename from`/`rename to` (`copy from`/`copy to`) lines, with the mode lines first when the mode moved too |
+| Conflicted, unsupported | "This file is conflicted"; the engine's reason |
+| Text with no row | "No changes to show.", or the whitespace sentence when ignoring whitespace hides every change |
+
+**Load Diff** (`diff_actions::load_anyway`) asks the file shown again with `load_anyway`,
+which the engine honours up to the 64 MiB ceiling; while it is shown a setting changed
+keeps it loaded, and another file starts unloaded
+(`load_diff_asks_the_file_again_past_the_limits`). Measured on F1 (`6a6e8446b97`,
+`arm_intrinsics.json`, 1.9 MB to 5.2 MB) in a release build: refused in 0.04 ms; Load
+Diff answered by the engine in 189 ms (median of five), prepared in 2.4 ms, and a frame
+after a scroll through its 334,688 unified (310,340 side-by-side) rows 1.4 ms (2.0 ms side
+by side) headless. At the ceiling, on files built for it: 60 MiB in one line, 153 ms to
+answer and microseconds a frame; 52 MiB of a million changed lines, 989 ms to answer on
+the diff thread, 20 ms to prepare, 1.5 ms (3.2 ms side by side) a frame.
+
+**A line past the long-line limit is drawn cut** (R6.9, `cairn_model::drawn_bytes`,
+`cairn_ui::LINE_CUT_MARKER`). Only a diff loaded past the limits holds one; drawn whole, a
+64 MiB line would be 64 MiB of text each time its row is built. A row draws at most the
+long-line limit's 2,048 bytes of a line, ending on a character, then " … line truncated" in
+the muted colour; its intra-line ranges past the cut are not read; and the widest line is
+measured to its cut, so the horizontal extent is bounded too
+(`a_line_past_the_limit_is_drawn_cut_with_its_marker_in_both_views`, a 4 MiB line in each
+view; `a_line_past_the_limit_is_cut_at_the_limit_on_a_character`).
+
+**Per frame and per row.** A frame builds the rows in view and nothing else. Per row: a
+search of the layout's index, one search of the intra-line pairs per side, the line's
+drawn text (at most the long-line limit's, never the file's), the line numbers formatted
+and one header string for a header row. Nothing per row reads the theme: the colours are
+constants. None of it grows with the file, the line or the scroll offset.
+
+**Horizontal extent.** Unified: every row is as wide as the view, or as
+`cairn_ui::content_width` (the gutters, the marker column and the widest drawn line's
+columns at the font's advance, the cut marker's too when a line is cut) where that is
+wider, measured once — so the horizontal scrollbar is the same whichever
 rows are built (`the_horizontal_extent_is_the_widest_lines_wherever_the_view_is`). Long
 lines scroll sideways, never wrap (issue #34). The gutter scrolls sideways with the
 text; Fork's own behaviour there was not established. A glyph the font lacks, drawn by a
@@ -1351,7 +1465,7 @@ wider fallback, can run a line past the extent.
 (Finding 10): ↑ and ↓ for previous and next change on the left; the path in IBM Plex
 Mono, the directory muted and the file name in the text colour, a rename's or a copy's
 old path in a tooltip; on the right, Ignore whitespace, Fewer lines, More lines, Entire
-file and Side-by-side, the last drawn disabled until phase 07. Each button is Fork's glyph
+file and Side-by-side. Each button is Fork's glyph
 (`cairn_ui`'s `toggle_glyphs`, built from plain shapes, no icon font): chevrons, `⎵`,
 `−`, `+` and `↕` over lines, a split rectangle. A toggle that is on draws its glyph in the
 accent colour, never filled, as Fork does; each button carries its name — read by assistive
@@ -1370,7 +1484,10 @@ is done too.
 
 **The settings** (`cairn_ui::DiffSettings`, `View::diff_settings`). One value for every
 diff view, kept for the session, not across sessions (issue #29): the lines of context,
-the entire file or not, whitespace ignored or not. Context moves a line per click, never
+the entire file or not, whitespace ignored or not, side by side or not (unified by
+default, R6.1; toggling it asks git nothing and lets go of the change last moved to, since
+its rows are the other view's — `side_by_side_is_one_setting_for_every_diff_and_asks_nothing`,
+which also shows the setting kept across another file and another commit). Context moves a line per click, never
 below one (`context_moves_a_line_at_a_time_and_never_below_one`); the entire file is a
 toggle that gives back the lines it left. It starts at the user's `diff.context`, raised
 to one — read on the diff thread, whose handle is the one opened again when the
@@ -1396,7 +1513,11 @@ while focus is inside the detail pane: the diff (focused by a press), the files,
 One step goes from the change last moved to while the view is still where that step left
 it, and otherwise from the top row in view, so the first press finds the first change at
 or below the top even when it is already in view (Fork's open bug is skipping it,
-TrackerWin #2393). The change moved to is put a row below the top and marked by a wider
+TrackerWin #2393). The changes are the drawn view's (`ShownDiff::stops`, unified or side
+by side), and rows and pixels are whole numbers throughout, so a change a million rows
+down is found from the row really at the top and put exactly one row below it
+(`a_change_a_million_rows_down_is_stepped_to_exactly`; the `f32` arithmetic it replaced
+lost whole rows past 2^24 pixels). The change moved to is put a row below the top and marked by a wider
 separator in the accent colour; past either end nothing moves; nothing acts while the
 Changes tab is hidden or the pane collapsed
 (`previous_and_next_change_step_one_change_from_where_the_view_is`,
@@ -1423,6 +1544,18 @@ number) and `docs/research/diff-engine/fork-shortcuts.md`.
 | Tab stops | eight columns, counted in terminal widths | Cairn-chosen (the user's decision "terminal widths"): what `git diff` shows in a terminal. Fork's tab width is a setting whose default is not established (Finding 17). |
 | Colours | Fork's dark values, retuned | Fork-measured values (Finding 25), moved by a Cairn-chosen rule: each keeps its offset from Fork's ground, channel by channel, on Cairn's darker ground, so a tint stands out as much as in Fork (`retuned`, below). |
 | `CURRENT_CHANGE` | the dark theme's `text_highlight` | Cairn-chosen: Fork uses the system accent (Finding 25), which Cairn has no platform call to read; the theme's accent, pinned equal by `the_current_change_is_the_themes_accent`. |
+| Side-by-side columns | two equal columns, each half the view, one gutter each, grey filler, the hunk header at the top of each | Fork-measured: Finding 11 (equal, not resizable, the vendor; one gutter per pane; grey filler; the header repeated). Filler's grey is Fork's `#424242` (Finding 25), retuned. |
+| Side-by-side sideways scroll | both columns' text slides together; each gutter stays | Cairn-chosen: Fork's panes are two text controls whose sideways scroll is not established; Cairn's are one view (the no-plain-`ScrollView` invariant), so one scroll moves both. |
+| Side-by-side `-`/`+` markers | a marker column per side | Cairn-chosen: Fork's is an opt-in preference (Finding 12); Cairn draws it always, as in unified, so meaning never rests on colour (L11). |
+| End-of-file marker side by side | a row after the change, in the column of the side that did not end | Cairn-chosen: git has no side-by-side form; Fork's is not recorded. |
+| Too large | "Changes are too large to display", "Load Diff" | Fork-measured: Finding 21 (Windows screenshot, TrackerWin #2245). The line under it giving the measurement, and "too large to load" past the ceiling, are Cairn's. |
+| Binary | "Old"/"New" over each size in KB and bytes | Fork-measured: Finding 22 (Windows 1.28 screenshot). The "Binary file" title, KB as 1,024 bytes and bytes alone under a KB are Cairn's. |
+| LFS pointer, submodule, mode only, rename | the pointer text under "Git LFS pointer"; git's own lines | Cairn-chosen: Fork's LFS and submodule views show downloaded content, chips and a commit graph (Finding 22), more than R6.8 asks; mode-only presentation is not established in Fork; git's own lines are the parity answer. |
+| Cut line marker | " … line truncated", muted | Cairn-chosen: Fork refuses such lines rather than cutting them (Finding 21). |
+| Changes tab summary | author, short id, author date, subject | Fork-measured: Finding 2 (avatar, author, abbreviated SHA, date, subject); no avatar (L9); the date in the user's chosen format. |
+| Changes tab list | filter field at the top, status letter and path, first file chosen | Fork-measured: Finding 5 (filter, badge, name; first file selected by default). |
+| Filter matching | the text anywhere in a path, a rename by either name, no wildcards, ASCII case ignored | Fork-measured in part: file name, extension or path expression, no wildcards (the vendor, TrackerWin #152 and Tracker #1482). Ignoring case is Cairn's choice, not established. The filter text is kept across commits for the session — Cairn's choice. |
+| File list width | 300 px until dragged, kept for the session | Cairn-chosen: Fork's split is draggable (Finding 5); its default width is not established. |
 
 **Colours and typeface** (`cairn_ui::diff_palette`). Named tokens, never literals at a
 call site. Fork's measured dark values (`docs/research/diff-engine/fork-detail-and-diff-ui.md`,
@@ -1570,6 +1703,14 @@ per way git reads a commit's text, by
 `iconv` by `each_encoding_reads_as_glibc_reads_it`.
 
 ## Known limits
+
+- **Past 2^24 pixels the virtualising view's own arithmetic is `f32`.** Cairn's previous
+  and next change compute in whole numbers, but Freya's `VirtualScrollView` places rows and
+  reads the scroll offset in `f32`, which holds whole pixels exactly only to 2^24 — about
+  987,000 rows, reachable only by a file loaded past the limits. Where rows are placed
+  past that is the toolkit's and no test pins it.
+- **The filter answers for one change set at a time**, and keeps its text for the session:
+  a filter typed over one commit is asked again over the next.
 
 - **A kept answer is as fresh as the files the thread can name.** Every file git or
   gix reads for a commit's diff is stamped before each query ("In the application"),

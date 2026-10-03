@@ -3,6 +3,83 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-03 — phase 02's QA: what it found, what was decided, what was fixed
+
+QA ran over `34bc907..HEAD`, the reworked phase. Its reviewers raised nineteen raw
+findings plus a coverage gap around C6; a fresh `qa-confirm` adjudicated them, most
+by experiment against git 2.56, and confirmed sixteen. Dismissed: **D3**, a ceiling on
+the changes query's answer — a cap would hide files git lists, and the cancel already
+bounds the time; **Q2**, a test-only option to run the floor's branches — it fails
+loudly rather than proving anything, and is superseded by the CI job below; and
+**Q3**, that gix opens the configuration with `includes: true` under full trust,
+which the adjudicator found to be no defect. The C6 audit is still to do.
+
+Two findings needed the user, who decided on 2026-10-03: **A3, honour
+`log.showRoot`**, and **Q1, prove the 2.30 floor in CI**.
+
+What was fixed, each with its test in the same commit (commits `430ab12` to the
+docs commit after `cd0c065`):
+
+- **D1 — the repository is named to git.** `in_repository` only set the directory,
+  so git's discovery read the enclosing repository for a working tree inside
+  another, and refused a bare repository under `safe.bareRepository=explicit`. Each
+  invocation now passes `--git-dir` and `--work-tree`. Decided here, without the
+  user: an explicitly named git directory skips git's `safe.directory` check
+  (reproduced with `GIT_TEST_ASSUME_DIFFERENT_OWNER=1`), so the options are given
+  only for a repository gix trusts fully, which is gix's reading of the same rule; a
+  less trusted one is left to discovery and to git's check. The command log and
+  errors record the verb's arguments, not the location — a log is the repository's
+  own. Fetch now lands in the repository Cairn opened, which was the bug's other
+  half.
+- **A1 — a shallow clone's boundary commit lists no parents**, as `git log
+  --format=%P` shows. **The history graph has the same divergence** — gix's walk
+  hands `info.parent_ids` with the parent the clone lacks
+  (`crates/cairn-git/src/history.rs`, `history/session.rs`), checked on a depth-1
+  clone of this checkout — and is not fixed here: the graph is history-graph's,
+  the fix spans three walk sites and the lane assigner's handling of a parent that
+  never arrives, and it is reported for its own change.
+- **A3 — `log.showRoot`.** False means no diff for a root commit (or a shallow
+  boundary), as `git log` and `git show` print none. Decided here: it is read for
+  every one-commit query, since `git log` refuses an invalid value whether or not
+  the commit is a root, and never for a comparison, which is `git diff`'s.
+- **A2 — `diff.ignoreSubmodules`.** Decided here, against the suggested rule: a
+  list filtered after git answers still diverges — git hides the gitlinks before
+  rename detection, so `git log` never counts them against `diff.renameLimit`, and
+  an added gitlink can push a search `git log` runs past the limit (reproduced on
+  2.30 and 2.56: `git log` shows `R094`, a filtered `diff-tree` a deletion and an
+  addition). So git is asked not to queue them: `--ignore-submodules=all` when no
+  submodule has a setting of its own, which is exact; otherwise, because that flag
+  overrides a submodule's `none`, the first answer's hidden gitlinks are excluded by
+  `:(exclude,literal)` pathspecs in a second run when detection is on, and dropped
+  when it is off. The semantics — the working tree's `.gitmodules`, else the
+  index's, else `HEAD`'s, never the shown commit's; none in a bare repository; the
+  name the last to claim a path; `ignore` values git does not know skipped — were
+  read from git's source at v2.30.0 and v2.56.0 and reproduced on both. Two
+  residuals are stated in `docs/systems/diff.md`.
+- **T1–T4.** C1 and C3 floor on files staged through a patch (a content query
+  answering everything binary now fails them, and passed before); C2 requires a
+  mode change beside a hunk, two hunks and CRLF context, from three new crafted
+  commits (dropping the mode lines when hunks exist, and stripping `\r` from
+  context, now fail it, and passed before); the cut-short test meets the square of
+  the limit (`>` turned `>=` now fails it, and passed before); and the
+  write-nothing test claims only what it decides, with the command pinned on the
+  argument vector.
+- **Q1 — the floor in CI.** A `git-floor` gate step (`scripts/git-floor.sh`)
+  builds git 2.30.9 and 2.32.7 by pinned commit and runs the diff tests on each;
+  2.32 because it alone reaches the 2.31–2.32 branch. Decided here: a gate step,
+  so `ci_runs_every_merge_bar_gate_step` holds CI to running it, but outside the
+  local full sequence, since it fetches and builds git; run by CI as its own job,
+  with the two `CAIRN_REQUIRE_*` variables moved from the workflow to the gate
+  job so the floor job's skips stay skips. The oracles needed spellings git 2.30
+  reads (`-m --first-parent`, a relative `--git-common-dir`, the 400 default), and
+  the `safe.bareRepository` case skips before 2.38. Verified locally against both
+  gits built in the scratchpad from a local clone of git's source.
+- **D2, Q4, Q5, T6, A4 — docs.** The partial-clone limit now covers tree-less
+  clones and what older git does; the cancellation paragraph lost its history and
+  its literal counts; `crafted()`'s doc lists the commits it makes; and `state.md`
+  records that "cut short" needs a `cairn-model` counterpart before phase 04 or 05
+  carries it across the seam.
+
 ## 2026-10-03 — phase 02 reworked: the changes query answered by `git diff-tree`
 
 The packet resumed on the process manager (#50) and phase 02's changes query moved

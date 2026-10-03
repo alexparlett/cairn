@@ -2,12 +2,14 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 02's rework landed (2026-10-03); phase 03 next.** The diff model
-exists in `cairn-model`, and `cairn-git` answers R2's two queries: the changes
-query from `git diff-tree` through the process manager (decision E, PRD R2.1, R2.2,
-R2.9 and C14 amended), the content query from gix. Phase 02's QA, deferred when the
-packet paused, runs over the reworked phase. Why decision E, and the evidence: the
-2026-09-30 and 2026-10-03 entries in `progress.md`,
+**Status: phase 02's rework landed and its QA findings are fixed (2026-10-03);
+phase 03 next, once the C6 audit is done.** The diff model exists in `cairn-model`,
+and `cairn-git` answers R2's two queries: the changes query from `git diff-tree`
+through the process manager (decision E, PRD R2.1, R2.2, R2.9 and C14 amended),
+honouring `diff.ignoreSubmodules` and `log.showRoot` as the user's `git log` does,
+the content query from gix. CI's `git floor` job runs the diff tests on git 2.30
+and 2.32 built from source. Why decision E, and the evidence: the 2026-09-30 and
+2026-10-03 entries in `progress.md`,
 `docs/research/diff-engine/rename-parity-spike.md` and
 `docs/research/diff-engine/git-process-survey.md`.
 
@@ -39,6 +41,13 @@ with D1, D3, D5 and D6 in `engine.md`, `concurrency.md`, `platform.md` and
 
 Q1-Q3 in `brainstorm.md`, lettered Q so they cannot be confused with the
 program's O1-O6.
+
+**For phases 04 and 05: "cut short" has no `cairn-model` type yet.** `ChangeSet`
+and `RenameDetection` are `cairn-git` types, and `cairn-ui` may not name
+`cairn-git`. Whatever crosses the seam to draw R2.2's notice — that the rename
+search was cut short, and the `needed_limit` to raise `diff.renameLimit` to — needs
+a `cairn-model` counterpart, which the phase that carries a change set across the
+worker boundary (04) or draws it (05) must decide.
 
 **Q3 is answered and closed by decision E.** gix paired 231 renames on
 `5a3292f163d` where git pairs 2,774; the changes query now asks git, and the bench
@@ -87,9 +96,12 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | `RenameDetection` | git | Whether detection was on and found copies, the limit git applied, and `needed_limit` / `was_cut_short()`: R2.2's "the answer says so", decided from git's answer and the limit, never from stderr. |
 | `ContentOptions` | git | R2.6's limits, whether to load past them anyway, and whether to compute the whitespace-ignoring ranges. |
 | `DiffSession` | git | Holds gix's resource cache for a run of content queries; its `changes` is `Repository::changes`. Borrows the repository and is not `Send`, like `HistorySession`. |
-| `Repository::changes(&GitBinary, ..)` | git | R2.1, R2.2, R2.9, R2.10: gix reads the commits and the two rename keys, `git diff-tree` answers. Blocks on one read process; `Cancel` polled every runner tick ends it. |
-| `reads::changes`, `reads::Detection` | git (crate-private) | The read: `git diff-tree -r -z --raw --no-abbrev` with detection spelled out, `-z` records parsed into `ChangedFile`s, a superseded query answering `ChangesCancelled`. |
+| `Repository::changes(&GitBinary, ..)` | git | R2.1, R2.2, R2.9, R2.10: gix reads the commits and the configuration — the two rename keys, `diff.ignoreSubmodules`, `log.showRoot` — and `git diff-tree` answers. Blocks on one read process (two when a hidden submodule must be excluded from a rename search); `Cancel` polled every runner tick ends it. A root commit under `log.showRoot=false` answers no files and starts no process. |
+| `reads::changes`, `reads::Detection`, `reads::Submodules` | git (crate-private) | The read: `git diff-tree -r -z --raw --no-abbrev` with detection spelled out, the submodules to leave out (`--ignore-submodules=all`, or `:(exclude,literal)` pathspecs), `-z` records parsed into `ChangedFile`s, a superseded query answering `ChangesCancelled`. |
 | `diff::renames` (`Configured`, `Search`) | git (crate-private) | `diff.renames` and `diff.renameLimit` parsed by git's rules, the limit the git in use applies, and the cut-short inference per git version. |
+| `diff::submodules` (`Hiding`) | git (crate-private) | What `diff.ignoreSubmodules` and each submodule's own `ignore` hide from the user's `git log`, with `.gitmodules` read where git reads it. |
+| `diff::git_config` | git (crate-private) | The last value of a key across the configuration, `git_config_bool`, `git_parse_int`. |
+| `GitCommand::in_repository` | git (crate-private, `process/`) | Now names the repository to git — `--git-dir` and `--work-tree` ahead of the verb — for a repository gix trusts fully; one it trusts less is left to git's discovery, so `safe.directory` still decides it. |
 | `Repository::file_diff` | git | R2.3 through R2.8, on a session of its own. |
 | `Repository::commit_details` | git | One commit in the detail R5.3 draws, without a changes query. |
 | `Error::ChangesCancelled`, `DiffSetup`, `DiffFile`, `UnexpectedGitOutput`, `InvalidConfig` | git | What the caller of a diff query must handle; `TreeDiff` went with the gix tree walk. |
@@ -99,7 +111,7 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | Phase | Status | Gate | QA |
 | --- | --- | --- | --- |
 | 01 diff model | landed | `scripts/gate.sh` PASS | `qa-checklist`, `test-coverage-auditor` and `responsiveness-reviewer`, adjudicated by `qa-confirm`; confirmed findings fixed or recorded as residuals in `docs/systems/diff.md` |
-| 02 engine, commits | landed 2026-09-18; changes query reworked onto `git diff-tree` 2026-10-03 (decision E) | `scripts/gate.sh` PASS | due over the reworked phase |
+| 02 engine, commits | landed 2026-09-18; changes query reworked onto `git diff-tree` 2026-10-03 (decision E) | `scripts/gate.sh` PASS | done over the reworked phase (2026-10-03), adjudicated by `qa-confirm`; confirmed findings fixed. The C6 audit is still outstanding |
 | 03 engine, working tree | not started | — | — |
 | 04 worker lanes | not started | — | — |
 | 05 detail pane | not started | — | — |
@@ -124,7 +136,10 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
   `docs/research/diff-engine/ui-and-app-as-built.md` record what was verified, in
   which copy, and when.
 - `scripts/gate.sh` is the bar. Never an ad-hoc `&&` chain, never piped through
-  `tail`.
+  `tail`. Its `git-floor` step is outside the full sequence — it fetches git's
+  source and builds 2.30 and 2.32 — and CI runs it as its own job; to run it
+  locally against gits already built, point `CAIRN_GIT_FLOOR_CACHE` at a directory
+  holding `git-2.30.9/` and `git-2.32.7/` prefixes.
 - Commit explicit paths, never `git add -A`.
 - A new dependency, crate or invariant needs its row in
   `crates/cairn-guards/tests/invariants.rs` in the same commit, or the gate fails.

@@ -292,24 +292,35 @@ v2.56.0; against the git that links,
 `a_rename_limit_that_cuts_detection_short_is_reported_exactly_when_git_warns`
 requires `needed_limit` to equal what git's own warning says, at limits either
 side of each boundary, over renames and copies, a commit whose exact renames a
-non-culling git would have counted, and one paired by name ahead of the limit.
+non-culling git would have counted, one paired by name ahead of the limit, and two
+deletions by two additions with nothing in common at a limit of exactly 2 — a search
+git runs and pairs nothing in, which is where `>` and `>=` part. The gits that link
+on a developer's machine and on CI's gate are new, so CI's `git floor` job
+(`scripts/git-floor.sh`) builds git 2.30 — the floor — and 2.32 — the last before
+2.33 — from source and runs these tests, and the rest of
+`crates/cairn-git/tests/diff/`, against each: every version branch above is decided
+against the git it is for.
 
 **Cancellation ends the process.** `cancel` is polled by the runner on every tick
-while `git` runs — through rename detection too, which used to run to completion —
-and once it says the query was superseded the process group is ended, the query
-answers `Error::ChangesCancelled`, and the command log records the invocation as
-cancelled. A query already superseded starts no process. Pinned by
+while `git` runs — through rename detection too — and once it says the query was
+superseded the process group is ended, the query answers `Error::ChangesCancelled`,
+and the command log records the invocation as cancelled. A query already superseded
+starts no process. Pinned by
 `a_changes_query_superseded_by_a_newer_epoch_stops_git_and_reports_it` (an
-exhaustive search over 4,000 deletions against 4,000 additions, ended mid-search;
-the log's `cancelled` is what a cancel that lost the race to git's own exit never
-says) and `a_changes_query_superseded_before_it_starts_runs_nothing`, both in
+exhaustive rename search with no limit, over enough dissimilar deletions and
+additions that git is still searching when the epoch moves; the log's `cancelled` is
+what a cancel that lost the race to git's own exit never says) and `a_changes_query_superseded_before_it_starts_runs_nothing`, both in
 `crates/cairn-git/src/reads/mod.rs`, and `a_cancelled_changes_query_answers_cancelled`
 from outside the crate.
 
 **It writes nothing.** `the_changes_query_writes_nothing` holds the whole git
 directory byte-identical across a copy search, a root commit and a comparison, with
 the working tree stat-dirty and a `diff.<driver>.cachetextconv` configured, and the
-textconv program never runs.
+textconv program never runs. That decides the outcome, not the command: between two
+commits porcelain `git diff --raw` and `git log --raw`, and `--textconv` without a
+patch, write nothing either. Which command runs, and that it carries no
+`--textconv`, `--ext-diff` or patch flag, is pinned on the argument vector by
+`the_query_is_diff_tree_and_never_runs_a_program` (`crates/cairn-git/src/reads/changes.rs`).
 
 ### The content query
 
@@ -394,7 +405,10 @@ read.
   every file's patch, with every line selected, to the parent's tree and compares
   the **tree** `git write-tree` gives with the commit's own. Not the patch text: a
   patch that applies cleanly and stages the wrong bytes passes any comparison of
-  strings.
+  strings. A file the model has no patch for — binary, a submodule — is staged
+  directly so the trees can still be compared, which proves nothing about the
+  emitter; so each test's floor counts the files staged through a patch, and a
+  content query that answered every file as binary fails all three.
 - **C2** (`a_seeded_selection_stages_what_its_patch_says_it_does`) runs twelve
   selections per file — every line, no lines, only additions, only removals, the
   first line of every change, the last line of every change, and eight seeded ones —
@@ -402,6 +416,10 @@ read.
   against the index: the mode staged, whether the source path survives, whether
   anything is staged at all. That second half matters because the reference applier
   discards every non-`@@` line, so nothing before this checked a header end to end.
+  It requires the crafted history to reach it with an added, a deleted, a modified
+  and a renamed file, a mode change beside a hunk (`old mode`/`new mode` and a body
+  in one patch), a file with two hunks at three lines of context, and an edit inside
+  a CRLF file, whose unchanged lines are context that must keep their `\r`.
   `the_last_line_of_a_file_with_no_newline_stages_on_its_own` reaches by hand the
   edge a seeded selection may never reach.
 - **C3** reverses the same patches onto the commit's tree and requires the parent's.
@@ -432,13 +450,17 @@ read.
   none of them (`docs/systems/git-processes.md`); since detection and the limit are
   passed to git spelled out, what decides the search is gix's view, which is the
   one the user's own shell has.
-- **In a blob-less partial clone, a rename search fails rather than fetching.**
-  Comparing contents needs blobs only the promisor may hold, and a read never
-  fetches (`GIT_NO_LAZY_FETCH=1`, from git 2.44), so the query answers
-  `Error::GitFailed` where the user's own `git log` would fetch and show the pairs.
-  With detection off, only trees are read, and the clone answers.
-  `in_a_partial_clone_a_rename_search_fails_rather_than_fetching` pins both. Older
-  git may fetch.
+- **In a partial clone, a query that needs an object the clone lacks fails rather
+  than fetching — from git 2.44.** A read never fetches (`GIT_NO_LAZY_FETCH=1`), so
+  the query answers `Error::GitFailed` where the user's own `git log` would fetch and
+  answer. In a blob-less clone (`--filter=blob:none`) that is a rename search, which
+  compares contents; with detection off only trees are read, and the clone answers —
+  `in_a_partial_clone_a_rename_search_fails_rather_than_fetching` pins both. A
+  tree-less clone (`--filter=tree:0`) lacks the trees too, so there the query fails
+  even with detection off. Git older than 2.44 ignores the variable and fetches what
+  it lacks instead: a pack written into the repository and the network reached, by a
+  read, and possibly once per missing object, so per query (reproduced with git 2.56
+  without the variable: one `diff-tree` over a tree-less clone wrote twelve packs).
 - **A submodule replaced by a directory of its own name, under a hidden-submodule
   setting with an exception, is filtered rather than excluded.** When
   `diff.ignoreSubmodules=all` hides a gitlink, some other submodule has a setting of

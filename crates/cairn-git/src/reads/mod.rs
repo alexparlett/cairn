@@ -19,16 +19,31 @@
 //!
 //! # What a read may run
 //!
-//! **Query plumbing, or `git status`, and one porcelain mode that reads no
-//! index: `git diff --no-index`.** An untracked file's git form — after the
-//! clean filter driver and line-ending conversion its attributes name — has no
-//! plumbing that prints it: `diff-files` and `diff-index` list only what the
-//! index holds, and adding the path to an index is a write. `git diff
-//! --no-index` reads no index, so it has none to refresh, and writes nothing
-//! (reproduced with git 2.30.9, 2.32.7 and 2.56.0 against a snapshot of the git
-//! directory; `a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`
-//! pins it). It is the one porcelain verb a read runs, only in that mode, and
-//! only from [`working_tree_patch`]. A read runs with
+//! **Query plumbing, or `git status`, and one named porcelain exception: `git
+//! diff --no-index -- /dev/null <path>`, for an untracked file** (accepted by
+//! the user on 2026-10-03). Why: an untracked file's git form — after the clean
+//! filter driver and the line-ending conversion its attributes name — has no
+//! plumbing that prints it. `diff-files` and `diff-index` list only what the
+//! index holds, and putting the path in an index to ask them is a write; `git
+//! diff --no-index` applies both conversions (a CRLF file under `text=auto`
+//! reads LF, a filtered file reads in its filter's form), so reading the file's
+//! own bytes would show what the user's git does not. Evidence that it writes
+//! nothing: it reads no index, so it has none to refresh; a snapshot of every
+//! file under the git directory is byte-identical after it on git 2.30.9, 2.32.7
+//! and 2.56.0, with a clean filter, CRLF files and submodules present; and
+//! `a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`,
+//! `a_text_auto_file_with_crlf_endings_is_no_change_and_an_edit_is_one_line`,
+//! `a_clean_filter_drivers_form_is_what_is_diffed_and_it_runs_under_git` and
+//! `an_untracked_file_is_what_git_diff_no_index_shows` hold the git directory
+//! byte-identical after each such read. What it runs is the clean filter and
+//! nothing else (`--no-ext-diff`, `--no-textconv`; the first test above). Being
+//! porcelain, it reads presentation settings plumbing never does — path prefixes
+//! and quoting, hunk joining and order, a relative path — so each is set back to
+//! git's default on that invocation (`working_tree::NO_INDEX_PRESENTATION`),
+//! while the settings that decide git's form of the file stay the user's
+//! (`an_untracked_answer_is_the_same_under_hostile_presentation_settings`). It
+//! is the only porcelain verb a read runs, only in that mode, and only from
+//! [`working_tree_patch`]. A read runs with
 //! `GIT_OPTIONAL_LOCKS=0`, so that looking at a repository never refreshes its
 //! index behind the user's back or holds `index.lock` while their own
 //! `git commit` needs it. But only `status` honours that variable: porcelain

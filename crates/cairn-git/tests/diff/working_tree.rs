@@ -1295,3 +1295,108 @@ fn a_large_file_whose_stat_or_mode_alone_moved_is_what_git_diff_shows() {
     );
     same_as_git(&repo, "touched.txt", WorkingTreeDiff::Unstaged, &touched);
 }
+
+/// `git diff --no-index` is porcelain, and reads the user's presentation settings that the
+/// plumbing reads never do. Every one found to change its output — path prefixes and their
+/// quoting, hunk joining and order, a relative path — is set hostile here, with colour
+/// forced, a zero default context and an external diff program besides, and the untracked
+/// answer is unchanged, still what the user's own `git diff --no-index` shows in content
+/// terms, the program not run, and the read seen carrying each default it pins. Caught by:
+/// `--no-color` dropped (colour codes read as lines), or a key's `-c` dropped from the read.
+#[test]
+fn an_untracked_answer_is_the_same_under_hostile_presentation_settings() {
+    let repo = base("hostile");
+    repo.write("sub/new é.txt", b"a\n\nb\n\tc\nd \n");
+    let calm = ask(&repo, "sub/new é.txt", WorkingTreeDiff::Untracked);
+
+    let trap_mark = repo.path().join("external-ran");
+    let trap = script(
+        &repo,
+        "external.sh",
+        &format!("#!/bin/sh\n: > '{}'\n", trap_mark.display()),
+    );
+    repo.write("order", b"sub/new \xc3\xa9.txt\n");
+    for (key, value) in [
+        ("diff.noprefix", "true"),
+        ("diff.mnemonicPrefix", "true"),
+        ("diff.srcPrefix", "SRC/"),
+        ("diff.dstPrefix", "DST/"),
+        ("core.quotePath", "false"),
+        ("diff.interHunkContext", "10"),
+        ("diff.relative", "true"),
+        ("diff.orderFile", "order"),
+        ("diff.suppressBlankEmpty", "true"),
+        ("diff.context", "0"),
+        ("color.ui", "always"),
+        ("color.diff", "always"),
+        ("diff.colorMoved", "zebra"),
+        ("diff.wsErrorHighlight", "all"),
+        ("core.abbrev", "4"),
+        ("diff.external", &trap.display().to_string()),
+    ] {
+        repo.config(key, value);
+    }
+    let shared = ok(SharedRepository::discover(repo.path()), "the fixture opens");
+    let hostile = ok(
+        shared.to_worker().working_tree_diff(
+            super::git(),
+            &RepoPath::new("sub/new é.txt"),
+            WorkingTreeDiff::Untracked,
+            &ContentOptions::default(),
+            &CancelSignal::new(),
+        ),
+        "the untracked answer",
+    );
+    assert_eq!(hostile, calm, "a presentation setting changed the answer");
+    assert!(!trap_mark.exists(), "the external diff program ran");
+    let diff = some(hostile, "an answer");
+    assert_eq!(lines(&diff).1, ["a", "", "b", "\tc", "d "]);
+    // The user's own `git diff --no-index`, with those settings: the same lines, once its
+    // forced colour is turned off (colour is presentation too).
+    let theirs = git_diff(
+        &repo,
+        "sub/new é.txt",
+        WorkingTreeDiff::Untracked,
+        &["--no-color"],
+    );
+    assert_eq!(
+        cairn_view(&diff, Context::lines(3), false),
+        hunks_of(&theirs)
+    );
+
+    let log = shared.command_log();
+    let read = some(
+        log.iter()
+            .find(|record| record.arguments.iter().any(|a| a == "--no-index")),
+        "the --no-index read",
+    );
+    for setting in [
+        "diff.noprefix=false",
+        "diff.mnemonicPrefix=false",
+        "diff.srcPrefix=a/",
+        "diff.dstPrefix=b/",
+        "core.quotePath=true",
+        "diff.interHunkContext=0",
+        "diff.relative=false",
+        "diff.orderFile=/dev/null",
+        "diff.suppressBlankEmpty=false",
+    ] {
+        assert!(
+            read.arguments.iter().any(|argument| argument == setting),
+            "the read does not pin {setting}: {:?}",
+            read.arguments
+        );
+    }
+    for flag in [
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "-U3",
+        "--no-abbrev",
+    ] {
+        assert!(
+            read.arguments.iter().any(|argument| argument == flag),
+            "{flag}"
+        );
+    }
+}

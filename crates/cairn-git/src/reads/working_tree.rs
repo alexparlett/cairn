@@ -14,7 +14,9 @@
 //!     [--ignore-submodules=<v>] <what> -- <path>
 //! ```
 //!
-//! with `<verb> <what>` one of `diff-index --cached --no-renames --end-of-options <commit>`
+//! — `diff --no-index`, a porcelain mode, also given `-c` for each key of
+//! [`NO_INDEX_PRESENTATION`], the user's presentation settings that porcelain reads and
+//! plumbing does not — with `<verb> <what>` one of `diff-index --cached --no-renames --end-of-options <commit>`
 //! and `:(literal)<path> :(exclude,glob)<path, escaped>/**` as the pathspec; `diff-files
 //! --no-renames` with that pathspec; or `diff --no-index` with `/dev/null <path>`. The
 //! exclusion keeps a path that is a directory on one side (`d` a file in the index, `d/x`
@@ -225,10 +227,40 @@ fn sections_fit(file: &ChangedFile, count: usize) -> Result<(), String> {
     }
 }
 
+/// What porcelain `git diff --no-index` reads of the user's configuration and plumbing
+/// does not, set back to git's defaults on that invocation alone: each changes only how
+/// the answer is printed — the header's path prefixes and quoting, how hunks are joined
+/// and ordered, a path made relative — never what git diffs or how. Found by experiment
+/// on git 2.30.9, 2.32.7 and 2.56.0: of every diff, colour and core key tried, these (and
+/// `diff.srcPrefix`/`diff.dstPrefix`, from 2.45) change its output, and the rest are
+/// already decided by a flag (`-U`, `--no-color`, `--no-ext-diff`, `--no-textconv`,
+/// `--no-abbrev`, `--full-index`); with them set, the output is byte-identical under every
+/// one set hostile at once. Kept, as parity with the user's `git diff --no-index`: the
+/// conversion keys (`core.autocrlf`, `core.eol`, `core.safecrlf`, the attributes, the
+/// filter drivers), which decide git's form of the file, and the algorithm keys, which
+/// cannot move a change that is every line of the file.
+const NO_INDEX_PRESENTATION: [&str; 9] = [
+    "diff.noprefix=false",
+    "diff.mnemonicPrefix=false",
+    "diff.srcPrefix=a/",
+    "diff.dstPrefix=b/",
+    "core.quotePath=true",
+    "diff.interHunkContext=0",
+    "diff.relative=false",
+    "diff.orderFile=/dev/null",
+    "diff.suppressBlankEmpty=false",
+];
+
 fn arguments(query: &WorkingTreeQuery<'_>) -> Vec<OsString> {
-    let mut arguments: Vec<OsString> = ["-c", "diff.suppressBlankEmpty=false"]
-        .map(OsString::from)
-        .to_vec();
+    let mut arguments: Vec<OsString> = Vec::new();
+    if query.side == Side::Untracked {
+        for setting in NO_INDEX_PRESENTATION {
+            arguments.extend(["-c", setting].map(OsString::from));
+        }
+    } else {
+        // Plumbing reads none of `NO_INDEX_PRESENTATION` but this one.
+        arguments.extend(["-c", "diff.suppressBlankEmpty=false"].map(OsString::from));
+    }
     match query.side {
         Side::Staged { .. } => {
             arguments.extend(["diff-index", "--cached", "--no-renames"].map(OsString::from));
@@ -362,7 +394,16 @@ mod tests {
             ["--", ":(literal)dir/*.txt", r":(exclude,glob)dir/\*.txt/**"]
         );
         let untracked = strings(arguments(&query(Side::Untracked, &path)));
-        assert_eq!(untracked[2..4], ["diff", "--no-index"]);
+        let settings = NO_INDEX_PRESENTATION.len() * 2;
+        assert_eq!(untracked[settings..settings + 2], ["diff", "--no-index"]);
+        for setting in NO_INDEX_PRESENTATION {
+            assert!(
+                untracked
+                    .windows(2)
+                    .any(|pair| pair[0] == "-c" && pair[1] == setting),
+                "{setting} is not set on the --no-index read: {untracked:?}"
+            );
+        }
         assert_eq!(
             untracked[untracked.len() - 3..],
             ["--", "/dev/null", "dir/*.txt"]

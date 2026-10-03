@@ -12,6 +12,7 @@ mod diff_function_context;
 mod diff_hunks;
 mod diff_overlay;
 mod diff_rows;
+mod diff_shown;
 mod diff_text;
 mod graph;
 mod history;
@@ -39,6 +40,7 @@ pub use diff_rows::{
     ChangeStops, DrawnRanges, SideBySideLayout, SideBySideRow, SideBySideRows, UnifiedLayout,
     UnifiedRow, UnifiedRows,
 };
+pub use diff_shown::{LINE_CUT_BYTES, ShownDiff, TAB_STOP, drawn_bytes, widest_drawn_columns};
 pub use diff_text::{ChangedRange, DiffLine, LineNumber, LineSpan, TextDiff, split_lines};
 pub use graph::{EdgeKind, EdgeSegment, GraphRow, Lane};
 pub use history::{HistoryRow, RowContent, RowId};

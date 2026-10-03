@@ -29,6 +29,17 @@ pub enum Error {
     #[error("the changes query was cancelled after {changed} files")]
     ChangesCancelled { changed: usize },
 
+    /// A content query was cancelled — superseded before or while its `git` read ran, which
+    /// is then ended. Not a failure to report as one: the caller asked for this by
+    /// superseding it.
+    #[error("the content query was cancelled")]
+    ContentCancelled,
+    /// `git`'s diff of a file printed lines that are not the lines Cairn read of it: the
+    /// content changed between the two reads, or one of them read something else. Neither
+    /// answer is used, since drawing either could show a diff of content that is not there;
+    /// asking again is the remedy. `detail` says which line differed.
+    #[error("git's diff of {path} does not match the content read for it ({detail}); ask again")]
+    ContentReadsDisagree { path: String, detail: String },
     /// `git` answered a read in a shape Cairn does not read — a record cut off, or a status
     /// or a mode git does not print for the question asked. Nothing of the answer is used:
     /// a guess could put a wrong row in front of the user.

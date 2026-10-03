@@ -6,6 +6,7 @@ mod scratch;
 mod bench;
 mod changes;
 mod content;
+mod parity;
 mod patches;
 
 /// `unwrap` and `expect` are denied outside a test function, and a helper shared by several

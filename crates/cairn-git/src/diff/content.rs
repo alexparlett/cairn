@@ -1,52 +1,447 @@
-//! One file's content, both versions, and what gix says differs between them.
+//! One file's content, both versions, and which of their lines git says changed.
 //!
-//! Every read goes through gix's resource cache in `Mode::ToGit`, which is the mode that
+//! gix reads the two versions — through its resource cache in `Mode::ToGit`, the mode that
 //! never runs a textconv program and the form `git diff` compares and `git apply --cached`
-//! expects (R2.3). The cache is also built with
-//! `skip_internal_diff_if_external_is_configured` off, so a `diff.<driver>.command` in the
-//! user's config is read and never run.
+//! expects (R2.3), built with `skip_internal_diff_if_external_is_configured` off, so a
+//! `diff.<driver>.command` in the user's config is read and never run — and decides, before
+//! any line is read, what is not text: a submodule, a mode change alone, a file too large
+//! (from the object's header), a binary one by git's rules, an LFS pointer.
+//!
+//! Which lines changed is git's answer (the content-parity decision of 2026-10-03, which
+//! amends packet decision L3): `git diff-tree -p` run as a read (`crate::reads::patches`),
+//! every line it prints checked against the lines gix read. So are the whitespace-ignoring
+//! ranges (`-w`) and each hunk's function context. Where there is only one answer git could
+//! give, git is not asked: a file added, deleted or changed in type is one change of every
+//! line (git's patch for a type change is a deletion and an addition), a side with no lines
+//! makes the other side's every line the change, and two sides with the same blob have
+//! none. Intra-line highlights stay gix's: git has no equivalent.
+
+use std::collections::BTreeMap;
 
 use cairn_model::{
-    ChangedFile, ChangedRange, DiffContent, DiffLimits, DisplayOverlay, FileDiff, FileMode,
-    LineSpan, Oid, SizeLimit, TextDiff, split_lines,
+    ChangeStatus, ChangedFile, ChangedRange, Context, DiffContent, DiffLimits, DiffLine,
+    DisplayOverlay, FileDiff, FileMode, FunctionContext, LineNumber, LineSpan, Oid, RepoPath,
+    SizeLimit, TextDiff, split_lines,
 };
-use gix::diff::blob::{Algorithm, InternedInput, ResourceKind, platform::prepare_diff::Operation};
+use gix::diff::blob::{ResourceKind, platform::prepare_diff::Operation};
 use gix::objs::tree::EntryKind;
 
 use crate::object_id::object_id;
-use crate::{Error, Repository};
+use crate::ops::GitBinary;
+use crate::reads::{
+    Algorithm, Detection, FilePatch, PatchQuery, PatchText, Reading, Scope, Submodules, patches,
+};
+use crate::{Cancel, Error, Repository};
 
-use super::ContentOptions;
+use super::algorithm::Algorithms;
+use super::submodules::Hiding;
+use super::{ChangeSet, ContentOptions};
 
 /// A Git LFS pointer names its own version first; the format caps a pointer at 1 KiB.
 const LFS_PREFIX: &[u8] = b"version https://git-lfs.github.com/spec/";
 const LFS_MAX_BYTES: usize = 1024;
 
+/// The two commits a content query's file changed between, as `git` is given them.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Trees {
+    pub(super) old: Oid,
+    pub(super) new: Oid,
+}
+
+/// What reading a file's two versions decided before git is asked anything.
+enum Prepared {
+    /// Not text, or not to be drawn: the whole answer.
+    Done(DiffContent),
+    /// Both versions as lines, and whether git has to say which changed.
+    Text {
+        old: Vec<DiffLine>,
+        new: Vec<DiffLine>,
+        asks_git: bool,
+    },
+}
+
+/// One file's content query (R2.3 through R2.8).
 pub(super) fn file_diff(
     repo: &Repository,
     cache: &mut gix::diff::blob::Platform,
+    git: &GitBinary,
+    trees: Trees,
     file: &ChangedFile,
     options: &ContentOptions,
+    cancel: &impl Cancel,
 ) -> Result<FileDiff, Error> {
+    if cancel.is_cancelled() {
+        return Err(Error::ContentCancelled);
+    }
+    let content = match prepare(repo, cache, file, options)? {
+        Prepared::Done(content) => content,
+        Prepared::Text { old, new, asks_git } => {
+            let readings = if asks_git {
+                let algorithm = Algorithms::read(repo.inner(), git.version())?
+                    .for_old_paths(git, repo, &[&file.old_path], cancel)?
+                    .pop()
+                    .flatten();
+                let asker = Asker {
+                    git,
+                    repo,
+                    trees,
+                    options,
+                    cancel,
+                };
+                Some(asker.file(file, algorithm, &old, &new)?)
+            } else {
+                None
+            };
+            text_content(old, new, readings, options)
+        }
+    };
     Ok(FileDiff {
         file: file.clone(),
-        content: content_of(repo, cache, file, options)?,
+        content,
     })
 }
 
-fn content_of(
+/// Every file of a change set, for Expand All: decided file by file as [`file_diff`]
+/// decides one, with the lines of every text file git has to read asked of git in ONE
+/// `diff-tree -p` over the whole comparison, with the changes query's own detection, so git
+/// pairs and lists exactly what that query listed. A file that answer does not hold as the
+/// change set holds it — paired otherwise, which a hidden submodule's place in a cut-short
+/// rename search can do, or called binary where gix called it text — and a file whose
+/// driver names its own algorithm are each asked about on their own. `cancel` is checked
+/// between files while they are read, and polled while git runs.
+pub(super) fn file_diffs(
+    repo: &Repository,
+    cache: &mut gix::diff::blob::Platform,
+    git: &GitBinary,
+    trees: Trees,
+    set: &ChangeSet,
+    options: &ContentOptions,
+    cancel: &impl Cancel,
+) -> Result<Vec<FileDiff>, Error> {
+    let mut prepared = Vec::with_capacity(set.files.len());
+    for file in &set.files {
+        if cancel.is_cancelled() {
+            return Err(Error::ContentCancelled);
+        }
+        prepared.push(prepare(repo, cache, file, options)?);
+    }
+    let asking: Vec<usize> = prepared
+        .iter()
+        .enumerate()
+        .filter(|(_, prepared)| matches!(prepared, Prepared::Text { asks_git: true, .. }))
+        .map(|(index, _)| index)
+        .collect();
+
+    let algorithms = Algorithms::read(repo.inner(), git.version())?;
+    let old_paths: Vec<&RepoPath> = asking
+        .iter()
+        .filter_map(|index| set.files.get(*index))
+        .map(|file| &file.old_path)
+        .collect();
+    let flags = algorithms.for_old_paths(git, repo, &old_paths, cancel)?;
+    let mut alone: Vec<(usize, Option<Algorithm>)> = Vec::new();
+    let mut together: Vec<usize> = Vec::new();
+    for (index, flag) in asking.iter().zip(flags) {
+        if flag == Some(algorithms.configured()) {
+            together.push(*index);
+        } else {
+            alone.push((*index, flag));
+        }
+    }
+
+    let asker = Asker {
+        git,
+        repo,
+        trees,
+        options,
+        cancel,
+    };
+    let mut readings: BTreeMap<usize, (Reading, Option<Reading>)> = BTreeMap::new();
+    if !together.is_empty() {
+        let hiding = Hiding::read(repo.inner(), repo.workdir().is_some())?;
+        let comparison = Scope::Comparison {
+            detection: detection_of(set),
+            submodules: match hiding {
+                Hiding::EveryGitlink => Submodules::HideEvery,
+                Hiding::Nothing | Hiding::GitlinksExcept(_) => Submodules::AsListed,
+            },
+        };
+        let configured = Some(algorithms.configured());
+        let ask = |ignore_whitespace: bool| {
+            let query = asker.query(configured, ignore_whitespace, comparison);
+            patches(git, repo, &query, cancel).map(by_paths)
+        };
+        let exact = ask(false)?;
+        let ignoring = if options.ignore_whitespace {
+            Some(ask(true)?)
+        } else {
+            None
+        };
+        for index in together {
+            let (Some(file), Some(Prepared::Text { old, new, .. })) =
+                (set.files.get(index), prepared.get(index))
+            else {
+                continue;
+            };
+            let Found::Text(exact_text) = lookup(&exact, file) else {
+                alone.push((index, configured));
+                continue;
+            };
+            let ignoring_text = match ignoring.as_ref().map(|ignoring| lookup(ignoring, file)) {
+                None => None,
+                Some(Found::Text(text)) => Some(Some(text)),
+                // Every change was whitespace, which git says by leaving the file out.
+                Some(Found::Left | Found::Unprinted) => Some(None),
+                Some(Found::Unusable) => {
+                    alone.push((index, configured));
+                    continue;
+                }
+            };
+            let exact = against(file, exact_text, old, new, false)?;
+            let ignoring = match ignoring_text {
+                None => None,
+                Some(None) => Some(Reading::default()),
+                Some(Some(text)) => Some(against(file, text, old, new, true)?),
+            };
+            readings.insert(index, (exact, ignoring));
+        }
+    }
+    for (index, algorithm) in alone {
+        let (Some(file), Some(Prepared::Text { old, new, .. })) =
+            (set.files.get(index), prepared.get(index))
+        else {
+            continue;
+        };
+        readings.insert(index, asker.file(file, algorithm, old, new)?);
+    }
+
+    Ok(set
+        .files
+        .iter()
+        .zip(prepared)
+        .enumerate()
+        .map(|(index, (file, prepared))| FileDiff {
+            file: file.clone(),
+            content: match prepared {
+                Prepared::Done(content) => content,
+                Prepared::Text { old, new, .. } => {
+                    text_content(old, new, readings.remove(&index), options)
+                }
+            },
+        })
+        .collect())
+}
+
+/// The changes query's detection, as its answer reports it: what `diff.renames` asked for,
+/// under the `-l` git was given (`0` where nothing limited the search).
+fn detection_of(set: &ChangeSet) -> Detection {
+    let limit = set.renames.limit.unwrap_or(0);
+    match (set.renames.enabled, set.renames.copies) {
+        (false, _) => Detection::Off,
+        (true, false) => Detection::Renames { limit },
+        (true, true) => Detection::Copies { limit },
+    }
+}
+
+fn by_paths(patches: Vec<FilePatch>) -> BTreeMap<(RepoPath, RepoPath), FilePatch> {
+    patches
+        .into_iter()
+        .map(|patch| (key(&patch.file), patch))
+        .collect()
+}
+
+fn key(file: &ChangedFile) -> (RepoPath, RepoPath) {
+    (file.old_path.clone(), file.new_path.clone())
+}
+
+/// Whether git's record is the file the caller holds: the same kind of change between the
+/// same blobs. A similarity score may differ between a search over two paths and one over
+/// a whole comparison; nothing else may.
+fn same_file(found: &ChangedFile, held: &ChangedFile) -> bool {
+    std::mem::discriminant(&found.status) == std::mem::discriminant(&held.status)
+        && found.old_path == held.old_path
+        && found.new_path == held.new_path
+        && found.old_id == held.old_id
+        && found.new_id == held.new_id
+}
+
+/// The context `git` is asked at: the view's, never less than one, and one for the entire
+/// file, whose one hunk starts at the first line, where git prints no function context.
+fn git_context(context: Context) -> u32 {
+    context.line_count().unwrap_or(1).max(1)
+}
+
+/// What every patch read of one query shares: the git to run, where, between which
+/// commits, at which context, and the query's cancel.
+struct Asker<'a, C: Cancel> {
+    git: &'a GitBinary,
+    repo: &'a Repository,
+    trees: Trees,
+    options: &'a ContentOptions,
+    cancel: &'a C,
+}
+
+impl<C: Cancel> Asker<'_, C> {
+    fn query<'q>(
+        &'q self,
+        algorithm: Option<Algorithm>,
+        ignore_whitespace: bool,
+        scope: Scope<'q>,
+    ) -> PatchQuery<'q> {
+        PatchQuery {
+            old: &self.trees.old,
+            new: &self.trees.new,
+            context: git_context(self.options.context),
+            algorithm,
+            ignore_whitespace,
+            scope,
+        }
+    }
+
+    /// One file asked of git on its own: the exact reading, and the whitespace-ignoring
+    /// one when the caller asked for it.
+    fn file(
+        &self,
+        file: &ChangedFile,
+        algorithm: Option<Algorithm>,
+        old: &[DiffLine],
+        new: &[DiffLine],
+    ) -> Result<(Reading, Option<Reading>), Error> {
+        let ask = |ignore_whitespace: bool| -> Result<Reading, Error> {
+            let query = self.query(algorithm, ignore_whitespace, Scope::File(file));
+            let answer = by_paths(patches(self.git, self.repo, &query, self.cancel)?);
+            match (lookup(&answer, file), ignore_whitespace) {
+                (Found::Text(text), _) => against(file, text, old, new, ignore_whitespace),
+                (Found::Left | Found::Unprinted, true) => Ok(Reading::default()),
+                (Found::Left, false) => Err(Error::ContentReadsDisagree {
+                    path: file.new_path.to_string(),
+                    detail: "git did not list the change the changes query listed".to_owned(),
+                }),
+                (Found::Unprinted | Found::Unusable, _) => Err(Error::ContentReadsDisagree {
+                    path: file.new_path.to_string(),
+                    detail: "git printed no diff of the two contents".to_owned(),
+                }),
+            }
+        };
+        let exact = ask(false)?;
+        let ignoring = if self.options.ignore_whitespace {
+            Some(ask(true)?)
+        } else {
+            None
+        };
+        Ok((exact, ignoring))
+    }
+}
+
+/// What git's answer holds for one file.
+enum Found<'p> {
+    /// The file's own patch, a diff of its two contents.
+    Text(&'p PatchText),
+    /// Not listed at all. Under `-w`, every change was whitespace (a git that leaves such a
+    /// file out of its raw records); otherwise, git paired the paths another way.
+    Left,
+    /// Listed with no patch: under `-w`, every change was whitespace (a git that lists such
+    /// a file and prints nothing for it).
+    Unprinted,
+    /// Listed as another change, or printed as binary.
+    Unusable,
+}
+
+fn lookup<'p>(
+    patches: &'p BTreeMap<(RepoPath, RepoPath), FilePatch>,
+    file: &ChangedFile,
+) -> Found<'p> {
+    let Some(patch) = patches.get(&key(file)) else {
+        return Found::Left;
+    };
+    if !same_file(&patch.file, file) {
+        return Found::Unusable;
+    }
+    match &patch.text {
+        None => Found::Unprinted,
+        Some(text) if text.is_binary() => Found::Unusable,
+        Some(text) => Found::Text(text),
+    }
+}
+
+fn against(
+    file: &ChangedFile,
+    text: &PatchText,
+    old: &[DiffLine],
+    new: &[DiffLine],
+    whitespace_ignored: bool,
+) -> Result<Reading, Error> {
+    text.read_against(old, new, whitespace_ignored)
+        .map_err(|detail| Error::ContentReadsDisagree {
+            path: file.new_path.to_string(),
+            detail,
+        })
+}
+
+/// The exact answer, and the display-only overlay beside it. `readings` is git's, exact
+/// and whitespace-ignoring; `None` is a file git was not asked about, whose one possible
+/// answer is every line of one side against every line of the other.
+fn text_content(
+    old: Vec<DiffLine>,
+    new: Vec<DiffLine>,
+    readings: Option<(Reading, Option<Reading>)>,
+    options: &ContentOptions,
+) -> DiffContent {
+    let (exact, ignoring) = match readings {
+        Some(readings) => readings,
+        None => {
+            let whole = whole(&old, &new);
+            let ignoring = options.ignore_whitespace.then(|| whole.clone());
+            (whole, ignoring)
+        }
+    };
+    let mut starts = exact.function_context;
+    let ignoring_changes = ignoring.map(|reading| {
+        starts.extend(reading.function_context);
+        reading.changes
+    });
+    let text = TextDiff::new(old, new, exact.changes);
+    let highlights = super::intraline::highlights(&text, options.limits.max_line_bytes);
+    let function_context =
+        FunctionContext::read_at(Context::Lines(git_context(options.context)), starts);
+    DiffContent::Text {
+        text,
+        overlay: DisplayOverlay::new(ignoring_changes, highlights)
+            .with_function_context(function_context),
+    }
+}
+
+/// What git says of a file it is not asked about: nothing changed when the two sides are
+/// the same lines — two empty files, or a rename that kept its blob — otherwise every line
+/// of one side against every line of the other, in one hunk starting at the first line,
+/// where git prints no function context.
+fn whole(old: &[DiffLine], new: &[DiffLine]) -> Reading {
+    if old == new {
+        return Reading::default();
+    }
+    let lines = |side: &[DiffLine]| u32::try_from(side.len()).unwrap_or(u32::MAX);
+    Reading {
+        changes: vec![ChangedRange::new(
+            LineSpan::at(0, lines(old)),
+            LineSpan::at(0, lines(new)),
+        )],
+        function_context: vec![(LineNumber::from_index(0), Vec::new())],
+    }
+}
+
+fn prepare(
     repo: &Repository,
     cache: &mut gix::diff::blob::Platform,
     file: &ChangedFile,
     options: &ContentOptions,
-) -> Result<DiffContent, Error> {
+) -> Result<Prepared, Error> {
     // A submodule is a commit id in a tree, not a blob; gix's blob platform refuses the
     // mode outright, so this is decided before anything is read.
     if file.old_mode == Some(FileMode::Submodule) || file.new_mode == Some(FileMode::Submodule) {
-        return Ok(DiffContent::Submodule {
+        return Ok(Prepared::Done(DiffContent::Submodule {
             old_target: file.old_id,
             new_target: file.new_id,
-        });
+        }));
     }
 
     // Same blob on both sides and a different mode: the whole change is the mode, and
@@ -56,7 +451,7 @@ fn content_of(
         && old == new
         && file.mode_changed()
     {
-        return Ok(DiffContent::ModeChangeOnly);
+        return Ok(Prepared::Done(DiffContent::ModeChangeOnly));
     }
 
     let inner = repo.inner();
@@ -71,13 +466,13 @@ fn content_of(
     for id in [file.old_id, file.new_id].into_iter().flatten() {
         let size = blob_size(inner, &id, file)?;
         if size > ceiling {
-            return Ok(DiffContent::TooLarge {
+            return Ok(Prepared::Done(DiffContent::TooLarge {
                 crossed: SizeLimit::Bytes {
                     limit: ceiling,
                     measured: size,
                 },
                 loadable: !options.load_anyway && size <= options.limits.load_anyway_bytes,
-            });
+            }));
         }
     }
 
@@ -91,30 +486,32 @@ fn content_of(
         path: file.new_path.to_string(),
         source: Box::new(source),
     })?;
-    let algorithm = match prepared.operation {
+    match prepared.operation {
         // git's own rule: the `diff`/`binary` attribute, `core.bigFileThreshold`, or a NUL
         // byte in the first 8,000 bytes (R2.5). gix clears the buffer of a binary resource,
         // so the size is all there is to show.
         Operation::SourceOrDestinationIsBinary => {
-            return Ok(DiffContent::Binary {
+            return Ok(Prepared::Done(DiffContent::Binary {
                 old_size: byte_size(prepared.old.data),
                 new_size: byte_size(prepared.new.data),
-            });
+            }));
         }
         // Unreachable while the cache is built with `skip_internal_diff_if_external_is_configured`
         // off, which is what `gix::diff::resource_cache` does and what R2.3 requires: the
         // configured program is read and never started. Answered rather than asserted, so a
         // gix that changed that default draws a notice instead of running a program.
         Operation::ExternalCommand { command } => {
-            return Ok(DiffContent::Unsupported {
+            return Ok(Prepared::Done(DiffContent::Unsupported {
                 reason: format!(
                     "an external diff program is configured for this path ({command}), and Cairn \
                      never runs one"
                 ),
-            });
+            }));
         }
-        Operation::InternalDiff { algorithm } => algorithm,
-    };
+        // The algorithm gix would use is not the one asked of git: `crate::diff::algorithm`
+        // decides that the way the user's `git diff` does.
+        Operation::InternalDiff { .. } => {}
+    }
 
     let old_bytes = prepared.old.data.as_slice().unwrap_or_default();
     let new_bytes = prepared.new.data.as_slice().unwrap_or_default();
@@ -123,63 +520,28 @@ fn content_of(
         && let Some(crossed) = crossed_line_limit(old_bytes, new_bytes, &options.limits)
     {
         // Under the byte ceiling by construction, so loading it anyway is always offered.
-        return Ok(DiffContent::TooLarge {
+        return Ok(Prepared::Done(DiffContent::TooLarge {
             crossed,
             loadable: true,
-        });
+        }));
     }
 
     if let Some(content) = lfs_pointer(old_bytes, new_bytes) {
-        return Ok(content);
+        return Ok(Prepared::Done(content));
     }
 
-    Ok(text_diff(old_bytes, new_bytes, algorithm, options))
-}
-
-/// The exact answer, and the display-only overlay beside it.
-fn text_diff(
-    old_bytes: &[u8],
-    new_bytes: &[u8],
-    algorithm: Algorithm,
-    options: &ContentOptions,
-) -> DiffContent {
-    let changes = exact_changes(old_bytes, new_bytes, algorithm);
-    // `split_lines` splits on `\n` exactly as the tokens above were split, so there is one
-    // line per token on each side and every range lands inside its own side.
-    let text = TextDiff::new(split_lines(old_bytes), split_lines(new_bytes), changes);
-    let highlights = super::intraline::highlights(&text, options.limits.max_line_bytes);
-    let ignoring_whitespace = options
-        .ignore_whitespace
-        .then(|| super::whitespace::changes_ignoring_whitespace(old_bytes, new_bytes, algorithm));
-    DiffContent::Text {
-        text,
-        overlay: DisplayOverlay::new(ignoring_whitespace, highlights),
-    }
-}
-
-/// gix computes this and Cairn groups it (L3). The tokens keep their terminators (R2.4),
-/// which is what makes a last line that lost its newline a change, exactly as git sees it.
-fn exact_changes(old_bytes: &[u8], new_bytes: &[u8], algorithm: Algorithm) -> Vec<ChangedRange> {
-    let mut input: InternedInput<&[u8]> = InternedInput::default();
-    input.update_before(gix::diff::blob::sources::byte_lines(old_bytes));
-    input.update_after(gix::diff::blob::sources::byte_lines(new_bytes));
-    // `Diff::compute` then `postprocess_lines`, which is git's indent heuristic.
-    let diff = gix::diff::blob::diff_with_slider_heuristics(algorithm, &input);
-    changed_ranges(&diff)
-}
-
-/// gix's hunk list as the model's changed ranges. Every hunk advances both sides over the
-/// same unchanged tokens, so the runs between two ranges are equal on both sides — which is
-/// what `TextDiff::new` requires of whoever produces them.
-pub(super) fn changed_ranges(diff: &gix::diff::blob::Diff) -> Vec<ChangedRange> {
-    diff.hunks()
-        .map(|hunk| {
-            ChangedRange::new(
-                LineSpan::at(hunk.before.start, hunk.before.end - hunk.before.start),
-                LineSpan::at(hunk.after.start, hunk.after.end - hunk.after.start),
-            )
-        })
-        .collect()
+    let (old, new) = (split_lines(old_bytes), split_lines(new_bytes));
+    let one_answer = matches!(
+        file.status,
+        ChangeStatus::Added | ChangeStatus::Deleted | ChangeStatus::TypeChanged
+    ) || file.old_id == file.new_id
+        || old.is_empty()
+        || new.is_empty();
+    Ok(Prepared::Text {
+        old,
+        new,
+        asks_git: !one_answer,
+    })
 }
 
 /// The size of one side's blob, read from its header so the object is never inflated.
@@ -296,6 +658,55 @@ fn lfs_pointer(old: &[u8], new: &[u8]) -> Option<DiffContent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The stale-read guard, as the caller meets it: a line git printed that is not the
+    /// line gix read is the typed error a caller retries, naming the file, and the same
+    /// patch over the lines git did print is read. Caught by: a mismatch mapped to some
+    /// other error, or swallowed into an empty diff.
+    #[test]
+    fn lines_git_printed_that_were_not_read_are_the_error_a_caller_retries() {
+        let mut output = format!(
+            ":100644 100644 {} {} M\0f.txt\0\0",
+            "07da224c7ec04501dfb451be161fa962effe1dc1", "ebc3711f1349e6204d89c344c178221fb8bf5113"
+        )
+        .into_bytes();
+        output.extend_from_slice(b"diff --git a/f.txt b/f.txt\n@@ -1,2 +1,2 @@\n a\n-b\n+B\n");
+        let parsed = crate::reads::parse_patches(&output).unwrap();
+        let (file, text) = (&parsed[0].file, parsed[0].text.as_ref().unwrap());
+        let new = split_lines(b"a\nB\n");
+
+        let read = against(file, text, &split_lines(b"a\nb\n"), &new, false).unwrap();
+        assert_eq!(
+            read.changes,
+            vec![ChangedRange::new(LineSpan::at(1, 1), LineSpan::at(1, 1))]
+        );
+        let changed_since = against(file, text, &split_lines(b"a\nb!\n"), &new, false);
+        match changed_since {
+            Err(Error::ContentReadsDisagree { path, .. }) => assert_eq!(path, "f.txt"),
+            other => panic!("expected the content-changed error, got {other:?}"),
+        }
+    }
+
+    /// A file git is not asked about has the one answer git would give.
+    #[test]
+    fn a_file_with_one_possible_answer_is_every_line_against_every_line() {
+        assert_eq!(whole(&[], &[]), Reading::default());
+        let added = whole(&[], &split_lines(b"x\ny\n"));
+        assert_eq!(
+            added.changes,
+            vec![ChangedRange::new(LineSpan::at(0, 0), LineSpan::at(0, 2))]
+        );
+        assert_eq!(
+            added.function_context,
+            vec![(LineNumber::from_index(0), Vec::new())],
+            "a hunk starting at the first line has no function context in git"
+        );
+        let emptied = whole(&split_lines(b"x\n"), &[]);
+        assert_eq!(
+            emptied.changes,
+            vec![ChangedRange::new(LineSpan::at(0, 1), LineSpan::at(0, 0))]
+        );
+    }
 
     #[test]
     fn the_line_limits_measure_the_longer_side_and_the_longest_line() {

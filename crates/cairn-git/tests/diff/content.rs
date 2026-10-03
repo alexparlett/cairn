@@ -2,108 +2,67 @@
 
 use std::time::Instant;
 
-use cairn_git::{CancelSignal, ChangesRequest, ContentOptions, Repository};
-use cairn_model::{
-    ChangedFile, Context, DiffContent, DiffLimits, DiffLine, Oid, SizeLimit, TextDiff, UnifiedRow,
-    UnifiedRows,
-};
+use cairn_git::{CancelSignal, ChangesRequest, ContentOptions, DiffSession, Error, Repository};
+use cairn_model::{ChangedFile, DiffContent, DiffLimits, FileDiff, Oid, SizeLimit, TextDiff};
 
 use super::repositories::{self, Repo};
 use super::{ok, some};
 
-/// One hunk as a patch spells it: the four header numbers, then the marked lines.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Hunk {
-    header: (u32, u32, u32, u32),
-    lines: Vec<String>,
+/// A content query for one file of `commit`'s change set, as the application asks it.
+pub trait Content {
+    fn content(
+        &mut self,
+        commit: impl std::fmt::Display,
+        file: &ChangedFile,
+        options: &ContentOptions,
+    ) -> Result<FileDiff, Error>;
 }
 
-const NO_NEWLINE: &str = "\\ No newline at end of file";
-
-/// `git diff -U3 <old blob> <new blob>`, with everything above the first `@@` dropped.
-///
-/// Two blobs rather than two commits and a path, so that whether git would have called the
-/// change a rename cannot change what is compared: the content query is handed one file's
-/// two versions and this is the same two versions.
-fn git_hunks(repo: &Repo, old: &str, new: &str) -> Vec<Hunk> {
-    let out = repo.git(&["diff", "-U3", "--no-ext-diff", "--no-color", old, new]);
-    let mut hunks: Vec<Hunk> = Vec::new();
-    for line in out.split_inclusive('\n') {
-        let line = line.strip_suffix('\n').unwrap_or(line);
-        if let Some(rest) = line.strip_prefix("@@ ") {
-            hunks.push(Hunk {
-                header: parse_header(rest),
-                lines: Vec::new(),
-            });
-            continue;
-        }
-        let Some(hunk) = hunks.last_mut() else {
-            continue; // A header line, above the first hunk.
-        };
-        if line.starts_with('\\') {
-            hunk.lines.push(NO_NEWLINE.to_owned());
-        } else if line.starts_with([' ', '+', '-']) {
-            hunk.lines.push(line.to_owned());
-        }
-    }
-    hunks
+fn request(commit: impl std::fmt::Display) -> ChangesRequest {
+    ChangesRequest::commit(ok(Oid::parse(&commit.to_string()), "a commit id"))
 }
 
-/// `-a,b +c,d @@ ...`, where a count of one is written by leaving it out.
-fn parse_header(rest: &str) -> (u32, u32, u32, u32) {
-    let body = rest.split(" @@").next().unwrap_or_default();
-    let mut sides = body.split_whitespace();
-    let side = |text: &str| {
-        let text = text.trim_start_matches(['-', '+']);
-        let mut parts = text.split(',');
-        let start: u32 = ok(parts.next().unwrap_or("0").parse(), "a line number");
-        let count: u32 = ok(parts.next().unwrap_or("1").parse(), "a line count");
-        (start, count)
-    };
-    let (old_start, old_count) = side(some(sides.next(), "an old side"));
-    let (new_start, new_count) = side(some(sides.next(), "a new side"));
-    (old_start, old_count, new_start, new_count)
-}
-
-/// The same shape, built from the unified projection the view draws.
-fn cairn_hunks(text: &TextDiff) -> Vec<Hunk> {
-    let rows = UnifiedRows::new(text, Context::lines(3));
-    let mut hunks: Vec<Hunk> = Vec::new();
-    for index in 0..rows.len() {
-        let row = some(rows.row(index), "a row below the count");
-        match row {
-            UnifiedRow::Header(header) => hunks.push(Hunk {
-                header: (
-                    header_start(header.old),
-                    header.old.len(),
-                    header_start(header.new),
-                    header.new.len(),
-                ),
-                lines: Vec::new(),
-            }),
-            UnifiedRow::Context { line, .. } => push(&mut hunks, ' ', line),
-            UnifiedRow::Removed { line, .. } => push(&mut hunks, '-', line),
-            UnifiedRow::Added { line, .. } => push(&mut hunks, '+', line),
-        }
-    }
-    hunks
-}
-
-/// git's own rule, out of `add-patch.c`: an empty range names the line before it.
-fn header_start(span: cairn_model::LineSpan) -> u32 {
-    if span.is_empty() {
-        span.start().index()
-    } else {
-        span.start().one_based()
+impl Content for DiffSession<'_> {
+    fn content(
+        &mut self,
+        commit: impl std::fmt::Display,
+        file: &ChangedFile,
+        options: &ContentOptions,
+    ) -> Result<FileDiff, Error> {
+        self.file_diff(
+            super::git(),
+            &request(commit),
+            file,
+            options,
+            &CancelSignal::new(),
+        )
     }
 }
 
-fn push(hunks: &mut [Hunk], marker: char, line: &DiffLine) {
-    let hunk = some(hunks.last_mut(), "a row before its header");
-    hunk.lines
-        .push(format!("{marker}{}", String::from_utf8_lossy(line.bytes())));
-    if !line.ends_with_newline() {
-        hunk.lines.push(NO_NEWLINE.to_owned());
+/// The same, on a session of its own.
+pub trait ContentAlone {
+    fn content(
+        &self,
+        commit: impl std::fmt::Display,
+        file: &ChangedFile,
+        options: &ContentOptions,
+    ) -> Result<FileDiff, Error>;
+}
+
+impl ContentAlone for Repository {
+    fn content(
+        &self,
+        commit: impl std::fmt::Display,
+        file: &ChangedFile,
+        options: &ContentOptions,
+    ) -> Result<FileDiff, Error> {
+        self.file_diff(
+            super::git(),
+            &request(commit),
+            file,
+            options,
+            &CancelSignal::new(),
+        )
     }
 }
 
@@ -129,7 +88,9 @@ fn changed(repo: &Repo, commit: &str) -> Vec<ChangedFile> {
 
 /// C6's first half, over every path of every commit in the crafted history — a missing
 /// final newline on each side, CRLF content, an added file, a deleted file, an empty file,
-/// a one-line file and adjacent hunks all pass through here.
+/// a one-line file, a rename, a type change and adjacent hunks all pass through here — at
+/// three lines of context and at one, each against the user's own `git diff`, header,
+/// function context and line (`super::parity`).
 #[test]
 fn every_crafted_file_diff_is_the_one_git_prints() {
     let repo = repositories::crafted();
@@ -140,35 +101,20 @@ fn every_crafted_file_diff_is_the_one_git_prints() {
         .lines()
         .map(str::to_owned)
         .collect();
-
-    let empty = repo
-        .git(&["hash-object", "-t", "blob", "/dev/null"])
-        .trim()
-        .to_owned();
-
     let mut compared = 0usize;
-    for commit in &commits {
-        for file in changed(&repo, commit) {
-            let diff = session
-                .file_diff(&file, &ContentOptions::default())
-                .expect("a file diff");
-            let DiffContent::Text { text, .. } = &diff.content else {
-                continue; // A binary, a submodule or a mode change draws no rows at all.
-            };
-            let path = file.new_path.display().into_owned();
-            let blob = |id: Option<Oid>| {
-                id.map_or_else(|| empty.clone(), |id| id.hex().as_str().to_owned())
-            };
-            assert_eq!(
-                cairn_hunks(text),
-                git_hunks(&repo, &blob(file.old_id), &blob(file.new_id)),
-                "{path} in {commit} does not read the way `git diff -U3` prints it"
+    for context in [3, 1] {
+        for commit in &commits {
+            let tally = super::parity::compare_commit(&repo, &mut session, commit, context, false);
+            assert!(
+                tally.divergent.is_empty(),
+                "not the way `git diff -U{context}` prints it:\n{}",
+                tally.divergent.join("\n")
             );
-            compared += 1;
+            compared += tally.files;
         }
     }
     assert!(
-        compared >= 12,
+        compared >= 24,
         "only {compared} files were compared; the fixture lost its content"
     );
 }
@@ -191,7 +137,7 @@ fn both_versions_of_a_file_are_the_bytes_git_stores() {
     for commit in &commits {
         for file in changed(&repo, commit) {
             let diff = session
-                .file_diff(&file, &ContentOptions::default())
+                .content(commit, &file, &ContentOptions::default())
                 .expect("a file diff");
             let DiffContent::Text { text, .. } = &diff.content else {
                 continue;
@@ -233,7 +179,7 @@ fn binary_verdicts(repo: &Repo, head: &str) -> Vec<(String, bool)> {
     for file in changed(repo, head) {
         let path = file.new_path.display().into_owned();
         let diff = ok(
-            session.file_diff(&file, &ContentOptions::default()),
+            session.content(head, &file, &ContentOptions::default()),
             "a file diff",
         );
         let binary_to_git = repo
@@ -332,7 +278,7 @@ fn neither_a_textconv_nor_an_external_diff_program_is_started() {
         .find(|file| file.new_path.display() == "trap.txt")
         .expect("the watched file changed");
     let diff = session
-        .file_diff(&trap, &ContentOptions::default())
+        .content(&head, &trap, &ContentOptions::default())
         .expect("a file diff");
     assert!(
         !repositories::trap_ran(&repo),
@@ -366,7 +312,7 @@ fn every_size_ceiling_fires_and_names_itself() {
     for file in changed(&repo, &head) {
         let path = file.new_path.display().into_owned();
         let diff = session
-            .file_diff(&file, &ContentOptions::default())
+            .content(&head, &file, &ContentOptions::default())
             .expect("a file diff");
         match &diff.content {
             DiffContent::TooLarge {
@@ -434,7 +380,7 @@ fn a_file_past_a_ceiling_can_be_asked_for_anyway() {
 
     for file in changed(&repo, &head) {
         let path = file.new_path.display().into_owned();
-        let diff = session.file_diff(&file, &anyway).expect("a file diff");
+        let diff = session.content(&head, &file, &anyway).expect("a file diff");
         let text = text_of(&diff.content);
         assert!(
             !text.new_lines().is_empty(),
@@ -466,7 +412,7 @@ fn the_size_ceiling_is_decided_before_the_content_is_read() {
     );
 
     let refused = session
-        .file_diff(&file, &ContentOptions::default())
+        .content(&head, &file, &ContentOptions::default())
         .expect("a file diff");
     assert!(
         matches!(
@@ -480,7 +426,8 @@ fn the_size_ceiling_is_decided_before_the_content_is_read() {
         refused.content
     );
 
-    let read_anyway = session.file_diff(
+    let read_anyway = session.content(
+        &head,
         &file,
         &ContentOptions {
             load_anyway: true,
@@ -527,7 +474,7 @@ fn past_the_load_anyway_ceiling_nothing_is_offered_or_read() {
     };
 
     let offered = session
-        .file_diff(&file, &ask(false, limits))
+        .content(&head, &file, &ask(false, limits))
         .expect("a file diff");
     assert_eq!(
         offered.content,
@@ -541,7 +488,7 @@ fn past_the_load_anyway_ceiling_nothing_is_offered_or_read() {
         "past the load-anyway ceiling, loading anyway is not offered"
     );
     let anyway = session
-        .file_diff(&file, &ask(true, limits))
+        .content(&head, &file, &ask(true, limits))
         .expect("asking anyway past the ceiling is answered from the header, never by reading");
     assert_eq!(
         anyway.content,
@@ -561,7 +508,7 @@ fn past_the_load_anyway_ceiling_nothing_is_offered_or_read() {
         ..DiffLimits::default()
     };
     let offered = session
-        .file_diff(&file, &ask(false, at_size))
+        .content(&head, &file, &ask(false, at_size))
         .expect("a file diff");
     assert_eq!(
         offered.content,
@@ -605,13 +552,15 @@ fn a_file_exactly_at_the_byte_ceiling_is_drawn() {
         ..ContentOptions::default()
     };
 
-    let drawn = engine.file_diff(&file, &at(size)).expect("a file diff");
+    let drawn = engine.content(head, &file, &at(size)).expect("a file diff");
     assert!(
         matches!(drawn.content, DiffContent::Text { .. }),
         "a file exactly at the ceiling was refused: {:?}",
         drawn.content
     );
-    let refused = engine.file_diff(&file, &at(size - 1)).expect("a file diff");
+    let refused = engine
+        .content(head, &file, &at(size - 1))
+        .expect("a file diff");
     assert_eq!(
         refused.content,
         DiffContent::TooLarge {
@@ -643,7 +592,7 @@ fn ignoring_whitespace_answers_a_second_set_of_ranges_and_keeps_the_lines() {
     let _ = base;
 
     let plain = engine
-        .file_diff(&file, &ContentOptions::default())
+        .content(head, &file, &ContentOptions::default())
         .expect("a file diff");
     let DiffContent::Text { text, overlay } = &plain.content else {
         panic!("{:?}", plain.content);
@@ -655,7 +604,8 @@ fn ignoring_whitespace_answers_a_second_set_of_ranges_and_keeps_the_lines() {
     );
 
     let ignoring = engine
-        .file_diff(
+        .content(
+            head,
             &file,
             &ContentOptions {
                 ignore_whitespace: true,
@@ -705,7 +655,7 @@ fn a_changed_pair_of_lines_carries_its_intra_line_ranges() {
         .next()
         .expect("one file changed");
     let diff = engine
-        .file_diff(&file, &ContentOptions::default())
+        .content(head, &file, &ContentOptions::default())
         .expect("a file diff");
     let DiffContent::Text { text, overlay } = &diff.content else {
         panic!("{:?}", diff.content);
@@ -759,7 +709,7 @@ fn a_submodule_answers_its_commit_ids_rather_than_lines() {
         .find(|file| file.new_path.display() == "sub")
         .expect("the submodule moved");
     let diff = engine
-        .file_diff(&file, &ContentOptions::default())
+        .content(head, &file, &ContentOptions::default())
         .expect("a file diff");
     assert_eq!(
         diff.content,
@@ -785,7 +735,7 @@ fn a_mode_change_alone_answers_without_reading_the_file() {
     assert_eq!(file.old_id, file.new_id, "only the mode moved");
 
     let diff = engine
-        .file_diff(&file, &ContentOptions::default())
+        .content(&head, &file, &ContentOptions::default())
         .expect("a file diff");
     assert_eq!(diff.content, DiffContent::ModeChangeOnly);
 }
@@ -808,10 +758,10 @@ fn a_session_answers_the_same_as_a_query_on_its_own() {
     for _ in 0..2 {
         for file in &files {
             let shared = session
-                .file_diff(file, &ContentOptions::default())
+                .content(&head, file, &ContentOptions::default())
                 .expect("a file diff");
             let alone = engine
-                .file_diff(file, &ContentOptions::default())
+                .content(&head, file, &ContentOptions::default())
                 .expect("a file diff");
             assert_eq!(shared, alone, "{} answered differently", file.new_path);
         }
@@ -833,13 +783,14 @@ fn refusing_a_large_file_costs_far_less_than_reading_it() {
 
     let refused = Instant::now();
     let _ = session
-        .file_diff(&file, &ContentOptions::default())
+        .content(&head, &file, &ContentOptions::default())
         .expect("a file diff");
     let refusing = refused.elapsed();
 
     let read = Instant::now();
     let _ = session
-        .file_diff(
+        .content(
+            &head,
             &file,
             &ContentOptions {
                 load_anyway: true,
@@ -852,4 +803,198 @@ fn refusing_a_large_file_costs_far_less_than_reading_it() {
         refusing < reading,
         "refusing took {refusing:?} and reading took {reading:?}"
     );
+}
+
+/// Every file under `dir`, by path, with its bytes.
+fn snapshot(dir: &std::path::Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    let mut files = std::collections::BTreeMap::new();
+    let mut pending = vec![dir.to_owned()];
+    while let Some(next) = pending.pop() {
+        for entry in ok(std::fs::read_dir(&next), "a directory reads") {
+            let path = ok(entry, "an entry").path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                files.insert(path.clone(), ok(std::fs::read(&path), "a file reads"));
+            }
+        }
+    }
+    files
+}
+
+/// The content query's reads write nothing and run nothing the user configured: with a
+/// textconv that caches (`cachetextconv`, which `--textconv` would write a notes ref for),
+/// an external diff (`diff.external`) and a driver's `command`, a clean and a smudge filter
+/// on every text file, a driver naming its own algorithm (so `git check-attr` runs, from git
+/// 2.40), and the working tree both stat-dirty and content-dirty, every file's content
+/// query — exact and ignoring whitespace, alone and through Expand All — leaves the git
+/// directory byte-identical and no program's mark behind. The programs are then run by
+/// hand, so their not running decides something. Which flags the reads pass is pinned on
+/// their argument vectors (`crates/cairn-git/src/reads/patches.rs`,
+/// `crates/cairn-git/src/reads/attributes.rs`). Caught by: `--textconv` or `--ext-diff`
+/// on a read, porcelain `git diff` in place of `diff-tree` (which refreshes the index), or
+/// a read of the working tree through a filter.
+#[test]
+fn the_content_query_writes_nothing_and_runs_nothing() {
+    let repo = repositories::attributes();
+    let mark = repo.path().join("mark.sh");
+    let marked = repo.path().join("filter-ran");
+    std::fs::write(
+        &mark,
+        format!("#!/bin/sh\n: > '{}'\ncat\n", marked.display()),
+    )
+    .unwrap_or_else(|e| panic!("writing the filter: {e}"));
+    repo.config("diff.trap.cachetextconv", "true");
+    repo.config("diff.trap.algorithm", "patience");
+    repo.config(
+        "diff.external",
+        &format!("sh {}", repo.path().join("trap.sh").display()),
+    );
+    repo.config("filter.mark.clean", &format!("sh {}", mark.display()));
+    repo.config("filter.mark.smudge", &format!("sh {}", mark.display()));
+    repo.config("filter.mark.required", "true");
+    // Content-dirty: the attributes themselves, now naming the filter, and a file.
+    repo.write(
+        ".gitattributes",
+        b"no-diff.txt -diff\nflagged.dat diff=flagged\ntrap.txt diff=trap\nmacro.dat binary\n\
+          *.txt filter=mark\n",
+    );
+    repo.write("plain.txt", b"ordinary, changed, and changed again\n");
+    // Stat-dirty: the same bytes, a new mtime, so a refresh would have something to record.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    repo.write("trap.txt", b"watched\nby a program, changed\n");
+    let before = snapshot(&repo.path().join(".git"));
+
+    let engine = ok(Repository::discover(repo.path()), "the fixture opens");
+    let mut session = ok(engine.diff_session(), "a diff session");
+    let head = repo.rev("HEAD");
+    let request = ChangesRequest::commit(head);
+    let set = ok(
+        session.changes(super::git(), &request, &CancelSignal::new()),
+        "the changes query answers",
+    );
+    let mut text_files = 0usize;
+    for ignore_whitespace in [false, true] {
+        let options = ContentOptions {
+            ignore_whitespace,
+            ..ContentOptions::default()
+        };
+        for file in &set.files {
+            let diff = ok(
+                session.file_diff(super::git(), &request, file, &options, &CancelSignal::new()),
+                "a file diff",
+            );
+            text_files += usize::from(matches!(diff.content, DiffContent::Text { .. }));
+        }
+        let _ = ok(
+            session.file_diffs(super::git(), &request, &set, &options, &CancelSignal::new()),
+            "Expand All answers",
+        );
+    }
+    assert!(text_files >= 6, "only {text_files} text files were read");
+
+    assert_eq!(
+        snapshot(&repo.path().join(".git")),
+        before,
+        "the git directory changed under a read"
+    );
+    assert!(
+        !repo.path().join(".git/refs/notes").exists(),
+        "a textconv cache was written"
+    );
+    assert!(
+        !repositories::trap_ran(&repo),
+        "a textconv or diff program ran"
+    );
+    assert!(!marked.exists(), "a clean or smudge filter ran");
+
+    repositories::run_trap(&repo);
+    assert!(repositories::trap_ran(&repo), "the trap cannot run at all");
+    let status = std::process::Command::new("sh")
+        .arg(&mark)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .status()
+        .unwrap_or_else(|e| panic!("running the filter by hand: {e}"));
+    assert!(
+        status.success() && marked.exists(),
+        "the filter cannot run at all"
+    );
+}
+
+/// From git 2.40 a diff driver's algorithm beats `diff.algorithm` for the paths whose
+/// attributes name the driver, and those paths are git's to say: here the working tree's
+/// `.gitattributes`, changed since the commit, hands the driver every file under
+/// `random/`, and each still reads as `git diff` shows it — which, under the driver's
+/// patience against a configured histogram, the fixture is shown to tell apart. Before
+/// 2.40 git ignores the key, and so does the query, starting no `check-attr`. Caught by:
+/// reading the attributes from the commit rather than where git reads them, or passing
+/// `--diff-algorithm` for a path whose driver names its own.
+#[test]
+fn a_drivers_algorithm_applies_where_git_says_the_driver_does() {
+    let repo = repositories::discriminating(&[
+        ("diff.algorithm", "histogram"),
+        ("diff.drv.algorithm", "patience"),
+    ]);
+    repo.write(".gitattributes", b"random/** diff=drv\n");
+    let head = repo.git(&["rev-parse", "HEAD"]).trim().to_owned();
+    let shared = ok(
+        cairn_git::SharedRepository::discover(repo.path()),
+        "the fixture opens",
+    );
+    let engine = shared.to_worker();
+    let mut session = ok(engine.diff_session(), "a diff session");
+    let tally = super::parity::compare_commit(&repo, &mut session, &head, 3, false);
+    assert!(
+        tally.divergent.is_empty(),
+        "{} files differ from git diff:\n{}",
+        tally.divergent.len(),
+        tally.divergent.join("\n")
+    );
+    let attribute_reads = shared
+        .command_log()
+        .iter()
+        .filter(|record| {
+            record
+                .arguments
+                .iter()
+                .any(|argument| argument == "check-attr")
+        })
+        .count();
+    let drivers_read = super::git().version()
+        >= cairn_git::ops::GitVersion {
+            major: 2,
+            minor: 40,
+            patch: 0,
+        };
+    if drivers_read {
+        assert!(attribute_reads > 0, "no git check-attr ran");
+        let patience = repo.git(&[
+            "-c",
+            "diff.algorithm=patience",
+            "diff",
+            "HEAD^",
+            "HEAD",
+            "--",
+            "random",
+        ]);
+        let histogram = repo.git(&[
+            "-c",
+            "diff.drv.algorithm=histogram",
+            "diff",
+            "HEAD^",
+            "HEAD",
+            "--",
+            "random",
+        ]);
+        assert_ne!(
+            patience, histogram,
+            "the fixture does not tell the driver's algorithm from diff.algorithm"
+        );
+    } else {
+        assert_eq!(
+            attribute_reads, 0,
+            "check-attr ran for a git that reads no driver algorithm"
+        );
+    }
 }

@@ -729,3 +729,324 @@ pub fn submodules(config: &[(&str, &str)]) -> Repo {
     commit("move them", EPOCH + 60);
     repo
 }
+
+/// A seeded generator, so a fixture built from it is the same on every machine and every
+/// run (a 64-bit LCG, Knuth's MMIX constants).
+pub struct Seeded(u64);
+
+impl Seeded {
+    pub fn new(seed: u64) -> Self {
+        Self(seed)
+    }
+
+    pub fn below(&mut self, bound: usize) -> usize {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        ((self.0 >> 33) as usize) % bound.max(1)
+    }
+
+    pub fn pick<'a>(&mut self, from: &[&'a str]) -> &'a str {
+        from[self.below(from.len())]
+    }
+}
+
+/// Lines from a small vocabulary of braces, blanks, repeated statements and declarations:
+/// what makes a diff ambiguous — a change that could slide up or down over equal lines, a
+/// block whose best placement the four algorithms and the indent heuristic disagree on.
+const VOCABULARY: &[&str] = &[
+    "{",
+    "}",
+    "",
+    "",
+    "    x = 1;",
+    "    x = 1;",
+    "    return x;",
+    "    if (x) {",
+    "    }",
+    "        y();",
+    "int f(void)",
+    "int g(void)",
+    "static int h;",
+    "/* note */",
+    "    z();",
+];
+
+fn random_lines(random: &mut Seeded, count: usize) -> Vec<String> {
+    (0..count)
+        .map(|_| random.pick(VOCABULARY).to_owned())
+        .collect()
+}
+
+/// `lines` with a few random edits: blocks inserted, deleted and replaced.
+fn edited(random: &mut Seeded, lines: &[String]) -> Vec<String> {
+    let mut out = lines.to_vec();
+    for _ in 0..1 + random.below(6) {
+        let at = random.below(out.len() + 1);
+        let block = {
+            let count = 1 + random.below(4);
+            random_lines(random, count)
+        };
+        match random.below(3) {
+            0 => {
+                for (offset, line) in block.into_iter().enumerate() {
+                    out.insert((at + offset).min(out.len()), line);
+                }
+            }
+            1 => {
+                let end = (at + 1 + random.below(3)).min(out.len());
+                if at < end {
+                    out.drain(at..end);
+                }
+            }
+            _ => {
+                let end = (at + block.len()).min(out.len());
+                if at < end {
+                    out.splice(at..end, block);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn joined(lines: &[String]) -> Vec<u8> {
+    let mut out = lines.join("\n").into_bytes();
+    out.push(b'\n');
+    out
+}
+
+/// Functions in the shape git's default function-name rule finds — a line that starts with
+/// a letter — with indented bodies, so the text after a hunk's `@@` depends on where the
+/// hunk starts, and so on the context.
+fn functions(names: &[&str], body: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for name in names {
+        out.push(format!("int {name}(void)"));
+        out.push("{".to_owned());
+        for n in 0..body {
+            out.push(format!("    {name}_step({n});"));
+        }
+        out.push("}".to_owned());
+        out.push(String::new());
+    }
+    out
+}
+
+/// The same for a driver whose `xfuncname` captures part of the line: `sub <name>`, of
+/// which git shows the name alone.
+fn subs(names: &[&str], body: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for name in names {
+        out.push(format!("sub {name} {{"));
+        for n in 0..body {
+            out.push(format!("    my ${name}{n} = {n};"));
+        }
+        out.push("}".to_owned());
+    }
+    out
+}
+
+/// Content on which git's answers discriminate — between the four algorithms, with and
+/// without the indent heuristic, between a diff driver's algorithm and `diff.algorithm` —
+/// and whose hunks carry function context, from git's default rule and from a driver's
+/// `xfuncname`. `config` is applied before anything is committed; `diff.renames=copies` and
+/// the `drv` driver's `xfuncname` always are.
+///
+/// One commit after a seed. `random/` holds seeded files edited at random; `heuristic.py`
+/// the indent heuristic's own example, a function inserted between two others; `code/`
+/// functions edited at depths that put hunks inside and across them, a rename and a copy of
+/// one of them with edits; `drv/` the same under the `drv` driver, and files added,
+/// deleted, emptied and filled, under the driver and without it.
+pub fn discriminating(config: &[(&str, &str)]) -> Repo {
+    let repo = Repo::new("discriminating");
+    repo.config("diff.renames", "copies");
+    repo.config("diff.drv.xfuncname", "^sub ([a-z]+)");
+    for (key, value) in config {
+        repo.config(key, value);
+    }
+    repo.write(".gitattributes", b"drv/** diff=drv\n");
+
+    let mut random = Seeded::new(20_261_003);
+    let mut pairs: Vec<(String, Vec<u8>, Vec<u8>)> = Vec::new();
+    for n in 0..48 {
+        let old = {
+            let count = 30 + random.below(90);
+            random_lines(&mut random, count)
+        };
+        let new = edited(&mut random, &old);
+        pairs.push((format!("random/r{n:02}.c"), joined(&old), joined(&new)));
+    }
+    for n in 0..16 {
+        let old = {
+            let count = 40 + random.below(60);
+            random_lines(&mut random, count)
+        };
+        let new = edited(&mut random, &old);
+        pairs.push((format!("drv/r{n:02}.pl"), joined(&old), joined(&new)));
+    }
+    // Long enough, and changed enough, that myers stops searching for the shortest script
+    // (its cost limit) where minimal does not.
+    for n in 0..2 {
+        let old = random_lines(&mut random, 3000);
+        let mut new = old.clone();
+        for _ in 0..800 {
+            let at = random.below(new.len());
+            new[at] = random.pick(VOCABULARY).to_owned();
+        }
+        pairs.push((format!("random/large{n}.c"), joined(&old), joined(&new)));
+    }
+    pairs.push((
+        "heuristic.py".to_owned(),
+        b"def a():\n    one\n\ndef c():\n    three\n".to_vec(),
+        b"def a():\n    one\n\ndef b():\n    two\n\ndef c():\n    three\n".to_vec(),
+    ));
+
+    let names = ["alpha", "bravo", "charlie", "delta", "echo"];
+    let code = functions(&names, 9);
+    let mut code_new = code.clone();
+    for (at, line) in [
+        (4usize, "    alpha_extra();"),
+        (18, "    bravo_moved();"),
+        (40, "    delta_new();"),
+        (41, "    delta_more();"),
+    ] {
+        code_new.insert(at, line.to_owned());
+    }
+    code_new[27] = "    charlie_step(changed);".to_owned();
+    pairs.push((
+        "code/functions.c".to_owned(),
+        joined(&code),
+        joined(&code_new),
+    ));
+
+    let perl = subs(&names, 8);
+    let mut perl_new = perl.clone();
+    perl_new[3] = "    my $alpha2 = 'two';".to_owned();
+    perl_new[15] = "    my $bravo4 = 'four';".to_owned();
+    perl_new.insert(30, "    my $delta_extra = 0;".to_owned());
+    pairs.push(("drv/subs.pl".to_owned(), joined(&perl), joined(&perl_new)));
+
+    // The copy's source is edited in the same commit, which is where `-C` looks for one.
+    let source = functions(&["source", "kept"], 12);
+    let mut source_edited = source.clone();
+    source_edited[5] = "    source_step(edited);".to_owned();
+    let mut copy = source.clone();
+    copy[20] = "    kept_step(in the copy);".to_owned();
+    let renamed = functions(&["moving", "along"], 12);
+    let mut renamed_edited = renamed.clone();
+    renamed_edited[24] = "    along_step(renamed);".to_owned();
+
+    for (path, old, _) in &pairs {
+        repo.write(path, old);
+    }
+    repo.write("code/source.c", &joined(&source));
+    repo.write("code/moving.c", &joined(&renamed));
+    for path in ["drv/deleted.pl", "deleted.c", "drv/emptied.pl", "emptied.c"] {
+        repo.write(path, &joined(&subs(&["gone"], 4)));
+    }
+    for path in ["drv/filled.pl", "filled.c"] {
+        repo.write(path, b"");
+    }
+    repo.commit("seed");
+
+    for (path, _, new) in &pairs {
+        repo.write(path, new);
+    }
+    repo.write("code/source.c", &joined(&source_edited));
+    repo.write("code/source-copy.c", &joined(&copy));
+    repo.remove("code/moving.c");
+    repo.write("code/moved.c", &joined(&renamed_edited));
+    for path in ["drv/deleted.pl", "deleted.c"] {
+        repo.remove(path);
+    }
+    for path in ["drv/emptied.pl", "emptied.c"] {
+        repo.write(path, b"");
+    }
+    for path in ["drv/filled.pl", "filled.c", "drv/added.pl", "added.c"] {
+        repo.write(path, &joined(&subs(&["fresh", "new"], 3)));
+    }
+    repo.commit("edits");
+    repo
+}
+
+/// Whitespace-only edits beside real ones, seeded: indentation changed, trailing blanks
+/// added, a tab for spaces, a blank line's spaces, a line split by a space — and files with
+/// both, and one with only a real edit.
+pub fn whitespace() -> Repo {
+    let repo = Repo::new("whitespace-parity");
+    let mut random = Seeded::new(7);
+    let mut pairs: Vec<(String, Vec<u8>, Vec<u8>)> = Vec::new();
+    for n in 0..32 {
+        let old = {
+            let count = 20 + random.below(50);
+            random_lines(&mut random, count)
+        };
+        let mut new = old.clone();
+        for _ in 0..1 + random.below(5) {
+            let at = random.below(new.len());
+            new[at] = match random.below(5) {
+                0 => format!("  {}", new[at]),
+                1 => format!("{} \t", new[at]),
+                2 => new[at].replace("    ", "\t"),
+                3 => new[at].replace(' ', ""),
+                _ => new[at].replace("x = 1", "x  =  1"),
+            };
+        }
+        // Half of the files also carry a real edit.
+        let new = if n % 2 == 0 {
+            edited(&mut random, &new)
+        } else {
+            new
+        };
+        pairs.push((format!("w{n:02}.c"), joined(&old), joined(&new)));
+    }
+    pairs.push((
+        "only-whitespace.c".to_owned(),
+        joined(&functions(&["alpha"], 4)),
+        joined(&functions(&["alpha"], 4))
+            .iter()
+            .flat_map(|byte| {
+                if *byte == b'\n' {
+                    vec![b' ', b'\n']
+                } else {
+                    vec![*byte]
+                }
+            })
+            .collect(),
+    ));
+    let real = functions(&["alpha", "bravo"], 6);
+    let mut real_new = real.clone();
+    real_new[10] = "    bravo_step(different);".to_owned();
+    pairs.push(("only-real.c".to_owned(), joined(&real), joined(&real_new)));
+    for (path, old, _) in &pairs {
+        repo.write(path, old);
+    }
+    repo.commit("seed");
+    for (path, _, new) in &pairs {
+        repo.write(path, new);
+    }
+    repo.commit("respace");
+    repo
+}
+
+impl Repo {
+    /// A clone of the repository at `source` sharing its objects (`git clone --shared`),
+    /// so a test can set configuration on it without touching the source; removed when
+    /// the test ends.
+    pub fn shared_clone_of(source: &Path, name: &str) -> Self {
+        let repo = Self::new(name);
+        std::fs::remove_dir_all(repo.path().join(".git"))
+            .unwrap_or_else(|e| panic!("emptying the clone's directory: {e}"));
+        repo.git(&[
+            "clone",
+            "--quiet",
+            "--shared",
+            "--no-checkout",
+            &source.to_string_lossy(),
+            ".",
+        ]);
+        repo
+    }
+}

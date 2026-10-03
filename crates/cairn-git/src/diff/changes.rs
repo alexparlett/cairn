@@ -7,7 +7,7 @@
 //! root. Plumbing reads `log.showRoot` no more than it reads `diff.renames`, so it is read
 //! here; a comparison of two commits is `git diff`'s answer, which does not read it.
 
-use cairn_model::{ChangedFile, Oid, RepoPath};
+use cairn_model::{ChangedFile, CommitDetails, Oid, RepoPath};
 
 use crate::object_id::{model_id, object_id};
 use crate::ops::GitBinary;
@@ -26,29 +26,7 @@ pub(super) fn changes(
     cancel: &impl Cancel,
 ) -> Result<ChangeSet, Error> {
     let inner = repo.inner();
-    // Each id is read as a commit here first, so a missing one is `ReadCommit` — the same
-    // answer whichever side it is on — and git is never handed a tree or a blob as a commit.
-    let (old, new, details) = match &request.subject {
-        Subject::Commit(id) => {
-            let commit = find_commit(inner, id)?;
-            let details = crate::commit::details_of(&commit, id)?;
-            // A root commit is compared with the empty tree (L5), which makes its diff the
-            // whole of its content rather than nothing at all — and so is a shallow
-            // clone's boundary commit, whose parents the clone does not have and which
-            // its details list none of, as git's own `git log` shows it (`details_of`).
-            // A merge is compared with its first parent, like any other commit.
-            let old = match details.parents.first() {
-                Some(parent) => *parent,
-                None => model_id(&gix::ObjectId::empty_tree(inner.object_hash()))?,
-            };
-            (old, *id, Some(details))
-        }
-        Subject::Between { old, new } => {
-            find_commit(inner, old)?;
-            find_commit(inner, new)?;
-            (*old, *new, None)
-        }
-    };
+    let (old, new, details) = subject(inner, request)?;
 
     let search = Configured::read(inner)?.search(git.version());
     // Read before anything is answered: `git log` refuses a value it does not accept
@@ -93,6 +71,39 @@ pub(super) fn changes(
         renames: search.outcome(&files),
         files,
         details,
+    })
+}
+
+/// What a request compares: the two commits `git` is given — the one commit's first parent
+/// or, for a root commit or a shallow clone's boundary, the empty tree — and, for one
+/// commit, its details. Each id is read as a commit, so a missing one is
+/// [`Error::ReadCommit`] and git is never handed a tree or a blob as a commit.
+pub(super) fn subject(
+    inner: &gix::Repository,
+    request: &ChangesRequest,
+) -> Result<(Oid, Oid, Option<CommitDetails>), Error> {
+    // Each id is read as a commit here first, so a missing one is `ReadCommit` — the same
+    // answer whichever side it is on — and git is never handed a tree or a blob as a commit.
+    Ok(match &request.subject {
+        Subject::Commit(id) => {
+            let commit = find_commit(inner, id)?;
+            let details = crate::commit::details_of(&commit, id)?;
+            // A root commit is compared with the empty tree (L5), which makes its diff the
+            // whole of its content rather than nothing at all — and so is a shallow
+            // clone's boundary commit, whose parents the clone does not have and which
+            // its details list none of, as git's own `git log` shows it (`details_of`).
+            // A merge is compared with its first parent, like any other commit.
+            let old = match details.parents.first() {
+                Some(parent) => *parent,
+                None => model_id(&gix::ObjectId::empty_tree(inner.object_hash()))?,
+            };
+            (old, *id, Some(details))
+        }
+        Subject::Between { old, new } => {
+            find_commit(inner, old)?;
+            find_commit(inner, new)?;
+            (*old, *new, None)
+        }
     })
 }
 

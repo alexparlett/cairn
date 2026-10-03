@@ -1,25 +1,27 @@
 //! What a commit, or a pair of commits, changed — and what one of those changes looks like
 //! line by line.
 //!
-//! Two queries (R2). The **changes query** answers the changed files, and `git diff-tree`
-//! answers it (decision E, `docs/design/engine.md`, "Where git answers a read"): which
-//! paths changed, their statuses, modes and ids and every rename and copy pair are git's
-//! own, under the rename detection the user's configuration asks for. It is the one diff
-//! query that starts a process, through `crate::reads`. The **content query** takes one of
-//! those files and answers its [`FileDiff`], computed by gix (decision L3) without a
-//! process. gix also reads the commits a changes query names and the user's
-//! configuration; nothing here implements a diff algorithm, and no gix type reaches a
-//! public signature.
+//! Two queries (R2), and git answers both (decision E, `docs/design/engine.md`, "Where git
+//! answers a read"). The **changes query** answers the changed files with `git diff-tree
+//! --raw`: which paths changed, their statuses, modes and ids and every rename and copy pair
+//! are git's own, under the rename detection the user's configuration asks for. The
+//! **content query** takes one of those files and answers its [`FileDiff`]: gix reads both
+//! versions and decides what is not text, and `git diff-tree -p` says which lines changed,
+//! with and without whitespace, and what function context each hunk carries (the
+//! content-parity decision of 2026-10-03, which amends packet decision L3). Both start
+//! their processes through `crate::reads`. gix also reads the commits a query names and the
+//! user's configuration; nothing here implements a diff algorithm but the intra-line
+//! highlights, which git has no equivalent of, and no gix type reaches a public signature.
 
+mod algorithm;
 mod changes;
 mod content;
 mod git_config;
 mod intraline;
 mod renames;
 mod submodules;
-mod whitespace;
 
-use cairn_model::{ChangedFile, CommitDetails, DiffLimits, FileDiff, Oid};
+use cairn_model::{ChangedFile, CommitDetails, Context, DiffLimits, FileDiff, Oid};
 
 use crate::ops::GitBinary;
 use crate::{Cancel, Error, Repository};
@@ -106,9 +108,14 @@ pub struct ContentOptions {
     /// this way either — a view draws its long lines truncated instead (R6.9).
     pub load_anyway: bool,
     /// Also compute the display-only ranges that comparing lines without their whitespace
-    /// produces (R2.8). The lines drawn are always the original bytes, and the patch
-    /// emitter can reach none of this by construction (R1.7).
+    /// produces (R2.8), as `git diff -w` does. The lines drawn are always the original
+    /// bytes, and the patch emitter can reach none of this by construction (R1.7).
     pub ignore_whitespace: bool,
+    /// The context the view groups hunks at (R6.3), which is the context git is asked at,
+    /// so that the function context its headers carry is the text `git diff -U<n>` prints
+    /// for those very hunks ([`cairn_model::FunctionContext`]). The changed ranges are the
+    /// same at every context; the entire file asks at one line.
+    pub context: Context,
 }
 
 /// A run of diff queries over one repository, holding gix's resource cache for the length
@@ -161,13 +168,60 @@ impl DiffSession<'_> {
         self.repo.changes(git, request, cancel)
     }
 
-    /// What one changed file's change turned out to be (R2.3 through R2.8).
+    /// What one changed file of `request`'s change set turned out to be (R2.3 through
+    /// R2.8): gix reads both versions and decides what is not text, and — for a file whose
+    /// lines git has to compare — one `git diff-tree -p` read says which changed, a second
+    /// does with `-w` when `options` asks to ignore whitespace, and a `git check-attr` read
+    /// precedes them when a diff driver may name its own algorithm. Each blocks, so it is a
+    /// worker's call; `cancel` is polled while git runs and a superseded query answers
+    /// [`Error::ContentCancelled`]. Lines git prints that are not the lines gix read are
+    /// [`Error::ContentReadsDisagree`].
     pub fn file_diff(
         &mut self,
+        git: &GitBinary,
+        request: &ChangesRequest,
         file: &ChangedFile,
         options: &ContentOptions,
+        cancel: &impl Cancel,
     ) -> Result<FileDiff, Error> {
-        content::file_diff(self.repo, &mut self.cache, file, options)
+        let (old, new, _) = changes::subject(self.repo.inner(), request)?;
+        let trees = content::Trees { old, new };
+        content::file_diff(
+            self.repo,
+            &mut self.cache,
+            git,
+            trees,
+            file,
+            options,
+            cancel,
+        )
+    }
+
+    /// Every file of `changes`, the change set `request` answered, in its order — what
+    /// Expand All shows. Each is decided as [`DiffSession::file_diff`] decides it, but the
+    /// lines of every text file git has to compare come from ONE `git diff-tree -p` over the
+    /// whole comparison (two with whitespace ignored), asked with the change set's own rename
+    /// detection; a file that answer does not hold as the change set does is asked about on
+    /// its own. `cancel` is checked between files and polled while git runs.
+    pub fn file_diffs(
+        &mut self,
+        git: &GitBinary,
+        request: &ChangesRequest,
+        changes: &ChangeSet,
+        options: &ContentOptions,
+        cancel: &impl Cancel,
+    ) -> Result<Vec<FileDiff>, Error> {
+        let (old, new, _) = changes::subject(self.repo.inner(), request)?;
+        let trees = content::Trees { old, new };
+        content::file_diffs(
+            self.repo,
+            &mut self.cache,
+            git,
+            trees,
+            changes,
+            options,
+            cancel,
+        )
     }
 }
 
@@ -190,12 +244,16 @@ impl Repository {
         changes::changes(git, self, request, cancel)
     }
 
-    /// One content query, on a session of its own.
+    /// One content query, on a session of its own: [`DiffSession::file_diff`].
     pub fn file_diff(
         &self,
+        git: &GitBinary,
+        request: &ChangesRequest,
         file: &ChangedFile,
         options: &ContentOptions,
+        cancel: &impl Cancel,
     ) -> Result<FileDiff, Error> {
-        self.diff_session()?.file_diff(file, options)
+        self.diff_session()?
+            .file_diff(git, request, file, options, cancel)
     }
 }

@@ -59,7 +59,7 @@ pub(crate) enum Submodules<'a> {
 }
 
 impl Detection {
-    fn arguments(self) -> Vec<String> {
+    pub(super) fn arguments(self) -> Vec<String> {
         match self {
             Self::Off => vec!["--no-renames".to_owned()],
             Self::Renames { limit } => vec!["-M".to_owned(), format!("-l{limit}")],
@@ -149,7 +149,7 @@ fn arguments(
 /// (`:<old mode> <new mode> <old id> <new id> <status>`), then one path, or two for a
 /// rename or a copy — the source, then the destination.
 #[derive(Debug, Default)]
-struct RawRecords {
+pub(super) struct RawRecords {
     files: Vec<ChangedFile>,
     pending: Option<Pending>,
     /// The first record that did not parse; everything after it is ignored.
@@ -172,7 +172,7 @@ struct Meta {
 }
 
 impl RawRecords {
-    fn push(&mut self, record: &[u8]) {
+    pub(super) fn push(&mut self, record: &[u8]) {
         if self.malformed.is_some() {
             return;
         }
@@ -203,7 +203,7 @@ impl RawRecords {
         }
     }
 
-    fn finish(self, arguments: &str) -> Result<Vec<ChangedFile>, Error> {
+    pub(super) fn finish(self, arguments: &str) -> Result<Vec<ChangedFile>, Error> {
         let unexpected = |record: String| Error::UnexpectedGitOutput {
             arguments: arguments.to_owned(),
             record,

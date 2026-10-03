@@ -5,9 +5,14 @@
 //! git shows means asking git — the changes query, whose rename and copy
 //! detection is where the two disagree — the read is a function here, built
 //! with [`crate::ops::GitBinary`]'s read builder, and the runner is reached from
-//! nowhere else but `ops/`. One function today: [`changes`], `git diff-tree`
-//! for the changes query (`diff-engine`, decision E), which `crate::diff`
-//! calls.
+//! nowhere else but `ops/`. Three functions today, all for `crate::diff`:
+//! [`changes`], `git diff-tree --raw` for the changes query (`diff-engine`,
+//! decision E); [`patches`], `git diff-tree -p` for the content query's
+//! changed ranges and function context, which gix's line diff placed
+//! differently from git's (the content-parity decision of 2026-10-03,
+//! `docs/research/diff-engine/content-parity-spike.md`); and
+//! [`diff_attributes`], `git check-attr diff`, which says whether a path's
+//! diff driver names an algorithm of its own.
 //!
 //! # What a read may run
 //!
@@ -67,9 +72,15 @@
 //! plumbing or `status` is a review obligation: a token scan cannot tell `diff-tree` from
 //! `diff` in an argument list built at run time.
 
+mod attributes;
 mod changes;
+mod patches;
 
+pub(crate) use attributes::{DiffAttribute, diff_attributes};
 pub(crate) use changes::{Detection, Submodules, changes};
+#[cfg(test)]
+pub(crate) use patches::parse as parse_patches;
+pub(crate) use patches::{Algorithm, FilePatch, PatchQuery, PatchText, Reading, Scope, patches};
 
 /// The read as the diff thread will run it: built here from a `GitBinary` copy
 /// that thread holds, run on that thread, stopped by an epoch, answering `-z`
@@ -84,7 +95,7 @@ mod diff_engine_path_forward {
 
     use cairn_model::{ChangeStatus, Oid};
 
-    use super::{Detection, Submodules, changes};
+    use super::{Algorithm, Detection, PatchQuery, Scope, Submodules, changes, patches};
     use crate::ops::{Askpass, GitBinary, GitEnvironment};
     use crate::{Cancel, Error, SharedRepository};
 
@@ -374,6 +385,145 @@ mod diff_engine_path_forward {
         );
         assert!(
             matches!(outcome, Err(Error::ChangesCancelled { changed: 0 })),
+            "{outcome:?}"
+        );
+        assert!(shared.command_log().is_empty(), "a process was started");
+    }
+
+    /// Two versions of a 60,000-line file of random small numbers, which `minimal` takes
+    /// seconds to diff: a content read that is still running when its epoch moves.
+    fn slow_to_diff(fixture: &Fixture) -> (Oid, Oid) {
+        let numbers = |seed: u64| -> String {
+            let mut state = seed;
+            (0..60_000)
+                .map(|_| {
+                    state = state
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(1_442_695_040_888_963_407);
+                    format!("{}\n", (state >> 33) % 50)
+                })
+                .collect()
+        };
+        std::fs::write(fixture.repo.join("numbers"), numbers(1)).unwrap_or_else(|e| panic!("{e}"));
+        fixture.git(&["add", "."], None);
+        fixture.git(&["commit", "-q", "-m", "one"], None);
+        std::fs::write(fixture.repo.join("numbers"), numbers(2)).unwrap_or_else(|e| panic!("{e}"));
+        fixture.git(&["commit", "-q", "-a", "-m", "two"], None);
+        (commit_id(fixture, "HEAD~1"), commit_id(fixture, "HEAD"))
+    }
+
+    /// The content read superseded while `git` is still diffing: `git` is stopped rather
+    /// than waited for — the command log says it was ended — the caller hears a cancelled
+    /// content query, and nothing is left running (R2.9, as the changes query is).
+    #[test]
+    fn a_content_read_superseded_by_a_newer_epoch_stops_git_and_reports_it() {
+        let fixture = Fixture::new("content-superseded");
+        let (old, new) = slow_to_diff(&fixture);
+        let shared = SharedRepository::discover(&fixture.repo).unwrap_or_else(|e| panic!("{e}"));
+        let repo = shared.to_worker();
+        let git = fixture.binary();
+        let unbounded = Epoch {
+            current: Arc::new(AtomicU64::new(0)),
+            started_under: 0,
+        };
+        let files = changes(
+            &git,
+            &repo,
+            &old,
+            &new,
+            Detection::Off,
+            Submodules::AsListed,
+            &unbounded,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let epochs = Arc::new(AtomicU64::new(0));
+        let query = Epoch {
+            current: Arc::clone(&epochs),
+            started_under: 0,
+        };
+        let superseding = {
+            let epochs = Arc::clone(&epochs);
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(100));
+                epochs.fetch_add(1, Ordering::Release);
+            })
+        };
+        let started = Instant::now();
+        let outcome = patches(
+            &git,
+            &repo,
+            &PatchQuery {
+                old: &old,
+                new: &new,
+                context: 3,
+                algorithm: Some(Algorithm::Minimal),
+                ignore_whitespace: false,
+                scope: Scope::File(&files[0]),
+            },
+            &query,
+        );
+        let elapsed = started.elapsed();
+        superseding
+            .join()
+            .unwrap_or_else(|_| panic!("the superseding thread panicked"));
+        assert!(
+            matches!(outcome, Err(Error::ContentCancelled)),
+            "expected a cancelled content query, got {outcome:?}"
+        );
+        assert!(elapsed < Duration::from_secs(2), "took {elapsed:?}");
+        let log = shared.command_log();
+        let last = log.last().unwrap_or_else(|| panic!("nothing was logged"));
+        assert_eq!(
+            last.arguments.iter().filter(|a| *a == "diff-tree").count(),
+            1
+        );
+        assert!(last.cancelled, "git finished before the cancel: {log:?}");
+        assert_eq!(
+            shared.end_invocations(Duration::from_secs(1)),
+            0,
+            "left running"
+        );
+    }
+
+    /// A content read superseded before it starts never starts `git`.
+    #[test]
+    fn a_content_read_superseded_before_it_starts_runs_nothing() {
+        let fixture = Fixture::new("content-before");
+        std::fs::write(fixture.repo.join("a"), "a\n").unwrap_or_else(|e| panic!("{e}"));
+        fixture.git(&["add", "."], None);
+        fixture.git(&["commit", "-q", "-m", "one"], None);
+        std::fs::write(fixture.repo.join("a"), "b\n").unwrap_or_else(|e| panic!("{e}"));
+        fixture.git(&["commit", "-q", "-a", "-m", "two"], None);
+        let (old, new) = (commit_id(&fixture, "HEAD~1"), commit_id(&fixture, "HEAD"));
+        let shared = SharedRepository::discover(&fixture.repo).unwrap_or_else(|e| panic!("{e}"));
+        let file = cairn_model::ChangedFile {
+            status: ChangeStatus::Modified,
+            old_path: cairn_model::RepoPath::new("a"),
+            new_path: cairn_model::RepoPath::new("a"),
+            old_mode: None,
+            new_mode: None,
+            old_id: None,
+            new_id: None,
+        };
+        let query = Epoch {
+            current: Arc::new(AtomicU64::new(1)),
+            started_under: 0,
+        };
+        let outcome = patches(
+            &fixture.binary(),
+            &shared.to_worker(),
+            &PatchQuery {
+                old: &old,
+                new: &new,
+                context: 3,
+                algorithm: None,
+                ignore_whitespace: false,
+                scope: Scope::File(&file),
+            },
+            &query,
+        );
+        assert!(
+            matches!(outcome, Err(Error::ContentCancelled)),
             "{outcome:?}"
         );
         assert!(shared.command_log().is_empty(), "a process was started");

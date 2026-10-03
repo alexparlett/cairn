@@ -218,13 +218,6 @@ impl<'a, K: Kind> GitCommand<'a, K> {
     /// Bytes [`GitCommand::start`] writes to the process's stdin, on a thread
     /// of their own, and then closes it: git reads a patch or a list to its
     /// end before it acts, so a stdin left open would hold it forever.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the first verb fed on stdin arrives with staging; tests drive it today"
-        )
-    )]
     pub(crate) fn input(mut self, bytes: impl Into<Vec<u8>>) -> Self {
         self.input = Some(bytes.into());
         self

@@ -84,8 +84,13 @@ fn report(name: &str, taken: Vec<Duration>, bar_ms: Option<u128>, git_ms: f64) {
         }
         None => String::new(),
     };
+    let git = if git_ms.is_nan() {
+        String::new()
+    } else {
+        format!("\tgit {git_ms:.1} ms")
+    };
     eprintln!(
-        "  {name}\n    median {:.3} ms\tmin {:.3}\tmax {:.3}\tgit {git_ms:.1} ms{bar}",
+        "  {name}\n    median {:.3} ms\tmin {:.3}\tmax {:.3}{git}{bar}",
         middle.as_secs_f64() * 1000.0,
         best.as_secs_f64() * 1000.0,
         worst.as_secs_f64() * 1000.0,
@@ -124,6 +129,24 @@ fn changes(session: &mut DiffSession<'_>, id: &Oid) -> ChangeSet {
             &CancelSignal::new(),
         ),
         "the changes query answers",
+    )
+}
+
+fn content(
+    session: &mut DiffSession<'_>,
+    id: &Oid,
+    file: &ChangedFile,
+    options: &ContentOptions,
+) -> cairn_model::FileDiff {
+    super::ok(
+        session.file_diff(
+            super::git(),
+            &ChangesRequest::commit(*id),
+            file,
+            options,
+            &CancelSignal::new(),
+        ),
+        "a file diff",
     )
 }
 
@@ -263,9 +286,7 @@ fn measures_the_diff_queries_against_a_named_repository() {
     let mut taken = Vec::new();
     for _ in 0..RUNS {
         let started = Instant::now();
-        let refusal = session
-            .file_diff(&file, &ContentOptions::default())
-            .expect("a file diff");
+        let refusal = content(&mut session, &id, &file, &ContentOptions::default());
         refused.push(started.elapsed());
         assert!(
             matches!(refusal.content, DiffContent::TooLarge { .. }),
@@ -274,7 +295,7 @@ fn measures_the_diff_queries_against_a_named_repository() {
         );
 
         let started = Instant::now();
-        let diff = session.file_diff(&file, &anyway).expect("a file diff");
+        let diff = content(&mut session, &id, &file, &anyway);
         taken.push(started.elapsed());
         assert!(
             matches!(diff.content, DiffContent::Text { .. }),
@@ -298,9 +319,7 @@ fn measures_the_diff_queries_against_a_named_repository() {
     let mut refusing = Vec::new();
     for _ in 0..RUNS {
         let started = Instant::now();
-        let diff = session
-            .file_diff(&file, &ContentOptions::default())
-            .expect("a file diff");
+        let diff = content(&mut session, &id, &file, &ContentOptions::default());
         refusing.push(started.elapsed());
         let DiffContent::TooLarge { crossed, loadable } = diff.content else {
             panic!("{path} was not refused: {:?}", diff.content);
@@ -323,9 +342,45 @@ fn measures_the_diff_queries_against_a_named_repository() {
     let mut loading = Vec::new();
     for _ in 0..RUNS {
         let started = Instant::now();
-        let diff = session.file_diff(&file, &anyway).expect("a file diff");
+        let diff = content(&mut session, &id, &file, &anyway);
         loading.push(started.elapsed());
         assert!(matches!(diff.content, DiffContent::Text { .. }));
     }
     report(&format!("{name}, Load Diff"), loading, None, git_ms);
+
+    // Expand All over the edit-heavy subject: every file's content in one call, the lines
+    // of every text file from one `git diff-tree -p` over the commit. No bar of its own in
+    // the PRD; measured because phase 08 builds on it.
+    eprintln!("\nExpand All (one diff-tree -p for the whole commit):");
+    let (name, hex, _, _) = CHANGES_SUBJECTS[0];
+    let id = Oid::parse(hex).expect("an id");
+    let request = ChangesRequest::commit(id);
+    let set = changes(&mut session, &id);
+    let all = |session: &mut DiffSession<'_>| {
+        super::ok(
+            session.file_diffs(
+                super::git(),
+                &request,
+                &set,
+                &ContentOptions::default(),
+                &CancelSignal::new(),
+            ),
+            "Expand All answers",
+        )
+    };
+    let _ = all(&mut session);
+    let mut expanding = Vec::new();
+    let mut text = 0usize;
+    for _ in 0..RUNS {
+        let started = Instant::now();
+        let diffs = all(&mut session);
+        expanding.push(started.elapsed());
+        text = diffs
+            .iter()
+            .filter(|diff| matches!(diff.content, DiffContent::Text { .. }))
+            .count();
+    }
+    // No git figure beside it: the baseline measured no whole-commit patch.
+    report(&format!("{name}, Expand All"), expanding, None, f64::NAN);
+    eprintln!("    {} files, {text} of them text", set.files.len());
 }

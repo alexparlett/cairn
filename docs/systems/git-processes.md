@@ -195,6 +195,13 @@ Why each variable is there, with its evidence, is beside it in
   `diff` and `describe --dirty` refresh the index anyway. That is why a read in
   `reads/` runs query plumbing or `status` only, as the module's own docs say where
   `diff-engine` will read them.
+- **A read may run the repository's `core.fsmonitor` hook, and no other
+  program.** `diff-tree` and `check-attr` run it as they read the index of a
+  repository with a working tree (reproduced on 2.30.9 through 2.56.0), as the
+  user's own `git diff` does; no flag of theirs turns it off, and the user
+  decided to allow it as parity (`reads/mod.rs`, "What a read may run";
+  `the_content_query_writes_nothing_and_runs_nothing`). A planted repository
+  naming one is refused at open ("Where an invocation runs").
 - **`GIT_NO_LAZY_FETCH=1` needs git 2.44; the floor is 2.30.** In a partial
   clone, a read that asks for an object only the promisor remote holds would
   fetch it — a pack written, the network reached. With the variable, git

@@ -446,13 +446,19 @@ over a `minimal` diff of two 60,000-line files that takes git seconds, and
 `a_content_read_superseded_before_it_starts_runs_nothing`, both in
 `crates/cairn-git/src/reads/mod.rs`). Which flags the read passes is pinned on its
 argument vector (`a_file_read_is_diff_tree_with_a_patch_and_never_runs_a_program`,
-`the_read_is_check_attr_of_diff_with_its_paths_on_stdin`), and that it writes and
-runs nothing by the outcome: `the_content_query_writes_nothing_and_runs_nothing`
-configures a caching textconv, `diff.external`, a driver `command`, a clean and a
-smudge filter and a driver algorithm, leaves the working tree stat-dirty and
+`the_read_is_check_attr_of_diff_with_its_paths_on_stdin`), and that it writes
+nothing and runs nothing but the repository's `core.fsmonitor` by the outcome:
+`the_content_query_writes_nothing_and_runs_nothing` configures a caching
+textconv, `diff.external`, a driver `command`, a clean and a smudge filter, a
+driver algorithm and `core.fsmonitor`, leaves the working tree stat-dirty and
 content-dirty, runs every file's query and Expand All with and without `-w`, and
-requires the git directory byte-identical and no program's mark — then runs the
-programs by hand.
+requires the git directory byte-identical, `check-attr` in the command log on git
+2.40 and later, and no program's mark but the fsmonitor hook's — then runs the
+programs by hand. The hook runs because `diff-tree` and `check-attr` run it as
+they read the index of a repository with a working tree, as the user's own
+`git diff` does; the user decided to allow it as parity (`crate::reads`, "What a
+read may run"). A bare repository planted to name one is refused when it is
+opened (`docs/systems/git-processes.md`, "Where an invocation runs").
 
 **Expand All.** `DiffSession::file_diffs(.., &ChangeSet, ..)` answers every file of
 a change set, decided as one file is, but asks git ONCE for the whole comparison:

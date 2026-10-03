@@ -27,9 +27,11 @@ Beyond the PRD, phase 09 confirms:
 - [ ] **No read path writes.** Nothing outside `ops/` writes a refreshed index, a
       blob or an object — `write_changes` and `worktree_file_to_object` are the two
       that are easy to call by accident.
-- [ ] **No program runs on a read except a filter driver.** A fixture configuring
-      both a `textconv` and an external `diff.<driver>.command` must leave no trace
-      after a diff.
+- [ ] **No program runs on a read except a filter driver and the repository's
+      `core.fsmonitor`** (the hook git runs as it reads the index, as the user's own
+      `git diff` does; allowed by the user's decision, QA round 3). A fixture
+      configuring a `textconv`, an external `diff.<driver>.command` and a hook must
+      leave no trace after a diff but the hook's.
 - [ ] **The emitter cannot reach the whitespace-ignoring ranges**, and the patch
       carries three lines of context whatever the display context was. Check the
       signature, then check a test proves it.

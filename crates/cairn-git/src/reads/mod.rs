@@ -43,6 +43,21 @@
 //! `--refresh` included), `read-tree`, `write-tree`, `hash-object -w` and
 //! `commit-tree` are plumbing writers, and each is a write, built in `ops/`.
 //!
+//! **The one program a read may run is the repository's `core.fsmonitor`.** In
+//! a repository with a working tree, `diff-tree` (raw and patch alike) and
+//! `check-attr` run the hook `core.fsmonitor` names as they read the index —
+//! reproduced with git 2.30.9, 2.32.7, 2.40.0 and 2.56.0 — exactly as the
+//! user's own `git diff` and `git status` do, and nothing a read passes turns it
+//! off. The user decided on 2026-10-03 (QA round 3) to allow it, as the parity
+//! it is: the hook is the user's, or one their repository's configuration
+//! names, and with `GIT_OPTIONAL_LOCKS=0` the read still writes nothing
+//! (`the_content_query_writes_nothing_and_runs_nothing` configures one and
+//! requires the git directory byte-identical). Nothing else a read starts may
+//! run a program: no textconv, external diff, driver `command`, clean or smudge
+//! filter (the same test). A planted repository naming a hook is the
+//! opening's to refuse, as git refuses it (`crate::bare_discovery`), not the
+//! read's.
+//!
 //! **A read never lazily fetches — on git 2.44 or later.** In a partial
 //! clone, asking for an object only the promisor remote holds fetches it,
 //! writing a pack and reaching the network. A read runs with

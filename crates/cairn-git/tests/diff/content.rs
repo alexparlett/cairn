@@ -822,18 +822,21 @@ fn snapshot(dir: &std::path::Path) -> std::collections::BTreeMap<std::path::Path
     files
 }
 
-/// The content query's reads write nothing and run nothing the user configured: with a
-/// textconv that caches (`cachetextconv`, which `--textconv` would write a notes ref for),
-/// an external diff (`diff.external`) and a driver's `command`, a clean and a smudge filter
-/// on every text file, a driver naming its own algorithm (so `git check-attr` runs, from git
-/// 2.40), and the working tree both stat-dirty and content-dirty, every file's content
-/// query — exact and ignoring whitespace, alone and through Expand All — leaves the git
-/// directory byte-identical and no program's mark behind. The programs are then run by
-/// hand, so their not running decides something. Which flags the reads pass is pinned on
-/// their argument vectors (`crates/cairn-git/src/reads/patches.rs`,
-/// `crates/cairn-git/src/reads/attributes.rs`). Caught by: `--textconv` or `--ext-diff`
-/// on a read, porcelain `git diff` in place of `diff-tree` (which refreshes the index), or
-/// a read of the working tree through a filter.
+/// The content query's reads write nothing and run nothing the user configured but the
+/// repository's `core.fsmonitor`, which every read with a working tree runs as the user's
+/// own `git diff` runs it (the user's decision, QA round 3): with a textconv that caches
+/// (`cachetextconv`, which `--textconv` would write a notes ref for), an external diff
+/// (`diff.external`) and a driver's `command`, a clean and a smudge filter on every text
+/// file, a driver naming its own algorithm (so `git check-attr` runs, from git 2.40, which
+/// the command log is shown to record), `core.fsmonitor` naming a program, and the working
+/// tree both stat-dirty and content-dirty, every file's content query — exact and ignoring
+/// whitespace, alone and through Expand All — leaves the git directory byte-identical, the
+/// fsmonitor program's mark the only one behind. The programs are then run by hand, so
+/// their not running decides something. Which flags the reads pass is pinned on their
+/// argument vectors (`crates/cairn-git/src/reads/patches.rs`,
+/// `crates/cairn-git/src/reads/attributes.rs`). Caught by: `--textconv` or `--ext-diff` on
+/// a read, porcelain `git diff` in place of `diff-tree` (which refreshes the index), a read
+/// of the working tree through a filter, or the driver's `check-attr` not run.
 #[test]
 fn the_content_query_writes_nothing_and_runs_nothing() {
     let repo = repositories::attributes();
@@ -853,6 +856,19 @@ fn the_content_query_writes_nothing_and_runs_nothing() {
     repo.config("filter.mark.clean", &format!("sh {}", mark.display()));
     repo.config("filter.mark.smudge", &format!("sh {}", mark.display()));
     repo.config("filter.mark.required", "true");
+    // The one program a read may run: it records that it ran and answers nothing, so git
+    // scans the working tree itself.
+    let monitor = repo.path().join("monitor.sh");
+    let monitored = repo.path().join("fsmonitor-ran");
+    std::fs::write(
+        &monitor,
+        format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\nexit 1\n",
+            monitored.display()
+        ),
+    )
+    .unwrap_or_else(|e| panic!("writing the fsmonitor hook: {e}"));
+    repo.config("core.fsmonitor", &format!("sh {}", monitor.display()));
     // Content-dirty: the attributes themselves, now naming the filter, and a file.
     repo.write(
         ".gitattributes",
@@ -865,7 +881,11 @@ fn the_content_query_writes_nothing_and_runs_nothing() {
     repo.write("trap.txt", b"watched\nby a program, changed\n");
     let before = snapshot(&repo.path().join(".git"));
 
-    let engine = ok(Repository::discover(repo.path()), "the fixture opens");
+    let shared = ok(
+        cairn_git::SharedRepository::discover(repo.path()),
+        "the fixture opens",
+    );
+    let engine = shared.to_worker();
     let mut session = ok(engine.diff_session(), "a diff session");
     let head = repo.rev("HEAD");
     let request = ChangesRequest::commit(head);
@@ -907,6 +927,36 @@ fn the_content_query_writes_nothing_and_runs_nothing() {
         "a textconv or diff program ran"
     );
     assert!(!marked.exists(), "a clean or smudge filter ran");
+    assert!(
+        monitored.exists(),
+        "the repository's core.fsmonitor did not run, where the user's own git diff runs it"
+    );
+    let log = shared.command_log();
+    let ran = |verb: &str| {
+        log.iter()
+            .filter(|record| record.arguments.iter().any(|argument| argument == verb))
+            .count()
+    };
+    assert!(ran("diff-tree") > 0, "no diff-tree ran: {log:?}");
+    let drivers_read = super::git().version()
+        >= cairn_git::ops::GitVersion {
+            major: 2,
+            minor: 40,
+            patch: 0,
+        };
+    if drivers_read {
+        assert!(
+            ran("check-attr") > 0,
+            "the driver's check-attr never ran, so its running nothing decides nothing: \
+             {log:?}"
+        );
+    } else {
+        assert_eq!(
+            ran("check-attr"),
+            0,
+            "check-attr ran for a git that reads no driver algorithm: {log:?}"
+        );
+    }
 
     repositories::run_trap(&repo);
     assert!(repositories::trap_ran(&repo), "the trap cannot run at all");

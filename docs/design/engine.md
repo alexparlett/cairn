@@ -13,9 +13,10 @@ in `crates/cairn-git/src/reads/`. The changes query — which paths a commit or 
 comparison changed, with their renames and copies — is one, because rename and
 copy detection is where gix and git disagree; which lines of a changed file
 changed is another, because line diffing is too ("Where git answers a read",
-below). Besides those, the one process a
-read may start is the user's own clean filter driver ("Reads see git's form",
-below). How every `git` process is built, run and ended is `processes.md`.
+below). Besides those, the processes a read may start are the user's own clean
+filter driver ("Reads see git's form", below) and, through those `git` reads,
+the repository's `core.fsmonitor` hook, which git runs as it reads the index of
+a repository with a working tree, as the user's own `git diff` does. How every `git` process is built, run and ended is `processes.md`.
 
 Writes go to `git` because of hooks, not coverage. A client that does not run
 `pre-commit` and `commit-msg` is broken for a large share of users, and gix runs

@@ -13,7 +13,9 @@
 //!
 //! — query plumbing that writes nothing: never `--textconv` (which, with a patch and
 //! `diff.<driver>.cachetextconv`, writes a notes ref) nor `--ext-diff` (which runs the
-//! user's program), and `diff-tree` reads no index and refreshes none.
+//! user's program), and `diff-tree` refreshes no index. The one program it may run is the
+//! repository's `core.fsmonitor` hook, which git runs for a repository with a working
+//! tree as the user's own `git diff` does (`crate::reads`, "What a read may run").
 //!
 //! **Why each part is there.**
 //!

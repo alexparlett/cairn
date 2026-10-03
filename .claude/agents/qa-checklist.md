@@ -108,6 +108,20 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
     `cairn-model` and `zeroize` is a finding — and no `#[allow]`/`#[expect]`
     lets an `unwrap`/`expect` through on a path that holds one, since the panic
     message would print the value.
+11. **Keyboard modifiers** (any diff in `crates/cairn-ui/` or `crates/cairn-app/`
+    touching a key or pointer handler, or `crates/cairn-ui/src/accelerators.rs`):
+    the guard `no_component_names_a_literal_modifier` reads spellings, so what it
+    cannot see is yours — a modifier reached through a `type` alias declared
+    outside the render crates, a macro, or a raw bit pattern compared without
+    naming the type; a public function of the accelerator table that hands out a
+    modifier or a "is Ctrl held" predicate a component could branch on under
+    another name (its surface speaks actions and chords only; `Chord::key_press`
+    is for headless tests, and a render path calling it is a finding); a key event
+    handled in `crates/cairn-ui/tests/` (unscanned); and whether a new chord is
+    right for each platform and clear of the desktop's and Fork's. Also: every
+    `match` over `DiffContent` in a test helper that a view could call names every
+    state, since `every_view_of_a_file_diff_names_every_state` reads production
+    code only.
 
 ## Review dispatch
 

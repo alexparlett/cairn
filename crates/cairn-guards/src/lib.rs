@@ -554,6 +554,107 @@ fn takes_no_arguments(code: &str, at: usize) -> bool {
     rest.as_str().trim_start().starts_with(')')
 }
 
+/// Every spelling of a keyboard modifier the toolkit offers a render file (D5, PRD R8.3),
+/// read from the vendored `keyboard-types` 0.8.3 and Freya's `ModifiersExt`: the held-keys
+/// type and its helper trait, the event field that carries them, the type's constants
+/// (`Modifiers::CONTROL`), the modifier keys themselves (`NamedKey::Control`,
+/// `Code::ControlLeft`) and the platform helpers that pick one. Whole identifiers, so an
+/// alias is caught on its import line and a qualified path on its last segment. `Fn`, the
+/// function key, is matched only after `::`: bare, it is Rust's closure trait.
+pub const MODIFIER_IDENTS: &[&str] = &[
+    // The type, its OS-aware helper trait and what it offers, and the event's field.
+    "Modifiers",
+    "ModifiersExt",
+    "ctrl_or_meta",
+    "ctrl_or_alt",
+    "modifiers",
+    // `keyboard_types::Modifiers`' constants.
+    "ALT",
+    "ALT_GRAPH",
+    "CONTROL",
+    "FN",
+    "FN_LOCK",
+    "HYPER",
+    "META",
+    "SHIFT",
+    "SUPER",
+    "SYMBOL",
+    "SYMBOL_LOCK",
+    // `NamedKey`'s modifier keys.
+    "Alt",
+    "AltGraph",
+    "Control",
+    "FnLock",
+    "Hyper",
+    "Meta",
+    "Shift",
+    "Super",
+    "Symbol",
+    "SymbolLock",
+    // `Code`'s.
+    "AltLeft",
+    "AltRight",
+    "ControlLeft",
+    "ControlRight",
+    "MetaLeft",
+    "MetaRight",
+    "ShiftLeft",
+    "ShiftRight",
+];
+
+/// `Modifiers`' own predicates, read as nullary method calls (`.ctrl()`): a value of the type
+/// reached by inference names nothing else.
+pub const MODIFIER_METHODS: &[&str] = &["alt", "ctrl", "meta", "shift"];
+
+/// A modifier written for a person to read: a key name in a label or a tooltip, which is a
+/// chord a component spelled for one platform.
+pub const MODIFIER_TEXT: &[&str] = &[
+    "Ctrl", "Cmd", "⌘", "⌥", "⌃", "⇧", "Alt+", "Control+", "Meta+", "Option+", "Shift+", "Super+",
+];
+
+/// 1-based lines where the production code of `source` (test modules blanked) names a
+/// keyboard modifier: an identifier of [`MODIFIER_IDENTS`], `::Fn`, a nullary call of one of
+/// [`MODIFIER_METHODS`], or a string literal holding one of [`MODIFIER_TEXT`].
+pub fn names_a_literal_modifier(source: &str) -> Vec<usize> {
+    let code = code_without_test_modules(&code_without_strings(source));
+    let mut lines = BTreeSet::new();
+    for ident in MODIFIER_IDENTS {
+        for offset in ident_offsets(&code, ident) {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+    for offset in ident_offsets(&code, "Fn") {
+        if code[..offset].trim_end().ends_with("::") {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+    for name in MODIFIER_METHODS {
+        for offset in ident_offsets(&code, name) {
+            if code[..offset].trim_end().ends_with('.')
+                && takes_no_arguments(&code, offset + name.len())
+            {
+                lines.insert(line_at(&code, offset));
+            }
+        }
+    }
+    // `code_only` copies a string's bytes one `char` each, so a literal's non-ASCII text
+    // arrives Latin-1-widened; the spellings are widened the same way to meet it. The
+    // `⌘` case of the matcher's self-test fails if either side stops doing so.
+    let widened: Vec<String> = MODIFIER_TEXT
+        .iter()
+        .map(|spelling| spelling.bytes().map(char::from).collect())
+        .collect();
+    for (line, text) in production_string_literals(source) {
+        if widened
+            .iter()
+            .any(|spelling| text.contains(spelling.as_str()))
+        {
+            lines.insert(line);
+        }
+    }
+    lines.into_iter().collect()
+}
+
 const ROW_CONTENT: &str = "RowContent";
 
 /// 1-based lines where `source` reads a `RowContent` without naming every variant: a wildcard or

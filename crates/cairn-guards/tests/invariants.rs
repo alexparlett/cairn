@@ -10,10 +10,10 @@ use cairn_guards::{
     configures_process_environment, constructs_named_struct, constructs_process_command,
     constructs_struct, declared_dependencies, declares_publicly, derives_or_implements,
     gate_command_assignments, gate_dispatch_arms, gate_full_sequence, gate_function_commands,
-    implements_type, job_env_entries, mentions_crate, names_gitoxide_mutation,
-    production_string_literals, reads_enum_partially, reads_row_content_partially, renames_type,
-    renders_in_a_macro, repo_root, rust_sources, spawns_git, structs_with_a_field_naming,
-    types_containing, waits_on_work,
+    implements_type, job_env_entries, mentions_crate, names_a_literal_modifier,
+    names_gitoxide_mutation, production_string_literals, reads_enum_partially,
+    reads_row_content_partially, renames_type, renders_in_a_macro, repo_root, rust_sources,
+    spawns_git, structs_with_a_field_naming, types_containing, waits_on_work,
 };
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
@@ -3101,6 +3101,161 @@ fn the_unbounded_view_matcher_catches_the_shapes_it_claims() {
             unbounded_view(&code_without_strings(source)),
             None,
             "the unbounded-view matcher fired on {source:?}"
+        );
+    }
+}
+
+/// The accelerator table (D5, PRD R8): the one render file that may name a modifier,
+/// because it is where every chord is written down.
+const ACCELERATOR_TABLE: &str = "crates/cairn-ui/src/accelerators.rs";
+
+/// PRD R8.3, decision D5: a component asks the accelerator table which action a key press
+/// is, and never names a modifier itself — not the held-keys type, not the event's field,
+/// not a modifier key, and not a chord spelled out for a person to read. A `Ctrl` written
+/// into a component is a shortcut that is wrong on macOS.
+#[test]
+fn no_component_names_a_literal_modifier() {
+    let table = Path::new(ACCELERATOR_TABLE);
+    let mut table_seen = false;
+    for dir in RENDER_SOURCE_DIRS {
+        let mut scanned = 0usize;
+        for (path, source) in rust_sources(dir) {
+            scanned += 1;
+            let hits = names_a_literal_modifier(&source);
+            if path == table {
+                table_seen = true;
+                // The matcher has to see the modifiers the table really names, or it is
+                // reading nothing anywhere.
+                assert!(
+                    !hits.is_empty(),
+                    "{ACCELERATOR_TABLE} names no modifier the matcher can see. Either the \
+                     table moved — move this guard's roster with it — or the matcher has gone \
+                     blind, and every other file passes for that reason alone."
+                );
+                continue;
+            }
+            assert!(
+                hits.is_empty(),
+                "{}:{} names a keyboard modifier. Shortcuts resolve through the accelerator \
+                 table ({ACCELERATOR_TABLE}): add an `Action` and its chord there and ask \
+                 `accelerators::resolve_key` which action a press is (CLAUDE.md, Invariants; \
+                 decision D5).",
+                path.display(),
+                hits[0]
+            );
+        }
+        // Per directory: a wrong roster path would otherwise pass.
+        assert!(
+            scanned > 0,
+            "the modifier guard found no files under {dir}; it is scanning less than it claims"
+        );
+    }
+    assert!(
+        table_seen,
+        "{ACCELERATOR_TABLE} does not exist, so no render file is the table and the guard \
+         exempts a file nobody can see. If the table moved, move the roster with it."
+    );
+}
+
+#[test]
+fn the_modifier_matcher_catches_the_shapes_it_claims() {
+    let caught = [
+        (
+            "the type, named",
+            "if e.modifiers.contains(Modifiers::CONTROL) {}",
+        ),
+        ("the event's field alone", "let held = e.modifiers;"),
+        (
+            "the field destructured",
+            "let KeyboardEventData { key, modifiers, .. } = data;",
+        ),
+        (
+            "an aliased import of the type",
+            "use freya::prelude::Modifiers as Held;",
+        ),
+        ("a constant through an alias", "if held == Held::CONTROL {}"),
+        (
+            "a qualified path",
+            "let held = keyboard_types::Modifiers::META | keyboard_types::Modifiers::ALT;",
+        ),
+        (
+            "a constant defined beside the component",
+            "const SAVE: Modifiers = Modifiers::CONTROL;\nfn row() -> Element { rect().into() }",
+        ),
+        (
+            "a constant of the key type",
+            "const COMMAND: NamedKey = NamedKey::Meta;",
+        ),
+        (
+            "a modifier key through an alias",
+            "use freya::prelude::NamedKey as K;\nif e.key == Key::Named(K::Shift) {}",
+        ),
+        (
+            "a glob of the key type's variants",
+            "use freya::prelude::NamedKey::*;\nif e.key == Key::Named(Alt) {}",
+        ),
+        (
+            "a physical modifier key",
+            "if e.code == Code::ControlLeft {}",
+        ),
+        (
+            "the OS-aware helper",
+            "if held.contains(Modifiers::ctrl_or_meta()) {}",
+        ),
+        ("the helper trait", "use freya::prelude::ModifiersExt;"),
+        ("a predicate by inference", "if e.data().held().ctrl() {}"),
+        ("a predicate, wrapped", "if held\n    .shift(\n) {}"),
+        (
+            "the function key",
+            "if e.key == Key::Named(NamedKey::Fn) {}",
+        ),
+        ("a chord in a label", "label().text(\"Ctrl+Alt+1\")"),
+        ("a chord for macOS", "label().text(\"⌘⌥1\")"),
+        (
+            "a chord in a constant",
+            "const HINT: &str = \"Shift+click to compare\";",
+        ),
+    ];
+    for (shape, source) in caught {
+        assert!(
+            !names_a_literal_modifier(source).is_empty(),
+            "the modifier matcher missed the {shape} shape: {source:?}"
+        );
+    }
+
+    let ignored = [
+        (
+            "Rust's closure trait",
+            "row: impl Fn(RowRender) -> Element + 'static,",
+        ),
+        (
+            "a resolved action",
+            "if let Some(action) = accelerators::resolve_key(&e) {}",
+        ),
+        ("a comment", "// Ctrl+↓ is next change; Modifiers::CONTROL"),
+        (
+            "an identifier containing a name",
+            "let shifted = on_shift_click;",
+        ),
+        (
+            "a method with arguments",
+            "let image = image().alt(description);",
+        ),
+        (
+            "a word in a string",
+            "label().text(\"Altitude of the Meta team\")",
+        ),
+        (
+            "a test module",
+            "#[cfg(test)]\nmod tests {\n    const HELD: Modifiers = Modifiers::CONTROL;\n}",
+        ),
+        ("a plain key", "Key::Named(NamedKey::ArrowDown) => Some(0),"),
+    ];
+    for (shape, source) in ignored {
+        assert_eq!(
+            names_a_literal_modifier(source),
+            Vec::<usize>::new(),
+            "the modifier matcher fired on the {shape} shape: {source:?}"
         );
     }
 }

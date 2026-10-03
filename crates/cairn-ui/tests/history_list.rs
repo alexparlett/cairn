@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use cairn_model::{CommitSummary, EdgeSegment, GraphRow, HistoryRow, Lane, Oid, RowContent, RowId};
+use cairn_ui::accelerators::{self, Action, Os};
 use cairn_ui::{HistoryList, PREFETCH_ROWS, ROW_HEIGHT, RowRender};
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -152,6 +153,35 @@ fn only_a_viewport_of_rows_is_built_however_long_the_history() {
     assert!(
         built.windows(2).all(|pair| pair[0] == pair[1]),
         "a longer history or a deeper scroll built a different number of rows: {built:?}"
+    );
+}
+
+/// C13, D5: an arrow held with a chord's modifiers is the accelerator's — "next change",
+/// "next file" — resolved through the table, not the list's "next commit". Caught by: the list
+/// moving on any arrow whatever is held.
+#[test]
+fn an_accelerators_chord_does_not_move_the_selection() {
+    let reports = Reports::default();
+    let (mut test, _) = launch(rows(0..100), &reports);
+    press(&mut test, NamedKey::ArrowDown);
+
+    for action in [Action::NextChange, Action::NextFile, Action::PreviousFile] {
+        let chord = accelerators::chord(action, Os::current());
+        let (key, _, held) = chord.key_press().unwrap();
+        test.press_key_with_modifiers(key, held);
+        test.sync_and_update();
+    }
+    assert_eq!(
+        reports.selected.borrow().as_slice(),
+        &[RowId::Commit(oid(0))],
+        "a chord moved the commit selection"
+    );
+
+    press(&mut test, NamedKey::ArrowDown);
+    assert_eq!(
+        reports.selected.borrow().last(),
+        Some(&RowId::Commit(oid(1))),
+        "the plain arrow stopped moving the selection"
     );
 }
 

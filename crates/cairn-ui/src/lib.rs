@@ -1,5 +1,6 @@
 //! Cairn's component library.
 
+pub mod accelerators;
 mod commit_row;
 mod credential_prompt;
 mod date_text;

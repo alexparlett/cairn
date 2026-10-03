@@ -3,6 +3,7 @@
 use cairn_model::{HistoryRow, RowId};
 use freya::prelude::*;
 
+use crate::accelerators;
 use crate::graph_geometry::ROW_HEIGHT;
 
 pub const PREFETCH_ROWS: usize = 24;
@@ -180,6 +181,11 @@ impl HistoryList {
         let on_select = self.on_select.clone();
 
         move |e: Event<KeyboardEventData>| {
+            // A chord is an accelerator's, resolved by the window: Ctrl+↓ is "next change",
+            // not "next commit".
+            if accelerators::resolve_key(&e).is_some() {
+                return;
+            }
             // Drop the read guard before calling out: a handler that reloads the list would panic.
             let moved = {
                 let held = rows.read();

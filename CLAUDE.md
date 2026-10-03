@@ -45,7 +45,7 @@ on the command line.
 | `crates/cairn-model/` | The vocabulary crossing the seam: `Oid`, `RefName`, `CommitSummary`, `CommitDetails`, `ChangeSet`, the `Confirmed` token. Plain data, plus the pure algorithms that produce some of it — the layout one (`LaneAssigner`) and the diff model (`TextDiff` and the hunk, row and patch projections of it, `Selection`, `emit_patch` and the reference `apply_patch`; `docs/systems/diff.md`) — and `Secret`, the one type that holds a credential. Depends on nothing but `zeroize` (for that type) — not `gix`, not `freya`, not the other crates. |
 | `crates/cairn-git/` | The repository engine: gitoxide-backed reads — the history walk, and under `src/diff/` the queries answering what a commit changed (asked of `git diff-tree` through `src/reads/`), what one file's change is, and one path's working-tree diff — and under `src/ops/` every write, delegating to the `git` binary per design decision D1. Every `git` process is built in the crate-private `src/process/` — `GitBinary` (startup discovery and the 2.30 floor), `GitEnvironment` (the explicitly built environment, the only place a `Command` is built), `Askpass` (where git and ssh are sent for a secret), the runner, which streams and can kill a process, and each repository's registry of running invocations and its command log — and an invocation is typed a read or a write, a write needing the `WriteAuthority` only `ops/` can construct. `src/ops/` holds `fetch`, the first verb (not destructive, so it takes no `Confirmed`), and the confirmation-seal placeholder, and re-exports what the application needs of `process/`; `src/reads/` is where each read `git` answers lives, one named function each: today `changes`, `git diff-tree` for the changes query, whose rename and copy pairs gix and git disagree on; `patches`, `git diff-tree -p` for the content query's changed lines and function context, whose line diff gix and git disagree on too; `diff_attributes`, `git check-attr`, which says whether a path's diff driver names its own algorithm; and `working_tree_patch`, one path's staged, unstaged or untracked diff (`git diff-index --cached`, `git diff-files`, `git diff --no-index`), which reads the working tree through git so its side is git's form of the file. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
 | `crates/cairn-askpass/` | The askpass helper binary `git` and `ssh` run to ask for a secret, and the library half — the `Channel` the application listens on. Links `cairn-model` and `zeroize` only: it runs in a process holding a plaintext secret. Never names the engine, the toolkit or a logging crate. |
-| `crates/cairn-ui/` | Freya components. Render `cairn-model` values, report intent through `EventHandler` props. Must never depend on `gix` or `cairn-git`, and must never touch the filesystem. |
+| `crates/cairn-ui/` | Freya components. Render `cairn-model` values, report intent through `EventHandler` props. `src/accelerators.rs` is the accelerator table, the one render file that names a modifier. Must never depend on `gix` or `cairn-git`, and must never touch the filesystem. |
 | `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. `src/worker/` is everything that may wait: `git` found once per application (`discovery.rs`), each repository's threads (`pool.rs`), the routing table from query lane to thread (`routing.rs`) and the per-lane epochs (`epoch.rs`), the diff thread (`diff_lane.rs`), the network lane (`network_lane.rs`) and the askpass acceptor; `src/diff_state.rs` is the diff selection and the answers kept for it; `src/closing.rs` is the window's close hook, which asks the worker to close and never waits. |
 | `crates/cairn-guards/` | Test-only. The deterministic enforcement twins for the Invariants below; nothing depends on it. |
 | `scripts/`, `.githooks/`, `.github/` | The enforcement layer (contract: `docs/qa-gate.md`). |
@@ -536,6 +536,35 @@ Project invariants:
   the reviewer's: whether a page is small enough that the work between yields is
   short, and whether a list is virtualized.
 
+- **No component names a literal modifier** (decision D5, PRD R8.3). Every
+  keyboard shortcut is an `Action` mapped to one chord per platform in the
+  accelerator table, `crates/cairn-ui/src/accelerators.rs`; a component asks
+  `accelerators::resolve_key` which action a key press is and never reads the
+  held keys itself, so a `Ctrl` that is wrong on macOS cannot be written into a
+  component. Twin: `no_component_names_a_literal_modifier`, over every file of
+  `crates/cairn-ui/src` and `crates/cairn-app/src` (test modules blanked) but the
+  table, which must exist and in which the matcher must find a modifier (so a
+  blind matcher fails); matcher `names_a_literal_modifier` in
+  `crates/cairn-guards/src/lib.rs`, whose rosters are read from the vendored
+  `keyboard-types` 0.8.3 and Freya's `ModifiersExt`: the type `Modifiers`, the
+  trait and its `ctrl_or_meta`/`ctrl_or_alt`, the event's `modifiers` field, the
+  type's constants (`CONTROL`, `META`, ...), the modifier keys of `NamedKey` and
+  `Code` (`Control`, `ShiftLeft`, ..., and `::Fn`), the nullary predicates
+  `.ctrl()`/`.alt()`/`.shift()`/`.meta()`, and a string literal spelling a chord
+  for a person (`Ctrl`, `Cmd`, `⌘`, `⌥`, `Shift+`, ...). Matcher self-test:
+  `the_modifier_matcher_catches_the_shapes_it_claims` — an aliased import of the
+  type, a qualified path, a constant defined beside a component, a glob of the
+  key type's variants, a predicate reached by inference. Residual review
+  obligations, `qa-checklist`'s: the matcher reads spellings, so a modifier
+  reached through a `type` alias declared outside the render crates, a macro, or
+  a raw bit pattern compared without naming the type is not seen; the table's
+  public surface must keep speaking actions and chords, never a modifier or a
+  "held" predicate a component could branch on under another name — the one
+  exception, `Chord::key_press`, hands a chord's keys to headless tests, and a
+  render path calling it is a finding; a key event
+  handled by a test in `crates/cairn-ui/tests/` is not scanned; and whether each
+  chord is right for its platform — clear of the desktop's and of Fork's — is a
+  judgement the table's tests do not make.
 - **No unbounded list renders without virtualization.** A history is however long
   somebody's repository is, so a view that builds one element per row of it is
   unbounded work per frame. Twin:
@@ -606,8 +635,9 @@ Project invariants:
 - Errors are `thiserror` enums whose variants name what the CALLER must handle;
   never re-export a dependency's error type across the seam.
 - Keyboard shortcuts resolve through one accelerator table mapping a logical
-  action to a per-platform chord. Never a literal `Ctrl` inside a component — it
-  is the cheap half of keeping macOS reachable (decision D5).
+  action to a per-platform chord (`crates/cairn-ui/src/accelerators.rs`). Never a
+  literal `Ctrl` inside a component — it is the cheap half of keeping macOS
+  reachable (decision D5), and an invariant with a guard (above).
 - Docs follow the anchor rule: cite stable paths, exported symbols, and pinned
   tests; never literal counts or line numbers that rot.
 

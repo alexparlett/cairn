@@ -3,6 +3,44 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-03 — Phase 07: the user's decisions on the Cairn-chosen behaviours, applied
+
+Packet mode, committed to `feature/diff-engine`. The user decided each Cairn-chosen item
+phase 07 reported (2026-10-03); each is recorded as a user decision in
+`docs/systems/diff.md`, "Measured from Fork, or chosen by Cairn".
+
+1. *Filter.* Case ignored as Unicode reads it (`str::to_lowercase`, no dependency; an ASCII
+   text in an ASCII path is still compared in place), so `É` finds `é`; the text kept for
+   the session; a chosen file the filter hides stays shown; and "Showing N of M files"
+   under the field whenever a filter is active — the answer's length and the change set's,
+   read as they are. While a new change set's first answer (or the first text typed) is on
+   its way, the list now says "Filtering…" and shows no file (`ShownFiles::Waiting`), where
+   it showed "0 of M" and "No file matches" or every file before.
+2. *Side-by-side* kept as built.
+3. *Notices.* A rename with no content change is "Renamed without changes" (a copy, "Copied
+   without changes", by analogy — Cairn's); conflicted is "Unmerged path — conflicts must
+   be resolved before a diff can be shown"; "Binary file", "Git LFS pointer" and
+   "Submodule" kept. Sizes: Finding 22 records only that Fork shows "the size in KB and
+   bytes", not the sample's numbers, so the base is unsettled and the unit is labelled KiB
+   (1,024 bytes): `2.0 KiB (2,048 bytes)`.
+4. *Cut marker* " … N more bytes", N the bytes not drawn; the horizontal extent leaves room
+   for the longest such marker a 64 MiB file can produce.
+5. *File list width.* 35% of the pane until dragged, never below 200 px (both panels
+   proportional; the fork's `ResizableContainer` floors a proportional panel's drag at
+   `min_pixels` converted through the flex factor, read in `apply_resize`), its share kept
+   for the session.
+
+**Tests, written first and shown RED, then GREEN.**
+
+| Decision | Test | RED |
+| --- | --- | --- |
+| 1 | `case_is_ignored_as_unicode_reads_it` | the ASCII-only fold (failed before the change) |
+| 1 | `an_active_filter_says_how_many_files_it_shows_of_how_many` (55,184 paths: "Showing 27,592 of 55,184 files", "Filtering…" while waiting, nothing with no filter) | before the change (no `Waiting`, no count); then the count line suppressed |
+| 1 | `typing_in_the_filter_asks_a_worker_and_the_list_draws_its_answer`, now asserting "Filtering…" before the answer and "Showing 2 of 55,184 files" after | — (updated for the waiting state) |
+| 3 | `every_state_that_is_not_text_draws_its_notice` (KiB, "Renamed without changes", the unmerged-path sentence) | before the change; then the rename titled as a content-free change |
+| 4 | `a_line_past_the_limit_is_drawn_cut_with_its_marker_in_both_views` (" … 4,192,256 more bytes"), `a_line_past_the_limit_is_drawn_to_the_limit` | before the change; then the count taken as the line's whole length |
+| 5 | `the_file_list_opens_at_a_third_of_the_pane_and_keeps_its_dragged_width` | before the change (the list opened at 302 px of 800) |
+
 ## 2026-10-03 — Phase 07: the Changes tab, the states that are not text, side-by-side
 
 Packet mode, committed to `feature/diff-engine`. Landed; QA is due (the orchestrator runs

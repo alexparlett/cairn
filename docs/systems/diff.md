@@ -1207,19 +1207,28 @@ involved: the exceptions roster stays empty.
 **The Changes tab** (`crates/cairn-app/src/changes_tab.rs`, phase 07, R5.4), Fork's
 (Findings 5 and 19): a one-line summary — the author's name, the short id, the author
 date in the user's chosen format and the subject (`cairn_ui::ChangesSummary`,
-`summary_parts`; no avatar) — then, behind a draggable splitter (the list 300 px wide
-until dragged, kept for the session), the changed files on the left under a filter field
-and one file's diff on the right. A component of its own, mounted only while the tab is
+`summary_parts`; no avatar) — then, behind a draggable splitter (the list opening at 35%
+of the pane, never dragged or squeezed below 200 px, its share kept for the session:
+`the_file_list_opens_at_a_third_of_the_pane_and_keeps_its_dragged_width`), the changed
+files on the left under a filter field and one file's diff on the right. A component of its own, mounted only while the tab is
 shown. The list (`cairn_ui::ChangesList`) is one `VirtualScrollView` of fixed rows over a
 `Readable` of the change set and one of the filter's answer (`cairn_ui::ShownFiles`, every
 file or the matching indices), so 55,184 files build one viewport of rows, filtered or not
 (`a_list_of_55184_files_builds_one_viewport_filtered_or_not`). Typing in the field writes
 the session's `View::filter_text`; an effect hands the text to `DiffState::filter`, which
 asks a worker (above) and keeps the answer only for the change set and text asked last —
-the last answer standing until the next arrives, nothing of another change set's ever
-read (`file_filter.rs`, `the_filter_shows_the_answer_for_the_change_set_and_text_asked_last`;
-through the window, `typing_in_the_filter_asks_a_worker_and_the_list_draws_its_answer`).
-A change set arriving asks again with the text as it is. With no file chosen, the first
+the last answer standing until the next arrives; for another change set, or the first
+text typed, the list waits (`ShownFiles::Waiting`, "Filtering…") rather than show any
+file as matched, so nothing of another change set's is ever read (`file_filter.rs`,
+`the_filter_shows_the_answer_for_the_change_set_and_text_asked_last`; through the window,
+`typing_in_the_filter_asks_a_worker_and_the_list_draws_its_answer`). While a filter is
+active the list says "Showing N of M files" — the answer's length and the change set's,
+read as they are, no walk of the list — so a file hidden by a filter kept from the last
+commit is never taken for one this commit did not touch
+(`an_active_filter_says_how_many_files_it_shows_of_how_many`, at 55,184 paths). The text
+is kept for the session, and a change set arriving asks again with it; a file chosen
+before the filter hid it stays shown on the right. Case is ignored as Unicode reads it, so
+`É` finds `é` (`case_is_ignored_as_unicode_reads_it`). With no file chosen, the first
 file the list shows is chosen, as Fork selects the first file by default
 (`the_changes_tab_shows_the_summary_the_files_and_the_first_files_diff`). A file pressed,
 or reached with ↑ or ↓ while the list has focus — through the files it SHOWS, stopping at
@@ -1417,13 +1426,13 @@ and looked at from a real fixture repository as well):
 
 | State | Drawn |
 | --- | --- |
-| Binary | "Binary file", Fork's "Old" and "New" over each side's size in KB and bytes (bytes alone under a KB); an absent side (added, deleted) has none |
+| Binary | "Binary file", Fork's "Old" and "New" over each side's size in KiB and bytes (`2.0 KiB (2,048 bytes)`; bytes alone under a KiB); an absent side (added, deleted) has none |
 | Too large | Fork's "Changes are too large to display", the measurement the limit fired on, and Fork's "Load Diff" while a load is offered; past the 64 MiB ceiling "too large to load" and no button |
 | Git LFS pointer | "Git LFS pointer" over each side's pointer text, the old above the new |
 | Submodule | "Submodule" over git's `-Subproject commit <id>` and `+Subproject commit <id>` lines, `-dirty` after the new where the working tree's checkout has changes; never "binary" |
 | Mode only | git's `old mode` and `new mode` lines, under "No change to the file's content" |
-| Rename or copy, no content change | git's `similarity index`, `rename from`/`rename to` (`copy from`/`copy to`) lines, with the mode lines first when the mode moved too |
-| Conflicted, unsupported | "This file is conflicted"; the engine's reason |
+| Rename or copy, no content change | "Renamed without changes" ("Copied without changes") over git's `similarity index`, `rename from`/`rename to` (`copy from`/`copy to`) lines; when the mode moved too, the mode lines first under "No change to the file's content" |
+| Conflicted, unsupported | "Unmerged path — conflicts must be resolved before a diff can be shown"; the engine's reason |
 | Text with no row | "No changes to show.", or the whitespace sentence when ignoring whitespace hides every change |
 
 **Load Diff** (`diff_actions::load_anyway`) asks the file shown again with `load_anyway`,
@@ -1438,10 +1447,10 @@ answer and microseconds a frame; 52 MiB of a million changed lines, 989 ms to an
 the diff thread, 20 ms to prepare, 1.5 ms (3.2 ms side by side) a frame.
 
 **A line past the long-line limit is drawn cut** (R6.9, `cairn_model::drawn_bytes`,
-`cairn_ui::LINE_CUT_MARKER`). Only a diff loaded past the limits holds one; drawn whole, a
+`cairn_ui::cut_marker`). Only a diff loaded past the limits holds one; drawn whole, a
 64 MiB line would be 64 MiB of text each time its row is built. A row draws at most the
-long-line limit's 2,048 bytes of a line, ending on a character, then " … line truncated" in
-the muted colour; its intra-line ranges past the cut are not read; and the widest line is
+long-line limit's 2,048 bytes of a line, ending on a character, then " … N more bytes" in
+the muted colour, N the bytes not drawn (" … 4,192,256 more bytes" for a 4 MiB line); its intra-line ranges past the cut are not read; and the widest line is
 measured to its cut, so the horizontal extent is bounded too
 (`a_line_past_the_limit_is_drawn_cut_with_its_marker_in_both_views`, a 4 MiB line in each
 view; `a_line_past_the_limit_is_cut_at_the_limit_on_a_character`).
@@ -1545,17 +1554,20 @@ number) and `docs/research/diff-engine/fork-shortcuts.md`.
 | Colours | Fork's dark values, retuned | Fork-measured values (Finding 25), moved by a Cairn-chosen rule: each keeps its offset from Fork's ground, channel by channel, on Cairn's darker ground, so a tint stands out as much as in Fork (`retuned`, below). |
 | `CURRENT_CHANGE` | the dark theme's `text_highlight` | Cairn-chosen: Fork uses the system accent (Finding 25), which Cairn has no platform call to read; the theme's accent, pinned equal by `the_current_change_is_the_themes_accent`. |
 | Side-by-side columns | two equal columns, each half the view, one gutter each, grey filler, the hunk header at the top of each | Fork-measured: Finding 11 (equal, not resizable, the vendor; one gutter per pane; grey filler; the header repeated). Filler's grey is Fork's `#424242` (Finding 25), retuned. |
-| Side-by-side sideways scroll | both columns' text slides together; each gutter stays | Cairn-chosen: Fork's panes are two text controls whose sideways scroll is not established; Cairn's are one view (the no-plain-`ScrollView` invariant), so one scroll moves both. |
-| Side-by-side `-`/`+` markers | a marker column per side | Cairn-chosen: Fork's is an opt-in preference (Finding 12); Cairn draws it always, as in unified, so meaning never rests on colour (L11). |
-| End-of-file marker side by side | a row after the change, in the column of the side that did not end | Cairn-chosen: git has no side-by-side form; Fork's is not recorded. |
+| Side-by-side sideways scroll | both columns' text slides together; each gutter stays | User decision (2026-10-03), kept as built: Fork's panes are two text controls whose sideways scroll is not established; Cairn's are one view (the no-plain-`ScrollView` invariant), so one scroll moves both. |
+| Side-by-side `-`/`+` markers | a marker column per side | User decision (2026-10-03), kept as built: Fork's is an opt-in preference (Finding 12); Cairn draws it always, as in unified, so meaning never rests on colour (L11). |
+| End-of-file marker side by side | a row after the change, in the column of the side that did not end | User decision (2026-10-03), kept as built: git has no side-by-side form; Fork's is not recorded. |
 | Too large | "Changes are too large to display", "Load Diff" | Fork-measured: Finding 21 (Windows screenshot, TrackerWin #2245). The line under it giving the measurement, and "too large to load" past the ceiling, are Cairn's. |
-| Binary | "Old"/"New" over each size in KB and bytes | Fork-measured: Finding 22 (Windows 1.28 screenshot). The "Binary file" title, KB as 1,024 bytes and bytes alone under a KB are Cairn's. |
-| LFS pointer, submodule, mode only, rename | the pointer text under "Git LFS pointer"; git's own lines | Cairn-chosen: Fork's LFS and submodule views show downloaded content, chips and a commit graph (Finding 22), more than R6.8 asks; mode-only presentation is not established in Fork; git's own lines are the parity answer. |
-| Cut line marker | " … line truncated", muted | Cairn-chosen: Fork refuses such lines rather than cutting them (Finding 21). |
+| Binary | "Old"/"New" over each size in KiB and bytes | Fork-measured: Finding 22 (Windows 1.28 screenshot: the size in KB and bytes). The research does not record the sample's numbers, so it does not settle whether Fork's KB is 1,000 or 1,024 bytes: user decision (2026-10-03), labelled honestly as KiB, 1,024 bytes; bytes alone under a KiB. "Binary file" kept, user decision. |
+| LFS pointer, submodule, mode only | the pointer text under "Git LFS pointer"; git's own lines under "Submodule", "No change to the file's content" | User decision (2026-10-03): "Git LFS pointer" and "Submodule" kept. Fork's LFS and submodule views show downloaded content, chips and a commit graph (Finding 22), more than R6.8 asks; git's own lines are the parity answer. |
+| Rename with no content change | "Renamed without changes" over git's rename lines | User decision (2026-10-03). "Copied without changes", for a copy, follows the same form — Cairn's, by analogy. |
+| Conflicted | "Unmerged path — conflicts must be resolved before a diff can be shown" | User decision (2026-10-03): git's own "Unmerged path", and why no diff is drawn. |
+| Cut line marker | " … N more bytes", muted, N the bytes not drawn | User decision (2026-10-03). Fork refuses such lines rather than cutting them (Finding 21). |
 | Changes tab summary | author, short id, author date, subject | Fork-measured: Finding 2 (avatar, author, abbreviated SHA, date, subject); no avatar (L9); the date in the user's chosen format. |
 | Changes tab list | filter field at the top, status letter and path, first file chosen | Fork-measured: Finding 5 (filter, badge, name; first file selected by default). |
-| Filter matching | the text anywhere in a path, a rename by either name, no wildcards, ASCII case ignored | Fork-measured in part: file name, extension or path expression, no wildcards (the vendor, TrackerWin #152 and Tracker #1482). Ignoring case is Cairn's choice, not established. The filter text is kept across commits for the session — Cairn's choice. |
-| File list width | 300 px until dragged, kept for the session | Cairn-chosen: Fork's split is draggable (Finding 5); its default width is not established. |
+| Filter matching | the text anywhere in a path, a rename by either name, no wildcards, case ignored as Unicode reads it | Fork-measured in part: file name, extension or path expression, no wildcards (the vendor, TrackerWin #152 and Tracker #1482). Unicode case folding (`str::to_lowercase`, no dependency): user decision (2026-10-03). |
+| Filter persistence | the text kept across commits for the session; a file chosen before the filter hid it stays shown; "Showing N of M files" whenever a filter is active | User decision (2026-10-03): the count line keeps a sticky filter from being mistaken for a commit that touched fewer files. |
+| File list width | 35% of the pane until dragged, never below 200 px, its share kept for the session | User decision (2026-10-03). Fork's split is draggable (Finding 5); its default width is not established. |
 
 **Colours and typeface** (`cairn_ui::diff_palette`). Named tokens, never literals at a
 call site. Fork's measured dark values (`docs/research/diff-engine/fork-detail-and-diff-ui.md`,

@@ -1460,3 +1460,121 @@ fn the_view_groups_hunks_as_the_users_git_diff_does() {
         "a diff.context git refuses was read"
     );
 }
+
+/// `git diff --name-status -z <old> <new>` as the user types it — reading their own
+/// `diff.renames` — as (status letter, old path, new path), in git's order.
+fn pair_name_status(repo: &Repo, old: &str, new: &str) -> Vec<(char, String, String)> {
+    let out = repo.git(&["diff", "--no-ext-diff", "--name-status", "-z", old, new]);
+    let mut fields = out.split('\0').filter(|field| !field.is_empty());
+    let mut found = Vec::new();
+    while let Some(status) = fields.next() {
+        let letter = some(status.chars().next(), "a status letter");
+        let first = some(fields.next(), "a path").to_owned();
+        let second = if matches!(letter, 'R' | 'C') {
+            some(fields.next(), "a second path").to_owned()
+        } else {
+            first.clone()
+        };
+        found.push((letter, first, second));
+    }
+    found.sort();
+    found
+}
+
+/// R7 and C12's parity, at the engine: comparing two commits is `git diff <base> <tip>` —
+/// tip against tip, never a merge base — for the pair far apart and adjacent, in both
+/// directions, under the user's own rename detection (`diff.renames` unset, `false` and
+/// `copies`): the same files with the same statuses and pairs as `git diff --name-status`,
+/// and every text file's rows, unified and side by side, as `git diff` prints them. Swapping
+/// the pair is `git diff <tip> <base>`, which changes the answer — an addition becomes a
+/// deletion, a rename runs the other way — not just the order it is named in. Caught by: a
+/// comparison against a merge base or the tip's parent, rename detection fixed rather than
+/// read from the configuration, or a swap that reverses only the label.
+#[test]
+fn a_comparison_of_two_commits_reads_as_git_diff_of_the_pair_both_ways() {
+    for config in [
+        &[][..],
+        &[("diff.renames", "false")][..],
+        &[("diff.renames", "copies")][..],
+    ] {
+        let repo = repositories::rewrites(config);
+        repo.write("added-late.txt", b"one\ntwo\n");
+        repo.write("moved/file0.txt", b"rewritten\nentirely\n");
+        repo.commit("late");
+        let engine = ok(Repository::discover(repo.path()), "the fixture opens");
+        let mut session = ok(engine.diff_session(), "a diff session");
+        let rev = |spec: &str| repo.git(&["rev-parse", spec]).trim().to_owned();
+        let pairs = [
+            (rev("HEAD~3"), rev("HEAD")),
+            (rev("HEAD~1"), rev("HEAD")),
+            (rev("HEAD~2"), rev("HEAD~1")),
+        ];
+        for (far, near) in pairs {
+            let mut answers = Vec::new();
+            for (base, tip) in [(&far, &near), (&near, &far)] {
+                let request = ChangesRequest::between(
+                    ok(Oid::parse(base), "an id"),
+                    ok(Oid::parse(tip), "an id"),
+                );
+                let set = ok(
+                    session.changes(super::git(), &request, &CancelSignal::new()),
+                    "the changes query answers",
+                );
+                let mut ours: Vec<(char, String, String)> = set
+                    .files
+                    .iter()
+                    .map(|file| {
+                        (
+                            letter(&file.status),
+                            file.old_path.display().into_owned(),
+                            file.new_path.display().into_owned(),
+                        )
+                    })
+                    .collect();
+                ours.sort();
+                assert_eq!(
+                    ours,
+                    pair_name_status(&repo, base, tip),
+                    "{base}..{tip} under {config:?}"
+                );
+                let options = ContentOptions {
+                    load_anyway: true,
+                    ..ContentOptions::default()
+                };
+                for file in &set.files {
+                    let diff = ok(
+                        session.file_diff(
+                            super::git(),
+                            &request,
+                            file,
+                            &options,
+                            &CancelSignal::new(),
+                        ),
+                        "a file diff",
+                    );
+                    if !matches!(diff.content, DiffContent::Text { .. }) {
+                        continue;
+                    }
+                    let theirs = git_view(&repo, base, tip, file, Some(3), &[]);
+                    assert_eq!(
+                        cairn_view(&diff, Context::lines(3), false),
+                        theirs,
+                        "{} in {base}..{tip} under {config:?}",
+                        file.new_path
+                    );
+                    assert_eq!(
+                        side_by_side_view(&diff, Context::lines(3), false),
+                        theirs,
+                        "{} side by side in {base}..{tip} under {config:?}",
+                        file.new_path
+                    );
+                }
+                answers.push(ours);
+            }
+            assert_ne!(
+                answers[0], answers[1],
+                "swapping {far}..{near} under {config:?} did not change the answer"
+            );
+        }
+    }
+}

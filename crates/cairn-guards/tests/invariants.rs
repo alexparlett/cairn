@@ -21,7 +21,12 @@ use cairn_guards::{
 const DEPENDENCY_ALLOWLIST: &[(&str, &[&str])] = &[
     ("cairn-model", &["zeroize"]),
     // `nix`: SIGTERM on cancel, so git can remove its lock files (issue #19).
-    ("cairn-git", &["cairn-model", "gix", "nix", "thiserror"]),
+    // `encoding_rs`: a commit in a legacy encoding read as git reads it (user-approved
+    // 2026-10-03).
+    (
+        "cairn-git",
+        &["cairn-model", "encoding_rs", "gix", "nix", "thiserror"],
+    ),
     ("cairn-ui", &["cairn-model", "freya"]),
     (
         "cairn-app",

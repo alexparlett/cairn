@@ -699,7 +699,7 @@ pub fn encoded_commits() -> (Repo, Vec<(Oid, &'static str)>) {
     repo.write("f.txt", b"one\n");
     let root = repo.commit("root");
     let tree = repo.git(&["rev-parse", "HEAD^{tree}"]).trim().to_owned();
-    let cases: [EncodedCommit; 8] = [
+    let cases: [EncodedCommit; 18] = [
         (
             "ISO-8859-1",
             Some("ISO-8859-1"),
@@ -755,6 +755,79 @@ pub fn encoded_commits() -> (Repo, Vec<(Oid, &'static str)>) {
             b"Ren\xe9",
             b"Ren\xe9",
             b"Caf\xe9 and caf\xc3\xa9\n",
+        ),
+        (
+            // glibc's SHIFT_JIS reads 0x5c and 0x7e as JIS X 0201's yen and overline, and
+            // six JIS X 0208 codes as JIS does, not as Microsoft does; a trail byte of 0x5c
+            // (0x955c) stays a kanji.
+            "Shift_JIS",
+            Some("Shift_JIS"),
+            b"\x8e\x52\x93\x63\x91\xbe\x98\x59",
+            b"\x95\x5c\x8e\xa6",
+            b"\x93\xfa\x96\x7b \x5c path \x7e \x81\x60 \x81\x61 \x81\x7c \x81\x91 \x81\x92 \x81\xca\n",
+        ),
+        (
+            "CP932, Microsoft's Shift_JIS",
+            Some("CP932"),
+            b"\x8e\x52\x93\x63",
+            b"\x8e\x52\x93\x63",
+            b"\x5c \x7e \x81\x60 \x87\x40\n",
+        ),
+        (
+            "Shift_JIS with a byte glibc leaves undefined",
+            Some("SJIS"),
+            b"\x8e\x52\x93\x63",
+            b"\x8e\x52\x93\x63",
+            b"NEC's circled one, \x87\x40\n",
+        ),
+        (
+            "EUC-JP, with JIS X 0212 and the six codes",
+            Some("EUC-JP"),
+            b"\xce\xeb\xcc\xda",
+            b"\xce\xeb\xcc\xda",
+            b"\xc6\xfc\xcb\xdc \x8f\xab\xb1 \x5c \xa1\xc1 \xa1\xc2 \xa1\xdd \xa1\xf1 \xa1\xf2 \xa2\xcc\n",
+        ),
+        (
+            "KOI8-R",
+            Some("KOI8-R"),
+            b"\xe9\xd7\xc1\xce \xb3\xcc\xcb\xc9\xce",
+            b"\xe9\xd7\xc1\xce",
+            b"\xf0\xd2\xc9\xd7\xc5\xd4 \xcd\xc9\xd2\n",
+        ),
+        (
+            "KOI8-U, whose box drawings WHATWG's table replaces",
+            Some("KOI8-U"),
+            b"\xfd\xc5",
+            b"\xfd\xc5",
+            b"\xae \xbe\n",
+        ),
+        (
+            "GB18030, two-byte and four-byte",
+            Some("GB18030"),
+            b"\xcd\xf5\xd0\xa1\xc3\xf7",
+            b"\xcd\xf5\xd0\xa1\xc3\xf7",
+            b"\xd6\xd0\xce\xc4\xa8\xa6 \x81\x30\x85\x38\n",
+        ),
+        (
+            "ISO-8859-9, whose C1 bytes WHATWG reads as windows-1254",
+            Some("ISO-8859-9"),
+            b"\xe7al\xfd\xfe",
+            b"\xe7al\xfd\xfe",
+            b"\xe7al\xfd\xfema \x80\x9f\n",
+        ),
+        (
+            "windows-1251 with a byte it leaves undefined",
+            Some("windows-1251"),
+            b"\xc8\xe2\xe0\xed",
+            b"\xc8\xe2\xe0\xed",
+            b"\xc8\xe2\xe0\xed \x98\n",
+        ),
+        (
+            "macintosh",
+            Some("macintosh"),
+            b"\x8e",
+            b"\x8e",
+            b"\xc6 \xf0 \x8e\n",
         ),
     ];
     let mut parent = root;

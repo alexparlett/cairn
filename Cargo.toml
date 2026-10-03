@@ -26,6 +26,11 @@ freya-testing = { git = "https://github.com/alexparlett/freya", rev = "caa46f871
 # is what lets gix open a repository made with `--object-format=sha256`.
 gix = { version = "0.87.1", features = ["blame", "blob-diff", "revision", "status", "max-performance", "parallel", "sha256"] }
 thiserror = "2"
+# Decodes a commit written in a legacy encoding (its `encoding` header) into the characters
+# git shows for it, where git converts with iconv (user-approved 2026-10-03). Already in the
+# build under gix-filter at this version; `cairn-git/src/commit_encoding.rs` layers glibc
+# iconv's mappings over the WHATWG tables where the two differ.
+encoding_rs = "0.8.41"
 # Sends SIGTERM to a git child on cancel, from safe code: `std` can only
 # SIGKILL, and git removes its lock files on SIGTERM alone (issue #19).
 # `signal` is the `kill(2)` wrapper, `process` the `Pid` it takes. `process`

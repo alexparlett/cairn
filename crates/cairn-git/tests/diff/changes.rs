@@ -759,6 +759,30 @@ fn the_text_of_an_encoded_commit_is_the_text_git_prints() {
         "{}",
         shown(&commits[3].0)
     );
+    let message = |id: &Oid| repo.git(&["log", "-1", "--format=%B", &id.to_string()]);
+    for (n, git_shows) in [
+        (8, "日本 ¥ path ‾ 〜"),
+        (9, "\\ ~ ～ ①"),
+        (11, "日本 é \\ 〜"),
+        (12, "Привет мир"),
+        (13, "╝ ╬"),
+        (14, "中文é µ"),
+    ] {
+        assert!(
+            message(&commits[n].0).contains(git_shows),
+            "{}: {:?}",
+            commits[n].1,
+            message(&commits[n].0)
+        );
+    }
+    for n in [10, 16] {
+        assert!(
+            message(&commits[n].0).contains('\u{fffd}'),
+            "{}: git converted it: {:?}",
+            commits[n].1,
+            message(&commits[n].0)
+        );
+    }
 }
 
 /// The mode a file mode maps to is the one git spells, which the comparison above rests on.

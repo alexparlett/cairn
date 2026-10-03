@@ -748,6 +748,7 @@ version = "0.1.0"
 dependencies = [
  "cairn-askpass",
  "cairn-model",
+ "encoding_rs",
  "gix",
  "nix",
  "thiserror 2.0.20",

@@ -2,9 +2,9 @@
 //! commits, comparisons and the working tree alike (PRD R4.2, R4.3, R4.5; packet decision
 //! L8).
 //!
-//! It takes its own thread-local repository handle once, and keeps for the life of the
-//! repository the [`DiffSession`] — gix's blob resource cache, reused across commits — and
-//! [`Answers`], the commit and comparison answers already given. A working-tree answer is
+//! It takes its own thread-local repository handle once, and keeps the [`DiffSession`] —
+//! gix's blob resource cache, reused across commits — and [`Answers`], the commit and
+//! comparison answers already given, until the index file moves ([`Kept`]). A working-tree answer is
 //! never kept, and the engine reads the index and the attributes afresh for every
 //! working-tree query.
 //!
@@ -63,8 +63,7 @@ pub(super) fn serve_diffs(
     // Once, at the top of the thread: each call rebuilds the object cache and the pack
     // snapshot, and `session` borrows it across turns.
     let repo = shared.to_worker();
-    let mut session: Option<DiffSession<'_>> = None;
-    let mut answers = Answers::default();
+    let mut kept = Kept::default();
     let mut waiting = Waiting::default();
 
     while waiting.gather(jobs) {
@@ -74,6 +73,7 @@ pub(super) fn serve_diffs(
         let Some((epoch, query)) = waiting.next(epochs) else {
             continue; // Everything that waited was superseded; the next turn blocks.
         };
+        kept.renew_if_moved(IndexStamp::of(&repo));
         let served = Served {
             repo: &repo,
             git,
@@ -82,7 +82,44 @@ pub(super) fn serve_diffs(
             cancel: epochs.watch(epoch),
             outbox,
         };
-        served.answer(query, &mut session, &mut answers);
+        served.answer(query, &mut kept.session, &mut kept.answers);
+    }
+}
+
+/// What the thread keeps between queries, and the index it was built against.
+///
+/// gix builds a session's attribute stack from the index as it stands when the session
+/// opens, and git reads a staged `.gitattributes` from it too; so when the index file
+/// moves, the session is reopened and the kept answers let go, and the next query reads
+/// the attributes as they are. One `stat` per query.
+#[derive(Default)]
+struct Kept<'repo> {
+    built_against: IndexStamp,
+    session: Option<DiffSession<'repo>>,
+    answers: Answers,
+}
+
+impl Kept<'_> {
+    fn renew_if_moved(&mut self, now: IndexStamp) {
+        if now != self.built_against {
+            self.session = None;
+            self.answers = Answers::default();
+            self.built_against = now;
+        }
+    }
+}
+
+/// The index file's modification time and length, or nothing when there is none to read
+/// (a bare repository, an unborn one with no index yet).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct IndexStamp(Option<(std::time::SystemTime, u64)>);
+
+impl IndexStamp {
+    fn of(repo: &Repository) -> Self {
+        let read = std::fs::metadata(repo.git_dir().join("index"))
+            .ok()
+            .and_then(|meta| Some((meta.modified().ok()?, meta.len())));
+        Self(read)
     }
 }
 
@@ -339,13 +376,14 @@ fn content_options(options: &DiffOptions) -> ContentOptions {
 /// blob ids) and the options (context, whitespace, loading past the ceiling). The
 /// configuration the engine reads — `diff.algorithm` and the drivers' algorithms,
 /// `diff.renames`, `diff.renameLimit`, `diff.ignoreSubmodules`, `log.showRoot` — is the
-/// repository handle's, read when the repository was opened; this cache lives exactly as
-/// long as that handle, so the two are refreshed together, by reopening. What `git` itself
-/// reads as it runs and an answer can depend on — the attributes (a diff driver's
-/// algorithm, its function-context pattern, `-diff`), `.gitmodules`, and the drivers'
-/// configuration — is NOT in the key: an edit to them while the repository is open is seen
-/// by the next query not already answered here, and not by one that is. Working-tree
-/// answers are never kept.
+/// repository handle's, read when the repository was opened; this cache lives no longer
+/// than that handle, so the two are refreshed together by reopening, and it is also let go
+/// whenever the index file moves ([`Kept`]), which a staged `.gitattributes` edit does.
+/// What `git` itself reads as it runs and an answer can depend on — the working tree's
+/// attributes (a diff driver's algorithm, its function-context pattern, `-diff`),
+/// `.gitmodules`, and the drivers' configuration — is NOT in the key: an unstaged edit to
+/// them while the repository is open is seen by the next query not already answered here,
+/// and not by one that is. Working-tree answers are never kept.
 #[derive(Debug, Default)]
 struct Answers {
     change_sets: Vec<(Comparison, ChangeSet)>,
@@ -695,6 +733,38 @@ mod tests {
             Err(disagree())
         });
         assert_eq!(asked.get(), 1, "a superseded query was asked again");
+    }
+
+    /// Caught by: keeping a session and answers built against an index that has since
+    /// moved — a staged `.gitattributes` edit (`-diff`, a driver) would not be seen until
+    /// the repository was reopened.
+    #[test]
+    fn what_is_kept_is_let_go_when_the_index_moves() {
+        let mut kept = Kept::default();
+        let stamp = |seconds: u64, len: u64| {
+            IndexStamp(Some((
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds),
+                len,
+            )))
+        };
+        kept.renew_if_moved(stamp(1, 10));
+        kept.answers
+            .keep_file_diff(committed(1, DiffOptions::default()), text_diff(1, 4));
+        kept.renew_if_moved(stamp(1, 10));
+        assert_eq!(
+            kept.answers.file_diffs.len(),
+            1,
+            "an unmoved index let go of answers"
+        );
+        for moved in [stamp(2, 10), stamp(2, 11), IndexStamp(None)] {
+            kept.answers
+                .keep_file_diff(committed(1, DiffOptions::default()), text_diff(1, 4));
+            kept.renew_if_moved(moved);
+            assert!(
+                kept.answers.file_diffs.is_empty(),
+                "{moved:?} kept the answers"
+            );
+        }
     }
 
     /// Caught by: a working-tree request answered for another side of the path.

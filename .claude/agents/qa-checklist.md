@@ -124,7 +124,9 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
     function of the accelerator table that hands out a
     modifier or a "is Ctrl held" predicate a component could branch on under
     another name (its surface speaks actions and chords only; `Chord::key_press`
-    is for headless tests, and a render path calling it is a finding); a key event
+    and `Chord::press_hold` are for headless tests, and a render path calling
+    either is a finding; `HeldKeys` answers which action a pointer press is, and a
+    method of it that answered which key is held would be one); a key event
     handled in `crates/cairn-ui/tests/` (unscanned); and whether a new chord is
     right for each platform and clear of the desktop's and Fork's.
 

@@ -50,7 +50,15 @@ same parity bar as unified, one shared setting), every non-text state draws its 
 with Load Diff for a file past the limits, a line past the long-line limit is drawn cut
 with a marker, `ShownDiff` is prepared on the diff thread (moved to `cairn-model`),
 previous/next change computes in whole numbers, and the row-exhaustiveness guard covers
-`UnifiedRow` and `SideBySideRow`.** The diff model exists in
+`UnifiedRow` and `SideBySideRow`. Phase 08 landed (2026-10-03), QA due: a file pressed in the Commit tab opens its diff
+in place under its row (Fork), Expand All opens files in order until a budget of 50,000
+lines is spent and says how many it left collapsed — read a page at a time, each file
+decided before its blobs are read, a file that fails failing alone (the bound phase 02's
+QA asked for) — and a ⌘/Ctrl-press on a second row compares the two, tip against tip with
+the lower row the base, under a header naming both with a swap, the Commit tab unavailable;
+C14's window check is measured headlessly over the bench repository (`window_check`), no
+frame over 16.7 ms while the heaviest subjects load, and the literal look at the window is
+the user's.** The diff model exists in
 `cairn-model`, and `cairn-git` answers R2's two queries: the changes query from
 `git diff-tree` through the process manager (decision E, PRD R2.1, R2.2, R2.9 and C14
 amended), honouring `diff.ignoreSubmodules` and `log.showRoot` as the user's `git log`
@@ -121,6 +129,13 @@ matches the filter.", the "Filter" placeholder, "Choose a file to see its diff."
 
 Q1-Q3 in `brainstorm.md`, lettered Q so they cannot be confused with the
 program's O1-O6.
+
+**Phase 08 met its four obligations (2026-10-03, `progress.md`): Expand All is bounded
+(`DiffSession::page`, the line budget decided before each file is read, a page's memory),
+answers per file, and pages; a Commit-tab press opens the file in place, the Changes tab
+reached by its tab; the second commit's press resolves through `HeldKeys` and the table's
+`ExtendSelection`; and the past-ceiling notice never reads as the ceiling (`mib_text`).** The
+three entries below are kept as they were written.
 
 **For phase 08: Expand All is unbounded in memory (QA round 3, R2; the user
 decided on 2026-10-03 that phase 08 bounds it).** `DiffSession::file_diffs` reads
@@ -300,6 +315,24 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | `View::{filter_text, changes_list_width}` | app (`src/window.rs`) | Phase 07: the tab's session state. |
 | `every_view_of_a_diff_row_names_every_kind_of_row`, `every_production_view_names_every_variant`, `the_diff_row_matcher_catches_the_shapes_it_claims` | guards (`tests/invariants.rs`) | Phase 07: `reads_enum_partially` over `UnifiedRow` and `SideBySideRow`; the self-test spells every `RowContent` shape for both (phase 07 QA, Q1). |
 | `every_notice_says_what_git_diff_says_of_the_same_file` | app (`tests/notice_parity.rs`) | Phase 07 QA (T4): every non-text notice, from a real repository through the engine and `ShownDiff`, compared with `git show`. |
+| `DiffSession::page(&GitBinary, &ChangesRequest, Offered, Option<&mut LineBudget>, ..)`, `Offered`, `Page`, `LineBudget`, `PAGE_FILES`, `PAGE_LINES` | git (`src/diff/content.rs`, `src/diff.rs`) | Phase 08: a page of a change set's files read in order until the page is full or the budget spent, each admitted before its blobs are read; per-file outcomes; `git diff-tree -p` over the page's paths alone. Replaced `DiffSession::file_diffs`. |
+| `reads::Scope::Comparison` | git | Phase 08: removed (every page reads its own paths). |
+| `ExpandQuery`, `OpenedFile`, `AllFrom`, `AllProgress`, `AllEnded`, `ExpandedFile`, `expanded_diffs`, `Request::Expand`, `Update::Expanded`, `DiffQuery::Expand` | app (`src/worker/request.rs`) | Phase 08: files opened in place and Expand All, answered a page at a time; replaced `Request::ExpandAll`, `Update::FileDiffs`, `DiffQuery::All`. `Retired::of` lost its file-diffs argument (everything retired is a `ShownDiff` or a change set). |
+| `Served::expand`, `prepared` | app (`src/worker/diff_lane.rs`) | Phase 08: the named files, then Expand All from where it stands, each page sent as prepared. |
+| `EXPAND_ALL_LINES` | app (`src/worker/expand_all.rs`) | Phase 08, Q2: 50,000 lines, R2.6's per-file line ceiling; why, in its doc and `progress.md`. |
+| `AllState`, `Asking`, `DiffState::{toggle_file, expand_all, collapse_all, load_in_place, reask_expansion, reask_file, file_needs_asking, expansion_needs_asking, settings_changed, expansion_arrived}`, `diff_state::answered_expansion` | app (`src/diff_state.rs`) | Phase 08: the files opened in place for the comparison selected, and the shared file-diff lane — each selection asked again, whole, when its tab is shown after the other took the lane. |
+| `diff_actions::{toggle_in_place, expand_all, load_in_place}`, `detail_pane::{CommitBody, shown_tab}` | app | Phase 08: the Commit tab's press, Expand All / Collapse All, Load Diff in place; the Commit tab's body a component, asking again as it is shown. |
+| `selection::{Pair, selected_comparison, extend, swap}`, `View::{pair, held_keys}` | app | Phase 08, R7: two commits compared, the lower row the base, never half-selected. |
+| `window_check` (`#[ignore]`d), `worker::update_within` | app (`src/window_check.rs`, `src/worker/fetch_tests.rs`) | Phase 08, C14: the real window over the real worker and engine against `CAIRN_BENCH_REPO`, frames paced at 60 Hz, each update's and frame's UI-thread time. |
+| `Expansion`, `Opened` | ui (`src/expansion.rs`) | Phase 08: the files opened in place and where each one's rows fall in the Commit tab's list — binary-searched, rebuilt from the first file changed. |
+| `CommitTab::{expansion, side_by_side, on_expand_all, on_load}`, `EXPAND_ALL_CAPTION`, `COLLAPSE_ALL_CAPTION`, `READING_DIFF`, `budget_notice` | ui (`src/commit_tab.rs`) | Phase 08: in-place rows under a file, the files bar. |
+| `NoticeRow`, `NoticeTone`, `notice_rows` | ui (`src/diff_notice.rs`) | Phase 08: a notice as rows, the Changes tab's words. |
+| `diff_view::{RowGeometry, draw_row}` | ui (private) | Phase 08: a diff row drawn from a `&ShownDiff`, by the diff view and the Commit tab alike. |
+| `accelerators::HeldKeys`, `Chord::press_hold` | ui (`src/accelerators.rs`) | Phase 08: the keys the window heard held, which a pointer press is resolved against; the pointer chord's keys for headless tests. |
+| `HistoryList::{also_selected, held, on_extend}` | ui (`src/history_list.rs`) | Phase 08: the second commit drawn selected, and a press with the extending chord reported apart. |
+| `ComparisonHeader`, `comparison_parts`, `BASE_CAPTION`, `TIP_CAPTION`, `SWAP_LABEL` | ui (`src/changes_list.rs`) | Phase 08, R7.3: both commits named, base then tip, with the swap. |
+| `DetailTabs::unavailable` | ui (`src/detail_tabs.rs`) | Phase 08, R7.3: the Commit tab disabled while two commits are selected. |
+| `mib_text` | ui (`src/diff_notice.rs`) | Phase 08 (phase 05's obligation): never reads a size just past the ceiling as the ceiling. |
 
 ## Validation status
 
@@ -312,7 +345,7 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | 05 detail pane | landed 2026-10-03; **phase 05 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 26 raw, 15 confirmed by `qa-confirm`, R3/G5 and one more dismissed; every confirmed finding fixed test-first and the user's six decisions applied (`progress.md`): dates in Fork's fixed English format, encodings through `encoding_rs` (user-approved) |
 | 06 unified diff view | landed 2026-10-03; **phase 06 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 15 raw plus 1 found, 14 confirmed by `qa-confirm`, C4 dismissed; every confirmed finding fixed test-first or recorded for phase 07, and the user's four decisions applied (`progress.md`), `unicode-width` user-approved |
 | 07 Changes tab and side-by-side | landed 2026-10-03; **phase 07 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 15 raw, 12 confirmed by `qa-confirm`, T3 and T8 dismissed with evidence; every confirmed finding fixed test-first and the user's decisions on the notices, the summary strip and the `İ` limit applied (`progress.md`) |
-| 08 expansion and compare | not started | — | — |
+| 08 expansion and compare | landed 2026-10-03; **QA due** | `scripts/gate.sh` PASS, `git-floor` included | due: `responsiveness-reviewer` and `test-coverage-auditor` fresh, the phase's `qa-checklist.md` items and its QA brief; C14's look at the window by hand is the user's |
 | 09 QA | not started | — | — |
 
 ## Environment notes

@@ -3,6 +3,189 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-03 — Phase 08: files opened in place, Expand All bounded, two commits compared, C14's window check
+
+Packet mode, committed to `feature/diff-engine`. Landed; QA is due (the orchestrator runs
+it: `responsiveness-reviewer` and `test-coverage-auditor` fresh, the phase's
+`qa-checklist.md` items and the phase doc's QA brief). As-built: `docs/systems/diff.md` —
+"The content query" (Expand All a page at a time), "In the application" (`Request::Expand`,
+the shared file-diff lane), "The detail pane" (files opened in place, Expand All, comparing
+two commits), "The accelerator table" (`HeldKeys`), the table "Measured from Fork, or chosen
+by Cairn", and the known limits.
+
+**What shipped.** A file pressed in the Commit tab opens its diff in place under its row and
+closes when pressed again; files start collapsed; Expand All — Collapse All while a file is
+open — opens files in the change set's order until 50,000 lines are spent, then says "Expand
+All stopped at its line budget: N files left collapsed." A ⌘- or Ctrl-press on a second row
+compares the two, tip against tip with the lower row the base, in the Changes tab under a
+header naming both ("Base", "Tip") with a swap; the Commit tab is unavailable while two are
+selected; a third press replaces the second, a plain press returns to one.
+
+**The four obligations `state.md` carried into this phase: met.**
+
+1. *Expand All bounded, per-file outcomes.* `DiffSession::file_diffs` is gone. The engine
+   reads a page (`DiffSession::page`): files in order until `PAGE_FILES` (256) or
+   `PAGE_LINES` (20,000) lines read, or the `LineBudget` spent, each file admitted or not
+   BEFORE any of its blobs is read, from what the files before it cost (a file costs one
+   and the lines of both versions it holds; a state refused on its header — too large — or
+   not text holds none); `git diff-tree -p` is asked about the page's paths alone, so what
+   the engine holds is a page's blobs and patch; a file that fails is that file's `Err`
+   beside the others. The diff thread sends each page as it is prepared
+   (`Update::Expanded`), Expand All carrying where it stands (`AllFrom { next, spent }`) so a
+   superseded one is taken up there; it runs in the file-diff lane, cancellable between
+   files and within each read, and a newer request there ends it
+   (`a_newer_request_in_the_lane_ends_an_expansion_and_kills_its_read`).
+2. *The Commit tab's press opens in place.* Fork's Finding 4: the Commit tab "does not switch
+   to Changes". The Changes tab's single-file view is reached by its tab, which keeps a file
+   of its own chosen from its own list (the first by default, Finding 5). Fork's Mac 1.0.71
+   buttons that reveal a file in the Changes tab are not drawn: their look is OPEN in the
+   research. The Commit tab's arrows no longer choose the Changes tab's file (phase 06 had
+   them do so, which would now take the file-diff lane from the files opened in place).
+3. *The modifier-click through the table.* This Freya build carries no modifiers on a pointer
+   event (verified in the fork, `freya-core/src/events/data.rs`: `MouseEventData` has none;
+   `freya-winit/src/renderer.rs` keeps `modifiers_state` for key events only). The table now
+   keeps `HeldKeys` — the window's global key down/up handlers feed it, a modifier key's own
+   press counted before the state it sets — and `HistoryList` resolves each press against it
+   (`HeldKeys::press` → `resolve_press_on`), reporting `ExtendSelection` apart. No component
+   names a modifier; `Chord::press_hold` lets a headless test hold the chord through the
+   table (CLAUDE.md's residual and `qa-checklist` item 11 name it beside `Chord::key_press`).
+4. *The past-ceiling notice.* `mib_text` keeps a tenth wherever it is honest and otherwise
+   takes as many places as it needs, up to seven, in whole numbers: 64 MiB and a byte reads
+   "64.000001 MiB", never "64.0 MiB".
+
+**Q2, Expand All's budget: `EXPAND_ALL_LINES` = 50,000 lines**
+(`crates/cairn-app/src/worker/expand_all.rs`, pinned by
+`the_expand_all_budget_is_one_files_line_ceiling`, and by a compile-time check that it is at
+least one engine page). Why: it is R2.6's line ceiling for one file drawn without Load Diff,
+so Expand All never holds more than about two of the largest files the diff draws unasked;
+on every subject of the bar it reads to its end in at most 23 ms warm, where 100,000 lines
+took up to 86 ms (M1) and 200,000 up to 251 ms; and the window check below found no frame
+near 16.7 ms while it read and drew. The engine's sweep, `measures_expand_all_budgets_against_a_named_repository`
+(release build, warm, medians of five, ms to the first page / to the end, files opened,
+lines spent):
+
+| Subject | 10,000 | 25,000 | 50,000 | 100,000 | 200,000 |
+| --- | --- | --- | --- | --- | --- |
+| S1 `cf2dff2b1e3` (27,592 files) | 0.4 / 0.5, 34 files | 1.1 / 1.7, 191 | 1.1 / 3.7, 464 | 1.1 / 6.9, 691 | 1.1 / 16.8, 2,429 |
+| M1 `5a3292f163d` (2,828 files) | 4.1 / 4.2, 4 | 5.7 / 11.2, 10 | 5.9 / 18.3, 18 (53,488 lines) | 5.9 / 86.2, 616 | 8.1 / 250.6, 1,986 |
+| S7 `f0845adb0c1` (1,017 files) | 4.5 / 4.6, 12 | 7.8 / 11.5, 59 | 7.5 / 22.9, 167 | 7.8 / 57.8, 573 | 8.7 / 109.1, 1,017 (all) |
+| F7 `3b09522c34b` (4 files) | 5.2 / 5.5, 3 | 5.0 / 5.3, 3 | 5.0 / 10.4, 4 (all) | 5.2 / 10.8, 4 | 5.2 / 10.6, 4 |
+| F1 `6a6e8446b97` (1 file, refused on its header) | 0.0, 1 file, 1 line | the same | the same | the same | the same |
+
+No file failed in any run. Overshoot is one file at most: M1's 50,000 budget spent 53,488.
+
+**C14, measured.** Machine: AMD Ryzen 7 9800X3D (16 threads), 60 GiB, NVMe; **git 2.56.0**
+(`measured-baseline.md` used 2.55.0); release build; `~/Development/bench/rust` at
+`c999cef531e`, read only, warm. The engine reporter
+(`measures_the_diff_queries_against_a_named_repository`, medians of seven) beside git's own
+baseline — every C14 engine ceiling met, and every figure but F7's refusal worse than git's:
+
+| Subject | Cairn | git (baseline) | Bar |
+| --- | --- | --- | --- |
+| S7 `f0845adb0c1` changes | 8.17 ms | 7.9 ms | 100 ms, met |
+| S1 `cf2dff2b1e3` changes | 35.49 ms | 28.6 ms | 500 ms, met |
+| M1 `5a3292f163d` changes | 83.20 ms | 78.5 ms | 500 ms, met |
+| M1 rename pairs | 2,774, every pair, source, destination and score git diff-tree's | 2,774 | equal, met |
+| F7 `3b09522c34b` content, loaded | 17.73 ms | 9.8 ms | 100 ms, met |
+| F1 `6a6e8446b97` refused as too large | 0.004 ms, content not read | — | answered without reading, met |
+| F1 Load Diff | 185.96 ms (engine); 215 ms answered in the window, `ShownDiff` prepared on the diff thread | 163.0 ms | recorded |
+| S7 Expand All with no budget (every file, page by page) | 109.07 ms, 1,017 files | — | — |
+
+**The window check** (`crates/cairn-app/src/window_check.rs`, `#[ignore]`d; `cargo test -p
+cairn-app --release -- --ignored --nocapture window_check`): the real window — every
+component — over the real worker and engine, headless through `freya-testing` at 1440×900,
+frames paced as a 60 Hz display paces them, each update applied with `session::apply` and
+timed (the UI thread's work per update), each frame's `sync_and_update` timed (events,
+components, layout, accessibility — everything but paint). Three runs agreed; one run's
+figures:
+
+| Phase | Answered and drawn | UI work per update (max) | Frames: median / max | Over 16.7 ms |
+| --- | --- | --- | --- | --- |
+| History opened, first page | 17.1 ms | 0.019 ms | 0.01 / 2.32 ms | 0 |
+| History scrolled, nothing loading | — | 0.036 ms | 1.35 / 2.14 ms | 0 |
+| The Commit tab drawn the first time in the session (newest commit) | 34.0 ms | 0.002 ms | 0.03 / **14.63 ms** | 0 |
+| S1 changes, first ask (git runs), history scrolled every frame | 72.6 ms (arrived 55.7) | 0.003 ms | 1.31 / 2.11 ms | 0 |
+| S1 changes, the kept answer | 18.1 ms (arrived 3.6) | 0.004 ms | 1.33 / 2.47 ms | 0 |
+| S1's 27,592 files scrolled, 100 rows a frame | — | — | 1.18 / 1.44 ms | 0 |
+| S1 Expand All, the tab scrolled every frame | 34.4 ms (first page 13.5) | 0.164 ms a page | 0.67 / 0.78 ms | 0 |
+| S1 through its 464 opened files, 100 rows a frame | — | — | 0.95 / 1.41 ms | 0 |
+| M1 changes, first ask | 106.7 ms (arrived 100.1) | 0.003 ms | 1.27 / 1.82 ms | 0 |
+| M1 changes, the kept answer | 18.3 ms | 0.002 ms | 1.37 / 1.77 ms | 0 |
+| M1's 2,828 files scrolled | — | — | 0.24 / 1.56 ms | 0 |
+| M1 Expand All | 34.5 ms (first page 10.8) | 0.007 ms a page | 0.93 / 1.25 ms | 0 |
+| M1 through its 18 opened files | — | — | 0.24 / 1.34 ms | 0 |
+| F1 refused as too large | 52.9 ms | 0.005 ms | 0.03 / 1.33 ms | 0 |
+| F1 Load Diff, history scrolled every frame | 216.4 ms (arrived 214.7) | 0.004 ms | 1.16 / 3.81 ms | 0 |
+| F1's loaded diff scrolled, ~140 rows a frame | — | — | 0.85 / 1.56 ms | 0 |
+
+Expand All held: S1 464 files, 27,128 left collapsed, the process's resident memory 151.5 →
+161.6 MiB; M1 18 files, 2,810 left collapsed, 167.3 → 169.9 MiB. Paint is not in these
+frames: the runner can only take a raster snapshot encoded to PNG, 40-43 ms for the whole
+window, which is an upper bound dominated by the encoding, not a frame's paint. One frame
+came near the bar: **the Commit tab's first draw in a session, 14-15 ms of UI-thread work**
+whatever the commit (a headless probe measured 11.5 ms over 2,828 files and over 27,592
+alike, so it is the toolkit's first text of each face and fallback, not the subject); every
+draw after it stays under 4 ms. With paint that one frame may be dropped once per session;
+it is stated in the known limits. **The literal look at the window, by hand, as C14 words
+it, remains the user's**: this measures the UI thread headless and cannot see paint, a
+compositor or the GPU.
+
+**Comparison parity.** `a_comparison_of_two_commits_reads_as_git_diff_of_the_pair_both_ways`
+(`cairn-git`): on the rewrites fixture with a late edit, under `diff.renames` unset, `false`
+and `copies`, the pair far apart (`HEAD~3`, `HEAD`) and adjacent (`HEAD~1`, `HEAD`;
+`HEAD~2`, `HEAD~1`), both ways round: the files, statuses and pairs equal `git diff
+--name-status <base> <tip>` as the user types it, every text file's unified and side-by-side
+rows equal `git diff -U3`, and the swapped answer differs from the forward one. The window
+asks `Comparison::Between { old: base, new: tip }`, handed to git as `ChangesRequest::between(base,
+tip)` (`a_comparison_is_asked_with_its_base_as_the_old_side`).
+
+**Tests, each shown RED (a mutation of the code it pins, or written before the code), then
+GREEN.**
+
+| Test | RED |
+| --- | --- |
+| `a_size_just_past_the_ceiling_never_reads_as_the_ceiling` | before the change: "64.0 MiB" for 64 MiB and a byte |
+| `expand_all_stops_at_its_budget_before_reading_the_next_file` | the budget check removed: all five files read |
+| `a_failing_file_is_that_files_outcome_and_the_rest_are_read` | a file's read failure returned as the page's |
+| `a_page_ends_at_its_file_count_or_its_line_count` | the file cap removed; the line cap removed |
+| `expand_all_runs_one_diff_tree_per_comparison` (now per page) | — (restated: at most one run per page and per driver algorithm, never one per file; not re-run against a mutation) |
+| `a_comparison_of_two_commits_reads_as_git_diff_of_the_pair_both_ways` | `ChangesRequest::between` reading its pair the other way round |
+| C10/C9 `a_pressed_file_is_reported_and_its_diff_opens_under_its_row`, `an_opened_file_says_it_is_being_read_or_failed_or_why_it_has_no_rows`, `only_a_viewport_of_rows_is_built_however_many_files_are_open` | the list's length forgetting the opened rows; an item placed without the rows the files above add |
+| C10 `expand_all_turns_into_collapse_all_and_says_what_its_budget_left_collapsed` | Expand All never turning into Collapse All; the budget's notice drawn whether or not it stopped |
+| `every_notice_says_the_same_words_in_place_as_in_the_changes_tab` | a binary side's size dropped from `notice_rows` |
+| `a_table_built_a_piece_at_a_time_is_the_table_built_whole` | the rebuild starting a file past the first set |
+| `a_newer_request_in_the_lane_ends_an_expansion_and_kills_its_read` | the expansion read on a cancel that never fires |
+| `expand_all_stops_at_its_budget_through_the_boundary` | the budget not passed to the page |
+| C10 `a_file_pressed_in_the_commit_tab_opens_its_diff_in_place` | the press wired as phase 06 had it (the Changes tab shown, nothing asked) |
+| C10 `expand_all_stops_at_its_budget_and_says_how_many_files_stay_collapsed` | the budget's end not recorded |
+| `the_file_and_the_files_opened_in_place_take_the_lane_from_each_other` | the file's asking not taking the lane from the expansion |
+| `a_page_is_kept_only_for_the_files_asked_as_they_were_asked`, `collapse_all_ends_what_is_in_flight_and_frees_what_was_drawn` | every arriving file kept; no superseding request |
+| `a_setting_asks_the_shown_tabs_selection_now_and_the_others_later` | both selections asked |
+| `a_failed_expansion_fails_the_files_still_awaited` | the failure not written |
+| `expand_all_opens_each_pages_files_and_moves_on_until_its_budget` | Expand All's progress not recorded |
+| `a_press_resolves_against_the_keys_the_window_heard` | written before `HeldKeys`; then a modifier key's own press and release not counted |
+| C12 `a_modifier_click_compares_two_commits_tip_against_tip_with_the_lower_row_the_base` | the base taken as the row pressed with the chord; a swap that only relabels; a plain press keeping the pair; the held keys ignored |
+| C12 `a_comparison_is_never_left_half_selected` | a plain press keeping the pair; a third press ignored; the held keys ignored |
+| `the_expand_all_budget_is_one_files_line_ceiling` | — (pins the decision) |
+
+Restated, not weakened: phase 06's `a_pressed_file_draws_its_diff_in_the_changes_tab_for_that_query_alone`
+is now `the_changes_tabs_file_draws_its_diff_for_that_query_alone` (the Changes tab chooses
+its file; the Commit tab's press opens in place); the two session tests of the configured
+context show the Changes tab first, since a setting now asks at once only the selection
+whose tab is shown; `the_message_is_the_rows_git_log_shows_for_it` finds Expand All between
+the message and the first file.
+
+**Decisions taken in this phase without asking**, each recorded as Cairn-chosen in
+`docs/systems/diff.md`'s table: the Commit tab's one 24 px pitch for in-place diff rows (the
+virtualised list needs rows of one size; Fork's in-place pitch is presumably its 17 pt) and
+one sideways scroll for the whole tab (Fork scrolls each inline diff on its own); a chevron
+disclosure on every platform; Collapse All whenever any file is open; Expand All re-reading
+files already open; the budget's words and place; in-place "Reading the diff…", failure and
+hidden-whitespace rows, and Load Diff in place; no reveal-in-Changes button; the third and
+repeated chord-press rules; the comparison header's "Base"/"Tip" captions and fields; the `↕`
+swap named "Swap base and tip"; the session's tab restored after a comparison; a setting
+asking at once only the shown tab's selection.
+
 ## 2026-10-03 — Phase 07 QA: fixed, and the user's decisions on the notices applied
 
 Packet mode, committed to `feature/diff-engine`. The QA round over phase 07: 15 raw

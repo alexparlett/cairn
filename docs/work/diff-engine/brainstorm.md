@@ -241,7 +241,8 @@ Lettered Q to keep them apart from the program's O1-O6 in
   takes a position on one of these it is Cairn's choice and says so, not a claim
   about Fork. Settled only on the user's own Fork install.
 - **Q2.** The Expand All line budget. Fixed in phase 08 against the window check,
-  as a named constant with a test.
+  as a named constant with a test. Answered in phase 08 (2026-10-03): 50,000 lines,
+  `EXPAND_ALL_LINES`, R2.6's line ceiling for one file; why, in `progress.md`.
 - **Q3.** How far gix's rename detection is from git's on
   `5a3292f163d`, where git finds 2,505 of its 2,543 inexact renames in a
   filename-matching pass that the rename limit does not govern. Measured in phase

@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use super::repositories::empty_home;
+
 #[derive(Debug)]
 pub struct Scratch {
     repo: PathBuf,
@@ -56,8 +58,12 @@ impl Scratch {
         command
             .current_dir(&self.repo)
             .args(args)
+            // As `Repo::run` isolates it, on every git from the floor.
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", empty_home())
+            .env("XDG_CONFIG_HOME", empty_home())
             .env("GIT_OPTIONAL_LOCKS", "0")
             .stdin(if stdin.is_some() {
                 Stdio::piped()
@@ -183,6 +189,9 @@ impl Scratch {
             .args(["cat-file", "blob", id])
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", empty_home())
+            .env("XDG_CONFIG_HOME", empty_home())
             .env("GIT_OBJECT_DIRECTORY", &objects)
             .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &alternate)
             .output()

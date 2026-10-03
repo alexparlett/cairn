@@ -16,6 +16,25 @@ pub struct Repo {
     borrowed: bool,
 }
 
+/// A directory with nothing in it, for `HOME` and `XDG_CONFIG_HOME`: no configuration
+/// file of the machine's user can be read through it, on any git. One for every run, kept
+/// rather than removed (a concurrent test binary may be using it), and checked empty.
+pub fn empty_home() -> &'static Path {
+    static HOME: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    HOME.get_or_init(|| {
+        let path = std::env::temp_dir().join("cairn-git-tests-empty-home");
+        std::fs::create_dir_all(&path).unwrap_or_else(|e| panic!("making {}: {e}", path.display()));
+        let mut entries =
+            std::fs::read_dir(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+        assert!(
+            entries.next().is_none(),
+            "{} is meant to be empty, and something wrote into it",
+            path.display()
+        );
+        path
+    })
+}
+
 /// Committer dates rise by a minute per commit, so `git log` orders them the way they were
 /// made whatever the machine's clock says.
 const EPOCH: i64 = 1_600_000_000;
@@ -84,9 +103,15 @@ impl Repo {
         command
             .current_dir(&self.path)
             .args(args)
-            // Isolate from the machine's git config, e.g. a global `commit.gpgsign`.
+            // Isolate from the machine's git config, e.g. a global `commit.gpgsign`. git
+            // before 2.32 knows neither `GIT_CONFIG_*` file variable and reads
+            // `~/.gitconfig` and the XDG file anyway, so the home it would look in is an
+            // empty directory and the system file is switched off by the older spelling.
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", empty_home())
+            .env("XDG_CONFIG_HOME", empty_home())
             .env("LC_ALL", "C")
             .env("GIT_AUTHOR_NAME", "A U Thor")
             .env("GIT_AUTHOR_EMAIL", "author@example.com")

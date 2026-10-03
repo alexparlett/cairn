@@ -254,6 +254,8 @@ mod tests {
                         diff: State::create(crate::diff_state::DiffState::default()),
                         filter_text: State::create(String::new()),
                         changes_list_width: State::create(crate::changes_tab::LIST_WIDTH),
+                        pair: State::create(None),
+                        held_keys: State::create(cairn_ui::accelerators::HeldKeys::default()),
                         history_scroll: ScrollController::new(0, 0, Vec::new()),
                         detail_tab: State::create(cairn_ui::DetailTab::default()),
                         pane_collapsed: State::create(false),

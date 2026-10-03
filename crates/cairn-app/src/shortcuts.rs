@@ -30,7 +30,8 @@ pub fn of_header(pressed: HeaderAction) -> Action {
 
 /// Does `action` to `view`, asking through `submit` what it must — nothing while a
 /// credential prompt is up, which owns the keys until it is answered (Q3). The second commit
-/// of a comparison acts from phase 08.
+/// of a comparison is a press, not a key: the history list resolves it against the keys the
+/// window heard held (`HeldKeys`) and selects it (`selection::extend`).
 pub fn act(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
     let View {
         mut detail_tab,
@@ -57,6 +58,7 @@ pub fn act(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
             true
         }),
         Action::ToggleSideBySide => diff_actions::toggle_side_by_side(view),
+        // A press's chord, never a key's: resolved where the press lands.
         Action::ExtendSelection => {}
     }
 }

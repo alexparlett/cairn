@@ -62,6 +62,7 @@ impl PartialEq for DetailPane {
             && one.change_cursor == two.change_cursor
             && one.filter_text == two.filter_text
             && one.changes_list_width == two.changes_list_width
+            && one.pair == two.pair
             && self.submit.is_some() == other.submit.is_some()
     }
 }
@@ -74,12 +75,20 @@ impl Component for DetailPane {
             mut pane_collapsed,
             ..
         } = view;
-        let tab = *detail_tab.read();
+        // Two commits selected: the Changes tab, the Commit tab unavailable (R7.3) — the tab
+        // chosen for the session is kept for when one is selected again.
+        let comparing = view.pair.read().is_some();
+        let tab = if comparing {
+            DetailTab::Changes
+        } else {
+            *detail_tab.read()
+        };
         let collapsed = *pane_collapsed.read();
         let hearing = self.submit.clone();
 
         let strip = DetailTabs::new(tab)
             .collapsed(collapsed)
+            .unavailable(comparing.then_some(DetailTab::Commit))
             .on_tab(move |chosen: DetailTab| {
                 detail_tab.set(chosen);
                 // A tab pressed on a collapsed pane is asked to be seen.
@@ -193,9 +202,14 @@ fn commit_body(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Element {
     }
 }
 
-/// The tab the pane shows: the one chosen for the session.
+/// The tab the pane shows: the Changes tab while two commits are compared, otherwise the one
+/// chosen for the session.
 pub fn shown_tab(view: View) -> DetailTab {
-    *view.detail_tab.peek()
+    if view.pair.peek().is_some() {
+        DetailTab::Changes
+    } else {
+        *view.detail_tab.peek()
+    }
 }
 
 /// A parent link: a loaded parent is selected, its changes asked for and its row brought

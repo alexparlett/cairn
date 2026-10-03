@@ -3,7 +3,7 @@
 use std::rc::Rc;
 
 use cairn_model::{HistoryRow, RemoteSummary, RowContent, RowId, Secret};
-use cairn_ui::accelerators::{self, Scope};
+use cairn_ui::accelerators::{self, HeldKeys, Scope};
 use cairn_ui::{
     ChangeCursor, CommitRow, CredentialPrompt, DETAIL_STRIP_HEIGHT, DetailTab, DiffSettings,
     HistoryHeader, HistoryList, ROW_HEIGHT, RowRender,
@@ -14,6 +14,7 @@ use crate::detail_pane::DetailPane;
 use crate::diff_state::DiffState;
 use crate::fetch_state::{FetchRefusal, FetchStatus, PromptView};
 use crate::history_state::{Progress, Status};
+use crate::selection::Pair;
 use crate::worker::{Replier, Reply, Request};
 use crate::{PAGE_ROWS, selection, shortcuts, status_text};
 
@@ -55,6 +56,12 @@ pub struct View {
     pub filter_text: State<String>,
     /// The Changes tab's file list's share of the pane as last dragged, in percent.
     pub changes_list_width: State<f32>,
+    /// Two commits selected to compare (R7), `selected` the one pressed plainly; `None` while
+    /// one is selected.
+    pub pair: State<Option<Pair>>,
+    /// The keys the window hears held, which a press on a row is resolved against (a pointer
+    /// press carries no modifiers in this toolkit build): the accelerator table's.
+    pub held_keys: State<HeldKeys>,
 }
 
 impl std::fmt::Debug for View {
@@ -102,9 +109,15 @@ pub fn window(
         // Every shortcut resolves through the accelerator table (R8): here the ones heard
         // wherever focus is; the detail pane hears its own (`detail_pane`).
         .on_global_key_down(move |e: Event<KeyboardEventData>| {
+            let mut held = view.held_keys;
+            held.write().heard(&e, true);
             if let Some(action) = accelerators::resolve_key(&e, Scope::Window) {
                 shortcuts::act(action, view, hearing.as_deref());
             }
+        })
+        .on_global_key_up(move |e: Event<KeyboardEventData>| {
+            let mut held = view.held_keys;
+            held.write().heard(&e, false);
         })
         .child(title_bar(
             opened,
@@ -204,6 +217,12 @@ fn dialog(
 fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Element {
     let mut progress = view.progress;
     let choosing = submit.clone();
+    let extending = submit.clone();
+    let second = view
+        .pair
+        .read()
+        .as_ref()
+        .and_then(|pair| pair.other(*view.selected.read()));
     HistoryList::new(view.rows, move |render: RowRender| {
         // No wildcard arm: a new row kind must fail to compile here.
         match render.row.content {
@@ -214,9 +233,15 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     })
     .lanes(lanes)
     .selected(*view.selected.read())
+    .also_selected(second)
+    .held(view.held_keys)
     .controller(view.history_scroll)
     // Choosing a row asks what it changed; the pane draws the answer for that row alone.
     .on_select(move |id: RowId| selection::choose(id, view, choosing.as_deref()))
+    // A row pressed with the table's extending chord is the second commit of a comparison.
+    .on_extend(move |(id, index): (RowId, usize)| {
+        selection::extend(id, index, view, extending.as_deref());
+    })
     .on_reach_end(move |()| {
         // `wants_more` debounces: every `submit` supersedes. `peek`, not `read`: reading here
         // subscribes the window to the progress it writes, and loops.
@@ -477,6 +502,8 @@ mod tests {
                     change_cursor: State::create(None),
                     filter_text: State::create(String::new()),
                     changes_list_width: State::create(crate::changes_tab::LIST_WIDTH),
+                    pair: State::create(None),
+                    held_keys: State::create(HeldKeys::default()),
                 })
             },
             1.,
@@ -1757,6 +1784,233 @@ mod tests {
             pane(&test)
                 .iter()
                 .any(|t| t == cairn_ui::EXPAND_ALL_CAPTION)
+        );
+    }
+
+    /// Holds (`down`) or lets go of the keys of the table's extending chord — ⌘ on macOS,
+    /// Ctrl elsewhere — through the table, as the window hears them.
+    fn hold_extending(test: &mut TestingRunner, down: bool) {
+        let chord = accelerators::chord(Action::ExtendSelection, accelerators::Os::current())
+            .and_then(|chord| chord.press_hold())
+            .expect("the extending chord is a press");
+        let (key, code, modifiers) = chord;
+        test.send_event(PlatformEvent::Keyboard {
+            name: if down {
+                KeyboardEventName::KeyDown
+            } else {
+                KeyboardEventName::KeyUp
+            },
+            key,
+            code,
+            modifiers: if down { modifiers } else { Default::default() },
+        });
+        test.sync_and_update();
+    }
+
+    /// Row `n` pressed with the extending chord held: ⌘-click or Ctrl-click.
+    fn extend_row(test: &mut TestingRunner, n: usize) {
+        hold_extending(test, true);
+        click_row(test, n);
+        hold_extending(test, false);
+    }
+
+    /// The changes queries asked since `from`.
+    fn changes_asked(submitted: &Submitted, from: usize) -> Vec<Comparison> {
+        submitted.borrow()[from..]
+            .iter()
+            .filter_map(|request| match request {
+                Request::Changes { of } => Some(*of),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn between(base: usize, tip: usize) -> Comparison {
+        Comparison::Between {
+            old: oid(base),
+            new: oid(tip),
+        }
+    }
+
+    /// The two commits selected, as the window keeps them: the one pressed plainly, and the
+    /// other of a pair.
+    fn selection(view: View) -> (Option<RowId>, Option<RowId>) {
+        let selected = *view.selected.peek();
+        let other = view
+            .pair
+            .peek()
+            .as_ref()
+            .and_then(|pair| pair.other(selected));
+        (selected, other)
+    }
+
+    /// C12, R7.1-R7.3 through the window: a row pressed with the table's extending chord
+    /// selects it beside the row selected — exactly two, drawn selected — and asks for the
+    /// comparison tip against tip with the LOWER row the base, whichever was pressed first,
+    /// far apart and adjacent; the pane shows the Changes tab under a header naming both
+    /// commits, the Commit tab unavailable; the swap asks for the comparison the other way
+    /// round. Caught by: the press read without the held keys (a plain selection), the base
+    /// taken as the first pressed rather than the lower row, a merge-base comparison, a swap
+    /// that only relabels, or the Commit tab still reachable.
+    #[test]
+    fn a_modifier_click_compares_two_commits_tip_against_tip_with_the_lower_row_the_base() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        for (first, second, base, tip) in [(2, 7, 7, 2), (7, 2, 7, 2), (3, 4, 4, 3)] {
+            click_row(&mut test, first);
+            let from = submitted.borrow().len();
+            extend_row(&mut test, second);
+            assert_eq!(
+                changes_asked(&submitted, from),
+                [between(base, tip)],
+                "{first} then {second}"
+            );
+            assert_eq!(
+                selection(view),
+                (
+                    Some(RowId::Commit(oid(first))),
+                    Some(RowId::Commit(oid(second)))
+                )
+            );
+        }
+
+        // Far apart again, for the pane, the comparison's answer arrived: no commit's details.
+        click_row(&mut test, 2);
+        extend_row(&mut test, 7);
+        // Both drawn selected, and no other.
+        let background = |test: &TestingRunner, subject: &str| {
+            let y = test
+                .find(|node, element| {
+                    Label::try_downcast(element)
+                        .filter(|label| label.text == subject)
+                        .map(|_| node.layout().area.min_y())
+                })
+                .unwrap_or_else(|| panic!("no row reads {subject}"));
+            test.find_many(|node, element| {
+                let area = node.layout().area;
+                Rect::try_downcast(element)
+                    .filter(|_| {
+                        area.min_y() <= y && y < area.max_y() && area.height() == ROW_HEIGHT
+                    })
+                    .map(|rect| rect.style.background)
+            })
+        };
+        assert_eq!(background(&test, "commit 2"), background(&test, "commit 7"));
+        assert_ne!(
+            background(&test, "commit 7"),
+            background(&test, "commit 5"),
+            "the second commit is not drawn selected"
+        );
+        let mut diff = view.diff;
+        let mut compared = answer_with(2, 3);
+        compared.details = None;
+        test.run_in(|| {
+            diff.write()
+                .changes_arrived(between(7, 2), compared.clone())
+        });
+        for _ in 0..3 {
+            test.sync_and_update();
+        }
+        let shown = pane(&test);
+        let base_id = oid(7).short().as_str().to_owned();
+        let tip_id = oid(2).short().as_str().to_owned();
+        let at = |text: &str| shown.iter().position(|t| t == text);
+        assert!(
+            at(cairn_ui::BASE_CAPTION) < at(&base_id)
+                && at(&base_id) < at(cairn_ui::TIP_CAPTION)
+                && at(cairn_ui::TIP_CAPTION) < at(&tip_id),
+            "the header does not name the base then the tip: {shown:?}"
+        );
+        assert!(shown.iter().any(|t| t == "commit 7") && shown.iter().any(|t| t == "commit 2"));
+        // The Commit tab is unavailable: pressed, the Changes tab stays.
+        click_label(&mut test, DetailTab::Commit.caption());
+        assert!(
+            pane(&test).iter().any(|t| t == cairn_ui::BASE_CAPTION),
+            "the Commit tab was shown over two commits"
+        );
+
+        let from = submitted.borrow().len();
+        click_named(&mut test, cairn_ui::SWAP_LABEL);
+        assert_eq!(changes_asked(&submitted, from), [between(2, 7)]);
+        test.run_in(|| {
+            diff.write()
+                .changes_arrived(between(2, 7), compared.clone())
+        });
+        for _ in 0..3 {
+            test.sync_and_update();
+        }
+        let shown = pane(&test);
+        let at = |text: &str| shown.iter().position(|t| t == text);
+        assert!(
+            at(&tip_id) < at(&base_id),
+            "the swap did not reverse the header: {shown:?}"
+        );
+    }
+
+    /// C12 and the QA brief: a comparison is never left half-selected. A third press with the
+    /// chord replaces the second, the row pressed plainly staying — exactly two; a press with
+    /// the chord on one of the pair leaves the other selected alone; on the one row selected it
+    /// changes nothing; and a plain press while the comparison is on its way returns to one,
+    /// the comparison's late answer never drawn. Caught by: a third commit kept, a pair with
+    /// one commit, nothing selected, or a late comparison drawn under one commit.
+    #[test]
+    fn a_comparison_is_never_left_half_selected() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        let id = |n: usize| Some(RowId::Commit(oid(n)));
+        click_row(&mut test, 2);
+        extend_row(&mut test, 7);
+        let from = submitted.borrow().len();
+        extend_row(&mut test, 5);
+        assert_eq!(selection(view), (id(2), id(5)), "a third press");
+        assert_eq!(changes_asked(&submitted, from), [between(5, 2)]);
+
+        let from = submitted.borrow().len();
+        extend_row(&mut test, 5);
+        assert_eq!(selection(view), (id(2), None), "the second pressed again");
+        assert_eq!(
+            changes_asked(&submitted, from),
+            [Comparison::Commit(oid(2))]
+        );
+
+        let from = submitted.borrow().len();
+        extend_row(&mut test, 2);
+        assert_eq!(
+            selection(view),
+            (id(2), None),
+            "the one selected pressed again"
+        );
+        assert!(changes_asked(&submitted, from).is_empty());
+
+        extend_row(&mut test, 5);
+        extend_row(&mut test, 2);
+        assert_eq!(
+            selection(view),
+            (id(5), None),
+            "the first of a pair pressed again"
+        );
+
+        // A plain press while the comparison is on its way.
+        click_row(&mut test, 1);
+        extend_row(&mut test, 8);
+        let from = submitted.borrow().len();
+        click_row(&mut test, 4);
+        assert_eq!(selection(view), (id(4), None));
+        assert_eq!(
+            changes_asked(&submitted, from),
+            [Comparison::Commit(oid(4))]
+        );
+        let mut diff = view.diff;
+        let kept = test.run_in(|| {
+            diff.write()
+                .changes_arrived(between(8, 1), answer_with(1, 2))
+        });
+        assert!(
+            !kept,
+            "the comparison's late answer was kept under one commit"
+        );
+        test.sync_and_update();
+        assert!(
+            !pane(&test).iter().any(|t| t == cairn_ui::BASE_CAPTION),
+            "the comparison's header is drawn over one commit"
         );
     }
 

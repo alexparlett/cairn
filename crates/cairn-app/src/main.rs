@@ -79,6 +79,9 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     // Session state of the Changes tab: its filter and its list's width.
     let filter_text = use_state(String::new);
     let changes_list_width = use_state(|| changes_tab::LIST_WIDTH);
+    // The second commit of a comparison, and the keys a press on a row is resolved against.
+    let pair = use_state(|| None);
+    let held_keys = use_state(cairn_ui::accelerators::HeldKeys::default);
     let view = View {
         rows,
         progress,
@@ -97,6 +100,8 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         change_cursor,
         filter_text,
         changes_list_width,
+        pair,
+        held_keys,
     };
 
     let opened = use_hook(|| {

@@ -1355,11 +1355,15 @@ mod tests {
         );
 
         match block_on(updates.next()) {
-            Some(Update::Superseded(retired)) => assert_eq!(retired.shown(), std::slice::from_ref(&shown)),
+            Some(Update::Superseded(retired)) => {
+                assert_eq!(retired.shown(), std::slice::from_ref(&shown))
+            }
             other => panic!("expected the stale file diff handed back, got {other:?}"),
         }
         match block_on(updates.next()) {
-            Some(Update::Superseded(retired)) => assert_eq!(retired.shown(), std::slice::from_ref(&shown)),
+            Some(Update::Superseded(retired)) => {
+                assert_eq!(retired.shown(), std::slice::from_ref(&shown))
+            }
             other => panic!("expected the stale page handed back, got {other:?}"),
         }
         match block_on(updates.next()) {

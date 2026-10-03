@@ -19,7 +19,9 @@
 use std::rc::Rc;
 
 use cairn_model::{ChangeStatus, ChangedFile, ShownDiff};
-use cairn_ui::{ChangesList, ChangesSummary, DiffHeader, DiffNotice, DiffNoticeView, DiffView};
+use cairn_ui::{
+    ChangesList, ChangesSummary, ComparisonHeader, DiffHeader, DiffNotice, DiffNoticeView, DiffView,
+};
 use freya::prelude::*;
 
 use crate::detail_pane::{NOTHING_SELECTED, READING, notice};
@@ -55,6 +57,7 @@ impl PartialEq for ChangesTab {
     fn eq(&self, other: &Self) -> bool {
         let (one, two) = (&self.view, &other.view);
         one.selected == two.selected
+            && one.pair == two.pair
             && one.diff == two.diff
             && one.diff_settings == two.diff_settings
             && one.diff_scroll == two.diff_scroll
@@ -113,10 +116,9 @@ impl Component for ChangesTab {
             }
         });
 
-        let Some(id) = *view.selected.read() else {
+        let Some(of) = selection::selected_comparison(view) else {
             return notice(NOTHING_SELECTED, false);
         };
-        let of = selection::comparison_of(id);
         let details = {
             let diff = view.diff.read();
             let Some((_, answer)) = diff.changes().filter(|(asked, _)| *asked == of) else {
@@ -146,10 +148,22 @@ impl Component for ChangesTab {
         // proportional, so the list keeps its share as the window changes; each has a floor
         // in pixels that a drag and a narrowing window both honour.
         let list_share = *width.peek();
+        // Over two commits, both named, base then tip, with the swap (R7.3); over one, its
+        // one-line summary.
+        let compared = view.pair.read().clone();
+        let swapping = self.submit.clone();
+        let header: Option<Element> = match compared {
+            Some(pair) => Some(
+                ComparisonHeader::new(pair.base, pair.tip)
+                    .on_swap(move |()| selection::swap(view, swapping.as_deref()))
+                    .into(),
+            ),
+            None => details.map(|details| ChangesSummary::new(details).into()),
+        };
         rect()
             .expanded()
             .content(Content::Flex)
-            .maybe_child(details.map(ChangesSummary::new))
+            .maybe_child(header)
             .child(
                 rect().width(Size::fill()).height(Size::flex(1.)).child(
                     ResizableContainer::new()

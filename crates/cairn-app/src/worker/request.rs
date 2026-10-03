@@ -16,13 +16,6 @@ use super::askpass::PromptId;
 use super::epoch::QueryLane;
 
 /// What a changes query compares (R2.1).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the window selects a commit, a file or the working tree from phase 05 on"
-    )
-)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Comparison {
     /// One commit against its first parent (the empty tree for a root commit).

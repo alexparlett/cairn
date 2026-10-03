@@ -863,6 +863,25 @@ mod tests {
         );
     }
 
+    /// R7.2: two commits are asked tip against tip with the window's base as git's old side,
+    /// so `git diff <base> <tip>` is what answers (pinned against git by
+    /// `a_comparison_of_two_commits_reads_as_git_diff_of_the_pair_both_ways`). Caught by: the
+    /// pair handed to the engine the other way round.
+    #[test]
+    fn a_comparison_is_asked_with_its_base_as_the_old_side() {
+        assert_eq!(
+            request(Comparison::Between {
+                old: oid(1),
+                new: oid(2)
+            }),
+            ChangesRequest::between(oid(1), oid(2))
+        );
+        assert_eq!(
+            request(Comparison::Commit(oid(3))),
+            ChangesRequest::commit(oid(3))
+        );
+    }
+
     /// Caught by: a working-tree request answered for another side of the path.
     #[test]
     fn each_working_side_asks_the_engine_for_that_side() {

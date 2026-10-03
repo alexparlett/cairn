@@ -3335,15 +3335,11 @@ fn ci_runs_every_merge_bar_gate_step() {
     let ci = std::fs::read_to_string(root.join(".github/workflows/ci.yml"))
         .unwrap_or_else(|e| panic!("reading .github/workflows/ci.yml: {e}"));
 
-    // The steps gate.sh knows about, read from its --step dispatch arms.
-    let gate_steps: BTreeSet<&str> = gate
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            let name = line.strip_suffix(";;")?.split(')').next()?.trim();
-            (line.contains("run_") && !name.is_empty() && !name.contains(' ')).then_some(name)
-        })
-        .collect();
+    // The steps gate.sh knows about, read from its --step dispatch arms by the reading that
+    // refuses an arm it cannot read rather than skipping it.
+    let arms = gate_dispatch_arms(&gate)
+        .unwrap_or_else(|e| panic!("scripts/gate.sh's dispatch arms cannot be read: {e}"));
+    let gate_steps: BTreeSet<&str> = arms.iter().map(|(step, _)| step.as_str()).collect();
 
     let ci_steps: BTreeSet<&str> = ci
         .lines()
@@ -3551,7 +3547,8 @@ const LOCAL_FULL_GATE_EXEMPT: &[&str] = &["test-fast"];
 fn the_local_full_gate_runs_every_step_but_the_day_loops() {
     let gate = std::fs::read_to_string(repo_root().join("scripts/gate.sh"))
         .unwrap_or_else(|e| panic!("reading scripts/gate.sh: {e}"));
-    let arms = gate_dispatch_arms(&gate);
+    let arms = gate_dispatch_arms(&gate)
+        .unwrap_or_else(|e| panic!("scripts/gate.sh's dispatch arms cannot be read: {e}"));
     assert!(
         arms.len() > LOCAL_FULL_GATE_EXEMPT.len(),
         "parsed {} dispatch arms out of scripts/gate.sh, so this check compared nothing",
@@ -3582,16 +3579,92 @@ fn the_local_full_gate_runs_every_step_but_the_day_loops() {
 /// The two readings the local-gate guard rests on, against the shapes they claim.
 #[test]
 fn the_gate_sequence_matcher_catches_the_shapes_it_claims() {
-    let arms = "case \"$SELECTED_STEP\" in\n    format) run_format ;;\n    \
-                git-floor) run_git_floor ;;\n    *)\n      exit 2\n      ;;\nesac\n";
+    let dispatch = |arms: &str| {
+        format!(
+            "if [ -n \"$SELECTED_STEP\" ]; then\n  case \"$SELECTED_STEP\" in\n{arms}    *)\n      \
+             echo \"unknown gate step: $SELECTED_STEP\" >&2\n      exit 2\n      ;;\n  esac\n  \
+             finish\nfi\n"
+        )
+    };
     assert_eq!(
-        gate_dispatch_arms(arms),
-        vec![
+        gate_dispatch_arms(&dispatch(
+            "    format) run_format ;;\n    git-floor) run_git_floor ;;\n"
+        )),
+        Ok(vec![
             ("format".to_owned(), "run_format".to_owned()),
             ("git-floor".to_owned(), "run_git_floor".to_owned()),
-        ],
+        ]),
         "the dispatch arms were misread"
     );
+    for (shape, arms) in [
+        (
+            "an arm with arguments",
+            "    git-floor) run_git_floor \"$@\" ;;\n",
+        ),
+        (
+            "an arm with a `;` before `;;`",
+            "    git-floor) run_git_floor; ;;\n",
+        ),
+        ("an arm without spaces", "    git-floor)run_git_floor;;\n"),
+        (
+            "an arm with two spaces",
+            "    git-floor)  run_git_floor ;;\n",
+        ),
+        (
+            "an arm calling no run_ function",
+            "    git-floor) scripts/git-floor.sh ;;\n",
+        ),
+        (
+            "a trailing comment",
+            "    git-floor) run_git_floor ;; # the floor\n",
+        ),
+        (
+            "an arm across lines",
+            "    git-floor)\n      run_git_floor\n      ;;\n",
+        ),
+        ("an alternation", "    git-floor|floor) run_git_floor ;;\n"),
+        ("a commented-out arm", "    # git-floor) run_git_floor ;;\n"),
+        ("a blank line", "    format) run_format ;;\n\n"),
+        (
+            "a step named twice",
+            "    format) run_format ;;\n    format) run_lint ;;\n",
+        ),
+    ] {
+        let script = dispatch(arms);
+        assert!(
+            gate_dispatch_arms(&script).is_err(),
+            "the dispatch reader guessed at {shape} instead of refusing it: {:?}",
+            gate_dispatch_arms(&script)
+        );
+    }
+    for (shape, script) in [
+        (
+            "an arm after the default",
+            dispatch("    format) run_format ;;\n").replace(
+                "      ;;\n  esac",
+                "      ;;\n    git-floor) run_git_floor ;;\n  esac",
+            ),
+        ),
+        (
+            "a default that runs a step",
+            dispatch("    format) run_format ;;\n").replace("exit 2", "run_git_floor"),
+        ),
+        (
+            "no default",
+            "case \"$SELECTED_STEP\" in\n    format) run_format ;;\nesac\n".to_owned(),
+        ),
+        (
+            "no esac",
+            "case \"$SELECTED_STEP\" in\n    format) run_format ;;\n".to_owned(),
+        ),
+        ("no dispatch", "run_format\n".to_owned()),
+    ] {
+        assert!(
+            gate_dispatch_arms(&script).is_err(),
+            "the dispatch reader guessed at {shape} instead of refusing it: {:?}",
+            gate_dispatch_arms(&script)
+        );
+    }
 
     let script = |tail: &str| {
         format!(

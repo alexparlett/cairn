@@ -1663,24 +1663,83 @@ pub fn job_env_entries(workflow: &str, job: &str) -> Vec<String> {
     entries
 }
 
-/// `scripts/gate.sh`'s `--step` dispatch arms, as `(step, function)`: `name) run_x ;;`.
-pub fn gate_dispatch_arms(gate: &str) -> Vec<(String, String)> {
-    gate.lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            let body = line.strip_suffix(";;")?;
-            let (name, call) = body.split_once(')')?;
-            let (name, call) = (name.trim(), call.trim());
-            let plain = |word: &str| {
-                !word.is_empty()
-                    && word
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-            };
-            (plain(name) && call.starts_with("run_") && plain(call))
-                .then(|| (name.to_owned(), call.to_owned()))
-        })
-        .collect()
+/// The body of `scripts/gate.sh`'s default dispatch arm, line by line after its `*)`.
+const GATE_DEFAULT_ARM: [&str; 3] = [
+    "echo \"unknown gate step: $SELECTED_STEP\" >&2",
+    "exit 2",
+    ";;",
+];
+
+/// `scripts/gate.sh`'s `--step` dispatch arms, as `(step, function)`. Every line between
+/// `case "$SELECTED_STEP" in` and its `esac` is read: each is a plain arm, exactly
+/// `name) run_x ;;` with a plain step name and a bare `run_*` call, or the one default
+/// arm, `*)` and then exactly [`GATE_DEFAULT_ARM`], last. Anything else — another
+/// spelling of an arm (arguments, a `;` before `;;`, no spaces), a trailing comment, an
+/// arm across lines, an alternation (`a|b)`), a comment or blank line, a step named
+/// twice, an arm after the default, a default with another body, no default, no `esac` —
+/// is an `Err` rather than a guess, so a step cannot be hidden from the guards that read
+/// this by writing its arm in a shape they skip.
+pub fn gate_dispatch_arms(gate: &str) -> Result<Vec<(String, String)>, String> {
+    let mut lines = gate
+        .lines()
+        .skip_while(|line| line.trim() != "case \"$SELECTED_STEP\" in");
+    if lines.next().is_none() {
+        return Err("no `case \"$SELECTED_STEP\" in`".to_owned());
+    }
+    let plain = |word: &str| {
+        !word.is_empty()
+            && word
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    };
+    let mut arms: Vec<(String, String)> = Vec::new();
+    // `None` before the default arm; `Some(n)` once inside it, `n` lines of its body read.
+    let mut default: Option<usize> = None;
+    for line in lines {
+        let trimmed = line.trim();
+        if let Some(read) = default {
+            if read == GATE_DEFAULT_ARM.len() {
+                return if trimmed == "esac" {
+                    Ok(arms)
+                } else {
+                    Err(format!("a line after the default arm: {trimmed:?}"))
+                };
+            }
+            if trimmed != GATE_DEFAULT_ARM[read] {
+                return Err(format!(
+                    "the default arm's line {} is {trimmed:?}, not {:?}",
+                    read + 1,
+                    GATE_DEFAULT_ARM[read]
+                ));
+            }
+            default = Some(read + 1);
+            continue;
+        }
+        if trimmed == "*)" {
+            default = Some(0);
+            continue;
+        }
+        if trimmed == "esac" {
+            return Err("the dispatch has no default arm".to_owned());
+        }
+        let arm = trimmed
+            .strip_suffix(" ;;")
+            .and_then(|body| body.split_once(") "))
+            .filter(|(name, call)| {
+                plain(name)
+                    && call.starts_with("run_")
+                    && plain(call)
+                    && trimmed == format!("{name}) {call} ;;")
+            });
+        let Some((name, call)) = arm else {
+            return Err(format!("a line that is no plain dispatch arm: {trimmed:?}"));
+        };
+        if arms.iter().any(|(step, _)| step == name) {
+            return Err(format!("the step `{name}` has two arms"));
+        }
+        arms.push((name.to_owned(), call.to_owned()));
+    }
+    Err("the dispatch never reaches `esac`".to_owned())
 }
 
 /// The `run_*` functions `scripts/gate.sh` calls when run with no arguments: the full

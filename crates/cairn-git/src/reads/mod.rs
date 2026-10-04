@@ -30,9 +30,11 @@
 //! diff --no-index` applies both conversions (a CRLF file under `text=auto`
 //! reads LF, a filtered file reads in its filter's form), so reading the file's
 //! own bytes would show what the user's git does not. Evidence that it writes
-//! nothing: it reads no index, so it has none to refresh; a snapshot of every
-//! file under the git directory is byte-identical after it on git 2.30.9, 2.32.7
-//! and 2.56.0, with a clean filter, CRLF files and submodules present; and
+//! nothing: it reads no index, so it has none to refresh, and it starts no
+//! fsmonitor daemon (reproduced with git 2.56.0 under `core.fsmonitor=true`); a
+//! snapshot of every file under the git directory is byte-identical after it on
+//! git 2.30.9, 2.32.7 and 2.56.0, with a clean filter, CRLF files and submodules
+//! present; and
 //! `a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`,
 //! `a_text_auto_file_with_crlf_endings_is_no_change_and_an_edit_is_one_line`,
 //! `a_clean_filter_drivers_form_is_what_is_diffed_and_it_runs_under_git` and
@@ -72,18 +74,38 @@
 //! `--refresh` included), `read-tree`, `write-tree`, `hash-object -w` and
 //! `commit-tree` are plumbing writers, and each is a write, built in `ops/`.
 //!
-//! **The one program a read may run is the repository's `core.fsmonitor`.** In
-//! a repository with a working tree, `diff-tree` (raw and patch alike) and
-//! `check-attr` run the hook `core.fsmonitor` names as they read the index —
-//! reproduced with git 2.30.9, 2.32.7, 2.40.0 and 2.56.0 — exactly as the
-//! user's own `git diff` and `git status` do, and nothing a read passes turns it
-//! off. The user decided on 2026-10-03 (QA round 3) to allow it, as the parity
-//! it is: the hook is the user's, or one their repository's configuration
-//! names, and with `GIT_OPTIONAL_LOCKS=0` the read still writes nothing
-//! (`the_content_query_writes_nothing_and_runs_nothing` configures one and
-//! requires the git directory byte-identical). A planted repository naming a
-//! hook is the opening's to refuse, as git refuses it (`crate::bare_discovery`),
-//! not the read's.
+//! **The one program a read may run is the repository's `core.fsmonitor`**, in
+//! either of its forms. In a repository with a working tree, `diff-tree` (raw
+//! and patch alike), `check-attr`, `diff-files` and `diff-index --cached` read
+//! the index, and as they do git consults the fsmonitor exactly as the user's
+//! own `git diff` and `git status` do; nothing a read passes turns it off (only
+//! `-c core.fsmonitor=false` would, which would make Cairn's read differ from
+//! the user's). The user accepted both forms as the parity they are (the hook
+//! on 2026-10-03, QA round 3; the daemon on 2026-10-04):
+//!
+//! - **A hook**, `core.fsmonitor` naming a program: git runs it as a child of
+//!   the read's `git` (reproduced with git 2.30.9, 2.32.7, 2.40.0 and 2.56.0),
+//!   and with `GIT_OPTIONAL_LOCKS=0` the read still writes nothing
+//!   (`the_content_query_writes_nothing_and_runs_nothing` configures one and
+//!   requires the git directory byte-identical).
+//! - **git's builtin daemon**, `core.fsmonitor=true` (git 2.36 and later, where
+//!   the platform has it): the first read that consults it starts
+//!   `git fsmonitor--daemon` if none is running, and the daemon creates its
+//!   socket, `.git/fsmonitor--daemon.ipc`, and its cookie directory,
+//!   `.git/fsmonitor--daemon/`, in the git directory (reproduced with git
+//!   2.56.0 under `GIT_OPTIONAL_LOCKS=0`; `diff --no-index`, which reads no
+//!   index, starts none). git starts it in a session of its own, so it is
+//!   outside the process group a read is ended by, outside the repository's
+//!   registry of running invocations, and outside
+//!   `SharedRepository::end_invocations`: it outlives the read and the
+//!   application, as it outlives the user's own `git status`, and it is not
+//!   Cairn's to end. No object, ref, index or config is written under it; the
+//!   daemon's own files are the one exception
+//!   (`a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files`,
+//!   skipped where the git or the platform has no builtin daemon).
+//!
+//! A planted repository naming a hook is the opening's to refuse, as git
+//! refuses it (`crate::bare_discovery`), not the read's.
 //!
 //! **A read of the working tree also runs the path's clean filter driver** —
 //! L6, D1 as amended (`docs/design/engine.md`, "Reads see git's form"): `git

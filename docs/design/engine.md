@@ -17,9 +17,17 @@ below); and so is one path's working-tree diff, because only git's own read of
 the working tree is git's form of it ("Reads see git's form", below). Besides
 `git` itself, the programs a read may start are the user's own clean filter
 driver, which git runs on a read of the working tree, and the repository's
-`core.fsmonitor` hook, which git runs as it reads the index of a repository with
-a working tree — each exactly as the user's own `git diff` runs it. How every
-`git` process is built, run and ended is `processes.md`.
+`core.fsmonitor`, which git consults as it reads the index of a repository with
+a working tree — each exactly as the user's own `git diff` runs it. The
+fsmonitor is either a hook, a program git runs as a child of the read, or,
+under `core.fsmonitor=true`, git's own fsmonitor daemon, which the first read
+to consult it starts if none is running (the user's decision,
+accepted as parity): the daemon writes its socket and cookie directory,
+`.git/fsmonitor--daemon.ipc` and `.git/fsmonitor--daemon/`, in the git
+directory — the one thing a read leaves there; no object, ref, index or config
+is written — and runs in a session of its own, so it outlives the read and the
+application and is not Cairn's to end. How every `git` process is built, run
+and ended is `processes.md`.
 
 Writes go to `git` because of hooks, not coverage. A client that does not run
 `pre-commit` and `commit-msg` is broken for a large share of users, and gix runs

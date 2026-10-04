@@ -8,6 +8,7 @@ mod bench;
 mod changes;
 mod content;
 mod expansion;
+mod fsmonitor;
 mod inputs;
 mod parity;
 mod patches;

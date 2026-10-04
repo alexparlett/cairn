@@ -519,8 +519,17 @@ requires the git directory byte-identical, `check-attr` in the command log on gi
 programs by hand. The hook runs because `diff-tree` and `check-attr` run it as
 they read the index of a repository with a working tree, as the user's own
 `git diff` does; the user decided to allow it as parity (`crate::reads`, "What a
-read may run"). A bare repository planted to name one is refused when it is
-opened (`docs/systems/git-processes.md`, "Where an invocation runs").
+read may run"). Under `core.fsmonitor=true` the fsmonitor is git's own daemon,
+which the first read to consult it starts if none is running (accepted as parity
+by the user on 2026-10-04): there, the git directory is not byte-identical after
+a read — the daemon's socket and cookie directory, `.git/fsmonitor--daemon.ipc`
+and `.git/fsmonitor--daemon/`, appear — but no object, ref, index or config is
+written, and the daemon, in a session of its own, outlives the read and the
+application and is not Cairn's to end
+(`a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files`, which
+stops the daemon itself, and is skipped where the git or the platform has none).
+A bare repository planted to name a hook is refused when it is opened
+(`docs/systems/git-processes.md`, "Where an invocation runs").
 
 **Expand All, and files opened in place, a page at a time** (phase 08, R5.3; the bound
 phase 02's QA asked for). `DiffSession::page(git, request, Offered { changes, files },
@@ -622,7 +631,9 @@ that environment plus what git sets for a filter (`GIT_DIR` and `GIT_WORK_TREE`
 only when the repository is named to git, which it is when opened with full trust;
 `GIT_EXEC_PATH`, `GIT_PREFIX`, `GIT_CONFIG_PARAMETERS`, git's exec directory first
 on `PATH`), its stderr the read's bounded tail; `diff-index --cached` reads only objects. Every read of the
-index runs the repository's `core.fsmonitor`, and for a submodule `diff-files` runs
+index runs the repository's `core.fsmonitor` — its hook, or under
+`core.fsmonitor=true` git's own daemon, started if none is running and left running
+(above) — and for a submodule `diff-files` runs
 `git status` inside it to say whether it is dirty. Pinned by
 `a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`
 (the git directory byte-identical after every query, staged, unstaged and

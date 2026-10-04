@@ -26,10 +26,13 @@
 //! **What each reads, writes and runs** — reproduced with git 2.30.9, 2.32.7 and 2.56.0
 //! against a snapshot of every file under the git directory, `.git/modules` included:
 //!
-//! - None writes anything: `diff-index` and `diff-files` never refresh the index (porcelain
-//!   `git diff` does, `GIT_OPTIONAL_LOCKS` or not — `crate::reads`), `--full-index` makes
-//!   git hash the working-tree side for its `index` line without writing the object, and
-//!   `diff --no-index` reads no index at all.
+//! - None writes an object, a ref, the index or config: `diff-index` and `diff-files` never
+//!   refresh the index (porcelain `git diff` does, `GIT_OPTIONAL_LOCKS` or not —
+//!   `crate::reads`), `--full-index` makes git hash the working-tree side for its `index`
+//!   line without writing the object, and `diff --no-index` reads no index at all. The one
+//!   exception is git's own fsmonitor daemon, under `core.fsmonitor=true`, whose socket and
+//!   cookie directory appear in the git directory when `diff-index` or `diff-files` starts
+//!   it (next item but one).
 //! - `diff-files` and `diff --no-index` run the clean filter driver of the path, through
 //!   git, with the read's environment (`crate::process`) and what git adds for a filter —
 //!   a `filter.<driver>.clean` command, or a long-running `filter.<driver>.process` (what
@@ -40,8 +43,11 @@
 //!   the user's program, and what it does is its own — git-lfs's clean stores the object in
 //!   `.git/lfs/objects`, exactly as it does under the user's `git diff`. `diff-index
 //!   --cached` reads only objects and runs none.
-//! - `diff-files` and `diff-index` read the index, so they run the repository's
-//!   `core.fsmonitor` like every read with a working tree; and for a submodule whose
+//! - `diff-files` and `diff-index` read the index, so they consult the repository's
+//!   `core.fsmonitor` like every read with a working tree — running its hook, or starting
+//!   git's own fsmonitor daemon under `core.fsmonitor=true`, which writes its socket and
+//!   cookie directory in the git directory and outlives the read (`crate::reads`); `diff
+//!   --no-index` reads no index and starts neither; and for a submodule whose
 //!   checkout git must look into, `diff-files` runs `git status` inside it, which may run
 //!   that repository's own fsmonitor and clean filters — what the user's `git diff` runs.
 //!   `--no-ext-diff` and `--no-textconv` keep every other program off.

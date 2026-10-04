@@ -213,8 +213,19 @@ Why each variable is there, with its evidence, is beside it in
   read the index of a repository with a working tree (reproduced on 2.30.9
   through 2.56.0), as the user's own `git diff` does; no flag of theirs turns it
   off, and the user decided to allow it as parity (`reads/mod.rs`, "What a read
-  may run"; `the_content_query_writes_nothing_and_runs_nothing`). A planted
-  repository naming one is refused at open ("Where an invocation runs").
+  may run"; `the_content_query_writes_nothing_and_runs_nothing`). Under
+  `core.fsmonitor=true` the same four start git's own fsmonitor daemon instead,
+  if none is running (git 2.36 and later; reproduced on 2.56.0; `diff
+  --no-index` starts none), as the user's `git status` does — accepted as parity
+  by the user on 2026-10-04. git starts it in a session of its own, so it is
+  outside the read's process group, outside the repository's registry of
+  running invocations and outside `SharedRepository::end_invocations`: it
+  outlives the read and the application, and is not Cairn's to end. It writes
+  its socket and cookie directory in the git directory, the one change a read
+  leaves there
+  (`a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files`).
+  A planted repository naming a hook is refused at open ("Where an invocation
+  runs").
   `diff-files` and `diff --no-index` run the clean filter driver the path's
   attributes name, as a child of the read's `git`, so with the read's
   environment above — `GIT_ASKPASS`, `SSH_ASKPASS` and, where the application
@@ -842,8 +853,9 @@ runs on the UI thread:
 4. Each worker thread lets its update sender go as it exits, the network lane
    only once its fetch is reaped, so the stream's end means every `git` Cairn
    started in the repository is over — except a process git itself detached
-   from the group, such as the auto-maintenance a fetch may start, which
-   outlives any group kill (`docs/design/processes.md`) — and the channel,
+   from the group, such as the auto-maintenance a fetch may start, or the
+   fsmonitor daemon a read starts under `core.fsmonitor=true`, which outlive
+   any group kill (`docs/design/processes.md`) — and the channel,
    and with it the askpass socket, is gone. A prompt still open holds the
    acceptor until the window refuses it, which the window does when the
    ended fetch's outcome arrives (`session::apply`, `withdraw`); a change to

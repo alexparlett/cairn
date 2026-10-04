@@ -176,7 +176,11 @@ copy is a different version from the fork that links.
   agrees with git, a read spawns no process — that is the whole reason the split
   pays. D1 is amended for the programs git itself starts on a read, each exactly
   as the user's own `git diff` starts it: the repository's `core.fsmonitor` hook,
-  as git reads the index of a repository with a working tree; and, on a read of
+  as git reads the index of a repository with a working tree — or, under
+  `core.fsmonitor=true`, git's own fsmonitor daemon, started if none is running,
+  which writes its socket and cookie directory in the git directory (the one
+  thing a read leaves there: no object, ref, index or config) and, in a session
+  of its own, outlives the read and the application, not Cairn's to end; and, on a read of
   the working tree, the path's clean filter driver — git-lfs, git-crypt; a
   `clean` command, or the long-running `filter.<driver>.process` git-lfs
   installs, which git sends only `command=clean` — which
@@ -198,7 +202,9 @@ copy is a different version from the fork that links.
   never runs on a read. No other program runs on a read — no textconv, external
   diff, driver `command` or smudge filter — pinned by
   `the_content_query_writes_nothing_and_runs_nothing` and
-  `a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`.
+  `a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`,
+  and the daemon's case by
+  `a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files`.
   How every `git` process is built, run and ended is
   `docs/design/processes.md`. Consequence for free: Cairn stores no
   credentials, because git's helpers do (D2).

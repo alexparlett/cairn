@@ -12,9 +12,10 @@
 //! It runs `git check-attr --stdin -z diff`, the paths fed on stdin NUL-terminated, so no
 //! path is ever read as an option and none counts against the command line's length. It is
 //! query plumbing that writes nothing: it reads the index and never refreshes it, and the
-//! one program it may run is the repository's `core.fsmonitor` hook, which git runs as it
-//! reads the index of a repository with a working tree, as the user's own `git diff` does
-//! (`crate::reads`, "What a read may run";
+//! one program it may run is the repository's `core.fsmonitor` — its hook, or git's own
+//! fsmonitor daemon under `core.fsmonitor=true`, started if none is running and left
+//! running — which git consults as it reads the index of a repository with a working tree,
+//! as the user's own `git diff` does (`crate::reads`, "What a read may run";
 //! `the_content_query_writes_nothing_and_runs_nothing`, in
 //! `crates/cairn-git/tests/diff/content.rs`). The answer is three NUL-terminated fields per
 //! path — the path, the attribute, its value — in the order the paths were given.

@@ -325,7 +325,8 @@ fn expand_all_turns_into_collapse_all_and_says_what_its_budget_left_collapsed() 
 /// and side by side — and at the end the last file's row sits at the bottom of the view, so
 /// the list is exactly as long as its header, its files and every opened file's rows. Caught
 /// by: rows built per opened line, a length that forgets the opened rows (the last file cut
-/// off) or counts them twice (empty space after it), or a deep row placed in the wrong file.
+/// off) or counts them twice (empty space after it), or a deep row placed in the wrong file
+/// or a row off its place, against row counts worked out by hand.
 #[test]
 fn only_a_viewport_of_rows_is_built_however_many_files_are_open() {
     const FILES: usize = 55_184;
@@ -361,21 +362,36 @@ fn only_a_viewport_of_rows_is_built_however_many_files_are_open() {
         let header = (first_top / DETAIL_ROW_HEIGHT).floor();
         // Where a file's label sits inside its row, centred.
         let inset = first_top - header * DETAIL_ROW_HEIGHT;
-        let opened_above = long_diff(10, LINES).rows(side_by_side) as f64;
+        // Counted by hand, not by the function under test (phase 08 QA's U5: a row too many
+        // per opened file, there or in the table, passed when this was read from it): one hunk
+        // header and 10,000 lines, and unified the 200 changed lines a second row each.
+        let opened_rows = if side_by_side { 10_001 } else { 10_201 };
+        assert_eq!(long_diff(10, LINES).rows(side_by_side), opened_rows);
+        let opened_above = opened_rows as f64;
         let target_line = 6_000u32;
         let changed_before = (0..target_line).filter(|line| line % 50 == 2).count() as f64;
+        assert_eq!(changed_before, 120.);
         let under = 1. + f64::from(target_line) + if side_by_side { 0. } else { changed_before };
         let row = f64::from(header) + 27_592. + opened_above + 1. + under;
         test.scroll((100., 100.), (0., -(row * f64::from(DETAIL_ROW_HEIGHT))));
         built_counts.push(within(&test, "deep in the middle file"));
         let line = format!("27592:{target_line}");
-        assert!(
-            built(&test)
-                .iter()
-                .any(|(text, _, visible)| *visible && *text == line),
-            "scrolling to line {target_line} of file 27,592 did not draw it (side by side: \
-             {side_by_side}): {:?}",
-            built(&test)
+        // Placed exactly: scrolled `row` rows down, the line is the row at the top of the view.
+        let slot = built(&test)
+            .into_iter()
+            .find(|(text, _, visible)| *visible && *text == line)
+            .map(|(_, top, _)| (top / DETAIL_ROW_HEIGHT).floor())
+            .unwrap_or_else(|| {
+                panic!(
+                    "scrolling to line {target_line} of file 27,592 did not draw it (side by \
+                     side: {side_by_side}): {:?}",
+                    built(&test)
+                )
+            });
+        assert_eq!(
+            slot, 0.,
+            "line {target_line} of file 27,592 is {slot} rows from where its place puts it (side \
+             by side: {side_by_side})"
         );
 
         test.scroll((100., 100.), (0., -1e9));

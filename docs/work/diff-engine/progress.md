@@ -3,6 +3,82 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-04 — Fix round 3 (phase 09): what gix makes of an admitted repository, and git's search
+
+Packet mode, committed to `feature/diff-engine`. Fresh reviews of 18727f1, cc142c1 and
+c743890; the user's decisions in force: ownership at open matches git, refuse at open where
+git refuses, and any divergence from what git shows is a critical bug.
+
+- **O1 (blocking).** gix re-checks the WORKING TREE's owner as it opens — the directory
+  `core.worktree` names, `safe.directory` from the system and global files only, compared
+  as written — and lowers a repository Cairn admitted to reduced trust where its rule
+  refuses; no open option prevents it (`Options::with(Trust::Full)` sets the git
+  directory's trust only; gix 0.87.1 `src/open/repository.rs`, `open_from_paths`, the
+  condition `*git_dir_trust != Full || worktree not owned`). Reduced then withheld
+  `--git-dir`/`--work-tree` (`process/cli.rs`), and gix read objects under a 16 MiB
+  ceiling (`gitoxide.objects.allocLimitIfReducedTrust`'s default). The repository-local
+  configuration was NOT dropped: it is loaded at the trust passed in (`Full`) and the
+  safe-directory pass only raises trust — so that half of the finding did not reproduce,
+  and is now pinned instead. Reproduced without root by `core.worktree = /`, which root
+  owns. Fixed: every repository is named to git; the allocation limit is switched off at
+  open (`config_overrides(["gitoxide.objects.allocLimitIfReducedTrust=0"])`). The
+  reviewer's `GIT_TEST_ASSUME_DIFFERENT_OWNER` reproductions do not reach gix (gix-sec
+  0.14.2 does not read the variable), so they opened fully trusted already; they are in
+  the new test as admitting settings. RED
+  (`a_repository_cairn_admits_is_read_as_git_reads_it_whatever_gix_makes_of_its_owner`,
+  `crates/cairn-git/tests/diff/ownership.rs`): "the user's own: the changes query fails
+  where git answers: ... fatal: not a git repository"; with the location fixed, "a 17 MiB
+  blob git reads is refused: ... loose object store"; GREEN on 2.56.0, 2.38.5 (scratch
+  build), 2.32.7 and 2.30.9. `a_repository_trusted_less_than_fully_is_left_to_gits_discovery`
+  is now `every_repository_is_named_to_git_whatever_trust_gix_gave_it` (asserts the
+  fixture IS reduced first).
+- **O2.** git 2.38.0–2.38.5's `read_protected_config` names the system file with
+  `git_system_config()` and never asks `git_config_system()`, so it reads it under
+  `GIT_CONFIG_NOSYSTEM` (read in `config.c` at v2.38.0, v2.38.5, v2.39.0). `Protected`
+  gains `nosystem`, shared by `safe.directory` and `safe.bareRepository`. RED
+  `the_system_file_is_read_under_nosystem_by_git_2_38_alone` ("safe.directory, git
+  2.38.0: left [] right [/system]"), and a real 2.38.5 built in scratch failing the parity
+  test's new "system file under GIT_CONFIG_NOSYSTEM" setting on every shape with the
+  model reverted; GREEN on 2.56.0, 2.38.5, 2.32.7, 2.30.9.
+- **O3.** The effective uid falls back to a created file's owner on Linux too; where no
+  route answers, the repository opens only if `safe.directory` names it and is otherwise
+  the new `Error::CurrentUserUnknown` — never "dubious ownership". RED
+  `the_effective_uid_falls_back_to_a_created_files_owner` (left None, right 4242) and
+  `an_unknown_user_is_never_called_someone_else`.
+- **O4 — not a divergence.** git's `is_missing_file` at every tag v2.52.0–v2.56.0 takes
+  `ENOENT` alone as missing and DIES on any other `stat` failure ("could not stat",
+  reproduced on 2.56.0 for `ENOTDIR` and `EACCES`) — not "present". Cairn already
+  matched; pinned by `an_optional_entry_git_cannot_stat_stops_git` and a parity setting
+  (`:(optional)` under a file).
+- **O5, wider than reported.** Cairn's search passed over a `.git` gix could not follow,
+  so a `.git` file naming a non-repository opened the ENCLOSING repository where git
+  stops ("not a git repository" / "gitfile does not point to a valid repository", every
+  version; reproduced on 2.30.9, 2.32.7, 2.38.5, 2.56.0). From 2.54 git also stops on a
+  `.git` it cannot `stat` (but for `ENOENT`/`ENOTDIR`) or that is neither file nor
+  directory (`read_gitfile_raw`, new in v2.54.0; a FIFO and an unsearchable directory
+  reproduced on 2.56.0 stopping and on 2.38.5 passing over). `bare_discovery::dot_git`
+  models it; `named_git_dir` requires a git directory too. RED
+  `a_dot_git_git_stops_on_stops_the_search` ("git 2.30.9: left the enclosing repository,
+  right stopped") and `a_gitfile_naming_no_repository_is_not_a_repository_before_ownership_is_asked`;
+  end to end against the git in use by `a_dot_git_git_stops_on_stops_cairn_where_it_stops_git`.
+- **G1.** `--test diff_engine` lists 109 at this tip: floor 108; `--lib diff:: reads::`
+  lists 63: floor 62 (unchanged). Comment corrected.
+- **G2.** `gate_function_body` (extracted from `gate_function_commands`) reads a gate
+  function to its closing `}`; `gate_function_calls` requires the probe as a statement
+  of `run_test_full`'s own. RED with the old blank-line reading moved into the matcher:
+  "the call moved into a function defined after it with no blank line between was read
+  as a call"; self-test `the_gate_function_call_matcher_catches_the_shapes_it_claims`.
+- **U1.** The tint test now requires the innermost ground under a changed line's first
+  glyph to be its tint, in both views; a mutation laying `FILLER` over the side-by-side
+  text area fails it ("no changed line's text is drawn on ...") and passed before.
+
+Gate: `scripts/gate.sh` full, 8 steps, PASS at 831bee4 (exit 0).
+
+Residuals: anything else gix keys on `git_dir_trust` after 0.87.1 is the review's
+(`docs/systems/git-processes.md`); a created file's owner is the effective uid only on a
+filesystem that records the creator (`ownership.rs`); the reviewer's claim that reduced
+trust drops local configuration was not reproduced and is pinned rather than fixed.
+
 ## 2026-10-04 — Fix: no marker column, and Fork's gutter (the user's visual check)
 
 Packet mode, committed to `feature/diff-engine`. **User decision (2026-10-04), reversing

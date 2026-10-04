@@ -680,7 +680,14 @@ Project invariants:
     thread in a lane of its own (`Request::FilterFiles`), never on the UI thread;
     the window keeps the indices it answers (`file_filter.rs`), and the list reads
     the chosen file's index from `DiffState` rather than searching the change set
-    for it.
+    for it. Two frees still happen on the UI thread rather than through
+    `Request::Retire`: `crates/cairn-app/src/session.rs`'s `reload_if`, when a
+    fetch moved refs, clears every loaded history row before reopening the
+    history — the one history-sized free on the UI thread, inherited from the
+    history view and not retired to a worker; and `Updates::next`
+    (`crates/cairn-app/src/worker/pool.rs`) drops each superseded answer that
+    `Update::into_retired` does not retire — a page of rows, a filter's index
+    list, a failure — each bounded by a page or by the change set's file list.
 
   Whether the virtualizing view really builds only what its viewport shows is
   pinned by a second, behavioural twin:

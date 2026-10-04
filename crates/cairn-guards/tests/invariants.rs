@@ -1018,9 +1018,10 @@ fn only_the_ops_module_mutates_a_repository() {
             let hits = spawns_git(&source);
             assert!(
                 hits.is_empty(),
-                "{}:{} spawns a `git` subprocess outside crates/cairn-git/src/ops. Every \
-                 repository mutation lives in that module so the confirmation seal cannot \
-                 be routed around.",
+                "{}:{} spawns a `git` subprocess outside crates/cairn-git/src/ops and \
+                 crates/cairn-git/src/process. Every repository mutation lives in ops, and \
+                 process is the one place a `git` process is run, so the confirmation seal \
+                 cannot be routed around.",
                 path.display(),
                 hits[0]
             );

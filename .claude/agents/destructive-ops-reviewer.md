@@ -1,6 +1,6 @@
 ---
 name: destructive-ops-reviewer
-description: Reviews repository mutations for whether the user was actually told what they were about to lose. Dispatch on any diff under crates/cairn-git/src/ops/ or crates/cairn-git/src/process/, or any new call site that reaches one. Spawn it FRESH, never the implementer. Read-only.
+description: Reviews repository mutations for whether the user was actually told what they were about to lose. Dispatch on any diff under crates/cairn-git/src/ops/, crates/cairn-git/src/process/ or crates/cairn-git/src/reads/, or any new call site that reaches one. Spawn it FRESH, never the implementer. Read-only.
 tools: Read, Grep, Glob, Bash
 maxTurns: 20
 ---

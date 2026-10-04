@@ -56,8 +56,9 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
    Conventional Commits with a body. If the diff touches the enforcement layer
    itself (guard checks, hooks, gate script, CI workflows, reviewer/skill
    definitions), dispatch pointer: `gate-integrity-reviewer`.
-7. **Destructive operations** (any diff under `crates/cairn-git/src/ops/` or
-   `crates/cairn-git/src/process/`, or a new call site reaching one): the operation takes `cairn_model::Confirmed` by
+7. **Destructive operations** (any diff under `crates/cairn-git/src/ops/`,
+   `crates/cairn-git/src/process/` or `crates/cairn-git/src/reads/`, or a new
+   call site reaching one): the operation takes `cairn_model::Confirmed` by
    value, the prompt text handed to `Confirmed::by_user` names the actual
    consequence (what is lost, how much, whether it is recoverable), and nothing
    constructs the token outside a user acknowledgement path. Also: no
@@ -88,8 +89,13 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
    everywhere), so what no twin sees is a path-call start
    (`Command::spawn(&mut c)`, `Command::output(&mut c)`) inside
    `process/environment.rs` (`nix` named outside `process/` is caught, and
-   `fork` is `unsafe`, which the workspace forbids). Dispatch pointer:
-   `destructive-ops-reviewer`.
+   `fork` is `unsafe`, which the workspace forbids). In `reads/`, the
+   literal twin `the_one_porcelain_read_is_diff_no_index_in_the_working_tree_read`
+   reads string literals only, so a verb assembled at run time (a `format!`, a
+   concatenation, a constant from elsewhere) is yours, and so is whether a
+   read's verb really is plumbing or `status` — no twin tells a querying verb
+   from a mutating one built with `GitBinary::read_invocation`.
+   Dispatch pointer: `destructive-ops-reviewer`.
 8. **Responsiveness** (any diff in `crates/cairn-ui/` or `crates/cairn-app/`, or
    anything changing what runs per frame or per query): no repository work on the
    UI thread, no unbounded list rendered without virtualization, no per-frame

@@ -1009,12 +1009,14 @@ with blob ids and once without.
 `a_patch_for_one_selection_does_not_give_what_another_one_means` is the negative
 that keeps the comparison honest.
 
-**Residual for the view phases:** `TextDiff`, `DiffContent` and `FileDiff` derive
-`Clone` and `PartialEq`, which a file's worth of lines makes expensive — a toolkit
-that compares component props by value on every parent render would pay it every
-frame. `cairn_ui::HistoryList` already met this and hand-wrote a `PartialEq` that
-compares the collection as a handle rather than by content; the diff view should
-follow it rather than passing a diff by value.
+**What the view does about the cost of a diff's derives:** `TextDiff`, `DiffContent`
+and `FileDiff` derive `Clone` and `PartialEq`, which a file's worth of lines makes
+expensive — a toolkit that compares component props by value on every parent render
+would pay it every frame. The views do not pass a diff by value: `cairn_ui::DiffView`
+holds the prepared diff as a `Readable<ShownDiff>` (`DiffView::new` takes
+`impl Into<Readable<ShownDiff>>`), a handle to state the window owns, and its
+hand-written `PartialEq` compares that handle, as `cairn_ui::HistoryList` does for
+its rows and `cairn_ui::ChangesList` for its change set.
 
 ## The states that are not text
 

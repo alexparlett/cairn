@@ -133,6 +133,13 @@ matches the filter.", the "Filter" placeholder, "Choose a file to see its diff."
 Q1-Q3 in `brainstorm.md`, lettered Q so they cannot be confused with the
 program's O1-O6.
 
+**Q1 is answered and closed (2026-10-04, phase 09).** `docs/systems/diff.md`'s
+"Measured from Fork, or chosen by Cairn" table answers it: every point where Fork's own
+documents are silent and a decision rests on it is marked there as Fork-measured, with its
+source, or Cairn-chosen, with its reason, and the Cairn-chosen ones are recorded as the
+user's decisions (phases 07 and 08's QA, `progress.md`) rather than as claims about Fork.
+None was settled on the user's own Fork install.
+
 **Phase 08 met its four obligations (2026-10-03, `progress.md`): Expand All is bounded
 (`DiffSession::page`, the line budget decided before each file is read, a page's memory),
 answers per file, and pages; a Commit-tab press opens the file in place, the Changes tab
@@ -353,7 +360,7 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | 06 unified diff view | landed 2026-10-03; **phase 06 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 15 raw plus 1 found, 14 confirmed by `qa-confirm`, C4 dismissed; every confirmed finding fixed test-first or recorded for phase 07, and the user's four decisions applied (`progress.md`), `unicode-width` user-approved |
 | 07 Changes tab and side-by-side | landed 2026-10-03; **phase 07 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 15 raw, 12 confirmed by `qa-confirm`, T3 and T8 dismissed with evidence; every confirmed finding fixed test-first and the user's decisions on the notices, the summary strip and the `İ` limit applied (`progress.md`) |
 | 08 expansion and compare | landed 2026-10-03; **phase 08 QA fixed** 2026-10-04 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-04): 22 raw, 18 confirmed by `qa-confirm`, U5 run as a probe (the gap it found now pinned); every confirmed finding fixed test-first and the user's decisions applied — Expand All keeps the files open, the comparison's header at once, the held keys let go of on focus loss, the other Cairn-chosen behaviours recorded as the user's (`progress.md`); C14 re-measured with a frame's applied updates counted; the look at the window by hand is the user's |
-| 09 QA | not started | — | — |
+| 09 QA | in progress — merge-bar QA round 1 fixed; user decisions pending (merge method, fsmonitor daemon, ownership rule, reload_if) | `scripts/gate.sh` PASS, `git-floor` included | merge-bar round 1 (2026-10-04): confirmed findings fixed or recorded, the rest dismissed with reasons (`progress.md`) |
 
 ## Environment notes
 

@@ -388,8 +388,8 @@ mod tests {
     use std::cell::RefCell;
 
     use cairn_model::{
-        ChangeSet, ChangeStatus, ChangedFile, CommitDetails, CommitSummary, EdgeSegment, FileMode,
-        GraphRow, Lane, Oid, RenameDetection, RepoPath, Signature, Timestamp,
+        ChangeSet, ChangeStatus, ChangedFile, CommitDetails, CommitSummary, Context, EdgeSegment,
+        FileMode, GraphRow, Lane, Oid, RenameDetection, RepoPath, Signature, Timestamp,
     };
     use cairn_ui::accelerators::Action;
     use cairn_ui::{COLLAPSE_CAPTION, EXPAND_CAPTION};
@@ -1922,7 +1922,8 @@ mod tests {
         );
         assert!(shown.iter().any(|t| t == "commit 7") && shown.iter().any(|t| t == "commit 2"));
         // The Commit tab is unavailable: pressed, the Changes tab stays.
-        click_label(&mut test, DetailTab::Commit.caption());
+        click_tab(&mut test, DetailTab::Commit);
+        assert_eq!(*view.detail_tab.read(), DetailTab::default());
         assert!(
             pane(&test).iter().any(|t| t == cairn_ui::BASE_CAPTION),
             "the Commit tab was shown over two commits"
@@ -2011,6 +2012,203 @@ mod tests {
         assert!(
             !pane(&test).iter().any(|t| t == cairn_ui::BASE_CAPTION),
             "the comparison's header is drawn over one commit"
+        );
+    }
+
+    /// Presses `tab` in the detail pane's strip — not the history's column heading of the
+    /// same word.
+    fn click_tab(test: &mut TestingRunner, tab: DetailTab) {
+        let strip = pane_top(test);
+        let centre = test
+            .find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| {
+                        label.text == tab.caption()
+                            && (node.layout().area.min_y() - strip).abs() < 1.
+                    })
+                    .map(|_| node.layout().area.center())
+            })
+            .unwrap_or_else(|| panic!("no {tab:?} tab in the pane's strip"));
+        test.click_cursor((f64::from(centre.x), f64::from(centre.y)));
+        test.sync_and_update();
+    }
+
+    /// Phase 08 QA's U1, R7.3 and the session's tab: while two commits are compared the
+    /// Commit tab is unavailable — pressed, it changes nothing, not even the tab kept for the
+    /// session — and when one commit is selected again, the tab chosen before the comparison
+    /// is the one drawn. Caught by: the press reaching the session's tab while it is drawn
+    /// disabled (the Commit tab shown once the comparison ends).
+    #[test]
+    fn the_commit_tab_is_unavailable_while_comparing_and_the_tab_chosen_comes_back() {
+        let (mut test, view, _) = launch((0..10).map(row).collect(), received(10, true));
+        click_row(&mut test, 2);
+        click_tab(&mut test, DetailTab::Changes);
+        assert_eq!(*view.detail_tab.read(), DetailTab::Changes);
+        extend_row(&mut test, 7);
+        click_tab(&mut test, DetailTab::Commit);
+        assert_eq!(
+            *view.detail_tab.read(),
+            DetailTab::Changes,
+            "the press on the unavailable Commit tab changed the session's tab"
+        );
+        assert!(pane(&test).iter().any(|t| t == cairn_ui::BASE_CAPTION));
+
+        click_row(&mut test, 4);
+        arrives(&mut test, view, 4, Vec::new());
+        let shown = pane(&test);
+        assert!(
+            shown.iter().any(|t| t == crate::changes_tab::READING_DIFF)
+                && !shown.iter().any(|t| t == cairn_ui::EXPAND_ALL_CAPTION),
+            "the Changes tab chosen before the comparison is not the one drawn: {shown:?}"
+        );
+    }
+
+    /// The user's decision (2026-10-04): the comparison's header — base, then tip, and the
+    /// swap — is drawn the moment the pair is set, with "Reading the comparison…" under it
+    /// while the change set is awaited, and its failure under it if it fails. Caught by: the
+    /// header drawn only once the answer arrives (the tab saying only that it reads).
+    #[test]
+    fn the_comparisons_header_is_drawn_at_once_and_the_answer_awaited_under_it() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        click_row(&mut test, 2);
+        extend_row(&mut test, 7);
+        test.sync_and_update();
+        let shown = pane(&test);
+        let (base_id, tip_id) = (
+            oid(7).short().as_str().to_owned(),
+            oid(2).short().as_str().to_owned(),
+        );
+        let at = |text: &str| shown.iter().position(|t| t == text);
+        assert!(
+            at(cairn_ui::BASE_CAPTION) < at(&base_id)
+                && at(&base_id) < at(cairn_ui::TIP_CAPTION)
+                && at(cairn_ui::TIP_CAPTION) < at(&tip_id)
+                && at(&tip_id) < at(crate::changes_tab::READING_COMPARISON),
+            "the header is not drawn over the comparison being read: {shown:?}"
+        );
+
+        // The swap works before the answer, too.
+        let from = submitted.borrow().len();
+        click_named(&mut test, cairn_ui::SWAP_LABEL);
+        assert_eq!(changes_asked(&submitted, from), [between(2, 7)]);
+
+        let mut diff = view.diff;
+        test.run_in(|| {
+            diff.write().failed(
+                &crate::worker::DiffQuery::Changes(between(2, 7)),
+                "no such commit".to_owned(),
+            )
+        });
+        test.sync_and_update();
+        test.sync_and_update();
+        let shown = pane(&test);
+        assert!(
+            shown.iter().any(|t| t == cairn_ui::BASE_CAPTION)
+                && shown.iter().any(|t| t == "no such commit"),
+            "the failure is not drawn under the header: {shown:?}"
+        );
+    }
+
+    /// Phase 08 QA's U6: a row pressed with the extending chord while nothing is selected is
+    /// selected alone, and its changes asked — nothing to compare it with. Caught by: a pair
+    /// made with nothing, or the press ignored.
+    #[test]
+    fn a_modifier_click_with_nothing_selected_selects_that_commit_alone() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        let from = submitted.borrow().len();
+        extend_row(&mut test, 5);
+        assert_eq!(selection(view), (Some(RowId::Commit(oid(5))), None));
+        assert!(view.pair.peek().is_none());
+        assert_eq!(
+            changes_asked(&submitted, from),
+            [Comparison::Commit(oid(5))]
+        );
+    }
+
+    /// One more line of context, as the bar or a shortcut asks it, its requests landing in
+    /// `submitted`.
+    fn more_lines(test: &mut TestingRunner, view: View, submitted: &Submitted) {
+        let pushing = submitted.clone();
+        let submit = move |request| pushing.borrow_mut().push(request);
+        test.run_in(|| {
+            crate::diff_actions::change_settings(view, Some(&submit), |settings| {
+                settings.more_lines()
+            })
+        });
+        test.sync_and_update();
+        test.sync_and_update();
+    }
+
+    fn asks_file(requests: &[Request]) -> bool {
+        requests.iter().any(|r| matches!(r, Request::FileDiff(_)))
+    }
+
+    fn asks_expansion(requests: &[Request]) -> bool {
+        requests.iter().any(|r| matches!(r, Request::Expand(_)))
+    }
+
+    /// Phase 08 QA's U3 through the window: a setting changed asks at once only the selection
+    /// whose tab is shown — with the Commit tab shown and a file open in place, the files
+    /// opened in place and not the Changes tab's file; with the Changes tab shown, its file
+    /// and not the files opened in place — and the other is asked, at the new setting, as
+    /// its tab is shown. Caught by: the shown tab mapped to the other selection, which asks
+    /// both (the second ending the first).
+    #[test]
+    fn a_setting_asks_the_shown_tabs_selection_at_once_and_the_other_as_its_tab_is_shown() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        choose_the_file(&mut test, view);
+        let query = last_file_query(&submitted);
+        answer_file(&mut test, view, &query, 40);
+        click_tab(&mut test, DetailTab::Commit);
+        click_label(&mut test, "file-of-2.rs");
+        let mut diff = view.diff;
+        test.run_in(|| {
+            diff.write()
+                .expansion_arrived(vec![opened_file(0, text_answer(2, 40), false)], None)
+        });
+        test.sync_and_update();
+        test.sync_and_update();
+
+        let from = submitted.borrow().len();
+        more_lines(&mut test, view, &submitted);
+        let asked = requests_since(&submitted, from);
+        assert!(asks_expansion(&asked), "{asked:?}");
+        assert!(
+            !asks_file(&asked),
+            "the Changes tab's file was asked with the Commit tab shown: {asked:?}"
+        );
+        assert_eq!(
+            last_expansion(&submitted).options.context,
+            Context::Lines(4)
+        );
+
+        let from = submitted.borrow().len();
+        click_tab(&mut test, DetailTab::Changes);
+        test.sync_and_update();
+        let asked = requests_since(&submitted, from);
+        assert!(asks_file(&asked) && !asks_expansion(&asked), "{asked:?}");
+        assert_eq!(
+            last_file_query(&submitted).options.context,
+            Context::Lines(4)
+        );
+
+        let from = submitted.borrow().len();
+        more_lines(&mut test, view, &submitted);
+        let asked = requests_since(&submitted, from);
+        assert!(asks_file(&asked), "{asked:?}");
+        assert!(
+            !asks_expansion(&asked),
+            "the files opened in place were asked with the Changes tab shown: {asked:?}"
+        );
+
+        let from = submitted.borrow().len();
+        click_tab(&mut test, DetailTab::Commit);
+        test.sync_and_update();
+        let asked = requests_since(&submitted, from);
+        assert!(asks_expansion(&asked) && !asks_file(&asked), "{asked:?}");
+        assert_eq!(
+            last_expansion(&submitted).options.context,
+            Context::Lines(5)
         );
     }
 

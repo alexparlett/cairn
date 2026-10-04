@@ -1235,7 +1235,12 @@ answer that will not come and neither is ever half-answered
 (`the_file_and_the_files_opened_in_place_take_the_lane_from_each_other`). A change of the
 shared settings asks again at once only for the tab shown (`DiffState::settings_changed`
 with an `Asking`), leaving the other to its tab — asking both would only have the second
-end the first (`a_setting_asks_the_shown_tabs_selection_now_and_the_others_later`).
+end the first (`a_setting_asks_the_shown_tabs_selection_now_and_the_others_later`,
+`a_setting_with_the_changes_tab_shown_asks_its_file_now_and_the_expansion_later`; through
+the window, from either tab,
+`a_setting_asks_the_shown_tabs_selection_at_once_and_the_other_as_its_tab_is_shown`). An
+Expand All whose request failed is off, and not asked again
+(`a_failed_expand_all_is_off_and_not_asked_again`).
 
 ## The detail pane
 
@@ -1457,12 +1462,19 @@ The Changes tab draws it under a header naming both commits, one per line — "B
 "Tip", each its short id, author and subject (`cairn_ui::ComparisonHeader`) — with a swap
 control at its right that asks the comparison the other way round (`selection::swap`), so
 the answer changes, not just the header
-(`a_modifier_click_compares_two_commits_tip_against_tip_with_the_lower_row_the_base`). Exactly
+(`a_modifier_click_compares_two_commits_tip_against_tip_with_the_lower_row_the_base`). The
+header and its swap are drawn the moment the pair is set, with "Reading the comparison…"
+under them while what the two changed is on its way, and its failure under them if it fails
+(`the_comparisons_header_is_drawn_at_once_and_the_answer_awaited_under_it`). Exactly
 two, never half-selected (`a_comparison_is_never_left_half_selected`): a third press with
 the chord replaces the second, the row pressed plainly staying; a press with the chord on
 one of the pair leaves the other selected alone; on the one row selected it changes
-nothing; a plain press returns to one, and the comparison's answer arriving after is never
-kept.
+nothing; with nothing selected it selects that row alone
+(`a_modifier_click_with_nothing_selected_selects_that_commit_alone`); a plain press returns
+to one, and the comparison's answer arriving after is never kept. While two are selected
+the Commit tab is drawn disabled and a press on it changes nothing, not even the tab kept
+for the session, which is the one drawn when one commit is selected again
+(`the_commit_tab_is_unavailable_while_comparing_and_the_tab_chosen_comes_back`).
 
 **A replaced answer is freed off the UI thread** (R2). Dropping a change set of 55,184
 files measured 1.2-2.0 ms in a release build (2026-10-03), more than a frame spares.

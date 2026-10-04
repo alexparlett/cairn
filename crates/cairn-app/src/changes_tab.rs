@@ -34,6 +34,8 @@ use crate::{diff_actions, selection, shortcuts};
 pub const NO_FILE_CHOSEN: &str = "Choose a file to see its diff.";
 /// Said while the chosen file's diff is on its way.
 pub const READING_DIFF: &str = "Reading the diff…";
+/// Said under the comparison's header while what two commits changed is on its way.
+pub const READING_COMPARISON: &str = "Reading the comparison…";
 /// The file list's share of the pane until its splitter is dragged, in percent (the user's
 /// decision, 2026-10-03: about a third).
 pub const LIST_WIDTH: f32 = 35.0;
@@ -119,14 +121,29 @@ impl Component for ChangesTab {
         let Some(of) = selection::selected_comparison(view) else {
             return notice(NOTHING_SELECTED, false);
         };
+        // Over two commits, both named, base then tip, with the swap (R7.3) — drawn the moment
+        // the pair is set, what they changed awaited under it (the user's decision,
+        // 2026-10-04); over one, its one-line summary, once its answer is here.
+        let compared = view.pair.read().clone();
+        let swapping = self.submit.clone();
+        let comparison: Option<Element> = compared.map(|pair| {
+            ComparisonHeader::new(pair.base, pair.tip)
+                .on_swap(move |()| selection::swap(view, swapping.as_deref()))
+                .into()
+        });
+        let reading = if comparison.is_some() {
+            READING_COMPARISON
+        } else {
+            READING
+        };
         let details = {
             let diff = view.diff.read();
             let Some((_, answer)) = diff.changes().filter(|(asked, _)| *asked == of) else {
-                return notice(READING, false);
+                return under(comparison, notice(reading, false));
             };
             match answer {
-                Answer::Waiting => return notice(READING, false),
-                Answer::Failed(message) => return notice(message.clone(), true),
+                Answer::Waiting => return under(comparison, notice(reading, false)),
+                Answer::Failed(message) => return under(comparison, notice(message.clone(), true)),
                 Answer::Ready(changes) => changes.details.clone(),
             }
         };
@@ -148,16 +165,8 @@ impl Component for ChangesTab {
         // proportional, so the list keeps its share as the window changes; each has a floor
         // in pixels that a drag and a narrowing window both honour.
         let list_share = *width.peek();
-        // Over two commits, both named, base then tip, with the swap (R7.3); over one, its
-        // one-line summary.
-        let compared = view.pair.read().clone();
-        let swapping = self.submit.clone();
-        let header: Option<Element> = match compared {
-            Some(pair) => Some(
-                ComparisonHeader::new(pair.base, pair.tip)
-                    .on_swap(move |()| selection::swap(view, swapping.as_deref()))
-                    .into(),
-            ),
+        let header: Option<Element> = match comparison {
+            Some(comparison) => Some(comparison),
             None => details.map(|details| ChangesSummary::new(details).into()),
         };
         rect()
@@ -182,6 +191,25 @@ impl Component for ChangesTab {
                 ),
             )
             .into()
+    }
+}
+
+/// What the tab draws in place of its list and diff — the answer awaited, or why it failed —
+/// under the comparison's header when two commits are compared.
+fn under(header: Option<Element>, body: Element) -> Element {
+    match header {
+        None => body,
+        Some(header) => rect()
+            .expanded()
+            .content(Content::Flex)
+            .child(header)
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::flex(1.))
+                    .child(body),
+            )
+            .into(),
     }
 }
 

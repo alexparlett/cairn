@@ -1,5 +1,5 @@
 //! What the diff view's controls do to the view state (PRD R6.1-R6.3, R6.7, R6.8, R8):
-//! choosing a file, the settings every diff view shares, Load Diff, and previous and next
+//! choosing a file, the diff views' settings, Load Diff, and previous and next
 //! change. On the UI thread; asking is a [`Request`] handed to the caller's submit, never a
 //! wait.
 //!
@@ -16,12 +16,22 @@ use crate::diff_state::Asking;
 use crate::window::View;
 use crate::worker::{DiffOptions, FileQuery, FileTarget, Request};
 
-/// What a file's diff is asked with, from the shared settings.
+/// What the Changes tab's file is asked with, from the settings.
 pub fn options(settings: DiffSettings) -> DiffOptions {
     DiffOptions {
         context: settings.context(),
         ignore_whitespace: settings.ignore_whitespace(),
         load_anyway: false,
+    }
+}
+
+/// What a file opened in place in the Commit tab is asked with: the shared context and
+/// whitespace, never the entire file, which is the Changes tab's alone (the user's decision,
+/// 2026-10-04).
+pub fn in_place_options(settings: DiffSettings) -> DiffOptions {
+    DiffOptions {
+        context: settings.line_context(),
+        ..options(settings)
     }
 }
 
@@ -129,9 +139,10 @@ fn ask_again(view: View, submit: Option<&dyn Fn(Request)>) {
         DetailTab::Changes => Asking::File,
         DetailTab::Commit => Asking::Expansion,
     };
-    let requests = diff
-        .write()
-        .settings_changed(options(*diff_settings.peek()), asking);
+    let settings = *diff_settings.peek();
+    let requests =
+        diff.write()
+            .settings_changed(options(settings), in_place_options(settings), asking);
     if !requests.is_empty() {
         change_cursor.set(None);
     }
@@ -139,7 +150,7 @@ fn ask_again(view: View, submit: Option<&dyn Fn(Request)>) {
 }
 
 /// A file pressed in the Commit tab opens its diff in place under its row, or closes it
-/// (R5.3, Fork's Finding 4), at the session's settings.
+/// (R5.3, Fork's Finding 4), at the session's settings but never the entire file.
 pub fn toggle_in_place(index: usize, view: View, submit: Option<&dyn Fn(Request)>) {
     let View {
         mut diff,
@@ -148,7 +159,7 @@ pub fn toggle_in_place(index: usize, view: View, submit: Option<&dyn Fn(Request)
     } = view;
     let requests = diff
         .write()
-        .toggle_file(index, options(*diff_settings.peek()));
+        .toggle_file(index, in_place_options(*diff_settings.peek()));
     submit_all(requests, submit);
 }
 
@@ -160,7 +171,8 @@ pub fn expand_all(all: bool, view: View, submit: Option<&dyn Fn(Request)>) {
         ..
     } = view;
     let requests = if all {
-        diff.write().expand_all(options(*diff_settings.peek()))
+        diff.write()
+            .expand_all(in_place_options(*diff_settings.peek()))
     } else {
         diff.write().collapse_all()
     };

@@ -1,6 +1,11 @@
-//! The settings every diff view shares (PRD R6.1, R6.3, R6.7): how much context, the entire
-//! file or not, whitespace ignored or not, unified or side-by-side. One value for the
-//! session, held by the application; not remembered across sessions (issue #29).
+//! The diff views' settings (PRD R6.1, R6.3, R6.7): how much context, the entire file or
+//! not, whitespace ignored or not, unified or side-by-side. One value for the session, held
+//! by the application; not remembered across sessions (issue #29).
+//!
+//! The context, the whitespace and side-by-side are shared by every diff view. The entire
+//! file is the Changes tab's alone (the user's decision, 2026-10-04, departing from Fork):
+//! a file opened in place in the Commit tab, which has no bar to turn it off, is always
+//! asked at [`DiffSettings::line_context`].
 
 use cairn_model::Context;
 
@@ -41,6 +46,12 @@ impl DiffSettings {
         } else {
             Context::lines(self.lines)
         }
+    }
+
+    /// The lines of context, whether or not the entire file is shown: what a file opened in
+    /// place in the Commit tab asks at and groups at, which never shows the entire file.
+    pub fn line_context(self) -> Context {
+        Context::lines(self.lines)
     }
 
     pub fn lines(self) -> u32 {
@@ -140,6 +151,19 @@ mod tests {
         assert!(!settings.can_show_more_lines() && !settings.can_show_fewer_lines());
         settings.toggle_entire_file();
         assert_eq!(settings.context(), Context::Lines(2));
+    }
+
+    /// The Commit tab's in-place diffs never show the entire file (the user's decision,
+    /// 2026-10-04): their context is the lines, the entire file on or off. Caught by: the
+    /// line context reading the entire-file setting.
+    #[test]
+    fn the_line_context_ignores_the_entire_file() {
+        let mut settings = DiffSettings::default();
+        assert!(settings.more_lines());
+        assert_eq!(settings.line_context(), Context::Lines(4));
+        settings.toggle_entire_file();
+        assert_eq!(settings.context(), Context::EntireFile);
+        assert_eq!(settings.line_context(), Context::Lines(4));
     }
 
     /// The configured context is where the session starts, until the user moves it; zero is

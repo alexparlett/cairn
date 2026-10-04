@@ -2245,6 +2245,91 @@ mod tests {
         );
     }
 
+    /// The user's decision (2026-10-04), departing from Fork: Entire File is the Changes
+    /// tab's alone. With it on there, a file opened in place in the Commit tab, and Expand
+    /// All, are asked at the shared line context and draw hunks; turning it off asks nothing
+    /// for the files opened in place; and the context and whitespace, which the two tabs
+    /// share, still reach them. Caught by: the Commit tab stuck showing the entire file with
+    /// no bar to turn it off (the user's report), or a toggle that re-reads its open files.
+    #[test]
+    fn entire_file_is_the_changes_tabs_alone_and_never_reaches_a_file_opened_in_place() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        choose_the_file(&mut test, view);
+        let query = last_file_query(&submitted);
+        answer_file(&mut test, view, &query, 40);
+        click_named(&mut test, cairn_ui::ENTIRE_FILE_LABEL);
+        assert_eq!(
+            last_file_query(&submitted).options.context,
+            Context::EntireFile
+        );
+
+        click_tab(&mut test, DetailTab::Commit);
+        click_label(&mut test, "file-of-2.rs");
+        let opened = last_expansion(&submitted);
+        assert_eq!(
+            opened.options.context,
+            Context::Lines(3),
+            "a file opened in place was asked for the entire file"
+        );
+        let mut diff = view.diff;
+        test.run_in(|| {
+            diff.write()
+                .expansion_arrived(vec![opened_file(0, text_answer(2, 40), false)], None)
+        });
+        test.sync_and_update();
+        test.sync_and_update();
+        let rows = pane_rows(&test);
+        assert!(rows.iter().any(|t| t.starts_with("@@ -3,")), "{rows:?}");
+
+        // Collapse All, then Expand All: asked at the line context too.
+        click_label(&mut test, cairn_ui::COLLAPSE_ALL_CAPTION);
+        click_label(&mut test, cairn_ui::EXPAND_ALL_CAPTION);
+        let all = last_expansion(&submitted);
+        assert!(all.all.is_some(), "{all:?}");
+        assert_eq!(all.options.context, Context::Lines(3));
+        test.run_in(|| {
+            diff.write().expansion_arrived(
+                vec![opened_file(0, text_answer(2, 40), true)],
+                Some(crate::worker::AllProgress {
+                    at: crate::worker::AllFrom { next: 1, spent: 40 },
+                    ended: Some(crate::worker::AllEnded::Every),
+                }),
+            )
+        });
+        test.sync_and_update();
+        test.sync_and_update();
+
+        // Entire File off, in the Changes tab: nothing is asked for the files opened in place,
+        // then or as the Commit tab is shown again.
+        click_tab(&mut test, DetailTab::Changes);
+        test.sync_and_update();
+        let from = submitted.borrow().len();
+        click_named(&mut test, cairn_ui::ENTIRE_FILE_LABEL);
+        click_tab(&mut test, DetailTab::Commit);
+        test.sync_and_update();
+        let asked = requests_since(&submitted, from);
+        assert!(
+            !asks_expansion(&asked),
+            "Entire File re-asked the files opened in place: {asked:?}"
+        );
+        assert!(pane_rows(&test).iter().any(|t| t.starts_with("@@ -3,")));
+
+        // The context and the whitespace moved in the Changes tab, then Entire File on again:
+        // the shared two reach the files opened in place, at their line context.
+        click_tab(&mut test, DetailTab::Changes);
+        more_lines(&mut test, view, &submitted);
+        click_named(&mut test, cairn_ui::IGNORE_WHITESPACE_LABEL);
+        click_named(&mut test, cairn_ui::ENTIRE_FILE_LABEL);
+        let from = submitted.borrow().len();
+        click_tab(&mut test, DetailTab::Commit);
+        test.sync_and_update();
+        let asked = requests_since(&submitted, from);
+        assert!(asks_expansion(&asked), "{asked:?}");
+        let reasked = last_expansion(&submitted);
+        assert_eq!(reasked.options.context, Context::Lines(4));
+        assert!(reasked.options.ignore_whitespace);
+    }
+
     fn requests_since(submitted: &Submitted, from: usize) -> Vec<Request> {
         submitted.borrow()[from..]
             .iter()

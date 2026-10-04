@@ -380,11 +380,17 @@ impl DiffState {
         }))
     }
 
-    /// The shared settings moved to `options`: the file selected and the files opened in place
-    /// are asked again at them — the one `asking` names now, the other as soon as its tab is
+    /// The settings moved: the file selected is asked again at `options` and the files opened
+    /// in place at `in_place` — the Changes tab's own entire file is not theirs — each only
+    /// when its options changed, the one `asking` names now, the other as soon as its tab is
     /// shown, since the two share the file-diff lane. A file read past the limits stays so.
     /// Returns what to submit: the request, and the replaced diffs for a worker to free.
-    pub fn settings_changed(&mut self, options: DiffOptions, asking: Asking) -> Vec<Request> {
+    pub fn settings_changed(
+        &mut self,
+        options: DiffOptions,
+        in_place: DiffOptions,
+        asking: Asking,
+    ) -> Vec<Request> {
         let mut requests = Vec::new();
         let mut file_asked = false;
         if let Some((query, answer)) = &mut self.file {
@@ -405,7 +411,7 @@ impl DiffState {
         if let Some(opening) = &mut self.opening {
             let wanted = DiffOptions {
                 load_anyway: false,
-                ..options
+                ..in_place
             };
             if opening.options != wanted {
                 opening.options = wanted;
@@ -1133,7 +1139,7 @@ mod tests {
 
         let mut wider = options;
         wider.context = Context::Lines(7);
-        let requests = state.settings_changed(wider, Asking::Expansion);
+        let requests = state.settings_changed(wider, wider, Asking::Expansion);
         let asked = expand_query(&requests);
         assert_eq!(asked.options, wider);
         assert_eq!(retired_count(&requests), 1);
@@ -1149,6 +1155,32 @@ mod tests {
             Some(Request::FileDiff(query)) => assert_eq!(query.options, wider),
             other => panic!("{other:?}"),
         }
+    }
+
+    /// The entire file moves the Changes tab's file alone (the user's decision, 2026-10-04):
+    /// the files opened in place keep their options, so nothing of theirs is asked again or
+    /// freed, now or when the Commit tab is shown. Caught by: one set of options for both.
+    #[test]
+    fn the_entire_file_asks_the_changes_tabs_file_and_leaves_the_files_opened_in_place() {
+        let mut state = answered(4);
+        let options = DiffOptions::default();
+        state.toggle_file(1, options);
+        state.expansion_arrived(page(&[1], false), None);
+        let chosen = file_of(commit(1), "a.txt");
+        state.select_file(chosen.clone());
+        assert!(state.file_arrived(&chosen, None));
+
+        let entire = DiffOptions {
+            context: Context::EntireFile,
+            ..options
+        };
+        let requests = state.settings_changed(entire, options, Asking::File);
+        match requests.as_slice() {
+            [Request::FileDiff(query)] => assert_eq!(query.options, entire),
+            other => panic!("expected the file alone, asked: {other:?}"),
+        }
+        assert!(!state.expansion_needs_asking());
+        assert_eq!(state.reask_expansion(), None);
     }
 
     /// Phase 08 QA's U2: an Expand All whose request failed is off — not asked again when the
@@ -1182,7 +1214,7 @@ mod tests {
 
         let mut wider = options;
         wider.context = Context::Lines(7);
-        let requests = state.settings_changed(wider, Asking::File);
+        let requests = state.settings_changed(wider, wider, Asking::File);
         match requests.first() {
             Some(Request::FileDiff(query)) => assert_eq!(query.options, wider),
             other => panic!("the file was not asked first: {other:?}"),

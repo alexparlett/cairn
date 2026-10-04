@@ -1249,8 +1249,11 @@ Changes tab's effect asks `reask_file` when `file_needs_asking`, the Commit tab'
 asks `reask_expansion` when `expansion_needs_asking`, so neither waits for good on an
 answer that will not come and neither is ever half-answered
 (`the_file_and_the_files_opened_in_place_take_the_lane_from_each_other`). A change of the
-shared settings asks again at once only for the tab shown (`DiffState::settings_changed`
-with an `Asking`), leaving the other to its tab — asking both would only have the second
+settings asks again at once only for the tab shown (`DiffState::settings_changed`
+with an `Asking`), leaving the other to its tab, and asks either only when its own options
+moved — the Changes tab's file at the settings, the files opened in place at them with the
+entire file left out, so Entire File asks nothing of theirs
+(`the_entire_file_asks_the_changes_tabs_file_and_leaves_the_files_opened_in_place`) — asking both would only have the second
 end the first (`a_setting_asks_the_shown_tabs_selection_now_and_the_others_later`,
 `a_setting_with_the_changes_tab_shown_asks_its_file_now_and_the_expansion_later`; through
 the window, from either tab,
@@ -1687,12 +1690,16 @@ user's decision, `docs/research/diff-engine/fork-shortcuts.md`); each press is m
 its `Action` (`shortcuts::of_header`) and done by `shortcuts::act`, the one place a chord
 is done too.
 
-**The settings** (`cairn_ui::DiffSettings`, `View::diff_settings`). One value for every
-diff view, kept for the session, not across sessions (issue #29): the lines of context,
-the entire file or not, whitespace ignored or not, side by side or not (unified by
+**The settings** (`cairn_ui::DiffSettings`, `View::diff_settings`). One value, kept for
+the session, not across sessions (issue #29): the lines of context, the entire file or
+not, whitespace ignored or not, side by side or not (unified by
 default, R6.1; toggling it asks git nothing and lets go of the change last moved to, since
 its rows are the other view's — `side_by_side_is_one_setting_for_every_diff_and_asks_nothing`,
-which also shows the setting kept across another file and another commit). Context moves a line per click, never
+which also shows the setting kept across another file and another commit). Every diff view
+shares all four but the entire file, which is the Changes tab's alone: a file opened in
+place in the Commit tab, which has no bar to turn it off, is asked at the lines of context
+whatever it says (`DiffSettings::line_context`, `diff_actions::in_place_options`; the
+user's decision, 2026-10-04, departing from Fork). Context moves a line per click, never
 below one (`context_moves_a_line_at_a_time_and_never_below_one`); the entire file is a
 toggle that gives back the lines it left. It starts at the user's `diff.context`, raised
 to one — read on the diff thread, whose handle is the one opened again when the
@@ -1774,7 +1781,7 @@ number) and `docs/research/diff-engine/fork-shortcuts.md`.
 | Filter persistence | the text kept across commits for the session; a file chosen before the filter hid it stays shown; "Showing N of M files" whenever a filter is active | User decision (2026-10-03): the count line keeps a sticky filter from being mistaken for a commit that touched fewer files. |
 | File list width | 35% of the pane until dragged, never below 200 px, its share kept for the session | User decision (2026-10-03). Fork's split is draggable (Finding 5); its default width is not established. |
 | A file pressed in the Commit tab | opens its diff under its row, pressed again closes it; files start collapsed; the Commit tab stays shown | Fork-measured: Finding 4 (vendor GIF; "it does not switch to Changes"; collapsed by default, by the vendor's choice). Phase 06's press, which showed the file in the Changes tab, is replaced. |
-| In-place diff's options | no bar of its own; the Changes tab's settings — context, whitespace, side-by-side — shared | Fork-measured: Finding 4 (the vendor: no header to host options; users: the Changes tab's options govern). |
+| In-place diff's options | no bar of its own; shares the Changes tab's context, whitespace and side-by-side; never the entire file — Entire File is the Changes tab's alone (`diff_actions::in_place_options`, `DiffSettings::line_context`) | Fork-measured: Finding 4 (the vendor: no header to host options; users: the Changes tab's options govern). The entire file left out is the user's decision, 2026-10-04, departing from Fork: with no bar to turn it off, the Commit tab was left showing every file whole (`entire_file_is_the_changes_tabs_alone_and_never_reaches_a_file_opened_in_place`). |
 | Expand All | right-aligned above the files; Collapse All while a file is open | Fork-measured: Finding 4 (Expand All turns into Collapse All). That it reads Collapse All while ANY file is open — one opened by a press as well — is the user's decision, 2026-10-04, kept as built: Fork's label after a single press is not recorded. |
 | Expand All's budget | 50,000 lines, both versions of each file counted, and one per file | Cairn-chosen (Q2; the PRD names a line budget, not its size): R2.6's per-file line ceiling, measured against the window check — `progress.md`, phase 08. |
 | What the budget says | "Expand All stopped at its line budget: N files left collapsed.", left of Collapse All | User's decision, 2026-10-04, kept as built: Fork has no budget (it expands every file). |

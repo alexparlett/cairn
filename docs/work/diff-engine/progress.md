@@ -3,6 +3,26 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-04 — Fix: Entire File is the Changes tab's alone (the user's decision)
+
+Packet mode, committed to `feature/diff-engine`. The user: "the Commit tab is stuck showing
+the entire file" — every diff view shared one `DiffSettings`, and the Commit tab has no bar
+to turn Entire File off. **User decision A (2026-10-04), departing from Fork:** Entire File
+belongs to the Changes tab alone; the Commit tab's in-place diffs (files opened by a press,
+and Expand All) never show the entire file, always hunks with context; context lines,
+ignore whitespace and side-by-side stay shared. Fix: `DiffSettings::line_context` and
+`diff_actions::in_place_options` (the shared settings at the line context) for
+`toggle_in_place` and `expand_all`, and `DiffState::settings_changed` takes the file's
+options and the in-place options apart, so toggling Entire File re-asks only the Changes
+tab's file. RED, through the window —
+`entire_file_is_the_changes_tabs_alone_and_never_reaches_a_file_opened_in_place`: "a file
+opened in place was asked for the entire file — left: EntireFile, right: Lines(3)". GREEN,
+with `the_entire_file_asks_the_changes_tabs_file_and_leaves_the_files_opened_in_place`
+(`diff_state.rs`) and `the_line_context_ignores_the_entire_file` (`diff_settings.rs`).
+`docs/systems/diff.md`'s "In-place diff's options" row and settings prose say so. Root
+`CLAUDE.md`'s repo map still calls `diff_settings.rs` "the settings every diff view
+shares": left for the coordinator, since an agent does not edit `CLAUDE.md` unasked.
+
 ## 2026-10-04 — Fix: the Changes tab's diff side vanished after its splitter was dragged
 
 Packet mode, committed to `feature/diff-engine`. The user, in the release app: the pane

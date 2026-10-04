@@ -108,6 +108,10 @@ pub struct ExpandQuery {
     pub files: Vec<OpenedFile>,
     /// Expand All, taken up where it stands; `None` when it is not on its way.
     pub all: Option<AllFrom>,
+    /// The files already open, in index order, which Expand All passes over: kept as they are
+    /// drawn, never read again (the user's decision, 2026-10-04). A file named in `files` is
+    /// among them, read once, by name.
+    pub kept_open: Vec<usize>,
 }
 
 /// One file opened in place, by its index in the change set, and whether it is read past
@@ -462,6 +466,7 @@ mod tests {
                     options: DiffOptions::default(),
                     files: Vec::new(),
                     all: Some(AllFrom::default()),
+                    kept_open: Vec::new(),
                 }),
                 QueryLane::FileDiff,
             ),

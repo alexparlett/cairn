@@ -434,8 +434,8 @@ impl<'a> Served<'a, '_> {
     /// Files opened in place (R5.3), answered a page at a time as each is read: first the
     /// files opened by name — those read past the limits apart, since a page is read at one
     /// set of options — then, when Expand All is on its way, the rest of the change set from
-    /// where it stands, until its line budget ([`EXPAND_ALL_LINES`]) is spent or every file is
-    /// open. Each page is read with the engine's per-page bound and sent as soon as it is
+    /// where it stands, passing over the files already open (`kept_open`, kept as they are
+    /// drawn), until its line budget ([`EXPAND_ALL_LINES`]) is spent or every file is open. Each page is read with the engine's per-page bound and sent as soon as it is
     /// prepared, so the memory held is a page's, and a file's failure is that file's outcome.
     /// The epoch is checked between files and polled while each read runs, so a newer request
     /// in the lane — another expansion, a file diff, a changes query — ends this one at the
@@ -452,17 +452,20 @@ impl<'a> Served<'a, '_> {
                 .collect()
         };
         let all_from = asked.all.map(|all| all.next.min(changes.files.len()));
+        // What Expand All offers: every file from where it stands but the ones already open,
+        // which are kept as they are drawn (the user's decision, 2026-10-04).
+        let all_offered: Vec<usize> = all_from.map_or_else(Vec::new, |from| {
+            (from..changes.files.len())
+                .filter(|index| asked.kept_open.binary_search(index).is_err())
+                .collect()
+        });
         // The directories whose attributes this reads: the files named, and every file Expand
         // All may still reach.
         let reached = asked
             .files
             .iter()
             .map(|file| file.index)
-            .chain(
-                all_from
-                    .into_iter()
-                    .flat_map(|from| from..changes.files.len()),
-            )
+            .chain(all_offered.iter().copied())
             .filter_map(|index| changes.files.get(index))
             .flat_map(|file| [&file.old_path, &file.new_path]);
         let read = self.directories.of(reached);
@@ -501,10 +504,10 @@ impl<'a> Served<'a, '_> {
             }
         }
 
-        let (Some(start), Some(all)) = (all_from, asked.all) else {
+        let Some(all) = asked.all else {
             return Ok(());
         };
-        let offered: Vec<usize> = (start..changes.files.len()).collect();
+        let offered = all_offered;
         let mut budget = LineBudget::resumed(EXPAND_ALL_LINES, all.spent);
         let content = content_options(&asked.options);
         let mut from = 0;
@@ -542,7 +545,8 @@ impl<'a> Served<'a, '_> {
                 files: prepared(files, asked.options, false, true),
                 all: Some(AllProgress {
                     at: AllFrom {
-                        next: start + from,
+                        // The first file offered and not decided: past the last, the end.
+                        next: offered.get(from).copied().unwrap_or(changes.files.len()),
                         spent: budget.spent(),
                     },
                     ended,

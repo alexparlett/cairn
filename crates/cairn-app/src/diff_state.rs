@@ -275,8 +275,8 @@ impl DiffState {
     }
 
     /// Expand All (R5.3): every file opened in the change set's order, from the first, until
-    /// its line budget is spent. Files already open are read again with the rest, replacing
-    /// what they drew.
+    /// its line budget is spent. Files already open are kept as they are drawn and passed over:
+    /// only the rest are read (the user's decision, 2026-10-04).
     pub fn expand_all(&mut self, options: DiffOptions) -> Vec<Request> {
         let Some(opening) = self.opening_now(options) else {
             return Vec::new();
@@ -306,6 +306,7 @@ impl DiffState {
                 options: opening.options,
                 files: Vec::new(),
                 all: None,
+                kept_open: Vec::new(),
             }));
             opening.in_lane = false;
         }
@@ -361,6 +362,12 @@ impl DiffState {
         if files.is_empty() && all.is_none() {
             return None;
         }
+        // Expand All passes over every file open, whatever it draws: it is kept, never read
+        // again (the user's decision, 2026-10-04).
+        let kept_open: Vec<usize> = match all {
+            Some(_) => opening.shown.iter().map(|(index, _)| index).collect(),
+            None => Vec::new(),
+        };
         opening.in_lane = true;
         self.file_in_lane = false;
         Some(Request::Expand(ExpandQuery {
@@ -369,6 +376,7 @@ impl DiffState {
             options: opening.options,
             files,
             all,
+            kept_open,
         }))
     }
 
@@ -907,6 +915,58 @@ mod tests {
         assert_eq!(expansion.len(), 4);
         assert!(expansion.stopped_at_budget());
         assert!(matches!(expansion.get(3), Some(Opened::Shown(_))));
+    }
+
+    /// The user's decision (2026-10-04): Expand All keeps the files already open — answered,
+    /// failed or still being read — and asks only for the rest; what they draw is not replaced
+    /// or freed, and the files Expand All reads open around them. Caught by: the files open
+    /// offered to Expand All again (read anew, their diffs replaced and freed), or a page of
+    /// Expand All replacing them.
+    #[test]
+    fn expand_all_keeps_the_files_already_open_and_asks_only_for_the_rest() {
+        let mut state = answered(6);
+        let options = DiffOptions::default();
+        state.toggle_file(1, options);
+        state.toggle_file(3, options);
+        state.expansion_arrived(page(&[1, 3], false), None);
+        state.toggle_file(4, options);
+        let drawn = |state: &DiffState, index: usize| answered_expansion(state).get(index).cloned();
+        let (one, three) = (drawn(&state, 1), drawn(&state, 3));
+        assert!(matches!(one, Some(Opened::Shown(_))));
+
+        let requests = state.expand_all(options);
+        let asked = expand_query(&requests);
+        assert_eq!(asked.all, Some(AllFrom::default()));
+        assert_eq!(
+            asked.kept_open,
+            [1, 3, 4],
+            "the files open are offered again"
+        );
+        assert_eq!(
+            asked.files,
+            [OpenedFile {
+                index: 4,
+                load_anyway: false
+            }],
+            "only the file still awaited is named"
+        );
+        assert_eq!(retired_count(&requests), 0, "a file open was let go of");
+        assert_eq!(
+            (drawn(&state, 1), drawn(&state, 3)),
+            (one.clone(), three.clone())
+        );
+
+        let freed = state.expansion_arrived(
+            page(&[0, 2, 5], true),
+            Some(AllProgress {
+                at: AllFrom { next: 6, spent: 9 },
+                ended: Some(AllEnded::Every),
+            }),
+        );
+        assert!(freed.is_none(), "{freed:?}");
+        assert_eq!((drawn(&state, 1), drawn(&state, 3)), (one, three));
+        assert_eq!(answered_expansion(&state).len(), 6);
+        assert_eq!(state.all_state(), Some(AllState::Done));
     }
 
     /// The Changes tab's file and the files opened in place share the file-diff lane, so each

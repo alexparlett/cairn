@@ -189,6 +189,7 @@ mod tests {
                     load_anyway: true,
                 }],
                 all: Some(crate::worker::request::AllFrom { next: 3, spent: 9 }),
+                kept_open: vec![0],
             }),
             Request::FilterFiles {
                 of: commit,

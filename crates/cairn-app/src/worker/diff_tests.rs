@@ -942,6 +942,7 @@ fn expand_all_answers_every_file_in_order_through_the_boundary() {
             options,
             files: Vec::new(),
             all: Some(AllFrom::default()),
+            kept_open: Vec::new(),
         },
     );
     let every: Vec<(usize, bool)> = (0..changes.files.len()).map(|n| (n, true)).collect();
@@ -972,6 +973,7 @@ fn expand_all_answers_every_file_in_order_through_the_boundary() {
                 load_anyway: false,
             }],
             all: None,
+            kept_open: Vec::new(),
         },
     );
     assert_eq!(expanded_files(&seen), [(1, true)]);
@@ -1002,6 +1004,7 @@ fn expand_all_stops_at_its_budget_through_the_boundary() {
             options: DiffOptions::default(),
             files: Vec::new(),
             all: Some(AllFrom { next: 0, spent }),
+            kept_open: Vec::new(),
         },
     );
     assert_eq!(expanded_files(&seen), [(0, true)]);
@@ -1060,6 +1063,7 @@ fn a_newer_request_in_the_lane_ends_an_expansion_and_kills_its_read() {
             load_anyway: false,
         }],
         all: Some(AllFrom::default()),
+        kept_open: vec![first_at],
     }));
     let reading = leaders(&stub, 1)[0];
     let superseded = Instant::now();
@@ -1118,6 +1122,67 @@ fn submodule_changes(files: usize) -> (Comparison, ChangeSet) {
     (Comparison::Commit(id), changes)
 }
 
+/// The user's decision (2026-10-04): Expand All keeps the files already open and reads only
+/// the rest. Files 1 and 3 open — 3 still awaited, so named — Expand All from the first file
+/// reads 0, 2, 4 and on, never 1, and 3 once, by name; it still ends at the change set's end.
+/// Caught by: the files open offered to Expand All again (each re-read and drawn anew), or a
+/// file named and open read twice.
+#[test]
+fn expand_all_passes_over_the_files_already_open() {
+    let files = 8;
+    let (of, changes) = submodule_changes(files);
+    let (handle, mut updates) = checkout();
+    let seen = expansion(
+        &handle,
+        &mut updates,
+        ExpandQuery {
+            of,
+            changes: std::sync::Arc::new(changes),
+            options: DiffOptions::default(),
+            files: vec![OpenedFile {
+                index: 3,
+                load_anyway: false,
+            }],
+            all: Some(AllFrom::default()),
+            kept_open: vec![1, 3],
+        },
+    );
+    let by_all: Vec<usize> = seen
+        .iter()
+        .flat_map(|u| match u {
+            Update::Expanded { files, .. } => files
+                .iter()
+                .map(|file| (file.file.index, file.by_all))
+                .collect(),
+            _ => Vec::new(),
+        })
+        .filter_map(|(index, by_all)| by_all.then_some(index))
+        .collect();
+    assert_eq!(
+        by_all,
+        [0, 2, 4, 5, 6, 7],
+        "Expand All read a file already open"
+    );
+    assert_eq!(
+        expanded_files(&seen)
+            .iter()
+            .filter(|(index, _)| *index == 3)
+            .count(),
+        1,
+        "the file named and open was read twice"
+    );
+    match seen.last() {
+        Some(Update::Expanded {
+            all: Some(progress),
+            ..
+        }) => {
+            assert_eq!(progress.ended, Some(AllEnded::Every));
+            assert_eq!(progress.at.next, files);
+        }
+        other => panic!("expected Expand All's end, got {other:?}"),
+    }
+}
+
 /// Phase 08 QA's E5: an Expand All taken up where a superseded one stopped, `next` files in,
 /// over a change set longer than a page, reads from that file on — each file answered once, in
 /// order, across both pages — and ends saying every file is open, at the change set's end.
@@ -1139,6 +1204,7 @@ fn expand_all_taken_up_midway_reads_from_where_it_stood_across_pages() {
             options: DiffOptions::default(),
             files: Vec::new(),
             all: Some(AllFrom { next, spent: 0 }),
+            kept_open: Vec::new(),
         },
     );
     let pages = seen

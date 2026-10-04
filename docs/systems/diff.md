@@ -1418,7 +1418,12 @@ Collapse All while any file is open (Fork turns the one into the other, Finding 
 All asks from the first file with nothing spent (`DiffState::expand_all`); each page that
 arrives opens its files under their rows and moves Expand All on to where it stands, so
 one superseded midway — by a file pressed, the Changes tab's file, Collapse All — is taken
-up again from there; files already open are read again with the rest. It stops when every
+up again from there. Files already open — answered, failed or still being read — are kept
+as they are drawn and passed over: the request names them (`ExpandQuery::kept_open`) and the
+diff thread offers Expand All only the rest, so an open diff is never read again nor drawn
+anew, and its lines are not charged to the budget, which bounds what Expand All reads
+(`expand_all_keeps_the_files_already_open_and_asks_only_for_the_rest`;
+`expand_all_passes_over_the_files_already_open`, through the boundary). It stops when every
 file is open, or when its line budget, `EXPAND_ALL_LINES` (fifty thousand), is spent: then
 the bar says "Expand All stopped at its line budget: N files left collapsed.", N the files
 not open (`expand_all_turns_into_collapse_all_and_says_what_its_budget_left_collapsed`;

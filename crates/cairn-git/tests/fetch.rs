@@ -1464,7 +1464,23 @@ fn the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git_in
             .arg(local.path())
             .status()
             .unwrap_or_else(|e| panic!("{e}"));
-        assert!(chown.success(), "could not give the repository to uid 1");
+        // What the namespace is, where it would not: the maps, the capabilities, and the
+        // confinement the process runs under.
+        let seen = |path: &str| std::fs::read_to_string(path).unwrap_or_else(|e| format!("{e}"));
+        assert!(
+            chown.success(),
+            "could not give the repository to uid 1\nuid_map:\n{}gid_map:\n{}{}\nlabel: {}",
+            seen("/proc/self/uid_map"),
+            seen("/proc/self/gid_map"),
+            seen("/proc/self/status")
+                .lines()
+                .filter(|line| line.starts_with("Cap")
+                    || line.starts_with("Uid")
+                    || line.starts_with("Gid"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            seen("/proc/self/attr/current")
+        );
         // The reproduction holds: gix by its own rule trusts this repository less than fully,
         // and git, without the command line's entry, refuses it as someone else's.
         let gix_trust = gix::open(local.path())

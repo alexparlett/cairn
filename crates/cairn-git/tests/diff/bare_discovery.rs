@@ -515,3 +515,278 @@ fn opening_reads_the_system_file_without_running_a_process() {
         "opening the repository ran a process"
     );
 }
+
+/// `GIT_CEILING_DIRECTORIES` and `GIT_DISCOVERY_ACROSS_FILESYSTEM` from the launch
+/// environment both bound the search, so with each spelled as the user's own git reads
+/// it Cairn opens exactly what that git opens from the same directory, or nothing where it
+/// finds nothing: a working tree's repository and a bare one found by searching, from the
+/// working tree, below it and inside the bare one, under a ceiling at, above and below the
+/// repository, at the starting directory itself (never its own ancestor), at `/`, several
+/// at once (the longest ancestor decides, a missing one is dropped), an empty entry (which
+/// leaves every entry after it as written: a link or a `..` then names nothing), relative
+/// entries (dropped), and a variable git cannot read as a boolean (git dies, Cairn
+/// refuses). Every variable is set in every case, empty where it says nothing, so the
+/// oracle inherits nothing of this process's own. Caught by: a search that ignores either
+/// variable — it opens the enclosing repository git calls "not a git repository" and names
+/// it with `--git-dir`, which no ceiling stops — counts the ceiling itself as searched,
+/// resolves entries after an empty one, or accepts what git dies on.
+#[test]
+fn a_ceiling_stops_cairns_search_exactly_where_it_stops_gits() {
+    let work = Repo::new("ceiling");
+    work.write("a/b/file.txt", b"one\n");
+    work.commit("first");
+    let top = physical(work.path());
+    let top_text = top.display().to_string();
+    let bare = top.join("inner.git");
+    work.git(&[
+        "clone",
+        "--quiet",
+        "--bare",
+        ".",
+        &bare.display().to_string(),
+    ]);
+    ok(
+        std::os::unix::fs::symlink(".", top.join("alias")),
+        "linking alias to the working tree",
+    );
+    let alias = format!("{top_text}/alias");
+    let parent = some_parent(&top);
+    let starts: Vec<(&str, PathBuf)> = vec![
+        ("the working tree", top.clone()),
+        ("a directory below it", top.join("a/b")),
+        ("the directory between", top.join("a")),
+        ("inside the bare repository", bare.join("refs")),
+    ];
+    let ceilings: Vec<(&str, String)> = vec![
+        ("none", String::new()),
+        ("the working tree", top_text.clone()),
+        ("the working tree with a slash", format!("{top_text}/")),
+        ("the directory between", format!("{top_text}/a")),
+        ("the deepest start", format!("{top_text}/a/b")),
+        ("the bare repository", bare.display().to_string()),
+        ("above the working tree", parent.clone()),
+        ("the root", "/".to_owned()),
+        (
+            "a missing entry, then the working tree",
+            format!("/nonexistent-cairn-ceiling/x:{top_text}"),
+        ),
+        (
+            "above, then the directory between",
+            format!("{parent}:{top_text}/a"),
+        ),
+        ("a link to the working tree", alias.clone()),
+        ("an empty entry, then the link", format!(":{alias}")),
+        ("the link, then an empty entry", format!("{alias}:")),
+        (
+            "an empty entry, then the working tree",
+            format!(":{top_text}"),
+        ),
+        (
+            "a .. that resolves to the working tree",
+            format!("{top_text}/a/.."),
+        ),
+        ("an empty entry, then that ..", format!(":{top_text}/a/..")),
+        ("relative entries", "a:..:.".to_owned()),
+        ("a missing last component", format!("{top_text}/missing")),
+        (
+            "a missing middle component",
+            format!("{top_text}/missing/deeper"),
+        ),
+    ];
+    let across: Vec<(&str, &str)> = vec![
+        ("unset", ""),
+        ("true", "true"),
+        ("a number", "2"),
+        ("a value git dies on", "sometimes"),
+    ];
+    let mut differ = Vec::new();
+    let mut seen = std::collections::BTreeMap::new();
+    for (ceiling, entries) in &ceilings {
+        for (crossing, value) in &across {
+            let extra = vec![
+                ("GIT_CEILING_DIRECTORIES", entries.clone()),
+                ("GIT_DISCOVERY_ACROSS_FILESYSTEM", (*value).to_owned()),
+            ];
+            for (start, directory) in &starts {
+                let expected = git_opens(directory, &extra);
+                let opened = SharedRepository::discover_for(directory, git(), launch(&extra));
+                let cairn_opens = opened
+                    .as_ref()
+                    .ok()
+                    .map(|shared| physical(shared.git_dir()));
+                if cairn_opens != expected {
+                    differ.push(format!(
+                        "from {start}, ceiling {ceiling}, across {crossing}: git opens \
+                         {expected:?}, Cairn {opened:?}"
+                    ));
+                }
+                if *crossing == "a value git dies on"
+                    && !matches!(opened, Err(Error::InvalidConfig { ref key, .. }) if key == "GIT_DISCOVERY_ACROSS_FILESYSTEM")
+                {
+                    differ.push(format!(
+                        "from {start}, ceiling {ceiling}: refused other than as git does: \
+                         {opened:?}"
+                    ));
+                }
+                seen.insert((*ceiling, *crossing, *start), expected.is_some());
+            }
+        }
+    }
+    assert!(differ.is_empty(), "{}", differ.join("\n"));
+    // The oracle decides something: the ceiling at the working tree hides it from below,
+    // and not from the working tree itself or with no ceiling.
+    let under = |ceiling: &str, start: &str| seen[&(ceiling, "unset", start)];
+    assert!(under("none", "a directory below it"));
+    assert!(!under("the working tree", "a directory below it"));
+    assert!(under("the working tree", "the working tree"));
+    assert!(!under("the bare repository", "inside the bare repository"));
+    assert!(under(
+        "an empty entry, then the link",
+        "a directory below it"
+    ));
+    assert!(!under("a link to the working tree", "a directory below it"));
+    assert!(!seen[&("none", "a value git dies on", "the working tree")]);
+}
+
+/// The directory above `path`, as text.
+fn some_parent(path: &Path) -> String {
+    path.parent()
+        .unwrap_or_else(|| panic!("{} has a parent", path.display()))
+        .display()
+        .to_string()
+}
+
+/// Where the child of
+/// [`the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it`] makes its
+/// repository, in a mount namespace of its own.
+const ACROSS_CHILD: &str = "CAIRN_TEST_ACROSS_FILESYSTEMS";
+
+/// `GIT_DISCOVERY_ACROSS_FILESYSTEM`: a directory on another filesystem inside a working
+/// tree finds no repository by default, as git stops at the boundary ("Stopping at
+/// filesystem boundary"), and finds the enclosing one when the variable is true — every
+/// spelling git reads as a boolean, each compared with the git in use. A second filesystem
+/// without root takes a user and mount namespace (`unshare --map-root-user --mount`) with a
+/// `tmpfs` mounted in the working tree, so this test binary runs itself again in one; where
+/// there is none the test says so and decides nothing. Caught by: the variable ignored,
+/// read as set when it is empty, or read other than as git reads a boolean.
+#[test]
+fn the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it() {
+    if std::env::var_os(ACROSS_CHILD).is_some() {
+        across_filesystems_in_a_namespace();
+        return;
+    }
+    let available = std::process::Command::new("unshare")
+        .args(["--map-root-user", "--mount", "true"])
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !available {
+        eprintln!(
+            "SKIPPED the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it: \
+             no user and mount namespace here, so no second filesystem"
+        );
+        return;
+    }
+    let output = std::process::Command::new("unshare")
+        .args(["--map-root-user", "--mount"])
+        .arg(ok(std::env::current_exe(), "this test binary"))
+        .args([
+            "--exact",
+            "diff::bare_discovery::the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it",
+            "--test-threads=1",
+            "--nocapture",
+        ])
+        .env(ACROSS_CHILD, "1")
+        .output();
+    let output = ok(output, "running this test binary in a namespace");
+    assert!(
+        output.status.success(),
+        "the child failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "the child ran no test:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// The child's half: a `tmpfs` mounted at `mounted/` in a working tree, searched from a
+/// directory in it under each value of the variable.
+fn across_filesystems_in_a_namespace() {
+    let work = Repo::new("across");
+    work.write("a.txt", b"one\n");
+    work.commit("first");
+    let mount_point = physical(work.path()).join("mounted");
+    ok(std::fs::create_dir(&mount_point), "making the mount point");
+    let mounted = std::process::Command::new("mount")
+        .args(["-t", "tmpfs", "cairn-test"])
+        .arg(&mount_point)
+        .status();
+    assert!(
+        mounted
+            .as_ref()
+            .is_ok_and(std::process::ExitStatus::success),
+        "could not mount a tmpfs in the namespace: {mounted:?}"
+    );
+    let _unmounted = Unmounted(mount_point.clone());
+    let start = mount_point.join("inside");
+    ok(
+        std::fs::create_dir(&start),
+        "making a directory on the tmpfs",
+    );
+    use std::os::unix::fs::MetadataExt as _;
+    assert_ne!(
+        ok(std::fs::metadata(&start), "the start").dev(),
+        ok(std::fs::metadata(work.path()), "the working tree").dev(),
+        "the tmpfs is not another filesystem"
+    );
+    let mut differ = Vec::new();
+    let mut opened_by_git = Vec::new();
+    for value in [
+        "",
+        "0",
+        "false",
+        "no",
+        "off",
+        "1",
+        "true",
+        "YES",
+        "On",
+        "2",
+        "-1",
+        "0x10",
+        "1k",
+        "sometimes",
+    ] {
+        let extra = vec![
+            ("GIT_CEILING_DIRECTORIES", String::new()),
+            ("GIT_DISCOVERY_ACROSS_FILESYSTEM", value.to_owned()),
+        ];
+        let expected = git_opens(&start, &extra);
+        let opened = SharedRepository::discover_for(&start, git(), launch(&extra));
+        let cairn_opens = opened
+            .as_ref()
+            .ok()
+            .map(|shared| physical(shared.git_dir()));
+        if cairn_opens != expected {
+            differ.push(format!(
+                "{value:?}: git opens {expected:?}, Cairn {opened:?}"
+            ));
+        }
+        opened_by_git.push((value, expected.is_some()));
+    }
+    assert!(differ.is_empty(), "{}", differ.join("\n"));
+    // The oracle decides something: git stops at the boundary unless told to cross it.
+    assert!(opened_by_git.contains(&("", false)), "{opened_by_git:?}");
+    assert!(opened_by_git.contains(&("true", true)), "{opened_by_git:?}");
+}
+
+/// Unmounts the tmpfs before the working tree is removed, so its removal can finish.
+struct Unmounted(PathBuf);
+
+impl Drop for Unmounted {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("umount").arg(&self.0).status();
+    }
+}

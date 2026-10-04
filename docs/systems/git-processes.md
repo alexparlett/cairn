@@ -401,8 +401,26 @@ applies git 2.45's rule with the process's own environment. A repository
 that passes is named to git as before.
 
 The search that is checked is the search that opens. `bare_discovery::find`
-walks once, from the physical directory upwards as git does (and, as git and
-gix do by default, not into another filesystem), and hands back where it
+walks once, from the physical directory upwards as git does, bounded as the
+user's own git bounds it from the launch environment: never into the longest
+`GIT_CEILING_DIRECTORIES` entry above the starting directory (split at `:`,
+relative entries dropped, each resolved as `real_pathdup` resolves it — or
+kept as written once an empty entry has been seen — the ceiling itself never
+searched and a directory never its own ceiling), and not into another
+filesystem unless `GIT_DISCOVERY_ACROSS_FILESYSTEM` is true as `git_env_bool`
+reads it (a value git dies on is `Error::InvalidConfig`) — `setup.c`'s
+`setup_git_directory_gently_1` and `path.c`'s `longest_ancestor_length`,
+the same at every tag from v2.30.0 to v2.56.0. Without that, a ceiling under
+which the user's git says "not a git repository" would have Cairn open the
+enclosing repository and name it to git with `--git-dir`, which no ceiling
+stops. Both are read for this search alone and are not on the roster a
+child inherits. Pinned against the git in use by
+`a_ceiling_stops_cairns_search_exactly_where_it_stops_gits` and
+`the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it`
+(`crates/cairn-git/tests/diff/bare_discovery.rs`; the second mounts a
+`tmpfs` in a user and mount namespace, and says it skipped where there is
+none, the unit tests in `bare_discovery.rs` reading the variable either
+way). It hands back where it
 stopped — the `.git` of a working tree, or a git directory found as itself —
 and gix opens exactly that path (`ThreadSafeRepository::open_opts` with the
 path taken as it is, at full trust, git's own checks having passed), never

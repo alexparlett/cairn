@@ -49,8 +49,11 @@
 //! every command with it; and a git built `WITH_BREAKING_CHANGES` before 3.0 defaults to
 //! `explicit` where this reads `all`.
 //!
-//! The search that is checked is the search that opens: [`find`] hands back where it
-//! stopped, and `SharedRepository` decides ownership over exactly that
+//! The search climbs no higher than the user's own git would from the same place: not into
+//! a `GIT_CEILING_DIRECTORIES` ceiling, and not across a filesystem boundary unless
+//! `GIT_DISCOVERY_ACROSS_FILESYSTEM` says so, both read from the launch environment
+//! (`Bounds`). The search that is checked is the search that opens: [`find`] hands back
+//! where it stopped, and `SharedRepository` decides ownership over exactly that
 //! (`crate::ownership`) and opens exactly that, never searching again.
 
 use std::ffi::{OsStr, OsString};
@@ -101,7 +104,8 @@ pub(crate) fn find(
     version: GitVersion,
     environment: &dyn Fn(&str) -> Option<OsString>,
 ) -> Result<Stop, Error> {
-    let stop = search(start, version)
+    let bounds = Bounds::from(environment)?;
+    let stop = search(start, version, &bounds)
         .map_err(|dot_git| Error::NotARepository { path: dot_git })?
         .ok_or_else(|| Error::NotARepository {
             path: start.to_owned(),
@@ -147,11 +151,12 @@ impl Stop {
 /// Git's search from `start`: from the physical directory upwards (git searches from
 /// `getcwd`, which resolves links), the first directory with a `.git` that is a repository
 /// is a working tree, and the first that is itself a git directory is a bare repository; a
-/// directory named `.git` is checked as itself, which git also ends up doing. Like git, and
-/// like the search gix makes by default, it does not cross into another filesystem.
-/// `Ok(None)` when it finds nothing, or `start` is not a directory that can be read;
-/// `Err` with the `.git` the git at `version` stops on ([`dot_git`]).
-fn search(start: &Path, version: GitVersion) -> Result<Option<Stop>, PathBuf> {
+/// directory named `.git` is checked as itself, which git also ends up doing. It climbs no
+/// higher than `bounds` let git climb: never into the longest ceiling above the starting
+/// directory, and — unless `GIT_DISCOVERY_ACROSS_FILESYSTEM` says otherwise — never into
+/// another filesystem. `Ok(None)` when it finds nothing, or `start` is not a directory
+/// that can be read; `Err` with the `.git` the git at `version` stops on ([`dot_git`]).
+fn search(start: &Path, version: GitVersion, bounds: &Bounds) -> Result<Option<Stop>, PathBuf> {
     use std::os::unix::fs::MetadataExt as _;
 
     let Ok(mut cursor) = std::fs::canonicalize(start) else {
@@ -161,8 +166,10 @@ fn search(start: &Path, version: GitVersion) -> Result<Option<Stop>, PathBuf> {
     let Some(start_device) = device(&cursor) else {
         return Ok(None);
     };
+    // Measured once, against the directory the search starts from, as git measures it.
+    let ceiling = longest_ancestor_length(cursor.as_os_str().as_bytes(), &bounds.ceilings);
     loop {
-        if device(&cursor) != Some(start_device) {
+        if bounds.one_filesystem && device(&cursor) != Some(start_device) {
             return Ok(None);
         }
         let dot_git = cursor.join(".git");
@@ -176,10 +183,106 @@ fn search(start: &Path, version: GitVersion) -> Result<Option<Stop>, PathBuf> {
         if gix::discover::is_git(&cursor).is_ok() {
             return Ok(Some(Stop::GitDirectory(cursor)));
         }
+        // git steps up to the separator before the last component and stops when that
+        // separator is at or above the ceiling's end, so the ceiling itself is never
+        // searched (`setup_git_directory_gently_1`'s `ceil_offset`).
+        let separator = cursor
+            .as_os_str()
+            .as_bytes()
+            .iter()
+            .rposition(|byte| *byte == b'/');
+        if separator.is_some_and(|at| ceiling.is_some_and(|end| at <= end)) {
+            return Ok(None);
+        }
         if !cursor.pop() {
             return Ok(None);
         }
     }
+}
+
+/// `GIT_CEILING_DIRECTORIES`, the variable git's search reads its ceilings from.
+const CEILING_DIRECTORIES: &str = "GIT_CEILING_DIRECTORIES";
+/// `GIT_DISCOVERY_ACROSS_FILESYSTEM`, the variable that lets git's search cross into
+/// another filesystem.
+const ACROSS_FILESYSTEM: &str = "GIT_DISCOVERY_ACROSS_FILESYSTEM";
+
+/// How far git's search may climb, read from the launch environment as
+/// `setup_git_directory_gently_1` reads it — the same at every tag from v2.30.0 to v2.56.0
+/// (read at v2.30.9, v2.38.0, v2.45.0, v2.54.0 and v2.56.0). Cairn reads both for its own
+/// search alone: every `git` it runs is named the repository (`--git-dir`), which no
+/// ceiling or boundary stops, and neither variable is on the roster a child inherits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Bounds {
+    /// The ceilings that count, as `canonicalize_ceiling_entry` leaves them.
+    ceilings: Vec<Vec<u8>>,
+    /// Whether the search stops at a filesystem boundary: git's `one_filesystem`.
+    one_filesystem: bool,
+}
+
+impl Bounds {
+    /// Both variables as `environment` holds them. `GIT_DISCOVERY_ACROSS_FILESYSTEM` is
+    /// `git_env_bool`'s: unset or false keeps the search on one filesystem, and a value it
+    /// cannot read as a boolean is one git dies on before searching
+    /// ([`Error::InvalidConfig`]).
+    fn from(environment: &dyn Fn(&str) -> Option<OsString>) -> Result<Self, Error> {
+        let across = environment(ACROSS_FILESYSTEM);
+        let crosses =
+            crate::ownership::env_bool(across.as_deref()).ok_or_else(|| Error::InvalidConfig {
+                key: ACROSS_FILESYSTEM.to_owned(),
+                value: across
+                    .as_deref()
+                    .map(OsStr::to_string_lossy)
+                    .unwrap_or_default()
+                    .into_owned(),
+            })?;
+        Ok(Self {
+            ceilings: ceilings(environment(CEILING_DIRECTORIES).as_deref()),
+            one_filesystem: !crosses,
+        })
+    }
+}
+
+/// `GIT_CEILING_DIRECTORIES` as git's search reads it: split at every `:`, an empty entry
+/// dropped — and every entry after it kept exactly as written, unresolved — a relative
+/// entry dropped, and any other resolved as `real_pathdup` resolves it (links followed,
+/// `.` and `..` read, only the last component allowed to be missing), dropped where that
+/// fails (`canonicalize_ceiling_entry`).
+fn ceilings(value: Option<&OsStr>) -> Vec<Vec<u8>> {
+    let Some(value) = value else {
+        return Vec::new();
+    };
+    let mut empty_entry_found = false;
+    let mut kept = Vec::new();
+    for entry in value.as_bytes().split(|byte| *byte == b':') {
+        if entry.is_empty() {
+            empty_entry_found = true;
+        } else if entry.first() != Some(&b'/') {
+            continue;
+        } else if empty_entry_found {
+            kept.push(entry.to_vec());
+        } else if let Some(real) = crate::ownership::real_path(entry, Path::new("/")) {
+            kept.push(real);
+        }
+    }
+    kept
+}
+
+/// `longest_ancestor_length` in git's `path.c`: the length, without a trailing `/`, of the
+/// longest ceiling that is a strict ancestor of `path` — `/foo` is not one of `/foobar`, a
+/// directory is not its own, and `/` has none — or `None`.
+fn longest_ancestor_length(path: &[u8], ceilings: &[Vec<u8>]) -> Option<usize> {
+    if path == b"/" {
+        return None;
+    }
+    ceilings
+        .iter()
+        .filter_map(|ceiling| {
+            let len = ceiling.len() - usize::from(ceiling.last() == Some(&b'/'));
+            let ancestor =
+                path.len() > len + 1 && path[..len] == ceiling[..len] && path[len] == b'/';
+            ancestor.then_some(len)
+        })
+        .max()
 }
 
 /// What git's search makes of one directory's `.git`.
@@ -645,6 +748,124 @@ mod tests {
         }
     }
 
+    /// No ceiling, and the search kept to one filesystem: git's search with neither
+    /// variable set.
+    const UNBOUNDED: Bounds = Bounds {
+        ceilings: Vec::new(),
+        one_filesystem: true,
+    };
+
+    fn ancestor(path: &str, ceilings: &[&str]) -> Option<usize> {
+        let ceilings: Vec<Vec<u8>> = ceilings.iter().map(|c| c.as_bytes().to_vec()).collect();
+        longest_ancestor_length(path.as_bytes(), &ceilings)
+    }
+
+    /// `longest_ancestor_length`, as git's `path.c` has it at every tag from v2.30.0 to
+    /// v2.56.0, over the cases its own comment names. Caught by: a prefix matched without
+    /// its separator (`/foo` over `/foobar`), a directory counted as its own ancestor, the
+    /// trailing slash kept in the length, or the shortest ceiling winning.
+    #[test]
+    fn the_longest_ceiling_above_a_directory_is_measured_as_git_measures_it() {
+        assert_eq!(ancestor("/a/b/c", &["/a"]), Some(2));
+        assert_eq!(ancestor("/a/b/c", &["/a/"]), Some(2));
+        assert_eq!(ancestor("/a/b/c", &["/a", "/a/b"]), Some(4));
+        assert_eq!(ancestor("/a/b/c", &["/a/b", "/a"]), Some(4));
+        assert_eq!(ancestor("/a/b/c", &["/"]), Some(0));
+        assert_eq!(ancestor("/", &["/"]), None, "/ has no ancestor");
+        assert_eq!(ancestor("/a/b", &["/a/b"]), None, "not its own ancestor");
+        assert_eq!(
+            ancestor("/a/bc", &["/a/b"]),
+            None,
+            "/a/b is not above /a/bc"
+        );
+        assert_eq!(ancestor("/a/b", &["/x", "/a/b/c"]), None);
+        assert_eq!(ancestor("/a/b", &[]), None);
+        assert_eq!(
+            ancestor("/a//b", &["/a/"]),
+            Some(2),
+            "compared as bytes, as git does"
+        );
+    }
+
+    fn ceilings_of(value: &str) -> Vec<String> {
+        ceilings(Some(OsStr::new(value)))
+            .into_iter()
+            .map(|entry| String::from_utf8_lossy(&entry).into_owned())
+            .collect()
+    }
+
+    /// `canonicalize_ceiling_entry`: an empty entry dropped and every entry after it kept
+    /// as written; relative entries dropped; the rest resolved as `real_pathdup` resolves
+    /// them, or dropped where it fails. Caught by: resolving after an empty entry, keeping a
+    /// relative entry, or keeping one whose middle component is missing.
+    #[test]
+    fn ceiling_entries_are_read_as_git_reads_them() {
+        let root = std::env::temp_dir().join(format!("cairn-ceilings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("real")).unwrap_or_else(|e| panic!("{e}"));
+        std::os::unix::fs::symlink("real", root.join("link")).unwrap_or_else(|e| panic!("{e}"));
+        let root = std::fs::canonicalize(&root).unwrap_or_else(|e| panic!("{e}"));
+        let r = root.display().to_string();
+        assert_eq!(ceilings(None), Vec::<Vec<u8>>::new());
+        assert_eq!(ceilings_of(""), Vec::<String>::new());
+        assert_eq!(ceilings_of(&format!("{r}/link")), [format!("{r}/real")]);
+        assert_eq!(
+            ceilings_of(&format!("{r}/real/../link/")),
+            [format!("{r}/real")]
+        );
+        assert_eq!(
+            ceilings_of(&format!("{r}/missing")),
+            [format!("{r}/missing")]
+        );
+        assert_eq!(
+            ceilings_of(&format!("{r}/missing/deeper")),
+            Vec::<String>::new()
+        );
+        assert_eq!(ceilings_of("relative:./x:../y"), Vec::<String>::new());
+        assert_eq!(
+            ceilings_of(&format!("{r}/link::{r}/link:relative:{r}/real/..")),
+            [
+                format!("{r}/real"),
+                format!("{r}/link"),
+                format!("{r}/real/..")
+            ],
+            "an empty entry leaves every entry after it as written"
+        );
+        assert_eq!(ceilings_of("/"), ["/"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `GIT_DISCOVERY_ACROSS_FILESYSTEM` as `git_env_bool` reads it: unset, empty or false
+    /// keeps the search on one filesystem, true or a non-zero number lifts that, and
+    /// anything else is a value git dies on. Caught by: a set-but-empty variable read as
+    /// true, or a value git dies on read as either.
+    #[test]
+    fn crossing_filesystems_is_read_as_git_reads_a_boolean() {
+        let bounds = |value: Option<&str>| {
+            let value = value.map(OsString::from);
+            Bounds::from(&move |name: &str| {
+                (name == ACROSS_FILESYSTEM).then(|| value.clone()).flatten()
+            })
+        };
+        let one = |value: Option<&str>| match bounds(value) {
+            Ok(bounds) => bounds.one_filesystem,
+            Err(error) => panic!("{value:?}: {error}"),
+        };
+        assert!(one(None));
+        for value in ["", "0", "false", "No", "OFF"] {
+            assert!(one(Some(value)), "{value:?}");
+        }
+        for value in ["1", "true", "YES", "on", "2", "-1", "0x10", "1k"] {
+            assert!(!one(Some(value)), "{value:?}");
+        }
+        for value in ["sometimes", "1x", " "] {
+            assert!(
+                matches!(bounds(Some(value)), Err(Error::InvalidConfig { ref key, .. }) if key == ACROSS_FILESYSTEM),
+                "{value:?}"
+            );
+        }
+    }
+
     /// Each band of git's rule, at its edges. Caught by: a band moved by a version, a
     /// `.git` directory allowed before 2.44, or a worktree's allowed before 2.45.
     #[test]
@@ -774,14 +995,14 @@ mod tests {
             _ => None,
         };
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let git_dir = match search(root, at(2, 56, 0)) {
+        let git_dir = match search(root, at(2, 56, 0), &UNBOUNDED) {
             Ok(Some(Stop::WorkTree(dot_git))) => {
                 gix::discover::path::from_gitdir_file(&dot_git).unwrap_or_else(|_| dot_git.clone())
             }
             _ => panic!("this checkout is not a working tree"),
         };
         assert!(matches!(
-            search(&git_dir, at(2, 56, 0)),
+            search(&git_dir, at(2, 56, 0), &UNBOUNDED),
             Ok(Some(Stop::GitDirectory(_)))
         ));
         assert!(find(&git_dir, at(2, 37, 7), &environment).is_ok());

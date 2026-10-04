@@ -325,7 +325,7 @@ fn uid_from(text: &[u8]) -> Option<u32> {
 /// `false`, `no`, `off` and `true`, `yes`, `on` without case, or an `int` as
 /// `git_parse_int` reads one, true when not zero — and `None` for anything else, a value
 /// git stops on.
-fn env_bool(value: Option<&OsStr>) -> Option<bool> {
+pub(crate) fn env_bool(value: Option<&OsStr>) -> Option<bool> {
     let Some(value) = value else {
         return Some(false);
     };
@@ -706,7 +706,7 @@ fn expand(rule: &Rule, value: &[u8], place: &Place<'_>) -> Result<Option<Vec<u8>
 /// component from the root or, relative, from `cwd` — empty components and `.` skipped,
 /// `..` taking the last resolved component off, each link replaced by its target — with
 /// only the last component allowed to be missing. `None` where git's fails.
-fn real_path(path: &[u8], cwd: &Path) -> Option<Vec<u8>> {
+pub(crate) fn real_path(path: &[u8], cwd: &Path) -> Option<Vec<u8>> {
     if path.is_empty() {
         return None;
     }

@@ -23,7 +23,11 @@
 //! The check reads the repository afresh rather than through the handle the
 //! worker opened at startup, because gix reads configuration once at open and
 //! `git` reads it on every run: a refspec added in a terminal since Cairn
-//! started must be seen by the same fetch that would act on it. It reads it
+//! started must be seen by the same fetch that would act on it. It opens it as
+//! the repository Cairn already admitted — fully trusted, every configuration
+//! section read — never letting gix decide trust again by its own owner rule,
+//! under which a repository git admits could have its `remote.*` sections
+//! hidden and the check see no remote at all (`as_admitted`). It reads it
 //! the way the child will: the child's environment is built, never inherited
 //! (`GitEnvironment`), so a `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_NOSYSTEM` or
 //! `GIT_CONFIG_COUNT` in Cairn's own environment never reaches git, and gix
@@ -51,14 +55,12 @@ use crate::error::RefusedWrite;
 /// configuration would have it write local branches or, with pruning on,
 /// delete local tags; see the module docs.
 pub(crate) fn check(git_dir: &Path, remote: &str) -> Result<(), Error> {
-    let repo = gix::open_opts(
-        git_dir,
-        Options::default().permissions(as_the_child_reads()),
-    )
-    .map_err(|source| Error::Open {
+    let repo = gix::open_opts(git_dir, as_admitted()).map_err(|source| Error::Open {
         path: git_dir.to_owned(),
         source: Box::new(source),
     })?;
+    // Every section is read (`as_admitted`), so no remote is hidden here that a file names:
+    // `None` is a remote no configuration file has, which git too fetches as a URL or refuses.
     let Some(found) = repo.try_find_remote(remote.as_bytes().as_bstr()) else {
         return Ok(());
     };
@@ -98,6 +100,32 @@ pub(crate) fn check(git_dir: &Path, remote: &str) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+/// Open the repository as the one Cairn already admitted, never deciding trust again: git's
+/// ownership check passed when it was opened (`crate::ownership`), and git applies no trust
+/// to configuration after that — it reads every file. Left to its own owner rule, gix opens
+/// a repository whose git directory is another user's at reduced trust even where git
+/// admits it (a `safe.directory` on the command line, `.`, a normalised entry, a root
+/// `SUDO_UID`), and at reduced trust its remote lookup filters the repository's own
+/// `remote.*` sections out, which would have this check see no remote and pass the fetch
+/// git then makes with the real `remote.<name>.mirror` in force. So the git directory is
+/// declared fully trusted, every configuration section is admitted to every lookup, and
+/// the allocation limit gix gives reduced trust is off, as at open
+/// (`crate::repository`).
+fn as_admitted() -> Options {
+    use gix::sec::trust::DefaultForLevel as _;
+    let trust = gix::sec::Trust::Full;
+    Options::default_for_level(trust)
+        .with(trust)
+        .permissions(as_the_child_reads())
+        .filter_config_section(every_section)
+        .config_overrides([crate::repository::NO_REDUCED_TRUST_ALLOCATION_LIMIT])
+}
+
+/// The section filter git has: none.
+fn every_section(_: &gix::config::file::Metadata) -> bool {
+    true
 }
 
 /// Read configuration as the child git will: from the files, never from

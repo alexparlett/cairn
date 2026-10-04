@@ -22,7 +22,8 @@ const NEWEST_RULE: GitVersion = GitVersion {
 /// gix's `gitoxide.objects.allocLimitIfReducedTrust` at zero, which turns off the
 /// allocation limit gix gives a repository it trusts less than fully: git reads an object
 /// of any size in a repository it opens.
-const NO_REDUCED_TRUST_ALLOCATION_LIMIT: &str = "gitoxide.objects.allocLimitIfReducedTrust=0";
+pub(crate) const NO_REDUCED_TRUST_ALLOCATION_LIMIT: &str =
+    "gitoxide.objects.allocLimitIfReducedTrust=0";
 
 pub struct SharedRepository {
     inner: gix::ThreadSafeRepository,
@@ -125,7 +126,11 @@ impl SharedRepository {
         // change is undone: the repository's configuration was loaded at full trust and
         // stays so, the `git` Cairn runs is named the repository whatever the trust
         // (`process/cli.rs`), and the one other effect — a 16 MiB ceiling on any object
-        // gix reads, which git does not have — is switched off here.
+        // gix reads, which git does not have — is switched off here. That holds for THIS
+        // open only: a second open of the repository left to gix's own rule loads the
+        // repository's configuration at reduced trust where its git directory is another
+        // user's, and gix's lookups then filter it out, so every other open declares full
+        // trust too (`ops::refspec_policy`, which also admits every section).
         let options = gix::open::Options::default_for_level(trust)
             .with(trust)
             .config_overrides([NO_REDUCED_TRUST_ALLOCATION_LIMIT])

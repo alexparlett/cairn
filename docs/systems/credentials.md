@@ -238,7 +238,13 @@ never enters `cairn-git` and never enters application state.
   fetch from a button never may: `ops/refspec_policy.rs` reads the remote's
   configuration afresh before any process starts (gix reads it once at open,
   git on every run, so a refspec added in a terminal since Cairn started is
-  seen), and reads it as the child git will — from the files, with Cairn's
+  seen), opens it as the repository Cairn admitted — full trust, every
+  configuration section read, never gix's own owner rule, under which a
+  repository whose git directory is another user's would have its
+  `remote.*` sections hidden and the check pass a mirror
+  (`the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git`,
+  which needs a user namespace with a second uid and says so when skipped)
+  — and reads it as the child git will — from the files, with Cairn's
   own `GIT_CONFIG_*` environment denied, since the child never inherits it
   (`the_refspec_check_ignores_config_from_cairns_own_environment`, over both
   `GIT_CONFIG_COUNT` and `GIT_CONFIG_GLOBAL`); the one file the two can

@@ -332,7 +332,7 @@ directory `core.worktree` names, by `is_path_owned_by_current_user`, with
 written — and where that refuses, lowers the repository to reduced trust,
 which no open option prevents (`Options::with(Trust::Full)` sets the git
 directory's trust only; gix 0.87.1 `open_from_paths`). That rule is not
-git's and decides nothing: the repository's configuration was loaded at
+git's and, in that open, decides nothing: the repository's configuration was loaded at
 full trust and is read whole, the allocation limit gix gives reduced trust
 (16 MiB per object) is switched off at open
 (`gitoxide.objects.allocLimitIfReducedTrust=0`), and the repository is named
@@ -342,7 +342,18 @@ itself, since its environment carries none of the launch environment's
 `a_repository_cairn_admits_is_read_as_git_reads_it_whatever_gix_makes_of_its_owner`
 (`core.worktree = /`, which root owns, under each admitting setting: the
 changes query answers, a 17 MiB blob is read, the repository's own
-`diff.context` holds) and in `process/cli.rs` by
+`diff.context` holds). That holds for the open that judged the repository,
+not for gix's own rule anywhere else: a second open left to it loads the
+repository's configuration at reduced trust where the git directory is
+another user's, and gix's lookups (`try_find_remote` above all) then filter
+the repository's own sections out. So the one other open, fetch's refspec
+check (`ops/refspec_policy.rs`), declares full trust and admits every
+section too, and a repository git admits that gix's rule would not — a
+command-line `safe.directory`, `.`, a normalised entry — has its
+`remote.<name>.mirror` seen and the fetch refused
+(`the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git`,
+`tests/fetch.rs`, in a user namespace with a second uid, skipped saying so
+where there is none). Pinned also in `process/cli.rs` by
 `every_repository_is_named_to_git_whatever_trust_gix_gave_it`. Pinned against git
 itself by `a_repository_opens_exactly_where_git_opens_it_whatever_safe_directory_says`
 (`crates/cairn-git/tests/diff/ownership.rs`, every shape under every
@@ -444,9 +455,10 @@ command line's parsing by
 `bare_discovery.rs`; and the application's open by
 `a_planted_bare_repository_is_refused_as_the_launchs_git_refuses_it`
 (`crates/cairn-app/src/worker/pool.rs`). Residual, stated rather than
-implied: no fixture can make a
+implied: no fixture outside a user namespace can make a
 repository its own user does not own, so a real second owner is decided by
-the privileged run above, and every other case through
+the privileged run above (and, for the refspec check, by the namespace test
+where `/etc/subuid` gives one), and every other case through
 `GIT_TEST_ASSUME_DIFFERENT_OWNER` or an injected identity; gix's own
 reduced trust, for a repository whose working tree its rule refuses, is
 undone as "Where an invocation runs" says, and anything else gix keys on

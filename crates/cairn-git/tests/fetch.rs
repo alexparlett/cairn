@@ -1166,6 +1166,112 @@ fn an_unreadable_remote_configuration_is_reported_and_starts_nothing() {
     assert!(!recording.ran(), "a git process was started");
 }
 
+/// The check reads the remote of a repository Cairn admitted whatever gix's own owner rule
+/// makes of it. A git directory owned by another user that git admits — here through
+/// `safe.directory=*` on the command line, which gix's rule never reads (it takes
+/// `safe.directory` from the system and global files only) — is one gix opens at reduced
+/// trust by default, and at reduced trust it hides the repository's own `remote.*`
+/// sections (`try_find_remote` filters them), so a check left to gix's rule saw no remote
+/// and let a mirror fetch through. A second owner without root takes a user namespace with
+/// a second uid mapped (`unshare --map-root-user --map-auto`, from `/etc/subuid`); where
+/// there is none the test says so and decides nothing. Caught by: the check leaving trust to
+/// gix's own rule, which loads the repository's configuration at reduced trust and then
+/// filters its remote out of the lookup.
+#[test]
+fn the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git() {
+    let inner = "the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git_inner";
+    let available = std::process::Command::new("unshare")
+        .args(["--map-root-user", "--map-auto", "true"])
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !available {
+        eprintln!(
+            "SKIPPED the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git: \
+             no user namespace with a second uid here, so no second owner"
+        );
+        return;
+    }
+    let exe = std::env::current_exe().unwrap_or_else(|e| panic!("{e}"));
+    // No global or system file: what admits the repository is the command line alone.
+    let home = fixtures::unborn();
+    let output = std::process::Command::new("unshare")
+        .args(["--map-root-user", "--map-auto"])
+        .arg(exe)
+        .args(["--exact", inner, "--include-ignored", "--nocapture"])
+        .env("GIT_CONFIG_PARAMETERS", "'safe.directory=*'")
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("CAIRN_TEST_INNER", "1")
+        .output()
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        output.status.success(),
+        "the inner test failed in the user namespace:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "the inner test did not run:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// The inner half of the test above, run as root of a user namespace in which uid 1 is
+/// somebody else; ignored so it runs only under its parent.
+#[test]
+#[ignore = "run by the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git"]
+fn the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git_inner() {
+    assert_eq!(
+        std::env::var("GIT_CONFIG_PARAMETERS").as_deref(),
+        Ok("'safe.directory=*'"),
+        "not running under the parent test"
+    );
+    let source = fixtures::braided(2);
+    let serving = Serving::serving(refusing());
+    for (settings, expected_setting, write) in [
+        (
+            ("remote.origin.mirror", "true"),
+            "remote.origin.mirror = true",
+            cairn_git::RefusedWrite::Mirror,
+        ),
+        (
+            ("remote.origin.fetch", "+refs/heads/*:refs/heads/*"),
+            "remote.origin.fetch = +refs/heads/*:refs/heads/*",
+            cairn_git::RefusedWrite::LocalBranches,
+        ),
+    ] {
+        let local = with_origin(&source.path().display().to_string());
+        local.git(&["config", settings.0, settings.1]);
+        let chown = std::process::Command::new("chown")
+            .args(["-R", "1:1"])
+            .arg(local.path())
+            .status()
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(chown.success(), "could not give the repository to uid 1");
+        // The reproduction holds: gix by its own rule trusts this repository less than fully,
+        // and git, without the command line's entry, refuses it as someone else's.
+        let gix_trust = gix::open(local.path())
+            .unwrap_or_else(|e| panic!("{e}"))
+            .git_dir_trust();
+        assert_eq!(gix_trust, gix::sec::Trust::Reduced, "gix trusts it fully");
+        let without = std::process::Command::new("git")
+            .arg("-C")
+            .arg(local.path())
+            .args(["rev-parse", "--git-dir"])
+            .env_remove("GIT_CONFIG_PARAMETERS")
+            .output()
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            String::from_utf8_lossy(&without.stderr).contains("dubious ownership"),
+            "git does not see another owner: {}",
+            String::from_utf8_lossy(&without.stderr)
+        );
+        refused_before_any_git_ran(&local, &serving, expected_setting, write);
+    }
+}
+
 // ── SSH ─────────────────────────────────────────────────────────────────────
 
 /// PRD B3 over ssh: the key's passphrase is asked once, through the helper,

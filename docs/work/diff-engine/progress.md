@@ -3,6 +3,149 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-04 — Phase 09: the merge-bar QA's first round fixed, and the user's four decisions
+
+Packet mode, committed to `feature/diff-engine`. The merge-bar QA over the whole packet:
+21 raw findings, 14 confirmed by `qa-confirm`, one escalated (F16, `reload_if`), six
+dismissed. Every confirmed finding is fixed or recorded below, and the user's decisions of
+2026-10-04 are applied.
+
+**The user's decisions.**
+
+1. *D1, merge method: the packet PR is squash-merged.* That is why three process findings
+   stay moot rather than being fixed by rewriting history: phase 06's C4 (`abf2c61` alone
+   does not compile `cairn-git`'s test target), phase 01's QC-9 (`daed55d`'s body longer
+   than four sentences) and F14 below. No commit of this branch reaches `main` on its own.
+2. *D2, `core.fsmonitor=true`, option A: accepted as parity and documented.* Under git's
+   builtin daemon, `diff-tree`, `check-attr --stdin -z diff`, `diff-files` and `diff-index
+   --cached` each start `git fsmonitor--daemon` when none is running (re-probed on git
+   2.56.0 under `GIT_OPTIONAL_LOCKS=0`); `diff --no-index` does not. The daemon runs in a
+   session of its own — outside the read's process group, the repository's registry and
+   `SharedRepository::end_invocations` — outlives the read and the application, and
+   creates `.git/fsmonitor--daemon.ipc` and `.git/fsmonitor--daemon/`; the user's own `git
+   diff` and `git status` do the same, and only `-c core.fsmonitor=false` would prevent
+   it. The "git directory byte-identical" claim is narrowed to "no object, ref, index or
+   config is written; git's own fsmonitor daemon files excepted" in `crates/cairn-git/src/reads/`
+   (`mod.rs`, `working_tree.rs`, `patches.rs`, `attributes.rs`), `docs/design/engine.md`,
+   `docs/systems/diff.md`, `docs/systems/git-processes.md` (the read rule, and the close,
+   which names the daemon beside auto-maintenance as outside it) and root `CLAUDE.md`.
+   Pinned by `a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files`
+   (`crates/cairn-git/tests/diff/fsmonitor.rs`): the reads run under `core.fsmonitor=true`,
+   the daemon's socket and directory must appear and the daemon must still be running once
+   Cairn's handles are dropped, and nothing else under `.git` may change (the snapshot
+   records a socket as a marker, since `read` cannot open one); a drop guard runs `git
+   fsmonitor--daemon stop` however the test ends. It prints `SKIPPED <name>: <reason>` —
+   the form `scripts/git-floor.sh` collects — below git 2.36, for a git built without the
+   daemon (`git version --build-options`), and where a throwaway repository beside the
+   fixture cannot start one (the filesystem); so it skips under both floor gits.
+3. *D3, ownership at open, option A: match git.* `SharedRepository::discover_as` took its
+   trust from the `.git` the search stopped at (`gix::sec::Trust::from_path_ownership`),
+   and gix's open added the working tree's top; but a fully trusted repository is named to
+   git with `--git-dir`/`--work-tree` (`process/cli.rs`, `repository_location`), which
+   skips git's own `safe.directory` check, and git's discovery (`ensure_valid_ownership`
+   in `setup.c`, read at v2.56.0 from the scratch copy) checks three paths: the `.git`
+   file when the git directory is reached through one, the working tree's top, and the
+   git directory — for a `.git` file the directory it names. So a linked worktree's or a
+   submodule checkout's `.git` file the user owned vouched for a git directory someone
+   else owned. New module `crates/cairn-git/src/ownership.rs`: `owners` asks an `owned`
+   answer about exactly the paths git checks (the git directory a `.git` file names
+   resolved with `gix::discover::path::from_gitdir_file` then `canonicalize`, as git's
+   `real_path`; a `.git` that stats as a directory is the git directory itself; a bare
+   repository has only its git directory), and `Owners::trust` is full only when every one
+   is owned. `safe.directory` is unchanged: gix still raises a less-than-fully-trusted
+   repository to full as it opens exactly when the setting names its working tree, or its
+   git directory when bare (`check_safe_directories`, gix 0.87.1's `open/repository.rs`,
+   verified in the vendored source, as is `gix::sec::identity::is_path_owned_by_current_user`,
+   an `lstat` like git's). `crate::bare_discovery::find` now hands back its `Stop` so the
+   ownership is decided over exactly the search that opens. The real chown case needs a
+   second owner, so it is a privileged review step, not a gate step:
+   `a_linked_worktree_whose_git_dir_is_someone_elses_is_refused_as_git_refuses_it`
+   (`#[ignore]`d in `crates/cairn-git/tests/diff/ownership.rs`) — run as root, it gives a
+   linked worktree's `.git/worktrees/<name>` to uid 65534, requires the user's own `git
+   status` there to refuse with "dubious ownership", and requires Cairn's changes query to
+   be refused by git the same way. Not run here (no root); run unprivileged it stops at the
+   `chown` with "run this test as root", which is what it says. Docs: `docs/systems/git-processes.md`
+   ("Where an invocation runs" and its residual), `docs/systems/diff.md`, the
+   `discover_for` and `repository_location` doc comments, and `bare_discovery`'s module doc.
+4. *D4, `reload_if`'s history-sized free on the UI thread (F16):* goes to a GitHub issue,
+   filed by the coordinator; the code is untouched here, and root `CLAUDE.md` now states it
+   as true today (F4b below).
+
+**Fixed, RED then GREEN.**
+
+| Finding | Test | RED |
+| --- | --- | --- |
+| F11 | `a_seeded_selection_stages_what_its_patch_says_it_does` (`crates/cairn-git/tests/diff/patches.rs`): "one line" and "one line, no newline" added to the shapes roster; the crafted fixture gains a `one line edit` commit (before `mode and content`, so `mode change` and `type change` stay `HEAD~1` and `HEAD`) editing `one-line.txt` and a new `one-line-no-eol.txt` (seeded in `endings`, one line with no final newline on both sides), so `@@ -1 +1 @@` goes through real `git apply --cached` | the roster before the fixture commit: "no one line file reached the seeded selections: ["added", "crlf context", "deleted", "mode change", "modified", "removal only", "rename", "two hunks", "type change"]". Every other test over `repositories::crafted()` still passes with no count changed: `a_comparison_of_two_commits_is_tip_against_tip`'s `HEAD~5` is now a different commit and is still compared against git's own answer; `every_crafted_file_diff_is_the_one_git_prints`'s `compared >= 24` floor holds with more files |
+| D2 | `a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files` | written first asserting the old claim, every path under `.git` unchanged: "the git directory changed under a read: [".../.git/fsmonitor--daemon.ipc"]" (git 2.56.0) |
+| D3 | `trust_is_full_only_when_every_path_git_checks_is_owned` (every combination git distinguishes: bare 2, `.git` directory 4, `.git` file 8, spelled out), `each_path_git_checks_is_asked_about_and_no_other` (the paths asked, in order, for each shape, and a `.git` file naming nothing) | `Owners::trust` written as the old effective rule — the `.git`'s owner and gix's working-tree check: "Owners { gitfile: Some(true), work_tree: Some(true), git_dir: false } left: Full right: Reduced", and the `.git` file case of the second test the same |
+
+**Fixed, documents and enforcement.**
+
+- F1: `scripts/git-floor.sh`'s floors were slack (61 and 90 against 63 and 104 listed).
+  Re-counted at this tip: `--lib diff:: reads::` lists 63, `--test diff_engine` 106 (D2's
+  and D3's tests); the floors are 62 and 105, and the comment names the counts.
+- F2: `.claude/agents/destructive-ops-reviewer.md`'s description dispatches on `reads/`
+  as its body and `docs/qa-gate.md` do; `.claude/agents/qa-checklist.md` item 7 dispatches
+  on `reads/` and states its residual there — the porcelain-read twin reads literals, so a
+  verb assembled at run time, and whether a read's verb is plumbing or `status` at all, are
+  the review's.
+- F4: `only_the_ops_module_mutates_a_repository`'s message names `process/`, which the
+  check also skips.
+- F4b (with F18): root `CLAUDE.md`'s viewport residual names the two frees made on the UI
+  thread rather than through `Request::Retire`: `session.rs`'s `reload_if`, history-sized,
+  and `Updates::next` dropping a superseded answer `Update::into_retired` does not retire —
+  a page of rows, a filter's index list, a failure — each bounded by a page or the file
+  list. Owner: `responsiveness-reviewer`.
+- F8: `state.md` closes brainstorm Q1, answered by `docs/systems/diff.md`'s "Measured from
+  Fork, or chosen by Cairn" table.
+- F13: `docs/systems/diff.md` states as built how the diff view holds a diff
+  (`Readable<ShownDiff>`, a hand-written `PartialEq` over the handle).
+
+**F9, a correction to the phase 05 entry below** (not edited): its table names C13's pin
+`every_action_resolves_through_the_table_on_every_platform`, which does not exist. The pins
+are `the_table_is_forks_chords_and_no_others` and
+`every_chord_resolves_to_its_action_in_its_scope_only`, in
+`crates/cairn-ui/src/accelerators.rs`.
+
+**F14, a process deviation, recorded:** `b555780 feat(model)` changed
+`crates/cairn-model/src/diff_rows.rs` without a test in the same commit, against root
+`CLAUDE.md`'s rule for `cairn-model`. The tests landed in later commits and cover it at the
+tip. History is not rewritten; under D1's squash merge the commit never reaches `main` alone.
+
+**F5: the five dismissals recorded with no reason, recovered.** Each reason below is the
+`qa-confirm` adjudicator's, recovered from that round's transcript, and re-checked at this
+tip.
+
+| Round | Finding | The adjudicator's reason | Holds at HEAD? |
+| --- | --- | --- | --- |
+| Phase 07 | T3 | The mutant as stated is killed: `cut: whole - LINE_CUT_BYTES` underflows on every short line, the dev profile keeps overflow checks, so `plain_text_is_drawn_as_it_is_and_its_ranges_do_not_move` panics. The remainder (no test of `cut` on a line cut mid-character) was folded into T2's fix | Yes: `cut: whole - bytes.len()` in `crates/cairn-ui/src/diff_line_text.rs`, `[profile.dev]` sets only `opt-level`, and the mid-character `shown.cut` assertion is in that file's tests |
+| Phase 07 | T8 | The side-by-side column of git's no-newline marker is pinned by `side_by_side_puts_gits_marker_in_the_column_of_the_side_that_did_not_end`; git's output has no columns, so the parity flattening cannot and need not pin it | Yes: the test is in `crates/cairn-model/src/diff_rows.rs` |
+| Phase 05 | R3 | `loaded_row` runs once per parent-link press, not per frame, and its doc says so; the finding names no defect | Yes: `selection::loaded_row`'s doc, and root `CLAUDE.md`'s viewport residual names it (and the extending press since phase 08) |
+| Phase 05 | G5 | The `DiffContent` check calls the same `reads_enum_partially` as the `RowContent` check, whose self-test runs every shape through it | Yes, and stronger: `DiffContent` has its own self-test since, `the_diff_content_matcher_catches_the_shapes_it_claims` |
+| Phase 05 | "one more" | Recovered, but it was not a dismissal in the verdict list: the adjudicator's count of three dismissed was R3, G5 and the half of G3 that was wrong — G3 claimed the accelerator table's residual was unstated, when its public surface already was (root `CLAUDE.md`, `qa-checklist` item 11); G3 was downgraded and its other half (the table file exempt from the modifier scan) kept as a doc fix | Yes: root `CLAUDE.md` states the table's exemption, and `the_accelerator_table_holds_data_and_resolution_only` now guards what the table may hold |
+| Phase 03 | QC3 | The gix calls were checked against vendored gix 0.87.1 and gix-index 0.55.0 and are used as they behave: `open_index` decodes a fresh copy of the index (R3.3), `entry_range` covers every stage, `Flags::INTENT_TO_ADD` is decoded from the extended flags, and `is_sparse` means a DIR entry is present | Yes: the same calls in `crates/cairn-git/src/diff/working_tree.rs`; `Cargo.lock` still pins gix 0.87.1 and gix-index 0.55.0 |
+| Phase 02, round 3 | S3 | A hostile `xfuncname` regex can only stall the read, the user's own git stalls the same way, and the stall can be ended: the patches read polls its cancel while git runs, and an epoch or a cancel kills the process | Yes: `reads::patches` polls `cancel` on every tick; and phase 08's E4 showed a regex git cannot compile fails that one file, not the run |
+
+**Dismissed in this round, with the adjudicator's reasons.**
+
+- F3: `PROCESS_CALL_EXCEPTIONS` carries a reason, is dead-row-checked, and rests on guards
+  that hold (a `Command` in `cairn-app` is caught by the terminal-prompt twin, `.command(..)`
+  by the process matcher).
+- F10: supersession is decided at read time by the epoch, not by timing: `submit` bumps the
+  lane's epoch on the caller's thread and `Updates::next` drops a stale `FileDiff` when it
+  reads it.
+- F12: `a_stat_dirty_file_is_no_change` does run under `answers_writing_nothing`, which
+  snapshots `.git` around every query.
+- F15: `write_changes` and `worktree_file_to_object` are both on `GITOXIDE_MUTATION_IDENTS`
+  in `crates/cairn-guards/src/lib.rs`.
+- F17: the Changes tab clones one commit's details per re-render of the tab — bounded by one
+  commit's message, never by the history or the file list, and not per frame.
+- F21: `work_tree_relative` passes a symlinked directory component, but the path reaches it
+  only from Cairn's own listing, and `cairn-ui` cannot name the engine; an accepted
+  residual.
+
+**Gate.** `scripts/gate.sh`, all eight steps with `git-floor`: PASS (exit 0).
+
 ## 2026-10-04 — Phase 08 QA: fixed, and the user's decisions applied
 
 Packet mode, committed to `feature/diff-engine`. The QA round over phase 08: 22 raw findings,

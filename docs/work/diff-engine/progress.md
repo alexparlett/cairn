@@ -3,6 +3,78 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-04 — Fix round 4 (phase 09): fetch's refspec check, git's search bounds, the .git file
+
+Packet mode, committed to `feature/diff-engine`. Fresh review of c743890..58c5cc9; the
+user's decisions in force: ownership at open matches git, refuse at open where git refuses,
+and any divergence from what git shows is a critical bug.
+
+- **F1 (ops, failed open).** `ops/refspec_policy.rs` re-opened the repository with gix
+  deciding trust by its own owner rule: a git directory owned by another user that git
+  admits (a command-line `safe.directory`, `.`, a normalised entry) loaded its
+  configuration at reduced trust, `try_find_remote` filtered the repository's own
+  `remote.*` sections out (gix 0.87.1 `src/repository/remote.rs`,
+  `filter_config_section`), the check saw no remote and passed, and git fetched with
+  `remote.<name>.mirror` in force. Not reproducible by `core.worktree = /` as reported: the
+  git directory is the user's there, so its sections load at full trust (reproduced
+  passing). Reproduced instead in a user namespace with a second uid (`unshare
+  --map-root-user --map-auto`, the repository given to uid 1, `safe.directory=*` on the
+  command line). Fixed: the check opens `as_admitted` — `Trust::Full` declared, every
+  configuration section admitted (`filter_config_section`), the reduced-trust allocation
+  limit off as at open — so a remote some file names is always seen and `None` means no
+  file names it (the contract: a URL or a name git does not know passes). RED
+  (`the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git`,
+  `tests/fetch.rs`; preconditions asserted: gix's own open is `Reduced`, git without the
+  entry says "dubious ownership"): "the fetch was not refused under remote.origin.mirror =
+  true"; GREEN for the mirror and a `refs/heads/` refspec. The "decides nothing" claim is
+  narrowed to the open that judged the repository (`repository.rs`,
+  `docs/systems/git-processes.md`); `credentials.md` says how the check opens.
+- **F2 (parity).** The open's search ignored `GIT_CEILING_DIRECTORIES` and
+  `GIT_DISCOVERY_ACROSS_FILESYSTEM`. Read in `setup.c` (`setup_git_directory_gently_1`,
+  `canonicalize_ceiling_entry`; `repo_discovery_find_dir` at 2.56) and `path.c`
+  (`longest_ancestor_length`) and `abspath.c` (`strbuf_realpath`) at v2.30.9, v2.38.0,
+  v2.45.0, v2.54.0, v2.56.0: identical semantics throughout — entries split at `:`, an
+  empty entry dropped and every entry after it kept as written, relative entries dropped,
+  the rest `real_pathdup`ed (last component may be missing) or dropped; the longest strict
+  ancestor of the physical cwd sets `ceil_offset`, the ceiling itself is never searched and
+  a directory is never its own ceiling; `git_env_bool` for the other (a bad value dies:
+  on 2.30.9 through `git_config_bool_or_int`'s `git_config_int`, on 2.56 as "bad boolean
+  environment value"). `Bounds`
+  in `bare_discovery.rs` reads both from the launch environment for Cairn's own search
+  alone (neither is on the subprocess roster). RED
+  `a_ceiling_stops_cairns_search_exactly_where_it_stops_gits` (e.g. "from a directory
+  below it, ceiling a .. that resolves to the working tree, across unset: git opens None,
+  Cairn Ok(...)", and every "a value git dies on" case opening) and
+  `the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it` (a tmpfs in a
+  user and mount namespace: `"1": git opens Some(...), Cairn Err(NotARepository ...)`);
+  unit tests `the_longest_ceiling_above_a_directory_is_measured_as_git_measures_it`,
+  `ceiling_entries_are_read_as_git_reads_them`,
+  `crossing_filesystems_is_read_as_git_reads_a_boolean`. GREEN on 2.56.0, 2.30.9, 2.32.7.
+- **F3 (parity).** git's limit is `max_file_size = 1 << 20`, `st_size >` it is
+  `READ_GITFILE_ERR_TOO_LARGE`, and discovery dies on it at every tag read (2.30.9 through
+  `die_on_error`, 2.56 through `read_gitfile_error_die`). The finding's premise was
+  inverted: gix-discover 0.55 reads at most 64 KiB, not any size, and — the divergence that
+  mattered — trims every trailing blank where git takes off only `\n` and `\r`, so a
+  `.git` file whose path ended in a space or tab opened the trimmed repository where git
+  stops. `bare_discovery::gitfile_target` reads it as `read_gitfile_raw` does (1 MiB, the
+  path ending at a NUL) for the search and the ownership check. RED
+  `a_dot_git_file_is_read_as_git_reads_it` ("a trailing space: git opens None, Cairn
+  Ok(...)", the same for a tab); unit `a_gitfile_is_read_as_git_reads_it` pins the 1 MiB
+  edge. GREEN on 2.56.0, 2.30.9, 2.32.7.
+- **Floors.** `--test diff_engine` lists 112: floor 111; `--lib diff:: reads::` 63: floor
+  62 (unchanged).
+
+Gate: `scripts/gate.sh` full, 8 steps, PASS at 16d7bcd (exit 0); the new tests ran on
+2.30.9 and 2.32.7 in `git-floor` with no new skip.
+
+Residuals: the F1 and F2-boundary tests need a user namespace (with `/etc/subuid` for F1)
+and say SKIPPED where there is none; F3 — gix reads the `.git` file again as it opens, so a
+file git follows and gix cannot (padded past 64 KiB, a NUL after the path) is refused, and
+a path ending in a blank that names a repository of its own is `RepositoryReplaced`, all
+pinned as residuals in the test; `GIT_DIR`/`GIT_WORK_TREE` in the launch environment, which
+make git skip discovery altogether, are not read by Cairn's open (outside this round's
+items).
+
 ## 2026-10-04 — Fix round 3 (phase 09): what gix makes of an admitted repository, and git's search
 
 Packet mode, committed to `feature/diff-engine`. Fresh reviews of 18727f1, cc142c1 and

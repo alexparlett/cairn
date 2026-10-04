@@ -7,6 +7,7 @@ use cairn_model::CommandRecord;
 
 use crate::Error;
 use crate::ops::{GitBinary, GitVersion};
+use crate::ownership::{Asked, Identity};
 pub use crate::process::CLOSE_BOUND;
 use crate::process::Processes;
 
@@ -45,66 +46,98 @@ impl SharedRepository {
     /// Opens the repository containing `path`, walking upwards like `git`, as the newest
     /// `git` Cairn knows decides it in the environment Cairn was launched with: a bare
     /// repository found by searching is refused under `safe.bareRepository = explicit`
-    /// ([`Error::BareRepositoryFoundBySearching`]). Where the `git` that will be asked is
-    /// known, [`SharedRepository::discover_for`] decides it as that version does.
+    /// ([`Error::BareRepositoryFoundBySearching`]), and one git refuses for dubious
+    /// ownership is refused ([`Error::DubiousOwnership`]) — with no `git` known, a
+    /// `safe.directory` entry spelled `%(prefix)/` with a relative rest names nothing. Where
+    /// the `git` that will be asked is known, [`SharedRepository::discover_for`] decides it
+    /// as that version does.
     pub fn discover(path: impl AsRef<Path>) -> Result<Self, Error> {
-        Self::discover_as(path.as_ref(), NEWEST_RULE, &|name| std::env::var_os(name))
+        Self::discover_as(
+            path.as_ref(),
+            Asked {
+                version: NEWEST_RULE,
+                executable: None,
+            },
+            &|name| std::env::var_os(name),
+            &Identity::of_this_process(),
+        )
     }
 
     /// Opens the repository containing `path` as `git` would find it from there:
-    /// walking upwards, and refusing a bare repository found by searching where that
-    /// version of git, reading the configuration `environment` leads to, refuses it
-    /// (`crate::bare_discovery`). `environment` answers what the launching environment
-    /// holds for a name — what the user's own `git`, run from the same place, reads.
-    /// Every `git` run in a fully trusted repository afterwards is given its git
-    /// directory explicitly, so this is the one place git's own checks are made: the
-    /// bare-repository one, and ownership — full trust only when the user owns every path
-    /// git checks, or `safe.directory` names the repository (`crate::ownership`).
+    /// walking upwards, and refusing it where that version of git, reading the
+    /// configuration `environment` leads to, refuses it — a bare repository found by
+    /// searching under `safe.bareRepository` (`crate::bare_discovery`), and a repository
+    /// whose paths are not all the user's and that `safe.directory` does not name
+    /// ([`Error::DubiousOwnership`], `crate::ownership`). `environment` answers what the
+    /// launching environment holds for a name — what the user's own `git`, run from the
+    /// same place, reads. Every `git` run in the repository afterwards is given its git
+    /// directory explicitly, which skips both checks, so this is the one place they are
+    /// made.
     pub fn discover_for(
         path: impl AsRef<Path>,
         git: &GitBinary,
         environment: impl Fn(&str) -> Option<OsString>,
     ) -> Result<Self, Error> {
-        Self::discover_as(path.as_ref(), git.version(), &environment)
+        Self::discover_as(
+            path.as_ref(),
+            Asked {
+                version: git.version(),
+                executable: Some(git.path()),
+            },
+            &environment,
+            &Identity::of_this_process(),
+        )
     }
 
+    /// The one route every open takes, with who the user is given: the process's own
+    /// identity in shipping code, another's in a test.
     fn discover_as(
         path: &Path,
-        version: GitVersion,
+        asked: Asked<'_>,
         environment: &dyn Fn(&str) -> Option<OsString>,
+        identity: &Identity<'_>,
     ) -> Result<Self, Error> {
         use gix::sec::trust::DefaultForLevel as _;
 
         let opened_at = std::time::SystemTime::now();
         // The path the check searched to, opened as it is: searching again could stop
         // somewhere else (`crate::bare_discovery::find`).
-        let stop = crate::bare_discovery::find(path, version, environment)?;
+        let stop = crate::bare_discovery::find(path, asked.version, environment)?;
         let not_a_repository = || Error::NotARepository {
             path: path.to_owned(),
         };
-        // The trust git's own discovery reaches there: full only when the user owns every
-        // path git checks — the `.git` file, the working tree's top and the git directory
-        // (`crate::ownership`). It picks the options and is the git directory's trust, which
-        // gix raises to full as it opens when `safe.directory` names the repository, as git
-        // does; and only a fully trusted repository is named to the `git` Cairn runs, so
-        // anything less is left to git's own check (`process/cli.rs`).
-        let trust = crate::ownership::owners(&stop, &crate::ownership::is_owned).trust();
-        let found = stop.into_path();
+        let start = std::fs::canonicalize(path).map_err(|_| not_a_repository())?;
+        // git's ownership check, made as the git in use makes it, refusing what it refuses
+        // (`crate::ownership`); what passes is opened with full trust, as git opens it.
+        let judged = crate::ownership::decide(&stop, &start, asked, environment, identity)?;
+        let trust = gix::sec::Trust::Full;
         let options = gix::open::Options::default_for_level(trust)
             .with(trust)
             .open_path_as_is(true);
         let inner =
-            gix::ThreadSafeRepository::open_opts(found, options).map_err(
-                |source| match source {
+            gix::ThreadSafeRepository::open_opts(stop.into_path(), options).map_err(|source| {
+                match source {
                     gix::open::Error::NotARepository { .. } => not_a_repository(),
                     other => Error::Open {
                         path: path.to_owned(),
                         source: Box::new(other),
                     },
-                },
-            )?;
+                }
+            })?;
+        // The git directory opened must be the one judged: a `.git` file is read once for
+        // the check and again by gix, and one rewritten between the two reads names a
+        // repository nobody checked.
+        let opened = inner.git_dir().to_owned();
+        let same = |a: &Path, b: &Path| matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(a), Ok(b)) if a == b);
+        if !same(&judged, &opened) {
+            return Err(Error::RepositoryReplaced {
+                path: path.to_owned(),
+                was: judged,
+                now: opened,
+            });
+        }
         Ok(Self {
-            git_dir: inner.git_dir().to_owned(),
+            git_dir: opened,
             workdir: inner.work_dir().map(Path::to_owned),
             inner,
             opened_from: path.to_owned(),
@@ -126,7 +159,15 @@ impl SharedRepository {
         git: &GitBinary,
         environment: impl Fn(&str) -> Option<OsString>,
     ) -> Result<Repository, Error> {
-        let fresh = Self::discover_as(&self.opened_from, git.version(), &environment)?;
+        let fresh = Self::discover_as(
+            &self.opened_from,
+            Asked {
+                version: git.version(),
+                executable: Some(git.path()),
+            },
+            &environment,
+            &Identity::of_this_process(),
+        )?;
         if fresh.git_dir != self.git_dir {
             return Err(Error::RepositoryReplaced {
                 path: self.opened_from.clone(),
@@ -286,6 +327,137 @@ mod tests {
     fn a_shared_repository_reports_a_non_repository_as_such() {
         let err = SharedRepository::discover("/").unwrap_err();
         assert!(matches!(err, Error::NotARepository { .. }), "got {err:?}");
+    }
+
+    /// The launch environment of these tests: no system file, no global one.
+    fn isolated(name: &str) -> Option<OsString> {
+        match name {
+            "GIT_CONFIG_NOSYSTEM" => Some(OsString::from("1")),
+            "GIT_CONFIG_GLOBAL" => Some(OsString::from("/dev/null")),
+            _ => None,
+        }
+    }
+
+    fn lstat_owner(path: &Path) -> Option<u32> {
+        use std::os::unix::fs::MetadataExt as _;
+        std::fs::symlink_metadata(path).ok().map(|meta| meta.uid())
+    }
+
+    fn newest() -> Asked<'static> {
+        Asked {
+            version: NEWEST_RULE,
+            executable: None,
+        }
+    }
+
+    /// The ownership check is wired into every open, and decides it: this checkout opened
+    /// by a user whose effective uid is not its owner's is refused with git's refusal,
+    /// naming its top — unless `safe.directory`, here on the command line, names it, or the
+    /// git asked is one from before git checked ownership — and opens for its owner.
+    /// Caught by: the open given full trust whatever the check says (the gap the old
+    /// reduced-trust open left: shown, not refused), the identity ignored for the
+    /// process's own, or every path taken as owned.
+    #[test]
+    fn a_repository_someone_else_owns_is_refused_at_open_unless_safe_directory_names_it() {
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let top = std::fs::canonicalize(
+            SharedRepository::discover(checkout)
+                .unwrap()
+                .workdir()
+                .unwrap(),
+        )
+        .unwrap();
+        let owner = lstat_owner(&top).unwrap();
+        let stranger = Identity {
+            euid: Some(owner.wrapping_add(1)),
+            owner_of: &lstat_owner,
+        };
+        match SharedRepository::discover_as(checkout, newest(), &isolated, &stranger) {
+            Err(Error::DubiousOwnership { path }) => assert_eq!(path, top),
+            other => panic!("opened, or refused otherwise, for a stranger: {other:?}"),
+        }
+        let named = |name: &str| match name {
+            "GIT_CONFIG_PARAMETERS" => Some(OsString::from("'safe.directory'='*'")),
+            other => isolated(other),
+        };
+        assert!(SharedRepository::discover_as(checkout, newest(), &named, &stranger).is_ok());
+        let unchecked = Asked {
+            version: GitVersion {
+                major: 2,
+                minor: 30,
+                patch: 2,
+            },
+            executable: None,
+        };
+        assert!(SharedRepository::discover_as(checkout, unchecked, &isolated, &stranger).is_ok());
+        let owner_identity = Identity {
+            euid: Some(owner),
+            owner_of: &lstat_owner,
+        };
+        assert!(
+            SharedRepository::discover_as(checkout, newest(), &isolated, &owner_identity).is_ok()
+        );
+    }
+
+    /// The git directory opened is the one judged: a `.git` file rewritten after the check
+    /// read it and before gix reads it again names a repository nobody checked, and is
+    /// refused as [`Error::RepositoryReplaced`]; left alone, it opens. The rewrite is made
+    /// by the identity's owner lookup as it is asked about the git directory, the last
+    /// path the check reads. Caught by: the check's git directory not compared with the
+    /// one opened.
+    #[test]
+    fn a_gitfile_rewritten_between_the_check_and_the_open_is_refused() {
+        let scratch =
+            std::env::temp_dir().join(format!("cairn-judged-{}-{}", std::process::id(), line!()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        let git_dir = |name: &str| {
+            let path = scratch.join(name);
+            std::fs::create_dir_all(path.join("objects")).unwrap();
+            std::fs::create_dir_all(path.join("refs/heads")).unwrap();
+            std::fs::write(path.join("HEAD"), b"ref: refs/heads/main\n").unwrap();
+            std::fs::write(
+                path.join("config"),
+                b"[core]\n\trepositoryformatversion = 0\n\tbare = false\n",
+            )
+            .unwrap();
+            std::fs::canonicalize(path).unwrap()
+        };
+        let checked = git_dir("checked.git");
+        let other = git_dir("other.git");
+        let work = scratch.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let gitfile = work.join(".git");
+        let point = |at: &Path| {
+            std::fs::write(&gitfile, format!("gitdir: {}\n", at.display())).unwrap();
+        };
+        let euid = lstat_owner(&work);
+
+        point(&checked);
+        let steady = Identity {
+            euid,
+            owner_of: &lstat_owner,
+        };
+        let opened = SharedRepository::discover_as(&work, newest(), &isolated, &steady).unwrap();
+        assert_eq!(std::fs::canonicalize(opened.git_dir()).unwrap(), checked);
+
+        let rewrite = |path: &Path| {
+            if path == checked {
+                point(&other);
+            }
+            lstat_owner(path)
+        };
+        let racing = Identity {
+            euid,
+            owner_of: &rewrite,
+        };
+        match SharedRepository::discover_as(&work, newest(), &isolated, &racing) {
+            Err(Error::RepositoryReplaced { was, now, .. }) => {
+                assert_eq!(was, checked);
+                assert_eq!(std::fs::canonicalize(now).unwrap(), other);
+            }
+            other => panic!("the rewritten .git file was not refused: {other:?}"),
+        }
+        std::fs::remove_dir_all(&scratch).unwrap();
     }
 
     /// Reporter. Env: `CAIRN_BENCH_REPO`, `CAIRN_BENCH_LIMIT`; run with `--release`.

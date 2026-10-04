@@ -57,7 +57,7 @@ fi
 # fails; raise a floor as its run gains tests.
 RUNS=(
   "--lib|diff:: reads::|62"
-  "--test diff_engine||105"
+  "--test diff_engine||107"
 )
 
 CACHE="${CAIRN_GIT_FLOOR_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/cairn/git-floor}"

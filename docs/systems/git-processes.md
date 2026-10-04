@@ -296,21 +296,38 @@ comes from.
 An explicitly named git directory is one git does not check the ownership
 of: `safe.directory` guards discovery only (reproduced with git 2.56 under
 `GIT_TEST_ASSUME_DIFFERENT_OWNER=1`, where `git log` refuses with "dubious
-ownership" and the same command given `--git-dir` answers). So the options
-are given only for a repository gix opened with full trust
-(`gix::Repository::git_dir_trust`), and the trust Cairn opens with is git's
-own rule (`ensure_valid_ownership` in `setup.c`, `crates/cairn-git/src/ownership.rs`):
-full only when the user owns every path git checks — the `.git` file, when
-the working tree reaches its git directory through one (a linked worktree, a
-submodule's checkout); the working tree's top; and the git directory, for a
-`.git` file the directory it names — the minimum over them, which gix then
-raises to full as it opens exactly when `safe.directory`, in the
-configuration git protects, names the working tree (or a bare repository's
-git directory), as git does. A repository opened with reduced trust is left
-to git's discovery, so git's own check decides it. Pinned by `trust_is_full_only_when_every_path_git_checks_is_owned` and
-`each_path_git_checks_is_asked_about_and_no_other` (in `ownership.rs`, the
-decision over each path's answer, every combination git distinguishes);
-end to end it needs a second owner, so it is a privileged review step:
+ownership" and the same command given `--git-dir` answers). So git's own
+check is made by Cairn as the repository is opened, and a repository git
+would refuse is refused there — `Error::DubiousOwnership`, before anything
+in it is read or run (user decision, 2026-10-04: refuse at open where git
+would refuse). The rule is `ensure_valid_ownership` in `setup.c` as the
+version of `git` in use has it (`crates/cairn-git/src/ownership.rs`, whose
+module documentation is the version table, read at every tag from v2.30.0
+to v2.56.0): no check before 2.30.3 and its sister releases; the working
+tree's top alone, then — from 2.30.5, 2.36.2 and 2.37.1 — every path git
+checks (the `.git` file, when the working tree reaches its git directory
+through one; the working tree's top; the git directory, for a `.git` file
+the directory it names); the owner by `lstat` against the effective uid,
+read from `/proc/self/status` on Linux (the owner of a file the process
+creates elsewhere), with `SUDO_UID` standing in for root alone;
+`GIT_TEST_ASSUME_DIFFERENT_OWNER` read as git reads it; and `safe.directory`
+matched as git matches it — `*`, the empty value's reset, `~/`, `%(prefix)/`
+from 2.34, the command line from 2.38, `<dir>/*` from 2.45.3 and 2.46.0,
+normalised (`real_path`, `.` the starting directory, relative entries
+ignored) from 2.46.1, `:(optional)` from 2.52 — over the configuration git
+protects, read by `crate::bare_discovery::protected_values` (no include
+followed on 2.38.x; `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` from 2.32).
+What passes is opened with full trust and named to git. Pinned against git
+itself by `a_repository_opens_exactly_where_git_opens_it_whatever_safe_directory_says`
+(`crates/cairn-git/tests/diff/ownership.rs`, every shape under every
+spelling of the setting with `GIT_TEST_ASSUME_DIFFERENT_OWNER=1`, so it
+runs against the floors' gits in `git-floor` too); through every open's
+wiring by `a_repository_someone_else_owns_is_refused_at_open_unless_safe_directory_names_it`
+(an identity whose effective uid is not the owner's) and
+`a_gitfile_rewritten_between_the_check_and_the_open_is_refused` (the git
+directory opened must be the one judged, or `Error::RepositoryReplaced`), in
+`repository.rs`; and each band by the unit tests in `ownership.rs`. The real
+second owner needs root, so that case is a privileged review step:
 `a_linked_worktree_whose_git_dir_is_someone_elses_is_refused_as_git_refuses_it`,
 `#[ignore]`d in `crates/cairn-git/tests/diff/ownership.rs`, run as root.
 
@@ -396,11 +413,17 @@ command line's parsing by
 `a_planted_bare_repository_is_refused_as_the_launchs_git_refuses_it`
 (`crates/cairn-app/src/worker/pool.rs`). Residual, stated rather than
 implied: no fixture can make a
-repository its own user does not own, so that a less-than-fully-trusted
-repository reaches git's own check is pinned at the function, not end to
-end, outside the privileged run above; and where gix's `safe.directory`
-matching and git's disagree — gix raising a repository git would refuse to
-full trust — the options skip git's check for it. The
+repository its own user does not own, so a real second owner is decided by
+the privileged run above, and every other case through
+`GIT_TEST_ASSUME_DIFFERENT_OWNER` or an injected identity; gix, given a
+repository Cairn decided git opens, checks the working tree's owner again by
+its own rule and, where that rule refuses what git's admits (`safe.directory`
+on the command line, `.`, a normalised entry, a git with no check), opens it
+with reduced trust — shown as git shows it, but read by gix with the
+repository's own configuration filtered and left to git's own discovery
+for the `git` Cairn runs in it, which opens it as git does; `%(prefix)/` is
+expanded against the directory above the `bin/` of the `git` found, and to
+nothing where no `git` is known (`SharedRepository::discover`). The
 `safe.bareRepository` check reads the system file at `GIT_CONFIG_SYSTEM` or
 `/etc/gitconfig`, not at the path compiled into the `git` Cairn found — the
 same file for a distribution's git (prefix `/usr`), another for a git built

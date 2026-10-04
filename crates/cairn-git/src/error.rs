@@ -8,11 +8,14 @@ pub enum Error {
     #[error("no git repository at {path}")]
     NotARepository { path: PathBuf },
 
-    /// Opening a repository again from the path it was opened from found another git
-    /// directory there: the repository the application holds is not the one that path now
-    /// names, so nothing read from the new one may be answered as the old one's.
+    /// Opening a repository found another git directory than the one it had checked: a
+    /// `.git` file rewritten between the ownership check's read of it and gix's, or —
+    /// opening again from the path it was opened from — a repository that is not the one
+    /// the application holds. Nothing read from the new one may be answered as the one
+    /// checked; `was` is that one.
     #[error(
-        "{path} now names the repository at {now}, not the one at {was} the application opened"
+        "{path} now names the repository at {now}, not the one at {was} the application \
+         checked and opened"
     )]
     RepositoryReplaced {
         path: PathBuf,
@@ -37,6 +40,20 @@ pub enum Error {
          safe.bareRepository is explicit; it was not opened"
     )]
     BareRepositoryFoundBySearching { path: PathBuf },
+
+    /// The repository was found by searching, and the user's own `git` refuses it for
+    /// dubious ownership: a path git checks — the `.git` file, the working tree's top, the
+    /// git directory — is not the current user's, and `safe.directory`, in the
+    /// configuration git protects, does not name it (`crate::ownership`). It is not
+    /// opened, and no `git` runs in it; `path` is what git names in its refusal, the
+    /// working tree's top or, for a bare repository, its git directory. The remedy is
+    /// git's own: `git config --global --add safe.directory <path>`.
+    #[error(
+        "detected dubious ownership in repository at {path}: it is not all yours, and \
+         safe.directory does not name it, so git refuses it; it was not opened (git config \
+         --global --add safe.directory {path} adds an exception)"
+    )]
+    DubiousOwnership { path: PathBuf },
 
     /// The system or global configuration, which says whether a bare repository found by
     /// searching may be opened, could not be read; git refuses to work until it can.

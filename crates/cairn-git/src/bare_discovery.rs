@@ -28,8 +28,10 @@
 //! The setting is read only from the configuration git protects (`git_protected_config`):
 //! the system file, the global ones and the command line's (`GIT_CONFIG_COUNT` and
 //! `GIT_CONFIG_PARAMETERS`, which `git -c` sets), never the repository's own — the file an
-//! attacker writes. Includes are followed, but not `includeIf "gitdir:"`, which git
-//! evaluates there with no repository. It is read whenever the search stops at a bare
+//! attacker writes. Includes are followed — except by 2.38.x, whose `read_protected_config`
+//! added each file without them ([`Protected`]) — but not `includeIf "gitdir:"`, which git
+//! evaluates there with no repository. The same reader serves `safe.directory`
+//! (`crate::ownership`), through [`protected_values`]. It is read whenever the search stops at a bare
 //! repository, implicit or not, and every value is checked as git checks it: `explicit` or
 //! `all` exactly, and anything else — another case, the bare key, an empty value — is a
 //! value git dies on, wherever it sits; the last value wins. The default is `all` before
@@ -106,7 +108,7 @@ pub(crate) fn find(
     }
     // Read before the path is looked at, as git reads it (`get_allowed_bare_repo()` is the
     // condition's first operand): a value git dies on refuses an implicit one too.
-    let explicit = match protected_setting(environment)? {
+    let explicit = match protected_setting(environment, version)? {
         Some(Setting::Explicit) => true,
         Some(Setting::All) => false,
         None => version >= EXPLICIT_BY_DEFAULT_FROM,
@@ -204,9 +206,17 @@ fn parse(value: Option<&[u8]>) -> Result<Setting, Error> {
 /// last one winning; `None` when nothing sets it.
 fn protected_setting(
     environment: &dyn Fn(&str) -> Option<OsString>,
+    version: GitVersion,
 ) -> Result<Option<Setting>, Error> {
-    let mut values = files_values(environment)?;
-    values.extend(command_line_values(environment)?);
+    let values = protected_values(
+        "bareRepository",
+        environment,
+        Protected {
+            includes: follows_includes(version),
+            command_line: true,
+            file_variables: version >= FILE_VARIABLES_FROM,
+        },
+    )?;
     let mut setting = None;
     for value in values {
         setting = Some(parse(value.as_deref())?);
@@ -214,9 +224,63 @@ fn protected_setting(
     Ok(setting)
 }
 
-/// Every value the system and global files give the key, in git's order: system, then the
-/// XDG file, then `~/.gitconfig` (or `GIT_CONFIG_GLOBAL` for both), includes followed in
-/// place. A file that cannot be read or parsed is the refusal git gives it.
+/// How git reads the configuration it protects, which changed with its version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Protected {
+    /// Whether `include.path` is followed: by every git but 2.38's, whose
+    /// `read_protected_config` added each file with `git_configset_add_file`, which follows
+    /// none (2.39 went back to `config_with_options`, which does).
+    pub(crate) includes: bool,
+    /// Whether the command line's configuration (`git -c`, `GIT_CONFIG_PARAMETERS`,
+    /// `GIT_CONFIG_COUNT`) counts: from 2.38, whose `git_protected_config` reads it; the
+    /// `read_very_early_config` before it skips it.
+    pub(crate) command_line: bool,
+    /// Whether `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` name the files: from 2.32, which
+    /// introduced them; a git before it reads `~/.gitconfig`, the XDG file and
+    /// `/etc/gitconfig` whatever they say (`GIT_CONFIG_NOSYSTEM` is older, and read by
+    /// both).
+    pub(crate) file_variables: bool,
+}
+
+/// The first git that reads `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM`.
+pub(crate) const FILE_VARIABLES_FROM: GitVersion = version(2, 32);
+
+/// The first git whose protected configuration follows no include.
+const INCLUDES_SKIPPED_FROM: GitVersion = version(2, 38);
+/// The first git after it that follows them again.
+const INCLUDES_FOLLOWED_AGAIN_FROM: GitVersion = version(2, 39);
+
+/// Whether the git at `version` follows `include.path` in the configuration it protects:
+/// every git but 2.38.x.
+pub(crate) fn follows_includes(version: GitVersion) -> bool {
+    !(INCLUDES_SKIPPED_FROM..INCLUDES_FOLLOWED_AGAIN_FROM).contains(&version)
+}
+
+/// Every value the configuration git protects gives `safe.<name>`, in git's order — the
+/// system file, the XDG file, `~/.gitconfig` (or `GIT_CONFIG_GLOBAL` for both), then the
+/// command line when `reading` counts it — every value checked as each reader of it checks
+/// it. `None` is a value given as the bare key on the command line; in a file the bare key
+/// reads as an empty value, which every reader treats alike.
+pub(crate) fn protected_values(
+    name: &str,
+    environment: &dyn Fn(&str) -> Option<OsString>,
+    reading: Protected,
+) -> Result<Vec<Option<Vec<u8>>>, Error> {
+    let files_environment = |variable: &str| match variable {
+        "GIT_CONFIG_GLOBAL" | "GIT_CONFIG_SYSTEM" if !reading.file_variables => None,
+        other => environment(other),
+    };
+    let mut values = files_values(name, &files_environment, reading.includes)?;
+    if reading.command_line {
+        values.extend(command_line_values(name, environment)?);
+    }
+    Ok(values)
+}
+
+/// Every value the system and global files give `safe.<name>`, in git's order: system, then
+/// the XDG file, then `~/.gitconfig` (or `GIT_CONFIG_GLOBAL` for both), includes followed in
+/// place when `includes` says so. A file that cannot be read or parsed is the refusal git
+/// gives it.
 ///
 /// The system file is `GIT_CONFIG_SYSTEM`, or `/etc/gitconfig` (unless
 /// `GIT_CONFIG_NOSYSTEM`): gix's `Source::System`, which names a path and runs nothing.
@@ -224,7 +288,9 @@ fn protected_setting(
 /// `git config -lz --show-origin` from the process's own environment, outside
 /// `GitEnvironment` — and which gix's own open never asks for.
 fn files_values(
+    name: &str,
     environment: &dyn Fn(&str) -> Option<OsString>,
+    includes: bool,
 ) -> Result<Vec<Option<Vec<u8>>>, Error> {
     use gix::config::{File, Source, file::Metadata, file::includes, file::init};
 
@@ -245,7 +311,11 @@ fn files_values(
         .collect();
     let home = environment("HOME").map(PathBuf::from);
     let options = init::Options {
-        includes: includes::Options::follow_without_conditional(home.as_deref()),
+        includes: if includes {
+            includes::Options::follow_without_conditional(home.as_deref())
+        } else {
+            includes::Options::no_follow()
+        },
         ..Default::default()
     };
     let file =
@@ -260,8 +330,8 @@ fn files_values(
         if section.header().subsection_name().is_some() {
             continue;
         }
-        for (name, value) in section.body() {
-            if name.eq_ignore_ascii_case("bareRepository") {
+        for (key, value) in section.body() {
+            if key.eq_ignore_ascii_case(name) {
                 // A key with no `=` reads as an empty value, which git refuses too.
                 values.push(Some(value.to_vec()));
             }
@@ -270,10 +340,11 @@ fn files_values(
     Ok(values)
 }
 
-/// Every value the command line gives the key: `GIT_CONFIG_COUNT`'s pairs, then
+/// Every value the command line gives `safe.<name>`: `GIT_CONFIG_COUNT`'s pairs, then
 /// `GIT_CONFIG_PARAMETERS`, as `git_config_from_parameters` reads them. `None` is a value
 /// given as the bare key.
 fn command_line_values(
+    name: &str,
     environment: &dyn Fn(&str) -> Option<OsString>,
 ) -> Result<Vec<Option<Vec<u8>>>, Error> {
     let malformed = |variable: &str, value: &OsStr| Error::InvalidConfig {
@@ -290,7 +361,7 @@ fn command_line_values(
             let key = environment(&key_name).ok_or_else(|| malformed(&key_name, OsStr::new("")))?;
             let value =
                 environment(&value_name).ok_or_else(|| malformed(&value_name, OsStr::new("")))?;
-            if is_key(key.as_bytes()) {
+            if is_key(key.as_bytes(), name) {
                 values.push(Some(value.as_bytes().to_vec()));
             }
         }
@@ -299,7 +370,7 @@ fn command_line_values(
         let pairs = parameter_pairs(parameters.as_bytes())
             .ok_or_else(|| malformed("GIT_CONFIG_PARAMETERS", &parameters))?;
         for (key, value) in pairs {
-            if is_key(&key) {
+            if is_key(&key, name) {
                 values.push(value);
             }
         }
@@ -328,49 +399,64 @@ enum CountRefused {
 fn entry_count(text: &[u8]) -> Result<usize, CountRefused> {
     use std::ffi::{c_int, c_ulong};
 
-    let mut rest = text;
-    while let [first, tail @ ..] = rest
-        && is_space(*first)
-    {
-        rest = tail;
+    let (value, consumed) = strtoul(text);
+    // `end` left anywhere but the text's end is bogus; nothing consumed leaves it at the
+    // start, so only an empty text is a count there.
+    if consumed != text.len() {
+        return Err(CountRefused::Bogus);
     }
-    let negative = rest.first() == Some(&b'-');
-    if let [b'-' | b'+', tail @ ..] = rest {
-        rest = tail;
-    }
-    if rest.is_empty() {
-        // Nothing consumed: `end` is the start of the text, so only an empty one is a count.
-        return if text.is_empty() {
-            Ok(0)
-        } else {
-            Err(CountRefused::Bogus)
-        };
-    }
-    let mut value: Option<c_ulong> = Some(0);
-    for byte in rest {
-        if !byte.is_ascii_digit() {
-            return Err(CountRefused::Bogus);
-        }
-        value = value
-            .and_then(|value| value.checked_mul(10))
-            .and_then(|value| value.checked_add(c_ulong::from(byte - b'0')));
-    }
-    let value = match value {
-        None => c_ulong::MAX,
-        Some(value) if negative => value.wrapping_neg(),
-        Some(value) => value,
-    };
+    // git does not look at `errno`: an overflow is `ULONG_MAX`, past `INT_MAX`.
+    let value = value.unwrap_or(c_ulong::MAX);
     if value > c_ulong::from(c_int::MAX.unsigned_abs()) {
         return Err(CountRefused::TooMany);
     }
     usize::try_from(value).map_err(|_| CountRefused::TooMany)
 }
 
-/// Whether a command-line key is `safe.bareRepository`, which git compares without case
-/// once it has lower-cased the section and the name (a subsection between them would make
-/// it another key).
-fn is_key(key: &[u8]) -> bool {
-    key.eq_ignore_ascii_case(KEY.as_bytes())
+/// C's `strtoul(text, &end, 10)` in the C locale: leading whitespace (C's `isspace`), one
+/// sign, then decimal digits; a negative number negated modulo `ULONG_MAX + 1`. Answers the
+/// value — `None` where it overflowed, which C reports as `ULONG_MAX` with `errno` set to
+/// `ERANGE`, either sign — and how many bytes `end` moved past: none at all when no digit
+/// follows the whitespace and sign, since C then leaves `end` at the start.
+pub(crate) fn strtoul(text: &[u8]) -> (Option<std::ffi::c_ulong>, usize) {
+    use std::ffi::c_ulong;
+
+    let mut at = 0;
+    while text.get(at).copied().is_some_and(is_space) {
+        at += 1;
+    }
+    let negative = text.get(at) == Some(&b'-');
+    if matches!(text.get(at), Some(b'-' | b'+')) {
+        at += 1;
+    }
+    let digits = text[at.min(text.len())..]
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    if digits == 0 {
+        return (Some(0), 0);
+    }
+    let mut value: Option<c_ulong> = Some(0);
+    for byte in &text[at..at + digits] {
+        value = value
+            .and_then(|value| value.checked_mul(10))
+            .and_then(|value| value.checked_add(c_ulong::from(byte - b'0')));
+    }
+    let value = match value {
+        Some(value) if negative => Some(value.wrapping_neg()),
+        other => other,
+    };
+    (value, at + digits)
+}
+
+/// Whether a command-line key is `safe.<name>`, which git compares without case once it has
+/// lower-cased the section and the name (a subsection between them would make it another
+/// key).
+fn is_key(key: &[u8], name: &str) -> bool {
+    key.split_at_checked(b"safe.".len())
+        .is_some_and(|(section, rest)| {
+            section.eq_ignore_ascii_case(b"safe.") && rest.eq_ignore_ascii_case(name.as_bytes())
+        })
 }
 
 /// One command-line entry: its key, and its value (`None` for the bare key).
@@ -437,7 +523,7 @@ fn old_style(entry: &[u8], pairs: &mut Vec<Pair>) -> Option<()> {
 }
 
 /// C's `isspace` in the C locale, which git's parser uses.
-fn is_space(byte: u8) -> bool {
+pub(crate) fn is_space(byte: u8) -> bool {
     matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c)
 }
 
@@ -643,6 +729,66 @@ mod tests {
         }
     }
 
+    /// The protected configuration as each git reads it: an include followed by every git
+    /// but 2.38's, the command line counted only where the reader counts it, and
+    /// `GIT_CONFIG_GLOBAL` honoured only by a git that knows it (2.32 on), the home's
+    /// `.gitconfig` read instead before. Caught by: 2.38 following includes (its
+    /// `read_protected_config` added each file without them), or a variable read by a git
+    /// that predates it.
+    #[test]
+    fn the_protected_configuration_is_read_as_each_git_reads_it() {
+        let scratch = std::env::temp_dir().join(format!(
+            "cairn-protected-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let included = scratch.join("included");
+        std::fs::write(&included, "[safe]\n\tdirectory = /included\n").unwrap();
+        let global = scratch.join("global");
+        std::fs::write(
+            &global,
+            format!(
+                "[safe]\n\tdirectory = /global\n[include]\n\tpath = {}\n",
+                included.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(scratch.join(".gitconfig"), "[safe]\n\tdirectory = /home\n").unwrap();
+        let environment = |name: &str| match name {
+            "GIT_CONFIG_NOSYSTEM" => Some(OsString::from("1")),
+            "GIT_CONFIG_GLOBAL" => Some(global.clone().into_os_string()),
+            "HOME" | "XDG_CONFIG_HOME" => Some(scratch.clone().into_os_string()),
+            "GIT_CONFIG_PARAMETERS" => Some(OsString::from("'safe.directory=/cli'")),
+            _ => None,
+        };
+        let read = |includes, command_line, file_variables| {
+            let values: Vec<String> = protected_values(
+                "directory",
+                &environment,
+                Protected {
+                    includes,
+                    command_line,
+                    file_variables,
+                },
+            )
+            .unwrap()
+            .into_iter()
+            .map(|value| String::from_utf8(value.unwrap_or_default()).unwrap())
+            .collect();
+            values
+        };
+        assert_eq!(read(true, true, true), ["/global", "/included", "/cli"]);
+        assert_eq!(read(false, true, true), ["/global", "/cli"]);
+        assert_eq!(read(true, false, true), ["/global", "/included"]);
+        assert_eq!(read(true, false, false), ["/home"]);
+        assert!(follows_includes(at(2, 37, 7)));
+        assert!(!follows_includes(at(2, 38, 0)) && !follows_includes(at(2, 38, 5)));
+        assert!(follows_includes(at(2, 39, 0)));
+        std::fs::remove_dir_all(&scratch).unwrap();
+    }
+
     /// The command line's values come after the files' and in git's order between them:
     /// `GIT_CONFIG_COUNT`'s pairs, then `GIT_CONFIG_PARAMETERS`, the last winning, a key
     /// matched without case, and a subsection making another key. Caught by: the two
@@ -663,13 +809,16 @@ mod tests {
             };
             Some(OsString::from(value))
         };
-        assert_eq!(protected_setting(&environment).unwrap(), Some(Setting::All));
+        assert_eq!(
+            protected_setting(&environment, at(2, 45, 0)).unwrap(),
+            Some(Setting::All)
+        );
         let without_parameters = |name: &str| match name {
             "GIT_CONFIG_PARAMETERS" => None,
             other => environment(other),
         };
         assert_eq!(
-            protected_setting(&without_parameters).unwrap(),
+            protected_setting(&without_parameters, at(2, 45, 0)).unwrap(),
             Some(Setting::Explicit)
         );
         let short = |name: &str| match name {
@@ -677,7 +826,7 @@ mod tests {
             other => environment(other),
         };
         assert!(matches!(
-            protected_setting(&short),
+            protected_setting(&short, at(2, 45, 0)),
             Err(Error::InvalidConfig { .. })
         ));
     }

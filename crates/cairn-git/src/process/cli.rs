@@ -329,13 +329,12 @@ impl GitCommand<'_, Write> {
 /// ownership of — `safe.directory` guards discovery only (reproduced with
 /// git 2.56: `GIT_TEST_ASSUME_DIFFERENT_OWNER=1 git log` refuses with
 /// "dubious ownership", and the same command given `--git-dir` answers). So
-/// the options are given only for a repository opened with full trust,
-/// which is git's own rule (`crate::ownership`): the user owns the `.git`
-/// file when there is one, the working tree's top and the git directory, or
-/// `safe.directory` in the configuration git protects names the repository.
-/// A repository opened with reduced trust is left to git's discovery, so
-/// git's own check decides it and a repository git would refuse to read is
-/// refused.
+/// git's check is made as the repository is opened (`crate::ownership`), and
+/// a repository git would refuse is refused there, never opened. Every
+/// repository Cairn holds passed it, and is opened with full trust; the one
+/// gix still marks reduced — where its own owner rule, checked again as it
+/// opens, refuses what git's admits — is left to git's discovery here, which
+/// opens it as git does.
 fn repository_location(trusted: bool, git_dir: &Path, workdir: Option<&Path>) -> Vec<OsString> {
     if !trusted {
         return Vec::new();
@@ -680,10 +679,11 @@ mod stub_tests {
         assert_eq!(log[0].arguments, ["diff-tree", "--raw"]);
     }
 
-    /// The other half of the rule, which no fixture can reach without a second user:
-    /// a repository gix trusts less than fully is left to git's discovery, so git's
-    /// own ownership check (`safe.directory`) still decides it. Caught by: naming
-    /// every repository whatever its trust, which bypasses that check.
+    /// The other half of the rule: a repository gix trusts less than fully — one
+    /// whose ownership git's rule admits and gix's own refuses, since what git
+    /// refuses is never opened (`crate::ownership`) — is left to git's discovery,
+    /// so git's own check decides it too. Caught by: naming every repository
+    /// whatever its trust, which bypasses that check.
     #[test]
     fn a_repository_trusted_less_than_fully_is_left_to_gits_discovery() {
         let git_dir = Path::new("/somewhere/repo/.git");

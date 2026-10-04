@@ -954,6 +954,86 @@ mod tests {
         drop(handle);
     }
 
+    /// A repository the launching environment's own `git` refuses for dubious ownership
+    /// is refused as it is opened, in git's words, and nothing is served behind the
+    /// refusal; with `safe.directory = *` it opens, as git does. The launch tells git to
+    /// take every path as someone else's (`GIT_TEST_ASSUME_DIFFERENT_OWNER`, which git
+    /// reads from 2.30.4 and Cairn reads as git does), so no second user is needed.
+    /// Caught by: the open made with reduced trust and shown, as it was before the user
+    /// decided to refuse it, or through `SharedRepository::discover`'s process environment
+    /// rather than the launch's.
+    #[test]
+    fn a_repository_git_refuses_for_its_ownership_is_refused_as_git_refuses_it() {
+        let version = match cairn_git::ops::GitBinary::discover(&cairn_git::ops::Askpass::new(
+            "/nonexistent/cairn-askpass",
+            None,
+        )) {
+            Ok(git) => git.version(),
+            Err(error) => panic!("finding git: {error}"),
+        };
+        let reads_the_variable = version.major > 2
+            || version.minor >= 36
+            || matches!(
+                (version.minor, version.patch),
+                (30, 4..) | (31, 3..) | (32, 2..) | (33, 3..) | (34, 3..) | (35, 3..)
+            );
+        if !reads_the_variable {
+            eprintln!(
+                "SKIPPED a_repository_git_refuses_for_its_ownership_is_refused_as_git_refuses_it: \
+                 git {version} does not read GIT_TEST_ASSUME_DIFFERENT_OWNER"
+            );
+            return;
+        }
+        let work = UnbornRepository::new("cairn-dubious-ownership");
+        let path = std::env::var_os("PATH");
+        let launch = |star: bool| {
+            let path = path.clone();
+            let parameters = star.then(|| OsString::from("'safe.directory=*'"));
+            Startup::new(
+                move |name| match name {
+                    "PATH" => path.clone(),
+                    "GIT_CONFIG_NOSYSTEM" => Some(OsString::from("1")),
+                    "GIT_CONFIG_GLOBAL" => Some(OsString::from("/dev/null")),
+                    "GIT_TEST_ASSUME_DIFFERENT_OWNER" => Some(OsString::from("1")),
+                    "GIT_CONFIG_PARAMETERS" => parameters.clone(),
+                    _ => None,
+                },
+                PathBuf::from("/nonexistent/cairn-askpass"),
+            )
+        };
+
+        let (_handle, mut updates, _) = match open_with(&work.path, launch(false)) {
+            Ok(opened) => opened,
+            Err(error) => panic!("starting the worker: {error}"),
+        };
+        match block_on(updates.next()) {
+            Some(Update::Failed { message }) => assert!(
+                message.contains("dubious ownership") && message.contains("safe.directory"),
+                "the refusal does not say why, in git's words: {message}"
+            ),
+            other => panic!("expected the refusal, got {other:?}"),
+        }
+        assert!(
+            block_on(updates.next()).is_none(),
+            "the worker went on to serve the repository after refusing it"
+        );
+
+        if version.major == 2 && version.minor < 38 {
+            // Before 2.38 git reads no `safe.directory` from the command line.
+            return;
+        }
+        let (handle, mut updates, _) = match open_with(&work.path, launch(true)) {
+            Ok(opened) => opened,
+            Err(error) => panic!("starting the worker: {error}"),
+        };
+        handle.submit(Request::OpenHistory { rows: 8 });
+        match block_on(updates.next()) {
+            Some(Update::Rows { rows, complete }) => assert!(rows.is_empty() && complete),
+            other => panic!("with safe.directory = * the repository opens, got {other:?}"),
+        }
+        drop(handle);
+    }
+
     /// `open` succeeds for a path with no repository above it.
     #[test]
     fn opening_returns_before_the_repository_is_found() {

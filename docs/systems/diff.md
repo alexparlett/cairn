@@ -516,9 +516,10 @@ driver algorithm and `core.fsmonitor`, leaves the working tree stat-dirty and
 content-dirty, runs every file's query and Expand All with and without `-w`, and
 requires the git directory byte-identical, `check-attr` in the command log on git
 2.40 and later, and no program's mark but the fsmonitor hook's — then runs the
-programs by hand. The hook runs because `diff-tree` and `check-attr` run it as
-they read the index of a repository with a working tree, as the user's own
-`git diff` does; the user decided to allow it as parity (`crate::reads`, "What a
+programs by hand. The hook runs because every read that reads the index of a
+repository with a working tree runs it — `diff-tree` (raw and patch alike),
+`check-attr`, `diff-files` and `diff-index --cached` (`crate::reads`) — as the
+user's own `git diff` does; the user decided to allow it as parity (`crate::reads`, "What a
 read may run"). Under `core.fsmonitor=true` the fsmonitor is git's own daemon,
 which the first read to consult it starts if none is running (accepted as parity
 by the user on 2026-10-04): there, the git directory is not byte-identical after
@@ -527,7 +528,16 @@ and `.git/fsmonitor--daemon/`, appear — but no object, ref, index or config is
 written, and the daemon, in a session of its own, outlives the read and the
 application and is not Cairn's to end
 (`a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files`, which
-stops the daemon itself, and is skipped where the git or the platform has none).
+stops the daemon itself, and is skipped where the git or the platform has none —
+on Linux, every git before 2.55, which brought the daemon there). The skip is a
+failure under `CAIRN_REQUIRE_FSMONITOR_DAEMON`, which `scripts/gate.sh`'s
+`test-full` sets wherever the `git` on `PATH` reports the daemon in `git version
+--build-options` and `scripts/git-floor.sh` clears for the floors' gits
+(`the_fsmonitor_daemon_pin_is_required_wherever_it_can_run`). Residual, stated:
+CI's `gate` job does not set it outright — the runner image's git (2.55.0 from
+the git-core PPA on `ubuntu-latest` as of 2026-10-04) has not been seen to
+report the daemon — so on a runner whose git lacks it the test skips with the
+gate's printed note rather than failing.
 A bare repository planted to name a hook is refused when it is opened, and so is one
 the user's own `git` refuses for dubious ownership — a path git checks (the `.git` file,
 the working tree's top, the git directory) not the user's, and `safe.directory` not

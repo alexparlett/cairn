@@ -100,9 +100,27 @@ require_ssh_fixture_where_possible() {
   fi
 }
 
+# a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files
+# (crates/cairn-git/tests/diff/fsmonitor.rs) skips where git has no builtin
+# fsmonitor daemon (Linux has one from git 2.55), and the skip would read `ok`.
+# Where the git on PATH reports the daemon it is REQUIRED, so a daemon that will
+# not start is red; where it does not, the gate says so once. scripts/git-floor.sh
+# clears the variable for the floors' gits, which have none; the guard
+# the_fsmonitor_daemon_pin_is_required_wherever_it_can_run pins all three.
+FSMONITOR_NOTE=""
+require_fsmonitor_daemon_where_possible() {
+  if git version --build-options 2>/dev/null | grep -qx 'feature: fsmonitor--daemon'; then
+    export CAIRN_REQUIRE_FSMONITOR_DAEMON=1
+  else
+    FSMONITOR_NOTE="the builtin-fsmonitor read test in crates/cairn-git/tests/diff/fsmonitor.rs SKIPPED here: the git on PATH has no fsmonitor--daemon"
+    echo "gate: $FSMONITOR_NOTE"
+  fi
+}
+
 run_test_full() {
   step "test-full"
   require_ssh_fixture_where_possible
+  require_fsmonitor_daemon_where_possible
   run_body "test-full" "$TEST_FULL_CMD"
 }
 run_test_doc()  { run_cmd "test-doc"  "$TEST_DOC_CMD"; }
@@ -111,7 +129,11 @@ run_git_floor() { run_cmd "git-floor" "$GIT_FLOOR_CMD"; }
 finish() {
   echo
   # A cap on coverage is restated where the verdict is read, not only where it happened.
-  if [ "$fail" -eq 0 ]; then echo "gate: PASS${SSH_FIXTURE_NOTE:+ ($SSH_FIXTURE_NOTE)}"; else echo "gate: FAIL"; fi
+  if [ "$fail" -eq 0 ]; then
+    echo "gate: PASS${SSH_FIXTURE_NOTE:+ ($SSH_FIXTURE_NOTE)}${FSMONITOR_NOTE:+ ($FSMONITOR_NOTE)}"
+  else
+    echo "gate: FAIL"
+  fi
   exit "$fail"
 }
 

@@ -4395,6 +4395,85 @@ fn the_ssh_criteria_are_required_wherever_they_can_run() {
     }
 }
 
+/// The builtin-fsmonitor read test (`crates/cairn-git/tests/diff/fsmonitor.rs`) skips where
+/// git has no fsmonitor daemon — Linux has one from git 2.55 — and a passing test's stderr
+/// is hidden, so `CAIRN_REQUIRE_FSMONITOR_DAEMON` is what turns a skip into a failure.
+/// Pinned here: the test's skip branch fails when the variable is set; `scripts/gate.sh`'s
+/// `test-full` sets it wherever the `git` on `PATH` reports the daemon in
+/// `git version --build-options`; and `scripts/git-floor.sh` clears it on every run of the
+/// floors' gits, which have none, so the full gate's later step is not failed by the
+/// earlier one's export. Each is a line-level check, so none can pass on an empty read.
+/// CI's `gate` job does not set it outright (a stated residual in the test's doc): this
+/// pin holds the probe, not the runner's git.
+#[test]
+fn the_fsmonitor_daemon_pin_is_required_wherever_it_can_run() {
+    let root = repo_root();
+    let read = |path: &str| {
+        std::fs::read_to_string(root.join(path)).unwrap_or_else(|e| panic!("reading {path}: {e}"))
+    };
+    let gate = read("scripts/gate.sh");
+    let floor = read("scripts/git-floor.sh");
+    let test = read("crates/cairn-git/tests/diff/fsmonitor.rs");
+
+    let body = test
+        .split("fn a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files()")
+        .nth(1)
+        .unwrap_or_else(|| panic!("the builtin-fsmonitor read test is gone from fsmonitor.rs"));
+    let skip_branch = body.split("eprintln!(").next().unwrap_or_default();
+    assert!(
+        skip_branch.contains("CAIRN_REQUIRE_FSMONITOR_DAEMON"),
+        "the builtin-fsmonitor read test no longer fails where the daemon cannot run and \
+         CAIRN_REQUIRE_FSMONITOR_DAEMON is set, so the gate's setting of it decides nothing"
+    );
+
+    let test_full = gate
+        .lines()
+        .skip_while(|line| !line.trim_start().starts_with("run_test_full()"))
+        .take_while(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        test_full.contains("require_fsmonitor_daemon_where_possible"),
+        "scripts/gate.sh's run_test_full no longer calls \
+         require_fsmonitor_daemon_where_possible, so the builtin-fsmonitor read test would \
+         skip silently where the daemon could have run."
+    );
+    let probe = gate
+        .lines()
+        .skip_while(|line| !line.starts_with("require_fsmonitor_daemon_where_possible()"))
+        .take_while(|line| line.trim() != "}")
+        .collect::<Vec<_>>()
+        .join("\n");
+    for needed in [
+        "git version --build-options",
+        "feature: fsmonitor--daemon",
+        "export CAIRN_REQUIRE_FSMONITOR_DAEMON=1",
+    ] {
+        assert!(
+            probe.contains(needed),
+            "scripts/gate.sh's require_fsmonitor_daemon_where_possible no longer has \
+             `{needed}`, so it no longer requires the daemon exactly where git reports one"
+        );
+    }
+
+    let runs: Vec<&str> = floor
+        .lines()
+        .filter(|line| line.contains("PATH=\"$prefix/bin:$PATH\""))
+        .collect();
+    assert!(
+        !runs.is_empty(),
+        "scripts/git-floor.sh runs no git from its floors' prefix, so this check compared \
+         nothing"
+    );
+    for run in runs {
+        assert!(
+            run.contains("-u CAIRN_REQUIRE_FSMONITOR_DAEMON"),
+            "scripts/git-floor.sh runs a floor's git with CAIRN_REQUIRE_FSMONITOR_DAEMON \
+             inherited, which fails the builtin-fsmonitor test on a git with no daemon: {run}"
+        );
+    }
+}
+
 /// The two `CAIRN_REQUIRE_*` pins read a job's own `env:` block; this is that reading,
 /// against the shapes it must refuse as well as the one it must find.
 #[test]

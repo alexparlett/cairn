@@ -88,8 +88,8 @@
 //!   and with `GIT_OPTIONAL_LOCKS=0` the read still writes nothing
 //!   (`the_content_query_writes_nothing_and_runs_nothing` configures one and
 //!   requires the git directory byte-identical).
-//! - **git's builtin daemon**, `core.fsmonitor=true` (git 2.36 and later, where
-//!   the platform has it): the first read that consults it starts
+//! - **git's builtin daemon**, `core.fsmonitor=true` (git 2.36 and later on
+//!   macOS and Windows, 2.55 and later on Linux, where the build has it): the first read that consults it starts
 //!   `git fsmonitor--daemon` if none is running, and the daemon creates its
 //!   socket, `.git/fsmonitor--daemon.ipc`, and its cookie directory,
 //!   `.git/fsmonitor--daemon/`, in the git directory (reproduced with git

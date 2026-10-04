@@ -23,12 +23,15 @@
 # skip is read rather than counted as a pass:
 #   - in_a_partial_clone_a_rename_search_fails_rather_than_fetching, on a git older than
 #     2.44, which ignores GIT_NO_LAZY_FETCH. It fails instead if
-#     CAIRN_REQUIRE_NO_LAZY_FETCH is set, so that is removed from these runs' environment.
+#     CAIRN_REQUIRE_NO_LAZY_FETCH is set, so that is removed from these runs' environment,
+#     and so is CAIRN_REQUIRE_FSMONITOR_DAEMON: these gits have no fsmonitor daemon.
 #   - a_bare_repository_is_answered_under_safe_bare_repository_explicit and
 #     a_planted_bare_repository_is_refused_at_open_and_runs_nothing (its refusal half), on
 #     a git older than 2.38, which has no safe.bareRepository.
 #   - a_sparse_index_is_unsupported_and_says_so, on a git older than 2.32, which cannot
 #     write a sparse index (2.30.9 here).
+#   - a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files, on every
+#     floor: no git before 2.55 has the fsmonitor daemon on Linux.
 # Each filtered run must also list at least as many tests as its floor below, so a filter
 # that stops matching — a module renamed, a test binary split — fails rather than running
 # nothing and passing.
@@ -133,7 +136,7 @@ for entry in "${VERSIONS[@]}"; do
     IFS='|' read -r target filters floor <<<"$run"
     label="$target${filters:+ $filters}"
     # shellcheck disable=SC2086 # the target and the filters are words, split on purpose
-    if ! listed=$(env -u CAIRN_REQUIRE_NO_LAZY_FETCH PATH="$prefix/bin:$PATH" \
+    if ! listed=$(env -u CAIRN_REQUIRE_NO_LAZY_FETCH -u CAIRN_REQUIRE_FSMONITOR_DAEMON PATH="$prefix/bin:$PATH" \
       cargo test -q -p cairn-git $target -- --list $filters); then
       echo "git-floor: could not list the tests of '$label'" >&2
       fail=1
@@ -148,7 +151,7 @@ for entry in "${VERSIONS[@]}"; do
     log="$LOGS/run.log"
     # --show-output prints a passing test's stderr, which is where a skip says so.
     # shellcheck disable=SC2086
-    if ! env -u CAIRN_REQUIRE_NO_LAZY_FETCH PATH="$prefix/bin:$PATH" \
+    if ! env -u CAIRN_REQUIRE_NO_LAZY_FETCH -u CAIRN_REQUIRE_FSMONITOR_DAEMON PATH="$prefix/bin:$PATH" \
       cargo test -p cairn-git $target -- --show-output $filters 2>&1 | tee "$log"; then
       fail=1
     fi

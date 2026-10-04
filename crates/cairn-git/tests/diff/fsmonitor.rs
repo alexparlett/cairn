@@ -82,9 +82,23 @@ fn no_daemon_here() -> Option<String> {
 /// repository is gone, because it is git's, in a session of its own, outside every process
 /// Cairn starts and ends. Caught by: a read that writes the index or an object under the
 /// daemon, and the daemon no longer started (the claim the docs make would then be stale).
+///
+/// It skips where the git or the machine has no daemon — git 2.55 brought one to Linux —
+/// and a passing test's stderr is hidden, so a skip reads `ok`. Where
+/// `CAIRN_REQUIRE_FSMONITOR_DAEMON` is set the skip is a failure: `scripts/gate.sh`'s
+/// `test-full` sets it wherever the `git` on `PATH` reports the daemon in
+/// `git version --build-options`, and `scripts/git-floor.sh` clears it for the floors'
+/// gits, which have none (`the_fsmonitor_daemon_pin_is_required_wherever_it_can_run`).
+/// Residual: CI's `gate` job does not set it outright, so a runner whose git lacks the
+/// daemon skips with the note the gate prints, not a red test.
 #[test]
 fn a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files() {
     if let Some(reason) = no_daemon_here() {
+        assert!(
+            std::env::var_os("CAIRN_REQUIRE_FSMONITOR_DAEMON").is_none(),
+            "CAIRN_REQUIRE_FSMONITOR_DAEMON is set, and git's fsmonitor daemon cannot run \
+             here: {reason}"
+        );
         eprintln!(
             "SKIPPED a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files: \
              {reason}"

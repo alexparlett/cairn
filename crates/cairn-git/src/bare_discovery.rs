@@ -76,6 +76,10 @@ const DOT_GIT_FROM: GitVersion = version(2, 44);
 const WORKTREES_FROM: GitVersion = version(2, 45);
 /// The first git whose default is `explicit`.
 const EXPLICIT_BY_DEFAULT_FROM: GitVersion = version(3, 0);
+/// The first git whose search stops on a `.git` it cannot `stat` (but for `ENOENT` and
+/// `ENOTDIR`) or that is neither a file nor a directory, rather than passing over it
+/// (`read_gitfile_raw` and the switch in `setup_git_directory_gently_1`, new in v2.54.0).
+const UNUSABLE_DOT_GIT_STOPS_FROM: GitVersion = version(2, 54);
 
 /// The setting's key, as git spells it.
 const KEY: &str = "safe.bareRepository";
@@ -97,9 +101,11 @@ pub(crate) fn find(
     version: GitVersion,
     environment: &dyn Fn(&str) -> Option<OsString>,
 ) -> Result<Stop, Error> {
-    let stop = search(start).ok_or_else(|| Error::NotARepository {
-        path: start.to_owned(),
-    })?;
+    let stop = search(start, version)
+        .map_err(|dot_git| Error::NotARepository { path: dot_git })?
+        .ok_or_else(|| Error::NotARepository {
+            path: start.to_owned(),
+        })?;
     let found = match stop {
         Stop::WorkTree(dot_git) => return Ok(Stop::WorkTree(dot_git)),
         Stop::GitDirectory(found) => found,
@@ -142,28 +148,91 @@ impl Stop {
 /// `getcwd`, which resolves links), the first directory with a `.git` that is a repository
 /// is a working tree, and the first that is itself a git directory is a bare repository; a
 /// directory named `.git` is checked as itself, which git also ends up doing. Like git, and
-/// like the search gix makes by default, it does not cross into another filesystem. `None`
-/// when it finds nothing, or `start` is not a directory that can be read.
-fn search(start: &Path) -> Option<Stop> {
+/// like the search gix makes by default, it does not cross into another filesystem.
+/// `Ok(None)` when it finds nothing, or `start` is not a directory that can be read;
+/// `Err` with the `.git` the git at `version` stops on ([`dot_git`]).
+fn search(start: &Path, version: GitVersion) -> Result<Option<Stop>, PathBuf> {
     use std::os::unix::fs::MetadataExt as _;
 
-    let mut cursor = std::fs::canonicalize(start).ok()?;
-    let device = std::fs::metadata(&cursor).ok()?.dev();
+    let Ok(mut cursor) = std::fs::canonicalize(start) else {
+        return Ok(None);
+    };
+    let device = |path: &Path| std::fs::metadata(path).ok().map(|meta| meta.dev());
+    let Some(start_device) = device(&cursor) else {
+        return Ok(None);
+    };
     loop {
-        if std::fs::metadata(&cursor).ok()?.dev() != device {
-            return None;
+        if device(&cursor) != Some(start_device) {
+            return Ok(None);
         }
         let dot_git = cursor.join(".git");
-        if cursor.file_name() != Some(OsStr::new(".git")) && gix::discover::is_git(&dot_git).is_ok()
-        {
-            return Some(Stop::WorkTree(dot_git));
+        if cursor.file_name() != Some(OsStr::new(".git")) {
+            match self::dot_git(&dot_git, version) {
+                DotGit::Repository => return Ok(Some(Stop::WorkTree(dot_git))),
+                DotGit::Stops => return Err(dot_git),
+                DotGit::PassedOver => {}
+            }
         }
         if gix::discover::is_git(&cursor).is_ok() {
-            return Some(Stop::GitDirectory(cursor));
+            return Ok(Some(Stop::GitDirectory(cursor)));
         }
         if !cursor.pop() {
-            return None;
+            return Ok(None);
         }
+    }
+}
+
+/// What git's search makes of one directory's `.git`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DotGit {
+    /// A repository: the search stops here, at a working tree.
+    Repository,
+    /// Nothing git can use, and the search goes on upwards.
+    PassedOver,
+    /// Something git stops the whole search on, as not a repository.
+    Stops,
+}
+
+/// `read_gitfile_gently` as `setup_git_directory_gently_1` reads `<dir>/.git`, at
+/// `version`: missing (`ENOENT`, `ENOTDIR`) it is passed over; a directory is the
+/// repository when it is one and passed over when not; a regular file (links followed) is
+/// read, and one that does not lead to a git directory — unreadable, too large, not
+/// `gitdir: <path>`, naming nothing or naming a directory that is not a repository — stops
+/// git on every version; and from 2.54 a `.git` that cannot be `stat`ed otherwise, or is
+/// neither a file nor a directory, stops it too, where git before passed over it. Whether
+/// a directory is a git directory is gix's `is_git`, as the search's other half asks it.
+fn dot_git(path: &Path, version: GitVersion) -> DotGit {
+    let stops_from_2_54 = if version >= UNUSABLE_DOT_GIT_STOPS_FROM {
+        DotGit::Stops
+    } else {
+        DotGit::PassedOver
+    };
+    let repository = gix::discover::is_git(path).is_ok();
+    match std::fs::metadata(path) {
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            DotGit::PassedOver
+        }
+        Err(_) => stops_from_2_54,
+        Ok(meta) if meta.is_dir() => {
+            if repository {
+                DotGit::Repository
+            } else {
+                DotGit::PassedOver
+            }
+        }
+        Ok(meta) if meta.is_file() => {
+            if repository {
+                DotGit::Repository
+            } else {
+                DotGit::Stops
+            }
+        }
+        Ok(_) => stops_from_2_54,
     }
 }
 
@@ -600,6 +669,98 @@ mod tests {
         }
     }
 
+    /// A `.git` git's search cannot use stops the search rather than being passed over, as
+    /// `setup_git_directory_gently_1` stops on it: a regular file that does not lead to a
+    /// git directory (here one naming an existing directory that is not a repository) on
+    /// every git — "not a git repository" to 2.53, "gitfile does not point to a valid
+    /// repository" from 2.54, reproduced on 2.30.9, 2.32.7, 2.38.5 and 2.56.0 — and from
+    /// 2.54, whose `read_gitfile_raw` tells `ENOENT` and `ENOTDIR` from other failures, a
+    /// `.git` that cannot be `stat`ed or is neither a file nor a directory (a socket here).
+    /// A `.git` directory that is not a repository is passed over on every git. Each sits in
+    /// a working tree inside an enclosing repository, which a search that passed over it
+    /// would open. Caught by: a `.git` gix cannot follow taken as no `.git` at all.
+    #[test]
+    fn a_dot_git_git_stops_on_stops_the_search() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let scratch = std::env::temp_dir().join(format!(
+            "cairn-dot-git-stops-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        let outer = scratch.join("outer");
+        let git_dir = outer.join(".git");
+        std::fs::create_dir_all(git_dir.join("objects")).unwrap();
+        std::fs::create_dir_all(git_dir.join("refs/heads")).unwrap();
+        std::fs::write(git_dir.join("HEAD"), b"ref: refs/heads/main\n").unwrap();
+        std::fs::create_dir_all(scratch.join("empty")).unwrap();
+        let outer = std::fs::canonicalize(&outer).unwrap();
+        let tree = |name: &str| {
+            let path = outer.join(name);
+            std::fs::create_dir_all(&path).unwrap();
+            path
+        };
+        let named_nothing = tree("gitfile");
+        std::fs::write(
+            named_nothing.join(".git"),
+            format!("gitdir: {}\n", scratch.join("empty").display()),
+        )
+        .unwrap();
+        let socket = tree("socket");
+        let _listener = std::os::unix::net::UnixListener::bind(socket.join(".git")).unwrap();
+        let unsearchable = tree("unsearchable");
+        let empty_dir = tree("dot-git-directory");
+        std::fs::create_dir(empty_dir.join(".git")).unwrap();
+        std::fs::set_permissions(&unsearchable, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let denied = std::fs::metadata(unsearchable.join(".git"))
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied);
+
+        let environment = |name: &str| match name {
+            "GIT_CONFIG_NOSYSTEM" => Some(OsString::from("1")),
+            "GIT_CONFIG_GLOBAL" => Some(OsString::from("/dev/null")),
+            _ => None,
+        };
+        let outcome = |start: &Path, found: GitVersion| match find(start, found, &environment) {
+            Ok(Stop::WorkTree(dot_git)) if dot_git == git_dir => "the enclosing repository",
+            Err(Error::NotARepository { path }) if path == start.join(".git") => "stopped",
+            other => panic!("git {found}, {}: {other:?}", start.display()),
+        };
+        for found in [at(2, 30, 9), at(2, 53, 0), at(2, 54, 0), at(2, 56, 0)] {
+            let from_2_54 = found >= at(2, 54, 0);
+            assert_eq!(outcome(&named_nothing, found), "stopped", "git {found}");
+            assert_eq!(
+                outcome(&socket, found),
+                if from_2_54 {
+                    "stopped"
+                } else {
+                    "the enclosing repository"
+                },
+                "git {found}"
+            );
+            assert_eq!(
+                outcome(&empty_dir, found),
+                "the enclosing repository",
+                "git {found}"
+            );
+            if denied {
+                assert_eq!(
+                    outcome(&unsearchable, found),
+                    if from_2_54 {
+                        "stopped"
+                    } else {
+                        "the enclosing repository"
+                    },
+                    "git {found}"
+                );
+            }
+        }
+        std::fs::set_permissions(&unsearchable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if !denied {
+            eprintln!("SKIPPED the stat-failure half: this user may search a mode-600 directory");
+        }
+        std::fs::remove_dir_all(&scratch).unwrap();
+    }
+
     /// A git before 2.38 has nothing to refuse, so nothing is read: even a configuration
     /// git would die on opens, from this checkout's git directory entered directly, which
     /// a git with the setting reads it for and dies on. Caught by: checking on a git with
@@ -613,13 +774,16 @@ mod tests {
             _ => None,
         };
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let git_dir = match search(root) {
-            Some(Stop::WorkTree(dot_git)) => {
+        let git_dir = match search(root, at(2, 56, 0)) {
+            Ok(Some(Stop::WorkTree(dot_git))) => {
                 gix::discover::path::from_gitdir_file(&dot_git).unwrap_or_else(|_| dot_git.clone())
             }
             _ => panic!("this checkout is not a working tree"),
         };
-        assert!(matches!(search(&git_dir), Some(Stop::GitDirectory(_))));
+        assert!(matches!(
+            search(&git_dir, at(2, 56, 0)),
+            Ok(Some(Stop::GitDirectory(_)))
+        ));
         assert!(find(&git_dir, at(2, 37, 7), &environment).is_ok());
         assert!(matches!(
             find(&git_dir, at(2, 38, 0), &environment),

@@ -45,7 +45,8 @@
 //!   taken, the last component allowed to be missing), and one that cannot be is skipped;
 //!   `.` is the directory git was run from.
 //! - **`:(optional)`** stripped from 2.52.0, where an entry naming a missing path stops
-//!   git (it crashes on it); from 2.53.0 such an entry is skipped.
+//!   git (it crashes on it); from 2.53.0 such an entry is skipped. Missing is `ENOENT`
+//!   alone (`is_missing_file`): any other failure to `stat` the path stops git on both.
 //!
 //! A value git cannot expand (`~nobody-here/`, `~` with no `HOME`) stops git wherever it
 //! sits once the list is consulted, and refuses here as [`Error::InvalidConfig`]. The list
@@ -430,8 +431,8 @@ impl Owners {
 /// `owned`, and the git directory judged: for a working tree, the `.git` file if `.git` is
 /// one, the directory holding `.git`, and the git directory (`.git` itself, or the directory
 /// the file names, its path resolved as git resolves it); for a bare repository, the git
-/// directory alone. `None` when a `.git` file names nothing readable — git stops on such a
-/// file, so there is nothing to judge.
+/// directory alone. `None` when a `.git` file names nothing that is a git directory — git
+/// stops on such a file as it reads it, so there is nothing to judge.
 pub(crate) fn owners(stop: &Stop, owned: &dyn Fn(&Path) -> bool) -> Option<(Owners, PathBuf)> {
     match stop {
         Stop::GitDirectory(git_dir) => Some((
@@ -471,9 +472,11 @@ pub(crate) fn owners(stop: &Stop, owned: &dyn Fn(&Path) -> bool) -> Option<(Owne
 }
 
 /// The git directory a `.git` file names, resolved to a physical path as git's
-/// `read_gitfile_gently` resolves it (`real_path`); `None` when it names nothing readable.
+/// `read_gitfile_gently` resolves it (`real_path`); `None` when it names nothing that is a
+/// git directory — git stops on such a file as it reads it, before any ownership check.
 fn named_git_dir(gitfile: &Path) -> Option<PathBuf> {
     let named = gix::discover::path::from_gitdir_file(gitfile).ok()?;
+    gix::discover::is_git(&named).ok()?;
     std::fs::canonicalize(named).ok()
 }
 
@@ -946,6 +949,115 @@ mod tests {
         std::fs::remove_dir_all(&scratch).unwrap();
     }
 
+    /// A `.git` file naming a directory that exists but is not a repository stops git as
+    /// "not a git repository" while it reads the file, before ownership is asked about
+    /// (`read_gitfile_gently`'s `is_git_directory`, then `setup.c`'s
+    /// `GIT_DIR_INVALID_GITFILE`; reproduced on 2.30.9, 2.32.7, 2.38.5 and 2.56.0 under
+    /// `GIT_TEST_ASSUME_DIFFERENT_OWNER=1`) — so it is [`Error::NotARepository`] here too,
+    /// whoever owns what. Caught by: only an unreadable path refused, so a stranger is told
+    /// of dubious ownership where git says there is no repository.
+    #[test]
+    fn a_gitfile_naming_no_repository_is_not_a_repository_before_ownership_is_asked() {
+        let scratch = std::env::temp_dir().join(format!(
+            "cairn-gitfile-no-repository-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(scratch.join("work")).unwrap();
+        std::fs::create_dir_all(scratch.join("empty")).unwrap();
+        let scratch = std::fs::canonicalize(&scratch).unwrap();
+        let work = scratch.join("work");
+        std::fs::write(
+            work.join(".git"),
+            format!("gitdir: {}\n", scratch.join("empty").display()),
+        )
+        .unwrap();
+        let stranger = Identity {
+            euid: owner_by_lstat(&work).map(|owner| owner.wrapping_add(1)),
+            owner_of: &owner_by_lstat,
+        };
+        let isolated = |name: &str| match name {
+            "GIT_CONFIG_NOSYSTEM" => Some(OsString::from("1")),
+            "GIT_CONFIG_GLOBAL" => Some(OsString::from("/dev/null")),
+            _ => None,
+        };
+        for found in [at(2, 30, 2), at(2, 30, 9), at(2, 56, 0)] {
+            let asked = Asked {
+                version: found,
+                executable: None,
+            };
+            match decide(
+                &Stop::WorkTree(work.join(".git")),
+                &work,
+                asked,
+                &isolated,
+                &stranger,
+            ) {
+                Err(Error::NotARepository { path }) => assert_eq!(path, work, "git {found}"),
+                other => panic!("git {found}: {other:?}"),
+            }
+        }
+        std::fs::remove_dir_all(&scratch).unwrap();
+    }
+
+    /// `:(optional)` as git 2.52 on reads it (`is_missing_file`, the same at every tag
+    /// from v2.52.0 to v2.56.0): only `ENOENT` is missing; any other failure to `stat` the
+    /// path — a component that is a file (`ENOTDIR`), a directory it may not search
+    /// (`EACCES`) — stops git ("could not stat"; reproduced on 2.56.0). Caught by: either
+    /// read as missing and skipped, or as present.
+    #[test]
+    fn an_optional_entry_git_cannot_stat_stops_git() {
+        let scratch = std::env::temp_dir().join(format!(
+            "cairn-optional-stat-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(scratch.join("locked")).unwrap();
+        std::fs::write(scratch.join("afile"), b"").unwrap();
+        let place = Place {
+            identifies: b"/r/own",
+            cwd: Path::new("/"),
+            home: None,
+            prefix: None,
+        };
+        let expanded = |found: GitVersion, path: &Path| {
+            let value = format!(":(optional){}", path.display());
+            expand(&Rule::of(found), value.as_bytes(), &place)
+        };
+        let under_a_file = scratch.join("afile/x");
+        for found in [at(2, 52, 0), at(2, 53, 0), at(2, 56, 0)] {
+            assert!(
+                matches!(
+                    expanded(found, &under_a_file),
+                    Err(Error::InvalidConfig { .. })
+                ),
+                "git {found}"
+            );
+            assert_eq!(
+                expanded(found, &scratch).unwrap(),
+                Some(scratch.as_os_str().as_bytes().to_vec())
+            );
+        }
+        use std::os::unix::fs::PermissionsExt as _;
+        let locked = scratch.join("locked");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let denied = std::fs::metadata(locked.join("x"))
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied);
+        let behind_a_lock = expanded(at(2, 56, 0), &locked.join("x"));
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if denied {
+            assert!(
+                matches!(behind_a_lock, Err(Error::InvalidConfig { .. })),
+                "{behind_a_lock:?}"
+            );
+        } else {
+            eprintln!("SKIPPED the EACCES half: this user may search a mode-000 directory");
+        }
+        std::fs::remove_dir_all(&scratch).unwrap();
+    }
+
     /// Each band of the version table at its edges, maintenance releases included, spelled
     /// out against what git's source says at that tag. Caught by: any band moved by a
     /// release, or a backport forgotten.
@@ -1318,7 +1430,10 @@ mod tests {
         let top = scratch.join("tree");
         let elsewhere = scratch.join("elsewhere.git");
         std::fs::create_dir_all(&top).unwrap();
-        std::fs::create_dir_all(&elsewhere).unwrap();
+        // A git directory, as a `.git` file must name one.
+        std::fs::create_dir_all(elsewhere.join("objects")).unwrap();
+        std::fs::create_dir_all(elsewhere.join("refs/heads")).unwrap();
+        std::fs::write(elsewhere.join("HEAD"), b"ref: refs/heads/main\n").unwrap();
         let elsewhere = std::fs::canonicalize(&elsewhere).unwrap();
 
         let asked = RefCell::new(Vec::new());

@@ -318,7 +318,9 @@ root alone;
 matched as git matches it — `*`, the empty value's reset, `~/`, `%(prefix)/`
 from 2.34, the command line from 2.38, `<dir>/*` from 2.45.3 and 2.46.0,
 normalised (`real_path`, `.` the starting directory, relative entries
-ignored) from 2.46.1, `:(optional)` from 2.52 — over the configuration git
+ignored) from 2.46.1, `:(optional)` from 2.52 (a path only `ENOENT` makes
+missing; any other failure to `stat` it stops git, as `is_missing_file`
+does) — over the configuration git
 protects, read by `crate::bare_discovery::protected_values` (on 2.38.x no
 include followed, and the system file read even under
 `GIT_CONFIG_NOSYSTEM`, since that reader names it without asking whether
@@ -368,7 +370,12 @@ a value git dies on with `Error::InvalidConfig`) before gix opens it, exactly
 where that version of git refuses it from the same directory
 (`crates/cairn-git/src/bare_discovery.rs`, read from git's `setup.c` at
 v2.38.0 through v2.56.0): the search stops at a directory that is itself a
-git directory rather than one holding a `.git`; the setting is read only from
+git directory rather than one holding a `.git`, and at a `.git` git cannot
+use, which it refuses as `Error::NotARepository` rather than searching on —
+on every git a regular file that does not lead to a git directory, and from
+2.54 one that cannot be `stat`ed (but for `ENOENT` and `ENOTDIR`) or is
+neither a file nor a directory, which older gits pass over (`dot_git`,
+`a_dot_git_git_stops_on_stops_the_search`); the setting is read only from
 the system file (under `GIT_CONFIG_NOSYSTEM` too on 2.38.x, as above), the
 global ones (includes followed, `includeIf "gitdir:"`
 not) and the command line's `GIT_CONFIG_COUNT` (its count read as git's

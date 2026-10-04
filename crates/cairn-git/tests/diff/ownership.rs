@@ -223,6 +223,15 @@ fn a_repository_opens_exactly_where_git_opens_it_whatever_safe_directory_says() 
                 &[&format!(":(optional){top}/missing"), "*"],
             ),
         ),
+        (
+            // Not a directory: `stat` fails with ENOTDIR, which `is_missing_file` does not
+            // take as missing, so git 2.52 on stops.
+            ":(optional) under a file, then *",
+            global(
+                "optional-under-a-file",
+                &[&format!(":(optional){top}/sub/a.txt/x"), "*"],
+            ),
+        ),
         ("relative", global("relative", &["ownership-parity"])),
         (".", global("dot", &["."])),
         ("<top>/*", global("top-star", &[&format!("{top}/*")])),
@@ -349,6 +358,65 @@ fn a_repository_opens_exactly_where_git_opens_it_whatever_safe_directory_says() 
         assert!(under("<top>/*", "a nested repository"), "git {version}");
         assert!(under(".", "the top") && !under(".", "a directory inside"));
     }
+}
+
+/// A `.git` git's search stops on stops Cairn's at open where the git in use stops, and is
+/// passed over where it is passed over — so the enclosing repository it sits in opens in
+/// Cairn exactly where git opens it: a `.git` file naming a directory that is not a
+/// repository (git stops on every version), and a `.git` that is a FIFO (git 2.54 on stops,
+/// older gits pass over it). Caught by: a `.git` gix cannot follow taken as no `.git`, which
+/// opened the enclosing repository where git refuses.
+#[test]
+fn a_dot_git_git_stops_on_stops_cairn_where_it_stops_git() {
+    let enclosing = Repo::new("dot-git-stops");
+    enclosing.write("a.txt", b"one\n");
+    enclosing.commit("seed");
+    let empty = enclosing.path().join("empty");
+    ok(std::fs::create_dir_all(&empty), "making an empty directory");
+    let gitfile = enclosing.path().join("gitfile");
+    ok(std::fs::create_dir_all(&gitfile), "making a working tree");
+    ok(
+        std::fs::write(
+            gitfile.join(".git"),
+            format!("gitdir: {}\n", empty.display()),
+        ),
+        "writing a .git file",
+    );
+    let fifo = enclosing.path().join("fifo");
+    ok(std::fs::create_dir_all(&fifo), "making a working tree");
+    let made = std::process::Command::new("mkfifo")
+        .arg(fifo.join(".git"))
+        .status();
+    assert!(
+        made.as_ref().is_ok_and(std::process::ExitStatus::success),
+        "mkfifo: {made:?}"
+    );
+    let mut stopped = Vec::new();
+    for directory in [&gitfile, &fifo] {
+        let expected = git_opens(directory, &[]);
+        let opened = SharedRepository::discover_for(directory, git(), launch(&[]));
+        match (&expected, &opened) {
+            (Some(git_dir), Ok(shared)) => assert_eq!(physical(shared.git_dir()), *git_dir),
+            (None, Err(Error::NotARepository { path })) => {
+                assert_eq!(*path, physical(directory).join(".git"));
+                stopped.push(directory);
+            }
+            _ => panic!(
+                "{}: git opens {expected:?}, Cairn {opened:?}",
+                directory.display()
+            ),
+        }
+    }
+    assert!(
+        stopped.contains(&&gitfile),
+        "git opened past a .git file naming no repository"
+    );
+    assert_eq!(
+        stopped.contains(&&fifo),
+        git().version() >= since(54),
+        "git {}",
+        git().version()
+    );
 }
 
 /// A repository Cairn admits is read as git reads it, whatever gix's own owner rule makes of

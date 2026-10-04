@@ -3,6 +3,95 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-04 — Phase 09 fix round 2: ownership refused at open as git refuses it
+
+Packet mode, committed to `feature/diff-engine` (18727f1, cc142c1, 1d98a29 and this
+entry's commit). Items from a fresh destructive-ops review and a coverage audit of
+6af4e7f..f2e57c3. **User decisions in force:** D3 "ownership at open matches git", and,
+new, **"refuse at open when git would refuse for dubious ownership"** (2026-10-04,
+consistent with the bare-repository decision "refuse at open, git's rule").
+
+- **R1 (critical parity), `SUDO_UID` for root alone.** gix-sec 0.14.2's
+  `is_path_owned_by_current_user` compares `SUDO_UID` for any effective uid; git's
+  `is_path_owned_by_current_uid` only when the effective uid is root (then a root-owned path
+  is owned, any other compared with `SUDO_UID`, read by `extract_id_from_env`: `strtoul`
+  whole, no overflow, cut to `uid_t`). `crate::ownership::owns` is git's rule; the
+  effective uid is the second field of `Uid:` in `/proc/self/status` on Linux (not the
+  owner of `/proc/self`, root for a non-dumpable process), the owner of a file the process
+  creates elsewhere (macOS); no `unsafe`, no dependency, no `nix` feature. RED —
+  `sudo_uid_stands_in_for_root_alone_as_git_reads_it` with gix's rule: "owner Some(1001),
+  euid 1000, SUDO_UID Some("1001")"; GREEN.
+- **R2 (parity), `safe.directory` matched by git's rule per version.** Read at every tag
+  v2.30.0..v2.56.0 (`setup.c`, `git-compat-util.h`, `config.c`, `path.c`, `abspath.c`);
+  the table, in `crate::ownership`'s module documentation: no check before 2.30.3 / 2.31.2 /
+  2.32.1 / 2.33.2 / 2.34.2 / 2.35.2 (2.36.0 on); `*` and `GIT_TEST_ASSUME_DIFFERENT_OWNER`
+  from 2.30.4 / 2.31.3 / 2.32.2 / 2.33.3 / 2.34.3 / 2.35.3 / 2.36.0; `SUDO_UID` from
+  2.30.5 / 2.31.4 / 2.32.3 / 2.33.4 / 2.34.4 / 2.35.4 / 2.36.2 / 2.37.0; every path (the
+  `.git` file, the top, the git directory) from the same, but 2.37.1; `GIT_CONFIG_GLOBAL`
+  and `GIT_CONFIG_SYSTEM` from 2.32; `%(prefix)/` from 2.34; the command line from 2.38
+  (`read_very_early_config` skipped it); no include followed in 2.38.x; `<dir>/*` (never
+  `<dir>` itself) from 2.45.3 and 2.46.0; normalised (`real_path`, relative ignored, `.`
+  the starting directory) from 2.46.1; `:(optional)` fatal on a missing path in 2.52,
+  skipped from 2.53. The matcher, interpolation and `real_path` are Cairn's; the protected
+  configuration is `bare_discovery`'s reader, generalised (`protected_values`), which also
+  fixes two latent bare-discovery divergences: 2.38.x followed includes there, and a git
+  before 2.32 was read through `GIT_CONFIG_GLOBAL`. RED —
+  `a_repository_opens_exactly_where_git_opens_it_whatever_safe_directory_says`
+  (`tests/diff/ownership.rs`, git as the oracle under `GIT_TEST_ASSUME_DIFFERENT_OWNER=1`):
+  78 shapes × settings where "git opens None, Cairn Ok(..)"; GREEN against git 2.30.2,
+  2.30.9, 2.32.7, 2.37.0, 2.38.5, 2.39.5, 2.40.0, 2.46.0, 2.52.0 and 2.56.0 (the extra gits
+  built in scratch). Unit tables: `each_band_follows_the_version_of_git`,
+  `safe_directory_is_matched_as_each_band_of_git_matches_it`,
+  `a_normalised_entry_is_resolved_as_git_resolves_it`, `an_entry_is_expanded_as_git_expands_it`,
+  `the_test_variable_is_a_boolean_as_git_reads_one`,
+  `the_protected_configuration_is_read_as_each_git_reads_it`. Cairn reads
+  `GIT_TEST_ASSUME_DIFFERENT_OWNER` from the launch environment as git does (git reads it
+  in every build), which is also what lets the oracle test run unprivileged.
+- **R3 (user decision), refuse at open.** `SharedRepository::discover_as` refuses with the
+  new `Error::DubiousOwnership { path }` (git's words, the top or the bare git directory,
+  and git's remedy) before anything is read; what passes opens with full trust. The app
+  surfaces it as it surfaces the bare-repository refusal (`Update::Failed` with the error's
+  text): `a_repository_git_refuses_for_its_ownership_is_refused_as_git_refuses_it`
+  (`worker/pool.rs`). Docs corrected: `ownership.rs` header, `docs/systems/diff.md`,
+  `process/cli.rs`, `docs/systems/git-processes.md` (the reduced-trust prose and the
+  residual about gix's `safe.directory`, now narrowed: gix re-checks the working tree's
+  owner by its own rule and, where that refuses what git admits — command line, `.`, a
+  normalised entry, a git with no check — opens with reduced trust; shown as git shows it,
+  read with the repository's configuration filtered, and left to git's discovery for
+  `git`). `docs/design/engine.md` states nothing about it.
+- **R4 (low), the git directory judged is the one opened.** `ownership::decide` returns the
+  git directory it judged; `discover_as` refuses with `Error::RepositoryReplaced` (doc and
+  message generalised) when gix's differs. RED, the comparison disabled:
+  `a_gitfile_rewritten_between_the_check_and_the_open_is_refused` panicked; GREEN.
+- **W1 (coverage).** `a_repository_someone_else_owns_is_refused_at_open_unless_safe_directory_names_it`
+  (`repository.rs`, an injected `Identity` whose effective uid is not the owner's) goes red
+  under each mutation tried: every path owned (`|_| true`), the process's identity used in
+  place of the given one, and the decision's refusal swallowed (opened anyway).
+- **W2 (coverage).** `CAIRN_REQUIRE_FSMONITOR_DAEMON` fails the builtin-fsmonitor test where
+  it would skip; `gate.sh`'s `test-full` sets it wherever `git version --build-options`
+  reports `feature: fsmonitor--daemon`, `git-floor.sh` clears it; guard
+  `the_fsmonitor_daemon_pin_is_required_wherever_it_can_run`. RED: with the variable set
+  and git 2.32.7 the test passed (skip); GREEN: it fails naming the reason, and passes on
+  2.56; the guard is red with the gate's call removed. **CI finding:** Linux has the daemon
+  only from git 2.55.0 (`compat/fsmonitor/fsm-listen-linux.c` first at v2.55.0; RelNotes
+  2.55: "The fsmonitor daemon has been implemented for Linux"); `ubuntu-latest`'s image
+  lists Git 2.55.0 from the git-core PPA, but whether that build reports the daemon was not
+  seen, so CI's job env does NOT set the variable — stated residual in the test's doc and
+  `docs/systems/diff.md`; whether CI should require it (or install a git known to carry it)
+  is the user's call.
+- **W3 (coverage).** "one line" and "one line, no newline" are now exclusive in
+  `a_seeded_selection_stages_what_its_patch_says_it_does`. RED with `one-line.txt`'s edit
+  removed: "no one line file reached the seeded selections"; GREEN restored.
+- **Docs.** Root `CLAUDE.md`'s `diff_settings.rs` phrase (Entire File is the Changes tab's
+  alone); `docs/systems/diff.md`'s fsmonitor sentence names the four verbs as
+  `reads/mod.rs` does. `git-floor.sh`'s `diff_engine` floor raised to 107.
+
+Residuals, stated: `%(prefix)/` is expanded against the directory above the found git's
+`bin/` (git's compiled-in prefix for an installed git) and to nothing where no git is known
+(`SharedRepository::discover`); a real second owner is still a privileged run
+(`a_linked_worktree_whose_git_dir_is_someone_elses_is_refused_as_git_refuses_it`, now
+asserting `Error::DubiousOwnership`); the macOS euid route is compiled only there.
+
 ## 2026-10-04 — Fix: the Commit tab's file rows drawn in the middle of the pane
 
 Packet mode, committed to `feature/diff-engine`. The user, with a screenshot of the running

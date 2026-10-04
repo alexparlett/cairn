@@ -251,8 +251,14 @@ never enters `cairn-git` and never enters application state.
   — the system file at git's own `sysconfdir`, a repository whose git
   directory is another user's
   (`the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git`,
-  which needs a user namespace with a second uid; required by the gate
-  wherever one can be made, `CAIRN_REQUIRE_USER_NAMESPACES`), and never
+  which needs a user namespace with a second uid its root may give a file
+  to; required by the gate wherever `unshare --map-root-user --map-auto
+  chown 1:1` succeeds, `CAIRN_REQUIRE_SECOND_OWNER` — the user's decision,
+  2026-10-04, that the probe tests exactly what the test needs. Residual:
+  it does not run on GitHub's Ubuntu 24.04 runners, whose AppArmor
+  `unprivileged_userns` profile maps the second uid and then refuses the
+  namespace's root the `chown`; the gate's PASS line says it SKIPPED and
+  why. It runs, and is required, wherever the probe passes), and never
   Cairn's own `GIT_CONFIG_*`, which the built environment does not carry
   (`the_refspec_check_ignores_config_from_cairns_own_environment`, over both
   `GIT_CONFIG_COUNT` and `GIT_CONFIG_GLOBAL`). git parses its own booleans,

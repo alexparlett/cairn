@@ -385,8 +385,11 @@ second time, asks git for the remote's configuration instead
 would not — a command-line `safe.directory`, `.`, a normalised entry — has
 its `remote.<name>.mirror` seen and the fetch refused
 (`the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git`,
-`tests/fetch.rs`, in a user namespace with a second uid; required by the
-gate wherever one can be made, `CAIRN_REQUIRE_USER_NAMESPACES`). Pinned also in `process/cli.rs` by
+`tests/fetch.rs`, in a user namespace with a second uid its root may give
+a file to; required by the gate wherever `unshare --map-root-user
+--map-auto chown 1:1` succeeds, `CAIRN_REQUIRE_SECOND_OWNER`, and skipped,
+with the gate's note, on GitHub's Ubuntu 24.04 runners, whose AppArmor
+`unprivileged_userns` profile refuses that `chown`). Pinned also in `process/cli.rs` by
 `every_repository_is_named_to_git_whatever_trust_gix_gave_it`. Pinned against git
 itself by `a_repository_opens_exactly_where_git_opens_it_whatever_safe_directory_says`
 (`crates/cairn-git/tests/diff/ownership.rs`, every shape under every
@@ -468,7 +471,9 @@ child inherits. Pinned against the git in use by
 `the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it`
 (`crates/cairn-git/tests/diff/bare_discovery.rs`; the second mounts a
 `tmpfs` in a user and mount namespace, required by the gate wherever one can
-be made (`CAIRN_REQUIRE_USER_NAMESPACES`) and saying it skipped elsewhere, the
+be made (`CAIRN_REQUIRE_MOUNT_NAMESPACE`, its own probe, `unshare
+--map-root-user --mount`, so the fetch test's stronger need never skips it)
+and saying it skipped elsewhere, the
 unit tests in `bare_discovery.rs` reading the variable either way). It hands back where it
 stopped — the `.git` of a working tree, or a git directory found as itself —
 and gix opens exactly that path (`ThreadSafeRepository::open_opts` with the

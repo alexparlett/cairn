@@ -117,23 +117,42 @@ require_fsmonitor_daemon_where_possible() {
   fi
 }
 
-# Two tests need a user namespace — a second owner (a second uid, from /etc/subuid) for
-# the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git
-# (crates/cairn-git/tests/fetch.rs), and a second filesystem (a mount namespace) for
-# the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it
-# (crates/cairn-git/tests/diff/bare_discovery.rs) — and skip where none can be made,
-# which would read `ok`. Where one probe that needs both succeeds they are REQUIRED, so
-# a broken namespace test is red; where it fails, the gate says so once. scripts/git-floor.sh
-# leaves the variable set: the namespace owes nothing to git's version. The guard
+# Two tests need a user namespace, each for something different, and skip where they
+# cannot have it, which would read `ok`:
+#   - the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it
+#     (crates/cairn-git/tests/diff/bare_discovery.rs) needs a second filesystem: a user
+#     and mount namespace, to mount a tmpfs in. CAIRN_REQUIRE_MOUNT_NAMESPACE.
+#   - the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git
+#     (crates/cairn-git/tests/fetch.rs) needs a second owner: a namespace with a second
+#     uid mapped (--map-auto, from /etc/subuid) whose root may give a file to it. Ubuntu
+#     24.04's AppArmor (GitHub's runners) confines an unprivileged namespace in its
+#     unprivileged_userns profile, which maps the uid and then refuses root the chown, so
+#     the probe is that chown. CAIRN_REQUIRE_SECOND_OWNER.
+# Each probe runs exactly what its test needs, so a namespace that serves one test and
+# not the other requires the one and says the other skipped (user decision 2026-10-04:
+# the probe tests exactly what the tests need). Where a probe succeeds its test is
+# REQUIRED, so a broken namespace test is red; where it fails, the gate says so once and
+# again on the PASS line. scripts/git-floor.sh leaves both variables set: a namespace owes
+# nothing to git's version. The guard
 # the_user_namespace_tests_are_required_wherever_they_can_run pins all of it.
-USERNS_NOTE=""
+MOUNTNS_NOTE=""
+OWNER_NOTE=""
 require_user_namespaces_where_possible() {
-  if unshare --map-root-user --map-auto --mount true >/dev/null 2>&1; then
-    export CAIRN_REQUIRE_USER_NAMESPACES=1
+  if unshare --map-root-user --mount true >/dev/null 2>&1; then
+    export CAIRN_REQUIRE_MOUNT_NAMESPACE=1
   else
-    USERNS_NOTE="the two user-namespace tests in crates/cairn-git/tests/fetch.rs and crates/cairn-git/tests/diff/bare_discovery.rs SKIPPED here: 'unshare --map-root-user --map-auto --mount' fails (no unprivileged user namespaces, or no /etc/subuid range)"
-    echo "gate: $USERNS_NOTE"
+    MOUNTNS_NOTE="the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it (crates/cairn-git/tests/diff/bare_discovery.rs) SKIPPED here: 'unshare --map-root-user --mount' fails, so no mount namespace and no second filesystem"
+    echo "gate: $MOUNTNS_NOTE"
   fi
+  local probe=""
+  if probe=$(mktemp -d) && : > "$probe/owned" \
+    && unshare --map-root-user --map-auto chown 1:1 "$probe/owned" >/dev/null 2>&1; then
+    export CAIRN_REQUIRE_SECOND_OWNER=1
+  else
+    OWNER_NOTE="the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git (crates/cairn-git/tests/fetch.rs) SKIPPED here: 'unshare --map-root-user --map-auto chown 1:1' fails, so no second owner (no unprivileged user namespaces, no /etc/subuid range, or a namespace whose root may not chown to the second uid, as AppArmor's unprivileged_userns profile refuses on Ubuntu 24.04)"
+    echo "gate: $OWNER_NOTE"
+  fi
+  if [ -n "$probe" ]; then rm -rf "$probe"; fi
 }
 
 run_test_full() {
@@ -150,7 +169,7 @@ finish() {
   echo
   # A cap on coverage is restated where the verdict is read, not only where it happened.
   if [ "$fail" -eq 0 ]; then
-    echo "gate: PASS${SSH_FIXTURE_NOTE:+ ($SSH_FIXTURE_NOTE)}${FSMONITOR_NOTE:+ ($FSMONITOR_NOTE)}${USERNS_NOTE:+ ($USERNS_NOTE)}"
+    echo "gate: PASS${SSH_FIXTURE_NOTE:+ ($SSH_FIXTURE_NOTE)}${FSMONITOR_NOTE:+ ($FSMONITOR_NOTE)}${MOUNTNS_NOTE:+ ($MOUNTNS_NOTE)}${OWNER_NOTE:+ ($OWNER_NOTE)}"
   else
     echo "gate: FAIL"
   fi

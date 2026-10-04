@@ -32,10 +32,11 @@
 #     write a sparse index (2.30.9 here).
 #   - a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files, on every
 #     floor: no git before 2.55 has the fsmonitor daemon on Linux.
-# CAIRN_REQUIRE_USER_NAMESPACES, which scripts/gate.sh's test-full exports where a user
-# and mount namespace can be made, is deliberately LEFT SET for these runs: the
-# across-filesystem test in the diff_engine run needs a namespace, not a newer git, so
-# where the full gate could make one the floors' gits are held to it too.
+# CAIRN_REQUIRE_MOUNT_NAMESPACE and CAIRN_REQUIRE_SECOND_OWNER, which scripts/gate.sh's
+# test-full exports where its probes can make each namespace, are deliberately LEFT SET
+# for these runs: the across-filesystem test in the diff_engine run needs a namespace,
+# not a newer git, so where the full gate could make one the floors' gits are held to it
+# too.
 # Each filtered run must also list at least as many tests as its floor below, so a filter
 # that stops matching — a module renamed, a test binary split — fails rather than running
 # nothing and passing.

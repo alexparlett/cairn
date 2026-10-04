@@ -4675,15 +4675,20 @@ fn the_fsmonitor_daemon_pin_is_required_wherever_it_can_run() {
 
 /// The two user-namespace tests — the refspec check over a repository another uid owns
 /// (`crates/cairn-git/tests/fetch.rs`) and git's search across a filesystem boundary
-/// (`crates/cairn-git/tests/diff/bare_discovery.rs`) — skip where no user namespace can be
-/// made, and a passing test's stderr is hidden, so `CAIRN_REQUIRE_USER_NAMESPACES` is what
-/// turns a skip into a failure. Pinned here: each test's skip branch fails when the variable
-/// is set; `scripts/gate.sh`'s `test-full` calls the probe (`gate_function_calls`), whose
-/// body runs one `unshare` needing everything both tests need — a mapped root, a second uid
-/// (`--map-auto`) and a mount namespace — and exports the variable, and the PASS line
-/// restates its note; and `scripts/git-floor.sh` never clears it, since the namespace owes
-/// nothing to git's version. CI's runners may refuse unprivileged namespaces, and the gate
-/// then prints the note: this pin holds the probe, not the runner.
+/// (`crates/cairn-git/tests/diff/bare_discovery.rs`) — skip where their namespace cannot be
+/// made, and a passing test's stderr is hidden, so a variable of each one's own turns its
+/// skip into a failure: `CAIRN_REQUIRE_SECOND_OWNER` and `CAIRN_REQUIRE_MOUNT_NAMESPACE`.
+/// They need different things — a second uid that the namespace's root may give a file to
+/// (`chown 1:1`, which AppArmor's `unprivileged_userns` profile refuses on Ubuntu 24.04),
+/// and a mount namespace — so the gate probes each exactly as its test does (the user's
+/// decision, 2026-10-04), and a host that serves one requires that one. Pinned here: each
+/// test's skip branch fails when its variable is set and makes its availability check with
+/// the arguments its probe in `scripts/gate.sh` runs; `test-full` calls the probe
+/// (`gate_function_calls`), whose body runs both `unshare`s, exports both variables, sets
+/// both notes and removes the file it gave away; the PASS line restates both notes; and
+/// `scripts/git-floor.sh` clears neither, since a namespace owes nothing to git's version.
+/// CI's runners may refuse either namespace, and the gate then prints the note: this pin
+/// holds the probes, not the runner.
 #[test]
 fn the_user_namespace_tests_are_required_wherever_they_can_run() {
     let root = repo_root();
@@ -4692,14 +4697,22 @@ fn the_user_namespace_tests_are_required_wherever_they_can_run() {
     };
     let gate = read("scripts/gate.sh");
     let floor = read("scripts/git-floor.sh");
-    for (file, test) in [
+    let probe = gate_function_body(&gate, "require_user_namespaces_where_possible")
+        .unwrap_or_else(|| panic!("scripts/gate.sh no longer defines the user-namespace probe"));
+    for (file, test, variable, availability, gate_probe) in [
         (
             "crates/cairn-git/tests/fetch.rs",
             "fn the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git()",
+            "CAIRN_REQUIRE_SECOND_OWNER",
+            r#".args(["--map-root-user", "--map-auto", "chown", "1:1"])"#,
+            "unshare --map-root-user --map-auto chown 1:1 \"$probe/owned\"",
         ),
         (
             "crates/cairn-git/tests/diff/bare_discovery.rs",
             "fn the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it()",
+            "CAIRN_REQUIRE_MOUNT_NAMESPACE",
+            r#".args(["--map-root-user", "--mount", "true"])"#,
+            "unshare --map-root-user --mount true",
         ),
     ] {
         let source = read(file);
@@ -4716,9 +4729,26 @@ fn the_user_namespace_tests_are_required_wherever_they_can_run() {
             "{test} in {file} no longer says SKIPPED where it skips, so this check read nothing"
         );
         assert!(
-            skip_branch.contains("CAIRN_REQUIRE_USER_NAMESPACES"),
-            "{test} in {file} no longer fails where no namespace can be made and \
-             CAIRN_REQUIRE_USER_NAMESPACES is set, so the gate's setting of it decides nothing"
+            skip_branch.contains(&format!("std::env::var_os(\"{variable}\")")),
+            "{test} in {file} no longer fails where its namespace cannot be made and {variable} \
+             is set, so the gate's setting of it decides nothing"
+        );
+        assert!(
+            skip_branch.contains(availability),
+            "{test} in {file} no longer checks for its namespace with `{availability}`, so the \
+             gate's probe no longer tests exactly what the test needs"
+        );
+        for needed in [gate_probe.to_owned(), format!("export {variable}=1")] {
+            assert!(
+                probe.contains(&needed),
+                "scripts/gate.sh's require_user_namespaces_where_possible no longer has \
+                 `{needed}`, so {test} is no longer required exactly where it can run"
+            );
+        }
+        assert!(
+            !floor.contains(&format!("-u {variable}")),
+            "scripts/git-floor.sh clears {variable}, so {test} could skip silently on the \
+             floors' gits, which a namespace does not depend on"
         );
     }
 
@@ -4731,30 +4761,26 @@ fn the_user_namespace_tests_are_required_wherever_they_can_run() {
         "scripts/gate.sh's run_test_full no longer calls require_user_namespaces_where_possible, \
          so the user-namespace tests would skip silently where they could have run."
     );
-    let probe = gate_function_body(&gate, "require_user_namespaces_where_possible")
-        .unwrap_or_else(|| panic!("scripts/gate.sh no longer defines the user-namespace probe"));
     for needed in [
-        "unshare --map-root-user --map-auto --mount true",
-        "export CAIRN_REQUIRE_USER_NAMESPACES=1",
-        "USERNS_NOTE=",
+        "MOUNTNS_NOTE=",
+        "OWNER_NOTE=",
+        "probe=$(mktemp -d)",
+        "rm -rf \"$probe\"",
     ] {
         assert!(
             probe.contains(needed),
             "scripts/gate.sh's require_user_namespaces_where_possible no longer has `{needed}`, \
-             so it no longer requires the namespace tests exactly where both can run"
+             so a skip goes unsaid or the probe's file is left behind"
         );
     }
-    assert!(
-        gate.lines()
-            .any(|line| line.contains("gate: PASS") && line.contains("${USERNS_NOTE:+")),
-        "scripts/gate.sh's PASS line no longer restates the user-namespace note, so a skip is \
-         not said where the verdict is read"
-    );
-    assert!(
-        !floor.contains("-u CAIRN_REQUIRE_USER_NAMESPACES"),
-        "scripts/git-floor.sh clears CAIRN_REQUIRE_USER_NAMESPACES, so the across-filesystem \
-         test could skip silently on the floors' gits, which a namespace does not depend on"
-    );
+    for note in ["${MOUNTNS_NOTE:+", "${OWNER_NOTE:+"] {
+        assert!(
+            gate.lines()
+                .any(|line| line.contains("gate: PASS") && line.contains(note)),
+            "scripts/gate.sh's PASS line no longer restates `{note}`, so a skip is not said \
+             where the verdict is read"
+        );
+    }
 }
 
 /// The two `CAIRN_REQUIRE_*` pins read a job's own `env:` block; this is that reading,

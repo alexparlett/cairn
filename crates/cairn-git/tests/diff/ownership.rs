@@ -419,6 +419,96 @@ fn a_dot_git_git_stops_on_stops_cairn_where_it_stops_git() {
     );
 }
 
+/// A `.git` file is read as git's `read_gitfile_raw` reads it (the same at every tag from
+/// v2.30.0 to v2.56.0): at most 1 MiB, `gitdir: ` and a path, only trailing newlines and
+/// carriage returns taken off, so a trailing space or tab is part of the path. git stops on
+/// a file it cannot follow ("too large to be a .git file", "not a git repository"), and so
+/// does Cairn; where it can, both open the repository it names. Caught by: gix's reading of
+/// the file in the search, which trims every trailing blank (opening a repository git
+/// stops on) and reads at most 64 KiB.
+///
+/// The residual, pinned so that a change in gix shows here: a file git CAN follow that gix
+/// cannot — padded past gix-discover 0.55's 64 KiB, or with a NUL after the path, which
+/// git's C string ends at — is one git opens and Cairn refuses, because gix reads the file
+/// again as it opens and no open option hands it the git directory instead without
+/// changing which working tree it assigns. And a path ending in a blank that names a
+/// repository of its own is that repository to git and the trimmed one to gix: Cairn
+/// refuses it as `Error::RepositoryReplaced`, the git directory judged not the one opened.
+#[test]
+fn a_dot_git_file_is_read_as_git_reads_it() {
+    const SPACED: &str = "a trailing space naming a repository that exists";
+    let target = Repo::new("dot-git-target");
+    target.write("a.txt", b"one\n");
+    target.commit("seed");
+    let named = physical(&target.path().join(".git")).display().to_string();
+    let holder = Repo::new("dot-git-holder");
+    let padded = |total: usize| {
+        let mut text = format!("gitdir: {named}").into_bytes();
+        text.resize(total, b'\n');
+        text
+    };
+    let shapes: Vec<(&str, Vec<u8>)> = vec![
+        ("plain", format!("gitdir: {named}\n").into_bytes()),
+        (
+            "a carriage return",
+            format!("gitdir: {named}\r\n").into_bytes(),
+        ),
+        (
+            "a trailing space",
+            format!("gitdir: {named} \n").into_bytes(),
+        ),
+        ("a trailing tab", format!("gitdir: {named}\t").into_bytes()),
+        ("padded under 64 KiB", padded(60 * 1024)),
+        ("padded past 1 MiB", padded((1 << 20) + 1)),
+    ];
+    let residual: Vec<(&str, Vec<u8>)> = vec![
+        ("padded to exactly 1 MiB", padded(1 << 20)),
+        (
+            "a NUL after the path",
+            format!("gitdir: {named}\0junk\n").into_bytes(),
+        ),
+        (SPACED, format!("gitdir: {named} \n").into_bytes()),
+    ];
+    let mut differ = Vec::new();
+    let mut seen = std::collections::BTreeMap::new();
+    for (index, (shape, text)) in shapes.iter().chain(residual.iter()).enumerate() {
+        if *shape == SPACED {
+            // Made only now, after the trailing space above was asked about naming nothing.
+            target.git(&["init", "--quiet", "--bare", &format!("{named} ")]);
+        }
+        let directory = holder.path().join(format!("tree-{index}"));
+        ok(std::fs::create_dir_all(&directory), "making a working tree");
+        ok(
+            std::fs::write(directory.join(".git"), text),
+            "writing a .git file",
+        );
+        let expected = git_opens(&directory, &[]);
+        let opened = SharedRepository::discover_for(&directory, git(), launch(&[]));
+        let cairn_opens = opened
+            .as_ref()
+            .ok()
+            .map(|shared| physical(shared.git_dir()));
+        seen.insert(*shape, expected.is_some());
+        let residual = residual.iter().any(|(name, _)| name == shape);
+        if residual {
+            let replaced = matches!(opened, Err(Error::RepositoryReplaced { .. }));
+            if expected.is_none() || cairn_opens.is_some() || (*shape == SPACED) != replaced {
+                differ.push(format!(
+                    "{shape}: the residual moved — git opens {expected:?}, Cairn {opened:?}"
+                ));
+            }
+        } else if cairn_opens != expected {
+            differ.push(format!("{shape}: git opens {expected:?}, Cairn {opened:?}"));
+        }
+    }
+    assert!(differ.is_empty(), "{}", differ.join("\n"));
+    // The oracle decides something: git follows the plain file and stops on the others.
+    assert!(seen["plain"]);
+    assert!(seen["a carriage return"]);
+    assert!(!seen["a trailing space"]);
+    assert!(!seen["padded past 1 MiB"]);
+}
+
 /// A repository Cairn admits is read as git reads it, whatever gix's own owner rule makes of
 /// it. gix checks the WORKING TREE's owner again as it opens — the directory `core.worktree`
 /// names, not the one holding `.git` that git checks — and, refused by its own

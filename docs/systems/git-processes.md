@@ -386,7 +386,20 @@ use, which it refuses as `Error::NotARepository` rather than searching on —
 on every git a regular file that does not lead to a git directory, and from
 2.54 one that cannot be `stat`ed (but for `ENOENT` and `ENOTDIR`) or is
 neither a file nor a directory, which older gits pass over (`dot_git`,
-`a_dot_git_git_stops_on_stops_the_search`); the setting is read only from
+`a_dot_git_git_stops_on_stops_the_search`). A `.git` file is read as git's
+`read_gitfile_raw` reads it, never as gix does (`gitfile_target`, for the
+search and the ownership check alike): at most 1 MiB, `gitdir: ` and a
+path with only trailing `\n` and `\r` taken off — a trailing space or tab is
+part of the path, which gix would trim and open — ending at its first NUL
+(`a_gitfile_is_read_as_git_reads_it`, and against the git in use
+`a_dot_git_file_is_read_as_git_reads_it`). Residual, pinned by that test so
+a change in gix shows: gix reads the file again as it opens, at most 64 KiB
+and with its own trimming, so a file git can follow and gix cannot — padded
+past 64 KiB, or with a NUL after the path — is one git opens and Cairn
+refuses, and one whose path ends in a blank naming a repository that exists
+is `Error::RepositoryReplaced` (the git directory judged is not the one gix
+opened); no open option hands gix the git directory instead without
+changing which working tree it assigns. The setting is read only from
 the system file (under `GIT_CONFIG_NOSYSTEM` too on 2.38.x, as above), the
 global ones (includes followed, `includeIf "gitdir:"`
 not) and the command line's `GIT_CONFIG_COUNT` (its count read as git's

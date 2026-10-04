@@ -475,8 +475,7 @@ pub(crate) fn owners(stop: &Stop, owned: &dyn Fn(&Path) -> bool) -> Option<(Owne
 /// `read_gitfile_gently` resolves it (`real_path`); `None` when it names nothing that is a
 /// git directory — git stops on such a file as it reads it, before any ownership check.
 fn named_git_dir(gitfile: &Path) -> Option<PathBuf> {
-    let named = gix::discover::path::from_gitdir_file(gitfile).ok()?;
-    gix::discover::is_git(&named).ok()?;
+    let named = crate::bare_discovery::gitfile_target(gitfile)?;
     std::fs::canonicalize(named).ok()
 }
 

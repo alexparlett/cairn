@@ -299,18 +299,18 @@ enum DotGit {
 /// `read_gitfile_gently` as `setup_git_directory_gently_1` reads `<dir>/.git`, at
 /// `version`: missing (`ENOENT`, `ENOTDIR`) it is passed over; a directory is the
 /// repository when it is one and passed over when not; a regular file (links followed) is
-/// read, and one that does not lead to a git directory — unreadable, too large, not
-/// `gitdir: <path>`, naming nothing or naming a directory that is not a repository — stops
-/// git on every version; and from 2.54 a `.git` that cannot be `stat`ed otherwise, or is
-/// neither a file nor a directory, stops it too, where git before passed over it. Whether
-/// a directory is a git directory is gix's `is_git`, as the search's other half asks it.
+/// read as git reads it ([`gitfile_target`]), and one that does not lead to a git
+/// directory — unreadable, too large, not `gitdir: <path>`, naming nothing or naming a
+/// directory that is not a repository — stops git on every version; and from 2.54 a `.git`
+/// that cannot be `stat`ed otherwise, or is neither a file nor a directory, stops it too,
+/// where git before passed over it. Whether a directory is a git directory is gix's
+/// `is_git`, as the search's other half asks it.
 fn dot_git(path: &Path, version: GitVersion) -> DotGit {
     let stops_from_2_54 = if version >= UNUSABLE_DOT_GIT_STOPS_FROM {
         DotGit::Stops
     } else {
         DotGit::PassedOver
     };
-    let repository = gix::discover::is_git(path).is_ok();
     match std::fs::metadata(path) {
         Err(error)
             if matches!(
@@ -322,14 +322,14 @@ fn dot_git(path: &Path, version: GitVersion) -> DotGit {
         }
         Err(_) => stops_from_2_54,
         Ok(meta) if meta.is_dir() => {
-            if repository {
+            if gix::discover::is_git(path).is_ok() {
                 DotGit::Repository
             } else {
                 DotGit::PassedOver
             }
         }
         Ok(meta) if meta.is_file() => {
-            if repository {
+            if gitfile_target(path).is_some() {
                 DotGit::Repository
             } else {
                 DotGit::Stops
@@ -337,6 +337,54 @@ fn dot_git(path: &Path, version: GitVersion) -> DotGit {
         }
         Ok(_) => stops_from_2_54,
     }
+}
+
+/// The largest `.git` file git reads: `read_gitfile_raw`'s `max_file_size`, 1 MiB at every
+/// tag from v2.30.0 to v2.56.0; a larger one is "too large to be a .git file".
+const MAX_GITFILE_SIZE: u64 = 1 << 20;
+
+/// The git directory a `.git` FILE at `path` names, read as git's `read_gitfile_raw` and
+/// `read_gitfile_gently` read it — the same at every tag from v2.30.0 to v2.56.0 — or
+/// `None` where git stops on it: a regular file (links followed) of at most
+/// [`MAX_GITFILE_SIZE`] bytes, read whole, starting `gitdir: `, with only trailing `\n` and
+/// `\r` taken off (a trailing space or tab is part of the path), a path of at least one
+/// byte that ends at its first NUL (git reads it as a C string), relative to the file's
+/// own directory unless absolute, and naming a git directory (gix's `is_git`, as the
+/// search asks of every directory). Not resolved: git's `real_path` is the caller's.
+/// gix reads the same file by rules of its own — every trailing blank trimmed, at most
+/// 64 KiB (gix-discover 0.55, `path::from_gitdir_file`) — so the search and the ownership
+/// check ask this, never gix.
+pub(crate) fn gitfile_target(path: &Path) -> Option<PathBuf> {
+    use std::io::Read as _;
+
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > MAX_GITFILE_SIZE {
+        return None;
+    }
+    let mut contents = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(MAX_GITFILE_SIZE + 1)
+        .read_to_end(&mut contents)
+        .ok()?;
+    if u64::try_from(contents.len()).ok()? != meta.len() {
+        return None;
+    }
+    let mut rest = contents.strip_prefix(b"gitdir: ")?;
+    while let [kept @ .., b'\n' | b'\r'] = rest {
+        rest = kept;
+    }
+    let named = rest.split(|byte| *byte == 0).next().unwrap_or_default();
+    if rest.is_empty() {
+        return None;
+    }
+    let named = Path::new(OsStr::from_bytes(named));
+    let named = if named.is_absolute() {
+        named.to_owned()
+    } else {
+        path.parent()?.join(named)
+    };
+    gix::discover::is_git(&named).is_ok().then_some(named)
 }
 
 /// `is_implicit_bare_repo` in git's `setup.c`, as the git at `version` has it. `path` is
@@ -832,6 +880,53 @@ mod tests {
             "an empty entry leaves every entry after it as written"
         );
         assert_eq!(ceilings_of("/"), ["/"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `read_gitfile_raw`'s reading, at its edges, where gix's reading differs: exactly
+    /// 1 MiB is read and one byte more is not, a NUL ends the path, only `\n` and `\r` are
+    /// taken off the end, a relative path is the file's directory's, and an empty one names
+    /// nothing. Caught by: the limit off by one or gix's 64 KiB, a trailing blank trimmed,
+    /// or a NUL kept in the path.
+    #[test]
+    fn a_gitfile_is_read_as_git_reads_it() {
+        let root = std::env::temp_dir().join(format!("cairn-gitfile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("refs")).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::create_dir_all(root.join("objects")).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(root.join("HEAD"), "ref: refs/heads/main\n")
+            .unwrap_or_else(|e| panic!("{e}"));
+        let gitfile = root.join("tree.git");
+        let named = root.display().to_string();
+        let read = |contents: &[u8]| {
+            std::fs::write(&gitfile, contents).unwrap_or_else(|e| panic!("{e}"));
+            gitfile_target(&gitfile)
+        };
+        let padded = |total: usize| {
+            let mut text = format!("gitdir: {named}").into_bytes();
+            text.resize(total, b'\n');
+            text
+        };
+        assert_eq!(
+            read(format!("gitdir: {named}\r\n").as_bytes()),
+            Some(root.clone())
+        );
+        assert_eq!(read(&padded(1 << 20)), Some(root.clone()), "exactly 1 MiB");
+        assert_eq!(read(&padded((1 << 20) + 1)), None, "one byte past 1 MiB");
+        assert_eq!(
+            read(format!("gitdir: {named}\0junk").as_bytes()),
+            Some(root.clone())
+        );
+        assert_eq!(read(format!("gitdir: {named} ").as_bytes()), None);
+        assert_eq!(read(format!("gitdir: {named}\t").as_bytes()), None);
+        assert_eq!(
+            read(b"gitdir: .\n"),
+            Some(root.join(".")),
+            "relative to the file"
+        );
+        assert_eq!(read(b"gitdir: \n"), None);
+        assert_eq!(read(format!("gitdir:{named}").as_bytes()), None);
+        assert_eq!(gitfile_target(&root), None, "a directory is no gitfile");
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -44,8 +44,13 @@ Beyond the PRD, phase 09 confirms:
       fail; if you cannot, C8 decides nothing.
 - [ ] **The exceptions roster is still empty** and no render file names a plain
       `ScrollView`. Three lists arrived in this packet.
-- [ ] **The marker column is present in both views** and no state is carried by
-      colour alone.
+- [ ] ~~**The marker column is present in both views** and no state is carried by
+      colour alone.~~ Superseded by the user's decision of 2026-10-04: no marker
+      column, as Fork's default. Check instead that no `-`/`+` is drawn in either
+      view, that in unified a removed row carries only its old number and an added
+      row only its new (`a_row_reads_the_same_with_its_colour_ignored`), and that
+      side by side a changed pair resting on tint alone is stated as a residual in
+      `docs/systems/diff.md`.
 - [ ] **Both new twins have been seen to fail** on a deliberate violation: the
       literal-modifier guard, and the headless test that pins one viewport of diff
       rows. A twin nobody has watched go red is a promise, not a guard.

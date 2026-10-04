@@ -180,7 +180,9 @@ impl Component for ChangesTab {
                 rect()
                     .width(Size::fill())
                     .height(Size::flex(1.))
-                    .on_sized(move |e: Event<SizedEventData>| split_width.set(e.area.width()))
+                    .on_sized(move |e: Event<SizedEventData>| {
+                        split_width.set_if_modified(e.area.width())
+                    })
                     .child(
                         ResizableContainer::new()
                             .direction(Direction::Horizontal)

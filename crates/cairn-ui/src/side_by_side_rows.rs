@@ -1,8 +1,12 @@
 //! One row of the side-by-side view (PRD R6.1, R6.4): two columns of equal width inside the
 //! one virtualising view, never two scroll views — the old side on the left and the new on
-//! the right, each a line-number gutter, a separator, and a text area tinted for a changed
-//! line, with filler where its side has no line beside the other's (Fork, Finding 11: equal
-//! panes, one gutter each, grey filler rows; the hunk header repeated at the top of each).
+//! the right, each a line-number gutter, a separator, and a text area, with filler where its
+//! side has no line beside the other's (Fork, Finding 11: equal panes, one gutter each, grey
+//! filler rows; the hunk header repeated at the top of each). A changed line's tint spans its
+//! whole column, number included, as Fork's side-by-side panes do (user-supplied Fork
+//! capture, 2026-10-04) — unlike unified, whose gutter keeps the ground. No marker column
+//! (the user's decision, 2026-10-04, as Fork's default): a changed pair is told from context
+//! by its tint alone, as in Fork, a stated residual (`docs/systems/diff.md`).
 //!
 //! **Equal columns, both in view.** Each column is half the view, so both sides are on screen
 //! together, as Fork's two panes are. A line wider than its column scrolls sideways: the
@@ -21,7 +25,7 @@ use freya::prelude::*;
 
 use crate::diff_palette::{DIFF_MUTED, FILLER, GUTTER_SEPARATOR};
 use crate::diff_row_parts::{
-    LineKind, MARKER_WIDTH, SEPARATOR_WIDTH, line_text, marker, number, separator, words,
+    LineKind, SEPARATOR_WIDTH, TEXT_PADDING, line_text, number, separator, words,
 };
 use crate::diff_view::{NO_NEWLINE_AT_END, RowGeometry, header_words};
 
@@ -185,7 +189,7 @@ pub(crate) fn build(
 }
 
 /// One column: its number, the separator, and its text area clipped to the column, the text
-/// slid by the sideways scroll.
+/// slid by the sideways scroll; a changed line's tint behind all three.
 fn column(cell: Cell<'_>, columns: Columns, data: &RowGeometry, current: bool) -> Rect {
     let (at, tint, content): (Option<LineNumber>, Option<Color>, Option<Rect>) = match cell {
         Cell::Line {
@@ -194,13 +198,12 @@ fn column(cell: Cell<'_>, columns: Columns, data: &RowGeometry, current: bool) -
             bytes,
             ranges,
         } => {
-            let (sign, tint, emphasis) = kind.dress();
+            let (tint, emphasis) = kind.dress();
             (
                 Some(at),
                 Some(tint),
                 Some(
                     text_strip(data.text_width, columns.shift)
-                        .child(marker(sign))
                         .child(line_text(bytes, ranges, emphasis)),
                 ),
             )
@@ -208,20 +211,17 @@ fn column(cell: Cell<'_>, columns: Columns, data: &RowGeometry, current: bool) -
         Cell::Note(text) => (
             None,
             None,
-            Some(
-                text_strip(data.text_width, columns.shift)
-                    .child(rect().width(Size::px(MARKER_WIDTH)))
-                    .child(words(text, DIFF_MUTED)),
-            ),
+            Some(text_strip(data.text_width, columns.shift).child(words(text, DIFF_MUTED))),
         ),
-        Cell::Filler => (None, Some(FILLER), None),
+        Cell::Filler => (None, None, None),
     };
+    let filler = content.is_none();
     let area = rect()
         .horizontal()
         .width(Size::flex(1.))
         .height(Size::fill())
         .overflow(Overflow::Clip)
-        .maybe(tint.is_some(), |el| el.background(tint.unwrap_or(FILLER)))
+        .maybe(filler, |el| el.background(FILLER))
         .maybe_child(content);
     rect()
         .horizontal()
@@ -229,17 +229,20 @@ fn column(cell: Cell<'_>, columns: Columns, data: &RowGeometry, current: bool) -
         .width(Size::px(columns.column))
         .height(Size::fill())
         .cross_align(Alignment::Center)
+        .maybe(tint.is_some(), |el| el.background(tint.unwrap_or(FILLER)))
         .child(number(at, data.number_width))
         .child(separator(current))
         .child(area)
 }
 
-/// A column's text, as wide as the widest line so it never wraps, slid left by the scroll.
+/// A column's text, as wide as the widest line so it never wraps — the few pixels after the
+/// separator included — slid left by the scroll.
 fn text_strip(text_width: f32, shift: f32) -> Rect {
     rect()
         .horizontal()
         .width(Size::px(text_width))
         .height(Size::fill())
+        .padding(Gaps::new(0., 0., 0., TEXT_PADDING))
         .cross_align(Alignment::Center)
         .offset_x(-shift)
 }

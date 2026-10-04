@@ -28,7 +28,7 @@ use crate::accelerators;
 use crate::diff_line_text::cut_marker;
 use crate::diff_palette::GROUND;
 use crate::diff_row_parts::{
-    ADVANCE, MARKER_WIDTH, SEPARATOR_WIDTH, TEXT_END_PADDING, number_width,
+    ADVANCE, SEPARATOR_WIDTH, TEXT_END_PADDING, TEXT_PADDING, number_width,
 };
 use crate::side_by_side_rows::Columns;
 use crate::{side_by_side_rows, unified_rows};
@@ -54,8 +54,9 @@ pub(crate) fn number_column_width(shown: &ShownDiff) -> f32 {
     number_width(shown.number_digits())
 }
 
-/// How wide a line's text of `shown` is at most, marker column included — the widest drawn
-/// line, and the cut marker when a line is cut: what a side-by-side column slides through.
+/// How wide a line's text of `shown` is at most, the gap after the separator included — the
+/// widest drawn line, and the cut marker when a line is cut: what a side-by-side column
+/// slides through.
 pub fn text_width(shown: &ShownDiff) -> f32 {
     let marker = if shown.has_cut_line() {
         // At most the marker for the most a line can lose: a file is loaded only to the
@@ -66,10 +67,10 @@ pub fn text_width(shown: &ShownDiff) -> f32 {
     } else {
         0
     };
-    MARKER_WIDTH + (shown.widest_columns() + marker) as f32 * ADVANCE + TEXT_END_PADDING
+    TEXT_PADDING + (shown.widest_columns() + marker) as f32 * ADVANCE + TEXT_END_PADDING
 }
 
-/// How wide every unified row of `shown` is at least: the gutters, the marker column and the
+/// How wide every unified row of `shown` is at least: the gutters, the separator and the
 /// widest drawn line.
 pub fn content_width(shown: &ShownDiff) -> f32 {
     2.0 * number_column_width(shown) + SEPARATOR_WIDTH + text_width(shown)
@@ -195,7 +196,7 @@ pub(crate) struct RowGeometry {
     /// The unified rows' least width.
     pub(crate) width: f32,
     pub(crate) number_width: f32,
-    /// A line's text at its widest, marker column included.
+    /// A line's text at its widest, the gap after the separator included.
     pub(crate) text_width: f32,
     /// The view's own width, which a side-by-side column is half of.
     pub(crate) view_width: f32,
@@ -610,14 +611,14 @@ mod tests {
         assert_eq!(next, back);
     }
 
-    /// The answer's extent is measured once: every row is the gutters, the marker column
-    /// and the widest line wide, whichever rows are built.
+    /// The answer's extent is measured once: every row is the gutters, the separator, the
+    /// gap after it and the widest line wide, whichever rows are built.
     #[test]
     fn the_width_is_the_widest_line_whatever_is_in_view() {
         let shown = every_tenth();
         let expected = 2.0 * number_width(3)
             + SEPARATOR_WIDTH
-            + MARKER_WIDTH
+            + TEXT_PADDING
             + 3.0 * ADVANCE
             + TEXT_END_PADDING;
         assert_eq!(content_width(&shown), expected);

@@ -57,6 +57,7 @@ pub use diff_notice::{
     RENAMED_MODE_CHANGED, RENAMED_WITHOUT_CHANGES, SUBMODULE, TOO_LARGE_TO_DISPLAY, header_lines,
     notice_rows, size_text, subproject_line, too_large_reason,
 };
+pub use diff_row_parts::{NUMBER_FONT_SIZE, NUMBER_PADDING, TEXT_PADDING, number_width};
 pub use diff_settings::DiffSettings;
 pub use diff_view::{
     ChangeCursor, DIFF_ROW_HEIGHT, DiffView, NO_NEWLINE_AT_END, content_width, step_change,

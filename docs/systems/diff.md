@@ -1574,11 +1574,18 @@ top, scrolled deep and at the end of a 1,000-line and a 100,000-line file — th
 number at each place for both — and the end is the projection's last row, so the view's
 length is the projection's (`only_a_viewport_of_diff_rows_is_built_however_long_the_file`,
 criterion C9 for unified rows, the twin of
-`only_a_viewport_of_rows_is_built_however_long_the_history`). A unified line row is the old and the new line number, right-aligned, a one-pixel separator,
-then — tinted for a change, from the separator to the row's end — a marker column
-(`-`, `+`, blank) and the line. A removed line leaves the new gutter blank, an added one
-the old; so a row means the same with its colour ignored
-(`a_row_reads_the_same_with_its_colour_ignored`, L11). A hunk header is git's
+`only_a_viewport_of_rows_is_built_however_long_the_history`). A unified line row is the old and the new line number, right-aligned, small and on the
+plain ground, a one-pixel separator, then — tinted for a change, from the separator to the
+row's end — the line, a few pixels in. There is no marker column (user decision,
+2026-10-04, reversing 2026-10-03's: Fork's default, which draws none). A removed line
+leaves the new gutter blank, an added one the old, so in unified the gutter still says
+added or removed with its colour ignored (`a_row_reads_the_same_with_its_colour_ignored`);
+side by side a changed pair is told from context by its tint alone, as in Fork — a stated
+residual of the decision, which L11's "never colour alone" no longer holds for. The gap
+either side of the separator, the numbers' size and the gutter's width are pinned in both
+views by `the_gutter_is_small_and_leaves_a_gap_either_side_of_its_separator_in_both_views`,
+and where each view's tint starts by
+`a_changed_rows_tint_starts_at_the_separator_in_unified_and_spans_the_number_side_by_side`. A hunk header is git's
 `@@ -a,b +c,d @@` and, after a space, the function context git printed for a hunk
 starting there, in muted text at the same height, with no numbers, no band and no
 button (Fork, Finding 13); git's `\ No newline at end of file` is a muted row of its
@@ -1602,8 +1609,8 @@ of plain `ScrollView`s stays empty — the old side on the left and the new on t
 each a line-number gutter, a separator and a text area: a context line in both columns,
 the i-th removed line beside the i-th added one, the shorter side's rows filler (Fork's
 grey, `FILLER`), the hunk header with git's function context at the top of each column,
-git's end-of-file marker in the column of the side that did not end, a `-`/`+` marker per
-changed line so a row reads the same with its colour ignored
+git's end-of-file marker in the column of the side that did not end, and no `-`/`+`
+marker — a changed line's tint spans its column, number included, as Fork's panes do
 (`side_by_side_pairs_lines_fills_the_shorter_side_and_reads_without_colour`). Each column
 is half the view, so both sides are on screen together as Fork's equal panes are; a line
 wider than its column scrolls sideways, sliding the text of both columns together while
@@ -1673,7 +1680,7 @@ and one header string for a header row. Nothing per row reads the theme: the col
 constants. None of it grows with the file, the line or the scroll offset.
 
 **Horizontal extent.** Unified: every row is as wide as the view, or as
-`cairn_ui::content_width` (the gutters, the marker column and the widest drawn line's
+`cairn_ui::content_width` (the gutters, the separator, the gap after it and the widest drawn line's
 columns at the font's advance, the cut marker's too when a line is cut) where that is
 wider, measured once — so the horizontal scrollbar is the same whichever
 rows are built (`the_horizontal_extent_is_the_widest_lines_wherever_the_view_is`). Long
@@ -1771,7 +1778,12 @@ number) and `docs/research/diff-engine/fork-shortcuts.md`.
 | `CURRENT_CHANGE` | the dark theme's `text_highlight` | Cairn-chosen: Fork uses the system accent (Finding 25), which Cairn has no platform call to read; the theme's accent, pinned equal by `the_current_change_is_the_themes_accent`. |
 | Side-by-side columns | two equal columns, each half the view, one gutter each, grey filler, the hunk header at the top of each | Fork-measured: Finding 11 (equal, not resizable, the vendor; one gutter per pane; grey filler; the header repeated). Filler's grey is Fork's `#424242` (Finding 25), retuned. |
 | Side-by-side sideways scroll | both columns' text slides together; each gutter stays | User decision (2026-10-03), kept as built: Fork's panes are two text controls whose sideways scroll is not established; Cairn's are one view (the no-plain-`ScrollView` invariant), so one scroll moves both. |
-| Side-by-side `-`/`+` markers | a marker column per side | User decision (2026-10-03), kept as built: Fork's is an opt-in preference (Finding 12); Cairn draws it always, as in unified, so meaning never rests on colour (L11). |
+| `-`/`+` marker column | none, in either view | User decision (2026-10-04): no marker column, as Fork's default (Finding 12: an opt-in preference); in unified the gutter (which number is blank) still says added/removed without colour; in side-by-side a changed pair is told from context by tint alone, as in Fork — stated residual. Reverses the 2026-10-03 decision that drew it always (L11). |
+| Line-number size (`NUMBER_FONT_SIZE`) | 9 px, Plex Mono, Fork's muted grey | Fork-measured: Mac numbers 6.5 pt tall (Finding 24) ÷ Plex Mono's 0.698 em figure height ≈ 9.3 px; the user-supplied Fork capture, 2026-10-04 (Windows, unified), agrees — its digits advance 0.84 of its code's, 0.84 × 11 ≈ 9.3. Whole pixels because Freya's `FontSize` is an `i32`. The face is Cairn-chosen: Fork's numbers use another font (Finding 12); Plex Mono's figures are tabular. |
+| Number column (`number_width`) | the file's widest number at 5.4 px a digit, 2 px before and 6 px after (`NUMBER_PADDING`) — 18.8 px for two digits; the unified gutter is two columns, ≈ 37.6 / 48.4 / 59.2 px for two, three and four digits | Fork-measured: the user-supplied Fork captures, 2026-10-04 (unified, Windows: the columns about a digit apart, about 6 px before the divider; ≈ 45 px for three digits, ≈ 60 px for four), the primary reference over Finding 24's Mac "≈ 50 pt for two digits", which they do not match. Widens with the digits, as Fork's does (Finding 12). |
+| Gap after the separator (`TEXT_PADDING`) | 4 px before the text and a hunk header's words | Fork-measured: the user-supplied capture, 2026-10-04, with the user's correction that the wider space there was the code's own indentation — "a few pixels, like the gap between the numbers and the divider". |
+| Unified tint | from the separator to the row's end; the gutter keeps the ground; the separator thin | Fork-measured: Finding 12 and the user-supplied Fork capture (unified, changed file), 2026-10-04. |
+| Side-by-side tint | across the whole column, its number included | Fork-measured: the user-supplied Fork capture (side-by-side), 2026-10-04 — unlike unified. Filler keeps Fork's grey on the text area. |
 | End-of-file marker side by side | a row after the change, in the column of the side that did not end | User decision (2026-10-03), kept as built: git has no side-by-side form; Fork's is not recorded. |
 | Too large | "Changes are too large to display", "Load Diff" | Fork-measured: Finding 21 (Windows screenshot, TrackerWin #2245). The line under it giving the measurement is Cairn's. |
 | Too large, past the 64 MiB ceiling | "72.3 MiB — larger than the 64 MiB Cairn can load": the file's size to a tenth of a MiB and the ceiling, no Load Diff, no logo | User's decision, 2026-10-03 (the sentence replaced "N bytes, more than the limit of 1,048,576 bytes; too large to load", which named the drawing limit rather than the one that refused the load). The ceiling said is `DiffLimits::LOAD_ANYWAY_BYTES`, the one every file diff is asked with. No logo kept as built: user's decision, 2026-10-03. |
@@ -1793,7 +1805,7 @@ number) and `docs/research/diff-engine/fork-shortcuts.md`.
 | Filter persistence | the text kept across commits for the session; a file chosen before the filter hid it stays shown; "Showing N of M files" whenever a filter is active | User decision (2026-10-03): the count line keeps a sticky filter from being mistaken for a commit that touched fewer files. |
 | File list width | 35% of the pane until dragged, never below 200 px, its share kept for the session | User decision (2026-10-03). Fork's split is draggable (Finding 5); its default width is not established. |
 | A file pressed in the Commit tab | opens its diff under its row, pressed again closes it; files start collapsed; the Commit tab stays shown | Fork-measured: Finding 4 (vendor GIF; "it does not switch to Changes"; collapsed by default, by the vendor's choice). Phase 06's press, which showed the file in the Changes tab, is replaced. |
-| In-place diff's options | no bar of its own; shares the Changes tab's context, whitespace and side-by-side; never the entire file — Entire File is the Changes tab's alone (`diff_actions::in_place_options`, `DiffSettings::line_context`) | Fork-measured: Finding 4 (the vendor: no header to host options; users: the Changes tab's options govern). The entire file left out is the user's decision, 2026-10-04, departing from Fork: with no bar to turn it off, the Commit tab was left showing every file whole (`entire_file_is_the_changes_tabs_alone_and_never_reaches_a_file_opened_in_place`). |
+| In-place diff's options | no bar of its own; shares the Changes tab's context, whitespace and side-by-side; never the entire file — Entire File is the Changes tab's alone (`diff_actions::in_place_options`, `DiffSettings::line_context`) | Fork-measured: Finding 4 (the vendor: no header to host options; users: the Changes tab's options govern). The entire file left out is the user's decision, 2026-10-04, departing from Fork: with no bar to turn it off, the Commit tab was left showing every file whole (`entire_file_is_the_changes_tabs_alone_and_never_reaches_a_file_opened_in_place`). While Entire File is on in the Changes tab its context buttons are disabled (`DiffSettings::more_lines` and `fewer_lines` refuse), so the Commit tab's in-place files keep the line count they had until Entire File is turned off. |
 | Expand All | right-aligned above the files; Collapse All while a file is open | Fork-measured: Finding 4 (Expand All turns into Collapse All). That it reads Collapse All while ANY file is open — one opened by a press as well — is the user's decision, 2026-10-04, kept as built: Fork's label after a single press is not recorded. |
 | Expand All's budget | 50,000 lines, both versions of each file counted, and one per file | Cairn-chosen (Q2; the PRD names a line budget, not its size): R2.6's per-file line ceiling, measured against the window check — `progress.md`, phase 08. |
 | What the budget says | "Expand All stopped at its line budget: N files left collapsed.", left of Collapse All | User's decision, 2026-10-04, kept as built: Fork has no budget (it expands every file). |

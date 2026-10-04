@@ -3,6 +3,58 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-04 — Fix: no marker column, and Fork's gutter (the user's visual check)
+
+Packet mode, committed to `feature/diff-engine`. **User decision (2026-10-04), reversing
+2026-10-03's:** "Fork doesn't have + or - just colours" — no `-`/`+` column in either view
+(unified and side-by-side, Changes tab and Commit tab in place). In unified the gutter (the
+blank number) still says added or removed without colour; side by side a changed pair is
+told from context by tint alone, as in Fork — stated residual in `docs/systems/diff.md`.
+With it, the user's "no gap between the line numbers and the divider" and "the gutter
+column is too big for the text size", and three user-supplied Fork captures (unified
+Windows `images/2.png`, side-by-side `3.png`, unified changed file `4.png`, the last the
+primary unified reference), plus the correction that the wider space after the divider
+there is the code's indentation.
+
+- **The gap.** Read in the pinned Freya (`freya-core/src/elements/label.rs`): a label's
+  paragraph is laid out over `area_size.width + 1` and painted at the visible area's origin,
+  so a label's own padding does not move right-aligned text — the number touched the
+  separator. The number is now a box whose padding holds the gap (`NUMBER_LEAD` 2 px,
+  `NUMBER_PADDING` 6 px) around a fill-width label; the text starts `TEXT_PADDING` (4 px)
+  after the separator in both views.
+- **The size.** `NUMBER_FONT_SIZE` 9 px: Fork's Mac numbers 6.5 pt tall ÷ Plex Mono's
+  0.698 em figures ≈ 9.3, and the Windows capture's digit/code advance ratio 0.84 × 11 ≈
+  9.3; Freya's `FontSize` is an `i32`, so 9 (a 9.3 first tried was stored as 9, which the
+  pin caught). `number_width` = digits × 5.4 + 8: 18.8 px a two-digit column, the unified
+  gutter ≈ 37.6 / 48.4 / 59.2 px for two / three / four digits (capture: ≈ 45 for three,
+  ≈ 60 for four; Finding 24's Mac "≈ 50 pt for two digits" is not matched, the captures
+  being the primary reference). Widens with the file's widest number, as before.
+- **Tints.** Unified unchanged: the gutter keeps the ground, the tint starts at the
+  separator. Side by side the tint now spans the whole column, number included (`3.png`).
+- RED (`crates/cairn-ui/tests/diff_view.rs`): `a_row_reads_the_same_with_its_colour_ignored`
+  — "a row of [\" \", \"¶    a();\"] after its numbers, not its text alone";
+  `side_by_side_pairs_lines_fills_the_shorter_side_and_reads_without_colour` — "a column of
+  [\" \", \"¶fn f() {\"]"; `the_gutter_is_small_and_leaves_a_gap_either_side_of_its_separator_in_both_views`
+  — "a number's size: left Some(11.0) right Some(9.3)" and, with that assertion set aside,
+  "a number ends 0 px before its separator, not 6" (the user's report, reproduced);
+  `a_changed_rows_tint_starts_at_the_separator_in_unified_and_spans_the_number_side_by_side`
+  — "side by side true: line 7's tint covers its number: false". GREEN, with the unit pin
+  `a_number_column_is_its_digits_at_the_numbers_size_and_two_gaps` (1, 2 and 4 digits) and
+  `the_width_is_the_widest_line_whatever_is_in_view` re-derived (`TEXT_PADDING` for the
+  old marker column).
+- Docs: `docs/systems/diff.md` (the row prose, the side-by-side prose, the extent, and the
+  "Measured from Fork, or chosen by Cairn" table: the marker row replaced, rows for the
+  numbers' size, the column, the gap after the separator and each view's tint, each cited
+  "user-supplied Fork capture, 2026-10-04"), the module docs of `diff_row_parts.rs`,
+  `unified_rows.rs`, `side_by_side_rows.rs` and `diff_palette.rs`, root `CLAUDE.md`'s
+  status sentence, and `qa-checklist.md` item 9 marked superseded. Left as historical:
+  `docs/prd/diff-engine.md` R6.4's "plus-or-minus marker column" and L11 in
+  `brainstorm.md` — planning records the decision now overrides; flagged for the
+  coordinator.
+- Review nits folded in: `changes_tab.rs`'s `split_width` written with `set_if_modified`,
+  as `commit_tab.rs` does; `docs/systems/diff.md`'s in-place options row says the context
+  buttons are disabled while Entire File is on, so in-place files keep their line count.
+
 ## 2026-10-04 — Phase 09 fix round 2: ownership refused at open as git refuses it
 
 Packet mode, committed to `feature/diff-engine` (18727f1, cc142c1, 1d98a29 and this

@@ -9,11 +9,14 @@ use cairn_model::{
     DisplayOverlay, FileDiff, FileMode, FunctionContext, IntraLineHighlight, LineNumber, LineSpan,
     RepoPath, ShownDiff, Similarity, TextDiff, UnifiedRow, UnifiedRows, split_lines,
 };
-use cairn_ui::diff_palette::{ADDED_EMPHASIS, CURRENT_CHANGE, REMOVED_EMPHASIS};
+use cairn_ui::diff_palette::{
+    ADDED_EMPHASIS, ADDED_TINT, CURRENT_CHANGE, GUTTER_SEPARATOR, REMOVED_EMPHASIS, REMOVED_TINT,
+};
 use cairn_ui::{
     DIFF_ROW_HEIGHT, DiffHeader, DiffSettings, DiffView, ENTIRE_FILE_LABEL, FEWER_LINES_LABEL,
     HIDDEN_CHANGES_NOTICE, HeaderAction, IGNORE_WHITESPACE_LABEL, MORE_LINES_LABEL,
-    NEXT_CHANGE_LABEL, NO_NEWLINE_AT_END, PREVIOUS_CHANGE_LABEL, SIDE_BY_SIDE_LABEL,
+    NEXT_CHANGE_LABEL, NO_NEWLINE_AT_END, NUMBER_FONT_SIZE, NUMBER_PADDING, PREVIOUS_CHANGE_LABEL,
+    SIDE_BY_SIDE_LABEL, TEXT_PADDING, number_width,
 };
 use freya::prelude::*;
 use freya_testing::{TestingNode, TestingRunner};
@@ -223,13 +226,12 @@ fn only_a_viewport_of_diff_rows_is_built_however_long_the_file() {
     );
 }
 
-/// One drawn row, read with its colour ignored: the gutter's two numbers, the marker
-/// column, the text.
+/// One drawn row, read with its colour ignored: the gutter's two numbers and the text —
+/// and nothing else, since no marker column is drawn (the user's decision, 2026-10-04).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Read {
     old: String,
     new: String,
-    marker: String,
     text: String,
 }
 
@@ -261,15 +263,13 @@ fn read_rows(test: &TestingRunner) -> Vec<Read> {
             let old = parts.next().unwrap_or_default();
             let new = parts.next().unwrap_or_default();
             let rest: Vec<String> = parts.collect();
-            let (marker, text) = match rest.as_slice() {
-                [text] => (String::new(), text.clone()),
-                [marker, text] => (marker.clone(), text.clone()),
-                other => panic!("a row of {other:?}"),
+            let text = match rest.as_slice() {
+                [text] if text.starts_with('¶') => text.clone(),
+                other => panic!("a row of {other:?} after its numbers, not its text alone"),
             };
             rows.push(Read {
                 old,
                 new,
-                marker,
                 text: text.trim_start_matches('¶').to_owned(),
             });
         }
@@ -281,21 +281,21 @@ fn read_rows(test: &TestingRunner) -> Vec<Read> {
     rows
 }
 
-fn read(old: &str, new: &str, marker: &str, text: &str) -> Read {
+fn read(old: &str, new: &str, text: &str) -> Read {
     Read {
         old: old.to_owned(),
         new: new.to_owned(),
-        marker: marker.to_owned(),
         text: text.to_owned(),
     }
 }
 
-/// L11, R6.4: a row means the same with its colour ignored — a removed line has an old
-/// number, a blank new gutter and `-`; an added one the reverse and `+`; a context line both
-/// numbers and a blank marker; a hunk header is git's `@@` line with the function context
-/// git printed, and no numbers; git's end-of-file marker is a row of its own. Caught by: a
-/// marker dropped, a number drawn on the side a line is not on, a header without its
-/// function context.
+/// R6.4, and the user's decision of 2026-10-04 (no marker column, as Fork's default): a
+/// row draws its numbers and its text and nothing between them, and the gutter alone still
+/// says what the tint says — a removed line has an old number and a blank new gutter, an
+/// added one the reverse, a context line both; a hunk header is git's `@@` line with the
+/// function context git printed, and no numbers; git's end-of-file marker is a row of its
+/// own. Caught by: a `-`/`+` column drawn again, a number drawn on the side a line is not
+/// on, a header without its function context.
 #[test]
 fn a_row_reads_the_same_with_its_colour_ignored() {
     let text = TextDiff::new(
@@ -311,12 +311,12 @@ fn a_row_reads_the_same_with_its_colour_ignored() {
     assert_eq!(
         read_rows(&test),
         [
-            read("", "", "", "@@ -2,3 +2,3 @@ fn main() {"),
-            read("2", "2", " ", "    a();"),
-            read("3", "", "-", "    b();"),
-            read("", "3", "+", "    c();"),
-            read("4", "4", " ", "}"),
-            read("", "", "", NO_NEWLINE_AT_END),
+            read("", "", "@@ -2,3 +2,3 @@ fn main() {"),
+            read("2", "2", "    a();"),
+            read("3", "", "    b();"),
+            read("", "3", "    c();"),
+            read("4", "4", "}"),
+            read("", "", NO_NEWLINE_AT_END),
         ]
     );
 }
@@ -837,12 +837,9 @@ fn only_a_viewport_of_side_by_side_rows_is_built_however_long_the_file() {
     );
 }
 
-/// One side-by-side row read with its colour ignored: each column's number, marker and text,
-/// or `None` for a column that is filler.
-type SideRow = (
-    Option<(String, String, String)>,
-    Option<(String, String, String)>,
-);
+/// One side-by-side row read with its colour ignored: each column's number and text, or
+/// `None` for a column that is filler.
+type SideRow = (Option<(String, String)>, Option<(String, String)>);
 
 /// The side-by-side rows on screen, top to bottom, each column read apart. A column with no
 /// text (only its blank number) is filler.
@@ -876,12 +873,11 @@ fn read_side_rows(test: &TestingRunner) -> Vec<SideRow> {
             return None;
         }
         let number = parts.first().cloned().unwrap_or_default();
-        let (marker, text) = match &parts[1..] {
-            [text] => (String::new(), text.clone()),
-            [marker, text] => (marker.clone(), text.clone()),
-            other => panic!("a column of {other:?}"),
+        let text = match &parts[1..] {
+            [text] if text.starts_with('¶') => text.clone(),
+            other => panic!("a column of {other:?} after its number, not its text alone"),
         };
-        Some((number, marker, text.trim_start_matches('¶').to_owned()))
+        Some((number, text.trim_start_matches('¶').to_owned()))
     };
     for (row, x, text) in pieces.into_iter().chain([(i32::MAX, 0., String::new())]) {
         if at.is_some_and(|current| current != row) {
@@ -897,18 +893,18 @@ fn read_side_rows(test: &TestingRunner) -> Vec<SideRow> {
     rows
 }
 
-fn cell(number: &str, marker: &str, text: &str) -> Option<(String, String, String)> {
-    Some((number.to_owned(), marker.to_owned(), text.to_owned()))
+fn cell(number: &str, text: &str) -> Option<(String, String)> {
+    Some((number.to_owned(), text.to_owned()))
 }
 
-/// R1.4, R6.1, R6.4, L11 side by side: the i-th removed line beside the i-th added one, the
-/// shorter side's rows filler, one number per column, a marker per line so a row reads the
-/// same with its colour ignored, the hunk header with git's function context in both
+/// R1.4, R6.1, R6.4 side by side: the i-th removed line beside the i-th added one, the
+/// shorter side's rows filler, one number per column and no marker (the user's decision of
+/// 2026-10-04, as Fork's default), the hunk header with git's function context in both
 /// columns, a context line in both, and git's end-of-file marker in the column of the side
 /// whose last line did not end. Here the sides differ in length both ways, and a whole side
 /// of one change is empty. Caught by: pairing by position in the hunk rather than in the
 /// change, filler drawn as a blank line with a number, the header in one column only, or a
-/// marker in the wrong column.
+/// `-`/`+` drawn again.
 #[test]
 fn side_by_side_pairs_lines_fills_the_shorter_side_and_reads_without_colour() {
     let text = TextDiff::new(
@@ -929,18 +925,15 @@ fn side_by_side_pairs_lines_fills_the_shorter_side_and_reads_without_colour() {
     assert_eq!(
         read_side_rows(&test),
         [
-            (cell("", "", header), cell("", "", header)),
-            (cell("1", " ", "fn f() {"), cell("1", " ", "fn f() {")),
-            (cell("2", "-", "    a();"), cell("2", "+", "    A();")),
-            (cell("3", "-", "    b();"), None),
-            (cell("4", " ", "}"), cell("3", " ", "}")),
-            (None, cell("4", "+", "new")),
-            (cell("5", " ", "x"), cell("5", " ", "x")),
-            (cell("6", "-", "y"), cell("6", "+", "Y")),
-            (
-                cell("", "", NO_NEWLINE_AT_END),
-                cell("", "", NO_NEWLINE_AT_END)
-            ),
+            (cell("", header), cell("", header)),
+            (cell("1", "fn f() {"), cell("1", "fn f() {")),
+            (cell("2", "    a();"), cell("2", "    A();")),
+            (cell("3", "    b();"), None),
+            (cell("4", "}"), cell("3", "}")),
+            (None, cell("4", "new")),
+            (cell("5", "x"), cell("5", "x")),
+            (cell("6", "y"), cell("6", "Y")),
+            (cell("", NO_NEWLINE_AT_END), cell("", NO_NEWLINE_AT_END)),
         ]
     );
 }
@@ -1061,5 +1054,181 @@ fn a_line_past_the_limit_is_drawn_cut_with_its_marker_in_both_views() {
         // The user's marker (2026-10-03): how many of the line's bytes are not drawn.
         assert_eq!(line[1], " … 4,192,256 more bytes");
         assert_eq!(4 * 1024 * 1024 - cut, 4_192_256);
+    }
+}
+
+/// Twelve lines, the seventh changed: two-digit numbers, a removed and an added row.
+fn two_digit_change() -> ShownDiff {
+    let old: String = (1..=12).map(|n| format!("line {n}\n")).collect();
+    let new = old.replace("line 7\n", "LINE 7\n");
+    let text = TextDiff::new(
+        split_lines(old.as_bytes()),
+        split_lines(new.as_bytes()),
+        vec![change((6, 1), (6, 1))],
+    );
+    ShownDiff::new(text_diff(text, DisplayOverlay::none()), Context::lines(3))
+}
+
+/// The one-pixel separators between a gutter and its text on screen, each `(row, area)`.
+/// In side-by-side the rule between the columns is one too; callers take the nearest.
+fn separators(test: &TestingRunner) -> Vec<(i32, Area)> {
+    test.find_many(|node, element| {
+        let area = node.layout().area;
+        Rect::try_downcast(element)
+            .filter(|rect| {
+                area.width() == 1.
+                    && area.height() == DIFF_ROW_HEIGHT
+                    && rect.style.background.as_color() == Some(GUTTER_SEPARATOR)
+            })
+            .map(|_| ((area.min_y() / DIFF_ROW_HEIGHT).floor() as i32, area))
+    })
+}
+
+/// The line numbers on screen, each `(row, area, font size)`.
+fn number_labels(test: &TestingRunner) -> Vec<(i32, Area, Option<f32>)> {
+    test.find_many(|node, element| {
+        let area = node.layout().area;
+        Label::try_downcast(element)
+            .filter(|label| {
+                !label.text.is_empty() && label.text.chars().all(|c| c.is_ascii_digit())
+            })
+            .map(|label| {
+                (
+                    (area.min_y() / DIFF_ROW_HEIGHT).floor() as i32,
+                    area,
+                    label.text_style_data.font_size.map(f32::from),
+                )
+            })
+    })
+}
+
+/// The line texts on screen, each `(row, area)`.
+fn line_paragraphs(test: &TestingRunner) -> Vec<(i32, Area)> {
+    test.find_many(|node, element| {
+        let area = node.layout().area;
+        Paragraph::try_downcast(element)
+            .map(|_| ((area.min_y() / DIFF_ROW_HEIGHT).floor() as i32, area))
+    })
+}
+
+/// The user's visual check (2026-10-04): "there is no gap between the line numbers and the
+/// divider", "the gutter column is too big for the text size", and Fork's captures
+/// (user-supplied, 2026-10-04): small numbers, a few pixels either side of the divider, no
+/// marker column. In both views every number's box ends at least `NUMBER_PADDING` before
+/// the separator to its right, every line's text starts at least `TEXT_PADDING` after the
+/// separator to its left, the numbers are drawn at `NUMBER_FONT_SIZE`, smaller than the
+/// text, and the unified gutter is two columns of `number_width` for the file's widest
+/// number. Caught by: the padding set on the number's own label — which this toolkit
+/// build lays its paragraph out over, right-aligning the digits against the separator —
+/// the numbers drawn at the text's size, or a marker column between separator and text.
+#[test]
+fn the_gutter_is_small_and_leaves_a_gap_either_side_of_its_separator_in_both_views() {
+    for side_by_side in [false, true] {
+        let test = launch_as(two_digit_change(), side_by_side);
+        let separators = separators(&test);
+        let numbers = number_labels(&test);
+        let texts = line_paragraphs(&test);
+        assert!(
+            numbers.len() >= 10 && texts.len() >= 8,
+            "too little drawn to decide anything: {} numbers, {} texts",
+            numbers.len(),
+            texts.len()
+        );
+        for (row, number, size) in &numbers {
+            assert_eq!(*size, Some(NUMBER_FONT_SIZE), "a number's size");
+            let separator = separators
+                .iter()
+                .filter(|(at, area)| at == row && area.min_x() >= number.max_x() - 0.01)
+                .map(|(_, area)| area.min_x())
+                .reduce(f32::min)
+                .unwrap_or_else(|| panic!("no separator right of a number on row {row}"));
+            assert!(
+                number.max_x() <= separator - NUMBER_PADDING + 0.01,
+                "side by side {side_by_side}: a number ends {} px before its separator, not \
+                 {NUMBER_PADDING}",
+                separator - number.max_x()
+            );
+        }
+        for (row, text) in &texts {
+            let separator = separators
+                .iter()
+                .filter(|(at, area)| at == row && area.max_x() <= text.min_x() + 0.01)
+                .map(|(_, area)| area.max_x())
+                .reduce(f32::max)
+                .unwrap_or_else(|| panic!("no separator left of a text on row {row}"));
+            assert!(
+                text.min_x() >= separator + TEXT_PADDING - 0.01,
+                "side by side {side_by_side}: a text starts {} px after its separator, not \
+                 {TEXT_PADDING}",
+                text.min_x() - separator
+            );
+        }
+        if !side_by_side {
+            let gutter = separators
+                .iter()
+                .map(|(_, area)| area.min_x())
+                .reduce(f32::min)
+                .unwrap_or_default();
+            assert!(
+                (gutter - 2. * number_width(2)).abs() < 0.01,
+                "the unified gutter is {gutter} px, not two columns of two digits"
+            );
+        }
+    }
+    const { assert!(NUMBER_FONT_SIZE < cairn_ui::diff_palette::DIFF_FONT_SIZE) };
+}
+
+/// Fork's captures (user-supplied, 2026-10-04): in unified the gutter keeps the plain
+/// ground on a changed row and the tint starts at the separator; side by side the tint
+/// runs across the pane, its number column included. Read as the backgrounds of the rects
+/// that hold a removed and an added row's number. Caught by: the side-by-side tint left
+/// after the number, or the unified gutter tinted.
+#[test]
+fn a_changed_rows_tint_starts_at_the_separator_in_unified_and_spans_the_number_side_by_side() {
+    for side_by_side in [false, true] {
+        let test = launch_as(two_digit_change(), side_by_side);
+        let tinted: Vec<(Area, Color)> = test.find_many(|node, element| {
+            let area = node.layout().area;
+            Rect::try_downcast(element).and_then(|rect| {
+                rect.style
+                    .background
+                    .as_color()
+                    .filter(|colour| [REMOVED_TINT, ADDED_TINT].contains(colour))
+                    .map(|colour| (area, colour))
+            })
+        });
+        let separators = separators(&test);
+        let numbers = number_labels(&test);
+        for (number, tint) in [("7", REMOVED_TINT), ("7", ADDED_TINT)] {
+            let rows: Vec<&(Area, Color)> = tinted
+                .iter()
+                .filter(|(_, colour)| *colour == tint)
+                .collect();
+            assert!(!rows.is_empty(), "no row is tinted {tint:?}");
+            for (area, _) in rows {
+                let row = (area.min_y() / DIFF_ROW_HEIGHT).floor() as i32;
+                let covers_a_number = numbers.iter().any(|(at, label, _)| {
+                    *at == row && label.min_x() >= area.min_x() && label.max_x() <= area.max_x()
+                });
+                assert_eq!(
+                    covers_a_number, side_by_side,
+                    "side by side {side_by_side}: line {number}'s tint covers its number: \
+                     {covers_a_number}"
+                );
+                if !side_by_side {
+                    let separator = separators
+                        .iter()
+                        .filter(|(at, _)| *at == row)
+                        .map(|(_, sep)| sep.max_x())
+                        .next()
+                        .unwrap_or_else(|| panic!("no separator on row {row}"));
+                    assert!(
+                        (area.min_x() - separator).abs() < 0.01,
+                        "the unified tint starts at {}, the separator ends at {separator}",
+                        area.min_x()
+                    );
+                }
+            }
+        }
     }
 }

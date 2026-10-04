@@ -42,9 +42,9 @@ fifty thousand lines is spent, then says how many it left collapsed — read a
 page at a time on the diff thread, each file decided before its blobs are read,
 a file that fails failing alone. The Changes tab is Fork's: a one-line summary,
 the changed files behind a filter answered on a worker, the first file chosen,
-and one file's diff, as the unified rows `git diff` prints — gutters, a marker
-column, hunk headers with git's function context, intra-line ranges, in IBM
-Plex Mono — or side by side, under Fork's bar of previous and next change and
+and one file's diff, as the unified rows `git diff` prints — Fork's small
+line-number gutters and no marker column, hunk headers with git's function
+context, intra-line ranges, in IBM Plex Mono — or side by side, under Fork's bar of previous and next change and
 the ignore-whitespace, context, entire-file and side-by-side buttons, the
 context starting at the user's `diff.context` (`docs/systems/diff.md`, "The
 diff view"); or the notice of a state that is not text, with Load Diff for a

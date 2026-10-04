@@ -1,16 +1,18 @@
-//! One row of the unified view (PRD R6.4, R6.5): an old and a new line-number gutter, a thin
-//! separator, then — tinted for a changed line — a marker column (`-`, `+`, or blank) and the
-//! line. A removed line leaves the new gutter blank and an added one the old, so the gutter
-//! and the marker say what the tint says (L11). A hunk header is git's `@@ -a,b +c,d @@` and
-//! the function context git printed after it, muted, at the same height, with no band and no
-//! button (Fork, Finding 13); git's `\ No newline at end of file` is a muted row of its own.
-//! The gutter scrolls sideways with the text.
+//! One row of the unified view (PRD R6.4, R6.5): an old and a new line-number gutter on the
+//! plain ground, a thin separator, then — tinted for a changed line, from the separator to
+//! the row's end — the line, a few pixels in. No marker column (the user's decision of
+//! 2026-10-04, as Fork's default): a removed line leaves the new gutter blank and an added one
+//! the old, so the gutter still says what the tint says without colour. A hunk header is
+//! git's `@@ -a,b +c,d @@` and the function context git printed after it, muted, at the same
+//! height, starting where a line's text starts, with no band and no button (Fork, Finding
+//! 13); git's `\ No newline at end of file` is a muted row of its own. The gutter scrolls
+//! sideways with the text.
 
 use cairn_model::{ByteRange, LineNumber, ShownDiff, UnifiedRow};
 use freya::prelude::*;
 
 use crate::diff_palette::DIFF_MUTED;
-use crate::diff_row_parts::{LineKind, MARKER_WIDTH, line_text, marker, number, separator, words};
+use crate::diff_row_parts::{LineKind, TEXT_PADDING, line_text, number, separator, words};
 use crate::diff_view::{NO_NEWLINE_AT_END, RowGeometry, header_words};
 
 /// Row `index` of `shown`'s unified rows, `size` tall, keyed by `key`.
@@ -102,7 +104,7 @@ fn line_row(
     bytes: &[u8],
     ranges: &[ByteRange],
 ) -> Element {
-    let (sign, tint, emphasis) = kind.dress();
+    let (tint, emphasis) = kind.dress();
     row.child(gutter(numbers, number_width))
         .child(separator(current))
         .child(
@@ -110,9 +112,9 @@ fn line_row(
                 .horizontal()
                 .width(Size::flex(1.))
                 .height(Size::fill())
+                .padding(Gaps::new(0., 0., 0., TEXT_PADDING))
                 .cross_align(Alignment::Center)
                 .background(tint)
-                .child(marker(sign))
                 .child(line_text(bytes, ranges, emphasis)),
         )
         .into()
@@ -128,8 +130,8 @@ fn note_row(row: Rect, number_width: f32, current: bool, text: String) -> Elemen
                 .horizontal()
                 .width(Size::flex(1.))
                 .height(Size::fill())
+                .padding(Gaps::new(0., 0., 0., TEXT_PADDING))
                 .cross_align(Alignment::Center)
-                .child(rect().width(Size::px(MARKER_WIDTH)))
                 .child(words(text, DIFF_MUTED)),
         )
         .into()

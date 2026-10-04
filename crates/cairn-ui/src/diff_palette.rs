@@ -11,8 +11,10 @@
 //! and the text keeps Fork's own value, which is lighter against a darker ground. The
 //! retuning is computed, not hand-picked, so the source value stays readable in the code.
 //!
-//! **Colour never carries the meaning alone** (L11): the marker column (`-`, `+`) and the
-//! blank gutter of the side a line is not on say what the tint says.
+//! **Where colour carries the meaning.** There is no marker column (the user's decision of
+//! 2026-10-04, as Fork's default): in unified the blank gutter of the side a line is not on
+//! still says what the tint says; side by side a changed pair is told from context by its
+//! tint alone, as in Fork — a stated residual of that decision.
 
 use freya::prelude::Color;
 

@@ -3,6 +3,41 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-04 — CI fix: two reduced-trust tests isolate the configuration gix reads
+
+Packet mode, committed to `feature/diff-engine` from 1f1eb10. CI's `gate` job (runs
+37186362485, 37188696238) failed `test-full` on
+`every_repository_is_named_to_git_whatever_trust_gix_gave_it` (`process/cli.rs`): gix
+trusted the `core.worktree = /` fixture `Full`, not `Reduced`. Passed locally.
+
+- **Cause.** GitHub's Ubuntu runner image appends `[safe] directory = *` to
+  `/etc/gitconfig` (`actions/runner-images`,
+  `images/ubuntu/scripts/build/install-git.sh`, for actions/checkout#760). gix 0.87.1
+  takes `safe.directory` from the system and global files (`Safe::directory_filter`),
+  and `check_safe_directories` admits every path on `*`, so `open_from_paths` raised the
+  trust to `Full` (`src/open/repository.rs`). actions/checkout's own `safe.directory` went
+  to a temporary `HOME` and played no part. Reproduced locally by pointing
+  `GIT_CONFIG_SYSTEM` at a file holding the same two lines: exactly that test failed in
+  `cairn-git`, and `a_repository_cairn_admits_is_read_as_git_reads_it_whatever_gix_makes_of_its_owner`
+  (`tests/diff/ownership.rs`) passed while deciding nothing — gix trusted every open in it
+  fully. Neither is a product divergence: the open's trust only differs from git's where
+  git's own check has already admitted the repository, which is the point of both tests.
+- **Fix (tests only).** Each test runs its reduced-trust half in the test binary again,
+  in a child with `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null` and an empty
+  `HOME`/`XDG_CONFIG_HOME` — gix honours all of them — and the child asserts gix's trust is
+  `Reduced` before anything is read (the ownership test gains that assertion; it had
+  none). The unit test's child is an `#[ignore]`d `_inner` test, run through
+  `process::cli::tests::passes_with_gix_configuration_isolated`, which lives in the
+  `#[cfg(test)]` module because the process guards read `stub_tests`'
+  `cfg(all(test, unix))` as production code. The skip where this user owns `/` stays.
+  The other host-precondition tests were checked under the emulated system file: the two
+  user-namespace tests already isolate their child (`GIT_CONFIG_NOSYSTEM`, own `HOME`),
+  and the ownership, bare-discovery and worker oracles read the launch environment
+  through a closure and run git with the system file off.
+- **Verified.** With the emulated `/etc/gitconfig`, each child fails `left: Full` and
+  each parent passes; `GIT_CONFIG_SYSTEM=<that file> scripts/gate.sh --step test-full`
+  passes; `scripts/gate.sh` (full) exits 0.
+
 ## 2026-10-04 — Fix round 5 (phase 09): fetch's refspec check asks git, the launch environment, namespace tests
 
 Packet mode, committed to `feature/diff-engine` from ff3b715. The user's decisions of

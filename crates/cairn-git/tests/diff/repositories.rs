@@ -210,9 +210,9 @@ impl Drop for Repo {
 /// The edge cases C2 names, each in a commit of its own so a test can reach it by subject.
 ///
 /// Commit order, oldest first: `seed`, `edits`, `endings`, `newlines`, `add and delete`,
-/// `rename with edits`, `far apart`, `crlf edit`, `delete a line`, `mode and content`,
-/// `mode change`, `type change`. The last two stay last: tests reach them as `HEAD~1` and
-/// `HEAD`.
+/// `rename with edits`, `far apart`, `crlf edit`, `delete a line`, `one line edit`,
+/// `mode and content`, `mode change`, `type change`. The last two stay last: tests reach
+/// them as `HEAD~1` and `HEAD`.
 pub fn crafted() -> Repo {
     let repo = Repo::new("crafted");
 
@@ -242,6 +242,7 @@ pub fn crafted() -> Repo {
     repo.write("no-eol.txt", b"first\nsecond\nlast with no newline");
     repo.write("crlf.txt", b"one\r\ntwo\r\nthree\r\n");
     repo.write("loses-eol.txt", b"stays\ngoing\n");
+    repo.write("one-line-no-eol.txt", b"alone");
     repo.commit("endings");
 
     // The newline on the last line moves in both directions at once.
@@ -290,6 +291,12 @@ pub fn crafted() -> Repo {
         .collect();
     repo.write("long.txt", deleted.as_bytes());
     repo.commit("delete a line");
+
+    // A file of one line whose one line changes, and one whose one line never ended in a
+    // newline and still does not: `@@ -1 +1 @@`, the header with no lengths.
+    repo.write("one-line.txt", b"ONLY\n");
+    repo.write("one-line-no-eol.txt", b"ALONE");
+    repo.commit("one line edit");
 
     // A mode change and an edit in one file: `old mode`/`new mode` beside a hunk.
     repo.write("added.txt", b"brand\nnew\nand more\n");

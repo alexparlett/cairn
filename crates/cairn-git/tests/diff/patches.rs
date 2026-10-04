@@ -394,6 +394,21 @@ fn a_seeded_selection_stages_what_its_patch_says_it_does() {
             {
                 shapes.push("removal only");
             }
+            if matches!(diff.file.status, ChangeStatus::Modified)
+                && !text.changes().is_empty()
+                && text.old_lines().len() == 1
+                && text.new_lines().len() == 1
+            {
+                shapes.push("one line");
+                if text
+                    .old_lines()
+                    .iter()
+                    .chain(text.new_lines())
+                    .all(|line| !line.ends_with_newline())
+                {
+                    shapes.push("one line, no newline");
+                }
+            }
             shapes.push(match diff.file.status {
                 ChangeStatus::Added => "added",
                 ChangeStatus::Deleted => "deleted",
@@ -501,6 +516,8 @@ fn a_seeded_selection_stages_what_its_patch_says_it_does() {
         "two hunks",
         "crlf context",
         "removal only",
+        "one line",
+        "one line, no newline",
     ] {
         assert!(
             shapes.contains(&wanted),

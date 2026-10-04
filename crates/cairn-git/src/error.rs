@@ -55,6 +55,20 @@ pub enum Error {
     )]
     DubiousOwnership { path: PathBuf },
 
+    /// Whether the repository is the current user's could not be decided, because the
+    /// process's effective uid could not be read by any route Cairn has (`/proc/self/status`,
+    /// then the owner of a file it creates; `crate::ownership`) — git's own `geteuid` cannot
+    /// fail — and `safe.directory` does not name it. It is not opened, and no `git` runs in
+    /// it; `path` is the working tree's top or, for a bare repository, its git directory.
+    /// Naming it in `safe.directory` opens it, as it would for git whoever owns it.
+    #[error(
+        "could not tell which user Cairn is running as, so whether git would open the \
+         repository at {path} — which it does only for its owner, or where safe.directory \
+         names it — cannot be decided; it was not opened (git config --global --add \
+         safe.directory {path} names it)"
+    )]
+    CurrentUserUnknown { path: PathBuf },
+
     /// The system or global configuration, which says whether a bare repository found by
     /// searching may be opened, could not be read; git refuses to work until it can.
     #[error("failed to read the system or global git configuration: {source}")]

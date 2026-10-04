@@ -308,8 +308,12 @@ tree's top alone, then — from 2.30.5, 2.36.2 and 2.37.1 — every path git
 checks (the `.git` file, when the working tree reaches its git directory
 through one; the working tree's top; the git directory, for a `.git` file
 the directory it names); the owner by `lstat` against the effective uid,
-read from `/proc/self/status` on Linux (the owner of a file the process
-creates elsewhere), with `SUDO_UID` standing in for root alone;
+read from `/proc/self/status`, or — where that cannot be read, as on
+macOS — as the owner of a file the process creates (where neither answers,
+ownership is not decided: the repository opens where `safe.directory` names
+it and is otherwise `Error::CurrentUserUnknown`, never "dubious ownership",
+since git's own `geteuid` cannot fail), with `SUDO_UID` standing in for
+root alone;
 `GIT_TEST_ASSUME_DIFFERENT_OWNER` read as git reads it; and `safe.directory`
 matched as git matches it — `*`, the empty value's reset, `~/`, `%(prefix)/`
 from 2.34, the command line from 2.38, `<dir>/*` from 2.45.3 and 2.46.0,

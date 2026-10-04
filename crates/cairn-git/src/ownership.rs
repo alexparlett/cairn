@@ -53,16 +53,24 @@
 //!
 //! The environment that configuration, `HOME` and `SUDO_UID` are read through is the one
 //! Cairn was launched with, what the user's own `git`, run from the same place, reads; the
-//! effective uid is the process's own ([`Identity::of_this_process`]). Residual review
+//! effective uid is the process's own ([`Identity::of_this_process`]), read from
+//! `/proc/self/status` or, where that cannot be read, as the owner of a file the process
+//! creates. git's `geteuid` cannot fail, but those reads can: where neither answers,
+//! ownership is not decided — the repository opens where `safe.directory` names it, as
+//! git opens it whoever owns it, and is otherwise refused as
+//! [`Error::CurrentUserUnknown`], never as dubious ownership. Residual review
 //! obligations, stated rather than implied: `%(prefix)/` is expanded against the
 //! directory above the `bin/` holding the `git` Cairn found (its links resolved), which is
 //! git's compiled-in prefix for an installed git, and is not expanded at all when no `git`
 //! is known ([`crate::SharedRepository::discover`]), so such an entry names nothing there;
 //! the configuration files are found as `crate::bare_discovery` finds them, with its
-//! residuals. gix, once Cairn has decided git opens a repository, checks the working
-//! tree's owner again by its own rule (`gix::sec::identity::is_path_owned_by_current_user`
-//! over the directory `core.worktree` names, and gix's `safe.directory` reading, which
-//! knows neither the command line, `.`, nor git's normalisation) and, where that rule
+//! residuals; the created file's owner is the effective uid on a filesystem that records
+//! the creator, which one mounted with a fixed owner (FAT, a squashing NFS) does not, and
+//! a temporary directory on one is the review's; and gix, once Cairn has decided git opens
+//! a repository, checks the working tree's owner again by its own rule
+//! (`gix::sec::identity::is_path_owned_by_current_user` over the directory `core.worktree`
+//! names, and gix's `safe.directory` reading, which knows neither the command line, `.`,
+//! nor git's normalisation) and, where that rule
 //! refuses what git's admits, lowers the repository's trust to reduced — which no open
 //! option prevents. That rule decides nothing: the repository's configuration was loaded
 //! at full trust and is read whole, the allocation limit gix gives reduced trust is
@@ -209,7 +217,8 @@ impl Rule {
 /// code ([`Identity::of_this_process`]), another's in a test.
 pub(crate) struct Identity<'a> {
     /// The effective uid, as `geteuid` answers it; `None` when it could not be read, and
-    /// then no path is owned.
+    /// then ownership is not decided: the repository opens only where `safe.directory`
+    /// names it, and is otherwise [`Error::CurrentUserUnknown`].
     pub(crate) euid: Option<u32>,
     /// The owner of a path, by `lstat` (a link is its own owner's); `None` when it cannot
     /// be read, and then the path is not owned, as git's check treats it.
@@ -231,27 +240,40 @@ fn owner_by_lstat(path: &Path) -> Option<u32> {
     std::fs::symlink_metadata(path).ok().map(|meta| meta.uid())
 }
 
-/// The process's effective uid without `unsafe` or a new dependency: on Linux the second
-/// field of `Uid:` in `/proc/self/status` (real, effective, saved, filesystem), which the
-/// kernel fills from the credentials themselves — unlike the owner of `/proc/self`, which is
-/// root for a process that is not dumpable.
-#[cfg(target_os = "linux")]
+/// The process's effective uid without `unsafe` or a new dependency, by the first route
+/// that answers ([`effective_uid_by`]): on Linux the second field of `Uid:` in
+/// `/proc/self/status` (real, effective, saved, filesystem), which the kernel fills from the
+/// credentials themselves — unlike the owner of `/proc/self`, which is root for a process
+/// that is not dumpable; and where there is no such file (macOS, or a Linux without `/proc`
+/// mounted), the owner of a file this process creates. `None` only when neither answers.
 fn effective_uid() -> Option<u32> {
-    let status = std::fs::read_to_string("/proc/self/status").ok()?;
-    status
-        .lines()
-        .find_map(|line| line.strip_prefix("Uid:"))?
-        .split_whitespace()
-        .nth(1)?
-        .parse()
-        .ok()
+    effective_uid_by(
+        &|| std::fs::read_to_string("/proc/self/status").ok(),
+        &owner_of_a_created_file,
+    )
 }
 
-/// The process's effective uid where there is no `/proc` (macOS): the owner of a file this
-/// process creates, which BSD semantics give the creator's effective uid; it is removed at
-/// once.
-#[cfg(not(target_os = "linux"))]
-fn effective_uid() -> Option<u32> {
+/// [`effective_uid`] over its two routes: the effective uid in `status`'s answer (the text
+/// of `/proc/self/status`), or, when that is missing or holds none, `created`'s.
+fn effective_uid_by(
+    status: &dyn Fn() -> Option<String>,
+    created: &dyn Fn() -> Option<u32>,
+) -> Option<u32> {
+    let from_status = status().and_then(|text| {
+        text.lines()
+            .find_map(|line| line.strip_prefix("Uid:"))?
+            .split_whitespace()
+            .nth(1)?
+            .parse()
+            .ok()
+    });
+    from_status.or_else(created)
+}
+
+/// The owner of a file this process creates in the temporary directory, which the kernel
+/// gives the creator's effective uid (on Linux its filesystem uid, the effective one unless
+/// `setfsuid` moved it; BSD semantics on macOS); it is removed at once.
+fn owner_of_a_created_file() -> Option<u32> {
     use std::os::unix::fs::MetadataExt as _;
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -520,7 +542,10 @@ pub(crate) fn decide(
     } else {
         false
     };
-    if !assume_different && owners.pass(rule.every_path) {
+    // git's `geteuid` cannot fail; Cairn's reading of it can, and then whether the paths
+    // are the user's is not known: never answered as "someone else's".
+    let user_unknown = !assume_different && identity.euid.is_none();
+    if !assume_different && !user_unknown && owners.pass(rule.every_path) {
         return Ok(git_dir);
     }
     // The path that identifies the repository: its working tree's top, or its git
@@ -529,19 +554,26 @@ pub(crate) fn decide(
         Stop::WorkTree(dot_git) => dot_git.parent().unwrap_or(dot_git),
         Stop::GitDirectory(git_dir) => git_dir.as_path(),
     };
-    let values = crate::bare_discovery::protected_values("directory", environment, rule.reading)?;
     let place = Place {
         identifies: identifies.as_os_str().as_bytes(),
         cwd: start,
         home: environment("HOME"),
         prefix: if rule.prefix { asked.prefix() } else { None },
     };
-    if names_the_repository(&rule, &values, &place)? {
-        Ok(git_dir)
-    } else {
-        Err(Error::DubiousOwnership {
+    let named = crate::bare_discovery::protected_values("directory", environment, rule.reading)
+        .and_then(|values| names_the_repository(&rule, &values, &place));
+    match named {
+        // Named, git opens it whoever owns it.
+        Ok(true) => Ok(git_dir),
+        // Owned, git would open it without reading the setting at all — so neither an
+        // unnamed repository nor a value git stops on decides it while the user is unknown.
+        _ if user_unknown => Err(Error::CurrentUserUnknown {
             path: identifies.to_owned(),
-        })
+        }),
+        Ok(false) => Err(Error::DubiousOwnership {
+            path: identifies.to_owned(),
+        }),
+        Err(error) => Err(error),
     }
 }
 
@@ -821,6 +853,97 @@ mod tests {
         std::fs::remove_file(&probe).unwrap();
         assert!(owner.is_some());
         assert_eq!(effective_uid(), owner);
+    }
+
+    /// The effective uid is read from `/proc/self/status` and, where that cannot be read or
+    /// parsed, from the owner of a file this process creates — git's `geteuid` cannot fail,
+    /// so a missing `/proc` must not make every repository someone else's. Caught by: the
+    /// status file as the only route on Linux.
+    #[test]
+    fn the_effective_uid_falls_back_to_a_created_files_owner() {
+        let status = |text: &'static str| move || Some(text.to_owned());
+        let created = || Some(4242);
+        let nothing_created = || None;
+        let unreadable = || None;
+        assert_eq!(
+            effective_uid_by(
+                &status("Name:\tx\nUid:\t1000\t1001\t1000\t1001\n"),
+                &created
+            ),
+            Some(1001),
+            "the status file's effective uid comes first"
+        );
+        assert_eq!(effective_uid_by(&unreadable, &created), Some(4242));
+        assert_eq!(
+            effective_uid_by(&status("Name:\tx\n"), &created),
+            Some(4242)
+        );
+        assert_eq!(
+            effective_uid_by(&status("Uid:\t1000\tnot-a-number\n"), &created),
+            Some(4242)
+        );
+        assert_eq!(effective_uid_by(&unreadable, &nothing_created), None);
+    }
+
+    /// Where the effective uid cannot be read by any route, nothing is claimed about who
+    /// owns the repository: it opens where `safe.directory` names it — git opens it then
+    /// whoever owns it — and is otherwise refused as [`Error::CurrentUserUnknown`], never as
+    /// dubious ownership, which would say the user is not its owner. Caught by: an unknown
+    /// user taken as owning nothing.
+    #[test]
+    fn an_unknown_user_is_never_called_someone_else() {
+        let scratch = std::env::temp_dir().join(format!(
+            "cairn-unknown-user-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(scratch.join(".git")).unwrap();
+        let top = std::fs::canonicalize(&scratch).unwrap();
+        let stop = Stop::WorkTree(top.join(".git"));
+        let unknown = Identity {
+            euid: None,
+            owner_of: &owner_by_lstat,
+        };
+        let asked = Asked {
+            version: at(2, 56, 0),
+            executable: None,
+        };
+        let isolated = |name: &str| match name {
+            "GIT_CONFIG_NOSYSTEM" => Some(OsString::from("1")),
+            "GIT_CONFIG_GLOBAL" => Some(OsString::from("/dev/null")),
+            _ => None,
+        };
+        match decide(&stop, &top, asked, &isolated, &unknown) {
+            Err(Error::CurrentUserUnknown { path }) => assert_eq!(path, top),
+            other => panic!("an unknown user was answered otherwise: {other:?}"),
+        }
+        // A value git stops on decides nothing either: an owner's git never reads it.
+        let invalid = |name: &str| match name {
+            "GIT_CONFIG_PARAMETERS" => {
+                Some(OsString::from("'safe.directory=~cairn-no-such-user/x'"))
+            }
+            other => isolated(other),
+        };
+        assert!(matches!(
+            decide(&stop, &top, asked, &invalid, &unknown),
+            Err(Error::CurrentUserUnknown { .. })
+        ));
+        // Told every path is someone else's, git never asks who the user is.
+        let assumed = |name: &str| match name {
+            "GIT_TEST_ASSUME_DIFFERENT_OWNER" => Some(OsString::from("1")),
+            other => isolated(other),
+        };
+        assert!(matches!(
+            decide(&stop, &top, asked, &assumed, &unknown),
+            Err(Error::DubiousOwnership { .. })
+        ));
+        let named = |name: &str| match name {
+            "GIT_CONFIG_PARAMETERS" => Some(OsString::from("'safe.directory=*'")),
+            other => isolated(other),
+        };
+        assert!(decide(&stop, &top, asked, &named, &unknown).is_ok());
+        std::fs::remove_dir_all(&scratch).unwrap();
     }
 
     /// Each band of the version table at its edges, maintenance releases included, spelled

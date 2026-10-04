@@ -50,7 +50,7 @@ same parity bar as unified, one shared setting), every non-text state draws its 
 with Load Diff for a file past the limits, a line past the long-line limit is drawn cut
 with a marker, `ShownDiff` is prepared on the diff thread (moved to `cairn-model`),
 previous/next change computes in whole numbers, and the row-exhaustiveness guard covers
-`UnifiedRow` and `SideBySideRow`. Phase 08 landed (2026-10-03), QA due: a file pressed in the Commit tab opens its diff
+`UnifiedRow` and `SideBySideRow`. Phase 08 landed (2026-10-03): a file pressed in the Commit tab opens its diff
 in place under its row (Fork), Expand All opens files in order until a budget of 50,000
 lines is spent and says how many it left collapsed — read a page at a time, each file
 decided before its blobs are read, a file that fails failing alone (the bound phase 02's
@@ -58,7 +58,10 @@ QA asked for) — and a ⌘/Ctrl-press on a second row compares the two, tip aga
 the lower row the base, under a header naming both with a swap, the Commit tab unavailable;
 C14's window check is measured headlessly over the bench repository (`window_check`), no
 frame over 16.7 ms while the heaviest subjects load, and the literal look at the window is
-the user's.** The diff model exists in
+the user's. Phase 08's QA is fixed (2026-10-04, `progress.md`): Expand All keeps the files
+already open and reads only the rest, the comparison's header is drawn the moment two
+commits are selected, and the keys held are let go of when the window loses focus — the
+user's decisions.** The diff model exists in
 `cairn-model`, and `cairn-git` answers R2's two queries: the changes query from
 `git diff-tree` through the process manager (decision E, PRD R2.1, R2.2, R2.9 and C14
 amended), honouring `diff.ignoreSubmodules` and `log.showRoot` as the user's `git log`
@@ -333,6 +336,10 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | `ComparisonHeader`, `comparison_parts`, `BASE_CAPTION`, `TIP_CAPTION`, `SWAP_LABEL` | ui (`src/changes_list.rs`) | Phase 08, R7.3: both commits named, base then tip, with the swap. |
 | `DetailTabs::unavailable` | ui (`src/detail_tabs.rs`) | Phase 08, R7.3: the Commit tab disabled while two commits are selected. |
 | `mib_text` | ui (`src/diff_notice.rs`) | Phase 08 (phase 05's obligation): never reads a size just past the ceiling as the ceiling. |
+| `ExpandQuery::kept_open` | app (`src/worker/request.rs`) | Phase 08 QA, the user's decision (2026-10-04): the files open, which Expand All passes over — kept as drawn, never read again; `AllFrom::next` is the first file offered and not decided. |
+| `changes_tab::READING_COMPARISON` | app | Phase 08 QA, the user's decision (2026-10-04): the comparison's header drawn at once, this under it while the change set is awaited. |
+| `worker::update_within` moved | app (`src/worker/window_check_updates.rs`) | Phase 08 QA's C6: out of the fetch tests into a module named for the window check, whose frames now time every update applied in them with their `sync_and_update` (R2). |
+| `HeldKeys` let go of on focus loss | app (`src/window.rs`), ui | Phase 08 QA, the user's decision (2026-10-04): reset when `Platform::is_app_focused` goes false; `HeldKeys` has no equality and an opaque `Debug` (C4). |
 
 ## Validation status
 
@@ -345,7 +352,7 @@ public signature. As-built prose for both: `docs/systems/diff.md`.
 | 05 detail pane | landed 2026-10-03; **phase 05 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 26 raw, 15 confirmed by `qa-confirm`, R3/G5 and one more dismissed; every confirmed finding fixed test-first and the user's six decisions applied (`progress.md`): dates in Fork's fixed English format, encodings through `encoding_rs` (user-approved) |
 | 06 unified diff view | landed 2026-10-03; **phase 06 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 15 raw plus 1 found, 14 confirmed by `qa-confirm`, C4 dismissed; every confirmed finding fixed test-first or recorded for phase 07, and the user's four decisions applied (`progress.md`), `unicode-width` user-approved |
 | 07 Changes tab and side-by-side | landed 2026-10-03; **phase 07 QA fixed** 2026-10-03 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-03): 15 raw, 12 confirmed by `qa-confirm`, T3 and T8 dismissed with evidence; every confirmed finding fixed test-first and the user's decisions on the notices, the summary strip and the `İ` limit applied (`progress.md`) |
-| 08 expansion and compare | landed 2026-10-03; **QA due** | `scripts/gate.sh` PASS, `git-floor` included | due: `responsiveness-reviewer` and `test-coverage-auditor` fresh, the phase's `qa-checklist.md` items and its QA brief; C14's look at the window by hand is the user's |
+| 08 expansion and compare | landed 2026-10-03; **phase 08 QA fixed** 2026-10-04 | `scripts/gate.sh` PASS, `git-floor` included | done (2026-10-04): 22 raw, 18 confirmed by `qa-confirm`, U5 run as a probe (the gap it found now pinned); every confirmed finding fixed test-first and the user's decisions applied — Expand All keeps the files open, the comparison's header at once, the held keys let go of on focus loss, the other Cairn-chosen behaviours recorded as the user's (`progress.md`); C14 re-measured with a frame's applied updates counted; the look at the window by hand is the user's |
 | 09 QA | not started | — | — |
 
 ## Environment notes

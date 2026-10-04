@@ -187,7 +187,8 @@ fn ask(of: Comparison, view: View, submit: Option<&dyn Fn(Request)>) {
 }
 
 /// Where `parent` is in the loaded history, if it is loaded. A scan of what is loaded, run
-/// once per press of a parent link and never per frame.
+/// once per press of a parent link and once per row pressed with the extending chord
+/// ([`extend`], to find which of the two rows is lower), never per frame.
 pub fn loaded_row(rows: &[HistoryRow], parent: Oid) -> Option<usize> {
     let wanted = RowId::Commit(parent);
     rows.iter().position(|row| row.id() == wanted)

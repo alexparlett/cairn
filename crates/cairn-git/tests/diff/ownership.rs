@@ -150,9 +150,10 @@ fn global_file(holder: &Path, name: &str, text: &str) -> Vec<(&'static str, Stri
 /// repository nested inside it, a linked worktree, a bare repository and a link to the
 /// working tree. The settings: none, `*`, a reset by the empty value either side of an
 /// entry, the top exactly, with a trailing slash, through a link, `~/`, `%(prefix)/`,
-/// `:(optional)`, relative, `.`, `<top>/*` and `<parent>/*`, through an include, on the
-/// command line both ways, a name git cannot expand, and the test variable itself unset,
-/// false, numeric and bogus. Caught by: gix's own `safe.directory` rule (which takes
+/// `:(optional)`, relative, `.`, `<top>/*` and `<parent>/*`, through an include, in a system
+/// file under `GIT_CONFIG_NOSYSTEM` (which git 2.38.x alone reads), on the command line both
+/// ways, a name git cannot expand, and the test variable itself unset, false, numeric and
+/// bogus. Caught by: gix's own `safe.directory` rule (which takes
 /// `<top>/*` to name `<top>` itself and reads neither the command line, `.`, nor git's
 /// normalisation), the test variable ignored, a refused repository opened with reduced
 /// trust rather than refused, and any band of git's version table moved.
@@ -243,6 +244,18 @@ fn a_repository_opens_exactly_where_git_opens_it_whatever_safe_directory_says() 
             extra
         }),
         (
+            // git 2.38.x reads the system file even under GIT_CONFIG_NOSYSTEM, which every
+            // other git honours.
+            "the system file under GIT_CONFIG_NOSYSTEM",
+            vec![
+                ("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1".to_owned()),
+                (
+                    "GIT_CONFIG_SYSTEM",
+                    written(holder, "system", &entries(&["*"])),
+                ),
+            ],
+        ),
+        (
             "GIT_CONFIG_PARAMETERS",
             vec![
                 ("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1".to_owned()),
@@ -324,6 +337,12 @@ fn a_repository_opens_exactly_where_git_opens_it_whatever_safe_directory_says() 
         assert!(under("the top", "a directory inside"), "git {version}");
         assert!(!under("the top", "a nested repository"), "git {version}");
     }
+    let nosystem_ignored = version.major == 2 && version.minor == 38;
+    assert_eq!(
+        under("the system file under GIT_CONFIG_NOSYSTEM", "the top"),
+        nosystem_ignored || !reads_the_variable,
+        "git {version}"
+    );
     if version >= since(47) {
         // `<top>/*` names what is under the top, never the top itself.
         assert!(!under("<top>/*", "the top"), "git {version}");

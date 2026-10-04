@@ -315,8 +315,10 @@ matched as git matches it — `*`, the empty value's reset, `~/`, `%(prefix)/`
 from 2.34, the command line from 2.38, `<dir>/*` from 2.45.3 and 2.46.0,
 normalised (`real_path`, `.` the starting directory, relative entries
 ignored) from 2.46.1, `:(optional)` from 2.52 — over the configuration git
-protects, read by `crate::bare_discovery::protected_values` (no include
-followed on 2.38.x; `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` from 2.32).
+protects, read by `crate::bare_discovery::protected_values` (on 2.38.x no
+include followed, and the system file read even under
+`GIT_CONFIG_NOSYSTEM`, since that reader names it without asking whether
+it is wanted; `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` from 2.32).
 What passes is opened with full trust and named to git, whatever gix makes
 of it: gix checks the working tree's owner again as it opens — the
 directory `core.worktree` names, by `is_path_owned_by_current_user`, with
@@ -363,7 +365,8 @@ where that version of git refuses it from the same directory
 (`crates/cairn-git/src/bare_discovery.rs`, read from git's `setup.c` at
 v2.38.0 through v2.56.0): the search stops at a directory that is itself a
 git directory rather than one holding a `.git`; the setting is read only from
-the system file, the global ones (includes followed, `includeIf "gitdir:"`
+the system file (under `GIT_CONFIG_NOSYSTEM` too on 2.38.x, as above), the
+global ones (includes followed, `includeIf "gitdir:"`
 not) and the command line's `GIT_CONFIG_COUNT` (its count read as git's
 `strtoul` reads it — leading whitespace and a sign accepted, an empty value
 zero entries, "bogus count" and "too many entries" where git says them) and
@@ -380,8 +383,8 @@ walks once, from the physical directory upwards as git does (and, as git and
 gix do by default, not into another filesystem), and hands back where it
 stopped — the `.git` of a working tree, or a git directory found as itself —
 and gix opens exactly that path (`ThreadSafeRepository::open_opts` with the
-path taken as it is, the options and trust gix's own discovery derives from
-its owner), never searching again. Two searches agree only while they take
+path taken as it is, at full trust, git's own checks having passed), never
+searching again. Two searches agree only while they take
 the same steps: gix's today switches to the physical path as git's does, but
 one that followed a link logically would climb from `docs/guide -> ../guide`
 into a bare repository planted as `docs/` while the check passed the working

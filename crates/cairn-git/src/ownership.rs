@@ -37,7 +37,8 @@
 //! - **`%(prefix)/`** expanded (`interpolate_path`) from 2.34.0; `~/` and `~user/` always.
 //! - **The command line** (`git -c`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT`) read
 //!   from 2.38.0, when `read_very_early_config` gave way to `git_protected_config`; and
-//!   2.38.x alone follows no `include.path` there (`crate::bare_discovery::Protected`).
+//!   2.38.x alone follows no `include.path` there and reads the system file even under
+//!   `GIT_CONFIG_NOSYSTEM` (`crate::bare_discovery::Protected`).
 //! - **`<dir>/*`** naming every path under `<dir>/` — never `<dir>` itself: 2.45.3, 2.46.0.
 //! - **Normalised** from 2.46.1: an entry neither absolute nor `.` is ignored (git warns);
 //!   the entry is resolved as `real_path` resolves it (links followed, `.` and `..`
@@ -135,7 +136,7 @@ pub(crate) struct Rule {
     leading_path: bool,
     normalised: bool,
     optional: Optional,
-    reading: Protected,
+    pub(crate) reading: Protected,
 }
 
 impl Rule {
@@ -198,6 +199,7 @@ impl Rule {
                 includes: crate::bare_discovery::follows_includes(found),
                 command_line: found >= version(2, 38, 0),
                 file_variables: found >= crate::bare_discovery::FILE_VARIABLES_FROM,
+                nosystem: crate::bare_discovery::honours_nosystem(found),
             },
         }
     }

@@ -29,7 +29,8 @@
 //! the system file, the global ones and the command line's (`GIT_CONFIG_COUNT` and
 //! `GIT_CONFIG_PARAMETERS`, which `git -c` sets), never the repository's own — the file an
 //! attacker writes. Includes are followed — except by 2.38.x, whose `read_protected_config`
-//! added each file without them ([`Protected`]) — but not `includeIf "gitdir:"`, which git
+//! added each file without them, and named the system file without asking whether
+//! `GIT_CONFIG_NOSYSTEM` wanted it ([`Protected`]) — but not `includeIf "gitdir:"`, which git
 //! evaluates there with no repository. The same reader serves `safe.directory`
 //! (`crate::ownership`), through [`protected_values`]. It is read whenever the search stops at a bare
 //! repository, implicit or not, and every value is checked as git checks it: `explicit` or
@@ -215,6 +216,7 @@ fn protected_setting(
             includes: follows_includes(version),
             command_line: true,
             file_variables: version >= FILE_VARIABLES_FROM,
+            nosystem: honours_nosystem(version),
         },
     )?;
     let mut setting = None;
@@ -240,6 +242,10 @@ pub(crate) struct Protected {
     /// `/etc/gitconfig` whatever they say (`GIT_CONFIG_NOSYSTEM` is older, and read by
     /// both).
     pub(crate) file_variables: bool,
+    /// Whether `GIT_CONFIG_NOSYSTEM` keeps the system file out: by every git but 2.38's,
+    /// whose `read_protected_config` names it with `git_system_config()` and never asks
+    /// `git_config_system()` (2.39's `config_with_options` asks again).
+    pub(crate) nosystem: bool,
 }
 
 /// The first git that reads `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM`.
@@ -256,6 +262,13 @@ pub(crate) fn follows_includes(version: GitVersion) -> bool {
     !(INCLUDES_SKIPPED_FROM..INCLUDES_FOLLOWED_AGAIN_FROM).contains(&version)
 }
 
+/// Whether the git at `version` keeps the system file out of the configuration it protects
+/// under `GIT_CONFIG_NOSYSTEM`: every git but 2.38.x, the same reader that follows no
+/// include (read in `config.c` at v2.38.0, v2.38.5 and v2.39.0).
+pub(crate) fn honours_nosystem(version: GitVersion) -> bool {
+    follows_includes(version)
+}
+
 /// Every value the configuration git protects gives `safe.<name>`, in git's order — the
 /// system file, the XDG file, `~/.gitconfig` (or `GIT_CONFIG_GLOBAL` for both), then the
 /// command line when `reading` counts it — every value checked as each reader of it checks
@@ -268,6 +281,7 @@ pub(crate) fn protected_values(
 ) -> Result<Vec<Option<Vec<u8>>>, Error> {
     let files_environment = |variable: &str| match variable {
         "GIT_CONFIG_GLOBAL" | "GIT_CONFIG_SYSTEM" if !reading.file_variables => None,
+        "GIT_CONFIG_NOSYSTEM" if !reading.nosystem => None,
         other => environment(other),
     };
     let mut values = files_values(name, &files_environment, reading.includes)?;
@@ -771,6 +785,7 @@ mod tests {
                     includes,
                     command_line,
                     file_variables,
+                    nosystem: true,
                 },
             )
             .unwrap()
@@ -786,6 +801,59 @@ mod tests {
         assert!(follows_includes(at(2, 37, 7)));
         assert!(!follows_includes(at(2, 38, 0)) && !follows_includes(at(2, 38, 5)));
         assert!(follows_includes(at(2, 39, 0)));
+        std::fs::remove_dir_all(&scratch).unwrap();
+    }
+
+    /// git 2.38.x's `read_protected_config` names the system file with `git_system_config()`
+    /// alone, never asking `git_config_system()`, so it reads that file even under
+    /// `GIT_CONFIG_NOSYSTEM`; every git before and after skips it (2.39 went back to
+    /// `config_with_options`, which asks). For `safe.directory` and `safe.bareRepository`
+    /// alike. Caught by: gix's `Source::System`, which honours the variable on every git.
+    #[test]
+    fn the_system_file_is_read_under_nosystem_by_git_2_38_alone() {
+        let scratch =
+            std::env::temp_dir().join(format!("cairn-nosystem-{}-{}", std::process::id(), line!()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let system = scratch.join("system");
+        std::fs::write(
+            &system,
+            "[safe]\n\tdirectory = /system\n\tbareRepository = explicit\n",
+        )
+        .unwrap();
+        let environment = |name: &str| match name {
+            "GIT_CONFIG_NOSYSTEM" => Some(OsString::from("1")),
+            "GIT_CONFIG_SYSTEM" => Some(system.clone().into_os_string()),
+            "GIT_CONFIG_GLOBAL" => Some(OsString::from("/dev/null")),
+            _ => None,
+        };
+        let directories = |found: GitVersion| -> Vec<Option<Vec<u8>>> {
+            protected_values(
+                "directory",
+                &environment,
+                crate::ownership::Rule::of(found).reading,
+            )
+            .unwrap()
+        };
+        for (found, read) in [
+            (at(2, 37, 7), false),
+            (at(2, 38, 0), true),
+            (at(2, 38, 5), true),
+            (at(2, 39, 0), false),
+            (at(2, 56, 0), false),
+        ] {
+            let expected: Vec<Option<Vec<u8>>> = if read {
+                vec![Some(b"/system".to_vec())]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(directories(found), expected, "safe.directory, git {found}");
+            assert_eq!(
+                protected_setting(&environment, found).unwrap(),
+                read.then_some(Setting::Explicit),
+                "safe.bareRepository, git {found}"
+            );
+        }
         std::fs::remove_dir_all(&scratch).unwrap();
     }
 

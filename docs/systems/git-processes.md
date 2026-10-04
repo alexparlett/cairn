@@ -23,7 +23,7 @@ lane, which refuses a second; closing the window closes its repository; and
 the worker answers the log as values, which no view draws yet (issue #41).
 
 Where a residual below says **accepted by the user on 2026-10-02**, the user
-reviewed it when the packet shipped and kept the behaviour as stated; where it
+reviewed it and kept the behaviour as stated; where it
 cites an issue, the user chose to have it fixed later, and the issue holds the
 options.
 
@@ -47,7 +47,8 @@ crates/cairn-git/src/
   ops/          every mutation; constructs WriteAuthority; re-exports what the app needs
     authority.rs    WriteAuthority, and the tests that need one (real `git` writes among them)
     fetch.rs        fetch, built as a write
-    refspec_policy.rs  the refspecs fetch refuses (docs/systems/credentials.md)
+    refspec_policy.rs  the remotes fetch refuses, decided over git's own answer
+                       (reads/fetch_settings.rs; docs/systems/credentials.md)
     stranded_locks.rs  every `*.lock` under a git directory; the runner reports them for a write
   reads/        each read `git` answers, one named function each; its tests run a read
                 built from a `GitBinary` copy, on a thread, stopped by an epoch
@@ -56,6 +57,9 @@ crates/cairn-git/src/
                     for the content query, one file or a whole comparison (docs/systems/diff.md)
     attributes.rs   diff_attributes — `git check-attr --stdin -z diff`, whether a path's diff
                     driver names its own algorithm (docs/systems/diff.md)
+    fetch_settings.rs  fetch_settings — `git config --includes --null` in query form, what a
+                    fetch of a remote will read, for fetch's refspec check
+                    (docs/systems/credentials.md)
 ```
 
 `process` is a private module (`mod process;` in `lib.rs`). The application
@@ -199,14 +203,19 @@ Why each variable is there, with its evidence, is beside it in
   `sequence.editor` outranks `GIT_EDITOR` for the rebase todo list.
 - **`GIT_OPTIONAL_LOCKS=0` covers `git status` and nothing else.** Porcelain
   `diff` and `describe --dirty` refresh the index anyway. That is why a read in
-  `reads/` runs query plumbing or `status` only — and, as the one porcelain
-  exception the user accepted, `git diff --no-index -- /dev/null <path>` for an
+  `reads/` runs query plumbing or `status` only — and, as the two porcelain
+  exceptions the user accepted, `git diff --no-index -- /dev/null <path>` for an
   untracked file's working-tree diff, `<path>` work-tree-relative (no absolute,
   `.` or `..` component, refused before git runs) and `./-` for `-`, which reads
   no index, with its presentation
-  settings pinned to git's defaults by `-c` — as the module's own docs say
-  (`reads/mod.rs`, "What a read may run"); `destructive-ops-reviewer` check 10
-  names it.
+  settings pinned to git's defaults by `-c` (2026-10-03); and `git config
+  --includes --null` with `--type=bool --get <key>` or `--get-all <key>`, query
+  form only, in `reads/fetch_settings.rs`, which asks git what a fetch will read
+  for fetch's refspec check, so the check decides on exactly what the fetch's
+  own git reads (2026-10-04) — as the module's own docs say
+  (`reads/mod.rs`, "What a read may run"); both are pinned by
+  `the_porcelain_reads_are_the_two_named_queries`, and
+  `destructive-ops-reviewer` check 10 names them.
 - **A read may run the repository's `core.fsmonitor` hook and, on a read of the
   working tree, the path's clean filter driver — no other program.**
   `diff-tree`, `diff-index`, `diff-files` and `check-attr` run the hook as they
@@ -346,11 +355,12 @@ changes query answers, a 17 MiB blob is read, the repository's own
 not for gix's own rule anywhere else: a second open left to it loads the
 repository's configuration at reduced trust where the git directory is
 another user's, and gix's lookups (`try_find_remote` above all) then filter
-the repository's own sections out. So the one other open, fetch's refspec
-check (`ops/refspec_policy.rs`), declares full trust and admits every
-section too, and a repository git admits that gix's rule would not — a
-command-line `safe.directory`, `.`, a normalised entry — has its
-`remote.<name>.mirror` seen and the fetch refused
+the repository's own sections out. So there is no other open: fetch's
+refspec check (`ops/refspec_policy.rs`), which once opened the repository a
+second time, asks git for the remote's configuration instead
+(`reads/fetch_settings.rs`), and a repository git admits that gix's rule
+would not — a command-line `safe.directory`, `.`, a normalised entry — has
+its `remote.<name>.mirror` seen and the fetch refused
 (`the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git`,
 `tests/fetch.rs`, in a user namespace with a second uid, skipped saying so
 where there is none). Pinned also in `process/cli.rs` by

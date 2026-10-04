@@ -63,7 +63,7 @@ repository, named on the command line.
 | --- | --- |
 | `docs/` | `qa-gate.md` (QA contract), `design/` intent, `prd/` per-packet specs, `systems/` as-built, `work/` in-flight dirs, `research/` evidence (deferred work goes to GitHub issues; `backlog/` is the no-remote fallback) — findings promote research → brainstorm → design/prd → systems (contract: `docs/CLAUDE.md`) |
 | `crates/cairn-model/` | The vocabulary crossing the seam: `Oid`, `RefName`, `CommitSummary`, `CommitDetails`, `ChangeSet`, the `Confirmed` token. Plain data, plus the pure algorithms that produce some of it — the layout one (`LaneAssigner`) and the diff model (`TextDiff` and the hunk, row and patch projections of it, `ShownDiff` — one answer prepared for the views, built on the worker — `Selection`, `emit_patch` and the reference `apply_patch`; `docs/systems/diff.md`) — and `Secret`, the one type that holds a credential. Depends on nothing but `zeroize` (for that type) — not `gix`, not `freya`, not the other crates. |
-| `crates/cairn-git/` | The repository engine: gitoxide-backed reads — the history walk, and under `src/diff/` the queries answering what a commit changed (asked of `git diff-tree` through `src/reads/`), what one file's change is, and one path's working-tree diff — and under `src/ops/` every write, delegating to the `git` binary per design decision D1. Every `git` process is built in the crate-private `src/process/` — `GitBinary` (startup discovery and the 2.30 floor), `GitEnvironment` (the explicitly built environment, the only place a `Command` is built), `Askpass` (where git and ssh are sent for a secret), the runner, which streams and can kill a process, and each repository's registry of running invocations and its command log — and an invocation is typed a read or a write, a write needing the `WriteAuthority` only `ops/` can construct. `src/ops/` holds `fetch`, the first verb (not destructive, so it takes no `Confirmed`), and the confirmation-seal placeholder, and re-exports what the application needs of `process/`; `src/reads/` is where each read `git` answers lives, one named function each: today `changes`, `git diff-tree` for the changes query, whose rename and copy pairs gix and git disagree on; `patches`, `git diff-tree -p` for the content query's changed lines and function context, whose line diff gix and git disagree on too; `diff_attributes`, `git check-attr`, which says whether a path's diff driver names its own algorithm; and `working_tree_patch`, one path's staged, unstaged or untracked diff (`git diff-index --cached`, `git diff-files`, `git diff --no-index`), which reads the working tree through git so its side is git's form of the file. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
+| `crates/cairn-git/` | The repository engine: gitoxide-backed reads — the history walk, and under `src/diff/` the queries answering what a commit changed (asked of `git diff-tree` through `src/reads/`), what one file's change is, and one path's working-tree diff — and under `src/ops/` every write, delegating to the `git` binary per design decision D1. Every `git` process is built in the crate-private `src/process/` — `GitBinary` (startup discovery and the 2.30 floor), `GitEnvironment` (the explicitly built environment, the only place a `Command` is built), `Askpass` (where git and ssh are sent for a secret), the runner, which streams and can kill a process, and each repository's registry of running invocations and its command log — and an invocation is typed a read or a write, a write needing the `WriteAuthority` only `ops/` can construct. `src/ops/` holds `fetch`, the first verb (not destructive, so it takes no `Confirmed`), and the confirmation-seal placeholder, and re-exports what the application needs of `process/`; `src/reads/` is where each read `git` answers lives, one named function each: today `changes`, `git diff-tree` for the changes query, whose rename and copy pairs gix and git disagree on; `patches`, `git diff-tree -p` for the content query's changed lines and function context, whose line diff gix and git disagree on too; `diff_attributes`, `git check-attr`, which says whether a path's diff driver names its own algorithm; `working_tree_patch`, one path's staged, unstaged or untracked diff (`git diff-index --cached`, `git diff-files`, `git diff --no-index`), which reads the working tree through git so its side is git's form of the file; and `fetch_settings`, `git config` in query form, what a fetch of a remote will read, for fetch's refspec check (`src/ops/refspec_policy.rs`), which must decide on exactly what the fetch's own git reads. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
 | `crates/cairn-askpass/` | The askpass helper binary `git` and `ssh` run to ask for a secret, and the library half — the `Channel` the application listens on. Links `cairn-model` and `zeroize` only: it runs in a process holding a plaintext secret. Never names the engine, the toolkit or a logging crate. |
 | `crates/cairn-ui/` | Freya components. Render `cairn-model` values, report intent through `EventHandler` props. `src/accelerators.rs` is the accelerator table, the one render file that names a modifier; `src/diff_view.rs` the diff view, drawing `src/unified_rows.rs` or `src/side_by_side_rows.rs` (each from `src/diff_row_parts.rs`), `src/diff_notice.rs` what stands in place of rows, `src/changes_list.rs` the Changes tab's filtered file list and summary, `src/diff_header.rs` its bar (whose glyphs `src/toggle_glyphs.rs` draws), `src/columns.rs` the terminal column widths tabs stop by, `src/diff_settings.rs` the diff settings — context, ignore-whitespace and side-by-side shared by every diff view, Entire File the Changes tab's alone, `src/diff_palette.rs` the diff's colour tokens and typeface, `src/commit_tab.rs` the Commit tab and `src/expansion.rs` where each file opened in place under its row falls in that tab's one list. Must never depend on `gix` or `cairn-git`, and must never touch the filesystem. |
 | `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. `src/worker/` is everything that may wait: `git` found once per application (`discovery.rs`), each repository's threads (`pool.rs`), the routing table from query lane to thread (`routing.rs`) and the per-lane epochs (`epoch.rs`), the diff thread (`diff_lane.rs`) and Expand All's line budget (`expand_all.rs`), the network lane (`network_lane.rs`) and the askpass acceptor; `src/diff_state.rs` is the diff selection and the answers kept for it; `src/selection.rs` chooses a row, or two to compare, and asks what they changed; `src/detail_pane.rs` draws the pane for the selection now and `src/changes_tab.rs` its Changes tab; `src/file_filter.rs` the Changes tab's filter as the window keeps it; `src/diff_actions.rs` chooses a file, changes the shared diff settings and moves between changes; `src/shortcuts.rs` is what each accelerator, and each button of the diff's bar, does; `assets/fonts/` holds the embedded IBM Plex Mono and its licence; `src/closing.rs` is the window's close hook, which asks the worker to close and never waits; `src/window_check.rs` is C14's window check, an `#[ignore]`d measurement of the real window over the bench repository. |
@@ -164,14 +164,21 @@ copy is a different version from the fork that links.
   `git diff-tree -p`, with `reads::diff_attributes` beside it), and one path's
   working-tree diff, where only git's own read of the working tree is git's form
   of it (`reads::working_tree_patch`: `git diff-index --cached`, `git
-  diff-files`, `git diff --no-index`) — and each such read is a named function in
+  diff-files`, `git diff --no-index`), and the remote configuration fetch's
+  refspec check decides on, where gix's reading of a linked worktree's
+  `includeIf`, of the system file and of trust is not git's
+  (`reads::fetch_settings`, `git config`) — and each such read is a named function in
   `cairn-git/src/reads/`, run as a read invocation: query plumbing (never a plumbing writer such as
-  `update-ref`, `update-index` or `write-tree`), `status`, or — the one porcelain
-  exception, accepted by the user, for an untracked file — `git diff --no-index
-  -- /dev/null <path>`, `<path>` work-tree-relative (no absolute, `.` or `..`
-  component, refused before git runs) and given as `./-` when it is `-`, which
-  git reads as stdin (it reads no index, so there is none to refresh; its
-  presentation settings are pinned by `-c`) only,
+  `update-ref`, `update-index` or `write-tree`), `status`, or one of the two
+  porcelain exceptions, each accepted by the user — for an untracked file,
+  `git diff --no-index -- /dev/null <path>`, `<path>` work-tree-relative (no
+  absolute, `.` or `..` component, refused before git runs) and given as `./-`
+  when it is `-`, which git reads as stdin (it reads no index, so there is none
+  to refresh; its presentation settings are pinned by `-c`); and, for fetch's
+  refspec check, `git config --includes --null` with `--type=bool --get <key>`
+  or `--get-all <key>`, query form only and never a setter
+  (`reads::fetch_settings`, 2026-10-04: the check must read the remote exactly
+  as the fetch's own git will, and fails closed when the read fails) — only,
   `GIT_OPTIONAL_LOCKS=0`, `GIT_NO_LAZY_FETCH=1`, no askpass token. Everywhere gix
   agrees with git, a read spawns no process — that is the whole reason the split
   pays. D1 is amended for the programs git itself starts on a read, each exactly
@@ -378,17 +385,25 @@ Project invariants:
   what no twin sees is a path-call start inside `process/environment.rs`, the
   one file allowed to name `Command`. (`nix` named outside `process/` is
   caught by the process twin, and `fork` inside it is `unsafe`, which the
-  workspace forbids.) That is `qa-checklist`'s (its item 7). The one porcelain
-  verb a read runs is pinned by
-  `the_one_porcelain_read_is_diff_no_index_in_the_working_tree_read` (self-test
+  workspace forbids.) That is `qa-checklist`'s (its item 7). The two porcelain
+  verbs a read runs are pinned by
+  `the_porcelain_reads_are_the_two_named_queries` (self-test
   `the_porcelain_read_matcher_catches_the_shapes_it_claims`): in the production
   code of `crates/cairn-git/src/reads/`, the exact literal `"diff"` appears only
   in `reads/working_tree.rs`, once, with `"--no-index"` the next literal on its
   line and `"/dev/null"` in the file (the `diff` attribute's two lines in
   `reads/attributes.rs` excused by `DIFF_ATTRIBUTE_LINES`, each required to
-  still match). Whether a read in `reads/` really runs query plumbing,
-  `status` or `git diff --no-index -- /dev/null <path>` beyond that literal —
-  a verb built at run time (`format!`, `concat!`, bytes) is not seen, and
+  still match); the exact literal `"config"` appears only in
+  `reads/fetch_settings.rs`, once, every literal there starting with `-` is one
+  of `CONFIG_QUERY_OPTIONS` (`--includes`, `--null`, `--type=bool`, `--get`,
+  `--get-all`, one of the last two required), none there is a
+  `CONFIG_SETTER_SUBCOMMANDS` word, and no literal anywhere in `reads/` is one
+  of `CONFIG_SETTER_OPTIONS` (`--add`, `--unset`, `--unset-all`,
+  `--replace-all`, `--edit`, `--rename-section`, `--remove-section`). Whether
+  a read in `reads/` really runs query plumbing, `status`, `git diff
+  --no-index -- /dev/null <path>` or `git config` in query form beyond those
+  literals — a verb or option built at run time (`format!`, `concat!`, bytes)
+  is not seen, and
   `GIT_OPTIONAL_LOCKS=0` covers `status` alone, so a porcelain `diff`
   built as a read still rewrites the index, and a plumbing writer built as one
   writes whatever it writes — is `destructive-ops-reviewer`'s (its check 10).

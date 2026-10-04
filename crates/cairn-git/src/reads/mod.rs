@@ -5,7 +5,7 @@
 //! git shows means asking git — the changes query, whose rename and copy
 //! detection is where the two disagree — the read is a function here, built
 //! with [`crate::ops::GitBinary`]'s read builder, and the runner is reached from
-//! nowhere else but `ops/`. Four functions today, all for `crate::diff`:
+//! nowhere else but `ops/`. Five functions today, four for `crate::diff`:
 //! [`changes`], `git diff-tree --raw` for the changes query (`diff-engine`,
 //! decision E); [`patches`], `git diff-tree -p` for the content query's
 //! changed ranges and function context, which gix's line diff placed
@@ -15,14 +15,28 @@
 //! diff driver names an algorithm of its own; and [`working_tree_patch`], one
 //! path's staged, unstaged or untracked diff — `git diff-index --cached`,
 //! `git diff-files`, `git diff --no-index` — which reads the working tree
-//! through git, so its side is git's form of the file (`diff-engine` phase 03).
+//! through git, so its side is git's form of the file (`diff-engine` phase 03);
+//! and one for fetch's refspec check, [`fetch_settings`], `git config` in query
+//! form, what a fetch of a remote will read, because the check must decide on
+//! exactly what the fetch's own git reads and gix's reading of a linked
+//! worktree's `includeIf`, of the system file and of trust is not git's (the
+//! user's decision of 2026-10-04).
 //!
 //! # What a read may run
 //!
-//! **Query plumbing, or `git status`, and one named porcelain exception: `git
-//! diff --no-index -- /dev/null <path>`, for an untracked file, `<path>`
-//! work-tree-relative and given as `./-` when it is `-`** (accepted by the user
-//! on 2026-10-03; [`working_tree::work_tree_relative`] refuses an empty or
+//! **Query plumbing, or `git status`, and two named porcelain exceptions.**
+//!
+//! **The second, `git config --includes --null` with `--type=bool --get <key>`
+//! or `--get-all <key>`** (accepted by the user on 2026-10-04): query form
+//! only, never a setter, built only in [`fetch_settings`], whose module docs
+//! carry its evidence — it takes no lock, reads no index and runs no program,
+//! and `the_refspec_checks_reads_write_nothing` holds the git directory
+//! byte-identical after it; the flags are all in git 2.18 and later, and git
+//! 2.56 takes the form without a word.
+//!
+//! **The first, `git diff --no-index -- /dev/null <path>`, for an untracked
+//! file, `<path>` work-tree-relative and given as `./-` when it is `-`**
+//! (accepted by the user on 2026-10-03; [`working_tree::work_tree_relative`] refuses an empty or
 //! absolute path, or one with a `.` or `..` component, before git runs). Why: an untracked file's git form — after the clean
 //! filter driver and the line-ending conversion its attributes name — has no
 //! plumbing that prints it. `diff-files` and `diff-index` list only what the
@@ -46,7 +60,7 @@
 //! git's default on that invocation (`working_tree::NO_INDEX_PRESENTATION`),
 //! while the settings that decide git's form of the file stay the user's
 //! (`an_untracked_answer_is_the_same_under_hostile_presentation_settings`). It
-//! is the only porcelain verb a read runs, only in that mode, and only from
+//! is the only porcelain `diff` a read runs, only in that mode, and only from
 //! [`working_tree_patch`]. A read runs with
 //! `GIT_OPTIONAL_LOCKS=0`, so that looking at a repository never refreshes its
 //! index behind the user's back or holds `index.lock` while their own
@@ -155,26 +169,30 @@
 //! out by its tests; that only this module and `ops/` name the runner is
 //! `the_runner_is_named_only_by_ops_and_reads`; that a read cannot build a
 //! write is the compiler's, because only `ops/` can construct the
-//! `WriteAuthority` a write needs; and that the porcelain verb is built once,
-//! as `--no-index` against `/dev/null`, is
-//! `the_one_porcelain_read_is_diff_no_index_in_the_working_tree_read` (matcher
-//! self-test `the_porcelain_read_matcher_catches_the_shapes_it_claims`): the
-//! exact literal `"diff"` appears in this module's production code only in
+//! `WriteAuthority` a write needs; and that the two porcelain verbs are built
+//! once each, in their accepted forms, is
+//! `the_porcelain_reads_are_the_two_named_queries` (matcher self-test
+//! `the_porcelain_read_matcher_catches_the_shapes_it_claims`): the exact
+//! literal `"diff"` appears in this module's production code only in
 //! `working_tree.rs`, once, with `"--no-index"` the next literal on its line
 //! and `"/dev/null"` in the file — the `diff` attribute's two lines in
-//! `attributes.rs` excused by name. What it cannot see is a review obligation
-//! (`destructive-ops-reviewer`, check 10): a verb built at run time — by
-//! `format!`, `concat!` or from bytes — and whether every other verb a read
-//! runs is query plumbing or `status`, since a token scan cannot tell
-//! `diff-tree` from `update-index` by what it does.
+//! `attributes.rs` excused by name — and the exact literal `"config"` only in
+//! `fetch_settings.rs`, once, every option literal there a query option and
+//! no `git config` setter literal anywhere here. What it cannot see is a
+//! review obligation (`destructive-ops-reviewer`, check 10): a verb or option
+//! built at run time — by `format!`, `concat!` or from bytes — and whether
+//! every other verb a read runs is query plumbing or `status`, since a token
+//! scan cannot tell `diff-tree` from `update-index` by what it does.
 
 mod attributes;
 mod changes;
+mod fetch_settings;
 mod patches;
 mod working_tree;
 
 pub(crate) use attributes::{DiffAttribute, diff_attributes};
 pub(crate) use changes::{Detection, Submodules, changes};
+pub(crate) use fetch_settings::{FetchSettings, fetch_settings};
 #[cfg(test)]
 pub(crate) use patches::parse as parse_patches;
 pub(crate) use patches::{Algorithm, FilePatch, PatchQuery, PatchText, Reading, Scope, patches};

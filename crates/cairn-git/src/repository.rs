@@ -22,8 +22,7 @@ const NEWEST_RULE: GitVersion = GitVersion {
 /// gix's `gitoxide.objects.allocLimitIfReducedTrust` at zero, which turns off the
 /// allocation limit gix gives a repository it trusts less than fully: git reads an object
 /// of any size in a repository it opens.
-pub(crate) const NO_REDUCED_TRUST_ALLOCATION_LIMIT: &str =
-    "gitoxide.objects.allocLimitIfReducedTrust=0";
+const NO_REDUCED_TRUST_ALLOCATION_LIMIT: &str = "gitoxide.objects.allocLimitIfReducedTrust=0";
 
 pub struct SharedRepository {
     inner: gix::ThreadSafeRepository,
@@ -129,8 +128,9 @@ impl SharedRepository {
         // gix reads, which git does not have — is switched off here. That holds for THIS
         // open only: a second open of the repository left to gix's own rule loads the
         // repository's configuration at reduced trust where its git directory is another
-        // user's, and gix's lookups then filter it out, so every other open declares full
-        // trust too (`ops::refspec_policy`, which also admits every section).
+        // user's, and gix's lookups then filter it out, so no other open is left to that
+        // rule: fetch's refspec check, which once opened the repository a second time to
+        // read its remote, now asks git (`reads::fetch_settings`).
         let options = gix::open::Options::default_for_level(trust)
             .with(trust)
             .config_overrides([NO_REDUCED_TRUST_ALLOCATION_LIMIT])

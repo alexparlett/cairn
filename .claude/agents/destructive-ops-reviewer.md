@@ -86,7 +86,7 @@ WARNING tier:
    the repository — refs, objects, the index, the working tree, config — is
    built with `GitBinary::write_invocation`, and every function in
    `crates/cairn-git/src/reads/` runs query plumbing or `git status` and
-   nothing else — with one accepted exception (the user's decision of
+   nothing else — with two accepted exceptions. The first (the user's decision of
    2026-10-03): `git diff --no-index -- /dev/null <path>`, built only by
    `reads::working_tree_patch` for the side asked about as untracked, with
    `<path>` a work-tree-relative path (no absolute, `.` or `..` component;
@@ -96,9 +96,18 @@ WARNING tier:
    index, so it has none to refresh. The exception is that mode alone: `git
    diff` without `--no-index`, or `--no-index` against anything but
    `/dev/null` and that path, or built anywhere else, is still a finding.
-   The literal is pinned by
-   `the_one_porcelain_read_is_diff_no_index_in_the_working_tree_read` — run
-   it; what it cannot see, a verb built at run time, is this check.
+   The second (the user's decision of 2026-10-04): `git config --includes
+   --null` with `--type=bool --get <key>` or `--get-all <key>`, built only by
+   `reads::fetch_settings` for fetch's refspec check, over `remote.<name>.*`
+   and `fetch.*` keys. Query form is the exception: any setter — `--add`,
+   `--unset`, `--unset-all`, `--replace-all`, `--edit`, `--rename-section`,
+   `--remove-section`, or the 2.46 subcommands `set`, `unset`, `edit`,
+   `rename-section`, `remove-section` — or another file chosen (`--file`,
+   `--global`, `--system`, `--blob`), or `config` built anywhere else, is a
+   finding; and the check that reads it must refuse the fetch when the read
+   fails, never read a failure as an unset key. Both literals are pinned by
+   `the_porcelain_reads_are_the_two_named_queries` — run it; what it cannot
+   see, a verb or an option built at run time, is this check.
    A read runs with `GIT_OPTIONAL_LOCKS=0`, which only `status`
    honours, so a porcelain `diff` or `describe --dirty` built as a read still
    rewrites the index, and a plumbing writer (`update-ref`, `update-index`,

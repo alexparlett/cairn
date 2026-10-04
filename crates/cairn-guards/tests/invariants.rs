@@ -1837,8 +1837,34 @@ fn the_runner_is_named_only_by_ops_and_reads() {
     }
 }
 
-/// The one file that may build the one porcelain read, `git diff --no-index`.
+/// The one file that may build the first porcelain read, `git diff --no-index`.
 const PORCELAIN_READ_FILE: &str = "crates/cairn-git/src/reads/working_tree.rs";
+
+/// The one file that may build the second porcelain read, `git config` in query form —
+/// what a fetch of a remote will read, asked of git (the user's decision of 2026-10-04).
+const CONFIG_READ_FILE: &str = "crates/cairn-git/src/reads/fetch_settings.rs";
+
+/// Every option the `git config` read may pass: the query form, and nothing that chooses
+/// another file or another type. Any literal of [`CONFIG_READ_FILE`]'s production code
+/// that starts with `-` must be one of these.
+const CONFIG_QUERY_OPTIONS: &[&str] =
+    &["--includes", "--null", "--type=bool", "--get", "--get-all"];
+
+/// `git config`'s writers, as options (every git) and as subcommands (2.46 and later). No
+/// option here may be a literal anywhere in `reads/`'s production code, and no subcommand
+/// in [`CONFIG_READ_FILE`]'s (the subcommands are words other reads print — `set` and
+/// `unset` are `git check-attr`'s answers — so they are refused in that file alone).
+const CONFIG_SETTER_OPTIONS: &[&str] = &[
+    "--add",
+    "--unset",
+    "--unset-all",
+    "--replace-all",
+    "--edit",
+    "--rename-section",
+    "--remove-section",
+];
+const CONFIG_SETTER_SUBCOMMANDS: &[&str] =
+    &["set", "unset", "edit", "rename-section", "remove-section"];
 
 /// The lines of `reads/` whose literal `"diff"` is not the verb: the `diff` ATTRIBUTE, which
 /// `git check-attr` is asked for and answers with. Each row is the file and the whole
@@ -1855,14 +1881,85 @@ const DIFF_ATTRIBUTE_LINES: &[(&str, &str)] = &[
     ),
 ];
 
-/// What the reads of `reads/` say about the porcelain verb `diff`, as `path:line ..` for each
-/// way they break the one accepted exception: the exact literal `"diff"` (plain, byte or raw)
-/// appears in production code of [`PORCELAIN_READ_FILE`] alone, exactly once, with the next
-/// literal on its line `"--no-index"`, and that file's production code holds `"/dev/null"`
-/// — but for the attribute lines of [`DIFF_ATTRIBUTE_LINES`], each of which must match.
-/// Comments and test modules are not read; a verb built by `format!` or `concat!` is not
-/// seen.
+/// What the reads of `reads/` say about the two porcelain verbs, as `path:line ..` for each
+/// way they break the two accepted exceptions. `diff`: the exact literal `"diff"` (plain,
+/// byte or raw) appears in production code of [`PORCELAIN_READ_FILE`] alone, exactly once,
+/// with the next literal on its line `"--no-index"`, and that file's production code holds
+/// `"/dev/null"` — but for the attribute lines of [`DIFF_ATTRIBUTE_LINES`], each of which
+/// must match. `config` ([`config_read_violations`]): the exact literal `"config"` appears
+/// in production code of [`CONFIG_READ_FILE`] alone, exactly once; every literal there that
+/// starts with `-` is one of [`CONFIG_QUERY_OPTIONS`], which must include `--get` or
+/// `--get-all`; no literal there is one of [`CONFIG_SETTER_SUBCOMMANDS`]; and no literal in
+/// any file is one of [`CONFIG_SETTER_OPTIONS`]. Comments and test modules are not read; a
+/// verb or an option built by `format!` or `concat!` is not seen.
 fn porcelain_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
+    let mut found = diff_read_violations(files);
+    found.extend(config_read_violations(files));
+    found
+}
+
+/// The `git config` half of [`porcelain_read_violations`].
+fn config_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut verbs = 0usize;
+    let mut has_query_action = false;
+    for (path, source) in files {
+        let at = |line: usize| format!("{}:{line}", path.display());
+        let home = *path == Path::new(CONFIG_READ_FILE);
+        for (line, text) in production_string_literals(source) {
+            if CONFIG_SETTER_OPTIONS.contains(&text.as_str()) {
+                found.push(format!(
+                    "{} names `{text}`, a `git config` writer, in reads/",
+                    at(line)
+                ));
+            }
+            if text == "config" {
+                verbs += 1;
+                if !home {
+                    found.push(format!(
+                        "{} names the porcelain verb `config` outside {CONFIG_READ_FILE}",
+                        at(line)
+                    ));
+                }
+            }
+            if !home {
+                continue;
+            }
+            if CONFIG_SETTER_SUBCOMMANDS.contains(&text.as_str()) {
+                found.push(format!(
+                    "{} names `{text}`, a `git config` writer, in {CONFIG_READ_FILE}",
+                    at(line)
+                ));
+            }
+            if text.starts_with('-') {
+                if CONFIG_QUERY_OPTIONS.contains(&text.as_str()) {
+                    has_query_action |= text == "--get" || text == "--get-all";
+                } else {
+                    found.push(format!(
+                        "{} passes `{text}` to the config read, which is not a query option",
+                        at(line)
+                    ));
+                }
+            }
+        }
+    }
+    if verbs != 1 {
+        found.push(format!(
+            "reads/ names the verb `config` {verbs} times in production code; the one accepted \
+             config read is built once, in {CONFIG_READ_FILE}"
+        ));
+    }
+    if !has_query_action {
+        found.push(format!(
+            "{CONFIG_READ_FILE} names neither `--get` nor `--get-all`, so its config read is \
+             not in query form"
+        ));
+    }
+    found
+}
+
+/// The `git diff --no-index` half of [`porcelain_read_violations`].
+fn diff_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
     let mut found = Vec::new();
     let mut verbs = 0usize;
     let mut has_null_device = false;
@@ -1934,23 +2031,26 @@ fn porcelain_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
     found
 }
 
-/// The one porcelain verb a read runs is `git diff --no-index`, built once, by the
-/// working-tree read, against `/dev/null` (the user's decision of 2026-10-03; check 10 of
-/// `destructive-ops-reviewer`). Porcelain `git diff` against the working tree refreshes the
-/// index whatever `GIT_OPTIONAL_LOCKS` says, so a second `"diff"` in `reads/` — a porcelain
-/// diff built as a read — is the regression this catches. Scoped to that literal; a verb
-/// built at run time (`format!`), and whether every other verb a read runs is query
-/// plumbing, stay the reviewer's.
+/// The two porcelain verbs a read runs are `git diff --no-index`, built once, by the
+/// working-tree read, against `/dev/null` (the user's decision of 2026-10-03), and `git
+/// config` in query form, built once, by the fetch-settings read (the user's decision of
+/// 2026-10-04); check 10 of `destructive-ops-reviewer`. Porcelain `git diff` against the
+/// working tree refreshes the index whatever `GIT_OPTIONAL_LOCKS` says, and `git config`
+/// with a setter writes the configuration, so a second `"diff"` or `"config"` in `reads/`,
+/// an option outside the query form in the config read, or a setter anywhere in `reads/`
+/// is the regression this catches. Scoped to those literals; a verb or option built at run
+/// time (`format!`), and whether every other verb a read runs is query plumbing, stay the
+/// reviewer's.
 #[test]
-fn the_one_porcelain_read_is_diff_no_index_in_the_working_tree_read() {
+fn the_porcelain_reads_are_the_two_named_queries() {
     let sources = rust_sources(READS_DIR);
-    assert!(
-        sources
-            .iter()
-            .any(|(path, _)| path == Path::new(PORCELAIN_READ_FILE)),
-        "{PORCELAIN_READ_FILE} is gone; this guard names it as the home of the one porcelain \
-         read — move the guard with the read"
-    );
+    for home in [PORCELAIN_READ_FILE, CONFIG_READ_FILE] {
+        assert!(
+            sources.iter().any(|(path, _)| path == Path::new(home)),
+            "{home} is gone; this guard names it as the home of a porcelain read — move the \
+             guard with the read"
+        );
+    }
     for (file, _) in DIFF_ATTRIBUTE_LINES {
         assert!(
             sources.iter().any(|(path, _)| path == Path::new(file)),
@@ -1964,9 +2064,10 @@ fn the_one_porcelain_read_is_diff_no_index_in_the_working_tree_read() {
     let found = porcelain_read_violations(&files);
     assert!(
         found.is_empty(),
-        "the porcelain read escaped its one accepted shape: {found:?}. A read runs query \
-         plumbing, `status`, or `git diff --no-index -- /dev/null <path>` built in \
-         {PORCELAIN_READ_FILE}; porcelain `git diff` rewrites the index it reads."
+        "a porcelain read escaped its accepted shape: {found:?}. A read runs query plumbing, \
+         `status`, `git diff --no-index -- /dev/null <path>` built in {PORCELAIN_READ_FILE}, \
+         or `git config` in query form built in {CONFIG_READ_FILE}; porcelain `git diff` \
+         rewrites the index it reads, and a `git config` setter the configuration."
     );
 }
 
@@ -1976,7 +2077,19 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
     let other = Path::new("crates/cairn-git/src/reads/changes.rs");
     let accepted =
         "fn a() { args.extend([\"diff\", \"--no-index\"]); args.extend([\"--\", \"/dev/null\"]); }";
-    let verdict = |files: &[(&Path, &str)]| porcelain_read_violations(files);
+    let config_home = Path::new(CONFIG_READ_FILE);
+    let accepted_config = "const QUERY: [&str; 3] = [\"config\", \"--includes\", \"--null\"];\n\
+                           const BOOLEAN: [&str; 2] = [\"--type=bool\", \"--get\"];\n\
+                           const EVERY_VALUE: [&str; 1] = [\"--get-all\"];\n";
+    // The `diff` cases are judged beside the accepted config read, unless they bring their
+    // own; the `config` cases below bring theirs beside the accepted diff read.
+    let verdict = |files: &[(&Path, &str)]| {
+        let mut all = files.to_vec();
+        if !files.iter().any(|(path, _)| *path == config_home) {
+            all.push((config_home, accepted_config));
+        }
+        porcelain_read_violations(&all)
+    };
     assert!(
         verdict(&[(home, accepted)]).is_empty(),
         "the accepted shape"
@@ -2090,6 +2203,94 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
             "{shape} was read as the verb"
         );
     }
+    // The config read: once, in its file, in query form, and no setter anywhere.
+    let config_verdict = |files: &[(&Path, &str)]| {
+        let mut all = vec![(home, accepted)];
+        all.extend_from_slice(files);
+        porcelain_read_violations(&all)
+    };
+    assert!(
+        config_verdict(&[(config_home, accepted_config)]).is_empty(),
+        "the accepted config read"
+    );
+    assert!(
+        config_verdict(&[
+            (config_home, accepted_config),
+            (other, "fn b() { if v == b\"set\" || v == b\"unset\" {} }")
+        ])
+        .is_empty(),
+        "check-attr's answers `set` and `unset` in another read"
+    );
+    let refused_config: &[(&str, &[(&Path, &str)])] = &[
+        (
+            "a setter option in the config read",
+            &[(
+                config_home,
+                "const Q: [&str; 3] = [\"config\", \"--get\", \"--unset\"];",
+            )],
+        ),
+        (
+            "a setter option elsewhere in reads/",
+            &[
+                (config_home, accepted_config),
+                (other, "fn b() { x.arg(\"--replace-all\"); }"),
+            ],
+        ),
+        (
+            "a setter subcommand in the config read",
+            &[(
+                config_home,
+                "const Q: [&str; 3] = [\"config\", \"set\", \"--get\"];",
+            )],
+        ),
+        (
+            "an option outside the query form",
+            &[(
+                config_home,
+                "const Q: [&str; 3] = [\"config\", \"--global\", \"--get\"];",
+            )],
+        ),
+        (
+            "`config` in another file",
+            &[
+                (config_home, accepted_config),
+                (other, "fn b() { x.args([\"config\", \"--get\"]); }"),
+            ],
+        ),
+        (
+            "a second `config` in its file",
+            &[(
+                config_home,
+                "const Q: [&str; 2] = [\"config\", \"--get\"];\nconst R: [&str; 2] = [\"config\", \"--get-all\"];",
+            )],
+        ),
+        (
+            "no query action",
+            &[(
+                config_home,
+                "const Q: [&str; 3] = [\"config\", \"--includes\", \"--null\"];",
+            )],
+        ),
+        ("no config read at all", &[(config_home, "fn a() {}")]),
+        (
+            "a second `diff` beside the config read",
+            &[
+                (config_home, accepted_config),
+                (other, "fn b() { x.arg(\"diff\"); }"),
+            ],
+        ),
+        (
+            "a setter as a raw string",
+            &[
+                (config_home, accepted_config),
+                (other, "fn b() { x.arg(r#\"--add\"#); }"),
+            ],
+        ),
+    ];
+    for (shape, files) in refused_config {
+        assert!(!config_verdict(files).is_empty(), "{shape} was not caught");
+    }
+
     // The literals are read where they are, lines counted through a multi-line string.
     assert_eq!(
         production_string_literals("let a = \"x\ny\";\nlet b = \"diff\";"),

@@ -43,10 +43,12 @@
 //!   it. Nothing outside `cairn-git` can run a
 //!   raw verb: the public surface is named operations ([`fetch`] today), so
 //!   the confirmation seal cannot be routed around through the runner.
-//! - `refspec_policy` (crate-private) reads a remote's configuration afresh
-//!   before a fetch and refuses one whose refspecs would write local branches
-//!   or, under pruning, delete local tags; the refusal is
-//!   [`Error::FetchRefused`], and no process starts.
+//! - `refspec_policy` (crate-private) asks git for a remote's configuration
+//!   afresh before a fetch (`crate::reads::fetch_settings`, `git config` in
+//!   query form) and refuses one whose refspecs would write local branches
+//!   or, under pruning, delete local tags, or whose remote is defined by a
+//!   `remotes/` or `branches/` file; the refusal is [`Error::FetchRefused`],
+//!   a read that fails is [`Error::RemoteConfig`], and no fetch starts.
 //!
 //! # The write seal
 //!

@@ -71,7 +71,7 @@ pub fn fetch(
     remote: &str,
     token: Option<&AskpassToken>,
 ) -> Result<FetchInProgress, Error> {
-    refspec_policy::check(repo.git_dir(), remote)?;
+    refspec_policy::check(git, repo, remote)?;
     // A write: it moves remote-tracking refs and adds objects, and it is the
     // one invocation that may ask the user for a credential.
     let mut command = git
@@ -160,16 +160,21 @@ mod tests {
     use super::*;
     use crate::process::stub_git::{StubGit, discover_retrying, printed_environment};
 
+    /// The stub's answer to the refspec check's `git config` reads: exit 1, git's "no
+    /// such key", so the check passes and the fetch itself is what the stub runs.
+    const UNSET_CONFIG: &str =
+        "for argument in \"$@\"; do [ \"$argument\" = config ] && exit 1; done\n";
+
     /// The repository named ahead of the verb (`process/cli.rs`), so the fetch lands
     /// in the repository Cairn opened; then nothing for prune — git reads
     /// `fetch.prune` itself — and `--no-prune-tags` always, before
     /// `--end-of-options` and the remote.
     #[test]
     fn the_arguments_leave_prune_to_git_forbid_pruning_tags_and_end_the_options() {
-        let stub = StubGit::with_git(
+        let stub = StubGit::with_git(&format!(
             "if [ \"$1\" = --version ]; then echo 'git version 2.30.0'; exit 0; fi\n\
-             printf '%s\\n' \"$@\" >&2",
-        );
+             {UNSET_CONFIG}printf '%s\\n' \"$@\" >&2",
+        ));
         let git = discover_retrying(stub.environment()).unwrap();
         let repo = Repository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
         let mut seen = Vec::new();
@@ -206,10 +211,10 @@ mod tests {
     /// stderr, which is what a fetch hands on as progress.
     #[test]
     fn a_fetch_runs_with_the_write_environment_and_its_token() {
-        let stub = StubGit::with_git(
+        let stub = StubGit::with_git(&format!(
             "if [ \"$1\" = --version ]; then echo 'git version 2.30.0'; exit 0; fi\n\
-             /usr/bin/env >&2",
-        );
+             {UNSET_CONFIG}/usr/bin/env >&2",
+        ));
         let environment = stub.environment();
         let path = environment
             .get("PATH")
@@ -264,7 +269,7 @@ mod tests {
         let stub = StubGit::with_git_from(|directory| {
             format!(
                 "if [ \"$1\" = --version ]; then echo 'git version 2.30.0'; exit 0; fi\n\
-                 /usr/bin/env > '{}'; echo 'Receiving objects: 100%, done.' >&2",
+                 {UNSET_CONFIG}/usr/bin/env > '{}'; echo 'Receiving objects: 100%, done.' >&2",
                 directory.join("environment-seen").display()
             )
         });
@@ -306,8 +311,27 @@ mod tests {
             );
         }
         let log = repo.processes().log();
-        assert_eq!(log.len(), 1, "one fetch, recorded {} times", log.len());
-        let record = &log[0];
+        let (fetches, reads): (Vec<_>, Vec<_>) = log
+            .iter()
+            .partition(|record| record.arguments.first().map(String::as_str) == Some("fetch"));
+        assert_eq!(
+            fetches.len(),
+            1,
+            "one fetch, recorded {} times",
+            fetches.len()
+        );
+        assert_eq!(
+            reads.len(),
+            4,
+            "the refspec check's four reads, logged as any read is: {reads:?}"
+        );
+        assert!(
+            reads
+                .iter()
+                .all(|record| record.arguments.first().map(String::as_str) == Some("config")),
+            "something but the check's reads was logged beside the fetch: {reads:?}"
+        );
+        let record = fetches[0];
         assert_eq!(
             record.arguments,
             [
@@ -319,7 +343,7 @@ mod tests {
             ]
         );
         assert_eq!(record.stderr, "Receiving objects: 100%, done.");
-        let rendered = format!("{record:?}");
+        let rendered = format!("{log:?}");
         for (name, value) in values {
             assert!(
                 !rendered.contains(value),

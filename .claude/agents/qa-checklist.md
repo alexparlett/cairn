@@ -90,8 +90,8 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
    (`Command::spawn(&mut c)`, `Command::output(&mut c)`) inside
    `process/environment.rs` (`nix` named outside `process/` is caught, and
    `fork` is `unsafe`, which the workspace forbids). In `reads/`, the
-   literal twin `the_one_porcelain_read_is_diff_no_index_in_the_working_tree_read`
-   reads string literals only, so a verb assembled at run time (a `format!`, a
+   literal twin `the_porcelain_reads_are_the_two_named_queries`
+   reads string literals only, so a verb or option assembled at run time (a `format!`, a
    concatenation, a constant from elsewhere) is yours, and so is whether a
    read's verb really is plumbing or `status` — no twin tells a querying verb
    from a mutating one built with `GitBinary::read_invocation`.

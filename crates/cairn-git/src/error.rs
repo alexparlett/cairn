@@ -288,8 +288,9 @@ pub enum Error {
         write: RefusedWrite,
     },
 
-    /// The remote's configuration could not be read, so the fetch could not
-    /// be checked and did not run.
+    /// The remote's configuration could not be read — `git config` failed, was
+    /// cancelled or answered what it never prints, or a configured refspec does
+    /// not parse — so the fetch could not be checked and did not run.
     #[error("could not read the configuration of remote {remote}: {source}")]
     RemoteConfig {
         remote: String,
@@ -314,6 +315,11 @@ pub enum RefusedWrite {
     /// `+refs/*:refs/*` refspec, and a mirror is a repository whose every
     /// ref is the remote's to overwrite (decided on issue #17).
     Mirror,
+    /// The remote is defined by a file git reads in place of configuration,
+    /// `$GIT_DIR/remotes/<name>` or `$GIT_DIR/branches/<name>`, which no query
+    /// of git's prints; a `branches/` file fetches into a local branch named
+    /// after the remote. The `setting` beside it is the file's path.
+    DefinedByFile,
 }
 
 impl std::fmt::Display for RefusedWrite {
@@ -326,6 +332,11 @@ impl std::fmt::Display for RefusedWrite {
             Self::Mirror => {
                 "declare the remote a mirror, whose fetch Cairn refuses on sight (the setting \
                  itself governs push; it is what a mirror clone carries)"
+            }
+            Self::DefinedByFile => {
+                "be read in place of the remote's configuration, which Cairn refuses on sight \
+                 (a branches/ file fetches into a local branch; define the remote with `git \
+                 remote add` and remove the file)"
             }
         })
     }

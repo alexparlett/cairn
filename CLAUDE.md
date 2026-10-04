@@ -192,8 +192,8 @@ copy is a different version from the fork that links.
   a driver can reach the socket, but carrying no token it fails closed — the
   read's two variables, no askpass token) plus what git sets for a filter
   (`GIT_EXEC_PATH`, `GIT_PREFIX`, `GIT_CONFIG_PARAMETERS`, git's exec directory
-  first on `PATH`, and `GIT_DIR` and `GIT_WORK_TREE` when Cairn names the
-  repository to git, which it does for one opened with full trust).
+  first on `PATH`, and `GIT_DIR` and `GIT_WORK_TREE`, since Cairn names every
+  repository it opens to git).
   Residuals, stated in `docs/design/engine.md` ("Reads see git's form"): that
   environment still hands the driver the user's `PATH`, `HOME` and the rest; a
   store the driver keeps is its own to write (git-lfs's `.git/lfs/objects`); a

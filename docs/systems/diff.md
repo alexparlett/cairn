@@ -642,8 +642,8 @@ install` configures) is started once per read and sent `command=clean` for each,
 and nothing else
 (`a_long_running_filter_process_is_sent_only_clean_and_its_form_is_diffed`, a
 pkt-line server in `sh` and `dd`, compared with `git diff`). The driver runs with
-that environment plus what git sets for a filter (`GIT_DIR` and `GIT_WORK_TREE`
-only when the repository is named to git, which it is when opened with full trust;
+that environment plus what git sets for a filter (`GIT_DIR` and `GIT_WORK_TREE`,
+since every repository Cairn opens is named to git, whatever trust gix gave it;
 `GIT_EXEC_PATH`, `GIT_PREFIX`, `GIT_CONFIG_PARAMETERS`, git's exec directory first
 on `PATH`), its stderr the read's bounded tail; `diff-index --cached` reads only objects. Every read of the
 index runs the repository's `core.fsmonitor` — its hook, or under

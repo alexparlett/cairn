@@ -58,13 +58,16 @@
 //! git's compiled-in prefix for an installed git, and is not expanded at all when no `git`
 //! is known ([`crate::SharedRepository::discover`]), so such an entry names nothing there;
 //! the configuration files are found as `crate::bare_discovery` finds them, with its
-//! residuals; and gix, once Cairn has decided git opens a repository, checks the working
+//! residuals. gix, once Cairn has decided git opens a repository, checks the working
 //! tree's owner again by its own rule (`gix::sec::identity::is_path_owned_by_current_user`
-//! and gix's `safe.directory` reading, which knows neither the command line, `.`, nor
-//! git's normalisation) and, where that rule refuses what git's admits, opens it with
-//! reduced trust: such a repository is shown, as git shows it, but read by gix with the
-//! repository's own configuration filtered, and left to git's own discovery for the `git`
-//! Cairn runs in it (`process/cli.rs`).
+//! over the directory `core.worktree` names, and gix's `safe.directory` reading, which
+//! knows neither the command line, `.`, nor git's normalisation) and, where that rule
+//! refuses what git's admits, lowers the repository's trust to reduced — which no open
+//! option prevents. That rule decides nothing: the repository's configuration was loaded
+//! at full trust and is read whole, the allocation limit gix gives reduced trust is
+//! switched off (`crate::repository`), and every `git` Cairn runs in it is named the
+//! repository (`process/cli.rs`), since this check is git's own; pinned end to end by
+//! `a_repository_cairn_admits_is_read_as_git_reads_it_whatever_gix_makes_of_its_owner`.
 //!
 //! The real case needs a second owner, so it is a privileged run rather than a gate step:
 //! `a_linked_worktree_whose_git_dir_is_someone_elses_is_refused_as_git_refuses_it`, an

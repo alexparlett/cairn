@@ -19,6 +19,11 @@ const NEWEST_RULE: GitVersion = GitVersion {
     patch: 0,
 };
 
+/// gix's `gitoxide.objects.allocLimitIfReducedTrust` at zero, which turns off the
+/// allocation limit gix gives a repository it trusts less than fully: git reads an object
+/// of any size in a repository it opens.
+const NO_REDUCED_TRUST_ALLOCATION_LIMIT: &str = "gitoxide.objects.allocLimitIfReducedTrust=0";
+
 pub struct SharedRepository {
     inner: gix::ThreadSafeRepository,
     git_dir: PathBuf,
@@ -111,8 +116,19 @@ impl SharedRepository {
         // (`crate::ownership`); what passes is opened with full trust, as git opens it.
         let judged = crate::ownership::decide(&stop, &start, asked, environment, identity)?;
         let trust = gix::sec::Trust::Full;
+        // `with(Full)` sets the git directory's trust, but gix still checks the WORKING
+        // TREE's owner again as it opens, by its own rule (the directory `core.worktree`
+        // names, `safe.directory` from the system and global files only, compared as
+        // written), and where that refuses it lowers the repository to reduced trust; no
+        // option skips that check (gix 0.87.1, `src/open/repository.rs`,
+        // `open_from_paths`). Git's check has already passed, so what reduced trust would
+        // change is undone: the repository's configuration was loaded at full trust and
+        // stays so, the `git` Cairn runs is named the repository whatever the trust
+        // (`process/cli.rs`), and the one other effect — a 16 MiB ceiling on any object
+        // gix reads, which git does not have — is switched off here.
         let options = gix::open::Options::default_for_level(trust)
             .with(trust)
+            .config_overrides([NO_REDUCED_TRUST_ALLOCATION_LIMIT])
             .open_path_as_is(true);
         let inner =
             gix::ThreadSafeRepository::open_opts(stop.into_path(), options).map_err(|source| {

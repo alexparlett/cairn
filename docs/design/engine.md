@@ -156,8 +156,8 @@ implied:
   driver can reach the helper's socket, but without a token it fails closed —
   plus what git sets for a filter (`GIT_EXEC_PATH`, `GIT_PREFIX`,
   `GIT_CONFIG_PARAMETERS`, and `PATH` with git's exec directory first; and
-  `GIT_DIR` and `GIT_WORK_TREE` when Cairn names the repository to git, which
-  it does for a repository opened with full trust, and otherwise not). The roster still hands it the user's `PATH`, `HOME` and the rest; that
+  `GIT_DIR` and `GIT_WORK_TREE`, since Cairn names every repository it opens
+  to git). The roster still hands it the user's `PATH`, `HOME` and the rest; that
   is what makes git-lfs work, and it is the driver's to use.
 - **What it writes is its own.** A driver may keep a store of its own — git-lfs's
   clean copies the file into `.git/lfs/objects`, as it does under the user's

@@ -6,7 +6,8 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use cairn_git::{Error, SharedRepository};
+use cairn_git::{CancelSignal, ChangesRequest, ContentOptions, Error, SharedRepository};
+use cairn_model::{Context, DiffContent};
 
 use super::repositories::{Repo, empty_home};
 use super::{git, ok, since};
@@ -328,6 +329,126 @@ fn a_repository_opens_exactly_where_git_opens_it_whatever_safe_directory_says() 
         assert!(!under("<top>/*", "the top"), "git {version}");
         assert!(under("<top>/*", "a nested repository"), "git {version}");
         assert!(under(".", "the top") && !under(".", "a directory inside"));
+    }
+}
+
+/// A repository Cairn admits is read as git reads it, whatever gix's own owner rule makes of
+/// it. gix checks the WORKING TREE's owner again as it opens — the directory `core.worktree`
+/// names, not the one holding `.git` that git checks — and, refused by its own
+/// `safe.directory` reading (system and global files only, compared as written), lowers the
+/// repository to reduced trust; `Options::with(Trust::Full)` does not stop it
+/// (gix 0.87.1, `src/open/repository.rs`, `open_from_paths`). Here the working tree is `/`,
+/// which root owns, so every open below is one gix trusts less than fully while git's check
+/// — of the directory holding `.git` — passes, under each way the launch environment admits
+/// a repository git is told is someone else's: nothing, `safe.directory=*` on the command
+/// line, and a global file naming the top with a trailing slash, or as `.`, where the git in
+/// use admits them (its own answer is the oracle). Each open must then answer a `git`-backed
+/// read (the changes query), a gix read of a blob past gix's reduced-trust allocation limit
+/// (16 MiB, loaded anyway), and the repository's own `diff.context`. Caught by: a reduced
+/// repository left to git's discovery, which from `/` finds no repository at all, or read by
+/// gix under the limit it gives reduced trust.
+#[test]
+fn a_repository_cairn_admits_is_read_as_git_reads_it_whatever_gix_makes_of_its_owner() {
+    use std::os::unix::fs::MetadataExt as _;
+    let scratch = Repo::new("ownership-reduced");
+    let probe = scratch.path().join("owner-probe");
+    ok(std::fs::write(&probe, b""), "writing a probe");
+    let me = ok(std::fs::symlink_metadata(&probe), "reading the probe").uid();
+    if ok(std::fs::symlink_metadata("/"), "reading /").uid() == me {
+        eprintln!(
+            "SKIPPED a_repository_cairn_admits_is_read_as_git_reads_it_whatever_gix_makes_of_its_owner: \
+             / is this user's own, so gix trusts it fully and this decides nothing"
+        );
+        return;
+    }
+    let repo = Repo::new("ownership-work-tree-elsewhere");
+    let mut big = Vec::with_capacity(17 * 1024 * 1024 + 1024);
+    while big.len() <= 17 * 1024 * 1024 {
+        big.extend_from_slice(&[b'z'; 1023]);
+        big.push(b'\n');
+    }
+    repo.write("big.txt", &big);
+    repo.write("small.txt", b"one\n");
+    let head = repo.commit("seed");
+    repo.config("diff.context", "7");
+    repo.config("core.worktree", "/");
+    let top = physical(repo.path()).display().to_string();
+    let assumed = |extra: &[(&'static str, String)]| {
+        let mut all = vec![("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1".to_owned())];
+        all.extend_from_slice(extra);
+        all
+    };
+    let settings: Vec<(&str, Vec<(&str, String)>)> = vec![
+        ("the user's own", Vec::new()),
+        (
+            "safe.directory=* on the command line",
+            assumed(&[("GIT_CONFIG_PARAMETERS", "'safe.directory=*'".to_owned())]),
+        ),
+        (
+            "the top with a trailing slash",
+            assumed(&global_file(
+                scratch.path(),
+                "slash",
+                &format!("[safe]\n\tdirectory = {top}/\n"),
+            )),
+        ),
+        (
+            ".",
+            assumed(&global_file(
+                scratch.path(),
+                "dot",
+                "[safe]\n\tdirectory = .\n",
+            )),
+        ),
+    ];
+    let mut admitted = 0;
+    for (setting, extra) in &settings {
+        if git_opens(repo.path(), extra).is_none() {
+            continue;
+        }
+        admitted += 1;
+        let shared = match SharedRepository::discover_for(repo.path(), git(), launch(extra)) {
+            Ok(shared) => shared,
+            Err(error) => panic!("{setting}: git opens it and Cairn refuses: {error}"),
+        };
+        assert_eq!(shared.workdir(), Some(Path::new("/")), "{setting}");
+        let engine = shared.to_worker();
+        let request = ChangesRequest::commit(head);
+        let changes = match engine.changes(git(), &request, &CancelSignal::new()) {
+            Ok(changes) => changes,
+            Err(error) => panic!("{setting}: the changes query fails where git answers: {error}"),
+        };
+        let paths: Vec<String> = changes
+            .files
+            .iter()
+            .map(|file| file.new_path.display().to_string())
+            .collect();
+        assert_eq!(paths, ["big.txt", "small.txt"], "{setting}");
+        let anyway = ContentOptions {
+            load_anyway: true,
+            ..ContentOptions::default()
+        };
+        let big_file = &changes.files[0];
+        match engine.file_diff(git(), &request, big_file, &anyway, &CancelSignal::new()) {
+            Ok(diff) => assert!(
+                matches!(diff.content, DiffContent::Text { .. }),
+                "{setting}: {:?}",
+                diff.content
+            ),
+            Err(error) => panic!("{setting}: a 17 MiB blob git reads is refused: {error}"),
+        }
+        assert_eq!(
+            ok(engine.configured_context(), "diff.context reads"),
+            Context::Lines(7),
+            "{setting}: the repository's own configuration was not read"
+        );
+    }
+    // The user's own repository is admitted on every git, so this decided something; the
+    // others are admitted only where the git in use reads them.
+    assert!(admitted >= 1);
+    let version = git().version();
+    if version >= since(47) {
+        assert_eq!(admitted, settings.len(), "git {version}");
     }
 }
 

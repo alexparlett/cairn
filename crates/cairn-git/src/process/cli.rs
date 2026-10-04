@@ -202,7 +202,6 @@ impl<'a, K: Kind> GitCommand<'a, K> {
         let inner = repo.inner();
         let absolute = |path: &Path| inner.current_dir().join(path);
         self.location = repository_location(
-            inner.git_dir_trust() == gix::sec::Trust::Full,
             &absolute(repo.git_dir()),
             repo.workdir().map(absolute).as_deref(),
         );
@@ -315,30 +314,31 @@ impl GitCommand<'_, Write> {
 }
 
 /// The global options that name a repository to git: `--git-dir`, and
-/// `--work-tree` when it has a working tree — given only when `trusted`.
+/// `--work-tree` when it has a working tree — for every repository Cairn holds.
 ///
 /// Without them git finds the repository by discovery from the directory it
 /// runs in, and discovery can find a different one: a working tree whose git
 /// directory lives elsewhere (`core.worktree`), sitting inside another
-/// repository's working tree, is discovered as that enclosing repository; and
-/// under `safe.bareRepository=explicit` git refuses to discover a bare
-/// repository at all. Naming it is what makes the repository git reads the
-/// one Cairn opened.
+/// repository's working tree, is discovered as that enclosing repository, or
+/// — run in a `core.worktree` outside any repository — none at all; and under
+/// `safe.bareRepository=explicit` git refuses to discover a bare repository at
+/// all. Naming it is what makes the repository git reads the one Cairn opened.
 ///
-/// But a git directory named explicitly is one git does not check the
-/// ownership of — `safe.directory` guards discovery only (reproduced with
-/// git 2.56: `GIT_TEST_ASSUME_DIFFERENT_OWNER=1 git log` refuses with
-/// "dubious ownership", and the same command given `--git-dir` answers). So
-/// git's check is made as the repository is opened (`crate::ownership`), and
-/// a repository git would refuse is refused there, never opened. Every
-/// repository Cairn holds passed it, and is opened with full trust; the one
-/// gix still marks reduced — where its own owner rule, checked again as it
-/// opens, refuses what git's admits — is left to git's discovery here, which
-/// opens it as git does.
-fn repository_location(trusted: bool, git_dir: &Path, workdir: Option<&Path>) -> Vec<OsString> {
-    if !trusted {
-        return Vec::new();
-    }
+/// A git directory named explicitly is one git does not check the ownership
+/// of — `safe.directory` guards discovery only (reproduced with git 2.56:
+/// `GIT_TEST_ASSUME_DIFFERENT_OWNER=1 git log` refuses with "dubious
+/// ownership", and the same command given `--git-dir` answers). So git's check
+/// is made as the repository is opened, by git's own rule for the version in
+/// use, against the environment Cairn was launched with (`crate::ownership`),
+/// and a repository git would refuse is refused there, never opened: every
+/// repository Cairn holds has passed git's check, and is named here whatever
+/// trust gix gave it. gix re-checks the working tree's owner by a rule of its
+/// own as it opens (and may lower its trust to reduced, which
+/// `Options::with(Trust::Full)` does not prevent), but that rule is not
+/// git's, so it decides nothing here — and the `git` run here could not make
+/// git's check anyway, since its environment carries none of the launch
+/// environment's `GIT_CONFIG_*` (`environment.rs`).
+fn repository_location(git_dir: &Path, workdir: Option<&Path>) -> Vec<OsString> {
     let option = |name: &str, path: &Path| {
         let mut option = OsString::from(name);
         option.push(path);
@@ -679,28 +679,85 @@ mod stub_tests {
         assert_eq!(log[0].arguments, ["diff-tree", "--raw"]);
     }
 
-    /// The other half of the rule: a repository gix trusts less than fully — one
-    /// whose ownership git's rule admits and gix's own refuses, since what git
-    /// refuses is never opened (`crate::ownership`) — is left to git's discovery,
-    /// so git's own check decides it too. Caught by: naming every repository
-    /// whatever its trust, which bypasses that check.
+    /// The other half of the rule: every repository Cairn holds is named to git,
+    /// whatever trust gix gave it — git's own ownership check was made as it was
+    /// opened (`crate::ownership`), and gix's re-check of the working tree's owner
+    /// is not git's rule. Built from a fixture gix trusts less than fully (its
+    /// working tree is `/`, which root owns), so the trust is shown to be reduced
+    /// before the location is read; skipped where this user owns `/`. Caught by:
+    /// the location withheld for a reduced repository, which leaves the `git` Cairn
+    /// runs to discover from the working tree — none at all from `/` — with an
+    /// environment that carries none of the launch environment's `safe.directory`
+    /// (end to end in `tests/diff/ownership.rs`).
     #[test]
-    fn a_repository_trusted_less_than_fully_is_left_to_gits_discovery() {
+    fn every_repository_is_named_to_git_whatever_trust_gix_gave_it() {
+        use std::os::unix::fs::MetadataExt as _;
         let git_dir = Path::new("/somewhere/repo/.git");
         let workdir = Path::new("/somewhere/repo");
-        assert!(super::repository_location(false, git_dir, Some(workdir)).is_empty());
         assert_eq!(
-            super::repository_location(true, git_dir, Some(workdir)),
+            super::repository_location(git_dir, Some(workdir)),
             [
                 "--git-dir=/somewhere/repo/.git",
                 "--work-tree=/somewhere/repo"
             ]
         );
         assert_eq!(
-            super::repository_location(true, git_dir, None),
+            super::repository_location(git_dir, None),
             ["--git-dir=/somewhere/repo/.git"],
             "a bare repository has no working tree to name"
         );
+
+        let scratch =
+            std::env::temp_dir().join(format!("cairn-reduced-{}-{}", std::process::id(), line!()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        let git_dir = scratch.join(".git");
+        std::fs::create_dir_all(git_dir.join("objects")).unwrap();
+        std::fs::create_dir_all(git_dir.join("refs/heads")).unwrap();
+        std::fs::write(git_dir.join("HEAD"), b"ref: refs/heads/main\n").unwrap();
+        std::fs::write(
+            git_dir.join("config"),
+            b"[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = /\n",
+        )
+        .unwrap();
+        let me = std::fs::symlink_metadata(git_dir.join("HEAD"))
+            .unwrap()
+            .uid();
+        if std::fs::symlink_metadata("/").unwrap().uid() == me {
+            eprintln!(
+                "SKIPPED every_repository_is_named_to_git_whatever_trust_gix_gave_it's \
+                 reduced half: / is this user's own"
+            );
+            std::fs::remove_dir_all(&scratch).unwrap();
+            return;
+        }
+        let stub = stub("printf '%s\\0' \"$@\"");
+        let git = discover_retrying(stub.environment()).unwrap();
+        let repo = Repository::discover(&scratch).unwrap();
+        assert_eq!(
+            repo.inner().git_dir_trust(),
+            gix::sec::Trust::Reduced,
+            "gix trusted a working tree root owns, so this decides nothing"
+        );
+        let output = git
+            .read_invocation()
+            .in_repository(&repo)
+            .arg("diff-tree")
+            .collected()
+            .unwrap();
+        let records: Vec<String> = output
+            .records()
+            .map(|record| String::from_utf8_lossy(record).into_owned())
+            .collect();
+        assert_eq!(records.len(), 3, "{records:?}");
+        let named = records[0]
+            .strip_prefix("--git-dir=")
+            .unwrap_or_else(|| panic!("{records:?} names no git directory"));
+        assert_eq!(
+            std::fs::canonicalize(named).unwrap(),
+            std::fs::canonicalize(&git_dir).unwrap()
+        );
+        assert_eq!(records[1..], ["--work-tree=/", "diff-tree"]);
+        std::fs::remove_dir_all(&scratch).unwrap();
     }
 
     /// Progress arrives one redraw at a time: git ends a meter's redraws with `\r`

@@ -232,9 +232,9 @@ Why each variable is there, with its evidence, is beside it in
   listens, `CAIRN_ASKPASS_SOCKET` among it, so a driver can reach the socket
   but, with no token, fails closed — plus what git sets for a filter
   (`GIT_EXEC_PATH`, `GIT_PREFIX`, `GIT_CONFIG_PARAMETERS`, the exec directory
-  first on `PATH`, and `GIT_DIR` and `GIT_WORK_TREE` when the repository is
-  named to git — full trust, "Where an invocation runs" — and not when it is
-  left to discovery), its stderr the read's bounded tail; and for
+  first on `PATH`, and `GIT_DIR` and `GIT_WORK_TREE`, since every repository
+  is named to git, "Where an invocation runs"), its stderr the read's bounded
+  tail; and for
   a submodule `diff-files` runs `git status` inside it, with that repository's
   own hook and filters (`reads/working_tree.rs`;
   `a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`,
@@ -317,7 +317,25 @@ normalised (`real_path`, `.` the starting directory, relative entries
 ignored) from 2.46.1, `:(optional)` from 2.52 — over the configuration git
 protects, read by `crate::bare_discovery::protected_values` (no include
 followed on 2.38.x; `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` from 2.32).
-What passes is opened with full trust and named to git. Pinned against git
+What passes is opened with full trust and named to git, whatever gix makes
+of it: gix checks the working tree's owner again as it opens — the
+directory `core.worktree` names, by `is_path_owned_by_current_user`, with
+`safe.directory` read from the system and global files alone, compared as
+written — and where that refuses, lowers the repository to reduced trust,
+which no open option prevents (`Options::with(Trust::Full)` sets the git
+directory's trust only; gix 0.87.1 `open_from_paths`). That rule is not
+git's and decides nothing: the repository's configuration was loaded at
+full trust and is read whole, the allocation limit gix gives reduced trust
+(16 MiB per object) is switched off at open
+(`gitoxide.objects.allocLimitIfReducedTrust=0`), and the repository is named
+to git whatever the trust — the `git` Cairn runs could not make git's check
+itself, since its environment carries none of the launch environment's
+`GIT_CONFIG_*`. Pinned end to end by
+`a_repository_cairn_admits_is_read_as_git_reads_it_whatever_gix_makes_of_its_owner`
+(`core.worktree = /`, which root owns, under each admitting setting: the
+changes query answers, a 17 MiB blob is read, the repository's own
+`diff.context` holds) and in `process/cli.rs` by
+`every_repository_is_named_to_git_whatever_trust_gix_gave_it`. Pinned against git
 itself by `a_repository_opens_exactly_where_git_opens_it_whatever_safe_directory_says`
 (`crates/cairn-git/tests/diff/ownership.rs`, every shape under every
 spelling of the setting with `GIT_TEST_ASSUME_DIFFERENT_OWNER=1`, so it
@@ -415,13 +433,11 @@ command line's parsing by
 implied: no fixture can make a
 repository its own user does not own, so a real second owner is decided by
 the privileged run above, and every other case through
-`GIT_TEST_ASSUME_DIFFERENT_OWNER` or an injected identity; gix, given a
-repository Cairn decided git opens, checks the working tree's owner again by
-its own rule and, where that rule refuses what git's admits (`safe.directory`
-on the command line, `.`, a normalised entry, a git with no check), opens it
-with reduced trust — shown as git shows it, but read by gix with the
-repository's own configuration filtered and left to git's own discovery
-for the `git` Cairn runs in it, which opens it as git does; `%(prefix)/` is
+`GIT_TEST_ASSUME_DIFFERENT_OWNER` or an injected identity; gix's own
+reduced trust, for a repository whose working tree its rule refuses, is
+undone as "Where an invocation runs" says, and anything else gix keys on
+`git_dir_trust` in a version after 0.87.1 is the review's to check;
+`%(prefix)/` is
 expanded against the directory above the `bin/` of the `git` found, and to
 nothing where no `git` is known (`SharedRepository::discover`). The
 `safe.bareRepository` check reads the system file at `GIT_CONFIG_SYSTEM` or

@@ -906,20 +906,55 @@ fn expanded_files(seen: &[Update]) -> Vec<(usize, bool)> {
         .collect()
 }
 
-/// A commit of this checkout that changed at least `files` files, and its change set.
-fn commit_changing(
+/// What Expand All would spend reading `changes` whole, measured file by file on the
+/// single-file path: one for each file, and every line of both versions of a file diffed as
+/// text (`cairn_git::LineBudget`'s rule). `None` once that reaches `EXPAND_ALL_LINES`, where
+/// it stops measuring, or at a file too large to be diffed as text at all.
+fn expand_all_cost(
     handle: &RepositoryHandle,
     updates: &mut Updates,
-    files: usize,
-) -> (Comparison, ChangeSet) {
-    let ids = commits(handle, updates, 40);
-    ids.iter()
-        .map(|id| {
-            let of = Comparison::Commit(*id);
-            (of, change_set(handle, updates, of))
-        })
-        .find(|(_, changes)| changes.files.len() >= files)
-        .unwrap_or_else(|| panic!("none of {ids:?} changed {files} files"))
+    of: Comparison,
+    changes: &ChangeSet,
+) -> Option<u64> {
+    let budget = super::expand_all::EXPAND_ALL_LINES;
+    let mut spent = 0u64;
+    for file in &changes.files {
+        let lines = match file_answer(handle, updates, &committed(of, file)) {
+            Some(FileDiff {
+                content: DiffContent::TooLarge { .. },
+                ..
+            }) => return None,
+            Some(diff) => diff.text().map_or(0, |text| {
+                (text.old_lines().len() + text.new_lines().len()) as u64
+            }),
+            None => 0,
+        };
+        spent = spent.saturating_add(1 + lines);
+        if spent >= budget {
+            return None;
+        }
+    }
+    Some(spent)
+}
+
+/// A commit of this checkout that changed at least `files` files and whose change set Expand
+/// All reads whole, its budget unspent — measured, not assumed: the newest commit is whatever
+/// the checkout is, and on a pull request's CI run that is the merge of the branch into
+/// `main`, whose change set is the whole branch, far past the budget. Measured on a handle of
+/// its own, so the answers it keeps are not the expansion's.
+fn commit_read_whole(files: usize) -> (Comparison, ChangeSet) {
+    let (handle, mut updates) = checkout();
+    let ids = commits(&handle, &mut updates, 40);
+    for id in &ids {
+        let of = Comparison::Commit(*id);
+        let changes = change_set(&handle, &mut updates, of);
+        if changes.files.len() >= files
+            && expand_all_cost(&handle, &mut updates, of, &changes).is_some()
+        {
+            return (of, changes);
+        }
+    }
+    panic!("none of {ids:?} changed {files} files within Expand All's budget");
 }
 
 /// Phase 08, R5.3 through the boundary: Expand All answers every file of a change set that
@@ -929,8 +964,8 @@ fn commit_changing(
 /// as part of Expand All.
 #[test]
 fn expand_all_answers_every_file_in_order_through_the_boundary() {
+    let (of, changes) = commit_read_whole(2);
     let (handle, mut updates) = checkout();
-    let (of, changes) = commit_changing(&handle, &mut updates, 2);
     let changes = std::sync::Arc::new(changes);
     let options = DiffOptions::default();
     let seen = expansion(
@@ -985,14 +1020,15 @@ fn expand_all_answers_every_file_in_order_through_the_boundary() {
 }
 
 /// Q2 through the boundary: Expand All stops at `EXPAND_ALL_LINES` — taken up one line short
-/// of it, it opens one file and ends with its budget spent, leaving the rest of a change set
-/// of several files unread; the progress it reports is where it stopped and what it spent.
+/// of it, it opens one file and ends with its budget spent, leaving unread the rest of a change
+/// set of several files it would otherwise read whole, so the budget alone stops it; the
+/// progress it reports is where it stopped and what it spent.
 /// Caught by: the budget not applied on the diff thread (every file read), or the end
 /// reported as every file opened.
 #[test]
 fn expand_all_stops_at_its_budget_through_the_boundary() {
+    let (of, changes) = commit_read_whole(3);
     let (handle, mut updates) = checkout();
-    let (of, changes) = commit_changing(&handle, &mut updates, 3);
     let changes = std::sync::Arc::new(changes);
     let spent = super::expand_all::EXPAND_ALL_LINES - 1;
     let seen = expansion(

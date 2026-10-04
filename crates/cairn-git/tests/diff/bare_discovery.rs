@@ -708,7 +708,11 @@ const ACROSS_CHILD: &str = "CAIRN_TEST_ACROSS_FILESYSTEMS";
 /// spelling git reads as a boolean, each compared with the git in use. A second filesystem
 /// without root takes a user and mount namespace (`unshare --map-root-user --mount`) with a
 /// `tmpfs` mounted in the working tree, so this test binary runs itself again in one; where
-/// there is none the test says so and decides nothing. Caught by: the variable ignored,
+/// there is none the test says so and decides nothing — unless
+/// `CAIRN_REQUIRE_USER_NAMESPACES` is set, which `scripts/gate.sh`'s `test-full` sets
+/// wherever such a namespace can be made (and `scripts/git-floor.sh`'s runs inherit, a
+/// namespace owing nothing to git's version), and then the skip is a failure
+/// (`the_user_namespace_tests_are_required_wherever_they_can_run`). Caught by: the variable ignored,
 /// read as set when it is empty, or read other than as git reads a boolean.
 #[test]
 fn the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it() {
@@ -721,6 +725,11 @@ fn the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it() {
         .output()
         .is_ok_and(|output| output.status.success());
     if !available {
+        assert!(
+            std::env::var_os("CAIRN_REQUIRE_USER_NAMESPACES").is_none(),
+            "CAIRN_REQUIRE_USER_NAMESPACES is set, and no user and mount namespace can be made \
+             here"
+        );
         eprintln!(
             "SKIPPED the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it: \
              no user and mount namespace here, so no second filesystem"

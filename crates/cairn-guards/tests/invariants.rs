@@ -4673,6 +4673,90 @@ fn the_fsmonitor_daemon_pin_is_required_wherever_it_can_run() {
     }
 }
 
+/// The two user-namespace tests — the refspec check over a repository another uid owns
+/// (`crates/cairn-git/tests/fetch.rs`) and git's search across a filesystem boundary
+/// (`crates/cairn-git/tests/diff/bare_discovery.rs`) — skip where no user namespace can be
+/// made, and a passing test's stderr is hidden, so `CAIRN_REQUIRE_USER_NAMESPACES` is what
+/// turns a skip into a failure. Pinned here: each test's skip branch fails when the variable
+/// is set; `scripts/gate.sh`'s `test-full` calls the probe (`gate_function_calls`), whose
+/// body runs one `unshare` needing everything both tests need — a mapped root, a second uid
+/// (`--map-auto`) and a mount namespace — and exports the variable, and the PASS line
+/// restates its note; and `scripts/git-floor.sh` never clears it, since the namespace owes
+/// nothing to git's version. CI's runners may refuse unprivileged namespaces, and the gate
+/// then prints the note: this pin holds the probe, not the runner.
+#[test]
+fn the_user_namespace_tests_are_required_wherever_they_can_run() {
+    let root = repo_root();
+    let read = |path: &str| {
+        std::fs::read_to_string(root.join(path)).unwrap_or_else(|e| panic!("reading {path}: {e}"))
+    };
+    let gate = read("scripts/gate.sh");
+    let floor = read("scripts/git-floor.sh");
+    for (file, test) in [
+        (
+            "crates/cairn-git/tests/fetch.rs",
+            "fn the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git()",
+        ),
+        (
+            "crates/cairn-git/tests/diff/bare_discovery.rs",
+            "fn the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it()",
+        ),
+    ] {
+        let source = read(file);
+        let body = source
+            .split(test)
+            .nth(1)
+            .unwrap_or_else(|| panic!("{test} is gone from {file}"));
+        let skip_branch = body
+            .split("eprintln!(\n            \"SKIPPED")
+            .next()
+            .unwrap_or_default();
+        assert!(
+            skip_branch.len() < body.len(),
+            "{test} in {file} no longer says SKIPPED where it skips, so this check read nothing"
+        );
+        assert!(
+            skip_branch.contains("CAIRN_REQUIRE_USER_NAMESPACES"),
+            "{test} in {file} no longer fails where no namespace can be made and \
+             CAIRN_REQUIRE_USER_NAMESPACES is set, so the gate's setting of it decides nothing"
+        );
+    }
+
+    assert!(
+        gate_function_calls(
+            &gate,
+            "run_test_full",
+            "require_user_namespaces_where_possible"
+        ),
+        "scripts/gate.sh's run_test_full no longer calls require_user_namespaces_where_possible, \
+         so the user-namespace tests would skip silently where they could have run."
+    );
+    let probe = gate_function_body(&gate, "require_user_namespaces_where_possible")
+        .unwrap_or_else(|| panic!("scripts/gate.sh no longer defines the user-namespace probe"));
+    for needed in [
+        "unshare --map-root-user --map-auto --mount true",
+        "export CAIRN_REQUIRE_USER_NAMESPACES=1",
+        "USERNS_NOTE=",
+    ] {
+        assert!(
+            probe.contains(needed),
+            "scripts/gate.sh's require_user_namespaces_where_possible no longer has `{needed}`, \
+             so it no longer requires the namespace tests exactly where both can run"
+        );
+    }
+    assert!(
+        gate.lines()
+            .any(|line| line.contains("gate: PASS") && line.contains("${USERNS_NOTE:+")),
+        "scripts/gate.sh's PASS line no longer restates the user-namespace note, so a skip is \
+         not said where the verdict is read"
+    );
+    assert!(
+        !floor.contains("-u CAIRN_REQUIRE_USER_NAMESPACES"),
+        "scripts/git-floor.sh clears CAIRN_REQUIRE_USER_NAMESPACES, so the across-filesystem \
+         test could skip silently on the floors' gits, which a namespace does not depend on"
+    );
+}
+
 /// The two `CAIRN_REQUIRE_*` pins read a job's own `env:` block; this is that reading,
 /// against the shapes it must refuse as well as the one it must find.
 #[test]

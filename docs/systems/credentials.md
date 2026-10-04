@@ -251,8 +251,8 @@ never enters `cairn-git` and never enters application state.
   — the system file at git's own `sysconfdir`, a repository whose git
   directory is another user's
   (`the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git`,
-  which needs a user namespace with a second uid and says so when skipped),
-  and never
+  which needs a user namespace with a second uid; required by the gate
+  wherever one can be made, `CAIRN_REQUIRE_USER_NAMESPACES`), and never
   Cairn's own `GIT_CONFIG_*`, which the built environment does not carry
   (`the_refspec_check_ignores_config_from_cairns_own_environment`, over both
   `GIT_CONFIG_COUNT` and `GIT_CONFIG_GLOBAL`). git parses its own booleans,

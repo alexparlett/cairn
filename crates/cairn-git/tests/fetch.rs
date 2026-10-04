@@ -1381,7 +1381,10 @@ fn an_unreadable_remote_configuration_is_reported_and_starts_nothing() {
 /// sections (`try_find_remote` filters them), so a check left to gix's rule saw no remote
 /// and let a mirror fetch through. A second owner without root takes a user namespace with
 /// a second uid mapped (`unshare --map-root-user --map-auto`, from `/etc/subuid`); where
-/// there is none the test says so and decides nothing. Caught by: the check leaving trust to
+/// there is none the test says so and decides nothing — unless
+/// `CAIRN_REQUIRE_USER_NAMESPACES` is set, which `scripts/gate.sh`'s `test-full` sets
+/// wherever such a namespace can be made, and then the skip is a failure
+/// (`the_user_namespace_tests_are_required_wherever_they_can_run`). Caught by: the check leaving trust to
 /// gix's own rule, which loads the repository's configuration at reduced trust and then
 /// filters its remote out of the lookup.
 #[test]
@@ -1392,6 +1395,11 @@ fn the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git() 
         .output()
         .is_ok_and(|output| output.status.success());
     if !available {
+        assert!(
+            std::env::var_os("CAIRN_REQUIRE_USER_NAMESPACES").is_none(),
+            "CAIRN_REQUIRE_USER_NAMESPACES is set, and no user namespace with a second uid can \
+             be made here"
+        );
         eprintln!(
             "SKIPPED the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git: \
              no user namespace with a second uid here, so no second owner"

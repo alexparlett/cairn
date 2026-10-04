@@ -117,10 +117,30 @@ require_fsmonitor_daemon_where_possible() {
   fi
 }
 
+# Two tests need a user namespace — a second owner (a second uid, from /etc/subuid) for
+# the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git
+# (crates/cairn-git/tests/fetch.rs), and a second filesystem (a mount namespace) for
+# the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it
+# (crates/cairn-git/tests/diff/bare_discovery.rs) — and skip where none can be made,
+# which would read `ok`. Where one probe that needs both succeeds they are REQUIRED, so
+# a broken namespace test is red; where it fails, the gate says so once. scripts/git-floor.sh
+# leaves the variable set: the namespace owes nothing to git's version. The guard
+# the_user_namespace_tests_are_required_wherever_they_can_run pins all of it.
+USERNS_NOTE=""
+require_user_namespaces_where_possible() {
+  if unshare --map-root-user --map-auto --mount true >/dev/null 2>&1; then
+    export CAIRN_REQUIRE_USER_NAMESPACES=1
+  else
+    USERNS_NOTE="the two user-namespace tests in crates/cairn-git/tests/fetch.rs and crates/cairn-git/tests/diff/bare_discovery.rs SKIPPED here: 'unshare --map-root-user --map-auto --mount' fails (no unprivileged user namespaces, or no /etc/subuid range)"
+    echo "gate: $USERNS_NOTE"
+  fi
+}
+
 run_test_full() {
   step "test-full"
   require_ssh_fixture_where_possible
   require_fsmonitor_daemon_where_possible
+  require_user_namespaces_where_possible
   run_body "test-full" "$TEST_FULL_CMD"
 }
 run_test_doc()  { run_cmd "test-doc"  "$TEST_DOC_CMD"; }
@@ -130,7 +150,7 @@ finish() {
   echo
   # A cap on coverage is restated where the verdict is read, not only where it happened.
   if [ "$fail" -eq 0 ]; then
-    echo "gate: PASS${SSH_FIXTURE_NOTE:+ ($SSH_FIXTURE_NOTE)}${FSMONITOR_NOTE:+ ($FSMONITOR_NOTE)}"
+    echo "gate: PASS${SSH_FIXTURE_NOTE:+ ($SSH_FIXTURE_NOTE)}${FSMONITOR_NOTE:+ ($FSMONITOR_NOTE)}${USERNS_NOTE:+ ($USERNS_NOTE)}"
   else
     echo "gate: FAIL"
   fi

@@ -618,3 +618,47 @@ fn the_strip_reports_its_tabs_and_its_collapse() {
     click_label(&mut test, EXPAND_CAPTION);
     assert!(!*strip.collapsed.read());
 }
+
+/// The user's report (2026-10-04), from the running app: each file's row — disclosure, status
+/// letter, path — was drawn in the middle of the pane. A file's row starts at its left
+/// padding and is centred top to bottom. Caught by: a row turned horizontal that keeps the
+/// vertical row's `main_align(Center)`, which then centres its content across the width.
+#[test]
+fn a_files_row_starts_at_the_left_of_the_tab_and_is_centred_top_to_bottom() {
+    let (test, _, _) = launch(change_set(0));
+    let path = "src/file-000001.rs";
+    let label = test
+        .find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == path)
+                .map(|_| node.layout().area)
+        })
+        .unwrap_or_else(|| panic!("no row draws {path}"));
+    let row = test
+        .find(|node, element| {
+            let area = node.layout().area;
+            Rect::try_downcast(element)
+                .filter(|_| {
+                    area.height() == DETAIL_ROW_HEIGHT
+                        && area.width() > WIDTH / 2.
+                        && area.min_y() <= label.min_y()
+                        && area.max_y() >= label.max_y()
+                })
+                .map(|_| area)
+        })
+        .unwrap_or_else(|| panic!("no row holds {path}"));
+    // The padding, the disclosure, the status letter and the gaps between them: well under a
+    // fifth of the row, where centring put it near the middle.
+    let indent = label.min_x() - row.min_x();
+    assert!(
+        (12. ..WIDTH / 5.).contains(&indent),
+        "the path starts {indent} px into a {} px row",
+        row.width()
+    );
+    assert!(
+        (label.center().y - row.center().y).abs() < 1.,
+        "the path is not centred in its row: {} against {}",
+        label.center().y,
+        row.center().y
+    );
+}

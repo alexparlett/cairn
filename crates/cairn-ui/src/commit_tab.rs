@@ -554,7 +554,11 @@ fn file_item(row: Rect, index: usize, data: &TabData) -> Element {
     let open = content.expansion.read().is_open(index);
     let (tab_id, mut cursor, on_file) = (content.tab_id, data.cursor, content.on_file.clone());
     let on_file_pressed = content.on_file_pressed.clone();
+    // Turned horizontal, the row's main axis is its width, where the centring `build_row`
+    // gives a vertical row would put the file in the middle of the pane: it starts at its
+    // padding, and `cross_align` centres it top to bottom.
     row.horizontal()
+        .main_align(Alignment::Start)
         .cross_align(Alignment::Center)
         .maybe(data.current == Some(index), |el| {
             el.background(colours().surface_secondary)

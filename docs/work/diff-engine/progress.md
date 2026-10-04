@@ -3,6 +3,22 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-04 — Fix: the Commit tab's file rows drawn in the middle of the pane
+
+Packet mode, committed to `feature/diff-engine`. The user, with a screenshot of the running
+app: each changed file's row in the Commit tab — disclosure, status letter, path — sat in
+the horizontal middle of the pane. `crates/cairn-ui/src/commit_tab.rs` `build_row` gives
+every row `main_align(Center)` (vertical centring in a vertical rect), and `file_item` turns
+the file's row `horizontal()`, which makes that centring horizontal. Fix: `file_item` sets
+`main_align(Start)` after `horizontal()`. RED —
+`a_files_row_starts_at_the_left_of_the_tab_and_is_centred_top_to_bottom`
+(`crates/cairn-ui/tests/commit_tab.rs`): "the path starts 494 px into a 1054.354 px row";
+GREEN. The other row builders were checked: the Commit tab's header, notice and Load Diff
+rows stay vertical, so their centring is vertical; the Changes tab's list rows are vertical
+rects holding a horizontal `file_row`, and were never centred across — pinned all the same by
+`a_files_row_starts_at_the_left_of_the_list_and_is_centred_top_to_bottom`
+(`crates/cairn-ui/tests/changes_list.rs`), green before and after.
+
 ## 2026-10-04 — Fix: Entire File is the Changes tab's alone (the user's decision)
 
 Packet mode, committed to `feature/diff-engine`. The user: "the Commit tab is stuck showing

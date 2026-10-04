@@ -335,3 +335,45 @@ fn an_active_filter_says_how_many_files_it_shows_of_how_many() {
     test.sync_and_update();
     assert!(!labels(&test).iter().any(|l| l.starts_with("Showing")));
 }
+
+/// The twin of the Commit tab's `a_files_row_starts_at_the_left_of_the_tab_and_is_centred_top_to_bottom`
+/// (the user's report, 2026-10-04): a file's row in the Changes tab's list starts at its left
+/// padding and is centred top to bottom. Caught by: a row whose alignment centres its content
+/// across the width.
+#[test]
+fn a_files_row_starts_at_the_left_of_the_list_and_is_centred_top_to_bottom() {
+    let (test, _, _) = launch(change_set(3), ShownFiles::All);
+    let path = file(1).new_path.display().into_owned();
+    let label = test
+        .find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == path)
+                .map(|_| node.layout().area)
+        })
+        .unwrap_or_else(|| panic!("no row draws {path}"));
+    let row = test
+        .find(|node, element| {
+            let area = node.layout().area;
+            Rect::try_downcast(element)
+                .filter(|_| {
+                    area.height() == DETAIL_ROW_HEIGHT
+                        && area.width() > WIDTH / 2.
+                        && area.min_y() <= label.min_y()
+                        && area.max_y() >= label.max_y()
+                })
+                .map(|_| area)
+        })
+        .unwrap_or_else(|| panic!("no row holds {path}"));
+    let indent = label.min_x() - row.min_x();
+    assert!(
+        (8. ..WIDTH / 5.).contains(&indent),
+        "the path starts {indent} px into a {} px row",
+        row.width()
+    );
+    assert!(
+        (label.center().y - row.center().y).abs() < 1.,
+        "the path is not centred in its row: {} against {}",
+        label.center().y,
+        row.center().y
+    );
+}

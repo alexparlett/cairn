@@ -1086,6 +1086,78 @@ fn a_newer_request_in_the_lane_ends_an_expansion_and_kills_its_read() {
         !seen.iter().any(|u| matches!(u, Update::Expanded { .. })),
         "a superseded expansion sent a page: {seen:?}"
     );
+    // Exactly two `diff-tree`s ever started: the expansion's, killed, and the file's. A third
+    // is an expansion that read on after it was superseded.
+    assert_eq!(
+        leaders(&stub, 2).len(),
+        2,
+        "a diff-tree started after the expansion was superseded"
+    );
+}
+
+/// `files` submodule changes of one commit of this checkout: files a page decides from their
+/// mode alone, reading no blob and asking no `git` (a commit id in a tree is not text), so a
+/// change set of any length is read in pages without a fixture of that many files.
+fn submodule_changes(files: usize) -> (Comparison, ChangeSet) {
+    let (handle, mut updates) = checkout();
+    let id = commits(&handle, &mut updates, 1)[0];
+    let gitlink = |n: usize| ChangedFile {
+        status: ChangeStatus::Modified,
+        old_path: RepoPath::from(format!("modules/{n:04}").as_str()),
+        new_path: RepoPath::from(format!("modules/{n:04}").as_str()),
+        old_mode: Some(cairn_model::FileMode::Submodule),
+        new_mode: Some(cairn_model::FileMode::Submodule),
+        old_id: Some(id),
+        new_id: Some(id),
+    };
+    let changes = ChangeSet {
+        files: (0..files).map(gitlink).collect(),
+        details: None,
+        renames: cairn_model::RenameDetection::default(),
+    };
+    (Comparison::Commit(id), changes)
+}
+
+/// Phase 08 QA's E5: an Expand All taken up where a superseded one stopped, `next` files in,
+/// over a change set longer than a page, reads from that file on — each file answered once, in
+/// order, across both pages — and ends saying every file is open, at the change set's end.
+/// Caught by: the place it stands ignored (reading from the first file), the files offered
+/// from the first while the place is reported from `next` (files read twice), or the place
+/// reported from the start of what was offered (a progress short of the end).
+#[test]
+fn expand_all_taken_up_midway_reads_from_where_it_stood_across_pages() {
+    let files = cairn_git::PAGE_FILES + 7;
+    let next = 5;
+    let (of, changes) = submodule_changes(files);
+    let (handle, mut updates) = checkout();
+    let seen = expansion(
+        &handle,
+        &mut updates,
+        ExpandQuery {
+            of,
+            changes: std::sync::Arc::new(changes),
+            options: DiffOptions::default(),
+            files: Vec::new(),
+            all: Some(AllFrom { next, spent: 0 }),
+        },
+    );
+    let pages = seen
+        .iter()
+        .filter(|u| matches!(u, Update::Expanded { files, .. } if !files.is_empty()))
+        .count();
+    assert!(pages >= 2, "the change set was read in {pages} page(s)");
+    let every: Vec<(usize, bool)> = (next..files).map(|n| (n, true)).collect();
+    assert_eq!(expanded_files(&seen), every);
+    match seen.last() {
+        Some(Update::Expanded {
+            all: Some(progress),
+            ..
+        }) => {
+            assert_eq!(progress.ended, Some(AllEnded::Every));
+            assert_eq!(progress.at.next, files);
+        }
+        other => panic!("expected Expand All's end, got {other:?}"),
+    }
 }
 
 /// T8: a working-tree file diff through the boundary answers the working tree as it is:

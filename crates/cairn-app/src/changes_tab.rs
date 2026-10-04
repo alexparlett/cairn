@@ -73,6 +73,9 @@ impl PartialEq for ChangesTab {
 impl Component for ChangesTab {
     fn render(&self) -> impl IntoElement {
         let view = self.view;
+        // The split's width as last laid out, which turns the list's dragged width into its
+        // share. Only peeked: a measurement redraws nothing.
+        let mut split_width = use_state(|| 0f32);
         let filtering = self.submit.clone();
         // The filter's text, as typed: asked of a worker when it changes. Peeked state, so
         // only a keystroke runs this.
@@ -174,24 +177,43 @@ impl Component for ChangesTab {
             .content(Content::Flex)
             .maybe_child(header)
             .child(
-                rect().width(Size::fill()).height(Size::flex(1.)).child(
-                    ResizableContainer::new()
-                        .direction(Direction::Horizontal)
-                        .panel(
-                            ResizablePanel::new(PanelSize::percent(list_share))
-                                .min_pixels(LIST_MIN_PIXELS)
-                                .on_resized(move |dragged: f32| width.set(dragged))
-                                .child(list),
-                        )
-                        .panel(
-                            ResizablePanel::new(PanelSize::percent(100. - list_share))
-                                .min_pixels(DIFF_MIN_PIXELS)
-                                .child(diff_side(view, self.submit.clone())),
-                        ),
-                ),
+                rect()
+                    .width(Size::fill())
+                    .height(Size::flex(1.))
+                    .on_sized(move |e: Event<SizedEventData>| split_width.set(e.area.width()))
+                    .child(
+                        ResizableContainer::new()
+                            .direction(Direction::Horizontal)
+                            .panel(
+                                ResizablePanel::new(PanelSize::percent(list_share))
+                                    .min_pixels(LIST_MIN_PIXELS)
+                                    // The splitter reports the width dragged to in pixels; the
+                                    // panels are laid out by share.
+                                    .on_resized(move |dragged: f32| {
+                                        if let Some(share) = share_of(dragged, *split_width.peek())
+                                        {
+                                            width.set(share);
+                                        }
+                                    })
+                                    .child(list),
+                            )
+                            .panel(
+                                ResizablePanel::new(PanelSize::percent(100. - list_share))
+                                    .min_pixels(DIFF_MIN_PIXELS)
+                                    .child(diff_side(view, self.submit.clone())),
+                            ),
+                    ),
             )
             .into()
     }
+}
+
+/// The file list's share of the split, in percent, once dragged to `list_px` in a split
+/// `split_px` wide (its handle included): Freya's splitter reports the width dragged to in
+/// pixels, while both panels are laid out by share. `None` while the split is unmeasured.
+fn share_of(list_px: f32, split_px: f32) -> Option<f32> {
+    let room = split_px - ResizableContext::HANDLE_SIZE;
+    (room > 0. && list_px.is_finite()).then(|| (list_px / room * 100.).clamp(0., 100.))
 }
 
 /// What the tab draws in place of its list and diff — the answer awaited, or why it failed —
@@ -291,4 +313,26 @@ fn diff_body(
     .side_by_side(side_by_side)
     .current(current)
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The splitter's pixels become a share of the room the two panels split, the handle
+    /// left out; an unmeasured split, or a width that is not a number, keeps the share as
+    /// it was; and no width is turned into a share past the whole. Caught by: the pixels
+    /// stored as the share (the diff side laid out to nothing on the next commit).
+    #[test]
+    fn a_dragged_width_becomes_a_share_of_the_split() {
+        let split = 800. + ResizableContext::HANDLE_SIZE;
+        assert_eq!(share_of(280., split), Some(35.));
+        assert_eq!(share_of(400., split), Some(50.));
+        assert_eq!(share_of(0., split), Some(0.));
+        assert_eq!(share_of(2000., split), Some(100.));
+        assert_eq!(share_of(-5., split), Some(0.));
+        assert_eq!(share_of(280., 0.), None);
+        assert_eq!(share_of(280., ResizableContext::HANDLE_SIZE), None);
+        assert_eq!(share_of(f32::NAN, split), None);
+    }
 }

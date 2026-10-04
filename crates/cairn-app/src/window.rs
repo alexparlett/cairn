@@ -2759,4 +2759,77 @@ mod tests {
             list_split(&test)
         );
     }
+
+    /// The labels drawn right of the Changes tab's splitter, inside the pane: the diff side.
+    fn diff_side_labels(test: &TestingRunner) -> Vec<String> {
+        let top = pane_top(test);
+        let split = list_split(test);
+        test.find_many(|node, element| {
+            let area = node.layout().area;
+            Label::try_downcast(element)
+                .filter(|_| area.min_y() > top && area.min_x() > split && area.width() > 0.)
+                .map(|label| label.text.to_string())
+        })
+    }
+
+    /// The bug the user met ("the diff view disappeared and won't come back"): the file
+    /// list's splitter reports the width dragged to in PIXELS, and the list's share is laid
+    /// out as a PERCENTAGE — so once dragged, the next time the Changes tab was laid out anew
+    /// (another commit chosen) the list was given hundreds of percent and the diff side less
+    /// than nothing, for the rest of the session. The width dragged to is kept as a share of
+    /// the pane, and the diff side is drawn beside it whatever is chosen next. Caught by: a
+    /// share stored in pixels.
+    #[test]
+    fn a_dragged_file_list_leaves_the_diff_drawn_beside_it_on_the_next_commit() {
+        let (mut test, view, _) = launch((0..10).map(row).collect(), received(10, true));
+        changes_tab_over(&mut test, view, 3);
+        let opened = list_split(&test);
+        let reading = crate::changes_tab::READING_DIFF;
+        assert!(
+            diff_side_labels(&test).iter().any(|t| t == reading),
+            "{:?}",
+            diff_side_labels(&test)
+        );
+
+        // A modest drag right, well inside both floors.
+        let y = f64::from(pane_top(&test) + 120.);
+        test.press_cursor((f64::from(opened), y));
+        test.move_cursor((f64::from(opened) + 40., y));
+        test.sync_and_update();
+        test.move_cursor((f64::from(opened) + 80., y));
+        test.sync_and_update();
+        test.release_cursor((f64::from(opened) + 80., y));
+        test.sync_and_update();
+        let dragged = list_split(&test);
+        assert!(
+            dragged > opened + 40.,
+            "the drag did not move the splitter: {opened} then {dragged}"
+        );
+        let share = *view.changes_list_width.read();
+        assert!(
+            (0. ..100.).contains(&share),
+            "the list's share is kept as {share}, not as a percentage of the pane"
+        );
+
+        // Another commit chosen: the tab is laid out anew, at the width dragged to.
+        click_row(&mut test, 3);
+        let mut diff = view.diff;
+        test.run_in(|| {
+            diff.write()
+                .changes_arrived(Comparison::Commit(oid(3)), answer_with(3, 3))
+        });
+        for _ in 0..4 {
+            test.sync_and_update();
+        }
+        let again = list_split(&test);
+        assert!(
+            (again - dragged).abs() < 4.,
+            "the list was laid out at {again} px after being dragged to {dragged}"
+        );
+        assert!(
+            diff_side_labels(&test).iter().any(|t| t == reading),
+            "the diff side is not drawn: {:?}",
+            diff_side_labels(&test)
+        );
+    }
 }

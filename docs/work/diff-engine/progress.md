@@ -3,6 +3,24 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-04 — Fix: the Changes tab's diff side vanished after its splitter was dragged
+
+Packet mode, committed to `feature/diff-engine`. The user, in the release app: the pane
+"collapsed and won't reopen", the diff gone even after choosing another commit. Not the
+pane's splitter and not Entire File: the Changes tab's file-list splitter. Freya's
+`ResizablePanel::on_resized` reports the width dragged to in pixels, and
+`crates/cairn-app/src/changes_tab.rs` stored it as `changes_list_width`, which the tab lays
+out as a percentage — so the next time the tab was laid out anew (another commit chosen)
+the list was given hundreds of percent and the diff side was pushed out of the pane, for
+the rest of the session. The pane splitter in `window.rs` stores pixels for a pixel panel,
+and is right. Fix: the tab measures its split (`on_sized` on the rect around it) and keeps
+the dragged width as a share of that room, handle excluded (`share_of`). RED, through the
+window — `a_dragged_file_list_leaves_the_diff_drawn_beside_it_on_the_next_commit`: "the
+list's share is kept as 360.59998, not as a percentage of the pane", and with that
+assertion set aside, "the list was laid out at 2872.3757 px after being dragged to
+362.59998". GREEN, with the unit pin `a_dragged_width_becomes_a_share_of_the_split`. Not a
+Freya defect: the fork documents `on_resized` as reporting the panel's size, and does.
+
 ## 2026-10-04 — Phase 09: the merge-bar QA's first round fixed, and the user's four decisions
 
 Packet mode, committed to `feature/diff-engine`. The merge-bar QA over the whole packet:

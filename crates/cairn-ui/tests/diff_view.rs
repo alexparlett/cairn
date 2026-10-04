@@ -1181,8 +1181,11 @@ fn the_gutter_is_small_and_leaves_a_gap_either_side_of_its_separator_in_both_vie
 /// Fork's captures (user-supplied, 2026-10-04): in unified the gutter keeps the plain
 /// ground on a changed row and the tint starts at the separator; side by side the tint
 /// runs across the pane, its number column included. Read as the backgrounds of the rects
-/// that hold a removed and an added row's number. Caught by: the side-by-side tint left
-/// after the number, or the unified gutter tinted.
+/// that hold a removed and an added row's number; and in both views the tint is what is
+/// drawn behind the changed line's text — the innermost rect with a background under the
+/// text's first glyph is the row's tint. Caught by: the side-by-side tint left after the
+/// number, the unified gutter tinted, or the tint held to the number column or covered by
+/// another ground before it reaches the text.
 #[test]
 fn a_changed_rows_tint_starts_at_the_separator_in_unified_and_spans_the_number_side_by_side() {
     for side_by_side in [false, true] {
@@ -1199,6 +1202,38 @@ fn a_changed_rows_tint_starts_at_the_separator_in_unified_and_spans_the_number_s
         });
         let separators = separators(&test);
         let numbers = number_labels(&test);
+        let grounds: Vec<(Area, Color)> = test.find_many(|node, element| {
+            let area = node.layout().area;
+            Rect::try_downcast(element).and_then(|rect| {
+                rect.style
+                    .background
+                    .as_color()
+                    .filter(|colour| *colour != Color::TRANSPARENT)
+                    .map(|colour| (area, colour))
+            })
+        });
+        let mut reached = Vec::new();
+        for (row, text) in line_paragraphs(&test) {
+            let (x, y) = (text.min_x() + 1., text.min_y() + text.height() / 2.);
+            let innermost = grounds
+                .iter()
+                .filter(|(area, _)| {
+                    area.min_x() <= x && x <= area.max_x() && area.min_y() <= y && y <= area.max_y()
+                })
+                .min_by(|(a, _), (b, _)| {
+                    (a.width() * a.height()).total_cmp(&(b.width() * b.height()))
+                })
+                .map(|(_, colour)| *colour);
+            if let Some(colour @ (REMOVED_TINT | ADDED_TINT)) = innermost {
+                reached.push((row, colour));
+            }
+        }
+        for tint in [REMOVED_TINT, ADDED_TINT] {
+            assert!(
+                reached.iter().any(|(_, colour)| *colour == tint),
+                "side by side {side_by_side}: no changed line's text is drawn on {tint:?}"
+            );
+        }
         for (number, tint) in [("7", REMOVED_TINT), ("7", ADDED_TINT)] {
             let rows: Vec<&(Area, Color)> = tinted
                 .iter()

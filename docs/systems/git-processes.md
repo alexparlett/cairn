@@ -387,7 +387,9 @@ on every git a regular file that does not lead to a git directory, and from
 2.54 one that cannot be `stat`ed (but for `ENOENT` and `ENOTDIR`) or is
 neither a file nor a directory, which older gits pass over (`dot_git`,
 `a_dot_git_git_stops_on_stops_the_search`). A `.git` file is read as git's
-`read_gitfile_raw` reads it, never as gix does (`gitfile_target`, for the
+`read_gitfile_gently` reads it (the rules are the same at every tag from
+v2.30.0; v2.56.0 moved them into the `read_gitfile_raw` it calls), never as
+gix does (`gitfile_target`, for the
 search and the ownership check alike): at most 1 MiB, `gitdir: ` and a
 path with only trailing `\n` and `\r` taken off — a trailing space or tab is
 part of the path, which gix would trim and open — ending at its first NUL

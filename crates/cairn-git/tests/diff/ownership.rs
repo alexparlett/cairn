@@ -419,8 +419,9 @@ fn a_dot_git_git_stops_on_stops_cairn_where_it_stops_git() {
     );
 }
 
-/// A `.git` file is read as git's `read_gitfile_raw` reads it (the same at every tag from
-/// v2.30.0 to v2.56.0): at most 1 MiB, `gitdir: ` and a path, only trailing newlines and
+/// A `.git` file is read as git's `read_gitfile_gently` reads it (the same rules at every tag
+/// from v2.30.0 to v2.56.0, moved into the `read_gitfile_raw` it calls at v2.56.0): at most
+/// 1 MiB, `gitdir: ` and a path, only trailing newlines and
 /// carriage returns taken off, so a trailing space or tab is part of the path. git stops on
 /// a file it cannot follow ("too large to be a .git file", "not a git repository"), and so
 /// does Cairn; where it can, both open the repository it names. Caught by: gix's reading of

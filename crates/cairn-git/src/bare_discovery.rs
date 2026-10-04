@@ -81,7 +81,9 @@ const WORKTREES_FROM: GitVersion = version(2, 45);
 const EXPLICIT_BY_DEFAULT_FROM: GitVersion = version(3, 0);
 /// The first git whose search stops on a `.git` it cannot `stat` (but for `ENOENT` and
 /// `ENOTDIR`) or that is neither a file nor a directory, rather than passing over it
-/// (`read_gitfile_raw` and the switch in `setup_git_directory_gently_1`, new in v2.54.0).
+/// (the `ENOENT`/`ENOTDIR` test inside `read_gitfile_gently` and the switch in
+/// `setup_git_directory_gently_1`, new in v2.54.0; v2.56.0 moved the test into
+/// `read_gitfile_raw`, which `read_gitfile_gently` calls).
 const UNUSABLE_DOT_GIT_STOPS_FROM: GitVersion = version(2, 54);
 
 /// The setting's key, as git spells it.
@@ -339,12 +341,15 @@ fn dot_git(path: &Path, version: GitVersion) -> DotGit {
     }
 }
 
-/// The largest `.git` file git reads: `read_gitfile_raw`'s `max_file_size`, 1 MiB at every
-/// tag from v2.30.0 to v2.56.0; a larger one is "too large to be a .git file".
+/// The largest `.git` file git reads: `max_file_size`, 1 MiB at every tag from v2.30.0 to
+/// v2.56.0 — in `read_gitfile_gently` to v2.55, in `read_gitfile_raw` (which
+/// `read_gitfile_gently` calls) from v2.56.0; a larger one is "too large to be a .git
+/// file".
 const MAX_GITFILE_SIZE: u64 = 1 << 20;
 
-/// The git directory a `.git` FILE at `path` names, read as git's `read_gitfile_raw` and
-/// `read_gitfile_gently` read it — the same at every tag from v2.30.0 to v2.56.0 — or
+/// The git directory a `.git` FILE at `path` names, read as git's `read_gitfile_gently`
+/// reads it — the same rules at every tag from v2.30.0 to v2.56.0, in that one function to
+/// v2.55 and split between it and the `read_gitfile_raw` it calls from v2.56.0 — or
 /// `None` where git stops on it: a regular file (links followed) of at most
 /// [`MAX_GITFILE_SIZE`] bytes, read whole, starting `gitdir: `, with only trailing `\n` and
 /// `\r` taken off (a trailing space or tab is part of the path), a path of at least one
@@ -883,7 +888,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// `read_gitfile_raw`'s reading, at its edges, where gix's reading differs: exactly
+    /// `read_gitfile_gently`'s reading (`read_gitfile_raw`'s, from v2.56.0), at its edges,
+    /// where gix's reading differs: exactly
     /// 1 MiB is read and one byte more is not, a NUL ends the path, only `\n` and `\r` are
     /// taken off the end, a relative path is the file's directory's, and an empty one names
     /// nothing. Caught by: the limit off by one or gix's 64 KiB, a trailing blank trimmed,
@@ -990,7 +996,7 @@ mod tests {
     /// git directory (here one naming an existing directory that is not a repository) on
     /// every git — "not a git repository" to 2.53, "gitfile does not point to a valid
     /// repository" from 2.54, reproduced on 2.30.9, 2.32.7, 2.38.5 and 2.56.0 — and from
-    /// 2.54, whose `read_gitfile_raw` tells `ENOENT` and `ENOTDIR` from other failures, a
+    /// 2.54, whose `read_gitfile_gently` tells `ENOENT` and `ENOTDIR` from other failures, a
     /// `.git` that cannot be `stat`ed or is neither a file nor a directory (a socket here).
     /// A `.git` directory that is not a repository is passed over on every git. Each sits in
     /// a working tree inside an enclosing repository, which a search that passed over it

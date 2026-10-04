@@ -322,6 +322,29 @@ mod tests {
         ));
     }
 
+    /// An empty configured refspec (`fetch =`) is git's `HEAD` with no destination
+    /// (`parse_refspec`: an empty source is `HEAD`), which fetches into `FETCH_HEAD` and
+    /// writes no ref — run on git 2.30.9 and 2.56.0 — so it is neither refused nor
+    /// unparsed, alone or beside a refspec that does refuse. gix-refspec 0.45.1 reads it as
+    /// git does (`fetch_head_only`); caught by: a parser that rejects it, which would refuse
+    /// the fetch as configuration Cairn could not read, or an empty value skipped so that
+    /// a refusing refspec after it is never read.
+    #[test]
+    fn an_empty_refspec_writes_nothing_and_is_not_refused() {
+        assert_eq!(refusal(&with(&[""])), None);
+        assert_eq!(
+            refusal(&with(&["", "+refs/heads/*:refs/remotes/origin/*"])),
+            None
+        );
+        assert_eq!(
+            refusal(&with(&["", "+refs/heads/*:refs/heads/*"])),
+            Some((
+                "remote.origin.fetch = +refs/heads/*:refs/heads/*".to_owned(),
+                RefusedWrite::LocalBranches
+            ))
+        );
+    }
+
     /// A read ended by the repository's close is the fetch cancelled, as a close of a running
     /// fetch is, and any other failure is the configuration unread; neither starts a fetch.
     /// Caught by: a close that lands during the check reported as a failure to read the

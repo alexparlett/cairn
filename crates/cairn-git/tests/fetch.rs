@@ -1077,6 +1077,46 @@ fn a_tag_refspec_is_refused_under_prune_and_fetched_without_it() {
     assert_eq!(fetched_main(&local), head_of(&source));
 }
 
+/// An empty configured refspec (`fetch =`) is one git accepts: an empty source is `HEAD`
+/// and there is no destination, so `git fetch` writes `FETCH_HEAD` and no ref (git 2.30.9
+/// and 2.56.0 alike). Cairn's fetch starts and writes exactly what plain git writes, alone
+/// and beside the clone's own refspec. Caught by: the check refusing the fetch as
+/// configuration it could not read, as it would if gix's parser rejected an empty refspec
+/// (gix-refspec 0.45.1 reads it as git does, `HEAD` and no destination).
+#[test]
+fn an_empty_refspec_is_fetched_into_fetch_head_as_git_fetches_it() {
+    let source = fixtures::braided(2);
+    let serving = Serving::serving(refusing());
+    let refs = |local: &Fixture| local.git(&["for-each-ref", "--format=%(refname)"]);
+    for alone in [true, false] {
+        let control = with_origin(&source.path().display().to_string());
+        let local = with_origin(&source.path().display().to_string());
+        for fixture in [&control, &local] {
+            if alone {
+                fixture.git(&["config", "--replace-all", "remote.origin.fetch", ""]);
+            } else {
+                fixture.git(&["config", "--add", "remote.origin.fetch", ""]);
+            }
+        }
+        control.git(&["fetch", "--quiet", "origin"]);
+        assert_eq!(
+            refs(&control).is_empty(),
+            alone,
+            "plain git wrote {:?}, alone: {alone}",
+            refs(&control)
+        );
+        let (outcome, _) = fetch_origin(&serving, &local, local.path(), None);
+        outcome.unwrap_or_else(|e| panic!("an empty refspec was refused, alone: {alone}: {e}"));
+        assert_eq!(refs(&local), refs(&control), "alone: {alone}");
+        let fetch_head = std::fs::read_to_string(local.path().join(".git/FETCH_HEAD"))
+            .unwrap_or_else(|e| panic!("no FETCH_HEAD, alone: {alone}: {e}"));
+        assert!(
+            fetch_head.starts_with(&head_of(&source)),
+            "FETCH_HEAD is not the remote's HEAD, alone: {alone}: {fetch_head}"
+        );
+    }
+}
+
 /// The check reads the remote as the fetch's own git will, because git answers it: in a
 /// linked worktree, git evaluates `includeIf "gitdir:..."` against the worktree's own git
 /// directory (`.git/worktrees/<id>`), and gix 0.87 against the common directory, so a

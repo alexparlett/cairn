@@ -300,7 +300,20 @@ never enters `cairn-git` and never enters application state.
   said so had a fetch been started
   (`the_recording_stub_reports_a_fetch_that_was_allowed_to_start` is the
   control); the destination reading and the decision over what git read are
-  the unit tests in `refspec_policy.rs`. The
+  the unit tests in `refspec_policy.rs`. An empty configured refspec
+  (`fetch =`) is git's `HEAD` with no destination, which fetches into
+  `FETCH_HEAD` and writes no ref (git 2.30.9 and 2.56.0 alike), so it is
+  neither refused nor unparsed
+  (`an_empty_refspec_is_fetched_into_fetch_head_as_git_fetches_it`, with
+  plain git as the control; `an_empty_refspec_writes_nothing_and_is_not_refused`).
+  Two residuals of the check's shape: its four `git config` reads and the
+  fetch are separate processes, so a configuration write landing in the
+  milliseconds between them can have the check decide on one generation of
+  the configuration and the fetch act on the next; and the user's own
+  cancel of a fetch cannot stop the four reads, which run before the fetch
+  has a process for it to kill (their cancel signal is held by nobody) —
+  closing the repository does end them, as the fetch cancelled before it
+  started. The
   refusal reaches the window as a failed fetch whose one line is the
   engine's sentence. Pruning that says what will go, as a confirmed
   operation, and a setting for it, are issue #17's remainder.

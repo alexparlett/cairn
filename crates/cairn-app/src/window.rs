@@ -89,6 +89,15 @@ pub fn window(
     let prompt = view.prompt.read().clone();
     let refused = view.refused.read().clone();
     let hearing = submit.clone();
+    // The keys held are let go of when the window loses focus: a release made while another
+    // window has it is never heard here, and a press after coming back must not be read as a
+    // chord still held (the user's decision, 2026-10-04).
+    let mut held_keys = view.held_keys;
+    use_side_effect(move || {
+        if !*Platform::get().is_app_focused.read() {
+            held_keys.set(HeldKeys::default());
+        }
+    });
 
     let list = rect()
         .width(Size::fill())
@@ -2106,6 +2115,30 @@ mod tests {
             shown.iter().any(|t| t == cairn_ui::BASE_CAPTION)
                 && shown.iter().any(|t| t == "no such commit"),
             "the failure is not drawn under the header: {shown:?}"
+        );
+    }
+
+    /// The user's decision (2026-10-04): the keys held are let go of when the window loses
+    /// focus — a release made in another window is never heard here — so a plain press after
+    /// coming back selects one commit and compares nothing. Caught by: the held keys kept
+    /// across the focus loss (the plain press read as the extending chord).
+    #[test]
+    fn the_keys_held_are_let_go_of_when_the_window_loses_focus() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        click_row(&mut test, 2);
+        hold_extending(&mut test, true);
+        test.run_in(|| Platform::get().is_app_focused.set(false));
+        test.sync_and_update();
+        test.run_in(|| Platform::get().is_app_focused.set(true));
+        test.sync_and_update();
+
+        let from = submitted.borrow().len();
+        click_row(&mut test, 5);
+        assert_eq!(selection(view), (Some(RowId::Commit(oid(5))), None));
+        assert!(view.pair.peek().is_none(), "the plain press compared two");
+        assert_eq!(
+            changes_asked(&submitted, from),
+            [Comparison::Commit(oid(5))]
         );
     }
 

@@ -1856,9 +1856,13 @@ speaks actions, scopes and chords, never a modifier a caller could branch on —
 it presses a chord, or holds a pointer chord's keys, through the table rather than spelling
 them. A pointer press is resolved against `HeldKeys`, the keys the window heard held (a
 press carries no modifiers in this Freya build): it answers which `Action` a press is,
-never which key is down (phase 08). The window hears `Scope::Window` on every
-key press (`on_global_key_down` on its root), and keeps `HeldKeys` from every key down and
-up it hears; the detail pane hears `Scope::Detail` on
+never which key is down (phase 08), and it has no equality and a `Debug` that names no
+key, so nothing can compare one with another to the same end. The window hears
+`Scope::Window` on every key press (`on_global_key_down` on its root), and keeps `HeldKeys`
+from every key down and up it hears, letting go of every key when the window loses focus
+(the toolkit's `Platform::is_app_focused`): a release made while another window has it is
+never heard here (`the_keys_held_are_let_go_of_when_the_window_loses_focus`). The detail
+pane hears `Scope::Detail` on
 the key presses that reach it from whatever inside it has focus (its root's
 `on_key_down`); both act in `crates/cairn-app/src/shortcuts.rs`, one arm per action,
 and nothing acts while a credential prompt is up, since the dialog owns the keys until

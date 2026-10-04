@@ -248,9 +248,16 @@ pub fn resolve_press_on(platform: Os, held: Modifiers) -> Option<Action> {
 /// so a pointer press can be resolved against the table: a press carries no modifiers in this
 /// build of the toolkit, so ⌘-click and Ctrl-click (`Action::ExtendSelection`) are read from
 /// this. It answers actions, never which modifier is down, so nothing that holds one can
-/// branch on a modifier by another name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// branch on a modifier by another name: no equality to compare one with, and a `Debug` that
+/// names no key.
+#[derive(Clone, Copy, Default)]
 pub struct HeldKeys(Modifiers);
+
+impl std::fmt::Debug for HeldKeys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeldKeys").finish_non_exhaustive()
+    }
+}
 
 impl HeldKeys {
     /// A key went down (`down`) or came up. The event's own modifiers are what is held, with

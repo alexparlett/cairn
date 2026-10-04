@@ -546,7 +546,36 @@ Project invariants:
   that refuses a conditional it does not know rather than guessing (self-test
   `the_gate_sequence_matcher_catches_the_shapes_it_claims`), with its exemptions
   an explicit roster (`LOCAL_FULL_GATE_EXEMPT`) that fails when a name in it stops
-  being a step.
+  being a step; and `the_full_gate_is_the_default_and_no_merge_bar_step_is_skipped`
+  holds what that reading cannot see — `FAST=0` is the default, set once before the
+  arguments are read, and no merge-bar step's `*_CMD` is the literal `skip` or empty
+  (self-test `the_gate_command_readers_catch_the_shapes_they_claim`).
+- **A test that skips where its host cannot serve it is required wherever the host
+  can.** A passing test's stderr is hidden, so a skip reads `ok`; each such test
+  fails instead of skipping when its `CAIRN_REQUIRE_*` variable is set, and
+  `scripts/gate.sh`'s `test-full` probes the host exactly as the test checks it and
+  sets the variable where the probe succeeds, saying so on the PASS line where it
+  does not: the sshd fixture (`CAIRN_REQUIRE_SSH_FIXTURE`), git's builtin fsmonitor
+  daemon (`CAIRN_REQUIRE_FSMONITOR_DAEMON`, cleared by `scripts/git-floor.sh` for the
+  floors' gits, which have none), a mount namespace and a second owner
+  (`CAIRN_REQUIRE_MOUNT_NAMESPACE`, `CAIRN_REQUIRE_SECOND_OWNER`); CI's `gate` job
+  sets `CAIRN_REQUIRE_SSH_FIXTURE` and `CAIRN_REQUIRE_NO_LAZY_FETCH` outright in its
+  own `env:`. Twins: `the_ssh_criteria_are_required_wherever_they_can_run`,
+  `the_partial_clone_pin_is_required_in_ci`,
+  `the_fsmonitor_daemon_pin_is_required_wherever_it_can_run` and
+  `the_user_namespace_tests_are_required_wherever_they_can_run`; the last two read
+  their probes whole (`gate_function_body`) and require each call as a statement
+  of `run_test_full`'s own (`gate_function_calls`, self-test
+  `the_gate_function_call_matcher_catches_the_shapes_it_claims`), and the CI pins
+  read the `gate` job's own `env:` block alone (self-test
+  `the_workflow_env_matcher_reads_only_the_jobs_own_block`). Residual review
+  obligations, `gate-integrity-reviewer`'s, until #58 closes them: the probe bodies
+  are matched as text with their comment lines kept, so a commented-out `export`
+  still satisfies a pin, and those body checks have no self-test; and `--step
+  git-floor` run alone — CI's `git floor` job — runs no probe, so the
+  across-filesystem test in its `diff_engine` run is never required there. Whether
+  the runner's host serves a probe at all (GitHub's Ubuntu 24.04 images refuse the
+  second owner) is said by the gate's note, not decided by it.
 - **The UI thread never waits on repository work.** `cairn-app` is partitioned by
   FILE: `crates/cairn-app/src/worker/` runs repository work and may block; every
   other file in the crate renders, and may name neither `cairn_git`, `gix` nor
@@ -842,5 +871,11 @@ same fork and rev as `freya`): `crates/cairn-ui/tests/` for components, and
   found once, the network lane and its refusal, and closing.
   `diff.md`: how a change to a file is described — one exact answer, its hunk,
   row and patch projections, the reference applier that checks the emitter,
-  and the two engine queries that fill it from a repository; the detail pane
-  and its Commit tab as built; and the accelerator table's contract.
+  and the engine queries that fill it from a repository; the diff thread and
+  its lanes; the detail pane, its Commit and Changes tabs, files opened in
+  place and two commits compared; the diff view, with what was measured from
+  Fork and what Cairn chose; and the accelerator table's contract.
+- `docs/research/<slug>/` — the evidence behind decisions, kept after teardown;
+  `docs/research/diff-engine/c14-measured.md` is Cairn's measured diff and
+  window numbers on the bench repository, against git's own in
+  `measured-baseline.md` beside it.

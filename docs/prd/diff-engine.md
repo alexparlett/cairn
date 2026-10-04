@@ -1,14 +1,49 @@
 ---
-status: in-flight
+status: shipped
 packet: diff-engine
 opened: 2026-09-17
+shipped: 2026-10-04
 ---
 
 # PRD — Diff engine
 
-**In flight. Authoritative while the packet is open.** Teardown stamps this file
-and points at `docs/systems/diff.md`; until then this is the one copy of what the
-packet commits to.
+**Shipped. Frozen — what this packet committed to, as it was committed to.** For
+how a diff is read, modelled and drawn now, read `docs/systems/diff.md`; for how
+every `git` it runs is built and where a repository is refused at open,
+`docs/systems/git-processes.md`; for fetch's refspec check, which this packet
+moved onto `git config`, `docs/systems/credentials.md`. Those are the living truth
+and this is not. Requirements R1-R8 and acceptance criteria C1-C16 were met at the
+merge bar, each against a test that decides it, with three qualified passes: C1's
+`#[ignore]`d reporter over a named repository was not built, so C1 rests on its
+integration test, which walks every non-merge commit of the Cairn checkout and of
+the crafted fixtures; C14's window half was measured headlessly by `window_check`
+(no frame over 16.7 ms of UI-thread work while the heaviest subjects loaded),
+which cannot see paint, so the look at the painted window is the user's, by hand;
+and C14's numbers, logged in the packet's `progress.md`, were kept at teardown in
+`docs/research/diff-engine/c14-measured.md`.
+
+Amendments made in flight are marked inline where they changed a requirement,
+each "(amended 2026-10, ...)". The ones the user decided at the merge bar
+(2026-10-04): no `-`/`+` marker column in either view, Fork's small line-number
+gutter, and each view's tint as Fork draws it (R6.4, R6.5, the colour rule);
+Entire File belongs to the Changes tab alone (R6.3); a read may start git's own
+fsmonitor daemon, which writes its socket and directory in the git directory
+(R3.5, the write rule). Added in flight, beyond R1-R8: a repository is refused at
+open wherever the user's own `git` would refuse it — a bare repository found by
+searching under `safe.bareRepository`, and dubious ownership by git's rule for
+the git in use, `GIT_DIR` and `GIT_WORK_TREE` in the launch environment ignored
+by design; and fetch's refspec check reads the remote with `git config`, the
+second porcelain read the user accepted beside `git diff --no-index`. Nothing
+below was descoped. What the packet left is filed: a guard over the full roster
+of read verbs (#54), the system configuration file a non-`/etc` git reads (#55),
+commit re-encoding beyond what was measured (#56), Fork for Windows' tab chords
+and date padding (#57), gaps in the gate's required-test pins (#58), the history
+rows a fetch frees on the UI thread (#52), the git-floor step's skips (#51) and
+the submodules a fetch recurses into (#53); and #29 and #31-#35 carry what it
+built toward them. The packet's work directory — the brainstorm, `state.md`,
+`progress.md` and the `qa-checklist.md` this file names below — was deleted at
+teardown; git history holds it, its decisions are in `docs/design/diff.md`, and
+the "see progress.md" pointers below are to that history.
 
 Design frame: `docs/design/diff.md`, and decisions **D1** (amended by this packet for
 filter drivers on a working-tree read), **D3** (the worker pool, which this packet
@@ -17,12 +52,14 @@ splits into lanes), **D5** (the accelerator table, born here) and **D6**
 `conflicts.md` under `docs/design/`; `docs/design/ui.md` for the layout. Program:
 `docs/work/daily-loop/roadmap.md` packet 3, under program decisions L2 (the model
 is patch-capable) and L6 (a measured bar). Decisions and rejected alternatives:
-`docs/work/diff-engine/brainstorm.md` L1-L16. Evidence, all under
+the packet's brainstorm, L1-L16, deleted at teardown and promoted to
+`docs/design/diff.md`. Evidence, all under
 `docs/research/diff-engine/`: `gix-diff-api.md` (the gix API, verified against
 the vendored source), `engine-and-worker-as-built.md`, `ui-and-app-as-built.md`,
 `what-clients-show.md` (a cross-client precedent study),
 `fork-detail-and-diff-ui.md` (Fork, the layout this packet follows) and
-`measured-baseline.md` (git's own timings on the repository the bar names).
+`measured-baseline.md` (git's own timings on the repository the bar names), and,
+added at teardown, `c14-measured.md` (Cairn's against them).
 
 ## What this packet delivers
 
@@ -164,6 +201,10 @@ being a feature and being a rewrite.
   index (unsupported, and said so) each answer their state, never an error and
   never an empty diff.
 - R3.5 A working-tree query writes nothing: no refreshed index, no object.
+  (Amended 2026-10, phase 09, the user's decision: under `core.fsmonitor=true` a
+  read may start git's own fsmonitor daemon, as the user's own `git diff` does,
+  which writes its socket and cookie directory in the git directory and outlives
+  the read; no object, ref, index or configuration is written.)
 - R3.6 This packet does not enumerate which paths changed, which is status and
   packet 4's, and does not draw a Local Changes screen. Whichever of packets 4 and
   5 builds the changed-file list wires it to R3 and R6 (L6).
@@ -229,17 +270,28 @@ being a feature and being a rewrite.
   hunks grouped with their `diff.interHunkContext`, as their `git diff` does (amended
   2026-10, phase 06, git parity, see progress.md) — and moves by one line per click, never
   below one; **entire file** shows every line. Context is one setting for every
-  diff view, kept for the session. Expanding a single gap is issue #32.
+  diff view, kept for the session. (Amended 2026-10, phase 09, the user's decision:
+  **entire file** belongs to the Changes tab alone; a file opened in place in the
+  Commit tab, which has no bar to turn it off, is always drawn at the lines of
+  context.) Expanding a single gap is issue #32.
 - R6.4 A unified row carries an old and a new line-number gutter and a
   plus-or-minus marker column; a side-by-side row carries a number gutter per
-  side. A hunk header row shows git's `@@ -a,b +c,d @@` with the function context
+  side. (Amended 2026-10, phase 09, the user's decision after looking at the
+  window: no marker column in either view, as Fork's default draws none, and the
+  gutter is Fork's — small numbers with a gap either side of the separator, sized
+  from user-supplied Fork captures.) A hunk header row shows git's `@@ -a,b +c,d @@` with the function context
   git prints after it (amended 2026-10, content parity, see progress.md) in muted text at normal
   row height, with no band and no buttons. Every row has the same height, and a
   long line scrolls horizontally rather than wrapping (wrap is issue #34).
 - R6.5 Added and removed rows take **solid tints**, starting from Fork's measured
   dark values and retuned to Cairn's ground; intra-line ranges take stronger tints.
   The tint starts after the gutters. A change is never shown by colour alone: the
-  marker column and the blank gutter carry it too (L11).
+  marker column and the blank gutter carry it too (L11). (Amended 2026-10, phase 09,
+  the user's decision: with no marker column, a unified row's blank gutter still
+  says added or removed, and its tint starts at the separator; side by side the
+  tint spans the whole column, number included, as Fork's panes do, and a changed
+  pair is told from context by its tint alone — a residual stated in
+  `docs/systems/diff.md`.)
 - R6.6 Diff text, ids and paths render in IBM Plex Mono, embedded as a font file
   with its licence (L16).
 - R6.7 With whitespace ignored, whitespace-only changes are hidden and the view
@@ -269,7 +321,11 @@ being a feature and being a rewrite.
   (D5). No component names a literal modifier.
 - R8.2 This packet's actions: previous and next change, previous and next file,
   toggle side-by-side, toggle ignore whitespace, more lines, fewer lines, entire
-  file, extend the selection to a second commit, and switch tab.
+  file, extend the selection to a second commit, and switch tab. (Amended 2026-10,
+  phase 05 QA, the user's decision: Fork's chords only. Previous and next file are
+  the focused file list's own ↑ and ↓, not table actions; the four diff toggles and
+  the entire file are actions with no chord, reached from the bar; switch tab is
+  two actions, one per tab.)
 - R8.3 "No component names a literal modifier" becomes an invariant in
   `CLAUDE.md`, with its guard twin, in the phase that builds the table (L14).
 
@@ -282,21 +338,24 @@ being a feature and being a rewrite.
   through the user's filters; a diff that skipped them would one day stage content
   the filter exists to change.
 - **Nothing in this packet writes to a repository.** Every query here is a read,
-  including the ones that run a filter driver.
+  including the ones that run a filter driver. (Amended 2026-10, phase 09: git's own
+  fsmonitor daemon, which a read may start as the user's `git diff` does, writes its
+  socket and directory; see R3.5.)
 - **An answer is drawn only for the selection it was computed for.** A fast click
   never draws the previous commit's files under the new commit's header.
 - **A too-large file is refused before it is read**, never after the window has
   stalled on it.
 - **Meaning never rests on colour alone**, the rule the graph's lanes already
-  follow.
+  follow. (Amended 2026-10, phase 09, the user's decision: side by side, a changed
+  pair rests on its tint alone, as in Fork; see R6.5.)
 - **Hidden changes are announced.** Ignoring whitespace says that it is hiding
   something; Fork hides them silently, and that is a deliberate deviation.
 - **No network call.** No avatar and no remote lookup, for any part of the pane.
 
 ## Acceptance criteria
 
-The single authoritative copy. `docs/work/diff-engine/qa-checklist.md` points
-here and does not restate them.
+The single authoritative copy. The packet's `qa-checklist.md` (deleted at
+teardown) pointed here and did not restate them.
 
 | # | Criterion | Pinned by |
 | --- | --- | --- |
@@ -313,7 +372,7 @@ here and does not restate them.
 | C11 | The header toggles behave as R6.2 and R6.3 say, including the one-line minimum; ignore-whitespace hides whitespace-only changes and says so; intra-line ranges are drawn; every R6.8 state draws its notice | headless tests |
 | C12 | A modifier-click selects two commits, the comparison is tip against tip with the lower row as base, and swap reverses it | headless test |
 | C13 | Every R8.2 action resolves through the accelerator table, and no component names a literal modifier | unit test, plus the guard from R8.3 |
-| C14 | On rust-lang/rust at `c999cef531e`, on the machine recorded in `measured-baseline.md`, warm, in a release build: the changes query finishes within 100 ms on `f0845adb0c1`, 500 ms on `cf2dff2b1e3` and 500 ms on `5a3292f163d`; the content query finishes within 100 ms on `3b09522c34b`; `6a6e8446b97` answers too large without reading its content, and its Load Diff time is recorded; the rename pairs on `5a3292f163d` match git's (amended 2026-10, decision E, see progress.md: they are git's own, so no gap may be filed); the window stays responsive while the two heaviest subjects load | an `#[ignore]`d reporter driven by `CAIRN_BENCH_REPO` for the engine numbers, and a check by hand for the window, all recorded in `progress.md` |
+| C14 | On rust-lang/rust at `c999cef531e`, on the machine recorded in `measured-baseline.md`, warm, in a release build: the changes query finishes within 100 ms on `f0845adb0c1`, 500 ms on `cf2dff2b1e3` and 500 ms on `5a3292f163d`; the content query finishes within 100 ms on `3b09522c34b`; `6a6e8446b97` answers too large without reading its content, and its Load Diff time is recorded; the rename pairs on `5a3292f163d` match git's (amended 2026-10, decision E, see progress.md: they are git's own, so no gap may be filed); the window stays responsive while the two heaviest subjects load | an `#[ignore]`d reporter driven by `CAIRN_BENCH_REPO` for the engine numbers, and a check by hand for the window, all recorded in `progress.md` (amended 2026-10, phase 08: the window is measured headlessly by the `#[ignore]`d `window_check`, the real window over the real worker and engine, frames timed on the UI thread; paint and the look by hand stay the user's; the numbers moved at teardown to `docs/research/diff-engine/c14-measured.md`) |
 | C15 | D1's amendment is in `docs/design/engine.md` and `CLAUDE.md`, and the environment the filter driver runs with — the read's, as git hands it on (amended 2026-10, phase 03, see progress.md) — is stated there with its residuals | review |
 | C16 | `scripts/gate.sh` passes | the gate |
 

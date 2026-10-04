@@ -2,7 +2,7 @@
 //!
 //! Not an assertion: a timing check in CI is flaky and bound to a machine, which is why
 //! `history-graph`'s A7 was not automated either. This prints numbers; the numbers go into
-//! `docs/work/diff-engine/progress.md` beside git's own from
+//! `docs/research/diff-engine/c14-measured.md` beside git's own from
 //! `docs/research/diff-engine/measured-baseline.md`.
 //!
 //! Run it with a release build, warm, against the repository the bar names:
@@ -455,7 +455,8 @@ fn expand_all(
 /// Q2, the Expand All budget, measured on the subjects of the bar: for each budget, how long
 /// Expand All takes to its first page and to its end on the heaviest commits, warm, in a
 /// release build — what the window waits for while it stays responsive. Prints; decides
-/// nothing (the choice and its reasons are in `progress.md`).
+/// nothing (the choice and its reasons are in `docs/research/diff-engine/c14-measured.md`,
+/// section 4).
 #[test]
 #[ignore = "needs a large repository named by CAIRN_BENCH_REPO"]
 fn measures_expand_all_budgets_against_a_named_repository() {

@@ -7,6 +7,13 @@ contract. Each is kept current in the same change that invalidates it.
 - `credentials.md` — the `git` subprocess backend and its environment, the
   askpass helper and its channel, the secret type, fetch end to end, and the
   decisions the `credential-prompts` packet locked.
+- `git-processes.md` — where every `git` process is built, the read/write seal,
+  the environment each kind of invocation runs with, the runner, each
+  repository's registry and command log, where a repository is refused at open,
+  and, in the application, `git` found once, the network lane and closing.
 - `diff.md` — how Cairn describes a change to a file: the one exact answer, the
   hunk, row and patch projections of it, presentation-independent line identity,
-  and the patch emitter with its reference applier. Model only so far.
+  the patch emitter with its reference applier, the engine queries that fill it
+  from a repository (what a commit or two commits changed, one file's change, one
+  path's working-tree diff), the diff thread and its lanes, the detail pane, the
+  diff view, and the accelerator table.

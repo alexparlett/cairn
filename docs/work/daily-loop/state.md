@@ -2,12 +2,11 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: three packets shipped (`history-graph`, `credential-prompts`,
-`process-manager`). `diff-engine` is in flight on `feature/diff-engine`, phases
-01 and 02 landed, and is unblocked: its changes query needed a `git` process,
-which `process-manager` (2a) built. That branch is brought up to date with
-`main` before it continues — the user's call, as it is a shared branch. The
-other five are briefs.**
+**Status: four packets shipped (`history-graph`, `credential-prompts`,
+`process-manager`, `diff-engine`). `diff-engine` passed its merge bar and was torn
+down on `feature/diff-engine`; it reaches `main` with its packet pull request,
+squash-merged by the user. The other five are briefs; 4 (`refs-and-status`) is
+next on the critical path.**
 
 ## The milestone
 
@@ -20,9 +19,10 @@ L1-L7 in `brainstorm.md`. The three that most constrain implementation:
 
 - **The diff model is patch-capable from its first commit (L2).** A display-shaped
   model makes line staging a rewrite. Packet 3 builds the patch emitter and its
-  round-trip test before anything consumes it. Its own decisions are
-  `docs/work/diff-engine/brainstorm.md` L1-L16; two of them change things outside
-  it, D1's amendment for filter drivers and the per-lane epochs.
+  round-trip test before anything consumes it. Its own decisions (L1-L16, its
+  brainstorm, deleted at teardown) are in `docs/design/diff.md` and
+  `docs/prd/diff-engine.md`; two of them change things outside it, D1's amendment
+  for filter drivers and the per-lane epochs.
 - **`credential-prompts` is load-bearing for staging (L3)**, because
   `git apply --cached` runs through its backend. It is not merely early.
 - **The reflog view ships with the first commit-level destructive operation (L4)**,
@@ -44,7 +44,7 @@ amended D1 for the filter drivers that status also runs.
 | 1 | `history-graph` | **shipped** — PRD frozen, as-built in `docs/systems/history-graph.md`; work dir torn down |
 | 2 | `credential-prompts` | **shipped** — PRD frozen, as-built in `docs/systems/credentials.md`; work dir torn down |
 | 2a | `process-manager` | **shipped** — PRD frozen, as-built in `docs/systems/git-processes.md`; work dir torn down; leftovers #41-#49 and #25 |
-| 3 | `diff-engine` | **in flight** on `feature/diff-engine`, phases 01-02 landed; unblocked by 2a, after the branch is brought up to date with `main` (the branch's `state.md` is current; the copy on `main` predates the work) |
+| 3 | `diff-engine` | **shipped** — PRD frozen, as-built in `docs/systems/diff.md`; work dir torn down; lands on `main` with its packet PR (squash merge); leftovers #54-#58, with #51-#53 |
 | 4 | `refs-and-status` | brief in `roadmap.md` |
 | 5 | `staging-and-commit` | brief in `roadmap.md` |
 | 6 | `remote-sync` | brief in `roadmap.md` |

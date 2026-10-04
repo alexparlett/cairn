@@ -156,7 +156,7 @@ impl Hiding {
 /// [`Hiding::read`] refuses it; a `.gitmodules` git might refuse to read is left to git.
 /// Reproduced with git 2.30.9 and 2.56.0 against `git diff` for a moved, a dirty and an
 /// untracked-content submodule under each value, and under each with a setting of its own
-/// (`docs/work/diff-engine/progress.md`, phase 03).
+/// (`docs/systems/diff.md`, "The working-tree query").
 pub(super) fn working_tree_ignore(
     repo: &gix::Repository,
     path: &RepoPath,

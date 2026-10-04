@@ -10,7 +10,7 @@ nuance that run must not lose.
 | 1 | `history-graph` | **shipped** | — |
 | 2 | `credential-prompts` | **shipped** | 1 |
 | 2a | `process-manager` | **shipped** | 2 |
-| 3 | `diff-engine` | **in flight**, phases 01-02 landed; unblocked by 2a | 1, 2a |
+| 3 | `diff-engine` | **shipped** (merge bar passed and torn down; lands on `main` with its packet PR) | 1, 2a |
 | 4 | `refs-and-status` | brief only | 1 (and 2a if O2 picks `git status`) |
 | 5 | `staging-and-commit` | brief only | 2, 2a, 3, 4 |
 | 6 | `remote-sync` | brief only | 2, 2a, 4 |
@@ -69,48 +69,50 @@ design, and the write-verb policies it must decide before its first verb
 (issue #45, with #44 on lock lists); for 6, the network lane push joins.
 Left as issues: #41-#49, and #25's remainder.
 
-## 3. diff-engine — in flight
+## 3. diff-engine — shipped
 
-**In flight on `feature/diff-engine`: phases 01 and 02 landed, and the work
-switched to 2a because the changes query needs a `git` process. 2a has
-shipped, so it is unblocked:** `feature/diff-engine` is brought up to date with
-`main` first (a shared branch, so the user's call), then the changes query is
-reworked onto `git diff-tree` through `reads/`; the model, the content query and
-the round-trip tests stand. Why: that branch's
-`docs/work/diff-engine/progress.md` (2026-09-30) and
-`docs/research/diff-engine/rename-parity-spike.md`.
+`docs/prd/diff-engine.md` (frozen), evidence `docs/research/diff-engine/` — among it
+`measured-baseline.md` (git's numbers on the bar's subjects) and `c14-measured.md`
+(Cairn's against them). Merge bar passed on 2026-10-04; the work directory was torn
+down and the packet lands on `main` as one squash-merged pull request (the user's
+decision). As built: `docs/systems/diff.md`; what it changed in how `git` runs and
+where a repository is refused at open, `docs/systems/git-processes.md`. **O1 is
+closed** (its decision L1): both presentations, unified by default, side-by-side as
+one shared setting, over a patch model independent of either.
 
-`docs/prd/diff-engine.md` (in flight), work directory `docs/work/diff-engine/`,
-evidence `docs/research/diff-engine/` (six records). Planned 2026-09-17 in nine
-phases. **O1 is closed** (decision L1 there): both presentations, unified by
-default, side-by-side as one shared setting, and Fork's context controls — and
-the patch model is independent of either, which was the half of O1 that mattered.
-Two decisions reach beyond this packet: D1 is amended so a working-tree read may
-run the user's clean filter driver, and queries are numbered per lane so a scroll
-and a diff stop cancelling each other. The brief it was planned from follows.
+It ran in two halves. Phases 01 and 02 landed; then the changes query hit rename
+parity — gix paired 231 renames where git paired 2,774 on a large rollup, which the
+user classed as a critical bug — so the work paused for 2a, and the changes query,
+then a file's changed lines, moved onto `git diff-tree` run as reads. Why:
+`docs/research/diff-engine/rename-parity-spike.md`,
+`docs/research/diff-engine/content-parity-spike.md` and
+`docs/research/diff-engine/git-process-survey.md`.
 
-**Builds:** the diff model and its rendering. Commit diffs, working-tree diffs,
-and comparing two arbitrary revisions. The commit details pane. Diff options:
-whitespace handling, word-level intra-line diff, context lines, rename detection.
+**Built:** the patch-capable model in `cairn-model` (one exact answer, hunk, row
+and patch projections, a selection by line identity, the emitter, and an
+independent reference applier, round-tripped through real `git apply --cached`);
+the engine's changes, content and single-path working-tree queries, each git's own
+answer — renames, changed lines, function context, `-w`, the user's algorithm and
+filter drivers — with parity to `git diff` pinned under every algorithm, over real
+history and on git 2.30 and 2.32 (`git-floor`); per-lane epochs and a diff thread;
+the detail pane (Commit and Changes tabs, files opened in place, Expand All under a
+line budget, two commits compared tip against tip); the unified and side-by-side
+diff view, Fork's bar and gutter, IBM Plex Mono embedded; the accelerator table
+(D5) and its guard. Two decisions reach beyond it: D1 is amended so a read runs
+`git` where gix's answer differs from git's and a working-tree read runs the clean
+filter git runs; and opening refuses a repository wherever the user's own `git`
+would — a bare repository found by searching, dubious ownership.
 
-**The thing this packet must not get wrong (L2):** the model is
-**patch-capable**, not display-shaped. It must emit a valid patch for an arbitrary
-subset of hunks and lines — correct hunk headers, correct context — because that
-is how packet 5 stages a single line. Build the patch emitter and its round-trip
-test in this packet even though nothing consumes it yet; that test is the
-difference between packet 5 being a feature and being a rewrite.
-
-**Nine consumers to design against**, only two of which exist here: commit
-details, working-tree changes, hunk staging, line staging, compare revisions,
-conflict resolution (D6), image diffs, stash contents, interactive-rebase preview.
-
-**Open:** ~~O1~~ — closed by the packet's L1, above: both, unified by default,
-over a patch model that is independent of either.
-
-**Carries a measured bar (L6):** diffing a large commit in a large repository.
-
-**Out:** image diffs (Tier 1, later), conflict resolution (D6, second lap),
-staging of any kind.
+**Leaves on the doorstep:** for 4, the single-path working-tree query and the diff
+view, waiting for the changed-path list this packet does not enumerate, and the
+Commit tab's place for ref chips; for 5, the emitter and its round-trip tests — a
+selection's patch always at three lines of context from the exact diff, never from
+a whitespace-ignoring view — and a view with no line selection yet. Left as issues:
+#54 (a guard over every verb a read may run), #55 (the system gitconfig a non-`/etc`
+git reads), #56 (commit re-encoding beyond what was measured), #57 (Fork for
+Windows' tab chords and date padding), #58 (gaps in the gate's required-test pins),
+#51, #52, #53; and #29-#37, the deferred diff features, with what this packet built
+toward each recorded on #29 and #31-#35.
 
 ## 4. refs-and-status — brief
 
@@ -134,11 +136,11 @@ the query a client runs most often and the one most likely to feel slow.
 
 **Out:** acting on any ref (packet 7), staging (packet 5).
 
-**Inherited from packet 3, once it lands:** the single-path working-tree diff
+**Inherited from packet 3:** the single-path working-tree diff
 query and the diff view itself. This packet owns the changed-path enumeration
 that neither of them has, so whichever of 4 and 5 lands first wires the Local
 Changes list to them. Note for O2: gix's status runs the user's clean filter
-driver when it hashes a working-tree file, exactly as packet 3's diff does, so a
+driver when it hashes a working-tree file, as git does for packet 3's working-tree diff, so a
 filtered path belongs in the agreement measurement rather than beside it.
 
 ## 5. staging-and-commit — brief

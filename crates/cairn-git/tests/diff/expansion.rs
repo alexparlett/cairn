@@ -430,9 +430,10 @@ fn a_page_and_a_budget_end_exactly_at_their_limits() {
     );
 }
 
-/// Phase 08 QA's E2: a page's two bounds are the numbers measured in phase 08 (`progress.md`,
-/// C14). Changing either is a measured C14 decision — re-run the engine's sweep and the
-/// window check, and record them — never an edit on its own.
+/// Phase 08 QA's E2: a page's two bounds are the numbers measured in phase 08
+/// (`docs/research/diff-engine/c14-measured.md`). Changing either is a measured C14
+/// decision — re-run the engine's sweep and the window check, and record them — never an
+/// edit on its own.
 #[test]
 fn a_pages_bounds_are_the_measured_ones() {
     assert_eq!(PAGE_FILES, 256);

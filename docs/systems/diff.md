@@ -10,9 +10,10 @@ what one of those changes is, line by line, and one path's staged, unstaged or
 untracked diff in the working tree, against a real repository; and the
 application asks those queries on a thread of their own and keeps each answer for
 the selection it names ("In the application", below). The window draws a
-commit's details and its changed files in the detail pane's Commit tab ("The
-detail pane", below), and a chosen file's diff as unified rows in its Changes tab
-("The diff view", below); nothing stages anything — the patch emitter still ships
+commit's details and its changed files in the detail pane's Commit tab, with a
+file's diff opened in place under its row, and in its Changes tab a filtered file
+list beside one file's diff, unified or side by side, or two commits compared
+("The detail pane" and "The diff view", below); nothing stages anything — the patch emitter still ships
 with no caller, deliberately (program decision L2 in
 `docs/work/daily-loop/brainstorm.md`), because its round-trip tests are what make
 a later staging packet a feature rather than a rewrite. Which paths of a working
@@ -21,14 +22,15 @@ given. Intent for this surface is `docs/design/diff.md` and `docs/design/ui.md`,
 decisions D1 (`docs/design/engine.md`), D3 (`docs/design/concurrency.md`), D5
 (`docs/design/platform.md`) and D6 (`docs/design/conflicts.md`), indexed in the
 spine `docs/design/cairn.md`; the commitment it was built against is
-`docs/prd/diff-engine.md`, in flight.
+`docs/prd/diff-engine.md`, shipped and frozen, and Cairn's measured numbers on the
+bar it names are `docs/research/diff-engine/c14-measured.md`.
 
 ## One exact answer, and projections of it
 
-The load-bearing shape (packet decision L2 in
-`docs/work/diff-engine/brainstorm.md`, which is a different decision from the
-program's L2 above) is that a file diff holds **one** exact answer and everything
-else is derived from it on demand.
+The load-bearing shape (the diff-engine packet's decision L2, now in
+`docs/design/diff.md`, "The model holds one exact answer" — a different decision
+from the program's L2 above) is that a file diff holds **one** exact answer and
+everything else is derived from it on demand.
 
 `cairn_model::TextDiff` is that answer: both versions of the file as
 `DiffLine`s — each line its bytes without the terminator, plus whether it had
@@ -1466,7 +1468,7 @@ not open (`expand_all_turns_into_collapse_all_and_says_what_its_budget_left_coll
 `expand_all_opens_each_pages_files_and_moves_on_until_its_budget`;
 `expand_all_stops_at_its_budget_and_says_how_many_files_stay_collapsed`, through the
 window). Why fifty thousand: `crates/cairn-app/src/worker/expand_all.rs` and
-`docs/work/diff-engine/progress.md`. Collapse All closes every file, stops Expand All, hands
+`docs/research/diff-engine/c14-measured.md` section 4. Collapse All closes every file, stops Expand All, hands
 what was drawn to a worker to free, and supersedes what is in flight with an expansion
 that names nothing (`collapse_all_ends_what_is_in_flight_and_frees_what_was_drawn`). A page
 is kept only for the files asked as they were asked: a file closed while its page was on its
@@ -1807,7 +1809,7 @@ number) and `docs/research/diff-engine/fork-shortcuts.md`.
 | A file pressed in the Commit tab | opens its diff under its row, pressed again closes it; files start collapsed; the Commit tab stays shown | Fork-measured: Finding 4 (vendor GIF; "it does not switch to Changes"; collapsed by default, by the vendor's choice). Phase 06's press, which showed the file in the Changes tab, is replaced. |
 | In-place diff's options | no bar of its own; shares the Changes tab's context, whitespace and side-by-side; never the entire file — Entire File is the Changes tab's alone (`diff_actions::in_place_options`, `DiffSettings::line_context`) | Fork-measured: Finding 4 (the vendor: no header to host options; users: the Changes tab's options govern). The entire file left out is the user's decision, 2026-10-04, departing from Fork: with no bar to turn it off, the Commit tab was left showing every file whole (`entire_file_is_the_changes_tabs_alone_and_never_reaches_a_file_opened_in_place`). While Entire File is on in the Changes tab its context buttons are disabled (`DiffSettings::more_lines` and `fewer_lines` refuse), so the Commit tab's in-place files keep the line count they had until Entire File is turned off. |
 | Expand All | right-aligned above the files; Collapse All while a file is open | Fork-measured: Finding 4 (Expand All turns into Collapse All). That it reads Collapse All while ANY file is open — one opened by a press as well — is the user's decision, 2026-10-04, kept as built: Fork's label after a single press is not recorded. |
-| Expand All's budget | 50,000 lines, both versions of each file counted, and one per file | Cairn-chosen (Q2; the PRD names a line budget, not its size): R2.6's per-file line ceiling, measured against the window check — `progress.md`, phase 08. |
+| Expand All's budget | 50,000 lines, both versions of each file counted, and one per file | Cairn-chosen (Q2; the PRD names a line budget, not its size): R2.6's per-file line ceiling, measured against the window check — `docs/research/diff-engine/c14-measured.md`, section 4. |
 | What the budget says | "Expand All stopped at its line budget: N files left collapsed.", left of Collapse All | User's decision, 2026-10-04, kept as built: Fork has no budget (it expands every file). |
 | Expand All over files already open | keeps them as they are drawn and reads only the rest: an open diff is never read again nor drawn anew, and its lines are not charged to the budget | User's decision, 2026-10-04 (as built it read them again with the rest, from the first file). |
 | A file row's disclosure | a chevron, right when closed, down when open | Fork-measured in part: Windows rows carry a disclosure triangle (Finding 4); a chevron of plain shapes rather than a filled triangle, and drawn on every platform (Mac rows carry none), the user's decision, 2026-10-04, kept as built. |
@@ -1852,7 +1854,11 @@ id, parents and paths are drawn in IBM Plex Mono (R6.6, L16): Regular from IBM's
 `IBMPlexMono-LICENSE.txt`, the SIL Open Font License 1.1, beside it), embedded with
 `LaunchConfig::with_font` under `DIFF_FONT_FAMILY` at 11 px; its advance is 0.6 em
 (`MONO_ADVANCE_EM`, read from its `hmtx` table). The download was the user's approval;
-no other weight is embedded.
+no other weight is embedded. Provenance: both files extracted from `ibm-plex-mono.zip`
+(SHA-256 `6d23f01257663d8cc49a0d64c22ced630b79e0e2a0ac08a0da86e9a38bbc481c`) of IBM/plex's
+GitHub release `@ibm/plex-mono@2.5.0`; the font file's SHA-256 is
+`7c6fbddca4b700be918f5f6183d9bd4464fa427fe435f0b480d77fe2bb8c5a43`, the licence's
+(`LICENSE.txt` in the package) `7e6b2818edbd8f6a01ae80641cc8f16a51080d08fb4e532be3a0b6f74adb07da`.
 
 **Git parity, pinned against `git diff`** (`crates/cairn-git/tests/diff/parity.rs`). The
 parity tests read the view's own projection (`UnifiedRows::shown`), not a copy of it:
@@ -1930,8 +1936,8 @@ chord alone whichever scope hears it, so Ctrl+↓ is "next change", never "next 
 `a_chord_of_either_scope_is_a_chord`,
 `the_change_chords_and_the_arrows_belong_to_the_focused_pane` (a pane hearing
 `Scope::Detail` as the window's does), and `the_tab_chords_resolve_through_the_table`
-through the window. That the window's detail pane hears the change chords is not
-observable until phase 06 gives them something to do. That no component names a
+through the window; that the window's detail pane hears them and moves the diff is
+`previous_and_next_change_move_the_diff_while_the_pane_has_focus`. That no component names a
 literal modifier is the guard `no_component_names_a_literal_modifier`, and that the
 table holds data and resolution only is `the_accelerator_table_holds_data_and_resolution_only`
 (root `CLAUDE.md`, Invariants).
@@ -2040,7 +2046,7 @@ per way git reads a commit's text, by
 - **A binary working-tree side's size is the file's on disk**, before any filter:
   git prints no content for it.
 - **A sparse index is unsupported**, though git's plumbing would answer it; reading
-  one is gix's to do, and this query does not yet.
+  one is gix's to do, and this query does not.
 - **The configuration is the handle's**, read when it was opened (`diff.algorithm`,
   `diff.ignoreSubmodules`, the drivers' algorithms); the application's diff thread
   opens its handle again when a configuration file moves. The index and the

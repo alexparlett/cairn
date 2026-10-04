@@ -6,12 +6,12 @@
 //! before its blobs are read, so the most that is ever held is the budget and the one file
 //! that crossed it, which R2.6's ceilings bound.
 //!
-//! **Why fifty thousand** (measured in phase 08, `docs/work/diff-engine/progress.md`): it is
-//! R2.6's own line ceiling for one file drawn without Load Diff, so Expand All never holds more
-//! than about two of the largest files the diff draws unasked; on every subject of the bar it
-//! is read to its end in at most 23 ms warm (S7, the edit-heavy commit), where 100,000 lines
-//! took up to 86 ms (M1) and 200,000 up to 251 ms; and the window check found no frame near
-//! 16.7 ms while it read and drew, on the heaviest subjects.
+//! **Why fifty thousand** (measured in phase 08, `docs/research/diff-engine/c14-measured.md`
+//! section 4): it is R2.6's own line ceiling for one file drawn without Load Diff, so Expand
+//! All never holds more than about two of the largest files the diff draws unasked; on every
+//! subject of the bar it is read to its end in at most 23 ms warm (S7, the edit-heavy
+//! commit), where 100,000 lines took up to 86 ms (M1) and 200,000 up to 251 ms; and the window
+//! check found no frame near 16.7 ms while it read and drew, on the heaviest subjects.
 
 /// The lines Expand All reads before it stops: R2.6's line ceiling for one file.
 pub const EXPAND_ALL_LINES: u64 = 50_000;

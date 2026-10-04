@@ -3,6 +3,61 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-04 — Final fix round (phase 09): each namespace probe tests what its test needs
+
+Packet mode, committed to `feature/diff-engine` from 59c4c02. CI's `gate` job (run
+37189806150) failed `test-full` on
+`the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git`: the runner
+made the namespace and mapped uid 1 (`1 165536 65536`), and its root was then refused the
+`chown` — `label: unprivileged_userns (enforce)`, Ubuntu 24.04's AppArmor profile for an
+unprivileged user namespace. The gate's one probe (`unshare --map-root-user --map-auto
+--mount true`) had already failed there, so nothing was required and the test's own
+weaker check (`--map-auto true`) let it run into the refusal.
+
+- **User decision (2026-10-04), option (b): the probe tests exactly what the tests
+  need.** CI's AppArmor setting is not relaxed (`.github/workflows/ci.yml` untouched).
+  The one probe became two, with a variable each, so the stronger need of the fetch test
+  cannot make the across-filesystem test optional where it can run:
+  `unshare --map-root-user --map-auto chown 1:1 <file>` sets
+  `CAIRN_REQUIRE_SECOND_OWNER` (fetch.rs), and `unshare --map-root-user --mount true`
+  sets `CAIRN_REQUIRE_MOUNT_NAMESPACE` (`tests/diff/bare_discovery.rs`), each test making
+  its availability check with the same arguments. The probe's file lives in a `mktemp -d`
+  directory removed after; the fetch test's lives in a fixture removed on drop. Each
+  failing probe prints its own note, restated on the PASS line, naming the test, the
+  command and why (for the second owner: no namespaces, no `/etc/subuid` range, or a
+  root that may not `chown` to the second uid, as AppArmor's `unprivileged_userns`
+  refuses on Ubuntu 24.04). `CAIRN_REQUIRE_USER_NAMESPACES` is retired.
+  `scripts/git-floor.sh` leaves both set. Guard
+  `the_user_namespace_tests_are_required_wherever_they_can_run` rewritten per test (its
+  variable in the skip branch, its availability arguments, its probe and export in the
+  gate, neither cleared by `git-floor.sh`) plus both notes, `mktemp -d` and the
+  `rm -rf`; RED under each of: the mount probe given `--map-auto`, the `rm -rf` dropped,
+  the fetch test reading the mount variable, the bare-discovery check given `--map-auto`,
+  the owner note dropped from the PASS line. Docs: `credentials.md` and
+  `git-processes.md` where the tests are described.
+- **Residual.** The second-owner fetch test does not run on GitHub's Ubuntu 24.04
+  runners; it runs, and is required, wherever the probe passes (it does here). Whether
+  the across-filesystem test runs on CI is now said by its own note.
+- **Empty refspec (destructive-ops review, round 5, item i) — not reproduced.** The
+  finding: `fetch =` reaches `gix::refspec::parse("")`, fails, and refuses as unread
+  configuration. Probed: git 2.30.9 and 2.56.0 fetch it into `FETCH_HEAD` alone, no ref
+  written; `git config --null --get-all` prints one empty record. But gix-refspec 0.45.1
+  parses an empty fetch spec as `HEAD` with no destination (`src/parse.rs`,
+  `fetch_head_only`), so the check already passes it: the new unit test
+  `an_empty_refspec_writes_nothing_and_is_not_refused` and the end-to-end
+  `an_empty_refspec_is_fetched_into_fetch_head_as_git_fetches_it` (plain git the
+  control; alone and beside the clone's refspec) were GREEN before any change, and
+  no product code changed. Both are kept as pins: each went RED with `decide` made to
+  refuse an empty refspec as unparsed ("unexpectedly unparsed", "the fetch did not
+  start"). Seen in passing: a valueless `fetch` key prints the same empty record, the
+  check passes it, and git then dies on it ("missing value", exit 128) having written
+  nothing.
+- **Two residuals stated (item ii)** in `credentials.md`'s fetch section, until now only
+  a code comment: the four `git config` reads and the fetch are separate processes, so a
+  configuration write landing between them can have the check and the fetch read
+  different generations (milliseconds); and the user's fetch-cancel cannot stop the four
+  reads — a repository close does.
+
 ## 2026-10-04 — CI fix: two reduced-trust tests isolate the configuration gix reads
 
 Packet mode, committed to `feature/diff-engine` from 1f1eb10. CI's `gate` job (runs

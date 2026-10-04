@@ -3,6 +3,131 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-04 — Fix round 5 (phase 09): fetch's refspec check asks git, the launch environment, namespace tests
+
+Packet mode, committed to `feature/diff-engine` from ff3b715. The user's decisions of
+2026-10-04, recorded here and where the docs state each rule:
+
+- **UD1.** Cairn is a multi-repository tool: each repository opens in a tab, by path.
+  `GIT_DIR` and `GIT_WORK_TREE` in the launch environment are IGNORED BY DESIGN — never
+  read by Cairn's open, never on the subprocess roster. The session-wide variables the
+  open does honour, as git does — `GIT_CEILING_DIRECTORIES`,
+  `GIT_DISCOVERY_ACROSS_FILESYSTEM`, `GIT_CONFIG_PARAMETERS`/`GIT_CONFIG_COUNT`,
+  `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_NOSYSTEM` — are kept. The
+  principle is stated once, in `docs/systems/git-processes.md`'s opening section, and
+  `bare_discovery.rs` and `ownership.rs` point to it. Pinned by
+  `the_launch_environments_git_dir_and_work_tree_are_ignored_by_design`
+  (`tests/diff/bare_discovery.rs`; git, given the variables, opens the other repository,
+  so the pin decides something). Round 4's "not read by Cairn's open (outside this
+  round's items)" is superseded by this decision.
+- **UD2.** A `.git` file padded past gix-discover's 64 KiB, with a NUL after the path, or
+  with a path ending in a blank that names an existing repository — git opens, Cairn
+  refuses — is an ACCEPTED residual (the user's decision), already pinned by
+  `a_dot_git_file_is_read_as_git_reads_it`'s residual arm; `git-processes.md`,
+  `bare_discovery::gitfile_target` and that test's doc now say so.
+- **UD3.** Fetch's refspec policy reads the remote exactly as the fetch's own git will: it
+  asks git. `git config` in query form is the SECOND named porcelain read exception,
+  beside `git diff --no-index`.
+
+Work:
+
+- **UD3 (ops, reads, guards).** RED first:
+  `the_refspec_check_reads_a_linked_worktrees_conditional_include_as_git_does`
+  (`tests/fetch.rs`: a linked worktree, `includeIf "gitdir:<main>/.git/worktrees/linked"`
+  including `remote.origin.mirror = true`; git sees it from the worktree and not from the
+  main one) — "the fetch was not refused under remote.origin.mirror = true". New read
+  `reads::fetch_settings` (`crates/cairn-git/src/reads/fetch_settings.rs`), four
+  invocations, each a read (`GIT_OPTIONAL_LOCKS=0`, `GIT_NO_LAZY_FETCH=1`, no token),
+  named to the repository by `in_repository` exactly as the fetch is:
+  `git --git-dir=<g> --work-tree=<w> config --includes --null --type=bool --get
+  remote.<name>.mirror`, the same for `remote.<name>.prune` and `fetch.prune`, and
+  `git ... config --includes --null --get-all remote.<name>.fetch`. Exit 0 is the
+  answer, exit 1 is "no such key" (or a key no configuration can hold, a newline in the
+  name), anything else — 128 for a bad boolean or an unparseable file — is an error.
+  Evidence: `builtin/config.c` at v2.30.0 has `--get`, `--get-all`, `--type`
+  (`option_parse_type`, "bool"), `--bool`, `-z/--null` and `--includes`; `get_value`
+  prints the last value unless `--get-all` and returns `!values.nr` (1 when unset), and
+  `CONFIG_INVALID_KEY` (1) for an invalid key — the same at v2.56.0, which takes the
+  legacy form with nothing on stderr. `remote.c` (`handle_config`) and `builtin/fetch.c`
+  (`git_fetch_config`, the `prune < 0` block) at v2.30.0 and v2.56.0 read `mirror`,
+  `prune` and `fetch.prune` with `git_config_bool`, last wins, `remote.<name>.prune`
+  over `fetch.prune`; `pruneTags` is not read because `--no-prune-tags` sets
+  `prune_tags` before the config could. Reproduced on 2.30.9, 2.32.7 and 2.56.0
+  (valueless `mirror` → true, `yes`/`off` → last wins, a newline key → exit 1, a bad
+  boolean and a broken file → 128, the worktree include seen through `--git-dir`). The
+  check FAILS CLOSED (`Error::RemoteConfig` on any read failure or unparseable refspec).
+  gix config reading is gone from `refspec_policy.rs` (`as_admitted`, `every_section`,
+  `as_the_child_reads` removed; `NO_REDUCED_TRUST_ALLOCATION_LIMIT` private again); the
+  decision is a pure `decide` over git's answer, unit-tested. Found while reading
+  `remote.c`: a remote git defines from `$GIT_DIR/branches/<name>` or
+  `$GIT_DIR/remotes/<name>` (read when no configuration gives it a URL) is invisible to
+  any `git config` query, and a `branches/` file fetches into `refs/heads/<name>`
+  (reproduced on 2.30.9 and 2.56.0). Refused on sight with the file quoted, new
+  `RefusedWrite::DefinedByFile` — RED (check disabled): "the remote defined by
+  .git/branches/upstream was fetched"; GREEN. Tests: unit
+  `each_setting_is_read_as_git_reads_it`, `a_linked_worktrees_conditional_include_is_read`,
+  `a_failed_or_cancelled_read_is_an_error_never_an_unset_key`,
+  `the_queries_are_config_reads_in_query_form` (run by git-floor's `--lib reads::` run,
+  GREEN on 2.30.9 and 2.32.7 too), `the_decision_quotes_the_setting_that_refused`,
+  `a_tag_refspec_is_refused_only_while_git_would_prune`,
+  `a_definition_file_is_looked_for_only_under_a_name_git_reads_one_for`; integration
+  `the_refspec_checks_reads_write_nothing` (git directory byte-identical) and
+  `a_remote_defined_by_a_file_git_reads_in_place_of_configuration_is_refused`. The
+  recording stub in `tests/fetch.rs` now hands `config` to the real git; the stub tests
+  in `ops/fetch.rs` answer it with exit 1, and the G17 log test counts the four reads
+  beside the one fetch. Guard renamed `the_one_porcelain_read_is_diff_no_index_in_the_working_tree_read`
+  → `the_porcelain_reads_are_the_two_named_queries`: `"config"` once, only in
+  `reads/fetch_settings.rs`; every `-` literal there in `CONFIG_QUERY_OPTIONS`
+  (`--includes`, `--null`, `--type=bool`, `--get`, `--get-all`; `--get` or `--get-all`
+  required); no `CONFIG_SETTER_SUBCOMMANDS` word there; no `CONFIG_SETTER_OPTIONS`
+  literal anywhere in `reads/`. Self-test spells a setter option in the file and
+  elsewhere, a setter subcommand, a non-query option, `config` in another file, a second
+  `config`, no query action, no config read, a second `diff`, a raw-string setter.
+  Updated: root `CLAUDE.md` (D1 paragraph, repo map, invariant), `docs/design/engine.md`,
+  `reads/mod.rs`, `destructive-ops-reviewer.md` check 10, `qa-checklist.md` item 7,
+  `docs/qa-gate.md`, `credentials.md` and `git-processes.md`.
+- **A close during the check (found by the first full gate run).** The check's reads are
+  booked in the repository's registry, so a close landing during them ended a read and the
+  fetch came back as `FetchFailed` "could not read the configuration of remote origin: git
+  config ... was cancelled" — RED in `a_fetch_closed_as_it_starts_is_still_ended`
+  (`cairn-app`): "the fetch forwarded before the close did not end, once, as a cancel".
+  A read ended that way (nobody holds its signal, so only a close ends it) is now the fetch
+  cancelled before it started, `Error::GitCancelled` with no lock files; anything else
+  still refuses as `RemoteConfig` (`refspec_policy::read_failed`, unit
+  `a_read_ended_by_a_close_is_a_cancel_and_any_other_failure_refuses`). GREEN, ten runs
+  of the racy test. `the_command_log_is_answered_through_the_worker_with_the_fetch_in_it`
+  now expects the four reads (exit 1 from its stub) before the one fetch.
+- **W1 (gate).** `CAIRN_REQUIRE_USER_NAMESPACES`: both namespace tests fail instead of
+  skipping when it is set; `scripts/gate.sh`'s `test-full` sets it where
+  `unshare --map-root-user --map-auto --mount true` succeeds (the union of both tests'
+  needs) and the PASS line carries `USERNS_NOTE` otherwise; `scripts/git-floor.sh` leaves
+  it set (the namespace owes nothing to git's version, and the across-filesystem test is
+  in the `diff_engine` run). Guard `the_user_namespace_tests_are_required_wherever_they_can_run`
+  (via `gate_function_calls`/`gate_function_body`); RED with the probe call removed from
+  `run_test_full`. Not set in CI, whose runners may refuse unprivileged namespaces.
+- **W2 (docs).** `read_gitfile_raw` exists only from v2.56.0; below it the rules and the
+  2.54 `ENOENT`/`ENOTDIR` switch are in `read_gitfile_gently`. Comments corrected in
+  `bare_discovery.rs`, `tests/diff/ownership.rs`, `git-processes.md` (8dc8389's message
+  is history and stays).
+- **Floors.** `--lib diff:: reads::` lists 67: floor 66; `--test diff_engine` 113:
+  floor 112.
+
+Commits: af8e579 (W2), 102a209 (UD3), 77f8b0f (UD1/UD2), 1a88da4 (W1), 5718423 (floors),
+4786528 (a close during the check).
+
+Gate: `scripts/gate.sh` full, 8 steps, PASS at 4786528 (exit 0), with no note: the two
+namespace tests ran REQUIRED (`CAIRN_REQUIRE_USER_NAMESPACES` set by the probe), and the new
+read's unit tests and the `GIT_DIR` pin ran on 2.30.9 and 2.32.7 in `git-floor` with no new
+skip. The first full run (at 5718423) failed in `cairn-app` on the two lifecycle tests the
+bullet above names; that is what 4786528 fixes.
+
+Residuals: a remote with a `remotes/` or `branches/` file is refused even where
+configuration also gives it a URL and git would ignore the file (fail closed; which one git
+reads depends on its version); the check's four `git config` runs cannot be cancelled by
+the fetch's own cancel (a few milliseconds before the fetch process exists); the namespace
+tests still skip, with the gate's note, where no namespace can be made (CI's runners
+among them, likely).
+
 ## 2026-10-04 — Fix round 4 (phase 09): fetch's refspec check, git's search bounds, the .git file
 
 Packet mode, committed to `feature/diff-engine`. Fresh review of c743890..58c5cc9; the

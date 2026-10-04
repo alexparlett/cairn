@@ -31,9 +31,11 @@
 //! directory where git uses the worktree's own git directory, reads the system file
 //! from its own path, and decides trust by an owner rule of its own, and each of
 //! those once let a fetch through that git then made as a mirror or a pruner of
-//! tags. The check FAILS CLOSED: a read that fails — no `git`, a cancel, a value git
-//! will not parse, an answer that is not one — refuses the fetch as
-//! [`Error::RemoteConfig`], and so does a refspec that does not parse.
+//! tags. The check FAILS CLOSED: a read that fails — no `git`, a value git will not
+//! parse, an answer that is not one — refuses the fetch as [`Error::RemoteConfig`], and
+//! so does a refspec that does not parse; a read ended because the repository is
+//! closing is the fetch cancelled before it started, [`Error::GitCancelled`], as a
+//! close of a running fetch reports it.
 //!
 //! One definition of a remote is not configuration: git reads `$GIT_DIR/remotes/<name>`
 //! and `$GIT_DIR/branches/<name>` (in the common directory) for a remote no
@@ -74,12 +76,8 @@ pub(crate) fn check(git: &GitBinary, repo: &Repository, remote: &str) -> Result<
     }
     // Nobody holds this signal: the reads are a few short `git config` runs ahead of a
     // fetch that has no process yet for its own cancel to end.
-    let settings = fetch_settings(git, repo, remote, &CancelSignal::new()).map_err(|source| {
-        Error::RemoteConfig {
-            remote: remote.to_owned(),
-            source: Box::new(source),
-        }
-    })?;
+    let settings = fetch_settings(git, repo, remote, &CancelSignal::new())
+        .map_err(|error| read_failed(remote, error))?;
     decide(remote, &settings).map_err(|refusal| match refusal {
         Refusal::Refused { setting, write } => refused(setting, write),
         Refusal::Unparsed(source) => Error::RemoteConfig {
@@ -87,6 +85,25 @@ pub(crate) fn check(git: &GitBinary, repo: &Repository, remote: &str) -> Result<
             source,
         },
     })
+}
+
+/// What a failed read of the remote's settings makes of the fetch: it does not start
+/// either way. A read that was ENDED — which, with nobody holding its cancel signal, only
+/// the repository closing does (`SharedRepository::end_invocations`, which ends every
+/// invocation in its registry and any that starts after) — is the fetch cancelled before
+/// it started, [`Error::GitCancelled`] with no lock files, since a read writes none;
+/// every other failure is [`Error::RemoteConfig`], carrying it.
+fn read_failed(remote: &str, error: Error) -> Error {
+    match error {
+        Error::GitReadCancelled { arguments } => Error::GitCancelled {
+            arguments,
+            stranded_locks: Vec::new(),
+        },
+        other => Error::RemoteConfig {
+            remote: remote.to_owned(),
+            source: Box::new(other),
+        },
+    }
 }
 
 /// Why [`decide`] refused.
@@ -303,6 +320,40 @@ mod tests {
             decide("origin", &with(&["refs/heads/*:refs/remotes/origin"])),
             Err(Refusal::Unparsed(_))
         ));
+    }
+
+    /// A read ended by the repository's close is the fetch cancelled, as a close of a running
+    /// fetch is, and any other failure is the configuration unread; neither starts a fetch.
+    /// Caught by: a close that lands during the check reported as a failure to read the
+    /// configuration (`a_fetch_closed_as_it_starts_is_still_ended`, in `cairn-app`, end to
+    /// end), or a failure read as a cancel the user never asked for.
+    #[test]
+    fn a_read_ended_by_a_close_is_a_cancel_and_any_other_failure_refuses() {
+        let ended = read_failed(
+            "origin",
+            Error::GitReadCancelled {
+                arguments: "config --includes --null --type=bool --get remote.origin.mirror"
+                    .to_owned(),
+            },
+        );
+        assert!(
+            matches!(
+                &ended,
+                Error::GitCancelled { stranded_locks, .. } if stranded_locks.is_empty()
+            ),
+            "{ended:?}"
+        );
+        let unread = read_failed(
+            "origin",
+            Error::UnexpectedGitOutput {
+                arguments: "config".to_owned(),
+                record: "x".to_owned(),
+            },
+        );
+        assert!(
+            matches!(&unread, Error::RemoteConfig { remote, .. } if remote == "origin"),
+            "{unread:?}"
+        );
     }
 
     /// Pruning as `builtin/fetch.c` decides it: `remote.<name>.prune` when set, either way,

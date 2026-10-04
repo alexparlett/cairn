@@ -357,7 +357,7 @@ fn a_second_fetch_while_one_runs_is_refused_with_a_reason() {
 
 /// PRD G17, the worker's half: the command log is answered through the
 /// boundary as `cairn-model` values, and a fetch's entry is in it once, with
-/// what it was given and how it ended. The probe ran in no repository, so it
+/// what it was given and how it ended, after the refspec check's reads. The probe ran in no repository, so it
 /// is not. Caught by: the request going unanswered, or answered from anywhere
 /// but the repository's log.
 #[test]
@@ -402,8 +402,18 @@ fn the_command_log_is_answered_through_the_worker_with_the_fetch_in_it() {
     let Some(Update::CommandLog { records }) = seen.last() else {
         panic!("no log: {seen:?}");
     };
-    assert_eq!(records.len(), 1, "{records:?}");
-    let record = &records[0];
+    // The refspec check's four `git config` reads come first (this stub answers each with
+    // exit 1, "no such key"), then the fetch, once.
+    assert_eq!(records.len(), 5, "{records:?}");
+    for read in &records[..4] {
+        assert_eq!(
+            read.arguments.first().map(String::as_str),
+            Some("config"),
+            "{read:?}"
+        );
+        assert_eq!(read.exit, CommandExit::Code(1), "{read:?}");
+    }
+    let record = &records[4];
     assert_eq!(record.arguments, FETCH);
     assert_eq!(
         record

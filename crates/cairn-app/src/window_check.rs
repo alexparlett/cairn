@@ -10,7 +10,10 @@
 //! phase scrolls — and runs one `sync_and_update` (events, components, layout and
 //! accessibility: everything a frame does on the UI thread but paint, which the headless
 //! runner can only measure as a raster snapshot encoded to PNG, reported apart as an upper
-//! bound). Times are wall-clock on the machine it runs on; nothing here asserts one.
+//! bound). A frame's time is the two together — every update applied in it and its
+//! `sync_and_update` — since the application applies its updates on the UI thread between
+//! frames (phase 08 QA's R2). Times are wall-clock on the machine it runs on; nothing here
+//! asserts one.
 //!
 //! Run it in a release build, warm, against the repository the bar names (read only):
 //!
@@ -186,6 +189,8 @@ impl Harness {
         loop {
             let frame_started = Instant::now();
             let mut this_frame: Vec<&'static str> = Vec::new();
+            // The UI thread's work this frame: every update applied, then the frame itself.
+            let mut applied_in_frame = Duration::ZERO;
             loop {
                 let wait = FRAME.saturating_sub(frame_started.elapsed());
                 let Some(update) = update_within(&mut self.updates, wait) else {
@@ -209,7 +214,9 @@ impl Harness {
                         },
                     );
                 });
-                phase.applied.push((kind, applying.elapsed()));
+                let applied = applying.elapsed();
+                applied_in_frame += applied;
+                phase.applied.push((kind, applied));
                 this_frame.push(kind);
                 if frame_started.elapsed() >= FRAME {
                     break;
@@ -229,7 +236,7 @@ impl Harness {
                 });
             }
             self.test.sync_and_update();
-            let framed = framing.elapsed();
+            let framed = applied_in_frame + framing.elapsed();
             phase.frames.push(framed);
             if std::env::var_os("CAIRN_WINDOW_CHECK_FRAMES").is_some() {
                 eprintln!(

@@ -19,6 +19,8 @@ mod request;
 mod routing;
 mod startup;
 mod wake;
+#[cfg(test)]
+mod window_check_updates;
 
 pub use askpass::{PromptId, Reply};
 #[cfg(test)]
@@ -26,8 +28,6 @@ pub(crate) use diff_tests::{Configurable, changes_answer, checkout, commits, nex
 pub use discovery::Discovery;
 #[cfg(test)]
 pub(crate) use expand_all::EXPAND_ALL_LINES;
-#[cfg(test)]
-pub(crate) use fetch_tests::update_within;
 #[cfg(test)]
 pub use pool::Updates;
 #[cfg(test)]
@@ -39,3 +39,5 @@ pub use request::{
     AllEnded, AllFrom, AllProgress, Comparison, DiffOptions, DiffQuery, ExpandQuery, ExpandedFile,
     FileQuery, FileTarget, OpenedFile, Request, Retired, Update, expanded_diffs,
 };
+#[cfg(test)]
+pub(crate) use window_check_updates::update_within;

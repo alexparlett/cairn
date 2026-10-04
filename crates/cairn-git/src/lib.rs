@@ -9,6 +9,7 @@ mod error;
 mod history;
 mod object_id;
 pub mod ops;
+mod ownership;
 mod process;
 mod reads;
 mod refs;

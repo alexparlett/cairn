@@ -56,8 +56,10 @@ impl SharedRepository {
     /// version of git, reading the configuration `environment` leads to, refuses it
     /// (`crate::bare_discovery`). `environment` answers what the launching environment
     /// holds for a name — what the user's own `git`, run from the same place, reads.
-    /// Every `git` run in the repository afterwards is given its git directory
-    /// explicitly, so this is the one place git's own check is made.
+    /// Every `git` run in a fully trusted repository afterwards is given its git
+    /// directory explicitly, so this is the one place git's own checks are made: the
+    /// bare-repository one, and ownership — full trust only when the user owns every path
+    /// git checks, or `safe.directory` names the repository (`crate::ownership`).
     pub fn discover_for(
         path: impl AsRef<Path>,
         git: &GitBinary,
@@ -76,13 +78,18 @@ impl SharedRepository {
         let opened_at = std::time::SystemTime::now();
         // The path the check searched to, opened as it is: searching again could stop
         // somewhere else (`crate::bare_discovery::find`).
-        let found = crate::bare_discovery::find(path, version, environment)?;
+        let stop = crate::bare_discovery::find(path, version, environment)?;
         let not_a_repository = || Error::NotARepository {
             path: path.to_owned(),
         };
-        // What gix's own discovery does with the path it stops at: the trust its owner
-        // earns picks the options, and is the git directory's trust.
-        let trust = gix::sec::Trust::from_path_ownership(&found).map_err(|_| not_a_repository())?;
+        // The trust git's own discovery reaches there: full only when the user owns every
+        // path git checks — the `.git` file, the working tree's top and the git directory
+        // (`crate::ownership`). It picks the options and is the git directory's trust, which
+        // gix raises to full as it opens when `safe.directory` names the repository, as git
+        // does; and only a fully trusted repository is named to the `git` Cairn runs, so
+        // anything less is left to git's own check (`process/cli.rs`).
+        let trust = crate::ownership::owners(&stop, &crate::ownership::is_owned).trust();
+        let found = stop.into_path();
         let options = gix::open::Options::default_for_level(trust)
             .with(trust)
             .open_path_as_is(true);

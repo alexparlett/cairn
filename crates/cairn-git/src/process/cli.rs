@@ -329,12 +329,13 @@ impl GitCommand<'_, Write> {
 /// ownership of — `safe.directory` guards discovery only (reproduced with
 /// git 2.56: `GIT_TEST_ASSUME_DIFFERENT_OWNER=1 git log` refuses with
 /// "dubious ownership", and the same command given `--git-dir` answers). So
-/// the options are given only for a repository gix opened with full trust,
-/// which is gix's reading of git's own rule — the git directory and the
-/// working tree owned by the user, or listed under `safe.directory` in the
-/// configuration git protects. A repository opened with reduced trust is
-/// left to git's discovery, as before, so git's own check decides it and a
-/// repository git would refuse to read is refused.
+/// the options are given only for a repository opened with full trust,
+/// which is git's own rule (`crate::ownership`): the user owns the `.git`
+/// file when there is one, the working tree's top and the git directory, or
+/// `safe.directory` in the configuration git protects names the repository.
+/// A repository opened with reduced trust is left to git's discovery, so
+/// git's own check decides it and a repository git would refuse to read is
+/// refused.
 fn repository_location(trusted: bool, git_dir: &Path, workdir: Option<&Path>) -> Vec<OsString> {
     if !trusted {
         return Vec::new();

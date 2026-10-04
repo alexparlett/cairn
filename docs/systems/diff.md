@@ -528,8 +528,11 @@ written, and the daemon, in a session of its own, outlives the read and the
 application and is not Cairn's to end
 (`a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files`, which
 stops the daemon itself, and is skipped where the git or the platform has none).
-A bare repository planted to name a hook is refused when it is opened
-(`docs/systems/git-processes.md`, "Where an invocation runs").
+A bare repository planted to name a hook is refused when it is opened, and one whose
+paths git checks for ownership — the `.git` file, the working tree's top, the git
+directory — are not all the user's, and which `safe.directory` does not name, is left to
+git's own discovery, which refuses it as the user's `git` does
+(`docs/systems/git-processes.md`, "Where an invocation runs"; `crate::ownership`).
 
 **Expand All, and files opened in place, a page at a time** (phase 08, R5.3; the bound
 phase 02's QA asked for). `DiffSession::page(git, request, Offered { changes, files },

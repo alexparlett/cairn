@@ -46,8 +46,9 @@
 //! every command with it; and a git built `WITH_BREAKING_CHANGES` before 3.0 defaults to
 //! `explicit` where this reads `all`.
 //!
-//! The search that is checked is the search that opens: [`find`] hands back the path it
-//! stopped at, and `SharedRepository` opens exactly that, never searching again.
+//! The search that is checked is the search that opens: [`find`] hands back where it
+//! stopped, and `SharedRepository` decides ownership over exactly that
+//! (`crate::ownership`) and opens exactly that, never searching again.
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt as _;
@@ -76,9 +77,9 @@ const EXPLICIT_BY_DEFAULT_FROM: GitVersion = version(3, 0);
 /// The setting's key, as git spells it.
 const KEY: &str = "safe.bareRepository";
 
-/// The repository git's search from `start` stops at, as the path to hand gix to open
-/// exactly there — the `.git` of a working tree, or a git directory found as itself —
-/// physical and absolute, or the refusal git at `version` gives it:
+/// Where git's search from `start` stops, with the path to hand gix to open exactly
+/// there — the `.git` of a working tree, or a git directory found as itself — physical
+/// and absolute, or the refusal git at `version` gives it:
 /// [`Error::NotARepository`] when the search finds nothing,
 /// [`Error::BareRepositoryFoundBySearching`] for a bare repository the setting refuses,
 /// [`Error::InvalidConfig`] for a value git dies on. `environment` answers what the
@@ -92,16 +93,16 @@ pub(crate) fn find(
     start: &Path,
     version: GitVersion,
     environment: &dyn Fn(&str) -> Option<OsString>,
-) -> Result<PathBuf, Error> {
+) -> Result<Stop, Error> {
     let stop = search(start).ok_or_else(|| Error::NotARepository {
         path: start.to_owned(),
     })?;
     let found = match stop {
-        Stop::WorkTree(dot_git) => return Ok(dot_git),
+        Stop::WorkTree(dot_git) => return Ok(Stop::WorkTree(dot_git)),
         Stop::GitDirectory(found) => found,
     };
     if version < SETTING_FROM {
-        return Ok(found);
+        return Ok(Stop::GitDirectory(found));
     }
     // Read before the path is looked at, as git reads it (`get_allowed_bare_repo()` is the
     // condition's first operand): a value git dies on refuses an implicit one too.
@@ -113,15 +114,25 @@ pub(crate) fn find(
     if explicit && !is_implicit(&found, version) {
         return Err(Error::BareRepositoryFoundBySearching { path: found });
     }
-    Ok(found)
+    Ok(Stop::GitDirectory(found))
 }
 
 /// Where git's search stops.
-enum Stop {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Stop {
     /// A directory holding a `.git` that is a repository: the path is that `.git`.
     WorkTree(PathBuf),
     /// A directory that is itself a git directory: a bare repository found by searching.
     GitDirectory(PathBuf),
+}
+
+impl Stop {
+    /// The path gix is handed to open: the `.git` of a working tree, or the git directory.
+    pub(crate) fn into_path(self) -> PathBuf {
+        match self {
+            Self::WorkTree(path) | Self::GitDirectory(path) => path,
+        }
+    }
 }
 
 /// Git's search from `start`: from the physical directory upwards (git searches from

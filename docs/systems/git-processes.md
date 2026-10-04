@@ -298,11 +298,21 @@ of: `safe.directory` guards discovery only (reproduced with git 2.56 under
 `GIT_TEST_ASSUME_DIFFERENT_OWNER=1`, where `git log` refuses with "dubious
 ownership" and the same command given `--git-dir` answers). So the options
 are given only for a repository gix opened with full trust
-(`gix::Repository::git_dir_trust`), which is gix's reading of git's rule —
-the git directory and the working tree owned by the user, or listed under
-`safe.directory` in the configuration git protects. A repository opened with
-reduced trust is left to git's discovery, as before naming existed, so git's
-own check decides it.
+(`gix::Repository::git_dir_trust`), and the trust Cairn opens with is git's
+own rule (`ensure_valid_ownership` in `setup.c`, `crates/cairn-git/src/ownership.rs`):
+full only when the user owns every path git checks — the `.git` file, when
+the working tree reaches its git directory through one (a linked worktree, a
+submodule's checkout); the working tree's top; and the git directory, for a
+`.git` file the directory it names — the minimum over them, which gix then
+raises to full as it opens exactly when `safe.directory`, in the
+configuration git protects, names the working tree (or a bare repository's
+git directory), as git does. A repository opened with reduced trust is left
+to git's discovery, so git's own check decides it. Pinned by `trust_is_full_only_when_every_path_git_checks_is_owned` and
+`each_path_git_checks_is_asked_about_and_no_other` (in `ownership.rs`, the
+decision over each path's answer, every combination git distinguishes);
+end to end it needs a second owner, so it is a privileged review step:
+`a_linked_worktree_whose_git_dir_is_someone_elses_is_refused_as_git_refuses_it`,
+`#[ignore]`d in `crates/cairn-git/tests/diff/ownership.rs`, run as root.
 
 Naming the git directory is also the explicit spelling git never refuses, so
 the one check git makes on a repository it found by searching — a bare one,
@@ -388,8 +398,9 @@ command line's parsing by
 implied: no fixture can make a
 repository its own user does not own, so that a less-than-fully-trusted
 repository reaches git's own check is pinned at the function, not end to
-end; and where gix's trust and git's ownership rule disagree — gix trusting
-a repository git would refuse — the options skip git's check for it. The
+end, outside the privileged run above; and where gix's `safe.directory`
+matching and git's disagree — gix raising a repository git would refuse to
+full trust — the options skip git's check for it. The
 `safe.bareRepository` check reads the system file at `GIT_CONFIG_SYSTEM` or
 `/etc/gitconfig`, not at the path compiled into the `git` Cairn found — the
 same file for a distribution's git (prefix `/usr`), another for a git built

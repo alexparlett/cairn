@@ -10,6 +10,7 @@ mod content;
 mod expansion;
 mod fsmonitor;
 mod inputs;
+mod ownership;
 mod parity;
 mod patches;
 mod working_tree;

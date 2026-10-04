@@ -399,13 +399,18 @@ fn a_seeded_selection_stages_what_its_patch_says_it_does() {
                 && text.old_lines().len() == 1
                 && text.new_lines().len() == 1
             {
-                shapes.push("one line");
-                if text
+                let ended = text
                     .old_lines()
                     .iter()
                     .chain(text.new_lines())
-                    .all(|line| !line.ends_with_newline())
-                {
+                    .map(|line| line.ends_with_newline())
+                    .collect::<Vec<_>>();
+                // The two shapes are exclusive: a one-line file whose line ends in a
+                // newline on both sides, and one whose line ends in none on either.
+                if ended.iter().all(|ended| *ended) {
+                    shapes.push("one line");
+                }
+                if ended.iter().all(|ended| !*ended) {
                     shapes.push("one line, no newline");
                 }
             }

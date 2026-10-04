@@ -53,7 +53,10 @@
 //! is consulted only when some path is not owned, and is read whole, the last word winning.
 //!
 //! The environment that configuration, `HOME` and `SUDO_UID` are read through is the one
-//! Cairn was launched with, what the user's own `git`, run from the same place, reads; the
+//! Cairn was launched with, what the user's own `git`, run from the same place, reads —
+//! the session-wide settings honoured as git honours them, while `GIT_DIR` and
+//! `GIT_WORK_TREE` are ignored by design (the user's decision of 2026-10-04, stated once in
+//! `docs/systems/git-processes.md`'s opening section); the
 //! effective uid is the process's own ([`Identity::of_this_process`]), read from
 //! `/proc/self/status` or, where that cannot be read, as the owner of a file the process
 //! creates. git's `geteuid` cannot fail, but those reads can: where neither answers,

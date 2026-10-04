@@ -656,6 +656,47 @@ fn some_parent(path: &Path) -> String {
         .to_string()
 }
 
+/// `GIT_DIR` and `GIT_WORK_TREE` in the launch environment are ignored BY DESIGN (the
+/// user's decision of 2026-10-04): Cairn is a multi-repository tool whose every tab opens
+/// the repository at the path it names, so the per-repository pointers that make git skip
+/// discovery altogether never redirect an open, while the session-wide variables beside
+/// them are honoured as git honours them (`docs/systems/git-processes.md`, opening
+/// section). The oracle shows the variables decide something for git — run from the same
+/// directory with them set, it opens the other repository — and Cairn opens the one at the
+/// path. Caught by: the open reading either variable.
+#[test]
+fn the_launch_environments_git_dir_and_work_tree_are_ignored_by_design() {
+    let named = Repo::new("named-by-path");
+    named.write("a.txt", b"one\n");
+    named.commit("first");
+    let elsewhere = Repo::new("named-by-variable");
+    elsewhere.write("b.txt", b"two\n");
+    elsewhere.commit("first");
+    let other_git_dir = physical(elsewhere.path()).join(".git");
+    let extra = vec![
+        ("GIT_CEILING_DIRECTORIES", String::new()),
+        ("GIT_DIR", other_git_dir.display().to_string()),
+        (
+            "GIT_WORK_TREE",
+            physical(elsewhere.path()).display().to_string(),
+        ),
+    ];
+    assert_eq!(
+        git_opens(named.path(), &extra),
+        Some(other_git_dir.clone()),
+        "git does not follow GIT_DIR, so this test decides nothing"
+    );
+    let opened = ok(
+        SharedRepository::discover_for(named.path(), git(), launch(&extra)),
+        "opening the repository at the path",
+    );
+    assert_eq!(
+        physical(opened.git_dir()),
+        physical(named.path()).join(".git"),
+        "the launch environment's GIT_DIR redirected the open"
+    );
+}
+
 /// Where the child of
 /// [`the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it`] makes its
 /// repository, in a mount namespace of its own.

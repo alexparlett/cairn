@@ -428,7 +428,8 @@ fn a_dot_git_git_stops_on_stops_cairn_where_it_stops_git() {
 /// the file in the search, which trims every trailing blank (opening a repository git
 /// stops on) and reads at most 64 KiB.
 ///
-/// The residual, pinned so that a change in gix shows here: a file git CAN follow that gix
+/// The residual, ACCEPTED by the user on 2026-10-04 and pinned so that a change in gix shows
+/// here: a file git CAN follow that gix
 /// cannot — padded past gix-discover 0.55's 64 KiB, or with a NUL after the path, which
 /// git's C string ends at — is one git opens and Cairn refuses, because gix reads the file
 /// again as it opens and no open option hands it the git directory instead without

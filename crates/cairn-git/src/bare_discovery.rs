@@ -52,7 +52,11 @@
 //! The search climbs no higher than the user's own git would from the same place: not into
 //! a `GIT_CEILING_DIRECTORIES` ceiling, and not across a filesystem boundary unless
 //! `GIT_DISCOVERY_ACROSS_FILESYSTEM` says so, both read from the launch environment
-//! (`Bounds`). The search that is checked is the search that opens: [`find`] hands back
+//! (`Bounds`). Those are session-wide settings, honoured as git honours them; `GIT_DIR` and
+//! `GIT_WORK_TREE`, the per-repository pointers that make git skip this search, are
+//! ignored by design — Cairn opens the repository at the path each tab names (the user's
+//! decision of 2026-10-04, stated once in `docs/systems/git-processes.md`'s opening
+//! section). The search that is checked is the search that opens: [`find`] hands back
 //! where it stopped, and `SharedRepository` decides ownership over exactly that
 //! (`crate::ownership`) and opens exactly that, never searching again.
 
@@ -358,7 +362,10 @@ const MAX_GITFILE_SIZE: u64 = 1 << 20;
 /// search asks of every directory). Not resolved: git's `real_path` is the caller's.
 /// gix reads the same file by rules of its own — every trailing blank trimmed, at most
 /// 64 KiB (gix-discover 0.55, `path::from_gitdir_file`) — so the search and the ownership
-/// check ask this, never gix.
+/// check ask this, never gix. gix still reads the file again as it opens, so a file git
+/// follows and gix cannot (padded past 64 KiB, a NUL after the path, a path ending in a
+/// blank that names a repository of its own) is refused where git opens it: a residual
+/// the user ACCEPTED on 2026-10-04, pinned by `a_dot_git_file_is_read_as_git_reads_it`.
 pub(crate) fn gitfile_target(path: &Path) -> Option<PathBuf> {
     use std::io::Read as _;
 

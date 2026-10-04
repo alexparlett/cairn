@@ -22,10 +22,33 @@ application, `git` is found once, as it starts; a fetch runs in the network
 lane, which refuses a second; closing the window closes its repository; and
 the worker answers the log as values, which no view draws yet (issue #41).
 
-Where a residual below says **accepted by the user on 2026-10-02**, the user
-reviewed it and kept the behaviour as stated; where it
+Where a residual below says **accepted by the user on 2026-10-02** (or a later
+date), the user reviewed it and kept the behaviour as stated; where it
 cites an issue, the user chose to have it fixed later, and the issue holds the
 options.
+
+**Which of the launch environment's variables Cairn honours** (the user's
+decision of 2026-10-04). Cairn is a multi-repository tool: each repository
+opens in a tab of its own, named by its path. So the settings in the
+environment Cairn was launched with that are SESSION-WIDE are honoured as the
+user's own `git` honours them, by Cairn's own open: the bounds of git's search,
+`GIT_CEILING_DIRECTORIES` and `GIT_DISCOVERY_ACROSS_FILESYSTEM`
+(`bare_discovery.rs`), and the sources of the protected configuration that
+decides whether a repository may open — `GIT_CONFIG_PARAMETERS` and
+`GIT_CONFIG_COUNT`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`,
+`GIT_CONFIG_NOSYSTEM` (`bare_discovery.rs`, `ownership.rs`). The
+PER-REPOSITORY process pointers, `GIT_DIR` and `GIT_WORK_TREE`, which make git
+skip discovery and read one repository whatever directory it runs in, are
+ignored BY DESIGN: Cairn's open never reads them, so no tab opens a repository
+other than the one at its path
+(`the_launch_environments_git_dir_and_work_tree_are_ignored_by_design`,
+`crates/cairn-git/tests/diff/bare_discovery.rs`, with git following the
+variable as its oracle). Neither kind is on the roster a `git` child inherits
+("The environment"): the open decides once which repository is meant and
+whether it may open, and every child is then named that repository with
+`--git-dir`/`--work-tree` ("Where an invocation runs"). This is the one place
+the principle is stated; the modules that read the launch environment point
+here.
 
 ## The layout
 
@@ -299,8 +322,8 @@ git directory lives elsewhere (`core.worktree`) and which sits inside
 another repository's working tree is discovered as that enclosing
 repository, and under `safe.bareRepository=explicit` git refuses to discover
 a bare repository at all. `GIT_DIR` and `GIT_WORK_TREE` from the launching
-environment are never inherited, so the options are the only place either
-comes from.
+environment are never inherited, and Cairn's open ignores them by design (the
+opening section), so the options are the only place either comes from.
 
 An explicitly named git directory is one git does not check the ownership
 of: `safe.directory` guards discovery only (reproduced with git 2.56 under
@@ -404,7 +427,8 @@ search and the ownership check alike): at most 1 MiB, `gitdir: ` and a
 path with only trailing `\n` and `\r` taken off — a trailing space or tab is
 part of the path, which gix would trim and open — ending at its first NUL
 (`a_gitfile_is_read_as_git_reads_it`, and against the git in use
-`a_dot_git_file_is_read_as_git_reads_it`). Residual, pinned by that test so
+`a_dot_git_file_is_read_as_git_reads_it`). Residual, accepted by the user on
+2026-10-04 (a stated residual, not an open gap), pinned by that test so
 a change in gix shows: gix reads the file again as it opens, at most 64 KiB
 and with its own trimming, so a file git can follow and gix cannot — padded
 past 64 KiB, or with a NUL after the path — is one git opens and Cairn

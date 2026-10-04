@@ -523,12 +523,22 @@ fn a_dot_git_file_is_read_as_git_reads_it() {
 /// line, and a global file naming the top with a trailing slash, or as `.`, where the git in
 /// use admits them (its own answer is the oracle). Each open must then answer a `git`-backed
 /// read (the changes query), a gix read of a blob past gix's reduced-trust allocation limit
-/// (16 MiB, loaded anyway), and the repository's own `diff.context`. Caught by: a reduced
-/// repository left to git's discovery, which from `/` finds no repository at all, or read by
-/// gix under the limit it gives reduced trust.
+/// (16 MiB, loaded anyway), and the repository's own `diff.context`. gix reads
+/// `safe.directory` from the system and global files of the process it runs in, which a
+/// test cannot choose for an open in its own process — a runner image's `/etc/gitconfig`
+/// carrying `safe.directory = *` (GitHub's Ubuntu images do) trusts every open fully and
+/// this decides nothing — so the opens run in this test binary again, in a child whose
+/// system file is off and whose global file and home are empty, and the child shows gix's
+/// trust reduced before it opens anything. Caught by: a reduced repository left to git's
+/// discovery, which from `/` finds no repository at all, or read by gix under the limit it
+/// gives reduced trust.
 #[test]
 fn a_repository_cairn_admits_is_read_as_git_reads_it_whatever_gix_makes_of_its_owner() {
     use std::os::unix::fs::MetadataExt as _;
+    if std::env::var_os(REDUCED_CHILD).is_some() {
+        read_as_git_reads_it_in_an_isolated_process();
+        return;
+    }
     let scratch = Repo::new("ownership-reduced");
     let probe = scratch.path().join("owner-probe");
     ok(std::fs::write(&probe, b""), "writing a probe");
@@ -540,6 +550,46 @@ fn a_repository_cairn_admits_is_read_as_git_reads_it_whatever_gix_makes_of_its_o
         );
         return;
     }
+    let name = module_path!()
+        .split_once("::")
+        .map(|(_, path)| {
+            format!(
+                "{path}::a_repository_cairn_admits_is_read_as_git_reads_it_whatever_gix_makes_of_its_owner"
+            )
+        })
+        .unwrap_or_else(|| panic!("{} names no module", module_path!()));
+    let output = ok(
+        std::process::Command::new(ok(std::env::current_exe(), "this test binary"))
+            .args(["--exact", &name, "--test-threads=1", "--nocapture"])
+            .env(REDUCED_CHILD, "1")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("HOME", empty_home())
+            .env("XDG_CONFIG_HOME", empty_home())
+            .output(),
+        "running this test binary with gix's configuration isolated",
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "the child failed:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "the child ran no test:\n{stdout}"
+    );
+}
+
+/// Marks the child
+/// [`a_repository_cairn_admits_is_read_as_git_reads_it_whatever_gix_makes_of_its_owner`] runs,
+/// with gix's configuration sources isolated.
+const REDUCED_CHILD: &str = "CAIRN_TEST_REDUCED_TRUST_CHILD";
+
+/// The child's half: every open of a repository whose working tree is `/`, under each way
+/// the launch environment admits it, read as git reads it.
+fn read_as_git_reads_it_in_an_isolated_process() {
+    let scratch = Repo::new("ownership-reduced");
     let repo = Repo::new("ownership-work-tree-elsewhere");
     let mut big = Vec::with_capacity(17 * 1024 * 1024 + 1024);
     while big.len() <= 17 * 1024 * 1024 {
@@ -551,6 +601,13 @@ fn a_repository_cairn_admits_is_read_as_git_reads_it_whatever_gix_makes_of_its_o
     let head = repo.commit("seed");
     repo.config("diff.context", "7");
     repo.config("core.worktree", "/");
+    // The reproduction holds: gix, by its own rule and in this process's configuration,
+    // trusts the repository less than fully.
+    assert_eq!(
+        ok(gix::open(repo.path()), "opening with gix").git_dir_trust(),
+        gix::sec::Trust::Reduced,
+        "gix trusted a working tree root owns, so this decides nothing"
+    );
     let top = physical(repo.path()).display().to_string();
     let assumed = |extra: &[(&'static str, String)]| {
         let mut all = vec![("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1".to_owned())];

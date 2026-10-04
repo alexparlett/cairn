@@ -454,6 +454,38 @@ mod tests {
         let arguments = [OsString::from("fetch"), OsString::from("--prune")];
         assert_eq!(describe(&arguments), "fetch --prune");
     }
+
+    /// Runs the test at `path` (from the crate root) in this test binary again, with
+    /// `marker` set and the configuration gix reads isolated — no system file, the global
+    /// file `/dev/null`, `home` as the home — and fails unless it ran and passed. gix takes
+    /// `safe.directory` from the system and global files of the process it opens in, which
+    /// a test cannot choose for its own process. Here rather than in `stub_tests`, whose
+    /// `cfg(all(test, unix))` the process guards read as production code, and production
+    /// code builds a process in `process/environment.rs` alone.
+    pub(super) fn passes_with_gix_configuration_isolated(path: &str, marker: &str, home: &Path) {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                path,
+                "--include-ignored",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env(marker, "1")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("HOME", home)
+            .env("XDG_CONFIG_HOME", home)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{path} failed with gix's configuration isolated:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(stdout.contains("1 passed"), "{path} did not run:\n{stdout}");
+    }
 }
 
 /// Against a stub `git` that reports what it was given. Inside the crate because the
@@ -684,11 +716,16 @@ mod stub_tests {
     /// opened (`crate::ownership`), and gix's re-check of the working tree's owner
     /// is not git's rule. Built from a fixture gix trusts less than fully (its
     /// working tree is `/`, which root owns), so the trust is shown to be reduced
-    /// before the location is read; skipped where this user owns `/`. Caught by:
-    /// the location withheld for a reduced repository, which leaves the `git` Cairn
-    /// runs to discover from the working tree — none at all from `/` — with an
-    /// environment that carries none of the launch environment's `safe.directory`
-    /// (end to end in `tests/diff/ownership.rs`).
+    /// before the location is read; skipped where this user owns `/`. gix takes
+    /// `safe.directory` from the system and global files, which this test cannot
+    /// choose for an open in its own process — a runner image's
+    /// `/etc/gitconfig` carrying `safe.directory = *` (GitHub's Ubuntu images do)
+    /// trusts the fixture fully and decides nothing — so the open runs in this test
+    /// binary again, in a child whose system file is off and whose global file and
+    /// home are empty. Caught by: the location withheld for a reduced repository,
+    /// which leaves the `git` Cairn runs to discover from the working tree — none
+    /// at all from `/` — with an environment that carries none of the launch
+    /// environment's `safe.directory` (end to end in `tests/diff/ownership.rs`).
     #[test]
     fn every_repository_is_named_to_git_whatever_trust_gix_gave_it() {
         use std::os::unix::fs::MetadataExt as _;
@@ -707,6 +744,43 @@ mod stub_tests {
             "a bare repository has no working tree to name"
         );
 
+        // The child's home: empty, so no configuration of this machine's user is read.
+        let home = std::env::temp_dir().join(format!("cairn-reduced-home-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let me = std::fs::symlink_metadata(&home).unwrap().uid();
+        if std::fs::symlink_metadata("/").unwrap().uid() == me {
+            eprintln!(
+                "SKIPPED every_repository_is_named_to_git_whatever_trust_gix_gave_it's \
+                 reduced half: / is this user's own"
+            );
+            std::fs::remove_dir_all(&home).unwrap();
+            return;
+        }
+        let name = module_path!()
+            .split_once("::")
+            .map(|(_, path)| {
+                format!("{path}::every_repository_is_named_to_git_whatever_trust_gix_gave_it_inner")
+            })
+            .unwrap();
+        super::tests::passes_with_gix_configuration_isolated(&name, REDUCED_CHILD, &home);
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// Set in the child [`every_repository_is_named_to_git_whatever_trust_gix_gave_it`]
+    /// runs, with gix's configuration sources isolated.
+    const REDUCED_CHILD: &str = "CAIRN_TEST_REDUCED_TRUST_CHILD";
+
+    /// The child's half, ignored so it runs only under its parent: a repository whose
+    /// working tree is `/` opened as Cairn opens it, shown to be one gix trusts less than
+    /// fully, and named to git all the same.
+    #[test]
+    #[ignore = "run by every_repository_is_named_to_git_whatever_trust_gix_gave_it"]
+    fn every_repository_is_named_to_git_whatever_trust_gix_gave_it_inner() {
+        assert!(
+            std::env::var_os(REDUCED_CHILD).is_some(),
+            "not running under the parent test, so gix's configuration is not isolated"
+        );
         let scratch =
             std::env::temp_dir().join(format!("cairn-reduced-{}-{}", std::process::id(), line!()));
         let _ = std::fs::remove_dir_all(&scratch);
@@ -719,17 +793,6 @@ mod stub_tests {
             b"[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = /\n",
         )
         .unwrap();
-        let me = std::fs::symlink_metadata(git_dir.join("HEAD"))
-            .unwrap()
-            .uid();
-        if std::fs::symlink_metadata("/").unwrap().uid() == me {
-            eprintln!(
-                "SKIPPED every_repository_is_named_to_git_whatever_trust_gix_gave_it's \
-                 reduced half: / is this user's own"
-            );
-            std::fs::remove_dir_all(&scratch).unwrap();
-            return;
-        }
         let stub = stub("printf '%s\\0' \"$@\"");
         let git = discover_retrying(stub.environment()).unwrap();
         let repo = Repository::discover(&scratch).unwrap();

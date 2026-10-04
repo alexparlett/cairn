@@ -279,3 +279,162 @@ fn a_page_ends_at_its_file_count_or_its_line_count() {
     );
     assert_eq!(all.len(), set.files.len());
 }
+
+/// Phase 08 QA's E4: a file git itself fails on — here its diff driver's `xfuncname` is a
+/// regular expression git refuses, which git finds only as it diffs that path and dies on
+/// (`fatal: Invalid regexp to look for hunk header`), ending the whole run — fails alone: the
+/// page's one `diff-tree -p` over the three paths fails, each file is then asked on its own,
+/// and the other two are answered as they are alone. Caught by: a failed grouped run returned
+/// as the page's failure (every file lost to one), or the files beside it never asked again.
+#[test]
+fn a_file_git_fails_on_in_a_grouped_run_fails_alone() {
+    let repo = Repo::new("grouped-failure");
+    repo.write(".gitattributes", b"f1.txt diff=broken\n");
+    for n in 0..3 {
+        repo.write(&format!("f{n}.txt"), &numbered(10, None));
+    }
+    repo.commit("seed");
+    for n in 0..3 {
+        repo.write(&format!("f{n}.txt"), &numbered(10, Some(n)));
+    }
+    repo.commit("edit every file");
+    repo.config("diff.broken.xfuncname", "[");
+
+    let opened = Opened::new(&repo);
+    let engine = opened.shared.to_worker();
+    let mut session = ok(engine.diff_session(), "a diff session");
+    let request = ChangesRequest::commit(repo.rev("HEAD"));
+    let set = changes(&mut session, &request);
+    assert_eq!(set.files.len(), 3);
+    let offered: Vec<usize> = (0..set.files.len()).collect();
+
+    let read = page(&mut session, &request, (&set, &offered), None);
+    assert_eq!(read_paths(&read, &set), ["f0.txt", "f1.txt", "f2.txt"]);
+    for (index, outcome) in &read.files {
+        let file = &set.files[*index];
+        let alone = session.file_diff(
+            super::git(),
+            &request,
+            file,
+            &ContentOptions::default(),
+            &CancelSignal::new(),
+        );
+        match (file.new_path.to_string().as_str(), outcome, alone) {
+            ("f1.txt", Err(_), Err(_)) => {}
+            ("f1.txt", Ok(diff), _) => panic!("git refuses f1.txt, yet it was answered: {diff:?}"),
+            (path, Ok(diff), Ok(alone)) => assert_eq!(*diff, alone, "{path}"),
+            (path, Err(error), _) => panic!("{path} failed beside the file git refuses: {error}"),
+            (path, Ok(_), Err(error)) => panic!("{path} alone: {error}"),
+        }
+    }
+    // The run over the page named every path, and failed; each was then asked alone.
+    assert!(
+        opened.runs_naming("f0.txt") >= 2 && opened.runs_naming("f2.txt") >= 2,
+        "the files beside the refused one were not asked in a grouped run and then alone"
+    );
+}
+
+/// Phase 08 QA's E6: a page asked once its query is already superseded reads nothing — no
+/// file charged to its budget, no `git` started — and answers `ContentCancelled`, never a
+/// page or a file's failure. Caught by: the cancel checked only after a file is read (the
+/// first file charged), or only while git runs (a `diff-tree` started).
+#[test]
+fn a_page_asked_after_its_cancel_reads_nothing() {
+    let (repo, _) = five_files();
+    let opened = Opened::new(&repo);
+    let engine = opened.shared.to_worker();
+    let mut session = ok(engine.diff_session(), "a diff session");
+    let request = ChangesRequest::commit(repo.rev("HEAD"));
+    let set = changes(&mut session, &request);
+    let offered: Vec<usize> = (0..set.files.len()).collect();
+    let runs_before = opened.shared.command_log().len();
+
+    let cancel = CancelSignal::new();
+    cancel.cancel();
+    let mut budget = LineBudget::new(1_000);
+    let answer = session.page(
+        super::git(),
+        &request,
+        Offered {
+            changes: &set,
+            files: &offered,
+        },
+        Some(&mut budget),
+        &ContentOptions::default(),
+        &cancel,
+    );
+    assert!(
+        matches!(answer, Err(cairn_git::Error::ContentCancelled)),
+        "{answer:?}"
+    );
+    assert_eq!(budget.spent(), 0, "a file was read after the cancel");
+    assert_eq!(
+        opened.shared.command_log().len(),
+        runs_before,
+        "git was started after the cancel"
+    );
+}
+
+/// Phase 08 QA's E1, the boundaries exactly: a budget is spent when its lines REACH its limit,
+/// not past it — resumed at the limit it is spent, one short it is not — and a page ends at the
+/// file whose cost brings the page's lines to exactly `PAGE_LINES`, as a budget ends at the
+/// file that brings it to exactly its limit. Two files here cost exactly half of `PAGE_LINES`
+/// each (5,000 lines, then 4,999, and one for the file). Caught by: either comparison made
+/// strict (`>`), which reads the third file onto a full page, or past a spent budget.
+#[test]
+fn a_page_and_a_budget_end_exactly_at_their_limits() {
+    let limit = 20_000u64;
+    assert!(LineBudget::resumed(limit, limit).is_spent());
+    assert!(!LineBudget::resumed(limit, limit - 1).is_spent());
+    assert!(LineBudget::new(0).is_spent());
+
+    let quarter = usize::try_from(PAGE_LINES / 4).unwrap_or(usize::MAX);
+    let repo = Repo::new("exact-limits");
+    repo.write("exact/a.txt", &numbered(quarter, None));
+    repo.write("exact/b.txt", &numbered(quarter, None));
+    repo.write("exact/c.txt", &numbered(3, None));
+    repo.commit("seed");
+    // One line deleted from the end: 5,000 lines old, 4,999 new, one for the file.
+    repo.write("exact/a.txt", &numbered(quarter - 1, None));
+    repo.write("exact/b.txt", &numbered(quarter - 1, None));
+    repo.write("exact/c.txt", &numbered(3, Some(1)));
+    repo.commit("edit");
+
+    let opened = Opened::new(&repo);
+    let engine = opened.shared.to_worker();
+    let mut session = ok(engine.diff_session(), "a diff session");
+    let request = ChangesRequest::commit(repo.rev("HEAD"));
+    let set = changes(&mut session, &request);
+    let offered: Vec<usize> = (0..set.files.len()).collect();
+    assert_eq!(set.files.len(), 3);
+
+    let full = page(&mut session, &request, (&set, &offered), None);
+    assert_eq!(
+        read_paths(&full, &set),
+        ["exact/a.txt", "exact/b.txt"],
+        "the page did not end at exactly PAGE_LINES"
+    );
+    assert_eq!(full.taken, 2);
+
+    let mut budget = LineBudget::new(PAGE_LINES / 2);
+    let spent = page(&mut session, &request, (&set, &offered), Some(&mut budget));
+    assert_eq!(
+        budget.spent(),
+        PAGE_LINES / 2,
+        "a file costs its lines and one"
+    );
+    assert_eq!(
+        read_paths(&spent, &set),
+        ["exact/a.txt"],
+        "the budget did not end at exactly its limit"
+    );
+}
+
+/// Phase 08 QA's E2: a page's two bounds are the numbers measured in phase 08 (`progress.md`,
+/// C14). Changing either is a measured C14 decision — re-run the engine's sweep and the
+/// window check, and record them — never an edit on its own.
+#[test]
+fn a_pages_bounds_are_the_measured_ones() {
+    assert_eq!(PAGE_FILES, 256);
+    assert_eq!(PAGE_LINES, 20_000);
+}

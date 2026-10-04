@@ -319,7 +319,8 @@ pub struct Page {
 }
 
 /// The most files one page reads: what its blobs, its patch and the paths on its `git`
-/// command line are bounded by.
+/// command line are bounded by. Measured against C14 in phase 08, with [`PAGE_LINES`]: a
+/// change to either is a measured decision, pinned by `a_pages_bounds_are_the_measured_ones`.
 pub const PAGE_FILES: usize = 256;
 
 /// The most lines one page reads, both versions of every file counted: past it the page ends

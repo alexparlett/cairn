@@ -1151,6 +1151,68 @@ mod tests {
         }
     }
 
+    /// Phase 08 QA's U2: an Expand All whose request failed is off — not asked again when the
+    /// Commit tab is next shown, and its button Expand All once more. Caught by: the failure
+    /// leaving Expand All running, which the tab then asks again, and fails again, for good.
+    #[test]
+    fn a_failed_expand_all_is_off_and_not_asked_again() {
+        let mut state = answered(4);
+        let asked = state.expand_all(DiffOptions::default());
+        let asked = expand_query(&asked).clone();
+        assert!(state.failed(&DiffQuery::Expand(asked), "bad config".to_owned()));
+        assert_eq!(state.all_state(), Some(AllState::Off));
+        assert!(!state.expansion_needs_asking());
+        assert_eq!(state.reask_expansion(), None);
+    }
+
+    /// Phase 08 QA's U3, the other direction of
+    /// `a_setting_asks_the_shown_tabs_selection_now_and_the_others_later`: with the Changes tab
+    /// shown, a setting asks its file at once and not the files opened in place, which are
+    /// asked — whole, at the new options — when the Commit tab is shown. Caught by: the
+    /// expansion asked now (ending the file's read), never, or at the old options.
+    #[test]
+    fn a_setting_with_the_changes_tab_shown_asks_its_file_now_and_the_expansion_later() {
+        let mut state = answered(4);
+        let options = DiffOptions::default();
+        state.toggle_file(1, options);
+        state.expansion_arrived(page(&[1], false), None);
+        let chosen = file_of(commit(1), "a.txt");
+        state.select_file(chosen.clone());
+        assert!(state.file_arrived(&chosen, None));
+
+        let mut wider = options;
+        wider.context = Context::Lines(7);
+        let requests = state.settings_changed(wider, Asking::File);
+        match requests.first() {
+            Some(Request::FileDiff(query)) => assert_eq!(query.options, wider),
+            other => panic!("the file was not asked first: {other:?}"),
+        }
+        assert!(
+            !requests.iter().any(|r| matches!(r, Request::Expand(_))),
+            "{requests:?}"
+        );
+        assert_eq!(
+            retired_count(&requests),
+            1,
+            "the open file's diff was not freed"
+        );
+        assert!(!state.file_needs_asking());
+        assert!(
+            state.expansion_needs_asking(),
+            "the files opened in place are not asked again when shown"
+        );
+        let asked = state.reask_expansion().into_iter().collect::<Vec<_>>();
+        let asked = expand_query(&asked);
+        assert_eq!(asked.options, wider);
+        assert_eq!(
+            asked.files,
+            [OpenedFile {
+                index: 1,
+                load_anyway: false
+            }]
+        );
+    }
+
     /// T4: a failure of the selected file is recorded as that file's answer. Caught by: the
     /// file arm of `failed` writing nothing (the pane waits for good on a failed diff).
     #[test]

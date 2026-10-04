@@ -10,11 +10,12 @@ use cairn_guards::{
     configures_process_environment, constructs_named_struct, constructs_process_command,
     constructs_struct, declared_dependencies, declares_publicly, derives_or_implements,
     embedded_font_violations, gate_command_assignments, gate_dispatch_arms, gate_full_sequence,
-    gate_function_commands, implements_type, job_env_entries, mentions_crate,
-    names_a_literal_modifier, names_an_element, names_gitoxide_mutation, production_char_literals,
-    production_string_literals, reads_enum_partially, reads_row_content_partially, renames_type,
-    renders_in_a_macro, repo_root, rust_sources, spawns_git, spells_a_chord,
-    structs_with_a_field_naming, types_containing, waits_on_work,
+    gate_function_body, gate_function_calls, gate_function_commands, implements_type,
+    job_env_entries, mentions_crate, names_a_literal_modifier, names_an_element,
+    names_gitoxide_mutation, production_char_literals, production_string_literals,
+    reads_enum_partially, reads_row_content_partially, renames_type, renders_in_a_macro, repo_root,
+    rust_sources, spawns_git, spells_a_chord, structs_with_a_field_naming, types_containing,
+    waits_on_work,
 };
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
@@ -4402,7 +4403,10 @@ fn the_ssh_criteria_are_required_wherever_they_can_run() {
 /// `test-full` sets it wherever the `git` on `PATH` reports the daemon in
 /// `git version --build-options`; and `scripts/git-floor.sh` clears it on every run of the
 /// floors' gits, which have none, so the full gate's later step is not failed by the
-/// earlier one's export. Each is a line-level check, so none can pass on an empty read.
+/// earlier one's export. Each is a line-level check, so none can pass on an empty read; the
+/// gate's functions are read whole, to their closing `}` (`gate_function_body`), and the
+/// call is a statement of `run_test_full`'s own (`gate_function_calls`, self-test
+/// `the_gate_function_call_matcher_catches_the_shapes_it_claims`).
 /// CI's `gate` job does not set it outright (a stated residual in the test's doc): this
 /// pin holds the probe, not the runner's git.
 #[test]
@@ -4426,24 +4430,18 @@ fn the_fsmonitor_daemon_pin_is_required_wherever_it_can_run() {
          CAIRN_REQUIRE_FSMONITOR_DAEMON is set, so the gate's setting of it decides nothing"
     );
 
-    let test_full = gate
-        .lines()
-        .skip_while(|line| !line.trim_start().starts_with("run_test_full()"))
-        .take_while(|line| !line.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n");
     assert!(
-        test_full.contains("require_fsmonitor_daemon_where_possible"),
+        gate_function_calls(
+            &gate,
+            "run_test_full",
+            "require_fsmonitor_daemon_where_possible"
+        ),
         "scripts/gate.sh's run_test_full no longer calls \
          require_fsmonitor_daemon_where_possible, so the builtin-fsmonitor read test would \
          skip silently where the daemon could have run."
     );
-    let probe = gate
-        .lines()
-        .skip_while(|line| !line.starts_with("require_fsmonitor_daemon_where_possible()"))
-        .take_while(|line| line.trim() != "}")
-        .collect::<Vec<_>>()
-        .join("\n");
+    let probe = gate_function_body(&gate, "require_fsmonitor_daemon_where_possible")
+        .unwrap_or_else(|| panic!("scripts/gate.sh no longer defines the fsmonitor probe"));
     for needed in [
         "git version --build-options",
         "feature: fsmonitor--daemon",
@@ -4700,6 +4698,51 @@ fn the_gate_command_readers_catch_the_shapes_they_claim() {
     );
     assert!(gate_function_commands(script, "run_c").is_empty());
     assert!(gate_function_commands(script, "run_missing").is_empty());
+}
+
+/// Whether a gate function calls another, against the shapes the fsmonitor pin must refuse
+/// as well as the ones it must find. Caught by: reading from the definition to the next
+/// blank line, which ran on into the functions defined after it with no blank between
+/// them, or a mention of the name taken as a call.
+#[test]
+fn the_gate_function_call_matcher_catches_the_shapes_it_claims() {
+    let gate = |full: &str| {
+        format!(
+            "probe() {{\n  :\n}}\n\nrun_full() {{\n  step \"full\"\n{full}  run_body \"full\" \
+             \"$FULL_CMD\"\n}}\nrun_doc()  {{ run_cmd \"doc\" \"$DOC_CMD\"; }}\n\
+             run_floor() {{ run_cmd \"floor\" \"$FLOOR_CMD\"; probe; }}\n"
+        )
+    };
+    let calls = |script: &str| gate_function_calls(script, "run_full", "probe");
+    assert!(calls(&gate("  probe\n")), "a call on a line of its own");
+    assert!(calls(&gate("  probe --quiet\n")), "a call with arguments");
+    assert!(calls(&gate("  :; probe\n")), "a call after a `;`");
+    assert!(
+        gate_function_calls(&gate(""), "run_floor", "probe"),
+        "a call inside a one-line definition"
+    );
+    for (refused, shape) in [
+        (
+            "",
+            "the call moved into a function defined after it with no blank line between",
+        ),
+        ("  # probe\n", "the call commented out"),
+        ("  echo \"probe\"\n", "the name inside a string"),
+        (
+            "  probe_other\n",
+            "another function whose name starts with it",
+        ),
+        (
+            "  run_cmd probe\n",
+            "the name as another command's argument",
+        ),
+    ] {
+        assert!(!calls(&gate(refused)), "{shape} was read as a call");
+    }
+    assert!(
+        !gate_function_calls(&gate("  probe\n"), "run_missing", "probe"),
+        "a function that does not exist calls nothing"
+    );
 }
 
 /// The two readings the local-gate guard rests on, against the shapes they claim.

@@ -2095,6 +2095,49 @@ pub fn gate_command_assignments(gate: &str) -> BTreeMap<String, Vec<String>> {
 /// `scripts/gate.sh` names — from `function() {` to its closing `}`, on one line or
 /// several. Empty when there is no such definition.
 pub fn gate_function_commands(gate: &str, function: &str) -> Vec<String> {
+    let body = gate_function_body(gate, function).unwrap_or_default();
+    let mut names = Vec::new();
+    let mut rest = body.as_str();
+    while let Some(at) = rest.find('$') {
+        rest = &rest[at + 1..];
+        let name: String = rest
+            .trim_start_matches('{')
+            .chars()
+            .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
+            .collect();
+        if name.ends_with("_CMD") && !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
+}
+
+/// Whether `function`'s definition in `scripts/gate.sh` ([`gate_function_body`]) calls
+/// `callee` as a command of its own: some statement of it — a line, or a part of one
+/// between `;`s, its opening `{` and closing `}` taken off — whose first word is `callee`.
+/// A comment, the name inside a string or as another command's argument, a longer name
+/// that starts with it, and a call in any other function's definition are not calls.
+pub fn gate_function_calls(gate: &str, function: &str, callee: &str) -> bool {
+    let Some(body) = gate_function_body(gate, function) else {
+        return false;
+    };
+    body.lines()
+        .flat_map(|line| line.split(';'))
+        .any(|statement| {
+            let statement = statement.trim();
+            let statement = statement
+                .strip_prefix('{')
+                .unwrap_or(statement)
+                .trim_start();
+            let statement = statement.strip_suffix('}').unwrap_or(statement);
+            statement.split_whitespace().next() == Some(callee)
+        })
+}
+
+/// `function`'s definition in `scripts/gate.sh`: what follows `function()` — its opening
+/// `{` included — to the line that closes it, a lone `}`, or to the end of the line for a
+/// definition on one line ending in `}`. `None` when there is no such definition.
+pub fn gate_function_body(gate: &str, function: &str) -> Option<String> {
     let opening = format!("{function}()");
     let mut body = String::new();
     let mut inside = false;
@@ -2116,20 +2159,7 @@ pub fn gate_function_commands(gate: &str, function: &str) -> Vec<String> {
             break;
         }
     }
-    let mut names = Vec::new();
-    let mut rest = body.as_str();
-    while let Some(at) = rest.find('$') {
-        rest = &rest[at + 1..];
-        let name: String = rest
-            .trim_start_matches('{')
-            .chars()
-            .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
-            .collect();
-        if name.ends_with("_CMD") && !names.contains(&name) {
-            names.push(name);
-        }
-    }
-    names
+    inside.then_some(body)
 }
 
 /// The body of `scripts/gate.sh`'s default dispatch arm, line by line after its `*)`.

@@ -16,9 +16,10 @@ the result as a virtualized list of rows with lanes, edges and four columns,
 paging as the reader scrolls. Nothing here mutates a repository, and there is no
 repository picker.
 
-**It walks from `HEAD`, not from every ref.** `worker::serve` builds
-`HistoryRequest::from_head(rows)`, so the graph is the checked-out branch's
-ancestry and a branch with no commit reachable from `HEAD` does not appear. The
+**It walks from `HEAD`, not from every ref.** The history lane (`Scroll::page`,
+`crates/cairn-app/src/worker/pool.rs`) builds `HistoryRequest::from_head(rows)`,
+so the graph is the checked-out branch's ancestry and a branch with no commit
+reachable from `HEAD` does not appear. The
 engine already takes a tip set — `HistoryRequest::from_commits` — and the
 research measurements drive it with every ref; nothing in the application does
 yet. `refs-and-status` is where showing all branches belongs, and see also the
@@ -31,7 +32,9 @@ One commit crosses four crates and changes shape three times.
 1. **`gix` hands over a walk entry.** `Repository::history_session`
    (`crates/cairn-git/src/history/session.rs`) opens one gitoxide revision walk
    and keeps it for the life of a scroll. Each step yields an id and its parent
-   ids, read from the walk rather than from a decoded object.
+   ids, read from the walk rather than from a decoded object — the parents git
+   shows, which in a shallow clone are not always the ones the object names
+   (see "A shallow clone" below).
 2. **`LaneAssigner` turns ids into a picture.**
    `crates/cairn-model/src/lane_assignment.rs` takes `(id, parent_ids)` in walk
    order and produces a `GraphRow`: the commit's `Lane`, and every `EdgeSegment`
@@ -162,6 +165,32 @@ cancelled cold query reports how far it got and discards the page; a cancelled
 (`a_cancelled_query_stops_walking_and_says_where`,
 `cancelling_a_session_stops_the_walk_and_keeps_its_progress`).
 
+**A shallow clone is walked as git walks it.** A boundary commit — one the
+clone's `shallow` file lists — names parents in its object that the clone does
+not have, and git reads the file as grafts: the commit has no parents, so `git
+log --format=%P` prints nothing for it and `--graph` draws it as a root, while
+a parent the clone DOES have, reached through another branch, is still shown.
+gix's own `rev_walk` handles the file otherwise: it hands the boundary commit
+over with the parents its object names, and skips the next appearance of each
+of those ids whichever commit names it — so a merge-shaped history cloned with
+`--depth` loses a commit its sibling branch reaches, and the lane assigner holds
+a lane open for a parent that never arrives. Both routes therefore walk through
+`crates/cairn-git/src/history/walk.rs`: gitoxide's `Simple` traversal itself,
+reading every commit through a `Grafted` object source that serves a boundary
+commit with its `parent` header lines removed — git's graft, applied where the
+object is read — and with no commit-graph in a shallow repository, which git
+does not read there either (`commit_graph_compatible`). The shallow file is
+read once per walk (`crates/cairn-git/src/shallow.rs`, which
+`Repository::commit_details` reads too). With no parents a boundary commit is a
+root to the assigner, so its line ends there and no lane stays reserved below
+it. Pinned against `git log --format='%H %P'` at four depths of one history — a
+lone tip, a merge cut at the boundary, two boundaries on two branches, and a
+boundary whose parent the clone has through a sibling — on both routes, with
+the graph required to be the one git's parents lay out
+(`a_shallow_clones_boundary_commits_have_the_parents_git_log_shows`,
+`crates/cairn-git/tests/history.rs`); the header rewrite by
+`only_the_headers_parent_lines_are_removed`.
+
 Order is `HistoryOrder::CommitTime` by default, chosen by measurement; neither
 it nor `GraphOrder` is topological, which is why the assigner must be total over
 arrival order. The measurement (`measures_both_orders_against_a_named_repository`,
@@ -178,7 +207,8 @@ FILE, and it is a guard, not a convention — see below.
 - **One open repository, one thread-local handle, taken once.**
   `cairn_git::SharedRepository` is gitoxide's `ThreadSafeRepository` with the
   paths cached, and `SharedRepository::to_worker()` is the `Repository` a worker
-  runs on. `worker::serve` calls it **once, at the top of the thread**: a
+  runs on. Each thread that reads calls it **once, at the top of the thread** —
+  `serve` on the repository thread, `serve_diffs` on the diff thread: a
   per-request conversion compiles and passes every test while rebuilding the
   object cache and the pack snapshot each time, which is why the call site
   carries a comment rather than being left to look obvious.
@@ -201,17 +231,33 @@ FILE, and it is a guard, not a convention — see below.
   served behind it (`a_missing_git_is_refused_naming_the_version_and_nothing_is_served`,
   `a_git_refused_at_discovery_is_refused_to_every_repository_that_asks`); one
   probe per application is `git_is_found_once_per_application_not_once_per_repository`.
-- `RepositoryHandle::submit(Request) -> Epoch` returns immediately over an
-  unbounded channel and holds no receiving end of anything.
+- `RepositoryHandle::submit(Request) -> Option<Epoch>` returns immediately and
+  holds no receiving end of anything. It numbers a query in its lane, then routes
+  it (`worker/routing.rs`) over an unbounded channel straight to the thread that
+  serves it, and returns the epoch; an operation is numbered in no lane and
+  returns `None`.
 - `Updates::next()` is an `async fn`: it `try_recv`s and otherwise parks on
   `worker/wake.rs`, a one-slot latch a worker sets. There is no timer and no
   async-runtime dependency.
+- **Epochs are numbered per lane** (`worker/epoch.rs`, PRD R4.1): `QueryLane`
+  is history, changes or file diff, and a new query supersedes the older ones in
+  its own lane only — except that a changes query also supersedes the file-diff
+  lane (`QueryLane::supersedes`), since a file of the commit that was selected is
+  no file of the one that is now. So a scroll never cancels a diff, a selection
+  never cancels a scroll, and an operation, numbered in no lane, supersedes
+  nothing (`each_lane_supersedes_itself_and_a_changes_query_the_file_diff_too`;
+  through the real boundary, `crates/cairn-app/src/worker/diff_tests.rs`).
 - **The epoch IS the cancel signal.** `Superseded` (`worker/epoch.rs`)
-  implements `cairn_git::Cancel` as "is my epoch still current", so superseding
-  a request stops its walk at the next commit rather than discarding a finished
-  answer (`superseding_a_request_stops_the_walk_that_is_serving_it`). Dropping
+  implements `cairn_git::Cancel` as "is my epoch still current in its lane", so
+  superseding a request stops its walk at the next commit rather than
+  discarding a finished answer (`superseding_a_request_stops_the_walk_that_is_serving_it`),
+  and ends a diff's `git` process group at the runner's next poll
+  (`a_superseded_diff_kills_its_git`). An answer that finished anyway is dropped
+  as it arrives, by `Updates::next`
+  (`an_answer_superseded_in_its_lane_is_dropped_on_arrival`). Dropping
   `Updates` stops everything, and so does `Request::Close`, which stops the
-  epochs as it is submitted: closing the window does not wait for a page.
+  epochs as it is submitted: closing the window does not wait for a page or a
+  diff.
 - **A dead worker is announced, not waited for.** `Update::WorkerLost` is sent
   from `WorkerExit`'s `Drop`, and the job channel is closed BEFORE the waiting
   task is woken. That ordering is the point: reversed, a worker that panicked
@@ -241,13 +287,19 @@ FILE, and it is a guard, not a convention — see below.
   the stream open with nothing coming. Every wait in the worker's tests is
   bounded (`fetch_tests::WAIT`, in `block_on` and `woken_by`), so a hang of
   that shape is a red test with a name.
-- `WORKERS_PER_REPOSITORY` is 1: the live walk lives on one thread, and a `const`
-  assertion fails the build if it is raised, because more workers need a routing
-  decision and not a bigger number. A second kind of work gets its own worker,
-  which costs this one almost nothing: measured by
+- **An explicit routing table names the thread for each lane**
+  (`worker/routing.rs`, PRD R4.2): the history lane on `cairn-repository`,
+  which owns the live walk — it borrows that thread's handle across turns and is
+  not `Send`, so it never moves — and the changes and file-diff lanes, commits,
+  comparisons and the working tree alike, on `cairn-diff`
+  (`worker/diff_lane.rs`). `route` applies it to every request as it is
+  submitted and hands each thread its own job type, so neither thread forwards
+  the other's work (`every_query_is_served_on_the_thread_its_lane_is_routed_to`).
+  A second thread costs the first almost nothing: measured by
   `measures_concurrent_walks_against_a_named_repository` (`#[ignore]`d),
   concurrent walks scale 2.1x, 4.2x and 7.9x at 2, 4 and 8 threads with
-  single-walk time flat.
+  single-walk time flat. How the diff thread schedules, caches and retries is in
+  `docs/systems/diff.md`, "In the application".
 - **The boundary is shaped for a second consumer, and none of it is stubbed.** A
   request is answered by a STREAM of `Update`s rather than by one reply; a worker
   runs ordinary blocking code, so a job that must wait on a UI answer makes its
@@ -263,15 +315,16 @@ FILE, and it is a guard, not a convention — see below.
   as-built description is `docs/systems/credentials.md`; the lane, the close
   and the command log are `docs/systems/git-processes.md`.
 
-Every `submit` of a QUERY supersedes (an operation carries no epoch), and a
-superseded page delivers nothing — so the caller must debounce. `Progress::wants_more()`
+Every `submit` of a QUERY supersedes the queries before it in its lane (an
+operation carries no epoch), and a superseded page delivers nothing — so the
+caller must debounce. `Progress::wants_more()`
 (`crates/cairn-app/src/history_state.rs`) is that debounce: it is false while a
 page is in flight, while the history is complete, and once the update stream has
 ended (no worker is left to answer).
 
 **A failed page is retried on the next approach to the end.** A failure leaves
 `wants_more()` true, so the next time a row near the end comes into view the
-page is asked for again; `worker::serve` dropped the live session on the error
+page is asked for again; the history lane dropped the live session on the error
 but kept the cursor, so that request cold-restarts from the last good page. The
 failure stays on screen — a banner under the rows — until a page arrives. It
 cannot loop: `on_reach_end` fires on a row's visibility CHANGING, and a failure
@@ -340,7 +393,7 @@ import — are rejected outside `cairn-model` by
   modules are cited by file, not by a `cairn_app::` path) decides which, so the
   reader never sees a blank area that could mean any of the three. A failure
   that arrives after rows are drawn is a banner under them, not a replacement
-  for them. `Status::Empty` is reachable because `worker::serve` maps
+  for them. `Status::Empty` is reachable because the history lane maps
   `Error::UnbornHead` to `Update::Rows { rows: [], complete: true }` rather than
   to a failure — a repository with no commits is empty, not broken.
 - **Keyboard**: arrow keys, `PageUp`/`PageDown`, `Home` and `End`, as a pure

@@ -9,17 +9,28 @@ use cairn_guards::{
     calls_nullary_method, code_only, code_without_strings, code_without_test_modules,
     configures_process_environment, constructs_named_struct, constructs_process_command,
     constructs_struct, declared_dependencies, declares_publicly, derives_or_implements,
-    implements_type, mentions_crate, names_gitoxide_mutation, reads_row_content_partially,
-    renames_type, renders_in_a_macro, repo_root, rust_sources, spawns_git,
-    structs_with_a_field_naming, types_containing, waits_on_work,
+    embedded_font_violations, gate_command_assignments, gate_dispatch_arms, gate_full_sequence,
+    gate_function_body, gate_function_calls, gate_function_commands, implements_type,
+    job_env_entries, mentions_crate, names_a_literal_modifier, names_an_element,
+    names_gitoxide_mutation, production_char_literals, production_string_literals,
+    reads_enum_partially, reads_row_content_partially, renames_type, renders_in_a_macro, repo_root,
+    rust_sources, spawns_git, spells_a_chord, structs_with_a_field_naming, types_containing,
+    waits_on_work,
 };
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
 const DEPENDENCY_ALLOWLIST: &[(&str, &[&str])] = &[
     ("cairn-model", &["zeroize"]),
     // `nix`: SIGTERM on cancel, so git can remove its lock files (issue #19).
-    ("cairn-git", &["cairn-model", "gix", "nix", "thiserror"]),
-    ("cairn-ui", &["cairn-model", "freya"]),
+    // `encoding_rs`: a commit in a legacy encoding read as git reads it (user-approved
+    // 2026-10-03).
+    (
+        "cairn-git",
+        &["cairn-model", "encoding_rs", "gix", "nix", "thiserror"],
+    ),
+    // `unicode-width`: a tab stops where a terminal stops it, after wide and combining
+    // characters (user-approved 2026-10-03, choosing "terminal widths").
+    ("cairn-ui", &["cairn-model", "freya", "unicode-width"]),
     (
         "cairn-app",
         &[
@@ -41,6 +52,10 @@ const TEST_ONLY_ALLOWLIST: &[(&str, &[&str])] = &[
     ("cairn-app", &["freya-testing"]),
     // The fetch tests serve a real askpass channel; the engine never links the helper.
     ("cairn-git", &["cairn-askpass"]),
+    // R1.5's pin counts allocations, which needs a counting global allocator. The crate
+    // carries its own `#[global_allocator]`, so it replaces the allocator of the test
+    // binary that links it and of nothing the seam ships.
+    ("cairn-model", &["allocation-counter"]),
 ];
 
 /// Crate directory → crate identifiers it may never name in code, in `src/`, `tests/` or anywhere
@@ -597,6 +612,385 @@ fn the_row_content_matcher_catches_the_shapes_it_claims() {
 }
 
 /// Where every repository mutation lives, and the only module that may build a write.
+/// Crates that may read `DiffContent` however they like: its owner, and this suite's fixtures.
+const DIFF_CONTENT_EXEMPT: &[&str] = &["cairn-model", "cairn-guards"];
+
+/// Module files a parent declares under `#[cfg(test)]` (`#[cfg(test)] mod diff_tests;`): test
+/// code that carries no `#[cfg(test)]` marker of its own for [`code_without_test_modules`] to
+/// find. Only a declaration at the top of its file (brace depth 0) names a file beside it —
+/// one inside `mod outer { .. }` names `outer/x.rs`, and one inside a test module is test
+/// code already — and a file that any other declaration in the same parent also names
+/// (`#[cfg(not(test))] mod x;`) is not test-only, so it stays scanned.
+fn test_only_module_files(
+    sources: &[(std::path::PathBuf, String)],
+) -> BTreeSet<std::path::PathBuf> {
+    let mut files = BTreeSet::new();
+    for (path, source) in sources {
+        let Some(parent) = path.parent() else {
+            continue;
+        };
+        let owns_its_directory = path
+            .file_name()
+            .is_some_and(|name| name == "mod.rs" || name == "lib.rs" || name == "main.rs");
+        let dir = match path.file_stem() {
+            Some(stem) if !owns_its_directory => parent.join(stem),
+            _ => parent.to_path_buf(),
+        };
+        let (test_only, otherwise) = top_level_module_declarations(&code_without_strings(source));
+        for name in test_only.difference(&otherwise) {
+            files.insert(dir.join(format!("{name}.rs")));
+            files.insert(dir.join(name).join("mod.rs"));
+        }
+    }
+    files
+}
+
+/// The body-less `mod name;` declarations at brace depth 0 of `code` (strings and comments
+/// already blanked): those `#[cfg(test)]` stands directly before, give or take a
+/// visibility, and the rest.
+fn top_level_module_declarations(code: &str) -> (BTreeSet<String>, BTreeSet<String>) {
+    const MARKER: &str = "#[cfg(test)]";
+    let bytes = code.as_bytes();
+    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let (mut test_only, mut otherwise) = (BTreeSet::new(), BTreeSet::new());
+    let mut depth = 0usize;
+    for (at, byte) in bytes.iter().enumerate() {
+        match byte {
+            b'{' => depth += 1,
+            b'}' => depth = depth.saturating_sub(1),
+            b'm' if depth == 0
+                && code[at..].starts_with("mod")
+                && (at == 0 || !is_ident(bytes[at - 1]))
+                && bytes.get(at + 3).is_some_and(u8::is_ascii_whitespace) =>
+            {
+                let after = code[at + 3..].trim_start();
+                let name: String = after
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                if name.is_empty() || !after[name.len()..].trim_start().starts_with(';') {
+                    continue;
+                }
+                let mut before = code[..at].trim_end();
+                if before.ends_with(')')
+                    && let Some(open) = before.rfind("pub(")
+                {
+                    before = before[..open].trim_end();
+                } else if let Some(rest) = before.strip_suffix("pub") {
+                    before = rest.trim_end();
+                }
+                if before.ends_with(MARKER) {
+                    test_only.insert(name);
+                } else {
+                    otherwise.insert(name);
+                }
+            }
+            _ => {}
+        }
+    }
+    (test_only, otherwise)
+}
+
+/// `cairn_model::DiffContent` is read the way `RowContent` is: by naming every state.
+/// Every variant is something a view has to draw (R6.8), and a wildcard arm compiles the
+/// day a ninth state lands and draws nothing for it. Production code only — test modules,
+/// `#[cfg(test)]` module files and `tests/` are left out, since a test that asserts one
+/// state (`matches!(content, DiffContent::Binary { .. })`) is a check, not a view.
+#[test]
+fn every_view_of_a_file_diff_names_every_state() {
+    every_production_view_names_every_variant("DiffContent");
+}
+
+/// The diff's row enums, `cairn_model::UnifiedRow` and `cairn_model::SideBySideRow`, are read
+/// the same way (phase 07, which brought the second reader): each variant is a kind of row a
+/// view draws — a header, a line on one side or both, git's end-of-file marker — and a
+/// wildcard arm compiles the day another kind lands and draws nothing for it. Production code
+/// only, over every crate's `src/` but the model's and this suite's, as for `DiffContent`.
+#[test]
+fn every_view_of_a_diff_row_names_every_kind_of_row() {
+    for row in ["UnifiedRow", "SideBySideRow"] {
+        every_production_view_names_every_variant(row);
+    }
+}
+
+/// Every production file outside [`DIFF_CONTENT_EXEMPT`] that names `name` reads it by naming
+/// every variant ([`reads_enum_partially`]), and at least one does, so the scan saw a reader.
+fn every_production_view_names_every_variant(name: &str) {
+    let crates_dir = repo_root().join("crates");
+    let entries = std::fs::read_dir(&crates_dir)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", crates_dir.display()));
+    let mut crates: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().join("Cargo.toml").is_file())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    crates.sort();
+    for exempt in DIFF_CONTENT_EXEMPT {
+        assert!(
+            crates.iter().any(|krate| krate == exempt),
+            "DIFF_CONTENT_EXEMPT names `{exempt}`, which is not a crate under crates/"
+        );
+    }
+
+    let mut readers = 0usize;
+    for krate in crates
+        .iter()
+        .filter(|krate| !DIFF_CONTENT_EXEMPT.contains(&krate.as_str()))
+    {
+        let src = format!("crates/{krate}/src");
+        if !repo_root().join(&src).is_dir() {
+            continue;
+        }
+        let sources = rust_sources(&src);
+        let test_only = test_only_module_files(&sources);
+        for (path, source) in &sources {
+            if test_only.contains(path) {
+                continue;
+            }
+            let production = code_without_test_modules(&code_without_strings(source));
+            if mentions_crate(&production, name).is_empty() {
+                continue;
+            }
+            readers += 1;
+            let hits = reads_enum_partially(&production, name);
+            assert!(
+                hits.is_empty(),
+                "{}:{} reads a `{name}` through a wildcard arm, a catch-all binding, \
+                 `if let`, `let .. else` or `matches!`. Every variant is something a view \
+                 draws; match each one by name (CLAUDE.md, Invariants).",
+                path.display(),
+                hits[0]
+            );
+        }
+    }
+    assert!(
+        readers > 0,
+        "no production file outside {DIFF_CONTENT_EXEMPT:?} names `{name}`, so this guard \
+         checked nothing. If it is read some other way now, move the guard with it."
+    );
+}
+
+/// The matcher, over the row enums' own shapes — every shape the `RowContent` invariant
+/// lists, spelled for `UnifiedRow` and for `SideBySideRow` alike: a wildcard (guarded, bound,
+/// in an or-pattern, behind an attribute, by reference) or a catch-all binding (plain, `ref`,
+/// `mut`, underscored, by reference) beside a header arm; `Some(_)` beside `Some(row)`, since
+/// a layout's `row()` hands one back as an `Option`; an `if let` (nested in an `Option` too),
+/// `while let`, let-chain or `let .. else` taking one kind of row; `matches!` over one, spaced
+/// or not; and an import of the variants (a glob, braced or not, one variant, grouped) or a
+/// rename. A match naming every variant, as the views write it, passes.
+#[test]
+fn the_diff_row_matcher_catches_the_shapes_it_claims() {
+    for row in ["UnifiedRow", "SideBySideRow"] {
+        let caught = [
+            (
+                "wildcard arm",
+                format!("match drawn {{\n    {row}::Header(h) => h,\n    _ => return,\n}}"),
+            ),
+            (
+                "guarded wildcard",
+                format!("match drawn {{\n    {row}::Header(h) => a(h),\n    _ if x => b(),\n}}"),
+            ),
+            (
+                "bound wildcard",
+                format!(
+                    "match drawn {{\n    {row}::Header(h) => a(h),\n    rest @ _ => b(rest),\n}}"
+                ),
+            ),
+            (
+                "wildcard in an or-pattern",
+                format!("match drawn {{\n    {row}::Header(h) | _ => a(),\n}}"),
+            ),
+            (
+                "attributed wildcard",
+                format!(
+                    "match drawn {{\n    {row}::Header(h) => a(h),\n    #[allow(unreachable_patterns)]\n    _ => b(),\n}}"
+                ),
+            ),
+            (
+                "catch-all binding",
+                format!(
+                    "match drawn {{\n    {row}::Header(h) => a(h),\n    other => b(other),\n}}"
+                ),
+            ),
+            (
+                "ref binding",
+                format!(
+                    "match drawn {{\n    {row}::Header(h) => a(h),\n    ref other => b(other),\n}}"
+                ),
+            ),
+            (
+                "mut binding",
+                format!(
+                    "match drawn {{\n    {row}::Header(h) => a(h),\n    mut other => b(other),\n}}"
+                ),
+            ),
+            (
+                "underscore binding",
+                format!("match drawn {{\n    {row}::Header(h) => a(h),\n    _rest => b(),\n}}"),
+            ),
+            (
+                "reference wildcard",
+                format!("match &drawn {{\n    &{row}::Header(ref h) => a(h),\n    &_ => b(),\n}}"),
+            ),
+            (
+                "reference binding",
+                format!(
+                    "match &drawn {{\n    &{row}::Header(ref h) => a(h),\n    &other => b(other),\n}}"
+                ),
+            ),
+            (
+                "wrapped wildcard",
+                format!(
+                    "match layout.row(t, o, 0) {{\n    Some({row}::Header(h)) => a(h),\n    Some(_) => b(),\n    None => c(),\n}}"
+                ),
+            ),
+            (
+                "if let",
+                format!("if let {row}::Removed {{ line, .. }} = drawn {{ draw(line) }}"),
+            ),
+            (
+                "nested if let",
+                format!("if let Some({row}::Header(h)) = layout.row(t, o, 0) {{ draw(h) }}"),
+            ),
+            (
+                "while let",
+                format!("while let Some({row}::Header(h)) = rows.next() {{ draw(h) }}"),
+            ),
+            (
+                "let chain",
+                format!(
+                    "if ready && let Some({row}::Header(h)) = layout.row(t, o, 0) {{\n    draw(h);\n}}"
+                ),
+            ),
+            (
+                "let else",
+                format!("let Some({row}::Header(h)) = layout.row(t, o, 0) else {{ return }};"),
+            ),
+            (
+                "matches!",
+                format!("let header = matches!(drawn, Some({row}::Header(_)));"),
+            ),
+            (
+                "spaced matches!",
+                format!("assert!(matches! (\n    drawn,\n    {row}::Header(..)\n));"),
+            ),
+            ("glob import", format!("use cairn_model::{row}::*;")),
+            (
+                "braced glob import",
+                format!("use cairn_model::{row}::{{self, *}};"),
+            ),
+            (
+                "variant import",
+                format!("use cairn_model::{row}::Header;\nif let Header(h) = x {{}}"),
+            ),
+            (
+                "grouped variant import",
+                format!("use cairn_model::{{{row}::Header, ShownDiff}};"),
+            ),
+            ("renamed import", format!("use cairn_model::{row} as Row;")),
+        ];
+        for (shape, source) in &caught {
+            assert!(
+                !reads_enum_partially(source, row).is_empty(),
+                "the matcher missed the {shape} shape of {row}: {source:?}"
+            );
+        }
+    }
+    let unified = "match drawn {\n    UnifiedRow::Header(h) => a(h),\n    UnifiedRow::Context { line, .. }\n    | UnifiedRow::Removed { line, .. }\n    | UnifiedRow::Added { line, .. } => b(line),\n    UnifiedRow::NoNewlineAtEnd => c(),\n}";
+    assert!(reads_enum_partially(unified, "UnifiedRow").is_empty());
+    let side = "let (left, right) = match drawn {\n    SideBySideRow::Header(h) => (h, h),\n    SideBySideRow::Context { old, new, .. } => (old, new),\n    SideBySideRow::Replaced { old, new, .. } => (old, new),\n    SideBySideRow::Removed { old, .. } => (old, x),\n    SideBySideRow::Added { new, .. } => (x, new),\n    SideBySideRow::NoNewlineAtEnd { old, new } => (old, new),\n};";
+    assert!(reads_enum_partially(side, "SideBySideRow").is_empty());
+}
+
+#[test]
+fn the_diff_content_matcher_catches_the_shapes_it_claims() {
+    let caught = [
+        (
+            "wildcard arm",
+            "match diff.content {\n    DiffContent::Text { text, .. } => draw(text),\n    _ => {}\n}",
+        ),
+        (
+            "catch-all binding",
+            "match &diff.content {\n    DiffContent::Binary { .. } => a(),\n    other => b(other),\n}",
+        ),
+        (
+            "if let",
+            "if let DiffContent::Text { text, .. } = &diff.content { draw(text) }",
+        ),
+        (
+            "let else",
+            "let DiffContent::Text { text, .. } = diff.content else { return };",
+        ),
+        (
+            "matches!",
+            "let text = matches!(diff.content, DiffContent::Text { .. });",
+        ),
+        ("glob import", "use cairn_model::DiffContent::*;"),
+        ("renamed import", "use cairn_model::DiffContent as State;"),
+    ];
+    for (shape, source) in caught {
+        assert!(
+            !reads_enum_partially(source, "DiffContent").is_empty(),
+            "the matcher missed the {shape} shape: {source:?}"
+        );
+    }
+    let total = "match content {\n    DiffContent::Text { .. } => 1,\n    DiffContent::Binary { .. }\n    | DiffContent::ModeChangeOnly => 0,\n}";
+    assert!(reads_enum_partially(total, "DiffContent").is_empty());
+
+    let sources = vec![
+        (
+            std::path::PathBuf::from("crates/x/src/worker/mod.rs"),
+            "mod pool;\n#[cfg(test)]\nmod diff_tests;\n#[cfg(test)]\npub(crate) use diff_tests::{a};\n".to_owned(),
+        ),
+        (
+            std::path::PathBuf::from("crates/x/src/view.rs"),
+            "#[cfg(test)]\nmod tests {\n}\n#[cfg(test)]\npub mod fixtures;\n".to_owned(),
+        ),
+    ];
+    let found = test_only_module_files(&sources);
+    for expected in [
+        "crates/x/src/worker/diff_tests.rs",
+        "crates/x/src/view/fixtures.rs",
+    ] {
+        assert!(
+            found.contains(Path::new(expected)),
+            "{expected} not seen as test-only: {found:?}"
+        );
+    }
+    assert!(!found.contains(Path::new("crates/x/src/worker/pool.rs")));
+    assert!(!found.contains(Path::new("crates/x/src/view/tests.rs")));
+
+    // G2: a declaration inside another module's braces names no file beside its parent,
+    // and a file another declaration also names is not test-only — each would otherwise
+    // leave a production file unscanned.
+    let sources = vec![
+        (
+            std::path::PathBuf::from("crates/x/src/nested.rs"),
+            "mod outer {\n    #[cfg(test)]\n    mod inner;\n}\n".to_owned(),
+        ),
+        (
+            std::path::PathBuf::from("crates/x/src/twice.rs"),
+            "#[cfg(test)]\nmod both;\n#[cfg(not(test))]\nmod both;\n#[cfg(test)]\npub(crate) mod only;\n"
+                .to_owned(),
+        ),
+    ];
+    let found = test_only_module_files(&sources);
+    for production in [
+        "crates/x/src/nested/inner.rs",
+        "crates/x/src/nested/outer/inner.rs",
+        "crates/x/src/twice/both.rs",
+    ] {
+        assert!(
+            !found.contains(Path::new(production)),
+            "{production} was taken for test-only: {found:?}"
+        );
+    }
+    assert!(
+        found.contains(Path::new("crates/x/src/twice/only.rs")),
+        "a test-only declaration beside a doubled one was missed: {found:?}"
+    );
+}
+
 const OPS_DIR: &str = "crates/cairn-git/src/ops";
 
 /// Where every `git` process is built, spawned, waited on and read, and nowhere else.
@@ -625,9 +1019,10 @@ fn only_the_ops_module_mutates_a_repository() {
             let hits = spawns_git(&source);
             assert!(
                 hits.is_empty(),
-                "{}:{} spawns a `git` subprocess outside crates/cairn-git/src/ops. Every \
-                 repository mutation lives in that module so the confirmation seal cannot \
-                 be routed around.",
+                "{}:{} spawns a `git` subprocess outside crates/cairn-git/src/ops and \
+                 crates/cairn-git/src/process. Every repository mutation lives in ops, and \
+                 process is the one place a `git` process is run, so the confirmation seal \
+                 cannot be routed around.",
                 path.display(),
                 hits[0]
             );
@@ -1440,6 +1835,467 @@ fn the_runner_is_named_only_by_ops_and_reads() {
              WriteAuthority can be named or built (process-manager G1)"
         );
     }
+}
+
+/// The one file that may build the first porcelain read, `git diff --no-index`.
+const PORCELAIN_READ_FILE: &str = "crates/cairn-git/src/reads/working_tree.rs";
+
+/// The one file that may build the second porcelain read, `git config` in query form —
+/// what a fetch of a remote will read, asked of git (the user's decision of 2026-10-04).
+const CONFIG_READ_FILE: &str = "crates/cairn-git/src/reads/fetch_settings.rs";
+
+/// Every option the `git config` read may pass: the query form, and nothing that chooses
+/// another file or another type. Any literal of [`CONFIG_READ_FILE`]'s production code
+/// that starts with `-` must be one of these.
+const CONFIG_QUERY_OPTIONS: &[&str] =
+    &["--includes", "--null", "--type=bool", "--get", "--get-all"];
+
+/// `git config`'s writers, as options (every git) and as subcommands (2.46 and later). No
+/// option here may be a literal anywhere in `reads/`'s production code, and no subcommand
+/// in [`CONFIG_READ_FILE`]'s (the subcommands are words other reads print — `set` and
+/// `unset` are `git check-attr`'s answers — so they are refused in that file alone).
+const CONFIG_SETTER_OPTIONS: &[&str] = &[
+    "--add",
+    "--unset",
+    "--unset-all",
+    "--replace-all",
+    "--edit",
+    "--rename-section",
+    "--remove-section",
+];
+const CONFIG_SETTER_SUBCOMMANDS: &[&str] =
+    &["set", "unset", "edit", "rename-section", "remove-section"];
+
+/// The lines of `reads/` whose literal `"diff"` is not the verb: the `diff` ATTRIBUTE, which
+/// `git check-attr` is asked for and answers with. Each row is the file and the whole
+/// trimmed line, and must still match, so a row outliving its line fails rather than
+/// excusing whatever lands there next.
+const DIFF_ATTRIBUTE_LINES: &[(&str, &str)] = &[
+    (
+        "crates/cairn-git/src/reads/attributes.rs",
+        r#"const ARGUMENTS: [&str; 4] = ["check-attr", "--stdin", "-z", "diff"];"#,
+    ),
+    (
+        "crates/cairn-git/src/reads/attributes.rs",
+        r#"if named.as_slice() == path.as_bytes() && attribute.as_slice() == b"diff" =>"#,
+    ),
+];
+
+/// What the reads of `reads/` say about the two porcelain verbs, as `path:line ..` for each
+/// way they break the two accepted exceptions. `diff`: the exact literal `"diff"` (plain,
+/// byte or raw) appears in production code of [`PORCELAIN_READ_FILE`] alone, exactly once,
+/// with the next literal on its line `"--no-index"`, and that file's production code holds
+/// `"/dev/null"` — but for the attribute lines of [`DIFF_ATTRIBUTE_LINES`], each of which
+/// must match. `config` ([`config_read_violations`]): the exact literal `"config"` appears
+/// in production code of [`CONFIG_READ_FILE`] alone, exactly once; every literal there that
+/// starts with `-` is one of [`CONFIG_QUERY_OPTIONS`], which must include `--get` or
+/// `--get-all`; no literal there is one of [`CONFIG_SETTER_SUBCOMMANDS`]; and no literal in
+/// any file is one of [`CONFIG_SETTER_OPTIONS`]. Comments and test modules are not read; a
+/// verb or an option built by `format!` or `concat!` is not seen.
+fn porcelain_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
+    let mut found = diff_read_violations(files);
+    found.extend(config_read_violations(files));
+    found
+}
+
+/// The `git config` half of [`porcelain_read_violations`].
+fn config_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut verbs = 0usize;
+    let mut has_query_action = false;
+    for (path, source) in files {
+        let at = |line: usize| format!("{}:{line}", path.display());
+        let home = *path == Path::new(CONFIG_READ_FILE);
+        for (line, text) in production_string_literals(source) {
+            if CONFIG_SETTER_OPTIONS.contains(&text.as_str()) {
+                found.push(format!(
+                    "{} names `{text}`, a `git config` writer, in reads/",
+                    at(line)
+                ));
+            }
+            if text == "config" {
+                verbs += 1;
+                if !home {
+                    found.push(format!(
+                        "{} names the porcelain verb `config` outside {CONFIG_READ_FILE}",
+                        at(line)
+                    ));
+                }
+            }
+            if !home {
+                continue;
+            }
+            if CONFIG_SETTER_SUBCOMMANDS.contains(&text.as_str()) {
+                found.push(format!(
+                    "{} names `{text}`, a `git config` writer, in {CONFIG_READ_FILE}",
+                    at(line)
+                ));
+            }
+            if text.starts_with('-') {
+                if CONFIG_QUERY_OPTIONS.contains(&text.as_str()) {
+                    has_query_action |= text == "--get" || text == "--get-all";
+                } else {
+                    found.push(format!(
+                        "{} passes `{text}` to the config read, which is not a query option",
+                        at(line)
+                    ));
+                }
+            }
+        }
+    }
+    if verbs != 1 {
+        found.push(format!(
+            "reads/ names the verb `config` {verbs} times in production code; the one accepted \
+             config read is built once, in {CONFIG_READ_FILE}"
+        ));
+    }
+    if !has_query_action {
+        found.push(format!(
+            "{CONFIG_READ_FILE} names neither `--get` nor `--get-all`, so its config read is \
+             not in query form"
+        ));
+    }
+    found
+}
+
+/// The `git diff --no-index` half of [`porcelain_read_violations`].
+fn diff_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut verbs = 0usize;
+    let mut has_null_device = false;
+    let mut attribute_lines_seen = vec![false; DIFF_ATTRIBUTE_LINES.len()];
+    for (path, source) in files {
+        let literals = production_string_literals(source);
+        let source_lines: Vec<&str> = source.lines().collect();
+        let at = |line: usize| format!("{}:{line}", path.display());
+        let home = *path == Path::new(PORCELAIN_READ_FILE);
+        if home {
+            has_null_device = literals.iter().any(|(_, text)| text == "/dev/null");
+        }
+        for (index, (line, text)) in literals.iter().enumerate() {
+            if text != "diff" {
+                continue;
+            }
+            let written = source_lines.get(line - 1).map_or("", |text| text.trim());
+            let attribute = DIFF_ATTRIBUTE_LINES
+                .iter()
+                .position(|(file, exact)| *path == Path::new(file) && written == *exact);
+            if let Some(row) = attribute {
+                attribute_lines_seen[row] = true;
+                continue;
+            }
+            verbs += 1;
+            if !home {
+                found.push(format!(
+                    "{} names the porcelain verb `diff` outside {PORCELAIN_READ_FILE}",
+                    at(*line)
+                ));
+                continue;
+            }
+            let beside = literals
+                .get(index + 1)
+                .is_some_and(|(next_line, next)| next_line == line && next == "--no-index");
+            if !beside {
+                found.push(format!(
+                    "{} names `diff` without `--no-index` beside it on its line",
+                    at(*line)
+                ));
+            }
+        }
+    }
+    if verbs != 1 {
+        found.push(format!(
+            "reads/ names the verb `diff` {verbs} times in production code; the one accepted \
+             porcelain read is built once, in {PORCELAIN_READ_FILE}"
+        ));
+    }
+    if !has_null_device {
+        found.push(format!(
+            "{PORCELAIN_READ_FILE} no longer names `/dev/null`, the one side `--no-index` is \
+             accepted against"
+        ));
+    }
+    let scanned_attributes = files.iter().any(|(path, _)| {
+        DIFF_ATTRIBUTE_LINES
+            .iter()
+            .any(|(file, _)| *path == Path::new(file))
+    });
+    for ((file, exact), seen) in DIFF_ATTRIBUTE_LINES.iter().zip(attribute_lines_seen) {
+        if scanned_attributes && !seen {
+            found.push(format!(
+                "DIFF_ATTRIBUTE_LINES excuses `{exact}` in {file}, which no longer holds it: \
+                 remove the row"
+            ));
+        }
+    }
+    found
+}
+
+/// The two porcelain verbs a read runs are `git diff --no-index`, built once, by the
+/// working-tree read, against `/dev/null` (the user's decision of 2026-10-03), and `git
+/// config` in query form, built once, by the fetch-settings read (the user's decision of
+/// 2026-10-04); check 10 of `destructive-ops-reviewer`. Porcelain `git diff` against the
+/// working tree refreshes the index whatever `GIT_OPTIONAL_LOCKS` says, and `git config`
+/// with a setter writes the configuration, so a second `"diff"` or `"config"` in `reads/`,
+/// an option outside the query form in the config read, or a setter anywhere in `reads/`
+/// is the regression this catches. Scoped to those literals; a verb or option built at run
+/// time (`format!`), and whether every other verb a read runs is query plumbing, stay the
+/// reviewer's.
+#[test]
+fn the_porcelain_reads_are_the_two_named_queries() {
+    let sources = rust_sources(READS_DIR);
+    for home in [PORCELAIN_READ_FILE, CONFIG_READ_FILE] {
+        assert!(
+            sources.iter().any(|(path, _)| path == Path::new(home)),
+            "{home} is gone; this guard names it as the home of a porcelain read — move the \
+             guard with the read"
+        );
+    }
+    for (file, _) in DIFF_ATTRIBUTE_LINES {
+        assert!(
+            sources.iter().any(|(path, _)| path == Path::new(file)),
+            "{file} is gone, and DIFF_ATTRIBUTE_LINES still excuses lines in it: remove its rows"
+        );
+    }
+    let files: Vec<(&Path, &str)> = sources
+        .iter()
+        .map(|(path, source)| (path.as_path(), source.as_str()))
+        .collect();
+    let found = porcelain_read_violations(&files);
+    assert!(
+        found.is_empty(),
+        "a porcelain read escaped its accepted shape: {found:?}. A read runs query plumbing, \
+         `status`, `git diff --no-index -- /dev/null <path>` built in {PORCELAIN_READ_FILE}, \
+         or `git config` in query form built in {CONFIG_READ_FILE}; porcelain `git diff` \
+         rewrites the index it reads, and a `git config` setter the configuration."
+    );
+}
+
+#[test]
+fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
+    let home = Path::new(PORCELAIN_READ_FILE);
+    let other = Path::new("crates/cairn-git/src/reads/changes.rs");
+    let accepted =
+        "fn a() { args.extend([\"diff\", \"--no-index\"]); args.extend([\"--\", \"/dev/null\"]); }";
+    let config_home = Path::new(CONFIG_READ_FILE);
+    let accepted_config = "const QUERY: [&str; 3] = [\"config\", \"--includes\", \"--null\"];\n\
+                           const BOOLEAN: [&str; 2] = [\"--type=bool\", \"--get\"];\n\
+                           const EVERY_VALUE: [&str; 1] = [\"--get-all\"];\n";
+    // The `diff` cases are judged beside the accepted config read, unless they bring their
+    // own; the `config` cases below bring theirs beside the accepted diff read.
+    let verdict = |files: &[(&Path, &str)]| {
+        let mut all = files.to_vec();
+        if !files.iter().any(|(path, _)| *path == config_home) {
+            all.push((config_home, accepted_config));
+        }
+        porcelain_read_violations(&all)
+    };
+    assert!(
+        verdict(&[(home, accepted)]).is_empty(),
+        "the accepted shape"
+    );
+    assert!(
+        verdict(&[
+            (home, accepted),
+            (other, "fn b() { x.args([\"diff-tree\", \"-p\"]); }")
+        ])
+        .is_empty(),
+        "a plumbing verb that merely starts with diff"
+    );
+
+    let refused: &[(&str, &[(&Path, &str)])] = &[
+        (
+            "a second `diff --no-index` elsewhere in reads/",
+            &[
+                (home, accepted),
+                (other, "fn b() { x.args([\"diff\", \"--no-index\"]); }"),
+            ],
+        ),
+        (
+            "porcelain diff elsewhere",
+            &[(home, accepted), (other, "fn b() { x.arg(\"diff\"); }")],
+        ),
+        (
+            "a second one in the home file",
+            &[(
+                home,
+                "fn a() { [\"diff\", \"--no-index\"]; [\"diff\", \"--no-index\"]; \"/dev/null\"; }",
+            )],
+        ),
+        (
+            "diff without --no-index beside it",
+            &[(home, "fn a() { [\"diff\", \"-p\"]; \"/dev/null\"; }")],
+        ),
+        (
+            "--no-index on another line",
+            &[(
+                home,
+                "fn a() { [\"diff\",\n \"--no-index\"]; \"/dev/null\"; }",
+            )],
+        ),
+        (
+            "no /dev/null",
+            &[(home, "fn a() { [\"diff\", \"--no-index\"]; }")],
+        ),
+        (
+            "no porcelain read at all",
+            &[(home, "fn a() { \"/dev/null\"; }")],
+        ),
+        (
+            "a raw string",
+            &[(home, accepted), (other, "fn b() { x.arg(r#\"diff\"#); }")],
+        ),
+        (
+            "a byte string",
+            &[(home, accepted), (other, "fn b() { x.arg(b\"diff\"); }")],
+        ),
+        (
+            "after a char literal holding a quote",
+            &[
+                (home, accepted),
+                (other, "fn b() { let q = '\"'; x.arg(\"diff\"); }"),
+            ],
+        ),
+    ];
+    for (shape, files) in refused {
+        assert!(!verdict(files).is_empty(), "{shape} was not caught");
+    }
+
+    // The attribute lines are excused only as written, and only while they are there.
+    let attributes = Path::new(DIFF_ATTRIBUTE_LINES[0].0);
+    let both = format!(
+        "fn c() {{\n    {}\n    {}\n}}\n",
+        DIFF_ATTRIBUTE_LINES[0].1, DIFF_ATTRIBUTE_LINES[1].1
+    );
+    assert!(
+        verdict(&[(home, accepted), (attributes, &both)]).is_empty(),
+        "the diff attribute's own lines"
+    );
+    let one = format!("fn c() {{\n    {}\n}}\n", DIFF_ATTRIBUTE_LINES[0].1);
+    assert!(
+        !verdict(&[(home, accepted), (attributes, &one)]).is_empty(),
+        "a stale attribute row was not caught"
+    );
+    let moved = format!(
+        "fn c() {{\n    {}\n    {}\n    x.arg(\"diff\");\n}}\n",
+        DIFF_ATTRIBUTE_LINES[0].1, DIFF_ATTRIBUTE_LINES[1].1
+    );
+    assert!(
+        !verdict(&[(home, accepted), (attributes, &moved)]).is_empty(),
+        "a verb in the attribute file beside its excused lines was not caught"
+    );
+
+    // Not production code, or not a literal: not the matcher's.
+    for (shape, extra) in [
+        ("a comment", "// x.arg(\"diff\");\nfn b() {}"),
+        ("a doc comment", "/// `git diff` is \"diff\"\nfn b() {}"),
+        (
+            "a test module",
+            "#[cfg(test)]\nmod tests {\n    fn t() { x.arg(\"diff\"); }\n}\n",
+        ),
+        (
+            "a longer literal",
+            "fn b() { x.arg(\"diff.noprefix=false\"); }",
+        ),
+    ] {
+        assert!(
+            verdict(&[(home, accepted), (other, extra)]).is_empty(),
+            "{shape} was read as the verb"
+        );
+    }
+    // The config read: once, in its file, in query form, and no setter anywhere.
+    let config_verdict = |files: &[(&Path, &str)]| {
+        let mut all = vec![(home, accepted)];
+        all.extend_from_slice(files);
+        porcelain_read_violations(&all)
+    };
+    assert!(
+        config_verdict(&[(config_home, accepted_config)]).is_empty(),
+        "the accepted config read"
+    );
+    assert!(
+        config_verdict(&[
+            (config_home, accepted_config),
+            (other, "fn b() { if v == b\"set\" || v == b\"unset\" {} }")
+        ])
+        .is_empty(),
+        "check-attr's answers `set` and `unset` in another read"
+    );
+    let refused_config: &[(&str, &[(&Path, &str)])] = &[
+        (
+            "a setter option in the config read",
+            &[(
+                config_home,
+                "const Q: [&str; 3] = [\"config\", \"--get\", \"--unset\"];",
+            )],
+        ),
+        (
+            "a setter option elsewhere in reads/",
+            &[
+                (config_home, accepted_config),
+                (other, "fn b() { x.arg(\"--replace-all\"); }"),
+            ],
+        ),
+        (
+            "a setter subcommand in the config read",
+            &[(
+                config_home,
+                "const Q: [&str; 3] = [\"config\", \"set\", \"--get\"];",
+            )],
+        ),
+        (
+            "an option outside the query form",
+            &[(
+                config_home,
+                "const Q: [&str; 3] = [\"config\", \"--global\", \"--get\"];",
+            )],
+        ),
+        (
+            "`config` in another file",
+            &[
+                (config_home, accepted_config),
+                (other, "fn b() { x.args([\"config\", \"--get\"]); }"),
+            ],
+        ),
+        (
+            "a second `config` in its file",
+            &[(
+                config_home,
+                "const Q: [&str; 2] = [\"config\", \"--get\"];\nconst R: [&str; 2] = [\"config\", \"--get-all\"];",
+            )],
+        ),
+        (
+            "no query action",
+            &[(
+                config_home,
+                "const Q: [&str; 3] = [\"config\", \"--includes\", \"--null\"];",
+            )],
+        ),
+        ("no config read at all", &[(config_home, "fn a() {}")]),
+        (
+            "a second `diff` beside the config read",
+            &[
+                (config_home, accepted_config),
+                (other, "fn b() { x.arg(\"diff\"); }"),
+            ],
+        ),
+        (
+            "a setter as a raw string",
+            &[
+                (config_home, accepted_config),
+                (other, "fn b() { x.arg(r#\"--add\"#); }"),
+            ],
+        ),
+    ];
+    for (shape, files) in refused_config {
+        assert!(!config_verdict(files).is_empty(), "{shape} was not caught");
+    }
+
+    // The literals are read where they are, lines counted through a multi-line string.
+    assert_eq!(
+        production_string_literals("let a = \"x\ny\";\nlet b = \"diff\";"),
+        vec![(1, "x\ny".to_owned()), (3, "diff".to_owned())]
+    );
 }
 
 #[test]
@@ -2663,6 +3519,273 @@ fn the_unbounded_view_matcher_catches_the_shapes_it_claims() {
     }
 }
 
+/// The accelerator table (D5, PRD R8): the one render file that may name a modifier,
+/// because it is where every chord is written down.
+const ACCELERATOR_TABLE: &str = "crates/cairn-ui/src/accelerators.rs";
+
+/// PRD R8.3, decision D5: a component asks the accelerator table which action a key press
+/// is, and never names a modifier itself — not the held-keys type, not the event's field,
+/// not a modifier key, and not a chord spelled out for a person to read. A `Ctrl` written
+/// into a component is a shortcut that is wrong on macOS.
+#[test]
+fn no_component_names_a_literal_modifier() {
+    let table = Path::new(ACCELERATOR_TABLE);
+    let mut table_seen = false;
+    for dir in RENDER_SOURCE_DIRS {
+        let mut scanned = 0usize;
+        for (path, source) in rust_sources(dir) {
+            scanned += 1;
+            let hits = names_a_literal_modifier(&source);
+            if path == table {
+                table_seen = true;
+                // The matcher has to see the modifiers the table really names, or it is
+                // reading nothing anywhere.
+                assert!(
+                    !hits.is_empty(),
+                    "{ACCELERATOR_TABLE} names no modifier the matcher can see. Either the \
+                     table moved — move this guard's roster with it — or the matcher has gone \
+                     blind, and every other file passes for that reason alone."
+                );
+                continue;
+            }
+            assert!(
+                hits.is_empty(),
+                "{}:{} names a keyboard modifier. Shortcuts resolve through the accelerator \
+                 table ({ACCELERATOR_TABLE}): add an `Action` and its chord there and ask \
+                 `accelerators::resolve_key` which action a press is (CLAUDE.md, Invariants; \
+                 decision D5).",
+                path.display(),
+                hits[0]
+            );
+        }
+        // Per directory: a wrong roster path would otherwise pass.
+        assert!(
+            scanned > 0,
+            "the modifier guard found no files under {dir}; it is scanning less than it claims"
+        );
+    }
+    assert!(
+        table_seen,
+        "{ACCELERATOR_TABLE} does not exist, so no render file is the table and the guard \
+         exempts a file nobody can see. If the table moved, move the roster with it."
+    );
+}
+
+#[test]
+fn the_modifier_matcher_catches_the_shapes_it_claims() {
+    let caught = [
+        (
+            "the type, named",
+            "if e.modifiers.contains(Modifiers::CONTROL) {}",
+        ),
+        ("the event's field alone", "let held = e.modifiers;"),
+        (
+            "the field destructured",
+            "let KeyboardEventData { key, modifiers, .. } = data;",
+        ),
+        (
+            "an aliased import of the type",
+            "use freya::prelude::Modifiers as Held;",
+        ),
+        ("a constant through an alias", "if held == Held::CONTROL {}"),
+        (
+            "a qualified path",
+            "let held = keyboard_types::Modifiers::META | keyboard_types::Modifiers::ALT;",
+        ),
+        (
+            "a constant defined beside the component",
+            "const SAVE: Modifiers = Modifiers::CONTROL;\nfn row() -> Element { rect().into() }",
+        ),
+        (
+            "a constant of the key type",
+            "const COMMAND: NamedKey = NamedKey::Meta;",
+        ),
+        (
+            "a modifier key through an alias",
+            "use freya::prelude::NamedKey as K;\nif e.key == Key::Named(K::Shift) {}",
+        ),
+        (
+            "a glob of the key type's variants",
+            "use freya::prelude::NamedKey::*;\nif e.key == Key::Named(Alt) {}",
+        ),
+        (
+            "a physical modifier key",
+            "if e.code == Code::ControlLeft {}",
+        ),
+        (
+            "the OS-aware helper",
+            "if held.contains(Modifiers::ctrl_or_meta()) {}",
+        ),
+        ("the helper trait", "use freya::prelude::ModifiersExt;"),
+        ("a predicate by inference", "if e.data().held().ctrl() {}"),
+        ("a predicate, wrapped", "if held\n    .shift(\n) {}"),
+        (
+            "the function key",
+            "if e.key == Key::Named(NamedKey::Fn) {}",
+        ),
+        ("a chord in a label", "label().text(\"Ctrl+Alt+1\")"),
+        ("a chord for macOS", "label().text(\"⌘⌥1\")"),
+        (
+            "a chord in a constant",
+            "const HINT: &str = \"Shift+click to compare\";",
+        ),
+        ("the command key as a char", "const COMMAND: char = '⌘';"),
+        ("the option key as a char", "if c == '⌥' {}"),
+        ("a char escape", "const COMMAND: char = '\\u{2318}';"),
+        (
+            "a unicode escape in a string",
+            "label().text(\"\\u{2318}1\")",
+        ),
+        ("a byte escape in a string", "label().text(\"\\x41lt+1\")"),
+        ("a raw string", "label().text(r#\"Ctrl+1\"#)"),
+        ("Shift, hyphenated", "label().text(\"Shift-click\")"),
+        ("Alt, hyphenated", "label().text(\"Alt-drag\")"),
+        ("Option, hyphenated", "label().text(\"Option-click\")"),
+        ("Control, hyphenated", "label().text(\"Control-click\")"),
+        ("Meta, hyphenated", "label().text(\"Meta-x\")"),
+        ("Super, hyphenated", "label().text(\"Super-key\")"),
+        ("Ctrl, hyphenated", "label().text(\"Ctrl-c\")"),
+        ("Cmd, hyphenated", "label().text(\"Cmd-k\")"),
+        ("Command, spelled out", "label().text(\"Command+K\")"),
+        ("Opt, abbreviated", "label().text(\"Opt+drag\")"),
+        (
+            "a lock key's constant",
+            "if held.contains(Modifiers::CAPS_LOCK) {}",
+        ),
+        (
+            "num lock as a key",
+            "if e.key == Key::Named(NamedKey::NumLock) {}",
+        ),
+        ("scroll lock as a code", "if e.code == Code::ScrollLock {}"),
+    ];
+    for (shape, source) in caught {
+        assert!(
+            !names_a_literal_modifier(source).is_empty(),
+            "the modifier matcher missed the {shape} shape: {source:?}"
+        );
+    }
+
+    let ignored = [
+        (
+            "Rust's closure trait",
+            "row: impl Fn(RowRender) -> Element + 'static,",
+        ),
+        (
+            "a resolved action",
+            "if let Some(action) = accelerators::resolve_key(&e) {}",
+        ),
+        ("a comment", "// Ctrl+↓ is next change; Modifiers::CONTROL"),
+        (
+            "an identifier containing a name",
+            "let shifted = on_shift_click;",
+        ),
+        (
+            "a method with arguments",
+            "let image = image().alt(description);",
+        ),
+        (
+            "a word in a string",
+            "label().text(\"Altitude of the Meta team\")",
+        ),
+        (
+            "a test module",
+            "#[cfg(test)]\nmod tests {\n    const HELD: Modifiers = Modifiers::CONTROL;\n}",
+        ),
+        (
+            "a char literal in a test module",
+            "#[cfg(test)]\nmod tests {\n    const COMMAND: char = '⌘';\n}",
+        ),
+        ("a plain key", "Key::Named(NamedKey::ArrowDown) => Some(0),"),
+        (
+            "a lifetime",
+            "fn caption(text: &'static str) -> Label { label() }",
+        ),
+        (
+            "an apostrophe in a string",
+            "label().text(\"don't shift-click\")",
+        ),
+        (
+            "a hyphen in a word",
+            "label().text(\"Alternative-text and Metadata\")",
+        ),
+    ];
+    for (shape, source) in ignored {
+        assert_eq!(
+            names_a_literal_modifier(source),
+            Vec::<usize>::new(),
+            "the modifier matcher fired on the {shape} shape: {source:?}"
+        );
+    }
+}
+
+/// The accelerator table holds data and the resolution of a press against it, and nothing
+/// a person reads (CLAUDE.md, Invariants; G3): an element built there, or a chord spelled
+/// out in a literal, would be a view inside the one file the modifier guard exempts — the
+/// place a `Ctrl` label could hide from it.
+#[test]
+fn the_accelerator_table_holds_data_and_resolution_only() {
+    let (_, table) = rust_sources("crates/cairn-ui/src")
+        .into_iter()
+        .find(|(path, _)| path == Path::new(ACCELERATOR_TABLE))
+        .unwrap_or_else(|| panic!("{ACCELERATOR_TABLE} does not exist; move this guard with it"));
+    let elements = names_an_element(&table);
+    assert!(
+        elements.is_empty(),
+        "{ACCELERATOR_TABLE}:{} builds or names an element. The table maps actions to chords \
+         and resolves a press; drawing belongs in a component, which asks the table.",
+        elements[0]
+    );
+    let spelled = spells_a_chord(&table);
+    assert!(
+        spelled.is_empty(),
+        "{ACCELERATOR_TABLE}:{} spells a chord for a person to read. A shortcut's text is a \
+         view; the table holds the chord as data.",
+        spelled[0]
+    );
+}
+
+#[test]
+fn the_element_matcher_catches_the_shapes_it_claims() {
+    for (shape, source) in [
+        ("a container", "fn hint() { rect().child(x); }"),
+        ("a label", "let caption = label().text(\"x\");"),
+        (
+            "an element type",
+            "pub fn hint(action: Action) -> Element { todo() }",
+        ),
+        ("a component", "impl Component for Hint {}"),
+        ("a button", "Button::new()"),
+        ("into an element", "fn hint() -> impl IntoElement {}"),
+    ] {
+        assert!(
+            !names_an_element(source).is_empty(),
+            "the element matcher missed the {shape} shape: {source:?}"
+        );
+    }
+    for (shape, source) in [
+        ("a comment", "// a label for a person, drawn in a rect"),
+        ("a word in a string", "const WHAT: &str = \"rect label\";"),
+        ("a longer identifier", "let labels = relabel(rectangle);"),
+        (
+            "a test module",
+            "#[cfg(test)]\nmod tests {\n    fn f() { rect(); }\n}",
+        ),
+    ] {
+        assert_eq!(
+            names_an_element(source),
+            Vec::<usize>::new(),
+            "the element matcher fired on the {shape} shape: {source:?}"
+        );
+    }
+    // The char-literal reader the chord matcher stands on: test modules and lifetimes out.
+    assert_eq!(
+        production_char_literals(
+            "const A: char = 'x';\n#[cfg(test)]\nmod t { const B: char = 'y'; }\nfn f<'a>(s: &'a str) {}"
+        ),
+        vec![(1, "x".to_owned())]
+    );
+}
+
 #[test]
 fn destructive_operations_are_sealed_behind_the_confirmation_token() {
     let (_, confirm) = rust_sources("crates/cairn-model/src")
@@ -3330,15 +4453,11 @@ fn ci_runs_every_merge_bar_gate_step() {
     let ci = std::fs::read_to_string(root.join(".github/workflows/ci.yml"))
         .unwrap_or_else(|e| panic!("reading .github/workflows/ci.yml: {e}"));
 
-    // The steps gate.sh knows about, read from its --step dispatch arms.
-    let gate_steps: BTreeSet<&str> = gate
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            let name = line.strip_suffix(";;")?.split(')').next()?.trim();
-            (line.contains("run_") && !name.is_empty() && !name.contains(' ')).then_some(name)
-        })
-        .collect();
+    // The steps gate.sh knows about, read from its --step dispatch arms by the reading that
+    // refuses an arm it cannot read rather than skipping it.
+    let arms = gate_dispatch_arms(&gate)
+        .unwrap_or_else(|e| panic!("scripts/gate.sh's dispatch arms cannot be read: {e}"));
+    let gate_steps: BTreeSet<&str> = arms.iter().map(|(step, _)| step.as_str()).collect();
 
     let ci_steps: BTreeSet<&str> = ci
         .lines()
@@ -3373,8 +4492,10 @@ fn ci_runs_every_merge_bar_gate_step() {
 
 /// The partial-clone pin of `GIT_NO_LAZY_FETCH` skips on a git older than 2.44, which ignores
 /// the variable, and a passing test's stderr is hidden, so `CAIRN_REQUIRE_NO_LAZY_FETCH` is
-/// what turns that skip into a failure on the merge bar. Pinned here: CI sets it, and the
-/// test still reads it in its skip branch (without that, setting it would change nothing).
+/// what turns that skip into a failure on the merge bar. Pinned here: CI sets it in the
+/// `gate` job's own `env:`, which every step of that job sees — not in another job, and not
+/// on one step, where `test-full` would not see it — and the test still reads it in its
+/// skip branch (without that, setting it would change nothing).
 #[test]
 fn the_partial_clone_pin_is_required_in_ci() {
     let root = repo_root();
@@ -3385,10 +4506,12 @@ fn the_partial_clone_pin_is_required_in_ci() {
     let authority = read("crates/cairn-git/src/ops/authority.rs");
 
     assert!(
-        ci.lines()
-            .any(|line| line.trim() == "CAIRN_REQUIRE_NO_LAZY_FETCH: 1"),
-        ".github/workflows/ci.yml no longer sets `CAIRN_REQUIRE_NO_LAZY_FETCH: 1`, so the \
-         partial-clone test of GIT_NO_LAZY_FETCH would skip silently on a git older than 2.44."
+        job_env_entries(&ci, "gate")
+            .iter()
+            .any(|entry| entry == "CAIRN_REQUIRE_NO_LAZY_FETCH: 1"),
+        ".github/workflows/ci.yml's `gate` job no longer sets `CAIRN_REQUIRE_NO_LAZY_FETCH: 1` \
+         in its own `env:`, so the partial-clone test of GIT_NO_LAZY_FETCH would skip silently \
+         on a git older than 2.44."
     );
     let test = authority
         .split("fn a_read_in_a_partial_clone_does_not_fetch_a_missing_object()")
@@ -3405,7 +4528,8 @@ fn the_partial_clone_pin_is_required_in_ci() {
 /// The ssh acceptance criteria (`crates/cairn-git/tests/fetch.rs`) skip where the fixture's
 /// `sshd` cannot run, and a passing test's stderr is hidden, so `CAIRN_REQUIRE_SSH_FIXTURE`
 /// is what turns a skip into a failure. Pinned here: CI sets it unconditionally (it
-/// installs the server), the gate's `test-full` step sets it wherever the fixture would
+/// installs the server) in the `gate` job's own `env:`, which every step of that job sees,
+/// the gate's `test-full` step sets it wherever the fixture would
 /// find an `sshd`, and the gate looks for one in every directory the fixture does — a
 /// directory dropped from the gate alone would bring the silent skip back on that machine.
 /// Each is a line-level check, so none can pass on an empty read.
@@ -3420,10 +4544,12 @@ fn the_ssh_criteria_are_required_wherever_they_can_run() {
     let fixture = read("crates/cairn-git/tests/remotes/ssh.rs");
 
     assert!(
-        ci.lines()
-            .any(|line| line.trim() == "CAIRN_REQUIRE_SSH_FIXTURE: 1"),
-        ".github/workflows/ci.yml no longer sets `CAIRN_REQUIRE_SSH_FIXTURE: 1`, so the ssh \
-         acceptance criteria would skip silently in CI wherever the fixture cannot run."
+        job_env_entries(&ci, "gate")
+            .iter()
+            .any(|entry| entry == "CAIRN_REQUIRE_SSH_FIXTURE: 1"),
+        ".github/workflows/ci.yml's `gate` job no longer sets `CAIRN_REQUIRE_SSH_FIXTURE: 1` \
+         in its own `env:`, so the ssh acceptance criteria would skip silently in CI wherever \
+         the fixture cannot run."
     );
     assert!(
         ci.lines().any(|line| line.contains("openssh-server")),
@@ -3467,6 +4593,598 @@ fn the_ssh_criteria_are_required_wherever_they_can_run() {
             "the ssh fixture looks for sshd in {dir} but scripts/gate.sh's \
              require_ssh_fixture_where_possible does not, so on a machine whose sshd is only \
              there the gate would not require the fixture and the criteria would skip silently."
+        );
+    }
+}
+
+/// The builtin-fsmonitor read test (`crates/cairn-git/tests/diff/fsmonitor.rs`) skips where
+/// git has no fsmonitor daemon — Linux has one from git 2.55 — and a passing test's stderr
+/// is hidden, so `CAIRN_REQUIRE_FSMONITOR_DAEMON` is what turns a skip into a failure.
+/// Pinned here: the test's skip branch fails when the variable is set; `scripts/gate.sh`'s
+/// `test-full` sets it wherever the `git` on `PATH` reports the daemon in
+/// `git version --build-options`; and `scripts/git-floor.sh` clears it on every run of the
+/// floors' gits, which have none, so the full gate's later step is not failed by the
+/// earlier one's export. Each is a line-level check, so none can pass on an empty read; the
+/// gate's functions are read whole, to their closing `}` (`gate_function_body`), and the
+/// call is a statement of `run_test_full`'s own (`gate_function_calls`, self-test
+/// `the_gate_function_call_matcher_catches_the_shapes_it_claims`).
+/// CI's `gate` job does not set it outright (a stated residual in the test's doc): this
+/// pin holds the probe, not the runner's git.
+#[test]
+fn the_fsmonitor_daemon_pin_is_required_wherever_it_can_run() {
+    let root = repo_root();
+    let read = |path: &str| {
+        std::fs::read_to_string(root.join(path)).unwrap_or_else(|e| panic!("reading {path}: {e}"))
+    };
+    let gate = read("scripts/gate.sh");
+    let floor = read("scripts/git-floor.sh");
+    let test = read("crates/cairn-git/tests/diff/fsmonitor.rs");
+
+    let body = test
+        .split("fn a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files()")
+        .nth(1)
+        .unwrap_or_else(|| panic!("the builtin-fsmonitor read test is gone from fsmonitor.rs"));
+    let skip_branch = body.split("eprintln!(").next().unwrap_or_default();
+    assert!(
+        skip_branch.contains("CAIRN_REQUIRE_FSMONITOR_DAEMON"),
+        "the builtin-fsmonitor read test no longer fails where the daemon cannot run and \
+         CAIRN_REQUIRE_FSMONITOR_DAEMON is set, so the gate's setting of it decides nothing"
+    );
+
+    assert!(
+        gate_function_calls(
+            &gate,
+            "run_test_full",
+            "require_fsmonitor_daemon_where_possible"
+        ),
+        "scripts/gate.sh's run_test_full no longer calls \
+         require_fsmonitor_daemon_where_possible, so the builtin-fsmonitor read test would \
+         skip silently where the daemon could have run."
+    );
+    let probe = gate_function_body(&gate, "require_fsmonitor_daemon_where_possible")
+        .unwrap_or_else(|| panic!("scripts/gate.sh no longer defines the fsmonitor probe"));
+    for needed in [
+        "git version --build-options",
+        "feature: fsmonitor--daemon",
+        "export CAIRN_REQUIRE_FSMONITOR_DAEMON=1",
+    ] {
+        assert!(
+            probe.contains(needed),
+            "scripts/gate.sh's require_fsmonitor_daemon_where_possible no longer has \
+             `{needed}`, so it no longer requires the daemon exactly where git reports one"
+        );
+    }
+
+    let runs: Vec<&str> = floor
+        .lines()
+        .filter(|line| line.contains("PATH=\"$prefix/bin:$PATH\""))
+        .collect();
+    assert!(
+        !runs.is_empty(),
+        "scripts/git-floor.sh runs no git from its floors' prefix, so this check compared \
+         nothing"
+    );
+    for run in runs {
+        assert!(
+            run.contains("-u CAIRN_REQUIRE_FSMONITOR_DAEMON"),
+            "scripts/git-floor.sh runs a floor's git with CAIRN_REQUIRE_FSMONITOR_DAEMON \
+             inherited, which fails the builtin-fsmonitor test on a git with no daemon: {run}"
+        );
+    }
+}
+
+/// The two user-namespace tests — the refspec check over a repository another uid owns
+/// (`crates/cairn-git/tests/fetch.rs`) and git's search across a filesystem boundary
+/// (`crates/cairn-git/tests/diff/bare_discovery.rs`) — skip where their namespace cannot be
+/// made, and a passing test's stderr is hidden, so a variable of each one's own turns its
+/// skip into a failure: `CAIRN_REQUIRE_SECOND_OWNER` and `CAIRN_REQUIRE_MOUNT_NAMESPACE`.
+/// They need different things — a second uid that the namespace's root may give a file to
+/// (`chown 1:1`, which AppArmor's `unprivileged_userns` profile refuses on Ubuntu 24.04),
+/// and a mount namespace — so the gate probes each exactly as its test does (the user's
+/// decision, 2026-10-04), and a host that serves one requires that one. Pinned here: each
+/// test's skip branch fails when its variable is set and makes its availability check with
+/// the arguments its probe in `scripts/gate.sh` runs; `test-full` calls the probe
+/// (`gate_function_calls`), whose body runs both `unshare`s, exports both variables, sets
+/// both notes and removes the file it gave away; the PASS line restates both notes; and
+/// `scripts/git-floor.sh` clears neither, since a namespace owes nothing to git's version.
+/// CI's runners may refuse either namespace, and the gate then prints the note: this pin
+/// holds the probes, not the runner.
+#[test]
+fn the_user_namespace_tests_are_required_wherever_they_can_run() {
+    let root = repo_root();
+    let read = |path: &str| {
+        std::fs::read_to_string(root.join(path)).unwrap_or_else(|e| panic!("reading {path}: {e}"))
+    };
+    let gate = read("scripts/gate.sh");
+    let floor = read("scripts/git-floor.sh");
+    let probe = gate_function_body(&gate, "require_user_namespaces_where_possible")
+        .unwrap_or_else(|| panic!("scripts/gate.sh no longer defines the user-namespace probe"));
+    for (file, test, variable, availability, gate_probe) in [
+        (
+            "crates/cairn-git/tests/fetch.rs",
+            "fn the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git()",
+            "CAIRN_REQUIRE_SECOND_OWNER",
+            r#".args(["--map-root-user", "--map-auto", "chown", "1:1"])"#,
+            "unshare --map-root-user --map-auto chown 1:1 \"$probe/owned\"",
+        ),
+        (
+            "crates/cairn-git/tests/diff/bare_discovery.rs",
+            "fn the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it()",
+            "CAIRN_REQUIRE_MOUNT_NAMESPACE",
+            r#".args(["--map-root-user", "--mount", "true"])"#,
+            "unshare --map-root-user --mount true",
+        ),
+    ] {
+        let source = read(file);
+        let body = source
+            .split(test)
+            .nth(1)
+            .unwrap_or_else(|| panic!("{test} is gone from {file}"));
+        let skip_branch = body
+            .split("eprintln!(\n            \"SKIPPED")
+            .next()
+            .unwrap_or_default();
+        assert!(
+            skip_branch.len() < body.len(),
+            "{test} in {file} no longer says SKIPPED where it skips, so this check read nothing"
+        );
+        assert!(
+            skip_branch.contains(&format!("std::env::var_os(\"{variable}\")")),
+            "{test} in {file} no longer fails where its namespace cannot be made and {variable} \
+             is set, so the gate's setting of it decides nothing"
+        );
+        assert!(
+            skip_branch.contains(availability),
+            "{test} in {file} no longer checks for its namespace with `{availability}`, so the \
+             gate's probe no longer tests exactly what the test needs"
+        );
+        for needed in [gate_probe.to_owned(), format!("export {variable}=1")] {
+            assert!(
+                probe.contains(&needed),
+                "scripts/gate.sh's require_user_namespaces_where_possible no longer has \
+                 `{needed}`, so {test} is no longer required exactly where it can run"
+            );
+        }
+        assert!(
+            !floor.contains(&format!("-u {variable}")),
+            "scripts/git-floor.sh clears {variable}, so {test} could skip silently on the \
+             floors' gits, which a namespace does not depend on"
+        );
+    }
+
+    assert!(
+        gate_function_calls(
+            &gate,
+            "run_test_full",
+            "require_user_namespaces_where_possible"
+        ),
+        "scripts/gate.sh's run_test_full no longer calls require_user_namespaces_where_possible, \
+         so the user-namespace tests would skip silently where they could have run."
+    );
+    for needed in [
+        "MOUNTNS_NOTE=",
+        "OWNER_NOTE=",
+        "probe=$(mktemp -d)",
+        "rm -rf \"$probe\"",
+    ] {
+        assert!(
+            probe.contains(needed),
+            "scripts/gate.sh's require_user_namespaces_where_possible no longer has `{needed}`, \
+             so a skip goes unsaid or the probe's file is left behind"
+        );
+    }
+    for note in ["${MOUNTNS_NOTE:+", "${OWNER_NOTE:+"] {
+        assert!(
+            gate.lines()
+                .any(|line| line.contains("gate: PASS") && line.contains(note)),
+            "scripts/gate.sh's PASS line no longer restates `{note}`, so a skip is not said \
+             where the verdict is read"
+        );
+    }
+}
+
+/// The two `CAIRN_REQUIRE_*` pins read a job's own `env:` block; this is that reading,
+/// against the shapes it must refuse as well as the one it must find.
+#[test]
+fn the_workflow_env_matcher_reads_only_the_jobs_own_block() {
+    let wanted = "CAIRN_REQUIRE_SSH_FIXTURE: 1";
+    let finds = |workflow: &str| {
+        job_env_entries(workflow, "gate")
+            .iter()
+            .any(|entry| entry == wanted)
+    };
+    let in_the_job = "jobs:\n  gate:\n    runs-on: x\n    # why\n    env:\n      # why\n      \
+                      CAIRN_REQUIRE_SSH_FIXTURE: 1\n      OTHER: 2\n    steps:\n      - run: a\n";
+    assert!(finds(in_the_job), "the job's own env was not read");
+    let after_a_scalar = "jobs:\n  gate:\n    env:\n      NOTE: |\n        text\n\n        more\n      \
+                          CAIRN_REQUIRE_SSH_FIXTURE: 1\n    steps: []\n";
+    assert_eq!(
+        job_env_entries(after_a_scalar, "gate"),
+        vec!["NOTE: |".to_owned(), wanted.to_owned()],
+        "an entry after a block scalar's body, blank line included, was not read as one"
+    );
+    assert_eq!(
+        job_env_entries(in_the_job, "gate"),
+        vec![wanted.to_owned(), "OTHER: 2".to_owned()],
+        "comments are not entries, and every entry is read"
+    );
+
+    for (shape, workflow) in [
+        (
+            "the workflow's env",
+            "env:\n  CAIRN_REQUIRE_SSH_FIXTURE: 1\njobs:\n  gate:\n    steps:\n      - run: a\n",
+        ),
+        (
+            "another job's env",
+            "jobs:\n  gate:\n    steps:\n      - run: a\n  git-floor:\n    env:\n      \
+             CAIRN_REQUIRE_SSH_FIXTURE: 1\n",
+        ),
+        (
+            "one step's env",
+            "jobs:\n  gate:\n    steps:\n      - name: Run full test suite\n        env:\n          \
+             CAIRN_REQUIRE_SSH_FIXTURE: 1\n        run: a\n",
+        ),
+        (
+            "a comment",
+            "jobs:\n  gate:\n    env:\n      # CAIRN_REQUIRE_SSH_FIXTURE: 1\n    steps: []\n",
+        ),
+        (
+            "a job whose name only starts the same",
+            "jobs:\n  gate-extra:\n    env:\n      CAIRN_REQUIRE_SSH_FIXTURE: 1\n",
+        ),
+        (
+            "an env after the job ends",
+            "jobs:\n  gate:\n    steps: []\n  other:\n    env:\n      \
+             CAIRN_REQUIRE_SSH_FIXTURE: 1\n",
+        ),
+        (
+            "a key named like the job outside `jobs:`",
+            "on:\n  gate:\n    env:\n      CAIRN_REQUIRE_SSH_FIXTURE: 1\njobs:\n  gate:\n    \
+             steps: []\n",
+        ),
+        (
+            "no `jobs:` at all",
+            "  gate:\n    env:\n      CAIRN_REQUIRE_SSH_FIXTURE: 1\n",
+        ),
+        (
+            "a block scalar's body in the job's env",
+            "jobs:\n  gate:\n    env:\n      NOTE: |\n        CAIRN_REQUIRE_SSH_FIXTURE: 1\n    \
+             steps: []\n",
+        ),
+        (
+            "a folded scalar's body with a chomping indicator",
+            "jobs:\n  gate:\n    env:\n      NOTE: >- # why\n        CAIRN_REQUIRE_SSH_FIXTURE: 1\n",
+        ),
+        (
+            "a nested map under an entry",
+            "jobs:\n  gate:\n    env:\n      OTHER: 1\n      MAP:\n        \
+             CAIRN_REQUIRE_SSH_FIXTURE: 1\n",
+        ),
+    ] {
+        assert!(
+            !finds(workflow),
+            "the env matcher counted {shape} as the gate job's own: {workflow:?}"
+        );
+    }
+}
+
+/// Steps the local full gate deliberately does not run, each with its reason. `test-fast`
+/// is the day loop's subset of `test-full`, which the full gate runs instead.
+const LOCAL_FULL_GATE_EXEMPT: &[&str] = &["test-fast"];
+
+/// `scripts/gate.sh` with no arguments is the merge bar a contributor runs, so every step
+/// it can run by name is in it — `deps` and `git-floor`, which reach the network, included
+/// — but for the explicit exemptions above. Without this a step added to the dispatch
+/// arms, and so to CI by `ci_runs_every_merge_bar_gate_step`, could be left out of the
+/// local merge bar, and a contributor's green gate would not be CI's.
+#[test]
+fn the_local_full_gate_runs_every_step_but_the_day_loops() {
+    let gate = std::fs::read_to_string(repo_root().join("scripts/gate.sh"))
+        .unwrap_or_else(|e| panic!("reading scripts/gate.sh: {e}"));
+    let arms = gate_dispatch_arms(&gate)
+        .unwrap_or_else(|e| panic!("scripts/gate.sh's dispatch arms cannot be read: {e}"));
+    assert!(
+        arms.len() > LOCAL_FULL_GATE_EXEMPT.len(),
+        "parsed {} dispatch arms out of scripts/gate.sh, so this check compared nothing",
+        arms.len()
+    );
+    let full = gate_full_sequence(&gate)
+        .unwrap_or_else(|e| panic!("scripts/gate.sh's full sequence cannot be read: {e}"));
+    for exempt in LOCAL_FULL_GATE_EXEMPT {
+        assert!(
+            arms.iter().any(|(step, _)| step == exempt),
+            "`{exempt}` is exempt from the local full gate but is no step of scripts/gate.sh; \
+             drop it from LOCAL_FULL_GATE_EXEMPT"
+        );
+    }
+    for (step, function) in &arms {
+        if LOCAL_FULL_GATE_EXEMPT.contains(&step.as_str()) {
+            continue;
+        }
+        assert!(
+            full.contains(function),
+            "scripts/gate.sh defines the step `{step}` but its full run never calls \
+             `{function}`, so the local merge bar would pass without it. Call it in the full \
+             sequence, or exempt it in LOCAL_FULL_GATE_EXEMPT with the reason."
+        );
+    }
+}
+
+/// `scripts/gate.sh` with no arguments is the merge bar only while two things hold that the
+/// sequence reading cannot see: the default is the full run (`FAST=0`, set once at the top
+/// and changed only by `--fast`), and no merge-bar step's command is the literal `skip`,
+/// which passes it without running anything. Every dispatch arm but the day loop's names
+/// at least one `*_CMD` variable, and every value given each one is a command.
+#[test]
+fn the_full_gate_is_the_default_and_no_merge_bar_step_is_skipped() {
+    let gate = std::fs::read_to_string(repo_root().join("scripts/gate.sh"))
+        .unwrap_or_else(|e| panic!("reading scripts/gate.sh: {e}"));
+    let assignments: Vec<&str> = gate
+        .lines()
+        .filter(|line| line.trim_start().starts_with("FAST="))
+        .collect();
+    assert_eq!(
+        assignments
+            .iter()
+            .map(|line| line.trim())
+            .collect::<Vec<_>>(),
+        ["FAST=0", "FAST=1"],
+        "scripts/gate.sh sets FAST other than once to 0 and once, for --fast, to 1"
+    );
+    assert_eq!(
+        assignments[0], "FAST=0",
+        "the default FAST=0 is not at the top level of scripts/gate.sh"
+    );
+    let default_at = gate.lines().position(|line| line == "FAST=0");
+    let parsing_at = gate
+        .lines()
+        .position(|line| line.trim() == "if [ \"$#\" -ne 0 ]; then");
+    assert!(
+        matches!((default_at, parsing_at), (Some(a), Some(b)) if a < b),
+        "FAST=0 is not set before the arguments are read"
+    );
+
+    let arms = gate_dispatch_arms(&gate)
+        .unwrap_or_else(|e| panic!("scripts/gate.sh's dispatch arms cannot be read: {e}"));
+    let commands = gate_command_assignments(&gate);
+    let mut checked = 0usize;
+    for (step, function) in &arms {
+        if LOCAL_FULL_GATE_EXEMPT.contains(&step.as_str()) {
+            continue;
+        }
+        let variables = gate_function_commands(&gate, function);
+        assert!(
+            !variables.is_empty(),
+            "the merge-bar step `{step}` runs `{function}`, which names no *_CMD variable, so \
+             whether it is skipped cannot be read"
+        );
+        for variable in variables {
+            let values = commands
+                .get(&variable)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            assert!(
+                !values.is_empty(),
+                "`{function}` runs ${variable}, which scripts/gate.sh never sets"
+            );
+            for value in values {
+                assert!(
+                    value != "skip" && !value.trim().is_empty(),
+                    "the merge-bar step `{step}` is set to {value:?} ({variable}), so the \
+                     merge bar would pass it without running it"
+                );
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked >= 8, "only {checked} step commands were checked");
+}
+
+/// The two readings the default-and-skip guard rests on.
+#[test]
+fn the_gate_command_readers_catch_the_shapes_they_claim() {
+    let script = "A_CMD=\"cargo fmt\"   # why\nB_CMD=skip\nC_CMD='skip' # why\n  D_CMD=\"x\"\n\
+                  lower_CMD=x\nE_CMD=\"first\"\nE_CMD=\"\"\n\
+                  run_a() { run_cmd \"a\" \"$A_CMD\"; }\nrun_b() {\n  step b\n  run_body \"b\" \
+                  \"${B_CMD}\" \"$C_CMD\"\n}\nrun_c() { :; }\n";
+    let found = gate_command_assignments(script);
+    let values = |name: &str| found.get(name).cloned().unwrap_or_default();
+    assert_eq!(
+        values("A_CMD"),
+        ["cargo fmt"],
+        "a quoted value and a comment"
+    );
+    assert_eq!(values("B_CMD"), ["skip"], "a bare word");
+    assert_eq!(values("C_CMD"), ["skip"], "single quotes");
+    assert_eq!(values("E_CMD"), ["first", ""], "every assignment, in order");
+    assert!(
+        !found.contains_key("D_CMD") && !found.contains_key("lower_CMD"),
+        "an indented assignment or a lower-case name was read as a step command: {found:?}"
+    );
+    assert_eq!(gate_function_commands(script, "run_a"), ["A_CMD"]);
+    assert_eq!(
+        gate_function_commands(script, "run_b"),
+        ["B_CMD", "C_CMD"],
+        "a definition over several lines, braced and plain references"
+    );
+    assert!(gate_function_commands(script, "run_c").is_empty());
+    assert!(gate_function_commands(script, "run_missing").is_empty());
+}
+
+/// Whether a gate function calls another, against the shapes the fsmonitor pin must refuse
+/// as well as the ones it must find. Caught by: reading from the definition to the next
+/// blank line, which ran on into the functions defined after it with no blank between
+/// them, or a mention of the name taken as a call.
+#[test]
+fn the_gate_function_call_matcher_catches_the_shapes_it_claims() {
+    let gate = |full: &str| {
+        format!(
+            "probe() {{\n  :\n}}\n\nrun_full() {{\n  step \"full\"\n{full}  run_body \"full\" \
+             \"$FULL_CMD\"\n}}\nrun_doc()  {{ run_cmd \"doc\" \"$DOC_CMD\"; }}\n\
+             run_floor() {{ run_cmd \"floor\" \"$FLOOR_CMD\"; probe; }}\n"
+        )
+    };
+    let calls = |script: &str| gate_function_calls(script, "run_full", "probe");
+    assert!(calls(&gate("  probe\n")), "a call on a line of its own");
+    assert!(calls(&gate("  probe --quiet\n")), "a call with arguments");
+    assert!(calls(&gate("  :; probe\n")), "a call after a `;`");
+    assert!(
+        gate_function_calls(&gate(""), "run_floor", "probe"),
+        "a call inside a one-line definition"
+    );
+    for (refused, shape) in [
+        (
+            "",
+            "the call moved into a function defined after it with no blank line between",
+        ),
+        ("  # probe\n", "the call commented out"),
+        ("  echo \"probe\"\n", "the name inside a string"),
+        (
+            "  probe_other\n",
+            "another function whose name starts with it",
+        ),
+        (
+            "  run_cmd probe\n",
+            "the name as another command's argument",
+        ),
+    ] {
+        assert!(!calls(&gate(refused)), "{shape} was read as a call");
+    }
+    assert!(
+        !gate_function_calls(&gate("  probe\n"), "run_missing", "probe"),
+        "a function that does not exist calls nothing"
+    );
+}
+
+/// The two readings the local-gate guard rests on, against the shapes they claim.
+#[test]
+fn the_gate_sequence_matcher_catches_the_shapes_it_claims() {
+    let dispatch = |arms: &str| {
+        format!(
+            "if [ -n \"$SELECTED_STEP\" ]; then\n  case \"$SELECTED_STEP\" in\n{arms}    *)\n      \
+             echo \"unknown gate step: $SELECTED_STEP\" >&2\n      exit 2\n      ;;\n  esac\n  \
+             finish\nfi\n"
+        )
+    };
+    assert_eq!(
+        gate_dispatch_arms(&dispatch(
+            "    format) run_format ;;\n    git-floor) run_git_floor ;;\n"
+        )),
+        Ok(vec![
+            ("format".to_owned(), "run_format".to_owned()),
+            ("git-floor".to_owned(), "run_git_floor".to_owned()),
+        ]),
+        "the dispatch arms were misread"
+    );
+    for (shape, arms) in [
+        (
+            "an arm with arguments",
+            "    git-floor) run_git_floor \"$@\" ;;\n",
+        ),
+        (
+            "an arm with a `;` before `;;`",
+            "    git-floor) run_git_floor; ;;\n",
+        ),
+        ("an arm without spaces", "    git-floor)run_git_floor;;\n"),
+        (
+            "an arm with two spaces",
+            "    git-floor)  run_git_floor ;;\n",
+        ),
+        (
+            "an arm calling no run_ function",
+            "    git-floor) scripts/git-floor.sh ;;\n",
+        ),
+        (
+            "a trailing comment",
+            "    git-floor) run_git_floor ;; # the floor\n",
+        ),
+        (
+            "an arm across lines",
+            "    git-floor)\n      run_git_floor\n      ;;\n",
+        ),
+        ("an alternation", "    git-floor|floor) run_git_floor ;;\n"),
+        ("a commented-out arm", "    # git-floor) run_git_floor ;;\n"),
+        ("a blank line", "    format) run_format ;;\n\n"),
+        (
+            "a step named twice",
+            "    format) run_format ;;\n    format) run_lint ;;\n",
+        ),
+    ] {
+        let script = dispatch(arms);
+        assert!(
+            gate_dispatch_arms(&script).is_err(),
+            "the dispatch reader guessed at {shape} instead of refusing it: {:?}",
+            gate_dispatch_arms(&script)
+        );
+    }
+    for (shape, script) in [
+        (
+            "an arm after the default",
+            dispatch("    format) run_format ;;\n").replace(
+                "      ;;\n  esac",
+                "      ;;\n    git-floor) run_git_floor ;;\n  esac",
+            ),
+        ),
+        (
+            "a default that runs a step",
+            dispatch("    format) run_format ;;\n").replace("exit 2", "run_git_floor"),
+        ),
+        (
+            "no default",
+            "case \"$SELECTED_STEP\" in\n    format) run_format ;;\nesac\n".to_owned(),
+        ),
+        (
+            "no esac",
+            "case \"$SELECTED_STEP\" in\n    format) run_format ;;\n".to_owned(),
+        ),
+        ("no dispatch", "run_format\n".to_owned()),
+    ] {
+        assert!(
+            gate_dispatch_arms(&script).is_err(),
+            "the dispatch reader guessed at {shape} instead of refusing it: {:?}",
+            gate_dispatch_arms(&script)
+        );
+    }
+
+    let script = |tail: &str| {
+        format!(
+            "run_x() {{ :; }}\nif [ -n \"$SELECTED_STEP\" ]; then\n  case \"$SELECTED_STEP\" in\n    \
+             x) run_x ;;\n  esac\n  if [ \"$a\" ]; then\n    :\n  fi\n  finish\nfi\n\n{tail}"
+        )
+    };
+    let full = |tail: &str| gate_full_sequence(&script(tail));
+    let names = |items: &[&str]| -> BTreeSet<String> {
+        items.iter().map(|item| (*item).to_owned()).collect()
+    };
+
+    assert_eq!(
+        full(
+            "run_format\n\nif [ \"$FAST\" -eq 0 ]; then\n  run_deps\nelse\n  run_test_fast\nfi\n\nfinish\n"
+        ),
+        Ok(names(&["run_deps", "run_format"])),
+        "the top level and the full branch count, the day loop's branch does not"
+    );
+    assert_eq!(
+        full("# run_deps\nrun_format\nfinish\nrun_git_floor\n"),
+        Ok(names(&["run_format"])),
+        "a commented-out call and a call after `finish` are not in the full run"
+    );
+    for (shape, tail) in [
+        (
+            "an unknown conditional",
+            "if [ \"$CI\" ]; then\n  run_git_floor\nfi\nfinish\n",
+        ),
+        (
+            "a call with arguments",
+            "run_cmd \"git-floor\" \"$X\"\nfinish\n",
+        ),
+        ("a backgrounded call", "run_git_floor &\nfinish\n"),
+        ("no finish", "run_format\n"),
+    ] {
+        assert!(
+            full(tail).is_err(),
+            "the full-sequence reader guessed at {shape} instead of refusing it: {:?}",
+            full(tail)
         );
     }
 }
@@ -3635,6 +5353,63 @@ fn the_point_in_time_matcher_catches_the_shapes_it_claims() {
             point_in_time_state(line),
             None,
             "the point-in-time matcher fired on {line:?}"
+        );
+    }
+}
+
+/// Where the application's embedded fonts live.
+const FONTS_DIR: &str = "crates/cairn-app/assets/fonts";
+
+/// Every font embedded in the application, with the licence file it ships under. A row is a
+/// user decision (the font's download is one, packet decision L16): IBM Plex Mono Regular,
+/// SIL Open Font License 1.1, approved 2026-10-03.
+const EMBEDDED_FONTS: &[(&str, &str)] = &[("IBMPlexMono-Regular.ttf", "IBMPlexMono-LICENSE.txt")];
+
+/// A font file is a dependency `cargo deny` cannot see: the embedded fonts directory holds
+/// exactly the roster, each font with its licence file beside it (CLAUDE.md, Invariants;
+/// `deny.toml`'s `[licenses]` note). Caught by: another font dropped in beside the roster,
+/// a licence file deleted, or a roster row left behind by a font that went.
+#[test]
+fn the_embedded_fonts_are_the_roster_each_with_its_licence() {
+    let dir = repo_root().join(FONTS_DIR);
+    let entries =
+        std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("reading {}: {e}", dir.display()));
+    let files: Vec<String> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        !files.is_empty(),
+        "{FONTS_DIR} is empty, so this check compared nothing; the fonts moved"
+    );
+    let violations = embedded_font_violations(&files, EMBEDDED_FONTS);
+    assert!(
+        violations.is_empty(),
+        "{FONTS_DIR}: {violations:#?}. Embedding a font is a user decision: add its row to \
+         EMBEDDED_FONTS with its licence file beside it, and its note to deny.toml."
+    );
+}
+
+#[test]
+fn the_embedded_font_matcher_catches_the_shapes_it_claims() {
+    let roster = &[("Mono.ttf", "Mono-LICENSE.txt")][..];
+    let files = |names: &[&str]| names.iter().map(|n| (*n).to_owned()).collect::<Vec<_>>();
+    assert!(embedded_font_violations(&files(&["Mono.ttf", "Mono-LICENSE.txt"]), roster).is_empty());
+    for (case, present) in [
+        (
+            "a planted extra font",
+            &["Mono.ttf", "Mono-LICENSE.txt", "Other.ttf"][..],
+        ),
+        (
+            "a planted font of another format",
+            &["Mono.ttf", "Mono-LICENSE.txt", "Mono.otf"],
+        ),
+        ("a deleted licence", &["Mono.ttf"]),
+        ("a font gone from its row", &["Mono-LICENSE.txt"]),
+    ] {
+        assert!(
+            !embedded_font_violations(&files(present), roster).is_empty(),
+            "{case} passed"
         );
     }
 }

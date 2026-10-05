@@ -3,6 +3,7 @@
 use cairn_model::{HistoryRow, RowId};
 use freya::prelude::*;
 
+use crate::accelerators::{self, Action, HeldKeys};
 use crate::graph_geometry::ROW_HEIGHT;
 
 pub const PREFETCH_ROWS: usize = 24;
@@ -26,9 +27,13 @@ pub struct HistoryList {
     rows: State<Vec<HistoryRow>>,
     lanes: usize,
     selected: Option<RowId>,
+    also_selected: Option<RowId>,
+    held: Option<Readable<HeldKeys>>,
     on_select: EventHandler<RowId>,
+    on_extend: EventHandler<(RowId, usize)>,
     on_reach_end: EventHandler<()>,
     row: Callback<RowRender, Element>,
+    controller: Option<ScrollController>,
     key: DiffKey,
 }
 
@@ -38,11 +43,22 @@ impl HistoryList {
             rows,
             lanes: 1,
             selected: None,
+            also_selected: None,
+            held: None,
             on_select: EventHandler::new(|_| {}),
+            on_extend: EventHandler::new(|_| {}),
             on_reach_end: EventHandler::new(|()| {}),
             row: Callback::new(row),
+            controller: None,
             key: DiffKey::None,
         }
+    }
+
+    /// Scrolls the list through `controller` rather than one of its own, so its caller can
+    /// reveal a row the list did not choose (a parent link's, through [`reveal_row`]).
+    pub fn controller(mut self, controller: ScrollController) -> Self {
+        self.controller = Some(controller);
+        self
     }
 
     pub fn lanes(mut self, lanes: usize) -> Self {
@@ -56,8 +72,29 @@ impl HistoryList {
         self
     }
 
+    /// The second of two rows selected to be compared (R7), drawn selected beside the first.
+    pub fn also_selected(mut self, also_selected: Option<RowId>) -> Self {
+        self.also_selected = also_selected;
+        self
+    }
+
+    /// The keys the window hears held, which a press is resolved against: a press while the
+    /// table's `ExtendSelection` chord is held (⌘-click, Ctrl-click) is reported through
+    /// [`Self::on_extend`] rather than [`Self::on_select`].
+    pub fn held(mut self, held: impl Into<Readable<HeldKeys>>) -> Self {
+        self.held = Some(held.into());
+        self
+    }
+
     pub fn on_select(mut self, on_select: impl Into<EventHandler<RowId>>) -> Self {
         self.on_select = on_select.into();
+        self
+    }
+
+    /// A row pressed with the selection-extending chord held, with its index in the rows: the
+    /// second commit of a comparison (R7.1). What it selects is the caller's.
+    pub fn on_extend(mut self, on_extend: impl Into<EventHandler<(RowId, usize)>>) -> Self {
+        self.on_extend = on_extend.into();
         self
     }
 
@@ -75,6 +112,8 @@ impl PartialEq for HistoryList {
         self.rows == other.rows
             && self.lanes == other.lanes
             && self.selected == other.selected
+            && self.also_selected == other.also_selected
+            && self.controller == other.controller
             && self.key == other.key
     }
 }
@@ -100,9 +139,12 @@ struct ListData {
     rows: State<Vec<HistoryRow>>,
     lanes: usize,
     selected: Option<RowId>,
+    also_selected: Option<RowId>,
+    held: Option<Readable<HeldKeys>>,
     length: usize,
     row: Callback<RowRender, Element>,
     on_select: EventHandler<RowId>,
+    on_extend: EventHandler<(RowId, usize)>,
     on_reach_end: EventHandler<()>,
     list_id: AccessibilityId,
     cursor: State<usize>,
@@ -113,6 +155,7 @@ impl PartialEq for ListData {
         self.rows == other.rows
             && self.lanes == other.lanes
             && self.selected == other.selected
+            && self.also_selected == other.also_selected
             && self.length == other.length
             && self.list_id == other.list_id
     }
@@ -122,7 +165,9 @@ impl Component for HistoryList {
     fn render(&self) -> impl IntoElement {
         let list_id = use_a11y();
         let focus = use_focus(list_id);
-        let controller = use_scroll_controller(ScrollConfig::default);
+        // Resolved unconditionally, so the hook count holds whichever controller is used.
+        let own = use_scroll_controller(ScrollConfig::default);
+        let controller = self.controller.unwrap_or(own);
         // A hint, checked against the row at that index before use.
         let cursor = use_state(|| 0usize);
 
@@ -133,9 +178,12 @@ impl Component for HistoryList {
             rows: self.rows,
             lanes: self.lanes,
             selected: self.selected,
+            also_selected: self.also_selected,
+            held: self.held.clone(),
             length,
             row: self.row.clone(),
             on_select: self.on_select.clone(),
+            on_extend: self.on_extend.clone(),
             on_reach_end: self.on_reach_end.clone(),
             list_id,
             cursor,
@@ -180,6 +228,11 @@ impl HistoryList {
         let on_select = self.on_select.clone();
 
         move |e: Event<KeyboardEventData>| {
+            // A chord is an accelerator's, whoever hears it: Ctrl+↓ is "next change", not
+            // "next commit", even while the pane that hears it does not have focus.
+            if accelerators::is_chord(&e) {
+                return;
+            }
             // Drop the read guard before calling out: a handler that reloads the list would panic.
             let moved = {
                 let held = rows.read();
@@ -199,10 +252,15 @@ impl HistoryList {
             e.stop_propagation();
             cursor.set(next);
             on_select.call(id);
-            // The selected row usually has no element yet, so reveal by offset.
-            controller.scroll_to_offset(next as f32 * ROW_HEIGHT, ROW_HEIGHT, Direction::Vertical);
+            reveal_row(&mut controller, next);
         }
     }
+}
+
+/// Scrolls a history list driven by `controller` until row `index` is in view. By offset:
+/// the row usually has no element yet.
+pub fn reveal_row(controller: &mut ScrollController, index: usize) {
+    controller.scroll_to_offset(index as f32 * ROW_HEIGHT, ROW_HEIGHT, Direction::Vertical);
 }
 
 /// Where `key` moves a selection at `current`; `None` for a key this list does not own.
@@ -236,12 +294,14 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
     let list_id = data.list_id;
     let mut cursor = data.cursor;
     let on_select = data.on_select.clone();
+    let on_extend = data.on_extend.clone();
+    let held = data.held.clone();
     let on_reach_end = data.on_reach_end.clone();
     let asks_for_more = asks_for_more(index, data.length);
 
     let drawn = data.row.call(RowRender {
         row: row.clone(),
-        selected: data.selected == Some(id),
+        selected: data.selected == Some(id) || data.also_selected == Some(id),
         lanes: data.lanes,
     });
 
@@ -252,8 +312,15 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
         .height(Size::px(item.size))
         .on_press(move |_| {
             list_id.request_focus();
-            cursor.set(index);
-            on_select.call(id);
+            let extending = held
+                .as_ref()
+                .is_some_and(|held| held.peek().press() == Some(Action::ExtendSelection));
+            if extending {
+                on_extend.call((id, index));
+            } else {
+                cursor.set(index);
+                on_select.call(id);
+            }
         })
         .maybe(asks_for_more, |el| {
             el.on_visible(move |_| on_reach_end.call(()))

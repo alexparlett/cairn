@@ -1,8 +1,14 @@
 //! Repository worker threads.
 
 mod askpass;
+mod diff_answers;
+mod diff_freshness;
+mod diff_lane;
+#[cfg(test)]
+mod diff_tests;
 mod discovery;
 mod epoch;
+mod expand_all;
 #[cfg(test)]
 mod fetch_tests;
 #[cfg(test)]
@@ -10,12 +16,28 @@ mod lifecycle_tests;
 mod network_lane;
 mod pool;
 mod request;
+mod routing;
 mod startup;
 mod wake;
+#[cfg(test)]
+mod window_check_updates;
 
 pub use askpass::{PromptId, Reply};
+#[cfg(test)]
+pub(crate) use diff_tests::{Configurable, changes_answer, checkout, commits, next_update};
 pub use discovery::Discovery;
+#[cfg(test)]
+pub(crate) use expand_all::EXPAND_ALL_LINES;
+#[cfg(test)]
+pub use pool::Updates;
 #[cfg(test)]
 pub use pool::idle_handle;
 pub use pool::{CLOSE_PATIENCE, Replier, RepositoryHandle, open};
-pub use request::{Request, Update};
+#[cfg(test)]
+pub use request::WorkingSide;
+pub use request::{
+    AllEnded, AllFrom, AllProgress, Comparison, DiffOptions, DiffQuery, ExpandQuery, ExpandedFile,
+    FileQuery, FileTarget, OpenedFile, Request, Retired, Update, expanded_diffs,
+};
+#[cfg(test)]
+pub(crate) use window_check_updates::update_within;

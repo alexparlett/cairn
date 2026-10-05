@@ -1,13 +1,15 @@
 //! Applying a worker's update to the view state: the one place an `Update`
 //! becomes what the window draws. On the UI thread, so nothing here waits.
 
+use std::sync::Arc;
+
 use freya::prelude::*;
 
 use crate::PAGE_ROWS;
 use crate::fetch_state::{FetchRefusal, FetchStatus, PromptView};
 use crate::history_state::{self, Progress};
 use crate::window::View;
-use crate::worker::{PromptId, Request, Update};
+use crate::worker::{PromptId, Request, Retired, Update, expanded_diffs};
 
 /// What applying an update may ask of the worker: a request, and the refusal
 /// of a prompt the window will not show. Two plain callbacks, never a struct
@@ -34,6 +36,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         mut prompt,
         mut remotes,
         mut refused,
+        mut diff,
         ..
     } = view;
     match update {
@@ -54,6 +57,9 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             progress.write().failed(message);
         }
         Update::Remotes { remotes: listed } => remotes.set(listed),
+        Update::ConfiguredContext { context } => {
+            crate::diff_actions::configured(context, view, worker.submit);
+        }
         Update::FetchStarted { remote } => fetch.write().started(remote),
         Update::FetchProgress { line } => fetch.write().progressed(line),
         Update::FetchFinished { remote, refreshed } => {
@@ -95,6 +101,70 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                 (worker.refuse)(id);
             }
         }
+        // Each kept only for the selection it names (PRD R4.4); checked before the write,
+        // so an answer for another selection does not even wake what draws the diff. One not
+        // kept is handed to a worker to free (`retire`), as a superseded one is.
+        Update::Changes { of, changes } => {
+            if diff.peek().wants_changes(of) {
+                let filtering = {
+                    let mut state = diff.write();
+                    state.changes_arrived(of, changes);
+                    // The filter's text, asked again for the change set that has arrived.
+                    state.filter_again()
+                };
+                if let Some(request) = filtering {
+                    (worker.submit)(request);
+                }
+            } else {
+                retire(Retired::of(Some(Arc::new(changes)), Vec::new()), worker);
+            }
+        }
+        Update::FilteredFiles { of, text, files } => {
+            if diff.peek().wants_filter(of, &text) {
+                diff.write().filter_arrived(of, &text, files);
+            }
+        }
+        Update::FileDiff {
+            query,
+            diff: answer,
+        } => {
+            let answer = answer.map(|shown| *shown);
+            if diff.peek().wants_file(&query) {
+                diff.write().file_arrived(&query, answer);
+            } else {
+                retire(Retired::of(None, answer.into_iter().collect()), worker);
+            }
+        }
+        Update::Expanded {
+            of,
+            options,
+            files,
+            all,
+        } => {
+            if diff.peek().wants_expansion(of, options) {
+                let freeing = diff.write().expansion_arrived(files, all);
+                if let Some(request) = freeing {
+                    (worker.submit)(request);
+                }
+            } else {
+                retire(Retired::of(None, expanded_diffs(files)), worker);
+            }
+        }
+        Update::DiffFailed { query, message } => {
+            if diff.peek().wants(&query) {
+                diff.write().failed(&query, message);
+            }
+        }
+        Update::Superseded(retired) => retire(Some(retired), worker),
+    }
+}
+
+/// Hands answers the window will not keep to a worker to free, rather than freeing them here
+/// on the UI thread: a file's prepared diff is up to 64 MiB in both layouts, a change set
+/// tens of thousands of files. `Request::Retire` only sends.
+fn retire(retired: Option<Retired>, worker: &Worker<'_>) {
+    if let Some(retired) = retired {
+        (worker.submit)(Request::Retire(retired));
     }
 }
 
@@ -181,6 +251,18 @@ mod tests {
                         prompt: State::create(None),
                         remotes: State::create(Vec::new()),
                         refused: State::create(None),
+                        diff: State::create(crate::diff_state::DiffState::default()),
+                        filter_text: State::create(String::new()),
+                        changes_list_width: State::create(crate::changes_tab::LIST_WIDTH),
+                        pair: State::create(None),
+                        held_keys: State::create(cairn_ui::accelerators::HeldKeys::default()),
+                        history_scroll: ScrollController::new(0, 0, Vec::new()),
+                        detail_tab: State::create(cairn_ui::DetailTab::default()),
+                        pane_collapsed: State::create(false),
+                        pane_height: State::create(crate::window::PANE_HEIGHT),
+                        diff_settings: State::create(cairn_ui::DiffSettings::default()),
+                        diff_scroll: ScrollController::new(0, 0, Vec::new()),
+                        change_cursor: State::create(None),
                     }
                 })
             },
@@ -220,6 +302,293 @@ mod tests {
                 },
             );
         });
+    }
+
+    /// C8, R4.4, through the real boundary: an answer naming another selection is never
+    /// drawn, even when its epoch is still current — the selection was cleared without
+    /// asking anything new, so the change set arrives through the worker under a current
+    /// epoch and only the window's own check can refuse it. The negative follows: asked
+    /// again and selected, it is kept. Mutation that reddens it: this arm storing whatever
+    /// change set arrives rather than asking `DiffState` whether it names the selection
+    /// (each of `DiffState`'s two checks alone is decided by `diff_state`'s own tests).
+    #[test]
+    fn an_answer_naming_another_selection_is_never_drawn() {
+        use crate::diff_state::Answer;
+        use crate::worker::{Comparison, changes_answer, checkout, commits};
+
+        let (handle, mut updates) = checkout();
+        let of = Comparison::Commit(commits(&handle, &mut updates, 1)[0]);
+        let (test, mut view, asked) = launch(FetchStatus::Idle);
+
+        for request in test.run_in(|| view.diff.write().select_changes(of)) {
+            handle.submit(request);
+        }
+        test.run_in(|| view.diff.write().clear());
+        applying(&test, view, &asked, changes_answer(&mut updates, of));
+        assert_eq!(
+            test.run_in(|| view.diff.peek().changes().map(|(of, _)| of)),
+            None,
+            "a change set was drawn with nothing selected"
+        );
+
+        for request in test.run_in(|| view.diff.write().select_changes(of)) {
+            handle.submit(request);
+        }
+        applying(&test, view, &asked, changes_answer(&mut updates, of));
+        let kept = test.run_in(|| {
+            view.diff
+                .peek()
+                .changes()
+                .map(|(of, answer)| (of, matches!(answer, Answer::Ready(_))))
+        });
+        assert_eq!(
+            kept,
+            Some((of, true)),
+            "the answer for the selection was not kept"
+        );
+        drop(handle);
+    }
+
+    /// T5, the other three diff arms: a file's diff, Expand All's batch and a failure are
+    /// each refused with nothing selected and kept once their selection is made. Synthetic
+    /// answers, since what is decided here is the window's own check. Caught by: an arm
+    /// that stores whatever arrives (selecting what it names first), or one that drops
+    /// even its own selection's answer.
+    #[test]
+    fn every_diff_answer_is_kept_for_its_selection_alone() {
+        use cairn_model::{
+            ChangeStatus, ChangedFile, DiffContent, FileDiff, FileMode, Oid, RepoPath,
+        };
+
+        use crate::diff_state::{Answer, answered_expansion};
+        use crate::worker::{
+            AllEnded, AllFrom, AllProgress, Comparison, DiffOptions, DiffQuery, ExpandedFile,
+            FileQuery, FileTarget, OpenedFile,
+        };
+
+        let of = Comparison::Commit(Oid::from_bytes(&[1; 20]).unwrap());
+        let file = ChangedFile {
+            status: ChangeStatus::Modified,
+            old_path: RepoPath::from("a.txt"),
+            new_path: RepoPath::from("a.txt"),
+            old_mode: Some(FileMode::Regular),
+            new_mode: Some(FileMode::Executable),
+            old_id: Some(Oid::from_bytes(&[2; 20]).unwrap()),
+            new_id: Some(Oid::from_bytes(&[2; 20]).unwrap()),
+        };
+        let diff = FileDiff {
+            file: file.clone(),
+            content: DiffContent::ModeChangeOnly,
+        };
+        let query = FileQuery {
+            target: FileTarget::Committed { of, file },
+            options: DiffOptions::default(),
+        };
+        let options = DiffOptions::default();
+        let (test, mut view, asked) = launch(FetchStatus::Idle);
+        let file_update = || Update::FileDiff {
+            query: query.clone(),
+            diff: Some(Box::new(cairn_model::ShownDiff::new(
+                diff.clone(),
+                query.options.context,
+            ))),
+        };
+        let page = || Update::Expanded {
+            of,
+            options,
+            files: vec![ExpandedFile {
+                file: OpenedFile {
+                    index: 0,
+                    load_anyway: false,
+                },
+                by_all: true,
+                outcome: Ok(Box::new(cairn_model::ShownDiff::new(
+                    diff.clone(),
+                    options.context,
+                ))),
+            }],
+            all: Some(AllProgress {
+                at: AllFrom { next: 1, spent: 1 },
+                ended: Some(AllEnded::Every),
+            }),
+        };
+
+        applying(&test, view, &asked, file_update());
+        assert!(
+            !test.run_in(|| view.diff.peek().file().is_some()),
+            "an answer was kept with nothing selected"
+        );
+        test.run_in(|| view.diff.write().select_file(query.clone()));
+        applying(&test, view, &asked, file_update());
+        assert_eq!(
+            test.run_in(|| view.diff.peek().file().map(|(_, a)| a.clone())),
+            Some(Answer::Ready(Some(cairn_model::ShownDiff::new(
+                diff.clone(),
+                query.options.context
+            )))),
+            "the selected file's diff was not kept"
+        );
+
+        test.run_in(|| view.diff.write().clear());
+        applying(&test, view, &asked, page());
+        assert!(
+            test.run_in(|| answered_expansion(&view.diff.peek()).is_empty()),
+            "an answer was kept with nothing selected"
+        );
+        test.run_in(|| {
+            let mut state = view.diff.write();
+            state.select_changes(of);
+            state.changes_arrived(
+                of,
+                cairn_model::ChangeSet {
+                    files: vec![diff.file.clone()],
+                    details: None,
+                    renames: cairn_model::RenameDetection::default(),
+                },
+            );
+            state.expand_all(options)
+        });
+        applying(&test, view, &asked, page());
+        assert!(
+            test.run_in(|| matches!(
+                answered_expansion(&view.diff.peek()).get(0),
+                Some(cairn_ui::Opened::Shown(_))
+            )),
+            "the selected expansion's page was not kept"
+        );
+
+        test.run_in(|| view.diff.write().clear());
+        let failure = || Update::DiffFailed {
+            query: DiffQuery::File(query.clone()),
+            message: "git failed".to_owned(),
+        };
+        applying(&test, view, &asked, failure());
+        assert!(
+            !test.run_in(|| view.diff.peek().file().is_some()),
+            "an answer was kept with nothing selected"
+        );
+        test.run_in(|| view.diff.write().select_file(query.clone()));
+        applying(&test, view, &asked, failure());
+        assert_eq!(
+            test.run_in(|| view.diff.peek().file().map(|(_, a)| a.clone())),
+            Some(Answer::Failed("git failed".to_owned())),
+            "the selected file's failure was not kept"
+        );
+    }
+
+    /// R1 (phase 07 QA): an answer the window will not keep is freed on a worker, never on
+    /// the UI thread — a file's prepared diff is up to 64 MiB in both layouts, a change set
+    /// 55,184 files. One the epoch filter caught arrives as `Update::Superseded` and is
+    /// handed straight back; one naming another selection is handed back from its own arm.
+    /// Both go as a `Request::Retire`, which only sends. Caught by: either dropped in place.
+    #[test]
+    fn an_answer_the_window_will_not_keep_is_handed_to_a_worker_to_free() {
+        use cairn_model::{
+            ChangeSet, ChangeStatus, ChangedFile, DiffContent, FileDiff, FileMode, Oid,
+            RenameDetection, RepoPath, ShownDiff,
+        };
+
+        use crate::worker::{Comparison, DiffOptions, FileQuery, FileTarget, Retired};
+
+        let of = Comparison::Commit(Oid::from_bytes(&[1; 20]).unwrap());
+        let file = ChangedFile {
+            status: ChangeStatus::Modified,
+            old_path: RepoPath::from("a.txt"),
+            new_path: RepoPath::from("a.txt"),
+            old_mode: Some(FileMode::Regular),
+            new_mode: Some(FileMode::Executable),
+            old_id: Some(Oid::from_bytes(&[2; 20]).unwrap()),
+            new_id: Some(Oid::from_bytes(&[2; 20]).unwrap()),
+        };
+        let diff = FileDiff {
+            file: file.clone(),
+            content: DiffContent::ModeChangeOnly,
+        };
+        let shown = ShownDiff::new(diff.clone(), DiffOptions::default().context);
+        let query = FileQuery {
+            target: FileTarget::Committed { of, file },
+            options: DiffOptions::default(),
+        };
+        let changes = ChangeSet {
+            files: Vec::new(),
+            details: None,
+            renames: RenameDetection::default(),
+        };
+        let retired = |asked: &Asked| -> Vec<Retired> {
+            asked
+                .submitted
+                .borrow_mut()
+                .drain(..)
+                .map(|request| match request {
+                    Request::Retire(retired) => retired,
+                    other => panic!("expected a retirement, got {other:?}"),
+                })
+                .collect()
+        };
+        let (test, view, asked) = launch(FetchStatus::Idle);
+
+        // Caught by the epoch filter: handed back as it came.
+        let stale = Retired::of(None, vec![shown.clone()])
+            .unwrap_or_else(|| unreachable!("a diff is something"));
+        applying(&test, view, &asked, Update::Superseded(stale.clone()));
+        assert_eq!(retired(&asked), [stale]);
+
+        // Naming nothing selected: each payload handed back from its own arm.
+        applying(
+            &test,
+            view,
+            &asked,
+            Update::FileDiff {
+                query: query.clone(),
+                diff: Some(Box::new(shown.clone())),
+            },
+        );
+        let handed = retired(&asked);
+        assert_eq!(handed.len(), 1, "an unwanted file diff was not retired");
+        assert_eq!(handed[0].shown(), std::slice::from_ref(&shown));
+
+        applying(
+            &test,
+            view,
+            &asked,
+            Update::Changes {
+                of,
+                changes: changes.clone(),
+            },
+        );
+        let handed = retired(&asked);
+        assert_eq!(handed.len(), 1, "an unwanted change set was not retired");
+        assert_eq!(handed[0].changes(), Some(&changes));
+
+        applying(
+            &test,
+            view,
+            &asked,
+            Update::Expanded {
+                of,
+                options: DiffOptions::default(),
+                files: vec![crate::worker::ExpandedFile {
+                    file: crate::worker::OpenedFile {
+                        index: 0,
+                        load_anyway: false,
+                    },
+                    by_all: true,
+                    outcome: Ok(Box::new(shown.clone())),
+                }],
+                all: None,
+            },
+        );
+        let handed = retired(&asked);
+        assert_eq!(
+            handed.len(),
+            1,
+            "an unwanted page of files opened in place was not retired"
+        );
+        assert_eq!(handed[0].shown(), std::slice::from_ref(&shown));
+
+        // A clean working-tree path's answer holds nothing to free, so nothing is sent.
+        applying(&test, view, &asked, Update::FileDiff { query, diff: None });
+        assert!(retired(&asked).is_empty());
     }
 
     /// A fetch the close itself ended may still have moved refs. Caught by: reloading
@@ -472,5 +841,193 @@ mod tests {
             },
         );
         assert_eq!(view.remotes.read().len(), 1);
+    }
+
+    /// Phase 06: the user's `diff.context` is where the session's context starts; a file
+    /// already shown at git's default — in the Changes tab — is asked again at it; once the user has moved the
+    /// context, a later reading of the configuration does not move it back. Caught by: a
+    /// context fixed at three, or one the configuration overrides after the user chose.
+    #[test]
+    fn the_configured_context_is_where_the_session_starts_until_the_user_moves_it() {
+        use cairn_model::{ChangeStatus, ChangedFile, Context, FileMode, Oid, RepoPath};
+
+        use crate::worker::{Comparison, FileQuery, FileTarget};
+
+        let (test, mut view, asked) = launch(FetchStatus::Idle);
+        let file = ChangedFile {
+            status: ChangeStatus::Modified,
+            old_path: RepoPath::from("a.txt"),
+            new_path: RepoPath::from("a.txt"),
+            old_mode: Some(FileMode::Regular),
+            new_mode: Some(FileMode::Regular),
+            old_id: None,
+            new_id: None,
+        };
+        let query = FileQuery {
+            target: FileTarget::Committed {
+                of: Comparison::Commit(Oid::from_bytes(&[1; 20]).unwrap()),
+                file,
+            },
+            options: crate::diff_actions::options(cairn_ui::DiffSettings::default()),
+        };
+        // Shown in the Changes tab, whose file a setting asks again at once (phase 08: the
+        // Commit tab's files opened in place share the lane, and the hidden one waits).
+        test.run_in(|| view.detail_tab.set(cairn_ui::DetailTab::Changes));
+        test.run_in(|| view.diff.write().select_file(query.clone()));
+
+        applying(
+            &test,
+            view,
+            &asked,
+            Update::ConfiguredContext {
+                context: Context::Lines(5),
+            },
+        );
+        assert_eq!(
+            test.run_in(|| view.diff_settings.peek().context()),
+            Context::Lines(5)
+        );
+        let mut again = query.clone();
+        again.options.context = Context::Lines(5);
+        assert_eq!(
+            asked.submitted.borrow().as_slice(),
+            [Request::FileDiff(again)]
+        );
+
+        test.run_in(|| {
+            view.diff_settings.write().more_lines();
+        });
+        applying(
+            &test,
+            view,
+            &asked,
+            Update::ConfiguredContext {
+                context: Context::Lines(9),
+            },
+        );
+        assert_eq!(
+            test.run_in(|| view.diff_settings.peek().context()),
+            Context::Lines(6),
+            "the configuration moved a context the user chose"
+        );
+        assert_eq!(asked.submitted.borrow().len(), 1);
+    }
+
+    /// Phase 06 QA (T7), through the real boundary: `diff.context` and
+    /// `diff.interHunkContext` edited mid-session reach the next answer — the context
+    /// adopted while the user has not moved it, the grouping always — and once the user has
+    /// moved the context, a `diff.context` edit is read and sent but not adopted, while the
+    /// inter-hunk context still applies. Caught by: the configured context read once, on a
+    /// handle the configuration's freshness never reopens.
+    #[test]
+    fn a_configuration_edit_mid_session_reaches_the_next_answer() {
+        use cairn_model::Context;
+
+        use crate::diff_state::Answer;
+        use crate::worker::{Configurable, FileQuery, FileTarget, next_update};
+
+        let repository = Configurable::new("diff-context-edit");
+        let (handle, mut updates) = repository.open();
+        let (test, mut view, asked) = launch(FetchStatus::Idle);
+        // The file is the Changes tab's, shown, so a setting asks it again at once.
+        test.run_in(|| view.detail_tab.set(cairn_ui::DetailTab::Changes));
+
+        // Applies updates, handing on whatever applying them asked, until `done` holds of
+        // the state and what arrived; returns what arrived.
+        let mut pump = |done: &dyn Fn(&[Update]) -> bool| -> Vec<Update> {
+            let mut seen = Vec::new();
+            loop {
+                for request in asked.submitted.borrow_mut().drain(..) {
+                    handle.submit(request);
+                }
+                if done(&seen) {
+                    return seen;
+                }
+                let update = next_update(&mut updates);
+                seen.push(update.clone());
+                applying(&test, view, &asked, update);
+            }
+        };
+        // The inter-hunk context of the answer shown, when it is the one asked at `context`
+        // with whitespace `ignoring` or not.
+        let shown_at = |context: Context, ignoring: bool| -> Option<u32> {
+            test.run_in(|| {
+                let state = view.diff.peek();
+                match state.file() {
+                    Some((query, Answer::Ready(Some(shown))))
+                        if query.options.context == context
+                            && query.options.ignore_whitespace == ignoring =>
+                    {
+                        shown
+                            .diff()
+                            .overlay()
+                            .map(|overlay| overlay.function_context().inter_hunk_context())
+                    }
+                    _ => None,
+                }
+            })
+        };
+        let configured = |seen: &[Update]| -> Vec<Context> {
+            seen.iter()
+                .filter_map(|update| match update {
+                    Update::ConfiguredContext { context } => Some(*context),
+                    _ => None,
+                })
+                .collect()
+        };
+        let settings = || test.run_in(|| view.diff_settings.peek().context());
+        let change = |change: fn(&mut cairn_ui::DiffSettings) -> bool| {
+            let submit = |request| asked.submitted.borrow_mut().push(request);
+            test.run_in(|| crate::diff_actions::change_settings(view, Some(&submit), change));
+        };
+
+        // At open: git's default, since nothing is configured.
+        asked
+            .submitted
+            .borrow_mut()
+            .push(Request::ConfiguredContext);
+        let seen = pump(&|seen| !configured(seen).is_empty());
+        assert_eq!(configured(&seen), [Context::Lines(3)]);
+        let query = FileQuery {
+            target: FileTarget::Committed {
+                of: repository.of,
+                file: repository.file.clone(),
+            },
+            options: crate::diff_actions::options(test.run_in(|| *view.diff_settings.peek())),
+        };
+        let mut diff = view.diff;
+        let asked_first = test.run_in(|| diff.write().select_file(query));
+        asked.submitted.borrow_mut().extend(asked_first);
+        pump(&|_| shown_at(Context::Lines(3), false).is_some());
+        assert_eq!(shown_at(Context::Lines(3), false), Some(0));
+
+        // Edited while the context is unmoved: the next answer, asked for anything, follows.
+        repository.configure("[diff]\n\tcontext = 5\n\tinterHunkContext = 2\n");
+        change(|settings| {
+            settings.toggle_ignore_whitespace();
+            true
+        });
+        let seen = pump(&|_| shown_at(Context::Lines(5), true).is_some());
+        assert!(configured(&seen).contains(&Context::Lines(5)), "{seen:?}");
+        assert_eq!(settings(), Context::Lines(5));
+        assert_eq!(shown_at(Context::Lines(5), true), Some(2));
+
+        // Moved by the user: a later diff.context is read and sent, and not adopted; the
+        // inter-hunk context still applies.
+        change(cairn_ui::DiffSettings::more_lines);
+        pump(&|_| shown_at(Context::Lines(6), true).is_some());
+        repository.configure("[diff]\n\tcontext = 7\n\tinterHunkContext = 4\n");
+        change(|settings| {
+            settings.toggle_ignore_whitespace();
+            true
+        });
+        let seen = pump(&|_| shown_at(Context::Lines(6), false) == Some(4));
+        assert!(configured(&seen).contains(&Context::Lines(7)), "{seen:?}");
+        assert_eq!(
+            settings(),
+            Context::Lines(6),
+            "the configuration moved a context the user chose"
+        );
+        drop(handle);
     }
 }

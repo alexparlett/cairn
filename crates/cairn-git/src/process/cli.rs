@@ -60,6 +60,11 @@ pub(crate) struct GitCommand<'a, K> {
     program: &'a Path,
     environment: &'a GitEnvironment,
     kind: K,
+    /// The repository's location as global options ahead of the verb —
+    /// `--git-dir` and, when it has one, `--work-tree` — set with the
+    /// directory ([`GitCommand::in_repository`]); empty for an invocation in
+    /// no repository, or one git is left to find by discovery.
+    location: Vec<OsString>,
     arguments: Vec<OsString>,
     directory: Option<PathBuf>,
     /// Where a write's lock files live, for its outcome; set with the directory.
@@ -168,6 +173,7 @@ impl<'a, K: Kind> GitCommand<'a, K> {
             program,
             environment,
             kind,
+            location: Vec::new(),
             arguments: Vec::new(),
             directory: None,
             dirs: None,
@@ -187,10 +193,18 @@ impl<'a, K: Kind> GitCommand<'a, K> {
         self
     }
 
-    /// Runs inside `repo`: its working tree, or the git directory of a bare one.
-    /// The invocation is booked in `repo`'s registry from its spawn to its end,
-    /// and written to its command log once, however it ends.
+    /// Runs inside `repo`: its working tree, or the git directory of a bare one,
+    /// with the repository named to git rather than left to its discovery
+    /// ([`repository_location`]). The invocation is booked in `repo`'s registry
+    /// from its spawn to its end, and written to its command log once, however
+    /// it ends.
     pub(crate) fn in_repository(mut self, repo: &Repository) -> Self {
+        let inner = repo.inner();
+        let absolute = |path: &Path| inner.current_dir().join(path);
+        self.location = repository_location(
+            &absolute(repo.git_dir()),
+            repo.workdir().map(absolute).as_deref(),
+        );
         self.directory = Some(repo.workdir().unwrap_or(repo.git_dir()).to_owned());
         self.dirs = Some(GitDirs {
             git_dir: repo.git_dir().to_owned(),
@@ -203,13 +217,6 @@ impl<'a, K: Kind> GitCommand<'a, K> {
     /// Bytes [`GitCommand::start`] writes to the process's stdin, on a thread
     /// of their own, and then closes it: git reads a patch or a list to its
     /// end before it acts, so a stdin left open would hold it forever.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the first verb fed on stdin arrives with staging; tests drive it today"
-        )
-    )]
     pub(crate) fn input(mut self, bytes: impl Into<Vec<u8>>) -> Self {
         self.input = Some(bytes.into());
         self
@@ -242,8 +249,12 @@ impl<'a, K: Kind> GitCommand<'a, K> {
     /// [`GitCommand::start`] with the thread starter given, so a test can make
     /// one fail.
     pub(super) fn start_with(self, spawner: &Spawner) -> Result<Invocation<K>, Error> {
+        // The repository's location goes ahead of the verb on the command line
+        // and nowhere else: a log is the repository's own, and an error is
+        // about the verb, so both record the verb and its arguments.
         let mut command = self.environment.command(self.program, self.kind.profile());
         command
+            .args(&self.location)
             .args(&self.arguments)
             .stdin(if self.input.is_some() {
                 Stdio::piped()
@@ -300,6 +311,44 @@ impl GitCommand<'_, Write> {
         self.kind.token = Some(token.clone());
         self
     }
+}
+
+/// The global options that name a repository to git: `--git-dir`, and
+/// `--work-tree` when it has a working tree — for every repository Cairn holds.
+///
+/// Without them git finds the repository by discovery from the directory it
+/// runs in, and discovery can find a different one: a working tree whose git
+/// directory lives elsewhere (`core.worktree`), sitting inside another
+/// repository's working tree, is discovered as that enclosing repository, or
+/// — run in a `core.worktree` outside any repository — none at all; and under
+/// `safe.bareRepository=explicit` git refuses to discover a bare repository at
+/// all. Naming it is what makes the repository git reads the one Cairn opened.
+///
+/// A git directory named explicitly is one git does not check the ownership
+/// of — `safe.directory` guards discovery only (reproduced with git 2.56:
+/// `GIT_TEST_ASSUME_DIFFERENT_OWNER=1 git log` refuses with "dubious
+/// ownership", and the same command given `--git-dir` answers). So git's check
+/// is made as the repository is opened, by git's own rule for the version in
+/// use, against the environment Cairn was launched with (`crate::ownership`),
+/// and a repository git would refuse is refused there, never opened: every
+/// repository Cairn holds has passed git's check, and is named here whatever
+/// trust gix gave it. gix re-checks the working tree's owner by a rule of its
+/// own as it opens (and may lower its trust to reduced, which
+/// `Options::with(Trust::Full)` does not prevent), but that rule is not
+/// git's, so it decides nothing here — and the `git` run here could not make
+/// git's check anyway, since its environment carries none of the launch
+/// environment's `GIT_CONFIG_*` (`environment.rs`).
+fn repository_location(git_dir: &Path, workdir: Option<&Path>) -> Vec<OsString> {
+    let option = |name: &str, path: &Path| {
+        let mut option = OsString::from(name);
+        option.push(path);
+        option
+    };
+    let mut location = vec![option("--git-dir=", git_dir)];
+    if let Some(workdir) = workdir {
+        location.push(option("--work-tree=", workdir));
+    }
+    location
 }
 
 /// The arguments as a user would have typed them, for an error message.
@@ -405,6 +454,38 @@ mod tests {
         let arguments = [OsString::from("fetch"), OsString::from("--prune")];
         assert_eq!(describe(&arguments), "fetch --prune");
     }
+
+    /// Runs the test at `path` (from the crate root) in this test binary again, with
+    /// `marker` set and the configuration gix reads isolated — no system file, the global
+    /// file `/dev/null`, `home` as the home — and fails unless it ran and passed. gix takes
+    /// `safe.directory` from the system and global files of the process it opens in, which
+    /// a test cannot choose for its own process. Here rather than in `stub_tests`, whose
+    /// `cfg(all(test, unix))` the process guards read as production code, and production
+    /// code builds a process in `process/environment.rs` alone.
+    pub(super) fn passes_with_gix_configuration_isolated(path: &str, marker: &str, home: &Path) {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                path,
+                "--include-ignored",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env(marker, "1")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("HOME", home)
+            .env("XDG_CONFIG_HOME", home)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{path} failed with gix's configuration isolated:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(stdout.contains("1 passed"), "{path} did not run:\n{stdout}");
+    }
 }
 
 /// Against a stub `git` that reports what it was given. Inside the crate because the
@@ -416,6 +497,7 @@ mod tests {
 mod stub_tests {
     use std::collections::BTreeMap;
     use std::ffi::OsString;
+    use std::path::Path;
 
     use super::super::stub_git::{StubGit, discover_retrying, printed_environment};
     use crate::{CancelSignal, Repository};
@@ -579,6 +661,166 @@ mod stub_tests {
             ran(git.read_invocation()),
             std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap()
         );
+    }
+
+    /// Every invocation in a repository names it to git ahead of the verb — its git
+    /// directory and its working tree, absolute — and the repository's own command
+    /// log records the verb and its arguments, as it always has. Caught by: a
+    /// repository left to git's discovery, which finds an enclosing repository or
+    /// refuses a bare one under `safe.bareRepository=explicit` (both against real
+    /// git in `tests/diff/changes.rs` and `tests/fetch.rs`), or the location put
+    /// after the verb, where git reads it as the verb's own option.
+    #[test]
+    fn a_trusted_repository_is_named_to_git_ahead_of_the_verb() {
+        let stub = stub("printf '%s\\0' \"$@\"");
+        let git = discover_retrying(stub.environment()).unwrap();
+        let repo = Repository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
+        assert_eq!(
+            repo.inner().git_dir_trust(),
+            gix::sec::Trust::Full,
+            "this checkout is the user's own, so it is trusted"
+        );
+        let git_dir = std::fs::canonicalize(repo.git_dir()).unwrap();
+        let workdir = std::fs::canonicalize(repo.workdir().unwrap()).unwrap();
+        let output = git
+            .read_invocation()
+            .in_repository(&repo)
+            .args(["diff-tree", "--raw"])
+            .start()
+            .unwrap()
+            .collect(&CancelSignal::new(), CEILING, |_| {})
+            .unwrap();
+        let records: Vec<String> = output
+            .records()
+            .map(|record| String::from_utf8_lossy(record).into_owned())
+            .collect();
+        assert_eq!(records.len(), 4, "{records:?}");
+        let named = |option: &str, record: &str| {
+            let path = record
+                .strip_prefix(option)
+                .unwrap_or_else(|| panic!("{record:?} is not {option}"));
+            assert!(Path::new(path).is_absolute(), "{record:?} is relative");
+            std::fs::canonicalize(path).unwrap()
+        };
+        assert_eq!(named("--git-dir=", &records[0]), git_dir);
+        assert_eq!(named("--work-tree=", &records[1]), workdir);
+        assert_eq!(records[2..], ["diff-tree", "--raw"]);
+
+        let log = repo.processes().log();
+        assert_eq!(log.len(), 1, "{log:?}");
+        assert_eq!(log[0].arguments, ["diff-tree", "--raw"]);
+    }
+
+    /// The other half of the rule: every repository Cairn holds is named to git,
+    /// whatever trust gix gave it — git's own ownership check was made as it was
+    /// opened (`crate::ownership`), and gix's re-check of the working tree's owner
+    /// is not git's rule. Built from a fixture gix trusts less than fully (its
+    /// working tree is `/`, which root owns), so the trust is shown to be reduced
+    /// before the location is read; skipped where this user owns `/`. gix takes
+    /// `safe.directory` from the system and global files, which this test cannot
+    /// choose for an open in its own process — a runner image's
+    /// `/etc/gitconfig` carrying `safe.directory = *` (GitHub's Ubuntu images do)
+    /// trusts the fixture fully and decides nothing — so the open runs in this test
+    /// binary again, in a child whose system file is off and whose global file and
+    /// home are empty. Caught by: the location withheld for a reduced repository,
+    /// which leaves the `git` Cairn runs to discover from the working tree — none
+    /// at all from `/` — with an environment that carries none of the launch
+    /// environment's `safe.directory` (end to end in `tests/diff/ownership.rs`).
+    #[test]
+    fn every_repository_is_named_to_git_whatever_trust_gix_gave_it() {
+        use std::os::unix::fs::MetadataExt as _;
+        let git_dir = Path::new("/somewhere/repo/.git");
+        let workdir = Path::new("/somewhere/repo");
+        assert_eq!(
+            super::repository_location(git_dir, Some(workdir)),
+            [
+                "--git-dir=/somewhere/repo/.git",
+                "--work-tree=/somewhere/repo"
+            ]
+        );
+        assert_eq!(
+            super::repository_location(git_dir, None),
+            ["--git-dir=/somewhere/repo/.git"],
+            "a bare repository has no working tree to name"
+        );
+
+        // The child's home: empty, so no configuration of this machine's user is read.
+        let home = std::env::temp_dir().join(format!("cairn-reduced-home-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let me = std::fs::symlink_metadata(&home).unwrap().uid();
+        if std::fs::symlink_metadata("/").unwrap().uid() == me {
+            eprintln!(
+                "SKIPPED every_repository_is_named_to_git_whatever_trust_gix_gave_it's \
+                 reduced half: / is this user's own"
+            );
+            std::fs::remove_dir_all(&home).unwrap();
+            return;
+        }
+        let name = module_path!()
+            .split_once("::")
+            .map(|(_, path)| {
+                format!("{path}::every_repository_is_named_to_git_whatever_trust_gix_gave_it_inner")
+            })
+            .unwrap();
+        super::tests::passes_with_gix_configuration_isolated(&name, REDUCED_CHILD, &home);
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// Set in the child [`every_repository_is_named_to_git_whatever_trust_gix_gave_it`]
+    /// runs, with gix's configuration sources isolated.
+    const REDUCED_CHILD: &str = "CAIRN_TEST_REDUCED_TRUST_CHILD";
+
+    /// The child's half, ignored so it runs only under its parent: a repository whose
+    /// working tree is `/` opened as Cairn opens it, shown to be one gix trusts less than
+    /// fully, and named to git all the same.
+    #[test]
+    #[ignore = "run by every_repository_is_named_to_git_whatever_trust_gix_gave_it"]
+    fn every_repository_is_named_to_git_whatever_trust_gix_gave_it_inner() {
+        assert!(
+            std::env::var_os(REDUCED_CHILD).is_some(),
+            "not running under the parent test, so gix's configuration is not isolated"
+        );
+        let scratch =
+            std::env::temp_dir().join(format!("cairn-reduced-{}-{}", std::process::id(), line!()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        let git_dir = scratch.join(".git");
+        std::fs::create_dir_all(git_dir.join("objects")).unwrap();
+        std::fs::create_dir_all(git_dir.join("refs/heads")).unwrap();
+        std::fs::write(git_dir.join("HEAD"), b"ref: refs/heads/main\n").unwrap();
+        std::fs::write(
+            git_dir.join("config"),
+            b"[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = /\n",
+        )
+        .unwrap();
+        let stub = stub("printf '%s\\0' \"$@\"");
+        let git = discover_retrying(stub.environment()).unwrap();
+        let repo = Repository::discover(&scratch).unwrap();
+        assert_eq!(
+            repo.inner().git_dir_trust(),
+            gix::sec::Trust::Reduced,
+            "gix trusted a working tree root owns, so this decides nothing"
+        );
+        let output = git
+            .read_invocation()
+            .in_repository(&repo)
+            .arg("diff-tree")
+            .collected()
+            .unwrap();
+        let records: Vec<String> = output
+            .records()
+            .map(|record| String::from_utf8_lossy(record).into_owned())
+            .collect();
+        assert_eq!(records.len(), 3, "{records:?}");
+        let named = records[0]
+            .strip_prefix("--git-dir=")
+            .unwrap_or_else(|| panic!("{records:?} names no git directory"));
+        assert_eq!(
+            std::fs::canonicalize(named).unwrap(),
+            std::fs::canonicalize(&git_dir).unwrap()
+        );
+        assert_eq!(records[1..], ["--work-tree=/", "diff-tree"]);
+        std::fs::remove_dir_all(&scratch).unwrap();
     }
 
     /// Progress arrives one redraw at a time: git ends a meter's redraws with `\r`

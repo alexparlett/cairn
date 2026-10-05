@@ -122,16 +122,10 @@ impl GitBinary {
 
     /// A read of this `git`, ready for its arguments: optional locks off and
     /// no askpass token, ever (`environment.rs`). For `crate::reads`, whose
-    /// functions each run plumbing or `status`, and for `crate::ops`. Never
+    /// functions each run plumbing, `status` or `git diff --no-index --
+    /// /dev/null <path>` (`<path>` work-tree-relative, `./-` for `-`), and for
+    /// `crate::ops`. Never
     /// public: the public surface is named operations, not a raw verb.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "reads/ is empty until diff-engine adds its first read, and the probe \
-                      builds its read before there is a GitBinary"
-        )
-    )]
     pub(crate) fn read_invocation(&self) -> GitCommand<'_, Read> {
         GitCommand::new(&self.path, &self.environment, Read)
     }

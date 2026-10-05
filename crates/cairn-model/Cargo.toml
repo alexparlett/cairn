@@ -15,5 +15,11 @@ publish = false
 # of a credential on drop, which a hand-rolled loop cannot promise.
 zeroize.workspace = true
 
+[dev-dependencies]
+# Counts this test binary's own allocations, which is what turns R1.5 — asking
+# for a row allocates nothing — from a claim in a doc comment into a pin.
+# See the workspace manifest for why this crate and not another.
+allocation-counter.workspace = true
+
 [lints]
 workspace = true

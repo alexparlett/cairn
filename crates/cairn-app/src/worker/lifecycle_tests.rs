@@ -38,9 +38,10 @@ const FETCH: [&str; 5] = [
 
 /// A directory holding one stub `git`, removed when the test ends. `--version`
 /// is answered, and counted in `probes`; `fetch` does what the test says,
-/// with `$DIR` naming this directory.
-struct StubGit {
-    directory: PathBuf,
+/// with `$DIR` naming this directory. An invocation in a repository names it
+/// ahead of the verb (`--git-dir=`, `--work-tree=`), which the stub skips.
+pub(super) struct StubGit {
+    pub(super) directory: PathBuf,
 }
 
 impl StubGit {
@@ -50,6 +51,12 @@ impl StubGit {
 
     /// A stub whose `--version` reports `version`.
     fn reporting(version: &str, fetch: &str) -> Self {
+        Self::answering(version, "fetch", fetch)
+    }
+
+    /// A stub whose `--version` reports `version` and whose `verb` does what
+    /// `body` says; every other verb fails.
+    pub(super) fn answering(version: &str, verb: &str, body: &str) -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let directory = std::env::temp_dir().join(format!(
             "cairn-app-stub-{}-{}",
@@ -62,8 +69,10 @@ impl StubGit {
         }
         let git = directory.join("git");
         let script = format!(
-            "#!/bin/sh\nDIR='{}'\ncase \"$1\" in\n--version)\n  echo probed >> \"$DIR/probes\"\n  \
-             echo 'git version {version}'\n  ;;\nfetch)\n{fetch}\n  ;;\n*)\n  exit 1\n  ;;\nesac\n",
+            "#!/bin/sh\nDIR='{}'\n\
+             while case \"$1\" in --git-dir=*|--work-tree=*) true ;; *) false ;; esac; do shift; done\n\
+             case \"$1\" in\n--version)\n  echo probed >> \"$DIR/probes\"\n  \
+             echo 'git version {version}'\n  ;;\n{verb})\n{body}\n  ;;\n*)\n  exit 1\n  ;;\nesac\n",
             directory.display()
         );
         if let Err(error) = std::fs::write(&git, script) {
@@ -101,7 +110,7 @@ impl StubGit {
 
     /// A launch whose `PATH` is this directory, with a `HOME` and, when given,
     /// a runtime directory for the askpass channel.
-    fn startup(&self, around: Option<(&Home, &RuntimeDir)>) -> Startup {
+    pub(super) fn startup(&self, around: Option<(&Home, &RuntimeDir)>) -> Startup {
         let path = self.directory.clone().into_os_string();
         let home = around.map(|(home, _)| home.path.clone().into_os_string());
         let runtime = around.map(|(_, runtime)| runtime.path.clone().into_os_string());
@@ -161,7 +170,7 @@ const HANGS_WITH_A_GRANDCHILD: &str = "  echo $$ > \"$DIR/leader\"\n  /bin/sleep
 /// The processes in group `group` that are still alive — not yet exited, or
 /// exited and waiting to be reaped is not "alive" — read from `/proc`.
 #[cfg(target_os = "linux")]
-fn alive_in_group(group: i32) -> Vec<i32> {
+pub(super) fn alive_in_group(group: i32) -> Vec<i32> {
     let Ok(entries) = std::fs::read_dir("/proc") else {
         panic!("/proc is not readable");
     };
@@ -348,7 +357,7 @@ fn a_second_fetch_while_one_runs_is_refused_with_a_reason() {
 
 /// PRD G17, the worker's half: the command log is answered through the
 /// boundary as `cairn-model` values, and a fetch's entry is in it once, with
-/// what it was given and how it ended. The probe ran in no repository, so it
+/// what it was given and how it ended, after the refspec check's reads. The probe ran in no repository, so it
 /// is not. Caught by: the request going unanswered, or answered from anywhere
 /// but the repository's log.
 #[test]
@@ -393,8 +402,18 @@ fn the_command_log_is_answered_through_the_worker_with_the_fetch_in_it() {
     let Some(Update::CommandLog { records }) = seen.last() else {
         panic!("no log: {seen:?}");
     };
-    assert_eq!(records.len(), 1, "{records:?}");
-    let record = &records[0];
+    // The refspec check's four `git config` reads come first (this stub answers each with
+    // exit 1, "no such key"), then the fetch, once.
+    assert_eq!(records.len(), 5, "{records:?}");
+    for read in &records[..4] {
+        assert_eq!(
+            read.arguments.first().map(String::as_str),
+            Some("config"),
+            "{read:?}"
+        );
+        assert_eq!(read.exit, CommandExit::Code(1), "{read:?}");
+    }
+    let record = &records[4];
     assert_eq!(record.arguments, FETCH);
     assert_eq!(
         record

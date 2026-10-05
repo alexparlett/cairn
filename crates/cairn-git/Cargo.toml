@@ -12,6 +12,7 @@ publish = false
 
 [dependencies]
 cairn-model.workspace = true
+encoding_rs.workspace = true
 gix.workspace = true
 nix.workspace = true
 thiserror.workspace = true

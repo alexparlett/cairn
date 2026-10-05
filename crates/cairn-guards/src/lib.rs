@@ -1,6 +1,6 @@
 //! Matchers and repository walking for the invariant guards.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// Resolved from this crate's manifest, not the process working directory.
@@ -372,6 +372,78 @@ pub fn code_without_test_modules(code: &str) -> String {
     String::from_utf8(out).unwrap_or_default()
 }
 
+/// Every string literal of `source` outside comments and `#[cfg(test)]` modules, as (1-based
+/// line it opens on, its text between the quotes as written, escapes not interpreted).
+/// Plain, byte and raw strings (`"..."`, `b"..."`, `r#"..."#`) all count; a char literal
+/// (`'"'`) does not open one.
+pub fn production_string_literals(source: &str) -> Vec<(usize, String)> {
+    let code = code_only(source);
+    let strings_blanked = code_without_strings(source);
+    let tests_blanked = code_without_test_modules(&strings_blanked);
+    // A line a test module blanked: it had code, and has none left.
+    let in_test: Vec<bool> = strings_blanked
+        .lines()
+        .zip(tests_blanked.lines())
+        .map(|(before, after)| !before.trim().is_empty() && after.trim().is_empty())
+        .collect();
+    let bytes = code.as_bytes();
+    let is_ident = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    let mut found = Vec::new();
+    let mut line = 1usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        let after_ident = i > 0 && is_ident(bytes[i - 1]);
+        // `r"`, `r#"`, `br"`: a raw string, ended by a quote and as many hashes.
+        let raw_hashes = (byte == b'r'
+            && (!after_ident || (bytes[i - 1] == b'b' && (i < 2 || !is_ident(bytes[i - 2])))))
+        .then(|| bytes[i + 1..].iter().take_while(|&&c| c == b'#').count())
+        .filter(|hashes| bytes.get(i + 1 + hashes) == Some(&b'"'));
+        if let Some(hashes) = raw_hashes {
+            let start = i + hashes + 2;
+            let mut end = start;
+            while end < bytes.len()
+                && !(bytes[end] == b'"'
+                    && bytes[end + 1..].iter().take_while(|&&c| c == b'#').count() >= hashes)
+            {
+                end += 1;
+            }
+            let text = &code[start..end.min(code.len())];
+            found.push((line, text.to_owned()));
+            line += text.matches('\n').count();
+            i = end + hashes + 1;
+            continue;
+        }
+        match byte {
+            b'\n' => {
+                line += 1;
+                i += 1;
+            }
+            b'\'' => match char_literal_end(bytes, i) {
+                Some(end) => i = end + 1,
+                None => i += 1,
+            },
+            b'"' => {
+                let start = i + 1;
+                let mut end = start;
+                while end < bytes.len() && bytes[end] != b'"' {
+                    end += if bytes[end] == b'\\' { 2 } else { 1 };
+                }
+                let end = end.min(bytes.len());
+                let text = &code[start..end];
+                found.push((line, text.to_owned()));
+                line += text.matches('\n').count();
+                i = end + 1;
+            }
+            _ => i += 1,
+        }
+    }
+    found
+        .into_iter()
+        .filter(|(line, _)| !in_test.get(line - 1).copied().unwrap_or(false))
+        .collect()
+}
+
 /// 1-based lines where `source` names the crate `ident` as a path root or import, in code,
 /// including aliases, `::ident` and re-exports.
 pub fn mentions_crate(source: &str, ident: &str) -> Vec<usize> {
@@ -482,6 +554,271 @@ fn takes_no_arguments(code: &str, at: usize) -> bool {
     rest.as_str().trim_start().starts_with(')')
 }
 
+/// Every spelling of a keyboard modifier the toolkit offers a render file (D5, PRD R8.3),
+/// read from the vendored `keyboard-types` (the version `Cargo.lock` pins) and Freya's
+/// `ModifiersExt`: the held-keys type and its helper trait, the event field that carries
+/// them, the type's constants (`Modifiers::CONTROL`), the modifier keys themselves
+/// (`NamedKey::Control`, `Code::ControlLeft`), the lock keys (`CAPS_LOCK`, `NamedKey::NumLock`,
+/// `Code::ScrollLock`: a component reading one is reading the held keys) and the platform
+/// helpers that pick one. Whole identifiers, so an alias is caught on its import line and a
+/// qualified path on its last segment. `Fn`, the function key, is matched only after `::`:
+/// bare, it is Rust's closure trait.
+pub const MODIFIER_IDENTS: &[&str] = &[
+    // The type, its OS-aware helper trait and what it offers, and the event's field.
+    "Modifiers",
+    "ModifiersExt",
+    "ctrl_or_meta",
+    "ctrl_or_alt",
+    "modifiers",
+    // `keyboard_types::Modifiers`' constants.
+    "ALT",
+    "ALT_GRAPH",
+    "CONTROL",
+    "FN",
+    "FN_LOCK",
+    "HYPER",
+    "META",
+    "SHIFT",
+    "SUPER",
+    "SYMBOL",
+    "SYMBOL_LOCK",
+    "CAPS_LOCK",
+    "NUM_LOCK",
+    "SCROLL_LOCK",
+    // `NamedKey`'s modifier keys.
+    "Alt",
+    "AltGraph",
+    "Control",
+    "FnLock",
+    "Hyper",
+    "Meta",
+    "Shift",
+    "Super",
+    "Symbol",
+    "SymbolLock",
+    // The lock keys, `NamedKey`'s and `Code`'s alike.
+    "CapsLock",
+    "NumLock",
+    "ScrollLock",
+    // `Code`'s.
+    "AltLeft",
+    "AltRight",
+    "ControlLeft",
+    "ControlRight",
+    "MetaLeft",
+    "MetaRight",
+    "ShiftLeft",
+    "ShiftRight",
+];
+
+/// `Modifiers`' own predicates, read as nullary method calls (`.ctrl()`): a value of the type
+/// reached by inference names nothing else.
+pub const MODIFIER_METHODS: &[&str] = &["alt", "ctrl", "meta", "shift"];
+
+/// A modifier written for a person to read: a key name in a label or a tooltip, which is a
+/// chord a component spelled for one platform — joined by `+` or by `-`, as both are
+/// written (`Shift+click`, `Shift-click`), and in a string or a char literal alike.
+pub const MODIFIER_TEXT: &[&str] = &[
+    "Ctrl", "Cmd", "⌘", "⌥", "⌃", "⇧", "Alt+", "Control+", "Meta+", "Option+", "Opt+", "Shift+",
+    "Super+", "Command+", "Alt-", "Control-", "Meta-", "Option-", "Shift-", "Super-", "Ctrl-",
+    "Cmd-",
+];
+
+/// 1-based lines where the production code of `source` (test modules blanked) names a
+/// keyboard modifier: an identifier of [`MODIFIER_IDENTS`], `::Fn`, a nullary call of one of
+/// [`MODIFIER_METHODS`], or a literal spelling a chord ([`spells_a_chord`]).
+pub fn names_a_literal_modifier(source: &str) -> Vec<usize> {
+    let code = code_without_test_modules(&code_without_strings(source));
+    let mut lines = BTreeSet::new();
+    for ident in MODIFIER_IDENTS {
+        for offset in ident_offsets(&code, ident) {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+    for offset in ident_offsets(&code, "Fn") {
+        if code[..offset].trim_end().ends_with("::") {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+    for name in MODIFIER_METHODS {
+        for offset in ident_offsets(&code, name) {
+            if code[..offset].trim_end().ends_with('.')
+                && takes_no_arguments(&code, offset + name.len())
+            {
+                lines.insert(line_at(&code, offset));
+            }
+        }
+    }
+    lines.extend(spells_a_chord(source));
+    lines.into_iter().collect()
+}
+
+/// 1-based lines where a production string or char literal of `source` holds one of
+/// [`MODIFIER_TEXT`] once its escapes are read — `'⌘'`, `"\u{2318}1"` and `"\x41lt+1"`
+/// spell a chord as surely as `"⌘1"` does.
+pub fn spells_a_chord(source: &str) -> Vec<usize> {
+    let mut lines = BTreeSet::new();
+    let literals = production_string_literals(source)
+        .into_iter()
+        // A string's bytes arrive one `char` each (`code_only`); put them back together.
+        .map(|(line, text)| (line, narrowed(&text)))
+        .chain(production_char_literals(source));
+    for (line, text) in literals {
+        let text = unescaped(&text);
+        if MODIFIER_TEXT.iter().any(|spelling| text.contains(spelling)) {
+            lines.insert(line);
+        }
+    }
+    lines.into_iter().collect()
+}
+
+/// `text` whose every `char` is one byte widened, as `code_only` copies a string, read back
+/// as the UTF-8 it was.
+fn narrowed(text: &str) -> String {
+    let bytes: Vec<u8> = text
+        .chars()
+        .map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?'))
+        .collect();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// A literal's text with its escapes read: `\u{..}`, `\x..`, the one-letter escapes, and a
+/// line continuation. An escape that does not parse is kept as written.
+fn unescaped(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('u') if chars.peek() == Some(&'{') => {
+                chars.next();
+                let digits: String = chars.by_ref().take_while(|c| *c != '}').collect();
+                match u32::from_str_radix(&digits.replace('_', ""), 16)
+                    .ok()
+                    .and_then(char::from_u32)
+                {
+                    Some(decoded) => out.push(decoded),
+                    None => out.push_str(&format!("\\u{{{digits}}}")),
+                }
+            }
+            Some('x') => {
+                let digits: String = chars.by_ref().take(2).collect();
+                match u8::from_str_radix(&digits, 16) {
+                    Ok(byte) => out.push(char::from(byte)),
+                    Err(_) => out.push_str(&format!("\\x{digits}")),
+                }
+            }
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('r') => out.push('\r'),
+            Some('0') => out.push('\0'),
+            // A line continuation: the newline and the indentation after it are not text.
+            Some('\n') => {
+                while chars.peek().is_some_and(|c| c.is_whitespace()) {
+                    chars.next();
+                }
+            }
+            Some(other) => out.push(other),
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+/// Every char literal of `source` outside comments and `#[cfg(test)]` modules, as (1-based
+/// line, its text between the apostrophes as written, escapes not interpreted). A lifetime
+/// is not one, and neither is an apostrophe inside a string.
+pub fn production_char_literals(source: &str) -> Vec<(usize, String)> {
+    let code = code_only(source);
+    let strings_blanked = code_without_strings(source);
+    let tests_blanked = code_without_test_modules(&strings_blanked);
+    // A line a test module blanked: it had code, and has none left.
+    let in_test: Vec<bool> = strings_blanked
+        .lines()
+        .zip(tests_blanked.lines())
+        .map(|(before, after)| !before.trim().is_empty() && after.trim().is_empty())
+        .collect();
+    let bytes = code.as_bytes();
+    let mut found = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            // Strings are stepped over whole, raw ones by their closing quote and hashes.
+            b'r' if bytes.get(i + 1).is_some_and(|b| *b == b'"' || *b == b'#')
+                && (i == 0
+                    || !is_ident_byte(bytes[i - 1])
+                    || (bytes[i - 1] == b'b' && (i < 2 || !is_ident_byte(bytes[i - 2])))) =>
+            {
+                let hashes = bytes[i + 1..].iter().take_while(|&&c| c == b'#').count();
+                if bytes.get(i + 1 + hashes) != Some(&b'"') {
+                    i += 1;
+                    continue;
+                }
+                let mut end = i + hashes + 2;
+                while end < bytes.len()
+                    && !(bytes[end] == b'"'
+                        && bytes[end + 1..].iter().take_while(|&&c| c == b'#').count() >= hashes)
+                {
+                    end += 1;
+                }
+                i = end + hashes + 1;
+            }
+            b'"' => {
+                let mut end = i + 1;
+                while end < bytes.len() && bytes[end] != b'"' {
+                    end += if bytes[end] == b'\\' { 2 } else { 1 };
+                }
+                i = end + 1;
+            }
+            b'\'' => match char_literal_end(bytes, i) {
+                Some(end) => {
+                    let line = line_at(&code, i);
+                    if !in_test.get(line - 1).copied().unwrap_or(false) {
+                        found.push((line, code[i + 1..end].to_owned()));
+                    }
+                    i = end + 1;
+                }
+                None => i += 1,
+            },
+            _ => i += 1,
+        }
+    }
+    found
+}
+
+/// What a render file names when it builds an element: Freya's element constructors and
+/// the types and traits a component is made of. The accelerator table holds data and the
+/// resolution of a press against it, so naming one of these there is a view in the table.
+pub const ELEMENT_BUILDERS: &[&str] = &[
+    "rect",
+    "label",
+    "paragraph",
+    "svg",
+    "image",
+    "Element",
+    "IntoElement",
+    "Component",
+    "Button",
+    "Label",
+    "Rect",
+];
+
+/// 1-based lines where the production code of `source` (test modules blanked) names one of
+/// [`ELEMENT_BUILDERS`].
+pub fn names_an_element(source: &str) -> Vec<usize> {
+    let code = code_without_test_modules(&code_without_strings(source));
+    let mut lines = BTreeSet::new();
+    for ident in ELEMENT_BUILDERS {
+        for offset in ident_offsets(&code, ident) {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+    lines.into_iter().collect()
+}
+
 const ROW_CONTENT: &str = "RowContent";
 
 /// 1-based lines where `source` reads a `RowContent` without naming every variant: a wildcard or
@@ -489,13 +826,19 @@ const ROW_CONTENT: &str = "RowContent";
 /// `if let`/`while let`/let-chain/`let .. else` over it, `matches!` over it, or an import of
 /// its variants or of it under another name.
 pub fn reads_row_content_partially(source: &str) -> Vec<usize> {
+    reads_enum_partially(source, ROW_CONTENT)
+}
+
+/// [`reads_row_content_partially`] for any enum a view must read by naming every variant —
+/// `RowContent`, and `DiffContent`, whose every state is something a view draws (R6.8).
+pub fn reads_enum_partially(source: &str, name: &str) -> Vec<usize> {
     let code = code_without_strings(source);
     let bytes = code.as_bytes();
-    let names_row_content = |text: &str| !ident_offsets(text, ROW_CONTENT).is_empty();
+    let names_the_enum = |text: &str| !ident_offsets(text, name).is_empty();
     let mut lines = BTreeSet::new();
 
-    for offset in ident_offsets(&code, ROW_CONTENT) {
-        let rest = code[offset + ROW_CONTENT.len()..].trim_start();
+    for offset in ident_offsets(&code, name) {
+        let rest = code[offset + name.len()..].trim_start();
         let glob = rest
             .strip_prefix("::")
             .is_some_and(|r| r.trim_start().starts_with('*'));
@@ -520,7 +863,7 @@ pub fn reads_row_content_partially(source: &str) -> Vec<usize> {
             continue;
         }
         let end = balanced_end(bytes, at);
-        if names_row_content(&code[at..end]) {
+        if names_the_enum(&code[at..end]) {
             lines.insert(line_at(&code, offset));
         }
     }
@@ -529,7 +872,7 @@ pub fn reads_row_content_partially(source: &str) -> Vec<usize> {
         let Some(assign) = depth_zero_assignment(bytes, offset + "let".len()) else {
             continue;
         };
-        if !names_row_content(&code[offset..assign]) {
+        if !names_the_enum(&code[offset..assign]) {
             continue;
         }
         let before = code[..offset].trim_end();
@@ -551,14 +894,14 @@ pub fn reads_row_content_partially(source: &str) -> Vec<usize> {
             continue;
         };
         let arms = match_arm_patterns(&code, open);
-        if !arms.iter().any(|(_, pattern)| names_row_content(pattern)) {
+        if !arms.iter().any(|(_, pattern)| names_the_enum(pattern)) {
             continue;
         }
         let wrappers: BTreeSet<&str> = arms
             .iter()
             .flat_map(|(_, pattern)| split_depth_zero(strip_guard(pattern), b'|'))
             .filter_map(|alternative| wrapped(alternative))
-            .filter(|(_, inner)| names_row_content(inner))
+            .filter(|(_, inner)| names_the_enum(inner))
             .map(|(head, _)| head)
             .collect();
         for (at, pattern) in arms {
@@ -1622,6 +1965,376 @@ pub fn spawns_git(source: &str) -> Vec<usize> {
         })
         .map(|(n, _)| n + 1)
         .collect()
+}
+
+/// The entries of one job's own `env:` block in a GitHub Actions workflow, trimmed — the
+/// variables every step of that job sees. A job is a two-space-indented key (`  gate:`)
+/// inside the top-level `jobs:` block — never a key of the same spelling under `on:` or
+/// anywhere else — running to the next key at two spaces or less; its `env:` is the one
+/// indented four spaces directly under it, so a workflow-level `env:`, another job's, and a
+/// step's own (`        env:`, which only that step sees) are none of them. An entry is a
+/// line at the env block's own indent (its first entry's); a line deeper than that is a
+/// value's continuation — the body of a block scalar (`X: |`) or a nested map — and is
+/// none, nor is the body of a block scalar anywhere in the job read as a key. Comments
+/// and blank lines are not entries.
+pub fn job_env_entries(workflow: &str, job: &str) -> Vec<String> {
+    let indent = |line: &str| line.len() - line.trim_start().len();
+    let meaningful = |line: &str| {
+        let trimmed = line.trim();
+        !trimmed.is_empty() && !trimmed.starts_with('#')
+    };
+    // A key whose value is a block scalar (`|`, `>`, with a chomping or indentation
+    // indicator, and a comment after it), whose body is every deeper line after it.
+    let opens_block_scalar = |line: &str| {
+        let value = line
+            .split_once(": ")
+            .map(|(_, value)| value)
+            .or_else(|| line.trim_start().strip_prefix("- "))
+            .unwrap_or_default();
+        let value = value.split(" #").next().unwrap_or_default().trim();
+        value.starts_with(['|', '>'])
+            && value[1..]
+                .chars()
+                .all(|c| c == '-' || c == '+' || c.is_ascii_digit())
+    };
+    let lines: Vec<&str> = workflow.lines().collect();
+    let Some(jobs) = lines.iter().position(|line| line.trim_end() == "jobs:") else {
+        return Vec::new();
+    };
+    let jobs_block: Vec<&str> = lines[jobs + 1..]
+        .iter()
+        .take_while(|line| !(meaningful(line) && indent(line) == 0))
+        .copied()
+        .collect();
+    let header = format!("  {job}:");
+    let mut scalar: Option<usize> = None;
+    let mut at = None;
+    for (index, line) in jobs_block.iter().enumerate() {
+        if let Some(opened) = scalar {
+            if !meaningful(line) || indent(line) > opened {
+                continue;
+            }
+            scalar = None;
+        }
+        if line.trim_end() == header {
+            at = Some(index);
+            break;
+        }
+        if meaningful(line) && opens_block_scalar(line) {
+            scalar = Some(indent(line));
+        }
+    }
+    let Some(at) = at else {
+        return Vec::new();
+    };
+    let mut entries = Vec::new();
+    let mut in_env = false;
+    let mut entry_indent: Option<usize> = None;
+    let mut scalar: Option<usize> = None;
+    for line in &jobs_block[at + 1..] {
+        if let Some(opened) = scalar {
+            if !meaningful(line) || indent(line) > opened {
+                continue;
+            }
+            scalar = None;
+        }
+        if !meaningful(line) {
+            continue;
+        }
+        if indent(line) <= 2 {
+            break;
+        }
+        if indent(line) == 4 {
+            in_env = line.trim_end() == "    env:";
+            entry_indent = None;
+        } else if in_env {
+            let level = *entry_indent.get_or_insert(indent(line));
+            if indent(line) == level {
+                entries.push(line.trim().to_owned());
+            }
+        }
+        if opens_block_scalar(line) {
+            scalar = Some(indent(line));
+        }
+    }
+    entries
+}
+
+/// Every value `scripts/gate.sh` assigns a step command variable (`NAME_CMD=...`) at the
+/// top level, by variable, in order: the value with its quotes taken off (`"..."`,
+/// `'...'`, or a bare word), a trailing comment left off.
+pub fn gate_command_assignments(gate: &str) -> BTreeMap<String, Vec<String>> {
+    let mut found: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for line in gate.lines() {
+        let Some((name, rest)) = line.split_once('=') else {
+            continue;
+        };
+        if !(name.ends_with("_CMD")
+            && name
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
+        {
+            continue;
+        }
+        let value = match rest.chars().next() {
+            Some(quote @ ('"' | '\'')) => {
+                rest[1..].split(quote).next().unwrap_or_default().to_owned()
+            }
+            _ => rest
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_owned(),
+        };
+        found.entry(name.to_owned()).or_default().push(value);
+    }
+    found
+}
+
+/// The step command variables (`$NAME_CMD`, `${NAME_CMD}`) `function`'s definition in
+/// `scripts/gate.sh` names — from `function() {` to its closing `}`, on one line or
+/// several. Empty when there is no such definition.
+pub fn gate_function_commands(gate: &str, function: &str) -> Vec<String> {
+    let body = gate_function_body(gate, function).unwrap_or_default();
+    let mut names = Vec::new();
+    let mut rest = body.as_str();
+    while let Some(at) = rest.find('$') {
+        rest = &rest[at + 1..];
+        let name: String = rest
+            .trim_start_matches('{')
+            .chars()
+            .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
+            .collect();
+        if name.ends_with("_CMD") && !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
+}
+
+/// Whether `function`'s definition in `scripts/gate.sh` ([`gate_function_body`]) calls
+/// `callee` as a command of its own: some statement of it — a line, or a part of one
+/// between `;`s, its opening `{` and closing `}` taken off — whose first word is `callee`.
+/// A comment, the name inside a string or as another command's argument, a longer name
+/// that starts with it, and a call in any other function's definition are not calls.
+pub fn gate_function_calls(gate: &str, function: &str, callee: &str) -> bool {
+    let Some(body) = gate_function_body(gate, function) else {
+        return false;
+    };
+    body.lines()
+        .flat_map(|line| line.split(';'))
+        .any(|statement| {
+            let statement = statement.trim();
+            let statement = statement
+                .strip_prefix('{')
+                .unwrap_or(statement)
+                .trim_start();
+            let statement = statement.strip_suffix('}').unwrap_or(statement);
+            statement.split_whitespace().next() == Some(callee)
+        })
+}
+
+/// `function`'s definition in `scripts/gate.sh`: what follows `function()` — its opening
+/// `{` included — to the line that closes it, a lone `}`, or to the end of the line for a
+/// definition on one line ending in `}`. `None` when there is no such definition.
+pub fn gate_function_body(gate: &str, function: &str) -> Option<String> {
+    let opening = format!("{function}()");
+    let mut body = String::new();
+    let mut inside = false;
+    for line in gate.lines() {
+        if !inside {
+            let Some(rest) = line.trim_start().strip_prefix(&opening) else {
+                continue;
+            };
+            inside = true;
+            body.push_str(rest);
+            if rest.trim_end().ends_with('}') {
+                break;
+            }
+            continue;
+        }
+        body.push('\n');
+        body.push_str(line);
+        if line.trim() == "}" {
+            break;
+        }
+    }
+    inside.then_some(body)
+}
+
+/// The body of `scripts/gate.sh`'s default dispatch arm, line by line after its `*)`.
+const GATE_DEFAULT_ARM: [&str; 3] = [
+    "echo \"unknown gate step: $SELECTED_STEP\" >&2",
+    "exit 2",
+    ";;",
+];
+
+/// `scripts/gate.sh`'s `--step` dispatch arms, as `(step, function)`. Every line between
+/// `case "$SELECTED_STEP" in` and its `esac` is read: each is a plain arm, exactly
+/// `name) run_x ;;` with a plain step name and a bare `run_*` call, or the one default
+/// arm, `*)` and then exactly [`GATE_DEFAULT_ARM`], last. Anything else — another
+/// spelling of an arm (arguments, a `;` before `;;`, no spaces), a trailing comment, an
+/// arm across lines, an alternation (`a|b)`), a comment or blank line, a step named
+/// twice, an arm after the default, a default with another body, no default, no `esac` —
+/// is an `Err` rather than a guess, so a step cannot be hidden from the guards that read
+/// this by writing its arm in a shape they skip.
+pub fn gate_dispatch_arms(gate: &str) -> Result<Vec<(String, String)>, String> {
+    let mut lines = gate
+        .lines()
+        .skip_while(|line| line.trim() != "case \"$SELECTED_STEP\" in");
+    if lines.next().is_none() {
+        return Err("no `case \"$SELECTED_STEP\" in`".to_owned());
+    }
+    let plain = |word: &str| {
+        !word.is_empty()
+            && word
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    };
+    let mut arms: Vec<(String, String)> = Vec::new();
+    // `None` before the default arm; `Some(n)` once inside it, `n` lines of its body read.
+    let mut default: Option<usize> = None;
+    for line in lines {
+        let trimmed = line.trim();
+        if let Some(read) = default {
+            if read == GATE_DEFAULT_ARM.len() {
+                return if trimmed == "esac" {
+                    Ok(arms)
+                } else {
+                    Err(format!("a line after the default arm: {trimmed:?}"))
+                };
+            }
+            if trimmed != GATE_DEFAULT_ARM[read] {
+                return Err(format!(
+                    "the default arm's line {} is {trimmed:?}, not {:?}",
+                    read + 1,
+                    GATE_DEFAULT_ARM[read]
+                ));
+            }
+            default = Some(read + 1);
+            continue;
+        }
+        if trimmed == "*)" {
+            default = Some(0);
+            continue;
+        }
+        if trimmed == "esac" {
+            return Err("the dispatch has no default arm".to_owned());
+        }
+        let arm = trimmed
+            .strip_suffix(" ;;")
+            .and_then(|body| body.split_once(") "))
+            .filter(|(name, call)| {
+                plain(name)
+                    && call.starts_with("run_")
+                    && plain(call)
+                    && trimmed == format!("{name}) {call} ;;")
+            });
+        let Some((name, call)) = arm else {
+            return Err(format!("a line that is no plain dispatch arm: {trimmed:?}"));
+        };
+        if arms.iter().any(|(step, _)| step == name) {
+            return Err(format!("the step `{name}` has two arms"));
+        }
+        arms.push((name.to_owned(), call.to_owned()));
+    }
+    Err("the dispatch never reaches `esac`".to_owned())
+}
+
+/// The `run_*` functions `scripts/gate.sh` calls when run with no arguments: the full
+/// gate, the merge bar. Read from the script's tail — everything after the `--step`
+/// block's closing `fi`, up to `finish` — counting a call at the top level or in the
+/// full branch of the one conditional the tail may hold (`if [ "$FAST" -eq 0 ]; then`),
+/// and not in its `else`, which is the day loop's. Any other line there is an `Err`
+/// rather than a guess, so a new conditional cannot hide a step from this reading.
+pub fn gate_full_sequence(gate: &str) -> Result<BTreeSet<String>, String> {
+    let mut lines = gate
+        .lines()
+        .skip_while(|line| line.trim() != "if [ -n \"$SELECTED_STEP\" ]; then");
+    if lines.next().is_none() {
+        return Err("no `if [ -n \"$SELECTED_STEP\" ]; then` block".to_owned());
+    }
+    let mut depth = 1usize;
+    for line in lines.by_ref() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("if ") {
+            depth += 1;
+        } else if trimmed == "fi" {
+            depth -= 1;
+            if depth == 0 {
+                break;
+            }
+        }
+    }
+    if depth != 0 {
+        return Err("the `--step` block never closes".to_owned());
+    }
+
+    #[derive(PartialEq)]
+    enum Branch {
+        Top,
+        Full,
+        Fast,
+    }
+    let mut branch = Branch::Top;
+    let mut full = BTreeSet::new();
+    let mut finished = false;
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        match trimmed {
+            "if [ \"$FAST\" -eq 0 ]; then" if branch == Branch::Top => branch = Branch::Full,
+            "else" if branch == Branch::Full => branch = Branch::Fast,
+            "fi" if branch != Branch::Top => branch = Branch::Top,
+            "finish" if branch == Branch::Top => {
+                finished = true;
+                break;
+            }
+            call if call.starts_with("run_")
+                && call.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') =>
+            {
+                if branch != Branch::Fast {
+                    full.insert(call.to_owned());
+                }
+            }
+            other => return Err(format!("a line the reading does not know: {other:?}")),
+        }
+    }
+    if !finished {
+        return Err("the full sequence never reaches `finish`".to_owned());
+    }
+    Ok(full)
+}
+
+/// What is wrong with a directory of embedded fonts holding `files`, against `roster`: each
+/// row a font file and the licence file it ships under. A file the roster does not name —
+/// another font, a stray — is a font nobody decided to embed; a roster font missing is a
+/// row nobody is keeping; and a font whose licence file is gone ships without the text its
+/// licence requires beside it. Empty when the directory is exactly the roster.
+pub fn embedded_font_violations(files: &[String], roster: &[(&str, &str)]) -> Vec<String> {
+    let named = |file: &str| {
+        roster
+            .iter()
+            .any(|(font, licence)| *font == file || *licence == file)
+    };
+    let mut violations: Vec<String> = files
+        .iter()
+        .filter(|file| !named(file))
+        .map(|file| format!("`{file}` is not on the roster of embedded fonts and licences"))
+        .collect();
+    for (font, licence) in roster {
+        if !files.iter().any(|file| file == font) {
+            violations.push(format!("the roster names `{font}`, which is not there"));
+        }
+        if !files.iter().any(|file| file == licence) {
+            violations.push(format!(
+                "`{font}` has no licence beside it: `{licence}` is gone"
+            ));
+        }
+    }
+    violations
 }
 
 #[cfg(test)]

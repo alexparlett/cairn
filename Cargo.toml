@@ -26,6 +26,17 @@ freya-testing = { git = "https://github.com/alexparlett/freya", rev = "caa46f871
 # is what lets gix open a repository made with `--object-format=sha256`.
 gix = { version = "0.87.1", features = ["blame", "blob-diff", "revision", "status", "max-performance", "parallel", "sha256"] }
 thiserror = "2"
+# Decodes a commit written in a legacy encoding (its `encoding` header) into the characters
+# git shows for it, where git converts with iconv (user-approved 2026-10-03). Already in the
+# build under gix-filter at this version; `cairn-git/src/commit_encoding.rs` layers glibc
+# iconv's mappings over the WHATWG tables where the two differ.
+encoding_rs = "0.8.41"
+# How many terminal columns a character takes — two for an emoji or a CJK ideograph, none
+# for a combining mark — so a tab in a diff line or a commit message stops where a
+# terminal running `git diff` or `git log` stops it (user-approved 2026-10-03, choosing
+# "terminal widths"). Character widths only: `cjk` (ambiguous characters as two) is off,
+# as a terminal outside an East Asian locale counts them. No dependencies of its own.
+unicode-width = { version = "0.2.2", default-features = false }
 # Sends SIGTERM to a git child on cancel, from safe code: `std` can only
 # SIGKILL, and git removes its lock files on SIGTERM alone (issue #19).
 # `signal` is the `kill(2)` wrapper, `process` the `Pid` it takes. `process`
@@ -35,6 +46,14 @@ nix = { version = "0.31.3", default-features = false, features = ["signal", "pro
 # Zeroes credential buffers on drop with writes the compiler may not remove
 # (credential-prompts L11). `alloc` is the `Vec` impl; nothing else is used.
 zeroize = { version = "1.9", default-features = false, features = ["alloc"] }
+# Test-only, and only cairn-model's: R1.5 says asking for a diff row allocates
+# nothing, and nothing but a counting allocator can decide that — a timing ratio
+# is flaky and a counter inside `TextDiff` would change a seam type. The crate
+# carries the `#[global_allocator]` itself, so it replaces the allocator of the
+# one test binary that links it and of nothing shipped; its counters are
+# thread-local, so `cargo test`'s parallel threads cannot pollute each other's
+# totals. No dependencies of its own.
+allocation-counter = "0.8.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

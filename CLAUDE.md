@@ -27,6 +27,33 @@ values and no view draws yet; and closing the window closes its repository,
 ending and reaping every `git` Cairn started in it before the window goes
 (what git itself detaches from the group, such as auto-maintenance, is not
 Cairn's to end).
+The engine can also answer what a commit or a pair of commits changed — `git
+diff-tree`'s answer, run as a read — and what one of those files' change is, line
+by line, and one path's staged, unstaged or untracked diff in the working tree
+(`docs/systems/diff.md`); the worker asks those
+queries on a diff thread of its own, numbered per lane so a scroll and a diff
+never cancel each other, and the window keeps each answer only for the
+selection it names. Choosing a commit asks what it changed, and the detail pane
+under the list — behind a draggable, collapsible splitter, with Commit and
+Changes tabs — draws its author, committer, id, parents, message and changed
+files in the Commit tab; a file pressed there opens its diff in place under its
+row, as Fork does, and Expand All opens the files in order until a budget of
+fifty thousand lines is spent, then says how many it left collapsed — read a
+page at a time on the diff thread, each file decided before its blobs are read,
+a file that fails failing alone. The Changes tab is Fork's: a one-line summary,
+the changed files behind a filter answered on a worker, the first file chosen,
+and one file's diff, as the unified rows `git diff` prints — Fork's small
+line-number gutters and no marker column, hunk headers with git's function
+context, intra-line ranges, in IBM Plex Mono — or side by side, under Fork's bar of previous and next change and
+the ignore-whitespace, context, entire-file and side-by-side buttons, the
+context starting at the user's `diff.context` (`docs/systems/diff.md`, "The
+diff view"); or the notice of a state that is not text, with Load Diff for a
+file past the limits and every line past the long-line limit drawn cut. A
+second commit pressed with ⌘ or Ctrl compares the two, tip against tip with
+the lower row the base, in the Changes tab under a header naming both and a
+swap, the Commit tab unavailable while two are selected. Keyboard shortcuts —
+and a press's modifiers, which this toolkit build does not carry on a pointer
+event — resolve through one accelerator table (`cairn_ui::accelerators`).
 Nothing else mutates a repository, and there is no repository picker: one
 repository, named on the command line.
 
@@ -35,11 +62,11 @@ repository, named on the command line.
 | Path | What lives there |
 | --- | --- |
 | `docs/` | `qa-gate.md` (QA contract), `design/` intent, `prd/` per-packet specs, `systems/` as-built, `work/` in-flight dirs, `research/` evidence (deferred work goes to GitHub issues; `backlog/` is the no-remote fallback) — findings promote research → brainstorm → design/prd → systems (contract: `docs/CLAUDE.md`) |
-| `crates/cairn-model/` | The vocabulary crossing the seam: `Oid`, `RefName`, `CommitSummary`, the `Confirmed` token. Plain data, plus the pure layout algorithm that produces some of it (`LaneAssigner`), and `Secret`, the one type that holds a credential. Depends on nothing but `zeroize` (for that type) — not `gix`, not `freya`, not the other crates. |
-| `crates/cairn-git/` | The repository engine: gitoxide-backed reads, and under `src/ops/` every write, delegating to the `git` binary per design decision D1. Every `git` process is built in the crate-private `src/process/` — `GitBinary` (startup discovery and the 2.30 floor), `GitEnvironment` (the explicitly built environment, the only place a `Command` is built), `Askpass` (where git and ssh are sent for a secret), the runner, which streams and can kill a process, and each repository's registry of running invocations and its command log — and an invocation is typed a read or a write, a write needing the `WriteAuthority` only `ops/` can construct. `src/ops/` holds `fetch`, the first verb (not destructive, so it takes no `Confirmed`), and the confirmation-seal placeholder, and re-exports what the application needs of `process/`; `src/reads/` is where each read `git` answers will live, one named function each (empty until `diff-engine`). Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
+| `crates/cairn-model/` | The vocabulary crossing the seam: `Oid`, `RefName`, `CommitSummary`, `CommitDetails`, `ChangeSet`, the `Confirmed` token. Plain data, plus the pure algorithms that produce some of it — the layout one (`LaneAssigner`) and the diff model (`TextDiff` and the hunk, row and patch projections of it, `ShownDiff` — one answer prepared for the views, built on the worker — `Selection`, `emit_patch` and the reference `apply_patch`; `docs/systems/diff.md`) — and `Secret`, the one type that holds a credential. Depends on nothing but `zeroize` (for that type) — not `gix`, not `freya`, not the other crates. |
+| `crates/cairn-git/` | The repository engine: gitoxide-backed reads — the history walk, and under `src/diff/` the queries answering what a commit changed (asked of `git diff-tree` through `src/reads/`), what one file's change is, and one path's working-tree diff — and under `src/ops/` every write, delegating to the `git` binary per design decision D1. Every `git` process is built in the crate-private `src/process/` — `GitBinary` (startup discovery and the 2.30 floor), `GitEnvironment` (the explicitly built environment, the only place a `Command` is built), `Askpass` (where git and ssh are sent for a secret), the runner, which streams and can kill a process, and each repository's registry of running invocations and its command log — and an invocation is typed a read or a write, a write needing the `WriteAuthority` only `ops/` can construct. `src/ops/` holds `fetch`, the first verb (not destructive, so it takes no `Confirmed`), and the confirmation-seal placeholder, and re-exports what the application needs of `process/`; `src/reads/` is where each read `git` answers lives, one named function each: today `changes`, `git diff-tree` for the changes query, whose rename and copy pairs gix and git disagree on; `patches`, `git diff-tree -p` for the content query's changed lines and function context, whose line diff gix and git disagree on too; `diff_attributes`, `git check-attr`, which says whether a path's diff driver names its own algorithm; `working_tree_patch`, one path's staged, unstaged or untracked diff (`git diff-index --cached`, `git diff-files`, `git diff --no-index`), which reads the working tree through git so its side is git's form of the file; and `fetch_settings`, `git config` in query form, what a fetch of a remote will read, for fetch's refspec check (`src/ops/refspec_policy.rs`), which must decide on exactly what the fetch's own git reads. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
 | `crates/cairn-askpass/` | The askpass helper binary `git` and `ssh` run to ask for a secret, and the library half — the `Channel` the application listens on. Links `cairn-model` and `zeroize` only: it runs in a process holding a plaintext secret. Never names the engine, the toolkit or a logging crate. |
-| `crates/cairn-ui/` | Freya components. Render `cairn-model` values, report intent through `EventHandler` props. Must never depend on `gix` or `cairn-git`, and must never touch the filesystem. |
-| `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. `src/worker/` is everything that may wait: `git` found once per application (`discovery.rs`), each repository's threads (`pool.rs`), the network lane (`network_lane.rs`) and the askpass acceptor; `src/closing.rs` is the window's close hook, which asks the worker to close and never waits. |
+| `crates/cairn-ui/` | Freya components. Render `cairn-model` values, report intent through `EventHandler` props. `src/accelerators.rs` is the accelerator table, the one render file that names a modifier; `src/diff_view.rs` the diff view, drawing `src/unified_rows.rs` or `src/side_by_side_rows.rs` (each from `src/diff_row_parts.rs`), `src/diff_notice.rs` what stands in place of rows, `src/changes_list.rs` the Changes tab's filtered file list and summary, `src/diff_header.rs` its bar (whose glyphs `src/toggle_glyphs.rs` draws), `src/columns.rs` the terminal column widths tabs stop by, `src/diff_settings.rs` the diff settings — context, ignore-whitespace and side-by-side shared by every diff view, Entire File the Changes tab's alone, `src/diff_palette.rs` the diff's colour tokens and typeface, `src/commit_tab.rs` the Commit tab and `src/expansion.rs` where each file opened in place under its row falls in that tab's one list. Must never depend on `gix` or `cairn-git`, and must never touch the filesystem. |
+| `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. `src/worker/` is everything that may wait: `git` found once per application (`discovery.rs`), each repository's threads (`pool.rs`), the routing table from query lane to thread (`routing.rs`) and the per-lane epochs (`epoch.rs`), the diff thread (`diff_lane.rs`) and Expand All's line budget (`expand_all.rs`), the network lane (`network_lane.rs`) and the askpass acceptor; `src/diff_state.rs` is the diff selection and the answers kept for it; `src/selection.rs` chooses a row, or two to compare, and asks what they changed; `src/detail_pane.rs` draws the pane for the selection now and `src/changes_tab.rs` its Changes tab; `src/file_filter.rs` the Changes tab's filter as the window keeps it; `src/diff_actions.rs` chooses a file, changes the shared diff settings and moves between changes; `src/shortcuts.rs` is what each accelerator, and each button of the diff's bar, does; `assets/fonts/` holds the embedded IBM Plex Mono and its licence; `src/closing.rs` is the window's close hook, which asks the worker to close and never waits; `src/window_check.rs` is C14's window check, an `#[ignore]`d measurement of the real window over the bench repository. |
 | `crates/cairn-guards/` | Test-only. The deterministic enforcement twins for the Invariants below; nothing depends on it. |
 | `scripts/`, `.githooks/`, `.github/` | The enforcement layer (contract: `docs/qa-gate.md`). |
 
@@ -49,11 +76,17 @@ there.
 ## Commands
 
 - `scripts/gate.sh` — the pre-merge gate: format, lint, typecheck, guards,
-  dependency policy, full test suite, doctests. Exit-code safe; run it before calling a
-  change done instead of an ad-hoc `&&` chain (piping test output through
-  `tail`/`head` masks the exit code).
+  dependency policy, full test suite, doctests, and `git-floor` (`cairn-git`'s
+  real-git diff tests against git 2.30.9 and 2.32.7, built from source by
+  `scripts/git-floor.sh` into `~/.cache/cairn/git-floor` on the first run, which
+  needs the network, a C compiler, make and zlib's headers, and fails naming what
+  is missing rather than skipping). Every `--step` but `test-fast` runs in it
+  (`the_local_full_gate_runs_every_step_but_the_day_loops`). Exit-code safe; run it
+  before calling a change done instead of an ad-hoc `&&` chain (piping test output
+  through `tail`/`head` masks the exit code).
 - `scripts/gate.sh --fast` — day-loop subset. Never the merge bar; deliberately
-  skips network-dependent checks so the day loop stays usable offline.
+  skips network-dependent checks (`deps`, `git-floor`) so the day loop stays usable
+  offline.
 - `scripts/gate.sh --step <name>` — one named gate component. CI uses this
   interface so CI and local runs share the same command implementation.
 - `cargo run -p cairn-app` — run the app. `cargo run -p cairn-app --release` for
@@ -62,8 +95,10 @@ there.
   helper is a second binary that `-p cairn-app` alone does not build: run
   `cargo build --workspace` first (or `-p cairn-askpass`), or fetches needing a
   prompt fail with a message saying so.
-- Toolchain is pinned in `rust-toolchain.toml`; `cargo deny` is the one tool the
-  gate needs that rustup does not ship (`cargo install cargo-deny --locked`).
+- Toolchain is pinned in `rust-toolchain.toml`; `cargo deny` is the one Rust tool the
+  gate needs that rustup does not ship (`cargo install cargo-deny --locked`), and
+  `git-floor` needs a C toolchain and zlib's headers (`build-essential zlib1g-dev`
+  on Debian and Ubuntu).
 
 **Version-sensitive API rule:** for any fast-moving dependency, verify APIs you are
 not certain of against current docs before writing them. Never code such an API from
@@ -122,14 +157,62 @@ copy is a different version from the fork that links.
 - **Reads go through gitoxide; writes go through the `git` binary.** Decision D1
   in `docs/design/engine.md`: a mutation must run the user's hooks, filters and
   credential helpers and honour their config, and gix runs none of them. A read
-  runs `git` only where gix's answer differs from git's — the changes query's
-  rename and copy detection will be the first (`diff-engine`; `reads/` is empty
-  today) — and each such read is a named function in `cairn-git/src/reads/`,
-  run as a read invocation: query plumbing (never a plumbing writer such as
-  `update-ref`, `update-index` or `write-tree`) or `status` only,
+  runs `git` only where gix's answer differs from git's — the changes query, whose
+  rename and copy detection is where they disagree (`reads::changes`,
+  `git diff-tree`), and the content query's changed lines, function context and
+  whitespace-ignoring lines, where their line diffs disagree (`reads::patches`,
+  `git diff-tree -p`, with `reads::diff_attributes` beside it), and one path's
+  working-tree diff, where only git's own read of the working tree is git's form
+  of it (`reads::working_tree_patch`: `git diff-index --cached`, `git
+  diff-files`, `git diff --no-index`), and the remote configuration fetch's
+  refspec check decides on, where gix's reading of a linked worktree's
+  `includeIf`, of the system file and of trust is not git's
+  (`reads::fetch_settings`, `git config`) — and each such read is a named function in
+  `cairn-git/src/reads/`, run as a read invocation: query plumbing (never a plumbing writer such as
+  `update-ref`, `update-index` or `write-tree`), `status`, or one of the two
+  porcelain exceptions, each accepted by the user — for an untracked file,
+  `git diff --no-index -- /dev/null <path>`, `<path>` work-tree-relative (no
+  absolute, `.` or `..` component, refused before git runs) and given as `./-`
+  when it is `-`, which git reads as stdin (it reads no index, so there is none
+  to refresh; its presentation settings are pinned by `-c`); and, for fetch's
+  refspec check, `git config --includes --null` with `--type=bool --get <key>`
+  or `--get-all <key>`, query form only and never a setter
+  (`reads::fetch_settings`, 2026-10-04: the check must read the remote exactly
+  as the fetch's own git will, and fails closed when the read fails) — only,
   `GIT_OPTIONAL_LOCKS=0`, `GIT_NO_LAZY_FETCH=1`, no askpass token. Everywhere gix
   agrees with git, a read spawns no process — that is the whole reason the split
-  pays. How every `git` process is built, run and ended is
+  pays. D1 is amended for the programs git itself starts on a read, each exactly
+  as the user's own `git diff` starts it: the repository's `core.fsmonitor` hook,
+  as git reads the index of a repository with a working tree — or, under
+  `core.fsmonitor=true`, git's own fsmonitor daemon, started if none is running,
+  which writes its socket and cookie directory in the git directory (the one
+  thing a read leaves there: no object, ref, index or config) and, in a session
+  of its own, outlives the read and the application, not Cairn's to end; and, on a read of
+  the working tree, the path's clean filter driver — git-lfs, git-crypt; a
+  `clean` command, or the long-running `filter.<driver>.process` git-lfs
+  installs, which git sends only `command=clean` — which
+  converts the file to git's form (and, for a submodule, `git status` inside it,
+  with that repository's own hook and filters). The driver runs as a child of the
+  read's `git`, so with the environment Cairn built for that read (the inherited
+  roster, the `ALWAYS` table, `GIT_ASKPASS` and `SSH_ASKPASS` naming Cairn's
+  helper and, while the application listens for it, `CAIRN_ASKPASS_SOCKET` — so
+  a driver can reach the socket, but carrying no token it fails closed — the
+  read's two variables, no askpass token) plus what git sets for a filter
+  (`GIT_EXEC_PATH`, `GIT_PREFIX`, `GIT_CONFIG_PARAMETERS`, git's exec directory
+  first on `PATH`, and `GIT_DIR` and `GIT_WORK_TREE`, since Cairn names every
+  repository it opens to git).
+  Residuals, stated in `docs/design/engine.md` ("Reads see git's form"): that
+  environment still hands the driver the user's `PATH`, `HOME` and the rest; a
+  store the driver keeps is its own to write (git-lfs's `.git/lfs/objects`); a
+  driver that fails without being `required` makes git fall back to the
+  unfiltered content with a stderr warning Cairn does not show; and `textconv`
+  never runs on a read. No other program runs on a read — no textconv, external
+  diff, driver `command` or smudge filter — pinned by
+  `the_content_query_writes_nothing_and_runs_nothing` and
+  `a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`,
+  and the daemon's case by
+  `a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files`.
+  How every `git` process is built, run and ended is
   `docs/design/processes.md`. Consequence for free: Cairn stores no
   credentials, because git's helpers do (D2).
 - **Every repository mutation lives in `cairn-git::ops`, and the destructive ones
@@ -143,12 +226,19 @@ copy is a different version from the fork that links.
   runner);
   `cairn-app` decides where the blocking work runs and hands results back as
   values (decision D3: one `cairn_git::SharedRepository` — gitoxide's
-  `ThreadSafeRepository` — per repository, a worker taking its thread-local
-  handle once, every QUERY carrying an epoch so a superseded query is abandoned
-  rather than rendered; an operation such as fetch carries none, so a scroll
-  and a fetch cannot supersede each other). The epoch IS the cancel signal the
-  engine polls, so superseding a query stops its walk rather than discarding
-  its answer; a fetch is cancelled by killing its process instead. A repository is somebody's 10-year
+  `ThreadSafeRepository` — per repository, each worker thread taking its
+  thread-local handle once, routed to by an explicit table — the history lane
+  on the repository thread that owns the live walk, the changes and file-diff
+  lanes on a diff thread of their own — and every QUERY carrying an epoch
+  numbered in its lane, so a superseded query is abandoned rather than
+  rendered; a query supersedes only its own lane, except that a changes query
+  also supersedes the file diff, and an operation such as fetch carries none,
+  so a scroll, a diff and a fetch cannot supersede one another; and every diff
+  answer names the selection it answers, which the window checks before it
+  keeps it). The epoch IS the cancel signal the
+  engine polls, so superseding a query stops its walk, or ends its `git`
+  read's process group, rather than discarding its answer; a fetch is
+  cancelled by killing its process instead. A repository is somebody's 10-year
   monorepo: any design that assumes a query is fast is wrong.
 - **A scroll keeps its walk open.** gitoxide's walk cannot be resumed from a
   value, so a cursor resumes by replaying — which makes page *k* cost `k x limit`
@@ -189,13 +279,26 @@ Project invariants:
   dependency whose features matter — `nix`, whose `process` feature compiles the
   exec family — is pinned in `deny.toml` (`[[bans.features]]`, `exact`: `process`
   and `signal`), which `gate.sh --step deps` enforces.
+- **Every embedded font is a user decision, and ships beside its licence.** A font
+  file is a dependency `cargo deny` cannot see, so the roster is the guard's:
+  `crates/cairn-app/assets/fonts/` holds exactly the files `EMBEDDED_FONTS` names
+  in `crates/cairn-guards/tests/invariants.rs`, each font with its licence file
+  beside it. Twin: `the_embedded_fonts_are_the_roster_each_with_its_licence`
+  (matcher `embedded_font_violations`, self-test
+  `the_embedded_font_matcher_catches_the_shapes_it_claims`): another font
+  dropped in, a licence file deleted, or a row outliving its font fails.
+  Residual review obligation, `qa-checklist`'s: the guard reads file names, so
+  whether a licence file holds the right licence for its font, and whether that
+  licence permits embedding it, is a judgement.
 - **`cairn-ui` and `cairn-model` never name `gix` or `cairn_git`; `cairn-git`
   never names `freya` or `cairn_ui`.** Manifests alone would miss a re-export, so
   the twin reads source: `layers_never_name_the_crates_they_are_sealed_from`,
   over the whole crate directory (`src/` and `tests/` alike), matching aliased
   imports and qualified paths, with the debris hook echoing the same rule in
   milliseconds.
-- **Outside `cairn-model`, a `RowContent` is read by naming every variant.** No
+- **Outside `cairn-model`, a `RowContent` — and, in production code, a
+  `DiffContent`, a `UnifiedRow` or a `SideBySideRow` — is read by naming every
+  variant.** No
   `_ =>`, catch-all binding (`other`, `ref x`, `&_`) or `Some(_)`-beside-
   `Some(RowContent::..)` arm in a match that names it, no `if let`, `while let`,
   let-chain or `let .. else` over it, no `matches!` over it, and no `use` that
@@ -207,7 +310,21 @@ Project invariants:
   `the_row_content_matcher_catches_the_shapes_it_claims`. Residual review
   obligation: the matcher reads spellings, so a helper that returns
   `Option<&CommitSummary>` and is then read partially, or a `type` alias for
-  `RowContent`, is `qa-checklist`'s to catch.
+  `RowContent`, is `qa-checklist`'s to catch. `DiffContent` is held to the same
+  matcher (`reads_enum_partially`) by `every_view_of_a_file_diff_names_every_state`
+  (self-test `the_diff_content_matcher_catches_the_shapes_it_claims`), over every
+  crate's `src/` but `cairn-model`'s and `cairn-guards`', in production code only:
+  test modules, files a parent declares under `#[cfg(test)]` at the top of the
+  file and through no other declaration (`#[cfg(not(test))] mod x;` keeps `x`
+  scanned; self-tested in `the_diff_content_matcher_catches_the_shapes_it_claims`),
+  and `tests/` are left out, since a test asserting one state is a check rather than a view; that a test
+  helper of this kind is not used to draw is the same review's. The diff's row
+  enums, `UnifiedRow` and `SideBySideRow`, are held to the same matcher over the
+  same files by `every_view_of_a_diff_row_names_every_kind_of_row` (self-test
+  `the_diff_row_matcher_catches_the_shapes_it_claims`, every shape spelled for
+  both enums), since phase 07 brought their second reader; the residuals are
+  `DiffContent`'s (a helper handing out one kind of row and read partially, or a
+  `type` alias for either enum, is `qa-checklist`'s).
 - **Only `cairn-git/src/ops/` mutates a repository**, whether through gitoxide or
   a `git` subprocess. Primary enforcement is the type: a `git` invocation is
   built as a read or a write (`GitBinary::read_invocation`,
@@ -268,8 +385,26 @@ Project invariants:
   what no twin sees is a path-call start inside `process/environment.rs`, the
   one file allowed to name `Command`. (`nix` named outside `process/` is
   caught by the process twin, and `fork` inside it is `unsafe`, which the
-  workspace forbids.) That is `qa-checklist`'s (its item 7). Whether a read in `reads/` really runs query plumbing or
-  `status` — `GIT_OPTIONAL_LOCKS=0` covers `status` alone, so a porcelain `diff`
+  workspace forbids.) That is `qa-checklist`'s (its item 7). The two porcelain
+  verbs a read runs are pinned by
+  `the_porcelain_reads_are_the_two_named_queries` (self-test
+  `the_porcelain_read_matcher_catches_the_shapes_it_claims`): in the production
+  code of `crates/cairn-git/src/reads/`, the exact literal `"diff"` appears only
+  in `reads/working_tree.rs`, once, with `"--no-index"` the next literal on its
+  line and `"/dev/null"` in the file (the `diff` attribute's two lines in
+  `reads/attributes.rs` excused by `DIFF_ATTRIBUTE_LINES`, each required to
+  still match); the exact literal `"config"` appears only in
+  `reads/fetch_settings.rs`, once, every literal there starting with `-` is one
+  of `CONFIG_QUERY_OPTIONS` (`--includes`, `--null`, `--type=bool`, `--get`,
+  `--get-all`, one of the last two required), none there is a
+  `CONFIG_SETTER_SUBCOMMANDS` word, and no literal anywhere in `reads/` is one
+  of `CONFIG_SETTER_OPTIONS` (`--add`, `--unset`, `--unset-all`,
+  `--replace-all`, `--edit`, `--rename-section`, `--remove-section`). Whether
+  a read in `reads/` really runs query plumbing, `status`, `git diff
+  --no-index -- /dev/null <path>` or `git config` in query form beyond those
+  literals — a verb or option built at run time (`format!`, `concat!`, bytes)
+  is not seen, and
+  `GIT_OPTIONAL_LOCKS=0` covers `status` alone, so a porcelain `diff`
   built as a read still rewrites the index, and a plumbing writer built as one
   writes whatever it writes — is `destructive-ops-reviewer`'s (its check 10).
 - **Every `git` subprocess runs with an environment Cairn built, and that
@@ -403,9 +538,44 @@ Project invariants:
   `todo!`, `unimplemented!` and `dbg!` are denied by the workspace clippy table,
   with tests exempted via `clippy.toml`. A panic in a git client can cost someone
   a working tree.
-- **CI runs every merge-bar gate step.** Twin: `ci_runs_every_merge_bar_gate_step`
+- **CI runs every merge-bar gate step, and the local full gate runs every step but
+  the day loop's `test-fast`.** Twins: `ci_runs_every_merge_bar_gate_step`
   compares `gate.sh`'s dispatch arms against the workflow, so a step added locally
-  cannot quietly skip CI.
+  cannot quietly skip CI; `the_local_full_gate_runs_every_step_but_the_day_loops`
+  compares them against what `gate.sh` with no arguments calls, read by a matcher
+  that refuses a conditional it does not know rather than guessing (self-test
+  `the_gate_sequence_matcher_catches_the_shapes_it_claims`), with its exemptions
+  an explicit roster (`LOCAL_FULL_GATE_EXEMPT`) that fails when a name in it stops
+  being a step; and `the_full_gate_is_the_default_and_no_merge_bar_step_is_skipped`
+  holds what that reading cannot see — `FAST=0` is the default, set once before the
+  arguments are read, and no merge-bar step's `*_CMD` is the literal `skip` or empty
+  (self-test `the_gate_command_readers_catch_the_shapes_they_claim`).
+- **A test that skips where its host cannot serve it is required wherever the host
+  can.** A passing test's stderr is hidden, so a skip reads `ok`; each such test
+  fails instead of skipping when its `CAIRN_REQUIRE_*` variable is set, and
+  `scripts/gate.sh`'s `test-full` probes the host exactly as the test checks it and
+  sets the variable where the probe succeeds, saying so on the PASS line where it
+  does not: the sshd fixture (`CAIRN_REQUIRE_SSH_FIXTURE`), git's builtin fsmonitor
+  daemon (`CAIRN_REQUIRE_FSMONITOR_DAEMON`, cleared by `scripts/git-floor.sh` for the
+  floors' gits, which have none), a mount namespace and a second owner
+  (`CAIRN_REQUIRE_MOUNT_NAMESPACE`, `CAIRN_REQUIRE_SECOND_OWNER`); CI's `gate` job
+  sets `CAIRN_REQUIRE_SSH_FIXTURE` and `CAIRN_REQUIRE_NO_LAZY_FETCH` outright in its
+  own `env:`. Twins: `the_ssh_criteria_are_required_wherever_they_can_run`,
+  `the_partial_clone_pin_is_required_in_ci`,
+  `the_fsmonitor_daemon_pin_is_required_wherever_it_can_run` and
+  `the_user_namespace_tests_are_required_wherever_they_can_run`; the last two read
+  their probes whole (`gate_function_body`) and require each call as a statement
+  of `run_test_full`'s own (`gate_function_calls`, self-test
+  `the_gate_function_call_matcher_catches_the_shapes_it_claims`), and the CI pins
+  read the `gate` job's own `env:` block alone (self-test
+  `the_workflow_env_matcher_reads_only_the_jobs_own_block`). Residual review
+  obligations, `gate-integrity-reviewer`'s, until #58 closes them: the probe bodies
+  are matched as text with their comment lines kept, so a commented-out `export`
+  still satisfies a pin, and those body checks have no self-test; and `--step
+  git-floor` run alone — CI's `git floor` job — runs no probe, so the
+  across-filesystem test in its `diff_engine` run is never required there. Whether
+  the runner's host serves a probe at all (GitHub's Ubuntu 24.04 images refuse the
+  second owner) is said by the gate's note, not decided by it.
 - **The UI thread never waits on repository work.** `cairn-app` is partitioned by
   FILE: `crates/cairn-app/src/worker/` runs repository work and may block; every
   other file in the crate renders, and may name neither `cairn_git`, `gix` nor
@@ -425,7 +595,11 @@ Project invariants:
   close hook — `Closing::requested`, which lives in the render-side
   `crates/cairn-app/src/closing.rs` and is scanned, but calls `submit` — whose
   `Request::Close` arm stops the epochs with an atomic store and queues the
-  close, and whose `CancelFetch` arm takes `FetchControl`'s mutex and calls
+  close, whose query arms bump their lanes' atomic counters and send to the
+  thread the routing table names over an unbounded channel, whose operation
+  arms (`Request::Retire`, a replaced change set handed to the repository
+  thread to free, among them) only send over one, and whose
+  `CancelFetch` arm takes `FetchControl`'s mutex and calls
   `KillHandle::kill`; `worker::open`, called from `main.rs`'s `use_hook`,
   and the `Replier` closure it returns; `Updates::next`, `Wake::poll`, `Drop for Updates` (an atomic
   store, when the stream's task is dropped); and
@@ -454,6 +628,52 @@ Project invariants:
   the reviewer's: whether a page is small enough that the work between yields is
   short, and whether a list is virtualized.
 
+- **No component names a literal modifier** (decision D5, PRD R8.3). Every
+  keyboard shortcut is an `Action` mapped to at most one chord per platform, and
+  to the scope it is heard in, in the accelerator table,
+  `crates/cairn-ui/src/accelerators.rs`; a component asks
+  `accelerators::resolve_key` which action a key press is (or `is_chord`, to leave
+  one alone) and never reads the held keys itself, so a `Ctrl` that is wrong on
+  macOS cannot be written into a component. Twin:
+  `no_component_names_a_literal_modifier`, over every file of `crates/cairn-ui/src`
+  and `crates/cairn-app/src` (test modules blanked) but the table, which must exist
+  and in which the matcher must find a modifier (so a blind matcher fails); matcher
+  `names_a_literal_modifier` in `crates/cairn-guards/src/lib.rs`, whose rosters are
+  read from the vendored `keyboard-types` (the version `Cargo.lock` pins) and
+  Freya's `ModifiersExt`: the type `Modifiers`, the trait and its
+  `ctrl_or_meta`/`ctrl_or_alt`, the event's `modifiers` field, the type's
+  constants (`CONTROL`, `META`, ..., and the locks `CAPS_LOCK`, `NUM_LOCK`,
+  `SCROLL_LOCK`, `FN_LOCK`, `SYMBOL_LOCK`), the modifier and lock keys of
+  `NamedKey` and `Code` (`Control`, `ShiftLeft`, `CapsLock`, ..., and `::Fn`),
+  the nullary predicates `.ctrl()`/`.alt()`/`.shift()`/`.meta()`, and a string
+  or char literal spelling a chord for a person once its `\u{..}` and `\x..`
+  escapes are read (`spells_a_chord`: `Ctrl`, `Cmd`, `⌘`, `⌥`, `Shift+`,
+  `Shift-`, `Command+`, `Opt+`, ...). Matcher self-test:
+  `the_modifier_matcher_catches_the_shapes_it_claims` — an aliased import of the
+  type, a qualified path, a constant defined beside a component, a glob of the
+  key type's variants, a predicate reached by inference, `'⌘'`, an escaped
+  `⌘`, each hyphenated spelling. **The table itself holds data and the
+  resolution of a press, nothing a person reads**: an element built there or a
+  chord spelled out in a literal would be a view inside the one file the
+  modifier guard exempts. Twin: `the_accelerator_table_holds_data_and_resolution_only`
+  — the table's production code names none of `ELEMENT_BUILDERS` (`rect`,
+  `label`, `Element`, `Component`, `Button`, ...; matcher `names_an_element`,
+  self-test `the_element_matcher_catches_the_shapes_it_claims`) and no literal of
+  it spells a chord. Residual review obligations, `qa-checklist`'s (its item
+  11): the matchers read spellings, so a modifier reached through a `type` alias
+  declared outside the render crates, a macro, or a raw bit pattern compared
+  without naming the type is not seen, nor is an element the table builds
+  through a helper named otherwise; the table's
+  public surface must keep speaking actions and chords, never a modifier or a
+  "held" predicate a component could branch on under another name — the
+  exceptions, `Chord::key_press` and `Chord::press_hold`, hand a chord's keys to
+  headless tests, and a render path calling either is a finding; `HeldKeys`, the
+  keys the window hears held so a pointer press can be resolved (this toolkit
+  build carries no modifiers on one), answers an `Action` and never which key is
+  down; a key event
+  handled by a test in `crates/cairn-ui/tests/` is not scanned; and whether each
+  chord is right for its platform — clear of the desktop's and of Fork's — is a
+  judgement the table's tests do not make.
 - **No unbounded list renders without virtualization.** A history is however long
   somebody's repository is, so a view that builds one element per row of it is
   unbounded work per frame. Twin:
@@ -488,16 +708,56 @@ Project invariants:
     design and unreachable while rows only append; the row that arrives ABOVE
     another is what enters it, which is what the working-tree row will do. Named
     here rather than left implicit, because a token scan cannot tell this
-    iteration from any other.
+    iteration from any other. Its sibling: a Commit-tab parent link finds its
+    parent with `selection::loaded_row`, a scan of every loaded row, once per
+    press on the UI thread, and so does a second commit pressed with the
+    extending chord (`selection::extend`, to find which of the two rows is lower)
+    — and the Commit tab builds its header (proportional
+    to the commit's message, never to its files) once per commit, cached on its id.
+    Files opened in place in the Commit tab are placed by a binary search over a
+    table of their row counts (`cairn_ui::Expansion`), rebuilt on the UI thread
+    from the first file a change touched — a page of Expand All appended costs the
+    page, but opening or closing an early file re-places every file open after it,
+    which Expand All's line budget bounds.
+    A file's diff is prepared once, on the diff thread that answered it
+    (`cairn_model::ShownDiff::new`, in `worker/diff_lane.rs`; the window only keeps
+    the value, `DiffState::file_arrived`, and each file of a page of files opened in
+    place alike, `DiffState::expansion_arrived`): both rows' indexes, proportional to its
+    changes, and one pass over its drawn bytes for the widest line — a line past
+    the long-line limit counted to its cut — bounded by R2.6's ceilings by default,
+    and by the 64 MiB load-anyway ceiling for a file loaded past them. The Changes
+    tab's filter is a pass over every path of a change set, run on the repository
+    thread in a lane of its own (`Request::FilterFiles`), never on the UI thread;
+    the window keeps the indices it answers (`file_filter.rs`), and the list reads
+    the chosen file's index from `DiffState` rather than searching the change set
+    for it. Two frees still happen on the UI thread rather than through
+    `Request::Retire`: `crates/cairn-app/src/session.rs`'s `reload_if`, when a
+    fetch moved refs, clears every loaded history row before reopening the
+    history — the one history-sized free on the UI thread, inherited from the
+    history view and not retired to a worker; and `Updates::next`
+    (`crates/cairn-app/src/worker/pool.rs`) drops each superseded answer that
+    `Update::into_retired` does not retire — a page of rows, a filter's index
+    list, a failure — each bounded by a page or by the change set's file list.
 
   Whether the virtualizing view really builds only what its viewport shows is
   pinned by a second, behavioural twin:
   `only_a_viewport_of_rows_is_built_however_long_the_history`
   (`crates/cairn-ui/tests/history_list.rs`) renders `HistoryList` headlessly over
   1,000 and 100,000 rows and requires one viewport's worth of rows, the same at
-  the top and scrolled deep at both lengths. It counts rows built, not work done:
-  whether per-frame work grows with scroll depth while that count stays flat stays
-  `responsiveness-reviewer`'s.
+  the top and scrolled deep at both lengths; its twins for the Commit tab's files,
+  `only_a_viewport_of_files_is_built_however_many_the_commit_touched`, and for the
+  Commit tab with files opened in place under their rows — the longest list in the
+  application — `only_a_viewport_of_rows_is_built_however_many_files_are_open`
+  (`crates/cairn-ui/tests/commit_tab_expansion.rs`, three files of 10,000 lines open
+  among 55,184, unified and side by side, top, deep and end), and for a
+  file's diff rows, `only_a_viewport_of_diff_rows_is_built_however_long_the_file`
+  (`crates/cairn-ui/tests/diff_view.rs`, which also scrolls to the end and requires
+  the projection's last row there) and its side-by-side twin
+  `only_a_viewport_of_side_by_side_rows_is_built_however_long_the_file`, and for the
+  Changes tab's files, `a_list_of_55184_files_builds_one_viewport_filtered_or_not`
+  (`crates/cairn-ui/tests/changes_list.rs`), hold the other lists to the same. They count
+  rows built, not work done: whether per-frame work grows with scroll depth while
+  that count stays flat stays `responsiveness-reviewer`'s.
 
 ## Conventions
 
@@ -524,8 +784,9 @@ Project invariants:
 - Errors are `thiserror` enums whose variants name what the CALLER must handle;
   never re-export a dependency's error type across the seam.
 - Keyboard shortcuts resolve through one accelerator table mapping a logical
-  action to a per-platform chord. Never a literal `Ctrl` inside a component — it
-  is the cheap half of keeping macOS reachable (decision D5).
+  action to a per-platform chord (`crates/cairn-ui/src/accelerators.rs`). Never a
+  literal `Ctrl` inside a component — it is the cheap half of keeping macOS
+  reachable (decision D5), and an invariant with a guard (above).
 - Docs follow the anchor rule: cite stable paths, exported symbols, and pinned
   tests; never literal counts or line numbers that rot.
 
@@ -554,7 +815,10 @@ Layers, cheapest boundary first (full contract: `docs/qa-gate.md`):
    suite.
 3. `scripts/gate.sh --fast` while iterating; `scripts/gate.sh` is the merge bar.
 4. CI (`.github/workflows/ci.yml`): the same checks as named `scripts/gate.sh
-   --step` invocations on every PR and push to `main`.
+   --step` invocations on every PR and every push to `main` or a `feature/**`
+   branch — `git-floor` in a job of its own — so CI runs what the local full gate
+   runs (`ci_runs_every_merge_bar_gate_step` one way,
+   `the_local_full_gate_runs_every_step_but_the_day_loops` the other).
 5. `/qa` at end of contribution: dispatches the `qa-checklist` agent plus the
    domain reviewers matching the diff surface. Spawn reviewers FRESH; never have
    the implementer review its own work.
@@ -605,3 +869,13 @@ same fork and rev as `freya`): `crates/cairn-ui/tests/` for components, and
   runner — its pipes, how an invocation is cancelled, and what it reports —
   each repository's registry and command log, and, in the application, `git`
   found once, the network lane and its refusal, and closing.
+  `diff.md`: how a change to a file is described — one exact answer, its hunk,
+  row and patch projections, the reference applier that checks the emitter,
+  and the engine queries that fill it from a repository; the diff thread and
+  its lanes; the detail pane, its Commit and Changes tabs, files opened in
+  place and two commits compared; the diff view, with what was measured from
+  Fork and what Cairn chose; and the accelerator table's contract.
+- `docs/research/<slug>/` — the evidence behind decisions, kept after teardown;
+  `docs/research/diff-engine/c14-measured.md` is Cairn's measured diff and
+  window numbers on the bench repository, against git's own in
+  `measured-baseline.md` beside it.

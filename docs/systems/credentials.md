@@ -235,36 +235,85 @@ never enters `cairn-git` and never enters application state.
   the tag) in `tests/fetch.rs`; the arguments themselves by
   `the_arguments_leave_prune_to_git_forbid_pruning_tags_and_end_the_options`.
   What the flag cannot cover is a configured refspec that writes where a
-  fetch from a button never may: `ops/refspec_policy.rs` reads the remote's
-  configuration afresh before any process starts (gix reads it once at open,
-  git on every run, so a refspec added in a terminal since Cairn started is
-  seen), and reads it as the child git will — from the files, with Cairn's
-  own `GIT_CONFIG_*` environment denied, since the child never inherits it
+  fetch from a button never may: `ops/refspec_policy.rs` asks git for the
+  remote's configuration before the fetch starts (`reads::fetch_settings`:
+  `git config --includes --null --type=bool --get <key>` for
+  `remote.<name>.mirror`, `remote.<name>.prune` and `fetch.prune`, and
+  `git config --includes --null --get-all remote.<name>.fetch` — the second
+  porcelain read, query form only, accepted by the user on 2026-10-04; see
+  `docs/systems/git-processes.md`, "What a read may run"). The same binary,
+  the same built environment and the same `--git-dir`/`--work-tree` as the
+  fetch, afresh on every fetch, so what the check decides on is what the
+  fetch's own git reads: a refspec added in a terminal since Cairn started,
+  a linked worktree's `includeIf "gitdir:..."` — which git evaluates against
+  the worktree's own git directory and gix against the common directory
+  (`the_refspec_check_reads_a_linked_worktrees_conditional_include_as_git_does`)
+  — the system file at git's own `sysconfdir`, a repository whose git
+  directory is another user's
+  (`the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git`,
+  which needs a user namespace with a second uid its root may give a file
+  to; required by the gate wherever `unshare --map-root-user --map-auto
+  chown 1:1` succeeds, `CAIRN_REQUIRE_SECOND_OWNER` — the user's decision,
+  2026-10-04, that the probe tests exactly what the test needs. Residual:
+  it does not run on GitHub's Ubuntu 24.04 runners, whose AppArmor
+  `unprivileged_userns` profile maps the second uid and then refuses the
+  namespace's root the `chown`; the gate's PASS line says it SKIPPED and
+  why. It runs, and is required, wherever the probe passes), and never
+  Cairn's own `GIT_CONFIG_*`, which the built environment does not carry
   (`the_refspec_check_ignores_config_from_cairns_own_environment`, over both
-  `GIT_CONFIG_COUNT` and `GIT_CONFIG_GLOBAL`); the one file the two can
-  still disagree on is the system configuration, which gix reads at
-  `/etc/gitconfig` and a git installed under another prefix reads elsewhere
-  — stated in the module, not checked, since asking git would spawn a
-  process outside `GitEnvironment` — and refuses, as `Error::FetchRefused`
-  quoting the setting, a remote with `remote.<name>.mirror` (a push setting
-  in git, refused on sight as what a mirror clone carries, and said so), a
-  `+refs/*:refs/*` or any `refs/heads/` destination (local branches
-  overwritten, with no reflog in a bare repository) — and, while pruning is
-  on, one whose own refspecs write
+  `GIT_CONFIG_COUNT` and `GIT_CONFIG_GLOBAL`). git parses its own booleans,
+  and the last value wins, as `remote.c` and `builtin/fetch.c` read them.
+  The check FAILS CLOSED: a read that fails — no `git`, a value git will not
+  parse as a boolean, a configuration file it cannot read, an answer that is
+  not one — and a configured refspec that does not parse are
+  `Error::RemoteConfig`, and no fetch starts
+  (`an_unreadable_remote_configuration_is_reported_and_starts_nothing`;
+  `a_failed_or_cancelled_read_is_an_error_never_an_unset_key` in
+  `reads/fetch_settings.rs`), except that a read ended because the
+  repository is closing is the fetch cancelled before it started,
+  `Error::GitCancelled` with no lock files, as a close of a running fetch
+  reports it (`a_fetch_closed_as_it_starts_is_still_ended`, in `cairn-app`);
+  its reads write nothing
+  (`the_refspec_checks_reads_write_nothing`). It refuses, as
+  `Error::FetchRefused` quoting the setting, a remote with
+  `remote.<name>.mirror` (a push setting in git, refused on sight as what a
+  mirror clone carries, and said so), a `+refs/*:refs/*` or any
+  `refs/heads/` destination (local branches overwritten, with no reflog in a
+  bare repository) — and, while pruning is on, one whose own refspecs write
   `refs/tags/`, since `--no-prune-tags` withholds only the tag refspec git
   would add; that refusal names the refspec and the prune setting that
-  decided, `remote.<name>.prune` over `fetch.prune` as git reads them. An
-  unqualified destination is read as git's `get_local_ref` reads it
+  decided, `remote.<name>.prune` over `fetch.prune` as git reads them
+  (`fetch.pruneTags` and `remote.<name>.pruneTags` are not read:
+  `--no-prune-tags` overrides both). A remote git would define from a file
+  rather than configuration — `$GIT_DIR/remotes/<name>` or
+  `$GIT_DIR/branches/<name>`, which no query prints and whose `branches/`
+  form fetches into `refs/heads/<name>` — is refused on sight with the file
+  quoted, whatever the configuration also says
+  (`a_remote_defined_by_a_file_git_reads_in_place_of_configuration_is_refused`).
+  An unqualified destination is read as git's `get_local_ref` reads it
   (`heads/`, `tags/`, `remotes/` get `refs/` in front, any other name is a
   branch, an unqualified glob writes nothing), checked against git 2.55.
   Pinned by `a_refspec_that_writes_local_branches_is_refused_before_git_runs`
   (opened before the refspec is written) and
   `a_tag_refspec_is_refused_under_prune_and_fetched_without_it`, both over a
-  recording stub `git` that would have said so had it been started
+  recording stub `git` that hands `config` to the real git and would have
+  said so had a fetch been started
   (`the_recording_stub_reports_a_fetch_that_was_allowed_to_start` is the
-  control); a configuration gix cannot read is `Error::RemoteConfig` and
-  starts nothing (`an_unreadable_remote_configuration_is_reported_and_starts_nothing`);
-  the destination reading is the unit tests in `refspec_policy.rs`. The
+  control); the destination reading and the decision over what git read are
+  the unit tests in `refspec_policy.rs`. An empty configured refspec
+  (`fetch =`) is git's `HEAD` with no destination, which fetches into
+  `FETCH_HEAD` and writes no ref (git 2.30.9 and 2.56.0 alike), so it is
+  neither refused nor unparsed
+  (`an_empty_refspec_is_fetched_into_fetch_head_as_git_fetches_it`, with
+  plain git as the control; `an_empty_refspec_writes_nothing_and_is_not_refused`).
+  Two residuals of the check's shape: its four `git config` reads and the
+  fetch are separate processes, so a configuration write landing in the
+  milliseconds between them can have the check decide on one generation of
+  the configuration and the fetch act on the next; and the user's own
+  cancel of a fetch cannot stop the four reads, which run before the fetch
+  has a process for it to kill (their cancel signal is held by nobody) —
+  closing the repository does end them, as the fetch cancelled before it
+  started. The
   refusal reaches the window as a failed fetch whose one line is the
   engine's sentence. Pruning that says what will go, as a confirmed
   operation, and a setting for it, are issue #17's remainder.

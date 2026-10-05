@@ -587,6 +587,80 @@ fn ref_tips_follow_the_refs_git_writes() {
     );
 }
 
+// ── Where the repository is ─────────────────────────────────────────────────
+
+/// A repository whose git directory lives apart from its working tree
+/// (`core.worktree`), and whose working tree sits inside another repository's:
+/// asked from that working tree, git's own discovery finds the ENCLOSING
+/// repository, which has no `origin`. Cairn names the repository it opened, so
+/// the fetch lands in the git directory Cairn opened and the enclosing
+/// repository is untouched. Caught by: an invocation left to git's discovery
+/// from the working tree, which fails the fetch on the enclosing repository.
+#[test]
+fn a_fetch_lands_in_the_repository_opened_when_its_working_tree_sits_inside_another() {
+    let source = fixtures::braided(3);
+    let enclosing = fixtures::unborn();
+    let inner = enclosing.path().join("inner");
+    std::fs::create_dir_all(&inner).unwrap_or_else(|e| panic!("{e}"));
+    let holder = fixtures::unborn();
+    let git_dir = holder.path().join("separate.git");
+    let git_dir_text = git_dir.display().to_string();
+    let in_separate = |args: &[&str]| {
+        let mut all = vec!["--git-dir", git_dir_text.as_str()];
+        all.extend_from_slice(args);
+        holder.git(&all)
+    };
+    holder.git(&["init", "--quiet", "--bare", &git_dir_text]);
+    in_separate(&["config", "core.bare", "false"]);
+    in_separate(&["config", "core.worktree", &inner.display().to_string()]);
+    in_separate(&[
+        "remote",
+        "add",
+        "origin",
+        &source.path().display().to_string(),
+    ]);
+    in_separate(&["config", "credential.helper", ""]);
+    let discovered_origin = std::process::Command::new("git")
+        .current_dir(&inner)
+        .args(["remote", "get-url", "origin"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .unwrap_or_else(|e| panic!("could not run git: {e}"));
+    assert!(
+        !discovered_origin.status.success(),
+        "git's discovery from the working tree must find the enclosing repository, \
+         which has no origin, or this test proves nothing"
+    );
+
+    let serving = Serving::serving(refusing());
+    let git = GitBinary::discover_with(environment(&serving, holder.path(), None))
+        .unwrap_or_else(|e| panic!("no usable git: {e}"));
+    let repo = Repository::discover(&git_dir).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        repo.workdir()
+            .map(|path| std::fs::canonicalize(path).unwrap_or_default()),
+        Some(std::fs::canonicalize(&inner).unwrap_or_else(|e| panic!("{e}"))),
+        "gix reads core.worktree"
+    );
+    fetch(&git, &repo, "origin", None)
+        .unwrap_or_else(|e| panic!("fetch did not start: {e}"))
+        .finish(|_| {})
+        .unwrap_or_else(|e| panic!("the fetch failed: {e}"));
+
+    assert_eq!(
+        in_separate(&["rev-parse", "refs/remotes/origin/main"]).trim(),
+        head_of(&source),
+        "the fetch did not land in the repository Cairn opened"
+    );
+    assert_eq!(
+        enclosing.git(&["for-each-ref"]),
+        "",
+        "the enclosing repository was written to"
+    );
+    assert_eq!(serving.prompts(), Vec::<String>::new());
+}
+
 // ── Pruning ─────────────────────────────────────────────────────────────────
 
 /// A clone of `source` that has fetched once and then grown a remote-tracking
@@ -754,10 +828,11 @@ fn remote_prune_overrides_fetch_prune_both_ways_as_git_does() {
     );
 }
 
-/// A `git` on a `PATH` of its own that answers `--version` and, for anything
-/// else, leaves a file saying it ran and then hangs — so "no process started"
-/// is a file that is not there, checked after the time a start would take,
-/// rather than a race against a real git that had not written yet.
+/// A `git` on a `PATH` of its own that answers `--version`, hands `config` —
+/// the read the refspec check asks before a fetch starts — to the real git, and
+/// for anything else leaves a file saying it ran and then hangs — so "no fetch
+/// started" is a file that is not there, checked after the time a start would
+/// take, rather than a race against a real git that had not written yet.
 struct RecordingGit {
     directory: PathBuf,
 }
@@ -772,9 +847,21 @@ impl RecordingGit {
         ));
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).unwrap_or_else(|e| panic!("{e}"));
-        // Its PATH is this directory alone, so the system's comes first for `touch`.
-        let script = "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'git version 2.30.0'; exit 0; fi\n\
-                      PATH=/usr/bin:/bin; touch \"$(dirname \"$0\")/ran\"; sleep 5\n";
+        // Its PATH is this directory alone, so the system's comes first for `touch`. The
+        // verb is the first argument after the repository's location (`--git-dir=`,
+        // `--work-tree=`); `config` is the read, and the real git answers it.
+        let script = format!(
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'git version 2.30.0'; exit 0; fi\n\
+             for argument in \"$@\"; do\n\
+               case \"$argument\" in\n\
+                 --git-dir=*|--work-tree=*) ;;\n\
+                 config) exec '{}' \"$@\" ;;\n\
+                 *) break ;;\n\
+               esac\n\
+             done\n\
+             PATH=/usr/bin:/bin; touch \"$(dirname \"$0\")/ran\"; sleep 5\n",
+            real_git().display()
+        );
         let git = directory.join("git");
         std::fs::write(&git, script).unwrap_or_else(|e| panic!("{e}"));
         use std::os::unix::fs::PermissionsExt;
@@ -835,17 +922,27 @@ impl Drop for RecordingGit {
     }
 }
 
-/// What a refused fetch reports, and that nothing ran: the stub `git` would
-/// have said so.
+/// The `git` on this process's `PATH`, which [`RecordingGit`] hands `config` to.
+fn real_git() -> PathBuf {
+    std::env::var_os("PATH")
+        .iter()
+        .flat_map(std::env::split_paths)
+        .map(|dir| dir.join("git"))
+        .find(|candidate| candidate.is_file())
+        .unwrap_or_else(|| panic!("no git on PATH"))
+}
+
+/// What a refused fetch of the repository at `at` reports, and that no fetch
+/// ran: the stub `git` would have said so.
 fn refused_before_any_git_ran(
-    local: &Fixture,
+    at: &Path,
     serving: &Serving,
     expected_setting: &str,
     expected_write: cairn_git::RefusedWrite,
 ) {
     let recording = RecordingGit::new();
-    let git = recording.discover(serving, local.path());
-    let repo = Repository::discover(local.path()).unwrap_or_else(|e| panic!("{e}"));
+    let git = recording.discover(serving, at);
+    let repo = Repository::discover(at).unwrap_or_else(|e| panic!("{e}"));
     let outcome = fetch(&git, &repo, "origin", None);
     match outcome {
         Err(Error::FetchRefused {
@@ -862,7 +959,7 @@ fn refused_before_any_git_ran(
     }
     assert!(
         !recording.ran(),
-        "a git process was started under {expected_setting} before the refusal"
+        "a fetch was started under {expected_setting} before the refusal"
     );
 }
 
@@ -935,7 +1032,7 @@ fn a_refspec_that_writes_local_branches_is_refused_before_git_runs() {
         for (setting, value) in &settings {
             local.git(&["config", setting, value]);
         }
-        refused_before_any_git_ran(&local, &serving, expected_setting, write);
+        refused_before_any_git_ran(local.path(), &serving, expected_setting, write);
     }
 }
 
@@ -954,7 +1051,7 @@ fn a_tag_refspec_is_refused_under_prune_and_fetched_without_it() {
     local.git(&["config", "--add", "remote.origin.fetch", refspec]);
     local.git(&["config", "fetch.prune", "true"]);
     refused_before_any_git_ran(
-        &local,
+        local.path(),
         &serving,
         &format!("remote.origin.fetch = {refspec} with fetch.prune = true"),
         cairn_git::RefusedWrite::LocalTags,
@@ -967,7 +1064,7 @@ fn a_tag_refspec_is_refused_under_prune_and_fetched_without_it() {
     local.git(&["config", "fetch.prune", "false"]);
     local.git(&["config", "remote.origin.prune", "true"]);
     refused_before_any_git_ran(
-        &local,
+        local.path(),
         &serving,
         &format!("remote.origin.fetch = {refspec} with remote.origin.prune = true"),
         cairn_git::RefusedWrite::LocalTags,
@@ -978,6 +1075,230 @@ fn a_tag_refspec_is_refused_under_prune_and_fetched_without_it() {
     let (outcome, _) = fetch_origin(&serving, &local, local.path(), None);
     outcome.unwrap_or_else(|e| panic!("a tag refspec without pruning was refused: {e}"));
     assert_eq!(fetched_main(&local), head_of(&source));
+}
+
+/// An empty configured refspec (`fetch =`) is one git accepts: an empty source is `HEAD`
+/// and there is no destination, so `git fetch` writes `FETCH_HEAD` and no ref (git 2.30.9
+/// and 2.56.0 alike). Cairn's fetch starts and writes exactly what plain git writes, alone
+/// and beside the clone's own refspec. Caught by: the check refusing the fetch as
+/// configuration it could not read, as it would if gix's parser rejected an empty refspec
+/// (gix-refspec 0.45.1 reads it as git does, `HEAD` and no destination).
+#[test]
+fn an_empty_refspec_is_fetched_into_fetch_head_as_git_fetches_it() {
+    let source = fixtures::braided(2);
+    let serving = Serving::serving(refusing());
+    let refs = |local: &Fixture| local.git(&["for-each-ref", "--format=%(refname)"]);
+    for alone in [true, false] {
+        let control = with_origin(&source.path().display().to_string());
+        let local = with_origin(&source.path().display().to_string());
+        for fixture in [&control, &local] {
+            if alone {
+                fixture.git(&["config", "--replace-all", "remote.origin.fetch", ""]);
+            } else {
+                fixture.git(&["config", "--add", "remote.origin.fetch", ""]);
+            }
+        }
+        control.git(&["fetch", "--quiet", "origin"]);
+        assert_eq!(
+            refs(&control).is_empty(),
+            alone,
+            "plain git wrote {:?}, alone: {alone}",
+            refs(&control)
+        );
+        let (outcome, _) = fetch_origin(&serving, &local, local.path(), None);
+        outcome.unwrap_or_else(|e| panic!("an empty refspec was refused, alone: {alone}: {e}"));
+        assert_eq!(refs(&local), refs(&control), "alone: {alone}");
+        let fetch_head = std::fs::read_to_string(local.path().join(".git/FETCH_HEAD"))
+            .unwrap_or_else(|e| panic!("no FETCH_HEAD, alone: {alone}: {e}"));
+        assert!(
+            fetch_head.starts_with(&head_of(&source)),
+            "FETCH_HEAD is not the remote's HEAD, alone: {alone}: {fetch_head}"
+        );
+    }
+}
+
+/// The check reads the remote as the fetch's own git will, because git answers it: in a
+/// linked worktree, git evaluates `includeIf "gitdir:..."` against the worktree's own git
+/// directory (`.git/worktrees/<id>`), and gix 0.87 against the common directory, so a
+/// mirror setting included for the linked worktree alone was invisible to a check that read
+/// configuration through gix — and the fetch git then made ran as a mirror. From the main
+/// worktree the include does not apply, for git or the check, and the fetch starts. Caught
+/// by: any reading of the configuration but git's own.
+#[test]
+fn the_refspec_check_reads_a_linked_worktrees_conditional_include_as_git_does() {
+    let source = fixtures::braided(2);
+    let serving = Serving::serving(refusing());
+    let local = with_origin(&source.path().display().to_string());
+    local.git(&["commit", "--quiet", "--allow-empty", "-m", "first"]);
+    local.git(&["worktree", "add", "--quiet", "-b", "linked", "linked"]);
+    let linked = local.path().join("linked");
+    let worktree_git_dir = std::fs::canonicalize(
+        local
+            .git(&["-C", "linked", "rev-parse", "--absolute-git-dir"])
+            .trim(),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let include = local.path().join("mirror.inc");
+    std::fs::write(&include, "[remote \"origin\"]\n\tmirror = true\n")
+        .unwrap_or_else(|e| panic!("{e}"));
+    local.git(&[
+        "config",
+        &format!("includeIf.gitdir:{}.path", worktree_git_dir.display()),
+        &include.display().to_string(),
+    ]);
+    // The reproduction holds: git applies the include in the linked worktree alone.
+    let mirror_in = |dir: &str| {
+        local
+            .git(&[
+                "-C",
+                dir,
+                "config",
+                "--default",
+                "false",
+                "--type=bool",
+                "remote.origin.mirror",
+            ])
+            .trim()
+            .to_owned()
+    };
+    assert_eq!(mirror_in("linked"), "true", "git does not see the include");
+    assert_eq!(
+        mirror_in("."),
+        "false",
+        "git applies the include outside the worktree"
+    );
+
+    refused_before_any_git_ran(
+        &linked,
+        &serving,
+        "remote.origin.mirror = true",
+        cairn_git::RefusedWrite::Mirror,
+    );
+
+    let recording = RecordingGit::new();
+    let git = recording.discover(&serving, local.path());
+    let repo = Repository::discover(local.path()).unwrap_or_else(|e| panic!("{e}"));
+    let started = fetch(&git, &repo, "origin", None)
+        .unwrap_or_else(|e| panic!("the main worktree's fetch was refused: {e}"));
+    assert!(recording.ran(), "the main worktree's fetch did not start");
+    started.canceller().cancel();
+    let _ = started.finish(|_| {});
+}
+
+/// A remote git defines from a file rather than configuration — `$GIT_DIR/branches/<name>`
+/// or `$GIT_DIR/remotes/<name>`, read when no configuration gives the remote a URL — is
+/// refused on sight with the file quoted, and no fetch starts: no query of git's prints
+/// what git makes of such a file, and a `branches/` file fetches into a local branch named
+/// after the remote, which the reproduction below shows git doing. Caught by: a check that
+/// reads configuration alone, which sees no refspec for such a remote and lets it through.
+#[test]
+fn a_remote_defined_by_a_file_git_reads_in_place_of_configuration_is_refused() {
+    let source = fixtures::braided(2);
+    let serving = Serving::serving(refusing());
+    let defined = |dir: &str, name: &str, text: String| {
+        let local = fixtures::unborn();
+        let directory = local.path().join(".git").join(dir);
+        std::fs::create_dir_all(&directory).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(directory.join(name), text).unwrap_or_else(|e| panic!("{e}"));
+        local
+    };
+    let branches = |name: &str| {
+        defined(
+            "branches",
+            name,
+            format!("{}#main\n", source.path().display()),
+        )
+    };
+
+    // The reproduction holds: git fetches such a remote into refs/heads/<name>.
+    let reproduced = branches("upstream");
+    reproduced.git(&["fetch", "--quiet", "--no-prune-tags", "upstream"]);
+    assert_eq!(
+        reproduced.git(&["rev-parse", "refs/heads/upstream"]).trim(),
+        head_of(&source),
+        "git did not fetch the branches/ file's remote into a local branch"
+    );
+
+    for (local, name, file) in [
+        (branches("upstream"), "upstream", ".git/branches/upstream"),
+        (
+            defined(
+                "remotes",
+                "other",
+                format!(
+                    "URL: {}\nPull: refs/heads/main:refs/heads/x\n",
+                    source.path().display()
+                ),
+            ),
+            "other",
+            ".git/remotes/other",
+        ),
+    ] {
+        let recording = RecordingGit::new();
+        let git = recording.discover(&serving, local.path());
+        let repo = Repository::discover(local.path()).unwrap_or_else(|e| panic!("{e}"));
+        match fetch(&git, &repo, name, None) {
+            Err(Error::FetchRefused {
+                remote,
+                setting,
+                write,
+            }) => {
+                assert_eq!(remote, name);
+                assert!(setting.ends_with(file), "{setting} is not {file}");
+                assert_eq!(write, cairn_git::RefusedWrite::DefinedByFile);
+            }
+            Ok(_) => panic!("the remote defined by {file} was fetched"),
+            Err(other) => panic!("refused for the wrong reason under {file}: {other}"),
+        }
+        assert!(!recording.ran(), "a fetch was started under {file}");
+    }
+}
+
+/// Every file under `dir`, with its bytes.
+fn snapshot(dir: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    let mut files = std::collections::BTreeMap::new();
+    let mut pending = vec![dir.to_owned()];
+    while let Some(next) = pending.pop() {
+        for entry in std::fs::read_dir(&next).unwrap_or_else(|e| panic!("{e}")) {
+            let path = entry.unwrap_or_else(|e| panic!("{e}")).path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{e}"));
+                files.insert(path, bytes);
+            }
+        }
+    }
+    files
+}
+
+/// The check's read — `git config` in query form, the second porcelain verb a read may run
+/// (`crate::reads`, "What a read may run") — writes nothing: a fetch refused after every
+/// key the check asks has been read leaves the git directory byte-identical, its
+/// configuration included. Run against the git on `PATH`, and by `scripts/git-floor.sh`'s
+/// gits through the same read's unit tests.
+#[test]
+fn the_refspec_checks_reads_write_nothing() {
+    let source = fixtures::braided(2);
+    let serving = Serving::serving(refusing());
+    let local = with_origin(&source.path().display().to_string());
+    let refspec = "+refs/tags/*:refs/tags/*";
+    local.git(&["config", "--add", "remote.origin.fetch", refspec]);
+    local.git(&["config", "remote.origin.prune", "true"]);
+    local.git(&["config", "fetch.prune", "false"]);
+    let git_dir = local.path().join(".git");
+    let before = snapshot(&git_dir);
+    refused_before_any_git_ran(
+        local.path(),
+        &serving,
+        &format!("remote.origin.fetch = {refspec} with remote.origin.prune = true"),
+        cairn_git::RefusedWrite::LocalTags,
+    );
+    assert!(before.len() > 3, "the snapshot read too little to decide");
+    assert!(
+        before == snapshot(&git_dir),
+        "the refspec check's reads changed the git directory"
+    );
 }
 
 /// The check reads configuration as the child git will: a `GIT_CONFIG_*` in
@@ -1090,6 +1411,142 @@ fn an_unreadable_remote_configuration_is_reported_and_starts_nothing() {
         other => panic!("expected the configuration error, got {other:?}"),
     }
     assert!(!recording.ran(), "a git process was started");
+}
+
+/// The check reads the remote of a repository Cairn admitted whatever gix's own owner rule
+/// makes of it. A git directory owned by another user that git admits — here through
+/// `safe.directory=*` on the command line, which gix's rule never reads (it takes
+/// `safe.directory` from the system and global files only) — is one gix opens at reduced
+/// trust by default, and at reduced trust it hides the repository's own `remote.*`
+/// sections (`try_find_remote` filters them), so a check left to gix's rule saw no remote
+/// and let a mirror fetch through. A second owner without root takes a user namespace with
+/// a second uid mapped (`unshare --map-root-user --map-auto`, from `/etc/subuid`) whose root
+/// may give a file to it — Ubuntu 24.04's AppArmor (GitHub's runners among its hosts)
+/// confines an unprivileged namespace in its `unprivileged_userns` profile, whose root may
+/// not, so the probe is that `chown`; where there is none the test says so and decides
+/// nothing — unless `CAIRN_REQUIRE_SECOND_OWNER` is set, which `scripts/gate.sh`'s
+/// `test-full` sets wherever the same `chown` succeeds, and then the skip is a failure
+/// (`the_user_namespace_tests_are_required_wherever_they_can_run`). Caught by: the check leaving trust to
+/// gix's own rule, which loads the repository's configuration at reduced trust and then
+/// filters its remote out of the lookup.
+#[test]
+fn the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git() {
+    let inner = "the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git_inner";
+    let probe = fixtures::unborn();
+    let owned = probe.path().join("owned");
+    std::fs::write(&owned, b"").unwrap_or_else(|e| panic!("{e}"));
+    let available = std::process::Command::new("unshare")
+        .args(["--map-root-user", "--map-auto", "chown", "1:1"])
+        .arg(&owned)
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !available {
+        assert!(
+            std::env::var_os("CAIRN_REQUIRE_SECOND_OWNER").is_none(),
+            "CAIRN_REQUIRE_SECOND_OWNER is set, and no user namespace whose root can give a \
+             file to a second uid can be made here"
+        );
+        eprintln!(
+            "SKIPPED the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git: \
+             no user namespace whose root can give a file to a second uid here, so no second owner"
+        );
+        return;
+    }
+    let exe = std::env::current_exe().unwrap_or_else(|e| panic!("{e}"));
+    // No global or system file: what admits the repository is the command line alone.
+    let home = fixtures::unborn();
+    let output = std::process::Command::new("unshare")
+        .args(["--map-root-user", "--map-auto"])
+        .arg(exe)
+        .args(["--exact", inner, "--include-ignored", "--nocapture"])
+        .env("GIT_CONFIG_PARAMETERS", "'safe.directory=*'")
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("CAIRN_TEST_INNER", "1")
+        .output()
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        output.status.success(),
+        "the inner test failed in the user namespace:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "the inner test did not run:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// The inner half of the test above, run as root of a user namespace in which uid 1 is
+/// somebody else; ignored so it runs only under its parent.
+#[test]
+#[ignore = "run by the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git"]
+fn the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git_inner() {
+    assert_eq!(
+        std::env::var("GIT_CONFIG_PARAMETERS").as_deref(),
+        Ok("'safe.directory=*'"),
+        "not running under the parent test"
+    );
+    let source = fixtures::braided(2);
+    let serving = Serving::serving(refusing());
+    for (settings, expected_setting, write) in [
+        (
+            ("remote.origin.mirror", "true"),
+            "remote.origin.mirror = true",
+            cairn_git::RefusedWrite::Mirror,
+        ),
+        (
+            ("remote.origin.fetch", "+refs/heads/*:refs/heads/*"),
+            "remote.origin.fetch = +refs/heads/*:refs/heads/*",
+            cairn_git::RefusedWrite::LocalBranches,
+        ),
+    ] {
+        let local = with_origin(&source.path().display().to_string());
+        local.git(&["config", settings.0, settings.1]);
+        let chown = std::process::Command::new("chown")
+            .args(["-R", "1:1"])
+            .arg(local.path())
+            .status()
+            .unwrap_or_else(|e| panic!("{e}"));
+        // What the namespace is, where it would not: the maps, the capabilities, and the
+        // confinement the process runs under.
+        let seen = |path: &str| std::fs::read_to_string(path).unwrap_or_else(|e| format!("{e}"));
+        assert!(
+            chown.success(),
+            "could not give the repository to uid 1\nuid_map:\n{}gid_map:\n{}{}\nlabel: {}",
+            seen("/proc/self/uid_map"),
+            seen("/proc/self/gid_map"),
+            seen("/proc/self/status")
+                .lines()
+                .filter(|line| line.starts_with("Cap")
+                    || line.starts_with("Uid")
+                    || line.starts_with("Gid"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            seen("/proc/self/attr/current")
+        );
+        // The reproduction holds: gix by its own rule trusts this repository less than fully,
+        // and git, without the command line's entry, refuses it as someone else's.
+        let gix_trust = gix::open(local.path())
+            .unwrap_or_else(|e| panic!("{e}"))
+            .git_dir_trust();
+        assert_eq!(gix_trust, gix::sec::Trust::Reduced, "gix trusts it fully");
+        let without = std::process::Command::new("git")
+            .arg("-C")
+            .arg(local.path())
+            .args(["rev-parse", "--git-dir"])
+            .env_remove("GIT_CONFIG_PARAMETERS")
+            .output()
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            String::from_utf8_lossy(&without.stderr).contains("dubious ownership"),
+            "git does not see another owner: {}",
+            String::from_utf8_lossy(&without.stderr)
+        );
+        refused_before_any_git_ran(local.path(), &serving, expected_setting, write);
+    }
 }
 
 // ── SSH ─────────────────────────────────────────────────────────────────────

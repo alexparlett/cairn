@@ -9,7 +9,8 @@ use crate::{Cancel, Error, Repository};
 
 /// Rows are handed out only once the assigner has made them final.
 pub struct HistorySession<'repo> {
-    walk: gix::revision::Walk<'repo>,
+    repo: &'repo gix::Repository,
+    walk: super::walk::CommitWalk<'repo>,
     assigner: LaneAssigner,
     /// Rows made final and not yet handed to the caller.
     ready: VecDeque<HistoryRow>,
@@ -54,16 +55,10 @@ impl Repository {
             skip,
         } = starting_points(self, request)?;
 
-        let walk = self
-            .inner()
-            .rev_walk(tips.iter().copied())
-            .sorting(order.sorting())
-            .all()
-            .map_err(|source| Error::Walk {
-                source: Box::new(source),
-            })?;
+        let walk = super::walk::open(self.inner(), &tips, order)?;
 
         Ok(HistorySession {
+            repo: self.inner(),
             walk,
             assigner: LaneAssigner::with_window(window),
             ready: VecDeque::new(),
@@ -145,11 +140,8 @@ impl HistorySession<'_> {
             source: Box::new(source),
         })?;
 
-        let id = super::model_id(&info.id)?;
-        let mut parents = Vec::with_capacity(info.parent_ids.len());
-        for parent in info.parent_ids.iter() {
-            parents.push(super::model_id(parent)?);
-        }
+        let id = crate::object_id::model_id(&info.id)?;
+        let parents = super::parents_of(&info)?;
         if self.walked >= self.skip {
             self.pending.push_back((id, parents.clone()));
         }
@@ -173,7 +165,7 @@ impl HistorySession<'_> {
             // Unreachable: one id is pushed per commit past the prefix.
             return Ok(());
         };
-        let commit = super::summary_of_commit(self.walk.repo, &id, &parents)?;
+        let commit = super::summary_of_commit(self.repo, &id, &parents)?;
         self.decoded += 1;
         self.ready.push_back(HistoryRow {
             content: RowContent::Commit(commit),

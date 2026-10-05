@@ -1,6 +1,7 @@
 //! History requests, cursors and pages.
 
 mod session;
+mod walk;
 
 use std::sync::Arc;
 
@@ -8,6 +9,8 @@ use cairn_model::{CommitSummary, HistoryRow, LaneAssigner, Oid, RowContent};
 
 pub use session::HistorySession;
 
+use crate::commit_encoding::CommitEncoding;
+use crate::object_id::{model_id, object_id};
 use crate::{Cancel, Error, Repository};
 
 /// Neither order is topological: a parent can arrive before its child.
@@ -27,12 +30,11 @@ impl Default for HistoryOrder {
 }
 
 impl HistoryOrder {
-    fn sorting(self) -> gix::revision::walk::Sorting {
+    fn sorting(self) -> gix::traverse::commit::simple::Sorting {
+        use gix::traverse::commit::simple::{CommitTimeOrder, Sorting};
         match self {
-            Self::CommitTime => gix::revision::walk::Sorting::ByCommitTime(
-                gix::traverse::commit::simple::CommitTimeOrder::NewestFirst,
-            ),
-            Self::GraphOrder => gix::revision::walk::Sorting::BreadthFirst,
+            Self::CommitTime => Sorting::ByCommitTime(CommitTimeOrder::NewestFirst),
+            Self::GraphOrder => Sorting::BreadthFirst,
         }
     }
 }
@@ -170,14 +172,7 @@ fn read_page(
     }
     let target = skip.saturating_add(request.limit);
 
-    let mut walk = repo
-        .inner()
-        .rev_walk(tips.iter().copied())
-        .sorting(order.sorting())
-        .all()
-        .map_err(|source| Error::Walk {
-            source: Box::new(source),
-        })?;
+    let mut walk = walk::open(repo.inner(), &tips, order)?;
 
     let mut assigner = LaneAssigner::with_window(window);
     let mut page = Page {
@@ -203,12 +198,10 @@ fn read_page(
         })?;
 
         let id = model_id(&info.id)?;
-        let mut parents = Vec::with_capacity(info.parent_ids.len());
-        for parent in info.parent_ids.iter() {
-            parents.push(model_id(parent)?);
-        }
+        let parents = parents_of(&info)?;
         if walked >= skip && walked < target {
-            page.summaries.push(summary_of(&info, &id, &parents)?);
+            page.summaries
+                .push(summary_of_commit(repo.inner(), &id, &parents)?);
             decoded += 1;
         }
         walked += 1;
@@ -247,7 +240,7 @@ fn read_page(
 
 /// Whether anything remains after `target`. One walk step, no object read.
 fn next_cursor(
-    walk: &mut gix::revision::Walk<'_>,
+    walk: &mut walk::CommitWalk<'_>,
     next: HistoryCursor,
     cancel: &impl Cancel,
     so_far: usize,
@@ -289,6 +282,14 @@ impl Page {
     }
 }
 
+/// The parents the walk read, which are the ones git shows (`walk`).
+fn parents_of(info: &gix::traverse::commit::Info) -> Result<Vec<Oid>, Error> {
+    info.parent_ids
+        .iter()
+        .map(|parent| model_id(parent))
+        .collect()
+}
+
 struct Resolved {
     tips: Tips,
     order: HistoryOrder,
@@ -327,7 +328,6 @@ fn starting_points(repo: &Repository, request: &HistoryRequest) -> Result<Resolv
     })
 }
 
-/// An id of the other width is refused here: gix asserts rather than failing on one.
 fn walk_tips(repo: &gix::Repository, tips: &[Oid]) -> Result<Tips, Error> {
     let format = repo.object_hash();
     let mut object_ids = Vec::with_capacity(tips.len());
@@ -347,36 +347,7 @@ fn walk_tips(repo: &gix::Repository, tips: &[Oid]) -> Result<Tips, Error> {
     Ok(object_ids.into())
 }
 
-fn object_id(oid: &Oid) -> Result<gix::hash::ObjectId, Error> {
-    // Both sides hold the digest; no hex round-trip.
-    gix::hash::ObjectId::try_from(oid.as_bytes()).map_err(|source| Error::ReadCommit {
-        id: oid.to_string(),
-        source: Box::new(source),
-    })
-}
-
-fn model_id(id: &gix::hash::oid) -> Result<Oid, Error> {
-    // Hex is built only to name the commit in an error.
-    Oid::from_bytes(id.as_bytes()).map_err(|source| Error::ReadCommit {
-        id: id.to_hex().to_string(),
-        source: Box::new(source),
-    })
-}
-
-/// The one place a walk step reads a commit object.
-fn summary_of(
-    info: &gix::revision::walk::Info<'_>,
-    id: &Oid,
-    parents: &[Oid],
-) -> Result<CommitSummary, Error> {
-    let commit = info.object().map_err(|source| Error::ReadCommit {
-        id: id.to_string(),
-        source: Box::new(source),
-    })?;
-    summary_from(&commit, id, parents)
-}
-
-/// By id: by the time a session hands out a row, the walk's `Info` is gone.
+/// The one place a walk step reads a commit object, by id: the walk hands over ids only.
 fn summary_of_commit(
     repo: &gix::Repository,
     id: &Oid,
@@ -400,15 +371,18 @@ fn summary_from(
         id: id.to_string(),
         source,
     };
-    let message = commit.message().map_err(|e| read(Box::new(e)))?;
-    let author = commit.author().map_err(|e| read(Box::new(e)))?;
+    // Decoded once: the encoding header, the author and the message are all read from it.
+    let decoded = commit.decode().map_err(|e| read(Box::new(e)))?;
+    // The characters git shows, as the Commit tab reads them (`crate::commit_encoding`).
+    let encoding = CommitEncoding::of_commit(commit, &decoded);
+    let author = decoded.author().map_err(|e| read(Box::new(e)))?;
     let time = author.time().map_err(|e| read(Box::new(e)))?;
     Ok(CommitSummary {
         id: *id,
         parents: parents.to_vec(),
-        summary: message.summary().into_owned().to_string(),
-        author_name: author.name.to_string(),
-        author_email: author.email.to_string(),
+        summary: encoding.text(&decoded.message().summary()),
+        author_name: encoding.text(author.name),
+        author_email: encoding.text(author.email),
         author_time: time.seconds,
     })
 }
@@ -505,21 +479,14 @@ mod tests {
                     inner.object_cache_size(cache);
                     let started = Instant::now();
                     let mut walked = 0usize;
-                    let mut walk = inner
-                        .rev_walk(vec![inner.head_id().unwrap().detach()])
-                        .sorting(order.sorting())
-                        .all()
-                        .unwrap();
+                    let head = inner.head_id().unwrap().detach();
+                    let mut walk = walk::open(&inner, &[head], order).unwrap();
                     let mut assigner = LaneAssigner::new();
                     while walked < limit {
                         let Some(next) = walk.next() else { break };
                         let info = next.unwrap();
                         let id = model_id(&info.id).unwrap();
-                        let parents: Vec<Oid> = info
-                            .parent_ids
-                            .iter()
-                            .map(|p| model_id(p).unwrap())
-                            .collect();
+                        let parents: Vec<Oid> = parents_of(&info).unwrap();
                         if lay_out {
                             assigner.push(id, parents);
                         }

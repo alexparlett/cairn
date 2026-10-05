@@ -146,6 +146,42 @@ impl Drop for UnbornRepository {
     }
 }
 
+/// Borrows this checkout's objects through `alternates`, so its `HEAD` can be broken and mended.
+pub(super) struct BorrowedRepository {
+    pub(super) fixture: UnbornRepository,
+}
+
+impl BorrowedRepository {
+    pub(super) fn new(name: &str) -> Self {
+        let fixture = UnbornRepository::new(name);
+        let checkout = match cairn_git::SharedRepository::discover(env!("CARGO_MANIFEST_DIR")) {
+            Ok(shared) => shared.git_dir().to_owned(),
+            Err(error) => panic!("opening the Cairn checkout: {error}"),
+        };
+        // A linked worktree keeps its objects in the common directory.
+        let common = match std::fs::read_to_string(checkout.join("commondir")) {
+            Ok(relative) => checkout.join(relative.trim()),
+            Err(_) => checkout,
+        };
+        let objects = match common.join("objects").canonicalize() {
+            Ok(objects) => objects,
+            Err(error) => panic!("finding the checkout's objects: {error}"),
+        };
+        let alternates = fixture.path.join(".git/objects/info/alternates");
+        if let Err(error) = std::fs::write(&alternates, format!("{}\n", objects.display())) {
+            panic!("writing {}: {error}", alternates.display());
+        }
+        Self { fixture }
+    }
+
+    pub(super) fn point_main_at(&self, id: &str) {
+        let main = self.fixture.path.join(".git/refs/heads/main");
+        if let Err(error) = std::fs::write(&main, format!("{id}\n")) {
+            panic!("writing {}: {error}", main.display());
+        }
+    }
+}
+
 /// A bare repository, built with `std::fs`, whose `origin` is `remote` and
 /// whose `HEAD` is the remote's `HEAD` after a fetch — whatever that HEAD is —
 /// through the remote-tracking ref `origin/main`, never a local branch.
@@ -384,7 +420,10 @@ pub(super) fn next_by(updates: &mut Updates, deadline: Instant, seen: &[Update])
 }
 
 /// Reads updates until `stop` says so, within [`WAIT`], returning everything seen.
-pub(super) fn collect_until(updates: &mut Updates, stop: impl Fn(&Update) -> bool) -> Vec<Update> {
+pub(super) fn collect_until(
+    updates: &mut Updates,
+    mut stop: impl FnMut(&Update) -> bool,
+) -> Vec<Update> {
     let deadline = Instant::now() + WAIT;
     let mut seen = Vec::new();
     loop {

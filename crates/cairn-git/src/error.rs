@@ -8,9 +8,71 @@ pub enum Error {
     #[error("no git repository at {path}")]
     NotARepository { path: PathBuf },
 
+    /// Opening a repository found another git directory than the one it had checked: a
+    /// `.git` file rewritten between the ownership check's read of it and gix's, or —
+    /// opening again from the path it was opened from — a repository that is not the one
+    /// the application holds. Nothing read from the new one may be answered as the one
+    /// checked; `was` is that one.
+    #[error(
+        "{path} now names the repository at {now}, not the one at {was} the application \
+         checked and opened"
+    )]
+    RepositoryReplaced {
+        path: PathBuf,
+        was: PathBuf,
+        now: PathBuf,
+    },
+
     #[error("failed to open the repository at {path}: {source}")]
     Open {
         path: PathBuf,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// The repository was found by searching upwards from the directory Cairn was asked to
+    /// open, and is a bare one that the user's `safe.bareRepository = explicit` tells their
+    /// own `git` to refuse — the protection against a bare repository planted inside a
+    /// cloned working tree, whose configuration names programs to run. It is not opened,
+    /// and no `git` runs in it. `path` is its git directory.
+    #[error(
+        "{path} is a bare repository found by searching, which git refuses because \
+         safe.bareRepository is explicit; it was not opened"
+    )]
+    BareRepositoryFoundBySearching { path: PathBuf },
+
+    /// The repository was found by searching, and the user's own `git` refuses it for
+    /// dubious ownership: a path git checks — the `.git` file, the working tree's top, the
+    /// git directory — is not the current user's, and `safe.directory`, in the
+    /// configuration git protects, does not name it (`crate::ownership`). It is not
+    /// opened, and no `git` runs in it; `path` is what git names in its refusal, the
+    /// working tree's top or, for a bare repository, its git directory. The remedy is
+    /// git's own: `git config --global --add safe.directory <path>`.
+    #[error(
+        "detected dubious ownership in repository at {path}: it is not all yours, and \
+         safe.directory does not name it, so git refuses it; it was not opened (git config \
+         --global --add safe.directory {path} adds an exception)"
+    )]
+    DubiousOwnership { path: PathBuf },
+
+    /// Whether the repository is the current user's could not be decided, because the
+    /// process's effective uid could not be read by any route Cairn has (`/proc/self/status`,
+    /// then the owner of a file it creates; `crate::ownership`) — git's own `geteuid` cannot
+    /// fail — and `safe.directory` does not name it. It is not opened, and no `git` runs in
+    /// it; `path` is the working tree's top or, for a bare repository, its git directory.
+    /// Naming it in `safe.directory` opens it, as it would for git whoever owns it.
+    #[error(
+        "could not tell which user Cairn is running as, so whether git would open the \
+         repository at {path} — which it does only for its owner, or where safe.directory \
+         names it — cannot be decided; it was not opened (git config --global --add \
+         safe.directory {path} names it)"
+    )]
+    CurrentUserUnknown { path: PathBuf },
+
+    /// The system or global configuration, which says whether a bare repository found by
+    /// searching may be opened, could not be read; git refuses to work until it can.
+    #[error("failed to read the system or global git configuration: {source}")]
+    ProtectedConfig {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
@@ -22,6 +84,57 @@ pub enum Error {
     /// `HEAD` points at a branch with no commits yet.
     #[error("the repository at {path} has no commits yet")]
     UnbornHead { path: PathBuf },
+
+    /// A changes query was cancelled — superseded before or while `git diff-tree` ran, which
+    /// is then ended — and `changed` is how many files it had read of git's answer. Not a
+    /// failure to report as one: the caller asked for this by superseding it.
+    #[error("the changes query was cancelled after {changed} files")]
+    ChangesCancelled { changed: usize },
+
+    /// A content query was cancelled — superseded before or while its `git` read ran, which
+    /// is then ended. Not a failure to report as one: the caller asked for this by
+    /// superseding it.
+    #[error("the content query was cancelled")]
+    ContentCancelled,
+    /// `git`'s diff of a file printed lines that are not the lines Cairn read of it: the
+    /// content changed between the two reads, or one of them read something else. Neither
+    /// answer is used, since drawing either could show a diff of content that is not there;
+    /// asking again is the remedy. `detail` says which line differed.
+    #[error("git's diff of {path} does not match the content read for it ({detail}); ask again")]
+    ContentReadsDisagree { path: String, detail: String },
+    /// `git` answered a read in a shape Cairn does not read — a record cut off, or a status
+    /// or a mode git does not print for the question asked. Nothing of the answer is used:
+    /// a guess could put a wrong row in front of the user.
+    #[error("git {arguments} answered with a record Cairn cannot read: {record}")]
+    UnexpectedGitOutput { arguments: String, record: String },
+
+    /// A working-tree query was asked about a path that is not relative to the working
+    /// tree as git holds one: empty, absolute, or with a `.` or `..` component. Nothing
+    /// was read and no `git` ran — such a path could name a file outside the working tree.
+    #[error("{path:?} is not a path inside the working tree, relative to its top")]
+    NotAWorkTreePath { path: String },
+
+    /// A configuration value git itself refuses, so the user's own `git log` and
+    /// `git show` refuse to answer too until it is changed. `value` is as configured.
+    #[error("the configuration value {key} = {value} is not one git accepts")]
+    InvalidConfig { key: String, value: String },
+
+    /// The diff machinery could not be built for this repository — the index or the
+    /// attribute stack could not be read. No query ran.
+    #[error("failed to prepare the repository for diffing: {source}")]
+    DiffSetup {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// One path's content could not be read or compared; every other path in the same
+    /// change set is unaffected.
+    #[error("failed to diff {path}: {source}")]
+    DiffFile {
+        path: String,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 
     /// Usually a corrupt or missing object.
     #[error("failed to walk the history: {source}")]
@@ -175,8 +288,9 @@ pub enum Error {
         write: RefusedWrite,
     },
 
-    /// The remote's configuration could not be read, so the fetch could not
-    /// be checked and did not run.
+    /// The remote's configuration could not be read — `git config` failed, was
+    /// cancelled or answered what it never prints, or a configured refspec does
+    /// not parse — so the fetch could not be checked and did not run.
     #[error("could not read the configuration of remote {remote}: {source}")]
     RemoteConfig {
         remote: String,
@@ -201,6 +315,11 @@ pub enum RefusedWrite {
     /// `+refs/*:refs/*` refspec, and a mirror is a repository whose every
     /// ref is the remote's to overwrite (decided on issue #17).
     Mirror,
+    /// The remote is defined by a file git reads in place of configuration,
+    /// `$GIT_DIR/remotes/<name>` or `$GIT_DIR/branches/<name>`, which no query
+    /// of git's prints; a `branches/` file fetches into a local branch named
+    /// after the remote. The `setting` beside it is the file's path.
+    DefinedByFile,
 }
 
 impl std::fmt::Display for RefusedWrite {
@@ -213,6 +332,11 @@ impl std::fmt::Display for RefusedWrite {
             Self::Mirror => {
                 "declare the remote a mirror, whose fetch Cairn refuses on sight (the setting \
                  itself governs push; it is what a mirror clone carries)"
+            }
+            Self::DefinedByFile => {
+                "be read in place of the remote's configuration, which Cairn refuses on sight \
+                 (a branches/ file fetches into a local branch; define the remote with `git \
+                 remote add` and remove the file)"
             }
         })
     }

@@ -45,6 +45,14 @@ impl Startup {
         )
     }
 
+    /// What the launching environment holds for `name`: what the user's own
+    /// `git`, run from the same place, reads its configuration through, so it
+    /// decides whether a repository may be opened at all
+    /// (`SharedRepository::discover_for`).
+    pub(super) fn parent(&self, name: &str) -> Option<OsString> {
+        (self.parent)(name)
+    }
+
     /// This process's environment and the helper installed beside its executable.
     pub(super) fn of_this_process() -> Self {
         Self::new(

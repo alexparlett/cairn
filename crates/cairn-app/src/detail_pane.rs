@@ -1,0 +1,239 @@
+//! The detail pane under the commit list (PRD R5.1, R5.2): its strip of tabs, and the tab
+//! shown. A component of its own, so an answer arriving redraws the pane and not the window.
+//!
+//! What it draws is decided against the selection, not against whatever the diff state
+//! holds: the Commit tab draws a change set only when it is the answer for the row
+//! selected now (R4.4), so a fast click never shows one commit's files under another, and
+//! the Changes tab draws a file's diff only when it is the answer for the file and the
+//! settings selected now.
+//!
+//! The Changes tab is a component of its own (`changes_tab`, phase 07): the summary, the
+//! filtered file list and one file's diff. So is the Commit tab's body (`CommitBody`, phase
+//! 08): a file pressed there opens its diff in place under its row, as Fork's Commit tab does
+//! (Finding 4), and closes it when pressed again; Expand All opens the files in order until its
+//! line budget is spent. The Changes tab keeps its own file, chosen from its own list: Fork's
+//! Commit tab does not switch to Changes, and the buttons Fork added to reveal a file there are
+//! not recorded (Finding 4), so none is drawn.
+
+use std::rc::Rc;
+
+use cairn_model::{Oid, RowId};
+use cairn_ui::accelerators::{self, Scope};
+use cairn_ui::{CommitTab, DetailTab, DetailTabs, reveal_row};
+use freya::prelude::*;
+
+use crate::changes_tab::ChangesTab;
+use crate::diff_state::{Answer, answered_changes, answered_expansion};
+use crate::window::View;
+use crate::worker::Request;
+use crate::{diff_actions, selection, shortcuts};
+
+/// Said in the pane while no row is selected.
+pub const NOTHING_SELECTED: &str = "Select a commit to see its details.";
+/// Said while the selected commit's answer is on its way.
+pub const READING: &str = "Reading the commit…";
+/// Said in the Commit tab over a comparison of two commits, which it does not describe
+/// (R7.3).
+pub const NOT_ONE_COMMIT: &str = "The Commit tab describes one commit.";
+
+pub struct DetailPane {
+    view: View,
+    submit: Option<Rc<dyn Fn(Request)>>,
+}
+
+impl DetailPane {
+    pub fn new(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Self {
+        Self { view, submit }
+    }
+}
+
+// By the handles it reads: the submitter is the same repository's however often it is built.
+impl PartialEq for DetailPane {
+    fn eq(&self, other: &Self) -> bool {
+        let (one, two) = (&self.view, &other.view);
+        one.selected == two.selected
+            && one.diff == two.diff
+            && one.rows == two.rows
+            && one.detail_tab == two.detail_tab
+            && one.pane_collapsed == two.pane_collapsed
+            && one.history_scroll == two.history_scroll
+            && one.diff_settings == two.diff_settings
+            && one.diff_scroll == two.diff_scroll
+            && one.change_cursor == two.change_cursor
+            && one.filter_text == two.filter_text
+            && one.changes_list_width == two.changes_list_width
+            && one.pair == two.pair
+            && self.submit.is_some() == other.submit.is_some()
+    }
+}
+
+impl Component for DetailPane {
+    fn render(&self) -> impl IntoElement {
+        let view = self.view;
+        let View {
+            mut detail_tab,
+            mut pane_collapsed,
+            ..
+        } = view;
+        // Two commits selected: the Changes tab, the Commit tab unavailable (R7.3) — the tab
+        // chosen for the session is kept for when one is selected again.
+        let comparing = view.pair.read().is_some();
+        let tab = if comparing {
+            DetailTab::Changes
+        } else {
+            *detail_tab.read()
+        };
+        let collapsed = *pane_collapsed.read();
+        let hearing = self.submit.clone();
+
+        let strip = DetailTabs::new(tab)
+            .collapsed(collapsed)
+            .unavailable(comparing.then_some(DetailTab::Commit))
+            .on_tab(move |chosen: DetailTab| {
+                detail_tab.set(chosen);
+                // A tab pressed on a collapsed pane is asked to be seen.
+                pane_collapsed.set(false);
+            })
+            .on_collapse(move |collapse: bool| pane_collapsed.set(collapse));
+
+        rect()
+            .width(Size::fill())
+            .height(Size::fill())
+            // The pane's own chords (previous and next change), heard only from inside it: a
+            // key press reaches this from whatever in the pane has focus, and from nowhere else.
+            .on_key_down(move |e: Event<KeyboardEventData>| {
+                if let Some(action) = accelerators::resolve_key(&e, Scope::Detail) {
+                    e.stop_propagation();
+                    shortcuts::act(action, view, hearing.as_deref());
+                }
+            })
+            .child(strip)
+            .maybe_child((!collapsed).then(|| match tab {
+                DetailTab::Commit => Element::from(CommitBody::new(view, self.submit.clone())),
+                DetailTab::Changes => ChangesTab::new(view, self.submit.clone()).into(),
+            }))
+    }
+}
+
+/// The Commit tab's body: the selected commit's answer, and only that, with its files opened
+/// in place. A component of its own, mounted only while the tab is shown, so the files it
+/// opened ask again — when the Changes tab's file took the lane they share — only for a tab
+/// someone is looking at.
+struct CommitBody {
+    view: View,
+    submit: Option<Rc<dyn Fn(Request)>>,
+}
+
+impl CommitBody {
+    fn new(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Self {
+        Self { view, submit }
+    }
+}
+
+// By the handles it reads: the submitter is the same repository's however often it is built.
+impl PartialEq for CommitBody {
+    fn eq(&self, other: &Self) -> bool {
+        let (one, two) = (&self.view, &other.view);
+        one.selected == two.selected
+            && one.diff == two.diff
+            && one.rows == two.rows
+            && one.diff_settings == two.diff_settings
+            && one.history_scroll == two.history_scroll
+            && self.submit.is_some() == other.submit.is_some()
+    }
+}
+
+impl Component for CommitBody {
+    fn render(&self) -> impl IntoElement {
+        let view = self.view;
+        let asking = self.submit.clone();
+        // Files opened here whose request lost the lane to the Changes tab's file are asked
+        // again as the tab is shown.
+        use_side_effect(move || {
+            if !view.diff.read().expansion_needs_asking() {
+                return;
+            }
+            let mut diff = view.diff;
+            let asked = diff.write().reask_expansion();
+            if let (Some(request), Some(submit)) = (asked, asking.as_deref()) {
+                submit(request);
+            }
+        });
+        commit_body(view, self.submit.clone())
+    }
+}
+
+fn commit_body(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Element {
+    let Some(id) = *view.selected.read() else {
+        return notice(NOTHING_SELECTED, false);
+    };
+    let of = selection::comparison_of(id);
+    let diff = view.diff.read();
+    let Some((_, answer)) = diff.changes().filter(|(asked, _)| *asked == of) else {
+        // Whatever is kept is another selection's: it is not drawn.
+        return notice(READING, false);
+    };
+    match answer {
+        Answer::Waiting => notice(READING, false),
+        Answer::Failed(message) => notice(message, true),
+        Answer::Ready(changes) if changes.details.is_none() => notice(NOT_ONE_COMMIT, false),
+        Answer::Ready(_) => {
+            let changes = view.diff.into_readable().map(answered_changes, |_| true);
+            let expansion = view.diff.into_readable().map(answered_expansion, |_| true);
+            let side_by_side = view.diff_settings.read().side_by_side();
+            let (toggling, expanding, loading) = (submit.clone(), submit.clone(), submit.clone());
+            CommitTab::new(changes)
+                .expansion(expansion)
+                .side_by_side(side_by_side)
+                .on_parent(move |parent: Oid| follow_parent(parent, view, submit.as_deref()))
+                // A press opens the file's diff in place, or closes it; an arrow only makes a
+                // file current.
+                .on_file_pressed(move |index: usize| {
+                    diff_actions::toggle_in_place(index, view, toggling.as_deref());
+                })
+                .on_expand_all(move |all: bool| {
+                    diff_actions::expand_all(all, view, expanding.as_deref());
+                })
+                .on_load(move |index: usize| {
+                    diff_actions::load_in_place(index, view, loading.as_deref());
+                })
+                .into()
+        }
+    }
+}
+
+/// The tab the pane shows: the Changes tab while two commits are compared, otherwise the one
+/// chosen for the session.
+pub fn shown_tab(view: View) -> DetailTab {
+    if view.pair.peek().is_some() {
+        DetailTab::Changes
+    } else {
+        *view.detail_tab.peek()
+    }
+}
+
+/// A parent link: a loaded parent is selected, its changes asked for and its row brought
+/// into view; an unloaded one does nothing, since reaching it is issue #3.
+fn follow_parent(parent: Oid, view: View, submit: Option<&dyn Fn(Request)>) {
+    let Some(index) = selection::loaded_row(&view.rows.peek(), parent) else {
+        return;
+    };
+    selection::choose(RowId::Commit(parent), view, submit);
+    let mut scroll = view.history_scroll;
+    reveal_row(&mut scroll, index);
+}
+
+pub(crate) fn notice(message: impl Into<String>, alarming: bool) -> Element {
+    let colours = get_theme_or_default();
+    let colour = if alarming {
+        colours.read().colors().error
+    } else {
+        colours.read().colors().text_placeholder
+    };
+    rect()
+        .expanded()
+        .center()
+        .padding(12.)
+        .child(label().text(message.into()).font_size(13.).color(colour))
+        .into()
+}

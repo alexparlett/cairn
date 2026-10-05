@@ -1,0 +1,242 @@
+//! What the diff view's controls do to the view state (PRD R6.1-R6.3, R6.7, R6.8, R8):
+//! choosing a file, the diff views' settings, Load Diff, and previous and next
+//! change. On the UI thread; asking is a [`Request`] handed to the caller's submit, never a
+//! wait.
+//!
+//! A setting is part of what a file's diff is asked with — the context git is asked at, and
+//! whether the whitespace-ignoring ranges are read — so a change of setting asks again,
+//! through [`DiffState`](crate::diff_state::DiffState) and the file-diff lane, superseding
+//! what is in flight; the answer kept is then the one naming the new options, and no other.
+
+use cairn_model::Context;
+use cairn_ui::{DetailTab, DiffSettings, step_change};
+use freya::prelude::*;
+
+use crate::diff_state::Asking;
+use crate::window::View;
+use crate::worker::{DiffOptions, FileQuery, FileTarget, Request};
+
+/// What the Changes tab's file is asked with, from the settings.
+pub fn options(settings: DiffSettings) -> DiffOptions {
+    DiffOptions {
+        context: settings.context(),
+        ignore_whitespace: settings.ignore_whitespace(),
+        load_anyway: false,
+    }
+}
+
+/// What a file opened in place in the Commit tab is asked with: the shared context and
+/// whitespace, never the entire file, which is the Changes tab's alone (the user's decision,
+/// 2026-10-04).
+pub fn in_place_options(settings: DiffSettings) -> DiffOptions {
+    DiffOptions {
+        context: settings.line_context(),
+        ..options(settings)
+    }
+}
+
+fn submit_all(requests: Vec<Request>, submit: Option<&dyn Fn(Request)>) {
+    if let Some(submit) = submit {
+        for request in requests {
+            submit(request);
+        }
+    }
+}
+
+/// The view starts at the top of a diff it has not drawn before, with no change moved to.
+fn reset_view(view: View) {
+    let View {
+        mut diff_scroll,
+        mut change_cursor,
+        ..
+    } = view;
+    diff_scroll.scroll_to_x(0);
+    diff_scroll.scroll_to_y(0);
+    change_cursor.set(None);
+}
+
+/// The file at `index` of the change set the selected commit answered becomes the file
+/// shown, asked at the session's settings. Choosing the file already shown asks nothing,
+/// unless its answer failed, when choosing it again is how to retry.
+pub fn choose_file(index: usize, view: View, submit: Option<&dyn Fn(Request)>) {
+    let View {
+        mut diff,
+        diff_settings,
+        ..
+    } = view;
+    let query = {
+        let state = diff.peek();
+        let Some((of, _)) = state.changes() else {
+            return;
+        };
+        let Some(file) = crate::diff_state::answered_changes(&state).files.get(index) else {
+            return;
+        };
+        FileQuery {
+            target: FileTarget::Committed {
+                of,
+                file: file.clone(),
+            },
+            options: options(*diff_settings.peek()),
+        }
+    };
+    let asked = diff.peek().file().is_some_and(|(selected, answer)| {
+        *selected == query && !matches!(answer, crate::diff_state::Answer::Failed(_))
+    });
+    if asked {
+        return;
+    }
+    let requests = {
+        let mut state = diff.write();
+        let requests = state.select_file(query);
+        state.chose_file_at(index);
+        requests
+    };
+    reset_view(view);
+    submit_all(requests, submit);
+}
+
+/// Load Diff (R6.8): the file shown asked again past R2.6's ceilings, up to the load-anyway
+/// ceiling, keeping where the view is. Its rows are then drawn with each line past the
+/// long-line limit cut (R6.9). Nothing when no file is shown or it was loaded already.
+pub fn load_anyway(view: View, submit: Option<&dyn Fn(Request)>) {
+    let View { mut diff, .. } = view;
+    let Some(mut query) = diff.peek().file().map(|(query, _)| query.clone()) else {
+        return;
+    };
+    if query.options.load_anyway {
+        return;
+    }
+    query.options.load_anyway = true;
+    let requests = diff.write().select_file(query);
+    submit_all(requests, submit);
+}
+
+/// Side-by-side or unified (R6.1): the same answer drawn another way, so nothing is asked
+/// again; the change last moved to is let go, since its rows are another view's.
+pub fn toggle_side_by_side(view: View) {
+    let View {
+        mut diff_settings,
+        mut change_cursor,
+        ..
+    } = view;
+    diff_settings.write().toggle_side_by_side();
+    change_cursor.set(None);
+}
+
+/// Asks the file shown, and the files opened in place, again at the settings as they are
+/// now, keeping where the views are: the one whose tab is shown at once, the other as its tab
+/// is shown again — they share the file-diff lane, so asking both would only have the second
+/// end the first.
+fn ask_again(view: View, submit: Option<&dyn Fn(Request)>) {
+    let View {
+        mut diff,
+        diff_settings,
+        mut change_cursor,
+        ..
+    } = view;
+    let asking = match crate::detail_pane::shown_tab(view) {
+        DetailTab::Changes => Asking::File,
+        DetailTab::Commit => Asking::Expansion,
+    };
+    let settings = *diff_settings.peek();
+    let requests =
+        diff.write()
+            .settings_changed(options(settings), in_place_options(settings), asking);
+    if !requests.is_empty() {
+        change_cursor.set(None);
+    }
+    submit_all(requests, submit);
+}
+
+/// A file pressed in the Commit tab opens its diff in place under its row, or closes it
+/// (R5.3, Fork's Finding 4), at the session's settings but never the entire file.
+pub fn toggle_in_place(index: usize, view: View, submit: Option<&dyn Fn(Request)>) {
+    let View {
+        mut diff,
+        diff_settings,
+        ..
+    } = view;
+    let requests = diff
+        .write()
+        .toggle_file(index, in_place_options(*diff_settings.peek()));
+    submit_all(requests, submit);
+}
+
+/// Expand All (`all`) or Collapse All, above the Commit tab's files.
+pub fn expand_all(all: bool, view: View, submit: Option<&dyn Fn(Request)>) {
+    let View {
+        mut diff,
+        diff_settings,
+        ..
+    } = view;
+    let requests = if all {
+        diff.write()
+            .expand_all(in_place_options(*diff_settings.peek()))
+    } else {
+        diff.write().collapse_all()
+    };
+    submit_all(requests, submit);
+}
+
+/// Load Diff under a file opened in place (R6.8).
+pub fn load_in_place(index: usize, view: View, submit: Option<&dyn Fn(Request)>) {
+    let View { mut diff, .. } = view;
+    let requests = diff.write().load_in_place(index);
+    submit_all(requests, submit);
+}
+
+/// Changes the shared settings with `change` and, when it changed them, asks the file shown
+/// again.
+pub fn change_settings(
+    view: View,
+    submit: Option<&dyn Fn(Request)>,
+    change: impl FnOnce(&mut DiffSettings) -> bool,
+) {
+    let mut settings = view.diff_settings;
+    let mut changed = *settings.peek();
+    if !change(&mut changed) {
+        return;
+    }
+    settings.set(changed);
+    ask_again(view, submit);
+}
+
+/// The user's `diff.context` arrived: the session starts from it, unless the context was
+/// already moved, and a file shown at the old default is asked again.
+pub fn configured(context: Context, view: View, submit: &dyn Fn(Request)) {
+    change_settings(view, Some(submit), |settings| settings.configured(context));
+}
+
+/// Previous or next change (R6.2): one change from where the view is, or from the change
+/// last moved to while the view has not moved since; nothing when no diff is drawn — the
+/// Changes tab hidden, the pane collapsed — or there is no change that way.
+pub fn step(view: View, forward: bool) {
+    let View {
+        diff,
+        detail_tab,
+        pane_collapsed,
+        mut diff_scroll,
+        mut change_cursor,
+        ..
+    } = view;
+    if *detail_tab.peek() != cairn_ui::DetailTab::Changes || *pane_collapsed.peek() {
+        return;
+    }
+    let side_by_side = view.diff_settings.peek().side_by_side();
+    let (_, scrolled_y): (i32, i32) = diff_scroll.into();
+    let moved = {
+        let state = diff.peek();
+        let Some(stops) = state
+            .shown_file()
+            .and_then(|shown| shown.stops(side_by_side))
+        else {
+            return;
+        };
+        step_change(stops, *change_cursor.peek(), scrolled_y, forward)
+    };
+    if let Some(moved) = moved {
+        diff_scroll.scroll_to_y(moved.scrolled_y);
+        change_cursor.set(Some(moved));
+    }
+}

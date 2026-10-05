@@ -190,25 +190,11 @@ impl Tail {
 
 /// Splits stdout into NUL-terminated records across chunks, handing each to
 /// the caller as soon as it is whole.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the first `-z` read arrives with diff-engine's changes query; tests drive it today"
-    )
-)]
 #[derive(Debug, Default)]
 pub(super) struct Records {
     pending: Vec<u8>,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the first `-z` read arrives with diff-engine's changes query; tests drive it today"
-    )
-)]
 impl Records {
     pub(super) fn push(&mut self, mut chunk: &[u8], record: &mut impl FnMut(&[u8])) {
         while let Some(end) = chunk.iter().position(|byte| *byte == 0) {

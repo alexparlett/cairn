@@ -33,7 +33,11 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
 
 1. **Invariants** (any code change): the Invariants block in root CLAUDE.md, item
    by item, against the touched files. A new prose rule with no enforcement twin
-   in the same change is a finding.
+   in the same change is a finding. The exhaustive-read invariant's residual is
+   yours: every `match` over `DiffContent`, `UnifiedRow` or `SideBySideRow` in a
+   test helper that a view could call names every variant, since
+   `every_view_of_a_file_diff_names_every_state` and
+   `every_view_of_a_diff_row_names_every_kind_of_row` read production code only.
 2. **Architecture boundaries** (changes crossing a boundary named in CLAUDE.md's
    Architecture section): the owning side writes, the other side reads; no layer
    bypassed. Dispatch pointer: the matching domain reviewer from
@@ -52,8 +56,9 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
    Conventional Commits with a body. If the diff touches the enforcement layer
    itself (guard checks, hooks, gate script, CI workflows, reviewer/skill
    definitions), dispatch pointer: `gate-integrity-reviewer`.
-7. **Destructive operations** (any diff under `crates/cairn-git/src/ops/` or
-   `crates/cairn-git/src/process/`, or a new call site reaching one): the operation takes `cairn_model::Confirmed` by
+7. **Destructive operations** (any diff under `crates/cairn-git/src/ops/`,
+   `crates/cairn-git/src/process/` or `crates/cairn-git/src/reads/`, or a new
+   call site reaching one): the operation takes `cairn_model::Confirmed` by
    value, the prompt text handed to `Confirmed::by_user` names the actual
    consequence (what is lost, how much, whether it is recoverable), and nothing
    constructs the token outside a user acknowledgement path. Also: no
@@ -84,8 +89,13 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
    everywhere), so what no twin sees is a path-call start
    (`Command::spawn(&mut c)`, `Command::output(&mut c)`) inside
    `process/environment.rs` (`nix` named outside `process/` is caught, and
-   `fork` is `unsafe`, which the workspace forbids). Dispatch pointer:
-   `destructive-ops-reviewer`.
+   `fork` is `unsafe`, which the workspace forbids). In `reads/`, the
+   literal twin `the_porcelain_reads_are_the_two_named_queries`
+   reads string literals only, so a verb or option assembled at run time (a `format!`, a
+   concatenation, a constant from elsewhere) is yours, and so is whether a
+   read's verb really is plumbing or `status` — no twin tells a querying verb
+   from a mutating one built with `GitBinary::read_invocation`.
+   Dispatch pointer: `destructive-ops-reviewer`.
 8. **Responsiveness** (any diff in `crates/cairn-ui/` or `crates/cairn-app/`, or
    anything changing what runs per frame or per query): no repository work on the
    UI thread, no unbounded list rendered without virtualization, no per-frame
@@ -108,6 +118,23 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
     `cairn-model` and `zeroize` is a finding — and no `#[allow]`/`#[expect]`
     lets an `unwrap`/`expect` through on a path that holds one, since the panic
     message would print the value.
+11. **Keyboard modifiers** (any diff in `crates/cairn-ui/` or `crates/cairn-app/`
+    touching a key or pointer handler, or `crates/cairn-ui/src/accelerators.rs`):
+    the guard `no_component_names_a_literal_modifier` reads spellings, so what it
+    cannot see is yours — a modifier reached through a `type` alias declared
+    outside the render crates, a macro, or a raw bit pattern compared without
+    naming the type; anything in the accelerator table but data and the
+    resolution of a press against it — an element or a chord-spelling label there
+    is a finding even where `the_accelerator_table_holds_data_and_resolution_only`
+    does not see it (an element built through a helper of another name); a public
+    function of the accelerator table that hands out a
+    modifier or a "is Ctrl held" predicate a component could branch on under
+    another name (its surface speaks actions and chords only; `Chord::key_press`
+    and `Chord::press_hold` are for headless tests, and a render path calling
+    either is a finding; `HeldKeys` answers which action a pointer press is, and a
+    method of it that answered which key is held would be one); a key event
+    handled in `crates/cairn-ui/tests/` (unscanned); and whether a new chord is
+    right for each platform and clear of the desktop's and Fork's.
 
 ## Review dispatch
 

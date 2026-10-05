@@ -349,20 +349,43 @@ impl<K: Kind> Invocation<K> {
         .map(|stderr| Output::new(Vec::new(), stderr))
     }
 
+    /// As [`Invocation::finish`], but taking at most `ceiling` bytes of stdout:
+    /// the chunk that would cross it is not handed on, the process is ended at
+    /// once, and the answer is [`Error::GitOutputTooLarge`], as for
+    /// [`Invocation::collect`]. Unlike `collect`, what arrived is the caller's as
+    /// it arrived, so a failed exit ([`Error::GitFailed`]) still leaves the
+    /// caller holding everything git printed before it — which a read whose
+    /// verb exits non-zero with an answer (`git diff --no-index`) reads.
+    pub(crate) fn finish_within(
+        self,
+        cancel: &impl Cancel,
+        ceiling: usize,
+        mut stdout: impl FnMut(&[u8]),
+        mut progress: impl FnMut(&str),
+    ) -> Result<Output, Error> {
+        let mut taken = 0usize;
+        self.drive(
+            cancel,
+            &mut |chunk| {
+                taken = taken.saturating_add(chunk.len());
+                if taken > ceiling {
+                    return Flow::Stop;
+                }
+                stdout(chunk);
+                Flow::Continue
+            },
+            &mut progress,
+            Some(ceiling),
+        )
+        .map(|stderr| Output::new(Vec::new(), stderr))
+    }
+
     /// As [`Invocation::finish`], with stdout split into the NUL-terminated
     /// records of a `-z` format, each handed to `record` as soon as it is whole.
     /// A last record without its NUL is handed on only if the invocation
     /// succeeded, since a cancelled one may have been cut off inside it. On an
     /// `Err`, the records already handed on are a prefix of an answer that did
     /// not complete, for the caller to discard.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the first `-z` read arrives with diff-engine's changes query; tests drive \
-                      it today"
-        )
-    )]
     pub(crate) fn records(
         self,
         cancel: &impl Cancel,
@@ -769,10 +792,19 @@ mod tests {
     /// On `SIGTERM`: says so, ends its grandchild (quietly: the group signal may
     /// have ended it first), and exits as git does after removing its locks. The
     /// trap runs at once because the shell is in `wait`.
+    ///
+    /// It speaks on a copy of stderr (`3`) and sends the shell's own stderr to
+    /// `/dev/null`, so the lines a test reads are the script's alone. dash —
+    /// `/bin/sh` on Debian and Ubuntu, so on CI — reports a job its `wait` reaps
+    /// that a signal ended by the signal's name ("Terminated"), as busybox's ash
+    /// does; bash says nothing. The group `SIGTERM` reaches the grandchild and
+    /// the shell at once, and whether the `wait` reaps the dead grandchild before
+    /// the trap runs is the scheduler's choice: on a loaded machine it often
+    /// does, and the stub's stderr gains a line the script never wrote.
     const ENDING_ON_TERM: &str = "PATH=/usr/bin:/bin; command -v sleep >/dev/null || exit 99; \
-        sleep 30 & child=$!; \
-        trap 'echo terminated >&2; kill $child 2>/dev/null; exit 143' TERM; \
-        echo hanging >&2; wait $child";
+        exec 3>&2 2>/dev/null; sleep 30 & child=$!; \
+        trap 'echo terminated >&3; kill $child; exit 143' TERM; \
+        echo hanging >&3; wait $child";
 
     /// Ignores `SIGTERM` and hangs in one-second sleeps, so only `SIGKILL` ends it.
     const IGNORING_TERM: &str = "PATH=/usr/bin:/bin; command -v sleep >/dev/null || exit 99; \
@@ -986,6 +1018,71 @@ mod tests {
             matches!(outcome, Err(Error::GitOutputTooLarge { ceiling: 999, .. })),
             "{outcome:?}"
         );
+    }
+
+    /// A bounded stream hands every byte on in order up to its ceiling, refuses one
+    /// byte past it with the ceiling's error — handing on nothing of the chunk that
+    /// crossed — and ends a process that keeps writing (the stub hangs after its
+    /// output, so only the runner ending it returns in time). Caught by: `>=` in place
+    /// of `>`, the crossing chunk handed on, or the process left running.
+    #[test]
+    fn a_bounded_stream_takes_exactly_its_ceiling_and_refuses_a_byte_more() {
+        let thousand = stub("PATH=/usr/bin:/bin; head -c 1000 /dev/zero");
+        let mut seen = 0usize;
+        let output =
+            started(&thousand).finish_within(&never(), 1000, |chunk| seen += chunk.len(), |_| {});
+        assert!(output.is_ok(), "{output:?}");
+        assert_eq!(seen, 1000);
+
+        let mut seen = 0usize;
+        let outcome =
+            started(&thousand).finish_within(&never(), 999, |chunk| seen += chunk.len(), |_| {});
+        assert!(
+            matches!(outcome, Err(Error::GitOutputTooLarge { ceiling: 999, .. })),
+            "{outcome:?}"
+        );
+        assert!(seen <= 999, "{seen} bytes were handed on past the ceiling");
+
+        let hanging = stub(
+            "PATH=/usr/bin:/bin; command -v head >/dev/null || exit 99; \
+             sleep 30 & head -c 2097152 /dev/zero; wait",
+        );
+        let invocation = started(&hanging);
+        let pid = invocation.id();
+        let begun = Instant::now();
+        let outcome = within(DEADLINE, move || {
+            invocation.finish_within(&never(), 1024 * 1024, |_| {}, |_| {})
+        });
+        assert!(
+            matches!(outcome, Err(Error::GitOutputTooLarge { .. })),
+            "{outcome:?}"
+        );
+        assert!(
+            begun.elapsed() < Duration::from_secs(2),
+            "the process was not ended when the ceiling was crossed"
+        );
+        assert!(eventually(DEADLINE, || group_gone(pid)));
+    }
+
+    /// A bounded stream's failed exit is `GitFailed` with its status, and what git
+    /// printed before it was already the caller's: `git diff --no-index` answers with
+    /// exit status 1. Caught by: stdout withheld until a successful exit, as `collect`
+    /// withholds it.
+    #[test]
+    fn a_bounded_streams_output_is_the_callers_even_when_git_exits_non_zero() {
+        let failing = stub("echo answered; exit 1");
+        let mut seen = Vec::new();
+        let outcome = started(&failing).finish_within(
+            &never(),
+            1024,
+            |chunk| seen.extend_from_slice(chunk),
+            |_| {},
+        );
+        match outcome {
+            Err(Error::GitFailed { status, .. }) => assert_eq!(status.code(), Some(1)),
+            other => panic!("expected git's failed exit, got {other:?}"),
+        }
+        assert_eq!(seen, b"answered\n");
     }
 
     /// Deterministic bytes that are not a repeating pattern a pipe could fold.
@@ -1562,10 +1659,12 @@ mod tests {
     /// deciding by the exit status alone, as the old runner did.
     #[test]
     fn a_cancelled_process_that_exits_zero_after_the_signal_is_reported_cancelled() {
+        // The shell's own stderr kept out of the pipe, as in `ENDING_ON_TERM`
+        // and for the reason given there.
         let stub = stub(
             "PATH=/usr/bin:/bin; command -v sleep >/dev/null || exit 99; \
-             sleep 30 & child=$!; trap 'kill $child 2>/dev/null; exit 0' TERM; \
-             echo hanging >&2; wait $child",
+             exec 3>&2 2>/dev/null; sleep 30 & child=$!; trap 'kill $child; exit 0' TERM; \
+             echo hanging >&3; wait $child",
         );
         let (outcome, seen, _) = cancel_once_hanging(started(&stub), Cancelling::ByHandle);
         assert_eq!(seen, ["hanging"]);

@@ -949,6 +949,161 @@ fn a_session_names_the_commit_it_cannot_read() {
     );
 }
 
+// ── A shallow clone ──
+
+/// `git log --format=%H %P` in `dir`: every commit git shows, newest first, with the
+/// parents git shows for it.
+fn shown_parents(dir: &std::path::Path) -> Vec<(String, Vec<String>)> {
+    fixtures::run(dir, &["log", "--format=%H %P", "HEAD"], None)
+        .lines()
+        .map(|line| {
+            let mut names = line.split_whitespace().map(str::to_owned);
+            let id = names.next().unwrap_or_default();
+            (id, names.collect())
+        })
+        .collect()
+}
+
+fn parents_of_rows(rows: &[HistoryRow]) -> Vec<(String, Vec<String>)> {
+    rows.iter()
+        .map(|row| {
+            let parents = commit_of(row).parents.iter().map(ToString::to_string);
+            (hex_id(row), parents.collect())
+        })
+        .collect()
+}
+
+/// A shallow clone's boundary commits — the ones its `shallow` file lists — name parents
+/// in their objects that the clone does not have, and git shows them with none: `git log
+/// --format=%P` prints nothing, and `git log --graph` draws each as a root. The history
+/// query answers the same, on both routes, at four depths of one history: a lone tip
+/// (depth 1), a merge cut at the boundary (2), two boundaries on two branches (3), and a
+/// boundary whose sibling branch still reaches deeper (4). And the graph is the one
+/// git's parents lay out, so no lane is held open for a parent that never arrives.
+/// Caught by: the walk's parent ids handed over as the object names them.
+#[test]
+fn a_shallow_clones_boundary_commits_have_the_parents_git_log_shows() {
+    // root - a - b ------- merge - top
+    //         \           /
+    //          s1 - s2 ---
+    let source = fixtures::unborn();
+    commit_stamped(&source, "root", fixtures::EPOCH + 60);
+    commit_stamped(&source, "a", fixtures::EPOCH + 120);
+    source.git(&["branch", "side"]);
+    commit_stamped(&source, "b", fixtures::EPOCH + 180);
+    source.git(&["checkout", "--quiet", "side"]);
+    commit_stamped(&source, "s1", fixtures::EPOCH + 240);
+    commit_stamped(&source, "s2", fixtures::EPOCH + 300);
+    source.git(&["checkout", "--quiet", "main"]);
+    fixtures::run(
+        source.path(),
+        &[
+            "merge",
+            "--quiet",
+            "--no-ff",
+            "--no-edit",
+            "-m",
+            "merge",
+            "side",
+        ],
+        Some(fixtures::EPOCH + 360),
+    );
+    commit_stamped(&source, "top", fixtures::EPOCH + 420);
+
+    let holder = fixtures::unborn();
+    let url = format!("file://{}", source.path().display());
+    let mut cut_merge = false;
+    for depth in [1, 2, 3, 4] {
+        let clone = holder.path().join(format!("depth-{depth}"));
+        let clone_text = clone.display().to_string();
+        holder.git(&[
+            "clone",
+            "--quiet",
+            "--depth",
+            &depth.to_string(),
+            &url,
+            &clone_text,
+        ]);
+        let shallow = ok(
+            std::fs::read_to_string(clone.join(".git/shallow")),
+            "the clone's shallow file",
+        );
+        let boundary: Vec<&str> = shallow.lines().collect();
+        assert!(
+            !boundary.is_empty(),
+            "depth {depth}: the clone is not shallow"
+        );
+        for id in &boundary {
+            let object = fixtures::run(&clone, &["cat-file", "-p", id], None);
+            let named = object.lines().filter(|l| l.starts_with("parent ")).count();
+            assert!(
+                named > 0,
+                "depth {depth}: boundary {id} names no parent in its object, so this \
+                 depth decides nothing"
+            );
+            cut_merge |= named > 1;
+        }
+
+        let expected = shown_parents(&clone);
+        for id in &boundary {
+            assert!(
+                expected
+                    .iter()
+                    .any(|(shown, parents)| shown == id && parents.is_empty()),
+                "depth {depth}: git log shows {id} with parents, so the oracle is not git's"
+            );
+        }
+
+        let repo = ok(Repository::discover(&clone), "opening the clone");
+        let request = HistoryRequest::from_head(expected.len() + 10);
+        let page = read(&repo, &request);
+        assert_eq!(
+            parents_of_rows(&page.rows),
+            expected,
+            "depth {depth}: the history query's parents are not git log's"
+        );
+        let (rows, _) = drain_session(&repo, &request, 2);
+        assert_eq!(
+            parents_of_rows(&rows),
+            expected,
+            "depth {depth}: the session's parents are not git log's"
+        );
+
+        let laid_out =
+            cairn_model::LaneAssigner::assign_all(expected.iter().map(|(id, parents)| {
+                let parse = |hex: &String| ok(cairn_model::Oid::parse(hex), "an id");
+                (parse(id), parents.iter().map(parse).collect())
+            }));
+        let graphs: Vec<_> = page.rows.iter().map(|row| row.graph.clone()).collect();
+        assert_eq!(
+            graphs, laid_out,
+            "depth {depth}: the graph is not the one git's parents lay out"
+        );
+        let last = some_last(&page.rows);
+        // Lines may come INTO the oldest row; none may pass it or leave it downward.
+        assert!(
+            last.graph
+                .edges
+                .iter()
+                .all(|edge| edge.kind == cairn_model::EdgeKind::IntoCommit),
+            "depth {depth}: the oldest row carries {:?}, a lane held open for a parent the \
+             clone does not have",
+            last.graph.edges
+        );
+    }
+    assert!(
+        cut_merge,
+        "no depth cut a merge at the boundary, so that case went untested"
+    );
+}
+
+fn some_last(rows: &[HistoryRow]) -> &HistoryRow {
+    match rows.last() {
+        Some(row) => row,
+        None => panic!("the clone answered no rows"),
+    }
+}
+
 // Builders only this file uses; the shared ones are in `fixtures`.
 
 /// A repository whose newest-first walk hands a parent over before its child. A fork,

@@ -80,8 +80,8 @@ const READ_ONLY: &[(&str, &str)] = &[
     // at a repository never rewrites its index behind the user's back — nor
     // holds `index.lock` while the user's own `git commit` needs it. Only
     // `status` honours it: porcelain `diff` and `describe --dirty` refresh the
-    // index anyway, which is why a read runs plumbing or `status` and nothing
-    // else (`crate::reads`; evidence:
+    // index anyway, which is why a read runs plumbing or `status` — or `diff
+    // --no-index`, which reads no index — and nothing else (`crate::reads`; evidence:
     // `docs/research/process-manager/platform-and-git-behaviour.md` C3).
     ("GIT_OPTIONAL_LOCKS", "0"),
     // In a partial clone, asking for an object only the promisor remote holds

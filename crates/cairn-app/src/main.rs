@@ -1,26 +1,43 @@
 //! The Cairn binary.
 
+mod changes_tab;
 mod closing;
+mod detail_pane;
+mod diff_actions;
+mod diff_state;
 mod fetch_state;
+mod file_filter;
 mod history_state;
 mod repository_path;
+mod selection;
 mod session;
+mod shortcuts;
 mod status_text;
 mod window;
+#[cfg(test)]
+mod window_check;
 mod worker;
 
 use std::rc::Rc;
 
 use cairn_model::{HistoryRow, RemoteSummary, RowId};
+use cairn_ui::diff_palette::DIFF_FONT_FAMILY;
+use cairn_ui::{DetailTab, DiffSettings};
 use freya::prelude::*;
 
 use closing::Closing;
+use diff_state::DiffState;
 use fetch_state::{FetchStatus, PromptView};
 use history_state::Progress;
 use window::View;
 use worker::Request;
 
 const PAGE_ROWS: usize = 64;
+
+/// IBM Plex Mono Regular, from IBM's release `@ibm/plex-mono@2.5.0`, under the SIL Open Font
+/// Licence 1.1 beside it in `assets/fonts/` (L16): the diff's typeface, embedded so the
+/// application draws the same text wherever it runs.
+const DIFF_FONT: &[u8] = include_bytes!("../assets/fonts/IBMPlexMono-Regular.ttf");
 
 fn main() {
     // Found once, as the application starts, on a thread of its own (PRD R6.1).
@@ -33,7 +50,11 @@ fn main() {
     .with_title("Cairn")
     // Closing the window closes its repository first (PRD R6.3): see `closing`.
     .with_on_close(move |_, _| closing.requested());
-    launch(LaunchConfig::new().with_window(window));
+    launch(
+        LaunchConfig::new()
+            .with_font(DIFF_FONT_FAMILY, DIFF_FONT)
+            .with_window(window),
+    );
 }
 
 fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
@@ -47,6 +68,22 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let prompt = use_state(|| None::<PromptView>);
     let remotes = use_state(Vec::<RemoteSummary>::new);
     let refused = use_state(|| None);
+    let diff = use_state(DiffState::default);
+    let history_scroll = use_scroll_controller(ScrollConfig::default);
+    // Session state: the tab and the pane's shape outlive every selection (R5.2).
+    let detail_tab = use_state(DetailTab::default);
+    let pane_collapsed = use_state(|| false);
+    let pane_height = use_state(|| window::PANE_HEIGHT);
+    // Session state of every diff view: its settings, its scroll, the change moved to.
+    let diff_settings = use_state(DiffSettings::default);
+    let diff_scroll = use_scroll_controller(ScrollConfig::default);
+    let change_cursor = use_state(|| None);
+    // Session state of the Changes tab: its filter and its list's width.
+    let filter_text = use_state(String::new);
+    let changes_list_width = use_state(|| changes_tab::LIST_WIDTH);
+    // The second commit of a comparison, and the keys a press on a row is resolved against.
+    let pair = use_state(|| None);
+    let held_keys = use_state(cairn_ui::accelerators::HeldKeys::default);
     let view = View {
         rows,
         progress,
@@ -55,6 +92,18 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         prompt,
         remotes,
         refused,
+        diff,
+        history_scroll,
+        detail_tab,
+        pane_collapsed,
+        pane_height,
+        diff_settings,
+        diff_scroll,
+        change_cursor,
+        filter_text,
+        changes_list_width,
+        pair,
+        held_keys,
     };
 
     let opened = use_hook(|| {
@@ -72,6 +121,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
                 closing.opened(handle.clone());
                 let platform = Platform::get();
                 handle.submit(Request::ListRemotes);
+                handle.submit(Request::ConfiguredContext);
                 handle.submit(Request::OpenHistory { rows: PAGE_ROWS });
                 let submitting = handle.clone();
                 // Weak: the task must not keep the answering end alive past the window,

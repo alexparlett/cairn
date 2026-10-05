@@ -22,10 +22,33 @@ application, `git` is found once, as it starts; a fetch runs in the network
 lane, which refuses a second; closing the window closes its repository; and
 the worker answers the log as values, which no view draws yet (issue #41).
 
-Where a residual below says **accepted by the user on 2026-10-02**, the user
-reviewed it when the packet shipped and kept the behaviour as stated; where it
+Where a residual below says **accepted by the user on 2026-10-02** (or a later
+date), the user reviewed it and kept the behaviour as stated; where it
 cites an issue, the user chose to have it fixed later, and the issue holds the
 options.
+
+**Which of the launch environment's variables Cairn honours** (the user's
+decision of 2026-10-04). Cairn is a multi-repository tool: each repository
+opens in a tab of its own, named by its path. So the settings in the
+environment Cairn was launched with that are SESSION-WIDE are honoured as the
+user's own `git` honours them, by Cairn's own open: the bounds of git's search,
+`GIT_CEILING_DIRECTORIES` and `GIT_DISCOVERY_ACROSS_FILESYSTEM`
+(`bare_discovery.rs`), and the sources of the protected configuration that
+decides whether a repository may open — `GIT_CONFIG_PARAMETERS` and
+`GIT_CONFIG_COUNT`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`,
+`GIT_CONFIG_NOSYSTEM` (`bare_discovery.rs`, `ownership.rs`). The
+PER-REPOSITORY process pointers, `GIT_DIR` and `GIT_WORK_TREE`, which make git
+skip discovery and read one repository whatever directory it runs in, are
+ignored BY DESIGN: Cairn's open never reads them, so no tab opens a repository
+other than the one at its path
+(`the_launch_environments_git_dir_and_work_tree_are_ignored_by_design`,
+`crates/cairn-git/tests/diff/bare_discovery.rs`, with git following the
+variable as its oracle). Neither kind is on the roster a `git` child inherits
+("The environment"): the open decides once which repository is meant and
+whether it may open, and every child is then named that repository with
+`--git-dir`/`--work-tree` ("Where an invocation runs"). This is the one place
+the principle is stated; the modules that read the launch environment point
+here.
 
 ## The layout
 
@@ -47,11 +70,19 @@ crates/cairn-git/src/
   ops/          every mutation; constructs WriteAuthority; re-exports what the app needs
     authority.rs    WriteAuthority, and the tests that need one (real `git` writes among them)
     fetch.rs        fetch, built as a write
-    refspec_policy.rs  the refspecs fetch refuses (docs/systems/credentials.md)
+    refspec_policy.rs  the remotes fetch refuses, decided over git's own answer
+                       (reads/fetch_settings.rs; docs/systems/credentials.md)
     stranded_locks.rs  every `*.lock` under a git directory; the runner reports them for a write
-  reads/        each read `git` answers, one named function each — empty until diff-engine;
-                its test module proves the shape that packet takes: a read built from a
-                `GitBinary` copy, run on a thread, stopped by an epoch, answering `-z` records
+  reads/        each read `git` answers, one named function each; its tests run a read
+                built from a `GitBinary` copy, on a thread, stopped by an epoch
+    changes.rs      changes — `git diff-tree -r -z --raw`, the changes query (docs/systems/diff.md)
+    patches.rs      patches — `git diff-tree -p`, a file's changed ranges and function context
+                    for the content query, one file or a whole comparison (docs/systems/diff.md)
+    attributes.rs   diff_attributes — `git check-attr --stdin -z diff`, whether a path's diff
+                    driver names its own algorithm (docs/systems/diff.md)
+    fetch_settings.rs  fetch_settings — `git config --includes --null` in query form, what a
+                    fetch of a remote will read, for fetch's refspec check
+                    (docs/systems/credentials.md)
 ```
 
 `process` is a private module (`mod process;` in `lib.rs`). The application
@@ -66,8 +97,14 @@ On the application's side, in `crates/cairn-app/src/`:
   worker/discovery.rs     Discovery — git found once per application, on cairn-discovery
   worker/startup.rs       Startup, Backend — a repository's channel, and git pointed at it
   worker/network_lane.rs  the network lane's loop: Operation, Lane, FetchControl, Refusal
-  worker/pool.rs          the repository thread: serves Request::Close and Request::CommandLog,
-                          spawns the network lane's cairn-network thread, Threads::drop
+  worker/pool.rs          the repository thread: serves the history lane, Request::Close and
+                          Request::CommandLog, spawns the cairn-diff and cairn-network
+                          threads, Threads::drop
+  worker/routing.rs       the routing table: which thread serves each request, applied as it
+                          is submitted
+  worker/epoch.rs         epochs numbered per query lane, each a read's Cancel
+  worker/diff_lane.rs     the diff thread's loop: the changes and file-diff lanes, whose reads
+                          a superseding query ends (docs/systems/diff.md, "In the application")
   worker/request.rs       Request and Update, the boundary's messages
   closing.rs              Closing — the window's close hook, which asks and never waits
 ```
@@ -189,8 +226,51 @@ Why each variable is there, with its evidence, is beside it in
   `sequence.editor` outranks `GIT_EDITOR` for the rebase todo list.
 - **`GIT_OPTIONAL_LOCKS=0` covers `git status` and nothing else.** Porcelain
   `diff` and `describe --dirty` refresh the index anyway. That is why a read in
-  `reads/` runs query plumbing or `status` only, as the module's own docs say where
-  `diff-engine` will read them.
+  `reads/` runs query plumbing or `status` only — and, as the two porcelain
+  exceptions the user accepted, `git diff --no-index -- /dev/null <path>` for an
+  untracked file's working-tree diff, `<path>` work-tree-relative (no absolute,
+  `.` or `..` component, refused before git runs) and `./-` for `-`, which reads
+  no index, with its presentation
+  settings pinned to git's defaults by `-c` (2026-10-03); and `git config
+  --includes --null` with `--type=bool --get <key>` or `--get-all <key>`, query
+  form only, in `reads/fetch_settings.rs`, which asks git what a fetch will read
+  for fetch's refspec check, so the check decides on exactly what the fetch's
+  own git reads (2026-10-04) — as the module's own docs say
+  (`reads/mod.rs`, "What a read may run"); both are pinned by
+  `the_porcelain_reads_are_the_two_named_queries`, and
+  `destructive-ops-reviewer` check 10 names them.
+- **A read may run the repository's `core.fsmonitor` hook and, on a read of the
+  working tree, the path's clean filter driver — no other program.**
+  `diff-tree`, `diff-index`, `diff-files` and `check-attr` run the hook as they
+  read the index of a repository with a working tree (reproduced on 2.30.9
+  through 2.56.0), as the user's own `git diff` does; no flag of theirs turns it
+  off, and the user decided to allow it as parity (`reads/mod.rs`, "What a read
+  may run"; `the_content_query_writes_nothing_and_runs_nothing`). Under
+  `core.fsmonitor=true` the same four start git's own fsmonitor daemon instead,
+  if none is running (git 2.36 and later; reproduced on 2.56.0; `diff
+  --no-index` starts none), as the user's `git status` does — accepted as parity
+  by the user on 2026-10-04. git starts it in a session of its own, so it is
+  outside the read's process group, outside the repository's registry of
+  running invocations and outside `SharedRepository::end_invocations`: it
+  outlives the read and the application, and is not Cairn's to end. It writes
+  its socket and cookie directory in the git directory, the one change a read
+  leaves there
+  (`a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files`).
+  A planted repository naming a hook is refused at open ("Where an invocation
+  runs").
+  `diff-files` and `diff --no-index` run the clean filter driver the path's
+  attributes name, as a child of the read's `git`, so with the read's
+  environment above — `GIT_ASKPASS`, `SSH_ASKPASS` and, where the application
+  listens, `CAIRN_ASKPASS_SOCKET` among it, so a driver can reach the socket
+  but, with no token, fails closed — plus what git sets for a filter
+  (`GIT_EXEC_PATH`, `GIT_PREFIX`, `GIT_CONFIG_PARAMETERS`, the exec directory
+  first on `PATH`, and `GIT_DIR` and `GIT_WORK_TREE`, since every repository
+  is named to git, "Where an invocation runs"), its stderr the read's bounded
+  tail; and for
+  a submodule `diff-files` runs `git status` inside it, with that repository's
+  own hook and filters (`reads/working_tree.rs`;
+  `a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`,
+  `a_clean_filter_drivers_form_is_what_is_diffed_and_it_runs_under_git`).
 - **`GIT_NO_LAZY_FETCH=1` needs git 2.44; the floor is 2.30.** In a partial
   clone, a read that asks for an object only the promisor remote holds would
   fetch it — a pack written, the network reached. With the variable, git
@@ -229,6 +309,250 @@ Pinned:
     and `an_interactive_rebase_fails_promptly_instead_of_opening_the_sequence_editor`.
     Each configures an editor that records it ran and then hangs. Each verb
     fails within the deadline, the editor never runs, and `HEAD` does not move.
+
+## Where an invocation runs
+
+`GitCommand::in_repository(repo)` runs the invocation in the repository's
+working tree, or the git directory of a bare one, and **names the repository
+to git** ahead of the verb: `--git-dir=<git dir>` and, when there is one,
+`--work-tree=<working tree>`, both absolute (`repository_location` in
+`process/cli.rs`). Left to its own discovery from that directory, git can
+read a different repository from the one Cairn opened: a working tree whose
+git directory lives elsewhere (`core.worktree`) and which sits inside
+another repository's working tree is discovered as that enclosing
+repository, and under `safe.bareRepository=explicit` git refuses to discover
+a bare repository at all. `GIT_DIR` and `GIT_WORK_TREE` from the launching
+environment are never inherited, and Cairn's open ignores them by design (the
+opening section), so the options are the only place either comes from.
+
+An explicitly named git directory is one git does not check the ownership
+of: `safe.directory` guards discovery only (reproduced with git 2.56 under
+`GIT_TEST_ASSUME_DIFFERENT_OWNER=1`, where `git log` refuses with "dubious
+ownership" and the same command given `--git-dir` answers). So git's own
+check is made by Cairn as the repository is opened, and a repository git
+would refuse is refused there — `Error::DubiousOwnership`, before anything
+in it is read or run (user decision, 2026-10-04: refuse at open where git
+would refuse). The rule is `ensure_valid_ownership` in `setup.c` as the
+version of `git` in use has it (`crates/cairn-git/src/ownership.rs`, whose
+module documentation is the version table, read at every tag from v2.30.0
+to v2.56.0): no check before 2.30.3 and its sister releases; the working
+tree's top alone, then — from 2.30.5, 2.36.2 and 2.37.1 — every path git
+checks (the `.git` file, when the working tree reaches its git directory
+through one; the working tree's top; the git directory, for a `.git` file
+the directory it names); the owner by `lstat` against the effective uid,
+read from `/proc/self/status`, or — where that cannot be read, as on
+macOS — as the owner of a file the process creates (where neither answers,
+ownership is not decided: the repository opens where `safe.directory` names
+it and is otherwise `Error::CurrentUserUnknown`, never "dubious ownership",
+since git's own `geteuid` cannot fail), with `SUDO_UID` standing in for
+root alone;
+`GIT_TEST_ASSUME_DIFFERENT_OWNER` read as git reads it; and `safe.directory`
+matched as git matches it — `*`, the empty value's reset, `~/`, `%(prefix)/`
+from 2.34, the command line from 2.38, `<dir>/*` from 2.45.3 and 2.46.0,
+normalised (`real_path`, `.` the starting directory, relative entries
+ignored) from 2.46.1, `:(optional)` from 2.52 (a path only `ENOENT` makes
+missing; any other failure to `stat` it stops git, as `is_missing_file`
+does) — over the configuration git
+protects, read by `crate::bare_discovery::protected_values` (on 2.38.x no
+include followed, and the system file read even under
+`GIT_CONFIG_NOSYSTEM`, since that reader names it without asking whether
+it is wanted; `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` from 2.32).
+What passes is opened with full trust and named to git, whatever gix makes
+of it: gix checks the working tree's owner again as it opens — the
+directory `core.worktree` names, by `is_path_owned_by_current_user`, with
+`safe.directory` read from the system and global files alone, compared as
+written — and where that refuses, lowers the repository to reduced trust,
+which no open option prevents (`Options::with(Trust::Full)` sets the git
+directory's trust only; gix 0.87.1 `open_from_paths`). That rule is not
+git's and, in that open, decides nothing: the repository's configuration was loaded at
+full trust and is read whole, the allocation limit gix gives reduced trust
+(16 MiB per object) is switched off at open
+(`gitoxide.objects.allocLimitIfReducedTrust=0`), and the repository is named
+to git whatever the trust — the `git` Cairn runs could not make git's check
+itself, since its environment carries none of the launch environment's
+`GIT_CONFIG_*`. Pinned end to end by
+`a_repository_cairn_admits_is_read_as_git_reads_it_whatever_gix_makes_of_its_owner`
+(`core.worktree = /`, which root owns, under each admitting setting: the
+changes query answers, a 17 MiB blob is read, the repository's own
+`diff.context` holds). That holds for the open that judged the repository,
+not for gix's own rule anywhere else: a second open left to it loads the
+repository's configuration at reduced trust where the git directory is
+another user's, and gix's lookups (`try_find_remote` above all) then filter
+the repository's own sections out. So there is no other open: fetch's
+refspec check (`ops/refspec_policy.rs`), which once opened the repository a
+second time, asks git for the remote's configuration instead
+(`reads/fetch_settings.rs`), and a repository git admits that gix's rule
+would not — a command-line `safe.directory`, `.`, a normalised entry — has
+its `remote.<name>.mirror` seen and the fetch refused
+(`the_refspec_check_sees_the_remote_of_a_repository_gix_trusts_less_than_git`,
+`tests/fetch.rs`, in a user namespace with a second uid its root may give
+a file to; required by the gate wherever `unshare --map-root-user
+--map-auto chown 1:1` succeeds, `CAIRN_REQUIRE_SECOND_OWNER`, and skipped,
+with the gate's note, on GitHub's Ubuntu 24.04 runners, whose AppArmor
+`unprivileged_userns` profile refuses that `chown`). Pinned also in `process/cli.rs` by
+`every_repository_is_named_to_git_whatever_trust_gix_gave_it`. Pinned against git
+itself by `a_repository_opens_exactly_where_git_opens_it_whatever_safe_directory_says`
+(`crates/cairn-git/tests/diff/ownership.rs`, every shape under every
+spelling of the setting with `GIT_TEST_ASSUME_DIFFERENT_OWNER=1`, so it
+runs against the floors' gits in `git-floor` too); through every open's
+wiring by `a_repository_someone_else_owns_is_refused_at_open_unless_safe_directory_names_it`
+(an identity whose effective uid is not the owner's) and
+`a_gitfile_rewritten_between_the_check_and_the_open_is_refused` (the git
+directory opened must be the one judged, or `Error::RepositoryReplaced`), in
+`repository.rs`; and each band by the unit tests in `ownership.rs`. The real
+second owner needs root, so that case is a privileged review step:
+`a_linked_worktree_whose_git_dir_is_someone_elses_is_refused_as_git_refuses_it`,
+`#[ignore]`d in `crates/cairn-git/tests/diff/ownership.rs`, run as root.
+
+Naming the git directory is also the explicit spelling git never refuses, so
+the one check git makes on a repository it found by searching — a bare one,
+under `safe.bareRepository = explicit` — is made when Cairn opens it, or a
+bare repository planted inside a cloned working tree would be read anyway,
+and the programs its configuration names (`core.fsmonitor` on every read,
+`core.sshCommand` and `credential.helper` on a fetch) run with it.
+`SharedRepository::discover_for(path, git, environment)` — the application's
+open, given the `git` found as it started and the launching environment —
+refuses such a repository with `Error::BareRepositoryFoundBySearching` (and
+a value git dies on with `Error::InvalidConfig`) before gix opens it, exactly
+where that version of git refuses it from the same directory
+(`crates/cairn-git/src/bare_discovery.rs`, read from git's `setup.c` at
+v2.38.0 through v2.56.0): the search stops at a directory that is itself a
+git directory rather than one holding a `.git`, and at a `.git` git cannot
+use, which it refuses as `Error::NotARepository` rather than searching on —
+on every git a regular file that does not lead to a git directory, and from
+2.54 one that cannot be `stat`ed (but for `ENOENT` and `ENOTDIR`) or is
+neither a file nor a directory, which older gits pass over (`dot_git`,
+`a_dot_git_git_stops_on_stops_the_search`). A `.git` file is read as git's
+`read_gitfile_gently` reads it (the rules are the same at every tag from
+v2.30.0; v2.56.0 moved them into the `read_gitfile_raw` it calls), never as
+gix does (`gitfile_target`, for the
+search and the ownership check alike): at most 1 MiB, `gitdir: ` and a
+path with only trailing `\n` and `\r` taken off — a trailing space or tab is
+part of the path, which gix would trim and open — ending at its first NUL
+(`a_gitfile_is_read_as_git_reads_it`, and against the git in use
+`a_dot_git_file_is_read_as_git_reads_it`). Residual, accepted by the user on
+2026-10-04 (a stated residual, not an open gap), pinned by that test so
+a change in gix shows: gix reads the file again as it opens, at most 64 KiB
+and with its own trimming, so a file git can follow and gix cannot — padded
+past 64 KiB, or with a NUL after the path — is one git opens and Cairn
+refuses, and one whose path ends in a blank naming a repository that exists
+is `Error::RepositoryReplaced` (the git directory judged is not the one gix
+opened); no open option hands gix the git directory instead without
+changing which working tree it assigns. The setting is read only from
+the system file (under `GIT_CONFIG_NOSYSTEM` too on 2.38.x, as above), the
+global ones (includes followed, `includeIf "gitdir:"`
+not) and the command line's `GIT_CONFIG_COUNT` (its count read as git's
+`strtoul` reads it — leading whitespace and a sign accepted, an empty value
+zero entries, "bogus count" and "too many entries" where git says them) and
+`GIT_CONFIG_PARAMETERS`, never the repository's own, and every value is
+checked, git dying on any but `explicit` and `all`; and what git calls
+implicit opens — nothing before 2.38 (the setting does not exist), nothing
+from 2.38 to 2.43, a directory named `.git` in 2.44, and from 2.45 a linked
+worktree's or a submodule's git directory too. `SharedRepository::discover`
+applies git 2.45's rule with the process's own environment. A repository
+that passes is named to git as before.
+
+The search that is checked is the search that opens. `bare_discovery::find`
+walks once, from the physical directory upwards as git does, bounded as the
+user's own git bounds it from the launch environment: never into the longest
+`GIT_CEILING_DIRECTORIES` entry above the starting directory (split at `:`,
+relative entries dropped, each resolved as `real_pathdup` resolves it — or
+kept as written once an empty entry has been seen — the ceiling itself never
+searched and a directory never its own ceiling), and not into another
+filesystem unless `GIT_DISCOVERY_ACROSS_FILESYSTEM` is true as `git_env_bool`
+reads it (a value git dies on is `Error::InvalidConfig`) — `setup.c`'s
+`setup_git_directory_gently_1` and `path.c`'s `longest_ancestor_length`,
+the same at every tag from v2.30.0 to v2.56.0. Without that, a ceiling under
+which the user's git says "not a git repository" would have Cairn open the
+enclosing repository and name it to git with `--git-dir`, which no ceiling
+stops. Both are read for this search alone and are not on the roster a
+child inherits. Pinned against the git in use by
+`a_ceiling_stops_cairns_search_exactly_where_it_stops_gits` and
+`the_search_crosses_a_filesystem_boundary_exactly_where_git_crosses_it`
+(`crates/cairn-git/tests/diff/bare_discovery.rs`; the second mounts a
+`tmpfs` in a user and mount namespace, required by the gate wherever one can
+be made (`CAIRN_REQUIRE_MOUNT_NAMESPACE`, its own probe, `unshare
+--map-root-user --mount`, so the fetch test's stronger need never skips it)
+and saying it skipped elsewhere, the
+unit tests in `bare_discovery.rs` reading the variable either way). It hands back where it
+stopped — the `.git` of a working tree, or a git directory found as itself —
+and gix opens exactly that path (`ThreadSafeRepository::open_opts` with the
+path taken as it is, at full trust, git's own checks having passed), never
+searching again. Two searches agree only while they take
+the same steps: gix's today switches to the physical path as git's does, but
+one that followed a link logically would climb from `docs/guide -> ../guide`
+into a bare repository planted as `docs/` while the check passed the working
+tree above it. So the paths a repository reports are physical — a repository
+opened through a link reports the directory the link leads to, as
+`git rev-parse` does. Reading the system file runs nothing: it is
+`GIT_CONFIG_SYSTEM` or `/etc/gitconfig`, gix's `Source::System`, never
+`Source::GitInstallation`, whose path gix-path finds by running the `git` on
+`PATH` (`git config -lz --show-origin`) outside `GitEnvironment` — which
+gix's own open never asks for either.
+
+The command log and an error report the verb and its arguments, not the
+location: a repository's log is its own, and the record's directory says
+where it ran.
+
+Pinned: `a_trusted_repository_is_named_to_git_ahead_of_the_verb` (a stub
+`git` prints its arguments) and
+`a_repository_trusted_less_than_fully_is_left_to_gits_discovery`, in
+`process/cli.rs`; against real git,
+`a_repository_whose_working_tree_sits_inside_another_is_the_one_asked` and
+`a_bare_repository_is_answered_under_safe_bare_repository_explicit`
+(`crates/cairn-git/tests/diff/changes.rs`), and
+`a_fetch_lands_in_the_repository_opened_when_its_working_tree_sits_inside_another`
+(`crates/cairn-git/tests/fetch.rs`), each of which fails with the options
+removed. The open's check is pinned against the git in use by
+`a_bare_repository_found_by_searching_opens_exactly_where_git_opens_it` —
+every shape (the planted repository and a directory inside it, a `.git`
+directory entered, a linked worktree's git directory, the worktree, the
+working tree) under every way the setting is given or not, the repositories'
+own configuration saying `explicit` throughout, Cairn opening the same git
+directory `git rev-parse --absolute-git-dir` does, or refusing where it
+refuses; a link inside a planted bare repository to a directory of the
+working tree, and a link from outside to it, among the shapes, and four
+`GIT_CONFIG_COUNT` spellings git accepts among the settings — and
+`opening_reads_the_system_file_without_running_a_process` (the test binary
+run again with a recording `git` first on `PATH` and no
+`GIT_CONFIG_NOSYSTEM`, the recorder shown to record) and
+`a_planted_bare_repository_is_refused_at_open_and_runs_nothing` (the planted
+`core.fsmonitor` runs on a read without the setting, as it does under git,
+and never under it; skipped before 2.38), in
+`crates/cairn-git/tests/diff/bare_discovery.rs`; the version bands by
+`which_bare_repositories_are_implicit_follows_the_version_of_git` and the
+command line's parsing by
+`command_line_parameters_are_read_as_git_reads_them` and
+`the_entry_count_is_read_as_gits_strtoul_reads_it`, in
+`bare_discovery.rs`; and the application's open by
+`a_planted_bare_repository_is_refused_as_the_launchs_git_refuses_it`
+(`crates/cairn-app/src/worker/pool.rs`). Residual, stated rather than
+implied: no fixture outside a user namespace can make a
+repository its own user does not own, so a real second owner is decided by
+the privileged run above (and, for the refspec check, by the namespace test
+where `/etc/subuid` gives one, which the gate then requires), and every other case through
+`GIT_TEST_ASSUME_DIFFERENT_OWNER` or an injected identity; gix's own
+reduced trust, for a repository whose working tree its rule refuses, is
+undone as "Where an invocation runs" says, and anything else gix keys on
+`git_dir_trust` in a version after 0.87.1 is the review's to check;
+`%(prefix)/` is
+expanded against the directory above the `bin/` of the `git` found, and to
+nothing where no `git` is known (`SharedRepository::discover`). The
+`safe.bareRepository` check reads the system file at `GIT_CONFIG_SYSTEM` or
+`/etc/gitconfig`, not at the path compiled into the `git` Cairn found — the
+same file for a distribution's git (prefix `/usr`), another for a git built
+with another `sysconfdir` (a custom prefix, Homebrew's, Apple's), whose file
+only running a process could find; does not follow an
+`includeIf "hasconfig:"` in a global file, which git can match there; does
+not check the other keys of `GIT_CONFIG_PARAMETERS`, and reads either
+variable only where the search stops at a bare repository, while git refuses
+every command when it cannot parse one; and reads a git built
+`WITH_BREAKING_CHANGES` before 3.0 as defaulting to `all`. Each would show a
+divergence only in the user's own protected configuration or environment,
+never one a repository can plant. Not residual: whether the repository
+opened is the one checked — it is opened from the path the check searched
+to, and the shapes test fails when it is opened through a second, logical
+search instead, or when the one search is made logical.
 
 ## The runner
 
@@ -652,8 +976,11 @@ runs on the UI thread:
    `Closing::requested` (`closing.rs`). The first time, it submits
    `Request::Close` and keeps the window open. `RepositoryHandle::submit`
    stops the epochs — an atomic store, so a page being walked is abandoned at
-   its next poll — and queues the close, which `serve` breaks on.
-2. On the repository thread, `Threads::drop` closes the network lane's queue
+   its next poll and a diff's read is ended at the runner's next tick — and
+   queues the close, which `serve` breaks on.
+2. On the repository thread, `Threads::drop` tells the diff thread to stop
+   (the window's handles hold its queue open, so it is told rather than left
+   to see the queue close), closes the network lane's queue
    and calls `SharedRepository::end_invocations(CLOSE_BOUND)`: every `git` in
    the registry is ended the way a cancel ends it, and the thread waits up to
    `CLOSE_BOUND` for their reaps. The registry is the one authority here — a
@@ -674,8 +1001,9 @@ runs on the UI thread:
 4. Each worker thread lets its update sender go as it exits, the network lane
    only once its fetch is reaped, so the stream's end means every `git` Cairn
    started in the repository is over — except a process git itself detached
-   from the group, such as the auto-maintenance a fetch may start, which
-   outlives any group kill (`docs/design/processes.md`) — and the channel,
+   from the group, such as the auto-maintenance a fetch may start, or the
+   fsmonitor daemon a read starts under `core.fsmonitor=true`, which outlive
+   any group kill (`docs/design/processes.md`) — and the channel,
    and with it the askpass socket, is gone. A prompt still open holds the
    acceptor until the window refuses it, which the window does when the
    ended fetch's outcome arrives (`session::apply`, `withdraw`); a change to
@@ -765,7 +1093,7 @@ names, not features; and `reads/` and `process/` are in
 by the user on 2026-10-02.
 
 What the guards cannot decide is stated in the root `CLAUDE.md` beside each
-invariant. That a read runs query plumbing or `status` is
+invariant. That a read runs query plumbing, `status` or `diff --no-index` is
 `destructive-ops-reviewer`'s check 10. These are `qa-checklist`'s item 7:
 
 - a process or a gix write reached through an alias, a trait object or a macro;

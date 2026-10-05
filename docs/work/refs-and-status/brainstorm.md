@@ -222,3 +222,22 @@ about 9x less than 1.4 GiB, not 25x. C15's bar is set at 192 MiB accordingly;
 shrinking the row struct itself is not in scope. The user was told. Also: L13's
 "cancel within about 10 µs" is the maximum deep in a find (0.6-17 µs overall),
 and "about 575 MB" is 575 MiB.
+
+## Locked 2026-10-05: slim rows
+
+**L14. The rest of a row is slimmed too.** After L13's correction (compact edges
+alone land near 160 MiB for rust-lang/rust, because a row's other parts already
+come to about 150 MiB), the user asked what shrinking the row itself would look
+like, and chose it. A row keeps its commit id once (today `CommitSummary` and
+`GraphRow` each hold it), a parent count instead of `Vec<Oid>` (the list reads
+only `parents.len()`; the Commit tab's parents come from the details query),
+its subject in a chunked text store and its author as an index into an author
+table the history shares, its date, lane and lane changes, and no author email
+(no production view reads it from a row). No row allocates on its own; stores
+grow in fixed chunks. Estimated about 120 B a row, so 40-50 MiB for all of
+rust-lang/rust (an estimate from the struct layout and the measured breakdown);
+C16's bar is 64 MiB. Cost accepted: rows stop being self-contained values —
+they are read through the history that holds the stores, and each worker page
+carries its text and new authors — which touches `cairn-model`'s vocabulary and
+every reader of a row. It is a phase of its own, 04, after compact edges (03);
+later phases are renumbered 05-10. Supersedes the "Corrected" entry's 192 MiB.

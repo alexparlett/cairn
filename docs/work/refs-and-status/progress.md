@@ -3,6 +3,13 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-05 — slim rows added
+
+The user locked L14: the rest of a row is slimmed (one id, a parent count, shared
+text and author stores, no email, no per-row allocation), as a phase 04 of its
+own; later phases renumbered 05-10. C16 bars all of rust-lang/rust at 64 MiB of
+retained rows; C15 keeps the edge equivalence and the find's time.
+
 ## 2026-10-05 — plan revised before merge
 
 At the user's request, two audit-settled choices were checked against evidence

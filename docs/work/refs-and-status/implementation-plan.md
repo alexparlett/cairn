@@ -36,18 +36,22 @@ fixes what they carry, not what they are called.
    floor tests, which are the packet's riskiest engine work.
 3. **03 compact rows** before anything adds to a row: it changes what a row keeps
    (`GraphRow`) and how the history row draws its edges, behind an equivalence
-   test against today's assigner, so the stash rows and labels of 04 are built
+   test against today's assigner, so the stash rows and labels of 05 are built
    on the row shape that ships rather than on one about to change.
-4. **04 history from every ref** needs 01's snapshot and 03's rows; it changes
+4. **04 slim rows** right after: the rest of a row (one id, a parent count,
+   shared text and author stores, no email, no per-row allocation), which
+   changes how every reader of a row reads it, so it lands before 05 adds a row
+   kind and 07 adds labels.
+5. **05 history from every ref** needs 01's snapshot and 03-04's rows; it changes
    `RowContent`, the one change whose blast radius the compiler and a guard both
    police, so it lands before any view draws a stash.
-5. **05 worker and refresh** once three answers exist to carry, and before any
+6. **06 worker and refresh** once three answers exist to carry, and before any
    view, so the lanes are designed against real queries.
-6. **06-08 UI** in dependency order: labels on rows and the toolbar (smallest
-   surface over 04 and 05), then the sidebar (which needs the find mechanism and
+7. **07-09 UI** in dependency order: labels on rows and the toolbar (smallest
+   surface over 05 and 06), then the sidebar (which needs the find mechanism and
    the labels' vocabulary), then Local Changes (which needs the sidebar's entry
    and 02's status) and the window check over everything.
-7. **09 QA** as its own fresh session, the merge bar.
+8. **10 QA** as its own fresh session, the merge bar.
 
 ## Review dispatch per phase
 
@@ -61,12 +65,13 @@ repeated in the table.
 | 01 | `test-coverage-auditor` — parity tests whose oracle is git, not a golden file; `destructive-ops-reviewer` — open's refusal path changes what Cairn opens, and `ref_tips`' rebuild touches `ops/fetch.rs`' contract; `gate-integrity-reviewer` — C2's `CAIRN_REQUIRE_*` variable, its `scripts/gate.sh` probe and its guard twin |
 | 02 | `test-coverage-auditor`; `destructive-ops-reviewer` — a new read in `reads/`, its verb and options, and that it writes nothing (its checks 9 and 10); `gate-integrity-reviewer` if a guard roster or a `CAIRN_REQUIRE_*` probe changes |
 | 03 | `test-coverage-auditor` — the equivalence test is the whole proof that no edge was lost; `responsiveness-reviewer` — deriving the drawn edges is work per drawn row |
-| 04 | `test-coverage-auditor`; `responsiveness-reviewer` — the walk's first page from every ref, and a new row kind in a virtualized list |
-| 05 | `responsiveness-reviewer`, `test-coverage-auditor` |
+| 04 | `test-coverage-auditor` — every row must draw what it drew; `responsiveness-reviewer` — reading a row through the history's stores on the render path |
+| 05 | `test-coverage-auditor`; `responsiveness-reviewer` — the walk's first page from every ref, and a new row kind in a virtualized list |
 | 06 | `responsiveness-reviewer`, `test-coverage-auditor` |
 | 07 | `responsiveness-reviewer`, `test-coverage-auditor` |
 | 08 | `responsiveness-reviewer`, `test-coverage-auditor` |
-| 09 | all of the above, over the whole packet diff |
+| 09 | `responsiveness-reviewer`, `test-coverage-auditor` |
+| 10 | all of the above, over the whole packet diff |
 
 ## Invariants in play
 
@@ -89,7 +94,7 @@ repeated in the table.
 - **The UI thread never waits on repository work.** New lanes live under
   `crates/cairn-app/src/worker/`; the focus subscription and the refresh request
   are render-side and only submit. A reopen on focus makes `reload_if`'s
-  UI-thread free of every loaded row frequent, so phase 05 retires those rows to
+  UI-thread free of every loaded row frequent, so phase 06 retires those rows to
   a worker (#52, PRD R11.3).
 - **No unbounded list renders without virtualization.** The sidebar's sections
   and Local Changes' two lists use `VirtualScrollView`; the `ScrollView`
@@ -123,10 +128,11 @@ with the residual it cannot express stated.
 | 01 | create `docs/systems/refs.md` (the snapshot, the parity rules, ahead/behind, reftable refused); row in `docs/systems/README.md`; `docs/systems/git-processes.md` where it lists what open refuses |
 | 02 | `docs/systems/git-processes.md` and `docs/systems/diff.md` where they list the reads git answers; create the status section of `docs/systems/refs.md` or a `status.md` (phase's call); the root `CLAUDE.md` D1 paragraph and repo map row for `cairn-git` (`reads::status`) — C13 |
 | 03 | `docs/systems/history-graph.md`: what a row keeps and how its edges are derived; the per-row memory figures, re-measured |
-| 04 | `docs/systems/history-graph.md`: seeded from every ref, labels, stash rows, the assigner's non-commit row |
-| 05 | `docs/systems/history-graph.md` and `docs/systems/git-processes.md` where they describe `reload_if`; the root `CLAUDE.md` responsiveness residuals for anything new the UI thread calls |
-| 06-08 | the sidebar, labels, toolbar and Local Changes in `docs/systems/history-graph.md` or a new `docs/systems/sidebar.md` (phase 07's call); the root `CLAUDE.md` status paragraph and repo map rows; the virtualization invariant's twins |
-| 09 | verify all of the above, stamp the PRD, update the roadmap and spine pointers, tear down |
+| 04 | `docs/systems/history-graph.md`: what a row keeps besides its edges, the stores, the per-row memory re-measured; the root `CLAUDE.md` repo map row for `cairn-model` |
+| 05 | `docs/systems/history-graph.md`: seeded from every ref, labels, stash rows, the assigner's non-commit row |
+| 06 | `docs/systems/history-graph.md` and `docs/systems/git-processes.md` where they describe `reload_if`; the root `CLAUDE.md` responsiveness residuals for anything new the UI thread calls |
+| 07-09 | the sidebar, labels, toolbar and Local Changes in `docs/systems/history-graph.md` or a new `docs/systems/sidebar.md` (phase 08's call); the root `CLAUDE.md` status paragraph and repo map rows; the virtualization invariant's twins |
+| 10 | verify all of the above, stamp the PRD, update the roadmap and spine pointers, tear down |
 
 ## Technical notes
 
@@ -158,6 +164,17 @@ files, but a phase re-reads them.
   visible area" (`fork-deep-history.md`). The assigner's repaint window (late
   parents) must reach the changes it repaints; K, and whether derivation runs at
   draw time or on the worker per viewport, are phase 03's to settle and measure.
+- **Slim rows:** today's `HistoryRow` is about 216 B fixed — `CommitSummary`
+  (id 33 B, parents `Vec<Oid>`, three `String`s, a time) plus `GraphRow`
+  (the same id again, a lane, the edge `Vec`) — and four heap allocations, each
+  with allocator overhead; the outer `Vec<HistoryRow>` grows by doubling. The
+  production readers are `commit_row.rs` (`parents.len()`, `summary`,
+  `author_name`, `author_time`) and `changes_list.rs` (`author_name`,
+  `summary`); `author_email` is read by no production view. Slim: one `Oid`, a
+  parent count, a `(offset, len)` into a chunked text store, a `u32` author index,
+  `author_time`, the lane and the lane-change offset — about 64 B — in a chunked
+  row store. Estimated about 120 B a row with the subject's bytes, so about
+  40-50 MiB for all of rust-lang/rust (estimate; C16 measures).
 - **Threads:** refs on the history thread (cheap; it reopens the walk); status and
   ahead/behind on a third, refresh, thread; a ref's find is a history-lane request
   that pages the held walk, so a scroll and a find supersede each other.

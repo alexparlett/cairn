@@ -8,7 +8,7 @@ opened: 2026-10-05
 
 **In flight. Authoritative while it is.** The packet's work directory is
 `docs/work/refs-and-status/`; its decisions and rejected alternatives are that
-directory's `brainstorm.md`, L1-L13. Requirements below cite them by id.
+directory's `brainstorm.md`, L1-L14. Requirements below cite them by id.
 
 Design frame: `docs/design/history-graph.md` (what the graph walks, its labels and
 its stash rows), `docs/design/ui.md` (the sidebar, the toolbar, Local Changes),
@@ -148,7 +148,7 @@ are later packets'.
   a detached `HEAD` that moved on) has no row in the graph, as in Fork
   (`fork-unreachable-stash-base.md`); it stays in the sidebar's Stashes (R8.5).
   How the walk knows a stash's base is reached before the row's date comes up is
-  phase 04's to settle within C11. A stash's index and untracked commits never
+  phase 05's to settle within C11. A stash's index and untracked commits never
   become rows (unless some ref reaches them otherwise). Several stashes on one
   commit each take their own row and lane.
 - R4.3 Every row carries the refs that point at its commit (R1's labels:
@@ -167,6 +167,16 @@ are later packets'.
   the edges the lane assigner computes today, repaints included. Today 89% of a
   retained row is the edges crossing it, 4.3-6.3 KB a row on rust-lang/rust
   (`deep-find-measured.md`); the bar is C15.
+- R4.7 A retained row is slim (L14): its commit id once (not again on its graph
+  row), a parent count in place of its parents (the list draws only whether a
+  commit is a merge; the Commit tab reads parents from the details query), its
+  subject as an offset into a text store the history shares, its author as an
+  index into an author table the history shares, its date, its lane and its lane
+  changes — and no author email, which the list never draws. No retained row
+  allocates on its own; the history's stores grow in fixed chunks, never by
+  doubling. A row is read through the history that holds its stores, and each
+  page from the worker carries its own text and any authors new to the history.
+  The bar is C16.
 
 ### R5 — Labels on rows (L7)
 
@@ -223,7 +233,7 @@ are later packets'.
 - R8.6 A find retains what scrolling to its target would, and no more: R4.6's
   compact rows. On rust-lang/rust paging to the oldest commit takes about 2.4 s
   and, with today's rows, holds about 1.4 GiB (`deep-find-measured.md`); with
-  compact rows it is held to C15. There is no cap on the history (L13). This
+  compact, slim rows it is held to C16. There is no cap on the history (L13). This
   deviates from Fork on purpose: Fork holds only its newest 50,000 or 100,000
   commits and does nothing when a pressed ref is past them
   (`fork-deep-history.md`).
@@ -308,16 +318,17 @@ here and does not restate them.
 | C5 | A superseded status read ends its process group: the repository's registry holds no running invocation after the cancel | integration test through the runner |
 | C6 | The commits the history walks equal `git rev-list --branches --remotes --tags HEAD`, on a fixture with a branch `HEAD` cannot reach, a tag on a tree, and a stash whose branch was deleted (no row for it, and none of its base's otherwise unreachable commits); every row's labels equal what `git log --decorate=full` names for that commit, `refs/stash` aside; each stash whose base is walked is one row, with one edge, to its first parent, and its index and untracked commits are not rows; a stash dated older than its base is drawn above it | integration and assigner tests |
 | C7 | Rows draw each label kind with its glyph, compact labels, clipping, ✓ and the bold `HEAD` subject; a stash row draws its chip and message; the Commit tab draws REFS; selecting a stash lists what `git stash show --name-status` lists, with `stash.showIncludeUntracked` unset and set | headless tests |
-| C8 | The sidebar draws its sections in order, groups by `/`, marks the current branch, shows ahead/behind and gone; the filter narrows on a worker; pressing a ref selects its row, finding one beyond the loaded pages and cancelling when a press or scroll supersedes it; a tag on a tree says so; a stash with no row shows its changes and says so; a deep find retains only compact rows (C15); a sidebar of 50,000 refs builds one viewport | headless and worker tests |
+| C8 | The sidebar draws its sections in order, groups by `/`, marks the current branch, shows ahead/behind and gone; the filter narrows on a worker; pressing a ref selects its row, finding one beyond the loaded pages and cancelling when a press or scroll supersedes it; a tag on a tree says so; a stash with no row shows its changes and says so; a deep find retains only compact, slim rows (C16); a sidebar of 50,000 refs builds one viewport | headless and worker tests |
 | C9 | Local Changes draws both lists with their badges and the count by R9.2; choosing a path draws its diff from the working-tree query; a conflicted path draws its notice; 50,000 paths build one viewport | headless tests |
 | C10 | Focus, the Refresh action and a finished fetch each re-read refs and status; a moved ref, a changed stash list and a checkout that moves no ref each reopen the history, and an unchanged snapshot does not; the selection survives a reopen; a superseded refresh is never drawn; no new lane supersedes another, and the changes-to-file-diff crossing is unchanged; a slow status queues neither a page nor a diff; superseded snapshots, statuses and a reopen's replaced rows are freed off the UI thread | worker tests through the real boundary, and headless tests with focus set |
 | C11 | On rust-lang/rust at `c999cef531e` (`~/Development/bench/rust`, never written), on the machine recorded in `docs/research/diff-engine/measured-baseline.md`, warm, release build, median of seven: status on a clean tree within 100 ms; status with 1,000 modified and 10,000 untracked files (on a scratch clone) within 250 ms; the refs snapshot with every ahead/behind within 100 ms, and a 10,000-ref fixture's recorded; the first page of history seeded from every ref within 200 ms, recorded beside `HEAD`'s; status with every file's stat changed recorded, not barred | an `#[ignore]`d reporter driven by `CAIRN_BENCH_REPO`, numbers in `progress.md` and, at teardown, in `docs/research/refs-and-status/` |
 | C12 | `window_check` keeps every frame under 16.7 ms of UI-thread work while the decorated history, the sidebar, the refs and a large status land | the `#[ignore]`d `window_check`, numbers recorded |
 | C13 | D1 in `docs/design/engine.md` and the root `CLAUDE.md` names status as a read git answers, with R3.8's residuals | review |
 | C14 | `scripts/gate.sh` passes | the gate |
-| C15 | Every row's derived edges equal the edges today's lane assigner computes for it, repaints included, over the crafted fixtures, the Cairn checkout and every ref of the bench repository; paging the whole of rust-lang/rust at `c999cef531e` from every ref, in a release build, retains at most 192 MiB of rows (1.4 GiB today; about 150 MiB of that is what a row keeps besides its edges, so edges compacted alone land near 160 MiB), and a find of its oldest commit takes no more than 10% longer than with today's rows (2.4 s) | an equivalence test in `cairn-model`/`cairn-git`, and the `#[ignore]`d reporter driven by `CAIRN_BENCH_REPO`, numbers recorded |
+| C15 | Every row's derived edges equal the edges today's lane assigner computes for it, repaints included, over the crafted fixtures, the Cairn checkout and every ref of the bench repository; a find of rust-lang/rust's oldest commit at `c999cef531e`, in a release build, takes no more than 10% longer than with today's rows (2.4 s) | an equivalence test in `cairn-model`/`cairn-git`, and the `#[ignore]`d reporter driven by `CAIRN_BENCH_REPO`, numbers recorded |
+| C16 | Every row draws the same subject, author, date, short id and merge marker as before the rows were slimmed, over the crafted fixtures and the Cairn checkout; paging the whole of rust-lang/rust at `c999cef531e` from every ref, in a release build, retains at most 64 MiB of rows and the stores they read (1.4 GiB today; about 160 MiB with compact edges alone); no retained row owns a heap allocation | headless and model tests, and the `#[ignore]`d reporter driven by `CAIRN_BENCH_REPO`, numbers recorded |
 
-C11, C12 and C15's measured half are not automated, for the reason `history-graph`'s A7 was not: a
+C11, C12, and the measured halves of C15 and C16 are not automated, for the reason `history-graph`'s A7 was not: a
 timing assertion in CI is flaky and bound to a machine.
 
 ## Out of scope

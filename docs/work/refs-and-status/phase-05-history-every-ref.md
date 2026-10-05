@@ -1,10 +1,10 @@
-# Phase 04 — The history from every ref, labelled, with stash rows
+# Phase 05 — The history from every ref, labelled, with stash rows
 
 ```
 STEP 0  Pre-flight: read docs/work/refs-and-status/state.md and this file.
         Nothing else yet. Declare the mode. User mode is the default: create a
         runtime-owned phase branch from feature/refs-and-status before editing.
-        Verify phases 01-03 are present at the integration tip. Direct
+        Verify phases 01-04 are present at the integration tip. Direct
         integration work requires an orchestrator prompt that explicitly
         declares packet mode.
 STEP 1  Load context via an Explore agent over crates/cairn-git/src/history*
@@ -51,13 +51,13 @@ STEP 2  Implement.
         (HistoryList::index_of's fallback must stay unreachable — stash rows
         append, they never arrive above a row).
 
-        Out of scope: drawing chips or stash rows (06), the worker's refresh and
-        reopen (05), the sidebar's find (07). The application may keep walking
-        from HEAD until phase 05 wires the snapshot, if that keeps the gate
+        Out of scope: drawing chips or stash rows (07), the worker's refresh and
+        reopen (06), the sidebar's find (08). The application may keep walking
+        from HEAD until phase 06 wires the snapshot, if that keeps the gate
         green; say which in state.md.
 STEP 3  Validate: scripts/gate.sh. Then orchestrate this phase's QA in this
         session: /qa over the phase diff with the reviewers implementation-plan.md
-        names for phase 04, spawned fresh, plus the qa-checklist.md items this
+        names for phase 05, spawned fresh, plus the qa-checklist.md items this
         phase covers and the QA brief below. Adjudication goes to qa-confirm
         (fresh), never this session inline; log dismissed findings with reasons
         in progress.md; fix confirmed findings in focused fixes; disputed

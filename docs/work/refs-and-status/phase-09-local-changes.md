@@ -1,10 +1,10 @@
-# Phase 08 — Local Changes, read only, and the window check
+# Phase 09 — Local Changes, read only, and the window check
 
 ```
 STEP 0  Pre-flight: read docs/work/refs-and-status/state.md and this file.
         Nothing else yet. Declare the mode. User mode is the default: create a
         runtime-owned phase branch from feature/refs-and-status before editing.
-        Verify phases 01-07 are present at the integration tip. Direct
+        Verify phases 01-08 are present at the integration tip. Direct
         integration work requires an orchestrator prompt that explicitly
         declares packet mode.
 STEP 1  Load context via an Explore agent over crates/cairn-app/src/
@@ -39,7 +39,7 @@ STEP 2  Implement.
         (#36); ignored files.
 STEP 3  Validate: scripts/gate.sh. Then orchestrate this phase's QA in this
         session: /qa over the phase diff with the reviewers implementation-plan.md
-        names for phase 08, spawned fresh, plus the qa-checklist.md items this
+        names for phase 09, spawned fresh, plus the qa-checklist.md items this
         phase covers and the QA brief below. Adjudication goes to qa-confirm
         (fresh), never this session inline; log dismissed findings with reasons
         in progress.md; fix confirmed findings in focused fixes; disputed

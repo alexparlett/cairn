@@ -27,10 +27,11 @@ STEP 2  Implement.
         2. Where derivation runs — at draw time over the drawn rows, or on the
            worker per viewport — and K: settle both by measurement (derivation
            cost per frame against the 16.7 ms budget; snapshot memory against
-           C15), and record the choice and its numbers in progress.md.
+           C16's 64 MiB, which phase 04 must still reach), and record the choice and its numbers in progress.md.
         3. cairn-ui: the history row draws its edges from the derived set;
            the viewport twin still holds.
-        4. C15: an equivalence test — every row's derived edges equal what the
+        4. C15 (and the memory figure phase 04 starts from, expected near
+           160 MiB): an equivalence test — every row's derived edges equal what the
            current assigner retains for it, repaints included — over the crafted
            fixtures and the Cairn checkout, and the #[ignore]d reporter over
            every ref of ~/Development/bench/rust (read only): equivalence over
@@ -45,7 +46,8 @@ STEP 2  Implement.
         never by the history); RowContent read by naming every variant (this
         phase adds no variant); the crate seal.
 
-        Out of scope: stash rows and labels (04), seeding from every ref (04),
+        Out of scope: the rest of the row — one id, a parent count, shared text and
+        author stores (04) — stash rows and labels (05), seeding from every ref (05),
         evicting rows (#4), any cap.
 STEP 3  Validate: scripts/gate.sh. Then orchestrate this phase's QA in this
         session: /qa over the phase diff with the reviewers implementation-plan.md
@@ -68,9 +70,8 @@ STEP 6  Branch authority follows the declared mode. In user mode, commit
         and the USER merges every PR.
 STEP 7  Final response: what shipped, what is deferred, exact follow-ups.
 STOPPING RULES: stop and ask the user if any row's derived edges differ from
-today's and the difference is not a bug in the old output; if C15's 192 MiB is
-out of reach without evicting rows; if derivation threatens the frame budget at
-any K that meets C15. Otherwise do not stop for permission.
+today's and the difference is not a bug in the old output; if derivation
+threatens the frame budget at any K whose snapshots leave C16 reachable. Otherwise do not stop for permission.
 ```
 
 ## QA brief

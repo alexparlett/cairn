@@ -35,7 +35,7 @@ STEP 2  Implement.
            for-each-ref's order, cancellable, no gix type at the boundary.
            Rebuild Repository::ref_tips on the snapshot so the network lane's
            before/after comparison sees symbolic refs and tag objects as the
-           snapshot does (phase 05 replaces that comparison with the refresh's;
+           snapshot does (phase 06 replaces that comparison with the refresh's;
            ops/fetch.rs's contract doc names ref_tips, so keep it true). Report
            the query's cost (R1.7). Open without GIT_NAMESPACE (R1.8).
         3. cairn-git: refuse a reftable repository at open (R1.9) beside the
@@ -58,8 +58,8 @@ STEP 2  Implement.
         wherever its host can serve it (C2); no unwrap/expect in shipping code;
         errors are thiserror variants naming what the caller handles.
 
-        Out of scope: status (02), compact rows (03), the history walk and labels (04), the worker
-        lanes (05), anything that draws.
+        Out of scope: status (02), compact and slim rows (03, 04), the history walk and labels (05), the worker
+        lanes (06), anything that draws.
 STEP 3  Validate: scripts/gate.sh. Then orchestrate this phase's QA in this
         session: /qa over the phase diff with the reviewers implementation-plan.md
         names for phase 01, spawned fresh, plus the qa-checklist.md items this

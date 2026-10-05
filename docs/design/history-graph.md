@@ -112,8 +112,12 @@ most of the cost: a hundred and more lanes cross each row of rust-lang/rust, and
 storing them per row would make a row several kilobytes and the whole history
 more than a gigabyte. The edges a drawn row crosses are derived instead, for the
 drawn rows alone, from periodic full lane snapshots advanced through the rows'
-changes — Fork's layout of the visible area. So what scrolling and finding
-retain grows with the rows passed, at a small fixed cost each, and never with
-the graph's width. Evidence:
+changes — Fork's layout of the visible area. Nor does a row carry what the list
+never draws or can fetch: it keeps its commit id once, a parent count rather
+than its parents, its subject in a text store the history shares, its author as
+an index into an author table, and no email; no row allocates on its own, and
+the stores grow in fixed chunks rather than by doubling. So what scrolling and
+finding retain grows with the rows passed, at a small fixed cost each — tens of
+mebibytes for the whole of rust-lang/rust — and never with the graph's width. Evidence:
 `docs/research/refs-and-status/deep-find-measured.md`,
 `docs/research/refs-and-status/fork-deep-history.md`.

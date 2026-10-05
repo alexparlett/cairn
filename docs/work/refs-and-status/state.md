@@ -8,7 +8,7 @@ it from `main` and pushes it.
 
 ## Locked decisions
 
-L1-L13 in `brainstorm.md`; the spec is `docs/prd/refs-and-status.md`. The ones
+L1-L14 in `brainstorm.md`; the spec is `docs/prd/refs-and-status.md`. The ones
 that most constrain implementation:
 
 - **Status is `git status --porcelain=v2 -z`, run as a read** (L1). Not gix's
@@ -25,9 +25,11 @@ that most constrain implementation:
 - **Refresh on focus, after an operation, and on the Refresh chord; no watching**
   (L11). A changed snapshot (any ref, `HEAD`'s state, the stash list) reopens the
   history; a reopen frees its old rows off the UI thread (#52).
+- **Slim rows** (L14): one id, a parent count, shared text and author stores, no
+  email, no per-row allocation (phase 04).
 - **Compact rows, no cap** (brainstorm L13): a row keeps its id, parents, text,
   lane and only the lane changes at it; the drawn edges are derived. A deep find
-  pages as planned and retains only compact rows (C15: 192 MiB for all of
+  pages as planned and retains only compact rows (C16: 64 MiB for all of
   rust-lang/rust, against 1.4 GiB today). A deliberate deviation from Fork, which
   caps its list and does nothing when a ref is past it.
 - **Threads and lanes** (brainstorm, "Settled in the coverage audit"): refs on
@@ -40,7 +42,7 @@ that most constrain implementation:
 
 - How `status.showUntrackedFiles` is read as git reads it (L2) — phase 02; a new
   `git config` porcelain read needs the user.
-- The Refresh chord per platform (Fork: ⌘R on macOS, F5 on Windows) — phase 05,
+- The Refresh chord per platform (Fork: ⌘R on macOS, F5 on Windows) — phase 06,
   from `fork-dev/Docs`' shortcut lists.
 - C11's first-page bar is written as 200 ms because history-graph's A7 has no
   number (L12); the user may revise it at the merge bar.
@@ -56,9 +58,10 @@ None yet.
 | 01 refs engine | not started |
 | 02 status engine | not started |
 | 03 compact rows | not started |
-| 04 history from every ref | not started |
-| 05 worker and refresh | not started |
-| 06 labels and toolbar | not started |
-| 07 sidebar | not started |
-| 08 local changes | not started |
-| 09 QA | not started |
+| 04 slim rows | not started |
+| 05 history from every ref | not started |
+| 06 worker and refresh | not started |
+| 07 labels and toolbar | not started |
+| 08 sidebar | not started |
+| 09 local changes | not started |
+| 10 QA | not started |

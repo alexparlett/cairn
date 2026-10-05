@@ -5,8 +5,8 @@ The cross-session cheat sheet. Every session updates this before ending.
 **Status: four packets shipped (`history-graph`, `credential-prompts`,
 `process-manager`, `diff-engine`). `diff-engine` passed its merge bar and was torn
 down on `feature/diff-engine`; it reaches `main` with its packet pull request,
-squash-merged by the user. The other five are briefs; 4 (`refs-and-status`) is
-next on the critical path.**
+squash-merged by the user. `refs-and-status` (4) is planned, next on the critical
+path; the other four are briefs.**
 
 ## The milestone
 
@@ -35,7 +35,9 @@ closed** by `diff-engine` (its L1): both presentations, unified by default, over
 patch model independent of either. O2 (`gix-status` versus
 `git status --porcelain=v2`) is the one that could reach back into D1, because
 status is the most divergence-prone read there is — and `diff-engine` has since
-amended D1 for the filter drivers that status also runs.
+amended D1 for the filter drivers that status also runs. **O2 is closed** by
+`refs-and-status` (its L1, 2026-10-05): `git status --porcelain=v2 -z`, run as a
+read, after a 38-fixture agreement spike.
 
 ## Packet status
 
@@ -45,7 +47,7 @@ amended D1 for the filter drivers that status also runs.
 | 2 | `credential-prompts` | **shipped** — PRD frozen, as-built in `docs/systems/credentials.md`; work dir torn down |
 | 2a | `process-manager` | **shipped** — PRD frozen, as-built in `docs/systems/git-processes.md`; work dir torn down; leftovers #41-#49 and #25 |
 | 3 | `diff-engine` | **shipped** — PRD frozen, as-built in `docs/systems/diff.md`; work dir torn down; lands on `main` with its packet PR (squash merge); leftovers #54-#58, with #51-#53 |
-| 4 | `refs-and-status` | brief in `roadmap.md` |
+| 4 | `refs-and-status` | **planned** — PRD `docs/prd/refs-and-status.md` in flight; work dir `docs/work/refs-and-status/`; O2 closed for `git status` |
 | 5 | `staging-and-commit` | brief in `roadmap.md` |
 | 6 | `remote-sync` | brief in `roadmap.md` |
 | 7 | `branch-ops` | brief in `roadmap.md` |

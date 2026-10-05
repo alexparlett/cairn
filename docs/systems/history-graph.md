@@ -487,7 +487,8 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
   Fork and Sourcetree. Tracked as issue #5.
 - **`GraphRow` still keys a row by `Oid`.** `RowContent` and `RowId` are total
   over rows that are not commits, but the assigner's own output is not — whoever
-  lays out the working-tree row meets that first.
+  lays out the first row that is not a commit meets that first (a stash row,
+  `docs/prd/refs-and-status.md` R4.4).
 - **The view is `HEAD`'s ancestry, not the repository's.** `from_head`, not
   `from_commits`, so nothing shows a branch that `HEAD` cannot reach.
   `HistoryRequest::from_commits` takes an unbounded tip set; it is resolved once

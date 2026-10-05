@@ -33,8 +33,9 @@ Kept, and why:
 - **Staging is one screen**: unstaged and staged lists, the diff of the selected
   file, and the commit box, without navigating away.
 - **Stashes appear inline in the commit list**, as well as in the sidebar: each
-  a row of its own, placed by date, on a short lane joined to the commit it was
-  made on (`history-graph.md`). Fork's feature list calls this out for a
+  stash made on a commit the graph shows is a row of its own, placed by date, on
+  a short lane joined to that commit (`history-graph.md`); one whose commit no
+  ref reaches is in the sidebar alone, and pressing it shows its changes. Fork's feature list calls this out for a
   reason.
 - **Repository tabs** across the top. The manager behind them is open
   (`cairn.md`, "Still open"); tabs are the least-committing surface to show.
@@ -49,6 +50,7 @@ Kept, and why:
 | An **operation log** drawer, quoting the prompt the user acknowledged for each destructive operation. Fork has nothing like it. | `engine.md`, "The confirmation seal" |
 | The discard dialog offers **stash first** as an option — surfacing the open auto-stash question as UI rather than deciding it silently. | `cairn.md`, "Still open" |
 | **Worktrees are a sidebar section**, as Fork's are, and a branch checked out in another worktree carries a chip as in Fork — and, unlike Fork, a disabled checkout. | `worktrees.md` |
+| Pressing a ref finds its commit however deep it is; Fork holds only its newest 50,000 or 100,000 commits and does nothing for a ref past them. | `history-graph.md` — a history is however long the repository is |
 | Remote-tracking labels carry a generic remote glyph wherever the forge is not known; Fork shows a forge icon on every one. | `forge-links.md` — a forge is identified only where it can be |
 | Branch and commit context menus carry **forge links**: create pull request, open on the forge, copy permalink. After a push, the toast offers *Create pull request* directly. | `forge-links.md` |
 | **Conflict resolution is three-way and region-level**, with *edit in your editor* as the escape hatch. Fork resolves per file and opens a resolver for the rest. | `conflicts.md` |

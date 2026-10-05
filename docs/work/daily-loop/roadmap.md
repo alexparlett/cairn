@@ -126,6 +126,10 @@ packet depends on 2a. Also locked: the walk seeds from every ref with stashes as
 rows of their own, no working-tree row (Fork has none), Fork's labels, sidebar
 and toolbar, a read-only Local Changes view wired to packet 3's working-tree
 query, and Fork's refresh (focus, after an operation, a chord; no watching).
+And, after measuring a deep find on rust-lang/rust (1.4 GiB retained, 89% of it
+per-row edges): compact rows whose edges are derived as drawn, and no cap on the
+history — a deliberate deviation from Fork, which caps its list and does nothing
+for a ref past it.
 The brief as written at program planning follows.
 
 

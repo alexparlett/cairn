@@ -15,9 +15,10 @@ Integration branch: `feature/refs-and-status`, base `main`.
 | --- | --- | --- |
 | 01 | `phase-01-refs-engine.md` | The refs snapshot and ahead/behind in the engine; reftable refused at open |
 | 02 | `phase-02-status-engine.md` | `reads::status` — `git status --porcelain=v2 -z` — and its model |
-| 03 | `phase-03-history-every-ref.md` | The walk seeded from every ref, labels on rows, stash rows |
-| 04 | `phase-04-worker-and-refresh.md` | The new lanes, refresh on focus/operation/chord, history reopen |
-| 05 | `phase-05-labels-and-toolbar.md` | Chips on rows, stash rows drawn, the Commit tab's REFS, the toolbar |
-| 06 | `phase-06-sidebar.md` | The sidebar, its filter, and finding a ref's commit |
-| 07 | `phase-07-local-changes.md` | The read-only Local Changes view, and the window check |
-| 08 | `phase-08-qa.md` | The merge bar, as its own fresh session; teardown |
+| 03 | `phase-03-compact-rows.md` | A row keeps only its own lane changes; the drawn edges are derived |
+| 04 | `phase-04-history-every-ref.md` | The walk seeded from every ref, labels on rows, stash rows |
+| 05 | `phase-05-worker-and-refresh.md` | The new lanes, refresh on focus/operation/chord, history reopen |
+| 06 | `phase-06-labels-and-toolbar.md` | Chips on rows, stash rows drawn, the Commit tab's REFS, the toolbar |
+| 07 | `phase-07-sidebar.md` | The sidebar, its filter, and finding a ref's commit |
+| 08 | `phase-08-local-changes.md` | The read-only Local Changes view, and the window check |
+| 09 | `phase-09-qa.md` | The merge bar, as its own fresh session; teardown |

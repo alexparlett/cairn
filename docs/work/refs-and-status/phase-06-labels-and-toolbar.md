@@ -1,10 +1,10 @@
-# Phase 05 — Labels on rows, stash rows, REFS and the toolbar
+# Phase 06 — Labels on rows, stash rows, REFS and the toolbar
 
 ```
 STEP 0  Pre-flight: read docs/work/refs-and-status/state.md and this file.
         Nothing else yet. Declare the mode. User mode is the default: create a
         runtime-owned phase branch from feature/refs-and-status before editing.
-        Verify phases 01-04 are present at the integration tip. Direct
+        Verify phases 01-05 are present at the integration tip. Direct
         integration work requires an orchestrator prompt that explicitly
         declares packet mode.
 STEP 1  Load context via an Explore agent over crates/cairn-ui/src/ (the history
@@ -33,11 +33,11 @@ STEP 2  Implement.
         component names a literal modifier; meaning never on colour alone;
         cairn-ui names neither gix nor cairn_git and touches no file.
 
-        Out of scope: the sidebar (06), Local Changes (07), forge icons
+        Out of scope: the sidebar (07), Local Changes (08), forge icons
         (packet 6), greying off-branch commits and push/pull dots (filed).
 STEP 3  Validate: scripts/gate.sh. Then orchestrate this phase's QA in this
         session: /qa over the phase diff with the reviewers implementation-plan.md
-        names for phase 05, spawned fresh, plus the qa-checklist.md items this
+        names for phase 06, spawned fresh, plus the qa-checklist.md items this
         phase covers and the QA brief below. Adjudication goes to qa-confirm
         (fresh), never this session inline; log dismissed findings with reasons
         in progress.md; fix confirmed findings in focused fixes; disputed

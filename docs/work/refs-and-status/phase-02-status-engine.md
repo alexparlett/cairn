@@ -52,7 +52,7 @@ STEP 2  Implement.
         gate-integrity-reviewer's); no unwrap/expect on git's bytes; cairn-model
         changes carry tests.
 
-        Out of scope: the worker lane (04), Local Changes (07), any index
+        Out of scope: the worker lane (05), Local Changes (08), any index
         refresh or write.
 STEP 3  Validate: scripts/gate.sh (git-floor included). Then orchestrate this
         phase's QA in this session: /qa over the phase diff with the reviewers

@@ -1,10 +1,10 @@
-# Phase 04 — The new lanes, and refresh
+# Phase 05 — The new lanes, and refresh
 
 ```
 STEP 0  Pre-flight: read docs/work/refs-and-status/state.md and this file.
         Nothing else yet. Declare the mode. User mode is the default: create a
         runtime-owned phase branch from feature/refs-and-status before editing.
-        Verify phases 01-03 are present at the integration tip. Direct
+        Verify phases 01-04 are present at the integration tip. Direct
         integration work requires an orchestrator prompt that explicitly
         declares packet mode.
 STEP 1  Load context via an Explore agent over crates/cairn-app/src/worker/
@@ -22,7 +22,7 @@ STEP 2  Implement.
            filter, each with its own epoch, routed by the table — refs on the
            history thread (it reopens the walk), status and ahead/behind on a
            new third thread (R11.2) — none superseding another lane; a ref's
-           find is a history-lane request (phase 06 builds it; leave its shape
+           find is a history-lane request (phase 07 builds it; leave its shape
            room here). Large superseded answers retired off the UI thread, and
            a reopen's replaced history rows with them (R11.3, closing #52).
         2. Refresh (R10): on focus gained, on a finished operation (fetch), and
@@ -33,7 +33,7 @@ STEP 2  Implement.
         3. The history reopens when the snapshot differs (any ref, HEAD's
            state, or the stash list — R10.4) and not otherwise, replacing
            fetch's tip comparison; the
-           application now walks from phase 03's every-ref request; a reopen
+           application now walks from phase 04's every-ref request; a reopen
            keeps the selected commit if it arrives again (R10.5).
         4. Tests for C10 through the real worker boundary, and headless with
            focus toggled through freya-testing.
@@ -44,11 +44,11 @@ STEP 2  Implement.
         component names a literal modifier (the chord lives in the table);
         epochs per lane — a refresh must not cancel a scroll or a diff.
 
-        Out of scope: drawing anything new (05-07), file-system watching, any
+        Out of scope: drawing anything new (06-08), file-system watching, any
         index refresh.
 STEP 3  Validate: scripts/gate.sh. Then orchestrate this phase's QA in this
         session: /qa over the phase diff with the reviewers implementation-plan.md
-        names for phase 04, spawned fresh, plus the qa-checklist.md items this
+        names for phase 05, spawned fresh, plus the qa-checklist.md items this
         phase covers and the QA brief below. Adjudication goes to qa-confirm
         (fresh), never this session inline; log dismissed findings with reasons
         in progress.md; fix confirmed findings in focused fixes; disputed

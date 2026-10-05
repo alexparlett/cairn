@@ -1,7 +1,7 @@
 # QA checklist — refs-and-status
 
 Packet-specific acceptance beyond the repo-wide gate. The acceptance criteria
-C1-C14 live in `docs/prd/refs-and-status.md` and are NOT copied here — verify
+C1-C15 live in `docs/prd/refs-and-status.md` and are NOT copied here — verify
 them there, against their pinned tests.
 
 ## Per-phase coverage of the PRD criteria
@@ -10,16 +10,17 @@ them there, against their pinned tests.
 | --- | --- |
 | 01 | C1, C2, C3, and C11's refs numbers |
 | 02 | C4, C5, C13, and C11's status numbers |
-| 03 | C6, and C11's first-page numbers |
-| 04 | C10 |
-| 05 | C7 |
-| 06 | C8 |
-| 07 | C9, C12, and C11 complete |
-| 08 | all of C1-C14, re-verified over the whole packet diff |
+| 03 | C15 |
+| 04 | C6, and C11's first-page numbers |
+| 05 | C10 |
+| 06 | C7 |
+| 07 | C8 |
+| 08 | C9, C12, and C11 complete |
+| 09 | all of C1-C15, re-verified over the whole packet diff |
 
 ## Packet-specific checks
 
-Beyond the PRD, phase 08 confirms:
+Beyond the PRD, phase 09 confirms:
 
 - [ ] **Every parity test's oracle is git.** C1, C3, C4 and C6 compare against
       what real `git` prints in the same fixture, never against a golden file or
@@ -36,7 +37,14 @@ Beyond the PRD, phase 08 confirms:
       included).
 - [ ] **A stash's index and untracked commits never become rows**, and a stash
       row's only edge is to its first parent — checked on a stash made with
-      `--include-untracked`.
+      `--include-untracked`; a stash whose base no ref reaches has no row and
+      pulls no commit into the graph.
+- [ ] **No edge was lost to compact rows**: the equivalence test compares the
+      derived edges of every row against what today's assigner retains, over
+      fixtures, the Cairn checkout and the bench repository, including rows
+      the assigner repainted late.
+- [ ] **A deep find retains only compact rows** (PRD R8.6, C15), measured on the
+      bench repository.
 - [ ] **Every new `RowContent` reader names every variant**; no wildcard was
       added to satisfy the compiler.
 - [ ] **Every new list is virtualized** and has its viewport twin; the

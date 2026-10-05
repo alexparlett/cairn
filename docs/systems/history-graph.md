@@ -118,8 +118,11 @@ runs the real query over every ref. Across seven repositories in the default
 order: p99 of 8 edge segments per row on the widest of them, 264 B per row at
 p99 on that same widest one, and single-digit lane counts throughout. Both byte
 figures are computed from `edges.len()` while a `GraphRow` retains
-`edges.capacity()`, so real retained layout is up to about twice them. Evidence
-and method:
+`edges.capacity()`, so real retained layout is up to about twice them. Those seven
+repositories had at most 2,896 commits; on rust-lang/rust in commit-time order
+105-160 edge segments stay open per row, and a retained row costs 4.3-6.3 KB, 89%
+of it edge segments (`docs/research/refs-and-status/deep-find-measured.md`).
+Evidence and method for the seven:
 `docs/research/history-graph/scroll-memory-model.md` Part D. Earlier, much
 larger figures in this packet's history described a synthetic fixture and not
 any repository; they are retracted there.
@@ -471,9 +474,12 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
 
 - **Memory is flat in history LENGTH and linear in rows SCROLLED.** A
   100k-commit repository costs nothing until it is scrolled; scrolled rows are
-  retained at roughly 660 bytes each and nothing evicts them. Tracked as
-  issue #4.
-- **A live scroll's walk retains every commit it visited.** The 660 bytes above
+  retained and nothing evicts them — roughly 660 bytes each by the history-graph
+  packet's own estimate on small repositories, but 4.3-6.3 KB each on
+  rust-lang/rust, where
+  scrolling to the oldest commit retains about 1.4 GiB
+  (`docs/research/refs-and-status/deep-find-measured.md`). Tracked as issue #4.
+- **A live scroll's walk retains every commit it visited.** The rows above
   are the application's row vector; separately, gitoxide's walk keeps a
   `HashSet<ObjectId>` of every commit visited (`gix-traverse`'s
   `simple::Simple`) — about 15 MB at 500k commits — and the worker holds that

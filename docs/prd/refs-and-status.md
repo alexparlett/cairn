@@ -8,7 +8,7 @@ opened: 2026-10-05
 
 **In flight. Authoritative while it is.** The packet's work directory is
 `docs/work/refs-and-status/`; its decisions and rejected alternatives are that
-directory's `brainstorm.md`, L1-L12. Requirements below cite them by id.
+directory's `brainstorm.md`, L1-L13. Requirements below cite them by id.
 
 Design frame: `docs/design/history-graph.md` (what the graph walks, its labels and
 its stash rows), `docs/design/ui.md` (the sidebar, the toolbar, Local Changes),
@@ -24,21 +24,28 @@ bar); it closes the program's open question O2. Evidence, all under
 - `status-agreement-spike.md` — gix status against `git status`, 38 fixtures on
   git 2.56.0 and 2.30.9, and both tools' cost on rust-lang/rust;
 - `fork-refs-and-status-ui.md` — Fork's labels, stash rows, sidebar, Local
-  Changes and refresh, as published.
+  Changes and refresh, as published;
+- `fork-unreachable-stash-base.md` — what Fork does with a stash whose base no
+  ref reaches;
+- `deep-find-measured.md` — finding a ref's commit by paging the held walk on
+  rust-lang/rust: time, retained memory, cancel;
+- `fork-deep-history.md` — Fork's commit cap, its layout of the visible area
+  alone, and what other clients do with a history too long to hold.
 
 ## What this packet delivers
 
 A graph that names what it shows. The history walks every branch, remote-tracking
 ref and tag, draws each ref as Fork's label on the commit it points at, and draws
-each stash as a row of its own. A sidebar lists the refs and the working tree's
+each stash made on a commit it shows as a row of its own. A row keeps only what
+it cannot derive, so a history of any depth stays cheap to scroll and to search. A sidebar lists the refs and the working tree's
 count of changes, and pressing a ref finds its commit. A toolbar names the
 current branch and how far it is from its upstream. And a read-only Local Changes
 view lists what `git status` says has changed, staged and unstaged, opening any
 file's diff through the working-tree query `diff-engine` built.
 
 Four layers, in build order: refs, ahead/behind and status in the engine, each
-exactly what git says; the history walk seeded from every ref, with labels and
-stash rows; the worker lanes that carry the new answers and the refresh that
+exactly what git says; compact rows whose edges are derived as they are drawn; the history walk seeded
+from every ref, with labels and stash rows; the worker lanes that carry the new answers and the refresh that
 re-asks them; and the views that draw them.
 
 Nothing in it writes to a repository. Staging, committing and every ref operation
@@ -130,15 +137,20 @@ are later packets'.
 ### R4 — The history walks every ref, with stash rows (L5)
 
 - R4.1 The history is seeded from every local branch, every remote-tracking ref,
-  every tag that identifies a commit, `HEAD`, and the commit each stash was made
-  on — Fork's All Commits — from the same snapshot R1 answers. `refs/stash` is
-  not a seed; a stash's base is, so the stash's edge always lands, even when the
-  branch it was made on has gone.
-- R4.2 Each stash is a row of its own, merged into the stream by its commit time
-  but never after the commit it was made on (a stash dated older than its base,
-  by clock skew, is drawn directly above it), with one edge: to that commit. A stash's index and untracked
-  commits never become rows (unless some ref reaches them otherwise). Several
-  stashes on one commit each take their own row and lane.
+  every tag that identifies a commit, and `HEAD` — Fork's All Commits — from the
+  same snapshot R1 answers. Nothing about a stash is a seed: not `refs/stash`,
+  and not the commit a stash was made on.
+- R4.2 Each stash whose base — the commit it was made on — is a commit the walk
+  reaches is a row of its own, merged into the stream by its commit time but
+  never after its base (a stash dated older than its base, by clock skew, is
+  drawn directly above it), with one edge: to that commit. A stash whose base no
+  seed reaches (its branch deleted, its commit rebased or amended away, made on
+  a detached `HEAD` that moved on) has no row in the graph, as in Fork
+  (`fork-unreachable-stash-base.md`); it stays in the sidebar's Stashes (R8.5).
+  How the walk knows a stash's base is reached before the row's date comes up is
+  phase 04's to settle within C11. A stash's index and untracked commits never
+  become rows (unless some ref reaches them otherwise). Several stashes on one
+  commit each take their own row and lane.
 - R4.3 Every row carries the refs that point at its commit (R1's labels:
   branches, remote-tracking refs, tags, and whether it is `HEAD`'s commit), from
   the snapshot the walk started from.
@@ -147,6 +159,14 @@ are later packets'.
   out without keying it as a commit the walk can reach.
 - R4.5 There is no working-tree row (L6). Fork draws none; the sidebar's Local
   Changes is the entry point.
+- R4.6 A row keeps only what it cannot derive (L13): its commit's id, parents,
+  subject, author and date, its lane, and the lanes that start, end, merge or
+  fork at it — never every lane passing through it. The edges a drawn row
+  crosses are derived from periodic full lane snapshots, advanced through the
+  rows' changes, for the rows drawn alone; they are exactly
+  the edges the lane assigner computes today, repaints included. Today 89% of a
+  retained row is the edges crossing it, 4.3-6.3 KB a row on rust-lang/rust
+  (`deep-find-measured.md`); the bar is C15.
 
 ### R5 — Labels on rows (L7)
 
@@ -197,8 +217,17 @@ are later packets'.
   not yet loaded is found by paging the held walk forward until it arrives,
   saying so while it looks. A find is history-lane work — it pages the same
   held walk a scroll pages — so the next press or scroll supersedes it. A ref
-  whose commit is not in the walk (a tag on a tree) says so.
-- R8.6 Pressing Local Changes shows the Local Changes view in the main region;
+  whose commit is not in the walk (a tag on a tree) says so. A stash with no row
+  (R4.2) shows its changes in the detail pane with no row selected, saying it is
+  not in the graph.
+- R8.6 A find retains what scrolling to its target would, and no more: R4.6's
+  compact rows. On rust-lang/rust paging to the oldest commit takes about 2.4 s
+  and, with today's rows, holds about 1.4 GiB (`deep-find-measured.md`); with
+  compact rows it is held to C15. There is no cap on the history (L13). This
+  deviates from Fork on purpose: Fork holds only its newest 50,000 or 100,000
+  commits and does nothing when a pressed ref is past them
+  (`fork-deep-history.md`).
+- R8.7 Pressing Local Changes shows the Local Changes view in the main region;
   pressing All Commits shows the history.
 
 ### R9 — Local Changes, read only (L10)
@@ -256,8 +285,10 @@ are later packets'.
   `git status` printed. A path git lists is listed; a path it does not, is not.
 - **Refs are git's.** A ref `git for-each-ref` lists is listed with its target;
   one it does not, is not.
-- **Fork's layout, every deviation named.** The deviations: a generic remote
-  glyph until packet 6 knows the forge; no working-tree row, as Fork has none.
+- **Fork's layout, every deviation named.** Two deviations: a generic remote
+  glyph until packet 6 knows the forge; and no cap on the history — a pressed ref
+  is found however deep it is, where Fork stops at its newest 50,000 or 100,000
+  commits and does nothing. (No working-tree row follows Fork, which has none.)
 - **Nothing in this packet writes to a repository.** Every query here is a read.
 - **Meaning never rests on colour alone.** A label's kind is its glyph and shape.
 - **An answer is drawn only for the refresh or selection it was computed for.**
@@ -275,17 +306,18 @@ here and does not restate them.
 | C3 | Ahead and behind equal `git rev-list --left-right --count` for a branch ahead, behind, diverged, equal, with a local upstream, and with a gone upstream (no counts); a cancelled query stops its walk rather than finishing it | integration test |
 | C4 | Status parsed from git equals independent oracles — `git diff --cached --name-status` under the same rename config, `git diff --name-status`, `git ls-files --others --exclude-standard`, `git ls-files -u` and the submodule's own state — on fixtures covering every R3.2 kind, all seven conflict kinds, renames and copies under each `status.renames` value, intent-to-add, type and mode changes, submodules under each ignore setting, `status.showUntrackedFiles=no`, nested untracked directories listed per file, names with spaces, newlines and invalid UTF-8, and an unborn branch; the index is byte-identical after every read; under git 2.30.9 and 2.32.7 as well as the host's (`git-floor`), where a sparse index answers R3.7's state | integration tests |
 | C5 | A superseded status read ends its process group: the repository's registry holds no running invocation after the cancel | integration test through the runner |
-| C6 | The commits the history walks equal `git rev-list --branches --remotes --tags HEAD` plus each stash's first parent, on a fixture with a branch `HEAD` cannot reach, a tag on a tree, and a stash whose branch was deleted; every row's labels equal what `git log --decorate=full` names for that commit, `refs/stash` aside; each stash is one row, with one edge, to its first parent, and its index and untracked commits are not rows; a stash dated older than its base is drawn above it | integration and assigner tests |
+| C6 | The commits the history walks equal `git rev-list --branches --remotes --tags HEAD`, on a fixture with a branch `HEAD` cannot reach, a tag on a tree, and a stash whose branch was deleted (no row for it, and none of its base's otherwise unreachable commits); every row's labels equal what `git log --decorate=full` names for that commit, `refs/stash` aside; each stash whose base is walked is one row, with one edge, to its first parent, and its index and untracked commits are not rows; a stash dated older than its base is drawn above it | integration and assigner tests |
 | C7 | Rows draw each label kind with its glyph, compact labels, clipping, ✓ and the bold `HEAD` subject; a stash row draws its chip and message; the Commit tab draws REFS; selecting a stash lists what `git stash show --name-status` lists, with `stash.showIncludeUntracked` unset and set | headless tests |
-| C8 | The sidebar draws its sections in order, groups by `/`, marks the current branch, shows ahead/behind and gone; the filter narrows on a worker; pressing a ref selects its row, finding one beyond the loaded pages and cancelling when a press or scroll supersedes it; a tag on a tree says so; a sidebar of 50,000 refs builds one viewport | headless and worker tests |
+| C8 | The sidebar draws its sections in order, groups by `/`, marks the current branch, shows ahead/behind and gone; the filter narrows on a worker; pressing a ref selects its row, finding one beyond the loaded pages and cancelling when a press or scroll supersedes it; a tag on a tree says so; a stash with no row shows its changes and says so; a deep find retains only compact rows (C15); a sidebar of 50,000 refs builds one viewport | headless and worker tests |
 | C9 | Local Changes draws both lists with their badges and the count by R9.2; choosing a path draws its diff from the working-tree query; a conflicted path draws its notice; 50,000 paths build one viewport | headless tests |
 | C10 | Focus, the Refresh action and a finished fetch each re-read refs and status; a moved ref, a changed stash list and a checkout that moves no ref each reopen the history, and an unchanged snapshot does not; the selection survives a reopen; a superseded refresh is never drawn; no new lane supersedes another, and the changes-to-file-diff crossing is unchanged; a slow status queues neither a page nor a diff; superseded snapshots, statuses and a reopen's replaced rows are freed off the UI thread | worker tests through the real boundary, and headless tests with focus set |
 | C11 | On rust-lang/rust at `c999cef531e` (`~/Development/bench/rust`, never written), on the machine recorded in `docs/research/diff-engine/measured-baseline.md`, warm, release build, median of seven: status on a clean tree within 100 ms; status with 1,000 modified and 10,000 untracked files (on a scratch clone) within 250 ms; the refs snapshot with every ahead/behind within 100 ms, and a 10,000-ref fixture's recorded; the first page of history seeded from every ref within 200 ms, recorded beside `HEAD`'s; status with every file's stat changed recorded, not barred | an `#[ignore]`d reporter driven by `CAIRN_BENCH_REPO`, numbers in `progress.md` and, at teardown, in `docs/research/refs-and-status/` |
 | C12 | `window_check` keeps every frame under 16.7 ms of UI-thread work while the decorated history, the sidebar, the refs and a large status land | the `#[ignore]`d `window_check`, numbers recorded |
 | C13 | D1 in `docs/design/engine.md` and the root `CLAUDE.md` names status as a read git answers, with R3.8's residuals | review |
 | C14 | `scripts/gate.sh` passes | the gate |
+| C15 | Every row's derived edges equal the edges today's lane assigner computes for it, repaints included, over the crafted fixtures, the Cairn checkout and every ref of the bench repository; paging the whole of rust-lang/rust at `c999cef531e` from every ref, in a release build, retains at most 192 MiB of rows (1.4 GiB today; about 150 MiB of that is what a row keeps besides its edges, so edges compacted alone land near 160 MiB), and a find of its oldest commit takes no more than 10% longer than with today's rows (2.4 s) | an equivalence test in `cairn-model`/`cairn-git`, and the `#[ignore]`d reporter driven by `CAIRN_BENCH_REPO`, numbers recorded |
 
-C11 and C12 are not automated, for the reason `history-graph`'s A7 was not: a
+C11, C12 and C15's measured half are not automated, for the reason `history-graph`'s A7 was not: a
 timing assertion in CI is flaky and bound to a machine.
 
 ## Out of scope
@@ -300,4 +332,5 @@ Not done, and filed with the `file-issue` skill at teardown: listing ignored fil
 stat-dirty tree reads fast again (a write, for the local write lane); greying
 commits not on the current branch, and Fork's push and pull dots; Fork's branch
 filter and hiding refs (#2); a Submodules section; the changed-file tree view
-(#36).
+(#36); a resident bound on rows for histories of millions of commits, with a
+re-walk beyond it (#4).

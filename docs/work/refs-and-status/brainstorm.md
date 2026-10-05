@@ -161,3 +161,64 @@ coverage audit, recorded for the user to see in the planning PR:
   focus makes that free frequent.
 - **`stash.showIncludeUntracked` is honoured** when a stash is selected (within
   L5's "what `git stash show` lists").
+
+## Revised after follow-up research, 2026-10-05
+
+The user asked for evidence on two of the audit-settled choices above before
+merging the plan.
+
+- **A stash's base no longer seeds the walk.** Fork draws a stash only on a
+  commit its ref walk already reached; a stash whose base no ref reaches has no
+  row and is listed in the sidebar alone (vendor statements in TrackerWin #1050
+  and Tracker #1283, and a screen recording in TrackerWin #1622 —
+  `docs/research/refs-and-status/fork-unreachable-stash-base.md`). Walking the
+  base would have matched `git log --all` and VS Code's Git Graph, but deviated
+  from Fork without a reason; the user chose Fork's rule. Supersedes the "A
+  stash's base commit seeds the walk" bullet above.
+- **A deep find's memory is bounded, and how is the user's decision in phase
+  06.** Paging the held walk is fast — about 120,000 rows a second, the oldest
+  commit of rust-lang/rust in about 2.4 s, seeded from every ref as cheaply as
+  from `HEAD` — but every row passed is kept (#4), about 1.4 GiB at that depth
+  (`docs/research/refs-and-status/deep-find-measured.md`). The find stays as
+  designed; its retained memory gets a bound before it is built.
+
+## Locked 2026-10-05, after the deep-find measurement
+
+**L13. Compact rows, no cap, and the deep find as designed.** The user asked for
+a deep find designed not to cost memory, after Fork was researched.
+
+Evidence: paging the held walk is fast (about 2.4 s to the oldest commit of
+rust-lang/rust, cancel within about 10 µs) but a retained row costs 4.3-6.3 KB
+there, 89% of it the edge segments crossing it — 105-160 open per row — so the
+oldest commit holds about 1.4 GiB (`deep-find-measured.md`; the systems doc's
+660 B a row came from repositories of at most 2,896 commits). Fork caps its list
+at its newest 50,000 (Windows) or 100,000 (Mac) commits, loads it whole, and does
+nothing for a pressed ref past it; it adopted the cap after a Chromium history
+cost gigabytes, and its graph layout "calculates only the visible area"
+(`fork-deep-history.md`). GitLens's Commit Graph pages a jump in, as Cairn plans.
+
+Locked: a row keeps its id, parents, text, lane and only the lane changes at it;
+the edges a drawn row crosses are derived from periodic lane snapshots, for the
+drawn rows alone (Fork's technique); no cap on the history; the find pages as
+planned and retains only compact rows. Estimated about 60 MB for all of
+rust-lang/rust (an estimate from the measured breakdown, not a measurement); the
+bar is 128 MiB (PRD C15). Compact rows are a phase of their own, 03, before stash
+rows and labels are added to a row; later phases are renumbered 04-09.
+
+Rejected: **Fork's cap** — a cap breaks "readable at scale" past it, and with
+today's rows 100,000 commits still cost about 575 MB, so it bounds nothing
+without compact rows. **A resident window with a re-walk beyond it** — constant
+memory, but a not-resident row state and seconds-long re-walks per miss, which
+only a history of millions of commits needs; filed with #4. Supersedes the
+"Revised after follow-up research" bullet on bounding a deep find.
+
+## Corrected in the revision's audit, 2026-10-05
+
+L13's estimate of "about 60 MB" for all of rust-lang/rust was wrong. The parts of
+a row that are not edges — the 216 B row struct with the outer row vector's
+growth slack (108 MiB), text (27 MiB) and parent ids (14 MiB) — already come to
+about 150 MiB (`deep-find-measured.md`), so compact rows land near 160 MiB:
+about 9x less than 1.4 GiB, not 25x. C15's bar is set at 192 MiB accordingly;
+shrinking the row struct itself is not in scope. The user was told. Also: L13's
+"cancel within about 10 µs" is the maximum deep in a find (0.6-17 µs overall),
+and "about 575 MB" is 575 MiB.

@@ -1,17 +1,17 @@
-# Phase 06 — The sidebar, its filter, and finding a ref
+# Phase 07 — The sidebar, its filter, and finding a ref
 
 ```
 STEP 0  Pre-flight: read docs/work/refs-and-status/state.md and this file.
         Nothing else yet. Declare the mode. User mode is the default: create a
         runtime-owned phase branch from feature/refs-and-status before editing.
-        Verify phases 01-05 are present at the integration tip. Direct
+        Verify phases 01-06 are present at the integration tip. Direct
         integration work requires an orchestrator prompt that explicitly
         declares packet mode.
 STEP 1  Load context via an Explore agent over crates/cairn-ui/src/
         (changes_list.rs as the virtualized-list-with-filter precedent, the
         history list, the splitter the detail pane uses), crates/cairn-app/src/
         (window.rs, file_filter.rs, selection.rs, worker/ for the filter and find
-        lanes phase 04 added), crates/cairn-ui/tests/changes_list.rs,
+        lanes phase 05 added), crates/cairn-ui/tests/changes_list.rs,
         docs/prd/refs-and-status.md (R8, C8) and
         docs/research/refs-and-status/fork-refs-and-status-ui.md section 5. Use
         the freya skill and verify every Freya API in the fork checkout at the
@@ -25,8 +25,12 @@ STEP 2  Implement.
         3. Pressing a ref or stash (R8.5): select and scroll; a row not loaded
            is found by paging the held walk forward as a history-lane request,
            saying "Finding <ref>…", superseded by the next press or scroll; a
-           ref whose commit is not walked (a tag on a tree) says so. Pressing Local Changes and All Commits
-           switches the main region (R8.6; Local Changes' content is phase 07's
+           ref whose commit is not walked (a tag on a tree) says so; a stash
+           with no row (R4.2) shows its changes and says it is not in the
+           graph. The find retains only phase 03's compact rows (R8.6);
+           measure a find of the bench repository's oldest commit — time,
+           retained memory, cancel — against C15. Pressing Local Changes and All Commits
+           switches the main region (R8.7; Local Changes' content is phase 08's
            — a placeholder is acceptable here).
         4. Tests for C8, including the viewport twin, named in the root
            CLAUDE.md virtualization invariant in the same commit.
@@ -36,11 +40,11 @@ STEP 2  Implement.
         worker query); no literal modifier; a find is history-lane work, so it
         and a scroll supersede each other and nothing else.
 
-        Out of scope: Local Changes' lists (07), Worktrees and Submodules
+        Out of scope: Local Changes' lists (08), Worktrees and Submodules
         sections, double-click checkout, hiding or filtering the graph (#2).
 STEP 3  Validate: scripts/gate.sh. Then orchestrate this phase's QA in this
         session: /qa over the phase diff with the reviewers implementation-plan.md
-        names for phase 06, spawned fresh, plus the qa-checklist.md items this
+        names for phase 07, spawned fresh, plus the qa-checklist.md items this
         phase covers and the QA brief below. Adjudication goes to qa-confirm
         (fresh), never this session inline; log dismissed findings with reasons
         in progress.md; fix confirmed findings in focused fixes; disputed
@@ -58,9 +62,9 @@ STEP 6  Branch authority follows the declared mode. In user mode, commit
         per-phase PR. NEVER merge or PR to main — teardown raises that one PR
         and the USER merges every PR.
 STEP 7  Final response: what shipped, what is deferred, exact follow-ups.
-STOPPING RULES: stop and ask the user if finding a deep commit on the bench
-repository takes long enough that a cap or a different mechanism is needed (that
-is a product decision); if the sidebar seems to need a plain ScrollView; or
+STOPPING RULES: stop and ask the user if finding the bench repository's oldest
+commit retains more than C15 allows or takes more than 10% longer than the 2.4 s
+measured in deep-find-measured.md (a cap or another mechanism is a product decision); if the sidebar seems to need a plain ScrollView; or
 before any deviation from Fork's order or behaviour. Otherwise do not stop for
 permission.
 ```

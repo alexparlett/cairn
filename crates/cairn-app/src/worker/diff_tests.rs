@@ -53,6 +53,26 @@ pub(crate) fn commits(handle: &RepositoryHandle, updates: &mut Updates, count: u
     }
 }
 
+/// Up to `at_most` commits of the history `HEAD` reaches, newest first: fewer when the
+/// history ends sooner, as a squash-merged checkout's does. For a search over recent
+/// history, where `at_most` is a budget, not a length the test depends on.
+pub(crate) fn recent_commits(
+    handle: &RepositoryHandle,
+    updates: &mut Updates,
+    at_most: usize,
+) -> Vec<Oid> {
+    handle.submit(Request::OpenHistory { rows: at_most });
+    let seen = collect_until(updates, |u| matches!(u, Update::Rows { .. }));
+    match seen.last() {
+        Some(Update::Rows { rows, complete })
+            if !rows.is_empty() && (rows.len() == at_most || *complete) =>
+        {
+            rows.iter().map(|row| row.graph.id).collect()
+        }
+        other => panic!("expected up to {at_most} rows, got {other:?}"),
+    }
+}
+
 /// `of`'s change set, asked and awaited.
 fn change_set(handle: &RepositoryHandle, updates: &mut Updates, of: Comparison) -> ChangeSet {
     handle.submit(Request::Changes { of });
@@ -536,7 +556,7 @@ fn is_binary(diff: &Option<FileDiff>) -> bool {
 /// compare line by line, and two of them: what an attribute edit can turn binary.
 fn two_rust_files() -> (Oid, Comparison, ChangedFile, ChangedFile) {
     let (handle, mut updates) = checkout();
-    let ids = commits(&handle, &mut updates, 40);
+    let ids = recent_commits(&handle, &mut updates, 40);
     for id in ids {
         let of = Comparison::Commit(id);
         let changes = change_set(&handle, &mut updates, of);
@@ -555,7 +575,7 @@ fn two_rust_files() -> (Oid, Comparison, ChangedFile, ChangedFile) {
             }
         }
     }
-    panic!("none of the last forty commits modified two Rust files");
+    panic!("none of the last forty commits, or all of them if fewer, modified two Rust files");
 }
 
 /// The engine's answer for `query` in `repository`, asked on a handle and session of its
@@ -789,7 +809,7 @@ fn a_stat_only_index_refresh_keeps_what_is_kept() {
 #[test]
 fn an_identical_ask_is_answered_from_what_is_kept() {
     let (handle, mut updates) = checkout();
-    let ids = commits(&handle, &mut updates, 40);
+    let ids = recent_commits(&handle, &mut updates, 40);
     let start = reads(&handle, &mut updates);
     let (of, file) = ids
         .iter()
@@ -944,7 +964,7 @@ fn expand_all_cost(
 /// its own, so the answers it keeps are not the expansion's.
 fn commit_read_whole(files: usize) -> (Comparison, ChangeSet) {
     let (handle, mut updates) = checkout();
-    let ids = commits(&handle, &mut updates, 40);
+    let ids = recent_commits(&handle, &mut updates, 40);
     for id in &ids {
         let of = Comparison::Commit(*id);
         let changes = change_set(&handle, &mut updates, of);

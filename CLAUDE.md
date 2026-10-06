@@ -80,7 +80,7 @@ there.
 
 - `scripts/gate.sh` — the pre-merge gate: format, lint, typecheck, guards,
   dependency policy, full test suite, doctests, and `git-floor` (`cairn-git`'s
-  real-git diff tests against git 2.30.9 and 2.32.7, built from source by
+  real-git diff and status tests against git 2.30.9 and 2.32.7, built from source by
   `scripts/git-floor.sh` into `~/.cache/cairn/git-floor` on the first run, which
   needs the network, a C compiler, make and zlib's headers, and fails naming what
   is missing rather than skipping). Every `--step` but `test-fast` runs in it
@@ -217,7 +217,12 @@ copy is a different version from the fork that links.
   mtimes, bytes unchanged; it runs `git status` inside each submodule, with that
   repository's own hook and filters; and since a read never writes the
   refreshed stat back, a tree whose every file's stat changed is rehashed in
-  full on every read until something refreshes the index, which Cairn does not.
+  full on every read until something refreshes the index, which Cairn does not;
+  and in a partial clone, a staged rename whose blob only the promisor holds
+  fails the whole read on git 2.44 and later (no fetch, nothing listed, where the
+  user's own `git status` would fetch and answer), while git before 2.44 ignores
+  `GIT_NO_LAZY_FETCH` and fetches, writing a pack
+  (`in_a_partial_clone_a_status_read_fails_rather_than_fetching`).
   Residuals, stated in `docs/design/engine.md` ("Reads see git's form"): that
   environment still hands the driver the user's `PATH`, `HOME` and the rest; a
   store the driver keeps is its own to write (git-lfs's `.git/lfs/objects`); a
@@ -225,8 +230,9 @@ copy is a different version from the fork that links.
   unfiltered content with a stderr warning Cairn does not show; and `textconv`
   never runs on a read. No other program runs on a read — no textconv, external
   diff, driver `command` or smudge filter — pinned by
-  `the_content_query_writes_nothing_and_runs_nothing` and
-  `a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`,
+  `the_content_query_writes_nothing_and_runs_nothing`,
+  `a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`
+  and `a_status_read_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`,
   and the daemon's case by
   `a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files`.
   How every `git` process is built, run and ended is

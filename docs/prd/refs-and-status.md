@@ -146,7 +146,13 @@ are later packets'.
   objects; the fsmonitor and the clean filter run as D1 already allows. Because a
   read never writes the refreshed index back, a tree whose every file's stat
   changed stays slow to read (736 ms on rust-lang/rust) until something
-  refreshes the index; Cairn does not, in this packet.
+  refreshes the index; Cairn does not, in this packet. And a read never lazily
+  fetches (the read environment's `GIT_NO_LAZY_FETCH=1`, the user's decision of
+  2026-10-02): in a partial clone, a staged rename whose blob only the promisor
+  holds fails the whole status read on git 2.44 and later — nothing listed, no
+  pack written — where the user's own `git status` would fetch and answer; git
+  before 2.44 ignores the variable, so there a status read fetches and writes a
+  pack.
 
 ### R4 — The history walks every ref, with stash rows (L5)
 

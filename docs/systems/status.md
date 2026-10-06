@@ -92,7 +92,9 @@ index gix reads as sparse is `IndexUnreadable(Sparse)` — `read-cache.c` learnt
 **Cancellation.** The cancel is polled before each read and by the runner while git
 runs: a superseded read ends git's process group — whatever git started with it, such
 as a `core.fsmonitor` hook — and answers `Error::StatusCancelled`, leaving nothing in
-the repository's registry (`a_superseded_status_read_ends_its_process_group_and_leaves_nothing_running`,
+the repository's registry, whichever of the two reads it was in
+(`a_superseded_status_read_ends_its_process_group_and_leaves_nothing_running`,
+`a_status_read_superseded_during_its_second_read_ends_it`,
 `a_status_read_superseded_before_it_starts_runs_nothing`).
 
 ## What a status read writes and runs
@@ -101,8 +103,15 @@ Under `GIT_OPTIONAL_LOCKS=0` git writes no index — not the refreshed stat info
 not the untracked cache, not the fsmonitor token — and takes no lock
 (`a_status_read_leaves_the_index_byte_identical`, which also shows that git with locks
 allowed rewrites that index; every fixture of `crates/cairn-git/tests/status.rs` holds
-the superproject's and each submodule's index byte-identical). Residuals, accepted as
-parity with the user's own `git status`:
+the superproject's and each submodule's index byte-identical).
+`a_status_read_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor` holds the
+whole git directory byte-identical, every mtime unchanged but the shared index's, under
+an untracked cache, an fsmonitor hook answering a token and a split index, all of which a
+locked status would rewrite; and with a caching textconv, an external diff, a driver's
+`command`, a smudge filter and a `post-index-change` hook configured it runs none of
+them — only the fsmonitor hook and the clean filter, and nothing but `git status`.
+Residuals, accepted as parity with the user's own `git status` (but the last, which is the
+read policy's):
 
 - under a split index git advances `sharedindex.*`'s mtime, and under a sparse index
   the mtime of the loose tree objects it expands, bytes unchanged in both;
@@ -112,9 +121,13 @@ parity with the user's own `git status`:
 - because a read never writes the refreshed stat back, a tree whose every file's stat
   changed is rehashed in full on every read until something refreshes the index, which
   nothing in Cairn does;
-- staged rename detection compares blobs, and in a partial clone a blob only the
-  promisor holds is not fetched from git 2.44 on, and may be on an older git
-  (`crate::reads`).
+- staged rename detection compares blobs, and a read never lazily fetches one
+  (`GIT_NO_LAZY_FETCH=1`, `crate::reads`): in a partial clone, a staged rename whose
+  blob only the promisor holds fails the WHOLE read on git 2.44 and later —
+  `Error::GitFailed`, nothing listed, no pack written — where the user's own `git status`
+  would fetch the blob and answer; git before 2.44 ignores the variable and fetches,
+  writing a pack (`in_a_partial_clone_a_status_read_fails_rather_than_fetching`, which
+  pins both).
 
 ## Parity, and where it is checked
 

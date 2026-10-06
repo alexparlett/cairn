@@ -3,6 +3,56 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-06 — phase 02 QA
+
+Fresh reviewers (`qa-checklist`, `test-coverage-auditor`, `destructive-ops-reviewer`,
+`gate-integrity-reviewer`) and a fresh `qa-confirm`, run by the coordinator.
+
+**The user accepted the two-read scheme for `status.showUntrackedFiles` (2026-10-06):** a
+first `git status` with no `--untracked-files`, a second with `--untracked-files=all` only
+where the first collapsed an untracked directory. Now a locked decision (`state.md`).
+
+Confirmed findings fixed:
+
+- DO1: `in_a_partial_clone_a_status_read_fails_rather_than_fetching` — a blob-less clone
+  whose sparse checkout left a blob with the promisor, and a staged inexact rename of it:
+  on git 2.44+ `Error::GitFailed`, nothing listed, no pack written; below 2.44 the read
+  fetches and answers, pinned as the floor's residual. Fails with the read's
+  `GIT_NO_LAZY_FETCH` set to `0`. The docs (`reads/status.rs`, `docs/systems/status.md`)
+  say the whole read fails; the residual is in PRD R3.8 and the root `CLAUDE.md`. No new
+  model variant, retry or fetch (the read policy of 2026-10-02).
+- DO2: `a_status_read_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor` — an
+  untracked cache, an fsmonitor token and a split index, each one a locked status
+  rewrites, and a caching textconv, an external diff, a driver `command`, a smudge filter
+  and a `post-index-change` hook: the git directory byte-identical (the shared index's
+  mtime excepted, as documented), only the clean filter and the hook's token answer ran.
+  Fails with the read's `GIT_OPTIONAL_LOCKS` set to `1`. Found building it: git 2.30.9 and
+  2.32.7 merge a split index when a locked status under `core.fsmonitor` rewrites the index.
+  Named in `CLAUDE.md`'s pin list and `docs/systems/status.md`.
+- TC1: `a_status_read_superseded_during_its_second_read_ends_it` — fails (after the
+  stub's 30 s) when the second read is given a cancel that never fires.
+- TC2: rename and unmerged records with submodule fields; fails with the field dropped
+  from either; the integration tests compare a conflicted entry's submodule state too.
+- TC3: the index walk panics on an unreadable directory, and each read requires the
+  superproject's index and each named submodule's among those compared (fails with the
+  walk skipping `modules/`, or matching no index).
+- QC-F2: the docs say a setting changed between the two reads is not seen.
+- QC-D1/GI1, QC-D2: "real-git diff and status tests" in `CLAUDE.md`, `docs/qa-gate.md`,
+  `scripts/gate.sh` and `scripts/git-floor.sh`; the banner reflowed; floors raised.
+- QC-F4: commit 3b56314 (`fix(app)`) belongs to phase 02 though it touches `cairn-app`:
+  `an_identical_ask_is_answered_from_what_is_kept` took the newest commit's first
+  modified file, which phase 02's docs commit made `CLAUDE.md` — past the size limits, so
+  answered without a patch read — and the test failed on the checkout's history, not on
+  the worker. It now searches for a file whose diff asks git, on a handle of its own.
+
+Dismissed, with the adjudicator's reasons:
+
+- QC-F3 (and the destructive-ops note on it): a nested repository makes every status read
+  twice — the documented, measured cost of the scheme the user accepted; phase 06 may
+  weigh it.
+
+For the user's end batch: what a failed status read does to the view (`state.md`).
+
 ## 2026-10-06 — phase 02: the status engine
 
 `Repository::status` — `git status --porcelain=v2 -z` as a read, parsed into

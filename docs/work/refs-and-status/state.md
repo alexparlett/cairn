@@ -2,7 +2,7 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 02 built (status engine), awaiting its QA; phase 03 next.** Integration branch
+**Status: phase 02 done (status engine), QA adjudicated and confirmed findings fixed; phase 03 next.** Integration branch
 `feature/refs-and-status`, in the worktree `.claude/worktrees/refs-and-status`,
 packet mode.
 
@@ -41,6 +41,10 @@ that most constrain implementation:
   history-lane work. A stash is drawn only on a commit the ref walk reaches, as
   in Fork; nothing about a stash seeds the walk (revised after
   `fork-unreachable-stash-base.md`).
+- **`status.showUntrackedFiles` is read by git itself** (the user's decision,
+  2026-10-06): a first `git status` with no `--untracked-files`, and a second with
+  `--untracked-files=all` only where the first collapsed an untracked directory — no
+  `git config` read, no gix reading. A nested repository makes every read two.
 
 ## Open questions
 
@@ -49,11 +53,12 @@ that most constrain implementation:
   counted in `RefsSnapshot::unreadable`, though git warns `ignoring ref with broken name`.
   Kept as built; whether it should be counted is the user's call.
 
-- For the user's end-of-packet batch (phase 02): `status.showUntrackedFiles` is read by
-  git itself — a first `git status` with no `--untracked-files`, and a second with
-  `--untracked-files=all` only where the first collapsed an untracked directory — rather
-  than by a new `git config` read or by gix. Decided in phase 02, not yet reviewed by the
-  user (`progress.md`, phase 02).
+- For the user's end-of-packet batch (phase 02 QA; not decided): a failed status read —
+  the partial-clone case among them, where a staged rename needs a blob only the promisor
+  holds — blanks the whole working-tree view, where a failed diff fails one query. Options
+  when Local Changes draws it (phase 09): keep `Error::GitFailed` (as built); a named state
+  classified by the repository's state; retry without rename detection; or let status
+  lazy-fetch.
 - The Refresh chord per platform (Fork: ⌘R on macOS, F5 on Windows) — phase 06,
   from `fork-dev/Docs`' shortcut lists.
 - C11's first-page bar is written as 200 ms because history-graph's A7 has no
@@ -105,7 +110,7 @@ Phase 02 (`docs/systems/status.md` is the as-built account):
 | Phase | Status |
 | --- | --- |
 | 01 refs engine | done: C1, C2, C3 pass; C11 refs numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
-| 02 status engine | built: C4, C5, C13 pass (host git, 2.30.9, 2.32.7); C11 status numbers in progress.md; full gate green; awaiting QA |
+| 02 status engine | done: C4, C5, C13 pass (host git, 2.30.9, 2.32.7); C11 status numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
 | 03 compact rows | not started |
 | 04 slim rows | not started |
 | 05 history from every ref | not started |

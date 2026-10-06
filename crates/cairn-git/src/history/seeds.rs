@@ -136,8 +136,10 @@ impl Decoration {
 
 /// `seeds` resolved against the repository: the tips the walk starts from, and its
 /// decoration. A detached `HEAD` naming what is not a commit seeds nothing, as it labels
-/// nothing. Reads two commits per stash and, for a detached `HEAD`, one header; the
-/// labels are shared, not copied.
+/// nothing. A stash whose commit cannot be read — dropped and pruned since the snapshot —
+/// has no row, as the snapshot's own stash read skips an entry it cannot read; the walk
+/// goes on without it. Reads two commits per stash and, for a detached `HEAD`, one header;
+/// the labels are shared, not copied.
 pub(super) fn resolve(
     repo: &gix::Repository,
     seeds: &RefSeeds,
@@ -154,10 +156,11 @@ pub(super) fn resolve(
             tips.push(id);
         }
     }
-    let mut stashes = Vec::with_capacity(seeds.stashes.len());
-    for entry in &seeds.stashes {
-        stashes.push(stash_of(repo, entry)?);
-    }
+    let stashes = seeds
+        .stashes
+        .iter()
+        .filter_map(|entry| stash_of(repo, entry).ok())
+        .collect();
     Ok((
         tips,
         Decoration {

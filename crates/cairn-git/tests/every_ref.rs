@@ -926,6 +926,48 @@ fn stash_rows_are_in_gits_date_order() {
     }
 }
 
+/// QC3: a stash whose commit is gone since the snapshot was read — dropped and pruned —
+/// has no row, and the walk goes on without it. Caught by: an unreadable stash failing the
+/// whole walk.
+#[test]
+fn a_stash_whose_commit_is_gone_since_the_snapshot_has_no_row() {
+    let fixture = fixtures::unborn();
+    let mut clock = Clock(fixtures::EPOCH);
+    commit(&fixture, &mut clock, "f", "1\n", "one");
+    write(&fixture, "f", "wip one\n");
+    git_at(
+        &fixture,
+        clock.tick(),
+        &["stash", "push", "--quiet", "-m", "kept"],
+    );
+    write(&fixture, "f", "wip two\n");
+    git_at(
+        &fixture,
+        clock.tick(),
+        &["stash", "push", "--quiet", "-m", "pruned"],
+    );
+    let pruned = rev_parse(&fixture, "stash@{0}");
+    let kept = rev_parse(&fixture, "stash@{1}");
+    let repo = ok(Repository::discover(fixture.path()), "opening the fixture");
+    let read = ok(repo.refs(&CancelSignal::new()), "reading the refs");
+    assert_eq!(read.snapshot.stashes.len(), 2);
+
+    let loose = fixture
+        .path()
+        .join(".git/objects")
+        .join(&pruned[..2])
+        .join(&pruned[2..]);
+    ok(std::fs::remove_file(&loose), "removing the stash commit");
+    let repo = ok(
+        Repository::discover(fixture.path()),
+        "opening the fixture again",
+    );
+    let rows = page_all(&repo, &HistoryRequest::from_refs(&read.snapshot, 2), 2);
+    let (commits, stashes) = index(&rows);
+    assert_eq!(stashes.keys().collect::<Vec<_>>(), [&kept]);
+    assert_eq!(commits.len(), 1);
+}
+
 /// RR1: opening a walk from every ref reads each tip, and polls the cancel before each but
 /// the first, on both routes: cancelled at its sixth poll, a walk from fifty tags stops
 /// having read six tips and laid nothing out, and a session cancelled there pages, once

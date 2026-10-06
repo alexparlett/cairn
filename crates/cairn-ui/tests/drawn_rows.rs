@@ -3,10 +3,10 @@
 //!
 //! `DRAWN_BEFORE` is what the list drew before: it was asserted against the old rows — each
 //! carrying its full parents and its author's address — while those rows were still what
-//! the list read (commit `4205d5d`), and the slimmed rows, read through a history built page by page, are now
-//! held to it. Each row is drawn by the
-//! window's own row, `CommitRow`, and read back from the drawn tree: its labels' text, and
-//! the pixel at the centre of its node, which a dot fills and a merge's ring leaves empty.
+//! the list read (commit `4205d5d`), and the slimmed rows, read through a history built
+//! page by page, are now held to it. Each row is drawn by the window's own row,
+//! `CommitRow`, and read back from the drawn tree: its labels' text, and the pixel at the
+//! centre of its node, which a dot fills and a merge's ring leaves empty.
 
 use cairn_model::{GraphRow, History, Lane, Oid, PagedCommit, RowContent, RowsPage};
 use cairn_ui::graph_geometry::{lane_x, row_middle};

@@ -717,9 +717,12 @@ mod tests {
     }
 
     /// `main` when rows were slimmed, and what each of its commits' rows drew in the window
-    /// before: subject, author, short id, date, and whether its node is a merge's ring. Each
-    /// line was read by this test from this window, over this checkout, built at commit
-    /// `4205d5d`, while every row still carried its full parents and its author's address.
+    /// before: subject, author, short id, date, and whether its node is a merge's ring.
+    /// Committed with the slimming (`1b0ca9f`); its lines were read by this test run
+    /// against a build of `4205d5d`, while every row still carried its full parents and its
+    /// author's address, and they agree with `CAIRN_BEFORE` in
+    /// `crates/cairn-git/tests/slim_rows.rs`, committed at `4205d5d`
+    /// (`the_windows_table_agrees_with_the_engines_table_captured_before`).
     const MAIN_DRAWN_BEFORE: &[(&str, &str, &str, &str, &str, bool)] = &[
         (
             "0cfd746b5a913529bbd1a9684f8e92f1cb364c84",
@@ -872,37 +875,91 @@ mod tests {
     /// before rows were slimmed. Caught by: a row reading another row's text or author, a
     /// parent count that is not its commit's, or a page's authors misnumbered in the
     /// history.
+    /// The window's table and the engine's, captured at `4205d5d` and committed there: the
+    /// same commits, in the same order, with the same subjects and authors, and a ring
+    /// exactly where the engine counted more than one parent. Caught by: a table edited
+    /// after the rows were slimmed to match what they draw now.
+    #[test]
+    fn the_windows_table_agrees_with_the_engines_table_captured_before() {
+        let engine = include_str!("../../cairn-git/tests/slim_rows.rs");
+        let table = engine
+            .split_once("const CAIRN_BEFORE: &[Row] = &[")
+            .and_then(|(_, rest)| rest.split_once("\n];"))
+            .map(|(table, _)| table)
+            .unwrap_or_else(|| panic!("no CAIRN_BEFORE table in slim_rows.rs"));
+        // Each row: `("id", "subject", "author", time, parents)`; no subject holds a quote.
+        let rows: Vec<(String, String, String, usize)> = table
+            .split("),")
+            .filter(|row| row.contains('"'))
+            .map(|row| {
+                let quoted: Vec<&str> = row.split('"').skip(1).step_by(2).collect();
+                let parents = row
+                    .rsplit(',')
+                    .find_map(|field| field.trim().trim_end_matches(')').parse().ok())
+                    .unwrap_or_else(|| panic!("no parent count in {row}"));
+                (
+                    quoted[0].to_owned(),
+                    quoted[1].to_owned(),
+                    quoted[2].to_owned(),
+                    parents,
+                )
+            })
+            .collect();
+        assert_eq!(rows.len(), MAIN_DRAWN_BEFORE.len());
+        for ((id, subject, author, parents), drawn) in rows.iter().zip(MAIN_DRAWN_BEFORE) {
+            let (hex, drawn_subject, drawn_author, short, _, ring) = *drawn;
+            assert_eq!((id.as_str(), subject.as_str()), (hex, drawn_subject));
+            assert_eq!(author, drawn_author, "{hex}");
+            assert!(hex.starts_with(short), "{hex}");
+            assert_eq!(*parents > 1, ring, "{hex}");
+        }
+    }
+
     #[test]
     fn the_cairn_checkouts_rows_draw_what_they_drew_before_rows_were_slimmed() {
         use freya::engine::prelude::{Image, ImageInfo, raster_n32_premul};
 
         let (handle, mut updates) = crate::worker::checkout();
-        handle.submit(Request::OpenHistory { rows: 4096 });
-        let page = loop {
-            match crate::worker::next_update(&mut updates) {
-                update @ crate::worker::Update::Rows { .. } => break update,
-                crate::worker::Update::Failed { message } => {
-                    panic!("the history failed: {message}")
-                }
-                _ => {}
-            }
-        };
         let (mut test, view, submitted) = launch(Vec::new(), Progress::opening());
         let submit = {
             let submitted = submitted.clone();
             move |request| submitted.borrow_mut().push(request)
         };
-        test.run_in(|| {
-            crate::session::apply(
-                page,
-                view,
-                &crate::session::Worker {
-                    submit: &submit,
-                    refuse: &|_| {},
-                    closing: false,
-                },
-            );
-        });
+        // Page as the window pages, each page applied as the window applies it, until every
+        // commit of `main`'s is held or the history ends: however far `HEAD` has moved on.
+        let wanted: Vec<RowId> = MAIN_DRAWN_BEFORE
+            .iter()
+            .map(|&(hex, ..)| RowId::Commit(Oid::parse(hex).unwrap()))
+            .collect();
+        handle.submit(Request::OpenHistory { rows: PAGE_ROWS });
+        loop {
+            let (page, complete) = match crate::worker::next_update(&mut updates) {
+                update @ crate::worker::Update::Rows { complete, .. } => (update, complete),
+                crate::worker::Update::Failed { message } => {
+                    panic!("the history failed: {message}")
+                }
+                _ => continue,
+            };
+            test.run_in(|| {
+                crate::session::apply(
+                    page,
+                    view,
+                    &crate::session::Worker {
+                        submit: &submit,
+                        refuse: &|_| {},
+                        closing: false,
+                    },
+                );
+            });
+            let held = {
+                let rows = view.rows.peek();
+                wanted.iter().all(|id| rows.position(*id).is_some())
+            };
+            if held || complete {
+                break;
+            }
+            handle.submit(Request::MoreHistory { rows: PAGE_ROWS });
+        }
         test.sync_and_update();
 
         let graph_left = test

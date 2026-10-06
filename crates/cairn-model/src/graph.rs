@@ -3,16 +3,21 @@
 use crate::{LaneSnapshot, Oid};
 
 /// A vertical track, numbered from the left.
+///
+/// Held in 32 bits, so a lane change a history keeps for every row is 16 bytes rather than
+/// 24: a lane is one of a row's open lines, and four billion of them is no history.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Lane(usize);
+pub struct Lane(u32);
 
 impl Lane {
+    /// An index past `u32::MAX` is held as `u32::MAX`: no window holds that many lines.
     pub fn new(index: usize) -> Self {
-        Self(index)
+        Self(u32::try_from(index).unwrap_or(u32::MAX))
     }
 
     pub fn index(self) -> usize {
-        self.0
+        // `usize` is at least 32 bits on every target Cairn builds for.
+        usize::try_from(self.0).unwrap_or(usize::MAX)
     }
 }
 
@@ -210,6 +215,18 @@ mod tests {
         );
         row.snapshot = None;
         assert_eq!(row.heap_bytes(), 3 * size_of::<LaneChange>());
+    }
+
+    /// Caught by: a lane held in a `usize` again, which makes every lane change a history
+    /// keeps 24 bytes rather than 16.
+    #[test]
+    fn a_lane_change_is_sixteen_bytes_and_a_lane_keeps_its_index() {
+        assert_eq!(size_of::<Lane>(), 4);
+        assert_eq!(size_of::<LaneChange>(), 16);
+        for index in [0, 1, 63, 64, 130, 65_535, 1 << 20] {
+            assert_eq!(Lane::new(index).index(), index);
+        }
+        assert_eq!(Lane::new(usize::MAX).index(), u32::MAX as usize);
     }
 
     #[test]

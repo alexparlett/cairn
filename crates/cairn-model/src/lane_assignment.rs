@@ -235,7 +235,7 @@ impl LaneAssigner {
         let snapshot = (index.is_multiple_of(self.snapshot_every) || index == self.drawn_from)
             .then(|| Box::new(self.leaving.snapshot()));
         let graph = GraphRow::laid_out(row.id, row.lane, row.changes.into_boxed_slice(), snapshot);
-        self.leaving.advance(&graph);
+        self.leaving.advance(graph.changes());
         graph
     }
 

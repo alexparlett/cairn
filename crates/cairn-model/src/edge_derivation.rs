@@ -39,7 +39,7 @@ impl LaneSnapshot {
 /// An out-of-order line crossing into a row: down `lane`, ending at the commit `ends_in`
 /// rows below (zero: this row's).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct LateLine {
+pub(crate) struct LateLine {
     ends_in: u32,
     order: u32,
     lane: Lane,
@@ -59,18 +59,82 @@ pub struct RowEdges {
     pub edges: Vec<EdgeSegment>,
 }
 
-/// The edges crossing `rows[index]`, derived from the nearest row at or above it that
-/// carries a snapshot. `None` when `index` is past the end, or when no row within
+/// What [`row_edges`] reads of one laid-out row: its lane, the lane changes at it and, on a
+/// row that carries one, the lines crossing into it. Borrowed from wherever the rows are
+/// kept — a slice of [`GraphRow`]s or a [`crate::History`]'s stores.
+#[derive(Debug, Clone, Copy)]
+pub struct LaidOutRow<'a> {
+    pub(crate) lane: Lane,
+    pub(crate) changes: &'a [LaneChange],
+    pub(crate) snapshot: Option<SnapshotView<'a>>,
+}
+
+/// The lines crossing into one row, borrowed: a [`LaneSnapshot`]'s, or a history's copy.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SnapshotView<'a> {
+    pub(crate) open: &'a [u64],
+    pub(crate) late: &'a [LateLine],
+}
+
+impl<'a> SnapshotView<'a> {
+    fn of(snapshot: &'a LaneSnapshot) -> Self {
+        Self {
+            open: &snapshot.open,
+            late: &snapshot.late,
+        }
+    }
+}
+
+impl<'a> LaidOutRow<'a> {
+    pub(crate) fn of(row: &'a GraphRow) -> Self {
+        Self {
+            lane: row.lane,
+            changes: row.changes(),
+            snapshot: row.snapshot().map(SnapshotView::of),
+        }
+    }
+}
+
+/// Rows a [`LaneAssigner`] laid out, as a reader keeps them, in order: what [`row_edges`]
+/// derives a row's edges from.
+pub trait LaidOutRows {
+    fn row_count(&self) -> usize;
+    /// Row `index`, or `None` past the end.
+    fn laid_out(&self, index: usize) -> Option<LaidOutRow<'_>>;
+}
+
+impl<R: AsRef<GraphRow>> LaidOutRows for [R] {
+    fn row_count(&self) -> usize {
+        self.len()
+    }
+
+    fn laid_out(&self, index: usize) -> Option<LaidOutRow<'_>> {
+        self.get(index).map(|row| LaidOutRow::of(row.as_ref()))
+    }
+}
+
+impl<R: AsRef<GraphRow>> LaidOutRows for Vec<R> {
+    fn row_count(&self) -> usize {
+        self.len()
+    }
+
+    fn laid_out(&self, index: usize) -> Option<LaidOutRow<'_>> {
+        self.as_slice().laid_out(index)
+    }
+}
+
+/// The edges crossing row `index` of `rows`, derived from the nearest row at or above it
+/// that carries a snapshot. `None` when `index` is past the end, or when no row within
 /// [`LaneAssigner::MAX_SNAPSHOT_EVERY`] above it carries one — never for rows a
 /// [`LaneAssigner`] laid out and a reader kept from the first it was handed.
 ///
 /// The work is one snapshot copied and advanced through at most the rows since it: bounded
 /// by the snapshot interval, never by the history.
-pub fn row_edges<R: AsRef<GraphRow>>(rows: &[R], index: usize) -> Option<RowEdges> {
-    let row = rows.get(index)?.as_ref();
+pub fn row_edges<T: LaidOutRows + ?Sized>(rows: &T, index: usize) -> Option<RowEdges> {
+    let row = rows.laid_out(index)?;
     let mut from = index;
     let snapshot = loop {
-        if let Some(snapshot) = rows.get(from)?.as_ref().snapshot() {
+        if let Some(snapshot) = rows.laid_out(from)?.snapshot {
             break snapshot;
         }
         if from == 0 || index - from + 1 >= LaneAssigner::MAX_SNAPSHOT_EVERY {
@@ -80,12 +144,12 @@ pub fn row_edges<R: AsRef<GraphRow>>(rows: &[R], index: usize) -> Option<RowEdge
     };
 
     let mut state = LaneState::from_snapshot(snapshot);
-    for above in rows.get(from..index)? {
-        state.advance(above.as_ref());
+    for above in from..index {
+        state.advance(rows.laid_out(above)?.changes);
     }
     Some(RowEdges {
         lane: row.lane,
-        edges: state.edges(row),
+        edges: state.edges(row.lane, row.changes),
     })
 }
 
@@ -99,7 +163,7 @@ pub(crate) struct LaneState {
 }
 
 impl LaneState {
-    fn from_snapshot(snapshot: &LaneSnapshot) -> Self {
+    fn from_snapshot(snapshot: SnapshotView<'_>) -> Self {
         Self {
             open: snapshot.open.to_vec(),
             late: snapshot.late.to_vec(),
@@ -150,14 +214,14 @@ impl LaneState {
     }
 
     /// From the lines crossing into `row` to those crossing into the row below it.
-    pub(crate) fn advance(&mut self, row: &GraphRow) {
-        for change in row.changes() {
+    pub(crate) fn advance(&mut self, changes: &[LaneChange]) {
+        for change in changes {
             if let LaneChange::Ends(lane) = *change {
                 self.close_lane(lane);
             }
         }
         self.late.retain(|line| line.ends_in != 0);
-        for change in row.changes() {
+        for change in changes {
             match *change {
                 LaneChange::Starts(lane) => self.open_lane(lane),
                 LaneChange::StartsLate { lane, rows, order } => self.late.push(LateLine {
@@ -177,9 +241,7 @@ impl LaneState {
     /// Every edge crossing `row`, given the lines crossing into it, in the assigner's
     /// order: the lines passing by lane, the lines ending at the node by lane, the lines
     /// leaving it in parent order, then every out-of-order line by the row it ends at.
-    pub(crate) fn edges(&self, row: &GraphRow) -> Vec<EdgeSegment> {
-        let own = row.lane;
-        let changes = row.changes();
+    pub(crate) fn edges(&self, own: Lane, changes: &[LaneChange]) -> Vec<EdgeSegment> {
         let ends = |lane: Lane| changes.contains(&LaneChange::Ends(lane));
         let mut edges = Vec::with_capacity(
             self.open
@@ -262,15 +324,18 @@ mod tests {
     #[test]
     fn a_snapshot_holds_the_words_its_open_lanes_need_and_its_late_lines() {
         let mut state = LaneState::default();
-        state.advance(&row(vec![
-            LaneChange::Starts(Lane::new(3)),
-            LaneChange::Starts(Lane::new(130)),
-            LaneChange::StartsLate {
-                lane: Lane::new(5),
-                rows: 4,
-                order: 0,
-            },
-        ]));
+        state.advance(
+            row(vec![
+                LaneChange::Starts(Lane::new(3)),
+                LaneChange::Starts(Lane::new(130)),
+                LaneChange::StartsLate {
+                    lane: Lane::new(5),
+                    rows: 4,
+                    order: 0,
+                },
+            ])
+            .changes(),
+        );
         let wide = state.snapshot();
         assert_eq!(
             wide.heap_bytes(),
@@ -278,7 +343,7 @@ mod tests {
         );
         assert_eq!(wide.highest_lane(), Some(Lane::new(130)));
 
-        state.advance(&row(vec![LaneChange::Ends(Lane::new(130))]));
+        state.advance(row(vec![LaneChange::Ends(Lane::new(130))]).changes());
         let narrow = state.snapshot();
         assert_eq!(
             narrow.heap_bytes(),
@@ -292,15 +357,18 @@ mod tests {
     #[test]
     fn a_rows_heap_bytes_count_what_its_snapshot_holds() {
         let mut state = LaneState::default();
-        state.advance(&row(vec![
-            LaneChange::Starts(Lane::new(3)),
-            LaneChange::Starts(Lane::new(130)),
-            LaneChange::StartsLate {
-                lane: Lane::new(5),
-                rows: 4,
-                order: 0,
-            },
-        ]));
+        state.advance(
+            row(vec![
+                LaneChange::Starts(Lane::new(3)),
+                LaneChange::Starts(Lane::new(130)),
+                LaneChange::StartsLate {
+                    lane: Lane::new(5),
+                    rows: 4,
+                    order: 0,
+                },
+            ])
+            .changes(),
+        );
         let wide = state.snapshot();
         let changes = vec![
             LaneChange::Ends(Lane::new(3)),

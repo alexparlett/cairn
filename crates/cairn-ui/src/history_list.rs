@@ -305,7 +305,7 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
     // At most a snapshot interval of rows above this one is read: bounded by the interval,
     // never by the history. Rows the assigner laid out always have a snapshot within it; a
     // row without one draws its node alone.
-    let graph = row_edges(&rows, item.index).unwrap_or_else(|| RowEdges {
+    let graph = row_edges(rows.as_slice(), item.index).unwrap_or_else(|| RowEdges {
         lane: row.graph.lane,
         edges: Vec::new(),
     });

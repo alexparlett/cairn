@@ -2,7 +2,7 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 03 implemented (compact rows), full gate green, awaiting its QA; phase 04 next.** Integration branch
+**Status: phase 03 done (compact rows), QA adjudicated and confirmed findings fixed; phase 04 next.** Integration branch
 `feature/refs-and-status`, in the worktree `.claude/worktrees/refs-and-status`,
 packet mode.
 
@@ -125,13 +125,17 @@ Phase 03 (`docs/systems/history-graph.md`, "What a row keeps"):
   and `crates/cairn-ui/tests/history_list.rs`; never edit it. The `#[ignore]`d reporter
   `measures_compact_rows_over_a_named_repository` (modes `find`, `equivalence`, `derive`).
 
+Deferred to phase 04 (phase 03 QA, RR1): `HistoryList`'s `RowRender` clones the whole
+`HistoryRow` for every row it builds, while `window.rs` reads only its `content` and
+`graph`; phase 04, which reshapes the row, passes only what is read.
+
 ## Validation status
 
 | Phase | Status |
 | --- | --- |
 | 01 refs engine | done: C1, C2, C3 pass; C11 refs numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
 | 02 status engine | done: C4, C5, C13 pass (host git, 2.30.9, 2.32.7); C11 status numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
-| 03 compact rows | implemented: C15 passes (equivalence over the fixtures, the Cairn checkout and every ref of the bench; find 2.26 s against 2.50 s before); K = 64, derived at draw time; numbers in progress.md; full gate green; QA pending |
+| 03 compact rows | implemented: C15 passes (equivalence over the fixtures, the Cairn checkout and every ref of the bench; find 2.26 s against 2.50 s before); K = 64, derived at draw time; numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
 | 04 slim rows | not started |
 | 05 history from every ref | not started |
 | 06 worker and refresh | not started |

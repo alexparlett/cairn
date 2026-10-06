@@ -4,10 +4,11 @@ How Cairn draws a repository's history today. As-built: everything here is code
 that exists. Behaviour is pinned by a test named beside it; the paragraphs that
 report a MEASUREMENT say so in their own words, because a measurement is not a
 test — `measures_layout_over_every_ref_of_a_named_repository` and
-`measures_compact_rows_over_a_named_repository` are `#[ignore]`d reporters, and "Known limits" is description rather than anything pinned. Intent
-for this surface lives in `docs/design/history-graph.md` (D4) and
-`docs/design/concurrency.md` (D3) and the
-commitment it was built against in `docs/prd/history-graph.md` (shipped, frozen).
+`measures_compact_rows_over_a_named_repository` are `#[ignore]`d reporters, and
+"Known limits" is description rather than anything pinned. Intent for this
+surface lives in `docs/design/history-graph.md` (D4) and
+`docs/design/concurrency.md` (D3), and the commitment it was built against in
+`docs/prd/history-graph.md` (shipped, frozen).
 
 What the application does today, end to end: it opens the repository containing
 the path named on its command line (or the working directory), walks that
@@ -145,7 +146,8 @@ never by the history.
 The derived edges are the edges the assigner drew before rows were compacted, row
 for row and in order, repaints included. The oracle is that assigner itself, kept
 verbatim as test code (`crates/cairn-model/tests/layout_before_compaction/mod.rs`,
-never edited): `every_row_draws_the_edges_the_assigner_retained_before_compaction`
+never edited, its code pinned by a fingerprint in
+`the_reference_assigner_is_the_one_compact_rows_were_checked_against`): `every_row_draws_the_edges_the_assigner_retained_before_compaction`
 (`crates/cairn-model/tests/lane_assignment.rs`) over the crafted fixtures and
 generated skewed histories at windows of one row up and snapshot intervals of one
 up, requiring repaints, a snapshot carrying a late line, a late line started below
@@ -481,7 +483,7 @@ import — are rejected outside `cairn-model` by
 | Only `crates/cairn-app/src/worker/` reaches a repository or waits | `the_ui_thread_never_waits_on_repository_work` |
 | The history list renders through a virtualizing view | `a_history_sized_list_renders_through_a_virtualizing_view` |
 | That view builds one viewport of rows at 1,000 and at 100,000 | `only_a_viewport_of_rows_is_built_however_long_the_history` |
-| Every row draws the edges the assigner drew before rows were compacted | `every_row_draws_the_edges_the_assigner_retained_before_compaction`, `the_cairn_checkouts_rows_draw_what_the_assigner_drew_before_compaction`, `rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew` |
+| Every row draws the edges the assigner drew before rows were compacted | `every_row_draws_the_edges_the_assigner_retained_before_compaction`, `the_cairn_checkouts_rows_draw_what_the_assigner_drew_before_compaction`, `each_cold_page_and_resumed_session_draws_on_its_own_what_the_assigner_drew_for_it`, `rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew` |
 
 The first five live in `crates/cairn-guards/tests/invariants.rs`; the sixth is a
 headless component test in `crates/cairn-ui/tests/history_list.rs`; the last are

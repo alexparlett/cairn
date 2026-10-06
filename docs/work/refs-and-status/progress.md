@@ -3,6 +3,44 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-06 — phase 03 QA
+
+Fresh reviewers (`qa-checklist` READY, `responsiveness-reviewer` with no findings,
+`test-coverage-auditor`) and a fresh `qa-confirm`, run by the coordinator.
+
+Confirmed findings fixed:
+
+- TC1: `a_rows_heap_bytes_count_what_its_snapshot_holds` — a row carrying a snapshot of
+  three words and a late line, its exact heap bytes pinned; fails with the snapshot's own
+  `heap_bytes` multiplied by zero in `GraphRow::heap_bytes`, which every earlier test (empty
+  snapshots only) let through.
+- TC2: `the_reference_assigner_is_the_one_compact_rows_were_checked_against` — an FNV-1a
+  fingerprint of C15's reference below its module documentation, taken while it was still
+  `f34631c`'s verbatim (no change to it since `f94fbdf`); fails on a one-character edit to
+  its code, and not on an edit to its documentation. No dependency added.
+- TC3 (reporter half): `measures_layout_over_every_ref_of_a_named_repository` counts rows
+  whose edges could not be derived, prints the count and fails on any; fails with the
+  reporter asking for the row below.
+- QC-A3: the systems doc's twins table names the cold-page and resumed-session test; its
+  opening paragraph is re-wrapped.
+- RR1: deferred to phase 04 (`state.md`): `RowRender` clones the whole row per built row.
+
+Dismissed, with reasons:
+
+- QC-A2: the `u32` saturation in `connect_upward` cannot be reached — both rows of a late
+  line are in the window's `VecDeque`, production never calls `with_window`, and the
+  default window is 1024 rows.
+- RR2: deriving O(viewport × K) per frame is the design, measured at about 0.5 ms a frame
+  at worst.
+- RR3: the 100,000-row viewport twin counts rows built, by design; derivation at real
+  snapshot spacing, scrolled deep and back, is pinned by
+  `rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew`.
+- TC2's `EdgeSegment`-constructor half: the constructors have their own unit tests, and the
+  literal-edge layout tests are independent of the oracle.
+- TC3's UI-fallback half: the node-alone fallback in `build_row` is commented, required by
+  the no-panic rule, and its precondition (a snapshot within reach on every row the
+  assigner lays out and a reader keeps) is pinned by the model's tests.
+
 ## 2026-10-06 — phase 03: compact rows
 
 A row keeps its id, lane and only the lane changes at it (`LaneChange`: a line ends at

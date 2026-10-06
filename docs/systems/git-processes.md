@@ -554,6 +554,17 @@ opened is the one checked — it is opened from the path the check searched
 to, and the shapes test fails when it is opened through a second, logical
 search instead, or when the one search is made logical.
 
+Two more refusals are made as the repository opens, once gix has opened it and
+before anything reads a ref, from the repository format as git reads it (the
+common directory's own `config`, no include followed; `crates/cairn-git/src/ref_storage.rs`):
+`Error::RefStorageUnsupported` when `extensions.refStorage` names anything but
+`files` — gix reads no such setting, and would open a reftable repository only to
+fail on its first ref — and `Error::RefStorageNeedsFormatVersion1` when a
+format-version-0 repository sets it at all, as git refuses it. The open also clears
+the refs namespace gix reads from `GIT_NAMESPACE` in Cairn's own environment, which
+no `git` Cairn runs is given, so gix's refs are that `git`'s. Both are
+`docs/systems/refs.md`'s.
+
 ## The runner
 
 `GitCommand::start()` spawns the process and hands back an `Invocation<K>`,
@@ -1025,8 +1036,8 @@ is left to drive a late `git` to its `SIGKILL` or reap it, and such a `git`
 runs on, orphaned, holding whatever locks it holds (issue #48).
 
 What a close does not bound: the network lane, after its fetch is reaped,
-still reads the refs once more (`ref_tips`, which has no cancel and peels
-every ref) before it lets its sender go, and it read them once before the
+still reads the refs once more (`ref_tips`, the refs snapshot with no cancel,
+which looks up every ref's object) before it lets its sender go, and it read them once before the
 fetch started, so a repository with a great many refs and a cold cache can
 hold the stream's end — and the window — past `CLOSE_PATIENCE`. The window
 stays open and draws nothing until the second request closes it. The

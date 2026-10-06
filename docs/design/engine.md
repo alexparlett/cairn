@@ -120,11 +120,16 @@ and `docs/research/refs-and-status/gix-refs-and-status-api.md`.
 
 Refs stay with gix, because gix agrees with `git for-each-ref` once it is read
 with care: a symbolic ref is never peeled into its target's name, a dangling one
-is hidden, the stash reflog is read so that a long message cannot end it, and a
-branch whose upstream is local (`remote = .`) is resolved as git resolves it,
-where gix answers none.
-gix cannot read a reftable repository at all, and opens one only to fail at
-`HEAD`, so such a repository is refused at open with the reason. Evidence:
+is hidden, the stash reflog is read so that a long message cannot end it, and
+every branch's upstream is resolved by hand from the configuration as git
+resolves it — the last remote, the first merge, a local upstream (`remote = .`)
+resolved as a ref name, a named remote's merge matched literally against its
+fetch refspecs in order — where gix answers none for a local upstream and
+otherwise for a second merge, a short merge or two matching refspecs. A ref
+naming a missing object is skipped and counted, where git refuses to list
+anything. gix cannot read a reftable repository at all, and opens one only to
+fail at `HEAD`, so such a repository is refused at open with the reason, and so is
+a format-version-0 repository that names a ref storage, as git refuses it. Evidence:
 `docs/research/refs-and-status/gix-refs-and-status-api.md`.
 
 Each such read is a named function in `reads/`, runs under a read's environment

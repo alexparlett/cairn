@@ -68,9 +68,20 @@ are later packets'.
   ref whose target does not exist is not listed, as `git for-each-ref` does not
   list it. A ref whose name is invalid is skipped, as git skips it; a ref that
   cannot be read is skipped and counted, never a failure of the whole snapshot.
+  A ref naming an object that is not there is skipped and counted the same way —
+  a deliberate divergence, the user's decision: git's own `for-each-ref` refuses
+  to list anything (`fatal: missing object`).
 - R1.4 Each local branch carries its upstream as git resolves it
   (`branch.<name>.remote` and `.merge`), including a local upstream
   (`remote = .`), and whether that upstream ref exists ("gone" when it does not).
+  Every upstream is resolved by hand from the configuration, as git's `set_merge`
+  does (the fifth parity rule): the last `branch.<name>.remote`; the first
+  `branch.<name>.merge`; with `remote = .`, the merge resolved as a ref name (kept
+  as written when it names no ref, or more than one); with a named remote, the
+  merge as written matched against that remote's fetch refspecs in configuration
+  order, the first match winning and a negative refspec ignored. gix answers
+  otherwise on two `merge` values, a short `merge` with a named remote and two
+  refspecs both mapping the merge.
 - R1.5 The stash list is the `refs/stash` reflog, newest first, each entry with
   its index (`stash@{n}`), its message, its commit and the commit it was made on
   (its first parent). The reflog is read so that no message length truncates or
@@ -83,7 +94,9 @@ are later packets'.
   variable.
 - R1.9 A repository whose refs live in reftable (`extensions.refStorage` set to
   anything but `files`) is refused at open with a reason saying so, where it is
-  refused for dubious ownership today. gix 0.87 opens such a repository and then
+  refused for dubious ownership today. A repository whose
+  `core.repositoryFormatVersion` is 0 and that sets `extensions.refStorage` at all,
+  `files` included, is refused beside it, as git refuses it ("v1-only extension"). gix 0.87 opens such a repository and then
   fails reading `HEAD`; reftable support is not built here (Out of scope).
 
 ### R2 — Ahead and behind (L9)

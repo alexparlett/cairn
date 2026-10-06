@@ -45,14 +45,24 @@ user). `-uall`'s cost at scale on rust-lang/rust was not measured by the spike
 default and `--ignored` walks build directories; a "show ignored" toggle is
 filed. Evidence: `fork-refs-and-status-ui.md` section 6–7.
 
-**L3. Refs come from gix, with four parity rules.** gix agrees with
+**L3. Refs come from gix, with five parity rules.** gix agrees with
 `git for-each-ref` on loose and packed refs, ordering and invalid names, at
 1.7 ms for 10,501 refs unpeeled. The rules, each to be pinned by a test:
 symbolic refs are never peeled (`.peeled()` renames `origin/HEAD` into a second
 `origin/main`); dangling symbolic refs are hidden as git hides them; the stash
 reflog is read oldest-first and reversed (the newest-first reader has a 4 KiB
 buffer and stops at a long message); an upstream of `remote = .` resolves as git
-resolves it (gix answers `None`). `GIT_NAMESPACE`: gix honours it from Cairn's
+resolves it (gix answers `None`); and every upstream is resolved by hand from the
+configuration, as git's `set_merge` resolves it — the last `branch.<n>.remote`, the
+first `branch.<n>.merge`, `remote = .` resolving the merge as a ref name, and a
+named remote's literal merge matched against its fetch refspecs in configuration
+order, first match winning, negative refspecs ignored. The fifth rule was added
+when phase 01 measured gix answering otherwise on two `merge` values (it takes the
+last), a short `merge` with a named remote (it expands and maps it; git maps
+nothing) and two refspecs both mapping the merge (it does not take the first);
+the user chose resolving by hand over asking git (2026-10-06). A ref naming a
+missing object is skipped and counted, where git's own `for-each-ref` refuses to
+list anything (user decision, 2026-10-06). `GIT_NAMESPACE`: gix honours it from Cairn's
 own environment but Cairn never hands it to `git`, so Cairn opens without it, and
 honouring it is filed. Evidence: `gix-refs-and-status-api.md`.
 Rejected: `git for-each-ref` as a read — no measured disagreement once the rules
@@ -61,7 +71,9 @@ hold, and D1 says a git read is argued from one.
 **L4. A reftable repository is refused at open, with its reason.** gix 0.87 opens
 one without complaint and then fails reading `HEAD`, so today's application
 already breaks on one; refusing at open, beside dubious ownership, is the honest
-answer. Reftable support is filed.
+answer. Reftable support is filed. A format-version-0 repository that sets
+`extensions.refStorage` at all is refused too, as git refuses it ("v1-only
+extension"), whatever the storage it names (user decision, 2026-10-06).
 
 **L5. The history walks every ref; stashes are rows of their own.** Seeds: every
 local branch, remote-tracking ref, tag identifying a commit, and `HEAD` — Fork's

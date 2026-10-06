@@ -15,7 +15,7 @@ cairn-app    refresh (focus │ after an operation │ Refresh chord)
              refresh thread ── status (git process) ── ahead/behind
              filter lanes   ── sidebar filter
                   │
-cairn-git    refs snapshot (gix, four parity rules) ── ahead/behind (two hidden walks)
+cairn-git    refs snapshot (gix, five parity rules) ── ahead/behind (two hidden walks)
              reads::status ── git status --porcelain=v2 -z ── parsed
              history ── seeded from the snapshot, stash rows merged by date, labels
                   │

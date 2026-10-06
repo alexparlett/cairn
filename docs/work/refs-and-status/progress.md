@@ -3,6 +3,46 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-06 — phase 01: the refs engine
+
+The refs snapshot, upstreams, the stash list and ahead/behind in `cairn-git`, the
+reftable refusal at open, and their vocabulary in `cairn-model`
+(`docs/systems/refs.md`). Packet mode, on `feature/refs-and-status`.
+
+**Stopped once for the user** (a phase-01 stopping rule): gix's upstream API
+disagreed with `%(upstream)` on three cases the four parity rules did not cover —
+two `branch.<n>.merge` values (gix takes the last, git the first), a short merge with
+a named remote (gix expands and maps it, git maps nothing), and two fetch refspecs
+both mapping the merge (gix does not take the first). The user chose resolving every
+upstream by hand from the configuration (a fifth parity rule, PRD R1.4, L3); kept a
+ref naming a missing object skipped and counted (a divergence from git's `fatal:
+missing object`, R1.3); and had a format-version-0 repository with
+`extensions.refStorage` refused at open, as git refuses it (R1.9).
+
+**C11, refs half** — release build, warm, median of seven, on the machine in
+`docs/research/diff-engine/measured-baseline.md` (AMD Ryzen 7 9800X3D), reporter
+`measures_the_refs_snapshot_and_ahead_behind`:
+
+| Repository | Refs | Refs snapshot | Snapshot + every ahead/behind |
+| --- | --- | --- | --- |
+| rust-lang/rust at `c999cef531e` (`main` equal to `origin/main`) | 175 | 0.14 ms | 0.13 ms (one branch, no walk) |
+| generated: 3,000 branches, 3,000 remote-tracking, 4,000 tags (1,000 annotated), packed, 500 loose | 10,001 | 28.4 ms | 28.3 ms (ten branches, equal) |
+
+Within C11's 100 ms on the bench. Beyond C11, a divergence built over the bench's
+real history (a branch at `HEAD` whose upstream is `HEAD~n`), each count equal to
+`git rev-list --left-right --count`:
+
+| Upstream | Ahead | Cairn | Commits read | git |
+| --- | --- | --- | --- | --- |
+| `HEAD~100` | 1,957 | 189 ms | 39,209 | 82-94 ms |
+| `HEAD~1000` | 22,649 | 1.32 s | 290,337 | 547-622 ms |
+| `HEAD~10000` | 169,679 | 3.02 s | 732,393 | 1.14 s |
+
+About two to three times git: gix's hidden frontier reads far more than the
+divergence, and no commit-graph is used so that every read can be cancelled (the
+bench has none either). It runs on the refresh thread (phase 06) and is cancellable,
+so it holds up nothing; a faster count is a follow-up, not a C11 failure.
+
 ## 2026-10-05 — slim rows added
 
 The user locked L14: the rest of a row is slimmed (one id, a parent count, shared

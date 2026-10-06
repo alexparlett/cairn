@@ -5,7 +5,7 @@ the graph name what it shows — every ref walked and labelled as Fork labels it
 stashes as rows of their own, a sidebar of refs and a toolbar naming the branch —
 and lists what `git status` says has changed in a read-only Local Changes view
 that opens each file's diff. Status is git's own answer (D1's fourth read git
-answers); refs are gix's, read under four parity rules; nothing writes.
+answers); refs are gix's, read under five parity rules; nothing writes.
 
 Spec: `docs/prd/refs-and-status.md` (the ONE copy of the acceptance criteria).
 Decisions: `brainstorm.md`. Evidence: `docs/research/refs-and-status/`.

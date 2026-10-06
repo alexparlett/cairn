@@ -17,3 +17,7 @@ contract. Each is kept current in the same change that invalidates it.
   from a repository (what a commit or two commits changed, one file's change, one
   path's working-tree diff), the diff thread and its lanes, the detail pane, the
   diff view, and the accelerator table.
+- `refs.md` — how the engine reads a repository's refs: the refs snapshot and the
+  five rules that make gix's answer git's, each branch's upstream, the stash list,
+  ahead and behind, and the repositories refused at open because their refs are not
+  files.

@@ -349,9 +349,11 @@ fn find(repo: &Repository, seed: &str) {
     let anon_after = proc_kb("RssAnon:");
     let retained = Retained::of(&kept);
     eprintln!(
-        "FIND seed={seed} found_at_row={} rows_kept={} ms={:.1}",
+        "FIND seed={seed} found_at_row={} rows_kept={} last={} ms={:.1}",
         found.unwrap_or(0),
         kept.len(),
+        kept.last()
+            .map_or_else(String::new, |row| row.graph.id.to_string()),
         elapsed.as_secs_f64() * 1e3
     );
     eprintln!(

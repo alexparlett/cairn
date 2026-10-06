@@ -2,7 +2,7 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 01 done (refs engine); phase 02 next.** Integration branch
+**Status: phase 02 built (status engine), awaiting its QA; phase 03 next.** Integration branch
 `feature/refs-and-status`, in the worktree `.claude/worktrees/refs-and-status`,
 packet mode.
 
@@ -49,8 +49,11 @@ that most constrain implementation:
   counted in `RefsSnapshot::unreadable`, though git warns `ignoring ref with broken name`.
   Kept as built; whether it should be counted is the user's call.
 
-- How `status.showUntrackedFiles` is read as git reads it (L2) — phase 02; a new
-  `git config` porcelain read needs the user.
+- For the user's end-of-packet batch (phase 02): `status.showUntrackedFiles` is read by
+  git itself — a first `git status` with no `--untracked-files`, and a second with
+  `--untracked-files=all` only where the first collapsed an untracked directory — rather
+  than by a new `git config` read or by gix. Decided in phase 02, not yet reviewed by the
+  user (`progress.md`, phase 02).
 - The Refresh chord per platform (Fork: ⌘R on macOS, F5 on Windows) — phase 06,
   from `fork-dev/Docs`' shortcut lists.
 - C11's first-page bar is written as 200 ms because history-graph's A7 has no
@@ -81,12 +84,28 @@ Phase 01 (`docs/systems/refs.md` is the as-built account):
   sets `CAIRN_REQUIRE_REFTABLE`; twin
   `the_reftable_refusal_is_required_wherever_it_can_run`.
 
+Phase 02 (`docs/systems/status.md` is the as-built account):
+
+- `cairn-model`: `crates/cairn-model/src/status.rs` — `WorkingTreeStatus` (`Listed(Vec<StatusEntry>)`,
+  `IndexUnreadable(UnreadableIndex::Sparse)`, `NoWorkingTree`), `StatusEntry` (`Changed`,
+  `Conflicted`, `Untracked`; `path`), `ChangedEntry { path, staged, unstaged, submodule }`,
+  `StagedChange`, `UnstagedChange` (`IntentToAdd`, and `Renamed`/`Copied` for git's one
+  index-to-worktree pairing), `SubmoduleState`, `ConflictedEntry`, `ConflictKind` (`ALL`,
+  `code`, `from_code`, `from_stages`).
+- `cairn-git`: `Repository::status(&git, &cancel) -> Result<WorkingTreeStatus, Error>`
+  (`src/status.rs`), over `reads::status` (`src/reads/status.rs`); new error
+  `StatusCancelled`. It blocks: phase 06 runs it on the third thread.
+- Tests: `crates/cairn-git/tests/status.rs` (C4's oracles; the `#[ignore]`d C11 reporter
+  `measures_the_status_read`), run by `scripts/git-floor.sh` as a third run (`--test
+  status`); unit tests in `src/reads/status.rs` (parser, stub argv and environment, C5's
+  cancel, the index left byte-identical, R3.7's version and index rule).
+
 ## Validation status
 
 | Phase | Status |
 | --- | --- |
 | 01 refs engine | done: C1, C2, C3 pass; C11 refs numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
-| 02 status engine | not started |
+| 02 status engine | built: C4, C5, C13 pass (host git, 2.30.9, 2.32.7); C11 status numbers in progress.md; full gate green; awaiting QA |
 | 03 compact rows | not started |
 | 04 slim rows | not started |
 | 05 history from every ref | not started |

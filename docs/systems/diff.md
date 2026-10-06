@@ -205,7 +205,9 @@ changes into hunks by git's own rule. No diff algorithm is written here but the
 intra-line highlights, and no gix type appears in a public signature. The
 **working-tree query** answers one path's staged, unstaged or untracked diff with
 `git diff-index --cached`, `git diff-files` or `git diff --no-index`, and the side
-git reads from the working tree is git's form of the file (below).
+git reads from the working tree is git's form of the file (below). Which paths have
+such a diff — what is staged, unstaged, in conflict or untracked — is the status
+read's answer, `git status --porcelain=v2 -z` (`docs/systems/status.md`).
 
 `DiffSession` (`crates/cairn-git/src/diff.rs`) holds gix's blob resource cache for
 a run of content queries. Building one reads the index and the attribute stack,
@@ -2037,7 +2039,8 @@ per way git reads a commit's text, by
 - **The working-tree query answers one path, named by its caller.** It pairs no
   rename (a path staged by `git mv` shows as added, as `git diff --cached -- <path>`
   shows it), and `Untracked` answers `git diff --no-index` for the path whatever the
-  index holds: which paths are untracked is status's to say.
+  index holds: which paths are untracked is status's to say (`Repository::status`,
+  `git status --porcelain=v2 -z`; `docs/systems/status.md`).
 - **A clean filter whose output differs run to run** is refused as
   `ContentReadsDisagree` every time, since git's two reads of the file never agree.
 - **A failed clean filter that is not `required` is shown as git shows it**, the

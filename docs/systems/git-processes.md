@@ -83,6 +83,9 @@ crates/cairn-git/src/
     fetch_settings.rs  fetch_settings — `git config --includes --null` in query form, what a
                     fetch of a remote will read, for fetch's refspec check
                     (docs/systems/credentials.md)
+    status.rs       status — `git status --porcelain=v2 -z`, the working tree's status, read
+                    again with `--untracked-files=all` where the first answer collapsed an
+                    untracked directory (docs/systems/status.md)
 ```
 
 `process` is a private module (`mod process;` in `lib.rs`). The application
@@ -225,8 +228,13 @@ Why each variable is there, with its evidence, is beside it in
   message git proposed. Both editor variables are set, because a user's
   `sequence.editor` outranks `GIT_EDITOR` for the rebase todo list.
 - **`GIT_OPTIONAL_LOCKS=0` covers `git status` and nothing else.** Porcelain
-  `diff` and `describe --dirty` refresh the index anyway. That is why a read in
-  `reads/` runs query plumbing or `status` only — and, as the two porcelain
+  `diff` and `describe --dirty` refresh the index anyway. `git status` itself is
+  a read (`reads/status.rs`): under the variable it writes neither the refreshed
+  stat information, the untracked cache nor the fsmonitor token, and leaves the
+  index byte-identical (`a_status_read_leaves_the_index_byte_identical`); under a
+  split index it advances `sharedindex.*`'s mtime and under a sparse index the
+  loose tree objects' mtimes, bytes unchanged, as the user's own `git status`
+  does. That is why a read in `reads/` runs query plumbing or `status` only — and, as the two porcelain
   exceptions the user accepted, `git diff --no-index -- /dev/null <path>` for an
   untracked file's working-tree diff, `<path>` work-tree-relative (no absolute,
   `.` or `..` component, refused before git runs) and `./-` for `-`, which reads
@@ -271,6 +279,11 @@ Why each variable is there, with its evidence, is beside it in
   own hook and filters (`reads/working_tree.rs`;
   `a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`,
   `a_clean_filter_drivers_form_is_what_is_diffed_and_it_runs_under_git`).
+  The status read runs the same: the hook or daemon, the clean filter of each
+  stat-dirty file it rehashes, and `git status` inside each submodule it looks
+  into (`reads/status.rs`); a superseded status read ends git's process group,
+  the hook it is waiting on included
+  (`a_superseded_status_read_ends_its_process_group_and_leaves_nothing_running`).
 - **`GIT_NO_LAZY_FETCH=1` needs git 2.44; the floor is 2.30.** In a partial
   clone, a read that asks for an object only the promisor remote holds would
   fetch it — a pack written, the network reached. With the variable, git

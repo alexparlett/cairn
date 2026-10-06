@@ -3,6 +3,56 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-06 — phase 02: the status engine
+
+`Repository::status` — `git status --porcelain=v2 -z` as a read, parsed into
+`cairn_model::WorkingTreeStatus` (`docs/systems/status.md`). Packet mode, on
+`feature/refs-and-status`. No stopping rule triggered.
+
+**`status.showUntrackedFiles`, read by git itself (decided here; for the user's
+review).** The first read passes no `--untracked-files`, so git reads the setting; only
+where its answer collapsed an untracked directory (a `?` record ending `/`) is the status
+read again with `--untracked-files=all`, whose answer is the answer. No `git config` read,
+so no porcelain read beyond `status` was added and the stopping rule did not apply. Why
+not gix's reading: besides the `includeIf` and system-file divergences behind
+`reads::fetch_settings`, the value's language differs by git version — git 2.56 takes
+`false`/`true`, 2.30.9 dies on both as a bad config (reproduced). Cost: a second read
+wherever an untracked directory or a nested repository exists (C11 below: 66.7 ms
+against 34.6 ms for one read).
+
+**Found while building:**
+
+- The sparse index (`sdir`) is read by git from **2.32.0**, not 2.31: `read-cache.c` at
+  v2.31.0 has no `CACHE_EXT_SPARSE_DIRECTORIES` (checked in git's source). R3.7's state is
+  a failed read on a git before 2.32 over an index gix reads as sparse.
+- `git diff --name-status` is not an oracle for submodules: on 2.32.7 and 2.56.0 it leaves
+  out a submodule whose only change is untracked content, which status reports as `S..U`
+  (2.30.9's `git diff` includes it). The submodule oracle is the submodule's own state.
+- An oracle `git diff -C` under `diff.renames=copies` is "find copies harder"; the oracle
+  runs with `-c diff.renames=false` so its flag alone decides.
+- git does not verify the index checksum on a read, so an index cut short can be read as
+  garbage (a record with an empty path, which the parser refuses) rather than failing; the
+  failing-read test breaks the `DIRC` signature instead.
+- Porcelain v2 prints no `#` header for `status.branch` or `status.showStash` set in
+  configuration (2.30.9, 2.32.7, 2.56.0); the parser skips a header anyway.
+
+**C11, status half** — release build, warm, median of seven [min–max], through
+`Repository::status` with the application's `git` (2.56.0), reporter
+`measures_the_status_read`; same machine as phase 01. The bench on btrfs, read only (its
+index and locks checked unchanged); the clone on tmpfs. Beside the spike's `git` (spawn +
+parse, `status-agreement-spike.md`):
+
+| Scenario | Entries | Reads | Cairn | Spike's git |
+| --- | --- | --- | --- | --- |
+| bench, clean (bar 100 ms) | 0 | 1 | 29.1 ms [28.9–30.0] | 28.8 ms (`-unormal`) |
+| scratch clone, clean | 0 | 1 | 24.3 ms [23.8–25.6] | 27.2 ms (`-unormal`) |
+| 1,000 modified + 10,000 untracked in 1,000 tracked directories (bar 250 ms) | 10,980 | 1 | 34.6 ms [33.8–43.8] | 26.3 (1,000 modified) and 34.1 (10,000 untracked), measured apart |
+| the same, untracked in 1,000 new directories (`-uall` second read; new data) | 11,000 | 2 | 66.7 ms [64.5–78.0] | — |
+| every tracked file's stat changed (recorded, not barred) | 0 | 1 | 758.9 ms [756.1–761.3] | 736.2 (`-uno`), 765.6 (`-unormal`) |
+| that read superseded at 100 ms | — | 1 | answered cancelled at 100.9 ms; registry empty; logged cancelled | — |
+
+Both bars met. 20 of the 10,000 untracked files fall in ignored directories.
+
 ## 2026-10-06 — phase 01 QA
 
 Four fresh reviewers (`qa-checklist`, `test-coverage-auditor`,

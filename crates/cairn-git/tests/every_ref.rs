@@ -967,8 +967,9 @@ fn a_stash_commit_met_while_looking_ahead_is_a_commits_row_and_no_stashs() {
 /// QC1: stash rows in their own date order. An older stash on the walk's first commit and
 /// a newer one on an older branch's tip: the newer is drawn first, as `git log
 /// --date-order` over the refs and the stash commits orders them — and over the fixture
-/// with every kind of stash too. Caught by: a stash going directly above its base before
-/// a newer stash whose date has come.
+/// with every kind of stash too; and a stash dated the same second as its index commit is
+/// above it. Caught by: a stash going directly above its base before a newer stash whose
+/// date has come, or a commit going first on a tie.
 #[test]
 fn stash_rows_are_in_gits_date_order() {
     let fixture = fixtures::unborn();
@@ -1019,6 +1020,21 @@ fn stash_rows_are_in_gits_date_order() {
             .collect();
         assert_eq!(drawn, expected);
     }
+
+    // A stash and the index commit it was made with share a second; git's date order puts
+    // the stash above it, its child, and so does the stream.
+    let repo = ok(
+        Repository::discover(it.fixture.path()),
+        "opening the fixture",
+    );
+    let rows = page_all(&repo, &snapshot_request(&repo, 3), 3);
+    let (commits, stashes) = index(&rows);
+    let shown = |id: &str| it.fixture.git(&["log", "-1", "--format=%ct", id]);
+    assert_eq!(shown(&it.untracked_stash), shown(&it.untracked_index));
+    assert!(
+        stashes[&it.untracked_stash] < commits[&it.untracked_index],
+        "the stash is below the index commit it was made with"
+    );
 }
 
 /// TC3: a page cancelled while it looks ahead for a stash's base stops there, having laid

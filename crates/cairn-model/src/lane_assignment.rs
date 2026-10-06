@@ -26,6 +26,14 @@ pub struct LaneAssigner {
     drawn_from: usize,
 }
 
+/// How a row's lines to its parents are laid: joining a line already descending to the
+/// parent, as a commit's are, or each in a lane of its own, as a stash's is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParentLines {
+    Join,
+    OwnLane,
+}
+
 /// A row still inside the window: every edge crossing it, which a late parent may yet add
 /// to and which [`LaneAssigner::free_lane_across`] reads, beside the changes it will keep.
 #[derive(Debug)]
@@ -139,6 +147,22 @@ impl LaneAssigner {
 
     /// `parents` is in git's order. Returns the row this push forced out of the window.
     pub fn push(&mut self, id: Oid, parents: Vec<Oid>) -> Option<GraphRow> {
+        self.lay_out(id, &parents, ParentLines::Join)
+    }
+
+    /// A stash's row (PRD R4.2, R4.4): `id` is the stash commit, which no commit the walk
+    /// reaches names as a parent, and `base` the commit it was made on — its first parent,
+    /// and the only one laid out: its index and untracked commits are never awaited. Its
+    /// line descends in a lane of its own to `base`, even where another line already awaits
+    /// `base`, so several stashes on one commit each keep their own lane down to it, all
+    /// ending there. Pushed before `base`, as the stream places a stash; a `base` already
+    /// laid out above is joined late, as any parent is. Returns the row this push forced
+    /// out of the window.
+    pub fn push_stash(&mut self, id: Oid, base: Oid) -> Option<GraphRow> {
+        self.lay_out(id, &[base], ParentLines::OwnLane)
+    }
+
+    fn lay_out(&mut self, id: Oid, parents: &[Oid], lines: ParentLines) -> Option<GraphRow> {
         // Evict first, or the repaint below reaches one row past the window.
         let finalised = self.evict_past_the_window();
         let row_index = self.rows_laid_out();
@@ -172,14 +196,18 @@ impl LaneAssigner {
 
         let mut late_parents = Vec::new();
         let mut placed = Vec::new();
-        for parent in &parents {
+        for parent in parents {
             if placed.contains(parent) {
                 // A commit may name the same parent twice; one line is enough.
                 continue;
             }
             placed.push(*parent);
 
-            if let Some(lane) = self.lanes.iter().position(|slot| *slot == Some(*parent)) {
+            let awaited = match lines {
+                ParentLines::Join => self.lanes.iter().position(|slot| *slot == Some(*parent)),
+                ParentLines::OwnLane => None,
+            };
+            if let Some(lane) = awaited {
                 // Another branch already reserved a lane for this parent.
                 edges.push(EdgeSegment::out_of_commit(Lane::new(own), Lane::new(lane)));
                 changes.push(LaneChange::Starts(Lane::new(lane)));
@@ -640,6 +668,157 @@ mod tests {
         let evicted = assigner.push(id(2), vec![]).expect("row 0 is now final");
         assert_eq!(evicted.id, id(1));
         assert_eq!(assigner.rows.len(), 1, "the window holds one row at a time");
+    }
+
+    /// Pushes `walk` — a commit's parents, or `None` for a stash on the one parent given —
+    /// through a window that holds every row, and returns the edges the assigner kept for
+    /// each row in the window beside the rows it made final.
+    fn lay_out_with_stashes(
+        walk: &[(Oid, Option<Vec<Oid>>, Oid)],
+    ) -> (Vec<Vec<EdgeSegment>>, Vec<GraphRow>) {
+        let mut assigner = LaneAssigner::with_window(usize::MAX).with_snapshot_every(3);
+        for (id, parents, base) in walk {
+            let finalised = match parents {
+                Some(parents) => assigner.push(*id, parents.clone()),
+                None => assigner.push_stash(*id, *base),
+            };
+            assert!(finalised.is_none(), "the window held every row");
+        }
+        let kept: Vec<Vec<EdgeSegment>> =
+            assigner.rows.iter().map(|row| row.edges.clone()).collect();
+        assert!(
+            assigner.lanes.iter().all(Option::is_none),
+            "a lane still awaits a commit after the walk: {:?}",
+            assigner.lanes
+        );
+        (kept, assigner.into_rows())
+    }
+
+    /// A stash above the commit it was made on, which nothing else awaits: its row's one
+    /// line leaves its node down its own lane and ends at that commit. Caught by: a stash
+    /// laid out with no line, or with lines to more than its base.
+    #[test]
+    fn a_stash_draws_one_line_down_to_the_commit_it_was_made_on() {
+        let (stash, base) = (id(10), id(1));
+        let (kept, rows) = lay_out_with_stashes(&[(stash, None, base), (base, Some(vec![]), base)]);
+        assert_eq!(rows[0].lane, Lane::new(0));
+        assert_eq!(rows[0].changes(), &[LaneChange::Starts(Lane::new(0))]);
+        assert_eq!(rows[1].changes(), &[LaneChange::Ends(Lane::new(0))]);
+        assert_eq!(
+            kept,
+            vec![
+                vec![EdgeSegment::out_of_commit(Lane::new(0), Lane::new(0))],
+                vec![EdgeSegment::into_commit(Lane::new(0), Lane::new(0))],
+            ]
+        );
+        for (index, edges) in kept.iter().enumerate() {
+            assert_eq!(
+                crate::row_edges(&rows, index)
+                    .map(|drawn| drawn.edges)
+                    .as_ref(),
+                Some(edges),
+                "row {index} derives other edges than the assigner kept"
+            );
+        }
+    }
+
+    /// The QA brief's two stashes on one commit, which a branch's line already awaits: two
+    /// rows, each in a lane of its own — never joining the branch's line, as a commit's
+    /// line would — and all three lines end at that commit. Caught by: a stash's line laid
+    /// as a commit's (`push`), which joins lane 0 at once and puts both stashes in lane 1.
+    #[test]
+    fn two_stashes_on_one_commit_each_keep_a_lane_down_to_it() {
+        let (tip, first, second, other, base) = (id(1), id(20), id(21), id(30), id(2));
+        let walk = [
+            (tip, Some(vec![base]), base),
+            (first, None, base),
+            (second, None, base),
+            (other, Some(vec![]), base),
+            (base, Some(vec![]), base),
+        ];
+        let (kept, rows) = lay_out_with_stashes(&walk);
+        let lanes: Vec<usize> = rows.iter().map(|row| row.lane.index()).collect();
+        assert_eq!(lanes, [0, 1, 2, 3, 0], "each stash in a lane of its own");
+        assert_eq!(rows[1].changes(), &[LaneChange::Starts(Lane::new(1))]);
+        assert_eq!(rows[2].changes(), &[LaneChange::Starts(Lane::new(2))]);
+        assert_eq!(
+            rows[4].changes(),
+            &[
+                LaneChange::Ends(Lane::new(0)),
+                LaneChange::Ends(Lane::new(1)),
+                LaneChange::Ends(Lane::new(2)),
+            ],
+            "the branch's and both stashes' lines end at the commit"
+        );
+        assert_eq!(
+            kept[4],
+            vec![
+                EdgeSegment::into_commit(Lane::new(0), Lane::new(0)),
+                EdgeSegment::into_commit(Lane::new(1), Lane::new(0)),
+                EdgeSegment::into_commit(Lane::new(2), Lane::new(0)),
+            ]
+        );
+        for (index, edges) in kept.iter().enumerate() {
+            assert_eq!(
+                crate::row_edges(&rows, index)
+                    .map(|drawn| drawn.edges)
+                    .as_ref(),
+                Some(edges),
+                "row {index} derives other edges than the assigner kept"
+            );
+        }
+
+        // The control: the same walk with each stash laid out as a commit joins lane 0.
+        let mut joined = LaneAssigner::with_window(usize::MAX);
+        for (id, parents, base) in walk {
+            joined.push(id, parents.unwrap_or_else(|| vec![base]));
+        }
+        let joined_lanes: Vec<usize> = joined
+            .into_rows()
+            .iter()
+            .map(|row| row.lane.index())
+            .collect();
+        assert_eq!(joined_lanes, [0, 1, 1, 1, 0], "the control decided nothing");
+    }
+
+    /// Stashes among late parents and their repaints, a snapshot every third row: every
+    /// row derives exactly the edges the assigner kept, and a stash's base already laid out
+    /// above it is joined by a late line. Caught by: a stash's change not recorded as the
+    /// edge it drew.
+    #[test]
+    fn rows_with_stashes_derive_the_edges_the_assigner_kept() {
+        let walk = [
+            (id(1), Some(vec![id(3)]), id(0)),
+            (id(40), None, id(3)),
+            (id(5), Some(vec![]), id(0)),
+            (id(6), Some(vec![id(5)]), id(0)),
+            (id(41), None, id(5)),
+            (id(3), Some(vec![id(4), id(7)]), id(0)),
+            (id(42), None, id(4)),
+            (id(43), None, id(4)),
+            (id(4), Some(vec![]), id(0)),
+            (id(7), Some(vec![]), id(0)),
+        ];
+        let (kept, rows) = lay_out_with_stashes(&walk);
+        // The late line leaves the base's row (row 2) for the stash two rows below it.
+        assert!(
+            rows[2].changes().contains(&LaneChange::StartsLate {
+                lane: Lane::new(4),
+                rows: 2,
+                order: 0
+            }),
+            "the stash whose base was already laid out was not joined late: {:?}",
+            rows[2].changes()
+        );
+        for (index, edges) in kept.iter().enumerate() {
+            assert_eq!(
+                crate::row_edges(&rows, index)
+                    .map(|drawn| drawn.edges)
+                    .as_ref(),
+                Some(edges),
+                "row {index} derives other edges than the assigner kept"
+            );
+        }
     }
 
     #[test]

@@ -27,12 +27,14 @@ fn open(fixture: &Fixture) -> Repository {
 fn hex_id(row: HistoryRow<'_>) -> String {
     match row.id() {
         RowId::Commit(id) => id.to_string(),
+        RowId::Stash(id) => panic!("a walk from HEAD drew stash {id}"),
     }
 }
 
 fn commit_of(row: HistoryRow<'_>) -> CommitSummary {
     match row.content() {
         RowContent::Commit(commit) => commit,
+        RowContent::Stash(stash) => panic!("a walk from HEAD drew a stash: {stash:?}"),
     }
 }
 
@@ -1121,8 +1123,10 @@ fn a_shallow_clones_boundary_commits_have_the_parents_git_log_shows() {
         let kept: Vec<KeptLayout> = held(&[&page.rows])
             .rows()
             .map(|row| {
-                // Stops compiling once a row can be something other than a commit.
-                let RowId::Commit(id) = row.id();
+                let id = match row.id() {
+                    RowId::Commit(id) => id,
+                    RowId::Stash(id) => panic!("a walk from HEAD drew stash {id}"),
+                };
                 (id, row.lane(), row.changes().to_vec(), row.has_snapshot())
             })
             .collect();

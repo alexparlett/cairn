@@ -1,32 +1,38 @@
 //! A history walk held open across pages.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 
-use cairn_model::{GraphRow, LaneAssigner, Oid, RowsPage};
+use cairn_model::{GraphRow, LaneAssigner, RowsPage};
 
+use super::seeds::Decoration;
+use super::stream::{Next, Stream};
 use super::{
-    Commit, HistoryCursor, HistoryOrder, HistoryPage, HistoryRequest, Resolved, starting_points,
+    HistoryCursor, HistoryOrder, HistoryPage, HistoryRequest, Laid, Pending, Resolved, lay_out,
+    starting_points,
 };
 use crate::{Cancel, Error, Repository};
 
 /// Rows are handed out only once the assigner has made them final.
 pub struct HistorySession<'repo> {
     repo: &'repo gix::Repository,
-    walk: super::walk::CommitWalk<'repo>,
+    stream: Stream<'repo>,
     assigner: LaneAssigner,
-    /// Rows made final, each with its commit read, and not yet handed to the caller.
-    ready: VecDeque<(GraphRow, Commit)>,
-    /// Walked commits still inside the window, with how many parents each has, oldest
-    /// first; the front is the next row to leave.
-    pending: VecDeque<(Oid, usize)>,
+    /// Rows made final, each with what it draws read, and not yet handed to the caller.
+    ready: VecDeque<(GraphRow, Laid)>,
+    /// Entries laid out and still inside the window, oldest first; the front is the next row
+    /// to leave.
+    pending: VecDeque<Pending>,
     tips: super::Tips,
+    decoration: Arc<Decoration>,
     order: HistoryOrder,
     window: usize,
+    lookahead: usize,
     /// Rows earlier pages covered: laid out for lane numbering, never decoded or handed back.
     skip: usize,
     /// Position in the walk of the next row to leave the assigner.
     next_row: usize,
-    /// Commits pulled off the walk, including the replayed prefix.
+    /// Rows laid out, including the replayed prefix.
     walked: usize,
     /// Commit objects read over the session's life.
     decoded: usize,
@@ -53,8 +59,10 @@ impl Repository {
     pub fn history_session(&self, request: &HistoryRequest) -> Result<HistorySession<'_>, Error> {
         let Resolved {
             tips,
+            decoration,
             order,
             window,
+            lookahead,
             skip,
         } = starting_points(self, request)?;
 
@@ -62,14 +70,16 @@ impl Repository {
 
         Ok(HistorySession {
             repo: self.inner(),
-            walk,
+            stream: Stream::new(walk, Arc::clone(&decoration), lookahead),
             // The first row handed out carries a snapshot, so it draws without the prefix.
             assigner: LaneAssigner::with_window(window).drawn_from(skip),
             ready: VecDeque::new(),
             pending: VecDeque::new(),
             tips,
+            decoration,
             order,
             window,
+            lookahead,
             skip,
             next_row: 0,
             walked: 0,
@@ -81,26 +91,25 @@ impl Repository {
 }
 
 impl HistorySession<'_> {
-    /// `cancel` is polled once per commit; on cancellation the work done stays in the session.
-    /// `walked` and `decoded` count this call only. Any error other than [`Error::Cancelled`]
-    /// poisons the session.
+    /// `cancel` is polled once per row laid out and per commit looked ahead at; on
+    /// cancellation the work done stays in the session. `walked` and `decoded` count this
+    /// call only. Any error other than [`Error::Cancelled`] poisons the session.
     pub fn next_page(&mut self, limit: usize, cancel: &impl Cancel) -> Result<HistoryPage, Error> {
         let walked_before = self.walked;
         let decoded_before = self.decoded;
 
         while self.ready.len() < limit && !self.exhausted {
-            if cancel.is_cancelled() {
+            if cancel.is_cancelled() || !self.pull(cancel)? {
                 return Err(Error::Cancelled {
                     walked: self.walked - walked_before,
                 });
             }
-            self.pull()?;
         }
 
         let take = limit.min(self.ready.len());
         let mut rows = RowsPage::new();
-        for (graph, commit) in self.ready.drain(..take) {
-            rows.push(graph, commit.paged());
+        for (graph, laid) in self.ready.drain(..take) {
+            laid.push_to(&mut rows, graph, &self.decoration);
         }
         self.delivered += rows.len();
         let more = !self.exhausted || !self.ready.is_empty();
@@ -116,9 +125,11 @@ impl HistorySession<'_> {
     /// Where a fresh query would start to continue this scroll.
     pub fn cursor(&self) -> HistoryCursor {
         HistoryCursor {
-            tips: std::sync::Arc::clone(&self.tips),
+            tips: Arc::clone(&self.tips),
+            decoration: Arc::clone(&self.decoration),
             order: self.order,
             window: self.window,
+            lookahead: self.lookahead,
             walked: self.skip + self.delivered,
         }
     }
@@ -127,40 +138,45 @@ impl HistorySession<'_> {
         self.delivered
     }
 
+    /// Commits pulled off the walk over the session's life, those looked ahead at for a
+    /// stash's base included.
+    pub fn commits_walked(&self) -> usize {
+        self.stream.pulled()
+    }
+
     /// The walk reached the end and every row it produced has been handed out.
     pub fn is_exhausted(&self) -> bool {
         self.exhausted && self.ready.is_empty()
     }
 
-    /// Pulls one commit off the walk and lays it out, or notices the end.
-    fn pull(&mut self) -> Result<(), Error> {
-        let Some(next) = self.walk.next() else {
-            self.exhausted = true;
-            // No later commit is coming: the window's rows are final.
-            let rest = std::mem::take(&mut self.assigner).into_rows();
-            for graph in rest {
-                self.place(graph)?;
+    /// Lays out the stream's next entry, or notices the end. `false` when `cancel` fired
+    /// while the stream looked ahead.
+    fn pull(&mut self, cancel: &impl Cancel) -> Result<bool, Error> {
+        let entry = match self.stream.next(cancel)? {
+            Next::Entry(entry) => entry,
+            Next::Cancelled => return Ok(false),
+            Next::End => {
+                self.exhausted = true;
+                // No later row is coming: the window's rows are final.
+                let rest = std::mem::take(&mut self.assigner).into_rows();
+                for graph in rest {
+                    self.place(graph)?;
+                }
+                return Ok(true);
             }
-            return Ok(());
         };
-        let info = next.map_err(|source| Error::Walk {
-            source: Box::new(source),
-        })?;
-
-        let id = crate::object_id::model_id(&info.id)?;
-        let parents = super::parents_of(&info)?;
         if self.walked >= self.skip {
-            self.pending.push_back((id, parents.len()));
+            self.pending.push_back(Pending::of(&entry));
         }
         self.walked += 1;
 
-        if let Some(graph) = self.assigner.push(id, parents) {
+        if let Some(graph) = lay_out(&mut self.assigner, &self.decoration, entry) {
             self.place(graph)?;
         }
-        Ok(())
+        Ok(true)
     }
 
-    /// Reads the commit for a final row and pairs the two, skipping the replayed prefix.
+    /// Reads what a final row draws and pairs the two, skipping the replayed prefix.
     fn place(&mut self, graph: GraphRow) -> Result<(), Error> {
         let position = self.next_row;
         self.next_row += 1;
@@ -168,13 +184,15 @@ impl HistorySession<'_> {
             // Replayed for the lanes; never read from the object database.
             return Ok(());
         }
-        let Some((id, parents)) = self.pending.pop_front() else {
-            // Unreachable: one id is pushed per commit past the prefix.
+        let Some(entry) = self.pending.pop_front() else {
+            // Unreachable: one entry is pushed per row past the prefix.
             return Ok(());
         };
-        let commit = super::summary_of_commit(self.repo, &id, parents)?;
-        self.decoded += 1;
-        self.ready.push_back((graph, commit));
+        let laid = Laid::read(self.repo, entry)?;
+        if matches!(laid, Laid::Commit { .. }) {
+            self.decoded += 1;
+        }
+        self.ready.push_back((graph, laid));
         Ok(())
     }
 }

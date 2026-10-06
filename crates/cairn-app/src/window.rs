@@ -238,6 +238,13 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
             RowContent::Commit(commit) => CommitRow::new(commit, render.graph, render.lanes)
                 .selected(render.selected)
                 .into(),
+            // Drawn as its stash commit's row, its message the subject, until stash rows get
+            // their own chip (refs-and-status R5.4).
+            RowContent::Stash(stash) => {
+                CommitRow::new(stash.as_commit(), render.graph, render.lanes)
+                    .selected(render.selected)
+                    .into()
+            }
         }
     })
     .lanes(lanes)
@@ -2210,6 +2217,59 @@ mod tests {
             .as_ref()
             .and_then(|pair| pair.other(selected));
         (selected, other)
+    }
+
+    /// A stash's row (refs-and-status R4.2), drawn as its stash commit's row until stash
+    /// rows get their own chip: its message is its subject; pressed, it is selected by its
+    /// own identity and asks what the stash commit changed against the commit it was made
+    /// on, its first parent (R6.2's pair, `stash^1..stash`); pressed with the extending
+    /// chord beside a commit, the pair holds the stash's row, the lower of the two the base.
+    /// Caught by: a stash's row drawing nothing, selected as a commit's, or compared with
+    /// anything but its first parent.
+    #[test]
+    fn a_stash_row_draws_its_message_and_asks_what_it_changed_on_its_base() {
+        let (mut test, view, submitted) = launch((0..3).map(row).collect(), received(6, true));
+        let mut rows = view.rows;
+        let mut page = RowsPage::new();
+        page.push_stash(
+            GraphRow::new(oid(90), Lane::new(1), Vec::new()),
+            cairn_model::PagedStash {
+                index: 0,
+                base: oid(3),
+                message: "On main: wip",
+                author: "Ada",
+                author_time: 0,
+            },
+        );
+        rows.write()
+            .append(page)
+            .unwrap_or_else(|full| panic!("{full}"));
+        hold(&mut rows.write(), (3..6).map(row).collect());
+        test.sync_and_update();
+
+        let from = submitted.borrow().len();
+        click_label(&mut test, "On main: wip");
+        test.sync_and_update();
+        assert_eq!(selection(view), (Some(RowId::Stash(oid(90))), None));
+        assert_eq!(
+            changes_asked(&submitted, from),
+            [Comparison::Commit(oid(90))]
+        );
+
+        let from = submitted.borrow().len();
+        extend_row(&mut test, 1);
+        assert_eq!(
+            selection(view),
+            (Some(RowId::Stash(oid(90))), Some(RowId::Commit(oid(1))))
+        );
+        assert_eq!(
+            changes_asked(&submitted, from),
+            [Comparison::Between {
+                old: oid(90),
+                new: oid(1)
+            }],
+            "the stash's row, the lower, is the base"
+        );
     }
 
     /// C12, R7.1-R7.3 through the window: a row pressed with the table's extending chord

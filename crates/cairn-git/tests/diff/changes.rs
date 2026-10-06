@@ -737,6 +737,9 @@ fn the_text_of_an_encoded_commit_is_the_text_git_prints() {
                     "{what}: the row's author"
                 );
             }
+            cairn_model::RowContent::Stash(stash) => {
+                panic!("{what}: a commit's row read as a stash's: {stash:?}")
+            }
         }
     }
     // The fixture decides something only if git really converted some and not others.

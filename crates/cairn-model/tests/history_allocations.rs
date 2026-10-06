@@ -1,9 +1,12 @@
 //! C16's third half, counted: no kept row owns a heap allocation. A row is `Copy` (the
 //! compile-time half, in `history.rs`); here the allocator says so too — appending ten
-//! thousand rows allocates per chunk of the history's stores, never per row, and reading a
-//! row's identity, lane and lane changes allocates nothing at all.
+//! thousand rows, labelled and stashes among them, allocates per chunk of the history's
+//! stores, never per row, and reading a row's identity, lane, lane changes and labels
+//! allocates nothing at all.
 
-use cairn_model::{GraphRow, History, LaneAssigner, Oid, PagedCommit, RowsPage};
+use cairn_model::{
+    GraphRow, History, Label, LaneAssigner, Oid, PagedCommit, PagedStash, RefKind, RowsPage,
+};
 
 fn oid(n: usize) -> Oid {
     let mut bytes = [0u8; 20];
@@ -27,23 +30,47 @@ fn graphs(len: usize) -> Vec<GraphRow> {
 
 fn page(graphs: &[GraphRow], subjects: &[String]) -> RowsPage {
     let authors = ["Ada Lovelace", "Grace Hopper", "Margaret Hamilton"];
+    let labels = [
+        Label {
+            name: "refs/heads/topic",
+            kind: RefKind::LocalBranch,
+            current: false,
+        },
+        Label {
+            name: "refs/tags/v1",
+            kind: RefKind::Tag,
+            current: false,
+        },
+    ];
     let mut page = RowsPage::new();
     for (n, graph) in graphs.iter().enumerate() {
-        page.push(
-            graph.clone(),
-            PagedCommit {
-                parents: 1 + n % 2,
-                subject: &subjects[n],
-                author: authors[n % authors.len()],
-                author_time: n as i64,
-            },
-        );
+        let commit = PagedCommit {
+            parents: 1 + n % 2,
+            subject: &subjects[n],
+            author: authors[n % authors.len()],
+            author_time: n as i64,
+        };
+        // A stash every thirteenth row and two labels every seventh, as rows of a walk
+        // from every ref carry them.
+        if n % 13 == 12 {
+            let stash = PagedStash {
+                index: n,
+                base: graph.id,
+                message: commit.subject,
+                author: commit.author,
+                author_time: commit.author_time,
+            };
+            page.push_stash(graph.clone(), stash);
+        } else {
+            let labelled = if n % 7 == 0 { &labels[..] } else { &[] };
+            page.push_labelled(graph.clone(), commit, n % 50 == 0, labelled);
+        }
     }
     page
 }
 
-/// Caught by: a row that boxes its subject, its author or its lane changes again, or a
-/// store that grows by reallocating as it fills rather than by adding a chunk.
+/// Caught by: a row that boxes its subject, its author, its lane changes or its labels
+/// again, or a store that grows by reallocating as it fills rather than by adding a chunk.
 #[test]
 fn appending_ten_thousand_rows_allocates_per_chunk_never_per_row() {
     let rows = 10_000;
@@ -83,12 +110,14 @@ fn reading_a_rows_identity_lane_and_changes_allocates_nothing() {
         history.append(page(graphs, subjects)).unwrap();
     }
     let mut changes = 0usize;
+    let mut labels = 0usize;
     for index in [0, 1, 63, 64, 1_500, rows - 1] {
         let read = allocation_counter::measure(|| {
             let row = history.row(index).unwrap();
             assert!(history.id(index).is_some());
             assert_eq!(row.lane(), graphs[index].lane);
             changes += row.changes().len();
+            labels += row.labels().iter().count();
         });
         assert_eq!(
             read.count_total, 0,
@@ -100,4 +129,5 @@ fn reading_a_rows_identity_lane_and_changes_allocates_nothing() {
         changes > 0,
         "no row read had a lane change, so nothing was read"
     );
+    assert!(labels > 0, "no row read had a label, so none was read");
 }

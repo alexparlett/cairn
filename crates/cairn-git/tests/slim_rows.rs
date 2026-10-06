@@ -81,6 +81,7 @@ fn drawn_rows(rows: &History) -> Vec<Drawn> {
                 time: commit.author_time,
                 parents: commit.parent_count,
             },
+            RowContent::Stash(stash) => panic!("a walk from HEAD drew a stash: {stash:?}"),
         })
         .collect()
 }

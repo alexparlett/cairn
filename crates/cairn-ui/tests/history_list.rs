@@ -74,11 +74,14 @@ fn list(reports: Reports) -> impl Fn() -> Element + 'static {
         let reached_end = reports.reached_end.clone();
 
         HistoryList::new(fixture.rows, |render: RowRender| {
-            let RowContent::Commit(commit) = render.content;
+            let subject = match render.content {
+                RowContent::Commit(commit) => commit.summary,
+                RowContent::Stash(stash) => stash.message,
+            };
             let marker = if render.selected { "> " } else { "" };
             label()
                 .height(Size::px(ROW_HEIGHT))
-                .text(format!("{marker}{}", commit.summary))
+                .text(format!("{marker}{subject}"))
                 .into()
         })
         .selected(*selected.read())
@@ -528,14 +531,14 @@ fn rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew() {
             let recorder = recorder.clone();
             let index_of = index_of_row.clone();
             HistoryList::new(fixture.rows, move |render: RowRender| {
-                let RowContent::Commit(commit) = &render.content;
+                let (id, subject) = match &render.content {
+                    RowContent::Commit(commit) => (commit.id, commit.summary.clone()),
+                    RowContent::Stash(stash) => (stash.id, stash.message.clone()),
+                };
                 recorder
                     .borrow_mut()
-                    .push((index_of[&commit.id], render.graph.clone()));
-                label()
-                    .height(Size::px(ROW_HEIGHT))
-                    .text(commit.summary.clone())
-                    .into()
+                    .push((index_of[&id], render.graph.clone()));
+                label().height(Size::px(ROW_HEIGHT)).text(subject).into()
             })
             .into()
         },

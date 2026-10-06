@@ -35,6 +35,8 @@ fn walk_of(repo: &Repository, rows: &History) -> Vec<(Oid, Vec<Oid>)> {
                 let details = ok(repo.commit_details(&id), "reading a commit's parents");
                 (id, details.parents)
             }
+            // C15's oracle knows commits alone; its walks are seeded with no stash.
+            RowId::Stash(id) => panic!("C15 was handed a walk with stash {id}"),
         })
         .collect()
 }
@@ -261,7 +263,13 @@ fn request_for(repo: &Repository, seed: &str) -> HistoryRequest {
     match seed {
         "head" => HistoryRequest::from_head(PAGE),
         "refs" => HistoryRequest::from_commits(every_ref_tip(repo), PAGE),
-        other => panic!("CAIRN_FIND_SEED={other}: want head or refs"),
+        // The walk the application opens: every ref's commit, each row labelled, every
+        // stash whose base is walked a row of its own.
+        "snapshot" => {
+            let read = ok(repo.refs(&CancelSignal::new()), "reading the refs");
+            HistoryRequest::from_refs(&read.snapshot, PAGE)
+        }
+        other => panic!("CAIRN_FIND_SEED={other}: want head, refs or snapshot"),
     }
 }
 
@@ -271,7 +279,10 @@ fn request_for(repo: &Repository, seed: &str) -> HistoryRequest {
 /// `CAIRN_C16_MIB`),
 /// `equivalence` (every row of the whole history against the frozen assigner), or
 /// `derive` (the worst-case derivation at each snapshot interval in `CAIRN_C15_KS`);
-/// `CAIRN_FIND_SEED` is `head` or `refs`. Run with `--release`, one mode per process.
+/// `CAIRN_FIND_SEED` is `head`, `refs` (every ref's commit, unlabelled) or `snapshot` (the
+/// refs snapshot's walk: labels and stash rows). Run with `--release`, one mode per
+/// process; `equivalence` and `derive` read commits alone, so not with `snapshot` where a
+/// stash is drawn.
 #[test]
 #[ignore = "needs a repository named by CAIRN_BENCH_REPO"]
 fn measures_compact_rows_over_a_named_repository() {
@@ -327,7 +338,9 @@ fn find(repo: &Repository, seed: &str) {
         .len()
         .checked_sub(1)
         .and_then(|last| kept.id(last))
-        .map_or_else(String::new, |RowId::Commit(id)| id.to_string());
+        .map_or_else(String::new, |id| match id {
+            RowId::Commit(id) | RowId::Stash(id) => id.to_string(),
+        });
     eprintln!(
         "FIND seed={seed} found_at_row={} rows_kept={} last={last} ms={:.1}",
         found.unwrap_or(0),
@@ -352,8 +365,8 @@ fn find(repo: &Repository, seed: &str) {
 fn report_retained(retained: &RetainedBytes, rows: usize, authors: usize) {
     eprintln!(
         "RETAINED total={:.2} MiB ({} B/row over {rows} rows): rows {:.2} MiB, text {:.2} MiB, \
-         lane changes {:.2} MiB, snapshots {:.2} MiB, authors {:.3} MiB ({authors} authors); \
-         kept row {} B, lane change {} B",
+         lane changes {:.2} MiB, snapshots {:.2} MiB, authors {:.3} MiB ({authors} authors), \
+         labels {:.3} MiB, stashes {:.3} MiB; kept row {} B, lane change {} B",
         mib(retained.total()),
         retained.total() / rows.max(1),
         mib(retained.rows),
@@ -361,6 +374,8 @@ fn report_retained(retained: &RetainedBytes, rows: usize, authors: usize) {
         mib(retained.lane_changes),
         mib(retained.snapshots),
         mib(retained.authors),
+        mib(retained.labels),
+        mib(retained.stashes),
         retained.rows / rows.max(1),
         size_of::<LaneChange>(),
     );

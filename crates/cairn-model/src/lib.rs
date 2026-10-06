@@ -27,6 +27,7 @@ mod prompt;
 mod refs;
 mod remote;
 mod repo_path;
+mod row_labels;
 mod rows_page;
 mod secret;
 mod status;
@@ -61,7 +62,8 @@ pub use refs::{
 };
 pub use remote::RemoteSummary;
 pub use repo_path::RepoPath;
-pub use rows_page::{PagedCommit, RowsPage};
+pub use row_labels::{Label, RowLabels};
+pub use rows_page::{PagedCommit, PagedStash, RowsPage};
 pub use secret::Secret;
 pub use status::{
     ChangedEntry, ConflictKind, ConflictedEntry, StagedChange, StatusEntry, SubmoduleState,
@@ -81,6 +83,40 @@ pub struct CommitSummary {
     pub author_name: String,
     /// Seconds since the Unix epoch.
     pub author_time: i64,
+}
+
+/// A stash as the history list draws its row (PRD R4.2, R5.4), read out of a [`History`]:
+/// the stash commit `stash@{index}` names, the commit it was made on — its first parent, and
+/// the one line its row draws — and the stash list's message, its row's subject. Its index
+/// and untracked commits are not rows, and are the details query's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StashSummary {
+    /// The stash commit itself.
+    pub id: Oid,
+    /// `0` is the newest: `stash@{0}`.
+    pub index: usize,
+    /// The commit the stash was made on.
+    pub base: Oid,
+    /// The stash list's message, `On main: wip` or `WIP on main: 1234567 subject`.
+    pub message: String,
+    pub author_name: String,
+    /// Seconds since the Unix epoch.
+    pub author_time: i64,
+}
+
+impl StashSummary {
+    /// The stash commit as a commit's row describes one: the stash's message as its
+    /// subject, and one parent — the one its row draws a line to — so it draws no merge's
+    /// ring.
+    pub fn as_commit(&self) -> CommitSummary {
+        CommitSummary {
+            id: self.id,
+            parent_count: 1,
+            summary: self.message.clone(),
+            author_name: self.author_name.clone(),
+            author_time: self.author_time,
+        }
+    }
 }
 
 /// A fully-qualified reference name, e.g. `refs/heads/main`.

@@ -92,6 +92,7 @@ mod tests {
     fn first_commit(history: &History) -> CommitSummary {
         match history.row(0).expect("a commit").content() {
             RowContent::Commit(commit) => commit,
+            RowContent::Stash(stash) => panic!("a walk from HEAD drew a stash: {stash:?}"),
         }
     }
 

@@ -17,21 +17,27 @@ use crate::diff_state::Answer;
 use crate::window::View;
 use crate::worker::{Comparison, Request};
 
-/// What a row's changes are asked against. Named variant by variant: a row that is not a
-/// commit — the working tree's, when it lands — must say here what it compares, or the
-/// window does not compile.
+/// What a row's changes are asked against. Named variant by variant: a row of another kind
+/// must say here what it compares, or the window does not compile. A stash's row compares
+/// the stash commit with its first parent, the commit it was made on — `stash^1..stash`, what
+/// `git stash show` lists (refs-and-status R6.2) — which is a commit's comparison of the
+/// stash commit: its Commit tab draws the stash commit's details, every parent among them.
 pub fn comparison_of(id: RowId) -> Comparison {
     match id {
         RowId::Commit(oid) => Comparison::Commit(oid),
+        RowId::Stash(stash) => Comparison::Commit(stash),
     }
 }
 
-/// Two commits selected to compare (R7): the base — the lower of the two rows, the commit the
-/// diff runs from — and the tip, each as the history drew it, for the header that names them.
+/// Two rows selected to compare (R7): the base — the lower of the two rows, the commit the
+/// diff runs from — and the tip, each as the history drew it, for the header that names them,
+/// and each row's identity, which a stash's row does not share with its commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pair {
     pub base: CommitSummary,
     pub tip: CommitSummary,
+    pub base_row: RowId,
+    pub tip_row: RowId,
 }
 
 impl Pair {
@@ -43,9 +49,9 @@ impl Pair {
         }
     }
 
-    /// The commit of the two that is not `one`.
+    /// The row of the two that is not `one`.
     pub fn other(&self, one: Option<RowId>) -> Option<RowId> {
-        let (base, tip) = (RowId::Commit(self.base.id), RowId::Commit(self.tip.id));
+        let (base, tip) = (self.base_row, self.tip_row);
         match one {
             Some(id) if id == base => Some(tip),
             Some(id) if id == tip => Some(base),
@@ -54,7 +60,7 @@ impl Pair {
     }
 
     fn holds(&self, id: RowId) -> bool {
-        id == RowId::Commit(self.base.id) || id == RowId::Commit(self.tip.id)
+        id == self.base_row || id == self.tip_row
     }
 }
 
@@ -66,11 +72,12 @@ pub fn selected_comparison(view: View) -> Option<Comparison> {
     }
 }
 
-/// The commit a loaded row draws, copied out of the history. Named variant by variant, as
-/// [`comparison_of`] is.
+/// The commit a loaded row draws, copied out of the history: a stash's row draws its stash
+/// commit, its message the subject. Named variant by variant, as [`comparison_of`] is.
 fn summary_of(row: HistoryRow<'_>) -> CommitSummary {
     match row.content() {
         RowContent::Commit(summary) => summary,
+        RowContent::Stash(stash) => stash.as_commit(),
     }
 }
 
@@ -118,10 +125,7 @@ pub fn extend(id: RowId, index: usize, view: View, submit: Option<&dyn Fn(Reques
     }
     let made = {
         let loaded = rows.peek();
-        let anchor_at = match anchor {
-            RowId::Commit(oid) => loaded_row(&loaded, oid),
-        };
-        match (anchor_at, loaded.row(index)) {
+        match (loaded.position(anchor), loaded.row(index)) {
             (Some(anchor_at), Some(pressed)) if pressed.id() == id => {
                 let (anchor_summary, pressed_summary) = match loaded.row(anchor_at) {
                     Some(row) => (summary_of(row), summary_of(pressed)),
@@ -132,11 +136,15 @@ pub fn extend(id: RowId, index: usize, view: View, submit: Option<&dyn Fn(Reques
                     Pair {
                         base: pressed_summary,
                         tip: anchor_summary,
+                        base_row: id,
+                        tip_row: anchor,
                     }
                 } else {
                     Pair {
                         base: anchor_summary,
                         tip: pressed_summary,
+                        base_row: anchor,
+                        tip_row: id,
                     }
                 })
             }
@@ -159,6 +167,8 @@ pub fn swap(view: View, submit: Option<&dyn Fn(Request)>) {
     let swapped = pair.peek().clone().map(|held| Pair {
         base: held.tip,
         tip: held.base,
+        base_row: held.tip_row,
+        tip_row: held.base_row,
     });
     let Some(swapped) = swapped else {
         return;

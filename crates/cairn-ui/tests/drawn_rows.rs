@@ -129,6 +129,9 @@ fn app() -> Element {
     let rows = use_consume::<State<History>>();
     HistoryList::new(rows, |render: RowRender| match render.content {
         RowContent::Commit(commit) => CommitRow::new(commit, render.graph, render.lanes).into(),
+        RowContent::Stash(stash) => {
+            CommitRow::new(stash.as_commit(), render.graph, render.lanes).into()
+        }
     })
     .into()
 }

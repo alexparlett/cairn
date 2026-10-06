@@ -9,10 +9,15 @@
 //! ahead in the walk itself:
 //!
 //! - When a stash's date comes up, the commits the walk has already yielded but not yet
-//!   handed on are searched for its base, and up to [`LOOKAHEAD`] more are pulled off the
-//!   walk to find it — stopping early once the walk passes the base's own date without
-//!   meeting it. Found: the stash's row goes here, at its date. Not found: the stash is
-//!   held.
+//!   handed on are searched for its base, and more are pulled off the walk to find it,
+//!   until [`LOOKAHEAD`] commits are ahead of the next one handed on — stopping early once
+//!   the walk passes the base's own date without meeting it. Found: the stash's row goes
+//!   here, at its date. Not found: the stash is held.
+//! - A stash's date comes up when it is no older than the commit about to be handed on —
+//!   a stash dated the same second as a commit goes first, as git's date order puts a
+//!   stash above the index commit it was made with — and stash rows keep their own date
+//!   order: newest first, `stash@{0}` first among equal dates, so a stash about to go
+//!   directly above its base waits for every newer stash to be placed or held.
 //! - Whenever the next commit to hand on is a held stash's base — or the base of a stash
 //!   whose date has not come up yet, as when a stash is dated older than its base by clock
 //!   skew — the stash's row goes directly above it.
@@ -165,14 +170,14 @@ impl<'repo> Stream<'repo> {
         };
         let (front_id, front_time) = (front.id, front.time);
 
-        // A stash made on the commit about to be handed on: directly above it.
-        if let Some(stash) = self.above(&front_id) {
-            return Ok(Next::Entry(Entry::Stash(stash)));
-        }
+        // The newest stash made on the commit about to be handed on, which goes directly
+        // above it — after every stash newer than it, below.
+        let above = self.above(&front_id);
 
-        // Each stash whose date is newer than the commit about to be handed on goes here,
-        // newest first, if its base is reached; one that is not is held.
-        while let Some(stash) = self.due(front_time) {
+        // Each stash no older than the commit about to be handed on, and newer than the
+        // stash going above it, goes here, newest first, if its base is reached; one that is
+        // not is held.
+        while let Some(stash) = self.due(front_time, above) {
             match self.look_ahead(stash, cancel)? {
                 Ahead::Reached => {
                     self.finish(stash);
@@ -182,6 +187,11 @@ impl<'repo> Stream<'repo> {
                 Ahead::NotYet => self.hold(stash),
                 Ahead::Cancelled => return Ok(Next::Cancelled),
             }
+        }
+
+        if let Some(stash) = above {
+            self.finish(stash);
+            return Ok(Next::Entry(Entry::Stash(stash)));
         }
 
         let Some(walked) = self.ahead.pop_front() else {
@@ -200,31 +210,43 @@ impl<'repo> Stream<'repo> {
         }))
     }
 
-    /// The newest stash on `base` not yet placed, marked placed.
-    fn above(&mut self, base: &Oid) -> Option<usize> {
+    /// The newest stash on `base` not yet placed, left unplaced.
+    fn above(&self, base: &Oid) -> Option<usize> {
         if self.by_base.is_empty() {
             return None;
         }
-        let waiting = self.by_base.get(base)?;
-        let stash = waiting
+        self.by_base
+            .get(base)?
             .iter()
             .copied()
-            .find(|&at| self.places.get(at) != Some(&Place::Done))?;
-        self.finish(stash);
-        Some(stash)
+            .find(|&at| self.places.get(at) != Some(&Place::Done))
     }
 
-    /// The newest stash still waiting whose date is newer than `time`, the date of the
-    /// commit about to be handed on.
-    fn due(&mut self, time: Option<i64>) -> Option<usize> {
+    /// The newest stash still waiting that is no older than `time`, the date of the commit
+    /// about to be handed on, and that comes before `above`, the stash going directly above
+    /// that commit: newer, or as new with a lower `stash@{n}`.
+    fn due(&mut self, time: Option<i64>, above: Option<usize>) -> Option<usize> {
         let time = time?;
+        let stashes = self.decoration.stashes();
+        let order = |at: usize| {
+            stashes
+                .get(at)
+                .map(|stash| (stash.committed, std::cmp::Reverse(stash.index)))
+        };
         while let Some(&at) = self.dated.get(self.next_dated) {
             if self.places.get(at) != Some(&Place::Waiting) {
                 self.next_dated += 1;
                 continue;
             }
-            let committed = self.decoration.stashes().get(at)?.committed;
-            return (committed > time).then_some(at);
+            let (committed, _) = order(at)?;
+            if committed < time {
+                return None;
+            }
+            // `dated` is in this order, so if this one does not come first, none does.
+            return match above {
+                Some(above) if order(at) <= order(above) => None,
+                Some(_) | None => Some(at),
+            };
         }
         None
     }

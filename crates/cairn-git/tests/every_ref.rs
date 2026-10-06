@@ -860,6 +860,72 @@ impl Cancel for StopAfter {
     }
 }
 
+/// The ids of `rows`, stash rows by their stash commit, in order.
+fn row_ids(rows: &History) -> Vec<String> {
+    rows.rows()
+        .map(|row| match row.id() {
+            RowId::Commit(id) | RowId::Stash(id) => id.to_string(),
+        })
+        .collect()
+}
+
+/// QC1: stash rows in their own date order. An older stash on the walk's first commit and
+/// a newer one on an older branch's tip: the newer is drawn first, as `git log
+/// --date-order` over the refs and the stash commits orders them — and over the fixture
+/// with every kind of stash too. Caught by: a stash going directly above its base before
+/// a newer stash whose date has come.
+#[test]
+fn stash_rows_are_in_gits_date_order() {
+    let fixture = fixtures::unborn();
+    let mut clock = Clock(fixtures::EPOCH);
+    commit(&fixture, &mut clock, "f", "old\n", "old tip");
+    fixture.git(&["branch", "old"]);
+    commit(&fixture, &mut clock, "f", "new\n", "newest commit");
+    write(&fixture, "f", "wip on main\n");
+    git_at(
+        &fixture,
+        clock.tick(),
+        &["stash", "push", "--quiet", "-m", "older"],
+    );
+    fixture.git(&["checkout", "--quiet", "old"]);
+    write(&fixture, "f", "wip on old\n");
+    git_at(
+        &fixture,
+        clock.tick(),
+        &["stash", "push", "--quiet", "-m", "newer"],
+    );
+    fixture.git(&["checkout", "--quiet", "main"]);
+
+    let it = everything();
+    for fixture in [&fixture, &it.fixture] {
+        let repo = ok(Repository::discover(fixture.path()), "opening the fixture");
+        let rows = page_all(&repo, &snapshot_request(&repo, 3), 3);
+        let (_, stashes) = index(&rows);
+        let drawn: Vec<String> = row_ids(&rows)
+            .into_iter()
+            .filter(|id| stashes.contains_key(id))
+            .collect();
+        assert!(drawn.len() >= 2, "the fixture decides nothing");
+        let mut args = vec![
+            "log",
+            "--date-order",
+            "--format=%H",
+            "--branches",
+            "--remotes",
+            "--tags",
+            "HEAD",
+        ];
+        args.extend(drawn.iter().map(String::as_str));
+        let expected: Vec<String> = fixture
+            .git(&args)
+            .lines()
+            .filter(|id| stashes.contains_key(*id))
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(drawn, expected);
+    }
+}
+
 /// RR1: opening a walk from every ref reads each tip, and polls the cancel before each but
 /// the first, on both routes: cancelled at its sixth poll, a walk from fifty tags stops
 /// having read six tips and laid nothing out, and a session cancelled there pages, once

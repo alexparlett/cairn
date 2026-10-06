@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# The oldest gits Cairn supports, built from source, under cairn-git's real-git diff
-# tests: `scripts/gate.sh --step git-floor`, part of the full gate and run by CI as its
-# own job.
+# The oldest gits Cairn supports, built from source, under cairn-git's real-git diff and
+# status tests: `scripts/gate.sh --step git-floor`, part of the full gate and run by CI as
+# its own job.
 #
 # The changes query asks the git in use (`git diff-tree`), and what that git does
 # differs by version in ways the code branches on (`crates/cairn-git/src/diff/renames.rs`:
 # what rename-limit check counts before 2.31, the 400 default and the 32,767 ceiling
 # before 2.33); so does the status read (`git status`, which cannot read a sparse index
-# before 2.32: `crates/cairn-git/src/reads/status.rs`). The machine's own git is new, so without this those branches are read
-# from git's source and never run against it. Two gits are built: the floor
-# (`GitBinary::MINIMUM`, which this script checks it matches) and the last before 2.33,
-# which is the only one that reaches the 2.31-2.32 branch.
+# before 2.32, and lazily fetches in a partial clone before 2.44:
+# `crates/cairn-git/src/reads/status.rs`). The machine's own git is new, so without this
+# those branches are read from git's source and never run against it. Two gits are
+# built: the floor (`GitBinary::MINIMUM`, which this script checks it matches) and the
+# last before 2.33, which is the only one that reaches the 2.31-2.32 branch.
 #
 # Each is fetched from https://github.com/git/git by its tag and checked against the
 # commit pinned here, so a moved tag fails rather than building something else; built
@@ -62,14 +63,14 @@ if [ -z "$floor_minor" ] || [ "2.$floor_minor" != "${first_version%.*}" ]; then
 fi
 
 # The filtered runs, as `<cargo target>|<test filters>|<floor>`. Each floor sits one under
-# the run's count when it was set (80, 113 and 15), so a filter that silently matches less
+# the run's count when it was set (81, 113 and 17), so a filter that silently matches less
 # fails; raise a floor as its run gains tests. `--test status` is the working tree's status
 # against its oracles (C4 of the refs-and-status packet), which owes its answer to the git
 # in use as much as the diff tests do.
 RUNS=(
-  "--lib|diff:: reads::|79"
+  "--lib|diff:: reads::|80"
   "--test diff_engine||112"
-  "--test status||14"
+  "--test status||16"
 )
 
 CACHE="${CAIRN_GIT_FLOOR_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/cairn/git-floor}"

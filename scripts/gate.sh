@@ -26,7 +26,7 @@ TEST_FULL_CMD="cargo test --workspace --all-targets"
 # --all-targets never runs doctests, and cairn-model's compile-fail pins on the
 # secret type ARE doctests. Its own step, so a red test-full does not hide it.
 TEST_DOC_CMD="cargo test --workspace --doc"
-# cairn-git's real-git diff tests against the oldest gits Cairn supports, built from
+# cairn-git's real-git diff and status tests against the oldest gits Cairn supports, built from
 # source (scripts/git-floor.sh). In the full sequence below, like `deps`: the first run
 # fetches git's source and builds two gits (a C compiler, make and zlib's headers; the
 # script names what is missing and FAILS, never skips), and later runs reuse the cached

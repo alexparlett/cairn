@@ -575,12 +575,18 @@ mod tests {
         let mut out_of_order_rows = 0usize;
         let mut out_of_order_segments = 0usize;
         let mut widest_lane = 0usize;
+        // Rows with no snapshot within reach: the list would draw their node alone.
+        let mut underived = 0usize;
 
         for (index, row) in page.rows.iter().enumerate() {
             let graph = &row.graph;
-            let edges = cairn_model::row_edges(&page.rows, index)
-                .map(|drawn| drawn.edges)
-                .unwrap_or_default();
+            let edges = match cairn_model::row_edges(&page.rows, index) {
+                Some(drawn) => drawn.edges,
+                None => {
+                    underived += 1;
+                    Vec::new()
+                }
+            };
             segments.push(edges.len());
             bytes.push(size_of::<cairn_model::GraphRow>() + graph.heap_bytes());
 
@@ -613,6 +619,7 @@ mod tests {
             100.0 * out_of_order_rows as f64 / rows as f64,
         );
         eprintln!("    highest lane number used: {widest_lane}");
+        eprintln!("    rows whose edges could not be derived: {underived}");
 
         let p99 = percentile(&bytes, 0.99);
         for commits in [10_000usize, 100_000, 500_000] {
@@ -622,6 +629,10 @@ mod tests {
                 total as f64 / (1024.0 * 1024.0),
             );
         }
+        assert_eq!(
+            underived, 0,
+            "{underived} rows had no snapshot within reach, so their edges were not derived"
+        );
     }
 
     fn describe(label: &str, values: &mut [usize]) {

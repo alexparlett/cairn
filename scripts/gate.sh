@@ -155,11 +155,31 @@ require_user_namespaces_where_possible() {
   if [ -n "$probe" ]; then rm -rf "$probe"; fi
 }
 
+# a_reftable_repository_is_refused_at_open_and_a_files_one_opens
+# (crates/cairn-git/tests/refs.rs) skips where the git on PATH cannot make a reftable
+# repository (git before 2.45), and the skip would read `ok`. Where this probe makes one,
+# exactly as the test does (`git init --quiet --ref-format=reftable`), the test is
+# REQUIRED, so a refusal that stops working is red; where it cannot, the gate says so once
+# and again on the PASS line. scripts/git-floor.sh runs no test binary that holds it. The
+# guard the_reftable_refusal_is_required_wherever_it_can_run pins all of it.
+REFTABLE_NOTE=""
+require_reftable_where_possible() {
+  local probe=""
+  if probe=$(mktemp -d) && git init --quiet --ref-format=reftable "$probe/repository" >/dev/null 2>&1; then
+    export CAIRN_REQUIRE_REFTABLE=1
+  else
+    REFTABLE_NOTE="a_reftable_repository_is_refused_at_open_and_a_files_one_opens (crates/cairn-git/tests/refs.rs) SKIPPED here: 'git init --ref-format=reftable' fails, so the git on PATH cannot make a reftable repository (git 2.45 or newer can)"
+    echo "gate: $REFTABLE_NOTE"
+  fi
+  if [ -n "$probe" ]; then rm -rf "$probe"; fi
+}
+
 run_test_full() {
   step "test-full"
   require_ssh_fixture_where_possible
   require_fsmonitor_daemon_where_possible
   require_user_namespaces_where_possible
+  require_reftable_where_possible
   run_body "test-full" "$TEST_FULL_CMD"
 }
 run_test_doc()  { run_cmd "test-doc"  "$TEST_DOC_CMD"; }
@@ -169,7 +189,7 @@ finish() {
   echo
   # A cap on coverage is restated where the verdict is read, not only where it happened.
   if [ "$fail" -eq 0 ]; then
-    echo "gate: PASS${SSH_FIXTURE_NOTE:+ ($SSH_FIXTURE_NOTE)}${FSMONITOR_NOTE:+ ($FSMONITOR_NOTE)}${MOUNTNS_NOTE:+ ($MOUNTNS_NOTE)}${OWNER_NOTE:+ ($OWNER_NOTE)}"
+    echo "gate: PASS${SSH_FIXTURE_NOTE:+ ($SSH_FIXTURE_NOTE)}${FSMONITOR_NOTE:+ ($FSMONITOR_NOTE)}${MOUNTNS_NOTE:+ ($MOUNTNS_NOTE)}${OWNER_NOTE:+ ($OWNER_NOTE)}${REFTABLE_NOTE:+ ($REFTABLE_NOTE)}"
   else
     echo "gate: FAIL"
   fi

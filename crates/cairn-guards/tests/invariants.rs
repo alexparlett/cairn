@@ -4673,6 +4673,107 @@ fn the_fsmonitor_daemon_pin_is_required_wherever_it_can_run() {
     }
 }
 
+/// The reftable refusal test (`crates/cairn-git/tests/refs.rs`, PRD C2) skips where the git
+/// on `PATH` cannot make a reftable repository — before git 2.45 — and a passing test's
+/// stderr is hidden, so `CAIRN_REQUIRE_REFTABLE` is what turns a skip into a failure.
+/// Pinned here: the test's skip branch fails when the variable is set and asks git exactly
+/// what the gate's probe asks (`init --quiet --ref-format=reftable`); `scripts/gate.sh`'s
+/// `test-full` calls the probe as a statement of its own (`gate_function_calls`), whose body
+/// (`gate_function_body`) runs that `git init`, exports the variable, sets the note and
+/// removes what it made; the PASS line restates the note; and `scripts/git-floor.sh`, whose
+/// floors' gits cannot make reftable, runs the test's binary only with the variable
+/// cleared — today it does not run it at all. CI's runner may lack a new enough git, and
+/// the gate then prints the note: this pin holds the probe, not the runner.
+#[test]
+fn the_reftable_refusal_is_required_wherever_it_can_run() {
+    let root = repo_root();
+    let read = |path: &str| {
+        std::fs::read_to_string(root.join(path)).unwrap_or_else(|e| panic!("reading {path}: {e}"))
+    };
+    let gate = read("scripts/gate.sh");
+    let floor = read("scripts/git-floor.sh");
+    let test = read("crates/cairn-git/tests/refs.rs");
+
+    let body = test
+        .split("fn a_reftable_repository_is_refused_at_open_and_a_files_one_opens()")
+        .nth(1)
+        .unwrap_or_else(|| panic!("the reftable refusal test is gone from refs.rs"));
+    let skip_branch = body.split("eprintln!(").next().unwrap_or_default();
+    assert!(
+        skip_branch.len() < body.len(),
+        "the reftable refusal test no longer says SKIPPED where it skips, so this check read \
+         nothing"
+    );
+    assert!(
+        skip_branch.contains("std::env::var_os(\"CAIRN_REQUIRE_REFTABLE\")"),
+        "the reftable refusal test no longer fails where git cannot make a reftable \
+         repository and CAIRN_REQUIRE_REFTABLE is set, so the gate's setting of it decides \
+         nothing"
+    );
+    assert!(
+        skip_branch.contains("no_reftable_here("),
+        "the reftable refusal test no longer asks no_reftable_here whether it can run"
+    );
+    let availability = test
+        .split("fn no_reftable_here(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}\n").next())
+        .unwrap_or_else(|| panic!("no_reftable_here is gone from refs.rs"));
+    assert!(
+        availability.contains(r#""init""#)
+            && availability.contains(r#""--quiet""#)
+            && availability.contains(r#""--ref-format=reftable""#),
+        "refs.rs's no_reftable_here no longer runs `git init --quiet --ref-format=reftable`, so \
+         the gate's probe no longer tests exactly what the test needs"
+    );
+
+    assert!(
+        gate_function_calls(&gate, "run_test_full", "require_reftable_where_possible"),
+        "scripts/gate.sh's run_test_full no longer calls require_reftable_where_possible, so \
+         the reftable refusal test would skip silently where it could have run."
+    );
+    let probe = gate_function_body(&gate, "require_reftable_where_possible")
+        .unwrap_or_else(|| panic!("scripts/gate.sh no longer defines the reftable probe"));
+    for needed in [
+        "git init --quiet --ref-format=reftable",
+        "export CAIRN_REQUIRE_REFTABLE=1",
+        "REFTABLE_NOTE=",
+        "probe=$(mktemp -d)",
+        "rm -rf \"$probe\"",
+    ] {
+        assert!(
+            probe.contains(needed),
+            "scripts/gate.sh's require_reftable_where_possible no longer has `{needed}`, so \
+             the reftable refusal test is no longer required exactly where it can run, or a \
+             skip goes unsaid, or the probe's repository is left behind"
+        );
+    }
+    assert!(
+        gate.lines()
+            .any(|line| line.contains("gate: PASS") && line.contains("${REFTABLE_NOTE:+")),
+        "scripts/gate.sh's PASS line no longer restates REFTABLE_NOTE, so a skip is not said \
+         where the verdict is read"
+    );
+
+    let runs: Vec<&str> = floor
+        .lines()
+        .filter(|line| line.contains("PATH=\"$prefix/bin:$PATH\""))
+        .collect();
+    assert!(
+        !runs.is_empty(),
+        "scripts/git-floor.sh runs no git from its floors' prefix, so this check compared \
+         nothing"
+    );
+    let runs_the_test = floor.contains("--test refs") || floor.contains("\"--tests");
+    for run in runs {
+        assert!(
+            !runs_the_test || run.contains("-u CAIRN_REQUIRE_REFTABLE"),
+            "scripts/git-floor.sh runs the refs tests with CAIRN_REQUIRE_REFTABLE inherited, \
+             which fails the reftable refusal test on a floor's git: {run}"
+        );
+    }
+}
+
 /// The two user-namespace tests — the refspec check over a repository another uid owns
 /// (`crates/cairn-git/tests/fetch.rs`) and git's search across a filesystem boundary
 /// (`crates/cairn-git/tests/diff/bare_discovery.rs`) — skip where their namespace cannot be

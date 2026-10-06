@@ -557,9 +557,9 @@ fn ref_tips_follow_the_refs_git_writes() {
     let tip_of = |reference: &str| {
         repo.ref_tips()
             .unwrap_or_else(|e| panic!("{e}"))
-            .iter()
-            .find(|(name, _)| name.as_str() == reference)
-            .map(|(_, oid)| oid.to_string())
+            .find(&cairn_model::RefName::new(reference))
+            .and_then(cairn_model::Ref::commit_id)
+            .map(|oid| oid.to_string())
     };
 
     assert_eq!(tip_of("refs/heads/main"), Some(git_says("refs/heads/main")));

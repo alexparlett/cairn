@@ -1,7 +1,7 @@
 //! History requests, cursors and pages.
 
 mod session;
-mod walk;
+pub(crate) mod walk;
 
 use std::sync::Arc;
 

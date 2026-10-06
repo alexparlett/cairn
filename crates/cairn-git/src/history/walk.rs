@@ -18,8 +18,10 @@
 //! (`commit_graph_compatible` in git's `commit-graph.c`), and a graph written before the
 //! repository became shallow would name the cut-off parents, so neither does this.
 
-use crate::Error;
+use std::cell::Cell;
+
 use crate::shallow::ShallowBoundary;
+use crate::{Cancel, Error};
 
 use super::HistoryOrder;
 
@@ -54,6 +56,65 @@ pub(super) fn open<'repo>(
         .sorting(order.sorting())
         .map(|walk| walk.commit_graph(graph))
         .map_err(|e| walk_error(Box::new(e)))
+}
+
+/// A walk from `tip` that leaves out every commit `hidden` reaches — `git rev-list
+/// <tip> ^<hidden>` — over the commits git's walk sees ([`Grafted`]). Every read goes
+/// through [`Polled`], which fails once `cancel` says so: the frontier gix paints before a
+/// hiding walk's first commit is one long call, and a read that fails is what stops it.
+/// So no commit-graph is used here, though git would use one: a commit read from the
+/// graph is not read through `objects`, and that paint could not be stopped. `reads`
+/// counts every object read.
+pub(crate) fn hiding<'a, C: Cancel>(
+    repo: &'a gix::Repository,
+    tip: gix::hash::ObjectId,
+    hidden: gix::hash::ObjectId,
+    cancel: &'a C,
+    reads: &'a Cell<usize>,
+) -> Result<HidingWalk<'a, C>, Error> {
+    let walk_error = |source: Box<dyn std::error::Error + Send + Sync>| Error::Walk { source };
+    let boundary = ShallowBoundary::read(repo).map_err(|e| walk_error(Box::new(e)))?;
+    let objects = Polled {
+        objects: Grafted {
+            objects: &repo.objects,
+            boundary,
+        },
+        cancel,
+        reads,
+    };
+    gix::traverse::commit::Simple::new([tip], objects)
+        .hide([hidden])
+        .map_err(|e| walk_error(Box::new(e)))
+}
+
+/// See [`hiding`].
+pub(crate) type HidingWalk<'a, C> =
+    gix::traverse::commit::Simple<Polled<'a, C>, fn(&gix::oid) -> bool>;
+
+/// [`Grafted`] reads that fail once `cancel` says so, each counted in `reads`.
+pub(crate) struct Polled<'a, C> {
+    objects: Grafted<'a>,
+    cancel: &'a C,
+    reads: &'a Cell<usize>,
+}
+
+/// What a read fails with once its walk is cancelled.
+#[derive(Debug, thiserror::Error)]
+#[error("the walk was cancelled")]
+struct WalkCancelled;
+
+impl<C: Cancel> gix::objs::Find for Polled<'_, C> {
+    fn try_find<'a>(
+        &self,
+        id: &gix::oid,
+        buffer: &'a mut Vec<u8>,
+    ) -> Result<Option<gix::objs::Data<'a>>, gix::objs::find::Error> {
+        if self.cancel.is_cancelled() {
+            return Err(Box::new(WalkCancelled));
+        }
+        self.reads.set(self.reads.get() + 1);
+        self.objects.try_find(id, buffer)
+    }
 }
 
 /// The object database as git's walk sees it in a shallow clone: a boundary commit reads

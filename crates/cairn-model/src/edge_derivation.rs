@@ -288,6 +288,39 @@ mod tests {
         assert_eq!(narrow.highest_lane(), Some(Lane::new(5)));
     }
 
+    /// Caught by: a row counting its snapshot's struct but not what the snapshot holds.
+    #[test]
+    fn a_rows_heap_bytes_count_what_its_snapshot_holds() {
+        let mut state = LaneState::default();
+        state.advance(&row(vec![
+            LaneChange::Starts(Lane::new(3)),
+            LaneChange::Starts(Lane::new(130)),
+            LaneChange::StartsLate {
+                lane: Lane::new(5),
+                rows: 4,
+                order: 0,
+            },
+        ]));
+        let wide = state.snapshot();
+        let changes = vec![
+            LaneChange::Ends(Lane::new(3)),
+            LaneChange::Starts(Lane::new(3)),
+        ];
+        let graph = GraphRow::laid_out(
+            Oid::from_bytes(&[2; 20]).unwrap(),
+            Lane::new(3),
+            changes.into_boxed_slice(),
+            Some(Box::new(wide)),
+        );
+        assert_eq!(
+            graph.heap_bytes(),
+            2 * size_of::<LaneChange>()
+                + size_of::<LaneSnapshot>()
+                + 3 * size_of::<u64>()
+                + size_of::<LateLine>()
+        );
+    }
+
     /// Caught by: a reader that looks further above a row than any interval allows, which
     /// on rows without snapshots is a scan of the history.
     #[test]

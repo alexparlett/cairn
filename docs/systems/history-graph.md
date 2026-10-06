@@ -147,19 +147,29 @@ span of its lane changes in the history's lane-change store, and — on a row wi
 one — the number of its lane snapshot in the history's snapshot store. The row
 type is `Copy`, which a type owning a `String`, a `Vec` or a `Box` cannot be, so
 no kept row owns a heap allocation (a compile-time assertion beside it). Every
-store grows in fixed chunks, never by doubling (`crates/cairn-model/src/chunked_store.rs`):
+store the rows read grows in fixed chunks, never by doubling
+(`crates/cairn-model/src/chunked_store.rs`):
 a chunk is allocated once at its full size and never moves, a run of text or of
-lane changes never splits across two, a run longer than a chunk gets one of its
+lane changes never splits across two, a run at least a chunk long gets one of its
 own length, and the list of chunks grows by one. Rows sit 1,024 to a chunk, text
 in 64 KiB chunks, lane changes 4,096 to a chunk. The author table names each
 author once across every page, found by a hash of the name with names that hash
-alike chained, so a page that brings only known authors adds none. A page is
+alike chained, so a page that brings only known authors adds none. That index is
+the one part of a history that is not chunked: a standard hash map from a
+fixed-key SipHash of the name to the first author filed under it, which doubles as
+it fills and rehashes every author so far when it does — on the UI thread, inside
+the append that crosses the threshold, bounded by distinct authors rather than rows
+(0.48 ms measured at 57,000; rust-lang/rust has 8,424). `History::retained`
+estimates its table from hashbrown's layout. A page is
 copied into the stores where pages were applied before (`History::append`), and
 a row is read through the history (`History::row`, a `HistoryRow` view): its id,
 lane and changes without copying anything, its content — what the list draws —
 copied out of the stores, and its edges derived. `History::retained` counts what
 the stores hold, by capacity: every chunk whole, the last one's unused room
-included.
+included. A history past its stores' 32-bit addresses (about 4 GiB of subjects)
+answers `HistoryFull` and keeps the rows of the page before the first it could not
+hold; the window ends the scroll there and says so (`Progress::appended`) until a
+reopen.
 
 `row_edges(rows, index)` (`crates/cairn-model/src/edge_derivation.rs`) derives
 what a row draws: it finds the nearest row at or above `index` that carries a
@@ -520,17 +530,23 @@ import — are rejected outside `cairn-model` by
 | The history list renders through a virtualizing view | `a_history_sized_list_renders_through_a_virtualizing_view` |
 | That view builds one viewport of rows at 1,000 and at 100,000 | `only_a_viewport_of_rows_is_built_however_long_the_history` |
 | Every row draws the edges the assigner drew before rows were compacted | `every_row_draws_the_edges_the_assigner_retained_before_compaction`, `the_cairn_checkouts_rows_draw_what_the_assigner_drew_before_compaction`, `each_cold_page_and_resumed_session_draws_on_its_own_what_the_assigner_drew_for_it`, `rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew` |
-| Every row draws the subject, author, date, short id and merge marker it drew before rows were slimmed | `every_crafted_row_draws_what_it_drew_before_rows_were_slimmed`, `every_row_of_the_cairn_checkout_draws_what_it_drew_before_rows_were_slimmed`, `every_row_of_a_braided_history_draws_what_git_prints` (`crates/cairn-git/tests/slim_rows.rs`), `every_row_draws_what_it_drew_before_rows_were_slimmed` (`crates/cairn-ui/tests/drawn_rows.rs`), `the_cairn_checkouts_rows_draw_what_they_drew_before_rows_were_slimmed` (`crates/cairn-app/src/window.rs`) |
-| No kept row owns a heap allocation; a history's stores grow in chunks | the `Copy` assertion beside `StoredRow` in `crates/cairn-model/src/history.rs`, `a_kept_row_is_seventy_two_bytes`, `appending_ten_thousand_rows_allocates_per_chunk_never_per_row` and `reading_a_rows_identity_lane_and_changes_allocates_nothing` (`crates/cairn-model/tests/history_allocations.rs`), and the store tests in `crates/cairn-model/src/chunked_store.rs` |
+| Every row draws the subject, author, date, short id and merge marker it drew before rows were slimmed | `every_crafted_row_draws_what_it_drew_before_rows_were_slimmed`, `every_row_of_the_cairn_checkout_draws_what_it_drew_before_rows_were_slimmed`, `every_row_of_a_braided_history_draws_what_git_prints` (`crates/cairn-git/tests/slim_rows.rs`), `every_row_draws_what_it_drew_before_rows_were_slimmed` (`crates/cairn-ui/tests/drawn_rows.rs`), `the_cairn_checkouts_rows_draw_what_they_drew_before_rows_were_slimmed` and `the_windows_table_agrees_with_the_engines_table_captured_before` (`crates/cairn-app/src/window.rs`) |
+| No kept row owns a heap allocation; a history's stores grow in chunks | the `Copy` assertion beside `StoredRow` in `crates/cairn-model/src/history.rs`, `a_kept_row_is_seventy_two_bytes` (`crates/cairn-model/src/history.rs`), `appending_ten_thousand_rows_allocates_per_chunk_never_per_row` and `reading_a_rows_identity_lane_and_changes_allocates_nothing` (`crates/cairn-model/tests/history_allocations.rs`), and the store tests in `crates/cairn-model/src/chunked_store.rs` |
 | Each author is named once; a subject reads back exactly | `a_page_of_new_authors_and_a_page_of_known_ones_both_draw_and_each_is_named_once`, `authors_whose_keys_collide_are_told_apart_by_name`, `an_empty_a_non_ascii_and_a_very_long_subject_read_back_exactly` (`crates/cairn-model/src/history.rs`) |
+| What a history retains counts every store, chunks whole | `what_a_history_retains_counts_every_chunk_whole`, `the_author_index_is_estimated_by_its_buckets` (`crates/cairn-model/src/history.rs`), `a_run_exactly_a_chunk_long_leaves_the_chunk_being_filled_alone` (`crates/cairn-model/src/chunked_store.rs`) |
+| A full history keeps the rows it held and ends the scroll | `a_page_past_the_historys_limit_keeps_the_rows_before_it_and_says_so` (`crates/cairn-model/src/history.rs`), `a_full_history_stops_asking_and_keeps_saying_so` (`crates/cairn-app/src/history_state.rs`) |
 
 The first five live in `crates/cairn-guards/tests/invariants.rs`; the sixth is a
 headless component test in `crates/cairn-ui/tests/history_list.rs`; the rest are
 the model, engine, list and window tests named under "What a row keeps". The
-slimmed rows' comparisons hold them to tables of what the rows drew before: each
-table was read from the old rows — their full parents and their author's address
-still on them — at commit `4205d5d`, the one before rows were slimmed, and is
-checked beside a live oracle (`git log` and the details query). The four that scan
+slimmed rows' comparisons hold them to tables of what the rows drew before. The
+engine's (`crates/cairn-git/tests/slim_rows.rs`) and the list's
+(`crates/cairn-ui/tests/drawn_rows.rs`) were committed at `4205d5d`, the one before
+rows were slimmed, and asserted there against the old rows, their full parents and
+their author's address still on them. The window's was committed with the
+slimming, `1b0ca9f`, from the same test run against a build of `4205d5d`, and
+`the_windows_table_agrees_with_the_engines_table_captured_before` holds it to the
+engine's. Each is checked beside a live oracle (`git log` and the details query). The four that scan
 SOURCE each assert a nonzero scanned-file count per directory, so a renamed
 directory reddens rather than passing on an empty walk — the waiting and
 virtualization twins inline, and the seal and row-content twins through
@@ -589,10 +605,10 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
   which on rust-lang/rust cost 4.3-6.3 KB a row and 1.4 GiB to its oldest commit
   (`docs/research/refs-and-status/deep-find-measured.md`), nor its parents, its
   author's address or a heap allocation of its own; scrolling or finding to that
-  commit from every ref (345,545 rows) retains 52.6 MiB, about 159 B a row,
+  commit from every ref (345,545 rows) retains 52.7 MiB, about 159 B a row,
   counted by capacity with every chunk whole: rows 23.8 MiB (72 B each), text
   16.0 MiB, lane changes 12.3 MiB (16 B each), snapshots 0.25 MiB and the author
-  table with its index 0.32 MiB (8,424 authors). Process `RssAnon` grows by
+  table with an estimate of its index 0.37 MiB (8,424 authors). Process `RssAnon` grows by
   83 MiB. Still linear in rows scrolled, and nothing evicts: tracked as issue #4.
 - **A live scroll's walk retains every commit it visited.** The rows above
   are the application's row vector; separately, gitoxide's walk keeps a

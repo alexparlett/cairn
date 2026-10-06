@@ -3,6 +3,48 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-06 — phase 04 QA
+
+Fresh reviewers (`qa-checklist` READY, `test-coverage-auditor`,
+`responsiveness-reviewer`) and a fresh `qa-confirm`, run by the coordinator: nine
+confirmed, none dismissed. Fixed:
+
+- TC1: `authors_whose_keys_collide_are_told_apart_by_name` files three names under one
+  key through `author_of`'s own path (`author_under`, the key given); fails with a new
+  author not chained to the one already under its key (`next: NO_AUTHOR`), with the name
+  check dropped and with the chain not walked.
+- TC2, QC3: `what_a_history_retains_counts_every_chunk_whole` asserts the snapshot and
+  author terms exactly, over a snapshot with an open lane and a late line; fails with the
+  author index, the open-lane store or the late-line store dropped. The index's share is
+  now an estimate of hashbrown's table (buckets from its capacity, an entry and a control
+  byte each, one group past the end; `the_author_index_is_estimated_by_its_buckets`), and
+  `RetainedBytes` says it is an estimate. Re-measured on rust-lang/rust from every ref
+  (same machine, release, one run): authors 0.371 MiB (was 0.324), total 52.66 MiB
+  against C16's 64.
+- TC3: a run of exactly a chunk now takes a chunk of its own (`len >= CHUNK`) and leaves
+  the chunk being filled to the runs after it, the boundary chosen and pinned by
+  `a_run_exactly_a_chunk_long_leaves_the_chunk_being_filled_alone` (fails with `>`).
+- QC1, TC4: a full history ends the scroll. `Progress::appended` sets the stream ended,
+  so nothing more is asked and a later page cannot flip the window back to ready
+  (`a_full_history_stops_asking_and_keeps_saying_so`, failing without either). The
+  model's partial-page contract is reached by naming every address of the text store
+  (`a_page_past_the_historys_limit_keeps_the_rows_before_it_and_says_so`, failing with a
+  row pushed before its text was held).
+- TC5, QC2: the window's table is said to be committed with the slimming (`1b0ca9f`)
+  from a run against `4205d5d`, and
+  `the_windows_table_agrees_with_the_engines_table_captured_before` holds it to
+  `CAIRN_BEFORE`, committed at `4205d5d` (fails with a subject edited).
+- QC5: the window's check pages as the window does until every commit of `main`'s is
+  held or the history ends; `drawn_rows.rs`'s module comment wrapped.
+- QC4: `a_kept_row_is_seventy_two_bytes` cited in `src/history.rs`.
+- RR1 (docs): the root `CLAUDE.md`'s `cairn-model` row and residual, and the systems
+  doc, say the author index is a standard hash map that doubles, rehashing every author
+  so far at each doubling (0.48 ms at 57,000), bounded by distinct authors. Pre-sizing a
+  reopened history is handed to phase 06 in `state.md`; the doubling itself is in the
+  user's batch.
+- RR2 (docs): the root `CLAUDE.md` no longer calls `index_of`'s fallback unreachable —
+  after a parent link or a pair let go, the next arrow key scans every loaded id once.
+
 ## 2026-10-06 — phase 04: slim rows
 
 A kept row is 72 bytes of plain data (`StoredRow`, private to

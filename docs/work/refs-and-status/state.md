@@ -2,7 +2,7 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 04 implemented (slim rows), awaiting its QA; phase 05 after.** Integration branch
+**Status: phase 04 done (slim rows), QA adjudicated and confirmed findings fixed; phase 05 next.** Integration branch
 `feature/refs-and-status`, in the worktree `.claude/worktrees/refs-and-status`,
 packet mode.
 
@@ -70,7 +70,20 @@ that most constrain implementation:
   the history; a parent count saturates at 65,535; a history past its stores' 32-bit
   addresses answers `HistoryFull`; and reading rows through the stores costs about
   0.06 ms a frame more at the median (1.31 → 1.37 ms, `window_check`), judged not to be
-  the stopping rule's "costs a frame measurably". Numbers in progress.md.
+  the stopping rule's "costs a frame measurably". Numbers in progress.md. Also (phase 04
+  QA, RR1): the author index is a standard hash map that grows by doubling, unlike
+  R4.7's "the history's stores grow in fixed chunks, never by doubling" — a rehash of
+  every author so far at each doubling, on the UI thread inside one append (0.48 ms
+  measured at 57,000 authors; rust-lang/rust has 8,424). Kept as built; no identity
+  hasher (the fixed-key SipHash key would let a crafted repository collide buckets) and
+  no chunked index.
+
+## Handed to phase 06
+
+- When a refresh reopens the history, build the new `History` pre-sized from the old
+  one's author count — a `History::with_author_capacity(old.author_count())`, with a
+  model test — so a reopen does not rehash its way back up through every doubling of
+  the author index on the UI thread (phase 04 QA, RR1).
 
 ## New modules and interfaces
 
@@ -152,7 +165,8 @@ Phase 04 (`docs/systems/history-graph.md`, "What a row keeps"):
   selected, lanes }` (RR1 closed: only what the window reads); `CommitRow` reads
   `parent_count`.
 - `cairn-app`: `View::rows` is a `State<History>`; `Update::Rows { rows: RowsPage, .. }`;
-  `session::apply` appends (a `HistoryFull` shows as the page's failure); `reload_if`
+  `session::apply` appends through `Progress::appended`, which ends the scroll on a
+  `HistoryFull` (no more pages asked, the failure stands until a reopen); `reload_if`
   replaces the history; `selection::loaded_row` is `History::position`.
 - Tests: `crates/cairn-git/tests/slim_rows.rs`, `crates/cairn-ui/tests/drawn_rows.rs`,
   `crates/cairn-model/tests/history_allocations.rs`, the window's
@@ -167,7 +181,7 @@ Phase 04 (`docs/systems/history-graph.md`, "What a row keeps"):
 | 01 refs engine | done: C1, C2, C3 pass; C11 refs numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
 | 02 status engine | done: C4, C5, C13 pass (host git, 2.30.9, 2.32.7); C11 status numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
 | 03 compact rows | implemented: C15 passes (equivalence over the fixtures, the Cairn checkout and every ref of the bench; find 2.26 s against 2.50 s before); K = 64, derived at draw time; numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
-| 04 slim rows | implemented: C16 passes (comparisons pinned at `4205d5d` over crafted fixtures and the Cairn checkout; 52.6 MiB retained for all of rust-lang/rust from every ref, capacity counted, against 64 MiB; no kept row owns a heap allocation); C15 still passes (equivalence on the bench, find 2.21 s); RR1 closed; numbers in progress.md; full gate green; QA pending |
+| 04 slim rows | done: C16 passes (comparisons pinned at `4205d5d` over crafted fixtures and the Cairn checkout; 52.6 MiB retained for all of rust-lang/rust from every ref, capacity counted, against 64 MiB; no kept row owns a heap allocation); C15 still passes (equivalence on the bench, find 2.21 s); RR1 closed; numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
 | 05 history from every ref | not started |
 | 06 worker and refresh | not started |
 | 07 labels and toolbar | not started |

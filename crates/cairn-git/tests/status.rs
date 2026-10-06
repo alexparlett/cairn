@@ -492,6 +492,19 @@ fn cairns_facts(entries: &[StatusEntry]) -> BTreeSet<Vec<u8>> {
                     conflict.path.as_bytes(),
                     None,
                 ));
+                if let Some(state) = conflict.submodule {
+                    let flags = [
+                        if state.new_commits { b'C' } else { b'.' },
+                        if state.modified_content { b'M' } else { b'.' },
+                        if state.untracked_content { b'U' } else { b'.' },
+                    ];
+                    facts.insert(fact(
+                        "conflicted submodule",
+                        &flags,
+                        conflict.path.as_bytes(),
+                        None,
+                    ));
+                }
             }
             StatusEntry::Untracked(path) => {
                 facts.insert(fact("untracked", b"?", path.as_bytes(), None));
@@ -507,10 +520,9 @@ fn indexes(git_dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     let mut found = Vec::new();
     let mut pending = vec![git_dir.to_owned()];
     while let Some(dir) = pending.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
+        let entries = std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+        for entry in entries {
+            let entry = entry.unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
             let path = entry.path();
             let name = entry.file_name();
             if path.is_dir() && !path.is_symlink() {
@@ -528,10 +540,24 @@ fn indexes(git_dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 }
 
 /// Cairn's status of `repo`, with every index under its git directory required
-/// byte-identical afterwards and no lock left behind; and how many `git` reads it ran.
-fn read_writing_nothing(repo: &Repo) -> (WorkingTreeStatus, usize) {
+/// byte-identical afterwards and no lock left behind; and how many `git` reads it ran. The
+/// superproject's index, and each of `submodules`' (`modules/<name>/index`), must be among
+/// those compared, so a walk that found nothing cannot pass.
+fn read_writing_nothing(repo: &Repo, submodules: &[&str]) -> (WorkingTreeStatus, usize) {
     let git_dir = repo.path().join(".git");
     let before = indexes(&git_dir);
+    let required = std::iter::once(git_dir.join("index")).chain(
+        submodules
+            .iter()
+            .map(|name| git_dir.join("modules").join(name).join("index")),
+    );
+    for index in required {
+        assert!(
+            before.iter().any(|(path, _)| *path == index),
+            "{} is not among the indexes compared",
+            index.display()
+        );
+    }
     assert!(
         before
             .iter()
@@ -561,7 +587,8 @@ fn read_writing_nothing(repo: &Repo) -> (WorkingTreeStatus, usize) {
 
 /// Checks Cairn's status of `repo` against the oracles, after a read that wrote nothing.
 fn assert_status_is_gits(repo: &Repo, expect: &Expect<'_>) -> Vec<StatusEntry> {
-    let (answer, _) = read_writing_nothing(repo);
+    let names: Vec<&str> = expect.submodules.iter().map(|(name, _)| *name).collect();
+    let (answer, _) = read_writing_nothing(repo, &names);
     let WorkingTreeStatus::Listed(entries) = answer else {
         panic!("not a list: {answer:?}");
     };
@@ -612,7 +639,7 @@ fn a_clean_tree_lists_nothing() {
     let repo = Repo::new("clean");
     repo.lines("a.txt", "a", 3);
     repo.commit("base");
-    let (answer, reads) = read_writing_nothing(&repo);
+    let (answer, reads) = read_writing_nothing(&repo, &[]);
     assert_eq!(answer, WorkingTreeStatus::Listed(Vec::new()));
     assert_eq!(reads, 1);
 }
@@ -872,7 +899,7 @@ fn untracked_files_are_listed_per_file_unless_the_user_said_none() {
         repo.git(&["init", "-q", "nested"]);
         repo.write("nested/n.txt", "n\n");
         let listed = setting != Some("no");
-        let (_, reads) = read_writing_nothing(&repo);
+        let (_, reads) = read_writing_nothing(&repo, &[]);
         assert_eq!(
             reads,
             if listed { 2 } else { 1 },
@@ -1150,7 +1177,7 @@ fn a_sparse_index_git_cannot_read_is_said_so_and_one_it_can_is_listed() {
     repo.write("b/new.txt", "new\n");
 
     if the_git_in_use() < since(32) {
-        let (answer, _) = read_writing_nothing(&repo);
+        let (answer, _) = read_writing_nothing(&repo, &[]);
         assert_eq!(
             answer,
             WorkingTreeStatus::IndexUnreadable(UnreadableIndex::Sparse),
@@ -1201,6 +1228,309 @@ fn a_bare_repository_has_no_working_tree_and_runs_nothing() {
         .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(answer, WorkingTreeStatus::NoWorkingTree);
     assert!(shared.command_log().is_empty(), "a process was started");
+}
+
+// ── what a status read never does ───────────────────────────────────────────
+
+/// The packs under a git directory's object store, by name: a lazy fetch adds one.
+fn packs(git_dir: &Path) -> Vec<OsString> {
+    let mut names: Vec<OsString> = std::fs::read_dir(git_dir.join("objects/pack"))
+        .unwrap_or_else(|e| panic!("{}: {e}", git_dir.display()))
+        .map(|entry| entry.unwrap_or_else(|e| panic!("{e}")).file_name())
+        .collect();
+    names.sort();
+    names
+}
+
+/// In a blob-less partial clone whose sparse checkout left a file's blob with the promisor
+/// alone, a staged inexact rename of that file makes git compare the missing blob. A read
+/// never fetches it (`crate::reads`, `GIT_NO_LAZY_FETCH=1`, git 2.44 and later): git fails,
+/// so the whole status read fails — `Error::GitFailed`, nothing listed — and no pack is
+/// written, where the user's own `git status` would fetch the blob and answer. A git older
+/// than 2.44 ignores the variable: there the read fetches, writing a pack, and answers the
+/// rename — the floor's residual, pinned so that it is seen. Caught by: a read that may
+/// lazy-fetch on a git that honours the variable (the read's environment lost), or an
+/// answer read from a failed status.
+#[test]
+fn in_a_partial_clone_a_status_read_fails_rather_than_fetching() {
+    let repo = Repo::new("partial-source");
+    repo.git(&["config", "uploadpack.allowFilter", "true"]);
+    repo.write("in/i.txt", "i\n");
+    let big: String = (1..=200).map(|n| format!("{n}\n")).collect();
+    repo.write("out/big", &big);
+    repo.commit("base");
+    repo.git(&["branch", "-M", "main"]);
+    let url = format!("file://{}", repo.path().display());
+    repo.build_in(
+        Path::new("git"),
+        &repo.root,
+        &[
+            "clone",
+            "-q",
+            "--filter=blob:none",
+            "--no-checkout",
+            &url,
+            "clone",
+        ],
+    );
+    let clone = repo.root.join("clone");
+    let git = |args: &[&str]| repo.build_in(Path::new("git"), &clone, args);
+    git(&["sparse-checkout", "init", "--cone"]);
+    git(&["sparse-checkout", "set", "in"]);
+    git(&["checkout", "-q", "main"]);
+    let missing = |clone: &Path| {
+        let listed = repo.ask(clone, &["rev-list", "--objects", "--missing=print", "HEAD"]);
+        listed
+            .split(|byte| *byte == b'\n')
+            .any(|line| line.starts_with(b"?"))
+    };
+    assert!(
+        missing(&clone),
+        "the clone holds every blob, so nothing is lazy here"
+    );
+    // A staged rename of the excluded file, with an edit: git compares its blob.
+    git(&["update-index", "--force-remove", "out/big"]);
+    let renamed: String = (1..=199).map(|n| format!("{n}\n")).collect();
+    std::fs::write(clone.join("in/big2"), renamed).unwrap_or_else(|e| panic!("{e}"));
+    git(&["add", "in/big2"]);
+    assert!(missing(&clone), "building the fixture fetched the blob");
+    let before = packs(&clone.join(".git"));
+
+    let shared = SharedRepository::discover(&clone).unwrap_or_else(|e| panic!("{e}"));
+    let outcome = shared
+        .to_worker()
+        .status(&repo.cairns_git(), &CancelSignal::new());
+    if the_git_in_use() >= since(44) {
+        assert!(
+            matches!(outcome, Err(Error::GitFailed { .. })),
+            "git {}: a rename over a blob the clone lacks did not fail: {outcome:?}",
+            the_git_in_use()
+        );
+        assert_eq!(packs(&clone.join(".git")), before, "the read fetched");
+        assert!(missing(&clone), "the read fetched the blob");
+    } else {
+        // The floor's residual: git ignores GIT_NO_LAZY_FETCH, fetches, and answers.
+        let Ok(WorkingTreeStatus::Listed(entries)) = outcome else {
+            panic!("git {}: {outcome:?}", the_git_in_use());
+        };
+        assert!(
+            entries.iter().any(|entry| matches!(
+                entry,
+                StatusEntry::Changed(changed)
+                    if matches!(changed.staged, Some(StagedChange::Renamed { .. }))
+            )),
+            "{entries:?}"
+        );
+        assert_ne!(
+            packs(&clone.join(".git")),
+            before,
+            "git {} did not fetch, so the residual stated is wrong",
+            the_git_in_use()
+        );
+    }
+}
+
+/// Every file under a git directory with its bytes and its mtime, `objects` included.
+fn snapshot(git_dir: &Path) -> Vec<(PathBuf, Vec<u8>, std::time::SystemTime)> {
+    let mut found = Vec::new();
+    let mut pending = vec![git_dir.to_owned()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
+            let path = entry.unwrap_or_else(|e| panic!("{e}")).path();
+            let meta = std::fs::symlink_metadata(&path).unwrap_or_else(|e| panic!("{e}"));
+            if meta.is_dir() {
+                pending.push(path);
+            } else if meta.is_file() {
+                let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{e}"));
+                let modified = meta.modified().unwrap_or_else(|e| panic!("{e}"));
+                found.push((path, bytes, modified));
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// A script beside the repository (outside its working tree, so never listed), executable.
+fn script(repo: &Repo, name: &str, body: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+    let path = repo.root.join(name);
+    std::fs::write(&path, body).unwrap_or_else(|e| panic!("{e}"));
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+        .unwrap_or_else(|e| panic!("{e}"));
+    path
+}
+
+/// R3.8 against what a status read must not write or run. The index carries an untracked
+/// cache, an fsmonitor token and a split index's link, all written by a locked `git status`
+/// before the read, and the tree has changed since, so a locked status would rewrite each;
+/// a caching textconv, an external diff, a driver's `command`, a smudge filter and a
+/// `post-index-change` hook are configured to leave a mark. The read leaves the git
+/// directory byte-identical, every file's mtime unchanged but the shared index's (git
+/// freshens the one it uses, the residual R3.8 states), and runs none of those: only the
+/// `core.fsmonitor` hook, which answers a token, and the clean filter of the stat-dirty file
+/// it rehashes, which leave theirs. Only `git status` ran. Caught by: status built so that it
+/// writes (the untracked cache, the token, the refreshed stat), or a flag that runs a
+/// driver.
+#[test]
+fn a_status_read_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor() {
+    let repo = Repo::new("traps");
+    let mark = |name: &str| repo.root.join(format!("{name}-ran"));
+    let trap = script(
+        &repo,
+        "trap.sh",
+        &format!("#!/bin/sh\n: > '{}'\ncat \"$1\"\n", mark("trap").display()),
+    );
+    let smudge = script(
+        &repo,
+        "smudge.sh",
+        &format!("#!/bin/sh\n: > '{}'\ncat\n", mark("smudge").display()),
+    );
+    let clean = script(
+        &repo,
+        "clean.sh",
+        &format!("#!/bin/sh\n: > '{}'\ncat\n", mark("clean").display()),
+    );
+    // Protocol 2: a token, a NUL, then the paths changed since — `/`, everything.
+    let monitor = script(
+        &repo,
+        "monitor.sh",
+        &format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\nprintf 'cairn-token\\0/\\0'\n",
+            mark("fsmonitor").display()
+        ),
+    );
+    let hook_mark = mark("hook");
+    repo.write("a.txt", "one\ntwo\n");
+    repo.write("b.txt", "one\ntwo\n");
+    repo.write("d/c.txt", "three\n");
+    repo.commit("three files");
+    for (key, value) in [
+        ("filter.mark.clean", clean.display().to_string()),
+        ("filter.mark.smudge", smudge.display().to_string()),
+        ("diff.trap.textconv", trap.display().to_string()),
+        ("diff.trap.cachetextconv", "true".to_owned()),
+        ("diff.trap.command", trap.display().to_string()),
+        ("diff.external", trap.display().to_string()),
+        ("core.fsmonitor", monitor.display().to_string()),
+        ("core.fsmonitorHookVersion", "2".to_owned()),
+        ("core.untrackedCache", "true".to_owned()),
+        ("core.splitIndex", "true".to_owned()),
+    ] {
+        repo.git(&["config", key, &value]);
+    }
+    let hooks = repo.path().join(".git/hooks");
+    std::fs::create_dir_all(&hooks).unwrap_or_else(|e| panic!("{e}"));
+    std::fs::write(
+        hooks.join("post-index-change"),
+        format!("#!/bin/sh\n: > '{}'\n", hook_mark.display()),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    repo.chmod(".git/hooks/post-index-change", 0o755);
+    repo.write(".gitattributes", "*.txt diff=trap filter=mark\n");
+    repo.git(&["add", ".gitattributes"]);
+    // A locked status, as the user's own, writes the untracked cache and the token; the
+    // split comes after it, since git 2.30.9 and 2.32.7 merge a split index whenever a
+    // locked status under `core.fsmonitor` rewrites it (2.56.0 keeps it; reproduced).
+    repo.git(&["status", "--porcelain"]);
+    repo.git(&["update-index", "--split-index", "--untracked-cache"]);
+    // Since then: a file touched with its content the same (rehashed through the clean
+    // filter), an edit, and an untracked directory.
+    std::fs::File::open(repo.path().join("a.txt"))
+        .and_then(|file| {
+            file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(60))
+        })
+        .unwrap_or_else(|e| panic!("{e}"));
+    repo.write("b.txt", "one\ntwo, edited\n");
+    repo.write("new/u.txt", "untracked\n");
+    for name in ["trap", "smudge", "clean", "fsmonitor", "hook"] {
+        let _ = std::fs::remove_file(mark(name));
+    }
+
+    let git_dir = repo.path().join(".git");
+    let index = std::fs::read(git_dir.join("index")).unwrap_or_else(|e| panic!("{e}"));
+    for extension in [&b"UNTR"[..], b"FSMN", b"link"] {
+        assert!(
+            index.windows(4).any(|window| window == extension),
+            "the index carries no {:?} extension, so the read decides nothing about it",
+            String::from_utf8_lossy(extension)
+        );
+    }
+    let before = snapshot(&git_dir);
+    let shared = SharedRepository::discover(repo.path()).unwrap_or_else(|e| panic!("{e}"));
+    let answer = shared
+        .to_worker()
+        .status(&repo.cairns_git(), &CancelSignal::new())
+        .unwrap_or_else(|e| panic!("{e}"));
+    let after = snapshot(&git_dir);
+    assert!(matches!(answer, WorkingTreeStatus::Listed(_)), "{answer:?}");
+
+    let paths = |taken: &[(PathBuf, Vec<u8>, std::time::SystemTime)]| {
+        taken
+            .iter()
+            .map(|(path, _, _)| path.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        paths(&after),
+        paths(&before),
+        "a file under .git appeared or went"
+    );
+    for ((path, bytes, modified), (_, bytes_after, modified_after)) in before.iter().zip(&after) {
+        assert!(bytes == bytes_after, "{} was rewritten", path.display());
+        let shared_index = path
+            .file_name()
+            .is_some_and(|name| name.as_bytes().starts_with(b"sharedindex."));
+        assert!(
+            shared_index || modified == modified_after,
+            "{} was touched",
+            path.display()
+        );
+    }
+    assert!(
+        !git_dir.join("refs/notes").exists(),
+        "a textconv cache was written"
+    );
+    assert!(
+        !mark("trap").exists(),
+        "a textconv, external diff or driver command ran"
+    );
+    assert!(!mark("smudge").exists(), "a smudge filter ran");
+    assert!(!hook_mark.exists(), "a hook ran");
+    assert!(
+        mark("clean").exists(),
+        "the clean filter never ran on the touched file"
+    );
+    assert!(
+        mark("fsmonitor").exists(),
+        "the repository's core.fsmonitor did not run"
+    );
+    for record in shared.command_log() {
+        assert!(
+            record.arguments.iter().any(|argument| argument == "status"),
+            "a read ran {:?}",
+            record.arguments
+        );
+    }
+
+    // Decisive only because each could run, and git with locks allowed would have written.
+    for (program, name) in [(&trap, "trap"), (&smudge, "smudge")] {
+        let ran = Command::new(program)
+            .arg(repo.path().join("a.txt"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .status();
+        assert!(ran.is_ok_and(|status| status.success()) && mark(name).exists());
+    }
+    repo.git(&["status", "--porcelain"]);
+    assert!(
+        std::fs::read(git_dir.join("index")).unwrap_or_else(|e| panic!("{e}")) != index,
+        "a locked git status left the index alone too"
+    );
+    assert!(
+        hook_mark.exists(),
+        "the post-index-change hook cannot run at all"
+    );
 }
 
 // ── C11 ─────────────────────────────────────────────────────────────────────

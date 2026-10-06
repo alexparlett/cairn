@@ -808,20 +808,31 @@ fn a_stat_only_index_refresh_keeps_what_is_kept() {
 /// are long settled. Caught by: either early return taken out, which reads again.
 #[test]
 fn an_identical_ask_is_answered_from_what_is_kept() {
+    // A modified file whose diff git is asked for: one past the size limits (a long
+    // document) is answered without a patch read, and decides nothing here. Found on a
+    // handle of its own, so the asks below start from nothing kept.
+    let (of, file) = {
+        let (handle, mut updates) = checkout();
+        let ids = recent_commits(&handle, &mut updates, 40);
+        ids.iter()
+            .find_map(|id| {
+                let of = Comparison::Commit(*id);
+                let files = change_set(&handle, &mut updates, of).files;
+                files
+                    .into_iter()
+                    .filter(|f| f.status == ChangeStatus::Modified)
+                    .find(|file| {
+                        let before = reads(&handle, &mut updates).0;
+                        file_answer(&handle, &mut updates, &committed(of, file));
+                        reads(&handle, &mut updates).0 > before
+                    })
+                    .map(|file| (of, file))
+            })
+            .unwrap_or_else(|| panic!("no file modified by {ids:?} asked a patch read"))
+    };
     let (handle, mut updates) = checkout();
-    let ids = recent_commits(&handle, &mut updates, 40);
     let start = reads(&handle, &mut updates);
-    let (of, file) = ids
-        .iter()
-        .find_map(|id| {
-            let of = Comparison::Commit(*id);
-            change_set(&handle, &mut updates, of)
-                .files
-                .into_iter()
-                .find(|f| f.status == ChangeStatus::Modified)
-                .map(|file| (of, file))
-        })
-        .unwrap_or_else(|| panic!("none of {ids:?} modified a file"));
+    change_set(&handle, &mut updates, of);
     let listed = reads(&handle, &mut updates).1 - start.1;
     change_set(&handle, &mut updates, of);
     assert_eq!(

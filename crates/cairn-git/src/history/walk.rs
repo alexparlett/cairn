@@ -18,7 +18,12 @@
 //! (`commit_graph_compatible` in git's `commit-graph.c`), and a graph written before the
 //! repository became shallow would name the cut-off parents, so neither does this.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::io::Write as _;
+use std::rc::Rc;
+
+use gix::objs::FindExt as _;
 
 use crate::shallow::ShallowBoundary;
 use crate::{Cancel, Error};
@@ -27,14 +32,23 @@ use super::HistoryOrder;
 
 /// gitoxide's traversal over [`Grafted`] reads, yielding detached walk entries.
 pub(super) type CommitWalk<'repo> =
-    gix::traverse::commit::Simple<Grafted<'repo>, fn(&gix::oid) -> bool>;
+    gix::traverse::commit::Simple<Seeded<'repo>, fn(&gix::oid) -> bool>;
 
-/// A walk from `tips` in `order`, with the repository's commit-graph where git would use one.
+/// A walk from `tips` in `order`, with the repository's commit-graph where git would use one;
+/// `None` when `cancel` fired while the tips were read, nothing kept.
+///
+/// In commit-time order gitoxide reads every tip's commit for its committer date before
+/// the walk's first step (`Simple::sorting`), in one call that polls nothing — a read per
+/// tip, and a walk from every ref has one tip per ref. So the tips are read here instead,
+/// `cancel` polled before each but the first (a walk from one tip polls as it always did,
+/// once per commit laid out), and gitoxide's own read of each tip is then answered from
+/// the dates read ([`Seeded`]), costing no object read. Graph order reads no tip to open.
 pub(super) fn open<'repo>(
     repo: &'repo gix::Repository,
     tips: &[gix::hash::ObjectId],
     order: HistoryOrder,
-) -> Result<CommitWalk<'repo>, Error> {
+    cancel: &impl Cancel,
+) -> Result<Option<CommitWalk<'repo>>, Error> {
     let walk_error = |source: Box<dyn std::error::Error + Send + Sync>| Error::Walk { source };
     let boundary = ShallowBoundary::read(repo).map_err(|e| walk_error(Box::new(e)))?;
     // As gix's own walk decides it: an invalid `core.commitGraph` is an error, and a graph
@@ -52,10 +66,81 @@ pub(super) fn open<'repo>(
         objects: &repo.objects,
         boundary,
     };
-    gix::traverse::commit::Simple::new(tips.iter().copied(), objects)
+    let mut dates = HashMap::new();
+    if matches!(order, HistoryOrder::CommitTime) {
+        dates.reserve(tips.len());
+        let mut buffer = Vec::new();
+        for (read, tip) in tips.iter().enumerate() {
+            if read > 0 && cancel.is_cancelled() {
+                return Ok(None);
+            }
+            if dates.contains_key(tip) {
+                continue;
+            }
+            let commit = objects
+                .find_commit_iter(tip, &mut buffer)
+                .map_err(|e| walk_error(Box::new(e)))?;
+            let committer = commit.committer().map_err(|e| walk_error(Box::new(e)))?;
+            dates.insert(*tip, committer.seconds());
+        }
+    }
+    let dates = Rc::new(RefCell::new(dates));
+    let seeded = Seeded {
+        objects,
+        dates: Rc::clone(&dates),
+    };
+    let walk = gix::traverse::commit::Simple::new(tips.iter().copied(), seeded)
         .sorting(order.sorting())
-        .map(|walk| walk.commit_graph(graph))
-        .map_err(|e| walk_error(Box::new(e)))
+        .map_err(|e| walk_error(Box::new(e)))?;
+    // Every later read is the object's own.
+    drop(dates.take());
+    Ok(Some(walk.commit_graph(graph)))
+}
+
+/// [`Grafted`] reads, except that while a walk opens, a tip whose committer date [`open`]
+/// has read is answered with a commit holding that date and nothing else: all gitoxide
+/// reads of a tip to order it (`add_to_queue`). Its every later read — its parents, when
+/// the walk reaches it — is the stored object, the dates being cleared once the walk is
+/// open.
+pub(super) struct Seeded<'repo> {
+    objects: Grafted<'repo>,
+    dates: Rc<RefCell<HashMap<gix::hash::ObjectId, i64>>>,
+}
+
+impl gix::objs::Find for Seeded<'_> {
+    fn try_find<'a>(
+        &self,
+        id: &gix::oid,
+        buffer: &'a mut Vec<u8>,
+    ) -> Result<Option<gix::objs::Data<'a>>, gix::objs::find::Error> {
+        let date = {
+            let dates = self.dates.borrow();
+            // Empty once the walk is open: every read but the open's.
+            if dates.is_empty() {
+                None
+            } else {
+                dates.get(id).copied()
+            }
+        };
+        let Some(seconds) = date else {
+            return self.objects.try_find(id, buffer);
+        };
+        let kind = id.kind();
+        buffer.clear();
+        let written = writeln!(
+            buffer,
+            "tree {}\nauthor a <a> {seconds} +0000\ncommitter a <a> {seconds} +0000\n",
+            kind.null()
+        );
+        if let Err(error) = written {
+            return Err(Box::new(error));
+        }
+        Ok(Some(gix::objs::Data {
+            kind: gix::objs::Kind::Commit,
+            object_hash: kind,
+            data: buffer.as_slice(),
+        }))
+    }
 }
 
 /// A walk from `tip` that leaves out every commit `hidden` reaches — `git rev-list

@@ -171,8 +171,9 @@ pub struct HistoryPage {
 }
 
 impl Repository {
-    /// `cancel` is polled once per row laid out and per commit looked ahead at. Resuming
-    /// replays the walk, so page `k` walks `k x limit` rows.
+    /// `cancel` is polled once per row laid out, per commit looked ahead at, and per tip
+    /// read to open the walk but the first (`walk::open`). Resuming replays the walk, so
+    /// page `k` walks `k x limit` rows.
     pub fn history(
         &self,
         request: &HistoryRequest,
@@ -214,7 +215,9 @@ fn read_page(
     }
     let target = skip.saturating_add(request.limit);
 
-    let walk = walk::open(repo.inner(), &tips, order)?;
+    let Some(walk) = walk::open(repo.inner(), &tips, order, cancel)? else {
+        return Err(Error::Cancelled { walked: 0 });
+    };
     let mut stream = Stream::new(walk, Arc::clone(&decoration), lookahead);
 
     // The page's first row carries a snapshot, so it draws without the replayed prefix.
@@ -620,7 +623,9 @@ mod tests {
                     let started = Instant::now();
                     let mut walked = 0usize;
                     let head = inner.head_id().unwrap().detach();
-                    let mut walk = walk::open(&inner, &[head], order).unwrap();
+                    let mut walk = walk::open(&inner, &[head], order, &CancelSignal::new())
+                        .unwrap()
+                        .expect("an uncancelled open was cancelled");
                     let mut assigner = LaneAssigner::new();
                     while walked < limit {
                         let Some(next) = walk.next() else { break };

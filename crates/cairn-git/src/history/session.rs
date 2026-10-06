@@ -16,7 +16,8 @@ use crate::{Cancel, Error, Repository};
 /// Rows are handed out only once the assigner has made them final.
 pub struct HistorySession<'repo> {
     repo: &'repo gix::Repository,
-    stream: Stream<'repo>,
+    /// `None` until the first page opens the walk, under that page's cancel.
+    stream: Option<Stream<'repo>>,
     assigner: LaneAssigner,
     /// Rows made final, each with what it draws read, and not yet handed to the caller.
     ready: VecDeque<(GraphRow, Laid)>,
@@ -55,7 +56,9 @@ impl std::fmt::Debug for HistorySession<'_> {
 }
 
 impl Repository {
-    /// The request's limit is ignored; [`HistorySession::next_page`] takes one.
+    /// The request's limit is ignored; [`HistorySession::next_page`] takes one. The walk is
+    /// opened by the first page, under its cancel: opening reads every tip, and a walk from
+    /// every ref has one per ref (`walk::open`).
     pub fn history_session(&self, request: &HistoryRequest) -> Result<HistorySession<'_>, Error> {
         let Resolved {
             tips,
@@ -66,11 +69,9 @@ impl Repository {
             skip,
         } = starting_points(self, request)?;
 
-        let walk = super::walk::open(self.inner(), &tips, order)?;
-
         Ok(HistorySession {
             repo: self.inner(),
-            stream: Stream::new(walk, Arc::clone(&decoration), lookahead),
+            stream: None,
             // The first row handed out carries a snapshot, so it draws without the prefix.
             assigner: LaneAssigner::with_window(window).drawn_from(skip),
             ready: VecDeque::new(),
@@ -91,12 +92,25 @@ impl Repository {
 }
 
 impl HistorySession<'_> {
-    /// `cancel` is polled once per row laid out and per commit looked ahead at; on
-    /// cancellation the work done stays in the session. `walked` and `decoded` count this
+    /// `cancel` is polled once per row laid out, per commit looked ahead at, and — on the
+    /// page that opens the walk — per tip read but the first; on cancellation the work done
+    /// stays in the session, except a cancelled open, which the next page begins again. `walked` and `decoded` count this
     /// call only. Any error other than [`Error::Cancelled`] poisons the session.
     pub fn next_page(&mut self, limit: usize, cancel: &impl Cancel) -> Result<HistoryPage, Error> {
         let walked_before = self.walked;
         let decoded_before = self.decoded;
+
+        if self.stream.is_none() {
+            let Some(walk) = super::walk::open(self.repo, &self.tips, self.order, cancel)? else {
+                // Nothing kept: the next page opens it again.
+                return Err(Error::Cancelled { walked: 0 });
+            };
+            self.stream = Some(Stream::new(
+                walk,
+                Arc::clone(&self.decoration),
+                self.lookahead,
+            ));
+        }
 
         while self.ready.len() < limit && !self.exhausted {
             if cancel.is_cancelled() || !self.pull(cancel)? {
@@ -141,7 +155,7 @@ impl HistorySession<'_> {
     /// Commits pulled off the walk over the session's life, those looked ahead at for a
     /// stash's base included.
     pub fn commits_walked(&self) -> usize {
-        self.stream.pulled()
+        self.stream.as_ref().map_or(0, Stream::pulled)
     }
 
     /// The walk reached the end and every row it produced has been handed out.
@@ -152,7 +166,11 @@ impl HistorySession<'_> {
     /// Lays out the stream's next entry, or notices the end. `false` when `cancel` fired
     /// while the stream looked ahead.
     fn pull(&mut self, cancel: &impl Cancel) -> Result<bool, Error> {
-        let entry = match self.stream.next(cancel)? {
+        let Some(stream) = self.stream.as_mut() else {
+            // Unreachable: `next_page` opens the walk before it pulls.
+            return Ok(false);
+        };
+        let entry = match stream.next(cancel)? {
             Next::Entry(entry) => entry,
             Next::Cancelled => return Ok(false),
             Next::End => {

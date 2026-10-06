@@ -10,6 +10,7 @@
 //! placed and drawn by — and shares, unchanged, with every page and cursor of that walk.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use cairn_model::{HeadState, Label, Oid, RefKind, RefName, RefsSnapshot, StashEntry};
 
@@ -44,7 +45,8 @@ pub(super) struct RefSeeds {
     head: Option<Oid>,
     /// Whether `head` was read from a detached `HEAD`, which may name what is not a commit.
     detached: bool,
-    labels: HashMap<Oid, Vec<SeedLabel>>,
+    /// Shared with the walk's [`Decoration`]: one entry per labelled commit, so never copied.
+    labels: Arc<HashMap<Oid, Vec<SeedLabel>>>,
     stashes: Vec<StashEntry>,
 }
 
@@ -83,7 +85,7 @@ impl RefSeeds {
             tips,
             head,
             detached,
-            labels,
+            labels: Arc::new(labels),
             stashes: snapshot.stashes.clone(),
         }
     }
@@ -109,7 +111,7 @@ pub(super) struct Stash {
 /// What a walk's rows carry beyond their commits, shared by every page and cursor of it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct Decoration {
-    labels: HashMap<Oid, Vec<SeedLabel>>,
+    labels: Arc<HashMap<Oid, Vec<SeedLabel>>>,
     head: Option<Oid>,
     stashes: Vec<Stash>,
 }
@@ -134,15 +136,17 @@ impl Decoration {
 
 /// `seeds` resolved against the repository: the tips the walk starts from, and its
 /// decoration. A detached `HEAD` naming what is not a commit seeds nothing, as it labels
-/// nothing.
+/// nothing. Reads two commits per stash and, for a detached `HEAD`, one header; the
+/// labels are shared, not copied.
 pub(super) fn resolve(
     repo: &gix::Repository,
     seeds: &RefSeeds,
 ) -> Result<(Vec<Oid>, Decoration), Error> {
     let mut tips = seeds.tips.clone();
     let mut head = seeds.head;
+    // Every tip labels its commit, so a commit with no label is no tip yet.
     if let Some(id) = seeds.head
-        && !tips.contains(&id)
+        && !seeds.labels.contains_key(&id)
     {
         if seeds.detached && !is_commit(repo, &id)? {
             head = None;
@@ -157,7 +161,7 @@ pub(super) fn resolve(
     Ok((
         tips,
         Decoration {
-            labels: seeds.labels.clone(),
+            labels: Arc::clone(&seeds.labels),
             head,
             stashes,
         },

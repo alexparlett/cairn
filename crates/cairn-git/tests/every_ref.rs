@@ -7,7 +7,9 @@ mod fixtures;
 
 use std::collections::{BTreeSet, HashMap};
 
-use cairn_git::{CancelSignal, HistoryOrder, HistoryRequest, Repository};
+use std::cell::Cell;
+
+use cairn_git::{Cancel, CancelSignal, Error, HistoryOrder, HistoryRequest, Repository};
 use cairn_model::{EdgeKind, History, HistoryRow, Lane, RefKind, RowContent, RowId, StashSummary};
 
 use fixtures::Fixture;
@@ -835,6 +837,90 @@ fn in_graph_order_a_stash_is_directly_above_its_base() {
     }
 }
 
+/// Fires from its `limit`th poll on, counting every poll.
+struct StopAfter {
+    limit: usize,
+    polls: Cell<usize>,
+}
+
+impl StopAfter {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            polls: Cell::new(0),
+        }
+    }
+}
+
+impl Cancel for StopAfter {
+    fn is_cancelled(&self) -> bool {
+        let seen = self.polls.get();
+        self.polls.set(seen + 1);
+        seen >= self.limit
+    }
+}
+
+/// RR1: opening a walk from every ref reads each tip, and polls the cancel before each but
+/// the first, on both routes: cancelled at its sixth poll, a walk from fifty tags stops
+/// having read six tips and laid nothing out, and a session cancelled there pages, once
+/// asked again, the rows one never cancelled does. Caught by: the open reading every tip
+/// without a poll (gitoxide's own `sorting`), which lays rows out before the cancel lands.
+#[test]
+fn opening_a_walk_from_many_refs_is_cancelled_between_tips() {
+    let fixture = fixtures::unborn();
+    let mut clock = Clock(fixtures::EPOCH);
+    let tags = 50;
+    for n in 0..tags {
+        commit(
+            &fixture,
+            &mut clock,
+            "f",
+            &format!("{n}\n"),
+            &format!("c{n}"),
+        );
+        fixture.git(&["tag", &format!("t{n}")]);
+    }
+    let repo = ok(Repository::discover(fixture.path()), "opening the fixture");
+    let stop_at = 5;
+
+    let cancel = StopAfter::new(stop_at);
+    match repo.history(&snapshot_request(&repo, 10), &cancel) {
+        Err(Error::Cancelled { walked }) => assert_eq!(walked, 0, "rows laid out past it"),
+        other => panic!("expected a cancellation, got {other:?}"),
+    }
+    assert_eq!(cancel.polls.get(), stop_at + 1, "the open kept polling");
+
+    let already = CancelSignal::new();
+    already.cancel();
+    match repo.history(&snapshot_request(&repo, 10), &already) {
+        Err(Error::Cancelled { walked }) => assert_eq!(walked, 0),
+        other => panic!("expected a cancellation, got {other:?}"),
+    }
+
+    let expected = described(&page_all(&repo, &snapshot_request(&repo, 10), 10));
+    assert_eq!(expected.len(), tags);
+    let mut session = ok(
+        repo.history_session(&snapshot_request(&repo, 10)),
+        "opening the session",
+    );
+    let cancel = StopAfter::new(stop_at);
+    match session.next_page(10, &cancel) {
+        Err(Error::Cancelled { walked }) => assert_eq!(walked, 0, "rows laid out past it"),
+        other => panic!("expected a cancellation, got {other:?}"),
+    }
+    assert_eq!(cancel.polls.get(), stop_at + 1);
+    assert_eq!(session.commits_walked(), 0, "the walk opened");
+    let mut rows = History::new();
+    loop {
+        let page = ok(session.next_page(10, &CancelSignal::new()), "paging");
+        ok(rows.append(page.rows), "holding a page");
+        if page.cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(described(&rows), expected);
+}
+
 // --- The reporter: C11's first page from every ref ---
 
 /// C11's first page: on the repository `CAIRN_BENCH_REPO` names (read only), the first page
@@ -896,4 +982,27 @@ fn measures_the_first_page_from_every_ref() {
              laid_out={laid_out} commits_pulled={pulled} stash_rows={stashes}"
         );
     }
+
+    // A first page from every ref whose cancel is already set: how long until it says so.
+    let mut samples = Vec::with_capacity(RUNS);
+    for run in 0..=RUNS {
+        let repo = ok(Repository::discover(&path), "opening the repository");
+        let snapshot = ok(repo.refs(&CancelSignal::new()), "reading the refs").snapshot;
+        let cancelled = CancelSignal::new();
+        cancelled.cancel();
+        let started = Instant::now();
+        let request = HistoryRequest::from_refs(&snapshot, PAGE);
+        let mut session = ok(repo.history_session(&request), "opening the session");
+        let answer = session.next_page(PAGE, &cancelled);
+        let elapsed = started.elapsed();
+        assert!(
+            matches!(answer, Err(Error::Cancelled { walked: 0 })),
+            "{answer:?}"
+        );
+        if run > 0 {
+            samples.push(elapsed);
+        }
+    }
+    let (median, low, high) = median(samples);
+    eprintln!("CANCELLED BEFORE THE OPEN median={median:.2} ms [{low:.2}-{high:.2}]");
 }

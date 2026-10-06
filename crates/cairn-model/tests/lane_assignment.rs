@@ -658,3 +658,35 @@ fn the_lanes_kept_rows_name_are_the_lanes_their_edges_reach() {
          nothing"
     );
 }
+
+/// FNV-1a over C15's reference, from its first line that is not module documentation, as
+/// it stood when compact rows landed. The reference is what every equivalence test compares
+/// against; editing it would let them pass against a different layout.
+const REFERENCE_FINGERPRINT: u64 = 0xf6bc_be46_1014_e960;
+
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
+/// Caught by: any edit to the reference's code, which C15 forbids.
+#[test]
+fn the_reference_assigner_is_the_one_compact_rows_were_checked_against() {
+    let source = include_str!("layout_before_compaction/mod.rs");
+    let body: Vec<&str> = source
+        .lines()
+        .skip_while(|line| line.starts_with("//!"))
+        .collect();
+    assert!(
+        body.iter().any(|line| line.contains("fn connect_upward")),
+        "the reference's body was not read"
+    );
+    assert_eq!(
+        fnv1a(body.join("\n").as_bytes()),
+        REFERENCE_FINGERPRINT,
+        "C15's reference, crates/cairn-model/tests/layout_before_compaction/mod.rs, was \
+         edited: it must stay the assigner rows were compacted from, verbatim. A layout \
+         change belongs in LaneAssigner, with its own tests."
+    );
+}

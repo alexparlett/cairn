@@ -3,6 +3,12 @@
 //! time: `git for-each-ref`, `git cat-file --batch-check`, `git symbolic-ref`,
 //! `git rev-parse`, `git stash list` and `git rev-list --left-right --count`. None is typed
 //! in from a run of Cairn.
+//!
+//! git, the oracle, runs with the machine's configuration shut out; Cairn's side opens in
+//! this test process, which reads the developer's global configuration as Cairn does. So
+//! every key the snapshot reads that a global file could set is set again in each
+//! fixture's own configuration (`pin_configuration_read`), and both sides read the same
+//! value.
 
 mod fixtures;
 
@@ -218,19 +224,23 @@ fn git_head(dir: &Path) -> HeadState {
     }
 }
 
-/// The stash list as `git stash list` prints it: index, reflog subject, commit and its
-/// first parent.
+/// The stash list as `git stash list` prints it: the index git gives each entry (from
+/// `stash@{n}`), reflog subject, commit and its first parent.
 fn git_stashes(dir: &Path) -> Vec<StashEntry> {
-    ask(dir, &["stash", "list", "--format=%H%x00%gs%x00%P"])
+    ask(dir, &["stash", "list", "--format=%gd%x00%H%x00%gs%x00%P"])
         .lines()
-        .enumerate()
-        .map(|(index, line)| {
+        .map(|line| {
             let fields: Vec<&str> = line.split('\0').collect();
+            let index = fields[0]
+                .strip_prefix("stash@{")
+                .and_then(|rest| rest.strip_suffix('}'))
+                .and_then(|n| n.parse().ok())
+                .unwrap_or_else(|| panic!("git named a stash {:?}", fields[0]));
             StashEntry {
                 index,
-                message: fields[1].to_owned(),
-                commit: oid(fields[0]),
-                base: oid(fields[2]
+                message: fields[2].to_owned(),
+                commit: oid(fields[1]),
+                base: oid(fields[3]
                     .split(' ')
                     .next()
                     .unwrap_or_else(|| panic!("nothing there"))),
@@ -293,9 +303,18 @@ fn write(fixture: &Fixture, path: &str, content: &str) {
     std::fs::write(path, content).unwrap_or_else(|e| panic!("{e}"));
 }
 
+/// Sets, in the fixture's own configuration, every key the snapshot reads that a global
+/// file could also set, so Cairn — which opens with the developer's global configuration,
+/// a process's environment being its own — and git, isolated from it, read the same value.
+/// Residual: a global `branch.<name>.*` or `remote.<name>.fetch` entry adds to the local
+/// ones for the upstream read, and no fixture can pin that away.
+fn pin_configuration_read(fixture: &Fixture) {
+    fixture.git(&["config", "core.warnAmbiguousRefs", "true"]);
+}
+
 /// Every kind of ref C1 names: loose and packed refs, a loose ref over a packed one, a
 /// packed annotated tag with its peeled line and a loose one without, lightweight,
-/// annotated and chained tags, tags on a tree and a blob, `origin/HEAD`, a symbolic local
+/// annotated and chained tags (a packed chain and a loose one of three), tags on a tree and a blob, `origin/HEAD`, a symbolic local
 /// branch, dangling symbolic refs one and two levels deep, an unreadable ref and invalid
 /// names.
 fn every_kind() -> Fixture {
@@ -337,12 +356,18 @@ fn every_kind() -> Fixture {
     fixture.git(&["config", "branch.side.merge", "refs/heads/side"]);
     fixture.git(&["config", "branch.feature.remote", "."]);
     fixture.git(&["config", "branch.feature.merge", "refs/heads/main"]);
+    pin_configuration_read(&fixture);
     fixture.git(&["pack-refs", "--all"]);
     // Loose after packing: a new branch, a loose ref over its packed self, and a loose
     // annotated tag (no peeled line to read).
     fixture.git(&["branch", "loose", "HEAD~2"]);
     fixture.git(&["update-ref", "refs/heads/side", "HEAD"]);
     fixture.git(&["tag", "-a", "loose-annotated", "-m", "loose", "HEAD~1"]);
+    // A loose chain of three tags: no packed `^` line answers it, so it is peeled object
+    // by object.
+    fixture.git(&["tag", "-a", "loose-chain-1", "-m", "one", "HEAD~1"]);
+    fixture.git(&["tag", "-a", "loose-chain-2", "-m", "two", "loose-chain-1"]);
+    fixture.git(&["tag", "-a", "loose-chain-3", "-m", "three", "loose-chain-2"]);
     fixture.git(&["symbolic-ref", "refs/heads/alias", "refs/heads/main"]);
     fixture.git(&[
         "symbolic-ref",
@@ -416,6 +441,24 @@ fn the_snapshot_is_what_git_lists_whatever_the_kind_of_ref_and_head() {
             &["rev-parse", "refs/tags/outermost^{commit}"]
         )))
     );
+    let RefTarget::Tag { object, commit } = tag("refs/tags/loose-chain-3") else {
+        panic!("the loose chain is not a tag");
+    };
+    assert_eq!(
+        object,
+        oid(&ask(dir, &["rev-parse", "refs/tags/loose-chain-3"]))
+    );
+    assert_eq!(
+        commit,
+        Some(oid(&ask(
+            dir,
+            &["rev-parse", "refs/tags/loose-chain-3^{commit}"]
+        )))
+    );
+    assert!(
+        !packed.contains("refs/tags/loose-chain-3"),
+        "the loose chain was packed, so its peeled line answers it"
+    );
     assert!(matches!(
         tag("refs/tags/annotated-tree"),
         RefTarget::Tag { commit: None, .. }
@@ -458,8 +501,9 @@ fn the_snapshot_is_gits_over_a_braided_history_in_either_hash() {
 }
 
 /// C1 from a linked worktree: its `HEAD` is its own, and the refs are the ones git lists
-/// there — the shared ones, not the worktree's private `refs/worktree/`. Caught by: the
-/// main worktree's `HEAD` read, or a private ref leaking into the listing.
+/// there. The worktree's private `refs/worktree/` is outside the three namespaces both
+/// sides list, so its exclusion holds by construction and this decides nothing about it.
+/// Caught by: the main worktree's `HEAD` read from the linked one.
 #[test]
 fn a_linked_worktree_lists_what_git_lists_there_with_its_own_head() {
     let fixture = every_kind();
@@ -556,6 +600,7 @@ fn each_upstream_is_what_git_resolves() {
     config("remote.neg.fetch", "+refs/heads/*:refs/remotes/neg/*");
     config("remote.neg.fetch", "^refs/heads/main");
     config("remote.nofetch.url", "https://example.invalid/3.git");
+    pin_configuration_read(&fixture);
     fixture.git(&["tag", "amb"]);
     let cases: &[(&str, &[(&str, &str)])] = &[
         (
@@ -773,11 +818,18 @@ fn a_ref_naming_a_missing_object_is_skipped_and_counted() {
 }
 
 /// `ref_tips`, what the network lane compares before and after a fetch, is the snapshot:
-/// it sees a symbolic ref retargeted and an annotated tag replaced by one on the same
-/// commit, where comparing peeled ids would see neither. Caught by: tips peeled again.
+/// it sees a symbolic ref retargeted to a ref on the same commit, and an annotated tag
+/// replaced by one on the same commit — each the ONLY change between its two reads, and
+/// each invisible to a comparison of peeled ids. Caught by: tips peeled again.
 #[test]
 fn ref_tips_see_a_symbolic_ref_retargeted_and_a_tag_object_replaced() {
     let fixture = every_kind();
+    // Both remote-tracking refs on one commit first, so the retarget moves no id.
+    fixture.git(&[
+        "update-ref",
+        "refs/remotes/origin/feature",
+        "refs/remotes/origin/main",
+    ]);
     let repo = Repository::discover(fixture.path()).unwrap();
     let before = repo.ref_tips().unwrap();
     fixture.git(&[
@@ -785,13 +837,21 @@ fn ref_tips_see_a_symbolic_ref_retargeted_and_a_tag_object_replaced() {
         "refs/remotes/origin/HEAD",
         "refs/remotes/origin/feature",
     ]);
-    fixture.git(&[
-        "update-ref",
-        "refs/remotes/origin/feature",
-        "refs/remotes/origin/main",
-    ]);
     let retargeted = repo.ref_tips().unwrap();
+    let peeled = |snapshot: &RefsSnapshot| {
+        snapshot
+            .refs
+            .iter()
+            .map(|r| (r.name.clone(), r.commit_id()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        peeled(&before),
+        peeled(&retargeted),
+        "the retarget moved an id"
+    );
     assert_ne!(before, retargeted, "a retargeted symbolic ref was not seen");
+
     fixture.git(&[
         "tag",
         "-f",
@@ -802,11 +862,209 @@ fn ref_tips_see_a_symbolic_ref_retargeted_and_a_tag_object_replaced() {
         "annotated^{commit}",
     ]);
     let replaced = repo.ref_tips().unwrap();
+    assert_eq!(
+        peeled(&retargeted),
+        peeled(&replaced),
+        "the replacement moved a commit"
+    );
     assert_ne!(
         retargeted, replaced,
         "a tag object replaced on the same commit was not seen"
     );
     assert_eq!(replaced, repo.ref_tips().unwrap());
+}
+
+/// A chain of `hops` symbolic refs, `refs/heads/{prefix}-1` → ... → `refs/heads/main`.
+fn symbolic_chain(fixture: &Fixture, prefix: &str, hops: usize) {
+    for hop in 1..=hops {
+        let target = if hop == hops {
+            "refs/heads/main".to_owned()
+        } else {
+            format!("refs/heads/{prefix}-{}", hop + 1)
+        };
+        fixture.git(&[
+            "symbolic-ref",
+            &format!("refs/heads/{prefix}-{hop}"),
+            &target,
+        ]);
+    }
+}
+
+/// git resolves a ref by reading at most five refs, itself included, so a chain of four
+/// symbolic hops is listed — naming the END of its chain, as `%(symref)` does — and one of
+/// five is not; that one is counted as unreadable here (git hides it silently). Caught by:
+/// the depth off by one either way, or `%(symref)` taken as the first hop.
+#[test]
+fn a_symbolic_chain_resolves_to_gits_depth_and_names_its_end() {
+    let fixture = fixtures::unborn();
+    let mut clock = fixtures::EPOCH;
+    commit(&fixture, &mut clock, "first");
+    symbolic_chain(&fixture, "four", 4);
+    symbolic_chain(&fixture, "five", 5);
+    let listed = ask(fixture.path(), &["for-each-ref", "--format=%(refname)"]);
+    assert!(listed.contains("refs/heads/four-1\n"), "{listed}");
+    assert!(!listed.contains("refs/heads/five-1\n"), "{listed}");
+    let cairn = assert_snapshot_is_gits(fixture.path());
+    assert_eq!(
+        cairn
+            .find(&RefName::new("refs/heads/four-1"))
+            .and_then(|r| r.symbolic.clone()),
+        Some(RefName::new("refs/heads/main"))
+    );
+    assert_eq!(
+        cairn.unreadable, 1,
+        "the five-hop chain is skipped and counted"
+    );
+}
+
+/// `HEAD` on a branch that is itself a symbolic ref: git's `symbolic-ref HEAD` names the
+/// end of the chain, and the branch is unborn when that end does not exist. Caught by:
+/// gix's `head()`, which follows one level and calls such a `HEAD` a branch.
+#[test]
+fn head_through_a_symbolic_branch_is_what_git_says() {
+    let fixture = fixtures::unborn();
+    let mut clock = fixtures::EPOCH;
+    commit(&fixture, &mut clock, "first");
+    fixture.git(&["symbolic-ref", "refs/heads/via", "refs/heads/main"]);
+    fixture.git(&["symbolic-ref", "HEAD", "refs/heads/via"]);
+    let through = assert_snapshot_is_gits(fixture.path());
+    assert_eq!(
+        through.head,
+        HeadState::Branch(RefName::new("refs/heads/main"))
+    );
+    fixture.git(&["symbolic-ref", "refs/heads/dangling", "refs/heads/nothere"]);
+    fixture.git(&["symbolic-ref", "HEAD", "refs/heads/dangling"]);
+    let dangling = assert_snapshot_is_gits(fixture.path());
+    assert_eq!(
+        dangling.head,
+        HeadState::Unborn(RefName::new("refs/heads/nothere"))
+    );
+}
+
+/// A refs query stops at whichever poll is cancelled — listing the refs, resolving an
+/// upstream, reading the stash reflog or its entries — and polls nothing after it. Over a
+/// fixture with every kind of poll: for each poll in turn, cancelling there is
+/// `Error::RefsCancelled` after exactly that many polls. Caught by: any poll point
+/// removed, or a loop that goes on after its cancel.
+#[test]
+fn a_refs_query_stops_at_whichever_poll_is_cancelled() {
+    let fixture = every_kind();
+    for made in 0..3 {
+        write(&fixture, "file.txt", &format!("change {made}\n"));
+        fixture.git(&["stash", "push", "--quiet", "-m", &format!("stash {made}")]);
+    }
+    let repo = Repository::discover(fixture.path()).unwrap();
+    let all = CancelAfter {
+        after: usize::MAX,
+        polls: Cell::new(0),
+    };
+    let read = repo.refs(&all).unwrap();
+    let total = all.polls.get();
+    let branches = read.snapshot.of_kind(RefKind::LocalBranch).count();
+    // One poll per ref the store yields — listed, hidden as dangling (every_kind has three:
+    // origin/dangling, deep1, deep2) or skipped as unreadable — one per local branch's
+    // upstream, one per stash reflog line and one per stash entry. Exact, so a poll point
+    // removed fails here even though every cancel below still lands.
+    let dangling = 3;
+    assert_eq!(
+        total,
+        read.snapshot.refs.len()
+            + dangling
+            + read.snapshot.unreadable
+            + branches
+            + 2 * read.snapshot.stashes.len(),
+        "{total} polls"
+    );
+    for after in 0..total {
+        let cancel = CancelAfter {
+            after,
+            polls: Cell::new(0),
+        };
+        assert!(
+            matches!(repo.refs(&cancel), Err(Error::RefsCancelled)),
+            "cancelled at poll {}, the query answered",
+            after + 1
+        );
+        assert_eq!(
+            cancel.polls.get(),
+            after + 1,
+            "it polled on after poll {}",
+            after + 1
+        );
+    }
+}
+
+/// What a refs query reports it paid, on a fixture small enough to count by hand:
+/// `HEAD` (one read, one hop to `main`); five refs listed, `origin/HEAD` one more for its
+/// hop; the stash ref; an object looked up for each of the five, the annotated tag read
+/// and peeled to its commit (two more), and the stash's commit; one reflog line. Caught
+/// by: a cost that counts something else, or nothing.
+#[test]
+fn a_refs_query_reports_the_cost_it_paid() {
+    let fixture = fixtures::unborn();
+    let mut clock = fixtures::EPOCH;
+    write(&fixture, "file.txt", "one\n");
+    fixture.git(&["add", "file.txt"]);
+    commit(&fixture, &mut clock, "first");
+    fixture.git(&["tag", "light"]);
+    fixture.git(&["tag", "-a", "ann", "-m", "ann"]);
+    fixture.git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    fixture.git(&[
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/main",
+    ]);
+    write(&fixture, "file.txt", "two\n");
+    fixture.git(&["stash", "push", "--quiet"]);
+    let read = Repository::discover(fixture.path())
+        .unwrap()
+        .refs(&CancelSignal::new())
+        .unwrap();
+    assert_eq!(read.snapshot.refs.len(), 5);
+    assert_eq!(read.cost.refs_read, 2 + 5 + 1 + 1, "{:?}", read.cost);
+    assert_eq!(read.cost.objects_read, 5 + 2 + 1, "{:?}", read.cost);
+    assert_eq!(read.cost.reflog_lines_read, 1, "{:?}", read.cost);
+}
+
+/// The stash list kept as git numbers it when the reflog is damaged: a line that does not
+/// parse is skipped and takes no number (the entries older than it move up), and an entry
+/// whose commit is missing is skipped but keeps its number; both are counted. Caught by: a
+/// damaged line numbered, a missing commit's number reused, or either failing the list.
+#[test]
+fn a_damaged_stash_reflog_is_numbered_as_git_numbers_it() {
+    let fixture = fixtures::unborn();
+    let mut clock = fixtures::EPOCH;
+    write(&fixture, "file.txt", "base\n");
+    fixture.git(&["add", "file.txt"]);
+    commit(&fixture, &mut clock, "base");
+    for made in 0..5 {
+        write(&fixture, "file.txt", &format!("change {made}\n"));
+        fixture.git(&["stash", "push", "--quiet", "-m", &format!("stash {made}")]);
+    }
+    let log = fixture.path().join(".git/logs/refs/stash");
+    let lines: Vec<String> = std::fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let mut damaged = lines.clone();
+    // Oldest first: the second line becomes garbage, the fourth names a missing commit.
+    damaged[1] = "this is not a reflog line".to_owned();
+    let mut fields: Vec<&str> = lines[3].splitn(3, ' ').collect();
+    fields[1] = "1234567890123456789012345678901234567890";
+    damaged[3] = fields.join(" ");
+    std::fs::write(&log, damaged.join("\n") + "\n").unwrap();
+    let git_numbers: Vec<usize> = git_stashes(fixture.path())
+        .iter()
+        .map(|e| e.index)
+        .collect();
+    assert_eq!(
+        git_numbers,
+        [0, 2, 3],
+        "git numbers the damaged list otherwise now"
+    );
+    let cairn = assert_snapshot_is_gits(fixture.path());
+    assert_eq!(cairn.unreadable, 2);
 }
 
 // ── C3: ahead and behind ────────────────────────────────────────────────────
@@ -863,7 +1121,21 @@ fn ahead_and_behind_are_what_rev_list_counts() {
     // Behind: the upstream moves on without the branch.
     on("main", 3, &mut clock);
     fixture.git(&["update-ref", "refs/remotes/origin/behind", "main"]);
-    fixture.git(&["update-ref", "refs/remotes/origin/diverged", "main"]);
+    // The diverged branch's upstream ends in a merge of its own.
+    fixture.git(&["checkout", "--quiet", "-b", "upstream-topic", "main~1"]);
+    commit(&fixture, &mut clock, "upstream topic");
+    fixture.git(&["checkout", "--quiet", "-b", "upstream-side", "main"]);
+    clock += 60;
+    fixtures::run(
+        fixture.path(),
+        &["merge", "--quiet", "--no-ff", "--no-edit", "upstream-topic"],
+        Some(clock),
+    );
+    fixture.git(&[
+        "update-ref",
+        "refs/remotes/origin/diverged",
+        "upstream-side",
+    ]);
     on("diverged", 2, &mut clock);
     fixture.git(&["checkout", "--quiet", "-b", "topic", "diverged~1"]);
     commit(&fixture, &mut clock, "topic");
@@ -910,7 +1182,13 @@ fn ahead_and_behind_are_what_rev_list_counts() {
         !counted.contains_key("refs/heads/gone") && !counted.contains_key("refs/heads/topic"),
         "a branch with a gone upstream, or none, was counted"
     );
-    assert!(read.commits_read > 0);
+    // Every commit counted was read at least once, by the walk that counted it.
+    let counted_commits: usize = expected.values().map(|c| c.ahead + c.behind).sum();
+    assert!(
+        read.commits_read >= counted_commits,
+        "{} commits read for {counted_commits} counted",
+        read.commits_read
+    );
 }
 
 /// Cancels on its `after`-th poll and counts every poll.
@@ -926,28 +1204,17 @@ impl Cancel for CancelAfter {
     }
 }
 
-/// C3: a cancelled ahead/behind stops its walk — the frontier gix paints before a hiding
-/// walk's first commit included — rather than finishing it and dropping the answer. Two
-/// thousand commits apart, cancelled on the fiftieth poll, it polls only a handful more
-/// times; a walk that ran to the end would poll thousands of times. A query cancelled
-/// before it starts answers no branch. Caught by: a walk that polls nothing, or polls
-/// only between commits it yields (the paint is one long call).
-#[test]
-fn a_cancelled_ahead_behind_stops_its_walk() {
-    let fixture = fixtures::unborn();
-    let mut clock = fixtures::EPOCH;
-    commit(&fixture, &mut clock, "root");
-    let root = ask(fixture.path(), &["rev-parse", "HEAD"])
-        .trim()
-        .to_owned();
+/// `count` empty commits on top of `from`, on `branch`, through one `git fast-import`,
+/// committer dates rising from `first_date`.
+fn long_branch(fixture: &Fixture, branch: &str, from: &str, count: usize, first_date: i64) {
     let mut stream = String::new();
-    for made in 1..=2000 {
+    for made in 1..=count {
         stream.push_str(&format!(
-            "commit refs/heads/long\nmark :{made}\ncommitter C <c@example.com> {} +0000\ndata 2\nc\n",
-            fixtures::EPOCH + 120 + made
+            "commit refs/heads/{branch}\nmark :{made}\ncommitter C <c@example.com> {} +0000\ndata 2\nc\n",
+            first_date + made as i64
         ));
         if made == 1 {
-            stream.push_str(&format!("from {root}\n"));
+            stream.push_str(&format!("from {from}\n"));
         }
         stream.push('\n');
     }
@@ -957,31 +1224,47 @@ fn a_cancelled_ahead_behind_stops_its_walk() {
         Some(stream.as_bytes()),
     );
     assert!(imported.status.success(), "{imported:?}");
-    fixture.git(&["config", "branch.long.remote", "."]);
-    fixture.git(&["config", "branch.long.merge", "refs/heads/main"]);
+}
+
+/// C3: a cancelled ahead/behind stops its walk rather than finishing it and dropping the
+/// answer — DURING the frontier gix paints before a hiding walk's first commit, the one
+/// long call in it. The counted side is one commit past the base; its upstream, the hidden
+/// side, is two thousand past it, so counting the one commit means painting the two
+/// thousand. Cancelled on the twentieth poll, the query has read about twenty objects when
+/// it stops; with the read poll removed (`history::walk`'s `Polled`) the paint reads all
+/// two thousand first. Also: a query cancelled between two counted branches answers the
+/// first (`branches: 1`), and one cancelled before it starts answers none. Caught by: a
+/// walk that polls nothing, or polls only between the commits it yields.
+#[test]
+fn a_cancelled_ahead_behind_stops_its_walk() {
+    let fixture = fixtures::unborn();
+    let mut clock = fixtures::EPOCH;
+    commit(&fixture, &mut clock, "root");
+    let base = ask(fixture.path(), &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    long_branch(&fixture, "long", &base, 2000, fixtures::EPOCH + 120);
+    fixture.git(&["branch", "short", &base]);
+    fixture.git(&["checkout", "--quiet", "short"]);
+    commit(&fixture, &mut clock, "short");
+    fixture.git(&["checkout", "--quiet", "main"]);
+    fixture.git(&["config", "branch.short.remote", "."]);
+    fixture.git(&["config", "branch.short.merge", "refs/heads/long"]);
+    // A branch sorting first whose upstream is itself: counted without a walk.
+    fixture.git(&["branch", "aaa", &base]);
+    fixture.git(&["config", "branch.aaa.remote", "."]);
+    fixture.git(&["config", "branch.aaa.merge", "refs/heads/aaa"]);
+    let git_says = git_ahead_behind(fixture.path(), "short", "long");
     assert_eq!(
-        git_ahead_behind(fixture.path(), "long", "main"),
+        git_says,
         AheadBehind {
-            ahead: 2000,
-            behind: 0
+            ahead: 1,
+            behind: 2000
         }
     );
 
     let repo = Repository::discover(fixture.path()).unwrap();
     let snapshot = repo.refs(&CancelSignal::new()).unwrap().snapshot;
-    let cancel = CancelAfter {
-        after: 50,
-        polls: Cell::new(0),
-    };
-    match repo.ahead_behind(&snapshot, &cancel) {
-        Err(Error::AheadBehindCancelled { branches: 0 }) => {}
-        other => panic!("not cancelled: {other:?}"),
-    }
-    assert!(
-        cancel.polls.get() < 60,
-        "the walk went on for {} polls after it was cancelled at 50",
-        cancel.polls.get()
-    );
     let uncancelled = CancelAfter {
         after: usize::MAX,
         polls: Cell::new(0),
@@ -989,32 +1272,190 @@ fn a_cancelled_ahead_behind_stops_its_walk() {
     let counted = repo.ahead_behind(&snapshot, &uncancelled).unwrap();
     assert_eq!(
         counted.counts,
-        vec![(
-            RefName::new("refs/heads/long"),
-            AheadBehind {
-                ahead: 2000,
-                behind: 0
-            }
-        )]
+        vec![
+            (RefName::new("refs/heads/aaa"), AheadBehind::default()),
+            (RefName::new("refs/heads/short"), git_says),
+        ]
     );
     assert!(
-        uncancelled.polls.get() > 2000,
-        "the walk polled only {} times",
-        uncancelled.polls.get()
+        counted.commits_read > 2000,
+        "the count read only {} commits, so the paint this test cancels is not long",
+        counted.commits_read
     );
+
+    // Polls 1 and 2 are the two branches' own; the third is the first read of the paint.
+    let cancel = CancelAfter {
+        after: 20,
+        polls: Cell::new(0),
+    };
+    match repo.ahead_behind(&snapshot, &cancel) {
+        Err(Error::AheadBehindCancelled {
+            branches: 1,
+            commits_read,
+        }) => assert!(
+            commits_read <= 25,
+            "cancelled at the twentieth poll, the paint went on to read {commits_read} commits"
+        ),
+        other => panic!("not cancelled within the paint: {other:?}"),
+    }
+    // The 21st poll cancels; the one after it is the walk asking whether the read it saw
+    // fail was refused for the cancel. Nothing polls after that.
+    assert!(
+        cancel.polls.get() <= 22,
+        "it polled {} times",
+        cancel.polls.get()
+    );
+
+    let between = CancelAfter {
+        after: 1,
+        polls: Cell::new(0),
+    };
+    assert!(matches!(
+        repo.ahead_behind(&snapshot, &between),
+        Err(Error::AheadBehindCancelled {
+            branches: 1,
+            commits_read: 0
+        })
+    ));
 
     let cancelled = CancelSignal::new();
     cancelled.cancel();
     assert!(matches!(
         repo.ahead_behind(&snapshot, &cancelled),
-        Err(Error::AheadBehindCancelled { branches: 0 })
+        Err(Error::AheadBehindCancelled {
+            branches: 0,
+            commits_read: 0
+        })
     ));
+}
+
+/// C3 where committer dates run against the graph: the base is dated after every commit
+/// on both sides, and one side's commits are dated in decreasing order, so an order by
+/// date meets the merge base first. Counts equal `git rev-list --left-right --count`.
+/// Caught by: a count that trusts dates to find where the two sides meet.
+#[test]
+fn ahead_and_behind_are_what_rev_list_counts_when_dates_run_backwards() {
+    let fixture = fixtures::unborn();
+    commit(&fixture, &mut (fixtures::EPOCH + 100_000), "root");
+    commit(
+        &fixture,
+        &mut (fixtures::EPOCH + 900_000),
+        "base, dated after everything above it",
+    );
+    let base = ask(fixture.path(), &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    fixture.git(&["branch", "forward", &base]);
+    fixture.git(&["checkout", "--quiet", "forward"]);
+    let mut rising = fixtures::EPOCH + 200_000;
+    for made in 0..5 {
+        commit(&fixture, &mut rising, &format!("forward {made}"));
+    }
+    fixture.git(&["checkout", "--quiet", "-b", "backward", &base]);
+    for made in 0..7 {
+        let mut falling = fixtures::EPOCH + 600_000 - 10_000 * made;
+        commit(&fixture, &mut falling, &format!("backward {made}"));
+    }
+    // A merge on the backward side, of a commit dated before the root.
+    fixture.git(&["checkout", "--quiet", "-b", "ancient", &base]);
+    commit(&fixture, &mut (fixtures::EPOCH + 50), "ancient");
+    fixture.git(&["checkout", "--quiet", "backward"]);
+    fixtures::run(
+        fixture.path(),
+        &["merge", "--quiet", "--no-ff", "--no-edit", "ancient"],
+        Some(fixtures::EPOCH + 300_000),
+    );
+    fixture.git(&["checkout", "--quiet", "main"]);
+    for (branch, upstream) in [("forward", "backward"), ("backward", "forward")] {
+        fixture.git(&["config", &format!("branch.{branch}.remote"), "."]);
+        fixture.git(&[
+            "config",
+            &format!("branch.{branch}.merge"),
+            &format!("refs/heads/{upstream}"),
+        ]);
+    }
+    let repo = Repository::discover(fixture.path()).unwrap();
+    let snapshot = repo.refs(&CancelSignal::new()).unwrap().snapshot;
+    let counted = repo.ahead_behind(&snapshot, &CancelSignal::new()).unwrap();
+    assert_eq!(
+        counted.counts,
+        vec![
+            (
+                RefName::new("refs/heads/backward"),
+                git_ahead_behind(fixture.path(), "backward", "forward")
+            ),
+            (
+                RefName::new("refs/heads/forward"),
+                git_ahead_behind(fixture.path(), "forward", "backward")
+            ),
+        ]
+    );
+}
+
+/// C3 in a shallow clone, whose boundary commits git reads as having no parents: counts
+/// equal `git rev-list --left-right --count` there, for a divergence that reaches past the
+/// boundary. Caught by: the walk following a parent the clone cut off.
+#[test]
+fn ahead_and_behind_are_what_rev_list_counts_in_a_shallow_clone() {
+    let source = fixtures::unborn();
+    let mut clock = fixtures::EPOCH;
+    for made in 0..8 {
+        commit(&source, &mut clock, &format!("main {made}"));
+    }
+    source.git(&["checkout", "--quiet", "-b", "side", "HEAD~5"]);
+    for made in 0..3 {
+        commit(&source, &mut clock, &format!("side {made}"));
+    }
+    source.git(&["checkout", "--quiet", "main"]);
+    let clone = source.path().with_extension("shallow");
+    let _ = std::fs::remove_dir_all(&clone);
+    let url = format!("file://{}", source.path().display());
+    let cloned = oracle(
+        source.path(),
+        &[
+            "clone",
+            "--quiet",
+            "--depth=3",
+            "--no-single-branch",
+            &url,
+            clone.to_str().unwrap_or_else(|| panic!("not UTF-8")),
+        ],
+        None,
+    );
+    assert!(cloned.status.success(), "{cloned:?}");
+    assert!(
+        clone.join(".git/shallow").is_file(),
+        "the clone is not shallow"
+    );
+    ask(&clone, &["branch", "--track", "local-side", "origin/side"]);
+    ask(
+        &clone,
+        &["config", "branch.local-side.merge", "refs/heads/main"],
+    );
+    let expected = git_ahead_behind(&clone, "local-side", "origin/main");
+    let full = git_ahead_behind(source.path(), "side", "main");
+    let repo = Repository::discover(&clone).unwrap();
+    let snapshot = repo.refs(&CancelSignal::new()).unwrap().snapshot;
+    let counted = repo.ahead_behind(&snapshot, &CancelSignal::new()).unwrap();
+    let _ = std::fs::remove_dir_all(&clone);
+    assert_ne!(
+        expected, full,
+        "the clone counts what the full repository counts, so its boundary decides nothing"
+    );
+    assert!(
+        counted
+            .counts
+            .contains(&(RefName::new("refs/heads/local-side"), expected)),
+        "{:?}, git says {expected:?}",
+        counted.counts
+    );
 }
 
 // ── C2: ref storage at open ─────────────────────────────────────────────────
 
-/// Whether the git on `PATH` can make a reftable repository, exactly as
-/// `scripts/gate.sh`'s `require_reftable_where_possible` asks it: `None` when it can.
+/// Whether the git on `PATH` can make a reftable repository, asked with the same
+/// `git init` command `scripts/gate.sh`'s `require_reftable_where_possible` runs (here in
+/// this file's isolated configuration): `None` when it can.
 fn no_reftable_here(at: &Path) -> Option<String> {
     let made = oracle(
         at.parent()
@@ -1031,8 +1472,9 @@ fn no_reftable_here(at: &Path) -> Option<String> {
     (!made.status.success()).then(|| String::from_utf8_lossy(&made.stderr).trim().to_owned())
 }
 
-/// C2: a reftable repository is refused at open with its reason — Cairn's, not gix's
-/// failure on the first ref it reads — and a files repository opens. Skipped where the
+/// C2: a reftable repository, and a linked worktree of one, is refused at open with its
+/// reason — Cairn's, not gix's failure on the first ref it reads — and a files repository
+/// opens. Skipped where the
 /// host's git cannot make a reftable repository (before 2.45), and required wherever it
 /// can: `CAIRN_REQUIRE_REFTABLE`, which `scripts/gate.sh`'s `test-full` sets where its
 /// probe makes one (`the_reftable_refusal_is_required_wherever_it_can_run`).
@@ -1065,10 +1507,33 @@ fn a_reftable_repository_is_refused_at_open_and_a_files_one_opens() {
         reftable.join(".git/reftable").is_dir(),
         "git made no reftable store"
     );
-    // git reads it.
+    // git reads it, and from a linked worktree of it, whose own git directory holds no
+    // configuration: the setting is read from the common directory.
     ask(&reftable, &["rev-parse", "HEAD"]);
+    let linked = reftable.with_extension("linked");
+    let _ = std::fs::remove_dir_all(&linked);
+    ask(
+        &reftable,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "linked",
+            linked
+                .to_str()
+                .unwrap_or_else(|| panic!("{} is not UTF-8", linked.display())),
+        ],
+    );
+    ask(&linked, &["rev-parse", "HEAD"]);
+    let refused_linked = SharedRepository::discover(&linked);
     let refused = SharedRepository::discover(&reftable);
     let _ = std::fs::remove_dir_all(&reftable);
+    let _ = std::fs::remove_dir_all(&linked);
+    assert!(
+        matches!(&refused_linked, Err(Error::RefStorageUnsupported { storage, .. }) if storage == "reftable"),
+        "a linked worktree of a reftable repository was not refused: {refused_linked:?}"
+    );
     match refused {
         Err(error @ Error::RefStorageUnsupported { .. }) => {
             let Error::RefStorageUnsupported { storage, .. } = &error else {
@@ -1083,19 +1548,32 @@ fn a_reftable_repository_is_refused_at_open_and_a_files_one_opens() {
 
 /// A repository's format, set by hand on a files repository, against git reading the same
 /// fixture: `extensions.refStorage = reftable` refused (whatever the refs really are, so
-/// the refusal is the configuration's, made before any ref is read); `files` in a
-/// format-version-1 repository opened, as git opens it; and any `refStorage` in a
-/// format-version-0 repository refused, as git refuses it ("v1-only extension"). Runs on
-/// any git: one before 2.45 knows no `refStorage` and refuses it as an unknown extension,
-/// so git's halves are asked only of a git that can make a reftable repository. Caught
-/// by: the setting ignored, a `files` repository refused, or the version not read.
+/// the refusal is the configuration's); `files` in a format-version-1 repository opened,
+/// as git opens it; any `refStorage` in a format-version-0 repository — `files` or
+/// `reftable` — refused for its version, as git refuses it ("v1-only extension"); and a
+/// repository with no `config` file at all opened, as git and gix open it. A git before
+/// 2.45 knows no `refStorage` and refuses it as an unknown extension, so git's halves are
+/// asked only of a git that can make a reftable repository: elsewhere they are skipped,
+/// saying so, and required wherever that git can (`CAIRN_REQUIRE_REFTABLE`). Caught by:
+/// the setting ignored, a `files` repository refused, the version not read or read after
+/// the storage, or a missing file refused.
 #[test]
 fn the_ref_storage_setting_is_read_as_git_reads_it() {
     let fixture = fixtures::unborn();
     let mut clock = fixtures::EPOCH;
     commit(&fixture, &mut clock, "first");
-    let git_knows_ref_storage = no_reftable_here(&fixture.path().with_extension("probe")).is_none();
-    let _ = std::fs::remove_dir_all(fixture.path().with_extension("probe"));
+    let probe = fixture.path().with_extension("probe");
+    let reftable_reason = no_reftable_here(&probe);
+    let _ = std::fs::remove_dir_all(&probe);
+    if let Some(reason) = &reftable_reason {
+        assert!(
+            std::env::var_os("CAIRN_REQUIRE_REFTABLE").is_none(),
+            "CAIRN_REQUIRE_REFTABLE is set, and the git here cannot make a reftable \
+             repository: {reason}"
+        );
+        eprintln!("SKIPPED the_ref_storage_setting_is_read_as_git_reads_it (git's half): {reason}");
+    }
+    let git_knows_ref_storage = reftable_reason.is_none();
     // Written by hand: a git that refuses the result will not set a key in it.
     let set = |version: &str, storage: &str| {
         std::fs::write(
@@ -1124,24 +1602,37 @@ fn the_ref_storage_setting_is_read_as_git_reads_it() {
         other => panic!("refStorage = reftable was not refused: {other:?}"),
     }
 
-    set("0", "files");
-    if git_knows_ref_storage {
-        let refused = git_opens();
-        assert!(
-            !refused.status.success()
-                && String::from_utf8_lossy(&refused.stderr).contains("v1-only extension"),
-            "git now opens a version-0 repository with refStorage: {refused:?}"
-        );
-    }
-    match SharedRepository::discover(fixture.path()) {
-        Err(error @ Error::RefStorageNeedsFormatVersion1 { .. }) => {
+    for storage in ["files", "reftable"] {
+        set("0", storage);
+        if git_knows_ref_storage {
+            let refused = git_opens();
             assert!(
-                error.to_string().contains("repositoryFormatVersion is 0"),
-                "{error}"
+                !refused.status.success()
+                    && String::from_utf8_lossy(&refused.stderr).contains("v1-only extension"),
+                "git now opens a version-0 repository with refStorage = {storage}: {refused:?}"
             );
         }
-        other => panic!("a version-0 repository with refStorage was opened: {other:?}"),
+        match SharedRepository::discover(fixture.path()) {
+            Err(error @ Error::RefStorageNeedsFormatVersion1 { .. }) => {
+                assert!(
+                    error.to_string().contains("repositoryFormatVersion is 0"),
+                    "{error}"
+                );
+            }
+            other => panic!(
+                "a version-0 repository with refStorage = {storage} was not refused for its \
+                 version: {other:?}"
+            ),
+        }
     }
+
+    std::fs::remove_file(fixture.path().join(".git/config")).unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        git_opens().status.success(),
+        "git refuses a repository with no config"
+    );
+    SharedRepository::discover(fixture.path())
+        .unwrap_or_else(|e| panic!("a repository with no config file was refused: {e}"));
 }
 
 // ── C11: what it costs ──────────────────────────────────────────────────────

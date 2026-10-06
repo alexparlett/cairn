@@ -135,19 +135,26 @@ fn resolve_name(reading: &mut Reading<'_>, name: &BStr) -> Option<BString> {
         .map(|end| end.as_bstr().to_owned())
 }
 
-/// The name at the end of `name`'s symbolic chain, when the chain ends at an object.
+/// The name at the end of `name`'s symbolic chain, when the chain ends at an object within
+/// git's depth (`SYMREF_MAX_DEPTH` refs read, `name` itself the first).
 fn symbolic_end(
     reading: &mut Reading<'_>,
     name: gix::refs::FullName,
 ) -> Option<gix::refs::FullName> {
     let mut current = exact(reading, &name)?;
-    for _ in 0..=SYMREF_MAX_DEPTH {
+    let mut read = 1;
+    loop {
         match current.target {
             gix::refs::Target::Object(_) => return Some(current.name),
-            gix::refs::Target::Symbolic(next) => current = exact(reading, &next)?,
+            gix::refs::Target::Symbolic(next) => {
+                read += 1;
+                if read > SYMREF_MAX_DEPTH {
+                    return None;
+                }
+                current = exact(reading, &next)?;
+            }
         }
     }
-    None
 }
 
 /// The destination one fetch refspec maps `merge` to, as git's `query_refspecs` maps it: a

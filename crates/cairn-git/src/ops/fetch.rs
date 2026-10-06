@@ -115,7 +115,11 @@ impl FetchInProgress {
     /// a ref actually moved is for the caller to see, which the worker does by
     /// comparing [`crate::Repository::ref_tips`] before and after, on every
     /// outcome, since a failed or killed fetch may have updated some refs
-    /// before it stopped. A cancelled fetch is [`Error::GitCancelled`],
+    /// before it stopped. That comparison sees only what the refs snapshot
+    /// holds — the local branches, remote-tracking refs and tags, `HEAD`, each
+    /// branch's upstream and the stash list — so a fetch that moves only a ref
+    /// outside those namespaces (`refs/notes/`, `refs/pull/`, `refs/replace/`)
+    /// is reported as having moved none. A cancelled fetch is [`Error::GitCancelled`],
     /// carrying every `*.lock` left under the git directory once git is gone;
     /// anything git refused is [`Error::GitFailed`] carrying its stderr —
     /// which is where "could not read Username ...: terminal prompts

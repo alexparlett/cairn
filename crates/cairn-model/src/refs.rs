@@ -83,8 +83,9 @@ pub struct Ref {
     pub name: RefName,
     pub kind: RefKind,
     pub target: RefTarget,
-    /// For a symbolic ref, the ref it points at — `refs/remotes/origin/main` for
-    /// `refs/remotes/origin/HEAD` — never peeled into it: the ref is listed as itself.
+    /// For a symbolic ref, the ref at the end of its chain, as `%(symref)` prints it —
+    /// `refs/remotes/origin/main` for `refs/remotes/origin/HEAD` — never peeled into it:
+    /// the ref is listed as itself.
     pub symbolic: Option<RefName>,
     /// A local branch's upstream, when it has one configured; `None` for every other kind.
     pub upstream: Option<Upstream>,

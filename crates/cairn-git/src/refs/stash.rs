@@ -12,9 +12,10 @@ use super::Reading;
 use crate::object_id::model_id;
 use crate::{Cancel, Error};
 
-/// Every stash entry, `stash@{0}` first. An entry whose line cannot be parsed, or whose
-/// commit cannot be read, is skipped and counted; the others keep the index git gives
-/// them, which is their place in the reflog.
+/// Every stash entry, `stash@{0}` first, numbered as git numbers them: a reflog line that
+/// cannot be parsed is skipped, counted, and takes no number; an entry whose commit cannot
+/// be read is skipped and counted but keeps its number, so the entries older than it keep
+/// theirs (both measured against `git stash list`).
 pub(super) fn list(
     reading: &mut Reading<'_>,
     cancel: &impl Cancel,
@@ -38,28 +39,28 @@ pub(super) fn list(
             return Ok(Vec::new());
         }
     };
-    // Oldest first, as the file holds them; `None` for a line that does not parse, which
-    // still takes its place in the numbering.
+    // Oldest first, as the file holds them. A line that does not parse is counted and
+    // dropped before the entries are numbered: git skips it the same way, and the entries
+    // older than it move up a place.
     let mut oldest_first = Vec::new();
     for line in lines {
         if cancel.is_cancelled() {
             return Err(Error::RefsCancelled);
         }
         reading.cost.reflog_lines_read += 1;
-        oldest_first.push(line.ok().and_then(|line| {
+        match line.ok().and_then(|line| {
             let commit = gix::ObjectId::from_hex(line.new_oid).ok()?;
             Some((commit, line.message.to_string()))
-        }));
+        }) {
+            Some(entry) => oldest_first.push(entry),
+            None => reading.unreadable += 1,
+        }
     }
     let mut entries = Vec::with_capacity(oldest_first.len());
-    for (index, line) in oldest_first.into_iter().rev().enumerate() {
+    for (index, (commit, message)) in oldest_first.into_iter().rev().enumerate() {
         if cancel.is_cancelled() {
             return Err(Error::RefsCancelled);
         }
-        let Some((commit, message)) = line else {
-            reading.unreadable += 1;
-            continue;
-        };
         reading.cost.objects_read += 1;
         let base = repo
             .find_commit(commit)

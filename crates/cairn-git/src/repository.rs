@@ -145,14 +145,20 @@ impl SharedRepository {
                     },
                 }
             })?;
-        // Refs kept in reftable are refused before anything reads one: gix opens such a
-        // repository and then fails on the first ref it reads (`crate::ref_storage`).
+        // Refs kept in reftable are refused before the snapshot or anything Cairn runs reads
+        // a ref (gix's open itself reads `HEAD`, a placeholder in such a repository it reads
+        // without failing): gix opens such a repository and then fails on the first real
+        // ref it reads (`crate::ref_storage`).
         crate::ref_storage::refuse_unread_storage(&inner)?;
         // `GIT_NAMESPACE` in Cairn's own environment is not honoured: gix reads it at open
         // (`gitoxide.core.refsNamespace`) and would show only the namespace's refs, where
         // every `git` Cairn runs is started without it (`process/environment.rs`'s roster),
         // so the refs shown are the refs that `git` sees. Every handle is made from this
-        // one, so clearing it here clears it everywhere.
+        // one, so clearing it here clears it everywhere. Caveat: gix restores the namespace
+        // from its configuration whenever that is re-read in place (gix 0.87.1,
+        // `config/cache/init.rs`, `apply_changed_values`, reached through
+        // `config_snapshot_mut`); nothing in Cairn does that, and a handle that ever did
+        // would have to clear it again.
         inner.refs.namespace = None;
         // The git directory opened must be the one judged: a `.git` file is read once for
         // the check and again by gix, and one rewritten between the two reads names a

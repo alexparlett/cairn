@@ -6,8 +6,9 @@
 //! and not through an include), whose values are `files` and `reftable`. gix 0.87 reads no
 //! such setting: it opens a reftable repository as if its refs were files, and then fails
 //! on the first ref it reads (`HEAD` names `refs/heads/.invalid`). Reftable is not built
-//! here (PRD R1.9), so such a repository is refused as it is opened, before any ref is
-//! read, with a reason the window draws.
+//! here (PRD R1.9), so such a repository is refused as it is opened, before the snapshot
+//! or anything Cairn runs reads a ref (gix's open itself reads `HEAD`, which in a reftable
+//! repository is a placeholder it reads without failing), with a reason the window draws.
 
 use std::path::Path;
 
@@ -62,6 +63,14 @@ struct Format {
 /// not parse is gix's to refuse, and it already opened the repository, so it reads as `0`.
 fn format(common_dir: &Path) -> Result<Format, Error> {
     let path = common_dir.join("config");
+    // git and gix both open a repository with no `config` at all, as format 0 with no
+    // extension.
+    if !path.exists() {
+        return Ok(Format {
+            version: 0,
+            storage: None,
+        });
+    }
     let config = gix::config::File::from_path_no_includes(path.clone(), gix::config::Source::Local)
         .map_err(|source| Error::Open {
             path,

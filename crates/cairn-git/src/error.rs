@@ -296,10 +296,17 @@ pub enum Error {
     RefsCancelled,
 
     /// An ahead/behind query was cancelled — superseded while it walked — after answering
-    /// `branches` local branches; what it had counted is dropped with it. Not a failure to
+    /// `branches` local branches and reading `commits_read` commit objects (the cost it
+    /// paid before it stopped); what it had counted is dropped with it. Not a failure to
     /// report as one.
-    #[error("the ahead/behind query was cancelled after {branches} branches")]
-    AheadBehindCancelled { branches: usize },
+    #[error(
+        "the ahead/behind query was cancelled after {branches} branches and {commits_read} \
+         commits read"
+    )]
+    AheadBehindCancelled {
+        branches: usize,
+        commits_read: usize,
+    },
 
     /// Reading the refs failed: the store could not be listed, or `HEAD` could not be read.
     /// One ref that cannot be read is skipped and counted instead (`RefsSnapshot::unreadable`).

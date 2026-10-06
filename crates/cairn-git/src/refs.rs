@@ -39,8 +39,10 @@ use cairn_model::{HeadState, Ref, RefKind, RefName, RefTarget, RefsSnapshot};
 use crate::object_id::model_id;
 use crate::{Cancel, CancelSignal, Error, Repository};
 
-/// git's limit on following a symbolic ref (`SYMREF_MAXDEPTH` in `refs.c`): a chain longer
-/// than this does not resolve, and the ref is skipped as broken.
+/// git's limit on resolving a ref (`SYMREF_MAXDEPTH` in `refs.c`): at most this many refs
+/// are read, the ref itself included, so a chain of more than four symbolic hops does not
+/// resolve and the ref is skipped — git hides it silently, as it hides a dangling one; here
+/// it is counted as unreadable.
 const SYMREF_MAX_DEPTH: usize = 5;
 
 /// A refs snapshot and what reading it cost.
@@ -80,6 +82,9 @@ impl Repository {
         let mut refs = reading.listed(cancel)?;
         for reference in &mut refs {
             if reference.kind == RefKind::LocalBranch {
+                if cancel.is_cancelled() {
+                    return Err(Error::RefsCancelled);
+                }
                 reference.upstream = upstream::of(&mut reading, &reference.name);
             }
         }
@@ -125,16 +130,35 @@ enum Resolution {
 }
 
 impl Reading<'_> {
+    /// `HEAD` as git answers it: detached at the object it names directly, or on the branch
+    /// at the END of its symbolic chain — what `git symbolic-ref HEAD` prints, following
+    /// every level — which is unborn when that chain ends at a ref that does not exist (or
+    /// does not resolve within git's depth), as `git rev-parse HEAD` then fails. gix's
+    /// `head()` follows one level only, and would call `HEAD` → `x` → (nothing) a branch.
     fn head(&mut self) -> Result<HeadState, Error> {
+        let head_error = |source: Box<dyn std::error::Error + Send + Sync>| Error::Refs { source };
         self.cost.refs_read += 1;
-        let head = self.repo.head().map_err(|source| Error::Refs {
-            source: Box::new(source),
-        })?;
-        Ok(match head.kind {
-            gix::head::Kind::Symbolic(reference) => HeadState::Branch(ref_name(&reference.name)),
-            gix::head::Kind::Unborn(name) => HeadState::Unborn(ref_name(&name)),
-            gix::head::Kind::Detached { target, .. } => HeadState::Detached(model_id(&target)?),
-        })
+        let head = self
+            .repo
+            .find_reference("HEAD")
+            .map_err(|source| head_error(Box::new(source)))?
+            .detach();
+        let mut name = match head.target {
+            gix::refs::Target::Object(id) => return Ok(HeadState::Detached(model_id(&id)?)),
+            gix::refs::Target::Symbolic(name) => name,
+        };
+        // `HEAD` itself is the first of git's reads.
+        for _ in 1..SYMREF_MAX_DEPTH {
+            self.cost.refs_read += 1;
+            match self.repo.try_find_reference(name.as_ref()) {
+                Ok(Some(found)) => match found.detach().target {
+                    gix::refs::Target::Object(_) => return Ok(HeadState::Branch(ref_name(&name))),
+                    gix::refs::Target::Symbolic(next) => name = next,
+                },
+                Ok(None) | Err(_) => return Ok(HeadState::Unborn(ref_name(&name))),
+            }
+        }
+        Ok(HeadState::Unborn(ref_name(&name)))
     }
 
     /// The local branches, then the remote-tracking refs, then the tags, each read in
@@ -180,13 +204,15 @@ impl Reading<'_> {
         Ok(refs)
     }
 
-    /// What `reference` names: a symbolic chain followed to the object at its end (keeping
-    /// the first target's name), and that object told apart and peeled.
+    /// What `reference` names: a symbolic chain followed to the object at its end, within
+    /// git's depth, naming the ref at that end — `%(symref)`, which is the end of the chain,
+    /// not its first hop — and that object told apart and peeled.
     fn resolve(&mut self, reference: &gix::refs::Reference) -> Resolution {
         let mut symbolic = None;
         let mut target = reference.target.clone();
         let mut peeled = reference.peeled;
-        let mut depth = 0;
+        // `reference` itself is the first of git's reads.
+        let mut read = 1;
         loop {
             match target {
                 gix::refs::Target::Object(id) => {
@@ -196,17 +222,15 @@ impl Reading<'_> {
                     };
                 }
                 gix::refs::Target::Symbolic(name) => {
-                    depth += 1;
-                    if depth > SYMREF_MAX_DEPTH {
+                    read += 1;
+                    if read > SYMREF_MAX_DEPTH {
                         return Resolution::Unreadable;
-                    }
-                    if symbolic.is_none() {
-                        symbolic = Some(ref_name(&name));
                     }
                     self.cost.refs_read += 1;
                     match self.repo.try_find_reference(name.as_ref()) {
                         Ok(Some(next)) => {
                             let next = next.detach();
+                            symbolic = Some(ref_name(&next.name));
                             target = next.target;
                             peeled = next.peeled;
                         }

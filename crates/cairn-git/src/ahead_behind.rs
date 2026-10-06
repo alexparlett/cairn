@@ -55,6 +55,7 @@ impl Repository {
             };
             let cancelled = || Error::AheadBehindCancelled {
                 branches: counts.len(),
+                commits_read: reads.get(),
             };
             if cancel.is_cancelled() {
                 return Err(cancelled());

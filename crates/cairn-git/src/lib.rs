@@ -18,6 +18,7 @@ mod refs;
 mod remotes;
 mod repository;
 mod shallow;
+mod status;
 
 pub use ahead_behind::AheadBehindRead;
 pub use cancel::{Cancel, CancelSignal};

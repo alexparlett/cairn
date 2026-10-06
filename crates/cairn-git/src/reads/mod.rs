@@ -5,7 +5,7 @@
 //! git shows means asking git — the changes query, whose rename and copy
 //! detection is where the two disagree — the read is a function here, built
 //! with [`crate::ops::GitBinary`]'s read builder, and the runner is reached from
-//! nowhere else but `ops/`. Five functions today, four for `crate::diff`:
+//! nowhere else but `ops/`. Six functions today, four for `crate::diff`:
 //! [`changes`], `git diff-tree --raw` for the changes query (`diff-engine`,
 //! decision E); [`patches`], `git diff-tree -p` for the content query's
 //! changed ranges and function context, which gix's line diff placed
@@ -20,7 +20,11 @@
 //! form, what a fetch of a remote will read, because the check must decide on
 //! exactly what the fetch's own git reads and gix's reading of a linked
 //! worktree's `includeIf`, of the system file and of trust is not git's (the
-//! user's decision of 2026-10-04).
+//! user's decision of 2026-10-04); and one for the working tree's status,
+//! [`status()`], `git status --porcelain=v2 -z`, because gix's status differs from
+//! git's wherever status is hard — staged renames past its limit, conflicted paths,
+//! sparse checkouts, a lying fsmonitor hook — and starts clean filters outside
+//! `process/` (the refs-and-status packet's L1).
 //!
 //! # What a read may run
 //!
@@ -188,6 +192,7 @@ mod attributes;
 mod changes;
 mod fetch_settings;
 mod patches;
+mod status;
 mod working_tree;
 
 pub(crate) use attributes::{DiffAttribute, diff_attributes};
@@ -196,6 +201,7 @@ pub(crate) use fetch_settings::{FetchSettings, fetch_settings};
 #[cfg(test)]
 pub(crate) use patches::parse as parse_patches;
 pub(crate) use patches::{Algorithm, FilePatch, PatchQuery, PatchText, Reading, Scope, patches};
+pub(crate) use status::status;
 pub(crate) use working_tree::{
     Side, WorkingTreeAnswer, WorkingTreeQuery, work_tree_relative, working_tree_patch,
 };

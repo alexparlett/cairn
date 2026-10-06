@@ -290,6 +290,12 @@ pub enum Error {
         stranded_locks: Vec<PathBuf>,
     },
 
+    /// A status read was cancelled — superseded before or while `git status` ran, which is
+    /// then ended with its process group. Not a failure to report as one: the caller asked
+    /// for this by superseding it.
+    #[error("the status read was cancelled")]
+    StatusCancelled,
+
     /// A refs query was cancelled — superseded before it finished reading. Not a failure
     /// to report as one: the caller asked for this by superseding it.
     #[error("the refs query was cancelled")]

@@ -17,14 +17,15 @@ the result as a virtualized list of rows with lanes, edges and four columns,
 paging as the reader scrolls. Nothing here mutates a repository, and there is no
 repository picker.
 
-**It walks from `HEAD`, not from every ref.** The history lane (`Scroll::page`,
-`crates/cairn-app/src/worker/pool.rs`) builds `HistoryRequest::from_head(rows)`,
-so the graph is the checked-out branch's ancestry and a branch with no commit
-reachable from `HEAD` does not appear. The
-engine already takes a tip set — `HistoryRequest::from_commits` — and the
-research measurements drive it with every ref; nothing in the application does
-yet. `refs-and-status` is where showing all branches belongs, and see also the
-caveat under "Known limits".
+**The engine walks from every ref; the application still walks from `HEAD`.**
+`HistoryRequest::from_refs` seeds a walk from a refs snapshot — every local branch,
+remote-tracking ref and tag that identifies a commit, and `HEAD` — labels each row
+with the refs pointing at its commit, and draws each stash whose base the walk
+reaches as a row of its own ("From every ref, labelled, with stash rows" below).
+The history lane (`Scroll::page`, `crates/cairn-app/src/worker/pool.rs`) still builds
+`HistoryRequest::from_head(rows)`, so the window draws the checked-out branch's
+ancestry, unlabelled and with no stash; reading the snapshot on the history thread
+and opening the walk from it is the worker's, and is not built yet.
 
 ## The path a commit takes
 
@@ -35,7 +36,8 @@ One commit crosses four crates and changes shape three times.
    and keeps it for the life of a scroll. Each step yields an id and its parent
    ids, read from the walk rather than from a decoded object — the parents git
    shows, which in a shallow clone are not always the ones the object names
-   (see "A shallow clone" below).
+   (see "A shallow clone" below). A walk from a refs snapshot merges each stash's
+   row into those steps (`crates/cairn-git/src/history/stream.rs`).
 2. **`LaneAssigner` turns ids into a picture.**
    `crates/cairn-model/src/lane_assignment.rs` takes `(id, parent_ids)` in walk
    order and produces a `GraphRow`: the commit's `Lane` and only the lane changes
@@ -44,9 +46,11 @@ One commit crosses four crates and changes shape three times.
 3. **The session pairs the picture with a commit.** Only once the assigner has
    *evicted* a row (so nothing later can repaint it) does the session read that
    commit's object, for its subject, its author's name, its author date and how
-   many parents the walk read for it. A page is a `RowsPage`
+   many parents the walk read for it — or, for a stash's row, takes what the walk
+   read of the stash when it opened. A page is a `RowsPage`
    (`crates/cairn-model/src/rows_page.rs`): its rows, its own text, the authors it
-   names (each once), its lane changes and its snapshots, in flat vectors.
+   names (each once), its lane changes and its snapshots, its rows' labels and its
+   stashes, in flat vectors.
 4. **The worker hands a page across, and the window appends it.**
    `crates/cairn-app/src/worker/` sends `Update::Rows { rows, complete }` to the
    window, which appends it to its `History` (`session::apply`, where pages were
@@ -122,6 +126,24 @@ assigner still held and repainted a line to. In the order Cairn walks that is
 from above without measuring it, since a parent must arrive late at all before
 it can arrive too late.
 
+**A stash's row is laid out with one line, in a lane of its own**
+(`LaneAssigner::push_stash`). The stash commit is pushed as the row's id with its
+base — the commit it was made on, its first parent — as its only parent: its index
+and untracked commits are never awaited. Its line leaves its node down a lane of its
+own to the base, even where another line already awaits that base, so several
+stashes on one commit each keep a lane down to it and every such line ends there
+(`Ends` for each); a commit's line instead joins a line already descending to its
+parent. The assigner is still keyed by `Oid` — the stash commit, which no commit the
+walk reaches names as a parent. A base already laid out above is joined by a late
+line, as any parent is, though the stream never places a stash below its base.
+Pinned by `a_stash_draws_one_line_down_to_the_commit_it_was_made_on`,
+`two_stashes_on_one_commit_each_keep_a_lane_down_to_it` (whose control lays the
+same walk out with `push` and gets one lane for both) and
+`rows_with_stashes_derive_the_edges_the_assigner_kept`
+(`crates/cairn-model/src/lane_assignment.rs`), each deriving every row's edges and
+requiring them equal to the edges the assigner kept in its window. C15's oracle
+knows commits alone, so its comparisons run over walks with no stash.
+
 **What a row keeps.** A `GraphRow` holds its commit's id, its lane and only the
 lane changes at it — never the lines passing through it. A `LaneChange` is a
 line that ends at the row's commit (`Ends`), one that leaves it down a lane to a
@@ -170,6 +192,26 @@ included. A history past its stores' 32-bit addresses (about 4 GiB of subjects)
 answers `HistoryFull` and keeps the rows of the page before the first it could not
 hold; the window ends the scroll there and says so (`Progress::appended`) until a
 reopen.
+
+**A row's kind, labels and stash sit beside it.** A kept row's last byte is its
+flags: whether it is a stash's (`RowId::Stash`, `RowContent::Stash`), whether its
+commit is `HEAD`'s, and whether refs point at it. What a labelled row carries — each
+ref's full name in the text store, its kind and whether it is the branch `HEAD` is
+on — is a run of a label store of its own, and what a stash's row keeps beyond a
+commit's (`stash@{n}` and its base; its message is the row's subject) is an entry of
+a stash store; each store holds one entry per such row, filed in row order and
+found by a binary search on the row's number, the last entry filed under a number
+read (one a row that could not be held left is never read: the row held next under
+that number filed its own after it). A row with neither costs nothing for them, and
+both stores grow in fixed chunks. A row is read as `HistoryRow::labels` (a
+`RowLabels`, iterating `Label`s) and `HistoryRow::content`. Pinned by
+`each_row_reads_back_its_own_labels_and_no_others`,
+`a_stash_row_reads_back_as_its_stash_and_is_found_by_its_identity`,
+`a_row_held_after_one_that_could_not_be_reads_its_own_labels_and_stash` and
+`labels_and_stashes_are_retained_by_whole_chunks_and_only_when_held`
+(`crates/cairn-model/src/history.rs`), with `history_allocations.rs` appending
+labelled rows and stashes per chunk and reading labels with no allocation. All of
+rust-lang/rust's labels from its snapshot hold 0.006 MiB.
 
 `row_edges(rows, index)` (`crates/cairn-model/src/edge_derivation.rs`) derives
 what a row draws: it finds the nearest row at or above `index` that carries a
@@ -266,7 +308,8 @@ commit-graph and deletes the loose objects of the commits a resumed page
 replays, so any stray decode fails to find its object
 (`a_replayed_prefix_is_walked_but_never_decoded`, `priming_the_window_walks_but_never_decodes`).
 
-**Cancellation is a poll, once per commit.** `Cancel` is a trait so a test can
+**Cancellation is a poll, once per commit** (and once per commit a walk from a
+refs snapshot looks ahead at, below). `Cancel` is a trait so a test can
 stop a walk at a chosen commit; `cairn-git` still knows nothing about threads. A
 cancelled cold query reports how far it got and discards the page; a cancelled
 *session* keeps its progress, so the next call continues rather than re-walks
@@ -305,6 +348,74 @@ arrival order. The measurement (`measures_both_orders_against_a_named_repository
 `#[ignore]`d): walking *and laying out* 50k commits took 129 ms in commit-time
 order against 196 ms in graph order, which leaves far more lanes open per row.
 Walking alone is the other way round.
+
+### From every ref, labelled, with stash rows
+
+`HistoryRequest::from_refs(&RefsSnapshot, limit)` (`crates/cairn-git/src/history/seeds.rs`)
+reads the snapshot as plain data: its seeds are every commit a listed ref
+identifies — a tag on a tree or a blob identifies none, so seeds nothing and labels
+nothing — each once, and `HEAD`'s, a detached `HEAD` naming what is not a commit
+seeding nothing; its labels are, per commit, the refs pointing at it in the
+snapshot's order, the branch `HEAD` is on marked current; and it carries the stash
+list. Nothing about a stash seeds the walk. When the walk opens, each stash's commit
+is read for its author, its author date and its committer date, and its base's
+committer date; the resolved labels and stashes (`Decoration`) are shared by every
+page and cursor of the walk, as its tips are, so a cold page resumed from a cursor
+carries the labels and stashes of the snapshot the walk began from.
+
+Both routes lay out the same stream (`crates/cairn-git/src/history/stream.rs`): the
+walk's commits, each stash's row merged in. A stash's row goes where its commit's
+date falls among the walk's commits — newest committed first, the walk's own order —
+but never after its base, and only when the walk reaches the base. How the stream
+knows the base is reached when the stash's date comes up is by looking ahead in the
+walk itself: the commits it has pulled and not yet handed on are searched for the
+base, and up to `LOOKAHEAD` (4,096) more are pulled to find it, stopping once the
+walk passes the base's own committer date without meeting it. Found, the row goes at
+the stash's date; not found, the stash is held. Whenever the next commit to hand on
+is the base of a stash not yet placed — held, or not yet due because its date is
+older than its base's by clock skew — the row goes directly above it. A stash still
+unplaced when the walk ends has no row. So a row is there exactly when the walk
+reaches its base, and costs no walk of its own: the commits looked ahead at are the
+next the stream hands on. A stash commit the walk reaches through a ref is that
+commit's row and no stash's. In graph order, which has no dates, every stash goes
+directly above its base. `HistoryRequest::with_stash_lookahead` sets the distance.
+`HistoryPage::walked` counts rows laid out, stash rows among them; `decoded` counts
+commits read, which a stash's row adds none to; cancellation is polled once per row
+and once per commit looked ahead at; `HistorySession::commits_walked` counts every
+commit pulled off the walk.
+
+Every expectation is git's, run in the same fixture at test time and over the whole
+walk, paged small (`crates/cairn-git/tests/every_ref.rs`):
+`the_commits_walked_from_every_ref_are_git_rev_lists` — the walk's commits are
+`git rev-list --branches --remotes --tags HEAD`, each once, over a branch `HEAD`
+cannot reach, a remote-tracking ref's and a tag's own commits, a tag on a tree, a
+stash whose branch was deleted (no row, none of its commits), and stashes made with
+and without `--include-untracked` whose internal commits are no rows unless a branch
+reaches one; `every_rows_labels_are_what_git_log_decorates_it_with` — each row's
+labels against `git log --decorate=full`, `refs/stash` aside, `origin/HEAD` and a
+nested tag among them; `each_stash_on_a_walked_commit_is_one_row_with_one_line_to_it`
+— each stash's index, base, message, author and date against `git stash list`, one
+line out of its node down its own lane into its base, two stashes on one commit in
+two lanes, a stash dated older than its base directly above it and the rest at their
+dates; `a_walk_paged_any_way_draws_the_rows_one_page_does` (held and cold, pages of
+one, two and five); `a_stash_on_a_deep_base_is_drawn_at_its_date_or_directly_above_its_base`;
+`a_detached_head_no_ref_reaches_is_walked_and_labelled`;
+`a_stash_commit_a_branch_reaches_is_a_commits_row_and_no_stashs`;
+`a_braided_history_from_every_ref_is_git_rev_lists` (order too, against
+`--date-order`); and `in_graph_order_a_stash_is_directly_above_its_base`.
+
+**Measured** (`measures_the_first_page_from_every_ref`, `#[ignore]`d; release, warm,
+median of seven, the machine in `docs/research/diff-engine/measured-baseline.md`), on
+rust-lang/rust at `c999cef531e`, which has no commit-graph file: the first page of 64
+rows from `HEAD` 7.7 ms, from every ref 7.3 ms with the snapshot already read and
+8.6 ms with its read; each laid out 1,088 rows. On a scratch clone of it with real
+stashes: a stash on `HEAD` adds nothing (7.4 ms); a stash whose base is 20,000 commits
+deep, or a stash on a deleted branch's old commit, looks ahead the whole 4,096 commits
+on the first page and costs 21.5 ms (3.1 ms with the clone's own commit-graph); the
+stream never holds more than 4,096 commits pulled ahead of the next row, so that is
+the most looking ahead adds to a page.
+A find of rust's oldest commit from the snapshot takes 2,265 ms against 2,253 ms from
+every ref's commit unlabelled and 2,211 ms from `HEAD`.
 
 ## The worker boundary (`cairn-app`)
 
@@ -622,16 +733,19 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
   (counting is a full walk) and no way to build a cursor from an offset, so a
   scrollbar drag has no answer; progressive loading is the model, as it is in
   Fork and Sourcetree. Tracked as issue #5.
-- **`GraphRow` and the kept row still key a row by `Oid`.** `RowContent` and
-  `RowId` are total over rows that are not commits, but the assigner's own output
-  is not, and a kept row (`History`'s) holds a commit's id and draws a commit's
-  content — whoever lays out the first row that is not a commit gives both a kind
-  first (a stash row, `docs/prd/refs-and-status.md` R4.4).
-- **The view is `HEAD`'s ancestry, not the repository's.** `from_head`, not
-  `from_commits`, so nothing shows a branch that `HEAD` cannot reach.
-  `HistoryRequest::from_commits` takes an unbounded tip set; it is resolved once
-  per walk, and a walk from thousands of tips costs what gitoxide's walk costs
-  to seed from them — measured by nothing yet.
+- **`GraphRow` still keys a row by `Oid`.** A stash's row is keyed by its stash
+  commit, which no commit the walk reaches names; the kept row says which kind it
+  is. A row with no `Oid` at all (there is to be no working-tree row) would need
+  the assigner keyed otherwise.
+- **The window's view is `HEAD`'s ancestry, not the repository's.** The engine's
+  `from_refs` walks every ref; the history lane builds `from_head` until the worker
+  reads a snapshot. A walk from thousands of tips costs what gitoxide's walk costs
+  to seed from them — measured on rust-lang/rust's 175 refs only.
+- **A stash's row is at its date only when its base is near.** A stash whose base
+  lies more than `LOOKAHEAD` commits below its date, or past a skewed date, is drawn
+  directly above its base instead; one whose stash commit is reached through a ref
+  only after the stash's row was placed — clock skew between the two — would have a
+  stash's row and a commit's. Neither is measured on a real repository with stashes.
 - **The first page of a scroll walks `window + limit` commits** before a single
   row can be delivered, because rows leave the assigner only once evicted. Those
   are walk steps, not object reads. Do not shrink the page to make it feel

@@ -3,6 +3,143 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-06 — phase 05: the history from every ref, labelled, with stash rows
+
+Packet mode, on `feature/refs-and-status`. `HistoryRequest::from_refs(&RefsSnapshot)`
+seeds a walk from every local branch, remote-tracking ref and tag that identifies a
+commit, and `HEAD` (a detached `HEAD` that is not a commit seeds nothing); tags on trees
+and blobs are filtered out before `walk_tips`; nothing about a stash seeds the walk.
+Each row carries the refs pointing at its commit from the same snapshot (`RowLabels`,
+`Label`: full name, kind, whether it is the branch `HEAD` is on; and whether the row is
+`HEAD`'s). A stash whose base the walk reaches is a row of its own: `RowContent::Stash`
+(`StashSummary`: stash commit, `stash@{n}`, base, the stash list's message, author,
+author date), `RowId::Stash(stash commit)`, laid out by `LaneAssigner::push_stash` with
+its base as its one parent, in a lane of its own. Every `RowContent` reader names the
+variant: the window draws a stash's row as its stash commit's row with its message as
+subject (phase 07 gives it a chip); `selection::comparison_of` compares a stash's row as
+the stash commit against its first parent (`Comparison::Commit(stash)` — R6.2's
+`stash^1..stash`); `Pair` keeps both rows' identities, since a stash's row and a
+commit's of the same id differ. The test-only `NotACommit` variants are gone. **The
+application still walks from `HEAD`** (`Scroll::page`'s `from_head`): reading the
+snapshot on the history thread is phase 06's.
+
+**How a stash's base is known to be reached: the walk looks ahead at itself.** The two
+history routes lay out one stream (`crates/cairn-git/src/history/stream.rs`). When a
+stash's committer date comes up among the walk's commits, the commits already pulled and
+not handed on are searched for its base, and up to `LOOKAHEAD` (4,096) more are pulled,
+stopping early once the walk passes the base's own committer date. Found: the row goes
+at its date. Not found: held, and placed directly above its base when the base is the
+next commit to hand on — as is a stash dated older than its base (clock skew). Never
+reached: no row. Exact (a row if and only if the walk reaches the base), no separate
+walk, nothing pulled in: the commits looked ahead at are the next ones handed on. A
+stash commit the walk reaches through a ref is a commit's row, never a stash's. Graph
+order has no dates, so every stash goes directly above its base. The cursor carries the
+resolved labels and stashes beside its tips, so a cold page resumed from it is the same
+stream. Cancellation is polled per row as before and per commit looked ahead at.
+
+**Measured — C11's first page** (`measures_the_first_page_from_every_ref`, release,
+warm, median of seven after a warm-up, each run a fresh open; AMD Ryzen 7 9800X3D,
+60 GiB, Linux 7.2.8-2-cachyos; `~/Development/bench/rust` at `c999cef531e`, which has no
+commit-graph file and no stash):
+
+| Seed | First page (64 rows) [min–max] | Rows laid out | Commits pulled |
+| --- | ---: | ---: | ---: |
+| `HEAD` | 7.69 ms [7.66–7.83] | 1,088 | 1,088 |
+| every ref, snapshot already read | 7.27 ms [7.24–7.34] | 1,088 | 1,088 |
+| every ref, with the snapshot's read | 8.56 ms [8.50–8.60] | 1,088 | 1,088 |
+
+Bar 200 ms: met. The stash mechanism, on a `--shared` scratch clone of the bench in the
+scratchpad (166 refs), every ref with the snapshot already read: no stash 7.40 ms; a
+stash on `HEAD` 7.40 ms (1,087 commits pulled, the row at its date); plus a stash whose
+base is `HEAD~20000` (2017) 21.60 ms (4,096 pulled; the row held and drawn directly
+above its base); plus a stash on a deleted branch's commit dated 2015 21.53 ms (4,096
+pulled; no row). With the clone's own commit-graph (written by git's `gc --auto` there)
+the worst case is 3.09 ms. The stream never holds more than 4,096 commits ahead of the
+next row, so that is the most looking ahead adds to a page.
+
+**C16 re-measured** (`measures_compact_rows_over_a_named_repository`, mode `find`, same
+machine, release, a fresh process per run, median of seven after a warm-up), paging all
+of rust-lang/rust: seed `snapshot` (the new walk: labels, stash rows) **52.67 MiB**
+retained, 159 B/row over 345,545 rows (rows 23.77, text 16.01, lane changes 12.25,
+snapshots 0.25, authors 0.371, labels 0.006, stashes 0.000 MiB), `RssAnon` +83.2 MiB;
+seed `refs` 52.66 MiB; `HEAD` 51.87 MiB over 340,228. Against 64 MiB: met. Find times:
+`snapshot` 2,265 ms [2,241–2,275], `refs` 2,253 [2,245–2,264], `HEAD` 2,211
+[2,205–2,221] — about 2% above phase 04's 2,206 / 2,169, inside C15's 10% of 2.4 s. On the
+scratch clone with its two drawn stashes: 52.67 MiB, stashes 0.003 MiB. **C15**
+equivalence on the bench still holds: seeds `refs` and `snapshot` 345,545 rows (49,609
+repainted, 627 late lines), `HEAD` 340,228 (48,988, 624), every row's derived edges the
+frozen assigner's.
+
+**Bench hygiene — two metadata-only touches, reported.** (1) The scratch clone was made
+with `git clone --shared`, so its objects live in the bench's pack through alternates;
+when `git stash` and `git commit` in the clone wrote objects the bench's pack already
+holds, git freshened that pack's mtime (`.git/objects/pack/pack-9359bf25….pack`, now
+2026-10-06 10:19:46; content unchanged). (2) A plain `git status` run on the bench to
+check it was clean created and removed `index.lock`, moving the `.git` directory's mtime
+(10:27:19); the index itself is unchanged (2026-09-17), and no lock was left. No object,
+ref, index or config of the bench changed. Next time: a scratch clone with no
+alternates (a clone across filesystems, as phase 02's on tmpfs), and
+`GIT_OPTIONAL_LOCKS=0 git status`.
+
+Pinned (mutation each was checked to fail, run by hand on `51b2a21`):
+
+- `the_commits_walked_from_every_ref_are_git_rev_lists` (C6): stash bases seeded
+  (also fails 3 other C6 tests); stash commits seeded (`refs/stash`, fails 6); a tag's
+  object rather than its commit seeded (fails 5); never placing a stash directly above
+  its base.
+- `every_rows_labels_are_what_git_log_decorates_it_with` (C6): symbolic refs dropped from
+  labels; `current` never set; `HEAD` never labelled (also
+  `a_detached_head_no_ref_reaches_is_walked_and_labelled`).
+- `each_stash_on_a_walked_commit_is_one_row_with_one_line_to_it` (C6): a stash laid out
+  with `push` (lines join, both stashes on one commit in one lane); never at its date
+  (always held; also the deep-base test); a stash placed above its base only once held.
+- `a_walk_paged_any_way_draws_the_rows_one_page_does`: a cursor that forgets the
+  decoration (cold pages lose their stash rows and labels).
+- `a_stash_commit_a_branch_reaches_is_a_commits_row_and_no_stashs`: the walked-as-a-commit
+  check dropped.
+- Assigner (C6's "assigner tests"): `two_stashes_on_one_commit_each_keep_a_lane_down_to_it`
+  and `rows_with_stashes_derive_the_edges_the_assigner_kept` fail with `push_stash`
+  joining as `push` does; `a_stash_draws_one_line_down_to_the_commit_it_was_made_on`
+  pins the one line and its derived edges.
+- Model: `a_row_held_after_one_that_could_not_be_reads_its_own_labels_and_stash` (the
+  first entry filed under a row number read rather than the last);
+  `each_row_reads_back_its_own_labels_and_no_others` (labels read from the row before);
+  `a_stash_row_reads_back_as_its_stash_and_is_found_by_its_identity` and
+  `a_consumer_reads_a_row_by_matching_on_its_content` (the stash flag dropped); the kept
+  row is still 72 B (`a_kept_row_is_seventy_two_bytes`: the flags byte fills the one byte
+  of padding).
+- Window: `a_stash_row_draws_its_message_and_asks_what_it_changed_on_its_base` fails
+  with a stash compared against itself, with `Pair` keying rows as commits, and with the
+  stash's row drawn without its message.
+
+Every walk in C6 is paged to its end over fixtures of eight to twenty-odd commits,
+git run in the same fixture at test time (`rev-list --branches --remotes --tags HEAD`,
+`log --decorate=full --format=%H%x1f%D`, `stash list --format=…`, `rev-list
+--date-order`).
+
+Decided here, batched for the user (not approved):
+
+- **Looking ahead, 4,096 commits.** A stash's row is at its date when the walk meets its
+  base within 4,096 commits of that date (or before passing the base's date); otherwise
+  directly above its base. R4.2's "merged by its commit time" is therefore exact only
+  for a near base; the QA brief's "at its date or directly above its base" is what holds
+  for a deep one. The alternative — a reachability walk per stash from the seeds — costs
+  a whole-history walk for every stash whose base is unreachable (a deleted branch's,
+  the common case Fork's rule exists for).
+- **Each stash keeps its own lane down to its base**, never joining a line already
+  descending to it, so several stashes on one commit each take a lane (Fork's
+  screenshots), where a commit's line joins at once.
+- **A stash commit some ref reaches is a commit's row and no stash's**, labelled by that
+  ref; its index and untracked commits are then rows too, as git walks them.
+- **A stash's row's subject is the stash list's message, its date the stash commit's
+  author date; it is placed by its committer date**, the walk's own order.
+- **Labels are in the snapshot's order** (local branches, remote-tracking refs, tags,
+  each by name); a row carries full names, its kind and whether it is current. Upstream
+  pairs for compact labels (R5.2) are phase 07's to read from the snapshot.
+- **A stash's row is drawn as a commit row with its message as subject** until phase
+  07's chip, and selected it asks the stash commit's changes against its first parent;
+  `stash.showIncludeUntracked` (R6.2) is not read yet.
+
 ## 2026-10-06 — phase 04 QA
 
 Fresh reviewers (`qa-checklist` READY, `test-coverage-auditor`,

@@ -2,7 +2,7 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 04 done (slim rows), QA adjudicated and confirmed findings fixed; phase 05 next.** Integration branch
+**Status: phase 05 implemented (the history from every ref, labelled, with stash rows), full gate green, awaiting its QA; phase 06 next. The application still walks from `HEAD`: the engine's `HistoryRequest::from_refs` is wired by phase 06.** Integration branch
 `feature/refs-and-status`, in the worktree `.claude/worktrees/refs-and-status`,
 packet mode.
 
@@ -78,8 +78,26 @@ that most constrain implementation:
   hasher (the fixed-key SipHash key would let a crafted repository collide buckets) and
   no chunked index.
 
+- For the user's end-of-packet batch (phase 05; not decided): a stash's base is found by
+  looking ahead at most 4,096 commits in the walk when the stash's date comes up — beyond
+  that the row is drawn directly above its base rather than at its date; each stash keeps
+  its own lane down to its base; a stash commit a ref reaches is a commit's row and no
+  stash's; a stash's subject is the stash list's message, its date the author date, its
+  place by committer date; labels in the snapshot's order. Detail and the alternative in
+  progress.md.
+- Bench hygiene (phase 05): a `--shared` scratch clone's `git stash` freshened the bench
+  pack's mtime through alternates, and a plain `git status` on the bench moved its `.git`
+  directory's mtime; no content changed (progress.md). Later phases: scratch clones with
+  no alternates, and `GIT_OPTIONAL_LOCKS=0` for any `git` run on the bench.
+
 ## Handed to phase 06
 
+- Open the history from the snapshot: `Scroll::page` (`crates/cairn-app/src/worker/pool.rs`)
+  builds `HistoryRequest::from_head(rows)` today; build `HistoryRequest::from_refs(&snapshot,
+  rows)` from the refs read on the history thread, so the walk, its labels and its stash rows
+  come from the snapshot the sidebar shows. `from_head`'s unborn-`HEAD` page
+  (`pool.rs::no_walk`) has no counterpart: a snapshot with no ref and an unborn `HEAD` walks
+  nothing and answers an empty, complete page.
 - When a refresh reopens the history, build the new `History` pre-sized from the old
   one's author count — a `History::with_author_capacity(old.author_count())`, with a
   model test — so a reopen does not rehash its way back up through every doubling of
@@ -174,6 +192,28 @@ Phase 04 (`docs/systems/history-graph.md`, "What a row keeps"):
   `find` mode reports `History::retained` and asserts C16's 64 MiB (`CAIRN_C16_MIB`).
   C15's walk now reads parents from the details query.
 
+Phase 05 (`docs/systems/history-graph.md`, "From every ref, labelled, with stash rows"):
+
+- `cairn-model`: `RowContent::Stash(StashSummary)` and `RowId::Stash(Oid)` (the stash
+  commit); `StashSummary { id, index, base, message, author_name, author_time }`
+  (`as_commit`); `HistoryRow::labels() -> RowLabels` (`is_head`, `len`, `is_empty`, `iter`
+  of `Label { name, kind: RefKind, current }`; `src/row_labels.rs`); `RowsPage::push_labelled`,
+  `RowsPage::push_stash(GraphRow, PagedStash)`; `RetainedBytes::{labels, stashes}`;
+  `LaneAssigner::push_stash(id, base)`. A kept row's last byte is its flags (stash, `HEAD`,
+  labelled); labels and stashes are side stores found by row number. The test-only
+  `NotACommit` variants are gone.
+- `cairn-git`: `HistoryRequest::from_refs(&RefsSnapshot, limit)`,
+  `HistoryRequest::with_stash_lookahead`, `HistorySession::commits_walked`; private
+  `src/history/seeds.rs` (`RefSeeds`, `Decoration`, `resolve`) and `src/history/stream.rs`
+  (`Stream`, `LOOKAHEAD`); the cursor carries the decoration. `HistoryPage::walked` counts
+  rows laid out; `decoded` counts commits read.
+- `cairn-app`: `selection::comparison_of(RowId::Stash(s)) = Comparison::Commit(s)`; `Pair`
+  has `base_row` and `tip_row`; the window draws a stash's row with `StashSummary::as_commit`.
+- `cairn-ui`: nothing yet — `RowRender` carries no labels; phase 07 reads
+  `HistoryRow::labels` in `render_of` (or copies them into `RowRender`) to draw chips.
+- Tests: `crates/cairn-git/tests/every_ref.rs` (C6, and the `#[ignore]`d C11 reporter
+  `measures_the_first_page_from_every_ref`); the C15/C16 reporter's seed `snapshot`.
+
 ## Validation status
 
 | Phase | Status |
@@ -182,7 +222,7 @@ Phase 04 (`docs/systems/history-graph.md`, "What a row keeps"):
 | 02 status engine | done: C4, C5, C13 pass (host git, 2.30.9, 2.32.7); C11 status numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
 | 03 compact rows | implemented: C15 passes (equivalence over the fixtures, the Cairn checkout and every ref of the bench; find 2.26 s against 2.50 s before); K = 64, derived at draw time; numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
 | 04 slim rows | done: C16 passes (comparisons pinned at `4205d5d` over crafted fixtures and the Cairn checkout; 52.6 MiB retained for all of rust-lang/rust from every ref, capacity counted, against 64 MiB; no kept row owns a heap allocation); C15 still passes (equivalence on the bench, find 2.21 s); RR1 closed; numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
-| 05 history from every ref | not started |
+| 05 history from every ref | implemented: C6 passes (walked commits = `git rev-list --branches --remotes --tags HEAD` over whole walks, labels = `git log --decorate=full`, stash rows with and without `--include-untracked`, assigner lane and edge tests); C11 first page from every ref 7.3 ms (8.6 ms with the snapshot read) beside `HEAD`'s 7.7 ms, worst stash look-ahead 21.6 ms; C16 52.67 MiB from the snapshot; C15 equivalence holds; the app still walks from `HEAD`; full gate green; QA pending |
 | 06 worker and refresh | not started |
 | 07 labels and toolbar | not started |
 | 08 sidebar | not started |

@@ -3,6 +3,58 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-06 — phase 01 QA
+
+Four fresh reviewers (`qa-checklist`, `test-coverage-auditor`,
+`destructive-ops-reviewer`, `gate-integrity-reviewer`); a fresh `qa-confirm`
+adjudicated. Confirmed findings fixed:
+
+- GI1, TC10: the reftable twin reads each test only to its closing brace, through a
+  matcher (`required_skip_violations`) with a self-test spelling the deleted SKIPPED
+  line, the requirement moved to the next test, and an idle `if .. {}`.
+- TC1, TC16: the cancelled ahead/behind test cancels inside a 2,000-commit frontier
+  paint and requires reads to stop there (`AheadBehindCancelled` now carries
+  `commits_read`); it fails with `Polled`'s poll removed (4,023 commits read). A cancel
+  between two branches answers `branches: 1`.
+- TC2: a loose chain of three tags, peeled object by object; a one-hop peel fails it.
+- GI3, GI4, GI6: the setting test's git half skips aloud and is required too; the gate's
+  note and `docs/qa-gate.md` name the probe and its twin; "exactly as the test does"
+  reworded.
+- TC3, TC4, TC5, TC6, TC8, TC9, TC12, TC13, TC14, TC15: the retarget is the only change
+  between two reads; chains at and past git's depth; a cancel at every poll of a refs
+  query, with the poll count exact; exact costs on a small fixture; a damaged stash
+  reflog; ahead/behind in a shallow clone; version 0 with `reftable` and a linked
+  worktree of a reftable repository; a merge on the upstream side; the one global key
+  read pinned locally in fixtures; the vacuous worktree claim dropped.
+- QC-F3: the upstream pass polls the cancel per branch.
+- QC-F5: committer dates running against the graph — gix's count equals git's there.
+- Probes, both confirmed and fixed against git: QC-F1, a repository with no `config`
+  file opens as git and gix open it; QC-F4, `HEAD` through a symbolic branch is the end
+  of the chain, unborn when that end is missing (git's `symbolic-ref` follows every
+  level). Found while fixing TC4: `%(symref)` names the END of a symbolic chain, and
+  git reads at most five refs, the ref itself included — the snapshot read one hop too
+  many and named the first hop; both fixed, pinned against git.
+- Found while fixing TC8: git numbers a stash list so that an unparseable reflog line
+  takes no number while a missing commit keeps its own; the snapshot gave the bad line
+  a number; fixed, and the oracle now reads git's own `%gd`.
+- DO1, DO2, QC-F2: docs say what `ref_tips` compares, that a gix configuration re-read
+  restores the namespace, and that gix's open reads `HEAD` before the refusal.
+
+Dismissed, with the adjudicator's reasons:
+
+- GI2: an inherited residual already stated in the root CLAUDE.md, tracked by open
+  issue #58, whose generic fix covers this probe too.
+- GI5: CI's `test-full` runs the gate's probe, matching the fsmonitor precedent.
+- GI7, TC11, and QC-F7's floor half: every floor-run pattern the twin misses fails
+  loudly (a floor git cannot make reftable, so the required test goes red), never
+  silently.
+- DO3: the gitoxide-mutation twin already scans these files, and they only read.
+- DO4: `ref_tips` was uncancellable before, runs off the UI thread, costs 28.4 ms at
+  10,000 refs, and phase 06 replaces it.
+- TC7: a deliberate two-read determinism check.
+
+For the user's end batch: QC-F6 (invalid ref names not counted), in `state.md`.
+
 ## 2026-10-06 — phase 01: the refs engine
 
 The refs snapshot, upstreams, the stash list and ahead/behind in `cairn-git`, the

@@ -64,7 +64,8 @@ are later packets'.
   tag chain is followed to its end; a tag that peels to something other than a
   commit is listed, and identifies no commit.
 - R1.3 A symbolic ref (`refs/remotes/origin/HEAD`) is never peeled into its
-  target's name: it is listed as itself, naming the ref it points at. A symbolic
+  target's name: it is listed as itself, naming the ref it points at (the end of its
+  chain, as `%(symref)` prints it). A symbolic
   ref whose target does not exist is not listed, as `git for-each-ref` does not
   list it. A ref whose name is invalid is skipped, as git skips it; a ref that
   cannot be read is skipped and counted, never a failure of the whole snapshot.

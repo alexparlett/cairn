@@ -44,6 +44,11 @@ that most constrain implementation:
 
 ## Open questions
 
+- For the user's end-of-packet batch (QA finding QC-F6, phase 01): a ref whose name git
+  calls invalid (`refs/heads/bad..name`) is skipped silently, as gix skips it, and not
+  counted in `RefsSnapshot::unreadable`, though git warns `ignoring ref with broken name`.
+  Kept as built; whether it should be counted is the user's call.
+
 - How `status.showUntrackedFiles` is read as git reads it (L2) — phase 02; a new
   `git config` porcelain read needs the user.
 - The Refresh chord per platform (Fork: ⌘R on macOS, F5 on Windows) — phase 06,
@@ -80,7 +85,7 @@ Phase 01 (`docs/systems/refs.md` is the as-built account):
 
 | Phase | Status |
 | --- | --- |
-| 01 refs engine | done: C1, C2, C3 pass; C11 refs numbers in progress.md; full gate green |
+| 01 refs engine | done: C1, C2, C3 pass; C11 refs numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
 | 02 status engine | not started |
 | 03 compact rows | not started |
 | 04 slim rows | not started |

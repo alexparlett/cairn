@@ -65,7 +65,7 @@ repository, named on the command line.
 | Path | What lives there |
 | --- | --- |
 | `docs/` | `qa-gate.md` (QA contract), `design/` intent, `prd/` per-packet specs, `systems/` as-built, `work/` in-flight dirs, `research/` evidence (deferred work goes to GitHub issues; `backlog/` is the no-remote fallback) — findings promote research → brainstorm → design/prd → systems (contract: `docs/CLAUDE.md`) |
-| `crates/cairn-model/` | The vocabulary crossing the seam: `Oid`, `RefName`, `RefsSnapshot` (refs, `HEAD`, the stash list, upstreams; with `AheadBehind`), `WorkingTreeStatus` (per path what `git status` lists — a staged and an unstaged change, a conflict's kind, a submodule's state, or untracked — or that git cannot read the index), `CommitSummary`, `CommitDetails`, `ChangeSet`, the `Confirmed` token. Plain data, plus the pure algorithms that produce some of it — the layout one (`LaneAssigner`, whose `GraphRow` keeps only a commit's lane and the lane changes at it, every `LaneAssigner::SNAPSHOT_EVERY`th row a lane snapshot, and `row_edges`, which derives the edges a drawn row crosses; `docs/systems/history-graph.md`) and the diff model (`TextDiff` and the hunk, row and patch projections of it, `ShownDiff` — one answer prepared for the views, built on the worker — `Selection`, `emit_patch` and the reference `apply_patch`; `docs/systems/diff.md`) — and `Secret`, the one type that holds a credential. Depends on nothing but `zeroize` (for that type) — not `gix`, not `freya`, not the other crates. |
+| `crates/cairn-model/` | The vocabulary crossing the seam: `Oid`, `RefName`, `RefsSnapshot` (refs, `HEAD`, the stash list, upstreams; with `AheadBehind`), `WorkingTreeStatus` (per path what `git status` lists — a staged and an unstaged change, a conflict's kind, a submodule's state, or untracked — or that git cannot read the index), `History` (the rows a reader keeps, slim and owning no heap allocation of their own — an id, a parent count, a subject and an author held in the history's shared text store and author table, a date, a lane and its lane changes — in stores that grow in fixed chunks, never by doubling (`src/chunked_store.rs`); a page arrives as a `RowsPage` and a row is read as a `HistoryRow`), `CommitSummary` (a row as the list draws it), `CommitDetails`, `ChangeSet`, the `Confirmed` token. Plain data, plus the pure algorithms that produce some of it — the layout one (`LaneAssigner`, whose `GraphRow` keeps only a commit's lane and the lane changes at it, every `LaneAssigner::SNAPSHOT_EVERY`th row a lane snapshot, and `row_edges`, which derives the edges a drawn row crosses from any `LaidOutRows` — a slice of `GraphRow`s or a `History`; `docs/systems/history-graph.md`) and the diff model (`TextDiff` and the hunk, row and patch projections of it, `ShownDiff` — one answer prepared for the views, built on the worker — `Selection`, `emit_patch` and the reference `apply_patch`; `docs/systems/diff.md`) — and `Secret`, the one type that holds a credential. Depends on nothing but `zeroize` (for that type) — not `gix`, not `freya`, not the other crates. |
 | `crates/cairn-git/` | The repository engine: gitoxide-backed reads — the history walk, the refs snapshot and each branch's upstream (`src/refs.rs`, `src/refs/`), ahead and behind (`src/ahead_behind.rs`), the ref-storage refusal at open (`src/ref_storage.rs`; `docs/systems/refs.md`), the working tree's status (`src/status.rs`, asked of `git status` through `src/reads/`; `docs/systems/status.md`), and under `src/diff/` the queries answering what a commit changed (asked of `git diff-tree` through `src/reads/`), what one file's change is, and one path's working-tree diff — and under `src/ops/` every write, delegating to the `git` binary per design decision D1. Every `git` process is built in the crate-private `src/process/` — `GitBinary` (startup discovery and the 2.30 floor), `GitEnvironment` (the explicitly built environment, the only place a `Command` is built), `Askpass` (where git and ssh are sent for a secret), the runner, which streams and can kill a process, and each repository's registry of running invocations and its command log — and an invocation is typed a read or a write, a write needing the `WriteAuthority` only `ops/` can construct. `src/ops/` holds `fetch`, the first verb (not destructive, so it takes no `Confirmed`), and the confirmation-seal placeholder, and re-exports what the application needs of `process/`; `src/reads/` is where each read `git` answers lives, one named function each: today `changes`, `git diff-tree` for the changes query, whose rename and copy pairs gix and git disagree on; `patches`, `git diff-tree -p` for the content query's changed lines and function context, whose line diff gix and git disagree on too; `diff_attributes`, `git check-attr`, which says whether a path's diff driver names its own algorithm; `working_tree_patch`, one path's staged, unstaged or untracked diff (`git diff-index --cached`, `git diff-files`, `git diff --no-index`), which reads the working tree through git so its side is git's form of the file; `fetch_settings`, `git config` in query form, what a fetch of a remote will read, for fetch's refspec check (`src/ops/refspec_policy.rs`), which must decide on exactly what the fetch's own git reads; and `status`, `git status --porcelain=v2 -z` — read again with `--untracked-files=all` only where the first answer collapsed an untracked directory, so git itself reads `status.showUntrackedFiles` — the working tree's status, which gix answers differently wherever status is hard. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
 | `crates/cairn-askpass/` | The askpass helper binary `git` and `ssh` run to ask for a secret, and the library half — the `Channel` the application listens on. Links `cairn-model` and `zeroize` only: it runs in a process holding a plaintext secret. Never names the engine, the toolkit or a logging crate. |
 | `crates/cairn-ui/` | Freya components. Render `cairn-model` values, report intent through `EventHandler` props. `src/accelerators.rs` is the accelerator table, the one render file that names a modifier; `src/diff_view.rs` the diff view, drawing `src/unified_rows.rs` or `src/side_by_side_rows.rs` (each from `src/diff_row_parts.rs`), `src/diff_notice.rs` what stands in place of rows, `src/changes_list.rs` the Changes tab's filtered file list and summary, `src/diff_header.rs` its bar (whose glyphs `src/toggle_glyphs.rs` draws), `src/columns.rs` the terminal column widths tabs stop by, `src/diff_settings.rs` the diff settings — context, ignore-whitespace and side-by-side shared by every diff view, Entire File the Changes tab's alone, `src/diff_palette.rs` the diff's colour tokens and typeface, `src/commit_tab.rs` the Commit tab and `src/expansion.rs` where each file opened in place under its row falls in that tab's one list. Must never depend on `gix` or `cairn-git`, and must never touch the filesystem. |
@@ -729,14 +729,15 @@ Project invariants:
     ever added, reviewing what else that file grows is the reviewer's.
   - *Whether work bounded by the VIEWPORT is bounded by the history anyway.*
     `cairn_ui::HistoryList`'s `index_of` keeps a cursor hint and falls back to
-    `rows.iter().position(..)` when it misses — a scan of every loaded row,
+    `History::position` when it misses — a scan of every loaded row's id,
     inside the key handler, on the UI thread. It is the correctness fallback by
     design and unreachable while rows only append; the row that arrives ABOVE
     another is what enters it; no row kind does today, and there is to be no
     working-tree row (`docs/design/history-graph.md`). Named
     here rather than left implicit, because a token scan cannot tell this
     iteration from any other. Its sibling: a Commit-tab parent link finds its
-    parent with `selection::loaded_row`, a scan of every loaded row, once per
+    parent with `selection::loaded_row` (`History::position`), a scan of every
+    loaded row's id, once per
     press on the UI thread, and so does a second commit pressed with the
     extending chord (`selection::extend`, to find which of the two rows is lower)
     — and the Commit tab builds its header (proportional
@@ -757,16 +758,21 @@ Project invariants:
     thread in a lane of its own (`Request::FilterFiles`), never on the UI thread;
     the window keeps the indices it answers (`file_filter.rs`), and the list reads
     the chosen file's index from `DiffState` rather than searching the change set
-    for it. A history row's edges are derived as the list builds it
-    (`cairn_model::row_edges`, in `HistoryList`'s `build_row`): one lane snapshot
-    copied and advanced through at most `LaneAssigner::SNAPSHOT_EVERY - 1` rows of
-    lane changes per drawn row, bounded by the snapshot interval, never by the
-    history (measured in `docs/systems/history-graph.md`, "What a row keeps").
+    for it. A history row is read through the history's stores as the list builds
+    it (`render_of`, in `HistoryList`'s `build_row`): its subject and author copied
+    out, and its edges derived — one lane snapshot copied and advanced through at
+    most `LaneAssigner::SNAPSHOT_EVERY - 1` rows of lane changes per drawn row,
+    bounded by the snapshot interval, never by the history (measured in
+    `docs/systems/history-graph.md`, "What a row keeps"). A page of rows is
+    appended to the history where pages were applied before (`session::apply`,
+    `History::append`): a copy proportional to the page.
     Two frees still happen on the UI thread rather than through
     `Request::Retire`: `crates/cairn-app/src/session.rs`'s `reload_if`, when a
-    fetch moved refs, clears every loaded history row before reopening the
-    history — the one history-sized free on the UI thread, inherited from the
-    history view and not retired to a worker; and `Updates::next`
+    fetch moved refs, replaces the loaded `History` with an empty one before
+    reopening the history — the one history-sized free on the UI thread, inherited
+    from the history view and not retired to a worker, though since rows were
+    slimmed it frees the history's chunks (a few hundred for all of
+    rust-lang/rust) rather than an allocation or more for every row; and `Updates::next`
     (`crates/cairn-app/src/worker/pool.rs`) drops each superseded answer that
     `Update::into_retired` does not retire — a page of rows, a filter's index
     list, a failure — each bounded by a page or by the change set's file list.

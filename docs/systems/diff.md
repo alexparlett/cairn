@@ -1951,9 +1951,11 @@ each with a name, an email and a `Timestamp` that keeps its own offset; the whol
 message, with `subject()` and `body()` reading it; and the parents in git's order,
 none for a shallow clone's boundary commit, whose parents the clone lacks — read from
 the shallow file by `crates/cairn-git/src/shallow.rs`, as the history walk reads it.
-It sits beside `CommitSummary` rather than replacing it — a history row draws a
-subject and one name, and carrying a committer, an offset and a whole message per
-row of a ten-year monorepo would be paying for what no row draws.
+It sits beside the history's rows rather than replacing them — a kept row holds a
+subject, one name and a parent count (`docs/systems/history-graph.md`, "What a row
+keeps"), and carrying every parent, both addresses, a committer, an offset and a whole
+message per row of a ten-year monorepo would be paying for what no row draws; the
+Commit tab reads all of them from here.
 `Timestamp::offset` spells the offset the way git writes it, `+0530` or `-0800`,
 pinned by `an_offset_reads_the_way_git_writes_it`.
 

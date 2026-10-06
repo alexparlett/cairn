@@ -43,17 +43,24 @@ One commit crosses four crates and changes shape three times.
    keeps" below). It is pure — no `gix`, no I/O, no clock.
 3. **The session pairs the picture with a commit.** Only once the assigner has
    *evicted* a row (so nothing later can repaint it) does the session read that
-   commit's object and build a `CommitSummary`. The result is a `HistoryRow`:
-   `content: RowContent::Commit(..)` plus `graph: GraphRow`.
-4. **The worker hands a page across as owned values.**
+   commit's object, for its subject, its author's name, its author date and how
+   many parents the walk read for it. A page is a `RowsPage`
+   (`crates/cairn-model/src/rows_page.rs`): its rows, its own text, the authors it
+   names (each once), its lane changes and its snapshots, in flat vectors.
+4. **The worker hands a page across, and the window appends it.**
    `crates/cairn-app/src/worker/` sends `Update::Rows { rows, complete }` to the
-   window; `crates/cairn-ui/src/history_list.rs` draws the rows the viewport
-   shows, deriving each one's edges as it builds it (`cairn_model::row_edges`).
+   window, which appends it to its `History` (`session::apply`, where pages were
+   applied before); `crates/cairn-ui/src/history_list.rs` draws the rows the
+   viewport shows, reading each through the history and deriving its edges as it
+   builds it.
 
-No FIELD is dropped in transit. `Oid`, parents, subject, author name and email,
-and the author timestamp arrive at `CommitRow` as the engine read them; the lane
-index arrives as the assigner emitted it, and the segments `graph_geometry` draws
-are exactly the ones the assigner drew for that row, derived ("What a row keeps").
+What the list draws arrives as the engine read it: the subject, the author's name
+and the author timestamp, the id, and whether the commit has more than one parent;
+the lane index arrives as the assigner emitted it, and the segments
+`graph_geometry` draws are exactly the ones the assigner drew for that row,
+derived ("What a row keeps"). A row keeps nothing else: a commit's parents and its
+author's address are the details query's (`Repository::commit_details`), which is
+where the Commit tab reads them.
 
 One thing a line CAN lose is its upper half. A backward line — a parent drawn
 above its child — is repainted onto rows the assigner still holds, so a skew
@@ -131,6 +138,29 @@ parent's line is placed in a lane free across those rows; a row's changes and
 snapshot are made final when it leaves the window, from the lines crossing into it
 as of then, so a repaint that reached it is in them.
 
+**A kept row is slim** (PRD R4.7). The window keeps its rows in a `History`
+(`crates/cairn-model/src/history.rs`), and a kept row is 72 bytes of plain data:
+its commit's id once, a parent count (saturating at `u16::MAX`: only whether it is
+more than one is drawn), its subject as a span of the history's text store, its
+author as a number in the history's author table, its author date, its lane, the
+span of its lane changes in the history's lane-change store, and — on a row with
+one — the number of its lane snapshot in the history's snapshot store. The row
+type is `Copy`, which a type owning a `String`, a `Vec` or a `Box` cannot be, so
+no kept row owns a heap allocation (a compile-time assertion beside it). Every
+store grows in fixed chunks, never by doubling (`crates/cairn-model/src/chunked_store.rs`):
+a chunk is allocated once at its full size and never moves, a run of text or of
+lane changes never splits across two, a run longer than a chunk gets one of its
+own length, and the list of chunks grows by one. Rows sit 1,024 to a chunk, text
+in 64 KiB chunks, lane changes 4,096 to a chunk. The author table names each
+author once across every page, found by a hash of the name with names that hash
+alike chained, so a page that brings only known authors adds none. A page is
+copied into the stores where pages were applied before (`History::append`), and
+a row is read through the history (`History::row`, a `HistoryRow` view): its id,
+lane and changes without copying anything, its content — what the list draws —
+copied out of the stores, and its edges derived. `History::retained` counts what
+the stores hold, by capacity: every chunk whole, the last one's unused room
+included.
+
 `row_edges(rows, index)` (`crates/cairn-model/src/edge_derivation.rs`) derives
 what a row draws: it finds the nearest row at or above `index` that carries a
 snapshot, at most `LaneAssigner::MAX_SNAPSHOT_EVERY` rows up, advances it through
@@ -141,7 +171,9 @@ out-of-order line by the row it ends at and its rank there. It answers `None` pa
 the end or with no snapshot within reach, which never happens to rows a
 `LaneAssigner` laid out and a reader kept from the first it was handed. The work is
 one snapshot copied and at most `K - 1` rows of changes, bounded by the interval,
-never by the history.
+never by the history. It reads rows through `LaidOutRows`, which a slice of
+`GraphRow`s and a `History` both implement, so the same derivation draws the
+assigner's own output and the window's kept rows.
 
 The derived edges are the edges the assigner drew before rows were compacted, row
 for row and in order, repaints included. The oracle is that assigner itself, kept
@@ -182,8 +214,9 @@ Those seven repositories had at most 2,896 commits; on rust-lang/rust in
 commit-time order 105-160 edge segments stay open per row, and a row that kept them
 cost 4.3-6.3 KB, 89% of it edge segments
 (`docs/research/refs-and-status/deep-find-measured.md`). With compact rows the same
-history's lane changes and snapshots come to 18.6 MiB, about 56 B a row, and a whole
-retained row to about 509 B (Known limits).
+history's lane changes and snapshots came to 18.6 MiB, about 56 B a row, and a whole
+retained row to about 509 B; with slim rows a whole retained row, with the text and
+lane changes it reads, is about 159 B (Known limits).
 Evidence and method for the seven:
 `docs/research/history-graph/scroll-memory-model.md` Part D. Earlier, much
 larger figures in this packet's history described a synthetic fixture and not
@@ -403,16 +436,19 @@ reader to scroll. Pinned by
 
 ## The view (`cairn-ui`)
 
-`HistoryList` takes the rows as a `State` HANDLE and a per-row builder, so
+`HistoryList` takes the `History` as a `State` HANDLE and a per-row builder, so
 nothing copies the history to draw it. It renders through
 `VirtualScrollView::new_with_data_controlled`, so per-render work is bounded by
 the viewport rather than by the history; the only per-render read proportional
 to the history is its `len()`. The list is keyed by `RowId`, so a row arriving
 above another neither moves the selection nor rebuilds the rows below it. Each
-row it builds has its edges derived there (`row_edges` in `build_row`), reading at
-most a snapshot interval of rows above it, and handed to the builder as
-`RowRender::graph`, which `CommitRow` draws; a row with no snapshot within reach,
-which the assigner never produces, would draw its node alone.
+row it builds is read through the history there (`render_of` in `build_row`): its
+content, copied out of the stores, and its edges, derived from at most a snapshot
+interval of rows above it. The builder is handed those two and nothing else of the
+row — `RowRender::content` and `RowRender::graph`, which `CommitRow` draws; a row
+with no snapshot within reach, which the assigner never produces, would draw its
+node alone. Reading a row is constant work per drawn row, bounded by the snapshot
+interval and the row's own text, never by the history.
 
 `RowContent` is read by matching, with no wildcard arm — `crates/cairn-app/src/window.rs`
 is the consumer, and because the enum is not `#[non_exhaustive]` the next kind
@@ -426,7 +462,7 @@ import — are rejected outside `cairn-model` by
 
 - **Columns** (Fork's four): graph and subject share the first, then author,
   abbreviated id, and `Date (UTC)`. The date column is labelled UTC because
-  `CommitSummary` carries the author time's seconds and not its offset, and
+  a kept row holds the author time's seconds and not its offset, and
   converting to the reader's local time needs a timezone database, which is a
   dependency decision nobody has taken. `utc_minutes`
   (`crates/cairn-ui/src/date_text.rs`, a private module) is Hinnant's
@@ -484,10 +520,17 @@ import — are rejected outside `cairn-model` by
 | The history list renders through a virtualizing view | `a_history_sized_list_renders_through_a_virtualizing_view` |
 | That view builds one viewport of rows at 1,000 and at 100,000 | `only_a_viewport_of_rows_is_built_however_long_the_history` |
 | Every row draws the edges the assigner drew before rows were compacted | `every_row_draws_the_edges_the_assigner_retained_before_compaction`, `the_cairn_checkouts_rows_draw_what_the_assigner_drew_before_compaction`, `each_cold_page_and_resumed_session_draws_on_its_own_what_the_assigner_drew_for_it`, `rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew` |
+| Every row draws the subject, author, date, short id and merge marker it drew before rows were slimmed | `every_crafted_row_draws_what_it_drew_before_rows_were_slimmed`, `every_row_of_the_cairn_checkout_draws_what_it_drew_before_rows_were_slimmed`, `every_row_of_a_braided_history_draws_what_git_prints` (`crates/cairn-git/tests/slim_rows.rs`), `every_row_draws_what_it_drew_before_rows_were_slimmed` (`crates/cairn-ui/tests/drawn_rows.rs`), `the_cairn_checkouts_rows_draw_what_they_drew_before_rows_were_slimmed` (`crates/cairn-app/src/window.rs`) |
+| No kept row owns a heap allocation; a history's stores grow in chunks | the `Copy` assertion beside `StoredRow` in `crates/cairn-model/src/history.rs`, `a_kept_row_is_seventy_two_bytes`, `appending_ten_thousand_rows_allocates_per_chunk_never_per_row` and `reading_a_rows_identity_lane_and_changes_allocates_nothing` (`crates/cairn-model/tests/history_allocations.rs`), and the store tests in `crates/cairn-model/src/chunked_store.rs` |
+| Each author is named once; a subject reads back exactly | `a_page_of_new_authors_and_a_page_of_known_ones_both_draw_and_each_is_named_once`, `authors_whose_keys_collide_are_told_apart_by_name`, `an_empty_a_non_ascii_and_a_very_long_subject_read_back_exactly` (`crates/cairn-model/src/history.rs`) |
 
 The first five live in `crates/cairn-guards/tests/invariants.rs`; the sixth is a
-headless component test in `crates/cairn-ui/tests/history_list.rs`; the last are
-the model, engine and list tests named under "What a row keeps". The four that scan
+headless component test in `crates/cairn-ui/tests/history_list.rs`; the rest are
+the model, engine, list and window tests named under "What a row keeps". The
+slimmed rows' comparisons hold them to tables of what the rows drew before: each
+table was read from the old rows — their full parents and their author's address
+still on them — at commit `4205d5d`, the one before rows were slimmed, and is
+checked beside a live oracle (`git log` and the details query). The four that scan
 SOURCE each assert a nonzero scanned-file count per directory, so a renamed
 directory reddens rather than passing on an empty walk — the waiting and
 virtualization twins inline, and the seal and row-content twins through
@@ -544,12 +587,13 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
   100k-commit repository costs nothing until it is scrolled; scrolled rows are
   retained and nothing evicts them. A row no longer keeps the edges crossing it,
   which on rust-lang/rust cost 4.3-6.3 KB a row and 1.4 GiB to its oldest commit
-  (`docs/research/refs-and-status/deep-find-measured.md`); scrolling or finding to
-  that commit from every ref now retains 167.9 MiB, about 509 B a row, counted by
-  capacity: the row vector (108 MiB, 216 B a row and its growth slack), text
-  (27 MiB), parent ids (14 MiB) and lane changes and snapshots (18.6 MiB).
-  Process `RssAnon` grows by 186 MiB. Still linear in rows scrolled, and nothing
-  evicts: tracked as issue #4.
+  (`docs/research/refs-and-status/deep-find-measured.md`), nor its parents, its
+  author's address or a heap allocation of its own; scrolling or finding to that
+  commit from every ref (345,545 rows) retains 52.6 MiB, about 159 B a row,
+  counted by capacity with every chunk whole: rows 23.8 MiB (72 B each), text
+  16.0 MiB, lane changes 12.3 MiB (16 B each), snapshots 0.25 MiB and the author
+  table with its index 0.32 MiB (8,424 authors). Process `RssAnon` grows by
+  83 MiB. Still linear in rows scrolled, and nothing evicts: tracked as issue #4.
 - **A live scroll's walk retains every commit it visited.** The rows above
   are the application's row vector; separately, gitoxide's walk keeps a
   `HashSet<ObjectId>` of every commit visited (`gix-traverse`'s
@@ -562,10 +606,11 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
   (counting is a full walk) and no way to build a cursor from an offset, so a
   scrollbar drag has no answer; progressive loading is the model, as it is in
   Fork and Sourcetree. Tracked as issue #5.
-- **`GraphRow` still keys a row by `Oid`.** `RowContent` and `RowId` are total
-  over rows that are not commits, but the assigner's own output is not — whoever
-  lays out the first row that is not a commit meets that first (a stash row,
-  `docs/prd/refs-and-status.md` R4.4).
+- **`GraphRow` and the kept row still key a row by `Oid`.** `RowContent` and
+  `RowId` are total over rows that are not commits, but the assigner's own output
+  is not, and a kept row (`History`'s) holds a commit's id and draws a commit's
+  content — whoever lays out the first row that is not a commit gives both a kind
+  first (a stash row, `docs/prd/refs-and-status.md` R4.4).
 - **The view is `HEAD`'s ancestry, not the repository's.** `from_head`, not
   `from_commits`, so nothing shows a branch that `HEAD` cannot reach.
   `HistoryRequest::from_commits` takes an unbounded tip set; it is resolved once

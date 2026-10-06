@@ -2,7 +2,7 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 03 done (compact rows), QA adjudicated and confirmed findings fixed; phase 04 next.** Integration branch
+**Status: phase 04 implemented (slim rows), awaiting its QA; phase 05 after.** Integration branch
 `feature/refs-and-status`, in the worktree `.claude/worktrees/refs-and-status`,
 packet mode.
 
@@ -63,6 +63,14 @@ that most constrain implementation:
   from `fork-dev/Docs`' shortcut lists.
 - C11's first-page bar is written as 200 ms because history-graph's A7 has no
   number (L12); the user may revise it at the merge bar.
+
+- For the user's end-of-packet batch (phase 04; not decided): authors are numbered on
+  the window's side — a page names its own authors once and `History::append` adds only
+  those the history lacks — where R4.7's letter has the worker send only authors new to
+  the history; a parent count saturates at 65,535; a history past its stores' 32-bit
+  addresses answers `HistoryFull`; and reading rows through the stores costs about
+  0.06 ms a frame more at the median (1.31 → 1.37 ms, `window_check`), judged not to be
+  the stopping rule's "costs a frame measurably". Numbers in progress.md.
 
 ## New modules and interfaces
 
@@ -125,9 +133,32 @@ Phase 03 (`docs/systems/history-graph.md`, "What a row keeps"):
   and `crates/cairn-ui/tests/history_list.rs`; never edit it. The `#[ignore]`d reporter
   `measures_compact_rows_over_a_named_repository` (modes `find`, `equivalence`, `derive`).
 
-Deferred to phase 04 (phase 03 QA, RR1): `HistoryList`'s `RowRender` clones the whole
-`HistoryRow` for every row it builds, while `window.rs` reads only its `content` and
-`graph`; phase 04, which reshapes the row, passes only what is read.
+Phase 04 (`docs/systems/history-graph.md`, "What a row keeps"):
+
+- `cairn-model`: `History` (`new`, `len`, `row`, `rows`, `id`, `position`, `append`,
+  `author_count`, `retained`), `HistoryRow<'h>` (a view: `index`, `id`, `lane`,
+  `changes`, `has_snapshot`, `lanes_named`, `edges`, `content`), `HistoryFull`,
+  `RetainedBytes` (`total`); `RowsPage` (`new`, `push(GraphRow, PagedCommit)`, `len`,
+  `ids`, `lanes_named`) and `PagedCommit { parents, subject, author, author_time }`
+  (`src/rows_page.rs`); the chunked stores (`src/chunked_store.rs`, crate-private);
+  `LaidOutRows`/`LaidOutRow` — `row_edges` takes any `LaidOutRows` (a slice or `Vec` of
+  `GraphRow`s, a `History`). `CommitSummary` is now `{ id, parent_count, summary,
+  author_name, author_time }`: no parents, no email. `Lane` holds a `u32`
+  (`Lane::new(usize)` saturates); `LaneChange` is 16 B. `HistoryRow` is no longer a
+  struct with `content` and `graph`.
+- `cairn-git`: `HistoryPage::rows` is a `RowsPage`; the walk reads a parent count, a
+  subject, an author name and a date per row (`history.rs`'s private `Commit`).
+- `cairn-ui`: `HistoryList::new(State<History>, ..)`; `RowRender { content, graph,
+  selected, lanes }` (RR1 closed: only what the window reads); `CommitRow` reads
+  `parent_count`.
+- `cairn-app`: `View::rows` is a `State<History>`; `Update::Rows { rows: RowsPage, .. }`;
+  `session::apply` appends (a `HistoryFull` shows as the page's failure); `reload_if`
+  replaces the history; `selection::loaded_row` is `History::position`.
+- Tests: `crates/cairn-git/tests/slim_rows.rs`, `crates/cairn-ui/tests/drawn_rows.rs`,
+  `crates/cairn-model/tests/history_allocations.rs`, the window's
+  `the_cairn_checkouts_rows_draw_what_they_drew_before_rows_were_slimmed`; the reporter's
+  `find` mode reports `History::retained` and asserts C16's 64 MiB (`CAIRN_C16_MIB`).
+  C15's walk now reads parents from the details query.
 
 ## Validation status
 
@@ -136,7 +167,7 @@ Deferred to phase 04 (phase 03 QA, RR1): `HistoryList`'s `RowRender` clones the 
 | 01 refs engine | done: C1, C2, C3 pass; C11 refs numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
 | 02 status engine | done: C4, C5, C13 pass (host git, 2.30.9, 2.32.7); C11 status numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
 | 03 compact rows | implemented: C15 passes (equivalence over the fixtures, the Cairn checkout and every ref of the bench; find 2.26 s against 2.50 s before); K = 64, derived at draw time; numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
-| 04 slim rows | not started |
+| 04 slim rows | implemented: C16 passes (comparisons pinned at `4205d5d` over crafted fixtures and the Cairn checkout; 52.6 MiB retained for all of rust-lang/rust from every ref, capacity counted, against 64 MiB; no kept row owns a heap allocation); C15 still passes (equivalence on the bench, find 2.21 s); RR1 closed; numbers in progress.md; full gate green; QA pending |
 | 05 history from every ref | not started |
 | 06 worker and refresh | not started |
 | 07 labels and toolbar | not started |

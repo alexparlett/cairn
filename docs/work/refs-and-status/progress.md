@@ -3,6 +3,109 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-06 — phase 04: slim rows
+
+A kept row is 72 bytes of plain data (`StoredRow`, private to
+`crates/cairn-model/src/history.rs`): its commit's id once, a parent count (`u16`,
+saturating), a subject span of the history's text store, an author number in its
+author table, the author date, the lane, the span of its lane changes and, on a row
+with one, its snapshot's number. It is `Copy`, asserted at compile time beside it, so
+no kept row owns a heap allocation. The window keeps a `History` whose stores grow in
+fixed chunks, never by doubling (`crates/cairn-model/src/chunked_store.rs`: rows 1,024
+to a chunk, text 64 KiB, lane changes 4,096; a run never splits across chunks, a run
+longer than a chunk gets its own; the list of chunks grows by one). A page crosses as a
+`RowsPage` (flat vectors: its rows, its own text, its authors once each, its lane
+changes and snapshots) and is appended in `session::apply`, where pages were applied
+before. Every reader reads through the history (`HistoryRow`); the list hands a row's
+callback only its content and edges (`RowRender { content, graph, .. }`), which closes
+RR1. `Lane` is held in 32 bits, so a `LaneChange` is 16 B rather than 24. No production
+view needed a row's full parents or its author's address — the Commit tab reads both
+from the details query — so no stopping rule fired. Packet mode, on
+`feature/refs-and-status`.
+
+**C16's comparison, written before the old fields went.** Commit `4205d5d` pinned what
+the rows drew while every row still carried its full parents and its author's address:
+`crates/cairn-git/tests/slim_rows.rs` (a crafted fixture of ten `git commit-tree`
+commits — an empty subject, one longer than a text chunk, one in ISO-8859-1, one of
+bytes that are not UTF-8, a name past ASCII, a merge, an octopus, a root — paged two at
+a time so pages bring new and known authors; and the Cairn checkout's walk from
+`0cfd746`, `main` as it stood) and `crates/cairn-ui/tests/drawn_rows.rs` (the list's
+labels and node centres over crafted rows). The window's own check over the Cairn
+checkout, `the_cairn_checkouts_rows_draw_what_they_drew_before_rows_were_slimmed`
+(`crates/cairn-app/src/window.rs`), has its table read by the same test built at
+`4205d5d` in a scratch worktree. `1b0ca9f` then slimmed the rows; every table is now
+held against the slimmed rows, beside live oracles (`git log`'s `%s %an %at %P` over the
+Cairn checkout from `HEAD` and a braided fixture; the details query's author, date and
+parents). The details query's subject is the message's first line by design
+(`CommitDetails::subject`), where a row's folds the first paragraph as `%s` does, so it
+is not used as a subject oracle.
+
+**C16, measured** — release build, warm, median of seven after a warm-up, fresh process
+per run; `~/Development/bench/rust` at `c999cef531e` (read only: its `.git` listing
+identical before and after, nothing newer than a marker file, `git status` clean); AMD
+Ryzen 7 9800X3D, 60 GiB, Linux 7.2.8-2-cachyos. Reporter
+`measures_compact_rows_over_a_named_repository`, mode `find`, paging the held session 64
+rows at a time and appending every page to one `History`:
+
+| Seed | Rows | Retained (capacity, every chunk whole) | Rows | Text | Lane changes | Snapshots | Authors and index | `RssAnon` growth | Find |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| every ref | 345,545 | **52.61 MiB** (159 B/row) | 23.77 MiB | 16.01 MiB | 12.25 MiB | 0.25 MiB | 0.32 MiB (8,424) | 83.1 MiB | 2,206 ms |
+| `HEAD` | 340,228 | 51.82 MiB (159 B/row) | 23.42 MiB | 15.76 MiB | 12.07 MiB | 0.25 MiB | 0.32 MiB (8,423) | 82.0 MiB | 2,169 ms |
+
+Against phase 03's 167.9 MiB from every ref (row vector 108.0, lane changes and
+snapshots 18.6, parents 14.3, text 27.0) and C16's 64 MiB: met, with the reporter
+asserting it. Find runs (ms, warm-up excluded): every ref 2198.6-2220.9, `HEAD`
+2157.3-2178.1 — faster than phase 03's 2,263 / 2,210 and well inside C15's 10% of
+2.4 s. C15's equivalence over the bench, mode `equivalence` (the walk's parents now read
+from the details query, as anything needing parents does): every ref 345,545 rows,
+49,609 repainted, 627 late lines; `HEAD` 340,228, 48,988, 624 — every row's derived
+edges equal to the frozen assigner's, as in phase 03.
+
+**Reading rows through the stores, per frame.** `window_check` (release, the same
+session, three runs each interleaved with `4622a76`, phase 03's last commit), the
+history scrolled 9 rows a frame: medians 1.30 / 1.33 / 1.31 ms before and 1.34 / 1.37 /
+1.38 ms after, maxima 1.95 / 2.14 / 1.90 and 1.86 / 1.86 / 2.18 ms; no frame over
+16.7 ms either way. About 0.06 ms a frame more at the median, 0.4% of a frame's budget,
+and no frame lost: judged not to be the stopping rule's "costs a frame measurably", and
+batched for the user. Applying a page: median 0.007-0.008 ms before, 0.008-0.009 ms
+after.
+
+Pinned (mutation each fails, run by hand on `1b0ca9f`):
+`every_row_draws_what_it_drew_before_rows_were_slimmed` and
+`the_cairn_checkouts_rows_draw_what_they_drew_before_rows_were_slimmed` (fail with
+`CommitRow` handing the node a parent count of 0, and with the list handing a row's
+callback the next row's content); `every_crafted_row_draws_what_it_drew_before_rows_were_slimmed`
+and `every_row_of_the_cairn_checkout_draws_what_it_drew_before_rows_were_slimmed` (fail
+with `History::append` keeping a page's author number rather than the history's, with
+every author added again on every page, and with a subject read a byte short);
+`a_page_of_new_authors_and_a_page_of_known_ones_both_draw_and_each_is_named_once` (the
+page's author number kept; every author added again);
+`authors_whose_keys_collide_are_told_apart_by_name` (the name check dropped; the chain
+not walked); `what_a_history_retains_counts_every_chunk_whole` and the store tests
+(chunks counted by length rather than capacity);
+`appending_ten_thousand_rows_allocates_per_chunk_never_per_row` (39 allocations for
+9,936 rows; fails with a new chunk for every run);
+`a_history_draws_what_the_rows_it_was_given_draw`,
+`the_cairn_checkouts_rows_draw_what_the_assigner_drew_before_compaction`,
+`each_cold_page_and_resumed_session_draws_on_its_own_what_the_assigner_drew_for_it` and
+`rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew` (a page's snapshots
+dropped on the way into the history). The `Copy` assertion stops compiling with a
+`String`, `Vec` or `Box` in the row.
+
+Decided here, batched for the user (not approved):
+
+- **Authors are numbered on the window's side.** A page names each of its own authors
+  once; `History::append` finds each in the history's table (a hash of the name, names
+  that hash alike chained) and adds only those it lacks. R4.7's letter is a page that
+  carries "any authors new to the history"; numbering on the worker would make every
+  page depend on the window having applied every page before it, which a superseded page
+  or a cold restart could break silently. The cost is hashing at most a page's authors
+  on the UI thread per page, and the index (counted in the 0.32 MiB above).
+- **A parent count saturates at 65,535**, which only decides whether a ring is drawn.
+- **A history too large for its 32-bit addresses** (about 4 GiB of subjects, or four
+  billion rows or lane changes) answers `HistoryFull`, which the window shows as the
+  page's failure; the rows appended before it stay.
+
 ## 2026-10-06 — phase 03 QA
 
 Fresh reviewers (`qa-checklist` READY, `responsiveness-reviewer` with no findings,

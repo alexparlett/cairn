@@ -2,7 +2,7 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 05 implemented (the history from every ref, labelled, with stash rows), full gate green, awaiting its QA; phase 06 next. The application still walks from `HEAD`: the engine's `HistoryRequest::from_refs` is wired by phase 06.** Integration branch
+**Status: phase 05 done (the history from every ref, labelled, with stash rows), QA adjudicated and confirmed findings fixed; phase 06 next. The application still walks from `HEAD`: the engine's `HistoryRequest::from_refs` is wired by phase 06.** Integration branch
 `feature/refs-and-status`, in the worktree `.claude/worktrees/refs-and-status`,
 packet mode.
 
@@ -85,6 +85,12 @@ that most constrain implementation:
   stash's; a stash's subject is the stash list's message, its date the author date, its
   place by committer date; labels in the snapshot's order. Detail and the alternative in
   progress.md.
+- For the user's end-of-packet batch (phase 05 QA, QC4; not decided): `git stash store` can
+  file one stash commit twice; each entry is a row, both `RowId::Stash` of that commit, so
+  selecting the second highlights the first. Options: drop a repeated stash commit's later
+  entries (one row, the newest `stash@{n}`), or key `RowId::Stash` by its index (which moves
+  as stashes are pushed and dropped). Phases 07 and 08 draw and select stash rows, so it is
+  theirs to settle with the user's answer.
 - Bench hygiene (phase 05): a `--shared` scratch clone's `git stash` freshened the bench
   pack's mtime through alternates, and a plain `git status` on the bench moved its `.git`
   directory's mtime; no content changed (progress.md). Later phases: scratch clones with
@@ -97,11 +103,29 @@ that most constrain implementation:
   rows)` from the refs read on the history thread, so the walk, its labels and its stash rows
   come from the snapshot the sidebar shows. `from_head`'s unborn-`HEAD` page
   (`pool.rs::no_walk`) has no counterpart: a snapshot with no ref and an unborn `HEAD` walks
-  nothing and answers an empty, complete page.
+  nothing and answers an empty, complete page — map that case to the `no_walk` page the
+  window shows today (phase 05 QA, QC7).
+- A session now opens its walk on its first `next_page`, under that page's cancel (phase 05
+  QA, RR1): `history_session` reports only what resolving the request fails on (an unborn
+  `HEAD`, a starting point of the wrong width), and a walk error — a tip that
+  is not a commit, an unreadable commit-graph setting — arrives from the first page.
+- A ref tip gone stale since the snapshot — deleted and pruned, or rewritten to a non-commit
+  — fails the open (`Error::Walk`), as a bad tip always did (phase 05 QA, QC3's sibling).
+  Decide its handling with the refresh: read the refs again and reopen, or drop the tip.
+- Measure layout and drawing on a fixture of thousands of unmerged refs (phase 05 QA, RR2):
+  the assigner scans every open lane twice per row and a drawn row's derivation walks the
+  lines crossing it, and a walk from every ref opens a lane per unmerged ref
+  (`docs/systems/history-graph.md`, Known limits). Phase 07 measures the drawing half.
 - When a refresh reopens the history, build the new `History` pre-sized from the old
   one's author count — a `History::with_author_capacity(old.author_count())`, with a
   model test — so a reopen does not rehash its way back up through every doubling of
   the author index on the UI thread (phase 04 QA, RR1).
+
+## Handed to phase 07
+
+- A row's labels are uncapped (phase 05 QA, RR3): chips must stop being built at the column's
+  edge — R5.3's clip, never a "+N" — so a row labelled by thousands of refs builds what the
+  column shows, not every chip.
 
 ## New modules and interfaces
 
@@ -222,7 +246,7 @@ Phase 05 (`docs/systems/history-graph.md`, "From every ref, labelled, with stash
 | 02 status engine | done: C4, C5, C13 pass (host git, 2.30.9, 2.32.7); C11 status numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
 | 03 compact rows | implemented: C15 passes (equivalence over the fixtures, the Cairn checkout and every ref of the bench; find 2.26 s against 2.50 s before); K = 64, derived at draw time; numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
 | 04 slim rows | done: C16 passes (comparisons pinned at `4205d5d` over crafted fixtures and the Cairn checkout; 52.6 MiB retained for all of rust-lang/rust from every ref, capacity counted, against 64 MiB; no kept row owns a heap allocation); C15 still passes (equivalence on the bench, find 2.21 s); RR1 closed; numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
-| 05 history from every ref | implemented: C6 passes (walked commits = `git rev-list --branches --remotes --tags HEAD` over whole walks, labels = `git log --decorate=full`, stash rows with and without `--include-untracked`, assigner lane and edge tests); C11 first page from every ref 7.3 ms (8.6 ms with the snapshot read) beside `HEAD`'s 7.7 ms, worst stash look-ahead 21.6 ms; C16 52.67 MiB from the snapshot; C15 equivalence holds; the app still walks from `HEAD`; full gate green; QA pending |
+| 05 history from every ref | implemented: C6 passes (walked commits = `git rev-list --branches --remotes --tags HEAD` over whole walks, labels = `git log --decorate=full`, stash rows with and without `--include-untracked`, assigner lane and edge tests); C11 first page from every ref 7.3 ms (8.6 ms with the snapshot read) beside `HEAD`'s 7.7 ms, worst stash look-ahead 21.6 ms; C16 52.67 MiB from the snapshot; C15 equivalence holds; the app still walks from `HEAD`; QA adjudicated, confirmed findings fixed (the walk's open cancellable between tips: 103 ms first page at 50,000 tags, cancelled in 6.3 ms); full gate green |
 | 06 worker and refresh | not started |
 | 07 labels and toolbar | not started |
 | 08 sidebar | not started |

@@ -3,6 +3,80 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-06 — phase 05 QA
+
+Fresh reviewers (`qa-checklist` READY, `test-coverage-auditor`, `responsiveness-reviewer`)
+and a fresh `qa-confirm`, run by the coordinator. Fixed, each pin checked to fail under the
+mutation named (run by hand on `17396d5`'s tree):
+
+- RR1, RR4 (`5b81a62`): opening a walk in date order read every tip in gitoxide's
+  `Simple::sorting`, one uncancellable call. `walk::open` now reads the tips in its own loop,
+  polling the cancel before each but the first, and answers gitoxide's read of each tip from
+  the dates read (`Seeded`: a commit holding the date and nothing else, while the walk
+  opens; every later read is the object's). A session opens its walk on its first page,
+  under that page's cancel. The labels are an `Arc` shared by the request and the walk, not
+  copied; whether `HEAD` is already a tip is a map lookup. Pin:
+  `opening_a_walk_from_many_refs_is_cancelled_between_tips` (fifty tags, cancelled at the
+  sixth poll: `Cancelled { walked: 0 }`, six polls, then the same rows) — fails with the
+  open's poll made dead. **Measured** (`measures_the_first_page_from_every_ref`, release,
+  warm, median of seven, same machine) on a synthetic repository in the scratchpad: a
+  50,000-commit chain from `git fast-import`, a tag on every commit. First page of 64 from
+  every ref, snapshot already read: **103 ms** [102–107] (91 ms before, gitoxide reading
+  the tips itself, cancellable at no point); with the snapshot's read, 123 ms from packed
+  refs and 235 ms from 50,000 loose refs; from `HEAD` 2.6 ms; a first page whose cancel is
+  already set answers cancelled in **6.3 ms** (91 ms before). The bench is unchanged: 7.3 ms
+  from every ref, 8.6 ms with the snapshot, cancelled in 0.04 ms; a find of its oldest
+  commit 2,250-2,257 ms (three runs). C11's 200 ms holds for the walk; the 235 ms with
+  50,000 loose refs is the refs read's (phase 01), not a stopping rule.
+- QC1 (`2c96d4d`): a stash going directly above the walk's next commit was emitted before a
+  newer stash whose date had come. The stash going above now waits for every newer stash
+  to be placed or held (`Stream::due` compares against it), newest first and `stash@{0}`
+  first on equal dates; and a stash dated the same second as a commit now goes first, as
+  git's date order puts a stash above the index commit it was made with. Pins:
+  `stash_rows_are_in_gits_date_order` (against `git log --date-order` over the refs and the
+  stash commits, on a fixture with an older stash on the walk's first commit and a newer one
+  on an older branch, and on `everything()`) — fails with the stash above emitted first; and
+  its tie assertion (`17396d5`) — fails with commits first on equal dates (`committed <= time`).
+- QC3 (`76ab666`): a stash whose commit cannot be read when the walk resolves has no row,
+  the walk going on. Pin: `a_stash_whose_commit_is_gone_since_the_snapshot_has_no_row`
+  (the loose object removed after the snapshot) — fails with the read's error propagated.
+- TC1 (`9fcd876`): `a_stash_commit_met_while_looking_ahead_is_a_commits_row_and_no_stashs`
+  (a branch commit on the stash commit, dated between base and stash; against `git
+  rev-list --date-order`) — fails with the look-ahead's check of a pulled commit against the
+  stash commit dead; the check over commits already ahead fails
+  `a_stash_commit_a_branch_reaches_is_a_commits_row_and_no_stashs`.
+- TC2: the deep-base test derives the distance (`AFTER + 1`): at it, the row is at its date;
+  one less, above its base — fails with `<` → `<=` in the look-ahead's bound. The module doc
+  says the bound is on commits ahead of the next one, in total.
+- TC3: `a_page_cancelled_while_looking_ahead_stops_and_resumes_to_the_same_rows` — fails with
+  the look-ahead's poll dead (the page lays a row out before the cancel lands).
+- TC4: `looking_ahead_stops_once_the_walk_passes_the_bases_date` (a deleted branch's stash;
+  the first page pulls the five commits newer than its base and one more) — fails with the
+  early stop dead.
+- TC5: the deep-base test runs the cold route too (look-ahead 3 and the distance) — fails
+  with `resume` taking the default look-ahead.
+- TC6: `in_graph_order_a_stash_is_directly_above_its_base` requires stashes on one base
+  newest first — fails with `by_base` filed oldest first.
+- QC2: the paging test requires the cold route's lanes equal one page's.
+- Docs: `docs/systems/history-graph.md` says cancellation is polled per tip read to open
+  (and how), the 50,000-tag numbers, the stash order rules, the unreadable stash, and two
+  known limits — layout and drawing grow with open lanes and every unmerged ref can open one
+  (RR2), and one stash commit twice in the list draws two rows with one identity (QC4).
+  Hand-offs in `state.md`: RR2 (measure a wide fixture, 06/07), RR3 (chips clipped at the
+  column, 07), QC7 (no seed and an unborn `HEAD` → the `no_walk` page, 06), a ref tip gone
+  stale since the snapshot (06), the session's walk errors now arriving from its first page
+  (06), QC4 (the user's batch, 07/08).
+
+Dismissed: RR5 — the root `CLAUDE.md` residual names `History::position`, which
+`selection::extend` calls (`crates/cairn-app/src/selection.rs`), so it is current; QC6 — the
+stash's diff against its first parent with `stash.showIncludeUntracked` unread is already a
+batched user decision.
+
+Tooling note: the mutation runner restored each file with its pre-mutation mtime, older than
+the mutated build, so a run that changed nothing else in that crate could test the mutated
+build. Every mutation run above rebuilt its crate (each wrote a newer file); the runner now
+touches the restored file, and every source was touched before the final gate.
+
 ## 2026-10-06 — phase 05: the history from every ref, labelled, with stash rows
 
 Packet mode, on `feature/refs-and-status`. `HistoryRequest::from_refs(&RefsSnapshot)`

@@ -1,4 +1,4 @@
-//! Commit, ref, graph, lane and diff types shared by the engine and the UI, and
+//! Commit, ref, graph, lane, diff and status types shared by the engine and the UI, and
 //! the record of a `git` invocation the engine's command log keeps.
 
 mod askpass;
@@ -26,6 +26,7 @@ mod refs;
 mod remote;
 mod repo_path;
 mod secret;
+mod status;
 
 pub use askpass::{AskpassToken, HELPER_PROGRAM, SOCKET_VARIABLE, TOKEN_VARIABLE};
 pub use change_set::{ChangeSet, RenameDetection};
@@ -57,6 +58,10 @@ pub use refs::{
 pub use remote::RemoteSummary;
 pub use repo_path::RepoPath;
 pub use secret::Secret;
+pub use status::{
+    ChangedEntry, ConflictKind, ConflictedEntry, StagedChange, StatusEntry, SubmoduleState,
+    UnreadableIndex, UnstagedChange, WorkingTreeStatus,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitSummary {

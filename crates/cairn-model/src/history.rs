@@ -126,7 +126,8 @@ impl std::fmt::Debug for History {
 
 /// What a history holds, in bytes, by capacity: every chunk of every store whole, the last
 /// one's unused room included, and the vectors that list them. Allocator overhead is not
-/// counted.
+/// counted. The author index's share is an estimate (`index_bytes`): the standard
+/// library's hash table does not report its buckets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RetainedBytes {
     pub rows: usize,
@@ -134,7 +135,7 @@ pub struct RetainedBytes {
     pub text: usize,
     pub lane_changes: usize,
     pub snapshots: usize,
-    /// The author table and the index that finds a name in it.
+    /// The author table, and an estimate of the index that finds a name in it.
     pub authors: usize,
 }
 
@@ -239,7 +240,7 @@ impl History {
             text: self.text.bytes(),
             lane_changes: self.changes.bytes(),
             snapshots: self.snapshots.bytes() + self.open_lanes.bytes() + self.late_lines.bytes(),
-            authors: self.authors.bytes() + self.author_index.capacity() * size_of::<(u64, u32)>(),
+            authors: self.authors.bytes() + index_bytes(self.author_index.capacity()),
         }
     }
 
@@ -251,6 +252,12 @@ impl History {
             name.hash(&mut hasher);
             hasher.finish()
         };
+        self.author_under(name, key)
+    }
+
+    /// [`Self::author_of`], with the name's index key given: every author filed under a
+    /// key is chained from the newest, so names whose keys collide are told apart by name.
+    fn author_under(&mut self, name: &str, key: u64) -> Result<u32, HistoryFull> {
         let first = self.author_index.get(&key).copied();
         let mut at = first;
         while let Some(number) = at {
@@ -295,6 +302,23 @@ impl History {
             snapshot,
         }
     }
+}
+
+/// The bytes a hash table of `capacity` `(u64, u32)` entries holds, as hashbrown — the
+/// standard library's table — lays it out: a power of two of buckets, of which it fills
+/// seven eighths (all but one under eight), each an entry and a control byte, and one
+/// group of control bytes past the end (16, its SSE2 width). An estimate: std reports a
+/// capacity, not its buckets, and alignment padding is not counted.
+fn index_bytes(capacity: usize) -> usize {
+    if capacity == 0 {
+        return 0;
+    }
+    let buckets = if capacity < 8 {
+        capacity + 1
+    } else {
+        capacity / 7 * 8
+    };
+    buckets.next_power_of_two() * (size_of::<(u64, u32)>() + 1) + 16
 }
 
 /// A history is drawn by deriving each row's edges from the rows above it.
@@ -477,39 +501,86 @@ mod tests {
         assert_eq!(drawn, expected);
     }
 
-    /// Two names whose index keys collide still read back as two authors. Caught by:
-    /// trusting the hash, or chaining only the newest author under a key.
+    /// Three names filed under one index key, through the path every author takes, each
+    /// read back as itself. Caught by: trusting the key without the name, not walking the
+    /// chain, and a new author filed under a key without chaining the one already there.
     #[test]
     fn authors_whose_keys_collide_are_told_apart_by_name() {
         let mut history = History::new();
-        let ada = history.author_of("Ada").unwrap();
-        // Force a collision: file Grace and Margaret under Ada's key.
-        let key = *history.author_index.keys().next().unwrap();
-        let grace_name = history.text.push("Grace").unwrap();
-        let grace = history
-            .authors
-            .push(StoredAuthor {
-                name: grace_name,
-                next: ada,
-            })
-            .unwrap();
-        history.author_index.insert(key, grace);
-        let margaret_name = history.text.push("Margaret").unwrap();
-        let margaret = history
-            .authors
-            .push(StoredAuthor {
-                name: margaret_name,
-                next: grace,
-            })
-            .unwrap();
-        history.author_index.insert(key, margaret);
+        let key = 7;
+        let ada = history.author_under("Ada", key).unwrap();
+        let grace = history.author_under("Grace", key).unwrap();
+        let margaret = history.author_under("Margaret", key).unwrap();
+        assert_eq!(history.author_count(), 3);
+        assert_eq!([ada, grace, margaret], [0, 1, 2]);
 
+        for (name, number) in [("Margaret", margaret), ("Grace", grace), ("Ada", ada)] {
+            assert_eq!(
+                history.author_under(name, key).unwrap(),
+                number,
+                "{name}, filed under a shared key, was not found as themself"
+            );
+            assert_eq!(history.author_name(number), name);
+        }
+        assert_eq!(history.author_count(), 3, "a filed author was added again");
         assert_eq!(
             history.author_of("Ada").unwrap(),
-            ada,
-            "Ada, two names down her key's chain, was not found"
+            3,
+            "Ada's own key names nobody yet"
         );
-        assert_eq!(history.author_count(), 3, "Ada was added again");
+    }
+
+    /// The partial-page contract at a history's limit, reached by naming every chunk the
+    /// text store's addresses can: a page appends its rows until one cannot be held, says
+    /// so, and keeps the rows before it. Caught by: a row pushed before its text was held,
+    /// or the error dropped.
+    #[test]
+    fn a_page_past_the_historys_limit_keeps_the_rows_before_it_and_says_so() {
+        let mut history = History::new();
+        let mut first = RowsPage::new();
+        first.push(
+            GraphRow::new(oid(1), Lane::new(0), Vec::new()),
+            commit("s", "a", 1),
+        );
+        history.append(first).unwrap();
+
+        history.text.fill_every_address();
+        let mut page = RowsPage::new();
+        // An empty subject by a known author needs no new text; the next row's does.
+        page.push(
+            GraphRow::new(oid(2), Lane::new(0), Vec::new()),
+            commit("", "a", 1),
+        );
+        page.push(
+            GraphRow::new(oid(3), Lane::new(0), Vec::new()),
+            commit("x", "a", 1),
+        );
+        page.push(
+            GraphRow::new(oid(4), Lane::new(0), Vec::new()),
+            commit("", "a", 1),
+        );
+        let full = history.append(page).unwrap_err();
+        assert_eq!(full, HistoryFull);
+        assert_eq!(full.to_string(), "the history is too large to hold");
+        assert_eq!(
+            history.len(),
+            2,
+            "the rows before the one that could not be held"
+        );
+        assert_eq!(history.id(1), Some(RowId::Commit(oid(2))));
+        assert_eq!(summary(history.row(1).unwrap()).author_name, "a");
+
+        let mut stranger = RowsPage::new();
+        stranger.push(
+            GraphRow::new(oid(5), Lane::new(0), Vec::new()),
+            commit("", "b", 1),
+        );
+        assert_eq!(
+            history.append(stranger),
+            Err(HistoryFull),
+            "a new author's name could not be held either"
+        );
+        assert_eq!(history.len(), 2);
     }
 
     /// The QA brief's subjects: empty, past ASCII and longer than a chunk of the text store.
@@ -613,20 +684,40 @@ mod tests {
     }
 
     /// Caught by: counting what the stores hold by length, so a chunk's unused room is not
-    /// counted, or a store left out of the total.
+    /// counted, or any store — a snapshot's open lanes and late lines, the author index —
+    /// left out of the total.
     #[test]
     fn what_a_history_retains_counts_every_chunk_whole() {
+        use crate::edge_derivation::LaneState;
+
         let mut history = History::new();
         assert_eq!(
             history.retained().total(),
             0,
             "an empty history holds nothing"
         );
-        let mut page = RowsPage::new();
-        page.push(
-            GraphRow::new(oid(1), Lane::new(0), vec![LaneChange::Starts(Lane::new(0))]),
-            commit("s", "a", 1),
+        // A snapshot with an open lane and a late line, so both of its stores hold a run.
+        let mut state = LaneState::default();
+        state.advance(&[
+            LaneChange::Starts(Lane::new(3)),
+            LaneChange::StartsLate {
+                lane: Lane::new(5),
+                rows: 4,
+                order: 0,
+            },
+        ]);
+        let graph = GraphRow::laid_out(
+            oid(1),
+            Lane::new(3),
+            vec![
+                LaneChange::Ends(Lane::new(3)),
+                LaneChange::Starts(Lane::new(3)),
+            ]
+            .into_boxed_slice(),
+            Some(Box::new(state.snapshot())),
         );
+        let mut page = RowsPage::new();
+        page.push(graph, commit("s", "a", 1));
         history.append(page).unwrap();
         let retained = history.retained();
         assert_eq!(
@@ -638,13 +729,21 @@ mod tests {
             retained.lane_changes,
             (1 << 12) * size_of::<LaneChange>() + size_of::<Vec<LaneChange>>()
         );
-        // One snapshot entry; the row drawn on its own crosses no lines, so its snapshot's
-        // own stores hold nothing.
         assert_eq!(
             retained.snapshots,
-            (1 << 8) * size_of::<StoredSnapshot>() + size_of::<Vec<StoredSnapshot>>()
+            (1 << 8) * size_of::<StoredSnapshot>()
+                + size_of::<Vec<StoredSnapshot>>()
+                + (1 << 12) * size_of::<u64>()
+                + size_of::<Vec<u64>>()
+                + (1 << 8) * size_of::<LateLine>()
+                + size_of::<Vec<LateLine>>()
         );
-        assert!(retained.authors >= (1 << 10) * size_of::<StoredAuthor>());
+        let index = index_bytes(history.author_index.capacity());
+        assert!(index > 0, "one author filed and no index counted");
+        assert_eq!(
+            retained.authors,
+            (1 << 10) * size_of::<StoredAuthor>() + size_of::<Vec<StoredAuthor>>() + index
+        );
         assert_eq!(
             retained.total(),
             retained.rows
@@ -653,6 +752,18 @@ mod tests {
                 + retained.snapshots
                 + retained.authors
         );
+    }
+
+    /// The estimate follows hashbrown's sizing: three entries in four buckets, seven in
+    /// eight, fourteen in sixteen.
+    #[test]
+    fn the_author_index_is_estimated_by_its_buckets() {
+        let bucket = size_of::<(u64, u32)>() + 1;
+        assert_eq!(index_bytes(0), 0);
+        assert_eq!(index_bytes(3), 4 * bucket + 16);
+        assert_eq!(index_bytes(7), 8 * bucket + 16);
+        assert_eq!(index_bytes(14), 16 * bucket + 16);
+        assert_eq!(index_bytes(57_344), 65_536 * bucket + 16);
     }
 
     /// The slim row's size, which C16's figure is made of. Caught by: a field added to it.

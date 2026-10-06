@@ -5,8 +5,9 @@
 //! holds is its chunks' capacity and a page appended costs at most a new chunk — never a
 //! copy of everything before it, and never a doubling's slack of up to half the store. A
 //! run of items is never split across chunks, so it reads back as one slice: a run that
-//! does not fit what is left of the chunk being filled starts the next, and a run longer
-//! than a chunk gets a chunk of exactly its own length.
+//! does not fit what is left of the chunk being filled starts the next, and a run at least
+//! a chunk long gets a chunk of exactly its own length, leaving the chunk being filled to
+//! the runs after it.
 
 use std::ops::Range;
 
@@ -144,9 +145,11 @@ impl<C: Chunk, const SHIFT: u32> Runs<C, SHIFT> {
                 // hold all of rust-lang/rust, and moving their headers is nothing beside
                 // filling one.
                 self.chunks.reserve_exact(1);
-                // A run longer than a chunk has one of exactly its length, and the chunk
-                // being filled stays the one to fill.
-                if len > Self::CHUNK {
+                // A run at least a chunk long has one of exactly its length, and the chunk
+                // being filled stays the one to fill: a run of exactly a chunk would fill a
+                // fresh chunk to the brim anyway, so making it the one to fill would only
+                // abandon the room left in the last.
+                if len >= Self::CHUNK {
                     self.chunks.push(C::with_capacity(len));
                 } else {
                     self.chunks.push(C::with_capacity(Self::CHUNK));
@@ -182,6 +185,17 @@ impl<C: Chunk, const SHIFT: u32> Runs<C, SHIFT> {
     pub(crate) fn bytes(&self) -> usize {
         self.chunks.iter().map(Chunk::bytes).sum::<usize>()
             + self.chunks.capacity() * size_of::<C>()
+    }
+
+    /// Names every chunk a 32-bit address can, each empty, so the next run that holds
+    /// anything finds the store full: how a test reaches a history's limit without
+    /// gigabytes of text.
+    #[cfg(test)]
+    pub(crate) fn fill_every_address(&mut self) {
+        while self.chunks.len() < Self::MAX_CHUNKS {
+            self.chunks.push(C::with_capacity(0));
+        }
+        self.filling = None;
     }
 
     #[cfg(test)]
@@ -311,6 +325,27 @@ mod tests {
         }
         assert_eq!(chunks.get(11), None);
         assert_eq!(chunks.runs.chunk_count(), 3);
+    }
+
+    /// The boundary: a run of exactly a chunk takes a chunk of its own and leaves the one
+    /// being filled to the runs after it. Caught by: `len > CHUNK`, which fills a fresh chunk
+    /// with it and abandons the first chunk's room.
+    #[test]
+    fn a_run_exactly_a_chunk_long_leaves_the_chunk_being_filled_alone() {
+        let mut runs: Runs<String, 4> = Runs::new();
+        let before = runs.push("abc").unwrap();
+        let whole = "y".repeat(16);
+        let whole_span = runs.push(&whole).unwrap();
+        let after = runs.push("def").unwrap();
+        assert_eq!(runs.get(before), Some("abc"));
+        assert_eq!(runs.get(whole_span), Some(whole.as_str()));
+        assert_eq!(runs.get(after), Some("def"));
+        assert_eq!(
+            runs.chunk_count(),
+            2,
+            "the run after a whole chunk's did not go back to the chunk being filled"
+        );
+        assert_eq!(runs.chunks[1].capacity(), 16);
     }
 
     /// Caught by: an address past 32 bits wrapping onto chunk zero.

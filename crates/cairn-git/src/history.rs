@@ -174,7 +174,8 @@ fn read_page(
 
     let mut walk = walk::open(repo.inner(), &tips, order)?;
 
-    let mut assigner = LaneAssigner::with_window(window);
+    // The page's first row carries a snapshot, so it draws without the replayed prefix.
+    let mut assigner = LaneAssigner::with_window(window).drawn_from(skip);
     let mut page = Page {
         rows: Vec::new(),
         summaries: Vec::new(),

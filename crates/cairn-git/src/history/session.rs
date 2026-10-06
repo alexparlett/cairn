@@ -60,7 +60,8 @@ impl Repository {
         Ok(HistorySession {
             repo: self.inner(),
             walk,
-            assigner: LaneAssigner::with_window(window),
+            // The first row handed out carries a snapshot, so it draws without the prefix.
+            assigner: LaneAssigner::with_window(window).drawn_from(skip),
             ready: VecDeque::new(),
             pending: VecDeque::new(),
             tips,

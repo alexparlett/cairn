@@ -247,3 +247,44 @@ impl LaneState {
         edges
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Oid;
+
+    fn row(changes: Vec<LaneChange>) -> GraphRow {
+        GraphRow::new(Oid::from_bytes(&[9; 20]).unwrap(), Lane::new(0), changes)
+    }
+
+    /// Caught by: a snapshot that keeps the words a closed lane left empty, or counts its
+    /// lines by something other than what it holds.
+    #[test]
+    fn a_snapshot_holds_the_words_its_open_lanes_need_and_its_late_lines() {
+        let mut state = LaneState::default();
+        state.advance(&row(vec![
+            LaneChange::Starts(Lane::new(3)),
+            LaneChange::Starts(Lane::new(130)),
+            LaneChange::StartsLate {
+                lane: Lane::new(5),
+                rows: 4,
+                order: 0,
+            },
+        ]));
+        let wide = state.snapshot();
+        assert_eq!(
+            wide.heap_bytes(),
+            3 * size_of::<u64>() + size_of::<LateLine>()
+        );
+        assert_eq!(wide.highest_lane(), Some(Lane::new(130)));
+
+        state.advance(&row(vec![LaneChange::Ends(Lane::new(130))]));
+        let narrow = state.snapshot();
+        assert_eq!(
+            narrow.heap_bytes(),
+            size_of::<u64>() + size_of::<LateLine>(),
+            "the words lane 130 needed outlived it"
+        );
+        assert_eq!(narrow.highest_lane(), Some(Lane::new(5)));
+    }
+}

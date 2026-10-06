@@ -37,6 +37,14 @@ impl HistoryRow {
     }
 }
 
+/// A history's rows are drawn by deriving each one's edges from the graph rows around it
+/// ([`crate::row_edges`]).
+impl AsRef<GraphRow> for HistoryRow {
+    fn as_ref(&self) -> &GraphRow {
+        &self.graph
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,6 +107,31 @@ mod tests {
             }
             .id(),
         );
+    }
+
+    /// Caught by: a history row handing the derivation some graph row other than its own.
+    #[test]
+    fn a_history_row_draws_from_its_own_graph_row() {
+        let walk = (0..5u8).map(|n| {
+            let id = Oid::from_bytes(&[n + 1; 20]).unwrap();
+            let parent = Oid::from_bytes(&[n + 2; 20]).unwrap();
+            (id, if n < 4 { vec![parent] } else { Vec::new() })
+        });
+        let graphs = crate::LaneAssigner::with_window(2)
+            .with_snapshot_every(2)
+            .assign_each(walk);
+        let rows: Vec<HistoryRow> = graphs
+            .iter()
+            .map(|graph| HistoryRow {
+                content: RowContent::Commit(commit(graph.id)),
+                graph: graph.clone(),
+            })
+            .collect();
+        for index in 0..rows.len() {
+            let drawn = crate::row_edges(&rows, index);
+            assert!(drawn.is_some(), "row {index} drew nothing");
+            assert_eq!(drawn, crate::row_edges(&graphs, index), "row {index}");
+        }
     }
 
     /// Pins a shape: stops compiling if `RowContent` becomes a bare commit field.

@@ -133,6 +133,15 @@ impl GraphRow {
         self.snapshot.is_some()
     }
 
+    /// Heap bytes the row holds beyond its own struct, by capacity: its changes and its
+    /// snapshot. Allocator overhead is not counted.
+    pub fn heap_bytes(&self) -> usize {
+        size_of_val::<[LaneChange]>(&self.changes)
+            + self.snapshot().map_or(0, |snapshot| {
+                size_of::<LaneSnapshot>() + snapshot.heap_bytes()
+            })
+    }
+
     pub(crate) fn snapshot(&self) -> Option<&LaneSnapshot> {
         self.snapshot.as_deref()
     }
@@ -168,6 +177,27 @@ mod tests {
         assert_eq!(segment.from.index(), 3);
         assert_eq!(segment.kind, EdgeKind::Passing);
         assert!(!segment.out_of_order);
+    }
+
+    /// Caught by: counting a row's changes by length of something else, or its snapshot not
+    /// at all.
+    #[test]
+    fn a_rows_heap_bytes_are_its_changes_and_its_snapshot() {
+        let id = Oid::from_bytes(&[1; 20]).unwrap();
+        let changes = vec![
+            LaneChange::Ends(Lane::new(0)),
+            LaneChange::Starts(Lane::new(0)),
+            LaneChange::Starts(Lane::new(70)),
+        ];
+        let mut row = GraphRow::new(id, Lane::new(0), changes);
+        let empty = LaneSnapshot::default();
+        assert_eq!(empty.heap_bytes(), 0);
+        assert_eq!(
+            row.heap_bytes(),
+            3 * size_of::<LaneChange>() + size_of::<LaneSnapshot>()
+        );
+        row.snapshot = None;
+        assert_eq!(row.heap_bytes(), 3 * size_of::<LaneChange>());
     }
 
     #[test]

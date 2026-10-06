@@ -2,7 +2,7 @@
 //! assigner retained for it before rows were compacted — repaints included — with the
 //! frozen copy of that assigner as the oracle, run over the very walk the rows came from.
 //! The `#[ignore]`d reporter does the same over every ref of a named repository and
-//! measures what compact rows cost.
+//! measures what compact, slim rows cost (C15's find time, C16's retained bytes).
 
 #[path = "../../cairn-model/tests/layout_before_compaction/mod.rs"]
 mod layout_before_compaction;
@@ -266,7 +266,9 @@ fn request_for(repo: &Repository, seed: &str) -> HistoryRequest {
 }
 
 /// Reporter. Env: `CAIRN_BENCH_REPO`; `CAIRN_C15_MODE` — `find` (time a find of
-/// `CAIRN_FIND_TARGET`, or of the last row, paging as the window does; retained bytes),
+/// `CAIRN_FIND_TARGET`, or of the last row, paging as the window does and appending every
+/// page to one `History`; what it retains, by capacity, held to C16's 64 MiB or to
+/// `CAIRN_C16_MIB`),
 /// `equivalence` (every row of the whole history against the frozen assigner), or
 /// `derive` (the worst-case derivation at each snapshot interval in `CAIRN_C15_KS`);
 /// `CAIRN_FIND_SEED` is `head` or `refs`. Run with `--release`, one mode per process.

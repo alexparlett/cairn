@@ -1,6 +1,6 @@
 //! The virtualised history list.
 
-use cairn_model::{HistoryRow, RowEdges, RowId, row_edges};
+use cairn_model::{History, HistoryRow, RowContent, RowEdges, RowId};
 use freya::prelude::*;
 
 use crate::accelerators::{self, Action, HeldKeys};
@@ -15,9 +15,11 @@ fn asks_for_more(index: usize, length: usize) -> bool {
 
 const PAGE_JUMP: usize = 10;
 
+/// What a row draws, read out of the history for that row alone: its content and its edges,
+/// and nothing else of it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RowRender {
-    pub row: HistoryRow,
+    pub content: RowContent,
     /// The row's lane and every line crossing it, derived from the rows above it for this
     /// row alone.
     pub graph: RowEdges,
@@ -27,7 +29,7 @@ pub struct RowRender {
 }
 
 pub struct HistoryList {
-    rows: State<Vec<HistoryRow>>,
+    rows: State<History>,
     lanes: usize,
     selected: Option<RowId>,
     also_selected: Option<RowId>,
@@ -41,7 +43,7 @@ pub struct HistoryList {
 }
 
 impl HistoryList {
-    pub fn new(rows: State<Vec<HistoryRow>>, row: impl Fn(RowRender) -> Element + 'static) -> Self {
+    pub fn new(rows: State<History>, row: impl Fn(RowRender) -> Element + 'static) -> Self {
         Self {
             rows,
             lanes: 1,
@@ -139,7 +141,7 @@ impl KeyExt for HistoryList {
 /// Data captured inside the builder closure is invisible to `VirtualScrollView`'s diffing.
 #[derive(Clone)]
 struct ListData {
-    rows: State<Vec<HistoryRow>>,
+    rows: State<History>,
     lanes: usize,
     selected: Option<RowId>,
     also_selected: Option<RowId>,
@@ -246,7 +248,7 @@ impl HistoryList {
                 let Some(next) = moved_to(&e.key, current, last) else {
                     return;
                 };
-                held.get(next).map(|row| (next, row.id()))
+                held.id(next).map(|id| (next, id))
             };
             let Some((next, id)) = moved else {
                 return;
@@ -284,8 +286,8 @@ fn moved_to(key: &Key, current: Option<usize>, last: usize) -> Option<usize> {
 
 fn build_row(item: VirtualItem, data: &ListData) -> Element {
     let rows = data.rows.read();
-    let Some(row) = rows.get(item.index) else {
-        // Length and vector can disagree for one frame; draw an empty row of the right height.
+    let Some(row) = rows.row(item.index) else {
+        // Length and history can disagree for one frame; draw an empty row of the right height.
         return rect()
             .width(Size::fill())
             .height(Size::px(item.size))
@@ -302,19 +304,7 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
     let on_reach_end = data.on_reach_end.clone();
     let asks_for_more = asks_for_more(index, data.length);
 
-    // At most a snapshot interval of rows above this one is read: bounded by the interval,
-    // never by the history. Rows the assigner laid out always have a snapshot within it; a
-    // row without one draws its node alone.
-    let graph = row_edges(rows.as_slice(), item.index).unwrap_or_else(|| RowEdges {
-        lane: row.graph.lane,
-        edges: Vec::new(),
-    });
-    let drawn = data.row.call(RowRender {
-        row: row.clone(),
-        graph,
-        selected: data.selected == Some(id) || data.also_selected == Some(id),
-        lanes: data.lanes,
-    });
+    let drawn = data.row.call(render_of(row, data));
 
     rect()
         // Keyed by identity: a positional key lets a reused slot paint the previous row's graph.
@@ -340,18 +330,35 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
         .into()
 }
 
+/// What `row` draws: its content, copied out of the history's stores, and its edges. At most
+/// a snapshot interval of rows above it is read: bounded by the interval, never by the
+/// history. Rows the assigner laid out always have a snapshot within it; a row without one
+/// draws its node alone.
+fn render_of(row: HistoryRow<'_>, data: &ListData) -> RowRender {
+    let id = row.id();
+    RowRender {
+        content: row.content(),
+        graph: row.edges().unwrap_or_else(|| RowEdges {
+            lane: row.lane(),
+            edges: Vec::new(),
+        }),
+        selected: data.selected == Some(id) || data.also_selected == Some(id),
+        lanes: data.lanes,
+    }
+}
+
 /// Where `id` sits in `rows`, checking `hint` first.
-fn index_of(rows: &[HistoryRow], id: RowId, hint: usize) -> Option<usize> {
-    if rows.get(hint).is_some_and(|row| row.id() == id) {
+fn index_of(rows: &History, id: RowId, hint: usize) -> Option<usize> {
+    if rows.id(hint) == Some(id) {
         return Some(hint);
     }
-    rows.iter().position(|row| row.id() == id)
+    rows.position(id)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cairn_model::{CommitSummary, GraphRow, Lane, Oid, RowContent};
+    use cairn_model::{GraphRow, Lane, Oid, PagedCommit, RowsPage};
 
     fn oid(n: u8) -> Oid {
         let mut hex = String::new();
@@ -364,20 +371,29 @@ mod tests {
         }
     }
 
-    fn history(len: u8) -> Vec<HistoryRow> {
-        (0..len)
-            .map(|n| HistoryRow {
-                content: RowContent::Commit(CommitSummary {
-                    id: oid(n),
-                    parents: Vec::new(),
-                    summary: format!("commit {n}"),
-                    author_name: "A".to_owned(),
-                    author_email: "a@example.com".to_owned(),
+    /// A row for each of `ids`, held as one history.
+    fn rows_of(ids: impl IntoIterator<Item = u8>) -> History {
+        let mut page = RowsPage::new();
+        for n in ids {
+            page.push(
+                GraphRow::new(oid(n), Lane::new(0), Vec::new()),
+                PagedCommit {
+                    parents: 1,
+                    subject: "commit",
+                    author: "A",
                     author_time: 0,
-                }),
-                graph: GraphRow::new(oid(n), Lane::new(0), Vec::new()),
-            })
-            .collect()
+                },
+            );
+        }
+        let mut history = History::new();
+        match history.append(page) {
+            Ok(()) => history,
+            Err(full) => panic!("{full}"),
+        }
+    }
+
+    fn history(len: u8) -> History {
+        rows_of(0..len)
     }
 
     #[test]
@@ -399,7 +415,7 @@ mod tests {
     fn a_row_that_is_not_there_is_not_found() {
         let rows = history(4);
         assert_eq!(index_of(&rows, RowId::Commit(oid(9)), 2), None);
-        assert_eq!(index_of(&[], RowId::Commit(oid(0)), 0), None);
+        assert_eq!(index_of(&History::new(), RowId::Commit(oid(0)), 0), None);
     }
 
     #[test]
@@ -409,8 +425,7 @@ mod tests {
         let at = index_of(&first_page, chosen, 0);
         assert_eq!(at, Some(40));
 
-        let mut both_pages = first_page;
-        both_pages.extend(history(200).into_iter().skip(64));
+        let both_pages = rows_of(0..200);
         assert_eq!(
             index_of(&both_pages, chosen, 40),
             Some(40),
@@ -426,8 +441,7 @@ mod tests {
         let chosen = RowId::Commit(oid(5));
         assert_eq!(index_of(&before, chosen, 5), Some(5));
 
-        let mut both = history(1);
-        both.extend(before);
+        let both = rows_of((0..1).chain(0..8));
 
         assert_eq!(
             index_of(&both, chosen, 5),

@@ -20,7 +20,7 @@ mod worker;
 
 use std::rc::Rc;
 
-use cairn_model::{HistoryRow, RemoteSummary, RowId};
+use cairn_model::{History, RemoteSummary, RowId};
 use cairn_ui::diff_palette::DIFF_FONT_FAMILY;
 use cairn_ui::{DetailTab, DiffSettings};
 use freya::prelude::*;
@@ -61,7 +61,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     use_init_theme(dark_theme);
 
     // The one copy of the history; this scope must not read it, only `progress`.
-    let rows = use_state(Vec::<HistoryRow>::new);
+    let rows = use_state(History::new);
     let mut progress = use_state(Progress::opening);
     let selected = use_state(|| None::<RowId>);
     let fetch = use_state(|| FetchStatus::Idle);

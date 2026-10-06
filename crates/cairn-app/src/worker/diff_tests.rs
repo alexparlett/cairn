@@ -46,9 +46,7 @@ pub(crate) fn commits(handle: &RepositoryHandle, updates: &mut Updates, count: u
     handle.submit(Request::OpenHistory { rows: count });
     let seen = collect_until(updates, |u| matches!(u, Update::Rows { .. }));
     match seen.last() {
-        Some(Update::Rows { rows, .. }) if rows.len() == count => {
-            rows.iter().map(|row| row.graph.id).collect()
-        }
+        Some(Update::Rows { rows, .. }) if rows.len() == count => rows.ids().collect(),
         other => panic!("expected {count} rows, got {other:?}"),
     }
 }
@@ -67,7 +65,7 @@ pub(crate) fn recent_commits(
         Some(Update::Rows { rows, complete })
             if !rows.is_empty() && (rows.len() == at_most || *complete) =>
         {
-            rows.iter().map(|row| row.graph.id).collect()
+            rows.ids().collect()
         }
         other => panic!("expected up to {at_most} rows, got {other:?}"),
     }

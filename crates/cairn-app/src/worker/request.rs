@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use cairn_model::ShownDiff;
 use cairn_model::{
-    ChangeSet, ChangedFile, CommandRecord, Context, HistoryRow, Oid, RemoteSummary, RepoPath,
+    ChangeSet, ChangedFile, CommandRecord, Context, Oid, RemoteSummary, RepoPath, RowsPage,
 };
 
 use super::askpass::PromptId;
@@ -292,10 +292,9 @@ impl Request {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Update {
     /// `complete` says the history has no more to give.
-    Rows {
-        rows: Vec<HistoryRow>,
-        complete: bool,
-    },
+    /// One page of rows, its text, authors, lane changes and snapshots beside them, for the
+    /// window to append to its history (`cairn_model::History::append`).
+    Rows { rows: RowsPage, complete: bool },
     /// `message` is display text, already rendered from the engine's error.
     Failed { message: String },
     /// A worker died. Tied to no request, so never filtered out by epoch.

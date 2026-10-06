@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use cairn_model::{
-    CommitSummary, GraphRow, HistoryRow, Lane, LaneAssigner, Oid, RowContent, RowEdges, RowId,
+    GraphRow, History, Lane, LaneAssigner, Oid, PagedCommit, RowContent, RowEdges, RowId, RowsPage,
 };
 use cairn_ui::accelerators::{self, Action, Os};
 use cairn_ui::{HistoryList, PREFETCH_ROWS, ROW_HEIGHT, RowRender};
@@ -25,22 +25,31 @@ fn oid(n: usize) -> Oid {
     Oid::from_bytes(&bytes).unwrap_or_else(|_| unreachable!("20 bytes is a SHA-1"))
 }
 
-fn row(n: usize) -> HistoryRow {
-    HistoryRow {
-        content: RowContent::Commit(CommitSummary {
-            id: oid(n),
-            parents: Vec::new(),
-            summary: format!("commit {n}"),
-            author_name: "A".to_owned(),
-            author_email: "a@example.com".to_owned(),
-            author_time: 0,
-        }),
-        graph: GraphRow::new(oid(n), Lane::new(0), Vec::new()),
+/// A page of rows `commit n` for each `n` of `range`.
+fn page(range: impl IntoIterator<Item = usize>) -> RowsPage {
+    let mut page = RowsPage::new();
+    for n in range {
+        page.push(
+            GraphRow::new(oid(n), Lane::new(0), Vec::new()),
+            PagedCommit {
+                parents: 1,
+                subject: &format!("commit {n}"),
+                author: "A",
+                author_time: 0,
+            },
+        );
     }
+    page
 }
 
-fn rows(range: std::ops::Range<usize>) -> Vec<HistoryRow> {
-    range.map(row).collect()
+fn hold(history: &mut History, page: RowsPage) {
+    history.append(page).unwrap_or_else(|full| panic!("{full}"));
+}
+
+fn rows(range: impl IntoIterator<Item = usize>) -> History {
+    let mut history = History::new();
+    hold(&mut history, page(range));
+    history
 }
 
 /// What the list reported, in order.
@@ -52,7 +61,7 @@ struct Reports {
 
 #[derive(Clone)]
 struct Fixture {
-    rows: State<Vec<HistoryRow>>,
+    rows: State<History>,
     selected: State<Option<RowId>>,
 }
 
@@ -65,7 +74,7 @@ fn list(reports: Reports) -> impl Fn() -> Element + 'static {
         let reached_end = reports.reached_end.clone();
 
         HistoryList::new(fixture.rows, |render: RowRender| {
-            let RowContent::Commit(commit) = render.row.content;
+            let RowContent::Commit(commit) = render.content;
             let marker = if render.selected { "> " } else { "" };
             label()
                 .height(Size::px(ROW_HEIGHT))
@@ -82,7 +91,7 @@ fn list(reports: Reports) -> impl Fn() -> Element + 'static {
     }
 }
 
-fn launch(initial: Vec<HistoryRow>, reports: &Reports) -> (TestingRunner, Fixture) {
+fn launch(initial: History, reports: &Reports) -> (TestingRunner, Fixture) {
     let (mut test, fixture) = TestingRunner::new(
         list(reports.clone()),
         (WIDTH, HEIGHT).into(),
@@ -237,7 +246,7 @@ fn the_selection_follows_its_row_when_rows_arrive_below_and_above_it() {
     press(&mut test, NamedKey::PageDown);
     assert_eq!(selected_rows(&test), vec!["commit 11".to_owned()]);
 
-    held.write().extend(rows(65..129));
+    hold(&mut held.write(), page(65..129));
     test.sync_and_update();
     assert_eq!(
         selected_rows(&test),
@@ -245,7 +254,9 @@ fn the_selection_follows_its_row_when_rows_arrive_below_and_above_it() {
         "a page arriving below moved the selection"
     );
 
-    held.write().insert(0, row(0));
+    // Rows only append to a history, so a row arrives above by the history being read
+    // again with it: the reopen a fetch that moved refs asks for.
+    held.set(rows(0..129));
     test.sync_and_update();
     assert!(
         built_rows(&test).iter().any(|(text, _)| text == "commit 0"),
@@ -407,7 +418,7 @@ fn the_end_is_reported_when_it_comes_into_view_and_not_on_every_frame() {
     );
 
     let mut held = fixture.rows;
-    held.write().extend(rows(length..length * 2));
+    hold(&mut held.write(), page(length..length * 2));
     test.sync_and_update();
     test.scroll((100., 100.), (0., -2. * length as f64 * ROW_HEIGHT as f64));
     assert!(
@@ -490,21 +501,23 @@ fn rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew() {
         .enumerate()
         .map(|(index, (id, _))| (*id, index))
         .collect();
-    let history: Vec<HistoryRow> = graphs
-        .into_iter()
-        .zip(&walk)
-        .map(|(graph, (id, parents))| HistoryRow {
-            content: RowContent::Commit(CommitSummary {
-                id: *id,
-                parents: parents.clone(),
-                summary: format!("commit {}", index_of[id]),
-                author_name: "A".to_owned(),
-                author_email: "a@example.com".to_owned(),
-                author_time: 0,
-            }),
-            graph,
-        })
-        .collect();
+    let mut history = History::new();
+    // Pages of the application's 64 rows, as the worker hands them over.
+    for chunk in graphs.chunks(64) {
+        let mut paged = RowsPage::new();
+        for graph in chunk {
+            paged.push(
+                graph.clone(),
+                PagedCommit {
+                    parents: walk[index_of[&graph.id]].1.len(),
+                    subject: &format!("commit {}", index_of[&graph.id]),
+                    author: "A",
+                    author_time: 0,
+                },
+            );
+        }
+        hold(&mut history, paged);
+    }
 
     let drawn: Rc<RefCell<Vec<(usize, RowEdges)>>> = Rc::default();
     let recorder = drawn.clone();
@@ -515,7 +528,7 @@ fn rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew() {
             let recorder = recorder.clone();
             let index_of = index_of_row.clone();
             HistoryList::new(fixture.rows, move |render: RowRender| {
-                let RowContent::Commit(commit) = &render.row.content;
+                let RowContent::Commit(commit) = &render.content;
                 recorder
                     .borrow_mut()
                     .push((index_of[&commit.id], render.graph.clone()));

@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use cairn_model::{DiffContent, HistoryRow, Oid, RemoteSummary, RowId};
+use cairn_model::{DiffContent, History, Oid, RemoteSummary, RowId};
 use cairn_ui::diff_palette::DIFF_FONT_FAMILY;
 use cairn_ui::{DetailTab, DiffSettings};
 use freya::prelude::*;
@@ -354,7 +354,7 @@ fn launch(path: &str) -> Harness {
         (WIDTH, HEIGHT).into(),
         |runner| {
             runner.provide_root_context(|| View {
-                rows: State::create(Vec::<HistoryRow>::new()),
+                rows: State::create(History::new()),
                 progress: State::create(Progress::opening()),
                 selected: State::create(None),
                 fetch: State::create(FetchStatus::Idle),
@@ -436,8 +436,7 @@ fn window_check() {
         .view
         .rows
         .peek()
-        .first()
-        .map(|row| row.id())
+        .id(0)
         .unwrap_or_else(|| panic!("no history"));
     let first = {
         let submit = harness.submit();

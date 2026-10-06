@@ -4,6 +4,7 @@
 mod askpass;
 mod change_set;
 mod changed_file;
+mod chunked_store;
 mod command_log;
 mod commit_details;
 mod confirm;
@@ -26,6 +27,7 @@ mod prompt;
 mod refs;
 mod remote;
 mod repo_path;
+mod rows_page;
 mod secret;
 mod status;
 
@@ -47,7 +49,7 @@ pub use diff_shown::{LINE_CUT_BYTES, ShownDiff, TAB_STOP, drawn_bytes, widest_dr
 pub use diff_text::{ChangedRange, DiffLine, LineNumber, LineSpan, TextDiff, split_lines};
 pub use edge_derivation::{LaidOutRow, LaidOutRows, LaneSnapshot, RowEdges, row_edges};
 pub use graph::{EdgeKind, EdgeSegment, GraphRow, Lane, LaneChange};
-pub use history::{HistoryRow, RowContent, RowId};
+pub use history::{History, HistoryFull, HistoryRow, RetainedBytes, RowContent, RowId};
 pub use lane_assignment::LaneAssigner;
 pub use line_selection::Selection;
 pub use oid::{Oid, OidHex, OidParseError};
@@ -59,19 +61,24 @@ pub use refs::{
 };
 pub use remote::RemoteSummary;
 pub use repo_path::RepoPath;
+pub use rows_page::{PagedCommit, RowsPage};
 pub use secret::Secret;
 pub use status::{
     ChangedEntry, ConflictKind, ConflictedEntry, StagedChange, StatusEntry, SubmoduleState,
     UnreadableIndex, UnstagedChange, WorkingTreeStatus,
 };
 
+/// A commit as the history list draws it, read out of a [`History`]: no parents beyond
+/// their count and no author address, which the list never draws — the details query
+/// carries both (`CommitDetails`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitSummary {
     pub id: Oid,
-    pub parents: Vec<Oid>,
+    /// How many parents the commit names, saturating at `u16::MAX`: more than one draws
+    /// its node as a merge's ring.
+    pub parent_count: usize,
     pub summary: String,
     pub author_name: String,
-    pub author_email: String,
     /// Seconds since the Unix epoch.
     pub author_time: i64,
 }

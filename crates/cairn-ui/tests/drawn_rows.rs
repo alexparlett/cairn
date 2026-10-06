@@ -3,11 +3,12 @@
 //!
 //! `DRAWN_BEFORE` is what the list drew before: it was asserted against the old rows — each
 //! carrying its full parents and its author's address — while those rows were still what
-//! the list read, and the slimmed rows are now held to it. Each row is drawn by the
+//! the list read (commit `4205d5d`), and the slimmed rows, read through a history built page by page, are now
+//! held to it. Each row is drawn by the
 //! window's own row, `CommitRow`, and read back from the drawn tree: its labels' text, and
 //! the pixel at the centre of its node, which a dot fills and a merge's ring leaves empty.
 
-use cairn_model::{CommitSummary, GraphRow, HistoryRow, Lane, Oid, RowContent};
+use cairn_model::{GraphRow, History, Lane, Oid, PagedCommit, RowContent, RowsPage};
 use cairn_ui::graph_geometry::{lane_x, row_middle};
 use cairn_ui::{CommitRow, HistoryList, ROW_HEIGHT, ROW_PADDING, RowRender};
 use freya::engine::prelude::{Image, ImageInfo, raster_n32_premul};
@@ -100,27 +101,33 @@ fn subject(written: &str) -> String {
     }
 }
 
-fn history() -> Vec<HistoryRow> {
-    WRITTEN
-        .iter()
-        .map(|&(first, summary, author, time, parents)| HistoryRow {
-            content: RowContent::Commit(CommitSummary {
-                id: oid(first),
-                parents: (0..parents).map(|n| oid(0xf0 + n as u8)).collect(),
-                summary: subject(summary),
-                author_name: author.to_owned(),
-                author_email: "someone@example.com".to_owned(),
-                author_time: time,
-            }),
-            graph: GraphRow::new(oid(first), Lane::new(0), Vec::new()),
-        })
-        .collect()
+/// The rows, appended to one history two at a time, as the worker's pages are: the first
+/// page brings two authors, later ones bring one new author or none.
+fn history() -> History {
+    let mut history = History::new();
+    for pair in WRITTEN.chunks(2) {
+        let mut page = RowsPage::new();
+        for &(first, summary, author, author_time, parents) in pair {
+            let subject = subject(summary);
+            page.push(
+                GraphRow::new(oid(first), Lane::new(0), Vec::new()),
+                PagedCommit {
+                    parents,
+                    subject: &subject,
+                    author,
+                    author_time,
+                },
+            );
+        }
+        history.append(page).unwrap_or_else(|full| panic!("{full}"));
+    }
+    history
 }
 
 /// The list as the window draws it: each row a `CommitRow`.
 fn app() -> Element {
-    let rows = use_consume::<State<Vec<HistoryRow>>>();
-    HistoryList::new(rows, |render: RowRender| match render.row.content {
+    let rows = use_consume::<State<History>>();
+    HistoryList::new(rows, |render: RowRender| match render.content {
         RowContent::Commit(commit) => CommitRow::new(commit, render.graph, render.lanes).into(),
     })
     .into()

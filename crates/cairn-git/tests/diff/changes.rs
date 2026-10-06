@@ -686,6 +686,8 @@ fn the_text_of_an_encoded_commit_is_the_text_git_prints() {
         ),
         "the history",
     );
+    let mut history = cairn_model::History::new();
+    ok(history.append(page.rows), "holding the history");
     for (id, what) in &commits {
         let hex = id.to_string();
         let field = |format: &str| {
@@ -721,23 +723,18 @@ fn the_text_of_an_encoded_commit_is_the_text_git_prints() {
         );
 
         let row = some(
-            page.rows
-                .iter()
-                .find(|row| row.id() == cairn_model::RowId::Commit(*id)),
+            history
+                .position(cairn_model::RowId::Commit(*id))
+                .and_then(|at| history.row(at)),
             "the commit's row",
         );
-        match &row.content {
+        match row.content() {
             cairn_model::RowContent::Commit(summary) => {
                 assert_eq!(summary.summary, field("%s"), "{what}: the row's subject");
                 assert_eq!(
                     summary.author_name,
                     field("%an"),
                     "{what}: the row's author"
-                );
-                assert_eq!(
-                    summary.author_email,
-                    field("%ae"),
-                    "{what}: the row's address"
                 );
             }
         }

@@ -2,9 +2,11 @@
 
 use std::collections::VecDeque;
 
-use cairn_model::{GraphRow, HistoryRow, LaneAssigner, Oid, RowContent};
+use cairn_model::{GraphRow, LaneAssigner, Oid, RowsPage};
 
-use super::{HistoryCursor, HistoryOrder, HistoryPage, HistoryRequest, Resolved, starting_points};
+use super::{
+    Commit, HistoryCursor, HistoryOrder, HistoryPage, HistoryRequest, Resolved, starting_points,
+};
 use crate::{Cancel, Error, Repository};
 
 /// Rows are handed out only once the assigner has made them final.
@@ -12,10 +14,11 @@ pub struct HistorySession<'repo> {
     repo: &'repo gix::Repository,
     walk: super::walk::CommitWalk<'repo>,
     assigner: LaneAssigner,
-    /// Rows made final and not yet handed to the caller.
-    ready: VecDeque<HistoryRow>,
-    /// Walked commits still inside the window, oldest first; the front is the next row to leave.
-    pending: VecDeque<(Oid, Vec<Oid>)>,
+    /// Rows made final, each with its commit read, and not yet handed to the caller.
+    ready: VecDeque<(GraphRow, Commit)>,
+    /// Walked commits still inside the window, with how many parents each has, oldest
+    /// first; the front is the next row to leave.
+    pending: VecDeque<(Oid, usize)>,
     tips: super::Tips,
     order: HistoryOrder,
     window: usize,
@@ -95,7 +98,10 @@ impl HistorySession<'_> {
         }
 
         let take = limit.min(self.ready.len());
-        let rows: Vec<HistoryRow> = self.ready.drain(..take).collect();
+        let mut rows = RowsPage::new();
+        for (graph, commit) in self.ready.drain(..take) {
+            rows.push(graph, commit.paged());
+        }
         self.delivered += rows.len();
         let more = !self.exhausted || !self.ready.is_empty();
 
@@ -144,7 +150,7 @@ impl HistorySession<'_> {
         let id = crate::object_id::model_id(&info.id)?;
         let parents = super::parents_of(&info)?;
         if self.walked >= self.skip {
-            self.pending.push_back((id, parents.clone()));
+            self.pending.push_back((id, parents.len()));
         }
         self.walked += 1;
 
@@ -166,12 +172,9 @@ impl HistorySession<'_> {
             // Unreachable: one id is pushed per commit past the prefix.
             return Ok(());
         };
-        let commit = super::summary_of_commit(self.repo, &id, &parents)?;
+        let commit = super::summary_of_commit(self.repo, &id, parents)?;
         self.decoded += 1;
-        self.ready.push_back(HistoryRow {
-            content: RowContent::Commit(commit),
-            graph,
-        });
+        self.ready.push_back((graph, commit));
         Ok(())
     }
 }
@@ -221,12 +224,17 @@ mod tests {
         let first = session.next_page(3, &CancelSignal::new()).unwrap();
         let second = session.next_page(3, &CancelSignal::new()).unwrap();
 
-        let paged: Vec<_> = first.rows.iter().chain(second.rows.iter()).collect();
-        assert_eq!(paged.len(), one_page.rows.len(), "row counts differ");
-        for (from_session, from_cursor) in paged.iter().zip(one_page.rows.iter()) {
+        let mut paged = cairn_model::History::new();
+        paged.append(first.rows).unwrap();
+        paged.append(second.rows).unwrap();
+        let mut whole = cairn_model::History::new();
+        whole.append(one_page.rows).unwrap();
+        assert_eq!(paged.len(), whole.len(), "row counts differ");
+        for (from_session, from_cursor) in paged.rows().zip(whole.rows()) {
             assert_eq!(from_session.id(), from_cursor.id(), "different commits");
             assert_eq!(
-                from_session.graph.lane, from_cursor.graph.lane,
+                from_session.lane(),
+                from_cursor.lane(),
                 "the same commit landed in different lanes"
             );
         }
@@ -298,7 +306,7 @@ mod tests {
 
         assert_eq!(next.rows.len(), 2);
         assert!(
-            !head.rows.iter().any(|r| r.id() == next.rows[0].id()),
+            !head.rows.ids().any(|id| next.rows.ids().next() == Some(id)),
             "the cold restart repeated a row the first session had handed out"
         );
         // Only rows handed out are decoded.

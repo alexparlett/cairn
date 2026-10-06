@@ -16,18 +16,14 @@ use crate::{EdgeSegment, GraphRow, Lane, LaneAssigner, LaneChange};
 pub struct LaneSnapshot {
     /// Bit `n` of word `n / 64`: lane `n` carries a line down into the row. No trailing
     /// zero word.
-    open: Box<[u64]>,
+    pub(crate) open: Box<[u64]>,
     /// Out-of-order lines crossing into the row, in the order they are drawn.
-    late: Box<[LateLine]>,
+    pub(crate) late: Box<[LateLine]>,
 }
 
 impl LaneSnapshot {
     pub(crate) fn highest_lane(&self) -> Option<Lane> {
-        let open = self.open.iter().enumerate().rev().find_map(|(word, bits)| {
-            (*bits != 0).then(|| word * 64 + 63 - bits.leading_zeros() as usize)
-        });
-        let late = self.late.iter().map(|line| line.lane.index()).max();
-        open.max(late).map(Lane::new)
+        SnapshotView::of(self).highest_lane()
     }
 
     /// Heap bytes the snapshot holds, by capacity.
@@ -77,11 +73,19 @@ pub(crate) struct SnapshotView<'a> {
 }
 
 impl<'a> SnapshotView<'a> {
-    fn of(snapshot: &'a LaneSnapshot) -> Self {
+    pub(crate) fn of(snapshot: &'a LaneSnapshot) -> Self {
         Self {
             open: &snapshot.open,
             late: &snapshot.late,
         }
+    }
+
+    pub(crate) fn highest_lane(self) -> Option<Lane> {
+        let open = self.open.iter().enumerate().rev().find_map(|(word, bits)| {
+            (*bits != 0).then(|| word * 64 + 63 - bits.leading_zeros() as usize)
+        });
+        let late = self.late.iter().map(|line| line.lane.index()).max();
+        open.max(late).map(Lane::new)
     }
 }
 

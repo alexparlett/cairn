@@ -19,10 +19,9 @@ fn commit() -> (CommitSummary, RowEdges) {
     (
         CommitSummary {
             id,
-            parents: Vec::new(),
+            parent_count: 0,
             summary: SUBJECT.to_owned(),
             author_name: AUTHOR.to_owned(),
-            author_email: "ada@example.com".to_owned(),
             author_time: WHEN,
         },
         RowEdges {

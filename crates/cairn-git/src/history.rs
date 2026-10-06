@@ -5,7 +5,7 @@ pub(crate) mod walk;
 
 use std::sync::Arc;
 
-use cairn_model::{CommitSummary, HistoryRow, LaneAssigner, Oid, RowContent};
+use cairn_model::{GraphRow, LaneAssigner, Oid, PagedCommit, RowsPage};
 
 pub use session::HistorySession;
 
@@ -123,8 +123,9 @@ impl HistoryRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryPage {
     /// Lane indices do not depend on paging; edges do. A backward line crossing a page
-    /// boundary arrives as its lower half only, still flagged out of order.
-    pub rows: Vec<HistoryRow>,
+    /// boundary arrives as its lower half only, still flagged out of order. Read by
+    /// appending to a [`cairn_model::History`].
+    pub rows: RowsPage,
     /// `None` at the end of the history; a zero limit hands back the given cursor.
     pub cursor: Option<HistoryCursor>,
     /// Commits laid out for this page, including a replayed prefix.
@@ -159,7 +160,7 @@ fn read_page(
     if request.limit == 0 {
         // `resume` consumed the caller's cursor; hand it back.
         return Ok(HistoryPage {
-            rows: Vec::new(),
+            rows: RowsPage::new(),
             cursor: Some(HistoryCursor {
                 tips,
                 order,
@@ -177,8 +178,8 @@ fn read_page(
     // The page's first row carries a snapshot, so it draws without the replayed prefix.
     let mut assigner = LaneAssigner::with_window(window).drawn_from(skip);
     let mut page = Page {
-        rows: Vec::new(),
-        summaries: Vec::new(),
+        rows: RowsPage::new(),
+        commits: Vec::new(),
         next_row: 0,
         skip,
     };
@@ -201,8 +202,8 @@ fn read_page(
         let id = model_id(&info.id)?;
         let parents = parents_of(&info)?;
         if walked >= skip && walked < target {
-            page.summaries
-                .push(summary_of_commit(repo.inner(), &id, &parents)?);
+            page.commits
+                .push(summary_of_commit(repo.inner(), &id, parents.len())?);
             decoded += 1;
         }
         walked += 1;
@@ -258,28 +259,45 @@ fn next_cursor(
     }
 }
 
-/// `summaries` is indexed by position, not consumed in order.
+/// `commits` is indexed by position, not consumed in order.
 struct Page {
-    rows: Vec<HistoryRow>,
-    summaries: Vec<CommitSummary>,
+    rows: RowsPage,
+    commits: Vec<Commit>,
     next_row: usize,
     skip: usize,
 }
 
 impl Page {
-    fn take(&mut self, graph: cairn_model::GraphRow) {
+    fn take(&mut self, graph: GraphRow) {
         let position = self.next_row;
         self.next_row += 1;
         let Some(offset) = position.checked_sub(self.skip) else {
             return; // Before this page starts.
         };
-        let Some(commit) = self.summaries.get(offset) else {
+        let Some(commit) = self.commits.get(offset) else {
             return; // After it ends: the walk stopped at `target`.
         };
-        self.rows.push(HistoryRow {
-            content: RowContent::Commit(commit.clone()),
-            graph,
-        });
+        self.rows.push(graph, commit.paged());
+    }
+}
+
+/// What a row draws of its commit, read once by the walk and copied into a page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Commit {
+    parents: usize,
+    subject: String,
+    author: String,
+    author_time: i64,
+}
+
+impl Commit {
+    fn paged(&self) -> PagedCommit<'_> {
+        PagedCommit {
+            parents: self.parents,
+            subject: &self.subject,
+            author: &self.author,
+            author_time: self.author_time,
+        }
     }
 }
 
@@ -348,12 +366,9 @@ fn walk_tips(repo: &gix::Repository, tips: &[Oid]) -> Result<Tips, Error> {
     Ok(object_ids.into())
 }
 
-/// The one place a walk step reads a commit object, by id: the walk hands over ids only.
-fn summary_of_commit(
-    repo: &gix::Repository,
-    id: &Oid,
-    parents: &[Oid],
-) -> Result<CommitSummary, Error> {
+/// The one place a walk step reads a commit object, by id: the walk hands over ids only,
+/// and `parents` counts the parents it read for it (`parents_of`).
+fn summary_of_commit(repo: &gix::Repository, id: &Oid, parents: usize) -> Result<Commit, Error> {
     let commit = repo
         .find_commit(object_id(id)?)
         .map_err(|source| Error::ReadCommit {
@@ -363,11 +378,7 @@ fn summary_of_commit(
     summary_from(&commit, id, parents)
 }
 
-fn summary_from(
-    commit: &gix::Commit<'_>,
-    id: &Oid,
-    parents: &[Oid],
-) -> Result<CommitSummary, Error> {
+fn summary_from(commit: &gix::Commit<'_>, id: &Oid, parents: usize) -> Result<Commit, Error> {
     let read = |source: Box<dyn std::error::Error + Send + Sync>| Error::ReadCommit {
         id: id.to_string(),
         source,
@@ -378,12 +389,10 @@ fn summary_from(
     let encoding = CommitEncoding::of_commit(commit, &decoded);
     let author = decoded.author().map_err(|e| read(Box::new(e)))?;
     let time = author.time().map_err(|e| read(Box::new(e)))?;
-    Ok(CommitSummary {
-        id: *id,
-        parents: parents.to_vec(),
-        summary: encoding.text(&decoded.message().summary()),
-        author_name: encoding.text(author.name),
-        author_email: encoding.text(author.email),
+    Ok(Commit {
+        parents,
+        subject: encoding.text(&decoded.message().summary()),
+        author: encoding.text(author.name),
         author_time: time.seconds,
     })
 }
@@ -411,15 +420,15 @@ mod tests {
             page.rows.len(),
             "decoded a commit for nothing"
         );
-        for row in &page.rows {
-            assert_eq!(
-                row.id(),
-                cairn_model::RowId::Commit(row.graph.id),
-                "the two halves named different commits"
-            );
+        let ids: Vec<Oid> = page.rows.ids().collect();
+        let mut history = cairn_model::History::new();
+        history.append(page.rows).unwrap();
+        for (row, id) in history.rows().zip(ids) {
+            assert_eq!(row.id(), cairn_model::RowId::Commit(id));
             // No wildcard arm: a new variant must fail to compile here.
-            match &row.content {
-                RowContent::Commit(commit) => {
+            match row.content() {
+                cairn_model::RowContent::Commit(commit) => {
+                    assert_eq!(commit.id, id, "the row's content is another commit's");
                     assert!(!commit.summary.is_empty(), "a commit with no summary");
                 }
             }
@@ -538,7 +547,7 @@ mod tests {
                     ""
                 },
             );
-            report_layout(&page);
+            report_layout(page);
         }
     }
 
@@ -566,21 +575,21 @@ mod tests {
         tips.iter().map(|id| model_id(id).unwrap()).collect()
     }
 
-    /// Segments are the derived edges each row draws; bytes are what a `GraphRow` retains,
-    /// its lane changes and any snapshot, by capacity.
-    fn report_layout(page: &HistoryPage) {
-        let mut segments = Vec::with_capacity(page.rows.len());
-        let mut open_lanes = Vec::with_capacity(page.rows.len());
-        let mut bytes = Vec::with_capacity(page.rows.len());
+    /// Segments are the derived edges each row draws; bytes are what the page's rows retain
+    /// once appended to a history, every store by capacity.
+    fn report_layout(page: HistoryPage) {
+        let mut history = cairn_model::History::new();
+        history.append(page.rows).unwrap();
+        let mut segments = Vec::with_capacity(history.len());
+        let mut open_lanes = Vec::with_capacity(history.len());
         let mut out_of_order_rows = 0usize;
         let mut out_of_order_segments = 0usize;
         let mut widest_lane = 0usize;
         // Rows with no snapshot within reach: the list would draw their node alone.
         let mut underived = 0usize;
 
-        for (index, row) in page.rows.iter().enumerate() {
-            let graph = &row.graph;
-            let edges = match cairn_model::row_edges(&page.rows, index) {
+        for row in history.rows() {
+            let edges = match row.edges() {
                 Some(drawn) => drawn.edges,
                 None => {
                     underived += 1;
@@ -588,10 +597,9 @@ mod tests {
                 }
             };
             segments.push(edges.len());
-            bytes.push(size_of::<cairn_model::GraphRow>() + graph.heap_bytes());
 
             // Open = occupied by the node or either end of a segment.
-            let mut lanes = vec![graph.lane.index()];
+            let mut lanes = vec![row.lane().index()];
             for edge in &edges {
                 for lane in [edge.from.index(), edge.to.index()] {
                     if !lanes.contains(&lane) {
@@ -611,24 +619,20 @@ mod tests {
 
         describe("segments/row ", &mut segments);
         describe("open lanes/row", &mut open_lanes);
-        describe("bytes/row     ", &mut bytes);
 
-        let rows = page.rows.len().max(1);
+        let rows = history.len().max(1);
         eprintln!(
             "    out-of-order: {out_of_order_rows} rows ({:.3}%), {out_of_order_segments} segments",
             100.0 * out_of_order_rows as f64 / rows as f64,
         );
         eprintln!("    highest lane number used: {widest_lane}");
         eprintln!("    rows whose edges could not be derived: {underived}");
-
-        let p99 = percentile(&bytes, 0.99);
-        for commits in [10_000usize, 100_000, 500_000] {
-            let total = p99 * commits;
-            eprintln!(
-                "    at p99 {p99} B/row x {commits} commits = {:.1} MB retained layout",
-                total as f64 / (1024.0 * 1024.0),
-            );
-        }
+        let retained = history.retained();
+        eprintln!(
+            "    retained {:.1} MiB, {} B/row: {retained:?}",
+            retained.total() as f64 / (1024.0 * 1024.0),
+            retained.total() / rows,
+        );
         assert_eq!(
             underived, 0,
             "{underived} rows had no snapshot within reach, so their edges were not derived"

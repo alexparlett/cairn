@@ -46,12 +46,15 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         } => {
             // Count before handing the rows over; afterwards it rereads the whole history.
             let widest = history_state::widest_lane(&page);
-            let loaded = {
-                let mut held = rows.write();
-                held.extend(page);
-                held.len()
+            let (loaded, held) = {
+                let mut history = rows.write();
+                let held = history.append(page);
+                (history.len(), held)
             };
             progress.write().received(widest, complete, loaded);
+            if let Err(full) = held {
+                progress.write().failed(full.to_string());
+            }
         }
         Update::Failed { message } | Update::WorkerLost { message } => {
             progress.write().failed(message);
@@ -173,14 +176,14 @@ fn retire(retired: Option<Retired>, worker: &Worker<'_>) {
 /// has stopped, and clearing every row on the way out is work for nothing.
 fn reload_if(
     refreshed: bool,
-    mut rows: State<Vec<cairn_model::HistoryRow>>,
+    mut rows: State<cairn_model::History>,
     mut progress: State<Progress>,
     worker: &Worker<'_>,
 ) {
     if !refreshed || worker.closing {
         return;
     }
-    rows.write().clear();
+    rows.set(cairn_model::History::new());
     progress.set(Progress::opening());
     (worker.submit)(Request::OpenHistory { rows: PAGE_ROWS });
 }
@@ -198,27 +201,39 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use cairn_model::{CommitSummary, GraphRow, HistoryRow, Lane, Oid, RowContent};
+    use cairn_model::{GraphRow, History, Lane, Oid, PagedCommit, RowsPage};
     use freya_testing::TestingRunner;
 
     use super::*;
     use crate::history_state::Status;
 
-    fn row(n: u8) -> HistoryRow {
+    fn oid(n: u8) -> Oid {
         let mut bytes = [0u8; 20];
         bytes[19] = n;
-        let id = Oid::from_bytes(&bytes).unwrap_or_else(|_| unreachable!("20 bytes is a SHA-1"));
-        HistoryRow {
-            content: RowContent::Commit(CommitSummary {
-                id,
-                parents: Vec::new(),
-                summary: format!("commit {n}"),
-                author_name: "Ada".to_owned(),
-                author_email: "ada@example.com".to_owned(),
-                author_time: 0,
-            }),
-            graph: GraphRow::new(id, Lane::new(0), Vec::new()),
+        Oid::from_bytes(&bytes).unwrap_or_else(|_| unreachable!("20 bytes is a SHA-1"))
+    }
+
+    /// A page of rows `commit n` for each `n` of `ids`, each by `author`.
+    fn page(ids: impl IntoIterator<Item = u8>, author: &str) -> RowsPage {
+        let mut page = RowsPage::new();
+        for n in ids {
+            page.push(
+                GraphRow::new(oid(n), Lane::new(0), Vec::new()),
+                PagedCommit {
+                    parents: 1,
+                    subject: &format!("commit {n}"),
+                    author,
+                    author_time: 0,
+                },
+            );
         }
+        page
+    }
+
+    fn history_of(page: RowsPage) -> History {
+        let mut history = History::new();
+        history.append(page).unwrap_or_else(|full| panic!("{full}"));
+        history
     }
 
     /// What the worker was asked, and which prompts were refused (never a secret).
@@ -240,7 +255,7 @@ mod tests {
                     let mut progress = Progress::opening();
                     progress.received(1, false, 3);
                     View {
-                        rows: State::create((0..3).map(row).collect()),
+                        rows: State::create(history_of(page(0..3, "Ada"))),
                         progress: State::create(progress),
                         selected: State::create(None),
                         fetch: State::create(fetch),

@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use cairn_git::{CancelSignal, HistoryOrder, HistoryRequest, Repository};
 use cairn_model::{
-    GraphRow, HistoryRow, LaneAssigner, LaneChange, Oid, RowContent, RowEdges, row_edges,
+    GraphRow, History, LaneAssigner, LaneChange, Oid, RetainedBytes, RowEdges, RowId, row_edges,
 };
 use layout_before_compaction::{AssignerBeforeCompaction, RowBeforeCompaction};
 
@@ -25,11 +25,16 @@ fn ok<T, E: std::fmt::Display>(result: Result<T, E>, what: &str) -> T {
     }
 }
 
-/// The ids and parents the assigner was handed, in walk order. No wildcard arm.
-fn walk_of(rows: &[HistoryRow]) -> Vec<(Oid, Vec<Oid>)> {
-    rows.iter()
-        .map(|row| match &row.content {
-            RowContent::Commit(commit) => (commit.id, commit.parents.clone()),
+/// The ids and parents the assigner was handed, in walk order: a row keeps how many
+/// parents its commit has, so which they are is read from the details query, as anything
+/// that needs them reads them. No wildcard arm.
+fn walk_of(repo: &Repository, rows: &History) -> Vec<(Oid, Vec<Oid>)> {
+    rows.rows()
+        .map(|row| match row.id() {
+            RowId::Commit(id) => {
+                let details = ok(repo.commit_details(&id), "reading a commit's parents");
+                (id, details.parents)
+            }
         })
         .collect()
 }
@@ -63,12 +68,12 @@ fn every_ref_tip(repo: &Repository) -> Vec<Oid> {
 }
 
 /// Pages a held session to the end, keeping every row as the window keeps them.
-fn page_all(repo: &Repository, request: &HistoryRequest) -> Vec<HistoryRow> {
+fn page_all(repo: &Repository, request: &HistoryRequest) -> History {
     let mut session = ok(repo.history_session(request), "opening the session");
-    let mut rows = Vec::new();
+    let mut rows = History::new();
     loop {
         let page = ok(session.next_page(PAGE, &CancelSignal::new()), "paging");
-        rows.extend(page.rows);
+        ok(rows.append(page.rows), "holding a page");
         if page.cursor.is_none() {
             return rows;
         }
@@ -86,14 +91,15 @@ struct Checked {
 /// the reader holds; `before` is the old assigner's output for the same rows.
 fn assert_draws_what_it_drew(
     what: &str,
-    rows: &[HistoryRow],
+    rows: &History,
     before: &[RowBeforeCompaction],
     checked: &mut Checked,
 ) {
     assert_eq!(rows.len(), before.len(), "{what}: a row was lost");
-    for (index, (row, old)) in rows.iter().zip(before).enumerate() {
+    for (index, (row, old)) in rows.rows().zip(before).enumerate() {
         assert_eq!(
-            row.graph.id, old.id,
+            row.id(),
+            RowId::Commit(old.id),
             "{what}: row {index} is another commit"
         );
         let drawn = row_edges(rows, index);
@@ -139,7 +145,7 @@ fn the_cairn_checkouts_rows_draw_what_the_assigner_drew_before_compaction() {
             for window in [LaneAssigner::DEFAULT_WINDOW, 8] {
                 let request = request.clone().with_order(order).with_window(window);
                 let rows = page_all(&repo, &request);
-                let before = before_compaction(&walk_of(&rows), window);
+                let before = before_compaction(&walk_of(&repo, &rows), window);
                 assert_draws_what_it_drew(
                     &format!("{seed}, {order:?}, window {window}"),
                     &rows,
@@ -174,7 +180,7 @@ fn each_cold_page_and_resumed_session_draws_on_its_own_what_the_assigner_drew_fo
         let first = HistoryRequest::from_head(limit)
             .with_order(order)
             .with_window(window);
-        let walk = walk_of(&page_all(&repo, &first));
+        let walk = walk_of(&repo, &page_all(&repo, &first));
 
         let mut request = first;
         let mut skip = 0usize;
@@ -188,7 +194,7 @@ fn each_cold_page_and_resumed_session_draws_on_its_own_what_the_assigner_drew_fo
             let before = before_compaction(&walk[..end], window);
             assert_draws_what_it_drew(
                 &format!("{order:?}, the page from row {skip}"),
-                &page.rows,
+                &held(page.rows.clone()),
                 &before[skip..],
                 &mut checked,
             );
@@ -240,42 +246,11 @@ fn proc_kb(field: &str) -> usize {
         .unwrap_or(0)
 }
 
-/// Heap and struct bytes the kept rows hold, by capacity (allocator overhead not counted).
-#[derive(Debug, Default)]
-struct Retained {
-    /// The row vector's capacity, slack included.
-    row_structs: usize,
-    /// Lane changes and snapshots.
-    graph: usize,
-    parents: usize,
-    text: usize,
-    snapshots: usize,
-}
-
-impl Retained {
-    fn of(rows: &Vec<HistoryRow>) -> Self {
-        let mut retained = Self {
-            row_structs: rows.capacity() * size_of::<HistoryRow>(),
-            ..Self::default()
-        };
-        for row in rows {
-            retained.graph += row.graph.heap_bytes();
-            retained.snapshots += usize::from(row.graph.has_snapshot());
-            match &row.content {
-                RowContent::Commit(commit) => {
-                    retained.parents += commit.parents.capacity() * size_of::<Oid>();
-                    retained.text += commit.summary.capacity()
-                        + commit.author_name.capacity()
-                        + commit.author_email.capacity();
-                }
-            }
-        }
-        retained
-    }
-
-    fn total(&self) -> usize {
-        self.row_structs + self.graph + self.parents + self.text
-    }
+/// One page held on its own, as a reader that kept it from its first row holds it.
+fn held(page: cairn_model::RowsPage) -> History {
+    let mut history = History::new();
+    ok(history.append(page), "holding a page");
+    history
 }
 
 fn mib(bytes: usize) -> f64 {
@@ -303,9 +278,7 @@ fn measures_compact_rows_over_a_named_repository() {
     let seed = env("CAIRN_FIND_SEED").unwrap_or_else(|| "refs".to_owned());
     let repo = ok(Repository::discover(&path), "opening the repository");
     eprintln!(
-        "repository {path}, mode {mode}, seed {seed}; HistoryRow {} B, GraphRow {} B, \
-         LaneChange {} B",
-        size_of::<HistoryRow>(),
+        "repository {path}, mode {mode}, seed {seed}; GraphRow {} B, LaneChange {} B",
         size_of::<GraphRow>(),
         size_of::<LaneChange>(),
     );
@@ -324,18 +297,18 @@ fn find(repo: &Repository, seed: &str) {
     let request = request_for(repo, seed);
     let mut session = ok(repo.history_session(&request), "opening the session");
     // Every loaded row is kept, as the window keeps them.
-    let mut kept: Vec<HistoryRow> = Vec::new();
+    let mut kept = History::new();
     let mut found = None;
     loop {
         let page = ok(session.next_page(PAGE, &CancelSignal::new()), "paging");
         let end = page.cursor.is_none();
         let hit = target.and_then(|target| {
             page.rows
-                .iter()
-                .position(|row| row.graph.id == target)
+                .ids()
+                .position(|id| id == target)
                 .map(|at| kept.len() + at + 1)
         });
-        kept.extend(page.rows);
+        ok(kept.append(page.rows), "holding a page");
         if hit.is_some() {
             found = hit;
             break;
@@ -347,28 +320,47 @@ fn find(repo: &Repository, seed: &str) {
     }
     let elapsed = started.elapsed();
     let anon_after = proc_kb("RssAnon:");
-    let retained = Retained::of(&kept);
+    let retained = kept.retained();
+    let last = kept
+        .len()
+        .checked_sub(1)
+        .and_then(|last| kept.id(last))
+        .map_or_else(String::new, |RowId::Commit(id)| id.to_string());
     eprintln!(
-        "FIND seed={seed} found_at_row={} rows_kept={} last={} ms={:.1}",
+        "FIND seed={seed} found_at_row={} rows_kept={} last={last} ms={:.1}",
         found.unwrap_or(0),
         kept.len(),
-        kept.last()
-            .map_or_else(String::new, |row| row.graph.id.to_string()),
         elapsed.as_secs_f64() * 1e3
     );
+    report_retained(&retained, kept.len(), kept.author_count());
     eprintln!(
-        "RETAINED total={:.1} MiB ({} B/row): row structs {:.1} MiB (vec capacity {}), \
-         lane changes and snapshots {:.2} MiB ({} snapshots), parents {:.1} MiB, text {:.1} MiB; RssAnon {anon_before} -> {anon_after} kB \
-         (+{:.1} MiB)",
-        mib(retained.total()),
-        retained.total() / kept.len().max(1),
-        mib(retained.row_structs),
-        kept.capacity(),
-        mib(retained.graph),
-        retained.snapshots,
-        mib(retained.parents),
-        mib(retained.text),
+        "RssAnon {anon_before} -> {anon_after} kB (+{:.1} MiB)",
         (anon_after.saturating_sub(anon_before)) as f64 / 1024.0,
+    );
+    // C16's bar: every row of the history and the stores they read, by capacity.
+    let ceiling = env("CAIRN_C16_MIB").map_or(64.0, |mib| ok(mib.parse::<f64>(), "CAIRN_C16_MIB"));
+    assert!(
+        mib(retained.total()) <= ceiling,
+        "{:.1} MiB retained, past C16's {ceiling} MiB",
+        mib(retained.total())
+    );
+}
+
+/// What a history holds, store by store, by capacity.
+fn report_retained(retained: &RetainedBytes, rows: usize, authors: usize) {
+    eprintln!(
+        "RETAINED total={:.2} MiB ({} B/row over {rows} rows): rows {:.2} MiB, text {:.2} MiB, \
+         lane changes {:.2} MiB, snapshots {:.2} MiB, authors {:.3} MiB ({authors} authors); \
+         kept row {} B, lane change {} B",
+        mib(retained.total()),
+        retained.total() / rows.max(1),
+        mib(retained.rows),
+        mib(retained.text),
+        mib(retained.lane_changes),
+        mib(retained.snapshots),
+        mib(retained.authors),
+        retained.rows / rows.max(1),
+        size_of::<LaneChange>(),
     );
 }
 
@@ -376,12 +368,12 @@ fn equivalence(repo: &Repository, seed: &str) {
     let started = Instant::now();
     let rows = page_all(repo, &request_for(repo, seed));
     let paged = started.elapsed();
-    let before = before_compaction(&walk_of(&rows), LaneAssigner::DEFAULT_WINDOW);
+    let before = before_compaction(&walk_of(repo, &rows), LaneAssigner::DEFAULT_WINDOW);
     let mut checked = Checked::default();
     assert_draws_what_it_drew(&format!("seed {seed}"), &rows, &before, &mut checked);
     let late_lines: usize = rows
-        .iter()
-        .flat_map(|row| row.graph.changes())
+        .rows()
+        .flat_map(|row| row.changes())
         .filter(|change| matches!(change, LaneChange::StartsLate { .. }))
         .count();
     eprintln!(
@@ -397,7 +389,7 @@ fn equivalence(repo: &Repository, seed: &str) {
 /// each row it draws.
 fn derive(repo: &Repository, seed: &str) {
     let rows = page_all(repo, &request_for(repo, seed));
-    let walk = walk_of(&rows);
+    let walk = walk_of(repo, &rows);
     drop(rows);
     let ks: Vec<usize> = env("CAIRN_C15_KS")
         .unwrap_or_else(|| "1,8,16,32,64,128,256,512,1024".to_owned())

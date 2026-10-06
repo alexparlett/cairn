@@ -10,7 +10,7 @@
 //! the base, which the swap reverses. Each change asks what the selection now compares, so an
 //! answer for one on its way when another was chosen is never drawn.
 
-use cairn_model::{CommitSummary, HistoryRow, Oid, RowContent, RowId};
+use cairn_model::{CommitSummary, History, HistoryRow, Oid, RowContent, RowId};
 use freya::prelude::*;
 
 use crate::diff_state::Answer;
@@ -66,9 +66,10 @@ pub fn selected_comparison(view: View) -> Option<Comparison> {
     }
 }
 
-/// The commit a loaded row draws. Named variant by variant, as [`comparison_of`] is.
-fn summary_of(row: &HistoryRow) -> &CommitSummary {
-    match &row.content {
+/// The commit a loaded row draws, copied out of the history. Named variant by variant, as
+/// [`comparison_of`] is.
+fn summary_of(row: HistoryRow<'_>) -> CommitSummary {
+    match row.content() {
         RowContent::Commit(summary) => summary,
     }
 }
@@ -120,10 +121,10 @@ pub fn extend(id: RowId, index: usize, view: View, submit: Option<&dyn Fn(Reques
         let anchor_at = match anchor {
             RowId::Commit(oid) => loaded_row(&loaded, oid),
         };
-        match (anchor_at, loaded.get(index)) {
+        match (anchor_at, loaded.row(index)) {
             (Some(anchor_at), Some(pressed)) if pressed.id() == id => {
-                let (anchor_summary, pressed_summary) = match loaded.get(anchor_at) {
-                    Some(row) => (summary_of(row).clone(), summary_of(pressed).clone()),
+                let (anchor_summary, pressed_summary) = match loaded.row(anchor_at) {
+                    Some(row) => (summary_of(row), summary_of(pressed)),
                     None => return,
                 };
                 // The lower row in the list is the base (R7.2).
@@ -189,40 +190,40 @@ fn ask(of: Comparison, view: View, submit: Option<&dyn Fn(Request)>) {
 /// Where `parent` is in the loaded history, if it is loaded. A scan of what is loaded, run
 /// once per press of a parent link and once per row pressed with the extending chord
 /// ([`extend`], to find which of the two rows is lower), never per frame.
-pub fn loaded_row(rows: &[HistoryRow], parent: Oid) -> Option<usize> {
-    let wanted = RowId::Commit(parent);
-    rows.iter().position(|row| row.id() == wanted)
+pub fn loaded_row(rows: &History, parent: Oid) -> Option<usize> {
+    rows.position(RowId::Commit(parent))
 }
 
 #[cfg(test)]
 mod tests {
-    use cairn_model::{CommitSummary, GraphRow, Lane, RowContent};
+    use cairn_model::{GraphRow, Lane, PagedCommit, RowsPage};
 
     use super::*;
 
-    fn row(n: u8) -> HistoryRow {
-        let id = Oid::from_bytes(&[n; 20]).unwrap();
-        HistoryRow {
-            content: RowContent::Commit(CommitSummary {
-                id,
-                parents: Vec::new(),
-                summary: format!("commit {n}"),
-                author_name: "Ada".to_owned(),
-                author_email: "ada@example.com".to_owned(),
-                author_time: 0,
-            }),
-            graph: GraphRow::new(id, Lane::new(0), Vec::new()),
-        }
-    }
-
     #[test]
     fn a_parent_is_found_where_it_is_loaded_and_nowhere_else() {
-        let rows: Vec<HistoryRow> = (1..=5).map(row).collect();
+        let mut page = RowsPage::new();
+        for n in 1..=5u8 {
+            page.push(
+                GraphRow::new(Oid::from_bytes(&[n; 20]).unwrap(), Lane::new(0), Vec::new()),
+                PagedCommit {
+                    parents: 1,
+                    subject: "commit",
+                    author: "Ada",
+                    author_time: 0,
+                },
+            );
+        }
+        let mut rows = History::new();
+        rows.append(page).unwrap();
         assert_eq!(
             loaded_row(&rows, Oid::from_bytes(&[4; 20]).unwrap()),
             Some(3)
         );
         assert_eq!(loaded_row(&rows, Oid::from_bytes(&[9; 20]).unwrap()), None);
-        assert_eq!(loaded_row(&[], Oid::from_bytes(&[1; 20]).unwrap()), None);
+        assert_eq!(
+            loaded_row(&History::new(), Oid::from_bytes(&[1; 20]).unwrap()),
+            None
+        );
     }
 }

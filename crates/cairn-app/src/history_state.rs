@@ -1,6 +1,6 @@
 //! View state for the history list.
 
-use cairn_model::HistoryRow;
+use cairn_model::RowsPage;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
@@ -99,20 +99,17 @@ impl Progress {
     }
 }
 
-/// The widest the rows draw, from the lanes each names — its node, its lane changes and,
-/// on a row with a snapshot, every line crossing into it. A passing line's commit may be on
-/// another page; over every page from the first, every lane a line crosses is named.
-pub fn widest_lane(rows: &[HistoryRow]) -> usize {
-    rows.iter()
-        .map(|row| row.graph.lanes_named())
-        .max()
-        .unwrap_or(1)
+/// The widest a page's rows draw, from the lanes each names — its node, its lane changes
+/// and, on a row with a snapshot, every line crossing into it. A passing line's commit may
+/// be on another page; over every page from the first, every lane a line crosses is named.
+pub fn widest_lane(page: &RowsPage) -> usize {
+    page.lanes_named()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cairn_model::{CommitSummary, GraphRow, Lane, LaneAssigner, LaneChange, Oid, RowContent};
+    use cairn_model::{GraphRow, Lane, LaneAssigner, LaneChange, Oid, PagedCommit};
 
     fn oid(n: u8) -> Oid {
         let mut bytes = [0u8; 20];
@@ -120,29 +117,31 @@ mod tests {
         Oid::from_bytes(&bytes).unwrap_or_else(|_| unreachable!("20 bytes is a SHA-1"))
     }
 
-    fn row(n: u8, lane: usize, changes: Vec<LaneChange>) -> HistoryRow {
-        row_of(GraphRow::new(oid(n), Lane::new(lane), changes))
+    fn row(n: u8, lane: usize, changes: Vec<LaneChange>) -> RowsPage {
+        page_of([GraphRow::new(oid(n), Lane::new(lane), changes)])
     }
 
-    fn row_of(graph: GraphRow) -> HistoryRow {
-        HistoryRow {
-            content: RowContent::Commit(CommitSummary {
-                id: graph.id,
-                parents: Vec::new(),
-                summary: "s".to_owned(),
-                author_name: "a".to_owned(),
-                author_email: "a@example.com".to_owned(),
-                author_time: 0,
-            }),
-            graph,
+    fn page_of(graphs: impl IntoIterator<Item = GraphRow>) -> RowsPage {
+        let mut page = RowsPage::new();
+        for graph in graphs {
+            page.push(
+                graph,
+                PagedCommit {
+                    parents: 1,
+                    subject: "s",
+                    author: "a",
+                    author_time: 0,
+                },
+            );
         }
+        page
     }
 
     #[test]
     fn loading_and_an_empty_repository_are_different_states() {
         let mut empty = Progress::opening();
         assert_eq!(empty.status(), &Status::Loading);
-        empty.received(widest_lane(&[]), true, 0);
+        empty.received(widest_lane(&RowsPage::new()), true, 0);
         assert_eq!(empty.status(), &Status::Empty);
         assert_ne!(Status::Empty, Status::Loading);
     }
@@ -151,7 +150,7 @@ mod tests {
     #[test]
     fn an_empty_page_with_more_to_come_is_still_loading() {
         let mut progress = Progress::opening();
-        progress.received(widest_lane(&[]), false, 0);
+        progress.received(widest_lane(&RowsPage::new()), false, 0);
         assert_eq!(progress.status(), &Status::Loading);
         assert!(progress.wants_more(), "a loading view stopped asking");
     }
@@ -159,7 +158,7 @@ mod tests {
     #[test]
     fn rows_arriving_make_the_view_ready() {
         let mut progress = Progress::opening();
-        let page = vec![row(1, 0, Vec::new())];
+        let page = row(1, 0, Vec::new());
         progress.received(widest_lane(&page), false, page.len());
         assert_eq!(progress.status(), &Status::Ready);
         assert!(progress.has_rows());
@@ -272,11 +271,11 @@ mod tests {
     #[test]
     fn the_graph_column_only_grows() {
         let mut progress = Progress::opening();
-        let wide = vec![row(1, 4, Vec::new())];
+        let wide = row(1, 4, Vec::new());
         progress.received(widest_lane(&wide), false, 1);
         assert_eq!(progress.lanes(), 5);
 
-        let narrow = vec![row(2, 0, Vec::new())];
+        let narrow = row(2, 0, Vec::new());
         progress.received(widest_lane(&narrow), false, 2);
         assert_eq!(progress.lanes(), 5, "the column narrowed under the reader");
     }
@@ -284,7 +283,7 @@ mod tests {
     /// Caught by: measuring nodes only.
     #[test]
     fn a_lane_only_a_change_names_still_gets_a_column() {
-        let rows = vec![row(1, 0, vec![LaneChange::Starts(Lane::new(6))])];
+        let rows = row(1, 0, vec![LaneChange::Starts(Lane::new(6))]);
         assert_eq!(widest_lane(&rows), 7);
     }
 
@@ -296,14 +295,14 @@ mod tests {
         let parents: Vec<Oid> = (10..17).map(oid).collect();
         let walk = vec![(oid(1), parents.clone()), (parents[0], Vec::new())];
         let graphs = LaneAssigner::new().drawn_from(1).assign_each(walk);
-        let page: Vec<HistoryRow> = graphs.into_iter().skip(1).map(row_of).collect();
-        assert_eq!(page[0].graph.changes(), [LaneChange::Ends(Lane::new(0))]);
+        assert_eq!(graphs[1].changes(), [LaneChange::Ends(Lane::new(0))]);
+        let page = page_of(graphs.into_iter().skip(1));
         assert_eq!(widest_lane(&page), 7);
     }
 
     /// Caught by: a zero-wide graph on a repository's first page.
     #[test]
     fn an_empty_page_still_reserves_a_column() {
-        assert_eq!(widest_lane(&[]), 1);
+        assert_eq!(widest_lane(&RowsPage::new()), 1);
     }
 }

@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use cairn_model::{HistoryRow, RemoteSummary, RowContent, RowId, Secret};
+use cairn_model::{History, RemoteSummary, RowContent, RowId, Secret};
 use cairn_ui::accelerators::{self, HeldKeys, Scope};
 use cairn_ui::{
     ChangeCursor, CommitRow, CredentialPrompt, DETAIL_STRIP_HEIGHT, DetailTab, DiffSettings,
@@ -29,7 +29,7 @@ const LIST_MIN_HEIGHT: f32 = 80.0;
 /// subscribes to what it reads.
 #[derive(Clone, Copy)]
 pub struct View {
-    pub rows: State<Vec<HistoryRow>>,
+    pub rows: State<History>,
     pub progress: State<Progress>,
     pub selected: State<Option<RowId>>,
     pub fetch: State<FetchStatus>,
@@ -234,7 +234,7 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
         .and_then(|pair| pair.other(*view.selected.read()));
     HistoryList::new(view.rows, move |render: RowRender| {
         // No wildcard arm: a new row kind must fail to compile here.
-        match render.row.content {
+        match render.content {
             RowContent::Commit(commit) => CommitRow::new(commit, render.graph, render.lanes)
                 .selected(render.selected)
                 .into(),
@@ -397,8 +397,8 @@ mod tests {
     use std::cell::RefCell;
 
     use cairn_model::{
-        ChangeSet, ChangeStatus, ChangedFile, CommitDetails, CommitSummary, Context, FileMode,
-        GraphRow, Lane, Oid, RenameDetection, RepoPath, Signature, Timestamp,
+        ChangeSet, ChangeStatus, ChangedFile, CommitDetails, Context, FileMode, GraphRow, Lane,
+        Oid, PagedCommit, RenameDetection, RepoPath, RowsPage, Signature, Timestamp,
     };
     use cairn_ui::accelerators::Action;
     use cairn_ui::{COLLAPSE_CAPTION, EXPAND_CAPTION};
@@ -418,7 +418,7 @@ mod tests {
     const HEIGHT: f32 = 600.;
     const PATH: &str = "/home/ada/engine";
 
-    fn row(n: usize) -> HistoryRow {
+    fn row(n: usize) -> TestRow {
         row_in_lane(n, 0)
     }
 
@@ -430,19 +430,47 @@ mod tests {
         Oid::from_bytes(&bytes).unwrap()
     }
 
-    fn row_in_lane(n: usize, lane: usize) -> HistoryRow {
-        let id = oid(n);
-        HistoryRow {
-            content: RowContent::Commit(CommitSummary {
-                id,
-                parents: Vec::new(),
-                summary: format!("commit {n}"),
-                author_name: "Ada".to_owned(),
-                author_email: "ada@example.com".to_owned(),
-                author_time: 0,
-            }),
-            graph: GraphRow::new(id, Lane::new(lane), Vec::new()),
+    /// A row as a test writes it: its layout and its subject, `commit n`.
+    struct TestRow {
+        graph: GraphRow,
+        subject: String,
+    }
+
+    fn row_in_lane(n: usize, lane: usize) -> TestRow {
+        TestRow {
+            graph: GraphRow::new(oid(n), Lane::new(lane), Vec::new()),
+            subject: format!("commit {n}"),
         }
+    }
+
+    /// `rows` as one page from the worker, authored by Ada.
+    fn page_of(rows: Vec<TestRow>) -> RowsPage {
+        let mut page = RowsPage::new();
+        for TestRow { graph, subject } in rows {
+            page.push(
+                graph,
+                PagedCommit {
+                    parents: 1,
+                    subject: &subject,
+                    author: "Ada",
+                    author_time: 0,
+                },
+            );
+        }
+        page
+    }
+
+    /// `rows` appended to `history` as one page.
+    fn hold(history: &mut History, rows: Vec<TestRow>) {
+        history
+            .append(page_of(rows))
+            .unwrap_or_else(|full| panic!("{full}"));
+    }
+
+    fn held(rows: Vec<TestRow>) -> History {
+        let mut history = History::new();
+        hold(&mut history, rows);
+        history
     }
 
     type Submitted = Rc<RefCell<Vec<Request>>>;
@@ -451,13 +479,13 @@ mod tests {
     /// for a refusal.
     type Answered = Rc<RefCell<Vec<(crate::worker::PromptId, Option<usize>)>>>;
 
-    fn launch(initial: Vec<HistoryRow>, progress: Progress) -> (TestingRunner, View, Submitted) {
+    fn launch(initial: Vec<TestRow>, progress: Progress) -> (TestingRunner, View, Submitted) {
         let (test, view, submitted, _) = launch_with(initial, progress, FetchStatus::Idle, None);
         (test, view, submitted)
     }
 
     fn launch_with(
-        initial: Vec<HistoryRow>,
+        initial: Vec<TestRow>,
         progress: Progress,
         fetch: FetchStatus,
         prompt: Option<PromptView>,
@@ -487,7 +515,7 @@ mod tests {
             (800., HEIGHT).into(),
             move |runner| {
                 runner.provide_root_context(|| View {
-                    rows: State::create(initial),
+                    rows: State::create(held(initial)),
                     progress: State::create(progress),
                     selected: State::create(None),
                     fetch: State::create(fetch),
@@ -594,7 +622,7 @@ mod tests {
     fn every_view_state_puts_its_own_sentence_in_the_window() {
         type Case = (
             &'static str,
-            Vec<HistoryRow>,
+            Vec<TestRow>,
             Progress,
             &'static [&'static str],
             &'static [&'static str],
@@ -688,11 +716,289 @@ mod tests {
         }
     }
 
+    /// `main` when rows were slimmed, and what each of its commits' rows drew in the window
+    /// before: subject, author, short id, date, and whether its node is a merge's ring. Each
+    /// line was read by this test from this window, over this checkout, built at commit
+    /// `4205d5d`, while every row still carried its full parents and its author's address.
+    const MAIN_DRAWN_BEFORE: &[(&str, &str, &str, &str, &str, bool)] = &[
+        (
+            "0cfd746b5a913529bbd1a9684f8e92f1cb364c84",
+            "docs(prd): plan the refs-and-status packet, from evidence and a Fork study (#60)",
+            "Alexander Parlett",
+            "0cfd746",
+            "2026-10-06 05:13",
+            false,
+        ),
+        (
+            "0a7aeb78b918a341bc21109059a240bc64924644",
+            "fix(app): let the worker tests search a short checkout history (#61)",
+            "Alexander Parlett",
+            "0a7aeb7",
+            "2026-10-05 19:36",
+            false,
+        ),
+        (
+            "9b6b7d0faf648d82c3da02297afc3777e969b827",
+            "diff-engine: show what a commit changed as git answers it, drawn as Fork draws it (#59)",
+            "Alexander Parlett",
+            "9b6b7d0",
+            "2026-10-05 13:41",
+            false,
+        ),
+        (
+            "cfe33151ce42afd96a6edfe5e8ee22a6489cde48",
+            "process-manager: one place that starts git, and a runner every verb can share (#50)",
+            "Alexander Parlett",
+            "cfe3315",
+            "2026-10-03 05:37",
+            false,
+        ),
+        (
+            "4fe7165b6f155b883e3fd960b63d27a91f573a02",
+            "docs(prd): plan the process-manager packet, from evidence (#40)",
+            "Alexander Parlett",
+            "4fe7165",
+            "2026-10-02 17:02",
+            false,
+        ),
+        (
+            "2987a53d1408bf625c6ae730f81ec4a312040614",
+            "docs(docs): keep point-in-time packet state out of design/ (#39)",
+            "Alexander Parlett",
+            "2987a53",
+            "2026-09-23 05:45",
+            false,
+        ),
+        (
+            "7d4d9ad7a2e366ca3a3d6277079d493d44c4560f",
+            "docs(prd): plan the diff-engine packet, from evidence and a Fork study (#38)",
+            "Alexander Parlett",
+            "7d4d9ad",
+            "2026-09-17 19:03",
+            false,
+        ),
+        (
+            "bf93a4eed43422a8f8f7cfbcda29c852d694ad44",
+            "credential-prompts: authenticated fetch without Cairn holding a credential (#28)",
+            "Alexander Parlett",
+            "bf93a4e",
+            "2026-09-17 13:57",
+            false,
+        ),
+        (
+            "f4f1d0512492d07fa38eb36eb8105e884d79090d",
+            "history-graph: draw the commit graph of a real repository (#14)",
+            "Alexander Parlett",
+            "f4f1d05",
+            "2026-09-16 20:58",
+            false,
+        ),
+        (
+            "9c93114bfba6a280b4965c42ac56a9079396e7f3",
+            "Merge pull request #15 from alexparlett/docs/ui-design",
+            "Alexander Parlett",
+            "9c93114",
+            "2026-09-16 18:42",
+            true,
+        ),
+        (
+            "e480fddafc07897e52b1cd9b9a69dd1c9f9fddb1",
+            "docs(design): UI design modelled on Fork, with five annotated mockups",
+            "Alex Parlett",
+            "e480fdd",
+            "2026-09-16 18:40",
+            false,
+        ),
+        (
+            "7f9c64852879d27ff41ecc2b247141fc8b6258b9",
+            "docs(design): stamp the out-of-scope list as reviewed against real usage",
+            "Alex Parlett",
+            "7f9c648",
+            "2026-09-14 20:31",
+            false,
+        ),
+        (
+            "b8f51524295a5709d685b0ee4a1dd217b241d457",
+            "docs(design): forge links are in scope (D9); the old line conflated two things",
+            "Alex Parlett",
+            "b8f5152",
+            "2026-09-14 20:26",
+            false,
+        ),
+        (
+            "1391fb127b2d84dc9aa9f0125e3ca63d066083b7",
+            "docs(design): inventory the feature surface, plan the daily-loop program",
+            "Alex Parlett",
+            "1391fb1",
+            "2026-09-14 20:21",
+            false,
+        ),
+        (
+            "3c1f0b34a7f47d68a7e689331eb3de1f8d4b4cc2",
+            "docs(design): order the packets, and close two gaps in the graph plan",
+            "Alex Parlett",
+            "3c1f0b3",
+            "2026-09-14 20:13",
+            false,
+        ),
+        (
+            "43602a3042ed2c6ec38a6039eab5f927cf0d0cc9",
+            "docs(design): close four open questions, fix two I framed wrongly",
+            "Alex Parlett",
+            "43602a3",
+            "2026-09-14 19:44",
+            false,
+        ),
+        (
+            "d23b4ff446097e9930ca30c16364b279b906bd0e",
+            "docs(design): lock decisions D1-D5 and file two packets",
+            "Alex Parlett",
+            "d23b4ff",
+            "2026-09-14 18:25",
+            false,
+        ),
+        (
+            "382d6980fe973f4b6e92fbd94651bead5b4f88cd",
+            "chore(repo): adopt the agentic harness and scaffold the Cairn workspace",
+            "Alex Parlett",
+            "382d698",
+            "2026-09-14 18:06",
+            false,
+        ),
+    ];
+
+    /// C16, headless, over the Cairn checkout: its rows, read by the worker, applied as the
+    /// window applies every page and drawn by the window's own rows, draw what they drew
+    /// before rows were slimmed. Caught by: a row reading another row's text or author, a
+    /// parent count that is not its commit's, or a page's authors misnumbered in the
+    /// history.
+    #[test]
+    fn the_cairn_checkouts_rows_draw_what_they_drew_before_rows_were_slimmed() {
+        use freya::engine::prelude::{Image, ImageInfo, raster_n32_premul};
+
+        let (handle, mut updates) = crate::worker::checkout();
+        handle.submit(Request::OpenHistory { rows: 4096 });
+        let page = loop {
+            match crate::worker::next_update(&mut updates) {
+                update @ crate::worker::Update::Rows { .. } => break update,
+                crate::worker::Update::Failed { message } => {
+                    panic!("the history failed: {message}")
+                }
+                _ => {}
+            }
+        };
+        let (mut test, view, submitted) = launch(Vec::new(), Progress::opening());
+        let submit = {
+            let submitted = submitted.clone();
+            move |request| submitted.borrow_mut().push(request)
+        };
+        test.run_in(|| {
+            crate::session::apply(
+                page,
+                view,
+                &crate::session::Worker {
+                    submit: &submit,
+                    refuse: &|_| {},
+                    closing: false,
+                },
+            );
+        });
+        test.sync_and_update();
+
+        let graph_left = test
+            .find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == "Graph and subject")
+                    .map(|_| node.layout().area.min_x())
+            })
+            .unwrap_or_else(|| panic!("no history header"));
+        let mut drawn = Vec::new();
+        for &(hex, ..) in MAIN_DRAWN_BEFORE {
+            let id = Oid::parse(hex).unwrap();
+            let (index, lane) = {
+                let rows = view.rows.peek();
+                let index = rows
+                    .position(RowId::Commit(id))
+                    .unwrap_or_else(|| panic!("{hex} is not in the checkout's history"));
+                (index, rows.row(index).map(|row| row.lane()).unwrap())
+            };
+            // Back to the top, then down to the row, so it sits at the top of the list.
+            test.scroll((100., 200.), (0., 1e6));
+            test.scroll((100., 200.), (0., -(index as f64) * f64::from(ROW_HEIGHT)));
+            let short = id.short().to_string();
+            let centre_y = test
+                .find(|node, element| {
+                    Label::try_downcast(element)
+                        .filter(|label| label.text == short.as_str())
+                        .map(|_| node.layout().area.center().y)
+                })
+                .unwrap_or_else(|| panic!("row {index} ({hex}) was not drawn"));
+            let mut labels: Vec<(f32, String)> = test.find_many(|node, element| {
+                let area = node.layout().area;
+                Label::try_downcast(element)
+                    .filter(|_| (area.center().y - centre_y).abs() < 1.0)
+                    .map(|label| (area.min_x(), label.text.to_string()))
+            });
+            labels.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+            let png = test.render();
+            let image = Image::from_encoded(png).unwrap();
+            let size = (800, HEIGHT as i32);
+            let mut surface = raster_n32_premul(size).unwrap();
+            surface.canvas().draw_image(&image, (0, 0), None);
+            let info = ImageInfo::new_n32_premul(size, None);
+            let stride = info.min_row_bytes();
+            let mut pixels = vec![0u8; stride * size.1 as usize];
+            assert!(surface.read_pixels(&info, &mut pixels, stride, (0, 0)));
+            let x = (graph_left - cairn_ui::ROW_PADDING
+                + cairn_ui::ROW_PADDING
+                + cairn_ui::graph_geometry::lane_x(lane))
+            .round() as usize;
+            let at = centre_y.round() as usize * stride + x * 4;
+            // The node's centre: a dot fills it with its lane's colour, a ring leaves it be.
+            let colour = cairn_ui::lane_palette::lane_colour(lane);
+            let filled = pixels.get(at..at + 3).is_some_and(|bgr| {
+                [bgr[2], bgr[1], bgr[0]]
+                    .iter()
+                    .zip([colour.r(), colour.g(), colour.b()])
+                    .all(|(a, b)| a.abs_diff(b) <= 2)
+            });
+
+            let mut line: Vec<String> = labels.into_iter().map(|(_, text)| text).collect();
+            line.push((!filled).to_string());
+            drawn.push(line);
+        }
+        let before: Vec<Vec<String>> = MAIN_DRAWN_BEFORE
+            .iter()
+            .map(|&(_, subject, author, short, date, ring)| {
+                vec![
+                    subject.to_owned(),
+                    author.to_owned(),
+                    short.to_owned(),
+                    date.to_owned(),
+                    ring.to_string(),
+                ]
+            })
+            .collect();
+        for (index, (now, then)) in drawn.iter().zip(&before).enumerate() {
+            assert_eq!(now, then, "main's row {index} draws something else");
+        }
+        assert_eq!(drawn.len(), 18, "main's rows were not all drawn");
+        assert!(
+            before.iter().any(|line| line[4] == "true"),
+            "no merge among main's rows, so no ring was decided"
+        );
+    }
+
     #[test]
     fn the_graph_column_is_as_wide_as_the_widest_lane_seen() {
-        let page: Vec<HistoryRow> = (0..3).map(|n| row_in_lane(n, 4)).collect();
+        let page: Vec<TestRow> = (0..3).map(|n| row_in_lane(n, 4)).collect();
         let mut progress = Progress::opening();
-        progress.received(history_state::widest_lane(&page), true, page.len());
+        progress.received(
+            history_state::widest_lane(&page_of((0..3).map(|n| row_in_lane(n, 4)).collect())),
+            true,
+            page.len(),
+        );
         let (test, _, _) = launch(page, progress);
 
         let subject_left = test
@@ -774,7 +1080,7 @@ mod tests {
         );
 
         let (mut rows, mut progress) = (view.rows, view.progress);
-        rows.write().extend((first..first * 2).map(row));
+        hold(&mut rows.write(), (first..first * 2).map(row).collect());
         progress.write().received(1, false, first * 2);
         test.sync_and_update();
         scroll_to_end(&mut test, first * 2);
@@ -822,7 +1128,7 @@ mod tests {
             "coming back to the end after a failed page did not ask for it again"
         );
 
-        rows.write().extend((first..first * 2).map(row));
+        hold(&mut rows.write(), (first..first * 2).map(row).collect());
         progress.write().received(1, false, first * 2);
         test.sync_and_update();
         scroll(&mut test, first as f64);

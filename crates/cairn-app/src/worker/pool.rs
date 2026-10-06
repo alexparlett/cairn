@@ -796,7 +796,7 @@ impl<'repo> Scroll<'repo> {
 fn no_walk(error: Error) -> Update {
     match error {
         Error::UnbornHead { .. } => Update::Rows {
-            rows: Vec::new(),
+            rows: cairn_model::RowsPage::new(),
             complete: true,
         },
         other => Update::Failed {
@@ -1072,7 +1072,7 @@ mod tests {
         assert_eq!(
             answer,
             Update::Rows {
-                rows: Vec::new(),
+                rows: cairn_model::RowsPage::new(),
                 complete: true
             },
             "an unborn HEAD was reported as a failure"
@@ -1129,7 +1129,7 @@ mod tests {
         checkout.submit(Request::OpenHistory { rows: 3 });
         let expected: Vec<String> = match block_on(checkout_updates.next()) {
             Some(Update::Rows { rows, .. }) if rows.len() == 3 => {
-                rows.iter().map(|row| row.graph.id.to_string()).collect()
+                rows.ids().map(|id| id.to_string()).collect()
             }
             other => panic!("expected three rows of this checkout, got {other:?}"),
         };
@@ -1152,9 +1152,7 @@ mod tests {
         handle.submit(Request::MoreHistory { rows: 3 });
         match block_on(updates.next()) {
             Some(Update::Rows { rows, .. }) => assert_eq!(
-                rows.iter()
-                    .map(|row| row.graph.id.to_string())
-                    .collect::<Vec<_>>(),
+                rows.ids().map(|id| id.to_string()).collect::<Vec<_>>(),
                 expected,
                 "the retry did not deliver the history from the top"
             ),
@@ -1179,9 +1177,7 @@ mod tests {
 
         assert_eq!(first.len(), 4);
         assert_eq!(second.len(), 4);
-        let repeated = first
-            .iter()
-            .any(|a| second.iter().any(|b| a.id() == b.id()));
+        let repeated = first.ids().any(|a| second.ids().any(|b| a == b));
         assert!(!repeated, "the second page repeated a row from the first");
     }
 
@@ -1200,7 +1196,7 @@ mod tests {
         let started = Instant::now();
         handle.submit(Request::OpenHistory { rows: 2 });
         let opened_on = match block_on(updates.next()) {
-            Some(Update::Rows { rows, .. }) if !rows.is_empty() => rows[0].id(),
+            Some(Update::Rows { rows, .. }) if !rows.is_empty() => rows.ids().next(),
             other => panic!("expected the first page of a scroll, got {other:?}"),
         };
         let answer = started.elapsed();
@@ -1228,8 +1224,8 @@ mod tests {
             handle.submit(Request::MoreHistory { rows: 2 });
 
             match block_on(updates.next()) {
-                Some(Update::Rows { rows, .. }) => match rows.first() {
-                    Some(row) if row.id() == opened_on => return,
+                Some(Update::Rows { rows, .. }) => match rows.ids().next() {
+                    Some(id) if Some(id) == opened_on => return,
                     Some(_) => never_started += 1,
                     None => ran_on += 1,
                 },

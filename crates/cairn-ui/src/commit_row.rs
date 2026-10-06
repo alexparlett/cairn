@@ -79,7 +79,7 @@ impl ComponentOwned for CommitRow {
                     .spacing(COLUMN_GAP)
                     .child(graph_cell(
                         &self.graph,
-                        self.commit.parents.len(),
+                        self.commit.parent_count,
                         self.lanes,
                     ))
                     .child(

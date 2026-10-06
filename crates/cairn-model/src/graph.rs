@@ -163,18 +163,31 @@ impl GraphRow {
         self.snapshot.as_deref()
     }
 
+    /// Its changes and its snapshot, to be copied into a page.
+    pub(crate) fn into_parts(self) -> (Oid, Lane, Box<[LaneChange]>, Option<Box<LaneSnapshot>>) {
+        (self.id, self.lane, self.changes, self.snapshot)
+    }
+
     /// One more than the highest lane this row names — its node, its changes and, on a row
     /// with a snapshot, every line crossing into it. Over every row from the first, that is
     /// the width of everything they draw.
     pub fn lanes_named(&self) -> usize {
-        let own = self
-            .changes
-            .iter()
-            .map(|change| change.lane())
-            .fold(self.lane, Lane::max);
-        let crossing = self.snapshot().and_then(LaneSnapshot::highest_lane);
-        crossing.map_or(own, |lane| own.max(lane)).index() + 1
+        lanes_named(
+            self.lane,
+            &self.changes,
+            self.snapshot().and_then(LaneSnapshot::highest_lane),
+        )
     }
+}
+
+/// One more than the highest lane a row names: its node, its changes and the highest line
+/// crossing into it, when it carries a snapshot.
+pub(crate) fn lanes_named(lane: Lane, changes: &[LaneChange], crossing: Option<Lane>) -> usize {
+    let own = changes
+        .iter()
+        .map(|change| change.lane())
+        .fold(lane, Lane::max);
+    crossing.map_or(own, |lane| own.max(lane)).index() + 1
 }
 
 impl AsRef<GraphRow> for GraphRow {

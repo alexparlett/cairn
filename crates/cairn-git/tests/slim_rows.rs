@@ -3,7 +3,8 @@
 //!
 //! The tables below are what the rows drew before: each was asserted against the old rows'
 //! own fields (their full parents, their author's address beside the name) while those
-//! fields still rode on every row, and the tests now hold the slimmed rows to them. The
+//! fields still rode on every row — commit `4205d5d`, the one before the rows were slimmed
+//! — and the tests now hold the slimmed rows to them. The
 //! crafted fixture is built by `git commit-tree`, so its ids are the same on every machine;
 //! the Cairn checkout's table is the walk from `main` as it stood when the rows were
 //! slimmed, which is never rewritten. Every row of both, and of the Cairn checkout from
@@ -16,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use cairn_git::{CancelSignal, HistoryRequest, Repository};
-use cairn_model::{HistoryRow, Oid, RowContent};
+use cairn_model::{History, Oid, RowContent};
 
 use fixtures::Fixture;
 
@@ -69,28 +70,29 @@ fn expected(table: &[Row]) -> Vec<Drawn> {
         .collect()
 }
 
-/// What each row drew, read from the rows' own fields. No wildcard arm.
-fn drawn_rows(rows: &[HistoryRow]) -> Vec<Drawn> {
-    rows.iter()
-        .map(|row| match &row.content {
+/// What each row draws, read through the history that holds it. No wildcard arm.
+fn drawn_rows(rows: &History) -> Vec<Drawn> {
+    rows.rows()
+        .map(|row| match row.content() {
             RowContent::Commit(commit) => Drawn {
                 id: commit.id.to_string(),
-                subject: commit.summary.clone(),
-                author: commit.author_name.clone(),
+                subject: commit.summary,
+                author: commit.author_name,
                 time: commit.author_time,
-                parents: commit.parents.len(),
+                parents: commit.parent_count,
             },
         })
         .collect()
 }
 
-/// Pages a held session to the end, `page` rows at a time, as the window pages it.
-fn page_all(repo: &Repository, request: &HistoryRequest, page: usize) -> Vec<HistoryRow> {
+/// Pages a held session to the end, `page` rows at a time, appending each page to one
+/// history as the window does.
+fn page_all(repo: &Repository, request: &HistoryRequest, page: usize) -> History {
     let mut session = ok(repo.history_session(request), "opening the session");
-    let mut rows = Vec::new();
+    let mut rows = History::new();
     loop {
         let next = ok(session.next_page(page, &CancelSignal::new()), "paging");
-        rows.extend(next.rows);
+        ok(rows.append(next.rows), "holding a page");
         if next.cursor.is_none() {
             return rows;
         }
@@ -402,6 +404,13 @@ fn every_crafted_row_draws_what_it_drew_before_rows_were_slimmed() {
     let rows = page_all(&repo, &request, 2);
     let drawn = drawn_rows(&rows);
     assert_draws("the crafted fixture", &drawn, &expected(CRAFTED_BEFORE));
+    // Five pages: two new authors, then a new one beside a known one twice, then only
+    // known ones twice. Each is named once.
+    assert_eq!(
+        rows.author_count(),
+        4,
+        "an author was named twice, or one was lost"
+    );
     assert_draws(
         "the crafted fixture, read afresh",
         &drawn,

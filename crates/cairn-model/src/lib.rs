@@ -22,6 +22,7 @@ mod oid;
 mod patch;
 mod patch_apply;
 mod prompt;
+mod refs;
 mod remote;
 mod repo_path;
 mod secret;
@@ -50,6 +51,9 @@ pub use oid::{Oid, OidHex, OidParseError};
 pub use patch::{PATCH_CONTEXT, Patch, emit_patch};
 pub use patch_apply::{PatchApplyError, apply_patch, apply_patch_in_reverse};
 pub use prompt::{PromptKind, prompt_subject};
+pub use refs::{
+    AheadBehind, HeadState, Ref, RefKind, RefTarget, RefsSnapshot, StashEntry, Upstream,
+};
 pub use remote::RemoteSummary;
 pub use repo_path::RepoPath;
 pub use secret::Secret;

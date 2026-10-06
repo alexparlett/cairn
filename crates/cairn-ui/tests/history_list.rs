@@ -29,9 +29,8 @@ fn row(n: usize) -> HistoryRow {
             author_time: 0,
         }),
         graph: GraphRow {
-            id: oid(n),
-            lane: Lane::new(0),
             edges: vec![EdgeSegment::passing(Lane::new(0))],
+            ..GraphRow::new(oid(n), Lane::new(0), Vec::new())
         },
     }
 }

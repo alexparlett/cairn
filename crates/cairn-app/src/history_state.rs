@@ -138,9 +138,8 @@ mod tests {
                 author_time: 0,
             }),
             graph: GraphRow {
-                id: oid(n),
-                lane: Lane::new(lane),
                 edges,
+                ..GraphRow::new(oid(n), Lane::new(lane), Vec::new())
             },
         }
     }

@@ -18,6 +18,98 @@ pub fn literal(rows: &[(&str, &[&str])]) -> History {
         .collect()
 }
 
+// --- Crafted histories ---
+
+pub fn linear() -> History {
+    literal(&[("c3", &["c2"]), ("c2", &["c1"]), ("c1", &[])])
+}
+
+pub fn branch_and_merge() -> History {
+    literal(&[
+        ("m", &["a", "b"]),
+        ("a", &["base"]),
+        ("b", &["base"]),
+        ("base", &[]),
+    ])
+}
+
+pub fn octopus_merge() -> History {
+    literal(&[
+        ("o", &["p1", "p2", "p3"]),
+        ("p1", &["base"]),
+        ("p2", &["base"]),
+        ("p3", &["base"]),
+        ("base", &[]),
+    ])
+}
+
+pub fn criss_cross() -> History {
+    literal(&[
+        ("m1", &["a", "b"]),
+        ("m2", &["a", "b"]),
+        ("a", &["base"]),
+        ("b", &["base"]),
+        ("base", &[]),
+    ])
+}
+
+/// `b` sits in lane 1 with lane 0 already empty: a branch must not hop left.
+pub fn lane_outlives_the_one_to_its_left() -> History {
+    literal(&[
+        ("t1", &["a"]),
+        ("t2", &["b"]),
+        ("a", &[]),
+        ("b", &["c"]),
+        ("c", &[]),
+    ])
+}
+
+pub fn multiple_roots() -> History {
+    literal(&[("a2", &["a1"]), ("b2", &["b1"]), ("a1", &[]), ("b1", &[])])
+}
+
+/// `p` at row 0, its child `c` at row 2, `t` between them.
+pub fn skewed() -> History {
+    literal(&[
+        ("p", &["base"]),
+        ("t", &["base"]),
+        ("c", &["p"]),
+        ("base", &[]),
+    ])
+}
+
+/// The same reversal four rows apart, with lanes 0, 1 and 2 busy throughout.
+pub fn skewed_across_a_busy_span() -> History {
+    literal(&[
+        ("t0", &["a"]),
+        ("t1", &["b"]),
+        ("p", &["e"]),
+        ("a", &["f"]),
+        ("b", &["f"]),
+        ("c", &["p"]),
+        ("e", &[]),
+        ("f", &[]),
+    ])
+}
+
+pub fn corpus() -> Vec<(&'static str, History)> {
+    vec![
+        ("linear", linear()),
+        ("branch and merge", branch_and_merge()),
+        ("octopus merge", octopus_merge()),
+        ("criss-cross", criss_cross()),
+        ("multiple roots", multiple_roots()),
+        (
+            "lane outlives its left neighbour",
+            lane_outlives_the_one_to_its_left(),
+        ),
+        ("skewed", skewed()),
+        ("skewed across a busy span", skewed_across_a_busy_span()),
+    ]
+}
+
+// --- Reading a layout ---
+
 /// A label as a reversible object id. `unwrap` is denied: this is not `#[cfg(test)]` code.
 pub fn oid(label: &str) -> Oid {
     let mut hex: String = label.bytes().map(|b| format!("{b:02x}")).collect();

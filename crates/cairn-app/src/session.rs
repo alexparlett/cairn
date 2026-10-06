@@ -218,9 +218,8 @@ mod tests {
                 author_time: 0,
             }),
             graph: GraphRow {
-                id,
-                lane: Lane::new(0),
                 edges: vec![EdgeSegment::passing(Lane::new(0))],
+                ..GraphRow::new(id, Lane::new(0), Vec::new())
             },
         }
     }

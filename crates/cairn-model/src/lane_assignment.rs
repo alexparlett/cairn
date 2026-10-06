@@ -2,7 +2,8 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use crate::{EdgeSegment, GraphRow, Lane, Oid};
+use crate::edge_derivation::LaneState;
+use crate::{EdgeSegment, GraphRow, Lane, LaneChange, Oid};
 
 #[derive(Debug)]
 pub struct LaneAssigner {
@@ -14,10 +15,25 @@ pub struct LaneAssigner {
     gone: VecDeque<Oid>,
     gone_count: HashMap<Oid, usize>,
     /// Never longer than `window`, even mid-push.
-    rows: VecDeque<GraphRow>,
+    rows: VecDeque<WindowRow>,
     /// Absolute row number of `rows.front()`.
     first_row: usize,
     window: usize,
+    /// The lines crossing into the next row to leave the window.
+    leaving: LaneState,
+    snapshot_every: usize,
+    /// The first row a reader keeps, which carries a snapshot wherever it falls.
+    drawn_from: usize,
+}
+
+/// A row still inside the window: every edge crossing it, which a late parent may yet add
+/// to and which [`LaneAssigner::free_lane_across`] reads, beside the changes it will keep.
+#[derive(Debug)]
+struct WindowRow {
+    id: Oid,
+    lane: Lane,
+    edges: Vec<EdgeSegment>,
+    changes: Vec<LaneChange>,
 }
 
 impl Default for LaneAssigner {
@@ -28,6 +44,13 @@ impl Default for LaneAssigner {
 
 impl LaneAssigner {
     pub const DEFAULT_WINDOW: usize = 1024;
+
+    /// Rows between lane snapshots, by default.
+    pub const SNAPSHOT_EVERY: usize = 64;
+
+    /// The most rows apart snapshots may be, and so the furthest [`crate::row_edges`] looks
+    /// above a row for one.
+    pub const MAX_SNAPSHOT_EVERY: usize = 4096;
 
     pub fn new() -> Self {
         Self::default()
@@ -43,11 +66,32 @@ impl LaneAssigner {
             rows: VecDeque::new(),
             first_row: 0,
             window: window.max(1),
+            leaving: LaneState::default(),
+            snapshot_every: Self::SNAPSHOT_EVERY,
+            drawn_from: 0,
         }
+    }
+
+    /// Rows between lane snapshots, held to `1..=MAX_SNAPSHOT_EVERY`. Fewer cost memory;
+    /// more cost work each time a row is drawn.
+    pub fn with_snapshot_every(mut self, rows: usize) -> Self {
+        self.snapshot_every = rows.clamp(1, Self::MAX_SNAPSHOT_EVERY);
+        self
+    }
+
+    /// Rows before `row` are laid out only to number the lanes and are not kept: `row`
+    /// carries a snapshot, so the rows from it on are drawn without them.
+    pub fn drawn_from(mut self, row: usize) -> Self {
+        self.drawn_from = row;
+        self
     }
 
     pub fn window(&self) -> usize {
         self.window
+    }
+
+    pub fn snapshot_every(&self) -> usize {
+        self.snapshot_every
     }
 
     /// How many ids past the window are still recognised as already laid out.
@@ -62,29 +106,35 @@ impl LaneAssigner {
     where
         I: IntoIterator<Item = (Oid, Vec<Oid>)>,
     {
-        let mut assigner = Self::new();
+        Self::new().assign_each(commits)
+    }
+
+    /// [`Self::assign_all`], with this assigner's window and snapshot interval.
+    pub fn assign_each<I>(mut self, commits: I) -> Vec<GraphRow>
+    where
+        I: IntoIterator<Item = (Oid, Vec<Oid>)>,
+    {
         let mut rows = Vec::new();
         for (id, parents) in commits {
-            if let Some(final_row) = assigner.push(id, parents) {
+            if let Some(final_row) = self.push(id, parents) {
                 rows.push(final_row);
             }
         }
-        rows.extend(assigner.into_rows());
+        rows.extend(self.into_rows());
         rows
-    }
-
-    /// The rows still inside the window, oldest first.
-    pub fn rows(&self) -> impl ExactSizeIterator<Item = &GraphRow> {
-        self.rows.iter()
     }
 
     fn rows_laid_out(&self) -> usize {
         self.first_row + self.rows.len()
     }
 
-    /// The rows still inside the window.
-    pub fn into_rows(self) -> Vec<GraphRow> {
-        self.rows.into()
+    /// The rows still inside the window, made final: no later commit is coming.
+    pub fn into_rows(mut self) -> Vec<GraphRow> {
+        let mut rows = Vec::with_capacity(self.rows.len());
+        while let Some(row) = self.rows.pop_front() {
+            rows.push(self.finalise(row));
+        }
+        rows
     }
 
     /// `parents` is in git's order. Returns the row this push forced out of the window.
@@ -108,6 +158,7 @@ impl LaneAssigner {
         };
 
         let mut edges = Vec::new();
+        let mut changes = Vec::with_capacity(reserved.len() + parents.len());
         for (lane, slot) in self.lanes.iter().enumerate() {
             if slot.is_some() && !reserved.contains(&lane) {
                 edges.push(EdgeSegment::passing(Lane::new(lane)));
@@ -115,6 +166,7 @@ impl LaneAssigner {
         }
         for &lane in &reserved {
             edges.push(EdgeSegment::into_commit(Lane::new(lane), Lane::new(own)));
+            changes.push(LaneChange::Ends(Lane::new(lane)));
             self.lanes[lane] = None;
         }
 
@@ -130,6 +182,7 @@ impl LaneAssigner {
             if let Some(lane) = self.lanes.iter().position(|slot| *slot == Some(*parent)) {
                 // Another branch already reserved a lane for this parent.
                 edges.push(EdgeSegment::out_of_commit(Lane::new(own), Lane::new(lane)));
+                changes.push(LaneChange::Starts(Lane::new(lane)));
             } else if self.laid_out.contains_key(parent) {
                 // Already laid out above: connect once this row exists.
                 late_parents.push(*parent);
@@ -144,17 +197,19 @@ impl LaneAssigner {
                 };
                 self.lanes[lane] = Some(*parent);
                 edges.push(EdgeSegment::out_of_commit(Lane::new(own), Lane::new(lane)));
+                changes.push(LaneChange::Starts(Lane::new(lane)));
             }
         }
 
-        self.rows.push_back(GraphRow {
+        self.rows.push_back(WindowRow {
             id,
             lane: Lane::new(own),
             edges,
+            changes,
         });
         self.laid_out.insert(id, (row_index, Lane::new(own)));
-        for parent in late_parents {
-            self.connect_upward(&parent, row_index);
+        for (order, parent) in late_parents.iter().enumerate() {
+            self.connect_upward(parent, row_index, order);
         }
         finalised
     }
@@ -169,8 +224,25 @@ impl LaneAssigner {
             self.laid_out.remove(&row.id);
         }
         self.remember_gone(row.id);
+        Some(self.finalise(row))
+    }
+
+    /// Turns the row at `first_row`, which nothing can repaint now, into the row a reader
+    /// keeps: its changes, and a snapshot of the lines crossing into it when one is due.
+    fn finalise(&mut self, row: WindowRow) -> GraphRow {
+        let index = self.first_row;
         self.first_row += 1;
-        Some(row)
+        let snapshot = (index.is_multiple_of(self.snapshot_every) || index == self.drawn_from)
+            .then(|| Box::new(self.leaving.snapshot()));
+        let graph = GraphRow {
+            id: row.id,
+            lane: row.lane,
+            changes: row.changes.into_boxed_slice(),
+            snapshot,
+            edges: row.edges,
+        };
+        self.leaving.advance(&graph);
+        graph
     }
 
     /// Records `id` as gone, forgetting the oldest past [`LaneAssigner::remembered`].
@@ -208,8 +280,9 @@ impl LaneAssigner {
             .filter(|&offset| offset < self.rows.len())
     }
 
-    /// Draws the line up to an earlier parent, repainting the rows between.
-    fn connect_upward(&mut self, parent: &Oid, child_row: usize) {
+    /// Draws the line up to an earlier parent, repainting the rows between. `order` ranks
+    /// it among this child's late parents.
+    fn connect_upward(&mut self, parent: &Oid, child_row: usize, order: usize) {
         let Some(&(parent_row, parent_lane)) = self.laid_out.get(parent) else {
             return;
         };
@@ -229,6 +302,13 @@ impl LaneAssigner {
         if let Some(row) = self.rows.get_mut(parent_offset) {
             row.edges
                 .push(EdgeSegment::out_of_commit(parent_lane, lane).marked_out_of_order());
+            // A window of more than `u32::MAX` rows, or a commit of that many parents, is
+            // not a history.
+            row.changes.push(LaneChange::StartsLate {
+                lane,
+                rows: u32::try_from(child_row - parent_row).unwrap_or(u32::MAX),
+                order: u32::try_from(order).unwrap_or(u32::MAX),
+            });
         }
         for row in self.rows.range_mut(parent_offset + 1..child_offset) {
             row.edges
@@ -415,7 +495,7 @@ mod tests {
 
         // Too late: still laid out, but no line to a row that is gone.
         assigner.push(child, vec![late]);
-        let rows: Vec<GraphRow> = assigner.rows().cloned().collect();
+        let rows: Vec<&WindowRow> = assigner.rows.iter().collect();
         let child_row = rows
             .iter()
             .find(|row| row.id == child)
@@ -460,7 +540,8 @@ mod tests {
                     rows.push(row);
                 }
             }
-            rows.extend(assigner.rows().cloned());
+            let open_lanes = assigner.lanes.len();
+            rows.extend(assigner.into_rows());
 
             assert_eq!(rows.len(), history.len(), "a commit was lost");
             let widest = rows
@@ -475,7 +556,7 @@ mod tests {
                 .max()
                 .unwrap_or(0);
             let busiest = rows.iter().map(|row| row.edges.len()).max().unwrap_or(0);
-            widths.push((assigner.lanes.len(), widest, busiest));
+            widths.push((open_lanes, widest, busiest));
         }
         assert!(
             widths.windows(2).all(|pair| pair[0] == pair[1]),
@@ -558,14 +639,10 @@ mod tests {
         let mut assigner = LaneAssigner::with_window(0);
         assert_eq!(assigner.window(), 1);
         assert!(assigner.push(id(1), vec![id(2)]).is_none());
-        assert_eq!(assigner.rows().len(), 1);
+        assert_eq!(assigner.rows.len(), 1);
         let evicted = assigner.push(id(2), vec![]).expect("row 0 is now final");
         assert_eq!(evicted.id, id(1));
-        assert_eq!(
-            assigner.rows().len(),
-            1,
-            "the window holds one row at a time"
-        );
+        assert_eq!(assigner.rows.len(), 1, "the window holds one row at a time");
     }
 
     #[test]

@@ -14,6 +14,7 @@ mod diff_overlay;
 mod diff_rows;
 mod diff_shown;
 mod diff_text;
+mod edge_derivation;
 mod graph;
 mod history;
 mod lane_assignment;
@@ -44,7 +45,8 @@ pub use diff_rows::{
 };
 pub use diff_shown::{LINE_CUT_BYTES, ShownDiff, TAB_STOP, drawn_bytes, widest_drawn_columns};
 pub use diff_text::{ChangedRange, DiffLine, LineNumber, LineSpan, TextDiff, split_lines};
-pub use graph::{EdgeKind, EdgeSegment, GraphRow, Lane};
+pub use edge_derivation::{LaneSnapshot, RowEdges, row_edges};
+pub use graph::{EdgeKind, EdgeSegment, GraphRow, Lane, LaneChange};
 pub use history::{HistoryRow, RowContent, RowId};
 pub use lane_assignment::LaneAssigner;
 pub use line_selection::Selection;

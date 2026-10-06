@@ -121,9 +121,8 @@ mod tests {
 
     fn row(lane: usize, edges: Vec<EdgeSegment>) -> GraphRow {
         GraphRow {
-            id: oid(),
-            lane: Lane::new(lane),
             edges,
+            ..GraphRow::new(oid(), Lane::new(lane), Vec::new())
         }
     }
 

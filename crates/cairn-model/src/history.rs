@@ -40,7 +40,7 @@ impl HistoryRow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{EdgeSegment, Lane};
+    use crate::{Lane, LaneChange};
 
     fn commit(id: Oid) -> CommitSummary {
         CommitSummary {
@@ -54,11 +54,7 @@ mod tests {
     }
 
     fn graph(id: Oid) -> GraphRow {
-        GraphRow {
-            id,
-            lane: Lane::new(0),
-            edges: vec![EdgeSegment::passing(Lane::new(0))],
-        }
+        GraphRow::new(id, Lane::new(0), vec![LaneChange::Starts(Lane::new(0))])
     }
 
     #[test]

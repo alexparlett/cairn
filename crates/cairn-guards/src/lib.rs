@@ -2112,6 +2112,51 @@ pub fn gate_function_commands(gate: &str, function: &str) -> Vec<String> {
     names
 }
 
+/// What keeps the test `test` in `source` from failing where it skips and `variable` is set:
+/// empty when the test is held to its `CAIRN_REQUIRE_*` pin. The test's body is read from
+/// `fn test(` to its closing `}` alone on a line (`\n}\n`), so text in the next test never
+/// counts; it must print `SKIPPED test` (its skip said aloud), and the code before that
+/// line — its skip branch — must ask `availability` whether it can run and must read
+/// `variable` inside a failing assertion: `assert!(std::env::var_os("<variable>").is_none()`
+/// once whitespace is taken out, so an `if .. {}` that reads the variable and does nothing
+/// is not a pin.
+pub fn required_skip_violations(
+    source: &str,
+    test: &str,
+    variable: &str,
+    availability: &str,
+) -> Vec<String> {
+    let Some(start) = source.find(&format!("fn {test}(")) else {
+        return vec![format!("{test} is gone")];
+    };
+    let rest = &source[start..];
+    let Some(end) = rest.find("\n}\n") else {
+        return vec![format!("{test} has no closing brace on a line of its own")];
+    };
+    let body = &rest[..end];
+    let Some(skipped_at) = body.find(&format!("SKIPPED {test}")) else {
+        return vec![format!(
+            "{test} no longer says `SKIPPED {test}` where it skips"
+        )];
+    };
+    let skip_branch = &body[..skipped_at];
+    let squeezed: String = skip_branch.chars().filter(|c| !c.is_whitespace()).collect();
+    let mut violations = Vec::new();
+    if !squeezed.contains(&format!(
+        "assert!(std::env::var_os(\"{variable}\").is_none()"
+    )) {
+        violations.push(format!(
+            "{test} no longer fails, before it says it skipped, when {variable} is set"
+        ));
+    }
+    if !skip_branch.contains(availability) {
+        violations.push(format!(
+            "{test} no longer asks `{availability}` whether it can run, before it skips"
+        ));
+    }
+    violations
+}
+
 /// Whether `function`'s definition in `scripts/gate.sh` ([`gate_function_body`]) calls
 /// `callee` as a command of its own: some statement of it — a line, or a part of one
 /// between `;`s, its opening `{` and closing `}` taken off — whose first word is `callee`.

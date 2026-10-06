@@ -14,8 +14,8 @@ use cairn_guards::{
     job_env_entries, mentions_crate, names_a_literal_modifier, names_an_element,
     names_gitoxide_mutation, production_char_literals, production_string_literals,
     reads_enum_partially, reads_row_content_partially, renames_type, renders_in_a_macro, repo_root,
-    rust_sources, spawns_git, spells_a_chord, structs_with_a_field_naming, types_containing,
-    waits_on_work,
+    required_skip_violations, rust_sources, spawns_git, spells_a_chord,
+    structs_with_a_field_naming, types_containing, waits_on_work,
 };
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
@@ -4673,17 +4673,22 @@ fn the_fsmonitor_daemon_pin_is_required_wherever_it_can_run() {
     }
 }
 
-/// The reftable refusal test (`crates/cairn-git/tests/refs.rs`, PRD C2) skips where the git
-/// on `PATH` cannot make a reftable repository — before git 2.45 — and a passing test's
-/// stderr is hidden, so `CAIRN_REQUIRE_REFTABLE` is what turns a skip into a failure.
-/// Pinned here: the test's skip branch fails when the variable is set and asks git exactly
-/// what the gate's probe asks (`init --quiet --ref-format=reftable`); `scripts/gate.sh`'s
-/// `test-full` calls the probe as a statement of its own (`gate_function_calls`), whose body
-/// (`gate_function_body`) runs that `git init`, exports the variable, sets the note and
-/// removes what it made; the PASS line restates the note; and `scripts/git-floor.sh`, whose
-/// floors' gits cannot make reftable, runs the test's binary only with the variable
-/// cleared — today it does not run it at all. CI's runner may lack a new enough git, and
-/// the gate then prints the note: this pin holds the probe, not the runner.
+/// The reftable tests (`crates/cairn-git/tests/refs.rs`, PRD C2) skip where the git on
+/// `PATH` cannot make a reftable repository — before git 2.45 — wholly
+/// (`a_reftable_repository_is_refused_at_open_and_a_files_one_opens`) or for git's half
+/// (`the_ref_storage_setting_is_read_as_git_reads_it`), and a passing test's stderr is
+/// hidden, so `CAIRN_REQUIRE_REFTABLE` is what turns a skip into a failure. Pinned here:
+/// each test, read to its own closing brace, fails in its skip branch when the variable is
+/// set and says SKIPPED (`required_skip_violations`, self-test
+/// `the_required_skip_matcher_catches_the_shapes_it_claims`), and asks
+/// `no_reftable_here`, which runs the gate probe's `git init --quiet
+/// --ref-format=reftable`; `scripts/gate.sh`'s `test-full` calls the probe as a statement
+/// of its own (`gate_function_calls`), whose body (`gate_function_body`) runs that
+/// `git init`, exports the variable, sets the note naming both tests and removes what it
+/// made; the PASS line restates the note; and `scripts/git-floor.sh`, whose floors' gits
+/// cannot make reftable, runs the tests' binary only with the variable cleared — today it
+/// does not run it at all. CI's runner may lack a new enough git, and the gate then prints
+/// the note: this pin holds the probe, not the runner.
 #[test]
 fn the_reftable_refusal_is_required_wherever_it_can_run() {
     let root = repo_root();
@@ -4694,26 +4699,19 @@ fn the_reftable_refusal_is_required_wherever_it_can_run() {
     let floor = read("scripts/git-floor.sh");
     let test = read("crates/cairn-git/tests/refs.rs");
 
-    let body = test
-        .split("fn a_reftable_repository_is_refused_at_open_and_a_files_one_opens()")
-        .nth(1)
-        .unwrap_or_else(|| panic!("the reftable refusal test is gone from refs.rs"));
-    let skip_branch = body.split("eprintln!(").next().unwrap_or_default();
-    assert!(
-        skip_branch.len() < body.len(),
-        "the reftable refusal test no longer says SKIPPED where it skips, so this check read \
-         nothing"
-    );
-    assert!(
-        skip_branch.contains("std::env::var_os(\"CAIRN_REQUIRE_REFTABLE\")"),
-        "the reftable refusal test no longer fails where git cannot make a reftable \
-         repository and CAIRN_REQUIRE_REFTABLE is set, so the gate's setting of it decides \
-         nothing"
-    );
-    assert!(
-        skip_branch.contains("no_reftable_here("),
-        "the reftable refusal test no longer asks no_reftable_here whether it can run"
-    );
+    let tests = [
+        "a_reftable_repository_is_refused_at_open_and_a_files_one_opens",
+        "the_ref_storage_setting_is_read_as_git_reads_it",
+    ];
+    for name in tests {
+        let violations =
+            required_skip_violations(&test, name, "CAIRN_REQUIRE_REFTABLE", "no_reftable_here(");
+        assert!(
+            violations.is_empty(),
+            "crates/cairn-git/tests/refs.rs: {violations:?}, so the gate's setting of \
+             CAIRN_REQUIRE_REFTABLE decides nothing for {name}"
+        );
+    }
     let availability = test
         .split("fn no_reftable_here(")
         .nth(1)
@@ -4724,13 +4722,13 @@ fn the_reftable_refusal_is_required_wherever_it_can_run() {
             && availability.contains(r#""--quiet""#)
             && availability.contains(r#""--ref-format=reftable""#),
         "refs.rs's no_reftable_here no longer runs `git init --quiet --ref-format=reftable`, so \
-         the gate's probe no longer tests exactly what the test needs"
+         the gate's probe no longer asks what the tests ask"
     );
 
     assert!(
         gate_function_calls(&gate, "run_test_full", "require_reftable_where_possible"),
         "scripts/gate.sh's run_test_full no longer calls require_reftable_where_possible, so \
-         the reftable refusal test would skip silently where it could have run."
+         the reftable tests would skip silently where they could have run."
     );
     let probe = gate_function_body(&gate, "require_reftable_where_possible")
         .unwrap_or_else(|| panic!("scripts/gate.sh no longer defines the reftable probe"));
@@ -4740,12 +4738,15 @@ fn the_reftable_refusal_is_required_wherever_it_can_run() {
         "REFTABLE_NOTE=",
         "probe=$(mktemp -d)",
         "rm -rf \"$probe\"",
-    ] {
+    ]
+    .into_iter()
+    .chain(tests)
+    {
         assert!(
             probe.contains(needed),
             "scripts/gate.sh's require_reftable_where_possible no longer has `{needed}`, so \
-             the reftable refusal test is no longer required exactly where it can run, or a \
-             skip goes unsaid, or the probe's repository is left behind"
+             the reftable tests are no longer required exactly where they can run, or a skip \
+             goes unsaid or unnamed, or the probe's repository is left behind"
         );
     }
     assert!(
@@ -4769,9 +4770,61 @@ fn the_reftable_refusal_is_required_wherever_it_can_run() {
         assert!(
             !runs_the_test || run.contains("-u CAIRN_REQUIRE_REFTABLE"),
             "scripts/git-floor.sh runs the refs tests with CAIRN_REQUIRE_REFTABLE inherited, \
-             which fails the reftable refusal test on a floor's git: {run}"
+             which fails the reftable tests on a floor's git: {run}"
         );
     }
+}
+
+/// `required_skip_violations` against the shapes it claims: the pinned shape passes; the
+/// SKIPPED line deleted, the requirement read moved into the NEXT test, the requirement
+/// read in an `if` that does nothing, and the availability check dropped each fail it.
+#[test]
+fn the_required_skip_matcher_catches_the_shapes_it_claims() {
+    let pinned = "fn the_test() {\n    if let Some(reason) = can_run() {\n        assert!(\n            \
+                  std::env::var_os(\"CAIRN_REQUIRE_X\")\n                .is_none(),\n            \
+                  \"set: {reason}\"\n        );\n        eprintln!(\"SKIPPED the_test: {reason}\");\n        \
+                  return;\n    }\n}\n\nfn next() {\n    eprintln!(\"later\");\n}\n";
+    let check =
+        |source: &str| required_skip_violations(source, "the_test", "CAIRN_REQUIRE_X", "can_run(");
+    assert!(check(pinned).is_empty(), "{:?}", check(pinned));
+
+    let unsaid = pinned.replace("eprintln!(\"SKIPPED the_test: {reason}\");", "");
+    assert!(
+        !check(&unsaid).is_empty(),
+        "M11: the SKIPPED line deleted passed"
+    );
+
+    let moved = pinned
+        .replace(
+            "assert!(\n            std::env::var_os(\"CAIRN_REQUIRE_X\")\n                .is_none(),\n            \"set: {reason}\"\n        );\n",
+            "",
+        )
+        .replace(
+            "fn next() {\n",
+            "fn next() {\n    assert!(std::env::var_os(\"CAIRN_REQUIRE_X\").is_none());\n    \
+             eprintln!(\"SKIPPED the_test\");\n",
+        );
+    assert_ne!(moved, pinned);
+    assert!(
+        !check(&moved).is_empty(),
+        "M12: the requirement moved to the next test passed"
+    );
+
+    let idle = pinned.replace(
+        "assert!(\n            std::env::var_os(\"CAIRN_REQUIRE_X\")\n                .is_none(),\n            \"set: {reason}\"\n        );",
+        "if std::env::var_os(\"CAIRN_REQUIRE_X\").is_none() {}",
+    );
+    assert_ne!(idle, pinned);
+    assert!(
+        !check(&idle).is_empty(),
+        "an `if .. {{}}` reading the variable passed"
+    );
+
+    let blind = pinned.replace("can_run()", "true_anyway()");
+    assert!(!check(&blind).is_empty(), "a skip that asks nothing passed");
+
+    let gone = pinned.replace("fn the_test()", "fn renamed()");
+    assert!(!check(&gone).is_empty(), "a missing test passed");
 }
 
 /// The two user-namespace tests — the refspec check over a repository another uid owns

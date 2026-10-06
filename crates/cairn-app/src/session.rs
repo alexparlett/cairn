@@ -51,10 +51,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                 let held = history.append(page);
                 (history.len(), held)
             };
-            progress.write().received(widest, complete, loaded);
-            if let Err(full) = held {
-                progress.write().failed(full.to_string());
-            }
+            progress.write().appended(widest, complete, loaded, held);
         }
         Update::Failed { message } | Update::WorkerLost { message } => {
             progress.write().failed(message);

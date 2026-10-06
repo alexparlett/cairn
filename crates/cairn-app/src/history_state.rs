@@ -1,6 +1,6 @@
 //! View state for the history list.
 
-use cairn_model::RowsPage;
+use cairn_model::{HistoryFull, RowsPage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
@@ -70,18 +70,40 @@ impl Progress {
         self.in_flight = true;
     }
 
-    /// `loaded` is the total rows held once the page has been added.
+    /// `loaded` is the total rows held once the page has been added. Once the history can
+    /// hold no more ([`Self::appended`]) or the stream has ended, the failure stands.
     pub fn received(&mut self, widest_lane: usize, complete: bool, loaded: usize) {
         self.in_flight = false;
         self.lanes = self.lanes.max(widest_lane);
         self.complete = complete;
         self.loaded = loaded;
+        if self.ended {
+            return;
+        }
         self.status = match (loaded, complete) {
             // Ran out with nothing in it: empty. Nothing handed over yet: still loading.
             (0, true) => Status::Empty,
             (0, false) => Status::Loading,
             _ => Status::Ready,
         };
+    }
+
+    /// A page has been appended to the history, all of it or — when `held` says the history
+    /// is full — the rows before the first it could not hold. A full history is the end of
+    /// the scroll: nothing more is asked for, since a later page could land after the rows
+    /// that were dropped and draw a history with a hole in it. Only a reopen starts again.
+    pub fn appended(
+        &mut self,
+        widest_lane: usize,
+        complete: bool,
+        loaded: usize,
+        held: Result<(), HistoryFull>,
+    ) {
+        self.received(widest_lane, complete, loaded);
+        if let Err(full) = held {
+            self.ended = true;
+            self.status = Status::Failed(full.to_string());
+        }
     }
 
     pub fn failed(&mut self, message: String) {
@@ -265,6 +287,33 @@ mod tests {
             silent.status(),
             &Status::Failed("the repository worker has stopped".to_owned())
         );
+    }
+
+    /// QA's QC1: a history that can hold no more ends the scroll — it asks for nothing
+    /// more, says why, and a page that arrives anyway does not unsay it. Caught by: treating
+    /// it as a failed page, which is asked for again and appends after the dropped rows.
+    #[test]
+    fn a_full_history_stops_asking_and_keeps_saying_so() {
+        let mut progress = Progress::opening();
+        progress.appended(1, false, 64, Ok(()));
+        assert!(progress.wants_more());
+
+        progress.asked();
+        progress.appended(1, false, 100, Err(HistoryFull));
+        let said = Status::Failed("the history is too large to hold".to_owned());
+        assert_eq!(progress.status(), &said);
+        assert!(
+            !progress.wants_more(),
+            "a full history asked for another page"
+        );
+        assert_eq!(progress.loaded(), 100, "the rows it did hold were disowned");
+
+        progress.received(1, false, 164);
+        assert_eq!(progress.status(), &said, "a later page unsaid the failure");
+        assert!(!progress.wants_more());
+
+        let reopened = Progress::opening();
+        assert_eq!(reopened.status(), &Status::Loading, "a reopen starts again");
     }
 
     /// Caught by: narrowing, which moves every subject sideways mid-scroll.

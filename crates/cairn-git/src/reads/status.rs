@@ -26,8 +26,9 @@
 //! `/` — is the status read again with `--untracked-files=all`, and the second answer is the
 //! answer, whole; the first is dropped. A directory listed under `all` too is a nested
 //! repository, which git lists as its directory in every mode. Two reads of `git status` and
-//! nothing else: no `git config` is run, so no porcelain read beyond `status` is added. The
-//! setting changing between the two reads is answered as it stood at the second.
+//! nothing else: no `git config` is run, so no porcelain read beyond `status` is added. A
+//! change to the setting between the two reads is not seen: the second read lists every
+//! untracked file whatever the setting then says, and the next status read sees the change.
 //!
 //! **What it writes, runs and reads.** A read runs with `GIT_OPTIONAL_LOCKS=0`, which `git
 //! status` honours by never writing the index — not the refreshed stat information, not the
@@ -41,9 +42,13 @@
 //! it runs `git status` inside it, with that repository's own hook and filters. Because a
 //! read never writes the refreshed stat back, a tree whose every file's stat changed stays
 //! as slow to read as the first time (736 ms on rust-lang/rust) until something refreshes the
-//! index; nothing here does. Staged rename detection compares blobs of `HEAD` and the index;
-//! in a partial clone a blob only the promisor holds is not fetched from git 2.44, and may be
-//! on an older git (`crate::reads`).
+//! index; nothing here does. Staged rename detection compares blobs of `HEAD` and the index,
+//! and in a partial clone a blob only the promisor holds is never fetched by a read from git
+//! 2.44 (`GIT_NO_LAZY_FETCH=1`, `crate::reads`): git fails, so the WHOLE read fails —
+//! [`Error::GitFailed`], nothing listed, no pack written — where the user's own `git status`
+//! would fetch the blob and answer. A git older than 2.44 ignores the variable and fetches,
+//! writing a pack: the floor's residual
+//! (`in_a_partial_clone_a_status_read_fails_rather_than_fetching`).
 //!
 //! **Failure.** Classified by exit status and the repository's state, never by stderr. One
 //! failure is a state rather than an error (R3.7): a git older than 2.32 cannot read a sparse
@@ -743,8 +748,9 @@ mod tests {
     }
 
     /// The submodule field: `N...` is no submodule, and each of `S`'s three letters is its
-    /// own flag. Caught by: a flag read from the wrong position, `S...` read as none, or a
-    /// letter in the wrong place accepted.
+    /// own flag, on an ordinary, a rename's and an unmerged record alike. Caught by: a flag
+    /// read from the wrong position, `S...` read as none, a letter in the wrong place
+    /// accepted, or the field dropped from a `2` or `u` record.
     #[test]
     fn each_submodule_letter_is_its_own_flag() {
         let state = |new_commits, modified_content, untracked_content| SubmoduleState {
@@ -778,6 +784,33 @@ mod tests {
                 format!("1 .M {refused} 160000 160000 160000 {BLOB} {BLOB} sub").into_bytes();
             assert!(parsed(&[&record]).is_err(), "{refused} was read");
         }
+
+        // The same field on a rename's record and on an unmerged one reaches its entry.
+        let renamed =
+            format!("2 R. SC.U 160000 160000 160000 {BLOB} {BLOB} R100 new sub").into_bytes();
+        assert_eq!(
+            parsed(&[&renamed, b"old sub"]),
+            Ok(vec![StatusEntry::Changed(ChangedEntry {
+                path: RepoPath::from("new sub"),
+                staged: Some(StagedChange::Renamed {
+                    from: RepoPath::from("old sub"),
+                    similarity: Similarity::from_percent(100),
+                }),
+                unstaged: None,
+                submodule: Some(state(true, false, true)),
+            })])
+        );
+        let unmerged =
+            format!("u UU S.M. 160000 160000 160000 160000 {BLOB} {BLOB} {BLOB} conflicted sub")
+                .into_bytes();
+        assert_eq!(
+            parsed(&[&unmerged]),
+            Ok(vec![StatusEntry::Conflicted(ConflictedEntry {
+                path: RepoPath::from("conflicted sub"),
+                kind: ConflictKind::BothModified,
+                submodule: Some(state(false, true, false)),
+            })])
+        );
     }
 
     /// What is not a record git prints for this query is refused, never guessed at: an
@@ -1232,6 +1265,66 @@ mod tests {
             matches!(read(&plain, &old), Err(Error::GitFailed { .. })),
             "an old git's failure over a plain index was said to be a sparse index"
         );
+    }
+
+    /// The second read — `--untracked-files=all`, after the first collapsed a directory — is
+    /// cancelled as the first is: superseded while it runs, its process group is ended, the
+    /// read answers cancelled, nothing is left registered, and the log holds both reads with
+    /// the second ended. A stub `git` answers `? dir/` to the first and sleeps through the
+    /// second. Caught by: the second read given a cancel that never fires.
+    #[test]
+    fn a_status_read_superseded_during_its_second_read_ends_it() {
+        // The stub's `PATH` is its own directory, so `sleep` is named by where it is.
+        let sleep = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .map(|dir| dir.join("sleep"))
+            .find(|path| path.is_file())
+            .unwrap_or_else(|| panic!("no sleep on PATH"));
+        let sleep = sleep.display();
+        let stub = StubGit::with_git_from(|directory| {
+            let started = directory.join("second-started").display().to_string();
+            format!(
+                "if [ \"$1\" = --version ]; then echo 'git version 2.30.0'; exit 0; fi\n\
+                 case \"$*\" in\n\
+                 *--untracked-files=all*) : > '{started}'; exec '{sleep}' 30 ;;\n\
+                 *) printf '? dir/\\0' ;;\n\
+                 esac"
+            )
+        });
+        let git = discover_retrying(stub.environment()).unwrap_or_else(|e| panic!("{e}"));
+        let repo =
+            Repository::discover(env!("CARGO_MANIFEST_DIR")).unwrap_or_else(|e| panic!("{e}"));
+        let epochs = Arc::new(AtomicU64::new(0));
+        let query = Epoch {
+            current: Arc::clone(&epochs),
+            started_under: 0,
+        };
+        let superseding = {
+            let epochs = Arc::clone(&epochs);
+            let started = stub.directory().join("second-started");
+            std::thread::spawn(move || {
+                let reached = eventually(Duration::from_secs(10), || started.exists());
+                epochs.fetch_add(1, Ordering::Release);
+                reached
+            })
+        };
+        let begun = Instant::now();
+        let outcome = status(&git, &repo, &query);
+        let elapsed = begun.elapsed();
+        let running_after = repo.processes().running();
+        let reached = superseding
+            .join()
+            .unwrap_or_else(|_| panic!("the superseding thread panicked"));
+        assert!(reached, "the second read never started");
+        assert!(
+            matches!(outcome, Err(Error::StatusCancelled)),
+            "expected a cancelled read, got {outcome:?}"
+        );
+        assert!(elapsed < Duration::from_secs(5), "took {elapsed:?}");
+        assert_eq!(running_after, 0, "the registry still holds the second read");
+        let log = repo.processes().log();
+        assert_eq!(log.len(), 2, "{log:?}");
+        assert!(!log[0].cancelled, "the first read was ended: {log:?}");
+        assert!(log[1].cancelled, "the second read finished: {log:?}");
     }
 
     /// A read superseded before it starts runs no `git` at all.

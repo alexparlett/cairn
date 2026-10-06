@@ -42,7 +42,7 @@ No risk, and most of the perceived quality of a git client lives here.
 | Commit search | `--grep`, author, date, and `-S`/`-G` pickaxe. Fork under-serves this; at scale it is badly missed. A differentiator. |
 | Compare arbitrary revisions | Two commits, or a branch against its upstream. |
 | Reflog view | Fork sells this as "restore lost commits". It is the recovery story for commit-level destruction — see Recovery below. |
-| Stash contents | Fork shows stashes inline in the commit list rather than in a side panel; worth copying. |
+| Stash contents | Fork shows stashes inline in the commit list, each a row of its own, as well as in its sidebar; worth copying. |
 | Submodule status | Which submodules exist, which are dirty, which are behind. |
 | Image diffs | Fork advertises this. Common, concrete, moderate cost once the diff foundation exists. |
 | Diff options | Whitespace handling, word-level intra-line diff, context lines, rename detection. |
@@ -120,7 +120,7 @@ reason it comes last here.
 | Recent repositories | |
 | Multi-repository UI | Tabs, sidebar, or windows — parked in `cairn.md`, "Still open". |
 | Init | |
-| **Worktrees** | First-class: list, create, switch, remove, and show which worktree holds a branch. A differentiator; Fork does not advertise it (`worktrees.md`). |
+| **Worktrees** | First-class: list, create, switch, remove, and show which worktree holds a branch. Fork lists them and marks a branch one holds; few other clients do (`worktrees.md`). |
 | Submodule init / update / sync | |
 | Git LFS | `git` applies the filters on write and reads see git's form (`engine.md`). Needs verifying, not building. |
 | `git config` editing | |

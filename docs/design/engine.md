@@ -14,7 +14,9 @@ comparison changed, with their renames and copies — is one, because rename and
 copy detection is where gix and git disagree; which lines of a changed file
 changed is another, because line diffing is too ("Where git answers a read",
 below); and so is one path's working-tree diff, because only git's own read of
-the working tree is git's form of it ("Reads see git's form", below). Besides
+the working tree is git's form of it ("Reads see git's form", below); and so is
+the working tree's status, which gix answers differently from git wherever
+status is hard. Besides
 `git` itself, the programs a read may start are the user's own clean filter
 driver, which git runs on a read of the working tree, and the repository's
 `core.fsmonitor`, which git consults as it reads the index of a repository with
@@ -96,6 +98,35 @@ fetch git then made. So git answers: `git config --includes --null` with
 (`reads::fetch_settings`), the second porcelain mode a read runs, accepted by
 the user; the check fails closed when the read fails.
 
+The fourth case is status: which paths are staged, changed, untracked or in
+conflict. Status is the read most exposed to everything that makes git's answer
+hard — rename detection between `HEAD` and the index, `core.fsmonitor`, sparse
+checkout, a split or sparse index, conflicted stages, intent-to-add, submodules
+— and gix's answer differs from git's across them, several times silently:
+staged renames with edits reported as adds and deletes once there are enough of
+them, `status.renames` read from the wrong section, a staged deletion nobody made
+under a split index beside a sparse one. gix's status also starts the user's
+clean filter itself,
+from Cairn's own process and environment, outside `processes.md`'s one place. So
+git answers: `git status --porcelain=v2 -z`, run as a read, with nothing passed
+that overrides the user's rename or submodule settings (`reads::status`). It is
+the cheaper of the two as well, except on a tree whose every file's stat changed:
+a read never writes the refreshed index back, so git rehashes every file each
+time until something refreshes the index, where gix's in-process hashing is
+several times faster. Under a split index git touches `sharedindex.*`'s mtime and under a sparse
+index loose tree objects' mtimes, as the user's own `git status` does; neither
+changes a byte. Evidence: `docs/research/refs-and-status/status-agreement-spike.md`
+and `docs/research/refs-and-status/gix-refs-and-status-api.md`.
+
+Refs stay with gix, because gix agrees with `git for-each-ref` once it is read
+with care: a symbolic ref is never peeled into its target's name, a dangling one
+is hidden, the stash reflog is read so that a long message cannot end it, and a
+branch whose upstream is local (`remote = .`) is resolved as git resolves it,
+where gix answers none.
+gix cannot read a reftable repository at all, and opens one only to fail at
+`HEAD`, so such a repository is refused at open with the reason. Evidence:
+`docs/research/refs-and-status/gix-refs-and-status-api.md`.
+
 Each such read is a named function in `reads/`, runs under a read's environment
 — no optional locks, no askpass token — and is cancelled by its query's epoch
 like any gix walk (`processes.md`, `concurrency.md`). A new one is a decision,
@@ -124,9 +155,10 @@ live in one application, and they can disagree. Three obligations follow.
    `crates/cairn-git/src/ops/mod.rs` and summarised in
    `docs/systems/credentials.md`.
 2. **Filters affect reads, not only writes** — the next section.
-3. **Edge cases can diverge.** gix's status against git's under sparse checkout,
+3. **Edge cases can diverge.** A gix read against git's under sparse checkout,
    `core.fsmonitor`, or unusual attribute configuration is a real defect class:
    Cairn shows one answer and the user's next `git` command acts on another.
+   Status is the clearest case, and git answers it.
 
 ## Reads see git's form
 

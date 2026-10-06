@@ -27,14 +27,22 @@ free, because some work is pinned. A scroll keeps one gitoxide walk alive
 (`history-graph.md`); that walk borrows the repository and is not `Send`, so every
 page of it runs on the thread that owns the handle. History has its thread; diffs
 — commit, comparison and working-tree — have another, so a long history page never
-queues a diff behind it.
+queues a diff behind it. The refs snapshot is read on the history thread, which
+reopens the walk from it. Status — a `git` read that rehashes every stat-dirty
+file — and ahead/behind — two walks a branch, as long as the branch has
+diverged — run on a third thread, so neither a page nor a diff queues behind a
+refresh.
 
 ## Lanes and epochs
 
-Every query belongs to a **lane** — history, changes, file diff — and carries an
-epoch numbered per lane. A new query supersedes older ones in its own lane only,
-except that a changes query also supersedes the file-diff lane; nothing else
-crosses. One counter for everything would let a scroll cancel a selection.
+Every query belongs to a **lane** — history, changes, file diff, the changed-file
+filter, refs, ahead/behind, status and the sidebar's filter — and carries an
+epoch numbered per lane. Finding a ref's commit pages the held walk, so it is
+history-lane work, and a scroll and a find supersede each other. A new query supersedes older ones in its own
+lane only, except that a changes query also supersedes the file-diff lane;
+nothing else crosses. One counter for everything would let a scroll cancel a
+selection, or a refresh a diff. A refresh — on focus, after an operation, or
+asked for — supersedes the refresh before it, lane by lane.
 
 The epoch is the cancel signal itself, not just a discard filter: the engine
 polls it, so superseding a query stops its walk rather than discarding its
@@ -45,7 +53,8 @@ commit's header. That is the part that is painful to retrofit, and what
 
 A read that `git` answers (`engine.md`) is a query like any other: it belongs to
 its lane, and superseding it ends its process (`processes.md`). Specs:
-`docs/prd/diff-engine.md` R4 for the lanes, `docs/prd/process-manager.md` R4.1
+`docs/prd/diff-engine.md` R4 and `docs/prd/refs-and-status.md` R11 for the lanes,
+`docs/prd/process-manager.md` R4.1
 for a read's process.
 
 ## Operations

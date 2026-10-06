@@ -11,14 +11,15 @@ nuance that run must not lose.
 | 2 | `credential-prompts` | **shipped** | 1 |
 | 2a | `process-manager` | **shipped** | 2 |
 | 3 | `diff-engine` | **shipped** (merge bar passed and torn down; lands on `main` with its packet PR) | 1, 2a |
-| 4 | `refs-and-status` | brief only | 1 (and 2a if O2 picks `git status`) |
+| 4 | `refs-and-status` | **planned** (PRD in flight, `docs/work/refs-and-status/`) | 1, 2a (O2 picked `git status`), 3 |
 | 5 | `staging-and-commit` | brief only | 2, 2a, 3, 4 |
 | 6 | `remote-sync` | brief only | 2, 2a, 4 |
 | 7 | `branch-ops` | brief only | 2a, 4 |
 | 8 | `worktrees` | brief only | 2a, 4 |
 
-2a depends on 2. 3 depends on 2a, and 4 depends on neither, unless O2 sends
-status to `git`. Every packet that spawns `git` depends on 2a. 6, 7 and 8 are
+2a depends on 2. 3 depends on 2a, and 4 on 1, 2a (O2 sent status to `git`) and
+3 (whose working-tree query its Local Changes view opens). Every packet that
+spawns `git` depends on 2a. 6, 7 and 8 are
 independent of each other. The local write lane is built by whichever of 5 and 7
 lands first. The critical path to D7 is 1 → 2 → 2a → 3 → 5, with 4 needed before 5.
 2a was inserted on 2026-10-02 and numbered so the other packets keep theirs.
@@ -114,7 +115,23 @@ Windows' tab chords and date padding), #58 (gaps in the gate's required-test pin
 #51, #52, #53; and #29-#37, the deferred diff features, with what this packet built
 toward each recorded on #29 and #31-#35.
 
-## 4. refs-and-status — brief
+## 4. refs-and-status — planned
+
+`docs/prd/refs-and-status.md` (in flight), work directory
+`docs/work/refs-and-status/`, evidence `docs/research/refs-and-status/`. Planned
+2026-10-05. **O2 is closed** (its decision L1): status is `git status
+--porcelain=v2 -z` run as a read — gix's status differed from git's on 12 of 38
+fixtures, three silently, and starts clean filters outside `process/` — so this
+packet depends on 2a. Also locked: the walk seeds from every ref with stashes as
+rows of their own, no working-tree row (Fork has none), Fork's labels, sidebar
+and toolbar, a read-only Local Changes view wired to packet 3's working-tree
+query, and Fork's refresh (focus, after an operation, a chord; no watching).
+And, after measuring a deep find on rust-lang/rust (1.4 GiB retained, 89% of it
+per-row edges): compact rows whose edges are derived as drawn, and no cap on the
+history — a deliberate deviation from Fork, which caps its list and does nothing
+for a ref past it.
+The brief as written at program planning follows.
+
 
 **Builds:** refs enumeration (branches, remotes, tags, stashes) and working-tree
 status (changed, staged, untracked, ignored, conflicted). Ref decoration on the
@@ -181,6 +198,10 @@ Cairn's mockup shows header actions and a selection gutter
 
 **Out:** merge, rebase, cherry-pick, revert, reset (all Tier 4, second lap).
 
+**Inherited from packet 4** (as planned): the Local Changes view, read only —
+Unstaged above Staged, the badges, each path's diff — which this packet adds
+stage, discard and the commit box to; and status as `git status` reports it.
+
 ## 6. remote-sync — brief
 
 **Builds:** pull and push. Upstream tracking. Remote add, edit and remove.
@@ -205,6 +226,10 @@ are not.
 **Open:** O4 — whether pull defaults to merge or rebase, and how visible that
 choice is. It must not live only in config, where a user finds it by being
 surprised.
+
+**Inherited from packet 4** (as planned): remote-tracking labels draw a generic
+remote glyph where Fork draws the forge's icon; identifying the forge here is
+what replaces it.
 
 **Destructive members:** force push, prune, delete remote tag. All take
 `Confirmed`, and force push is the operation whose prompt
@@ -243,9 +268,12 @@ check out a branch that is already checked out elsewhere, then fails confusingly
 Creating means choosing a path, which is a UI surface; the guard above needs only
 the read side.
 
-**Why this is in the first milestone at all**, when Fork does not have it: it is
-cheap on the read side and it is the workflow this repository is developed in —
-`CLAUDE.md` puts every packet in its own worktree.
+**Why this is in the first milestone at all:** it is cheap on the read side and
+it is the workflow this repository is developed in — `CLAUDE.md` puts every
+packet in its own worktree. (Fork does have it: a Worktrees sidebar section since
+2023, and an icon on a branch held elsewhere —
+`docs/research/refs-and-status/fork-refs-and-status-ui.md`. Cairn's addition is
+the disabled checkout.)
 
 ---
 

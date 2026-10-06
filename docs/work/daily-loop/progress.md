@@ -3,6 +3,16 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-05 — refs-and-status planned; O2 closed
+
+Packet 4 planned with `/feature-plan`: PRD `docs/prd/refs-and-status.md`, work
+directory `docs/work/refs-and-status/`, evidence `docs/research/refs-and-status/`.
+O2 closed for `git status --porcelain=v2 -z` as a read, on a 38-fixture agreement
+spike (gix differed on 12, three silently, and runs clean filters outside
+`process/`). The packet now depends on 2a. The Fork study corrected two program
+records: Fork has had a worktree sidebar since 2023, and draws no working-tree
+row in the graph, so Cairn draws none.
+
 ## 2026-09-14 — out-of-scope list reviewed against real usage and confirmed
 
 Walked the remaining out-of-scope entries with the user after D9 moved one of them

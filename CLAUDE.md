@@ -706,7 +706,8 @@ Project invariants:
     `rows.iter().position(..)` when it misses — a scan of every loaded row,
     inside the key handler, on the UI thread. It is the correctness fallback by
     design and unreachable while rows only append; the row that arrives ABOVE
-    another is what enters it, which is what the working-tree row will do. Named
+    another is what enters it; no row kind does today, and there is to be no
+    working-tree row (`docs/design/history-graph.md`). Named
     here rather than left implicit, because a token scan cannot tell this
     iteration from any other. Its sibling: a Commit-tab parent link finds its
     parent with `selection::loaded_row`, a scan of every loaded row, once per

@@ -234,13 +234,7 @@ impl LaneAssigner {
         self.first_row += 1;
         let snapshot = (index.is_multiple_of(self.snapshot_every) || index == self.drawn_from)
             .then(|| Box::new(self.leaving.snapshot()));
-        let graph = GraphRow {
-            id: row.id,
-            lane: row.lane,
-            changes: row.changes.into_boxed_slice(),
-            snapshot,
-            edges: row.edges,
-        };
+        let graph = GraphRow::laid_out(row.id, row.lane, row.changes.into_boxed_slice(), snapshot);
         self.leaving.advance(&graph);
         graph
     }
@@ -544,7 +538,10 @@ mod tests {
             rows.extend(assigner.into_rows());
 
             assert_eq!(rows.len(), history.len(), "a commit was lost");
-            let widest = rows
+            let drawn: Vec<crate::RowEdges> = (0..rows.len())
+                .map(|index| crate::row_edges(&rows, index).unwrap())
+                .collect();
+            let widest = drawn
                 .iter()
                 .flat_map(|row| {
                     std::iter::once(row.lane.index()).chain(
@@ -555,7 +552,7 @@ mod tests {
                 })
                 .max()
                 .unwrap_or(0);
-            let busiest = rows.iter().map(|row| row.edges.len()).max().unwrap_or(0);
+            let busiest = drawn.iter().map(|row| row.edges.len()).max().unwrap_or(0);
             widths.push((open_lanes, widest, busiest));
         }
         assert!(

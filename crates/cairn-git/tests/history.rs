@@ -50,6 +50,16 @@ fn lanes(rows: &[HistoryRow]) -> Vec<(String, usize)> {
         .collect()
 }
 
+/// Every row's edges, derived as the list derives each row it draws.
+fn drawn_edges(rows: &[HistoryRow]) -> Vec<Vec<EdgeSegment>> {
+    (0..rows.len())
+        .map(|index| match cairn_model::row_edges(rows, index) {
+            Some(drawn) => drawn.edges,
+            None => panic!("row {index} has no snapshot within reach"),
+        })
+        .collect()
+}
+
 fn read(repo: &Repository, request: &HistoryRequest) -> HistoryPage {
     ok(
         repo.history(request, &CancelSignal::new()),
@@ -220,18 +230,19 @@ fn two_pages_of_n_match_one_page_of_2n_including_lanes() {
         "lanes moved when the page split"
     );
 
+    let (split_edges, whole_edges) = (drawn_edges(&split), drawn_edges(&whole.rows));
     for (index, (apart, together)) in split.iter().zip(&whole.rows).enumerate() {
         assert_eq!(
             apart.content, together.content,
             "row {index} is a different commit"
         );
+        let (apart, together) = (&split_edges[index], &whole_edges[index]);
         assert!(
-            together.graph.edges.starts_with(&apart.graph.edges),
-            "row {index} lost segments when the page split:\n  split {:?}\n  whole {:?}",
-            apart.graph.edges,
-            together.graph.edges
+            together.starts_with(apart),
+            "row {index} lost segments when the page split:\n  split {apart:?}\n  whole \
+             {together:?}",
         );
-        for gained in &together.graph.edges[apart.graph.edges.len()..] {
+        for gained in &together[apart.len()..] {
             assert!(
                 gained.out_of_order,
                 "row {index} gained {gained:?} unflagged, so the difference is not a repaint"
@@ -289,12 +300,13 @@ fn a_backward_line_across_a_page_boundary_is_a_gained_segment() {
         repaints(&split) < repaints(&whole.rows),
         "the boundary-crossing line was expected to be missing from the split run"
     );
-    for (index, (apart, together)) in split.iter().zip(&whole.rows).enumerate() {
+    let (split_edges, whole_edges) = (drawn_edges(&split), drawn_edges(&whole.rows));
+    for (index, (apart, together)) in split_edges.iter().zip(&whole_edges).enumerate() {
         assert!(
-            together.graph.edges.starts_with(&apart.graph.edges),
+            together.starts_with(apart),
             "row {index} differs by more than a gained segment"
         );
-        for gained in &together.graph.edges[apart.graph.edges.len()..] {
+        for gained in &together[apart.len()..] {
             assert!(
                 gained.out_of_order,
                 "row {index} gained {gained:?} unflagged"
@@ -384,9 +396,10 @@ fn a_narrow_window_returns_every_commit() {
 }
 
 fn repaints(rows: &[HistoryRow]) -> usize {
-    rows.iter()
-        .flat_map(|row| &row.graph.edges)
-        .filter(|edge: &&EdgeSegment| edge.out_of_order)
+    drawn_edges(rows)
+        .iter()
+        .flatten()
+        .filter(|edge| edge.out_of_order)
         .count()
 }
 
@@ -1079,29 +1092,22 @@ fn a_shallow_clones_boundary_commits_have_the_parents_git_log_shows() {
             graphs, laid_out,
             "depth {depth}: the graph is not the one git's parents lay out"
         );
-        let last = some_last(&page.rows);
+        let last = match drawn_edges(&page.rows).pop() {
+            Some(edges) => edges,
+            None => panic!("the clone answered no rows"),
+        };
         // Lines may come INTO the oldest row; none may pass it or leave it downward.
         assert!(
-            last.graph
-                .edges
-                .iter()
+            last.iter()
                 .all(|edge| edge.kind == cairn_model::EdgeKind::IntoCommit),
-            "depth {depth}: the oldest row carries {:?}, a lane held open for a parent the \
+            "depth {depth}: the oldest row carries {last:?}, a lane held open for a parent the \
              clone does not have",
-            last.graph.edges
         );
     }
     assert!(
         cut_merge,
         "no depth cut a merge at the boundary, so that case went untested"
     );
-}
-
-fn some_last(rows: &[HistoryRow]) -> &HistoryRow {
-    match rows.last() {
-        Some(row) => row,
-        None => panic!("the clone answered no rows"),
-    }
 }
 
 // Builders only this file uses; the shared ones are in `fixtures`.

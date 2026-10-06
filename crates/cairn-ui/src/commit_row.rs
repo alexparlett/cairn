@@ -1,6 +1,6 @@
 //! One commit's row in the history list.
 
-use cairn_model::{CommitSummary, GraphRow};
+use cairn_model::{CommitSummary, RowEdges};
 use freya::prelude::*;
 
 use crate::date_text;
@@ -20,15 +20,17 @@ pub const ROW_FONT_SIZE: f32 = 13.0;
 #[derive(Debug, PartialEq, Clone)]
 pub struct CommitRow {
     commit: CommitSummary,
-    graph: GraphRow,
+    graph: RowEdges,
     lanes: usize,
     selected: bool,
     key: DiffKey,
 }
 
 impl CommitRow {
-    /// `lanes` is the graph column's width for the whole list, not for this row.
-    pub fn new(commit: CommitSummary, graph: GraphRow, lanes: usize) -> Self {
+    /// `graph` is the row's lane and every line crossing it, derived for the row drawn
+    /// ([`cairn_model::row_edges`]); `lanes` is the graph column's width for the whole list,
+    /// not for this row.
+    pub fn new(commit: CommitSummary, graph: RowEdges, lanes: usize) -> Self {
         Self {
             commit,
             graph,

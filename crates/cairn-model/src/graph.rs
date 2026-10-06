@@ -103,14 +103,12 @@ pub struct GraphRow {
     pub lane: Lane,
     /// In the order the edges they derive are drawn: ends by lane, starts in parent order,
     /// late starts as their children arrived.
-    pub changes: Box<[LaneChange]>,
+    changes: Box<[LaneChange]>,
     /// The lines crossing into this row, on every [`LaneAssigner::snapshot_every`]th row and
     /// on the first a reader keeps.
     ///
     /// [`LaneAssigner::snapshot_every`]: crate::LaneAssigner::snapshot_every
-    pub snapshot: Option<Box<LaneSnapshot>>,
-    /// Every line crossing this row, in no meaningful order.
-    pub edges: Vec<EdgeSegment>,
+    snapshot: Option<Box<LaneSnapshot>>,
 }
 
 impl GraphRow {
@@ -121,7 +119,21 @@ impl GraphRow {
             lane,
             changes: changes.into_boxed_slice(),
             snapshot: Some(Box::default()),
-            edges: Vec::new(),
+        }
+    }
+
+    /// A row the lane assigner made final.
+    pub(crate) fn laid_out(
+        id: Oid,
+        lane: Lane,
+        changes: Box<[LaneChange]>,
+        snapshot: Option<Box<LaneSnapshot>>,
+    ) -> Self {
+        Self {
+            id,
+            lane,
+            changes,
+            snapshot,
         }
     }
 

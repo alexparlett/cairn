@@ -1,13 +1,20 @@
 //! Headless component tests for `HistoryList`.
 
+#[path = "../../cairn-model/tests/layout_before_compaction/mod.rs"]
+mod layout_before_compaction;
+
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
-use cairn_model::{CommitSummary, EdgeSegment, GraphRow, HistoryRow, Lane, Oid, RowContent, RowId};
+use cairn_model::{
+    CommitSummary, GraphRow, HistoryRow, Lane, LaneAssigner, Oid, RowContent, RowEdges, RowId,
+};
 use cairn_ui::accelerators::{self, Action, Os};
 use cairn_ui::{HistoryList, PREFETCH_ROWS, ROW_HEIGHT, RowRender};
 use freya::prelude::*;
 use freya_testing::TestingRunner;
+use layout_before_compaction::AssignerBeforeCompaction;
 
 const WIDTH: f32 = 600.;
 const HEIGHT: f32 = 520.;
@@ -28,10 +35,7 @@ fn row(n: usize) -> HistoryRow {
             author_email: "a@example.com".to_owned(),
             author_time: 0,
         }),
-        graph: GraphRow {
-            edges: vec![EdgeSegment::passing(Lane::new(0))],
-            ..GraphRow::new(oid(n), Lane::new(0), Vec::new())
-        },
+        graph: GraphRow::new(oid(n), Lane::new(0), Vec::new()),
     }
 }
 
@@ -441,4 +445,129 @@ fn the_list_is_outlined_only_while_it_has_keyboard_focus() {
     test.sync_and_update();
     test.sync_and_update();
     assert!(outlined(&test), "a keyboard-focused list was not outlined");
+}
+
+/// A walk that keeps several lanes open and hands some parents over before their children:
+/// commit `n`'s parents are `n + 1` and, every seventh, `n + 4` and `n + 9`; every
+/// thirteenth commit swaps places with the one after it.
+fn braided_walk(len: usize) -> Vec<(Oid, Vec<Oid>)> {
+    let mut walk: Vec<(Oid, Vec<Oid>)> = (0..len)
+        .map(|n| {
+            let mut parents: Vec<Oid> = [1, 4, 9]
+                .into_iter()
+                .take(if n % 7 == 0 { 3 } else { 1 })
+                .filter(|step| n + step < len)
+                .map(|step| oid(n + step))
+                .collect();
+            parents.dedup();
+            (oid(n), parents)
+        })
+        .collect();
+    for n in (0..len.saturating_sub(1)).step_by(13) {
+        walk.swap(n, n + 1);
+    }
+    walk
+}
+
+/// The QA brief's scroll: deep, then back to the top. Every row the list draws, each time it
+/// draws it, carries exactly the edges the assigner retained for it before compaction.
+/// Caught by: deriving a row from a snapshot other than its own nearest, or from state a
+/// previous row's derivation left behind.
+#[test]
+fn rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew() {
+    let length = 3_000;
+    let walk = braided_walk(length);
+    let mut before_assigner = AssignerBeforeCompaction::new();
+    let mut before = Vec::new();
+    for (id, parents) in &walk {
+        before.extend(before_assigner.push(*id, parents.clone()));
+    }
+    before.extend(before_assigner.into_rows());
+
+    let graphs = LaneAssigner::assign_all(walk.iter().cloned());
+    let index_of: HashMap<Oid, usize> = walk
+        .iter()
+        .enumerate()
+        .map(|(index, (id, _))| (*id, index))
+        .collect();
+    let history: Vec<HistoryRow> = graphs
+        .into_iter()
+        .zip(&walk)
+        .map(|(graph, (id, parents))| HistoryRow {
+            content: RowContent::Commit(CommitSummary {
+                id: *id,
+                parents: parents.clone(),
+                summary: format!("commit {}", index_of[id]),
+                author_name: "A".to_owned(),
+                author_email: "a@example.com".to_owned(),
+                author_time: 0,
+            }),
+            graph,
+        })
+        .collect();
+
+    let drawn: Rc<RefCell<Vec<(usize, RowEdges)>>> = Rc::default();
+    let recorder = drawn.clone();
+    let index_of_row = index_of.clone();
+    let (mut test, _) = TestingRunner::new(
+        move || -> Element {
+            let fixture = use_consume::<Fixture>();
+            let recorder = recorder.clone();
+            let index_of = index_of_row.clone();
+            HistoryList::new(fixture.rows, move |render: RowRender| {
+                let RowContent::Commit(commit) = &render.row.content;
+                recorder
+                    .borrow_mut()
+                    .push((index_of[&commit.id], render.graph.clone()));
+                label()
+                    .height(Size::px(ROW_HEIGHT))
+                    .text(commit.summary.clone())
+                    .into()
+            })
+            .into()
+        },
+        (WIDTH, HEIGHT).into(),
+        move |runner| {
+            runner.provide_root_context(|| Fixture {
+                rows: State::create(history),
+                selected: State::create(None),
+            })
+        },
+        1.,
+    );
+    test.sync_and_update();
+    let at_the_top = drawn.borrow().len();
+
+    let deep = 2_500.0 * ROW_HEIGHT as f64;
+    test.scroll((100., 100.), (0., -deep));
+    test.scroll((100., 100.), (0., deep));
+
+    let drawn = drawn.borrow();
+    for (index, graph) in drawn.iter() {
+        let old = &before[*index];
+        assert_eq!(
+            graph,
+            &RowEdges {
+                lane: old.lane,
+                edges: old.edges.clone(),
+            },
+            "row {index} drew other edges than the assigner retained for it"
+        );
+    }
+    let times_drawn = |index: usize| drawn.iter().filter(|(at, _)| *at == index).count();
+    assert!(at_the_top > 0, "nothing was drawn at the top");
+    assert!(
+        (0..5).all(|index| times_drawn(index) >= 2),
+        "the top rows were not drawn again after the scroll back"
+    );
+    assert!(
+        drawn.iter().any(|(index, _)| *index > 2_000),
+        "the scroll never reached deep rows"
+    );
+    assert!(
+        drawn
+            .iter()
+            .any(|(_, graph)| graph.edges.iter().any(|edge| edge.out_of_order)),
+        "no drawn row carried a repainted line, so the late lines decided nothing"
+    );
 }

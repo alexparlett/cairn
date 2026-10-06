@@ -287,4 +287,25 @@ mod tests {
         );
         assert_eq!(narrow.highest_lane(), Some(Lane::new(5)));
     }
+
+    /// Caught by: a reader that looks further above a row than any interval allows, which
+    /// on rows without snapshots is a scan of the history.
+    #[test]
+    fn a_row_further_below_its_snapshot_than_any_interval_draws_nothing() {
+        let id = Oid::from_bytes(&[4; 20]).unwrap();
+        let mut rows = vec![GraphRow::new(id, Lane::new(0), Vec::new())];
+        rows.extend(
+            (0..LaneAssigner::MAX_SNAPSHOT_EVERY)
+                .map(|_| GraphRow::laid_out(id, Lane::new(0), Box::new([]), None)),
+        );
+        let furthest = LaneAssigner::MAX_SNAPSHOT_EVERY - 1;
+        assert!(
+            row_edges(&rows, furthest).is_some(),
+            "the furthest reachable row"
+        );
+        assert!(
+            row_edges(&rows, furthest + 1).is_none(),
+            "a row beyond every interval was derived from a snapshot that far above it"
+        );
+    }
 }

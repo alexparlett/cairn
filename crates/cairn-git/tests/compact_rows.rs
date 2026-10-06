@@ -11,8 +11,7 @@ use std::time::{Duration, Instant};
 
 use cairn_git::{CancelSignal, HistoryOrder, HistoryRequest, Repository};
 use cairn_model::{
-    EdgeSegment, GraphRow, HistoryRow, LaneAssigner, LaneChange, Oid, RowContent, RowEdges,
-    row_edges,
+    GraphRow, HistoryRow, LaneAssigner, LaneChange, Oid, RowContent, RowEdges, row_edges,
 };
 use layout_before_compaction::{AssignerBeforeCompaction, RowBeforeCompaction};
 
@@ -109,11 +108,6 @@ fn assert_draws_what_it_drew(
                 old.id
             );
         }
-        // The old edge storage still rides on the row: the frozen copy must agree with it.
-        assert_eq!(
-            row.graph.edges, old.edges,
-            "{what}: row {index}: the frozen assigner is not the one that drew these rows"
-        );
         checked.rows += 1;
         if old.edges.iter().any(|edge| edge.out_of_order) {
             checked.repainted += 1;
@@ -253,8 +247,6 @@ struct Retained {
     row_structs: usize,
     /// Lane changes and snapshots.
     graph: usize,
-    /// The old edge storage, while it still rides on the row.
-    edges: usize,
     parents: usize,
     text: usize,
     snapshots: usize,
@@ -268,7 +260,6 @@ impl Retained {
         };
         for row in rows {
             retained.graph += row.graph.heap_bytes();
-            retained.edges += row.graph.edges.capacity() * size_of::<EdgeSegment>();
             retained.snapshots += usize::from(row.graph.has_snapshot());
             match &row.content {
                 RowContent::Commit(commit) => {
@@ -283,7 +274,7 @@ impl Retained {
     }
 
     fn total(&self) -> usize {
-        self.row_structs + self.graph + self.edges + self.parents + self.text
+        self.row_structs + self.graph + self.parents + self.text
     }
 }
 
@@ -365,8 +356,7 @@ fn find(repo: &Repository, seed: &str) {
     );
     eprintln!(
         "RETAINED total={:.1} MiB ({} B/row): row structs {:.1} MiB (vec capacity {}), \
-         lane changes and snapshots {:.2} MiB ({} snapshots), old edge storage {:.1} MiB, \
-         parents {:.1} MiB, text {:.1} MiB; RssAnon {anon_before} -> {anon_after} kB \
+         lane changes and snapshots {:.2} MiB ({} snapshots), parents {:.1} MiB, text {:.1} MiB; RssAnon {anon_before} -> {anon_after} kB \
          (+{:.1} MiB)",
         mib(retained.total()),
         retained.total() / kept.len().max(1),
@@ -374,7 +364,6 @@ fn find(repo: &Repository, seed: &str) {
         kept.capacity(),
         mib(retained.graph),
         retained.snapshots,
-        mib(retained.edges),
         mib(retained.parents),
         mib(retained.text),
         (anon_after.saturating_sub(anon_before)) as f64 / 1024.0,

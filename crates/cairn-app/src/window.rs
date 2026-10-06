@@ -235,7 +235,7 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     HistoryList::new(view.rows, move |render: RowRender| {
         // No wildcard arm: a new row kind must fail to compile here.
         match render.row.content {
-            RowContent::Commit(commit) => CommitRow::new(commit, render.row.graph, render.lanes)
+            RowContent::Commit(commit) => CommitRow::new(commit, render.graph, render.lanes)
                 .selected(render.selected)
                 .into(),
         }
@@ -397,8 +397,8 @@ mod tests {
     use std::cell::RefCell;
 
     use cairn_model::{
-        ChangeSet, ChangeStatus, ChangedFile, CommitDetails, CommitSummary, Context, EdgeSegment,
-        FileMode, GraphRow, Lane, Oid, RenameDetection, RepoPath, Signature, Timestamp,
+        ChangeSet, ChangeStatus, ChangedFile, CommitDetails, CommitSummary, Context, FileMode,
+        GraphRow, Lane, Oid, RenameDetection, RepoPath, Signature, Timestamp,
     };
     use cairn_ui::accelerators::Action;
     use cairn_ui::{COLLAPSE_CAPTION, EXPAND_CAPTION};
@@ -441,10 +441,7 @@ mod tests {
                 author_email: "ada@example.com".to_owned(),
                 author_time: 0,
             }),
-            graph: GraphRow {
-                edges: vec![EdgeSegment::passing(Lane::new(lane))],
-                ..GraphRow::new(id, Lane::new(lane), Vec::new())
-            },
+            graph: GraphRow::new(id, Lane::new(lane), Vec::new()),
         }
     }
 

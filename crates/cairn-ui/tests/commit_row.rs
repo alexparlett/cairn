@@ -1,6 +1,6 @@
 //! Headless component tests for `CommitRow` and `HistoryHeader`.
 
-use cairn_model::{CommitSummary, EdgeSegment, GraphRow, Lane, Oid};
+use cairn_model::{CommitSummary, EdgeSegment, Lane, Oid, RowEdges};
 use cairn_ui::{
     AUTHOR_WIDTH, CommitRow, DATE_WIDTH, HistoryHeader, ID_WIDTH, ROW_FONT_SIZE, ROW_HEIGHT,
     graph_width,
@@ -14,7 +14,7 @@ const HEX: &str = "0123456789abcdef0123456789abcdef01234567";
 /// 2024-03-09 16:05:00 UTC.
 const WHEN: i64 = 1_710_000_300;
 
-fn commit() -> (CommitSummary, GraphRow) {
+fn commit() -> (CommitSummary, RowEdges) {
     let id = Oid::parse(HEX).unwrap_or_else(|_| unreachable!("40 hex digits is a SHA-1"));
     (
         CommitSummary {
@@ -25,9 +25,9 @@ fn commit() -> (CommitSummary, GraphRow) {
             author_email: "ada@example.com".to_owned(),
             author_time: WHEN,
         },
-        GraphRow {
+        RowEdges {
+            lane: Lane::new(0),
             edges: vec![EdgeSegment::passing(Lane::new(0))],
-            ..GraphRow::new(id, Lane::new(0), Vec::new())
         },
     )
 }

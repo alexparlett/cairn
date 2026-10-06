@@ -99,19 +99,12 @@ impl Progress {
     }
 }
 
-/// Counts every lane a segment names, not just node lanes: a passing line's commit
-/// may be on another page.
+/// The widest the rows draw, from the lanes each names — its node, its lane changes and,
+/// on a row with a snapshot, every line crossing into it. A passing line's commit may be on
+/// another page; over every page from the first, every lane a line crosses is named.
 pub fn widest_lane(rows: &[HistoryRow]) -> usize {
     rows.iter()
-        .map(|row| {
-            let node = row.graph.lane.index();
-            row.graph
-                .edges
-                .iter()
-                .map(|edge| edge.from.index().max(edge.to.index()))
-                .fold(node, usize::max)
-                + 1
-        })
+        .map(|row| row.graph.lanes_named())
         .max()
         .unwrap_or(1)
 }
@@ -119,7 +112,7 @@ pub fn widest_lane(rows: &[HistoryRow]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cairn_model::{CommitSummary, EdgeSegment, GraphRow, Lane, Oid, RowContent};
+    use cairn_model::{CommitSummary, GraphRow, Lane, LaneAssigner, LaneChange, Oid, RowContent};
 
     fn oid(n: u8) -> Oid {
         let mut bytes = [0u8; 20];
@@ -127,20 +120,21 @@ mod tests {
         Oid::from_bytes(&bytes).unwrap_or_else(|_| unreachable!("20 bytes is a SHA-1"))
     }
 
-    fn row(n: u8, lane: usize, edges: Vec<EdgeSegment>) -> HistoryRow {
+    fn row(n: u8, lane: usize, changes: Vec<LaneChange>) -> HistoryRow {
+        row_of(GraphRow::new(oid(n), Lane::new(lane), changes))
+    }
+
+    fn row_of(graph: GraphRow) -> HistoryRow {
         HistoryRow {
             content: RowContent::Commit(CommitSummary {
-                id: oid(n),
+                id: graph.id,
                 parents: Vec::new(),
                 summary: "s".to_owned(),
                 author_name: "a".to_owned(),
                 author_email: "a@example.com".to_owned(),
                 author_time: 0,
             }),
-            graph: GraphRow {
-                edges,
-                ..GraphRow::new(oid(n), Lane::new(lane), Vec::new())
-            },
+            graph,
         }
     }
 
@@ -289,16 +283,22 @@ mod tests {
 
     /// Caught by: measuring nodes only.
     #[test]
-    fn a_lane_only_a_passing_line_uses_still_gets_a_column() {
-        let rows = vec![row(
-            1,
-            0,
-            vec![
-                EdgeSegment::passing(Lane::new(0)),
-                EdgeSegment::passing(Lane::new(6)),
-            ],
-        )];
+    fn a_lane_only_a_change_names_still_gets_a_column() {
+        let rows = vec![row(1, 0, vec![LaneChange::Starts(Lane::new(6))])];
         assert_eq!(widest_lane(&rows), 7);
+    }
+
+    /// Caught by: measuring a row's own changes only, when a page's rows cross a lane
+    /// opened on an earlier page.
+    #[test]
+    fn a_lane_only_a_passing_line_uses_still_gets_a_column() {
+        // `a` opens lanes 0 to 6 to parents never walked; `x0` ends lane 0 alone.
+        let parents: Vec<Oid> = (10..17).map(oid).collect();
+        let walk = vec![(oid(1), parents.clone()), (parents[0], Vec::new())];
+        let graphs = LaneAssigner::new().drawn_from(1).assign_each(walk);
+        let page: Vec<HistoryRow> = graphs.into_iter().skip(1).map(row_of).collect();
+        assert_eq!(page[0].graph.changes(), [LaneChange::Ends(Lane::new(0))]);
+        assert_eq!(widest_lane(&page), 7);
     }
 
     /// Caught by: a zero-wide graph on a repository's first page.

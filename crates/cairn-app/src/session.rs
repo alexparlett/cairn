@@ -198,7 +198,7 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use cairn_model::{CommitSummary, EdgeSegment, GraphRow, HistoryRow, Lane, Oid, RowContent};
+    use cairn_model::{CommitSummary, GraphRow, HistoryRow, Lane, Oid, RowContent};
     use freya_testing::TestingRunner;
 
     use super::*;
@@ -217,10 +217,7 @@ mod tests {
                 author_email: "ada@example.com".to_owned(),
                 author_time: 0,
             }),
-            graph: GraphRow {
-                edges: vec![EdgeSegment::passing(Lane::new(0))],
-                ..GraphRow::new(id, Lane::new(0), Vec::new())
-            },
+            graph: GraphRow::new(id, Lane::new(0), Vec::new()),
         }
     }
 

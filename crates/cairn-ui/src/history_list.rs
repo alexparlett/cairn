@@ -1,6 +1,6 @@
 //! The virtualised history list.
 
-use cairn_model::{HistoryRow, RowId};
+use cairn_model::{HistoryRow, RowEdges, RowId, row_edges};
 use freya::prelude::*;
 
 use crate::accelerators::{self, Action, HeldKeys};
@@ -18,6 +18,9 @@ const PAGE_JUMP: usize = 10;
 #[derive(Debug, Clone, PartialEq)]
 pub struct RowRender {
     pub row: HistoryRow,
+    /// The row's lane and every line crossing it, derived from the rows above it for this
+    /// row alone.
+    pub graph: RowEdges,
     pub selected: bool,
     /// Width of the graph column for the whole list, in lanes.
     pub lanes: usize,
@@ -299,8 +302,16 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
     let on_reach_end = data.on_reach_end.clone();
     let asks_for_more = asks_for_more(index, data.length);
 
+    // At most a snapshot interval of rows above this one is read: bounded by the interval,
+    // never by the history. Rows the assigner laid out always have a snapshot within it; a
+    // row without one draws its node alone.
+    let graph = row_edges(&rows, item.index).unwrap_or_else(|| RowEdges {
+        lane: row.graph.lane,
+        edges: Vec::new(),
+    });
     let drawn = data.row.call(RowRender {
         row: row.clone(),
+        graph,
         selected: data.selected == Some(id) || data.also_selected == Some(id),
         lanes: data.lanes,
     });
@@ -340,7 +351,7 @@ fn index_of(rows: &[HistoryRow], id: RowId, hint: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cairn_model::{CommitSummary, EdgeSegment, GraphRow, Lane, Oid, RowContent};
+    use cairn_model::{CommitSummary, GraphRow, Lane, Oid, RowContent};
 
     fn oid(n: u8) -> Oid {
         let mut hex = String::new();
@@ -364,10 +375,7 @@ mod tests {
                     author_email: "a@example.com".to_owned(),
                     author_time: 0,
                 }),
-                graph: GraphRow {
-                    edges: vec![EdgeSegment::passing(Lane::new(0))],
-                    ..GraphRow::new(oid(n), Lane::new(0), Vec::new())
-                },
+                graph: GraphRow::new(oid(n), Lane::new(0), Vec::new()),
             })
             .collect()
     }

@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use cairn_model::{EdgeKind, GraphRow, Lane, LaneAssigner, Oid};
+use cairn_model::{EdgeKind, EdgeSegment, GraphRow, Lane, LaneAssigner, Oid, row_edges};
 
 /// `(commit label, parent labels)` in walk order.
 pub type History = Vec<(String, Vec<String>)>;
@@ -131,18 +131,39 @@ pub fn label_of(id: &Oid) -> String {
     String::from_utf8_lossy(&label).into_owned()
 }
 
-pub fn assign(history: &History) -> Vec<GraphRow> {
-    LaneAssigner::assign_all(
-        history
-            .iter()
-            .map(|(id, parents)| (oid(id), parents.iter().map(|p| oid(p)).collect())),
-    )
+/// A row as it is drawn: its commit, its lane and every edge derived for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DrawnRow {
+    pub id: Oid,
+    pub lane: Lane,
+    pub edges: Vec<EdgeSegment>,
+}
+
+/// Every row's edges, derived as the list derives them for the rows it draws.
+pub fn drawn(rows: &[GraphRow]) -> Vec<DrawnRow> {
+    (0..rows.len())
+        .map(|index| {
+            let derived = row_edges(rows, index)
+                .unwrap_or_else(|| panic!("row {index} has no snapshot within reach"));
+            DrawnRow {
+                id: rows[index].id,
+                lane: derived.lane,
+                edges: derived.edges,
+            }
+        })
+        .collect()
+}
+
+pub fn assign(history: &History) -> Vec<DrawnRow> {
+    drawn(&LaneAssigner::assign_all(history.iter().map(
+        |(id, parents)| (oid(id), parents.iter().map(|p| oid(p)).collect()),
+    )))
 }
 
 /// One line per row. `pass 2` crosses lane 2, `in 1>0` runs from the top edge
 /// in lane 1 to the node in lane 0, `out 0>1` from the node to the bottom edge,
 /// and a trailing `~` marks a segment flagged out of order.
-pub fn describe(rows: &[GraphRow]) -> Vec<String> {
+pub fn describe(rows: &[DrawnRow]) -> Vec<String> {
     rows.iter()
         .map(|row| {
             let segments: Vec<String> = row
@@ -183,7 +204,7 @@ fn distinct_parents(parents: &[String]) -> Vec<&String> {
 }
 
 /// The lane carrying a continuous line from row `top`'s node to row `bottom`'s.
-fn connecting_lane(rows: &[GraphRow], top: usize, bottom: usize) -> Option<Lane> {
+fn connecting_lane(rows: &[DrawnRow], top: usize, bottom: usize) -> Option<Lane> {
     rows[top]
         .edges
         .iter()
@@ -205,7 +226,7 @@ fn connecting_lane(rows: &[GraphRow], top: usize, bottom: usize) -> Option<Lane>
 }
 
 /// Every commit has a row, every parent link is drawn end to end, and no other line is.
-pub fn assert_every_parent_edge_is_drawn(history: &History, rows: &[GraphRow]) {
+pub fn assert_every_parent_edge_is_drawn(history: &History, rows: &[DrawnRow]) {
     assert_eq!(rows.len(), history.len(), "one row per commit");
     assert_the_picture_joins_up(rows);
     let row_of: HashMap<Oid, usize> = rows
@@ -252,7 +273,7 @@ pub fn assert_every_parent_edge_is_drawn(history: &History, rows: &[GraphRow]) {
 
 /// Lane numbering is dense from zero, a passing line stays in its lane, a line
 /// into the row ends at its node and a line out of it starts there.
-pub fn assert_rows_are_well_formed(rows: &[GraphRow]) {
+pub fn assert_rows_are_well_formed(rows: &[DrawnRow]) {
     if rows.is_empty() {
         return;
     }
@@ -295,7 +316,7 @@ pub fn assert_rows_are_well_formed(rows: &[GraphRow]) {
 
 /// What leaves the bottom of one row is exactly what enters the top of the
 /// next, no lane carries two lines at once, and nothing enters the first row.
-pub fn assert_the_picture_joins_up(rows: &[GraphRow]) {
+pub fn assert_the_picture_joins_up(rows: &[DrawnRow]) {
     let mut leaving_the_row_above: HashSet<usize> = HashSet::new();
     for row in rows {
         let mut entering: HashSet<usize> = HashSet::new();

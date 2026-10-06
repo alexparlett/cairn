@@ -516,10 +516,10 @@ mod tests {
         let tips = every_ref_tip(&repo);
         eprintln!(
             "repository {path}: {} commit-bearing ref tips, limit {limit}, \
-             GraphRow {} B fixed + EdgeSegment {} B each",
+             GraphRow {} B fixed + LaneChange {} B each",
             tips.len(),
             size_of::<cairn_model::GraphRow>(),
-            size_of::<cairn_model::EdgeSegment>(),
+            size_of::<cairn_model::LaneChange>(),
         );
         assert!(!tips.is_empty(), "no ref resolved to a commit");
 
@@ -566,7 +566,8 @@ mod tests {
         tips.iter().map(|id| model_id(id).unwrap()).collect()
     }
 
-    /// Byte figures use `edges.len()`; a `GraphRow` retains `edges.capacity()`.
+    /// Segments are the derived edges each row draws; bytes are what a `GraphRow` retains,
+    /// its lane changes and any snapshot, by capacity.
     fn report_layout(page: &HistoryPage) {
         let mut segments = Vec::with_capacity(page.rows.len());
         let mut open_lanes = Vec::with_capacity(page.rows.len());
@@ -575,17 +576,17 @@ mod tests {
         let mut out_of_order_segments = 0usize;
         let mut widest_lane = 0usize;
 
-        for row in &page.rows {
+        for (index, row) in page.rows.iter().enumerate() {
             let graph = &row.graph;
-            segments.push(graph.edges.len());
-            bytes.push(
-                size_of::<cairn_model::GraphRow>()
-                    + graph.edges.len() * size_of::<cairn_model::EdgeSegment>(),
-            );
+            let edges = cairn_model::row_edges(&page.rows, index)
+                .map(|drawn| drawn.edges)
+                .unwrap_or_default();
+            segments.push(edges.len());
+            bytes.push(size_of::<cairn_model::GraphRow>() + graph.heap_bytes());
 
             // Open = occupied by the node or either end of a segment.
             let mut lanes = vec![graph.lane.index()];
-            for edge in &graph.edges {
+            for edge in &edges {
                 for lane in [edge.from.index(), edge.to.index()] {
                     if !lanes.contains(&lane) {
                         lanes.push(lane);
@@ -595,7 +596,7 @@ mod tests {
             }
             open_lanes.push(lanes.len());
 
-            let flagged = graph.edges.iter().filter(|e| e.out_of_order).count();
+            let flagged = edges.iter().filter(|e| e.out_of_order).count();
             out_of_order_segments += flagged;
             if flagged > 0 {
                 out_of_order_rows += 1;

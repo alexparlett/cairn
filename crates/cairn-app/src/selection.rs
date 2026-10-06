@@ -196,7 +196,7 @@ pub fn loaded_row(rows: &[HistoryRow], parent: Oid) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use cairn_model::{CommitSummary, EdgeSegment, GraphRow, Lane, RowContent};
+    use cairn_model::{CommitSummary, GraphRow, Lane, RowContent};
 
     use super::*;
 
@@ -211,10 +211,7 @@ mod tests {
                 author_email: "ada@example.com".to_owned(),
                 author_time: 0,
             }),
-            graph: GraphRow {
-                edges: vec![EdgeSegment::passing(Lane::new(0))],
-                ..GraphRow::new(id, Lane::new(0), Vec::new())
-            },
+            graph: GraphRow::new(id, Lane::new(0), Vec::new()),
         }
     }
 

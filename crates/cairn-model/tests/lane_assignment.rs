@@ -298,7 +298,11 @@ fn pushing_one_at_a_time_matches_assigning_the_whole_walk() {
             }
         }
         streamed.extend(assigner.into_rows());
-        assert_eq!(describe(&streamed), describe(&assign(&history)), "{name}");
+        assert_eq!(
+            describe(&histories::drawn(&streamed)),
+            describe(&assign(&history)),
+            "{name}"
+        );
     }
 }
 
@@ -407,11 +411,6 @@ fn assert_draws_what_it_drew(
             }),
             "{name}: row {index} draws other edges than the assigner retained for it"
         );
-        // The old edge storage still rides on the row: the frozen copy must agree with it.
-        assert_eq!(
-            new.edges, old.edges,
-            "{name}: row {index}: the frozen assigner is not the one that drew these rows"
-        );
 
         seen.rows += 1;
         let late_crossing = old
@@ -489,9 +488,9 @@ fn every_row_draws_the_edges_the_assigner_retained_before_compaction() {
 fn two_late_lines_cross_a_row_in_their_childs_parent_order() {
     let history = two_late_parents_in_reverse();
     let before = before_compaction(&history, 1024);
-    let rows = assign(&history);
+    let rows = compacted(&history, 1024, LaneAssigner::SNAPSHOT_EVERY);
     assert_eq!(
-        describe(&rows),
+        describe(&histories::drawn(&rows)),
         [
             "p1 lane=0 [out 0>0, out 0>3~]",
             "p2 lane=1 [pass 0, out 1>0, out 1>2~, pass 3~]",
@@ -579,33 +578,14 @@ fn a_row_with_no_snapshot_within_reach_draws_nothing_rather_than_guessing() {
         "row 21 is below row 16's"
     );
 
-    // A row exactly `MAX_SNAPSHOT_EVERY` rows below its snapshot is the furthest reachable.
-    let long = linear_history(LaneAssigner::MAX_SNAPSHOT_EVERY + 1);
-    let rows = compacted(&long, 1024, LaneAssigner::MAX_SNAPSHOT_EVERY);
-    let last = LaneAssigner::MAX_SNAPSHOT_EVERY - 1;
-    assert!(row_edges(&rows, last).is_some());
-    assert!(
-        rows[LaneAssigner::MAX_SNAPSHOT_EVERY].has_snapshot(),
-        "the next row starts the next interval"
-    );
-    let without_the_first: Vec<GraphRow> = rows
-        .iter()
-        .enumerate()
-        .map(|(index, row)| {
-            if index == 0 {
-                GraphRow {
-                    snapshot: None,
-                    ..row.clone()
-                }
-            } else {
-                row.clone()
-            }
-        })
+    // The interval is held to the furthest a reader looks.
+    let long = linear_history(LaneAssigner::MAX_SNAPSHOT_EVERY + 2);
+    let rows = compacted(&long, 1024, usize::MAX);
+    let carrying: Vec<usize> = (0..rows.len())
+        .filter(|&index| rows[index].has_snapshot())
         .collect();
-    assert!(
-        row_edges(&without_the_first, last).is_none(),
-        "a row with no snapshot within reach was derived from beyond it"
-    );
+    assert_eq!(carrying, [0, LaneAssigner::MAX_SNAPSHOT_EVERY]);
+    assert!(row_edges(&rows, LaneAssigner::MAX_SNAPSHOT_EVERY - 1).is_some());
 }
 
 fn linear_history(len: usize) -> History {

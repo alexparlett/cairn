@@ -1,6 +1,6 @@
 //! Row geometry, in row-local logical pixels with `y` growing downwards.
 
-use cairn_model::{EdgeKind, EdgeSegment, GraphRow, Lane};
+use cairn_model::{EdgeKind, EdgeSegment, Lane, RowEdges};
 
 pub const ROW_HEIGHT: f32 = 26.0;
 
@@ -75,7 +75,7 @@ pub fn row_middle() -> f32 {
 }
 
 /// `parents` decides the node shape only; the lines come from the row's segments.
-pub fn row_geometry(row: &GraphRow, parents: usize) -> RowGeometry {
+pub fn row_geometry(row: &RowEdges, parents: usize) -> RowGeometry {
     let middle = row_middle();
     let strokes = row.edges.iter().map(|edge| stroke(edge, middle)).collect();
 
@@ -110,19 +110,11 @@ fn stroke(edge: &EdgeSegment, middle: f32) -> Stroke {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cairn_model::Oid;
 
-    fn oid() -> Oid {
-        match Oid::parse("0123456789abcdef0123456789abcdef01234567") {
-            Ok(id) => id,
-            Err(_) => unreachable!("a fixed valid hex id"),
-        }
-    }
-
-    fn row(lane: usize, edges: Vec<EdgeSegment>) -> GraphRow {
-        GraphRow {
+    fn row(lane: usize, edges: Vec<EdgeSegment>) -> RowEdges {
+        RowEdges {
+            lane: Lane::new(lane),
             edges,
-            ..GraphRow::new(oid(), Lane::new(lane), Vec::new())
         }
     }
 

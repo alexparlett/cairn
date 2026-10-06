@@ -3,8 +3,8 @@
 How Cairn draws a repository's history today. As-built: everything here is code
 that exists. Behaviour is pinned by a test named beside it; the paragraphs that
 report a MEASUREMENT say so in their own words, because a measurement is not a
-test — `measures_layout_over_every_ref_of_a_named_repository` is an `#[ignore]`d
-reporter, and "Known limits" is description rather than anything pinned. Intent
+test — `measures_layout_over_every_ref_of_a_named_repository` and
+`measures_compact_rows_over_a_named_repository` are `#[ignore]`d reporters, and "Known limits" is description rather than anything pinned. Intent
 for this surface lives in `docs/design/history-graph.md` (D4) and
 `docs/design/concurrency.md` (D3) and the
 commitment it was built against in `docs/prd/history-graph.md` (shipped, frozen).
@@ -37,8 +37,9 @@ One commit crosses four crates and changes shape three times.
    (see "A shallow clone" below).
 2. **`LaneAssigner` turns ids into a picture.**
    `crates/cairn-model/src/lane_assignment.rs` takes `(id, parent_ids)` in walk
-   order and produces a `GraphRow`: the commit's `Lane`, and every `EdgeSegment`
-   crossing that row. It is pure — no `gix`, no I/O, no clock.
+   order and produces a `GraphRow`: the commit's `Lane` and only the lane changes
+   at it, every 64th row with a snapshot of the lines crossing into it ("What a row
+   keeps" below). It is pure — no `gix`, no I/O, no clock.
 3. **The session pairs the picture with a commit.** Only once the assigner has
    *evicted* a row (so nothing later can repaint it) does the session read that
    commit's object and build a `CommitSummary`. The result is a `HistoryRow`:
@@ -46,11 +47,12 @@ One commit crosses four crates and changes shape three times.
 4. **The worker hands a page across as owned values.**
    `crates/cairn-app/src/worker/` sends `Update::Rows { rows, complete }` to the
    window; `crates/cairn-ui/src/history_list.rs` draws the rows the viewport
-   shows.
+   shows, deriving each one's edges as it builds it (`cairn_model::row_edges`).
 
 No FIELD is dropped in transit. `Oid`, parents, subject, author name and email,
 and the author timestamp arrive at `CommitRow` as the engine read them; the lane
-index and the segments arrive at `graph_geometry` as the assigner emitted them.
+index arrives as the assigner emitted it, and the segments `graph_geometry` draws
+are exactly the ones the assigner drew for that row, derived ("What a row keeps").
 
 One thing a line CAN lose is its upper half. A backward line — a parent drawn
 above its child — is repainted onto rows the assigner still holds, so a skew
@@ -65,8 +67,9 @@ property of each segment rather than of a line the view reconstructs.
 ## The lane assigner (`cairn-model`)
 
 The vocabulary is `Lane`, `EdgeKind` (`Passing` / `IntoCommit` / `OutOfCommit`),
-`EdgeSegment` and `GraphRow`. It is geometric only: nothing in it names
-genealogy, so a view draws a row without knowing what the line means.
+`EdgeSegment`, `LaneChange`, `LaneSnapshot`, `GraphRow` and `RowEdges`. It is
+geometric only: nothing in it names genealogy, so a view draws a row without
+knowing what the line means.
 
 **Lane indices are final; edge segments inside the window are not.** Once a row
 has been emitted its lane never changes. Segments may be repainted for rows the
@@ -111,17 +114,74 @@ assigner still held and repainted a line to. In the order Cairn walks that is
 from above without measuring it, since a parent must arrive late at all before
 it can arrive too late.
 
+**What a row keeps.** A `GraphRow` holds its commit's id, its lane and only the
+lane changes at it — never the lines passing through it. A `LaneChange` is a
+line that ends at the row's commit (`Ends`), one that leaves it down a lane to a
+parent below (`Starts`, opening the lane or joining one already descending to that
+parent), or an out-of-order line leaving it for a child laid out below that names
+it as a parent (`StartsLate`, with the rows to that child and its rank among the
+child's late parents). Every `LaneAssigner::SNAPSHOT_EVERY`th row (64) also holds a
+`LaneSnapshot` — a bitset of the lanes carrying a line into it, and the out-of-order
+lines crossing into it — and so does the first row a reader keeps
+(`LaneAssigner::drawn_from`, which a session and a cold page set to the rows they
+replayed and dropped), so every page sequence draws without the rows before it.
+The assigner still keeps every edge of the rows inside its window, because a late
+parent's line is placed in a lane free across those rows; a row's changes and
+snapshot are made final when it leaves the window, from the lines crossing into it
+as of then, so a repaint that reached it is in them.
+
+`row_edges(rows, index)` (`crates/cairn-model/src/edge_derivation.rs`) derives
+what a row draws: it finds the nearest row at or above `index` that carries a
+snapshot, at most `LaneAssigner::MAX_SNAPSHOT_EVERY` rows up, advances it through
+the changes of the rows between, and returns the row's lane and every edge
+crossing it in the order the assigner drew them — the lines passing by lane, those
+ending at the node by lane, those leaving it in parent order, then every
+out-of-order line by the row it ends at and its rank there. It answers `None` past
+the end or with no snapshot within reach, which never happens to rows a
+`LaneAssigner` laid out and a reader kept from the first it was handed. The work is
+one snapshot copied and at most `K - 1` rows of changes, bounded by the interval,
+never by the history.
+
+The derived edges are the edges the assigner drew before rows were compacted, row
+for row and in order, repaints included. The oracle is that assigner itself, kept
+verbatim as test code (`crates/cairn-model/tests/layout_before_compaction/mod.rs`,
+never edited): `every_row_draws_the_edges_the_assigner_retained_before_compaction`
+(`crates/cairn-model/tests/lane_assignment.rs`) over the crafted fixtures and
+generated skewed histories at windows of one row up and snapshot intervals of one
+up, requiring repaints, a snapshot carrying a late line, a late line started below
+a snapshot and a row derived from the furthest a snapshot can be;
+`the_cairn_checkouts_rows_draw_what_the_assigner_drew_before_compaction` and
+`each_cold_page_and_resumed_session_draws_on_its_own_what_the_assigner_drew_for_it`
+(`crates/cairn-git/tests/compact_rows.rs`) over the walk a session or a cold page
+really paged; and `rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew`
+(`crates/cairn-ui/tests/history_list.rs`) over every row the list builds, scrolled
+deep and back. The reporter `measures_compact_rows_over_a_named_repository` runs the
+same comparison over a whole named repository.
+
+**The snapshot interval was chosen by measurement.** On rust-lang/rust, a row
+`K - 1` below its snapshot — the worst a row can be — derived in 0.76 µs at the
+median, 2.0 µs at p99 and 14.1 µs at worst with K = 64 (about 106 edges a row),
+against 8.3 µs, 24 µs and 37 µs at 1024; snapshots hold 0.31 MiB for the whole
+history at 64, 19.8 MiB at one. A window's 35 rows cost well under a millisecond of a
+16.7 ms frame, so the list derives on the UI thread as it builds each row rather
+than on a worker per viewport. 64 is also the application's page, so every page
+from the first starts on a snapshot. Measured by the reporter's `derive` mode
+(release build, warm, every row `K - 1` below its snapshot over the whole history
+from every ref, on the machine in `docs/research/diff-engine/measured-baseline.md`).
+
 **Measured shape of a real repository.** The harness
 `measures_layout_over_every_ref_of_a_named_repository`
 (`crates/cairn-git/src/history.rs`, `#[ignore]`d, driven by `CAIRN_BENCH_REPO`)
 runs the real query over every ref. Across seven repositories in the default
 order: p99 of 8 edge segments per row on the widest of them, 264 B per row at
-p99 on that same widest one, and single-digit lane counts throughout. Both byte
-figures are computed from `edges.len()` while a `GraphRow` retains
-`edges.capacity()`, so real retained layout is up to about twice them. Those seven
-repositories had at most 2,896 commits; on rust-lang/rust in commit-time order
-105-160 edge segments stay open per row, and a retained row costs 4.3-6.3 KB, 89%
-of it edge segments (`docs/research/refs-and-status/deep-find-measured.md`).
+p99 on that same widest one, and single-digit lane counts throughout — figures from
+when a row kept its edges, computed from their length rather than their capacity.
+Those seven repositories had at most 2,896 commits; on rust-lang/rust in
+commit-time order 105-160 edge segments stay open per row, and a row that kept them
+cost 4.3-6.3 KB, 89% of it edge segments
+(`docs/research/refs-and-status/deep-find-measured.md`). With compact rows the same
+history's lane changes and snapshots come to 18.6 MiB, about 56 B a row, and a whole
+retained row to about 509 B (Known limits).
 Evidence and method for the seven:
 `docs/research/history-graph/scroll-memory-model.md` Part D. Earlier, much
 larger figures in this packet's history described a synthetic fixture and not
@@ -346,7 +406,11 @@ nothing copies the history to draw it. It renders through
 `VirtualScrollView::new_with_data_controlled`, so per-render work is bounded by
 the viewport rather than by the history; the only per-render read proportional
 to the history is its `len()`. The list is keyed by `RowId`, so a row arriving
-above another neither moves the selection nor rebuilds the rows below it.
+above another neither moves the selection nor rebuilds the rows below it. Each
+row it builds has its edges derived there (`row_edges` in `build_row`), reading at
+most a snapshot interval of rows above it, and handed to the builder as
+`RowRender::graph`, which `CommitRow` draws; a row with no snapshot within reach,
+which the assigner never produces, would draw its node alone.
 
 `RowContent` is read by matching, with no wildcard arm — `crates/cairn-app/src/window.rs`
 is the consumer, and because the enum is not `#[non_exhaustive]` the next kind
@@ -417,9 +481,11 @@ import — are rejected outside `cairn-model` by
 | Only `crates/cairn-app/src/worker/` reaches a repository or waits | `the_ui_thread_never_waits_on_repository_work` |
 | The history list renders through a virtualizing view | `a_history_sized_list_renders_through_a_virtualizing_view` |
 | That view builds one viewport of rows at 1,000 and at 100,000 | `only_a_viewport_of_rows_is_built_however_long_the_history` |
+| Every row draws the edges the assigner drew before rows were compacted | `every_row_draws_the_edges_the_assigner_retained_before_compaction`, `the_cairn_checkouts_rows_draw_what_the_assigner_drew_before_compaction`, `rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew` |
 
-The first five live in `crates/cairn-guards/tests/invariants.rs`; the last is a
-headless component test in `crates/cairn-ui/tests/history_list.rs`. The four that scan
+The first five live in `crates/cairn-guards/tests/invariants.rs`; the sixth is a
+headless component test in `crates/cairn-ui/tests/history_list.rs`; the last are
+the model, engine and list tests named under "What a row keeps". The four that scan
 SOURCE each assert a nonzero scanned-file count per directory, so a renamed
 directory reddens rather than passing on an empty walk — the waiting and
 virtualization twins inline, and the seal and row-content twins through
@@ -474,11 +540,14 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
 
 - **Memory is flat in history LENGTH and linear in rows SCROLLED.** A
   100k-commit repository costs nothing until it is scrolled; scrolled rows are
-  retained and nothing evicts them — roughly 660 bytes each by the history-graph
-  packet's own estimate on small repositories, but 4.3-6.3 KB each on
-  rust-lang/rust, where
-  scrolling to the oldest commit retains about 1.4 GiB
-  (`docs/research/refs-and-status/deep-find-measured.md`). Tracked as issue #4.
+  retained and nothing evicts them. A row no longer keeps the edges crossing it,
+  which on rust-lang/rust cost 4.3-6.3 KB a row and 1.4 GiB to its oldest commit
+  (`docs/research/refs-and-status/deep-find-measured.md`); scrolling or finding to
+  that commit from every ref now retains 167.9 MiB, about 509 B a row, counted by
+  capacity: the row vector (108 MiB, 216 B a row and its growth slack), text
+  (27 MiB), parent ids (14 MiB) and lane changes and snapshots (18.6 MiB).
+  Process `RssAnon` grows by 186 MiB. Still linear in rows scrolled, and nothing
+  evicts: tracked as issue #4.
 - **A live scroll's walk retains every commit it visited.** The rows above
   are the application's row vector; separately, gitoxide's walk keeps a
   `HashSet<ObjectId>` of every commit visited (`gix-traverse`'s

@@ -3,6 +3,93 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-06 — phase 03: compact rows
+
+A row keeps its id, lane and only the lane changes at it (`LaneChange`: a line ends at
+its commit, starts from it, or starts late — out of order — to a child laid out below);
+every 64th row, and the first row a reader keeps, carries a `LaneSnapshot` of the lines
+crossing into it; `cairn_model::row_edges` derives a drawn row's edges from the nearest
+snapshot above it, advanced through at most 63 rows. Packet mode, on
+`feature/refs-and-status`. No stopping rule fired: no row's derived edges differ from
+the old assigner's anywhere they were compared.
+
+**C15's oracle and how it was written first.** `crates/cairn-model/tests/layout_before_compaction/mod.rs`
+is `f34631c`'s lane assigner verbatim (two names changed, checked by a `diff`), kept as
+test code. Commit `f94fbdf` added the compact form while the old `edges` field still
+rode on every row, and its equivalence test compared each row's derived edges with that
+field and with the frozen copy; `7c23805` ran the same over the Cairn checkout and, in the
+`#[ignore]`d reporter, over every row of the bench repository from every ref (345,545
+rows, 49,609 of them repainted, 627 late lines) and from `HEAD` (340,228 rows, 48,988
+repainted) — every row equal to the old storage and to the frozen copy, edge for edge and
+in order. `097af10` then removed the field; the tests keep comparing against the frozen
+copy. The assigner still keeps every edge for the rows inside its window (a repaint's
+lane is chosen from them), so its layout is today's; only what it hands out changed.
+
+**Where derivation runs, and K: at draw time, K = 64.** `HistoryList` derives each row
+it builds (`row_edges` in `build_row`), from at most `K - 1` rows above it. Measured
+with the reporter's `derive` mode (`measures_compact_rows_over_a_named_repository`,
+release build, warm, one process, every row exactly `K - 1` below its snapshot over the
+whole bench history from every ref; mean 106 edges a row):
+
+| K | Rows timed | Per row p50 | p99 | Max | Snapshots held |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 345,545 | 0.23 µs | 0.41 µs | 9.9 µs | 19.81 MiB |
+| 8 | 43,193 | 0.29 µs | 0.65 µs | 15.1 µs | 2.48 MiB |
+| 16 | 21,596 | 0.38 µs | 0.86 µs | 15.0 µs | 1.24 MiB |
+| 32 | 10,798 | 0.55 µs | 1.34 µs | 13.7 µs | 0.62 MiB |
+| **64** | 5,399 | **0.76 µs** | **2.0 µs** | **14.1 µs** | **0.31 MiB** |
+| 128 | 2,699 | 1.26 µs | 3.4 µs | 14.8 µs | 0.15 MiB |
+| 256 | 1,349 | 2.82 µs | 7.1 µs | 21.0 µs | 0.08 MiB |
+| 1024 | 337 | 8.34 µs | 24.4 µs | 36.8 µs | 0.02 MiB |
+
+A 1440×900 window shows 35 rows at 26 px; even with every one at the worst row timed
+(14.1 µs) a frame's derivation is 0.5 ms of the 16.7 ms budget, and 0.07 ms at the p99.
+K = 64 keeps snapshots at 0.31 MiB, which leaves C16's 64 MiB to phase 04, and matches
+the application's page (`PAGE_ROWS`), so every page from the first starts on a snapshot.
+Deriving on the worker per viewport would add a round trip to every scroll for work that
+costs microseconds on the UI thread; not done. The real window agrees: `window_check`
+(release, one run each, same session) scrolled the history 9 rows a frame in 1.31 ms
+median, 1.89 ms max with compact rows, against 1.27 / 1.99 ms at `f34631c`.
+
+**C15 numbers** — release build, warm, median of seven after a warm-up, fresh process per
+run, interleaved with the old rows' runs; `~/Development/bench/rust` at `c999cef531e`
+(read only: its `.git` listing identical before and after, nothing newer than a marker
+file, `git status` clean); AMD Ryzen 7 9800X3D, 60 GiB, Linux 7.2.8-2-cachyos. A find of
+the oldest commit (`c01efc669f0`, the last row) pages the held session 64 rows at a time
+keeping every row, as the window does. "Before" is `deep-find-measured.md`'s appendix
+reporter built at `f34631c` and run in the same session:
+
+| Seed | Rows | Before: find | After: find | Change | Before: retained (capacity) | After: retained (capacity) | `RssAnon` growth before / after |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| every ref | 345,545 | 2,495 ms | 2,263 ms | −9.3% | 1,427 MiB | 167.9 MiB | 1,446 / 185.7 MiB |
+| `HEAD` | 340,228 | 2,453 ms | 2,210 ms | −9.9% | 1,392 MiB | 167.0 MiB | 1,410 / 184.4 MiB |
+
+Runs (ms, warm-up excluded): every ref before 2486.7-2508.7, after 2255.8-2269.7; `HEAD`
+before 2430.4-2461.6, after 2204.7-2227.1. C15's bar — no more than 10% slower than
+2.4 s — holds; it is faster, since a row no longer allocates its edges. The retained
+figure counts capacity: the row vector's capacity (524,288 rows × 216 B = 108.0 MiB,
+its growth slack included), lane changes and snapshots 18.61 MiB (5,400 snapshots),
+parents 14.3 MiB, text 27.0 MiB. That is the figure phase 04 starts from (the plan
+expected about 160 MiB). A `LaneChange` is 24 B; nothing shrinks it in this phase.
+
+Pinned (mutation each fails, run by hand): `every_row_draws_the_edges_the_assigner_retained_before_compaction`
+(crafted fixtures and 1,590 generated histories, windows 1-1024, K 1-64; fails with ended
+late lines never retired, ending lanes never closed, the late-line merge reversed,
+late lines ranked by end row only, snapshots without late lines, snapshots taken after the
+row, a late span one short, ending lanes also drawn passing, and late ranks not recorded),
+`two_late_lines_cross_a_row_in_their_childs_parent_order`,
+`a_snapshot_falls_every_k_rows_and_on_the_first_row_kept` (fails with no snapshot on the
+first kept row), `rows_kept_from_any_row_on_draw_without_the_rows_above_them`,
+`a_row_with_no_snapshot_within_reach_draws_nothing_rather_than_guessing`,
+`a_row_further_below_its_snapshot_than_any_interval_draws_nothing`,
+`the_lanes_kept_rows_name_are_the_lanes_their_edges_reach` (fails with a snapshot's lanes
+uncounted), `the_cairn_checkouts_rows_draw_what_the_assigner_drew_before_compaction` and
+`each_cold_page_and_resumed_session_draws_on_its_own_what_the_assigner_drew_for_it`
+(fails with `drawn_from` dropped from either the cold page or the session), and in the
+list `rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew` (fails deriving from
+the row above). The viewport twin, `only_a_viewport_of_rows_is_built_however_long_the_history`,
+still holds.
+
 ## 2026-10-06 — phase 02 QA
 
 Fresh reviewers (`qa-checklist`, `test-coverage-auditor`, `destructive-ops-reviewer`,

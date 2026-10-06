@@ -2,7 +2,7 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 02 done (status engine), QA adjudicated and confirmed findings fixed; phase 03 next.** Integration branch
+**Status: phase 03 implemented (compact rows), full gate green, awaiting its QA; phase 04 next.** Integration branch
 `feature/refs-and-status`, in the worktree `.claude/worktrees/refs-and-status`,
 packet mode.
 
@@ -105,13 +105,33 @@ Phase 02 (`docs/systems/status.md` is the as-built account):
   status`); unit tests in `src/reads/status.rs` (parser, stub argv and environment, C5's
   cancel, the index left byte-identical, R3.7's version and index rule).
 
+Phase 03 (`docs/systems/history-graph.md`, "What a row keeps"):
+
+- `cairn-model`: `GraphRow { id, lane }` plus private lane changes and an optional
+  snapshot — `GraphRow::new(id, lane, changes)` (a row drawn on its own), `changes()`,
+  `has_snapshot()`, `lanes_named()`, `heap_bytes()`; `LaneChange` (`Ends`, `Starts`,
+  `StartsLate { lane, rows, order }`; `lane()`); `LaneSnapshot` (opaque; `heap_bytes`);
+  `RowEdges { lane, edges }` and `row_edges(rows, index)` (`src/edge_derivation.rs`,
+  generic over `AsRef<GraphRow>`, which `GraphRow` and `HistoryRow` implement).
+  `LaneAssigner::SNAPSHOT_EVERY` (64), `MAX_SNAPSHOT_EVERY` (4096), `with_snapshot_every`,
+  `snapshot_every`, `drawn_from(row)` (the first kept row carries a snapshot),
+  `assign_each`; `rows()` is gone. `GraphRow::edges` is gone: every reader derives.
+- `cairn-git`: a session and a cold page call `drawn_from(skip)`.
+- `cairn-ui`: `RowRender::graph` is the drawn row's `RowEdges`; `CommitRow::new` takes
+  it; `graph_geometry::row_geometry` and `graph_cell` draw a `RowEdges`.
+- `cairn-app`: `history_state::widest_lane` reads `GraphRow::lanes_named`.
+- Tests: C15's oracle is `crates/cairn-model/tests/layout_before_compaction/mod.rs`, the
+  pre-compaction assigner verbatim, included by path from `crates/cairn-git/tests/compact_rows.rs`
+  and `crates/cairn-ui/tests/history_list.rs`; never edit it. The `#[ignore]`d reporter
+  `measures_compact_rows_over_a_named_repository` (modes `find`, `equivalence`, `derive`).
+
 ## Validation status
 
 | Phase | Status |
 | --- | --- |
 | 01 refs engine | done: C1, C2, C3 pass; C11 refs numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
 | 02 status engine | done: C4, C5, C13 pass (host git, 2.30.9, 2.32.7); C11 status numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
-| 03 compact rows | not started |
+| 03 compact rows | implemented: C15 passes (equivalence over the fixtures, the Cairn checkout and every ref of the bench; find 2.26 s against 2.50 s before); K = 64, derived at draw time; numbers in progress.md; full gate green; QA pending |
 | 04 slim rows | not started |
 | 05 history from every ref | not started |
 | 06 worker and refresh | not started |

@@ -505,7 +505,7 @@ fn banner(message: String, alarming: bool) -> Element {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::cell::RefCell;
 
     use cairn_model::{
@@ -1650,7 +1650,9 @@ mod tests {
         test.sync_and_update();
     }
 
-    fn press_chord(test: &mut TestingRunner, action: Action) {
+    /// Presses `action`'s chord on this platform, as a key press reaches the window; for the
+    /// other window tests too, so no other test file names a modifier.
+    pub(crate) fn press_chord(test: &mut TestingRunner, action: Action) {
         let chord = accelerators::chord(action, accelerators::Os::current()).unwrap();
         let (key, code, modifiers) = chord.key_press().unwrap();
         test.send_event(PlatformEvent::Keyboard {

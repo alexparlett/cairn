@@ -561,8 +561,7 @@ fn many_changes(path: &str, lines: u32, context: Context) -> Box<ShownDiff> {
 /// chord unheard with the detail pane gone, or one that moves the Changes tab's diff.
 #[test]
 fn next_change_moves_local_changes_own_diff() {
-    use cairn_ui::accelerators::{self, Action};
-    use freya_testing::prelude::{KeyboardEventName, PlatformEvent};
+    use cairn_ui::accelerators::Action;
 
     let (mut test, view, submitted) = launch();
     apply(&mut test, view, &submitted, status(every_kind()));
@@ -582,20 +581,8 @@ fn next_change_moves_local_changes_own_diff() {
     // Inside the diff, right of the lists, under the bar.
     test.click_cursor((f64::from(WIDTH) - 200., 300.));
     test.sync_and_update();
-    let chord = accelerators::chord(Action::NextChange, accelerators::Os::current())
-        .unwrap_or_else(|| panic!("next change has no chord"));
-    let (key, code, modifiers) = chord
-        .key_press()
-        .unwrap_or_else(|| panic!("the chord is no key press"));
     for _ in 0..3 {
-        test.send_event(PlatformEvent::Keyboard {
-            name: KeyboardEventName::KeyDown,
-            key: key.clone(),
-            code,
-            modifiers,
-        });
-        test.sync_and_update();
-        test.sync_and_update();
+        crate::window::tests::press_chord(&mut test, Action::NextChange);
     }
     let (_, local_y): (i32, i32) = view.local.scroll.into();
     let (_, changes_y): (i32, i32) = view.diff_scroll.into();

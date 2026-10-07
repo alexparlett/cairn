@@ -639,7 +639,8 @@ file system (R10.2).
 read. A refresh compares the refs it reads with the first by
 `RefsSnapshot::walks_as` — the same refs naming the same objects, the same `HEAD`,
 the same stash list — and answers `Update::Refs { snapshot, reopen }`. The window keeps
-the snapshot (`refresh_state.rs`, for the views phases 07-09 build) and, on `reopen`,
+the snapshot (`refresh_state.rs`, which the history's chips, the title bar, the sidebar
+and the Commit tab's REFS row read) and, on `reopen`,
 reopens: the old `History` is moved out, a new one is built with
 `History::with_author_capacity` of the old one's author count, the history is asked
 for again and then the old one handed to the repository thread to free as a

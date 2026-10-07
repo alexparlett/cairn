@@ -109,7 +109,25 @@ under a split index beside a sparse one. gix's status also starts the user's
 clean filter itself,
 from Cairn's own process and environment, outside `processes.md`'s one place. So
 git answers: `git status --porcelain=v2 -z`, run as a read, with nothing passed
-that overrides the user's rename or submodule settings (`reads::status`). It is
+that overrides the user's rename or submodule settings (`reads::status`).
+Untracked files are listed one per file, yet git itself reads the user's
+`status.showUntrackedFiles`: a first read passes no `--untracked-files`, so git
+applies the setting — `no` lists none, `normal` collapses an untracked directory
+to one entry — and only where that answer holds a collapsed directory does a
+second read, with `--untracked-files=all`, list its files. Cairn reads no
+configuration of its own to decide, so the setting is honoured from wherever git
+finds it — an include, a worktree's own file, the command line — as `git status`
+honours it; the price is a tree holding an untracked nested repository, which git
+lists as a directory either way, read twice every time. Like every read of the
+working tree, a status read starts what the user's own `git status` starts: the
+repository's `core.fsmonitor` hook or daemon, the clean filter driver of each
+file whose stat changed, and, inside each submodule, `git status` with that
+repository's own hook and filters ("Reads see git's form"). In a partial clone, a
+staged rename whose blob only the promisor holds fails the whole read on a git
+that honours `GIT_NO_LAZY_FETCH` (2.44 and later) — nothing listed, where the
+user's own `git status` would fetch the blob and answer — and an older git, which
+ignores the variable, fetches it, writing a pack and reaching the network: the
+floor's residual, accepted with the 2.30 floor (as built: `docs/systems/status.md`). It is
 the cheaper of the two as well, except on a tree whose every file's stat changed:
 a read never writes the refreshed index back, so git rehashes every file each
 time until something refreshes the index, where gix's in-process hashing is

@@ -132,8 +132,11 @@ are later packets'.
 - R3.4 Untracked files are listed one per file (git's `--untracked-files=all`,
   Fork's choice), except where the user's configuration sets
   `status.showUntrackedFiles=no`, where none are listed. The setting is read as
-  git reads it; how is phase 02's to decide against `reads::fetch_settings`'s
-  precedent, and a new porcelain read needs the user.
+  git reads it. Amended by the user's decision of 2026-10-06: git itself reads it —
+  a first `git status` passes no `--untracked-files`, and a second, with
+  `--untracked-files=all`, is run only where the first collapsed an untracked
+  directory — so there is no `git config` read and no reading of the setting by gix,
+  and a tree with an untracked nested repository is read twice.
 - R3.5 Ignored files are not listed.
 - R3.6 Submodules are reported as the user's `submodule.<name>.ignore` and
   `diff.ignoreSubmodules` make `git status` report them.
@@ -235,7 +238,9 @@ are later packets'.
 - R7.1 The title bar shows the repository's name, marked `*` while status reports
   any change, the current branch, and its behind and ahead counts (↓n ↑m) when it
   has an upstream; a detached `HEAD` shows its short id, an unborn branch its name
-  and that it has no commit.
+  and that it has no commit. Amended by the user's decision of 2026-10-07: the counts
+  are printed as Fork prints them, behind then ahead with no space, `18↓1↑`, a zero
+  count left out and nothing for a branch level with its upstream.
 
 ### R8 — The sidebar (L8)
 

@@ -654,3 +654,88 @@ fn local_changes_filter_is_answered_on_a_worker_for_the_windows_own_lists() {
     }
     drop(handle);
 }
+
+/// Phase 09 QA's TC5: Local Changes' filter superseded while its pass runs stops part way and
+/// sends nothing. Driven on the lane's own function with the outbox read raw — beneath the
+/// epoch filter, which would hide a superseded answer either way — over a status large enough
+/// that its pass takes far longer than the moment the supersession comes after. Caught by: a
+/// pass told to keep going whatever its number (`|| true`), which runs to the end and sends
+/// rows no one will draw.
+#[test]
+fn a_local_changes_filter_superseded_mid_pass_stops_and_sends_nothing() {
+    use std::sync::Arc;
+
+    use cairn_model::{LocalChanges, RepoPath, StatusEntry};
+
+    use super::epoch::{Epochs, QueryLane};
+    use super::pool::{Outbox, filter_local_changes};
+
+    let changes = Arc::new(LocalChanges::new(WorkingTreeStatus::Listed(
+        (0..400_000)
+            .map(|n| StatusEntry::Untracked(RepoPath::from(format!("dir/file-{n:06}.rs").as_str())))
+            .collect(),
+    )));
+    let lane = QueryLane::LocalChangesFilter;
+
+    // Unsuperseded, for how long the whole pass takes on this machine.
+    let epochs = Epochs::new();
+    let (outbox, sent) = Outbox::watched();
+    let started = Instant::now();
+    filter_local_changes(
+        Arc::clone(&changes),
+        "rs".to_owned(),
+        epochs.bump(lane),
+        &epochs,
+        &outbox,
+    );
+    let whole = started.elapsed();
+    assert_eq!(
+        sent.try_iter().count(),
+        1,
+        "the unsuperseded pass sent nothing"
+    );
+
+    let mut stopped = 0;
+    for _ in 0..5 {
+        let epochs = Epochs::new();
+        let (outbox, sent) = Outbox::watched();
+        let mine = epochs.bump(lane);
+        let superseding = epochs.clone();
+        let delay = whole / 10;
+        let bump = std::thread::spawn(move || {
+            std::thread::sleep(delay);
+            let at = Instant::now();
+            superseding.bump(lane);
+            at
+        });
+        let began = Instant::now();
+        filter_local_changes(
+            Arc::clone(&changes),
+            "rs".to_owned(),
+            mine,
+            &epochs,
+            &outbox,
+        );
+        let ended = Instant::now();
+        let bumped = bump.join().unwrap_or_else(|_| panic!("the bump panicked"));
+        // Only a supersession that landed while the pass ran decides anything.
+        if bumped <= began || bumped >= ended {
+            continue;
+        }
+        assert_eq!(
+            sent.try_iter().count(),
+            0,
+            "a pass superseded part way sent its rows"
+        );
+        assert!(
+            ended - began < whole / 2 + Duration::from_millis(5),
+            "a pass superseded after {delay:?} ran {:?} of {whole:?}",
+            ended - began
+        );
+        stopped += 1;
+    }
+    assert!(
+        stopped > 0,
+        "no supersession landed while a pass ran (a pass takes {whole:?})"
+    );
+}

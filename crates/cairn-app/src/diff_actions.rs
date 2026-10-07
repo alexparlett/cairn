@@ -26,8 +26,8 @@ pub fn options(settings: DiffSettings) -> DiffOptions {
 }
 
 /// What a file opened in place in the Commit tab is asked with: the shared context and
-/// whitespace, never the entire file, which is the Changes tab's alone (the user's decision,
-/// 2026-10-04).
+/// whitespace, never the entire file, which is the Changes tab's and Local Changes' and never a
+/// file opened in place (the user's decision, 2026-10-04).
 pub fn in_place_options(settings: DiffSettings) -> DiffOptions {
     DiffOptions {
         context: settings.line_context(),

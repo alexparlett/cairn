@@ -3,9 +3,10 @@
 //! by the application; not remembered across sessions (issue #29).
 //!
 //! The context, the whitespace and side-by-side are shared by every diff view. The entire
-//! file is the Changes tab's alone (the user's decision, 2026-10-04, departing from Fork):
-//! a file opened in place in the Commit tab, which has no bar to turn it off, is always
-//! asked at [`DiffSettings::line_context`].
+//! file is the Changes tab's and Local Changes', each a view of one file under the bar, and
+//! never a file opened in place (the user's decision, 2026-10-04, departing from Fork): a file
+//! opened in place in the Commit tab, which has no bar to turn it off, is always asked at
+//! [`DiffSettings::line_context`].
 
 use cairn_model::Context;
 

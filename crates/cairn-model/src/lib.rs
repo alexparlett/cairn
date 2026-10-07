@@ -136,13 +136,19 @@ impl RefName {
 
     /// `refs/heads/main` becomes `main`; an unknown namespace is left whole.
     pub fn shorthand(&self) -> &str {
-        for prefix in ["refs/heads/", "refs/remotes/", "refs/tags/"] {
-            if let Some(rest) = self.0.strip_prefix(prefix) {
-                return rest;
-            }
-        }
-        &self.0
+        short_ref_name(&self.0)
     }
+}
+
+/// `full` past the namespace a branch, a remote-tracking ref or a tag lives in; any other
+/// name whole.
+fn short_ref_name(full: &str) -> &str {
+    for prefix in ["refs/heads/", "refs/remotes/", "refs/tags/"] {
+        if let Some(rest) = full.strip_prefix(prefix) {
+            return rest;
+        }
+    }
+    full
 }
 
 #[cfg(test)]

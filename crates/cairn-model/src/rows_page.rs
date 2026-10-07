@@ -92,7 +92,9 @@ impl RowsPage {
     }
 
     /// Appends the row `graph` lays out, for the commit `commit` describes, carrying the
-    /// refs that point at it and whether it is `HEAD`'s (PRD R4.3).
+    /// refs that point at it and whether it is `HEAD`'s (PRD R4.3). The labels are kept
+    /// bytewise by full name — a snapshot's own order, which a walk hands them in — so that
+    /// [`crate::RowLabels::find`] can search them; any other order is sorted into that one.
     pub fn push_labelled(
         &mut self,
         graph: GraphRow,
@@ -101,6 +103,15 @@ impl RowsPage {
         labels: &[Label<'_>],
     ) {
         let first_label = self.labels.len();
+        let sorted;
+        let labels = if labels.is_sorted_by_key(|label| label.name.as_bytes()) {
+            labels
+        } else {
+            let mut owned = labels.to_vec();
+            owned.sort_by_key(|label| label.name.as_bytes());
+            sorted = owned;
+            &sorted[..]
+        };
         for label in labels {
             let name = self.text_of(label.name);
             self.labels.push(PageLabel {

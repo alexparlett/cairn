@@ -17,6 +17,13 @@ pub struct Label<'a> {
     pub current: bool,
 }
 
+impl<'a> Label<'a> {
+    /// The name past its namespace, as Fork's chip spells it: `main`, `origin/main`, `v1.0`.
+    pub fn short_name(&self) -> &'a str {
+        crate::short_ref_name(self.name)
+    }
+}
+
 /// A label as a history keeps it: its name a span of the history's text store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StoredLabel {
@@ -53,8 +60,24 @@ impl<'h> RowLabels<'h> {
         self.stored.is_empty()
     }
 
-    /// Each ref pointing at the row's commit, in the snapshot's order: local branches, then
-    /// remote-tracking refs, then tags, each by name.
+    /// The ref named `name` (its full name) if it points at the row's commit: a binary
+    /// search, since the labels are kept bytewise by name ([`crate::RowsPage::push_labelled`]).
+    pub fn find(&self, name: &str) -> Option<Label<'h>> {
+        let text = self.text;
+        let read = move |label: &StoredLabel| text.get(label.name).unwrap_or_default();
+        self.stored
+            .binary_search_by(|label| read(label).as_bytes().cmp(name.as_bytes()))
+            .ok()
+            .and_then(|at| self.stored.get(at))
+            .map(|label| Label {
+                name: read(label),
+                kind: label.kind,
+                current: label.current,
+            })
+    }
+
+    /// Each ref pointing at the row's commit, in the snapshot's order — bytewise by full
+    /// name, which puts local branches first, then remote-tracking refs, then tags.
     pub fn iter(&self) -> impl Iterator<Item = Label<'h>> + 'h {
         let text = self.text;
         self.stored.iter().map(move |label| Label {

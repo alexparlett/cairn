@@ -788,6 +788,84 @@ mod tests {
         assert_eq!(summary(history.row(4).unwrap()).summary, "five");
     }
 
+    /// A row's labels are kept by full name whatever order they were pushed in, and each is
+    /// found by its full name and no other: what a chip's compaction and the current branch's
+    /// place are decided by. Caught by: `push_labelled` keeping the caller's order (the
+    /// search misses `refs/heads/a`), `find` answering a neighbour, or a near name found.
+    #[test]
+    fn a_rows_labels_are_kept_by_name_and_each_is_found_by_its_own() {
+        use crate::RefKind::{LocalBranch, RemoteTracking, Tag};
+        let mut history = History::new();
+        let mut page = RowsPage::new();
+        page.push_labelled(
+            GraphRow::new(oid(1), Lane::new(0), Vec::new()),
+            commit("one", "Ada", 1),
+            true,
+            &[
+                label("refs/tags/v1", Tag, false),
+                label("refs/remotes/origin/main", RemoteTracking, false),
+                label("refs/heads/main", LocalBranch, true),
+                label("refs/heads/a", LocalBranch, false),
+            ],
+        );
+        history.append(page).unwrap();
+        let labels = history.row(0).unwrap().labels();
+        let names: Vec<&str> = labels.iter().map(|label| label.name).collect();
+        assert_eq!(
+            names,
+            [
+                "refs/heads/a",
+                "refs/heads/main",
+                "refs/remotes/origin/main",
+                "refs/tags/v1"
+            ]
+        );
+        for name in &names {
+            assert_eq!(labels.find(name).map(|label| label.name), Some(*name));
+        }
+        let main = labels.find("refs/heads/main").unwrap();
+        assert!(main.current && main.kind == LocalBranch);
+        assert_eq!(
+            labels
+                .find("refs/remotes/origin/main")
+                .map(|label| label.kind),
+            Some(RemoteTracking)
+        );
+        for missing in [
+            "refs/heads/mai",
+            "refs/heads/main2",
+            "main",
+            "refs/tags/v2",
+            "",
+        ] {
+            assert_eq!(labels.find(missing), None, "{missing:?} was found");
+        }
+        assert_eq!(
+            history
+                .row(0)
+                .unwrap()
+                .labels()
+                .find("refs/heads/a")
+                .map(|l| l.short_name()),
+            Some("a")
+        );
+    }
+
+    /// Caught by: a namespace left on, or a name past it cut further.
+    #[test]
+    fn a_labels_short_name_is_its_name_past_its_namespace() {
+        use crate::RefKind::{LocalBranch, RemoteTracking, Tag};
+        assert_eq!(
+            label("refs/heads/feature/x", LocalBranch, false).short_name(),
+            "feature/x"
+        );
+        assert_eq!(
+            label("refs/remotes/origin/main", RemoteTracking, false).short_name(),
+            "origin/main"
+        );
+        assert_eq!(label("refs/tags/v1.0", Tag, false).short_name(), "v1.0");
+    }
+
     /// A row that could not be held leaves its labels and its stash filed under its
     /// number; the next row held under that number reads its own, the last filed. Caught
     /// by: reading the first entry filed under a number rather than the last.

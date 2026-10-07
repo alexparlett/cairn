@@ -59,8 +59,9 @@ counts as git lists them (`docs/systems/refs.md`), and its working tree's status
 `git status` answers it (`docs/systems/status.md`); no view draws either yet. The window
 walks the history from every ref, each row labelled and each stash a row of its own
 (`docs/systems/history-graph.md`), and refreshes — the refs on the history thread,
-status and ahead/behind on a refresh thread of their own, each in its own lane — when it
-gains focus, when a fetch ends and on the Refresh action (F5, ⌘R on macOS), reopening
+status and ahead/behind on a refresh thread of their own, the refs and ahead/behind
+superseding the refresh before them and a running status left to finish, one follow-up
+behind it — when it gains focus, when a fetch ends and on the Refresh action (F5, ⌘R on macOS), reopening
 the history only when what it draws changed, its old rows freed on a worker.
 Nothing else mutates a repository, and there is no repository picker: one
 repository, named on the command line.
@@ -631,10 +632,13 @@ Project invariants:
   thread the routing table names over an unbounded channel, whose operation
   arms (`Request::Retire`, a replaced change set handed to the repository
   thread to free, among them) only send over one, whose `Request::Refresh`
-  arm bumps three lanes' counters and sends once to the repository thread and
-  once to the refresh thread, and whose
+  arm bumps two lanes' counters, reads a third's, and sends once to the
+  repository thread and once to the refresh thread, and whose
   `CancelFetch` arm takes `FetchControl`'s mutex and calls
-  `KillHandle::kill`; `worker::open`, called from `main.rs`'s `use_hook`,
+  `KillHandle::kill`; the `Retired` constructors the window builds a
+  retirement with (`Retired::of`, `Retired::history`, `Retired::refs`,
+  `Retired::ahead_behind`, `Retired::status`, in `worker/request.rs`), which
+  only box what they are given; `worker::open`, called from `main.rs`'s `use_hook`,
   and the `Replier` closure it returns; `Updates::next`, `Wake::poll`, `Drop for Updates` (an atomic
   store, when the stream's task is dropped); and
   `Discovery::start`, which `main` calls on the main thread before the window

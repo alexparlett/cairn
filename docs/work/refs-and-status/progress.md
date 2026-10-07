@@ -3,6 +3,54 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-07 — phase 06 QA
+
+Fresh qa-checklist (NOT READY on QC1 = TC1), responsiveness-reviewer, test-coverage-auditor,
+destructive-ops-reviewer; adjudicated by a fresh qa-confirm. Fixes:
+
+- **TC1 (must fix; CI run 37592390981 failed on it).** The fetch test submitted its fetch after
+  reading only the first refresh's refs, so that refresh's count or status could arrive among
+  the fetch's updates and come first. It now drains the whole refresh (`one_refresh`, lifted
+  to `pub(super)`). Held 40 of 40 runs with 16 busy loops loading the machine.
+- **TC2.** The flapping test now counts what each lane drew. Under the amended R10.3 it holds
+  refs and ahead/behind to one each and status to one or two; red when status is answered under
+  the ahead/behind lane's number (a superseded status drawn twice) and, before the amendment,
+  when a refresh was not numbered in the status lane.
+- **RR2, the user's decision: status coalesced.** A refresh is numbered in the refs and
+  ahead/behind lanes only; a status is sent under the status lane's unmoved number; the refresh
+  thread drops every status job queued behind the one it takes up (`refresh_lane::coalesced`).
+  Pinned by `a_refresh_leaves_a_running_status_to_finish_and_asks_one_more_after_it` (three
+  refreshes during a held status: it is not ended, it is drawn, exactly one follow-up runs) —
+  red under "a refresh bumps the status lane again" (the first `git` ended), "no follow-up"
+  (one status) and "a follow-up per refresh" (four); and `a_close_ends_a_running_status` (a
+  close during it ends the stream within the bound, no status drawn, the process group gone,
+  the queued status never run) — red only when both the stopping cancel and the registry's
+  `end_invocations` are removed: each alone still ends the status, so either is enough.
+- **DO1.** Those two tests are the refresh superseded (now coalesced) and the close during a
+  running status, with the process group checked from `/proc`.
+- **QC4.** The focus test asserts the chosen commit is among the reopened rows;
+  history-graph.md says what the window shows when it never comes back (chosen, no row drawn
+  chosen, the pane keeping its answer).
+- **RR3.** The root CLAUDE.md names the `Retired` constructors among the worker functions the
+  UI thread calls, and the Refresh arm's two bumps.
+- **DO2.** git-processes.md says the close ends the refresh thread's status and bounds its reap.
+- **RR4.** A reopen asks the new history before handing the old to the worker to free.
+- **RR1, the user's decision: kept.** The refs stay on the repository thread; the cost is in
+  history-graph.md, "Refresh".
+- **TC3** handed to phase 08 (state.md).
+
+Dismissed, with reasons:
+
+- TC-note (`rows_answer_or_failure` skips only an open's own refs): no Refresh is submitted in
+  the three tests that use it today.
+- QC2 (two drawn `reopen: true` answers): cannot occur. A refresh submitted before the window
+  reads the first's answer makes that answer non-current, dropped in `Updates::next`; a drawn
+  answer submits `OpenHistory` in the same pass, which sets `walked_from` before any later
+  refresh compares.
+- QC5: information; the first refs failure shows and recovers on focus or F5, as documented.
+- QC-VERIFY: ⌘R is Fork's macOS Refresh (`fork-refs-and-status-ui.md`, section 7, and
+  `fork-dev/Docs`).
+
 ## 2026-10-07 — phase 06: the new lanes, and refresh
 
 Packet mode, on `feature/refs-and-status`. What landed (`docs/systems/history-graph.md`,

@@ -2,7 +2,7 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 06 implemented (the refresh: refs on the history thread, status and ahead/behind on a refresh thread, each in its own lane; the window walks from every ref and reopens only when what it draws changed), full gate green; phase 06 QA next (the coordinator's), then phase 07.** Integration branch
+**Status: phase 06 done (the refresh: refs on the history thread, status and ahead/behind on a refresh thread; the window walks from every ref and reopens only when what it draws changed), QA adjudicated and confirmed findings fixed, the user's two decisions on it built; phase 07 next.** Integration branch
 `feature/refs-and-status`, in the worktree `.claude/worktrees/refs-and-status`,
 packet mode.
 
@@ -47,6 +47,13 @@ that most constrain implementation:
   `git config` read, no gix reading. A nested repository makes every read two.
 
 ## Open questions
+
+- Decided by the user (2026-10-07, phase 06 QA): **RR1** — the refs stay read on the
+  repository thread (R11.2), so a page asked during a refresh waits behind one refs read;
+  the cost is written in `docs/systems/history-graph.md`, "Refresh". **RR2** — status is
+  coalesced, not superseded: R10.3 amended so a refresh leaves a running `git status` to
+  finish (its answer drawn) and every refresh asked meanwhile is one follow-up; only a close
+  ends one. Ahead/behind and refs still supersede lane by lane.
 
 - For the user's end-of-packet batch (QA finding QC-F6, phase 01): a ref whose name git
   calls invalid (`refs/heads/bad..name`) is skipped silently, as gix skips it, and not
@@ -119,6 +126,13 @@ Every hand-off is done (progress.md, "phase 06"): `from_refs` wired (`HistoryLan
 walk error arrives from the first page; the stale tip re-read and reopened once; RR2 measured;
 `History::with_author_capacity` with its model test; the reopen's rows freed on a worker; the
 fetch's `reload_if` comparison and `Repository::ref_tips` gone.
+
+## Handed to phase 08
+
+- Phase 06 QA's TC3: the phase that first submits `Request::FilterRefs` adds a boundary test
+  of the ref-filter lane — an answer arrives, a superseded one is dropped, and one superseded
+  mid-match stops (the `|| true` keep-going, a dropped `is_current` and a `None` epoch each
+  slip today, since nothing asks the lane).
 
 ## Handed to phase 07
 

@@ -569,15 +569,36 @@ FILE, and it is a guard, not a convention — see below.
 ### Refresh
 
 As-built for refs-and-status R10 and R11 (phase 06). `Request::Refresh` is three
-queries, numbered as it is submitted in the refs, ahead/behind and status lanes and
-in no other, so it supersedes the refresh before it lane by lane and never a page,
-a diff or a filter (`Request::lanes`; `a_refresh_cancels_neither_a_page_being_walked_nor_a_diff_being_read`).
-Its refs go to the repository thread, its status to the refresh thread; once the refs
-are read, the repository thread hands them to the refresh thread for ahead/behind,
-under the epoch the refresh was given. A refresh asked again at once — focus
-flapping — leaves one answer of each to be drawn
-(`a_refresh_asked_twice_at_once_draws_one_answer_of_each`), and a status that hangs
-holds up neither a page nor a diff (`a_slow_status_delays_neither_a_page_nor_a_diff`).
+reads. Its refs and ahead/behind are numbered as it is submitted, in the refs and
+ahead/behind lanes and in no other, so it supersedes the refresh before it lane by lane
+and never a page, a diff or a filter (`Request::lanes`;
+`a_refresh_cancels_neither_a_page_being_walked_nor_a_diff_being_read`). Its refs go to
+the repository thread, its status to the refresh thread; once the refs are read, the
+repository thread hands them to the refresh thread for ahead/behind, under the epoch the
+refresh was given. A refresh asked again at once — focus flapping — leaves one refs
+answer and one count to be drawn, and one status or two
+(`a_refresh_asked_twice_at_once_draws_one_answer_of_each`), and a status that hangs holds
+up neither a page nor a diff (`a_slow_status_delays_neither_a_page_nor_a_diff`).
+
+**Status is not superseded** (R10.3 as amended, the user's decision of 2026-10-07). A
+refresh leaves a running `git status` to finish, and its answer is drawn; every refresh
+asked while it ran becomes one follow-up status after it, however many there were — the
+refresh thread takes up a status job and drops every other status job queued behind it,
+since one read answers them all (`serve_refreshes`). The status lane's number is never
+moved by a refresh, so only a close cancels a status — by stopping every lane, and by
+ending every `git` in the repository's registry, either of which ends it
+(`a_refresh_leaves_a_running_status_to_finish_and_asks_one_more_after_it`,
+`a_close_ends_a_running_status`). Ahead/behind waits behind a running status on the same
+thread.
+
+**What a refresh costs, as built.** The refs are read on the repository thread (R11.2,
+kept by the user's decision of 2026-10-07), so a scroll page asked while a refresh reads
+them waits behind one refs read — about 22 ms at 10,500 refs warm, more at 40,000 and
+cold, measured by phase 06's QA — at most once per trigger; a refresh never cancels the page. A status, once
+started, runs to its end whatever refreshes arrive, so a window switched faster than a
+status takes still gets one, followed by at most one more; each status is a full stat of
+the tree (736 ms on a stat-dirty rust-lang/rust), which a refresh asked while one runs
+pays once more after it, not once per switch.
 
 It is asked for on three occasions, and the UI thread only submits on each: the window
 gaining focus (`crates/cairn-app/src/refresh.rs`, a side effect on the toolkit's
@@ -596,11 +617,14 @@ read. A refresh compares the refs it reads with the first by
 `RefsSnapshot::walks_as` — the same refs naming the same objects, the same `HEAD`,
 the same stash list — and answers `Update::Refs { snapshot, reopen }`. The window keeps
 the snapshot (`refresh_state.rs`, for the views phases 07-09 build) and, on `reopen`,
-reopens: the old `History` is moved out and handed to the repository thread to free
-as a `Request::Retire` (#52, R11.3), a new one is built with
+reopens: the old `History` is moved out, a new one is built with
 `History::with_author_capacity` of the old one's author count, the history is asked
-for again, and the selection is left as it is, drawn again when its row arrives
-(R10.5). A stash pushed, a checkout that moves no ref and a moved ref each reopen; a
+for again and then the old one handed to the repository thread to free as a
+`Request::Retire` (#52, R11.3) — in that order, so the new first page is not queued
+behind the free — and the selection is left as it is, drawn again when its row arrives
+(R10.5). A chosen commit that never arrives again — its branch deleted, nothing else
+reaching it — stays chosen: no row is drawn chosen, and the detail pane keeps the
+answer it holds for it until another row is chosen. A stash pushed, a checkout that moves no ref and a moved ref each reopen; a
 refresh that finds nothing changed does not, and neither does an upstream's
 configuration alone (`a_walk_is_the_same_unless_what_it_draws_changed`, in the model)
 (`a_refresh_reopens_for_a_stash_a_checkout_and_a_moved_ref_and_for_nothing_else`,

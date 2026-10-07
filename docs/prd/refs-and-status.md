@@ -284,7 +284,11 @@ are later packets'.
   whose chord is Fork's for each platform, in the accelerator table.
 - R10.2 Nothing watches the file system.
 - R10.3 A refresh supersedes the refresh before it, lane by lane; an answer is
-  drawn only against the refresh it answers.
+  drawn only against the refresh it answers. Except status (the user's decision of
+  2026-10-07, from phase 06 QA): a refresh does not end a `git status` already
+  running; it finishes and its answer is drawn, and every refresh asked while it ran
+  is one follow-up status after it, however many there were. Only closing the
+  window ends a running status.
 - R10.4 When the refs snapshot differs from the one the history was walked from —
   any ref moved, appeared or went, `HEAD`'s state changed (a checkout that moves
   no ref still moves ✓ and the bold row), or the stash list changed — the history

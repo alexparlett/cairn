@@ -1051,9 +1051,10 @@ runs on, orphaned, holding whatever locks it holds (issue #48).
 The network lane reads no refs around a fetch any more (phase 06 of
 refs-and-status): whether a fetch moved one is the refresh's to find out, which the
 window asks for on every ending, in the refs lane on the repository thread, where a
-close's stopped epochs cancel it between refs. What a close does not bound now is
-the reaps' own wait and the refresh thread's status, whose `git` the close ends with
-the rest (issue #43).
+close's stopped epochs cancel it between refs. The refresh thread's `git status`,
+which no refresh supersedes, is ended by the close like every other `git` in the
+registry, and its reap is bounded by `CLOSE_BOUND` with the rest
+(`a_close_ends_a_running_status`; issue #43).
 
 A close also ends any `git` in flight, a write included, without asking: the
 window refuses nothing and the user is told nothing about what was running.

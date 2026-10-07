@@ -829,8 +829,12 @@ refs), and, through the window, by
 ### The title bar
 
 The title bar's status box (`cairn_ui::StatusBox`, `crates/cairn-ui/src/status_box.rs`;
-R7.1, Fork's section 9) names the repository — the last component of the path it was
-opened at, `*` after it while the last status read listed a change — then a branch glyph
+R7.1, Fork's section 9) names the repository — its folder, as Fork names it: the last
+component of its working tree (of its git directory when it is bare), which the worker
+sends once the repository is open (`Update::Opened`, kept in `View::repository`), so a
+launch at `.`, `..`, a subdirectory or its `.git` names the repository and not the path
+given (`an_open_names_the_repositorys_folder_whatever_path_it_was_opened_at`); nothing
+until it is open — `*` after it while the last status read listed a change — then a branch glyph
 and the current branch, and its distance from its upstream as Fork prints it, behind then
 ahead, `18↓ 1↑`, a zero count left out and nothing for a branch level with its upstream;
 or `upstream gone` for a configured upstream no ref is (git's `[gone]`); a detached `HEAD`

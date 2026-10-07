@@ -21,6 +21,7 @@ mod graph_cell;
 pub mod graph_geometry;
 mod history_list;
 pub mod lane_palette;
+mod local_changes;
 mod message_lines;
 mod ref_chips;
 mod ref_glyphs;
@@ -71,6 +72,10 @@ pub use expansion::{Expansion, Opened};
 pub use file_filter::ShownFiles;
 pub use graph_geometry::{LANE_WIDTH, MAX_DRAWN_LANES, ROW_HEIGHT, graph_width};
 pub use history_list::{HistoryList, PREFETCH_ROWS, RowRender, reveal_row};
+pub use local_changes::{
+    LIST_HEADER_HEIGHT, LocalChangesList, NO_PATH_MATCHES, STAGED_CAPTION, UNSTAGED_CAPTION,
+    badge_letter, change_text, list_caption,
+};
 pub use ref_chips::{
     CHIP_FONT_SIZE, CHIP_GAP, CHIP_HEIGHT, Chip, ChipKind, TAG_INDIGO, chip_element, chips_of_row,
     min_width, row_chips, tint,

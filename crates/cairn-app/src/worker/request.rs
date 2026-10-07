@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use cairn_model::ShownDiff;
 use cairn_model::{
-    AheadBehind, ChangeSet, ChangedFile, CommandRecord, Context, Disclosure, History, Oid, RefName,
-    RefsSnapshot, RemoteSummary, RepoPath, RowsPage, SidebarRow, WorkingTreeStatus,
+    AheadBehind, ChangeSet, ChangedFile, CommandRecord, Context, Disclosure, History, LocalChanges,
+    MatchedRows, Oid, RefName, RefsSnapshot, RemoteSummary, RepoPath, RowsPage, SidebarRow,
 };
 
 use super::askpass::PromptId;
@@ -29,14 +29,8 @@ pub enum Comparison {
     Stash(Oid),
 }
 
-/// Which of a path's working-tree diffs (R3.1).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the window selects a commit, a file or the working tree from phase 05 on"
-    )
-)]
+/// Which of a path's working-tree diffs (R3.1): what a path chosen in Local Changes is asked
+/// as, by the list it was chosen in (refs-and-status R9.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkingSide {
     /// `HEAD` against the index: `git diff --cached`.
@@ -61,18 +55,11 @@ pub struct DiffOptions {
 }
 
 /// The file a diff is of.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the window selects a commit, a file or the working tree from phase 05 on"
-    )
-)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileTarget {
     /// One file of `of`'s change set, exactly as that answer named it.
     Committed { of: Comparison, file: ChangedFile },
-    /// One path's diff in the working tree.
+    /// One path's diff in the working tree: a path chosen in Local Changes.
     WorkingTree { path: RepoPath, side: WorkingSide },
 }
 
@@ -191,7 +178,7 @@ struct RetiredAnswers {
     history: Option<ReplacedHistory>,
     refs: Option<Arc<RefsSnapshot>>,
     ahead_behind: Option<Arc<Vec<(RefName, AheadBehind)>>>,
-    status: Option<WorkingTreeStatus>,
+    status: Option<Arc<LocalChanges>>,
     sidebar: Option<Arc<Vec<SidebarRow>>>,
 }
 
@@ -258,8 +245,9 @@ impl Retired {
         }))
     }
 
-    /// A status the window replaced or never kept.
-    pub fn status(status: WorkingTreeStatus) -> Self {
+    /// A status the window replaced or never kept, and the lists laid out over it — shared
+    /// with a filter of them that may be the last to hold them.
+    pub fn status(status: Arc<LocalChanges>) -> Self {
         Self(Box::new(RetiredAnswers {
             status: Some(status),
             ..RetiredAnswers::default()
@@ -287,8 +275,8 @@ impl Retired {
 
     /// The status let go of, for a test that checks what was handed over.
     #[cfg(test)]
-    pub fn working_tree_status(&self) -> Option<&WorkingTreeStatus> {
-        self.0.status.as_ref()
+    pub fn working_tree_status(&self) -> Option<&cairn_model::WorkingTreeStatus> {
+        self.0.status.as_deref().map(LocalChanges::status)
     }
 
     /// The ahead/behind counts let go of, for a test that checks what was handed over.
@@ -383,6 +371,15 @@ pub enum Request {
         text: String,
         disclosure: Arc<Disclosure>,
     },
+    /// Which rows of Local Changes' two lists hold `text` in a path (refs-and-status R9; the
+    /// Changes tab's filter's rule), answered by [`Update::FilteredLocalChanges`]: a pass over
+    /// every path the status listed, run on the repository thread, numbered in the
+    /// local-changes-filter lane so the next keystroke, or a status arriving, supersedes it and
+    /// nothing else does; `changes` is the window's own, shared.
+    FilterLocalChanges {
+        changes: Arc<LocalChanges>,
+        text: String,
+    },
     /// Fetches `remote` (a configured name or a URL) in the network lane;
     /// its progress and outcome arrive as the `Fetch*` updates, or
     /// [`Update::FetchRefused`] when a fetch is already in flight.
@@ -430,6 +427,7 @@ impl Request {
             // Not the status lane: a refresh never supersedes a status (R10.3 as amended).
             Self::Refresh => &[QueryLane::Refs, QueryLane::AheadBehind],
             Self::FilterRefs { .. } => &[QueryLane::RefFilter],
+            Self::FilterLocalChanges { .. } => &[QueryLane::LocalChangesFilter],
             Self::ListRemotes
             | Self::ConfiguredContext
             | Self::Fetch { .. }
@@ -540,9 +538,10 @@ pub enum Update {
     AheadBehind {
         counts: Vec<(RefName, AheadBehind)>,
     },
-    /// The working tree's status as `git status` lists it (R3).
+    /// The working tree's status as `git status` lists it (R3), laid out on the refresh
+    /// thread as Local Changes' two lists (R9.1), so the window only keeps it.
     Status {
-        status: WorkingTreeStatus,
+        changes: Arc<LocalChanges>,
     },
     /// One of a refresh's reads failed: `message` is display text. The answer kept before
     /// stays as it was.
@@ -556,6 +555,13 @@ pub enum Update {
         refs: Arc<RefsSnapshot>,
         text: String,
         rows: Vec<SidebarRow>,
+    },
+    /// The rows of `changes`' two lists that hold `text`, with the lists they index, so the
+    /// window keeps the rows only for the lists it draws.
+    FilteredLocalChanges {
+        changes: Arc<LocalChanges>,
+        text: String,
+        rows: MatchedRows,
     },
     /// The repository's command log, oldest first, as far back as it keeps.
     CommandLog {
@@ -622,7 +628,9 @@ impl Update {
             Self::Expanded { files, .. } => Retired::of(None, expanded_diffs(files)),
             Self::Refs { snapshot, .. } => Some(Retired::refs(snapshot)),
             Self::AheadBehind { counts } => Retired::ahead_behind(Arc::new(counts)),
-            Self::Status { status } => Some(Retired::status(status)),
+            Self::Status { changes } => Some(Retired::status(changes)),
+            // The lists may be the last hold on a status the window has replaced since.
+            Self::FilteredLocalChanges { changes, .. } => Some(Retired::status(changes)),
             // The snapshot may be the last hold on one the window has replaced since.
             Self::FilteredRefs { refs, rows, .. } => Some(Retired::sidebar(refs, Arc::new(rows))),
             Self::Superseded(retired) => Some(retired),
@@ -724,6 +732,15 @@ mod tests {
                     disclosure: Arc::new(Disclosure::default()),
                 },
                 QueryLane::RefFilter,
+            ),
+            (
+                Request::FilterLocalChanges {
+                    changes: Arc::new(LocalChanges::new(cairn_model::WorkingTreeStatus::Listed(
+                        Vec::new(),
+                    ))),
+                    text: "src".to_owned(),
+                },
+                QueryLane::LocalChangesFilter,
             ),
         ] {
             assert_eq!(query.lanes(), [lane], "{query:?}");

@@ -8,13 +8,13 @@
 //! through [`DiffState`](crate::diff_state::DiffState) and the file-diff lane, superseding
 //! what is in flight; the answer kept is then the one naming the new options, and no other.
 
-use cairn_model::Context;
-use cairn_ui::{DetailTab, DiffSettings, step_change};
+use cairn_model::{ChangeList, Context, LocalChange, PathState};
+use cairn_ui::{DetailTab, DiffSettings, MainView, step_change};
 use freya::prelude::*;
 
-use crate::diff_state::Asking;
+use crate::diff_state::{Asking, WorkingChoice};
 use crate::window::View;
-use crate::worker::{DiffOptions, FileQuery, FileTarget, Request};
+use crate::worker::{DiffOptions, FileQuery, FileTarget, Request, WorkingSide};
 
 /// What the Changes tab's file is asked with, from the settings.
 pub fn options(settings: DiffSettings) -> DiffOptions {
@@ -113,15 +113,99 @@ pub fn load_anyway(view: View, submit: Option<&dyn Fn(Request)>) {
 }
 
 /// Side-by-side or unified (R6.1): the same answer drawn another way, so nothing is asked
-/// again; the change last moved to is let go, since its rows are another view's.
+/// again; the change last moved to is let go, in either view, since its rows are another
+/// view's.
 pub fn toggle_side_by_side(view: View) {
     let View {
         mut diff_settings,
         mut change_cursor,
         ..
     } = view;
+    let mut local_cursor = view.local.cursor;
     diff_settings.write().toggle_side_by_side();
     change_cursor.set(None);
+    local_cursor.set(None);
+}
+
+/// Whether Local Changes is shown in place of the history.
+fn local_changes_shown(view: View) -> bool {
+    *view.sidebar.main.peek() == MainView::LocalChanges
+}
+
+/// What a path of Local Changes is asked as (R9.3): its staged diff from Staged, its unstaged
+/// or — for a path git does not track — untracked diff from Unstaged, at the Changes tab's
+/// options; `None` for a conflicted path, which has a notice in place of a diff (R9.4).
+pub fn working_query(
+    list: ChangeList,
+    change: &LocalChange<'_>,
+    settings: DiffSettings,
+) -> Option<FileQuery> {
+    let side = match (change.state, list) {
+        (PathState::Conflicted, _) => return None,
+        (PathState::Untracked, _) => WorkingSide::Untracked,
+        (PathState::Tracked, ChangeList::Staged) => WorkingSide::Staged,
+        (PathState::Tracked, ChangeList::Unstaged) => WorkingSide::Unstaged,
+    };
+    Some(FileQuery {
+        target: FileTarget::WorkingTree {
+            path: change.path.clone(),
+            side,
+        },
+        options: options(settings),
+    })
+}
+
+/// Local Changes' diff starts at its top, with no change moved to.
+fn reset_local_view(view: View) {
+    let mut scroll = view.local.scroll;
+    let mut cursor = view.local.cursor;
+    scroll.scroll_to_x(0);
+    scroll.scroll_to_y(0);
+    cursor.set(None);
+}
+
+/// The path on `row` of `list`, in the lists Local Changes draws, becomes the path chosen and
+/// its diff is asked (R9.3). Choosing the path already chosen, asked as it is, asks nothing,
+/// unless its answer failed, when choosing it again is how to retry.
+pub fn choose_working(list: ChangeList, row: usize, view: View, submit: Option<&dyn Fn(Request)>) {
+    let (choice, query) = {
+        let local = view.local.state.peek();
+        let lists = crate::local_changes_state::drawn_changes(&local);
+        let Some(change) = lists.get(list, row) else {
+            return;
+        };
+        (
+            WorkingChoice {
+                list,
+                path: change.path.clone(),
+                lists: local.serial(),
+            },
+            working_query(list, &change, *view.diff_settings.peek()),
+        )
+    };
+    let mut diff = view.diff;
+    let asked = {
+        let state = diff.peek();
+        state.working_choice() == Some(&choice)
+            && state.working_query() == query.as_ref()
+            && !matches!(
+                state.working_shown(),
+                Some(crate::diff_state::WorkingShown::Failed(_))
+            )
+    };
+    if asked {
+        return;
+    }
+    let requests = diff.write().choose_working(choice, query);
+    reset_local_view(view);
+    submit_all(requests, submit);
+}
+
+/// Load Diff for the path chosen in Local Changes (R6.8), keeping where its view is.
+pub fn load_working_anyway(view: View, submit: Option<&dyn Fn(Request)>) {
+    let mut diff = view.diff;
+    let requests = diff.write().load_working_anyway();
+    submit_all(requests, submit);
 }
 
 /// Asks the file shown, and the files opened in place, again at the settings as they are
@@ -135,9 +219,14 @@ fn ask_again(view: View, submit: Option<&dyn Fn(Request)>) {
         mut change_cursor,
         ..
     } = view;
-    let asking = match crate::detail_pane::shown_tab(view) {
-        DetailTab::Changes => Asking::File,
-        DetailTab::Commit => Asking::Expansion,
+    let mut local_cursor = view.local.cursor;
+    let asking = if local_changes_shown(view) {
+        Asking::Working
+    } else {
+        match crate::detail_pane::shown_tab(view) {
+            DetailTab::Changes => Asking::File,
+            DetailTab::Commit => Asking::Expansion,
+        }
     };
     let settings = *diff_settings.peek();
     let requests =
@@ -145,6 +234,7 @@ fn ask_again(view: View, submit: Option<&dyn Fn(Request)>) {
             .settings_changed(options(settings), in_place_options(settings), asking);
     if !requests.is_empty() {
         change_cursor.set(None);
+        local_cursor.set(None);
     }
     submit_all(requests, submit);
 }
@@ -210,8 +300,30 @@ pub fn configured(context: Context, view: View, submit: &dyn Fn(Request)) {
 
 /// Previous or next change (R6.2): one change from where the view is, or from the change
 /// last moved to while the view has not moved since; nothing when no diff is drawn — the
-/// Changes tab hidden, the pane collapsed — or there is no change that way.
+/// Changes tab hidden, the pane collapsed — or there is no change that way. With Local Changes
+/// shown, in its diff.
 pub fn step(view: View, forward: bool) {
+    if local_changes_shown(view) {
+        let mut scroll = view.local.scroll;
+        let mut cursor = view.local.cursor;
+        let side_by_side = view.diff_settings.peek().side_by_side();
+        let (_, scrolled_y): (i32, i32) = scroll.into();
+        let moved = {
+            let state = view.diff.peek();
+            let Some(stops) = state
+                .shown_working()
+                .and_then(|shown| shown.stops(side_by_side))
+            else {
+                return;
+            };
+            step_change(stops, *cursor.peek(), scrolled_y, forward)
+        };
+        if let Some(moved) = moved {
+            scroll.scroll_to_y(moved.scrolled_y);
+            cursor.set(Some(moved));
+        }
+        return;
+    }
     let View {
         diff,
         detail_tab,

@@ -86,6 +86,7 @@ fn kind(update: &Update) -> &'static str {
         Update::AheadBehind { .. } => "ahead/behind",
         Update::Status { .. } => "status",
         Update::FilteredRefs { .. } => "ref filter",
+        Update::FilteredLocalChanges { .. } => "local changes filter",
         Update::RefreshFailed { .. } => "refresh failed",
         Update::Failed { .. }
         | Update::WorkerLost { .. }
@@ -383,6 +384,7 @@ fn launch(path: &str) -> Harness {
                 refreshed: State::create(crate::refresh_state::RefreshState::default()),
                 repository: State::create(None),
                 sidebar: crate::sidebar_state::SidebarView::created(),
+                local: crate::local_changes_state::LocalChangesView::created(),
             })
         },
         1.,

@@ -213,7 +213,7 @@ impl Component for ChangesTab {
 /// The file list's share of the split, in percent, once dragged to `list_px` in a split
 /// `split_px` wide (its handle included): Freya's splitter reports the width dragged to in
 /// pixels, while both panels are laid out by share. `None` while the split is unmeasured.
-fn share_of(list_px: f32, split_px: f32) -> Option<f32> {
+pub(crate) fn share_of(list_px: f32, split_px: f32) -> Option<f32> {
     let room = split_px - ResizableContext::HANDLE_SIZE;
     (room > 0. && list_px.is_finite()).then(|| (list_px / room * 100.).clamp(0., 100.))
 }

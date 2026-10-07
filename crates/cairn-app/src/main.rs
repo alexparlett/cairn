@@ -8,6 +8,10 @@ mod diff_state;
 mod fetch_state;
 mod file_filter;
 mod history_state;
+mod local_changes_pane;
+mod local_changes_state;
+#[cfg(test)]
+mod local_changes_tests;
 mod ref_find;
 mod refresh;
 mod refresh_state;
@@ -99,6 +103,8 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let repository = use_state(|| None::<String>);
     // The sidebar's state, for the session (refs-and-status R8).
     let sidebar = sidebar_state::SidebarView::used();
+    // Local Changes' lists, filter and diff, for the session (refs-and-status R9).
+    let local = local_changes_state::LocalChangesView::used();
     let view = View {
         rows,
         progress,
@@ -123,6 +129,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         refreshed,
         repository,
         sidebar,
+        local,
     };
 
     let opened = use_hook(|| {

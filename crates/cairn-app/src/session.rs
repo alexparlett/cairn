@@ -111,9 +111,30 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             let replaced = refreshed.write().ahead_behind_arrived(counts);
             retire(replaced, worker);
         }
-        Update::Status { status } => {
-            let replaced = refreshed.write().status_arrived(status);
+        // Kept for the title bar and the sidebar's count; laid out for Local Changes' lists,
+        // drawn at once or once a filter's rows are here (R9). What either lets go of is freed
+        // on a worker.
+        Update::Status { changes } => {
+            let mut local = view.local.state;
+            let asked = local.write().status_arrived(Arc::clone(&changes));
+            let replaced = refreshed.write().status_arrived(changes);
+            for request in asked {
+                if !worker.closing || matches!(request, Request::Retire(_)) {
+                    (worker.submit)(request);
+                }
+            }
             retire(replaced, worker);
+        }
+        Update::FilteredLocalChanges {
+            changes,
+            text,
+            rows,
+        } => {
+            let mut local = view.local.state;
+            let requests = local.write().filtered(changes, &text, rows);
+            for request in requests {
+                (worker.submit)(request);
+            }
         }
         Update::RefreshFailed { what, message } => {
             // With no refs ever read, the history has nothing to walk from: say why there.
@@ -170,10 +191,28 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             diff: answer,
         } => {
             let answer = answer.map(|shown| *shown);
-            if diff.peek().wants_file(&query) {
-                diff.write().file_arrived(&query, answer);
-            } else {
-                retire(Retired::of(None, answer.into_iter().collect()), worker);
+            match &query.target {
+                crate::worker::FileTarget::WorkingTree { .. } => {
+                    // Kept only for the path chosen in Local Changes, asked as it is now.
+                    let (_, freeing) = if diff.peek().wants_file(&query) {
+                        diff.write().working_arrived(&query, answer)
+                    } else {
+                        (
+                            false,
+                            Retired::of(None, answer.into_iter().collect()).map(Request::Retire),
+                        )
+                    };
+                    if let Some(request) = freeing {
+                        (worker.submit)(request);
+                    }
+                }
+                crate::worker::FileTarget::Committed { .. } => {
+                    if diff.peek().wants_file(&query) {
+                        diff.write().file_arrived(&query, answer);
+                    } else {
+                        retire(Retired::of(None, answer.into_iter().collect()), worker);
+                    }
+                }
             }
         }
         Update::Expanded {
@@ -329,6 +368,7 @@ mod tests {
                         refreshed: State::create(crate::refresh_state::RefreshState::default()),
                         repository: State::create(None),
                         sidebar: crate::sidebar_state::SidebarView::created(),
+                        local: crate::local_changes_state::LocalChangesView::created(),
                     }
                 })
             },
@@ -1206,13 +1246,20 @@ mod tests {
                 view,
                 &asked,
                 Update::Status {
-                    status: status.clone(),
+                    changes: std::sync::Arc::new(cairn_model::LocalChanges::new(status.clone())),
                 },
             );
         }
+        // The status replaced is let go of by both its holders — the refresh's answers and
+        // Local Changes' lists — each handing its hold to a worker.
         match asked.submitted.borrow().as_slice() {
-            [Request::Retire(counted), Request::Retire(read)] => {
+            [
+                Request::Retire(counted),
+                Request::Retire(drawn),
+                Request::Retire(read),
+            ] => {
                 assert_eq!(counted.counts(), counts.as_slice());
+                assert_eq!(drawn.working_tree_status(), Some(&status));
                 assert_eq!(read.working_tree_status(), Some(&status));
             }
             other => panic!("expected the replaced answers retired, got {other:?}"),

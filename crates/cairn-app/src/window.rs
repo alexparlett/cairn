@@ -6,8 +6,8 @@ use cairn_model::{History, RemoteSummary, RowContent, RowId, Secret, Upstream, W
 use cairn_ui::accelerators::{self, HeldKeys, Scope};
 use cairn_ui::{
     ChangeCursor, CommitRow, CredentialPrompt, DETAIL_STRIP_HEIGHT, DetailTab, DiffSettings,
-    HistoryHeader, HistoryList, LOCAL_CHANGES_CAPTION, MainView, ROW_HEIGHT, RowRender, StatusBox,
-    Tracking, current_branch,
+    HistoryHeader, HistoryList, MainView, ROW_HEIGHT, RowRender, StatusBox, Tracking,
+    current_branch,
 };
 use freya::prelude::*;
 
@@ -15,6 +15,8 @@ use crate::detail_pane::DetailPane;
 use crate::diff_state::DiffState;
 use crate::fetch_state::{FetchRefusal, FetchStatus, PromptView};
 use crate::history_state::{Progress, Status};
+use crate::local_changes_pane::LocalChangesPane;
+use crate::local_changes_state::LocalChangesView;
 use crate::refresh_state::RefreshState;
 use crate::selection::Pair;
 use crate::sidebar_pane::SidebarPane;
@@ -30,8 +32,6 @@ const PANE_MIN_HEIGHT: f32 = 90.0;
 const LIST_MIN_HEIGHT: f32 = 80.0;
 /// The least the main region keeps beside the sidebar when the window is squeezed.
 const MAIN_MIN_WIDTH: f32 = 240.0;
-/// Said in the main region while Local Changes is chosen, until its lists are built.
-pub const LOCAL_CHANGES_PLACEHOLDER: &str = "Local Changes lists the working tree's changes.";
 
 /// The view state the window is drawn from. Handles, not values: the window
 /// subscribes to what it reads.
@@ -81,6 +81,8 @@ pub struct View {
     pub repository: State<Option<String>>,
     /// The sidebar: its rows, the filter, what the main region shows, a press's find.
     pub sidebar: SidebarView,
+    /// Local Changes: its lists, its filter and its diff's scroll (refs-and-status R9).
+    pub local: LocalChangesView,
 }
 
 impl std::fmt::Debug for View {
@@ -186,7 +188,7 @@ pub fn window(
             SidebarPane::new(view, submit.clone()).into(),
             match *view.sidebar.main.read() {
                 MainView::AllCommits => split(list, DetailPane::new(view, submit).into(), view),
-                MainView::LocalChanges => notice(LOCAL_CHANGES_PLACEHOLDER, LOCAL_CHANGES_CAPTION),
+                MainView::LocalChanges => LocalChangesPane::new(view, submit).into(),
             },
             view,
         ))
@@ -656,6 +658,7 @@ mod tests {
                     refreshed: State::create(RefreshState::default()),
                     repository: State::create(Some("engine".to_owned())),
                     sidebar: SidebarView::created(),
+                    local: crate::local_changes_state::LocalChangesView::created(),
                 })
             },
             1.,
@@ -2426,13 +2429,17 @@ mod tests {
         if let Some(counts) = counts {
             let _ = state.ahead_behind_arrived(vec![(RefName::new("refs/heads/main"), counts)]);
         }
-        let _ = state.status_arrived(WorkingTreeStatus::Listed(
-            (0..changed)
-                .map(|n| {
-                    StatusEntry::Untracked(cairn_model::RepoPath::from(format!("new-{n}").as_str()))
-                })
-                .collect(),
-        ));
+        let _ = state.status_arrived(std::sync::Arc::new(cairn_model::LocalChanges::new(
+            WorkingTreeStatus::Listed(
+                (0..changed)
+                    .map(|n| {
+                        StatusEntry::Untracked(cairn_model::RepoPath::from(
+                            format!("new-{n}").as_str(),
+                        ))
+                    })
+                    .collect(),
+            ),
+        )));
         drop(state);
         test.sync_and_update();
     }

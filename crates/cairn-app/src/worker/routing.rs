@@ -12,6 +12,7 @@
 //! | refs (`Refresh`'s first read) | `cairn-repository`, which reopens the walk from them (refs-and-status R11.2) |
 //! | ahead/behind and status (`Refresh`'s other two) | `cairn-refresh`, so neither a page nor a diff queues behind a slow status or a long divergence; ahead/behind is forwarded there by the repository thread once the refs it counts are read |
 //! | ref filter (`FilterRefs`) | `cairn-repository`, as the file filter |
+//! | Local Changes' filter (`FilterLocalChanges`) | `cairn-repository`, as the file filter |
 //! | `CancelFetch` | none: the fetch's control, from the caller's thread |
 //!
 //! [`route`] is the table, applied to every request as it is submitted: it hands each one
@@ -29,7 +30,7 @@
 use super::epoch::QueryLane;
 use std::sync::Arc;
 
-use cairn_model::{ChangeSet, Disclosure, Oid, RefsSnapshot};
+use cairn_model::{ChangeSet, Disclosure, LocalChanges, Oid, RefsSnapshot};
 
 use super::epoch::Epoch;
 
@@ -55,7 +56,8 @@ pub(super) const fn thread_of(lane: QueryLane) -> Thread {
         | QueryLane::Walk
         | QueryLane::FileFilter
         | QueryLane::Refs
-        | QueryLane::RefFilter => Thread::Repository,
+        | QueryLane::RefFilter
+        | QueryLane::LocalChangesFilter => Thread::Repository,
         QueryLane::Changes | QueryLane::FileDiff => Thread::Diff,
         QueryLane::AheadBehind | QueryLane::Status => Thread::Refresh,
     }
@@ -100,6 +102,11 @@ pub(super) enum RepositoryJob {
         refs: Arc<RefsSnapshot>,
         text: String,
         disclosure: Arc<Disclosure>,
+    },
+    /// Which rows of Local Changes' two lists a filter's text leaves.
+    FilterLocalChanges {
+        changes: Arc<LocalChanges>,
+        text: String,
     },
     /// Answers to free; the job does nothing else.
     Retire(Retired),
@@ -181,6 +188,9 @@ pub(super) fn route(request: Request) -> Routed {
             text,
             disclosure,
         }),
+        Request::FilterLocalChanges { changes, text } => {
+            Routed::Repository(RepositoryJob::FilterLocalChanges { changes, text })
+        }
         Request::ListRemotes => Routed::Repository(RepositoryJob::ListRemotes),
         Request::ConfiguredContext => Routed::ConfiguredContext,
         Request::Fetch { remote } => Routed::Repository(RepositoryJob::Fetch { remote }),
@@ -222,6 +232,9 @@ pub(super) fn unroute(routed: Routed) -> Request {
             text,
             disclosure,
         },
+        Routed::Repository(RepositoryJob::FilterLocalChanges { changes, text }) => {
+            Request::FilterLocalChanges { changes, text }
+        }
         Routed::Repository(RepositoryJob::Close) => Request::Close,
         Routed::Diff(DiffQuery::Changes(of)) => Request::Changes { of },
         Routed::Diff(DiffQuery::File(query)) => Request::FileDiff(query),
@@ -278,6 +291,14 @@ mod tests {
                 }),
                 text: "lib".to_owned(),
             },
+            Request::FilterLocalChanges {
+                changes: Arc::new(cairn_model::LocalChanges::new(
+                    cairn_model::WorkingTreeStatus::Listed(vec![
+                        cairn_model::StatusEntry::Untracked(cairn_model::RepoPath::from("a")),
+                    ]),
+                )),
+                text: "a".to_owned(),
+            },
             Request::Refresh,
             Request::FilterRefs {
                 refs: Arc::new(cairn_model::RefsSnapshot {
@@ -331,6 +352,7 @@ mod tests {
         assert_eq!(thread_of(QueryLane::AheadBehind), Thread::Refresh);
         assert_eq!(thread_of(QueryLane::Status), Thread::Refresh);
         assert_eq!(thread_of(QueryLane::RefFilter), Thread::Repository);
+        assert_eq!(thread_of(QueryLane::LocalChangesFilter), Thread::Repository);
         for request in every_request() {
             let lanes = request.lanes();
             let routed = route(request.clone());

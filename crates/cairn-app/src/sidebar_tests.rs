@@ -24,11 +24,12 @@ use freya_testing::TestingRunner;
 use crate::diff_state::DiffState;
 use crate::fetch_state::FetchStatus;
 use crate::history_state::Progress;
+use crate::local_changes_pane::READING_STATUS;
 use crate::ref_find::{FIND_PAGE_ROWS, finding_text, no_commit_text, not_in_graph_text};
 use crate::refresh_state::RefreshState;
 use crate::session::{self, Worker};
 use crate::sidebar_state::{SIDEBAR_WIDTH, SidebarView};
-use crate::window::{LOCAL_CHANGES_PLACEHOLDER, PANE_HEIGHT, View, window};
+use crate::window::{PANE_HEIGHT, View, window};
 use crate::worker::{Comparison, Request, Update};
 
 const WIDTH: f32 = 1000.;
@@ -172,6 +173,7 @@ fn launch(loaded: usize, complete: bool) -> (TestingRunner, View, Submitted) {
                     refreshed: State::create(RefreshState::default()),
                     repository: State::create(Some("engine".to_owned())),
                     sidebar: SidebarView::created(),
+                    local: crate::local_changes_state::LocalChangesView::created(),
                 }
             })
         },
@@ -588,10 +590,7 @@ fn local_changes_and_all_commits_switch_the_main_region() {
     press(&mut test, LOCAL_CHANGES_CAPTION);
     assert_eq!(*view.sidebar.main.read(), MainView::LocalChanges);
     let drawn = texts(&test);
-    assert!(
-        drawn.contains(&LOCAL_CHANGES_PLACEHOLDER.to_owned()),
-        "{drawn:?}"
-    );
+    assert!(drawn.contains(&READING_STATUS.to_owned()), "{drawn:?}");
     assert!(
         !drawn.contains(&"commit 0".to_owned()),
         "the history is still drawn"

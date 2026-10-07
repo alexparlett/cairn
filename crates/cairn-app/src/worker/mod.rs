@@ -43,11 +43,10 @@ pub use pool::idle_handle;
 pub use pool::{CLOSE_PATIENCE, Replier, RepositoryHandle, open};
 #[cfg(test)]
 pub(crate) use refresh_tests::Refreshable;
-#[cfg(test)]
-pub use request::WorkingSide;
 pub use request::{
     AllEnded, AllFrom, AllProgress, Comparison, DiffOptions, DiffQuery, ExpandQuery, ExpandedFile,
-    FileQuery, FileTarget, OpenedFile, Refreshed, Request, Retired, Update, expanded_diffs,
+    FileQuery, FileTarget, OpenedFile, Refreshed, Request, Retired, Update, WorkingSide,
+    expanded_diffs,
 };
 #[cfg(test)]
 pub(crate) use window_check_updates::update_within;

@@ -5,7 +5,7 @@
 
 use std::rc::Rc;
 
-use cairn_model::{SidebarRow, WorkingTreeStatus};
+use cairn_model::{LocalChanges, SidebarRow, WorkingTreeStatus};
 use cairn_ui::{MainView, Sidebar};
 use freya::prelude::*;
 
@@ -33,11 +33,13 @@ impl PartialEq for SidebarPane {
     }
 }
 
-/// The count beside Local Changes: the paths the last status listed (R9.2), each listed once
-/// by `git status`; none before a status was read, or where there is no working tree to list.
-pub fn local_changes_count(status: Option<&WorkingTreeStatus>) -> Option<usize> {
-    match status? {
-        WorkingTreeStatus::Listed(entries) => Some(entries.len()),
+/// The count beside Local Changes: the distinct paths the last status listed (R9.2) — a path
+/// in both lists once; none before a status was read, or where there is no working tree to
+/// list.
+pub fn local_changes_count(changes: Option<&LocalChanges>) -> Option<usize> {
+    let changes = changes?;
+    match changes.status() {
+        WorkingTreeStatus::Listed(_) => Some(changes.paths()),
         WorkingTreeStatus::IndexUnreadable(_) | WorkingTreeStatus::NoWorkingTree => None,
     }
 }
@@ -71,7 +73,9 @@ impl Component for SidebarPane {
         let mut main = view.sidebar.main;
         Sidebar::new(state.shown().cloned(), view.sidebar.filter_text)
             .counts(refreshed.ahead_behind().cloned())
-            .local_changes(local_changes_count(refreshed.status()))
+            .local_changes(local_changes_count(
+                refreshed.local_changes().map(|changes| &**changes),
+            ))
             .main(*view.sidebar.main.read())
             .chosen(state.chosen().cloned())
             .notice(notice)

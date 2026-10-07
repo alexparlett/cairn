@@ -1,9 +1,10 @@
 //! Request epochs, numbered per query lane, which double as the engine's cancel signal.
 //!
-//! Nine lanes (PRD R4.1, packet decision L8, phase 07's file filter, and refs-and-status
+//! Ten lanes (PRD R4.1, packet decision L8, phase 07's file filter, and refs-and-status
 //! R11.1): the history, the walk its pages come from, the changes query, the file diff, the
 //! Changes tab's filter over a change set's files, the refs snapshot, ahead/behind, the
-//! working tree's status and the sidebar's filter over the refs. A new query supersedes the
+//! working tree's status, the sidebar's filter over the refs and Local Changes' filter over
+//! the status. A new query supersedes the
 //! older ones in its own lane only, with one
 //! exception — a changes query also supersedes the file-diff lane, since a file of the
 //! commit that was selected is no file of the one that is now. So a scroll never cancels a
@@ -48,6 +49,9 @@ pub enum QueryLane {
     Status,
     /// Which refs and stashes the sidebar's filter text leaves (R8.3).
     RefFilter,
+    /// Which paths of Local Changes' two lists the view's filter text leaves (R9): numbered so
+    /// a keystroke, or the lists of a status that has arrived, supersede the pass before.
+    LocalChangesFilter,
 }
 
 impl QueryLane {
@@ -63,6 +67,7 @@ impl QueryLane {
         Self::AheadBehind,
         Self::Status,
         Self::RefFilter,
+        Self::LocalChangesFilter,
     ];
 
     fn index(self) -> usize {
@@ -76,6 +81,7 @@ impl QueryLane {
             Self::AheadBehind => 6,
             Self::Status => 7,
             Self::RefFilter => 8,
+            Self::LocalChangesFilter => 9,
         }
     }
 
@@ -92,12 +98,13 @@ impl QueryLane {
             Self::AheadBehind => &[Self::AheadBehind],
             Self::Status => &[Self::Status],
             Self::RefFilter => &[Self::RefFilter],
+            Self::LocalChangesFilter => &[Self::LocalChangesFilter],
         }
     }
 }
 
 /// How many lanes there are: one counter each.
-const LANES: usize = 9;
+const LANES: usize = 10;
 
 /// Which request a value belongs to: its lane, and its number there. Monotonic within a
 /// lane, and never reused.
@@ -267,6 +274,7 @@ mod tests {
             QueryLane::AheadBehind,
             QueryLane::Status,
             QueryLane::RefFilter,
+            QueryLane::LocalChangesFilter,
         ] {
             assert_eq!(
                 lane.supersedes(),

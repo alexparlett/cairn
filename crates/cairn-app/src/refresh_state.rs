@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use cairn_model::{AheadBehind, RefName, RefsSnapshot, WorkingTreeStatus};
+use cairn_model::{AheadBehind, LocalChanges, RefName, RefsSnapshot, WorkingTreeStatus};
 use cairn_ui::BranchCounts;
 
 use crate::worker::{Refreshed, Retired};
@@ -43,7 +43,7 @@ impl<T> Kept<T> {
 pub struct RefreshState {
     refs: Kept<Arc<RefsSnapshot>>,
     ahead_behind: Kept<BranchCounts>,
-    status: Kept<WorkingTreeStatus>,
+    status: Kept<Arc<LocalChanges>>,
 }
 
 impl RefreshState {
@@ -71,6 +71,12 @@ impl RefreshState {
 
     /// The working tree's status, if read.
     pub fn status(&self) -> Option<&WorkingTreeStatus> {
+        self.status.last.as_deref().map(LocalChanges::status)
+    }
+
+    /// The working tree's status laid out as Local Changes' two lists, if read: shared with a
+    /// filter of them asked of a worker.
+    pub fn local_changes(&self) -> Option<&Arc<LocalChanges>> {
         self.status.last.as_ref()
     }
 
@@ -97,7 +103,7 @@ impl RefreshState {
     }
 
     /// Keeps `status`, handing back the one it replaces to be freed on a worker.
-    pub fn status_arrived(&mut self, status: WorkingTreeStatus) -> Option<Retired> {
+    pub fn status_arrived(&mut self, status: Arc<LocalChanges>) -> Option<Retired> {
         self.status.arrived(status).map(Retired::status)
     }
 

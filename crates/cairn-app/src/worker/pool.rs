@@ -862,6 +862,11 @@ fn serve(
                     filter_files(of, &files, text, epoch, &epochs, outbox);
                 }
             }
+            RepositoryJob::FilterLocalChanges { changes, text } => {
+                if let Some(epoch) = epoch {
+                    filter_local_changes(changes, text, epoch, &epochs, outbox);
+                }
+            }
             // Freed here, off the UI thread, which is the whole of the job.
             RepositoryJob::Retire(retired) => drop(retired),
             // The epochs were stopped as it was sent; the closing is the caller's.
@@ -912,6 +917,33 @@ fn filter_files(
                 of,
                 text,
                 files: matched,
+            },
+        );
+    }
+}
+
+/// Which rows of Local Changes' two lists hold `text` (refs-and-status R9), answered while
+/// `epoch` is current: one superseded before it started, or by a keystroke or a newer status
+/// while it runs, stops within a few thousand paths and sends nothing. The lists are the
+/// window's own, shared, and handed back with the rows so the window keeps the rows only for
+/// the lists they index.
+pub(super) fn filter_local_changes(
+    changes: Arc<cairn_model::LocalChanges>,
+    text: String,
+    epoch: Epoch,
+    epochs: &Epochs,
+    outbox: &Outbox,
+) {
+    if !epochs.is_current(epoch) {
+        return;
+    }
+    if let Some(rows) = changes.matching(&text, || epochs.is_current(epoch)) {
+        outbox.send(
+            Some(epoch),
+            Update::FilteredLocalChanges {
+                changes,
+                text,
+                rows,
             },
         );
     }
@@ -1731,7 +1763,7 @@ mod tests {
             outbox.send(
                 Some(read),
                 Update::Status {
-                    status: status.clone(),
+                    changes: Arc::new(cairn_model::LocalChanges::new(status.clone())),
                 },
             );
         };

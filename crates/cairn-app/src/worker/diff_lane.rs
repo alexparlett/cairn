@@ -661,7 +661,10 @@ mod tests {
             | QueryLane::Refs
             | QueryLane::AheadBehind
             | QueryLane::Status
-            | QueryLane::RefFilter => DiffQuery::File(committed(n, DiffOptions::default())),
+            | QueryLane::RefFilter
+            | QueryLane::LocalChangesFilter => {
+                DiffQuery::File(committed(n, DiffOptions::default()))
+            }
         };
         DiffJob::Query {
             epoch: epochs.bump(lane),

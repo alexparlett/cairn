@@ -361,8 +361,8 @@ fn a_slow_status_delays_neither_a_page_nor_a_diff() {
         matches!(update, Update::Status { .. } | Update::RefreshFailed { .. })
     });
     match seen.last() {
-        Some(Update::Status { status }) => {
-            assert_eq!(*status, WorkingTreeStatus::Listed(Vec::new()));
+        Some(Update::Status { changes }) => {
+            assert_eq!(*changes.status(), WorkingTreeStatus::Listed(Vec::new()));
         }
         other => panic!("expected the released status, got {other:?}"),
     }
@@ -551,5 +551,106 @@ fn a_close_ends_a_running_status() {
         "the status git outlived the close"
     );
     assert_eq!(statuses_started(&stub), [running], "the queued status ran");
+    drop(handle);
+}
+
+/// R9.1, R9.2 and the QA brief, through the real boundary: untracked files under a new
+/// directory are listed one row per file — the directory never a row of its own — in their
+/// paths' order, laid out on the refresh thread, and counted one each. Caught by: git's
+/// collapsed directory kept (one row, a count of one), or the lists laid out on the window's
+/// side (an answer that carries none).
+#[test]
+fn untracked_files_under_a_new_directory_are_listed_one_per_file_and_counted() {
+    use cairn_model::{ChangeKind, ChangeList, PathState};
+
+    let fixture = super::fetch_tests::UnbornRepository::new(&format!(
+        "cairn-local-untracked-{}",
+        std::process::id()
+    ));
+    for (path, text) in [
+        ("new/one.txt", "one\n"),
+        ("new/deeper/two.txt", "two\n"),
+        ("top.txt", "top\n"),
+    ] {
+        let at = fixture.path.join(path);
+        if let Some(parent) = at.parent() {
+            std::fs::create_dir_all(parent)
+                .unwrap_or_else(|error| panic!("creating {}: {error}", parent.display()));
+        }
+        std::fs::write(&at, text).unwrap_or_else(|error| panic!("writing {path}: {error}"));
+    }
+    let (handle, mut updates) = super::diff_tests::opened(&fixture.path);
+    handle.submit(Request::Refresh);
+    let seen = collect_until(&mut updates, |update| {
+        matches!(update, Update::Status { .. } | Update::RefreshFailed { .. })
+    });
+    let Some(Update::Status { changes }) = seen.last() else {
+        panic!("no status arrived: {seen:?}");
+    };
+    let rows: Vec<(String, ChangeKind, PathState)> = (0..changes.len(ChangeList::Unstaged))
+        .filter_map(|row| changes.get(ChangeList::Unstaged, row))
+        .map(|change| {
+            (
+                change.path.display().into_owned(),
+                change.kind,
+                change.state,
+            )
+        })
+        .collect();
+    let untracked = |path: &str| (path.to_owned(), ChangeKind::Added, PathState::Untracked);
+    assert_eq!(
+        rows,
+        [
+            untracked("new/deeper/two.txt"),
+            untracked("new/one.txt"),
+            untracked("top.txt")
+        ]
+    );
+    assert_eq!(changes.len(ChangeList::Staged), 0);
+    assert_eq!(changes.paths(), 3);
+    drop(handle);
+}
+
+/// R9's filter, through the real boundary: answered on the repository thread for the window's
+/// own lists, shared, and a newer text superseding the older, whose rows never arrive. Caught
+/// by: lists copied on the way (an answer the window cannot tell is for its lists), or a
+/// filter not numbered in its lane (both answers arrive).
+#[test]
+fn local_changes_filter_is_answered_on_a_worker_for_the_windows_own_lists() {
+    use std::sync::Arc;
+
+    use cairn_model::{ChangeList, LocalChanges, RepoPath, StatusEntry};
+
+    let (handle, mut updates) = super::diff_tests::checkout();
+    let lists = Arc::new(LocalChanges::new(WorkingTreeStatus::Listed(
+        ["src/a.rs", "src/b.rs", "top.txt"]
+            .into_iter()
+            .map(|path| StatusEntry::Untracked(RepoPath::from(path)))
+            .collect(),
+    )));
+    for text in ["src", "top"] {
+        handle.submit(Request::FilterLocalChanges {
+            changes: Arc::clone(&lists),
+            text: text.to_owned(),
+        });
+    }
+    let seen = collect_until(
+        &mut updates,
+        |update| matches!(update, Update::FilteredLocalChanges { text, .. } if text == "top"),
+    );
+    assert!(
+        !seen.iter().any(
+            |update| matches!(update, Update::FilteredLocalChanges { text, .. } if text == "src")
+        ),
+        "the superseded filter's rows arrived: {seen:?}"
+    );
+    match seen.last() {
+        Some(Update::FilteredLocalChanges { changes, rows, .. }) => {
+            assert!(Arc::ptr_eq(changes, &lists), "the lists were copied");
+            assert_eq!(rows.of(ChangeList::Unstaged), [2]);
+            assert!(rows.of(ChangeList::Staged).is_empty());
+        }
+        other => panic!("{other:?}"),
+    }
     drop(handle);
 }

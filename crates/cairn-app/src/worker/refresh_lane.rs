@@ -21,7 +21,7 @@ use std::sync::mpsc::Receiver;
 
 use cairn_git::ops::GitBinary;
 use cairn_git::{Error, Repository, SharedRepository};
-use cairn_model::RefsSnapshot;
+use cairn_model::{LocalChanges, RefsSnapshot};
 
 use super::epoch::{Epoch, Epochs};
 use super::pool::Outbox;
@@ -112,7 +112,13 @@ fn status(repo: &Repository, epoch: Epoch, serving: &Refreshing<'_>) {
         return;
     }
     match repo.status(serving.git, &serving.epochs.watch(epoch)) {
-        Ok(status) => serving.outbox.send(Some(epoch), Update::Status { status }),
+        // Laid out as Local Changes' lists here, off the UI thread: a sort of every path.
+        Ok(status) => serving.outbox.send(
+            Some(epoch),
+            Update::Status {
+                changes: Arc::new(LocalChanges::new(status)),
+            },
+        ),
         // Ended by a close, which the cancel saw: not a failure.
         Err(Error::StatusCancelled) => {}
         Err(error) => serving.outbox.send(

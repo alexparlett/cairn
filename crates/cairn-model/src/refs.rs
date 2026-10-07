@@ -2,6 +2,7 @@
 //! stash list, and where `HEAD` is — what `git for-each-ref`, `git symbolic-ref`,
 //! `git rev-parse` and `git stash list` answer, as plain data.
 
+use crate::text_filter::{BETWEEN_CHECKS, Folded};
 use crate::{Oid, RefName};
 
 /// Which of the three namespaces a listed ref lives in.
@@ -170,6 +171,64 @@ impl RefsSnapshot {
             .ok()
             .and_then(|at| self.refs.get(at))
     }
+
+    /// Whether a history walked from `other` is the one walked from this: the same refs
+    /// naming the same objects (a symbolic ref's target among them), the same `HEAD` and the
+    /// same stash list (PRD R10.4). An upstream's configuration and the count of refs that
+    /// could not be read draw nothing in the graph, so they are left out: a refresh that
+    /// finds only those changed leaves the history alone.
+    pub fn walks_as(&self, other: &Self) -> bool {
+        self.head == other.head
+            && self.stashes == other.stashes
+            && self.refs.len() == other.refs.len()
+            && self.refs.iter().zip(&other.refs).all(|(one, another)| {
+                one.name == another.name
+                    && one.kind == another.kind
+                    && one.target == another.target
+                    && one.symbolic == another.symbolic
+            })
+    }
+
+    /// The refs and stashes whose names hold `text`, by index in [`Self::refs`] and
+    /// [`Self::stashes`], in order — or `None` when `keep_going` says to stop, asked before
+    /// the first and every few thousand after. The sidebar's filter (PRD R8.3): a ref by its
+    /// name past its namespace (`main`, `origin/main`, `v1.0`), a stash by its message; the
+    /// text anywhere in it, case ignored, as the Changes tab's file filter reads its text. An
+    /// empty `text` matches everything. A pass over every ref, so a worker's.
+    pub fn matching(
+        &self,
+        text: &str,
+        mut keep_going: impl FnMut() -> bool,
+    ) -> Option<RefsMatched> {
+        let wanted = Folded::of(text);
+        let mut matched = RefsMatched::default();
+        for (index, listed) in self.refs.iter().enumerate() {
+            if index % BETWEEN_CHECKS == 0 && !keep_going() {
+                return None;
+            }
+            if wanted.found_in(listed.name.shorthand().as_bytes()) {
+                matched.refs.push(u32::try_from(index).unwrap_or(u32::MAX));
+            }
+        }
+        for (index, stash) in self.stashes.iter().enumerate() {
+            if index % BETWEEN_CHECKS == 0 && !keep_going() {
+                return None;
+            }
+            if wanted.found_in(stash.message.as_bytes()) {
+                matched
+                    .stashes
+                    .push(u32::try_from(index).unwrap_or(u32::MAX));
+            }
+        }
+        Some(matched)
+    }
+}
+
+/// What [`RefsSnapshot::matching`] leaves: indices into the snapshot's refs and stashes.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RefsMatched {
+    pub refs: Vec<u32>,
+    pub stashes: Vec<u32>,
 }
 
 #[cfg(test)]
@@ -332,6 +391,144 @@ mod tests {
                 ahead: 0,
                 behind: 0
             }
+        );
+    }
+
+    fn snapshot_of(names: &[&str], stashes: &[&str]) -> RefsSnapshot {
+        RefsSnapshot {
+            refs: names
+                .iter()
+                .enumerate()
+                .map(|(n, name)| {
+                    let kind = if name.starts_with("refs/heads/") {
+                        RefKind::LocalBranch
+                    } else if name.starts_with("refs/remotes/") {
+                        RefKind::RemoteTracking
+                    } else {
+                        RefKind::Tag
+                    };
+                    listed(name, kind, RefTarget::Commit(oid(n as u8 + 1)))
+                })
+                .collect(),
+            head: HeadState::Branch(RefName::new("refs/heads/main")),
+            stashes: stashes
+                .iter()
+                .enumerate()
+                .map(|(index, message)| StashEntry {
+                    index,
+                    message: (*message).to_owned(),
+                    commit: oid(100 + index as u8),
+                    base: oid(1),
+                })
+                .collect(),
+            unreadable: 0,
+        }
+    }
+
+    /// PRD R10.4: a refresh reopens the history when a ref moved, appeared or went, a
+    /// symbolic ref was retargeted, `HEAD`'s state changed or the stash list did, and not
+    /// for what the graph does not draw — an upstream's configuration, the count of refs
+    /// that could not be read. Caught by: comparing whole snapshots (an upstream edit reopens
+    /// the history), or leaving any drawn part out (a moved ref, a checkout that moves no
+    /// ref, a dropped stash leave the graph stale).
+    #[test]
+    fn a_walk_is_the_same_unless_what_it_draws_changed() {
+        let base = snapshot_of(&["refs/heads/main", "refs/heads/topic"], &["On main: wip"]);
+        assert!(base.walks_as(&base.clone()));
+
+        let mut tracked = base.clone();
+        tracked.refs[0].upstream = Some(Upstream::Gone {
+            name: RefName::new("refs/remotes/origin/main"),
+        });
+        let mut broken = base.clone();
+        broken.unreadable = 3;
+        for same in [tracked, broken] {
+            assert_ne!(same, base);
+            assert!(same.walks_as(&base), "{same:?}");
+        }
+
+        let mut moved = base.clone();
+        moved.refs[1].target = RefTarget::Commit(oid(9));
+        let mut retargeted = base.clone();
+        retargeted.refs[0].symbolic = Some(RefName::new("refs/heads/topic"));
+        let mut checked_out = base.clone();
+        checked_out.head = HeadState::Branch(RefName::new("refs/heads/topic"));
+        let mut stashed = base.clone();
+        stashed.stashes[0].message = "On main: other".to_owned();
+        let mut dropped = base.clone();
+        dropped.stashes.clear();
+        let mut gone = base.clone();
+        gone.refs.pop();
+        let mut renamed = base.clone();
+        renamed.refs[1].name = RefName::new("refs/heads/topic2");
+        let mut rekinded = base.clone();
+        rekinded.refs[1].kind = RefKind::Tag;
+        for changed in [
+            moved,
+            retargeted,
+            checked_out,
+            stashed,
+            dropped,
+            gone,
+            renamed,
+            rekinded,
+        ] {
+            assert!(!changed.walks_as(&base), "{changed:?}");
+            assert!(!base.walks_as(&changed), "{changed:?}");
+        }
+    }
+
+    /// PRD R8.3: the sidebar's filter keeps the refs whose name past its namespace holds the
+    /// text, and the stashes whose message does, case ignored; an empty text keeps
+    /// everything; a stop asked for is honoured. Caught by: matching the full name (`heads`
+    /// would keep every branch), a case-sensitive match, stashes left out, or a filter that
+    /// runs on after it was told to stop.
+    #[test]
+    fn the_sidebar_filter_keeps_the_names_that_hold_its_text() {
+        let snapshot = snapshot_of(
+            &[
+                "refs/heads/Feature/Login",
+                "refs/heads/main",
+                "refs/remotes/origin/feature/login",
+                "refs/tags/v1.0",
+            ],
+            &["On main: login wip", "WIP on main: other"],
+        );
+        assert_eq!(
+            snapshot.matching("LOGIN", || true),
+            Some(RefsMatched {
+                refs: vec![0, 2],
+                stashes: vec![0],
+            })
+        );
+        assert_eq!(
+            snapshot.matching("heads", || true),
+            Some(RefsMatched::default()),
+            "the namespace is not part of a name"
+        );
+        assert_eq!(
+            snapshot.matching("origin/", || true),
+            Some(RefsMatched {
+                refs: vec![2],
+                stashes: Vec::new(),
+            })
+        );
+        assert_eq!(
+            snapshot.matching("", || true),
+            Some(RefsMatched {
+                refs: vec![0, 1, 2, 3],
+                stashes: vec![0, 1],
+            })
+        );
+        assert_eq!(snapshot.matching("main", || false), None);
+        let mut asked = 0;
+        let stopped_at_stashes = snapshot.matching("main", || {
+            asked += 1;
+            asked < 2
+        });
+        assert_eq!(
+            stopped_at_stashes, None,
+            "the stashes' pass ran on after a stop"
         );
     }
 }

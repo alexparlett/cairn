@@ -1,10 +1,8 @@
 //! What a commit or a comparison changed, and how the rename search that paired its files
 //! went — the answer to the changes query, as the window and the views receive it.
 
+use crate::text_filter::{BETWEEN_CHECKS, Folded};
 use crate::{ChangeStatus, ChangedFile, CommitDetails};
-
-/// How many files [`ChangeSet::files_matching`] matches between two asks of its `keep_going`.
-const BETWEEN_CHECKS: usize = 4_096;
 
 /// How rename and copy detection went, so a view can say when it was cut short (R2.2).
 ///
@@ -88,39 +86,6 @@ impl ChangeSet {
             }
         }
         Some(matched)
-    }
-}
-
-/// A filter's text with its case folded, and how to find it in a path.
-struct Folded {
-    text: String,
-    ascii: bool,
-}
-
-impl Folded {
-    fn of(text: &str) -> Self {
-        Self {
-            text: text.to_lowercase(),
-            ascii: text.is_ascii(),
-        }
-    }
-
-    /// Whether the text occurs in `path`, case folded on both sides. An ASCII text in an
-    /// ASCII path is compared in place; anything else is read and lowercased first, which
-    /// allocates only for such a path.
-    fn found_in(&self, path: &[u8]) -> bool {
-        if self.text.is_empty() {
-            return true;
-        }
-        if self.ascii && path.is_ascii() {
-            let wanted = self.text.as_bytes();
-            return path
-                .windows(wanted.len())
-                .any(|window| window.eq_ignore_ascii_case(wanted));
-        }
-        String::from_utf8_lossy(path)
-            .to_lowercase()
-            .contains(&self.text)
     }
 }
 

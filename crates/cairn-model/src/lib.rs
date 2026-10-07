@@ -31,6 +31,7 @@ mod row_labels;
 mod rows_page;
 mod secret;
 mod status;
+mod text_filter;
 
 pub use askpass::{AskpassToken, HELPER_PROGRAM, SOCKET_VARIABLE, TOKEN_VARIABLE};
 pub use change_set::{ChangeSet, RenameDetection};
@@ -58,7 +59,8 @@ pub use patch::{PATCH_CONTEXT, Patch, emit_patch};
 pub use patch_apply::{PatchApplyError, apply_patch, apply_patch_in_reverse};
 pub use prompt::{PromptKind, prompt_subject};
 pub use refs::{
-    AheadBehind, HeadState, Ref, RefKind, RefTarget, RefsSnapshot, StashEntry, Upstream,
+    AheadBehind, HeadState, Ref, RefKind, RefTarget, RefsMatched, RefsSnapshot, StashEntry,
+    Upstream,
 };
 pub use remote::RemoteSummary;
 pub use repo_path::RepoPath;

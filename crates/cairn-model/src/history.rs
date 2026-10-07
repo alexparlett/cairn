@@ -212,6 +212,18 @@ impl History {
         }
     }
 
+    /// An empty history whose author index already has room for `authors` names, so the
+    /// first that many appended never rehash it. What a reopen builds from the history it
+    /// replaces (`History::author_count`): the same repository names about as many authors
+    /// again, and growing the index back up through every doubling would rehash every
+    /// author so far, on the UI thread, inside an append (phase 04 QA, RR1).
+    pub fn with_author_capacity(authors: usize) -> Self {
+        Self {
+            author_index: HashMap::with_capacity(authors),
+            ..Self::new()
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.rows.len()
     }
@@ -958,6 +970,53 @@ mod tests {
             .map(|&(s, a, p, t)| (s.to_owned(), a.to_owned(), p, t))
             .collect();
         assert_eq!(drawn, expected);
+    }
+
+    /// Phase 04 QA's RR1, handed to phase 06: a history built for a reopen from the one it
+    /// replaces has room in its author index for as many authors as that one named, so
+    /// appending them all again never grows (and so never rehashes) the index; a history
+    /// built empty grows through its doublings. Caught by: `with_author_capacity` ignoring
+    /// its count (the index starts empty and doubles its way up), or a reopen that builds
+    /// with `History::new`.
+    #[test]
+    fn a_history_sized_for_its_authors_appends_them_without_growing_its_index() {
+        let authors: Vec<String> = (0..1_000).map(|n| format!("Author {n}")).collect();
+        let page = || {
+            let mut page = RowsPage::new();
+            for (n, author) in authors.iter().enumerate() {
+                let mut bytes = [0u8; 20];
+                bytes[..8].copy_from_slice(&(n as u64).to_be_bytes());
+                page.push(
+                    GraphRow::new(Oid::from_bytes(&bytes).unwrap(), Lane::new(0), Vec::new()),
+                    commit("s", author, 1),
+                );
+            }
+            page
+        };
+        let mut old = History::new();
+        let empty = old.author_index.capacity();
+        old.append(page()).unwrap();
+        assert_eq!(old.author_count(), authors.len());
+        assert!(
+            old.author_index.capacity() > empty,
+            "an empty history's index did not grow, so this test measures nothing"
+        );
+
+        let mut reopened = History::with_author_capacity(old.author_count());
+        assert!(reopened.is_empty());
+        let sized = reopened.author_index.capacity();
+        assert!(
+            sized >= authors.len(),
+            "room for {sized} of {} authors",
+            authors.len()
+        );
+        reopened.append(page()).unwrap();
+        assert_eq!(reopened.author_count(), authors.len());
+        assert_eq!(
+            reopened.author_index.capacity(),
+            sized,
+            "the index grew while the authors it was sized for were appended"
+        );
     }
 
     /// Three names filed under one index key, through the path every author takes, each

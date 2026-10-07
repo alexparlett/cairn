@@ -1658,7 +1658,19 @@ top, scrolled deep and at the end of a 1,000-line and a 100,000-line file — th
 number at each place for both — and the end is the projection's last row, so the view's
 length is the projection's (`only_a_viewport_of_diff_rows_is_built_however_long_the_file`,
 criterion C9 for unified rows, the twin of
-`only_a_viewport_of_rows_is_built_however_long_the_history`). A unified line row is the old and the new line number, right-aligned, small and on the
+`only_a_viewport_of_rows_is_built_however_long_the_history`) and the room after it.
+**Room after the last row** (`crates/cairn-ui/src/end_room.rs`, the user's report of
+2026-10-07): Freya's `VirtualScrollView` draws its horizontal scrollbar over the bottom
+16 px of the viewport and lays out no padding, so the diff view, the Commit tab's one list
+(header, files and the rows opened under them), the Changes tab's file list and Local
+Changes' two lists each count empty rows after their last — `with_end_room`, at least
+`END_ROOM` (20 px) in whole rows: one 24 px row, two 17 px diff rows — which build empty and
+come after every row an index names, so no search, scroll to a row or `Expansion` placement
+sees them; End in the diff view reaches past them. Scrolled to the end, the last row is
+clear of the bar (`scrolled_to_the_end_the_last_row_is_clear_of_the_horizontal_scrollbar`,
+`scrolled_to_the_end_the_last_file_is_clear_of_the_horizontal_scrollbar`,
+`scrolled_to_the_end_each_lists_last_row_is_clear_of_the_horizontal_scrollbar`, and the
+Commit tab's end in `only_a_viewport_of_rows_is_built_however_many_files_are_open`). A unified line row is the old and the new line number, right-aligned, small and on the
 plain ground, a one-pixel separator, then — tinted for a change, from the separator to the
 row's end — the line, a few pixels in. There is no marker column (user decision,
 2026-10-04, reversing 2026-10-03's: Fork's default, which draws none). A removed line

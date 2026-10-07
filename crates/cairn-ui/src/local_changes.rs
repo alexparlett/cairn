@@ -381,7 +381,9 @@ impl Component for ListSection {
                     .on_key_down(keyboard(&data, controller))
                     .child(
                         VirtualScrollView::new_with_data_controlled(data, build_row, controller)
-                            .length(self.rows)
+                            // Room for the horizontal scrollbar after the last row
+                            // (`end_room`); a row past the list's own builds empty.
+                            .length(crate::end_room::with_end_room(self.rows, DETAIL_ROW_HEIGHT))
                             .item_size(DETAIL_ROW_HEIGHT)
                             // The arrows move the path chosen, not the viewport.
                             .scroll_with_arrows(false)

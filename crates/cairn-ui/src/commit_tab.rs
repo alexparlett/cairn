@@ -452,7 +452,8 @@ impl Component for TabBody {
             view_width: *width.read(),
             scroll: controller,
         };
-        let length = data.content.length();
+        // The rows after the last are room for the horizontal scrollbar (`end_room`).
+        let length = crate::end_room::with_end_room(data.content.length(), DETAIL_ROW_HEIGHT);
         let border = colours().border_focus;
 
         rect()
@@ -568,6 +569,10 @@ fn build_row(item: VirtualItem, data: &TabData) -> Element {
         .main_align(Alignment::Center)
         .padding(Gaps::new(0., PADDING, 0., PADDING));
     let content = &data.content;
+    if item.index >= content.length() {
+        // Room for the horizontal scrollbar after the last row (`end_room`).
+        return row.into();
+    }
     let Some(at) = item.index.checked_sub(content.lines.len()) else {
         return match content.lines.get(item.index) {
             Some(Line::FilesBar) => row.child(files_bar(content)).into(),

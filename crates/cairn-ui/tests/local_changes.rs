@@ -10,7 +10,7 @@ use cairn_model::{
 };
 use cairn_ui::{
     DETAIL_ROW_HEIGHT, FILTERING, GLYPH_SIZE, LIST_HEADER_HEIGHT, LocalChangesList,
-    NO_PATH_MATCHES, RefGlyph, STAGED_CAPTION, ShownFiles, UNSTAGED_CAPTION,
+    NO_PATH_MATCHES, RefGlyph, SCROLLBAR_THICKNESS, STAGED_CAPTION, ShownFiles, UNSTAGED_CAPTION,
 };
 use freya::engine::prelude::{FontCollection, ImageInfo, raster_n32_premul};
 use freya::prelude::*;
@@ -589,6 +589,50 @@ fn a_status_of_50000_paths_builds_one_viewport_filtered_or_not() {
             .iter()
             .any(|(path, visible)| *visible && *path == last_unstaged),
         "the end of Unstaged is not its last row, {last_unstaged}"
+    );
+}
+
+/// The user's report (2026-10-07): scrolled to the end, each list's last row sits above the
+/// horizontal scrollbar Freya draws over the bottom of that list, never under it — Unstaged's
+/// above the Staged heading, Staged's above the view's bottom edge. Caught by: a list exactly
+/// as long as its rows (its last row flush with the bottom of the list).
+#[test]
+fn scrolled_to_the_end_each_lists_last_row_is_clear_of_the_horizontal_scrollbar() {
+    let changes = many(400);
+    let last = |list: ChangeList| {
+        changes
+            .get(list, changes.len(list) - 1)
+            .map(|change| change.path.display().into_owned())
+            .unwrap_or_default()
+    };
+    let (last_unstaged, last_staged) = (last(ChangeList::Unstaged), last(ChangeList::Staged));
+    let (mut test, _, _) = launch(changes);
+    test.scroll((100., 120.), (0., -1e7));
+    test.scroll((100., f64::from(HEIGHT) - 60.), (0., -1e7));
+    test.sync_and_update();
+    let bottom_of = |test: &TestingRunner, path: &str| {
+        let centre = y_of(test, path)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("{path} is not drawn at the end of its list"));
+        centre + DETAIL_ROW_HEIGHT / 2.
+    };
+    let staged_heading_top = y_of(&test, STAGED_CAPTION)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("no Staged heading"))
+        - LIST_HEADER_HEIGHT / 2.;
+    let unstaged_bottom = bottom_of(&test, &last_unstaged);
+    assert!(
+        unstaged_bottom <= staged_heading_top - SCROLLBAR_THICKNESS,
+        "Unstaged's last row ends at {unstaged_bottom}, under the scrollbar over the list's \
+         bottom (the Staged heading at {staged_heading_top})"
+    );
+    let staged_bottom = bottom_of(&test, &last_staged);
+    assert!(
+        staged_bottom <= HEIGHT - SCROLLBAR_THICKNESS,
+        "Staged's last row ends at {staged_bottom}, under the scrollbar over the bottom of the \
+         {HEIGHT} px view"
     );
 }
 

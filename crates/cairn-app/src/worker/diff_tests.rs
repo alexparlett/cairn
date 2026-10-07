@@ -29,7 +29,7 @@ use super::request::{
 use super::startup::Startup;
 
 /// The boundary over `repository`, with this process's `git`.
-fn opened(repository: &Path) -> (RepositoryHandle, Updates) {
+pub(super) fn opened(repository: &Path) -> (RepositoryHandle, Updates) {
     match open_with(repository, Startup::of_this_process()) {
         Ok((handle, updates, _)) => (handle, updates),
         Err(error) => panic!("starting the worker: {error}"),

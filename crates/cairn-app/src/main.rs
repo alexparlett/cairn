@@ -8,6 +8,7 @@ mod diff_state;
 mod fetch_state;
 mod file_filter;
 mod history_state;
+mod ref_find;
 mod refresh;
 mod refresh_state;
 mod repository_path;
@@ -15,6 +16,10 @@ mod row_finder;
 mod selection;
 mod session;
 mod shortcuts;
+mod sidebar_pane;
+mod sidebar_state;
+#[cfg(test)]
+mod sidebar_tests;
 mod status_text;
 mod window;
 #[cfg(test)]
@@ -91,6 +96,8 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let refreshed = use_state(refresh_state::RefreshState::default);
     // What the title bar calls the repository, once the worker has opened it.
     let repository = use_state(|| None::<String>);
+    // The sidebar's state, for the session (refs-and-status R8).
+    let sidebar = sidebar_state::SidebarView::used();
     let view = View {
         rows,
         progress,
@@ -113,6 +120,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         held_keys,
         refreshed,
         repository,
+        sidebar,
     };
 
     let opened = use_hook(|| {

@@ -70,6 +70,13 @@ impl Progress {
         self.in_flight = true;
     }
 
+    /// A find in the sidebar was stopped (refs-and-status R8.5): no page is waited for, so the
+    /// list's next visibility change may ask one. A page the find laid out before it stopped
+    /// may still arrive, and is appended as any page is.
+    pub fn stopped_finding(&mut self) {
+        self.in_flight = false;
+    }
+
     /// `loaded` is the total rows held once the page has been added. Once the history can
     /// hold no more ([`Self::appended`]) or the stream has ended, the failure stands.
     pub fn received(&mut self, widest_lane: usize, complete: bool, loaded: usize) {

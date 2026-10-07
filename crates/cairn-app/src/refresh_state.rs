@@ -11,6 +11,7 @@
 use std::sync::Arc;
 
 use cairn_model::{AheadBehind, RefName, RefsSnapshot, WorkingTreeStatus};
+use cairn_ui::BranchCounts;
 
 use crate::worker::{Refreshed, Retired};
 
@@ -41,7 +42,7 @@ impl<T> Kept<T> {
 #[derive(Debug, Default)]
 pub struct RefreshState {
     refs: Kept<Arc<RefsSnapshot>>,
-    ahead_behind: Kept<Vec<(RefName, AheadBehind)>>,
+    ahead_behind: Kept<BranchCounts>,
     status: Kept<WorkingTreeStatus>,
 }
 
@@ -51,19 +52,16 @@ impl RefreshState {
         self.refs.last.as_ref()
     }
 
-    /// Each local branch's distance from its upstream, if counted.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the sidebar reads it from phase 08 on")
-    )]
-    pub fn ahead_behind(&self) -> Option<&[(RefName, AheadBehind)]> {
-        self.ahead_behind.last.as_deref()
+    /// Each local branch's distance from its upstream, if counted: shared with the sidebar,
+    /// which draws each branch's.
+    pub fn ahead_behind(&self) -> Option<&BranchCounts> {
+        self.ahead_behind.last.as_ref()
     }
 
     /// `branch`'s distance from its upstream, if it was counted: a binary search, since the
     /// counts come in the snapshot's order, by name.
     pub fn ahead_behind_of(&self, branch: &RefName) -> Option<AheadBehind> {
-        let counts = self.ahead_behind.last.as_deref()?;
+        let counts = self.ahead_behind.last.as_deref()?.as_slice();
         counts
             .binary_search_by(|(name, _)| name.as_str().as_bytes().cmp(branch.as_str().as_bytes()))
             .ok()
@@ -76,14 +74,8 @@ impl RefreshState {
         self.status.last.as_ref()
     }
 
-    /// Why the last read of `what` failed, while no answer has arrived since.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the sidebar and Local Changes say so from phases 08-09 on"
-        )
-    )]
+    /// Why the last read of `what` failed, while no answer has arrived since: the sidebar says
+    /// the refs'.
     pub fn failure(&self, what: Refreshed) -> Option<&str> {
         match what {
             Refreshed::Refs => self.refs.failure.as_deref(),
@@ -100,7 +92,7 @@ impl RefreshState {
     /// Keeps `counts`, handing back those they replace to be freed on a worker.
     pub fn ahead_behind_arrived(&mut self, counts: Vec<(RefName, AheadBehind)>) -> Option<Retired> {
         self.ahead_behind
-            .arrived(counts)
+            .arrived(Arc::new(counts))
             .and_then(Retired::ahead_behind)
     }
 

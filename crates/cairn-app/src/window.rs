@@ -6,7 +6,8 @@ use cairn_model::{History, RemoteSummary, RowContent, RowId, Secret, Upstream, W
 use cairn_ui::accelerators::{self, HeldKeys, Scope};
 use cairn_ui::{
     ChangeCursor, CommitRow, CredentialPrompt, DETAIL_STRIP_HEIGHT, DetailTab, DiffSettings,
-    HistoryHeader, HistoryList, ROW_HEIGHT, RowRender, StatusBox, Tracking, current_branch,
+    HistoryHeader, HistoryList, LOCAL_CHANGES_CAPTION, MainView, ROW_HEIGHT, RowRender, StatusBox,
+    Tracking, current_branch,
 };
 use freya::prelude::*;
 
@@ -16,8 +17,10 @@ use crate::fetch_state::{FetchRefusal, FetchStatus, PromptView};
 use crate::history_state::{Progress, Status};
 use crate::refresh_state::RefreshState;
 use crate::selection::Pair;
+use crate::sidebar_pane::SidebarPane;
+use crate::sidebar_state::{SIDEBAR_MIN_WIDTH, SidebarView};
 use crate::worker::{Replier, Reply, Request};
-use crate::{PAGE_ROWS, selection, shortcuts, status_text};
+use crate::{PAGE_ROWS, ref_find, selection, shortcuts, status_text};
 
 /// The detail pane's height until the splitter is dragged.
 pub const PANE_HEIGHT: f32 = 260.0;
@@ -25,6 +28,10 @@ pub const PANE_HEIGHT: f32 = 260.0;
 const PANE_MIN_HEIGHT: f32 = 90.0;
 /// The least the commit list keeps when the window is squeezed.
 const LIST_MIN_HEIGHT: f32 = 80.0;
+/// The least the main region keeps beside the sidebar when the window is squeezed.
+const MAIN_MIN_WIDTH: f32 = 240.0;
+/// Said in the main region while Local Changes is chosen, until its lists are built.
+pub const LOCAL_CHANGES_PLACEHOLDER: &str = "Local Changes lists the working tree's changes.";
 
 /// The view state the window is drawn from. Handles, not values: the window
 /// subscribes to what it reads.
@@ -68,6 +75,8 @@ pub struct View {
     /// What the title bar calls the repository, once the worker has opened it
     /// (`Update::Opened`).
     pub repository: State<Option<String>>,
+    /// The sidebar: its rows, the filter, what the main region shows, a press's find.
+    pub sidebar: SidebarView,
 }
 
 impl std::fmt::Debug for View {
@@ -106,6 +115,21 @@ pub fn window(
     });
     // Coming back to the window reads the refs and the working tree again (R10.1).
     crate::refresh::on_focus_gained(submit.clone());
+    // A scroll of the list supersedes a find in the sidebar (R8.5): subscribed to the list's
+    // scroll alone, and acting only while a find looks.
+    let stopping = submit.clone();
+    use_side_effect(move || {
+        let (_, y): (i32, i32) = view.history_scroll.into();
+        let away = view
+            .sidebar
+            .finding
+            .peek()
+            .as_ref()
+            .is_some_and(|find| ref_find::scrolled_away(find, y));
+        if away {
+            ref_find::superseded(view, stopping.as_deref());
+        }
+    });
 
     let list = rect()
         .width(Size::fill())
@@ -154,8 +178,37 @@ pub fn window(
                 .as_ref()
                 .map(|refusal| banner(status_text::refusal_line(refusal), false)),
         )
-        .child(split(list, DetailPane::new(view, submit).into(), view))
+        .child(beside(
+            SidebarPane::new(view, submit.clone()).into(),
+            match *view.sidebar.main.read() {
+                MainView::AllCommits => split(list, DetailPane::new(view, submit).into(), view),
+                MainView::LocalChanges => notice(LOCAL_CHANGES_PLACEHOLDER, LOCAL_CHANGES_CAPTION),
+            },
+            view,
+        ))
         .maybe_child(prompt.map(|prompt| dialog(prompt, &fetch, view.prompt, answer)))
+        .into()
+}
+
+/// The sidebar left of the main region, behind a draggable splitter (refs-and-status R8.1).
+fn beside(sidebar: Element, main: Element, view: View) -> Element {
+    let mut width = view.sidebar.width;
+    // Peeked: the width only matters when the split is laid out anew, and reading it would
+    // redraw the window on every step of a drag.
+    let at = *width.peek();
+    ResizableContainer::new()
+        .direction(Direction::Horizontal)
+        .panel(
+            ResizablePanel::new(PanelSize::px(at))
+                .min_size(SIDEBAR_MIN_WIDTH)
+                .on_resized(move |dragged: f32| width.set(dragged))
+                .child(sidebar),
+        )
+        .panel(
+            ResizablePanel::new(PanelSize::percent(100.))
+                .min_pixels(MAIN_MIN_WIDTH)
+                .child(main),
+        )
         .into()
 }
 
@@ -264,13 +317,22 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     .also_selected(second)
     .held(view.held_keys)
     .controller(view.history_scroll)
-    // Choosing a row asks what it changed; the pane draws the answer for that row alone.
-    .on_select(move |id: RowId| selection::choose(id, view, choosing.as_deref()))
+    // Choosing a row asks what it changed; the pane draws the answer for that row alone. It
+    // supersedes a find in the sidebar, and the entry pressed there is let go of.
+    .on_select(move |id: RowId| {
+        ref_find::row_chosen(view, choosing.as_deref());
+        selection::choose(id, view, choosing.as_deref());
+    })
     // A row pressed with the table's extending chord is the second commit of a comparison.
     .on_extend(move |(id, index): (RowId, usize)| {
+        ref_find::row_chosen(view, extending.as_deref());
         selection::extend(id, index, view, extending.as_deref());
     })
     .on_reach_end(move |()| {
+        // A find pages the walk itself; a page asked here would supersede it.
+        if view.sidebar.finding.peek().is_some() {
+            return;
+        }
         // `wants_more` debounces: every `submit` supersedes. `peek`, not `read`: reading here
         // subscribes the window to the progress it writes, and loops.
         if !progress.peek().wants_more() {
@@ -459,6 +521,11 @@ mod tests {
     use crate::history_state;
 
     const HEIGHT: f32 = 600.;
+    /// Where the main region begins: right of the sidebar at its opening width and the
+    /// splitter's handle. The window is as wide again as the main region's 800 px.
+    const LEFT: f32 = crate::sidebar_state::SIDEBAR_WIDTH + ResizableContext::HANDLE_SIZE;
+    const LEFT_X: f64 = LEFT as f64;
+    const WINDOW_WIDTH: f32 = LEFT + 800.;
     const PATH: &str = "/home/ada/engine";
 
     fn row(n: usize) -> TestRow {
@@ -555,7 +622,7 @@ mod tests {
         };
         let (mut test, view) = TestingRunner::new(
             app,
-            (800., HEIGHT).into(),
+            (WINDOW_WIDTH, HEIGHT).into(),
             move |runner| {
                 runner.provide_root_context(|| View {
                     rows: State::create(held(initial)),
@@ -582,6 +649,7 @@ mod tests {
                     held_keys: State::create(HeldKeys::default()),
                     refreshed: State::create(RefreshState::default()),
                     repository: State::create(Some("engine".to_owned())),
+                    sidebar: SidebarView::created(),
                 })
             },
             1.,
@@ -1025,8 +1093,11 @@ mod tests {
                 (index, rows.row(index).map(|row| row.lane()).unwrap())
             };
             // Back to the top, then down to the row, so it sits at the top of the list.
-            test.scroll((100., 200.), (0., 1e6));
-            test.scroll((100., 200.), (0., -(index as f64) * f64::from(ROW_HEIGHT)));
+            test.scroll((LEFT_X + 100., 200.), (0., 1e6));
+            test.scroll(
+                (LEFT_X + 100., 200.),
+                (0., -(index as f64) * f64::from(ROW_HEIGHT)),
+            );
             let short = id.short().to_string();
             let centre_y = test
                 .find(|node, element| {
@@ -1042,6 +1113,8 @@ mod tests {
                 let area = node.layout().area;
                 Label::try_downcast(element)
                     .filter(|_| (area.center().y - centre_y).abs() < 1.0)
+                    // The history's, not the sidebar's beside it.
+                    .filter(|_| area.min_x() >= LEFT)
                     .filter(|label| label.text_style_data.font_size != chip_size)
                     .map(|label| (area.min_x(), label.text.to_string()))
             });
@@ -1049,7 +1122,7 @@ mod tests {
 
             let png = test.render();
             let image = Image::from_encoded(png).unwrap();
-            let size = (800, HEIGHT as i32);
+            let size = (WINDOW_WIDTH as i32, HEIGHT as i32);
             let mut surface = raster_n32_premul(size).unwrap();
             surface.canvas().draw_image(&image, (0, 0), None);
             let info = ImageInfo::new_n32_premul(size, None);
@@ -1128,7 +1201,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             subject_left,
-            ROW_PADDING + graph_width(5) + COLUMN_GAP,
+            LEFT + ROW_PADDING + graph_width(5) + COLUMN_GAP,
             "the rows were not drawn with the lanes the history needs"
         );
     }
@@ -1162,7 +1235,7 @@ mod tests {
         );
         assert_eq!(backgrounds(&test, second), backgrounds(&test, third));
 
-        test.click_cursor((100., second as f64 + 5.));
+        test.click_cursor((LEFT_X + 100., second as f64 + 5.));
         assert_ne!(
             backgrounds(&test, second),
             backgrounds(&test, third),
@@ -1177,7 +1250,10 @@ mod tests {
             launch((0..first).map(row).collect(), received(first, false));
         let more = Request::MoreHistory { rows: PAGE_ROWS };
         let scroll_to_end = |test: &mut TestingRunner, rows: usize| {
-            test.scroll((100., 200.), (0., -(rows as f64 * ROW_HEIGHT as f64)));
+            test.scroll(
+                (LEFT_X + 100., 200.),
+                (0., -(rows as f64 * ROW_HEIGHT as f64)),
+            );
         };
 
         test.sync_and_update();
@@ -1189,7 +1265,10 @@ mod tests {
         scroll_to_end(&mut test, first);
         assert_eq!(submitted.borrow().as_slice(), std::slice::from_ref(&more));
 
-        test.scroll((100., 200.), (0., first as f64 * ROW_HEIGHT as f64));
+        test.scroll(
+            (LEFT_X + 100., 200.),
+            (0., first as f64 * ROW_HEIGHT as f64),
+        );
         scroll_to_end(&mut test, first);
         assert_eq!(
             submitted.borrow().len(),
@@ -1215,7 +1294,7 @@ mod tests {
         let (mut test, view, submitted) =
             launch((0..first).map(row).collect(), received(first, false));
         let scroll = |test: &mut TestingRunner, rows: f64| {
-            test.scroll((100., 200.), (0., -(rows * ROW_HEIGHT as f64)));
+            test.scroll((LEFT_X + 100., 200.), (0., -(rows * ROW_HEIGHT as f64)));
         };
 
         scroll(&mut test, first as f64);
@@ -1911,12 +1990,12 @@ mod tests {
                     .map(|_| f64::from(area.center().y))
             })
             .unwrap();
-        test.press_cursor((300., handle));
-        test.move_cursor((300., handle - 80.));
+        test.press_cursor((LEFT_X + 300., handle));
+        test.move_cursor((LEFT_X + 300., handle - 80.));
         test.sync_and_update();
-        test.move_cursor((300., handle - 120.));
+        test.move_cursor((LEFT_X + 300., handle - 120.));
         test.sync_and_update();
-        test.release_cursor((300., handle - 120.));
+        test.release_cursor((LEFT_X + 300., handle - 120.));
         test.sync_and_update();
         let dragged = pane_top(&test);
         assert!(
@@ -3299,7 +3378,7 @@ mod tests {
         // Focus in the diff.
         // Below the strip, the summary and the bar; right of the file list.
         let rows_top = pane_top(&test) + 130.;
-        test.click_cursor((600., f64::from(rows_top)));
+        test.click_cursor((LEFT_X + 600., f64::from(rows_top)));
         test.sync_and_update();
         press_chord(&mut test, Action::NextChange);
         assert_eq!(scrolled_y(view), top_for(0));
@@ -3454,6 +3533,8 @@ mod tests {
                             .iter()
                             .any(|span| span.text.as_ref() == cairn_ui::FILTER_PLACEHOLDER)
                     })
+                    // The Changes tab's, not the sidebar's.
+                    .filter(|_| node.layout().area.min_x() > LEFT)
                     .map(|_| node.layout().area.center())
             })
             .expect("the filter field");
@@ -3654,7 +3735,7 @@ mod tests {
         changes_tab_over(&mut test, view, 3);
         let opened = list_split(&test);
         assert!(
-            (opened - 0.35 * 800.).abs() < 8.,
+            (opened - LEFT - 0.35 * 800.).abs() < 8.,
             "the list opened {opened} px wide in an 800 px pane"
         );
 
@@ -3662,11 +3743,11 @@ mod tests {
         test.press_cursor((f64::from(opened), y));
         test.move_cursor((f64::from(opened) - 40., y));
         test.sync_and_update();
-        test.move_cursor((20., y));
+        test.move_cursor((LEFT_X + 20., y));
         test.sync_and_update();
-        test.release_cursor((20., y));
+        test.release_cursor((LEFT_X + 20., y));
         test.sync_and_update();
-        let narrowest = list_split(&test);
+        let narrowest = list_split(&test) - LEFT;
         assert!(
             (190. ..230.).contains(&narrowest),
             "a drag took the list to {narrowest} px, past its 200 px floor"
@@ -3678,7 +3759,7 @@ mod tests {
             test.sync_and_update();
         }
         assert!(
-            (list_split(&test) - narrowest).abs() < 2.,
+            (list_split(&test) - LEFT - narrowest).abs() < 2.,
             "the width dragged to, {narrowest}, was not kept: {}",
             list_split(&test)
         );

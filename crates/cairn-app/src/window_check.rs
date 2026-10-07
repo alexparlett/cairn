@@ -381,6 +381,7 @@ fn launch(path: &str) -> Harness {
                 held_keys: State::create(cairn_ui::accelerators::HeldKeys::default()),
                 refreshed: State::create(crate::refresh_state::RefreshState::default()),
                 repository: State::create(None),
+                sidebar: crate::sidebar_state::SidebarView::created(),
             })
         },
         1.,

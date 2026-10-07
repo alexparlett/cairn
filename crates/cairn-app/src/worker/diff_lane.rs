@@ -656,6 +656,7 @@ mod tests {
             QueryLane::Changes => DiffQuery::Changes(of),
             QueryLane::FileDiff
             | QueryLane::History
+            | QueryLane::Walk
             | QueryLane::FileFilter
             | QueryLane::Refs
             | QueryLane::AheadBehind

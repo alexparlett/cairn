@@ -11,6 +11,8 @@ mod epoch;
 mod expand_all;
 #[cfg(test)]
 mod fetch_tests;
+#[cfg(test)]
+mod find_tests;
 mod history_lane;
 #[cfg(test)]
 mod lifecycle_tests;

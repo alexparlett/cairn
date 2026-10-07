@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use cairn_model::ShownDiff;
 use cairn_model::{
-    AheadBehind, ChangeSet, ChangedFile, CommandRecord, Context, History, Oid, RefName,
-    RefsMatched, RefsSnapshot, RemoteSummary, RepoPath, RowsPage, WorkingTreeStatus,
+    AheadBehind, ChangeSet, ChangedFile, CommandRecord, Context, Disclosure, History, Oid, RefName,
+    RefsSnapshot, RemoteSummary, RepoPath, RowsPage, SidebarRow, WorkingTreeStatus,
 };
 
 use super::askpass::PromptId;
@@ -190,8 +190,9 @@ struct RetiredAnswers {
     shown: Vec<ShownDiff>,
     history: Option<ReplacedHistory>,
     refs: Option<Arc<RefsSnapshot>>,
-    ahead_behind: Vec<(RefName, AheadBehind)>,
+    ahead_behind: Option<Arc<Vec<(RefName, AheadBehind)>>>,
     status: Option<WorkingTreeStatus>,
+    sidebar: Option<Arc<Vec<SidebarRow>>>,
 }
 
 /// A history a reopen replaced, shared so a request carrying it can be cloned; two are the
@@ -236,14 +237,25 @@ impl Retired {
         }))
     }
 
-    /// Ahead/behind counts the window replaced or never kept; `None` when there are none.
-    pub fn ahead_behind(counts: Vec<(RefName, AheadBehind)>) -> Option<Self> {
+    /// Ahead/behind counts the window replaced or never kept — shared with the sidebar that
+    /// draws them, so freed where the last hold on them goes; `None` when there are none.
+    pub fn ahead_behind(counts: Arc<Vec<(RefName, AheadBehind)>>) -> Option<Self> {
         (!counts.is_empty()).then(|| {
             Self(Box::new(RetiredAnswers {
-                ahead_behind: counts,
+                ahead_behind: Some(counts),
                 ..RetiredAnswers::default()
             }))
         })
+    }
+
+    /// The sidebar's rows the window replaced or never kept, and the snapshot they index,
+    /// which they may be the last hold on.
+    pub fn sidebar(refs: Arc<RefsSnapshot>, rows: Arc<Vec<SidebarRow>>) -> Self {
+        Self(Box::new(RetiredAnswers {
+            refs: Some(refs),
+            sidebar: Some(rows),
+            ..RetiredAnswers::default()
+        }))
     }
 
     /// A status the window replaced or never kept.
@@ -267,6 +279,12 @@ impl Retired {
         self.0.refs.as_deref()
     }
 
+    /// The sidebar's rows let go of, for a test that checks what was handed over.
+    #[cfg(test)]
+    pub fn sidebar_rows(&self) -> Option<&[SidebarRow]> {
+        self.0.sidebar.as_deref().map(Vec::as_slice)
+    }
+
     /// The status let go of, for a test that checks what was handed over.
     #[cfg(test)]
     pub fn working_tree_status(&self) -> Option<&WorkingTreeStatus> {
@@ -276,7 +294,7 @@ impl Retired {
     /// The ahead/behind counts let go of, for a test that checks what was handed over.
     #[cfg(test)]
     pub fn counts(&self) -> &[(RefName, AheadBehind)] {
-        &self.0.ahead_behind
+        self.0.ahead_behind.as_deref().map_or(&[], Vec::as_slice)
     }
 
     /// The change set let go of, for a test that checks what was handed over.
@@ -298,10 +316,22 @@ pub enum Request {
     /// from the refs snapshot the last refresh read on the history thread, or — when none has
     /// been read, or the walk from it fails because one of its commits has gone since — from
     /// one read now, which is answered as [`Update::Refs`] in the history lane before the
-    /// first page.
+    /// first page. Numbered in the walk lane too: every page of the walk it opens is answered
+    /// under that number, so the pages of the walk it replaces are never drawn.
     OpenHistory { rows: usize },
     /// The next `rows` rows; falls back to the cold cursor when no walk is open.
     MoreHistory { rows: usize },
+    /// Finds the row of `target` — a commit's, or a stash's by its stash commit — by paging
+    /// the walk open forward `rows` at a time until a page holds it or the walk ends
+    /// (refs-and-status R8.5): every page answered as [`Update::Rows`], as a scroll's are, so
+    /// the window keeps what scrolling there would and no more (R8.6). History-lane work: the
+    /// next press, scroll or stop supersedes it, and it supersedes the page or find in
+    /// flight. On the repository thread a page at a time, so a filter or a refresh asked
+    /// meanwhile is served between its pages.
+    FindRow { target: Oid, rows: usize },
+    /// Supersedes the find in flight and asks nothing: what a scroll of the list, a row
+    /// chosen in it or a find answered by a page already loaded asks of the history lane.
+    StopFinding,
     /// What `of` changed, answered by [`Update::Changes`]. Supersedes the changes query
     /// and the file diff in flight, and nothing else.
     Changes { of: Comparison },
@@ -342,20 +372,16 @@ pub enum Request {
     /// thread ([`Update::AheadBehind`], [`Update::Status`]), so neither a page nor a diff
     /// queues behind a slow one. A failure is [`Update::RefreshFailed`].
     Refresh,
-    /// Which of `refs`' refs and stashes hold `text` in a name (the sidebar's filter, R8.3),
-    /// answered by [`Update::FilteredRefs`]: a pass over every ref, run on the repository
-    /// thread, numbered in the ref-filter lane so the next keystroke supersedes it and
-    /// nothing else does; `refs` is the window's own snapshot, shared.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the sidebar's filter box asks it from phase 08 on"
-        )
-    )]
+    /// The sidebar's rows for `refs` (R8.1-R8.3): its sections, the refs and stashes whose
+    /// names hold `text`, in folders, as far as `disclosure` opens them
+    /// (`RefsSnapshot::sidebar_rows`), answered by [`Update::FilteredRefs`]. A pass over
+    /// every ref, run on the repository thread, numbered in the ref-filter lane so the next
+    /// keystroke, folder opened or snapshot superseded it and nothing else does; `refs` is
+    /// the window's own snapshot, shared.
     FilterRefs {
         refs: Arc<RefsSnapshot>,
         text: String,
+        disclosure: Arc<Disclosure>,
     },
     /// Fetches `remote` (a configured name or a URL) in the network lane;
     /// its progress and outcome arrive as the `Fetch*` updates, or
@@ -384,7 +410,7 @@ pub enum Request {
     Close,
 }
 
-/// The most lanes one request is numbered in: a refresh's two.
+/// The most lanes one request is numbered in: a refresh's two, and an open's.
 pub(super) const MOST_LANES: usize = 2;
 
 impl Request {
@@ -394,7 +420,10 @@ impl Request {
     /// request does not compile until it is placed.
     pub fn lanes(&self) -> &'static [QueryLane] {
         match self {
-            Self::OpenHistory { .. } | Self::MoreHistory { .. } => &[QueryLane::History],
+            Self::OpenHistory { .. } => &[QueryLane::History, QueryLane::Walk],
+            Self::MoreHistory { .. } | Self::FindRow { .. } | Self::StopFinding => {
+                &[QueryLane::History]
+            }
             Self::Changes { .. } => &[QueryLane::Changes],
             Self::FileDiff(_) | Self::Expand(_) => &[QueryLane::FileDiff],
             Self::FilterFiles { .. } => &[QueryLane::FileFilter],
@@ -521,10 +550,12 @@ pub enum Update {
         what: Refreshed,
         message: String,
     },
-    /// The refs and stashes of the window's snapshot whose names hold `text`, by index.
+    /// The sidebar's rows for `refs`, the snapshot they index, with `text` the filter they
+    /// were laid out for. Superseded by the next ask, so the one read is the latest asked.
     FilteredRefs {
+        refs: Arc<RefsSnapshot>,
         text: String,
-        matched: RefsMatched,
+        rows: Vec<SidebarRow>,
     },
     /// The repository's command log, oldest first, as far back as it keeps.
     CommandLog {
@@ -590,12 +621,13 @@ impl Update {
             }
             Self::Expanded { files, .. } => Retired::of(None, expanded_diffs(files)),
             Self::Refs { snapshot, .. } => Some(Retired::refs(snapshot)),
-            Self::AheadBehind { counts } => Retired::ahead_behind(counts),
+            Self::AheadBehind { counts } => Retired::ahead_behind(Arc::new(counts)),
             Self::Status { status } => Some(Retired::status(status)),
+            // The snapshot may be the last hold on one the window has replaced since.
+            Self::FilteredRefs { refs, rows, .. } => Some(Retired::sidebar(refs, Arc::new(rows))),
             Self::Superseded(retired) => Some(retired),
             Self::Rows { .. }
             | Self::RefreshFailed { .. }
-            | Self::FilteredRefs { .. }
             | Self::Failed { .. }
             | Self::WorkerLost { .. }
             | Self::Remotes { .. }
@@ -642,8 +674,15 @@ mod tests {
             options: DiffOptions::default(),
         };
         for (query, lane) in [
-            (Request::OpenHistory { rows: 1 }, QueryLane::History),
             (Request::MoreHistory { rows: 1 }, QueryLane::History),
+            (
+                Request::FindRow {
+                    target: cairn_model::Oid::from_bytes(&[2; 20]).unwrap(),
+                    rows: 1,
+                },
+                QueryLane::History,
+            ),
+            (Request::StopFinding, QueryLane::History),
             (Request::Changes { of: commit }, QueryLane::Changes),
             (Request::FileDiff(file.clone()), QueryLane::FileDiff),
             (
@@ -682,12 +721,19 @@ mod tests {
                         unreadable: 0,
                     }),
                     text: "main".to_owned(),
+                    disclosure: Arc::new(Disclosure::default()),
                 },
                 QueryLane::RefFilter,
             ),
         ] {
             assert_eq!(query.lanes(), [lane], "{query:?}");
         }
+        // An open is numbered in the history lane, superseding a scroll or a find, and in the
+        // walk lane, so the pages of the walk it replaces are dropped.
+        assert_eq!(
+            Request::OpenHistory { rows: 1 }.lanes(),
+            [QueryLane::History, QueryLane::Walk]
+        );
         // A refresh is numbered in the refs and ahead/behind lanes and nothing else: no page,
         // no diff, no filter is superseded by one, and no status (R10.3 as amended).
         assert_eq!(

@@ -55,9 +55,12 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                 (history.len(), held)
             };
             progress.write().appended(widest, complete, loaded, held);
+            // A find in the sidebar looks through the rows that arrived (R8.5).
+            crate::ref_find::pages_arrived(view, Some(worker.submit));
         }
         Update::Failed { message } | Update::WorkerLost { message } => {
             progress.write().failed(message);
+            crate::ref_find::failed(view);
         }
         Update::Remotes { remotes: listed } => remotes.set(listed),
         Update::Opened { name } => repository.set(Some(name)),
@@ -90,10 +93,18 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         // Kept for the views that draw it (phases 07-08); the snapshot it replaces is freed
         // on a worker. A history the refs no longer draw is reopened.
         Update::Refs { snapshot, reopen } => {
+            // The sidebar's rows are asked for the snapshot that arrived (R8).
+            let mut sidebar = view.sidebar.state;
+            let asked = sidebar.write().refs_arrived(&snapshot);
+            if !worker.closing {
+                (worker.submit)(asked);
+            }
             let replaced = refreshed.write().refs_arrived(snapshot);
             retire(replaced, worker);
             if reopen && !worker.closing {
                 reopen_history(rows, progress, worker);
+                // A find looking in the history it replaced looks in the new one.
+                crate::ref_find::reopened(view, Some(worker.submit));
             }
         }
         Update::AheadBehind { counts } => {
@@ -111,8 +122,13 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             }
             refreshed.write().failed(what, message);
         }
-        // Asked by the sidebar's filter box from phase 08 on, which keeps what it answers.
-        Update::FilteredRefs { .. } => {}
+        // The sidebar's rows, the latest asked: kept with the snapshot they index, the ones
+        // they replace freed on a worker.
+        Update::FilteredRefs { refs, rows, .. } => {
+            let mut sidebar = view.sidebar.state;
+            let replaced = sidebar.write().rows_arrived(refs, rows);
+            retire(replaced, worker);
+        }
         // Beside the fetch in flight, which it leaves as it was; the next press clears it.
         Update::FetchRefused { remote, reason } => {
             refused.set(Some(FetchRefusal { remote, reason }));
@@ -311,6 +327,7 @@ mod tests {
                         change_cursor: State::create(None),
                         refreshed: State::create(crate::refresh_state::RefreshState::default()),
                         repository: State::create(None),
+                        sidebar: crate::sidebar_state::SidebarView::created(),
                     }
                 })
             },
@@ -1065,8 +1082,13 @@ mod tests {
             },
         );
         let submitted: Vec<Request> = asked.submitted.borrow_mut().drain(..).collect();
+        // The sidebar's rows asked for the snapshot first (refs-and-status R8), then the reopen.
         match submitted.as_slice() {
-            [Request::OpenHistory { rows }, Request::Retire(retired)] => {
+            [
+                Request::FilterRefs { .. },
+                Request::OpenHistory { rows },
+                Request::Retire(retired),
+            ] => {
                 assert_eq!(retired.replaced_rows(), Some(3), "not the old rows");
                 assert_eq!(*rows, PAGE_ROWS);
             }
@@ -1101,7 +1123,9 @@ mod tests {
             },
         );
         match asked.submitted.borrow().as_slice() {
-            [Request::Retire(retired)] => assert_eq!(retired.refs_snapshot(), Some(&*first)),
+            [Request::FilterRefs { .. }, Request::Retire(retired)] => {
+                assert_eq!(retired.refs_snapshot(), Some(&*first));
+            }
             other => panic!("expected only the replaced snapshot retired, got {other:?}"),
         }
     }
@@ -1209,7 +1233,10 @@ mod tests {
             "the failure threw the answer away"
         );
         assert_eq!(kept.failure(Refreshed::Status), Some("git status failed"));
-        assert_eq!(kept.ahead_behind(), Some(counts.as_slice()));
+        assert_eq!(
+            kept.ahead_behind().map(|kept| kept.as_slice()),
+            Some(counts.as_slice())
+        );
         assert_eq!(kept.failure(Refreshed::AheadBehind), None);
     }
 

@@ -32,16 +32,17 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::time::Duration;
 
 use cairn_git::{CLOSE_BOUND, SharedRepository};
+use cairn_model::{Disclosure, RefsSnapshot};
 
 use super::askpass::{AcceptorStop, Reply, STOP_DEADLINE, serve_prompts};
 use super::diff_lane::{DiffJob, Serving, serve_diffs};
 use super::discovery::Discovery;
 use super::epoch::{Epoch, Epochs, QueryLane};
-use super::history_lane::{Answering, HistoryLane};
+use super::history_lane::{Answering, Finding, HistoryLane};
 use super::network_lane::{FetchControl, Lane, Operation, serve_network_lane};
 use super::refresh_lane::{RefreshJob, Refreshing, serve_refreshes};
 use super::request::{MOST_LANES, Request, Update};
-use super::routing::{RepositoryJob, Routed, route};
+use super::routing::{Page, RepositoryJob, Routed, route};
 use super::startup::{Backend, Startup};
 use super::wake::{Wake, Woken};
 
@@ -537,6 +538,14 @@ impl RepositoryHandle {
                     let _ = self.refresh.send(RefreshJob::Status { epoch: status });
                 }
             }
+            Routed::OpenHistory { rows } => {
+                if let (Some(epoch), Some(walk)) = (epoch, epoch_of(QueryLane::Walk)) {
+                    let _ = self.jobs.send((
+                        Some(epoch),
+                        RepositoryJob::History(Page::Open { rows, walk }),
+                    ));
+                }
+            }
             Routed::CancelFetch => self.control.cancel(),
             Routed::Repository(job) => {
                 if matches!(job, RepositoryJob::Close) {
@@ -765,11 +774,50 @@ fn serve(
         outbox,
     };
 
-    while let Ok((epoch, job)) = jobs.recv() {
+    // A find in progress (R8.5): one page of it is walked whenever no other job is waiting, so
+    // a filter, a refresh or a free asked meanwhile is served between its pages, and the
+    // next page or find — whose number supersedes it — ends it.
+    let mut finding: Option<(Epoch, Finding)> = None;
+    loop {
+        let next = match finding {
+            Some((epoch, find)) => match jobs.try_recv() {
+                Ok(job) => job,
+                Err(TryRecvError::Empty) => {
+                    finding = (!epochs.is_stopping()
+                        && epochs.is_current(epoch)
+                        && history.find_page(&repo, find, epoch, &answering))
+                    .then_some((epoch, find));
+                    continue;
+                }
+                Err(TryRecvError::Disconnected) => break,
+            },
+            None => match jobs.recv() {
+                Ok(job) => job,
+                Err(_) => break,
+            },
+        };
+        let (epoch, job) = next;
         if epochs.is_stopping() {
             break;
         }
         match job {
+            RepositoryJob::History(Page::Find { target, rows }) => match epoch {
+                Some(epoch) if epochs.is_current(epoch) => {
+                    finding = Some((epoch, Finding { target, rows }));
+                }
+                // Superseded before it was picked up.
+                _ => {}
+            },
+            // Its number superseded the find; there is nothing to walk.
+            RepositoryJob::History(Page::Stop) => finding = None,
+            // An open whose walk is still the window's, superseded in the history lane by a
+            // find or a stop asked straight after it: the walk it replaces is let go of all
+            // the same, so what is asked next pages the new walk, never the old one.
+            RepositoryJob::History(Page::Open { walk, .. })
+                if epochs.is_current(walk) && !epoch.is_some_and(|e| epochs.is_current(e)) =>
+            {
+                history.replace_walk(walk);
+            }
             RepositoryJob::History(page) => match epoch {
                 Some(epoch) if epochs.is_current(epoch) => {
                     history.page(&repo, page, epoch, &answering);
@@ -785,12 +833,13 @@ fn serve(
                 // Superseded by the next refresh before it was picked up.
                 _ => {}
             },
-            RepositoryJob::FilterRefs { refs, text } => {
-                if let Some(epoch) = epoch
-                    && epochs.is_current(epoch)
-                    && let Some(matched) = refs.matching(&text, || epochs.is_current(epoch))
-                {
-                    outbox.send(Some(epoch), Update::FilteredRefs { text, matched });
+            RepositoryJob::FilterRefs {
+                refs,
+                text,
+                disclosure,
+            } => {
+                if let Some(epoch) = epoch {
+                    sidebar_rows(refs, text, &disclosure, epoch, &epochs, outbox);
                 }
             }
             RepositoryJob::ListRemotes => outbox.send(
@@ -818,6 +867,26 @@ fn serve(
             // The epochs were stopped as it was sent; the closing is the caller's.
             RepositoryJob::Close => break,
         }
+    }
+}
+
+/// The sidebar's rows for `refs` (R8.1-R8.3), answered while `epoch` is current: one
+/// superseded before it started, or by the next ask while it runs, stops within a few
+/// thousand refs and sends nothing. The snapshot is the window's own, shared, and handed back
+/// with the rows so the window keeps them together.
+pub(super) fn sidebar_rows(
+    refs: Arc<RefsSnapshot>,
+    text: String,
+    disclosure: &Disclosure,
+    epoch: Epoch,
+    epochs: &Epochs,
+    outbox: &Outbox,
+) {
+    if !epochs.is_current(epoch) {
+        return;
+    }
+    if let Some(rows) = refs.sidebar_rows(&text, disclosure, || epochs.is_current(epoch)) {
+        outbox.send(Some(epoch), Update::FilteredRefs { refs, text, rows });
     }
 }
 
@@ -1334,11 +1403,13 @@ mod tests {
         for _ in 0..40 {
             // Posted under one epoch, which `submit` cannot do.
             let epoch = handle.epochs.bump(QueryLane::History);
+            let walk = handle.epochs.bump(QueryLane::Walk);
             for _ in 0..batch {
                 let queued = handle.jobs.send((
                     Some(epoch),
                     RepositoryJob::History(Page::Open {
                         rows: whole_history,
+                        walk,
                     }),
                 ));
                 assert!(queued.is_ok(), "the worker went away mid-batch");
@@ -1347,13 +1418,24 @@ mod tests {
             // Supersedes the whole batch.
             handle.submit(Request::MoreHistory { rows: 2 });
 
-            match after_refs(&mut updates) {
-                Some(Update::Rows { rows, .. }) => match rows.ids().next() {
-                    Some(id) if Some(id) == opened_on => return,
-                    Some(_) => never_started += 1,
-                    None => ran_on += 1,
-                },
-                other => panic!("expected the next page, got {other:?}"),
+            // A page is answered under its walk's number, which the supersession does not
+            // move: the opens of the batch that finished before it arrive whole, and are passed
+            // over. The page the supersession asked for is the walk taken up where the cancel
+            // stopped it — its first two rows — or, had the open running then not stopped, an
+            // empty page from a walk run to its end.
+            loop {
+                match after_refs(&mut updates) {
+                    Some(Update::Rows { rows, .. }) if rows.len() > 2 => {}
+                    Some(Update::Rows { rows, .. }) => {
+                        match rows.ids().next() {
+                            Some(id) if Some(id) == opened_on => return,
+                            Some(_) => never_started += 1,
+                            None => ran_on += 1,
+                        }
+                        break;
+                    }
+                    other => panic!("expected the next page, got {other:?}"),
+                }
             }
         }
 

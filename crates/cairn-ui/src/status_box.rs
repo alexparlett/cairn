@@ -1,5 +1,5 @@
 //! The title bar's status box, Fork's (refs-and-status R7.1; `fork-refs-and-status-ui.md`,
-//! section 9): the repository's name, marked `*` while status reports a change; a branch
+//! section 9): the repository's name — its folder's, as the worker that opened it names it — marked `*` while status reports a change; a branch
 //! glyph and the current branch; and how far it is from its upstream — behind, then ahead,
 //! Fork's `18↓ 1↑`, a count of nothing left out as Fork leaves it — or that its upstream is
 //! gone. A detached `HEAD` names its short id, an unborn branch its name and that it has no
@@ -64,7 +64,7 @@ pub fn name_text(name: &str, dirty: bool) -> String {
 /// The status box: no handler, so equal content compares equal and is not redrawn.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StatusBox {
-    name: String,
+    name: Option<String>,
     dirty: bool,
     head: Option<HeadState>,
     tracking: Tracking,
@@ -72,10 +72,11 @@ pub struct StatusBox {
 }
 
 impl StatusBox {
-    /// The box for the repository called `name`; `head` is `None` until the refs are read.
-    pub fn new(name: impl Into<String>, head: Option<HeadState>) -> Self {
+    /// The box for the repository called `name` — `None` until it is open — and `head` —
+    /// `None` until the refs are read.
+    pub fn new(name: Option<String>, head: Option<HeadState>) -> Self {
         Self {
-            name: name.into(),
+            name,
             dirty: false,
             head,
             tracking: Tracking::Untold,
@@ -135,14 +136,14 @@ impl ComponentOwned for StatusBox {
             .horizontal()
             .cross_align(Alignment::center())
             .spacing(8.)
-            .child(
+            .maybe_child(self.name.as_deref().map(|name| {
                 label()
-                    .text(name_text(&self.name, self.dirty))
+                    .text(name_text(name, self.dirty))
                     .max_lines(1)
                     .font_size(FONT_SIZE)
                     .font_weight(FontWeight::BOLD)
-                    .color(primary),
-            )
+                    .color(primary)
+            }))
             .maybe_child(on_branch.then(|| RefGlyph::Branch.draw(secondary)))
             .maybe_child(self.head.as_ref().map(|head| {
                 label()
@@ -157,17 +158,6 @@ impl ComponentOwned for StatusBox {
     fn render_key(&self) -> DiffKey {
         self.key.clone().or(self.default_key())
     }
-}
-
-/// The name a repository at `path` is called by: its last component, or the whole path when
-/// it has none (`/`).
-pub fn repository_name(path: &str) -> String {
-    path.trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .filter(|name| !name.is_empty())
-        .unwrap_or(path)
-        .to_owned()
 }
 
 /// The branch `HEAD` is on, when it has a commit: the one whose upstream the box measures.
@@ -216,12 +206,8 @@ mod tests {
     }
 
     #[test]
-    fn a_dirty_repository_is_starred_and_named_by_its_last_component() {
+    fn a_dirty_repository_is_starred() {
         assert_eq!(name_text("swift", true), "swift*");
         assert_eq!(name_text("swift", false), "swift");
-        assert_eq!(repository_name("/home/ada/engine"), "engine");
-        assert_eq!(repository_name("/home/ada/engine/"), "engine");
-        assert_eq!(repository_name("engine"), "engine");
-        assert_eq!(repository_name("/"), "/");
     }
 }

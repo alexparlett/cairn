@@ -170,6 +170,12 @@ pub fn open(
                         return;
                     }
                 };
+            outbox.send(
+                None,
+                Update::Opened {
+                    name: repository_name(&shared),
+                },
+            );
             // This repository's channel, and git pointed at it.
             let backend = Backend::open(discovery.startup(), &git);
             let threads = Threads::start(
@@ -210,6 +216,18 @@ pub fn open(
             let _ = answers.send(answer);
         }),
     ))
+}
+
+/// What the title bar calls `shared`: the last component of its working tree — of its git
+/// directory, when it is bare — which discovery has already made absolute and free of `.`
+/// and `..`, so a repository opened at `.`, `..`, a subdirectory or its `.git` is named by its
+/// own folder (`an_open_names_the_repositorys_folder_whatever_path_it_was_opened_at`).
+fn repository_name(shared: &SharedRepository) -> String {
+    let root = shared.workdir().unwrap_or_else(|| shared.git_dir());
+    root.file_name().map_or_else(
+        || root.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
 }
 
 /// [`open`] with a `git` found afresh from `startup` — the environment it is
@@ -857,8 +875,66 @@ mod tests {
     /// The Cairn checkout itself, opened through the real boundary.
     fn cairn() -> (RepositoryHandle, Updates) {
         match open_with(env!("CARGO_MANIFEST_DIR"), Startup::of_this_process()) {
-            Ok((handle, updates, _)) => (handle, updates),
+            Ok((handle, mut updates, _)) => {
+                crate::worker::fetch_tests::opened_as(&mut updates);
+                (handle, updates)
+            }
             Err(error) => panic!("opening the Cairn checkout: {error}"),
+        }
+    }
+
+    /// QC1, R7.1: the title bar names the repository's own folder whatever path it was opened
+    /// at — its working tree, `<it>/.`, `<it>/sub/..`, a subdirectory, its `.git` — as Fork
+    /// names a repository by its folder. Caught by: naming the path as given (`.`, `..`,
+    /// `sub`, `.git`), unresolved.
+    #[test]
+    fn an_open_names_the_repositorys_folder_whatever_path_it_was_opened_at() {
+        let fixture = UnbornRepository::new("cairn-named-by-its-folder");
+        let sub = fixture.path.join("sub");
+        std::fs::create_dir_all(sub.join("deeper"))
+            .unwrap_or_else(|error| panic!("making {}: {error}", sub.display()));
+        for at in [
+            fixture.path.clone(),
+            fixture.path.join("."),
+            sub.join(".."),
+            sub.clone(),
+            sub.join("deeper"),
+            fixture.path.join(".git"),
+        ] {
+            let (_handle, mut updates, _) = match open_with(&at, Startup::of_this_process()) {
+                Ok(opened) => opened,
+                Err(error) => panic!("starting the worker: {error}"),
+            };
+            assert_eq!(
+                crate::worker::fetch_tests::opened_as(&mut updates),
+                "cairn-named-by-its-folder",
+                "opened at {}",
+                at.display()
+            );
+        }
+        // Relative to where the application was launched, as a command line names it: the
+        // tests run in this crate's directory, inside the Cairn checkout.
+        let checkout = match cairn_git::SharedRepository::discover(env!("CARGO_MANIFEST_DIR")) {
+            Ok(shared) => shared.workdir().map(Path::to_owned),
+            Err(error) => panic!("opening the Cairn checkout: {error}"),
+        };
+        let folder = checkout
+            .and_then(|root| std::fs::canonicalize(root).ok())
+            .and_then(|root| {
+                root.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| panic!("the Cairn checkout has no folder name"));
+        for at in [".", "src", "./src/..", "../.."] {
+            let (_handle, mut updates, _) = match open_with(at, Startup::of_this_process()) {
+                Ok(opened) => opened,
+                Err(error) => panic!("starting the worker: {error}"),
+            };
+            assert_eq!(
+                crate::worker::fetch_tests::opened_as(&mut updates),
+                folder,
+                "opened at {at}"
+            );
         }
     }
 
@@ -984,6 +1060,7 @@ mod tests {
             Ok(opened) => opened,
             Err(error) => panic!("starting the worker: {error}"),
         };
+        crate::worker::fetch_tests::opened_as(&mut updates);
         handle.submit(Request::OpenHistory { rows: 8 });
         match after_refs(&mut updates) {
             Some(Update::Rows { rows, complete }) => assert!(rows.is_empty() && complete),
@@ -1064,6 +1141,7 @@ mod tests {
             Ok(opened) => opened,
             Err(error) => panic!("starting the worker: {error}"),
         };
+        crate::worker::fetch_tests::opened_as(&mut updates);
         handle.submit(Request::OpenHistory { rows: 8 });
         match after_refs(&mut updates) {
             Some(Update::Rows { rows, complete }) => assert!(rows.is_empty() && complete),
@@ -1094,6 +1172,10 @@ mod tests {
             Ok(opened) => opened,
             Err(error) => panic!("starting the worker: {error}"),
         };
+        assert_eq!(
+            crate::worker::fetch_tests::opened_as(&mut updates),
+            "cairn-unborn-head"
+        );
         handle.submit(Request::OpenHistory { rows: 8 });
 
         match block_on(updates.next()) {
@@ -1181,6 +1263,7 @@ mod tests {
                 Ok(opened) => opened,
                 Err(error) => panic!("starting the worker: {error}"),
             };
+        crate::worker::fetch_tests::opened_as(&mut updates);
 
         handle.submit(Request::OpenHistory { rows: 3 });
         match after_refs(&mut updates) {

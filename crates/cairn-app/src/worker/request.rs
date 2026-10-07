@@ -439,6 +439,13 @@ pub enum Update {
     WorkerLost {
         message: String,
     },
+    /// The repository is open: `name` is what the title bar calls it — the last component of
+    /// its working tree, or of its git directory when it is bare, as Fork names a
+    /// repository's folder — whatever path it was opened at (`.`, a subdirectory, its `.git`).
+    /// Sent once, first, tied to no request.
+    Opened {
+        name: String,
+    },
     /// The default remote first, when there is one.
     Remotes {
         remotes: Vec<RemoteSummary>,
@@ -592,6 +599,7 @@ impl Update {
             | Self::Failed { .. }
             | Self::WorkerLost { .. }
             | Self::Remotes { .. }
+            | Self::Opened { .. }
             | Self::ConfiguredContext { .. }
             | Self::FetchStarted { .. }
             | Self::FetchProgress { .. }

@@ -62,7 +62,10 @@ impl Refreshable {
     /// The boundary over this repository, with this process's `git`.
     pub(crate) fn open(&self) -> (RepositoryHandle, Updates) {
         match open_with(self.path(), Startup::of_this_process()) {
-            Ok((handle, updates, _)) => (handle, updates),
+            Ok((handle, mut updates, _)) => {
+                super::fetch_tests::opened_as(&mut updates);
+                (handle, updates)
+            }
             Err(error) => panic!("starting the worker: {error}"),
         }
     }

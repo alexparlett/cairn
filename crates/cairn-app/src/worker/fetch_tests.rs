@@ -387,7 +387,10 @@ fn boundary(
         built_helper(),
     );
     match open_with(repository, startup) {
-        Ok(opened) => opened,
+        Ok((handle, mut updates, answer)) => {
+            opened_as(&mut updates);
+            (handle, updates, answer)
+        }
         Err(error) => panic!("starting the worker: {error}"),
     }
 }
@@ -450,6 +453,15 @@ fn rows_answer_or_failure(updates: &mut Updates) -> Option<Update> {
             Some(Update::Refs { reopen: false, .. }) => {}
             other => return other,
         }
+    }
+}
+
+/// The first word of a stream whose repository opened: the name the title bar calls it
+/// (`Update::Opened`), which every open that succeeds sends before anything else.
+pub(super) fn opened_as(updates: &mut Updates) -> String {
+    match next_by(updates, Instant::now() + WAIT, &[]) {
+        Some(Update::Opened { name }) => name,
+        other => panic!("the open did not first say what it opened: {other:?}"),
     }
 }
 

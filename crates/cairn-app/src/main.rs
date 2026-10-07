@@ -89,6 +89,8 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let held_keys = use_state(cairn_ui::accelerators::HeldKeys::default);
     // What the last refresh answered (R10).
     let refreshed = use_state(refresh_state::RefreshState::default);
+    // What the title bar calls the repository, once the worker has opened it.
+    let repository = use_state(|| None::<String>);
     let view = View {
         rows,
         progress,
@@ -110,6 +112,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         pair,
         held_keys,
         refreshed,
+        repository,
     };
 
     let opened = use_hook(|| {

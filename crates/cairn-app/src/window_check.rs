@@ -81,6 +81,7 @@ fn kind(update: &Update) -> &'static str {
         Update::DiffFailed { .. } => "diff failed",
         Update::ConfiguredContext { .. } => "configured context",
         Update::Remotes { .. } => "remotes",
+        Update::Opened { .. } => "opened",
         Update::Refs { .. } => "refs",
         Update::AheadBehind { .. } => "ahead/behind",
         Update::Status { .. } => "status",
@@ -379,6 +380,7 @@ fn launch(path: &str) -> Harness {
                 pair: State::create(None),
                 held_keys: State::create(cairn_ui::accelerators::HeldKeys::default()),
                 refreshed: State::create(crate::refresh_state::RefreshState::default()),
+                repository: State::create(None),
             })
         },
         1.,

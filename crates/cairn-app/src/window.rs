@@ -7,7 +7,6 @@ use cairn_ui::accelerators::{self, HeldKeys, Scope};
 use cairn_ui::{
     ChangeCursor, CommitRow, CredentialPrompt, DETAIL_STRIP_HEIGHT, DetailTab, DiffSettings,
     HistoryHeader, HistoryList, ROW_HEIGHT, RowRender, StatusBox, Tracking, current_branch,
-    repository_name,
 };
 use freya::prelude::*;
 
@@ -66,6 +65,9 @@ pub struct View {
     pub held_keys: State<HeldKeys>,
     /// What the last refresh answered: the refs, ahead/behind and the working tree's status.
     pub refreshed: State<RefreshState>,
+    /// What the title bar calls the repository, once the worker has opened it
+    /// (`Update::Opened`).
+    pub repository: State<Option<String>>,
 }
 
 impl std::fmt::Debug for View {
@@ -135,7 +137,7 @@ pub fn window(
             held.write().heard(&e, false);
         })
         .child(title_bar(
-            status_box(opened, &view.refreshed.read()),
+            status_box(view.repository.read().clone(), &view.refreshed.read()),
             &counted,
             &fetch,
             view.fetch,
@@ -282,11 +284,11 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     .into()
 }
 
-/// The status box for the repository at `path` (R7.1): its name, `*` while the last status
+/// The status box for the repository called `name` (R7.1) — none until it is open — `*` while the last status
 /// listed a change, the current branch and its distance from its upstream, from what the last
 /// refresh answered — each as old as the answer it is read from (a status may be one refresh
 /// behind, R10.3 as amended).
-fn status_box(path: &str, refreshed: &RefreshState) -> StatusBox {
+fn status_box(name: Option<String>, refreshed: &RefreshState) -> StatusBox {
     let refs = refreshed.refs();
     let head = refs.map(|refs| refs.head.clone());
     let tracking = refs
@@ -306,9 +308,7 @@ fn status_box(path: &str, refreshed: &RefreshState) -> StatusBox {
             false
         }
     };
-    StatusBox::new(repository_name(path), head)
-        .dirty(dirty)
-        .tracking(tracking)
+    StatusBox::new(name, head).dirty(dirty).tracking(tracking)
 }
 
 fn title_bar(
@@ -581,6 +581,7 @@ mod tests {
                     pair: State::create(None),
                     held_keys: State::create(HeldKeys::default()),
                     refreshed: State::create(RefreshState::default()),
+                    repository: State::create(Some("engine".to_owned())),
                 })
             },
             1.,
@@ -2428,6 +2429,34 @@ mod tests {
             "{shown:?}"
         );
         assert!(shown.contains(&"engine*".to_owned()), "{shown:?}");
+
+        // QC1: the name is the one the worker says it opened, never the path given.
+        let mut repository = view.repository;
+        repository.set(None);
+        test.sync_and_update();
+        let shown = title(&test);
+        assert!(
+            !shown
+                .iter()
+                .any(|text| text.starts_with("engine") || text == PATH),
+            "a repository not yet opened was named: {shown:?}"
+        );
+        test.run_in(|| {
+            crate::session::apply(
+                crate::worker::Update::Opened {
+                    name: "folder".to_owned(),
+                },
+                view,
+                &crate::session::Worker {
+                    submit: &|_| {},
+                    refuse: &|_| {},
+                    closing: false,
+                },
+            );
+        });
+        test.sync_and_update();
+        let shown = title(&test);
+        assert!(shown.contains(&"folder*".to_owned()), "{shown:?}");
     }
 
     /// C7 through the window: a row's chips are laid out against the refresh's snapshot — the

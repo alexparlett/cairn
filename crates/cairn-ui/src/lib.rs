@@ -77,5 +77,5 @@ pub use ref_chips::{
 pub use ref_glyphs::{GLYPH_SIZE, RefGlyph};
 pub use status_box::{
     NO_COMMITS_YET, StatusBox, Tracking, UPSTREAM_GONE, counts_text, current_branch, head_text,
-    name_text, repository_name,
+    name_text,
 };

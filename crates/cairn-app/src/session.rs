@@ -39,6 +39,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         mut refused,
         mut diff,
         mut refreshed,
+        mut repository,
         ..
     } = view;
     match update {
@@ -59,6 +60,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             progress.write().failed(message);
         }
         Update::Remotes { remotes: listed } => remotes.set(listed),
+        Update::Opened { name } => repository.set(Some(name)),
         Update::ConfiguredContext { context } => {
             crate::diff_actions::configured(context, view, worker.submit);
         }
@@ -308,6 +310,7 @@ mod tests {
                         diff_scroll: ScrollController::new(0, 0, Vec::new()),
                         change_cursor: State::create(None),
                         refreshed: State::create(crate::refresh_state::RefreshState::default()),
+                        repository: State::create(None),
                     }
                 })
             },

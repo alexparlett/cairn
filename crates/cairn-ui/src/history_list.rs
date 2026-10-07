@@ -8,7 +8,7 @@ use freya::prelude::*;
 use crate::accelerators::{self, Action, HeldKeys};
 use crate::commit_row::label_room;
 use crate::graph_geometry::ROW_HEIGHT;
-use crate::ref_chips::{Chip, row_chips};
+use crate::ref_chips::{Chip, chips_of_row};
 
 pub const PREFETCH_ROWS: usize = 24;
 
@@ -368,21 +368,15 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
 /// only draws them.
 fn render_of(row: HistoryRow<'_>, data: &ListData) -> RowRender {
     let id = row.id();
-    let content = row.content();
-    let labels = row.labels();
-    // No wildcard arm: a new row kind must say here what chips it draws.
-    let chips = match &content {
-        RowContent::Commit(_) => row_chips(labels, data.refs.as_deref(), data.room),
-        RowContent::Stash(stash) => vec![Chip::stash(stash.index)],
-    };
+    let chips = chips_of_row(row, data.refs.as_deref(), data.room);
     RowRender {
-        content,
+        content: row.content(),
         graph: row.edges().unwrap_or_else(|| RowEdges {
             lane: row.lane(),
             edges: Vec::new(),
         }),
         chips,
-        head: labels.is_head(),
+        head: row.labels().is_head(),
         selected: data.selected == Some(id) || data.also_selected == Some(id),
         lanes: data.lanes,
     }

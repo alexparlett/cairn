@@ -146,7 +146,12 @@ pub struct History {
     labelled: Chunks<LabelledRow, 8>,
     /// One entry for each stash's row, in row order.
     stashes: Chunks<StoredStash, 6>,
+    /// This history's own number ([`History::serial`]).
+    serial: u64,
 }
+
+/// The number the next history built is given.
+static NEXT_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 impl Default for History {
     fn default() -> Self {
@@ -209,7 +214,16 @@ impl History {
             labels: Runs::new(),
             labelled: Chunks::new(),
             stashes: Chunks::new(),
+            serial: NEXT_SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
+    }
+
+    /// A number no other history built in this process holds, kept as rows are appended: a
+    /// reader that remembers where it found a row, or how far it has looked, can tell whether
+    /// the history it looks in now is the one it looked in, since rows only append to one
+    /// history and a reopen builds another.
+    pub fn serial(&self) -> u64 {
+        self.serial
     }
 
     /// An empty history whose author index already has room for `authors` names, so the
@@ -786,6 +800,23 @@ mod tests {
         assert!(history.row(1).unwrap().labels().is_empty());
         // The labels' names are text the history holds; the subjects still read back.
         assert_eq!(summary(history.row(4).unwrap()).summary, "five");
+    }
+
+    /// Caught by: every history numbered alike, or an append renumbering one.
+    #[test]
+    fn each_history_has_its_own_serial_and_keeps_it_as_rows_arrive() {
+        let mut one = History::new();
+        let other = History::with_author_capacity(8);
+        assert_ne!(one.serial(), other.serial());
+        assert_ne!(one.serial(), History::new().serial());
+        let before = one.serial();
+        let mut page = RowsPage::new();
+        page.push(
+            GraphRow::new(oid(1), Lane::new(0), Vec::new()),
+            commit("one", "Ada", 1),
+        );
+        one.append(page).unwrap();
+        assert_eq!(one.serial(), before);
     }
 
     /// A row's labels are kept by full name whatever order they were pushed in, and each is

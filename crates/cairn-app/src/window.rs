@@ -2247,10 +2247,12 @@ mod tests {
 
     /// C7 through the window: a row's chips are laid out against the refresh's snapshot — the
     /// current branch first with its check mark and folded with its upstream at that commit,
-    /// another remote's ref its own chip — and `HEAD`'s subject is bold. Caught by: the window
-    /// not handing the list the snapshot (no fold, no current first), or the head flag dropped.
+    /// another remote's ref its own chip — and `HEAD`'s subject is bold; selected, its Commit
+    /// tab draws the same chips in a REFS row (R6.1), and a commit no ref points at has none.
+    /// Caught by: the window not handing the list the snapshot (no fold, no current first),
+    /// the head flag dropped, or the REFS row not given the selected row's chips.
     #[test]
-    fn a_rows_chips_are_drawn_against_the_refreshs_snapshot() {
+    fn a_rows_chips_and_its_refs_row_are_drawn_against_the_refreshs_snapshot() {
         use cairn_model::{
             HeadState, Label as RefLabel, Ref, RefKind, RefName, RefTarget, RefsSnapshot, Upstream,
         };
@@ -2366,6 +2368,38 @@ mod tests {
             "HEAD's subject is not bold"
         );
         assert_ne!(weight("commit 1"), Some(FontWeight::BOLD));
+
+        click_row(&mut test, 0);
+        arrives(&mut test, view, 0, vec![oid(1)]);
+        let shown = pane(&test);
+        let at = |text: &str| shown.iter().position(|shown| shown == text);
+        assert!(
+            at(cairn_ui::REFS_CAPTION).is_some(),
+            "no REFS row: {shown:?}"
+        );
+        assert!(
+            at(cairn_ui::REFS_CAPTION) < at("main")
+                && at("main") < at("mike/main")
+                && at("mike/main") < at(cairn_ui::ID_CAPTION),
+            "REFS does not hold the row's chips above the id: {shown:?}"
+        );
+        assert_eq!(
+            at("origin/main"),
+            None,
+            "the REFS row did not fold origin/main"
+        );
+
+        click_row(&mut test, 1);
+        arrives(&mut test, view, 1, vec![oid(2)]);
+        let shown = pane(&test);
+        assert!(
+            shown.iter().any(|text| text == cairn_ui::ID_CAPTION),
+            "{shown:?}"
+        );
+        assert!(
+            !shown.iter().any(|text| text == cairn_ui::REFS_CAPTION),
+            "a commit no ref points at has a REFS row: {shown:?}"
+        );
     }
 
     /// A stash's row (refs-and-status R4.2, R5.4): its `stash@{n}` chip, then its message as

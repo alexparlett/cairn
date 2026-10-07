@@ -11,6 +11,7 @@ mod history_state;
 mod refresh;
 mod refresh_state;
 mod repository_path;
+mod row_finder;
 mod selection;
 mod session;
 mod shortcuts;

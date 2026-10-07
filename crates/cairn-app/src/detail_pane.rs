@@ -15,15 +15,17 @@
 //! Commit tab does not switch to Changes, and the buttons Fork added to reveal a file there are
 //! not recorded (Finding 4), so none is drawn.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use cairn_model::{Oid, RowId};
 use cairn_ui::accelerators::{self, Scope};
-use cairn_ui::{CommitTab, DetailTab, DetailTabs, reveal_row};
+use cairn_ui::{CommitTab, DetailTab, DetailTabs, Refs, chips_of_row, reveal_row};
 use freya::prelude::*;
 
 use crate::changes_tab::ChangesTab;
 use crate::diff_state::{Answer, answered_changes, answered_expansion};
+use crate::row_finder::RowFinder;
 use crate::window::View;
 use crate::worker::Request;
 use crate::{diff_actions, selection, shortcuts};
@@ -137,6 +139,7 @@ impl PartialEq for CommitBody {
         one.selected == two.selected
             && one.diff == two.diff
             && one.rows == two.rows
+            && one.refreshed == two.refreshed
             && one.diff_settings == two.diff_settings
             && one.history_scroll == two.history_scroll
             && self.submit.is_some() == other.submit.is_some()
@@ -147,6 +150,7 @@ impl Component for CommitBody {
     fn render(&self) -> impl IntoElement {
         let view = self.view;
         let asking = self.submit.clone();
+        let finder = use_hook(|| Rc::new(RefCell::new(RowFinder::default())));
         // Files opened here whose request lost the lane to the Changes tab's file are asked
         // again as the tab is shown.
         use_side_effect(move || {
@@ -159,11 +163,15 @@ impl Component for CommitBody {
                 submit(request);
             }
         });
-        commit_body(view, self.submit.clone())
+        commit_body(view, self.submit.clone(), &finder)
     }
 }
 
-fn commit_body(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Element {
+fn commit_body(
+    view: View,
+    submit: Option<Rc<dyn Fn(Request)>>,
+    finder: &RefCell<RowFinder>,
+) -> Element {
     let Some(id) = *view.selected.read() else {
         return notice(NOTHING_SELECTED, false);
     };
@@ -183,6 +191,7 @@ fn commit_body(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Element {
             let side_by_side = view.diff_settings.read().side_by_side();
             let (toggling, expanding, loading) = (submit.clone(), submit.clone(), submit.clone());
             CommitTab::new(changes)
+                .refs(refs_of(view, id, finder))
                 .expansion(expansion)
                 .side_by_side(side_by_side)
                 .on_parent(move |parent: Oid| follow_parent(parent, view, submit.as_deref()))
@@ -199,6 +208,27 @@ fn commit_body(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Element {
                 })
                 .into()
         }
+    }
+}
+
+/// The REFS row of the row selected (R6.1): the chips its row in the history draws, in its
+/// lane, laid out for the window's width — the most the pane can show — and none while the row
+/// is not loaded. The row is found once per history (`RowFinder`); its chips are laid out as
+/// the history list lays out a row's, reading at most what fits.
+fn refs_of(view: View, id: RowId, finder: &RefCell<RowFinder>) -> Refs {
+    let rows = view.rows.read();
+    let Some(row) = finder
+        .borrow_mut()
+        .find(&rows, id)
+        .and_then(|at| rows.row(at))
+    else {
+        return Refs::default();
+    };
+    let snapshot = view.refreshed.read().refs().cloned();
+    let room = Platform::get().root_size.read().width;
+    Refs {
+        chips: chips_of_row(row, snapshot.as_deref(), room),
+        lane: row.lane(),
     }
 }
 

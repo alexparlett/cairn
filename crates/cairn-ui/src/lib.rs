@@ -39,8 +39,8 @@ pub use commit_row::{
 };
 pub use commit_tab::{
     AUTHOR_CAPTION, COLLAPSE_ALL_CAPTION, COMMITTER_CAPTION, CommitTab, DETAIL_ROW_HEIGHT,
-    EXPAND_ALL_CAPTION, ID_CAPTION, NO_FILES, PARENTS_CAPTION, READING_DIFF, budget_notice,
-    cut_short_notice, file_text, status_letter,
+    EXPAND_ALL_CAPTION, ID_CAPTION, NO_FILES, PARENTS_CAPTION, READING_DIFF, REFS_CAPTION, Refs,
+    budget_notice, cut_short_notice, file_text, status_letter,
 };
 pub use credential_prompt::CredentialPrompt;
 pub use detail_tabs::{
@@ -70,7 +70,7 @@ pub use file_filter::ShownFiles;
 pub use graph_geometry::{LANE_WIDTH, MAX_DRAWN_LANES, ROW_HEIGHT, graph_width};
 pub use history_list::{HistoryList, PREFETCH_ROWS, RowRender, reveal_row};
 pub use ref_chips::{
-    CHIP_FONT_SIZE, CHIP_GAP, CHIP_HEIGHT, Chip, ChipKind, TAG_INDIGO, chip_element, min_width,
-    row_chips, tint,
+    CHIP_FONT_SIZE, CHIP_GAP, CHIP_HEIGHT, Chip, ChipKind, TAG_INDIGO, chip_element, chips_of_row,
+    min_width, row_chips, tint,
 };
 pub use ref_glyphs::{GLYPH_SIZE, RefGlyph};

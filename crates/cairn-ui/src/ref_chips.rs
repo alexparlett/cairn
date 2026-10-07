@@ -22,7 +22,9 @@
 //! is spent by a lower bound of each chip's width ([`min_width`]): the column is always filled
 //! to its edge, and at most a column's worth of lower bounds is built past it.
 
-use cairn_model::{HeadState, Label, Lane, RefKind, RefsSnapshot, RowLabels, Upstream};
+use cairn_model::{
+    HeadState, HistoryRow, Label, Lane, RefKind, RefsSnapshot, RowContent, RowLabels, Upstream,
+};
 use freya::prelude::*;
 
 use crate::lane_palette::lane_colour;
@@ -98,6 +100,16 @@ impl Chip {
             kind: ChipKind::Stash,
             text: format!("stash@{{{index}}}"),
         }
+    }
+}
+
+/// The chips `row` draws in `room` pixels: a commit's refs ([`row_chips`]), a stash's
+/// `stash@{n}`. What the history list draws on the row and the Commit tab's REFS row repeats.
+pub fn chips_of_row(row: HistoryRow<'_>, refs: Option<&RefsSnapshot>, room: f32) -> Vec<Chip> {
+    // No wildcard arm: a new row kind must say here what chips it draws.
+    match row.content() {
+        RowContent::Commit(_) => row_chips(row.labels(), refs, room),
+        RowContent::Stash(stash) => vec![Chip::stash(stash.index)],
     }
 }
 

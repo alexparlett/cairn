@@ -1,7 +1,8 @@
 //! The glyphs a ref's chip, the title bar and the sidebar carry (refs-and-status R5.1, R5.4,
 //! R5.5, R7.1, R8.2), drawn as Fork draws its label icons: a tag for a tag, a generic remote —
 //! a cloud — for a remote-tracking ref (a forge's own icon is packet 6's), a box for a stash, a
-//! check mark for the current branch, a branch for any other branch and the title bar's; and,
+//! check mark for the current branch, a branch for any other branch with an upstream and the
+//! title bar's, a single line of commits for a branch with none (Fork's local-only icon); and,
 //! in the sidebar, a folder, a warning triangle for a branch whose upstream is gone (Fork's
 //! icon for it), and the triangle that says whether a section or folder is open.
 //!
@@ -32,8 +33,11 @@ pub enum RefGlyph {
     Stash,
     /// The branch `HEAD` is on.
     Current,
-    /// The title bar's current branch, and a branch in the sidebar.
+    /// The title bar's current branch, and a branch with an upstream in the sidebar.
     Branch,
+    /// A branch in the sidebar with no upstream: one line of commits, its newest hollow, where
+    /// a branch with an upstream forks — Fork's local-only icon, told by its shape.
+    LocalOnly,
     /// A folder of refs in the sidebar.
     Folder,
     /// A branch whose upstream is configured but gone: a warning triangle.
@@ -45,12 +49,13 @@ pub enum RefGlyph {
 }
 
 impl RefGlyph {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Remote,
         Self::Tag,
         Self::Stash,
         Self::Current,
         Self::Branch,
+        Self::LocalOnly,
         Self::Folder,
         Self::Gone,
         Self::Opened,
@@ -142,6 +147,14 @@ pub(crate) fn paint(canvas: &freya::engine::prelude::Canvas, glyph: RefGlyph, co
             canvas.draw_circle((2.6, 1.8), 1.4, &paint);
             canvas.draw_circle((2.6, 8.2), 1.4, &paint);
             canvas.draw_circle((7.4, 2.4), 1.4, &paint);
+        }
+        RefGlyph::LocalOnly => {
+            // One line of two commits, the newer hollow: nothing pushed it anywhere.
+            paint.set_style(PaintStyle::Stroke);
+            canvas.draw_line((5.0, 3.4), (5.0, 7.0), &paint);
+            canvas.draw_circle((5.0, 2.0), 1.4, &paint);
+            paint.set_style(PaintStyle::Fill);
+            canvas.draw_circle((5.0, 8.2), 1.5, &paint);
         }
         RefGlyph::Folder => {
             // A folder: its tab and its body, outlined.

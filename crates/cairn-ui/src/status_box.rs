@@ -1,7 +1,7 @@
 //! The title bar's status box, Fork's (refs-and-status R7.1; `fork-refs-and-status-ui.md`,
 //! section 9): the repository's name — its folder's, as the worker that opened it names it — marked `*` while status reports a change; a branch
 //! glyph and the current branch; and how far it is from its upstream — behind, then ahead,
-//! Fork's `18↓ 1↑`, a count of nothing left out as Fork leaves it — or that its upstream is
+//! Fork's `18↓1↑`, a count of nothing left out as Fork leaves it — or that its upstream is
 //! gone. A detached `HEAD` names its short id, an unborn branch its name and that it has no
 //! commit yet, each in git's own words. The arrows are drawn in IBM Plex Mono, the typeface
 //! the application embeds, which carries them.
@@ -40,16 +40,13 @@ pub fn head_text(head: &HeadState) -> String {
     }
 }
 
-/// `n↓ m↑` as Fork prints it, behind first, a zero count left out; empty when the branch is
-/// level with its upstream.
+/// `n↓m↑` as Fork prints it — behind first, no space between, a zero count left out (the
+/// user's decision, 2026-10-07, from Fork's own screenshots) — empty when the branch is level
+/// with its upstream.
 pub fn counts_text(counts: AheadBehind) -> String {
     let behind = (counts.behind > 0).then(|| format!("{}↓", counts.behind));
     let ahead = (counts.ahead > 0).then(|| format!("{}↑", counts.ahead));
-    behind
-        .into_iter()
-        .chain(ahead)
-        .collect::<Vec<_>>()
-        .join(" ")
+    behind.into_iter().chain(ahead).collect::<Vec<_>>().concat()
 }
 
 /// The repository's name, `*` after it while the working tree has changes.
@@ -199,7 +196,7 @@ mod tests {
     #[test]
     fn counts_are_behind_then_ahead_and_a_zero_is_left_out() {
         let counted = |ahead, behind| AheadBehind { ahead, behind };
-        assert_eq!(counts_text(counted(1, 18)), "18↓ 1↑");
+        assert_eq!(counts_text(counted(1, 18)), "18↓1↑");
         assert_eq!(counts_text(counted(0, 853)), "853↓");
         assert_eq!(counts_text(counted(2, 0)), "2↑");
         assert_eq!(counts_text(counted(0, 0)), "");

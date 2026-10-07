@@ -84,10 +84,13 @@ fn every_kind() -> RefsSnapshot {
     topic.upstream = Some(Upstream::Gone {
         name: RefName::new("refs/remotes/origin/topic"),
     });
+    let mut origin_head = listed("refs/remotes/origin/HEAD");
+    origin_head.symbolic = Some(RefName::new("refs/remotes/origin/main"));
     snapshot(
         vec![
             main,
             topic,
+            origin_head,
             listed("refs/heads/feature/login"),
             listed("refs/remotes/origin/main"),
             listed("refs/remotes/upstream/main"),
@@ -195,10 +198,11 @@ fn centre_of(test: &TestingRunner, text: &str) -> (f64, f64) {
 /// R8.1, R8.2, R9.2: Local Changes with its count and All Commits, the filter, then Branches,
 /// Remotes, Tags and Stashes in Fork's order; branches and remotes in folders split at `/`, an
 /// open folder's refs under it, folders first, a closed folder's hidden; the current branch
-/// bold with its counts behind then ahead; a gone upstream said; tags whole; every stash by
-/// its message. Caught by: a section out of Fork's order or missing, a folder flattened, the
-/// current branch drawn plain, its counts left out, or the count beside Local Changes
-/// missing.
+/// bold with its counts behind then ahead, unspaced as Fork prints them (`2↓1↑`); tags
+/// whole; the symbolic `origin/HEAD` by its remote's name too, under its remote; every stash
+/// by its message. Caught by: a section out of Fork's order or missing, a folder flattened,
+/// the current branch drawn plain, its counts left out or spaced, `origin/HEAD` drawn bare,
+/// or the count beside Local Changes missing.
 #[test]
 fn the_sidebar_draws_its_sections_in_forks_order_with_forks_marks() {
     let mut disclosure = Disclosure::default();
@@ -216,10 +220,11 @@ fn the_sidebar_draws_its_sections_in_forks_order_with_forks_marks() {
             "feature",
             "login",
             "main",
-            "2↓ 1↑",
+            "2↓1↑",
             "topic",
             "Remotes",
             "origin",
+            "origin/HEAD",
             "main",
             "upstream",
             "Tags",
@@ -271,7 +276,7 @@ fn each_entry_draws_its_kinds_glyph() {
         (
             RefGlyph::Current,
             "main".to_owned(),
-            Some("2↓ 1↑".to_owned()),
+            Some("2↓1↑".to_owned()),
             true
         )
     );
@@ -300,19 +305,29 @@ fn each_entry_draws_its_kinds_glyph() {
     assert_eq!(remote.glyph, RefGlyph::Remote);
     assert_eq!(remote.counts, None, "a remote-tracking ref has no counts");
 
-    // A branch with no upstream: a branch, no counts.
+    // Fork's three upstream states, each its own shape (the user's decision, 2026-10-07): a
+    // branch with an upstream the branch, one with none the local-only line, one whose
+    // upstream is gone the warning — whoever is current.
     let mut plain = every_kind();
     plain.head = HeadState::Detached(oid(1));
-    let rows = plain
-        .sidebar_rows("", &Disclosure::default(), || true)
-        .unwrap();
-    let main = rows
-        .iter()
-        .filter_map(|row| drawn_row(*row, &plain, None, None))
-        .find(|row| row.text == "main")
-        .unwrap_or_else(|| panic!("main not drawn"));
-    assert_eq!(main.glyph, RefGlyph::Branch);
+    let mut feature_open = Disclosure::default();
+    feature_open.toggle_folder("refs/heads/feature");
+    let rows = plain.sidebar_rows("", &feature_open, || true).unwrap();
+    let glyph_of = |text: &str| {
+        rows.iter()
+            .filter_map(|row| drawn_row(*row, &plain, None, None))
+            .find(|row| row.text == text)
+            .unwrap_or_else(|| panic!("{text} not drawn"))
+    };
+    let main = glyph_of("main");
+    assert_eq!(main.glyph, RefGlyph::Branch, "a branch with an upstream");
     assert!(!main.bold && !main.warning);
+    assert_eq!(
+        glyph_of("login").glyph,
+        RefGlyph::LocalOnly,
+        "a branch with none"
+    );
+    assert_eq!(glyph_of("topic").glyph, RefGlyph::Gone);
 
     // The current branch with its upstream gone: the check mark, and the warning beside it.
     let mut stranded = every_kind();

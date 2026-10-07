@@ -392,9 +392,11 @@ pub fn drawn_row(
         SidebarRow::Ref { index, depth } => {
             let listed = refs.refs.get(index as usize)?;
             let short = listed.name.shorthand();
-            let text = match listed.kind {
-                RefKind::Tag => short,
-                RefKind::LocalBranch | RefKind::RemoteTracking => {
+            // A symbolic remote-tracking ref — `origin/HEAD` — keeps its remote's name, as
+            // Fork lists it (the user's decision, 2026-10-07).
+            let text = match (listed.kind, &listed.symbolic) {
+                (RefKind::Tag, _) | (RefKind::RemoteTracking, Some(_)) => short,
+                (RefKind::LocalBranch, _) | (RefKind::RemoteTracking, None) => {
                     short.rsplit('/').next().unwrap_or(short)
                 }
             }
@@ -411,10 +413,11 @@ pub fn drawn_row(
                             .filter(|text| !text.is_empty()),
                         Some(Upstream::Gone { .. }) | None => None,
                     };
-                    let glyph = match (current, gone) {
+                    let glyph = match (current, &listed.upstream) {
                         (true, _) => RefGlyph::Current,
-                        (false, true) => RefGlyph::Gone,
-                        (false, false) => RefGlyph::Branch,
+                        (false, Some(Upstream::Gone { .. })) => RefGlyph::Gone,
+                        (false, Some(Upstream::Exists { .. })) => RefGlyph::Branch,
+                        (false, None) => RefGlyph::LocalOnly,
                     };
                     DrawnRow {
                         bold: current,

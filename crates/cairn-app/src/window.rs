@@ -2466,7 +2466,7 @@ mod tests {
             2,
         );
         let shown = title(&test);
-        for wanted in ["engine*", "main", "18↓ 1↑"] {
+        for wanted in ["engine*", "main", "18↓1↑"] {
             assert!(
                 shown.contains(&wanted.to_owned()),
                 "no {wanted:?} in {shown:?}"

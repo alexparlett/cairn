@@ -1446,8 +1446,10 @@ row. The window finds the selected row once per history and selection
 a row not yet loaded is looked for only among the rows appended since the last look, and
 `History::serial` tells a reopened history from the one looked in) and lays its chips out
 for the window's width, the most the pane can show (`detail_pane::refs_of`); the tab gets
-them as `CommitTab::refs` and caches them with the header, so the REFS row is built once
-per commit and refs, never per frame
+them as `CommitTab::refs` and caches the header built from them, so the header is built
+once per commit and refs, never per frame — the chips themselves are laid out on every
+render of the Commit tab's body (a page arriving, a frame of a resize), bounded by the
+window's width, never by the refs
 (`the_refs_row_stands_above_the_id_and_only_when_a_ref_points_at_the_commit`,
 `the_header_is_built_once_per_commit_however_often_the_state_is_written`,
 `a_rows_chips_and_its_refs_row_are_drawn_against_the_refreshs_snapshot`,

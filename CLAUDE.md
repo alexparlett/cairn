@@ -829,7 +829,11 @@ Project invariants:
     selection (`crates/cairn-app/src/row_finder.rs`): one pass over the loaded rows' ids,
     spread over the pages as they arrive and begun again only for a reopened history
     (`History::serial`), on the UI thread; its chips are laid out for the window's width
-    and cached with the tab's header. A page of rows is
+    on every render of the tab's body (a page arriving, a frame of a resize), bounded by
+    that width, and only the header built from them is cached. While the window is
+    resized sideways the list's room changes every frame, so every visible row is built
+    again each frame — edges derived, chips laid out — bounded by the viewport's rows and
+    the lanes crossing them. A page of rows is
     appended to the history where pages were applied before (`session::apply`,
     `History::append`): a copy proportional to the page, plus, at each doubling
     of the author index (a standard hash map, keyed by a fixed-key SipHash of the

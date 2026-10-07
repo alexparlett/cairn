@@ -801,12 +801,16 @@ row's subject is bold.
   column is always filled to its edge and at most a column's worth of lower bounds is
   built past it. Laying a row out reads the current branch's label and each upstream by
   a search, and stops at the first label past the room: a commit with 10,000 refs lays
-  out 15 chips for 600 px in 0.3 µs (the reporter above).
+  out a column's worth (`chips_stop_being_built_at_the_rooms_edge_however_many_refs_the_commit_has`;
+  timed by `measures_drawing_a_viewport_over_many_open_lanes_and_a_crowded_rows_chips`).
 - **Laid out once per row built**: `render_of` lays the chips out as the list builds the
   row (`RowRender::chips`, `RowRender::head`), and `CommitRow` only draws them, so a frame
   that does not build the row lays nothing out
   (`a_rows_chips_are_laid_out_once_per_row_built_and_never_per_frame`, counting layouts
-  across frames that redraw the window but not the list, and across a scroll).
+  across frames that redraw the window but not the list, and across a scroll). A change
+  of the list's width is a change of the room, so while the window is resized sideways
+  every visible row is built again each frame — its edges derived and its chips laid out
+  — bounded by the viewport's rows and the lanes crossing them, never by the history.
 
 Pinned by `crates/cairn-ui/tests/ref_chips.rs` —
 `a_branch_and_its_upstream_at_one_commit_are_one_chip_and_nothing_else_is_folded`,

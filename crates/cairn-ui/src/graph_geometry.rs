@@ -199,6 +199,35 @@ mod tests {
         // Below the cap nothing is merged, and the order of what is kept is the edges'.
         let few = row_geometry(&row(0, edges[..3].to_vec()), 1);
         assert_eq!(few.strokes, every[..3].to_vec());
+
+        // TC1: past the cap a line passing the row and a line into its node start at the same
+        // place and end at different ones; both are painted, read by their coordinates.
+        let past = Lane::new(MAX_DRAWN_LANES + 3);
+        let node = Lane::new(2);
+        let shared_x = lane_x(Lane::new(MAX_DRAWN_LANES - 1));
+        let crossed = row_geometry(
+            &row(
+                2,
+                vec![
+                    EdgeSegment::passing(past),
+                    EdgeSegment::into_commit(Lane::new(MAX_DRAWN_LANES + 9), node),
+                ],
+            ),
+            1,
+        );
+        let ends: Vec<(Point, Point)> = crossed
+            .strokes
+            .iter()
+            .map(|stroke| (stroke.from, stroke.to))
+            .collect();
+        assert_eq!(
+            ends,
+            [
+                ((shared_x, 0.0), (shared_x, ROW_HEIGHT)),
+                ((shared_x, 0.0), (lane_x(node), row_middle())),
+            ],
+            "a line past the cap lost where it ends"
+        );
     }
 
     #[test]

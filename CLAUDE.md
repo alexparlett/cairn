@@ -253,8 +253,9 @@ copy is a different version from the fork that links.
   never runs on a read. No other program runs on a read — no textconv, external
   diff, driver `command` or smudge filter — pinned by
   `the_content_query_writes_nothing_and_runs_nothing`,
-  `a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`
-  and `a_status_read_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`,
+  `a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`,
+  `a_status_read_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`
+  and `a_stash_read_writes_nothing_and_runs_no_program_but_fsmonitor`,
   and the daemon's case by
   `a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files`.
   How every `git` process is built, run and ended is

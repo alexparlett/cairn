@@ -1,5 +1,5 @@
 //! C7's engine half (refs-and-status R6.2): a stash lists what `git stash show --name-status`
-//! lists, with `stash.showIncludeUntracked` unset and set — the untracked files paired with
+//! lists, with `stash.showIncludeUntracked` off and on — the untracked files paired with
 //! the tracked changes as git pairs them — and each file's content is read from the side it
 //! is on, the untracked commit's included. Run under the host's git and the floors' (git
 //! 2.30.9 ignores the setting, as it ignores it for the user).
@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use cairn_git::{CancelSignal, ChangesRequest, ContentOptions, Error, Repository};
 use cairn_model::{ChangeStatus, ChangedFile, DiffContent, Oid};
 
-use super::repositories::Repo;
+use super::repositories::{self, Repo};
 use super::{every_file, git, ok, since};
 
 /// A stash made with `--include-untracked` of: a tracked file deleted and its content, one
@@ -91,14 +91,14 @@ fn stash_changes(repo: &Repo, stash: Oid) -> Result<cairn_model::ChangeSet, Erro
     engine.changes(git(), &ChangesRequest::stash(stash), &CancelSignal::new())
 }
 
-/// C7, R6.2: with `stash.showIncludeUntracked` unset, a stash lists its tracked changes
+/// C7, R6.2: with `stash.showIncludeUntracked` off, a stash lists its tracked changes
 /// alone; set, the untracked files too, a deleted tracked file and an untracked file of its
 /// content paired as the rename git calls them — each exactly what `git stash show
 /// --name-status` lists under the same git. Caught by: a commit's comparison of the stash
-/// (no untracked files ever), untracked files listed with the setting unset, or the two
+/// (no untracked files ever), untracked files listed with the setting off, or the two
 /// halves diffed apart (`D a` and `A b`, where git pairs them).
 #[test]
-fn a_stash_lists_what_git_stash_show_lists_with_the_setting_unset_and_set() {
+fn a_stash_lists_what_git_stash_show_lists_with_the_setting_off_and_on() {
     let (repo, stash) = stashed();
     let pairs = git().version() >= since(32);
 
@@ -107,18 +107,18 @@ fn a_stash_lists_what_git_stash_show_lists_with_the_setting_unset_and_set() {
     assert_eq!(
         unset,
         git_lists(&repo),
-        "unset: not what git stash show lists"
+        "off: not what git stash show lists"
     );
     assert!(
         !unset
             .iter()
             .any(|(_, paths)| paths.contains(&"new.txt".to_owned())),
-        "an untracked file was listed with the setting unset: {unset:?}"
+        "an untracked file was listed with the setting off: {unset:?}"
     );
 
     repo.config("stash.showIncludeUntracked", "true");
     let set = listed(&ok(stash_changes(&repo, stash), "the stash answers").files);
-    assert_eq!(set, git_lists(&repo), "set: not what git stash show lists");
+    assert_eq!(set, git_lists(&repo), "on: not what git stash show lists");
     if pairs {
         assert!(
             set.contains(&("R".to_owned(), vec!["a".to_owned(), "b".to_owned()])),
@@ -131,7 +131,7 @@ fn a_stash_lists_what_git_stash_show_lists_with_the_setting_unset_and_set() {
     } else {
         assert_eq!(set, unset, "a git before 2.32 does not read the setting");
         eprintln!(
-            "note: git {:?} predates stash.showIncludeUntracked; only the unset answer was decided",
+            "note: git {:?} predates stash.showIncludeUntracked; only the answer with it off was decided",
             git().version()
         );
     }
@@ -240,13 +240,17 @@ fn a_stash_read_writes_nothing() {
         "nothing was read, so nothing decided"
     );
     let mut session = ok(engine.diff_session(), "a diff session");
-    let _ = every_file(
-        &mut session,
-        &request,
-        &set,
-        &ContentOptions::default(),
-        &CancelSignal::new(),
+    let read = ok(
+        every_file(
+            &mut session,
+            &request,
+            &set,
+            &ContentOptions::default(),
+            &CancelSignal::new(),
+        ),
+        "Expand All reads every file",
     );
+    assert_eq!(read.len(), set.files.len(), "a file was not read");
 
     assert_eq!(
         snapshot(&repo.path().join(".git")),
@@ -325,4 +329,126 @@ fn a_copy_into_an_untracked_file_is_read_from_the_untracked_commit() {
     };
     assert_eq!(text.changes().len(), 1, "the copy's one edited line");
     assert_eq!(text.new_content(), copied.as_bytes());
+}
+
+/// DO2: the stash read writes nothing and runs no program but what D1 allows a read — the
+/// repository's `core.fsmonitor` — under a hostile configuration: a caching textconv and a
+/// driver `command` (the fixture's trap), `diff.external`, a clean and a smudge filter on
+/// every `.txt`, `core.pager`, the untracked cache, and `stash.showIncludeUntracked` set,
+/// with the working tree stat-dirty. The git directory is byte-identical after the stash's
+/// list and every file's content, exact and ignoring whitespace, and none of the programs'
+/// markers is written; each program is then run by hand, so its not running decides
+/// something. Caught by: a patch form (`-p` runs the textconv or the external diff), the
+/// stash read built as a write, or a read through the working tree's filters.
+#[test]
+fn a_stash_read_writes_nothing_and_runs_no_program_but_fsmonitor() {
+    let repo = repositories::attributes();
+    repo.write("trap.txt", b"watched\nby a program, stashed\n");
+    repo.write("plain.txt", b"ordinary, stashed\n");
+    repo.write("loose.txt", b"untracked, stashed\n");
+    repo.git(&["stash", "push", "--quiet", "--include-untracked"]);
+    let stash = repo.rev("stash@{0}");
+
+    let marker = |name: &str| repo.path().join(name);
+    let script = |name: &str, body: String| {
+        let path = marker(name);
+        std::fs::write(&path, body).unwrap_or_else(|e| panic!("writing {name}: {e}"));
+        path
+    };
+    let filter = script(
+        "mark.sh",
+        format!("#!/bin/sh\n: > '{}'\ncat\n", marker("filter-ran").display()),
+    );
+    let pager = script(
+        "pager.sh",
+        format!("#!/bin/sh\n: > '{}'\ncat\n", marker("pager-ran").display()),
+    );
+    let monitor = script(
+        "monitor.sh",
+        format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\nexit 1\n",
+            marker("fsmonitor-ran").display()
+        ),
+    );
+    repo.config("diff.trap.cachetextconv", "true");
+    repo.config(
+        "diff.external",
+        &format!("sh {}", repo.path().join("trap.sh").display()),
+    );
+    repo.config("filter.mark.clean", &format!("sh {}", filter.display()));
+    repo.config("filter.mark.smudge", &format!("sh {}", filter.display()));
+    repo.config("filter.mark.required", "true");
+    repo.config("core.pager", &format!("sh {}", pager.display()));
+    repo.config("core.fsmonitor", &format!("sh {}", monitor.display()));
+    repo.config("core.untrackedCache", "true");
+    repo.config("stash.showIncludeUntracked", "true");
+    repo.write(
+        ".gitattributes",
+        b"no-diff.txt -diff\nflagged.dat diff=flagged\ntrap.txt diff=trap\nmacro.dat binary\n\
+          *.txt filter=mark\n",
+    );
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    repo.write("plain.txt", b"ordinary, changed\n");
+    let before = snapshot(&repo.path().join(".git"));
+
+    let request = ChangesRequest::stash(stash);
+    let engine = ok(Repository::discover(repo.path()), "the fixture opens");
+    let set = ok(
+        engine.changes(git(), &request, &CancelSignal::new()),
+        "the stash answers",
+    );
+    let names: Vec<String> = set.files.iter().map(|f| f.new_path.to_string()).collect();
+    assert!(names.contains(&"trap.txt".to_owned()), "{names:?}");
+    if git().version() >= since(32) {
+        assert!(names.contains(&"loose.txt".to_owned()), "{names:?}");
+    }
+    let mut session = ok(engine.diff_session(), "a diff session");
+    for ignore_whitespace in [false, true] {
+        let options = ContentOptions {
+            ignore_whitespace,
+            ..ContentOptions::default()
+        };
+        let read = ok(
+            every_file(&mut session, &request, &set, &options, &CancelSignal::new()),
+            "Expand All reads every file",
+        );
+        assert_eq!(read.len(), set.files.len());
+    }
+
+    assert_eq!(
+        snapshot(&repo.path().join(".git")),
+        before,
+        "the git directory changed under a stash read"
+    );
+    assert!(
+        !repo.path().join(".git/refs/notes").exists(),
+        "a textconv cache was written"
+    );
+    assert!(
+        !super::repositories::trap_ran(&repo),
+        "a textconv, driver or external diff ran"
+    );
+    assert!(
+        !marker("filter-ran").exists(),
+        "a clean or smudge filter ran"
+    );
+    assert!(!marker("pager-ran").exists(), "the pager ran");
+
+    super::repositories::run_trap(&repo);
+    assert!(
+        super::repositories::trap_ran(&repo),
+        "the trap cannot run at all"
+    );
+    for (program, ran) in [(&filter, "filter-ran"), (&pager, "pager-ran")] {
+        let status = std::process::Command::new("sh")
+            .arg(program)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap_or_else(|e| panic!("running {} by hand: {e}", program.display()));
+        assert!(
+            status.success() && marker(ran).exists(),
+            "{ran}: cannot run at all"
+        );
+    }
 }

@@ -63,7 +63,7 @@ if [ -z "$floor_minor" ] || [ "2.$floor_minor" != "${first_version%.*}" ]; then
 fi
 
 # The filtered runs, as `<cargo target>|<test filters>|<floor>`. Each floor sits one under
-# the run's count when it was set (83, 118 and 17), so a filter that silently matches less
+# the run's count when it was set (83, 119 and 17), so a filter that silently matches less
 # fails; raise a floor as its run gains tests. `--test status` is the working tree's status
 # against its oracles (C4 of the refs-and-status packet), which owes its answer to the git
 # in use as much as the diff tests do; `--test diff_engine` holds a stash's list against
@@ -71,7 +71,7 @@ fi
 # and 2.32.7 does.
 RUNS=(
   "--lib|diff:: reads::|82"
-  "--test diff_engine||117"
+  "--test diff_engine||118"
   "--test status||16"
 )
 

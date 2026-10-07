@@ -416,13 +416,17 @@ same lines. Expand All's pages ask such files alone, as they ask any file a page
 not hold as the change set does.
 
 Pinned against git (`crates/cairn-git/tests/diff/stash.rs`, run under the host's git and
-both floors): `a_stash_lists_what_git_stash_show_lists_with_the_setting_unset_and_set`
+both floors): `a_stash_lists_what_git_stash_show_lists_with_the_setting_off_and_on`
 (against `git stash show --name-status`, the pairing across the two halves required on
 2.32 and later), `each_file_of_a_stash_is_read_from_the_side_it_is_on` (alone and through
 Expand All, each side the bytes git stores),
 `a_copy_into_an_untracked_file_is_read_from_the_untracked_commit` (`diff.renames=copies`,
 2.32 and later), `a_stash_read_writes_nothing` (the git directory byte-identical, the
-tree stat-dirty) and `a_stash_describes_its_stash_commit`; the argv and the read's
+tree stat-dirty), `a_stash_read_writes_nothing_and_runs_no_program_but_fsmonitor` (the
+same under a caching textconv, a driver `command`, `diff.external`, clean and smudge
+filters, `core.pager`, the untracked cache and a `core.fsmonitor` hook: no program's
+marker but the hook's may be written, and each program is run by hand to show it can
+run) and `a_stash_describes_its_stash_commit`; the argv and the read's
 environment by `the_stub_git_is_asked_stash_show_with_a_reads_environment`, the argv alone
 by `the_read_is_stash_show_in_raw_form_and_nothing_else`. Residuals: `git stash` needs a
 working tree, so a stash in a bare repository fails as git fails it (`Error::GitFailed`);

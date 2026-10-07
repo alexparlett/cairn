@@ -782,11 +782,16 @@ Project invariants:
     `cairn_ui::HistoryList`'s `index_of` keeps a cursor hint and falls back to
     `History::position` when it misses — a scan of every loaded row's id,
     inside the key handler, on the UI thread. It is the correctness fallback by
-    design, and it is reached: the hint moves only with an arrow key or a plain
-    press, so after a parent link selects its parent (`detail_pane.rs`'s
-    `follow_parent`, through `selection::choose`) or a compared pair is let go
-    (`selection::extend`), the next arrow key misses the hint and scans every loaded
-    id once — once per key press, never per frame. A row arriving ABOVE another
+    design, and it is reached. The hint is the window's (`View::history_cursor`,
+    handed to the list by `HistoryList::cursor`): an arrow key and a plain press move
+    it, and so do the rows chosen outside the list — a parent link's
+    (`detail_pane.rs`'s `follow_parent`) and a ref pressed in the sidebar, found loaded
+    or by a find (`ref_find.rs`'s `bring_into_view`) — so their next arrow key starts
+    there (`the_list_moves_from_the_row_its_callers_hint_names`). It still misses after a
+    compared pair is let go (`selection::extend`, which selects the other row without
+    knowing its index) and after a reopen keeps the selection by id while the rows
+    under the hint changed: the next arrow key then scans the loaded ids, from the top
+    to the selected row — once per key press, never per frame. A row arriving ABOVE another
     would enter it too; no row kind does today — a stash's row is laid out in the
     walk's stream and appended like any other — and there is to be no
     working-tree row (`docs/design/history-graph.md`). Named

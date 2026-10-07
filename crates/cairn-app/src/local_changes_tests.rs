@@ -629,3 +629,116 @@ fn a_status_that_could_not_be_read_is_said() {
         "the lists kept were thrown away"
     );
 }
+
+/// The rows of the lists drawn highlighted: a list row's rect in the chosen colour.
+fn highlighted_rows(test: &TestingRunner) -> usize {
+    let chosen = test.run_in(|| get_theme_or_default().read().colors().surface_secondary);
+    test.find_many(|node, element| {
+        let area = node.layout().area;
+        Rect::try_downcast(element)
+            .filter(|_| {
+                area.min_x() > SIDEBAR_WIDTH && area.height() == cairn_ui::DETAIL_ROW_HEIGHT
+            })
+            .filter(|rect| rect.style.background.as_color() == Some(chosen))
+            .map(|_| ())
+    })
+    .len()
+}
+
+/// Phase 09 QA's RR-note, the Changes tab's rule: a filter that hides the path chosen leaves it
+/// chosen — its diff drawn, no row highlighted — and a refresh asks it again; only a status
+/// that no longer lists it chooses another. Caught by: the path let go of, or another chosen,
+/// when the filter hides it; or the hidden path not asked again on a refresh.
+#[test]
+fn a_filter_hiding_the_path_chosen_keeps_it_chosen_and_drawn() {
+    let (mut test, view, submitted) = launch();
+    apply(&mut test, view, &submitted, status(every_kind()));
+    open_local_changes(&mut test);
+    let chosen = asked(&submitted)
+        .pop()
+        .unwrap_or_else(|| panic!("nothing asked"));
+    assert_eq!(path_of(&chosen), "both.rs");
+    answer(&mut test, view, &submitted, &chosen, "UNSTAGED LINE");
+    assert_eq!(
+        highlighted_rows(&test),
+        1,
+        "the path chosen is not highlighted"
+    );
+
+    let mut text = view.local.filter_text;
+    test.run_in(|| text.set("new".to_owned()));
+    for _ in 0..3 {
+        test.sync_and_update();
+    }
+    let filter = |submitted: &Submitted| {
+        submitted
+            .borrow()
+            .iter()
+            .rev()
+            .find_map(|request| match request {
+                Request::FilterLocalChanges { changes, text } => {
+                    Some((Arc::clone(changes), text.clone()))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("the filter was not asked"))
+    };
+    let (lists, typed) = filter(&submitted);
+    let rows = lists
+        .matching(&typed, || true)
+        .unwrap_or_else(|| unreachable!("never told to stop"));
+    let before = asked(&submitted).len();
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::FilteredLocalChanges {
+            changes: lists,
+            text: typed,
+            rows,
+        },
+    );
+    assert!(
+        !labels(&test).contains(&"both.rs".to_owned()),
+        "the filter left both.rs"
+    );
+    assert_eq!(asked(&submitted).len(), before, "another path was chosen");
+    assert!(
+        paragraphs(&test)
+            .iter()
+            .any(|t| t.contains("UNSTAGED LINE")),
+        "the diff of the path chosen was let go of"
+    );
+    assert_eq!(
+        highlighted_rows(&test),
+        0,
+        "a row is highlighted for a path not shown"
+    );
+
+    // A refresh, the filter on: the new lists' rows asked, then the hidden path asked again.
+    apply(&mut test, view, &submitted, status(every_kind()));
+    let (lists, typed) = filter(&submitted);
+    let rows = lists
+        .matching(&typed, || true)
+        .unwrap_or_else(|| unreachable!("never told to stop"));
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::FilteredLocalChanges {
+            changes: lists,
+            text: typed,
+            rows,
+        },
+    );
+    assert_eq!(
+        asked(&submitted).pop(),
+        Some(chosen),
+        "the hidden path was not asked again"
+    );
+    assert!(
+        paragraphs(&test)
+            .iter()
+            .any(|t| t.contains("UNSTAGED LINE"))
+    );
+}

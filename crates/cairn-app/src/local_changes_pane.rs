@@ -11,8 +11,10 @@
 //! Unstaged (R9.3) — superseding the last; a conflicted path asks nothing and draws its notice
 //! (R9.4). With nothing chosen, the first path the lists show is, as the view opens (R9.3).
 //! When other lists are drawn — a refresh's status — the path chosen is looked for in them by a
-//! search: still listed, it is asked again, its diff drawn until the new one comes; gone, the
-//! first path is chosen in its place, so no diff is drawn under no row.
+//! search: still listed, it is asked again, its diff drawn until the new one comes; gone from
+//! the status, the first path shown is chosen in its place, so no diff is drawn for a path the
+//! status no longer lists. The filter follows the Changes tab's rule: a path it hides stays
+//! chosen, its diff drawn and no row highlighted, and is asked again on each refresh.
 //!
 //! **What it draws.** The lists only for the status they are laid out over; the diff only for
 //! the answer naming the path chosen, its side and the settings now. Nothing stages, unstages
@@ -25,14 +27,16 @@ use cairn_model::{
     WorkingTreeStatus,
 };
 use cairn_ui::accelerators::{self, Scope};
-use cairn_ui::{DiffHeader, DiffNotice, DiffNoticeView, DiffView, LocalChangesList, ShownFiles};
+use cairn_ui::{
+    DiffHeader, DiffNotice, DiffNoticeView, DiffSettings, DiffView, LocalChangesList, ShownFiles,
+};
 use freya::prelude::*;
 
 use crate::detail_pane::notice;
-use crate::diff_state::{WorkingShown, answered_working};
+use crate::diff_state::{WorkingChoice, WorkingShown, answered_working};
 use crate::local_changes_state::{drawn_changes, shown_rows};
 use crate::window::View;
-use crate::worker::{Refreshed, Request};
+use crate::worker::{FileQuery, Refreshed, Request};
 use crate::{diff_actions, shortcuts};
 
 /// Said in place of the lists before the first status is read.
@@ -108,60 +112,93 @@ fn first_shown(
     })
 }
 
-/// What the path chosen is to be, now that the lists drawn are numbered `serial`: found again
-/// in them, it is asked again; gone, or none chosen, the first path shown is chosen; with none
-/// shown, none is. Run as the view is shown and whenever other lists are drawn.
-fn follow_the_lists(view: View, submit: Option<&dyn Fn(Request)>) {
-    let local = view.local.state.peek();
-    if !local.is_settled() {
-        return;
-    }
-    let serial = local.serial();
-    let lists = drawn_changes(&local);
-    let chosen = view.diff.peek().working_choice().cloned();
-    let found = chosen.as_ref().and_then(|choice| {
+/// What following the lists does to the path chosen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Follow {
+    /// Chosen in these lists already: nothing is written.
+    Keep,
+    /// Still listed: asked again, as it is listed now — `None` for a conflict, which asks
+    /// nothing.
+    ReAsk(Option<FileQuery>),
+    /// Gone, or never chosen: the first path the lists show.
+    ChooseFirst(ChangeList, usize),
+    /// Gone, and no path shown: let go of.
+    LetGo,
+    /// None chosen and none shown: nothing is written. A decision that wrote here would wake
+    /// the effect that asks it again, for good.
+    Nothing,
+}
+
+/// What the path chosen is to be in the lists drawn, numbered `serial`, through the filter's
+/// rows: found again in them, it is asked again; gone, or none chosen, the first path shown is
+/// chosen; with none shown, a path chosen is let go of and none chosen stays so. Only a path
+/// gone from the status is let go of: one the filter hides stays chosen and drawn, its row
+/// unhighlighted, as the Changes tab keeps a file its filter hides.
+fn follow(
+    lists: &LocalChanges,
+    serial: u64,
+    shown: [&ShownFiles; 2],
+    chosen: Option<&WorkingChoice>,
+    settings: DiffSettings,
+) -> Follow {
+    if let Some(choice) = chosen {
         if choice.lists == serial {
-            return Some(None);
+            return Follow::Keep;
         }
-        lists
+        let found = lists
             .row_of(choice.list, &choice.path)
-            .and_then(|row| lists.get(choice.list, row))
-            .map(|change| {
-                Some(diff_actions::working_query(
-                    choice.list,
-                    &change,
-                    *view.diff_settings.peek(),
-                ))
-            })
-    });
+            .and_then(|row| lists.get(choice.list, row));
+        if let Some(change) = found {
+            return Follow::ReAsk(diff_actions::working_query(choice.list, &change, settings));
+        }
+    }
+    match first_shown(lists, shown[0], shown[1]) {
+        Some((list, row)) => Follow::ChooseFirst(list, row),
+        None if chosen.is_some() => Follow::LetGo,
+        None => Follow::Nothing,
+    }
+}
+
+/// Does what [`follow`] decides for the lists drawn now. Run as the view is shown and whenever
+/// other lists are drawn.
+fn follow_the_lists(view: View, submit: Option<&dyn Fn(Request)>) {
+    let decided = {
+        let local = view.local.state.peek();
+        if !local.is_settled() {
+            return;
+        }
+        let diff = view.diff.peek();
+        (
+            local.serial(),
+            follow(
+                drawn_changes(&local),
+                local.serial(),
+                [
+                    shown_rows(&local, ChangeList::Unstaged),
+                    shown_rows(&local, ChangeList::Staged),
+                ],
+                diff.working_choice(),
+                *view.diff_settings.peek(),
+            ),
+        )
+    };
     let mut diff = view.diff;
-    match found {
-        // Chosen in these lists already.
-        Some(None) => {}
-        // Still listed: asked again, as it is listed now.
-        Some(Some(query)) => {
-            drop(local);
+    match decided {
+        (_, Follow::Keep | Follow::Nothing) => {}
+        (serial, Follow::ReAsk(query)) => {
             let requests = diff.write().refresh_working(serial, query);
             submit_all(requests, submit);
         }
-        // Gone, or never chosen: the first path shown, or none.
-        None => {
-            let first = first_shown(
-                lists,
-                shown_rows(&local, ChangeList::Unstaged),
-                shown_rows(&local, ChangeList::Staged),
-            );
-            drop(local);
-            match first {
-                Some((list, row)) => diff_actions::choose_working(list, row, view, submit),
-                // Written only when a path is to be let go of: a write wakes this again.
-                None if chosen.is_some() => {
-                    let requests = diff.write().let_go_of_working();
-                    submit_all(requests, submit);
-                }
-                None => {}
-            }
+        (_, Follow::ChooseFirst(list, row)) => {
+            diff_actions::choose_working(list, row, view, submit);
         }
+        // Written only when there is a path to let go of: a write wakes the effect again, so a
+        // decision gone wrong here must cost one more look, never a loop.
+        (_, Follow::LetGo) if diff.peek().working_choice().is_some() => {
+            let requests = diff.write().let_go_of_working();
+            submit_all(requests, submit);
+        }
+        (_, Follow::LetGo) => {}
     }
 }
 
@@ -405,4 +442,123 @@ fn diff_body(
     .side_by_side(side_by_side)
     .current(current)
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use cairn_model::{RepoPath, StatusEntry, WorkingTreeStatus};
+
+    use super::*;
+    use crate::diff_state::DiffState;
+
+    fn lists(paths: &[&str]) -> LocalChanges {
+        LocalChanges::new(WorkingTreeStatus::Listed(
+            paths
+                .iter()
+                .map(|path| StatusEntry::Untracked(RepoPath::from(*path)))
+                .collect(),
+        ))
+    }
+
+    fn chosen(path: &str, lists: u64) -> WorkingChoice {
+        WorkingChoice {
+            list: ChangeList::Unstaged,
+            path: RepoPath::from(path),
+            lists,
+        }
+    }
+
+    const ALL: [&ShownFiles; 2] = [&ShownFiles::All, &ShownFiles::All];
+
+    /// Phase 09 QA's TC1: an empty status with nothing chosen decides nothing — a decision that
+    /// wrote there woke the effect again, for good, which a test could only see as a hang — and
+    /// with a path chosen lets it go once, then decides nothing. Caught by: a let-go decided
+    /// with nothing chosen (`None if chosen.is_some() || true`).
+    #[test]
+    fn an_empty_status_lets_a_path_go_once_and_then_decides_nothing() {
+        let empty = lists(&[]);
+        let settings = DiffSettings::default();
+        assert_eq!(follow(&empty, 2, ALL, None, settings), Follow::Nothing);
+        assert_eq!(
+            follow(&empty, 2, ALL, Some(&chosen("a.rs", 1)), settings),
+            Follow::LetGo
+        );
+        // The effect, run as the view runs it: each decision applied, and asked again after
+        // each write, until it writes nothing.
+        let mut state = DiffState::default();
+        let _ = state.choose_working(chosen("a.rs", 1), None);
+        let mut writes = 0;
+        loop {
+            match follow(&empty, 2, ALL, state.working_choice(), settings) {
+                Follow::Keep | Follow::Nothing => break,
+                Follow::LetGo => {
+                    let _ = state.let_go_of_working();
+                }
+                other => panic!("an empty status decided {other:?}"),
+            }
+            writes += 1;
+            assert!(
+                writes <= 1,
+                "following an empty status writes again and again"
+            );
+        }
+        assert_eq!(writes, 1);
+    }
+
+    /// The decision for each case: a path chosen in these lists kept; one still listed asked
+    /// again as it is listed now; one gone, or none, the first path shown; a filter hiding the
+    /// path chosen keeps it (the Changes tab's rule), and a filter leaving no row lets none be
+    /// chosen. Caught by: a path re-asked against the lists it was chosen in, a path the filter
+    /// hides let go of, or a hidden first row chosen.
+    #[test]
+    fn the_path_chosen_follows_the_lists_as_decided() {
+        let settings = DiffSettings::default();
+        let drawn = lists(&["a.rs", "b.rs"]);
+        assert_eq!(
+            follow(&drawn, 1, ALL, Some(&chosen("b.rs", 1)), settings),
+            Follow::Keep
+        );
+        match follow(&drawn, 2, ALL, Some(&chosen("b.rs", 1)), settings) {
+            Follow::ReAsk(Some(query)) => {
+                assert_eq!(diff_state_path(&query), "b.rs");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            follow(&drawn, 2, ALL, Some(&chosen("gone.rs", 1)), settings),
+            Follow::ChooseFirst(ChangeList::Unstaged, 0)
+        );
+        assert_eq!(
+            follow(&drawn, 2, ALL, None, settings),
+            Follow::ChooseFirst(ChangeList::Unstaged, 0)
+        );
+        // The filter shows b.rs alone: a.rs, chosen and hidden, stays chosen and is asked
+        // again; with none chosen, the first row shown is b.rs.
+        let filtered = [
+            &ShownFiles::Filtered(vec![1]),
+            &ShownFiles::Filtered(Vec::new()),
+        ];
+        assert!(matches!(
+            follow(&drawn, 2, filtered, Some(&chosen("a.rs", 1)), settings),
+            Follow::ReAsk(Some(_))
+        ));
+        assert_eq!(
+            follow(&drawn, 2, filtered, None, settings),
+            Follow::ChooseFirst(ChangeList::Unstaged, 1)
+        );
+        let none = [
+            &ShownFiles::Filtered(Vec::new()),
+            &ShownFiles::Filtered(Vec::new()),
+        ];
+        assert_eq!(follow(&drawn, 2, none, None, settings), Follow::Nothing);
+    }
+
+    fn diff_state_path(query: &FileQuery) -> String {
+        match &query.target {
+            crate::worker::FileTarget::WorkingTree { path, .. } => path.display().into_owned(),
+            crate::worker::FileTarget::Committed { file, .. } => {
+                file.new_path.display().into_owned()
+            }
+        }
+    }
 }

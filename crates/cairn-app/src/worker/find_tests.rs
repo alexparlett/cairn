@@ -186,6 +186,68 @@ fn the_pages_a_find_laid_out_before_it_was_stopped_still_arrive() {
     }
 }
 
+/// R8.5: a stop alone — what a scroll or a row chosen asks, with nothing asked after it —
+/// ends the find: once an operation queued behind the stop on the same thread is answered,
+/// no page of the find arrives, and the next page asked continues the walk where the find
+/// left it. Over a line of commits written for it, one row a find page, so a find left
+/// running would still be paging long after. Caught by: a stop numbered in no lane or not
+/// routed to the history lane (the find pages on to the end of the line).
+#[test]
+fn a_stop_alone_ends_the_find_and_leaves_the_walk_where_it_stood() {
+    let line = super::written_repository::WrittenRepository::linear(
+        "cairn-stop-alone",
+        cairn_model::LaneAssigner::DEFAULT_WINDOW * 3,
+    );
+    let (handle, mut updates) = super::diff_tests::opened(line.path());
+    super::fetch_tests::opened_as(&mut updates);
+    handle.submit(Request::OpenHistory { rows: 1 });
+    let mut seen = collect_until(&mut updates, |u| matches!(u, Update::Rows { .. }));
+    handle.submit(Request::FindRow {
+        target: nowhere(),
+        rows: 1,
+    });
+    seen.extend(collect_until(&mut updates, |u| {
+        matches!(u, Update::Rows { .. })
+    }));
+    handle.submit(Request::StopFinding);
+    // Behind the stop on the repository thread: answered only once the stop was taken.
+    handle.submit(Request::ListRemotes);
+    seen.extend(collect_until(&mut updates, |u| {
+        matches!(u, Update::Remotes { .. })
+    }));
+    let mut late = Vec::new();
+    while let Some(update) = poll_for(&mut updates, Duration::from_millis(200)) {
+        late.push(update);
+    }
+    assert!(
+        !late.iter().any(|u| matches!(u, Update::Rows { .. })),
+        "the find paged on after its stop: {} more updates",
+        late.len()
+    );
+    assert!(
+        !seen
+            .iter()
+            .any(|u| matches!(u, Update::Rows { complete: true, .. })),
+        "the find walked to the end of the line"
+    );
+    handle.submit(Request::MoreHistory { rows: 3 });
+    seen.extend(collect_until(
+        &mut updates,
+        |u| matches!(u, Update::Rows { rows, .. } if rows.len() == 3),
+    ));
+    let kept = rows_of(&seen);
+    assert_eq!(
+        kept,
+        line.commits[..kept.len()],
+        "a page was lost or repeated"
+    );
+    assert!(
+        kept.len() < line.commits.len() / 2,
+        "the find ran on: {}",
+        kept.len()
+    );
+}
+
 /// R8.5: a find whose row no page holds — a stash whose base no ref reaches, a ref moved since
 /// the walk began — pages to the walk's end, and the last page says the walk is complete: what
 /// the window reads as the row not being in the graph. Caught by: a find that stops short of

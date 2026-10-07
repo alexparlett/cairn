@@ -3,6 +3,137 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-07 — phase 09: Local Changes, read only, and the window check
+
+Packet mode, on `feature/refs-and-status`. QA pending (the coordinator's, fresh reviewers).
+
+**Shipped.** Local Changes in the main region (`docs/systems/local-changes.md`): a filter over
+Unstaged above Staged, each a flat `VirtualScrollView` of paths with a badge (`M`, `A` for added,
+intent-to-add or untracked, `D`, `R`/`C` with the source before the path, `T`, `S` for a
+submodule, Fork's warning triangle for a conflict), the chosen path's diff on the right under
+the diff view's bar. The lists are `cairn_model::LocalChanges` — the status's entries indexed
+into two lists sorted by path bytes, built on the refresh thread (`Update::Status` now carries
+`Arc<LocalChanges>`), with the count of distinct paths (`paths`, now the sidebar's count), a
+path's row by binary search (`row_of`) and the filter's pass (`matching`, a tenth lane
+`QueryLane::LocalChangesFilter`, `Request::FilterLocalChanges`, `Update::FilteredLocalChanges`,
+on the repository thread). The window keeps the lists drawn and the filter's rows
+(`local_changes_state.rs`); with a filter on, a new status is drawn only once its rows arrive.
+The path chosen lives in `DiffState` (`diff_state/working.rs`) as a third holder of the
+file-diff lane: asked as its list says (`WorkingSide::Staged`, `Unstaged`, `Untracked`; a
+conflict asks nothing and draws `DiffNotice::Conflicted`), kept only for that exact query,
+re-asked when the view is shown after losing the lane, by a setting moved with the view shown
+(`Asking::Working`), and followed through each status drawn (`follow_the_lists`): still
+listed, asked again with its last diff drawn meanwhile; gone, the first path chosen; none, none.
+`FileTarget::WorkingTree` and `WorkingSide` lost their `expect(dead_code)`. The view hears
+previous and next change itself (its own scroll and cursor, `LocalChangesView`) and says a
+failed status read in place of the lists, or over the lists kept.
+
+**Decided, batched for the user (not approved):**
+
+- **The filter field is built** — Fork's Local Changes has one above the lists, and the Changes
+  tab's precedent draws its filter — but **not the eye (quick look), the layout menu or the
+  collapse-all chevron**, as the Changes tab draws none of them; the layout menu's items
+  (tree, combined list, hide untracked, show ignored) are out of scope by the PRD (#36, R3.4,
+  R3.5). Named in `local-changes.md`.
+- **Badges are the Commit tab's letters** (`A` for added and untracked alike, `T` for a type
+  change as R9.1 names it a kind, `S` for a submodule), where Fork draws a green `+` for
+  untracked/added, `M` for a type change and a submodule icon; the conflict is Fork's triangle.
+- **Rows in path-byte order**, untracked mixed with tracked (Fork declined tracked-first; its
+  exact list order is not recorded).
+- **The count is distinct paths** (R9.2's letter), where phase 08 counted entries: a staged
+  deletion and an untracked file of the same name count once (Fork's OPEN 9 unsettled).
+- **Local Changes' diff takes the Changes tab's options**, Entire File included (one file's diff
+  under the same bar); the setting is shared with the Changes tab.
+- **A refresh re-asks the path chosen** even when the status is unchanged (the file may have
+  changed under the same `M`), drawing its last diff meanwhile; a path gone chooses the first.
+- **The status failure** (the user's open question from phase 02) is drawn as built: the
+  `GitFailed` message for the whole view, the lists of the last status kept under it.
+- Unstaged and Staged split the left side in two equal halves (no splitter between them).
+- "Showing N of M files" counts rows, so a path in both lists counts twice there.
+
+**C9** passes: `local_changes_draws_its_lists_and_the_first_paths_diff_from_the_working_tree_query`
+(lists, count, first path asked as its side, answer drawn for that query alone, an untracked
+path asked as untracked), `both_lists_draw_their_paths_with_their_badges`,
+`a_conflicted_path_draws_its_notice_and_asks_nothing`, and the viewport twin
+`a_status_of_50000_paths_builds_one_viewport_filtered_or_not` (named in the root `CLAUDE.md`).
+
+**The QA brief, each pinned:**
+
+- A refresh removing the chosen path: `a_refresh_that_removes_the_chosen_path_draws_no_stale_diff_under_no_row`
+  (window) and `a_refresh_asks_the_path_again_and_draws_its_last_diff_meanwhile` (state).
+- A path staged and unstaged: `a_path_in_both_lists_draws_each_lists_diff_and_the_answers_cannot_cross`
+  (window) and `a_path_in_both_lists_keeps_only_the_answer_for_the_list_chosen` (state).
+- Untracked files under a new directory, one per file and counted:
+  `untracked_files_under_a_new_directory_are_listed_one_per_file_and_counted` (real boundary,
+  a repository written with `std::fs`), `each_path_is_in_the_lists_its_changes_put_it_in_ordered_by_name`,
+  `the_count_beside_local_changes_is_of_distinct_paths`.
+- window_check's status is large and only the scratch clone was dirtied: the check refuses a
+  scratch path inside the bench (or the bench inside it) and a clone with
+  `objects/info/alternates`, and asserts at least 1,000 paths; it landed 11,000 (below), and
+  `find ~/Development/bench/rust/.git -newer <marker>` printed nothing after either run (and
+  after the clone, made with `GIT_OPTIONAL_LOCKS=0 git clone --local --no-hardlinks`).
+
+**Every pin checked against a named mutation:**
+
+| Pin | Mutation it fails under |
+| --- | --- |
+| `each_change_is_drawn_as_its_kind_with_a_sources_path` | Unstaged takes `unstaged.is_some()` alone (a submodule listed for its state alone dropped) |
+| `the_count_is_of_distinct_paths`, `each_path_is_in_the_lists_its_changes_put_it_in_ordered_by_name` | the distinct-path merge advancing one list on equal paths (a path in both counted twice) |
+| `a_status_of_50000_paths_builds_one_viewport_filtered_or_not` | `item_size(1.)` (514 rows built for a viewport of about 22); `length(rows.min(1000))` (the end is not the last row) |
+| `a_path_in_both_lists_keeps_only_the_answer_for_the_list_chosen` | `working_arrived` keeping any answer |
+| `the_working_path_and_the_commits_file_take_the_lane_from_each_other` | choosing the path not taking the lane from the commit's file; `select_changes` leaving the path's lane |
+| `a_refresh_asks_the_path_again_and_draws_its_last_diff_meanwhile` | `refresh_working` dropping the drawn diff |
+| `a_refresh_that_removes_the_chosen_path_draws_no_stale_diff_under_no_row` | a path gone treated as still chosen |
+| `a_path_in_both_lists_draws_each_lists_diff_and_the_answers_cannot_cross` | a Staged row asked as unstaged |
+| `a_conflicted_path_draws_its_notice_and_asks_nothing` | a conflict asked as unstaged |
+| `local_changes_draws_its_lists_and_the_first_paths_diff_from_the_working_tree_query` | no first path chosen on open |
+| `local_changes_filter_is_answered_on_a_worker_for_the_windows_own_lists` | the request numbered in no lane (never served: no answer) |
+| `untracked_files_under_a_new_directory_are_listed_one_per_file_and_counted` | the status read's second `--untracked-files=all` read skipped (`new/` one row) |
+| `the_count_beside_local_changes_is_of_distinct_paths` | the count as entries |
+| `next_change_moves_local_changes_own_diff` | the view's `Scope::Detail` chords unheard |
+| `a_status_that_could_not_be_read_is_said` | the failure line over the kept lists dropped |
+
+A bug the window tests found first: a status listing nothing, with a path chosen, let it go and
+then let go of nothing in a loop (each write woke the effect again); `follow_the_lists` now
+writes only when a path is to be let go of.
+
+**C12 — `window_check`, measured** (release, warm, 1440×900, AMD Ryzen 7 9800X3D, two runs;
+frames are the UI thread's work: every update applied in the frame plus its
+`sync_and_update`). The window now opens as the application does — `Request::Refresh`, the refs
+opening the history from every ref — and lands the decorated history, the sidebar's rows, the
+refs and the status before its first phase ends:
+
+| Phase | Frames | Median | p99 | Max (run 1 / run 2) | Over 16.7 ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| bench: opening — refs (175), first page (8 rows labelled), sidebar rows, status | 35 / 33 | 0.02 ms | 7.5 ms | 7.51 / 7.01 ms | 0 |
+| bench: the history scrolled | 62 | 1.43 / 1.34 ms | 2.1 ms | 2.12 / 2.09 ms | 0 |
+| bench: S1, M1, F1 phases (as before) | — | — | — | 15.76 (F1 Load Diff, run 1) / 7.52 ms | 0 |
+| scratch clone (11,000 paths): opening, its status among what lands | 37 | 0.02 ms | 8.3 ms | 6.70 / 8.25 ms | 0 |
+| Local Changes shown: lists (Unstaged 10,750, Staged 500) and the first path's diff | 24 / 25 | 0.03 ms | 8.6 ms | 7.26 / 8.61 ms | 0 |
+| Unstaged scrolled, 100 rows a frame | 122 | 0.68 / 0.75 ms | 1.3 ms | 1.34 / 1.47 ms | 0 |
+| a filter typed, its rows answered on a worker | 13 | 0.02 ms | 1.0 ms | 1.02 / 0.94 ms | 0 |
+| a refresh landed with the view shown | 28 | 0.02 ms | 1.2 ms | 1.15 / 0.60 ms | 0 |
+
+Applying a status of 11,000 paths costs 0.004-0.014 ms (the lists arrive laid out; the window
+moves an `Arc`). The status landed after 77 ms on the bench (clean) and about 110 ms on the
+scratch clone (11,000 paths, two reads); the first path's diff about 60-80 ms after the view was
+shown. The F1 Load Diff frame at 15.76 ms in run 1 (2.98 ms in run 2) is the existing phase's,
+not this phase's; no frame crossed 16.7 ms. The slowest scratch frames (7-9 ms) are the view's
+first draw.
+
+**C11, complete** — every number on the machine in `measured-baseline.md`, release, warm,
+median of seven, measured in the phases named; nothing here was re-measured:
+
+| C11 item | Bar | Measured | Where |
+| --- | --- | --- | --- |
+| status, clean bench | 100 ms | 29.1 ms | phase 02 |
+| status, 1,000 modified + 10,000 untracked (scratch clone) | 250 ms | 34.6 ms (one read); 66.7 ms with the untracked in 1,000 new directories (two reads) | phase 02 |
+| refs snapshot with every ahead/behind, bench | 100 ms | 0.13 ms (175 refs) | phase 01 |
+| the same, 10,000-ref fixture | recorded | 28.3 ms (10,001 refs) | phase 01 |
+| first page from every ref | 200 ms | 7.27 ms (8.56 ms with the snapshot's read) | phase 05 |
+| the same from `HEAD`, beside it | recorded | 7.69 ms | phase 05 |
+| status with every file's stat changed | recorded, not barred | 758.9 ms | phase 02 |
+
 ## 2026-10-07 — phase 08 QA
 
 Fresh qa-checklist (NOT READY on QC-B1), responsiveness-reviewer, test-coverage-auditor;

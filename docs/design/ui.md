@@ -75,10 +75,11 @@ The title bar names the repository — marked `*` while the working tree has
 changes — the current branch, and its behind and ahead counts, as Fork's central
 status box does.
 
-Pressing Local Changes puts the staging screen in the main region: Unstaged above
-Staged, each a list of paths with Fork's badges, and the diff of the chosen path
-beneath, the stage and discard gestures on it, and the commit box (`diff.md`,
-below).
+Pressing Local Changes puts the staging screen in the main region, as Fork lays it
+out: a filter over Unstaged above Staged, each a list of paths with Fork's badges, and
+beside them, on the right, the diff of the chosen path with the stage and discard
+gestures on it and the commit box under it (`diff.md`, below). As built:
+`docs/systems/local-changes.md`.
 
 **Refresh** is Fork's: refs and status are re-read when the window gains focus,
 after Cairn's own operations, and on the Refresh chord. Nothing watches the file

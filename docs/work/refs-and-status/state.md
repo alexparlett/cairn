@@ -2,7 +2,7 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 08 done (the sidebar, its filter on the repository thread, a pressed ref found by paging the held walk), QA adjudicated, confirmed findings fixed and the user's Fork decisions built; phase 09 next.** Integration branch
+**Status: phase 09 implemented (Local Changes, read only; C12's window check landing refs, the sidebar and an 11,000-path status), QA pending (the coordinator's); phase 10 next.** Integration branch
 `feature/refs-and-status`, in the worktree `.claude/worktrees/refs-and-status`,
 packet mode.
 
@@ -99,6 +99,17 @@ that most constrain implementation:
   at teardown); a ninth query lane, `QueryLane::Walk`. Detail in progress.md, phase 08.
 - C11's first-page bar is written as 200 ms because history-graph's A7 has no
   number (L12); the user may revise it at the merge bar.
+- For the user's end-of-packet batch (phase 09; not decided): Local Changes draws the filter
+  field but not Fork's eye (quick look), layout menu or collapse-all chevron (the Changes tab's
+  precedent; the menu's items are out of scope); badges are the Commit tab's letters (`A` for
+  added and untracked, `T`, `S` for a submodule) where Fork draws `+`, `M` for a type change and
+  a submodule icon; rows in path-byte order; the count is distinct paths (a staged deletion and
+  an untracked file of one name once), where phase 08 counted entries; the view's diff takes the
+  Changes tab's options, Entire File included; a refresh re-asks the path chosen, its last diff
+  drawn meanwhile, and a path gone chooses the first; Unstaged and Staged split the side in
+  equal halves; "Showing N of M files" counts rows. Detail in progress.md, phase 09. The status
+  failure question above is drawn as built: the message for the whole view, the last lists kept
+  under it.
 
 - For the user's end-of-packet batch (phase 04; not decided): authors are numbered on
   the window's side — a page names its own authors once and `History::append` adds only
@@ -178,14 +189,21 @@ each place once; chips stop being built at the column's edge (RR3); labels' orde
   (found by its stash commit, whichever entry) or, with no row, shows `Comparison::Stash` with
   no row selected and says it is not in the graph.
 
-## Handed to phase 09
+## Handed to phase 09 (done)
 
-- Local Changes' content: `MainView::LocalChanges` draws `window::LOCAL_CHANGES_PLACEHOLDER`
-  in the main region; phase 09 puts its lists there. `sidebar_pane::local_changes_count` is
-  R9.2's count (the paths status listed); `RefreshState::failure(Refreshed::Status)` is there
-  for Local Changes to say.
-- C12's `window_check` should land the sidebar beside the history (it draws today with
-  `SidebarView::created()`, nothing answered).
+- Local Changes' content: done — `LocalChangesPane` in the main region, the placeholder gone;
+  `local_changes_count` now counts distinct paths (`LocalChanges::paths`, R9.2's letter);
+  `RefreshState::failure(Refreshed::Status)` said in place of the lists, or over the lists kept
+  (`a_status_that_could_not_be_read_is_said`).
+- C12's `window_check`: done — it opens with a refresh, so the refs, the decorated history and
+  the sidebar's rows (answered, not `created()` empty) land in its first phase, and a scratch
+  clone's 11,000-path status lands in Local Changes (progress.md, phase 09).
+
+## Handed to phase 10
+
+- Issues to file at teardown, besides those listed above: Local Changes' tree view is #36
+  already; Fork's eye (quick look) and the layout menu's Hide Untracked Files, if the user wants
+  them.
 
 ## New modules and interfaces
 
@@ -372,6 +390,29 @@ Phase 08 (`docs/systems/sidebar.md` is the as-built account):
   length without this checkout's or a `git` run); window tests run in a window as wide again as
   the sidebar (`LEFT`).
 
+Phase 09 (`docs/systems/local-changes.md` is the as-built account):
+
+- `cairn-model`: `src/local_changes.rs` — `LocalChanges` (`new`, `status`, `into_status`,
+  `paths`, `len`, `is_empty`, `get`, `row_of`, `matching`), `ChangeList` (`ALL`),
+  `ChangeKind`, `PathState`, `LocalChange { path, from, kind, state }`, `MatchedRows`.
+- `cairn-ui`: `src/local_changes.rs` — `LocalChangesList`, `badge_letter`, `change_text`,
+  `list_caption`, `UNSTAGED_CAPTION`, `STAGED_CAPTION`, `NO_PATH_MATCHES`, `LIST_HEADER_HEIGHT`.
+- `cairn-app`: `QueryLane::LocalChangesFilter`; `Request::FilterLocalChanges { changes, text }`,
+  `Update::FilteredLocalChanges { changes, text, rows }`, `Update::Status { changes:
+  Arc<LocalChanges> }`, `Retired::status(Arc<LocalChanges>)`; `pool::filter_local_changes`;
+  `RefreshState::local_changes`; `local_changes_state.rs` (`LocalChangesView`,
+  `LocalChangesState`, `drawn_changes`, `shown_rows`), `local_changes_pane.rs`
+  (`LocalChangesPane`, `follow_the_lists`, the notices), `diff_state/working.rs`
+  (`WorkingChoice`, `WorkingShown`, `DiffState::{choose_working, refresh_working,
+  let_go_of_working, working_choice, working_query, working_shown, shown_working,
+  working_needs_asking, reask_working, working_arrived, load_working_anyway}`,
+  `Asking::Working`, `answered_working`); `diff_actions::{working_query, choose_working,
+  load_working_anyway}`; `View::local`; `changes_tab::share_of` crate-visible;
+  `window::LOCAL_CHANGES_PLACEHOLDER` gone; `WorkingSide` exported outside tests.
+- Tests: `crates/cairn-ui/tests/local_changes.rs`, `crates/cairn-app/src/local_changes_tests.rs`,
+  the state tests in `diff_state/working.rs` and `local_changes_state.rs`, two boundary tests in
+  `worker/refresh_tests.rs`; `window_check` takes `CAIRN_SCRATCH_REPO`.
+
 ## Validation status
 
 | Phase | Status |
@@ -384,5 +425,5 @@ Phase 08 (`docs/systems/sidebar.md` is the as-built account):
 | 06 worker and refresh | implemented: C10 passes through the real boundary (`a_refresh_reopens_for_a_stash_a_checkout_and_a_moved_ref_and_for_nothing_else`, the refresh tests) and headless with focus set (`focus_gained_after_a_ref_moved_reopens_the_history_keeping_the_chosen_row`); every pin checked against a named mutation (progress.md); RR2 measured; full gate green; QA pending |
 | 07 labels and toolbar | done: C7 passes (headless: chips, compaction, clipping, ✓, bold `HEAD`, stash chip, REFS, a stash's list against `git stash show --name-status` off and on, on the host's git and both floors); the QA brief's cases pinned; every pin checked against a named mutation (progress.md); RR2's drawing half measured; QA adjudicated, confirmed findings fixed (the title bar names the repository's folder, `Update::Opened`; the stash read's options guarded); full gate green |
 | 08 sidebar | done: C8 passes (headless and through the real boundary; the twins `a_sidebar_of_50000_refs_builds_one_viewport`, `a_folder_of_10000_branches_open_builds_one_viewport`); the QA brief's cases pinned; every pin checked against a named mutation (progress.md); a find of the bench's oldest commit 2.23-2.25 s and 52.67 MiB retained through the boundary, cancelled halfway with no row after the stop; QA adjudicated, confirmed findings fixed (TC1's cancel pinned on lines of commits written for the tests, a stop alone, the list's hint the window's), the user's Fork decisions built; full gate green |
-| 09 local changes | not started |
+| 09 local changes | implemented: C9 passes (headless and through the real boundary; the twin `a_status_of_50000_paths_builds_one_viewport_filtered_or_not`); the QA brief's cases pinned; every pin checked against a named mutation (progress.md); C12 measured (every frame under 16.7 ms, two runs; an 11,000-path status on a scratch clone, the bench untouched); C11 complete in progress.md; full gate green; QA pending |
 | 10 QA | not started |

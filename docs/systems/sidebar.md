@@ -11,13 +11,12 @@ Cairn's sidebar is not Fork's is named under "Where it is not Fork's".
 Left of the main region, behind a draggable splitter (`window::beside`, Freya's
 `ResizableContainer`; its width kept for the session in `SidebarView::width`), top to bottom:
 
-- **Local Changes**, with the count of paths the last status listed — `Local Changes (N)`,
-  the count left out when there is none or no status has been read
-  (`sidebar_pane::local_changes_count`, `cairn_ui::local_changes_text`) — and **All
-  Commits**. They choose what the main region shows (`cairn_ui::MainView`,
-  `SidebarView::main`): the history with its detail pane, or Local Changes, which draws a
-  placeholder until its lists are built (`window::LOCAL_CHANGES_PLACEHOLDER`). Pressing a
-  ref returns the main region to the history.
+- **Local Changes**, with the count of distinct paths the last status listed — `Local
+  Changes (N)`, the count left out when there is none or no status has been read
+  (`sidebar_pane::local_changes_count`, `LocalChanges::paths`, `cairn_ui::local_changes_text`)
+  — and **All Commits**. They choose what the main region shows (`cairn_ui::MainView`,
+  `SidebarView::main`): the history with its detail pane, or the Local Changes view
+  (`local-changes.md`). Pressing a ref returns the main region to the history.
 - **A filter box** (`cairn_ui::SIDEBAR_FILTER_PLACEHOLDER`), and under it one line saying
   what a press is doing — "Finding <ref>…" — or why it found nothing, or, when the last
   refresh could not read the refs, why (`RefreshState::failure`).

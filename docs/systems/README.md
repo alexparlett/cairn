@@ -24,3 +24,8 @@ contract. Each is kept current in the same change that invalidates it.
 - `sidebar.md` — the window's sidebar: Local Changes and All Commits, the filter,
   the sections of refs and their folders laid out on a worker, and pressing an
   entry — its row selected, or found by paging the history's walk.
+- `status.md` — the working tree's status as `git status` answers it: what it lists, the
+  read that asks it, and the oracles that check it.
+- `local-changes.md` — the Local Changes view: Unstaged and Staged laid out over a status on
+  a worker, the filter, a path chosen and its working-tree diff asked and drawn for that path
+  alone, and how the path chosen follows each refresh.

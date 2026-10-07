@@ -13,12 +13,14 @@ the selection it names ("In the application", below). The window draws a
 commit's details and its changed files in the detail pane's Commit tab, with a
 file's diff opened in place under its row, and in its Changes tab a filtered file
 list beside one file's diff, unified or side by side, or two commits compared
-("The detail pane" and "The diff view", below); nothing stages anything — the patch emitter still ships
+("The detail pane" and "The diff view", below); and, in the Local Changes view, the path
+chosen in its Unstaged or Staged list beside its working-tree diff (`local-changes.md`);
+nothing stages anything — the patch emitter still ships
 with no caller, deliberately (program decision L2 in
 `docs/work/daily-loop/brainstorm.md`), because its round-trip tests are what make
 a later staging packet a feature rather than a rewrite. Which paths of a working
-tree changed — status — is not here: the working-tree query answers one path it is
-given. Intent for this surface is `docs/design/diff.md` and `docs/design/ui.md`, under
+tree changed — status — is not here (`status.md`): the working-tree query answers one path it
+is given, and Local Changes gives it the path chosen in its lists. Intent for this surface is `docs/design/diff.md` and `docs/design/ui.md`, under
 decisions D1 (`docs/design/engine.md`), D3 (`docs/design/concurrency.md`), D5
 (`docs/design/platform.md`) and D6 (`docs/design/conflicts.md`), indexed in the
 spine `docs/design/cairn.md`; the commitment it was built against is
@@ -1123,7 +1125,9 @@ on one.
 `Update::Changes { of, changes }` answers with the `ChangeSet`.
 `Request::FileDiff(FileQuery)` asks for one file's diff: a `FileTarget`
 (`Committed { of, file }`, the `ChangedFile` exactly as the change set named it,
-or `WorkingTree { path, side }`) and the `DiffOptions` the view chose — the
+or `WorkingTree { path, side }`, which Local Changes asks for the path chosen in its lists —
+its `WorkingSide` by the list it was chosen in, `local-changes.md`) and the `DiffOptions` the
+view chose — the
 context git is asked at, whether to compute the whitespace-ignoring ranges, and
 whether to load past R2.6's byte ceiling; the ceilings themselves are fixed.
 `Update::FileDiff { query, diff }` answers with the same query, `diff` being
@@ -1305,7 +1309,15 @@ what it compares. Two commits compared (phase 08, R7) are chosen there too
 
 **The file-diff lane is shared** (phase 08). The Changes tab's file and the Commit tab's
 files opened in place are both asked in the file-diff lane — R4.3 puts Expand All there,
-and a newer request in it supersedes it — so each asking takes the lane from the other.
+and a newer request in it supersedes it — so each asking takes the lane from the other. So
+is the path chosen in Local Changes (refs-and-status phase 09, `diff_state/working.rs`):
+it takes the lane from both and they from it, it is asked again as its view is shown
+(`working_needs_asking`, `reask_working`), a setting moved with its view shown asks it at
+once (`Asking::Working`), and a changes query supersedes it with the rest
+(`the_working_path_and_the_commits_file_take_the_lane_from_each_other`,
+`a_setting_asks_the_working_path_when_local_changes_is_shown`). A working-tree answer is
+kept only when it names exactly the query the path chosen is asked as now
+(`DiffState::working_arrived`).
 `DiffState` records which holds it (`file_in_lane`, and the expansion's own), and the one
 that lost it while its answer was awaited is asked again, whole, as its tab is shown: the
 Changes tab's effect asks `reask_file` when `file_needs_asking`, the Commit tab's body

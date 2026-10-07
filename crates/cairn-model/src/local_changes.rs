@@ -12,12 +12,29 @@
 //! **Which list.** A tracked path is in Staged when it has a staged change, and in Unstaged when
 //! it has an unstaged one — in both when it has both (R9.1) — or when git listed it for a
 //! submodule's state alone; a conflicted path and an untracked one are in Unstaged, as Fork
-//! puts them (`fork-refs-and-status-ui.md` section 6). Each list is in the order of its paths'
-//! bytes — git's own order — so tracked and untracked paths are mixed by name, as Fork mixes
-//! them (it declined to list tracked paths first).
+//! puts them (`fork-refs-and-status-ui.md` section 6). Each list is in Fork's natural order of
+//! its paths ([`path_order`], the sidebar's `natural_order`: case ignored, numbers read as
+//! numbers; the user's decision, 2026-10-07), so tracked and untracked paths are mixed by name,
+//! as Fork mixes them (it declined to list tracked paths first).
+
+use std::cmp::Ordering;
 
 use crate::text_filter::{BETWEEN_CHECKS, Folded};
-use crate::{RepoPath, StagedChange, StatusEntry, UnstagedChange, WorkingTreeStatus};
+use crate::{
+    RepoPath, StagedChange, StatusEntry, UnstagedChange, WorkingTreeStatus, natural_order,
+};
+
+/// The order a list's paths are in: Fork's natural order of the paths as text
+/// ([`natural_order`]: case ignored, each run of digits read as its number), and, between two
+/// paths that read alike — bytes that are not UTF-8 read as the same replacement — their
+/// bytes, so the order is total and two paths are equal only when their bytes are.
+pub fn path_order(one: &[u8], other: &[u8]) -> Ordering {
+    natural_order(
+        &String::from_utf8_lossy(one),
+        &String::from_utf8_lossy(other),
+    )
+    .then_with(|| one.cmp(other))
+}
 
 /// One of the view's two lists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -117,7 +134,8 @@ impl LocalChanges {
                     staged.push(index);
                 }
             }
-            let by_path = |one: &u32, two: &u32| path_at(entries, *one).cmp(path_at(entries, *two));
+            let by_path =
+                |one: &u32, two: &u32| path_order(path_at(entries, *one), path_at(entries, *two));
             unstaged.sort_unstable_by(by_path);
             staged.sort_unstable_by(by_path);
         }
@@ -177,12 +195,12 @@ impl LocalChanges {
         Some(change_of(entry, list))
     }
 
-    /// The row of `list` that lists `path`, if it does: a binary search, since each list is in
-    /// its paths' order and lists a path at most once.
+    /// The row of `list` that lists `path`, if it does: a binary search in [`path_order`], the
+    /// order each list is sorted in, since each list lists a path at most once.
     pub fn row_of(&self, list: ChangeList, path: &RepoPath) -> Option<usize> {
         let entries = self.entries();
         self.list(list)
-            .binary_search_by(|index| path_at(entries, *index).cmp(path.as_bytes()))
+            .binary_search_by(|index| path_order(path_at(entries, *index), path.as_bytes()))
             .ok()
     }
 
@@ -255,7 +273,7 @@ fn distinct_paths(status: &WorkingTreeStatus, unstaged: &[u32], staged: &[u32]) 
     loop {
         match (one.peek(), two.peek()) {
             (Some(a), Some(b)) => {
-                match path(**a).cmp(path(**b)) {
+                match path_order(path(**a), path(**b)) {
                     std::cmp::Ordering::Less => {
                         one.next();
                     }
@@ -626,6 +644,59 @@ mod tests {
         assert_eq!(matched.of(ChangeList::Unstaged), [1, 2]);
         assert_eq!(matched.of(ChangeList::Staged), [0, 1]);
         assert_eq!(changes.matching("src", || false), None);
+    }
+
+    /// The user's decision (2026-10-07): each list is in Fork's natural order — case ignored,
+    /// numbers read as numbers — and a path is found by a search in that same order, two paths
+    /// that read alike as text (bytes that are not UTF-8) told apart by their bytes. Caught by:
+    /// a bytewise sort (`B10` before `a`, `b10` before `b2`), or a search in another order than
+    /// the sort's (a path listed and not found).
+    #[test]
+    fn each_list_is_in_natural_order_and_found_in_it() {
+        let paths: Vec<Vec<u8>> = vec![
+            b"b10.rs".to_vec(),
+            b"B2.rs".to_vec(),
+            b"a.rs".to_vec(),
+            b"Z/one.rs".to_vec(),
+            b"x\xff".to_vec(),
+            b"x\xfe".to_vec(),
+            b"m 2.rs".to_vec(),
+        ];
+        let changes = LocalChanges::new(WorkingTreeStatus::Listed(
+            paths
+                .iter()
+                .map(|path| StatusEntry::Untracked(RepoPath::new(path.clone())))
+                .collect(),
+        ));
+        let order: Vec<Vec<u8>> = (0..changes.len(ChangeList::Unstaged))
+            .filter_map(|row| changes.get(ChangeList::Unstaged, row))
+            .map(|change| change.path.as_bytes().to_vec())
+            .collect();
+        assert_eq!(
+            order,
+            [
+                b"a.rs".to_vec(),
+                b"B2.rs".to_vec(),
+                b"b10.rs".to_vec(),
+                b"m 2.rs".to_vec(),
+                b"x\xfe".to_vec(),
+                b"x\xff".to_vec(),
+                b"Z/one.rs".to_vec(),
+            ]
+        );
+        for (row, path) in order.iter().enumerate() {
+            assert_eq!(
+                changes.row_of(ChangeList::Unstaged, &RepoPath::new(path.clone())),
+                Some(row),
+                "{:?}",
+                String::from_utf8_lossy(path)
+            );
+        }
+        assert_eq!(
+            changes.row_of(ChangeList::Unstaged, &RepoPath::from("b2.rs")),
+            None
+        );
+        assert_eq!(changes.paths(), 7);
     }
 
     /// Fifty thousand paths are laid out in their order, each list a row per path. Caught by:

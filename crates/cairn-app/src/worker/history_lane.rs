@@ -345,6 +345,76 @@ mod tests {
 
     use super::*;
     use crate::worker::Refreshable;
+    use crate::worker::epoch::QueryLane;
+
+    /// The cancel a scroll and a find share (R8.5): a page asked under a number already
+    /// superseded stops at its first commit and sends nothing, the walk keeping its place, and
+    /// the next page asked under the current number takes the walk up where the last one sent
+    /// left it. Driven on the lane itself, over a line of commits written for it (not this
+    /// checkout's history, #61) and longer than the lane assigner's window
+    /// (`LaneAssigner::DEFAULT_WINDOW`), so its first page does not walk it to its end; nothing
+    /// is timed. Caught by: the walk handed a fresh `CancelSignal` rather than the epoch (the
+    /// stale page walks the whole line), the walk watched under the walk lane's number rather
+    /// than the page's (the same), or a stale page that drops the walk.
+    #[test]
+    fn a_page_asked_under_a_superseded_number_walks_nothing_and_the_next_takes_the_walk_up() {
+        let line = crate::worker::written_repository::WrittenRepository::linear(
+            "cairn-superseded-page",
+            cairn_model::LaneAssigner::DEFAULT_WINDOW + 64,
+        );
+        let repo = Repository::discover(line.path())
+            .unwrap_or_else(|error| panic!("opening the line: {error}"));
+        let epochs = Epochs::new();
+        let (outbox, sent) = Outbox::watched();
+        let answering = Answering {
+            epochs: &epochs,
+            outbox: &outbox,
+        };
+        let mut lane = HistoryLane::default();
+        let opened = epochs.bump(QueryLane::History);
+        let walk = epochs.bump(QueryLane::Walk);
+        lane.page(&repo, Page::Open { rows: 2, walk }, opened, &answering);
+        let first: Vec<Update> = sent.try_iter().map(|sent| sent.opened().1).collect();
+        let first_rows: Vec<Oid> = first
+            .iter()
+            .filter_map(|update| match update {
+                Update::Rows { rows, .. } => Some(rows.ids().collect::<Vec<_>>()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(first_rows, line.commits[..2]);
+
+        let stale = epochs.bump(QueryLane::History);
+        let current = epochs.bump(QueryLane::History);
+        lane.page(&repo, Page::More { rows: 1_000_000 }, stale, &answering);
+        let after_stale: Vec<(Option<Epoch>, Update)> =
+            sent.try_iter().map(|sent| sent.opened()).collect();
+        assert!(
+            after_stale.is_empty(),
+            "a page asked under a superseded number sent {after_stale:?}"
+        );
+        assert!(
+            lane.session.is_some(),
+            "the superseded page dropped the walk"
+        );
+
+        lane.page(&repo, Page::More { rows: 2 }, current, &answering);
+        let next: Vec<(Option<Epoch>, Update)> =
+            sent.try_iter().map(|sent| sent.opened()).collect();
+        match next.as_slice() {
+            [(epoch, Update::Rows { rows, complete })] => {
+                assert_eq!(
+                    *epoch,
+                    Some(walk),
+                    "a page not answered under its walk's number"
+                );
+                assert_eq!(rows.ids().collect::<Vec<_>>(), line.commits[2..4]);
+                assert!(!complete, "the walk ended early");
+            }
+            other => panic!("expected the next two rows, got {other:?}"),
+        }
+    }
 
     /// The decision phase 05 handed on: a ref whose commit has gone since the refresh read
     /// it — deleted and pruned in between — fails the walk's open from that snapshot; the

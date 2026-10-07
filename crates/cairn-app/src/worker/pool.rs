@@ -1374,77 +1374,101 @@ mod tests {
         assert!(!repeated, "the second page repeated a row from the first");
     }
 
-    /// Caught by: handing `next_page` a fresh `CancelSignal` instead of `epochs.watch(epoch)`.
-    /// A supersession landing between two batched requests looks like completion, so a round
-    /// that sees one retries; the failure is every round seeing one.
+    /// The cancel a scroll and a find share, through the real boundary: one queued page
+    /// asking for the whole of a long line of commits, superseded while it walks by a page
+    /// asking for two, stops where it is, sends nothing, and the two rows answered are the
+    /// walk's third and fourth — the walk taken up where the first page left it. The line is
+    /// written for the test (not this checkout's history, #61), long enough that walking it
+    /// takes far longer than the moment the supersession comes after; a round whose walk
+    /// finished first (a slow machine) is tried again. Caught by: handing `next_page` a fresh
+    /// `CancelSignal` instead of the epoch, or watching the walk lane's number rather than the
+    /// page's — every round's walk then runs to the end. A page starting at the walk's first
+    /// row is a reopened walk, a failure outright.
     #[test]
     fn superseding_a_request_stops_the_walk_that_is_serving_it() {
-        // Larger than this repository, so every request below would walk the whole history.
-        let whole_history = 1_000_000;
-        // Queued work, so the worker is still busy when the supersession arrives.
-        let batch = 2_000;
-        let (handle, mut updates) = cairn();
-
-        // One ordinary round trip, to name the opening row and time an answer on this machine.
-        let started = Instant::now();
-        handle.submit(Request::OpenHistory { rows: 2 });
-        let opened_on = match after_refs(&mut updates) {
-            Some(Update::Rows { rows, .. }) if !rows.is_empty() => rows.ids().next(),
+        let line = crate::worker::written_repository::WrittenRepository::linear(
+            "cairn-superseded-walk",
+            20_000,
+        );
+        let (handle, mut updates) = match open_with(line.path(), Startup::of_this_process()) {
+            Ok((handle, mut updates, _)) => {
+                crate::worker::fetch_tests::opened_as(&mut updates);
+                (handle, updates)
+            }
+            Err(error) => panic!("opening the line: {error}"),
+        };
+        let whole = line.commits.len();
+        let first_page = |updates: &mut Updates| match after_refs(updates) {
+            Some(Update::Rows { rows, .. }) => rows.ids().collect::<Vec<_>>(),
             other => panic!("expected the first page of a scroll, got {other:?}"),
         };
-        let answer = started.elapsed();
-        let wait = (answer * 2).clamp(
-            std::time::Duration::from_millis(1),
-            std::time::Duration::from_millis(20),
-        );
+        let queue_the_rest = |handle: &RepositoryHandle| {
+            // Posted under its own number, as `submit` would, but held to one page of the rest.
+            let epoch = handle.epochs.bump(QueryLane::History);
+            let queued = handle.jobs.send((
+                Some(epoch),
+                RepositoryJob::History(Page::More { rows: whole }),
+            ));
+            assert!(queued.is_ok(), "the worker went away");
+        };
+
+        // Unsuperseded, for how long walking the rest takes on this machine.
+        handle.submit(Request::OpenHistory { rows: 2 });
+        assert_eq!(first_page(&mut updates), line.commits[..2]);
+        let started = Instant::now();
+        queue_the_rest(&handle);
+        match after_refs(&mut updates) {
+            Some(Update::Rows {
+                rows,
+                complete: true,
+            }) => assert_eq!(rows.len(), whole - 2),
+            other => panic!("expected the rest of the line, got {other:?}"),
+        }
+        let rest = started.elapsed();
+        let wait = rest / 5;
 
         let mut ran_on = 0usize;
-        let mut never_started = 0usize;
-        for _ in 0..40 {
-            // Posted under one epoch, which `submit` cannot do.
-            let epoch = handle.epochs.bump(QueryLane::History);
-            let walk = handle.epochs.bump(QueryLane::Walk);
-            for _ in 0..batch {
-                let queued = handle.jobs.send((
-                    Some(epoch),
-                    RepositoryJob::History(Page::Open {
-                        rows: whole_history,
-                        walk,
-                    }),
-                ));
-                assert!(queued.is_ok(), "the worker went away mid-batch");
-            }
+        for _ in 0..20 {
+            handle.submit(Request::OpenHistory { rows: 2 });
+            assert_eq!(first_page(&mut updates), line.commits[..2]);
+            queue_the_rest(&handle);
             std::thread::sleep(wait);
-            // Supersedes the whole batch.
             handle.submit(Request::MoreHistory { rows: 2 });
-
-            // A page is answered under its walk's number, which the supersession does not
-            // move: the opens of the batch that finished before it arrive whole, and are passed
-            // over. The page the supersession asked for is the walk taken up where the cancel
-            // stopped it — its first two rows — or, had the open running then not stopped, an
-            // empty page from a walk run to its end.
-            loop {
-                match after_refs(&mut updates) {
-                    Some(Update::Rows { rows, .. }) if rows.len() > 2 => {}
-                    Some(Update::Rows { rows, .. }) => {
-                        match rows.ids().next() {
-                            Some(id) if Some(id) == opened_on => return,
-                            Some(_) => never_started += 1,
-                            None => ran_on += 1,
-                        }
-                        break;
-                    }
-                    other => panic!("expected the next page, got {other:?}"),
+            match after_refs(&mut updates) {
+                Some(Update::Rows { rows, .. }) if rows.len() == 2 => {
+                    let ids: Vec<cairn_model::Oid> = rows.ids().collect();
+                    assert_ne!(
+                        ids.first(),
+                        line.commits.first(),
+                        "the next page began the walk again"
+                    );
+                    assert_eq!(
+                        ids,
+                        line.commits[2..4],
+                        "the walk was not taken up where it was"
+                    );
+                    return;
                 }
+                Some(Update::Rows { rows, .. }) if rows.len() == whole - 2 => {
+                    // The walk finished before the supersession: its page, then the empty one.
+                    ran_on += 1;
+                    match after_refs(&mut updates) {
+                        Some(Update::Rows {
+                            rows,
+                            complete: true,
+                        }) if rows.is_empty() => {}
+                        other => panic!("expected the empty end of the walk, got {other:?}"),
+                    }
+                }
+                other => panic!("expected the next page, got {other:?}"),
             }
         }
 
         panic!(
-            "no supersession ever stopped a walk: {ran_on} rounds ran to the end of the \
-             history anyway and {never_started} never started one, over a batch of {batch} \
-             requests superseded after {wait:?} (one answer took {answer:?}). A walk that \
-             finishes after being superseded means the engine was handed a cancel signal \
-             that is not the epoch — see `serve`."
+            "no supersession ever stopped a walk: {ran_on} rounds ran to the end of the line \
+             anyway, superseded after {wait:?} (the whole rest took {rest:?}). A walk that \
+             finishes after being superseded means the engine was handed a cancel signal that \
+             is not the page's epoch — see `HistoryLane::answer`."
         );
     }
 

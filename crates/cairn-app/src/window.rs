@@ -2,11 +2,12 @@
 
 use std::rc::Rc;
 
-use cairn_model::{HistoryRow, RemoteSummary, RowContent, RowId, Secret};
+use cairn_model::{History, RemoteSummary, RowContent, RowId, Secret, Upstream, WorkingTreeStatus};
 use cairn_ui::accelerators::{self, HeldKeys, Scope};
 use cairn_ui::{
     ChangeCursor, CommitRow, CredentialPrompt, DETAIL_STRIP_HEIGHT, DetailTab, DiffSettings,
-    HistoryHeader, HistoryList, ROW_HEIGHT, RowRender,
+    HistoryHeader, HistoryList, MainView, ROW_HEIGHT, RowRender, StatusBox, Tracking,
+    current_branch,
 };
 use freya::prelude::*;
 
@@ -14,9 +15,14 @@ use crate::detail_pane::DetailPane;
 use crate::diff_state::DiffState;
 use crate::fetch_state::{FetchRefusal, FetchStatus, PromptView};
 use crate::history_state::{Progress, Status};
+use crate::local_changes_pane::LocalChangesPane;
+use crate::local_changes_state::LocalChangesView;
+use crate::refresh_state::RefreshState;
 use crate::selection::Pair;
+use crate::sidebar_pane::SidebarPane;
+use crate::sidebar_state::{SIDEBAR_MIN_WIDTH, SidebarView};
 use crate::worker::{Replier, Reply, Request};
-use crate::{PAGE_ROWS, selection, shortcuts, status_text};
+use crate::{PAGE_ROWS, ref_find, selection, shortcuts, status_text};
 
 /// The detail pane's height until the splitter is dragged.
 pub const PANE_HEIGHT: f32 = 260.0;
@@ -24,12 +30,14 @@ pub const PANE_HEIGHT: f32 = 260.0;
 const PANE_MIN_HEIGHT: f32 = 90.0;
 /// The least the commit list keeps when the window is squeezed.
 const LIST_MIN_HEIGHT: f32 = 80.0;
+/// The least the main region keeps beside the sidebar when the window is squeezed.
+const MAIN_MIN_WIDTH: f32 = 240.0;
 
 /// The view state the window is drawn from. Handles, not values: the window
 /// subscribes to what it reads.
 #[derive(Clone, Copy)]
 pub struct View {
-    pub rows: State<Vec<HistoryRow>>,
+    pub rows: State<History>,
     pub progress: State<Progress>,
     pub selected: State<Option<RowId>>,
     pub fetch: State<FetchStatus>,
@@ -41,6 +49,10 @@ pub struct View {
     pub diff: State<DiffState>,
     /// The commit list's scroll, shared so a parent link can bring its row into view.
     pub history_scroll: ScrollController,
+    /// Where the commit list's selection sits, shared so a row chosen outside the list — a
+    /// pressed ref's, a parent link's — is told to it and the next arrow key starts there
+    /// rather than searching the loaded rows.
+    pub history_cursor: State<usize>,
     /// The detail pane's tab, kept for the session (R5.2).
     pub detail_tab: State<DetailTab>,
     pub pane_collapsed: State<bool>,
@@ -62,6 +74,15 @@ pub struct View {
     /// The keys the window hears held, which a press on a row is resolved against (a pointer
     /// press carries no modifiers in this toolkit build): the accelerator table's.
     pub held_keys: State<HeldKeys>,
+    /// What the last refresh answered: the refs, ahead/behind and the working tree's status.
+    pub refreshed: State<RefreshState>,
+    /// What the title bar calls the repository, once the worker has opened it
+    /// (`Update::Opened`).
+    pub repository: State<Option<String>>,
+    /// The sidebar: its rows, the filter, what the main region shows, a press's find.
+    pub sidebar: SidebarView,
+    /// Local Changes: its lists, its filter and its diff's scroll (refs-and-status R9).
+    pub local: LocalChangesView,
 }
 
 impl std::fmt::Debug for View {
@@ -98,6 +119,23 @@ pub fn window(
             held_keys.set(HeldKeys::default());
         }
     });
+    // Coming back to the window reads the refs and the working tree again (R10.1).
+    crate::refresh::on_focus_gained(submit.clone());
+    // A scroll of the list supersedes a find in the sidebar (R8.5): subscribed to the list's
+    // scroll alone, and acting only while a find looks.
+    let stopping = submit.clone();
+    use_side_effect(move || {
+        let (_, y): (i32, i32) = view.history_scroll.into();
+        let away = view
+            .sidebar
+            .finding
+            .peek()
+            .as_ref()
+            .is_some_and(|find| ref_find::scrolled_away(find, y));
+        if away {
+            ref_find::superseded(view, stopping.as_deref());
+        }
+    });
 
     let list = rect()
         .width(Size::fill())
@@ -129,7 +167,7 @@ pub fn window(
             held.write().heard(&e, false);
         })
         .child(title_bar(
-            opened,
+            status_box(view.repository.read().clone(), &view.refreshed.read()),
             &counted,
             &fetch,
             view.fetch,
@@ -146,8 +184,37 @@ pub fn window(
                 .as_ref()
                 .map(|refusal| banner(status_text::refusal_line(refusal), false)),
         )
-        .child(split(list, DetailPane::new(view, submit).into(), view))
+        .child(beside(
+            SidebarPane::new(view, submit.clone()).into(),
+            match *view.sidebar.main.read() {
+                MainView::AllCommits => split(list, DetailPane::new(view, submit).into(), view),
+                MainView::LocalChanges => LocalChangesPane::new(view, submit).into(),
+            },
+            view,
+        ))
         .maybe_child(prompt.map(|prompt| dialog(prompt, &fetch, view.prompt, answer)))
+        .into()
+}
+
+/// The sidebar left of the main region, behind a draggable splitter (refs-and-status R8.1).
+fn beside(sidebar: Element, main: Element, view: View) -> Element {
+    let mut width = view.sidebar.width;
+    // Peeked: the width only matters when the split is laid out anew, and reading it would
+    // redraw the window on every step of a drag.
+    let at = *width.peek();
+    ResizableContainer::new()
+        .direction(Direction::Horizontal)
+        .panel(
+            ResizablePanel::new(PanelSize::px(at))
+                .min_size(SIDEBAR_MIN_WIDTH)
+                .on_resized(move |dragged: f32| width.set(dragged))
+                .child(sidebar),
+        )
+        .panel(
+            ResizablePanel::new(PanelSize::percent(100.))
+                .min_pixels(MAIN_MIN_WIDTH)
+                .child(main),
+        )
         .into()
 }
 
@@ -232,26 +299,47 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
         .read()
         .as_ref()
         .and_then(|pair| pair.other(*view.selected.read()));
+    let refs = view.refreshed.read().refs().cloned();
     HistoryList::new(view.rows, move |render: RowRender| {
         // No wildcard arm: a new row kind must fail to compile here.
-        match render.row.content {
-            RowContent::Commit(commit) => CommitRow::new(commit, render.row.graph, render.lanes)
+        match render.content {
+            RowContent::Commit(commit) => CommitRow::new(commit, render.graph, render.lanes)
+                .chips(render.chips)
+                .head(render.head)
                 .selected(render.selected)
                 .into(),
+            // A stash's row: its `stash@{n}` chip and its message as the subject (R5.4).
+            RowContent::Stash(stash) => {
+                CommitRow::new(stash.as_commit(), render.graph, render.lanes)
+                    .chips(render.chips)
+                    .selected(render.selected)
+                    .into()
+            }
         }
     })
+    .refs(refs)
     .lanes(lanes)
     .selected(*view.selected.read())
     .also_selected(second)
     .held(view.held_keys)
     .controller(view.history_scroll)
-    // Choosing a row asks what it changed; the pane draws the answer for that row alone.
-    .on_select(move |id: RowId| selection::choose(id, view, choosing.as_deref()))
+    .cursor(view.history_cursor)
+    // Choosing a row asks what it changed; the pane draws the answer for that row alone. It
+    // supersedes a find in the sidebar, and the entry pressed there is let go of.
+    .on_select(move |id: RowId| {
+        ref_find::row_chosen(view, choosing.as_deref());
+        selection::choose(id, view, choosing.as_deref());
+    })
     // A row pressed with the table's extending chord is the second commit of a comparison.
     .on_extend(move |(id, index): (RowId, usize)| {
+        ref_find::row_chosen(view, extending.as_deref());
         selection::extend(id, index, view, extending.as_deref());
     })
     .on_reach_end(move |()| {
+        // A find pages the walk itself; a page asked here would supersede it.
+        if view.sidebar.finding.peek().is_some() {
+            return;
+        }
         // `wants_more` debounces: every `submit` supersedes. `peek`, not `read`: reading here
         // subscribes the window to the progress it writes, and loops.
         if !progress.peek().wants_more() {
@@ -265,8 +353,35 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     .into()
 }
 
+/// The status box for the repository called `name` (R7.1) — none until it is open — `*` while the last status
+/// listed a change, the current branch and its distance from its upstream, from what the last
+/// refresh answered — each as old as the answer it is read from (a status may be one refresh
+/// behind, R10.3 as amended).
+fn status_box(name: Option<String>, refreshed: &RefreshState) -> StatusBox {
+    let refs = refreshed.refs();
+    let head = refs.map(|refs| refs.head.clone());
+    let tracking = refs
+        .and_then(|refs| {
+            let branch = current_branch(&refs.head)?;
+            Some(match refs.find(branch)?.upstream.as_ref()? {
+                Upstream::Gone { .. } => Tracking::Gone,
+                Upstream::Exists { .. } => refreshed
+                    .ahead_behind_of(branch)
+                    .map_or(Tracking::Untold, Tracking::Counts),
+            })
+        })
+        .unwrap_or(Tracking::Untold);
+    let dirty = match refreshed.status() {
+        Some(WorkingTreeStatus::Listed(entries)) => !entries.is_empty(),
+        Some(WorkingTreeStatus::IndexUnreadable(_) | WorkingTreeStatus::NoWorkingTree) | None => {
+            false
+        }
+    };
+    StatusBox::new(name, head).dirty(dirty).tracking(tracking)
+}
+
 fn title_bar(
-    path: &str,
+    status: StatusBox,
     counted: &str,
     fetch: &FetchStatus,
     fetch_state: State<FetchStatus>,
@@ -283,13 +398,10 @@ fn title_bar(
         .padding(Gaps::new(8., 12., 8., 12.))
         .child(label().text("Cairn").theme_color().font_size(16.))
         .child(
-            label()
-                .text(path.to_owned())
-                .max_lines(1)
-                .text_overflow(TextOverflow::Ellipsis)
+            rect()
                 .width(Size::flex(1.))
-                .font_size(13.)
-                .color(get_theme_or_default().read().colors().text_secondary),
+                .overflow(Overflow::Clip)
+                .child(status),
         )
         .child(
             label()
@@ -393,12 +505,12 @@ fn banner(message: String, alarming: bool) -> Element {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::cell::RefCell;
 
     use cairn_model::{
-        ChangeSet, ChangeStatus, ChangedFile, CommitDetails, CommitSummary, Context, EdgeSegment,
-        FileMode, GraphRow, Lane, Oid, RenameDetection, RepoPath, Signature, Timestamp,
+        ChangeSet, ChangeStatus, ChangedFile, CommitDetails, Context, FileMode, GraphRow, Lane,
+        Oid, PagedCommit, RenameDetection, RepoPath, RowsPage, Signature, Timestamp,
     };
     use cairn_ui::accelerators::Action;
     use cairn_ui::{COLLAPSE_CAPTION, EXPAND_CAPTION};
@@ -416,9 +528,14 @@ mod tests {
     use crate::history_state;
 
     const HEIGHT: f32 = 600.;
+    /// Where the main region begins: right of the sidebar at its opening width and the
+    /// splitter's handle. The window is as wide again as the main region's 800 px.
+    const LEFT: f32 = crate::sidebar_state::SIDEBAR_WIDTH + ResizableContext::HANDLE_SIZE;
+    const LEFT_X: f64 = LEFT as f64;
+    const WINDOW_WIDTH: f32 = LEFT + 800.;
     const PATH: &str = "/home/ada/engine";
 
-    fn row(n: usize) -> HistoryRow {
+    fn row(n: usize) -> TestRow {
         row_in_lane(n, 0)
     }
 
@@ -430,23 +547,47 @@ mod tests {
         Oid::from_bytes(&bytes).unwrap()
     }
 
-    fn row_in_lane(n: usize, lane: usize) -> HistoryRow {
-        let id = oid(n);
-        HistoryRow {
-            content: RowContent::Commit(CommitSummary {
-                id,
-                parents: Vec::new(),
-                summary: format!("commit {n}"),
-                author_name: "Ada".to_owned(),
-                author_email: "ada@example.com".to_owned(),
-                author_time: 0,
-            }),
-            graph: GraphRow {
-                id,
-                lane: Lane::new(lane),
-                edges: vec![EdgeSegment::passing(Lane::new(lane))],
-            },
+    /// A row as a test writes it: its layout and its subject, `commit n`.
+    struct TestRow {
+        graph: GraphRow,
+        subject: String,
+    }
+
+    fn row_in_lane(n: usize, lane: usize) -> TestRow {
+        TestRow {
+            graph: GraphRow::new(oid(n), Lane::new(lane), Vec::new()),
+            subject: format!("commit {n}"),
         }
+    }
+
+    /// `rows` as one page from the worker, authored by Ada.
+    fn page_of(rows: Vec<TestRow>) -> RowsPage {
+        let mut page = RowsPage::new();
+        for TestRow { graph, subject } in rows {
+            page.push(
+                graph,
+                PagedCommit {
+                    parents: 1,
+                    subject: &subject,
+                    author: "Ada",
+                    author_time: 0,
+                },
+            );
+        }
+        page
+    }
+
+    /// `rows` appended to `history` as one page.
+    fn hold(history: &mut History, rows: Vec<TestRow>) {
+        history
+            .append(page_of(rows))
+            .unwrap_or_else(|full| panic!("{full}"));
+    }
+
+    fn held(rows: Vec<TestRow>) -> History {
+        let mut history = History::new();
+        hold(&mut history, rows);
+        history
     }
 
     type Submitted = Rc<RefCell<Vec<Request>>>;
@@ -455,13 +596,13 @@ mod tests {
     /// for a refusal.
     type Answered = Rc<RefCell<Vec<(crate::worker::PromptId, Option<usize>)>>>;
 
-    fn launch(initial: Vec<HistoryRow>, progress: Progress) -> (TestingRunner, View, Submitted) {
+    fn launch(initial: Vec<TestRow>, progress: Progress) -> (TestingRunner, View, Submitted) {
         let (test, view, submitted, _) = launch_with(initial, progress, FetchStatus::Idle, None);
         (test, view, submitted)
     }
 
     fn launch_with(
-        initial: Vec<HistoryRow>,
+        initial: Vec<TestRow>,
         progress: Progress,
         fetch: FetchStatus,
         prompt: Option<PromptView>,
@@ -488,10 +629,10 @@ mod tests {
         };
         let (mut test, view) = TestingRunner::new(
             app,
-            (800., HEIGHT).into(),
+            (WINDOW_WIDTH, HEIGHT).into(),
             move |runner| {
                 runner.provide_root_context(|| View {
-                    rows: State::create(initial),
+                    rows: State::create(held(initial)),
                     progress: State::create(progress),
                     selected: State::create(None),
                     fetch: State::create(fetch),
@@ -503,6 +644,7 @@ mod tests {
                     refused: State::create(None),
                     diff: State::create(DiffState::default()),
                     history_scroll: ScrollController::new(0, 0, Vec::new()),
+                    history_cursor: State::create(0),
                     detail_tab: State::create(DetailTab::default()),
                     pane_collapsed: State::create(false),
                     pane_height: State::create(PANE_HEIGHT),
@@ -513,6 +655,10 @@ mod tests {
                     changes_list_width: State::create(crate::changes_tab::LIST_WIDTH),
                     pair: State::create(None),
                     held_keys: State::create(HeldKeys::default()),
+                    refreshed: State::create(RefreshState::default()),
+                    repository: State::create(Some("engine".to_owned())),
+                    sidebar: SidebarView::created(),
+                    local: crate::local_changes_state::LocalChangesView::created(),
                 })
             },
             1.,
@@ -598,7 +744,7 @@ mod tests {
     fn every_view_state_puts_its_own_sentence_in_the_window() {
         type Case = (
             &'static str,
-            Vec<HistoryRow>,
+            Vec<TestRow>,
             Progress,
             &'static [&'static str],
             &'static [&'static str],
@@ -692,11 +838,367 @@ mod tests {
         }
     }
 
+    /// `main` when rows were slimmed, and what each of its commits' rows drew in the window
+    /// before: subject, author, short id, date, and whether its node is a merge's ring.
+    /// Committed with the slimming (`1b0ca9f`); its lines were read by this test run
+    /// against a build of `4205d5d`, while every row still carried its full parents and its
+    /// author's address, and they agree with `CAIRN_BEFORE` in
+    /// `crates/cairn-git/tests/slim_rows.rs`, committed at `4205d5d`
+    /// (`the_windows_table_agrees_with_the_engines_table_captured_before`).
+    const MAIN_DRAWN_BEFORE: &[(&str, &str, &str, &str, &str, bool)] = &[
+        (
+            "0cfd746b5a913529bbd1a9684f8e92f1cb364c84",
+            "docs(prd): plan the refs-and-status packet, from evidence and a Fork study (#60)",
+            "Alexander Parlett",
+            "0cfd746",
+            "2026-10-06 05:13",
+            false,
+        ),
+        (
+            "0a7aeb78b918a341bc21109059a240bc64924644",
+            "fix(app): let the worker tests search a short checkout history (#61)",
+            "Alexander Parlett",
+            "0a7aeb7",
+            "2026-10-05 19:36",
+            false,
+        ),
+        (
+            "9b6b7d0faf648d82c3da02297afc3777e969b827",
+            "diff-engine: show what a commit changed as git answers it, drawn as Fork draws it (#59)",
+            "Alexander Parlett",
+            "9b6b7d0",
+            "2026-10-05 13:41",
+            false,
+        ),
+        (
+            "cfe33151ce42afd96a6edfe5e8ee22a6489cde48",
+            "process-manager: one place that starts git, and a runner every verb can share (#50)",
+            "Alexander Parlett",
+            "cfe3315",
+            "2026-10-03 05:37",
+            false,
+        ),
+        (
+            "4fe7165b6f155b883e3fd960b63d27a91f573a02",
+            "docs(prd): plan the process-manager packet, from evidence (#40)",
+            "Alexander Parlett",
+            "4fe7165",
+            "2026-10-02 17:02",
+            false,
+        ),
+        (
+            "2987a53d1408bf625c6ae730f81ec4a312040614",
+            "docs(docs): keep point-in-time packet state out of design/ (#39)",
+            "Alexander Parlett",
+            "2987a53",
+            "2026-09-23 05:45",
+            false,
+        ),
+        (
+            "7d4d9ad7a2e366ca3a3d6277079d493d44c4560f",
+            "docs(prd): plan the diff-engine packet, from evidence and a Fork study (#38)",
+            "Alexander Parlett",
+            "7d4d9ad",
+            "2026-09-17 19:03",
+            false,
+        ),
+        (
+            "bf93a4eed43422a8f8f7cfbcda29c852d694ad44",
+            "credential-prompts: authenticated fetch without Cairn holding a credential (#28)",
+            "Alexander Parlett",
+            "bf93a4e",
+            "2026-09-17 13:57",
+            false,
+        ),
+        (
+            "f4f1d0512492d07fa38eb36eb8105e884d79090d",
+            "history-graph: draw the commit graph of a real repository (#14)",
+            "Alexander Parlett",
+            "f4f1d05",
+            "2026-09-16 20:58",
+            false,
+        ),
+        (
+            "9c93114bfba6a280b4965c42ac56a9079396e7f3",
+            "Merge pull request #15 from alexparlett/docs/ui-design",
+            "Alexander Parlett",
+            "9c93114",
+            "2026-09-16 18:42",
+            true,
+        ),
+        (
+            "e480fddafc07897e52b1cd9b9a69dd1c9f9fddb1",
+            "docs(design): UI design modelled on Fork, with five annotated mockups",
+            "Alex Parlett",
+            "e480fdd",
+            "2026-09-16 18:40",
+            false,
+        ),
+        (
+            "7f9c64852879d27ff41ecc2b247141fc8b6258b9",
+            "docs(design): stamp the out-of-scope list as reviewed against real usage",
+            "Alex Parlett",
+            "7f9c648",
+            "2026-09-14 20:31",
+            false,
+        ),
+        (
+            "b8f51524295a5709d685b0ee4a1dd217b241d457",
+            "docs(design): forge links are in scope (D9); the old line conflated two things",
+            "Alex Parlett",
+            "b8f5152",
+            "2026-09-14 20:26",
+            false,
+        ),
+        (
+            "1391fb127b2d84dc9aa9f0125e3ca63d066083b7",
+            "docs(design): inventory the feature surface, plan the daily-loop program",
+            "Alex Parlett",
+            "1391fb1",
+            "2026-09-14 20:21",
+            false,
+        ),
+        (
+            "3c1f0b34a7f47d68a7e689331eb3de1f8d4b4cc2",
+            "docs(design): order the packets, and close two gaps in the graph plan",
+            "Alex Parlett",
+            "3c1f0b3",
+            "2026-09-14 20:13",
+            false,
+        ),
+        (
+            "43602a3042ed2c6ec38a6039eab5f927cf0d0cc9",
+            "docs(design): close four open questions, fix two I framed wrongly",
+            "Alex Parlett",
+            "43602a3",
+            "2026-09-14 19:44",
+            false,
+        ),
+        (
+            "d23b4ff446097e9930ca30c16364b279b906bd0e",
+            "docs(design): lock decisions D1-D5 and file two packets",
+            "Alex Parlett",
+            "d23b4ff",
+            "2026-09-14 18:25",
+            false,
+        ),
+        (
+            "382d6980fe973f4b6e92fbd94651bead5b4f88cd",
+            "chore(repo): adopt the agentic harness and scaffold the Cairn workspace",
+            "Alex Parlett",
+            "382d698",
+            "2026-09-14 18:06",
+            false,
+        ),
+    ];
+
+    /// C16, headless, over the Cairn checkout: its rows, read by the worker, applied as the
+    /// window applies every page and drawn by the window's own rows, draw what they drew
+    /// before rows were slimmed. Caught by: a row reading another row's text or author, a
+    /// parent count that is not its commit's, or a page's authors misnumbered in the
+    /// history.
+    /// The window's table and the engine's, captured at `4205d5d` and committed there: the
+    /// same commits, in the same order, with the same subjects and authors, and a ring
+    /// exactly where the engine counted more than one parent. Caught by: a table edited
+    /// after the rows were slimmed to match what they draw now.
+    #[test]
+    fn the_windows_table_agrees_with_the_engines_table_captured_before() {
+        let engine = include_str!("../../cairn-git/tests/slim_rows.rs");
+        let table = engine
+            .split_once("const CAIRN_BEFORE: &[Row] = &[")
+            .and_then(|(_, rest)| rest.split_once("\n];"))
+            .map(|(table, _)| table)
+            .unwrap_or_else(|| panic!("no CAIRN_BEFORE table in slim_rows.rs"));
+        // Each row: `("id", "subject", "author", time, parents)`; no subject holds a quote.
+        let rows: Vec<(String, String, String, usize)> = table
+            .split("),")
+            .filter(|row| row.contains('"'))
+            .map(|row| {
+                let quoted: Vec<&str> = row.split('"').skip(1).step_by(2).collect();
+                let parents = row
+                    .rsplit(',')
+                    .find_map(|field| field.trim().trim_end_matches(')').parse().ok())
+                    .unwrap_or_else(|| panic!("no parent count in {row}"));
+                (
+                    quoted[0].to_owned(),
+                    quoted[1].to_owned(),
+                    quoted[2].to_owned(),
+                    parents,
+                )
+            })
+            .collect();
+        assert_eq!(rows.len(), MAIN_DRAWN_BEFORE.len());
+        for ((id, subject, author, parents), drawn) in rows.iter().zip(MAIN_DRAWN_BEFORE) {
+            let (hex, drawn_subject, drawn_author, short, _, ring) = *drawn;
+            assert_eq!((id.as_str(), subject.as_str()), (hex, drawn_subject));
+            assert_eq!(author, drawn_author, "{hex}");
+            assert!(hex.starts_with(short), "{hex}");
+            assert_eq!(*parents > 1, ring, "{hex}");
+        }
+    }
+
+    #[test]
+    fn the_cairn_checkouts_rows_draw_what_they_drew_before_rows_were_slimmed() {
+        use freya::engine::prelude::{Image, ImageInfo, raster_n32_premul};
+
+        let (handle, mut updates) = crate::worker::checkout();
+        let (mut test, view, submitted) = launch(Vec::new(), Progress::opening());
+        let submit = {
+            let submitted = submitted.clone();
+            move |request| submitted.borrow_mut().push(request)
+        };
+        // Page as the window pages, each page applied as the window applies it, until every
+        // commit of `main`'s is held or the history ends: however far `HEAD` has moved on.
+        let wanted: Vec<RowId> = MAIN_DRAWN_BEFORE
+            .iter()
+            .map(|&(hex, ..)| RowId::Commit(Oid::parse(hex).unwrap()))
+            .collect();
+        handle.submit(Request::OpenHistory { rows: PAGE_ROWS });
+        loop {
+            let (page, complete) = match crate::worker::next_update(&mut updates) {
+                update @ crate::worker::Update::Rows { complete, .. } => (update, complete),
+                crate::worker::Update::Failed { message } => {
+                    panic!("the history failed: {message}")
+                }
+                _ => continue,
+            };
+            test.run_in(|| {
+                crate::session::apply(
+                    page,
+                    view,
+                    &crate::session::Worker {
+                        submit: &submit,
+                        refuse: &|_| {},
+                        closing: false,
+                    },
+                );
+            });
+            let held = {
+                let rows = view.rows.peek();
+                wanted.iter().all(|id| rows.position(*id).is_some())
+            };
+            if held || complete {
+                break;
+            }
+            handle.submit(Request::MoreHistory { rows: PAGE_ROWS });
+        }
+        test.sync_and_update();
+
+        let graph_left = test
+            .find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == "Graph and subject")
+                    .map(|_| node.layout().area.min_x())
+            })
+            .unwrap_or_else(|| panic!("no history header"));
+        let mut drawn = Vec::new();
+        for &(hex, ..) in MAIN_DRAWN_BEFORE {
+            let id = Oid::parse(hex).unwrap();
+            let (index, lane) = {
+                let rows = view.rows.peek();
+                let index = rows
+                    .position(RowId::Commit(id))
+                    .unwrap_or_else(|| panic!("{hex} is not in the checkout's history"));
+                (index, rows.row(index).map(|row| row.lane()).unwrap())
+            };
+            // Back to the top, then down to the row, so it sits at the top of the list.
+            test.scroll((LEFT_X + 100., 200.), (0., 1e6));
+            test.scroll(
+                (LEFT_X + 100., 200.),
+                (0., -(index as f64) * f64::from(ROW_HEIGHT)),
+            );
+            let short = id.short().to_string();
+            let centre_y = test
+                .find(|node, element| {
+                    Label::try_downcast(element)
+                        .filter(|label| label.text == short.as_str())
+                        .map(|_| node.layout().area.center().y)
+                })
+                .unwrap_or_else(|| panic!("row {index} ({hex}) was not drawn"));
+            // The chips are phase 07's, and name whatever refs the checkout has today: what
+            // the row drew before is its text past them.
+            let chip_size = Some(freya::prelude::FontSize::from(cairn_ui::CHIP_FONT_SIZE));
+            let mut labels: Vec<(f32, String)> = test.find_many(|node, element| {
+                let area = node.layout().area;
+                Label::try_downcast(element)
+                    .filter(|_| (area.center().y - centre_y).abs() < 1.0)
+                    // The history's, not the sidebar's beside it.
+                    .filter(|_| area.min_x() >= LEFT)
+                    .filter(|label| label.text_style_data.font_size != chip_size)
+                    .map(|label| (area.min_x(), label.text.to_string()))
+            });
+            labels.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+            let png = test.render();
+            let image = Image::from_encoded(png).unwrap();
+            let size = (WINDOW_WIDTH as i32, HEIGHT as i32);
+            let mut surface = raster_n32_premul(size).unwrap();
+            surface.canvas().draw_image(&image, (0, 0), None);
+            let info = ImageInfo::new_n32_premul(size, None);
+            let stride = info.min_row_bytes();
+            let mut pixels = vec![0u8; stride * size.1 as usize];
+            assert!(surface.read_pixels(&info, &mut pixels, stride, (0, 0)));
+            let x = (graph_left - cairn_ui::ROW_PADDING
+                + cairn_ui::ROW_PADDING
+                + cairn_ui::graph_geometry::lane_x(lane))
+            .round() as usize;
+            let at = centre_y.round() as usize * stride + x * 4;
+            // The node's centre: a dot fills it with its lane's colour, a ring leaves it be.
+            let colour = cairn_ui::lane_palette::lane_colour(lane);
+            let filled = pixels.get(at..at + 3).is_some_and(|bgr| {
+                [bgr[2], bgr[1], bgr[0]]
+                    .iter()
+                    .zip([colour.r(), colour.g(), colour.b()])
+                    .all(|(a, b)| a.abs_diff(b) <= 2)
+            });
+
+            let mut line: Vec<String> = labels.into_iter().map(|(_, text)| text).collect();
+            line.push((!filled).to_string());
+            drawn.push(line);
+        }
+        let before: Vec<Vec<String>> = MAIN_DRAWN_BEFORE
+            .iter()
+            .map(|&(_, subject, author, short, date, ring)| {
+                vec![
+                    subject.to_owned(),
+                    author.to_owned(),
+                    short.to_owned(),
+                    date.to_owned(),
+                    ring.to_string(),
+                ]
+            })
+            .collect();
+        // As sets of texts: a row whose chips fill its column pushes its subject past the
+        // author's (R5.3, as in Fork), which a left-to-right reading would then put second.
+        // The columns' own order is `commit_row`'s tests'.
+        let sorted = |line: &Vec<String>| {
+            let mut line = line.clone();
+            line.sort();
+            line
+        };
+        for (index, (now, then)) in drawn.iter().zip(&before).enumerate() {
+            assert_eq!(
+                sorted(now),
+                sorted(then),
+                "main's row {index} draws something else"
+            );
+        }
+        assert_eq!(drawn.len(), 18, "main's rows were not all drawn");
+        assert!(
+            before.iter().any(|line| line[4] == "true"),
+            "no merge among main's rows, so no ring was decided"
+        );
+    }
+
     #[test]
     fn the_graph_column_is_as_wide_as_the_widest_lane_seen() {
-        let page: Vec<HistoryRow> = (0..3).map(|n| row_in_lane(n, 4)).collect();
+        let page: Vec<TestRow> = (0..3).map(|n| row_in_lane(n, 4)).collect();
         let mut progress = Progress::opening();
-        progress.received(history_state::widest_lane(&page), true, page.len());
+        progress.received(
+            history_state::widest_lane(&page_of((0..3).map(|n| row_in_lane(n, 4)).collect())),
+            true,
+            page.len(),
+        );
         let (test, _, _) = launch(page, progress);
 
         let subject_left = test
@@ -708,7 +1210,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             subject_left,
-            ROW_PADDING + graph_width(5) + COLUMN_GAP,
+            LEFT + ROW_PADDING + graph_width(5) + COLUMN_GAP,
             "the rows were not drawn with the lanes the history needs"
         );
     }
@@ -742,7 +1244,7 @@ mod tests {
         );
         assert_eq!(backgrounds(&test, second), backgrounds(&test, third));
 
-        test.click_cursor((100., second as f64 + 5.));
+        test.click_cursor((LEFT_X + 100., second as f64 + 5.));
         assert_ne!(
             backgrounds(&test, second),
             backgrounds(&test, third),
@@ -757,7 +1259,10 @@ mod tests {
             launch((0..first).map(row).collect(), received(first, false));
         let more = Request::MoreHistory { rows: PAGE_ROWS };
         let scroll_to_end = |test: &mut TestingRunner, rows: usize| {
-            test.scroll((100., 200.), (0., -(rows as f64 * ROW_HEIGHT as f64)));
+            test.scroll(
+                (LEFT_X + 100., 200.),
+                (0., -(rows as f64 * ROW_HEIGHT as f64)),
+            );
         };
 
         test.sync_and_update();
@@ -769,7 +1274,10 @@ mod tests {
         scroll_to_end(&mut test, first);
         assert_eq!(submitted.borrow().as_slice(), std::slice::from_ref(&more));
 
-        test.scroll((100., 200.), (0., first as f64 * ROW_HEIGHT as f64));
+        test.scroll(
+            (LEFT_X + 100., 200.),
+            (0., first as f64 * ROW_HEIGHT as f64),
+        );
         scroll_to_end(&mut test, first);
         assert_eq!(
             submitted.borrow().len(),
@@ -778,7 +1286,7 @@ mod tests {
         );
 
         let (mut rows, mut progress) = (view.rows, view.progress);
-        rows.write().extend((first..first * 2).map(row));
+        hold(&mut rows.write(), (first..first * 2).map(row).collect());
         progress.write().received(1, false, first * 2);
         test.sync_and_update();
         scroll_to_end(&mut test, first * 2);
@@ -795,7 +1303,7 @@ mod tests {
         let (mut test, view, submitted) =
             launch((0..first).map(row).collect(), received(first, false));
         let scroll = |test: &mut TestingRunner, rows: f64| {
-            test.scroll((100., 200.), (0., -(rows * ROW_HEIGHT as f64)));
+            test.scroll((LEFT_X + 100., 200.), (0., -(rows * ROW_HEIGHT as f64)));
         };
 
         scroll(&mut test, first as f64);
@@ -826,7 +1334,7 @@ mod tests {
             "coming back to the end after a failed page did not ask for it again"
         );
 
-        rows.write().extend((first..first * 2).map(row));
+        hold(&mut rows.write(), (first..first * 2).map(row).collect());
         progress.write().received(1, false, first * 2);
         test.sync_and_update();
         scroll(&mut test, first as f64);
@@ -1142,7 +1650,9 @@ mod tests {
         test.sync_and_update();
     }
 
-    fn press_chord(test: &mut TestingRunner, action: Action) {
+    /// Presses `action`'s chord on this platform, as a key press reaches the window; for the
+    /// other window tests too, so no other test file names a modifier.
+    pub(crate) fn press_chord(test: &mut TestingRunner, action: Action) {
         let chord = accelerators::chord(action, accelerators::Os::current()).unwrap();
         let (key, code, modifiers) = chord.key_press().unwrap();
         test.send_event(PlatformEvent::Keyboard {
@@ -1455,6 +1965,8 @@ mod tests {
         test.sync_and_update();
         test.sync_and_update();
         assert_eq!(*view.selected.read(), Some(RowId::Commit(oid(45))));
+        // Told to the list, so its next arrow key starts at the parent without a search.
+        assert_eq!(*view.history_cursor.read(), 45);
         let asked: Vec<Request> = submitted
             .borrow()
             .iter()
@@ -1491,12 +2003,12 @@ mod tests {
                     .map(|_| f64::from(area.center().y))
             })
             .unwrap();
-        test.press_cursor((300., handle));
-        test.move_cursor((300., handle - 80.));
+        test.press_cursor((LEFT_X + 300., handle));
+        test.move_cursor((LEFT_X + 300., handle - 80.));
         test.sync_and_update();
-        test.move_cursor((300., handle - 120.));
+        test.move_cursor((LEFT_X + 300., handle - 120.));
         test.sync_and_update();
-        test.release_cursor((300., handle - 120.));
+        test.release_cursor((LEFT_X + 300., handle - 120.));
         test.sync_and_update();
         let dragged = pane_top(&test);
         assert!(
@@ -1851,6 +2363,429 @@ mod tests {
             .as_ref()
             .and_then(|pair| pair.other(selected));
         (selected, other)
+    }
+
+    /// The title bar's texts: every label above the column headings.
+    fn title(test: &TestingRunner) -> Vec<String> {
+        let headings = test
+            .find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == "Author")
+                    .map(|_| node.layout().area.min_y())
+            })
+            .unwrap_or_else(|| panic!("no column headings"));
+        test.find_many(|node, element| {
+            Label::try_downcast(element)
+                .filter(|_| node.layout().area.max_y() <= headings)
+                .map(|label| label.text.to_string())
+        })
+    }
+
+    /// What a refresh answered, handed to the window as `session::apply` would keep it: refs
+    /// with `HEAD` at `head`, one branch `main` whose upstream is `upstream` (gone when it is
+    /// not listed), counts for `main`, and a status listing `changed` paths.
+    fn refreshed_with(
+        test: &mut TestingRunner,
+        view: View,
+        head: cairn_model::HeadState,
+        upstream: Option<(&str, bool)>,
+        counts: Option<cairn_model::AheadBehind>,
+        changed: usize,
+    ) {
+        use cairn_model::{Ref, RefKind, RefName, RefTarget, RefsSnapshot, StatusEntry, Upstream};
+        let mut refs = vec![Ref {
+            name: RefName::new("refs/heads/main"),
+            kind: RefKind::LocalBranch,
+            target: RefTarget::Commit(oid(0)),
+            symbolic: None,
+            upstream: upstream.map(|(name, exists)| {
+                if exists {
+                    Upstream::Exists {
+                        name: RefName::new(name),
+                        commit: Some(oid(1)),
+                    }
+                } else {
+                    Upstream::Gone {
+                        name: RefName::new(name),
+                    }
+                }
+            }),
+        }];
+        if let Some((name, true)) = upstream {
+            refs.push(Ref {
+                name: RefName::new(name),
+                kind: RefKind::RemoteTracking,
+                target: RefTarget::Commit(oid(1)),
+                symbolic: None,
+                upstream: None,
+            });
+        }
+        let mut refreshed = view.refreshed;
+        let mut state = refreshed.write();
+        let _ = state.refs_arrived(std::sync::Arc::new(RefsSnapshot {
+            refs,
+            head,
+            stashes: Vec::new(),
+            unreadable: 0,
+        }));
+        if let Some(counts) = counts {
+            let _ = state.ahead_behind_arrived(vec![(RefName::new("refs/heads/main"), counts)]);
+        }
+        let _ = state.status_arrived(std::sync::Arc::new(cairn_model::LocalChanges::new(
+            WorkingTreeStatus::Listed(
+                (0..changed)
+                    .map(|n| {
+                        StatusEntry::Untracked(cairn_model::RepoPath::from(
+                            format!("new-{n}").as_str(),
+                        ))
+                    })
+                    .collect(),
+            ),
+        )));
+        drop(state);
+        test.sync_and_update();
+    }
+
+    /// R7.1, the QA brief: the title bar names the repository — `*` while status lists a
+    /// change — the current branch and its counts behind then ahead; a gone upstream says so
+    /// and draws no counts; a detached `HEAD` its short id; an unborn branch its name and that
+    /// it has no commit. Caught by: the star drawn for a clean tree or missed for a dirty one,
+    /// another branch's counts, counts drawn for a gone upstream, or a detached or unborn
+    /// `HEAD` drawn as a branch.
+    #[test]
+    fn the_title_bar_names_the_repository_the_branch_and_how_far_it_is_from_its_upstream() {
+        use cairn_model::{AheadBehind, HeadState, RefName};
+        let main = || HeadState::Branch(RefName::new("refs/heads/main"));
+
+        let (mut test, view, _) = launch((0..2).map(row).collect(), received(2, true));
+        assert!(
+            title(&test).contains(&"engine".to_owned()),
+            "{:?}",
+            title(&test)
+        );
+        refreshed_with(
+            &mut test,
+            view,
+            main(),
+            Some(("refs/remotes/origin/main", true)),
+            Some(AheadBehind {
+                ahead: 1,
+                behind: 18,
+            }),
+            2,
+        );
+        let shown = title(&test);
+        for wanted in ["engine*", "main", "18↓1↑"] {
+            assert!(
+                shown.contains(&wanted.to_owned()),
+                "no {wanted:?} in {shown:?}"
+            );
+        }
+
+        let (mut test, view, _) = launch((0..2).map(row).collect(), received(2, true));
+        refreshed_with(
+            &mut test,
+            view,
+            main(),
+            Some(("refs/remotes/origin/main", false)),
+            // Counts a refresh read before the upstream went: never drawn beside `gone`.
+            Some(AheadBehind {
+                ahead: 1,
+                behind: 18,
+            }),
+            0,
+        );
+        let shown = title(&test);
+        for wanted in ["engine", "main", cairn_ui::UPSTREAM_GONE] {
+            assert!(
+                shown.contains(&wanted.to_owned()),
+                "no {wanted:?} in {shown:?}"
+            );
+        }
+        assert!(
+            !shown
+                .iter()
+                .any(|text| text.contains('↓') || text.contains('↑')),
+            "{shown:?}"
+        );
+
+        let (mut test, view, _) = launch((0..2).map(row).collect(), received(2, true));
+        refreshed_with(&mut test, view, HeadState::Detached(oid(1)), None, None, 0);
+        let detached = format!("HEAD detached at {}", oid(1).short().as_str());
+        assert!(title(&test).contains(&detached), "{:?}", title(&test));
+
+        let (mut test, view, _) = launch(Vec::new(), received(0, true));
+        refreshed_with(
+            &mut test,
+            view,
+            HeadState::Unborn(RefName::new("refs/heads/trunk")),
+            None,
+            None,
+            1,
+        );
+        let shown = title(&test);
+        assert!(
+            shown.contains(&"trunk (no commits yet)".to_owned()),
+            "{shown:?}"
+        );
+        assert!(shown.contains(&"engine*".to_owned()), "{shown:?}");
+
+        // QC1: the name is the one the worker says it opened, never the path given.
+        let mut repository = view.repository;
+        repository.set(None);
+        test.sync_and_update();
+        let shown = title(&test);
+        assert!(
+            !shown
+                .iter()
+                .any(|text| text.starts_with("engine") || text == PATH),
+            "a repository not yet opened was named: {shown:?}"
+        );
+        test.run_in(|| {
+            crate::session::apply(
+                crate::worker::Update::Opened {
+                    name: "folder".to_owned(),
+                },
+                view,
+                &crate::session::Worker {
+                    submit: &|_| {},
+                    refuse: &|_| {},
+                    closing: false,
+                },
+            );
+        });
+        test.sync_and_update();
+        let shown = title(&test);
+        assert!(shown.contains(&"folder*".to_owned()), "{shown:?}");
+    }
+
+    /// C7 through the window: a row's chips are laid out against the refresh's snapshot — the
+    /// current branch first with its check mark and folded with its upstream at that commit,
+    /// another remote's ref its own chip — and `HEAD`'s subject is bold; selected, its Commit
+    /// tab draws the same chips in a REFS row (R6.1), and a commit no ref points at has none.
+    /// Caught by: the window not handing the list the snapshot (no fold, no current first),
+    /// the head flag dropped, or the REFS row not given the selected row's chips.
+    #[test]
+    fn a_rows_chips_and_its_refs_row_are_drawn_against_the_refreshs_snapshot() {
+        use cairn_model::{
+            HeadState, Label as RefLabel, Ref, RefKind, RefName, RefTarget, RefsSnapshot, Upstream,
+        };
+
+        let (mut test, view, _) = launch(Vec::new(), received(2, true));
+        let mut page = RowsPage::new();
+        let names = [
+            "refs/heads/main",
+            "refs/remotes/mike/main",
+            "refs/remotes/origin/main",
+        ];
+        let labels: Vec<RefLabel<'_>> = names
+            .iter()
+            .map(|name| RefLabel {
+                name,
+                kind: if name.starts_with("refs/heads/") {
+                    RefKind::LocalBranch
+                } else {
+                    RefKind::RemoteTracking
+                },
+                current: *name == "refs/heads/main",
+            })
+            .collect();
+        page.push_labelled(
+            GraphRow::new(oid(0), Lane::new(0), Vec::new()),
+            PagedCommit {
+                parents: 1,
+                subject: "commit 0",
+                author: "Ada",
+                author_time: 0,
+            },
+            true,
+            &labels,
+        );
+        page.push(
+            GraphRow::new(oid(1), Lane::new(0), Vec::new()),
+            PagedCommit {
+                parents: 1,
+                subject: "commit 1",
+                author: "Ada",
+                author_time: 0,
+            },
+        );
+        let mut rows = view.rows;
+        rows.write()
+            .append(page)
+            .unwrap_or_else(|full| panic!("{full}"));
+        let listed = |name: &str, upstream: Option<&str>| Ref {
+            name: RefName::new(name),
+            kind: if name.starts_with("refs/heads/") {
+                RefKind::LocalBranch
+            } else {
+                RefKind::RemoteTracking
+            },
+            target: RefTarget::Commit(oid(0)),
+            symbolic: None,
+            upstream: upstream.map(|upstream| Upstream::Exists {
+                name: RefName::new(upstream),
+                commit: Some(oid(0)),
+            }),
+        };
+        let mut refreshed = view.refreshed;
+        let _ = refreshed
+            .write()
+            .refs_arrived(std::sync::Arc::new(RefsSnapshot {
+                refs: vec![
+                    listed("refs/heads/main", Some("refs/remotes/origin/main")),
+                    listed("refs/remotes/mike/main", None),
+                    listed("refs/remotes/origin/main", None),
+                ],
+                head: HeadState::Branch(RefName::new("refs/heads/main")),
+                stashes: Vec::new(),
+                unreadable: 0,
+            }));
+        test.sync_and_update();
+        test.sync_and_update();
+
+        let row_y = test
+            .find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == "commit 0")
+                    .map(|_| node.layout().area.center().y)
+            })
+            .unwrap_or_else(|| panic!("the labelled row was not drawn"));
+        let chips: Vec<(f32, String)> = {
+            let chip_size = Some(freya::prelude::FontSize::from(cairn_ui::CHIP_FONT_SIZE));
+            let mut found = test.find_many(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text_style_data.font_size == chip_size)
+                    .filter(|_| (node.layout().area.center().y - row_y).abs() < 1.)
+                    .map(|label| (node.layout().area.min_x(), label.text.to_string()))
+            });
+            found.sort_by(|a, b| a.0.total_cmp(&b.0));
+            found
+        };
+        let texts: Vec<&str> = chips.iter().map(|(_, text)| text.as_str()).collect();
+        assert_eq!(
+            texts,
+            ["main", "mike/main"],
+            "origin/main was not folded into main"
+        );
+        let weight = |text: &str| {
+            test.find(|_, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == text)
+                    .map(|label| label.text_style_data.font_weight)
+            })
+            .flatten()
+        };
+        assert_eq!(
+            weight("commit 0"),
+            Some(FontWeight::BOLD),
+            "HEAD's subject is not bold"
+        );
+        assert_ne!(weight("commit 1"), Some(FontWeight::BOLD));
+
+        click_row(&mut test, 0);
+        arrives(&mut test, view, 0, vec![oid(1)]);
+        let shown = pane(&test);
+        let at = |text: &str| shown.iter().position(|shown| shown == text);
+        assert!(
+            at(cairn_ui::REFS_CAPTION).is_some(),
+            "no REFS row: {shown:?}"
+        );
+        assert!(
+            at(cairn_ui::REFS_CAPTION) < at("main")
+                && at("main") < at("mike/main")
+                && at("mike/main") < at(cairn_ui::ID_CAPTION),
+            "REFS does not hold the row's chips above the id: {shown:?}"
+        );
+        assert_eq!(
+            at("origin/main"),
+            None,
+            "the REFS row did not fold origin/main"
+        );
+
+        click_row(&mut test, 1);
+        arrives(&mut test, view, 1, vec![oid(2)]);
+        let shown = pane(&test);
+        assert!(
+            shown.iter().any(|text| text == cairn_ui::ID_CAPTION),
+            "{shown:?}"
+        );
+        assert!(
+            !shown.iter().any(|text| text == cairn_ui::REFS_CAPTION),
+            "a commit no ref points at has a REFS row: {shown:?}"
+        );
+    }
+
+    /// A stash's row (refs-and-status R4.2, R5.4): its `stash@{n}` chip, then its message as
+    /// its subject, on one row; pressed, it is selected by its
+    /// own identity and asks what `git stash show` lists of it (R6.2); pressed with the extending
+    /// chord beside a commit, the pair holds the stash's row, the lower of the two the base.
+    /// Caught by: a stash's row drawing nothing, selected as a commit's, or asking a commit's
+    /// comparison of its stash commit rather than `git stash show`'s.
+    #[test]
+    fn a_stash_row_draws_its_message_and_asks_what_it_changed_on_its_base() {
+        let (mut test, view, submitted) = launch((0..3).map(row).collect(), received(6, true));
+        let mut rows = view.rows;
+        let mut page = RowsPage::new();
+        page.push_stash(
+            GraphRow::new(oid(90), Lane::new(1), Vec::new()),
+            cairn_model::PagedStash {
+                index: 0,
+                base: oid(3),
+                message: "On main: wip",
+                author: "Ada",
+                author_time: 0,
+            },
+        );
+        rows.write()
+            .append(page)
+            .unwrap_or_else(|full| panic!("{full}"));
+        hold(&mut rows.write(), (3..6).map(row).collect());
+        test.sync_and_update();
+        test.sync_and_update();
+
+        let place = |text: &str| {
+            test.find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == text)
+                    .map(|_| (node.layout().area.min_x(), node.layout().area.center().y))
+            })
+            .unwrap_or_else(|| panic!("nothing reads {text:?}"))
+        };
+        let (chip, message) = (place("stash@{0}"), place("On main: wip"));
+        assert!(
+            chip.0 < message.0,
+            "the stash's chip is not before its message"
+        );
+        assert!(
+            (chip.1 - message.1).abs() < 1.,
+            "the chip is not on the stash's row"
+        );
+
+        let from = submitted.borrow().len();
+        click_label(&mut test, "On main: wip");
+        test.sync_and_update();
+        assert_eq!(selection(view), (Some(RowId::Stash(oid(90))), None));
+        assert_eq!(
+            changes_asked(&submitted, from),
+            [Comparison::Stash(oid(90))],
+            "a stash's row asks what `git stash show` lists"
+        );
+
+        let from = submitted.borrow().len();
+        extend_row(&mut test, 1);
+        assert_eq!(
+            selection(view),
+            (Some(RowId::Stash(oid(90))), Some(RowId::Commit(oid(1))))
+        );
+        assert_eq!(
+            changes_asked(&submitted, from),
+            [Comparison::Between {
+                old: oid(90),
+                new: oid(1)
+            }],
+            "the stash's row, the lower, is the base"
+        );
     }
 
     /// C12, R7.1-R7.3 through the window: a row pressed with the table's extending chord
@@ -2460,7 +3395,7 @@ mod tests {
         // Focus in the diff.
         // Below the strip, the summary and the bar; right of the file list.
         let rows_top = pane_top(&test) + 130.;
-        test.click_cursor((600., f64::from(rows_top)));
+        test.click_cursor((LEFT_X + 600., f64::from(rows_top)));
         test.sync_and_update();
         press_chord(&mut test, Action::NextChange);
         assert_eq!(scrolled_y(view), top_for(0));
@@ -2615,6 +3550,8 @@ mod tests {
                             .iter()
                             .any(|span| span.text.as_ref() == cairn_ui::FILTER_PLACEHOLDER)
                     })
+                    // The Changes tab's, not the sidebar's.
+                    .filter(|_| node.layout().area.min_x() > LEFT)
                     .map(|_| node.layout().area.center())
             })
             .expect("the filter field");
@@ -2815,7 +3752,7 @@ mod tests {
         changes_tab_over(&mut test, view, 3);
         let opened = list_split(&test);
         assert!(
-            (opened - 0.35 * 800.).abs() < 8.,
+            (opened - LEFT - 0.35 * 800.).abs() < 8.,
             "the list opened {opened} px wide in an 800 px pane"
         );
 
@@ -2823,11 +3760,11 @@ mod tests {
         test.press_cursor((f64::from(opened), y));
         test.move_cursor((f64::from(opened) - 40., y));
         test.sync_and_update();
-        test.move_cursor((20., y));
+        test.move_cursor((LEFT_X + 20., y));
         test.sync_and_update();
-        test.release_cursor((20., y));
+        test.release_cursor((LEFT_X + 20., y));
         test.sync_and_update();
-        let narrowest = list_split(&test);
+        let narrowest = list_split(&test) - LEFT;
         assert!(
             (190. ..230.).contains(&narrowest),
             "a drag took the list to {narrowest} px, past its 200 px floor"
@@ -2839,7 +3776,7 @@ mod tests {
             test.sync_and_update();
         }
         assert!(
-            (list_split(&test) - narrowest).abs() < 2.,
+            (list_split(&test) - LEFT - narrowest).abs() < 2.,
             "the width dragged to, {narrowest}, was not kept: {}",
             list_split(&test)
         );
@@ -2916,5 +3853,172 @@ mod tests {
             "the diff side is not drawn: {:?}",
             diff_side_labels(&test)
         );
+    }
+
+    fn toggle_focus(test: &mut TestingRunner, focused: bool) {
+        test.run_in(|| Platform::get().is_app_focused.set(focused));
+        test.sync_and_update();
+    }
+
+    /// R10.1 and the QA brief, headless with focus set: gaining focus asks for a refresh,
+    /// and that submit is all the UI thread does — no row cleared, nothing else asked;
+    /// losing focus asks nothing; each gain asks once, so focus flapping asks twice and
+    /// leaves superseding the first to the worker (`a_refresh_asked_twice_at_once_draws_one_
+    /// answer_of_each`). Caught by: no refresh on focus, one on losing it, one per render,
+    /// or work besides the submit.
+    #[test]
+    fn gaining_focus_asks_for_a_refresh_and_nothing_else() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        let from = submitted.borrow().len();
+        test.sync_and_update();
+        assert_eq!(
+            requests_since(&submitted, from),
+            [],
+            "rendering asked something"
+        );
+
+        toggle_focus(&mut test, false);
+        assert_eq!(
+            requests_since(&submitted, from),
+            [],
+            "losing focus asked something"
+        );
+        toggle_focus(&mut test, true);
+        assert_eq!(requests_since(&submitted, from), [Request::Refresh]);
+        assert_eq!(view.rows.read().len(), 10, "focus touched the rows");
+        assert_eq!(*view.progress.read(), received(10, true));
+
+        toggle_focus(&mut test, false);
+        toggle_focus(&mut test, true);
+        assert_eq!(
+            requests_since(&submitted, from),
+            [Request::Refresh, Request::Refresh]
+        );
+    }
+
+    /// R10.1: the Refresh action, through the accelerator table's chord on this platform,
+    /// asks for a refresh and nothing else. Caught by: the action placed in the table and
+    /// never acted on, or acting by more than a submit.
+    #[test]
+    fn the_refresh_chord_asks_for_a_refresh() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        let from = submitted.borrow().len();
+        press_chord(&mut test, Action::Refresh);
+        assert_eq!(requests_since(&submitted, from), [Request::Refresh]);
+        assert_eq!(view.rows.read().len(), 10);
+    }
+
+    /// C10 headless with focus set, through the real boundary: the window opens its history
+    /// from its first refresh; a row is chosen; a ref moves; the window gains focus, the
+    /// refresh finds the move and the history is reopened — the old rows retired to the
+    /// worker — and the chosen row, arriving again, is drawn chosen (R10.5); gaining focus
+    /// again with nothing moved reopens nothing. Caught by: focus that does not refresh, a
+    /// reopen that drops the selection, or one on an unchanged snapshot.
+    #[test]
+    fn focus_gained_after_a_ref_moved_reopens_the_history_keeping_the_chosen_row() {
+        use crate::session::{Worker, apply};
+        use crate::worker::{Refreshable, next_update};
+
+        let fixture = Refreshable::new("cairn-window-focus-reopens");
+        let (handle, mut updates) = fixture.open();
+        let (mut test, view, submitted) = launch(Vec::new(), Progress::opening());
+        let mut forwarded = 0;
+        // How many times the window asked for the history, and how many refs answers it
+        // applied, so far.
+        let (mut opens, mut refs) = (0, 0);
+        // Hands what the window asked to the worker and applies what comes back, until
+        // `done` holds of the window and the two counts.
+        let mut pump = |test: &mut TestingRunner, done: &dyn Fn(View, usize, usize) -> bool| {
+            loop {
+                let asked: Vec<Request> = submitted.borrow()[forwarded..].to_vec();
+                forwarded += asked.len();
+                for request in asked {
+                    if matches!(request, Request::OpenHistory { .. }) {
+                        opens += 1;
+                    }
+                    handle.submit(request);
+                }
+                if done(view, opens, refs) {
+                    return (opens, refs);
+                }
+                let update = next_update(&mut updates);
+                if matches!(update, crate::worker::Update::Refs { .. }) {
+                    refs += 1;
+                }
+                let record = {
+                    let submitted = submitted.clone();
+                    move |request| submitted.borrow_mut().push(request)
+                };
+                test.run_in(|| {
+                    apply(
+                        update,
+                        view,
+                        &Worker {
+                            submit: &record,
+                            refuse: &|_| {},
+                            closing: false,
+                        },
+                    );
+                });
+                test.sync_and_update();
+            }
+        };
+        let loaded = |view: View| {
+            let progress = view.progress.peek();
+            progress.has_rows() && *progress.status() == Status::Ready
+        };
+
+        submitted.borrow_mut().push(Request::Refresh);
+        let (opened, _) = pump(&mut test, &|view, opens, _| opens == 1 && loaded(view));
+        assert_eq!(opened, 1, "the first refresh did not open");
+        let chosen = fixture.commits[1];
+        let subject = {
+            let rows = view.rows.peek();
+            let Some(at) = rows.position(RowId::Commit(chosen)) else {
+                panic!("the chosen commit was not drawn");
+            };
+            match rows.row(at).map(|row| row.content()) {
+                Some(cairn_model::RowContent::Commit(commit)) => commit.summary,
+                Some(cairn_model::RowContent::Stash(stash)) => stash.message,
+                None => unreachable!("the row was found"),
+            }
+        };
+        for _ in 0..3 {
+            test.sync_and_update();
+        }
+        click_label(&mut test, &subject);
+        test.sync_and_update();
+        assert_eq!(*view.selected.peek(), Some(RowId::Commit(chosen)));
+
+        fixture.point("topic", fixture.commits[3]);
+        toggle_focus(&mut test, false);
+        toggle_focus(&mut test, true);
+        let (reopened, seen) = pump(&mut test, &|view, opens, _| opens == 2 && loaded(view));
+        assert_eq!(
+            reopened, 2,
+            "focus after a moved ref did not reopen the history"
+        );
+        assert!(
+            submitted.borrow().iter().any(|request| matches!(
+                request,
+                Request::Retire(retired) if retired.replaced_rows().is_some()
+            )),
+            "the old rows were not handed to the worker"
+        );
+        assert_eq!(
+            *view.selected.peek(),
+            Some(RowId::Commit(chosen)),
+            "the selection was lost"
+        );
+        assert!(
+            view.rows.peek().position(RowId::Commit(chosen)).is_some(),
+            "the chosen commit did not arrive again in the reopened rows"
+        );
+
+        // Nothing moved: the refresh's refs arrive, and nothing reopens.
+        toggle_focus(&mut test, false);
+        toggle_focus(&mut test, true);
+        let (quiet, _) = pump(&mut test, &|_, _, refs| refs > seen);
+        assert_eq!(quiet, 2, "focus with nothing moved reopened the history");
     }
 }

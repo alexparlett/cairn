@@ -14,8 +14,8 @@ use cairn_guards::{
     job_env_entries, mentions_crate, names_a_literal_modifier, names_an_element,
     names_gitoxide_mutation, production_char_literals, production_string_literals,
     reads_enum_partially, reads_row_content_partially, renames_type, renders_in_a_macro, repo_root,
-    rust_sources, spawns_git, spells_a_chord, structs_with_a_field_naming, types_containing,
-    waits_on_work,
+    required_skip_violations, rust_sources, spawns_git, spells_a_chord,
+    structs_with_a_field_naming, types_containing, waits_on_work,
 };
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
@@ -1844,6 +1844,42 @@ const PORCELAIN_READ_FILE: &str = "crates/cairn-git/src/reads/working_tree.rs";
 /// what a fetch of a remote will read, asked of git (the user's decision of 2026-10-04).
 const CONFIG_READ_FILE: &str = "crates/cairn-git/src/reads/fetch_settings.rs";
 
+/// The one file that may build the third porcelain read, `git stash show` in raw form —
+/// what a stash changed, untracked files paired as git pairs them (the user's decision of
+/// 2026-10-07).
+const STASH_READ_FILE: &str = "crates/cairn-git/src/reads/stash_changes.rs";
+
+/// `git stash`'s subcommands but `show` (and `list`, which reads): each writes a stash,
+/// the working tree, a branch or a ref (`export` writes a ref, `import` the stash), and none
+/// may be a literal anywhere in `reads/`.
+const STASH_WRITING_SUBCOMMANDS: &[&str] = &[
+    "push", "pop", "apply", "drop", "store", "clear", "create", "branch", "save", "export",
+    "import",
+];
+
+/// Every option the `git stash show` read may pass: the raw form, and the refusals of every
+/// program and presentation setting porcelain would otherwise read. Any literal of
+/// [`STASH_READ_FILE`]'s production code that starts with `-` must be one of these, and each
+/// of [`STASH_SHOW_REQUIRED`] must be there: no patch (`-p`, which could run textconv or an
+/// external diff), and no untracked option (`-u`, `--include-untracked`,
+/// `--only-untracked`), since git reads `stash.showIncludeUntracked` itself.
+const STASH_SHOW_OPTIONS: &[&str] = &[
+    "--raw",
+    "-z",
+    "--no-abbrev",
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-relative",
+    "--end-of-options",
+];
+const STASH_SHOW_REQUIRED: &[&str] = &[
+    "--raw",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--end-of-options",
+];
+
 /// Every option the `git config` read may pass: the query form, and nothing that chooses
 /// another file or another type. Any literal of [`CONFIG_READ_FILE`]'s production code
 /// that starts with `-` must be one of these.
@@ -1881,8 +1917,8 @@ const DIFF_ATTRIBUTE_LINES: &[(&str, &str)] = &[
     ),
 ];
 
-/// What the reads of `reads/` say about the two porcelain verbs, as `path:line ..` for each
-/// way they break the two accepted exceptions. `diff`: the exact literal `"diff"` (plain,
+/// What the reads of `reads/` say about the three porcelain verbs, as `path:line ..` for each
+/// way they break the three accepted exceptions. `diff`: the exact literal `"diff"` (plain,
 /// byte or raw) appears in production code of [`PORCELAIN_READ_FILE`] alone, exactly once,
 /// with the next literal on its line `"--no-index"`, and that file's production code holds
 /// `"/dev/null"` — but for the attribute lines of [`DIFF_ATTRIBUTE_LINES`], each of which
@@ -1890,11 +1926,84 @@ const DIFF_ATTRIBUTE_LINES: &[(&str, &str)] = &[
 /// in production code of [`CONFIG_READ_FILE`] alone, exactly once; every literal there that
 /// starts with `-` is one of [`CONFIG_QUERY_OPTIONS`], which must include `--get` or
 /// `--get-all`; no literal there is one of [`CONFIG_SETTER_SUBCOMMANDS`]; and no literal in
-/// any file is one of [`CONFIG_SETTER_OPTIONS`]. Comments and test modules are not read; a
+/// any file is one of [`CONFIG_SETTER_OPTIONS`]. `stash` ([`stash_read_violations`]): the
+/// exact literal `"stash"` appears in production code of [`STASH_READ_FILE`] alone, exactly
+/// once, `"show"` the literal after it; every literal there that starts with `-` is one of
+/// [`STASH_SHOW_OPTIONS`], each of [`STASH_SHOW_REQUIRED`] among them; and no literal in any
+/// file is one of [`STASH_WRITING_SUBCOMMANDS`]. Comments and test modules are not read; a
 /// verb or an option built by `format!` or `concat!` is not seen.
 fn porcelain_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
     let mut found = diff_read_violations(files);
     found.extend(config_read_violations(files));
+    found.extend(stash_read_violations(files));
+    found
+}
+
+/// The `git stash show` third of [`porcelain_read_violations`]: the exact literal `"stash"`
+/// appears in production code of [`STASH_READ_FILE`] alone, exactly once, the next literal
+/// after it `"show"`; every literal there that starts with `-` is one of
+/// [`STASH_SHOW_OPTIONS`], each of [`STASH_SHOW_REQUIRED`] among them; and no literal
+/// anywhere in `reads/` is one of [`STASH_WRITING_SUBCOMMANDS`].
+fn stash_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut verbs = 0usize;
+    let mut passed: Vec<String> = Vec::new();
+    for (path, source) in files {
+        let at = |line: usize| format!("{}:{line}", path.display());
+        let home = *path == Path::new(STASH_READ_FILE);
+        let literals = production_string_literals(source);
+        for (index, (line, text)) in literals.iter().enumerate() {
+            if home && text.starts_with('-') {
+                if STASH_SHOW_OPTIONS.contains(&text.as_str()) {
+                    passed.push(text.clone());
+                } else {
+                    found.push(format!(
+                        "{} passes `{text}` to the stash read, which is not one of its options",
+                        at(*line)
+                    ));
+                }
+            }
+            if STASH_WRITING_SUBCOMMANDS.contains(&text.as_str()) {
+                found.push(format!(
+                    "{} names `{text}`, a `git stash` subcommand that writes, in reads/",
+                    at(*line)
+                ));
+            }
+            if text != "stash" {
+                continue;
+            }
+            verbs += 1;
+            if !home {
+                found.push(format!(
+                    "{} names the porcelain verb `stash` outside {STASH_READ_FILE}",
+                    at(*line)
+                ));
+                continue;
+            }
+            if !literals
+                .get(index + 1)
+                .is_some_and(|(_, next)| next == "show")
+            {
+                found.push(format!(
+                    "{} names `stash` without `show` as the literal after it",
+                    at(*line)
+                ));
+            }
+        }
+    }
+    if verbs != 1 {
+        found.push(format!(
+            "reads/ names the verb `stash` {verbs} times in production code; the one accepted \
+             stash read is built once, in {STASH_READ_FILE}"
+        ));
+    }
+    for required in STASH_SHOW_REQUIRED {
+        if !passed.iter().any(|option| option == required) {
+            found.push(format!(
+                "{STASH_READ_FILE} does not pass `{required}`, which the stash read must"
+            ));
+        }
+    }
     found
 }
 
@@ -2031,20 +2140,23 @@ fn diff_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
     found
 }
 
-/// The two porcelain verbs a read runs are `git diff --no-index`, built once, by the
-/// working-tree read, against `/dev/null` (the user's decision of 2026-10-03), and `git
-/// config` in query form, built once, by the fetch-settings read (the user's decision of
-/// 2026-10-04); check 10 of `destructive-ops-reviewer`. Porcelain `git diff` against the
-/// working tree refreshes the index whatever `GIT_OPTIONAL_LOCKS` says, and `git config`
-/// with a setter writes the configuration, so a second `"diff"` or `"config"` in `reads/`,
-/// an option outside the query form in the config read, or a setter anywhere in `reads/`
-/// is the regression this catches. Scoped to those literals; a verb or option built at run
-/// time (`format!`), and whether every other verb a read runs is query plumbing, stay the
-/// reviewer's.
+/// The three porcelain verbs a read runs are `git diff --no-index`, built once, by the
+/// working-tree read, against `/dev/null` (the user's decision of 2026-10-03), `git config`
+/// in query form, built once, by the fetch-settings read (the user's decision of
+/// 2026-10-04), and `git stash show`, built once, by the stash read (the user's decision of
+/// 2026-10-07); check 10 of `destructive-ops-reviewer`. Porcelain `git diff` against the
+/// working tree refreshes the index whatever `GIT_OPTIONAL_LOCKS` says, `git config` with a
+/// setter writes the configuration, and every `git stash` subcommand but `show` and `list`
+/// writes a stash, the working tree or a branch, so a second `"diff"`, `"config"` or
+/// `"stash"` in `reads/`, an option outside the query form in the config read, a setter
+/// anywhere in `reads/`, `stash` without `show` after it, or a writing stash subcommand
+/// anywhere in `reads/` is the regression this catches. Scoped to those literals; a verb or
+/// option built at run time (`format!`), and whether every other verb a read runs is query
+/// plumbing, stay the reviewer's.
 #[test]
-fn the_porcelain_reads_are_the_two_named_queries() {
+fn the_porcelain_reads_are_the_three_named_queries() {
     let sources = rust_sources(READS_DIR);
-    for home in [PORCELAIN_READ_FILE, CONFIG_READ_FILE] {
+    for home in [PORCELAIN_READ_FILE, CONFIG_READ_FILE, STASH_READ_FILE] {
         assert!(
             sources.iter().any(|(path, _)| path == Path::new(home)),
             "{home} is gone; this guard names it as the home of a porcelain read — move the \
@@ -2066,8 +2178,10 @@ fn the_porcelain_reads_are_the_two_named_queries() {
         found.is_empty(),
         "a porcelain read escaped its accepted shape: {found:?}. A read runs query plumbing, \
          `status`, `git diff --no-index -- /dev/null <path>` built in {PORCELAIN_READ_FILE}, \
-         or `git config` in query form built in {CONFIG_READ_FILE}; porcelain `git diff` \
-         rewrites the index it reads, and a `git config` setter the configuration."
+         `git config` in query form built in {CONFIG_READ_FILE}, or `git stash show` built \
+         in {STASH_READ_FILE}; porcelain `git diff` rewrites the index it reads, a `git \
+         config` setter the configuration, and any other `git stash` the stashes or the \
+         working tree."
     );
 }
 
@@ -2081,12 +2195,19 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
     let accepted_config = "const QUERY: [&str; 3] = [\"config\", \"--includes\", \"--null\"];\n\
                            const BOOLEAN: [&str; 2] = [\"--type=bool\", \"--get\"];\n\
                            const EVERY_VALUE: [&str; 1] = [\"--get-all\"];\n";
-    // The `diff` cases are judged beside the accepted config read, unless they bring their
-    // own; the `config` cases below bring theirs beside the accepted diff read.
+    let stash_home = Path::new(STASH_READ_FILE);
+    let accepted_stash = "fn s() { let a = [\"stash\",\n \"show\",\n \"--raw\", \"-z\", \
+                          \"--no-abbrev\", \"--no-color\", \"--no-ext-diff\", \
+                          \"--no-textconv\", \"--no-relative\", \"--end-of-options\"]; }";
+    // The `diff` cases are judged beside the accepted config and stash reads, unless they
+    // bring their own; the `config` and `stash` cases below bring theirs beside the rest.
     let verdict = |files: &[(&Path, &str)]| {
         let mut all = files.to_vec();
         if !files.iter().any(|(path, _)| *path == config_home) {
             all.push((config_home, accepted_config));
+        }
+        if !files.iter().any(|(path, _)| *path == stash_home) {
+            all.push((stash_home, accepted_stash));
         }
         porcelain_read_violations(&all)
     };
@@ -2205,7 +2326,7 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
     }
     // The config read: once, in its file, in query form, and no setter anywhere.
     let config_verdict = |files: &[(&Path, &str)]| {
-        let mut all = vec![(home, accepted)];
+        let mut all = vec![(home, accepted), (stash_home, accepted_stash)];
         all.extend_from_slice(files);
         porcelain_read_violations(&all)
     };
@@ -2289,6 +2410,126 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
     ];
     for (shape, files) in refused_config {
         assert!(!config_verdict(files).is_empty(), "{shape} was not caught");
+    }
+
+    // The stash read: once, in its file, `show` after it, and no writing subcommand anywhere.
+    let stash_verdict = |files: &[(&Path, &str)]| {
+        let mut all = vec![(home, accepted), (config_home, accepted_config)];
+        all.extend_from_slice(files);
+        porcelain_read_violations(&all)
+    };
+    assert!(
+        stash_verdict(&[(stash_home, accepted_stash)]).is_empty(),
+        "the accepted stash read, `show` on the next line"
+    );
+    assert!(
+        stash_verdict(&[
+            (stash_home, accepted_stash),
+            (
+                other,
+                "#[cfg(test)]\nmod tests {\n    fn t() { [\"stash\", \"pop\"]; }\n}\n"
+            ),
+        ])
+        .is_empty(),
+        "a test module's stash"
+    );
+    let refused_stash: &[(&str, &[(&Path, &str)])] = &[
+        (
+            "`stash` in another file",
+            &[
+                (stash_home, accepted_stash),
+                (other, "fn b() { x.args([\"stash\", \"show\"]); }"),
+            ],
+        ),
+        (
+            "a second `stash` in its file",
+            &[(
+                stash_home,
+                "fn s() { [\"stash\", \"show\"]; [\"stash\", \"show\"]; }",
+            )],
+        ),
+        (
+            "`stash` without `show` after it",
+            &[(stash_home, "fn s() { [\"stash\", \"list\"]; }")],
+        ),
+        (
+            "`stash push` in its file",
+            &[(stash_home, "fn s() { [\"stash\", \"push\"]; }")],
+        ),
+        (
+            "a writing subcommand beside the accepted read",
+            &[(
+                stash_home,
+                "fn s() { [\"stash\", \"show\"]; x.arg(\"pop\"); }",
+            )],
+        ),
+        (
+            "a writing subcommand elsewhere in reads/",
+            &[
+                (stash_home, accepted_stash),
+                (other, "fn b() { x.arg(\"drop\"); }"),
+            ],
+        ),
+        (
+            "a writing subcommand as a raw string",
+            &[
+                (stash_home, accepted_stash),
+                (other, "fn b() { x.arg(r#\"store\"#); }"),
+            ],
+        ),
+        ("no stash read at all", &[(stash_home, "fn s() {}")]),
+    ];
+    for (shape, files) in refused_stash {
+        assert!(!stash_verdict(files).is_empty(), "{shape} was not caught");
+    }
+    // The stash read's options: one outside the list, and each required one dropped.
+    for added in [
+        "-p",
+        "--patch",
+        "--ext-diff",
+        "--textconv",
+        "-u",
+        "--include-untracked",
+        "--only-untracked",
+        "--stat",
+    ] {
+        let source = accepted_stash.replace("\"--raw\"", &format!("\"--raw\", \"{added}\""));
+        assert!(
+            !stash_verdict(&[(stash_home, &source)]).is_empty(),
+            "`{added}` in the stash read was not caught"
+        );
+    }
+    for required in STASH_SHOW_REQUIRED {
+        let source = accepted_stash.replace(&format!(", \"{required}\""), "");
+        let source = source.replace(&format!("\"{required}\", "), "");
+        assert!(
+            !source.contains(&format!("\"{required}\"")),
+            "{required} was not removed"
+        );
+        assert!(
+            !stash_verdict(&[(stash_home, &source)]).is_empty(),
+            "the stash read without `{required}` was not caught"
+        );
+    }
+    // An option in another read is that read's: only the stash read's are held to the list.
+    assert!(
+        stash_verdict(&[
+            (stash_home, accepted_stash),
+            (other, "fn b() { x.args([\"-p\", \"--stat\"]); }")
+        ])
+        .is_empty(),
+        "another read's options were held to the stash read's list"
+    );
+    // Spelled out apart from the roster, so an entry dropped from it fails here.
+    for subcommand in [
+        "push", "pop", "apply", "drop", "store", "clear", "create", "branch", "save", "export",
+        "import",
+    ] {
+        let source = format!("fn b() {{ x.arg(\"{subcommand}\"); }}");
+        assert!(
+            !stash_verdict(&[(stash_home, accepted_stash), (other, &source)]).is_empty(),
+            "`{subcommand}` was not caught"
+        );
     }
 
     // The literals are read where they are, lines counted through a multi-line string.
@@ -4671,6 +4912,160 @@ fn the_fsmonitor_daemon_pin_is_required_wherever_it_can_run() {
              inherited, which fails the builtin-fsmonitor test on a git with no daemon: {run}"
         );
     }
+}
+
+/// The reftable tests (`crates/cairn-git/tests/refs.rs`, PRD C2) skip where the git on
+/// `PATH` cannot make a reftable repository — before git 2.45 — wholly
+/// (`a_reftable_repository_is_refused_at_open_and_a_files_one_opens`) or for git's half
+/// (`the_ref_storage_setting_is_read_as_git_reads_it`), and a passing test's stderr is
+/// hidden, so `CAIRN_REQUIRE_REFTABLE` is what turns a skip into a failure. Pinned here:
+/// each test, read to its own closing brace, fails in its skip branch when the variable is
+/// set and says SKIPPED (`required_skip_violations`, self-test
+/// `the_required_skip_matcher_catches_the_shapes_it_claims`), and asks
+/// `no_reftable_here`, which runs the gate probe's `git init --quiet
+/// --ref-format=reftable`; `scripts/gate.sh`'s `test-full` calls the probe as a statement
+/// of its own (`gate_function_calls`), whose body (`gate_function_body`) runs that
+/// `git init`, exports the variable, sets the note naming both tests and removes what it
+/// made; the PASS line restates the note; and `scripts/git-floor.sh`, whose floors' gits
+/// cannot make reftable, runs the tests' binary only with the variable cleared — today it
+/// does not run it at all. CI's runner may lack a new enough git, and the gate then prints
+/// the note: this pin holds the probe, not the runner.
+#[test]
+fn the_reftable_refusal_is_required_wherever_it_can_run() {
+    let root = repo_root();
+    let read = |path: &str| {
+        std::fs::read_to_string(root.join(path)).unwrap_or_else(|e| panic!("reading {path}: {e}"))
+    };
+    let gate = read("scripts/gate.sh");
+    let floor = read("scripts/git-floor.sh");
+    let test = read("crates/cairn-git/tests/refs.rs");
+
+    let tests = [
+        "a_reftable_repository_is_refused_at_open_and_a_files_one_opens",
+        "the_ref_storage_setting_is_read_as_git_reads_it",
+    ];
+    for name in tests {
+        let violations =
+            required_skip_violations(&test, name, "CAIRN_REQUIRE_REFTABLE", "no_reftable_here(");
+        assert!(
+            violations.is_empty(),
+            "crates/cairn-git/tests/refs.rs: {violations:?}, so the gate's setting of \
+             CAIRN_REQUIRE_REFTABLE decides nothing for {name}"
+        );
+    }
+    let availability = test
+        .split("fn no_reftable_here(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}\n").next())
+        .unwrap_or_else(|| panic!("no_reftable_here is gone from refs.rs"));
+    assert!(
+        availability.contains(r#""init""#)
+            && availability.contains(r#""--quiet""#)
+            && availability.contains(r#""--ref-format=reftable""#),
+        "refs.rs's no_reftable_here no longer runs `git init --quiet --ref-format=reftable`, so \
+         the gate's probe no longer asks what the tests ask"
+    );
+
+    assert!(
+        gate_function_calls(&gate, "run_test_full", "require_reftable_where_possible"),
+        "scripts/gate.sh's run_test_full no longer calls require_reftable_where_possible, so \
+         the reftable tests would skip silently where they could have run."
+    );
+    let probe = gate_function_body(&gate, "require_reftable_where_possible")
+        .unwrap_or_else(|| panic!("scripts/gate.sh no longer defines the reftable probe"));
+    for needed in [
+        "git init --quiet --ref-format=reftable",
+        "export CAIRN_REQUIRE_REFTABLE=1",
+        "REFTABLE_NOTE=",
+        "probe=$(mktemp -d)",
+        "rm -rf \"$probe\"",
+    ]
+    .into_iter()
+    .chain(tests)
+    {
+        assert!(
+            probe.contains(needed),
+            "scripts/gate.sh's require_reftable_where_possible no longer has `{needed}`, so \
+             the reftable tests are no longer required exactly where they can run, or a skip \
+             goes unsaid or unnamed, or the probe's repository is left behind"
+        );
+    }
+    assert!(
+        gate.lines()
+            .any(|line| line.contains("gate: PASS") && line.contains("${REFTABLE_NOTE:+")),
+        "scripts/gate.sh's PASS line no longer restates REFTABLE_NOTE, so a skip is not said \
+         where the verdict is read"
+    );
+
+    let runs: Vec<&str> = floor
+        .lines()
+        .filter(|line| line.contains("PATH=\"$prefix/bin:$PATH\""))
+        .collect();
+    assert!(
+        !runs.is_empty(),
+        "scripts/git-floor.sh runs no git from its floors' prefix, so this check compared \
+         nothing"
+    );
+    let runs_the_test = floor.contains("--test refs") || floor.contains("\"--tests");
+    for run in runs {
+        assert!(
+            !runs_the_test || run.contains("-u CAIRN_REQUIRE_REFTABLE"),
+            "scripts/git-floor.sh runs the refs tests with CAIRN_REQUIRE_REFTABLE inherited, \
+             which fails the reftable tests on a floor's git: {run}"
+        );
+    }
+}
+
+/// `required_skip_violations` against the shapes it claims: the pinned shape passes; the
+/// SKIPPED line deleted, the requirement read moved into the NEXT test, the requirement
+/// read in an `if` that does nothing, and the availability check dropped each fail it.
+#[test]
+fn the_required_skip_matcher_catches_the_shapes_it_claims() {
+    let pinned = "fn the_test() {\n    if let Some(reason) = can_run() {\n        assert!(\n            \
+                  std::env::var_os(\"CAIRN_REQUIRE_X\")\n                .is_none(),\n            \
+                  \"set: {reason}\"\n        );\n        eprintln!(\"SKIPPED the_test: {reason}\");\n        \
+                  return;\n    }\n}\n\nfn next() {\n    eprintln!(\"later\");\n}\n";
+    let check =
+        |source: &str| required_skip_violations(source, "the_test", "CAIRN_REQUIRE_X", "can_run(");
+    assert!(check(pinned).is_empty(), "{:?}", check(pinned));
+
+    let unsaid = pinned.replace("eprintln!(\"SKIPPED the_test: {reason}\");", "");
+    assert!(
+        !check(&unsaid).is_empty(),
+        "M11: the SKIPPED line deleted passed"
+    );
+
+    let moved = pinned
+        .replace(
+            "assert!(\n            std::env::var_os(\"CAIRN_REQUIRE_X\")\n                .is_none(),\n            \"set: {reason}\"\n        );\n",
+            "",
+        )
+        .replace(
+            "fn next() {\n",
+            "fn next() {\n    assert!(std::env::var_os(\"CAIRN_REQUIRE_X\").is_none());\n    \
+             eprintln!(\"SKIPPED the_test\");\n",
+        );
+    assert_ne!(moved, pinned);
+    assert!(
+        !check(&moved).is_empty(),
+        "M12: the requirement moved to the next test passed"
+    );
+
+    let idle = pinned.replace(
+        "assert!(\n            std::env::var_os(\"CAIRN_REQUIRE_X\")\n                .is_none(),\n            \"set: {reason}\"\n        );",
+        "if std::env::var_os(\"CAIRN_REQUIRE_X\").is_none() {}",
+    );
+    assert_ne!(idle, pinned);
+    assert!(
+        !check(&idle).is_empty(),
+        "an `if .. {{}}` reading the variable passed"
+    );
+
+    let blind = pinned.replace("can_run()", "true_anyway()");
+    assert!(!check(&blind).is_empty(), "a skip that asks nothing passed");
+
+    let gone = pinned.replace("fn the_test()", "fn renamed()");
+    assert!(!check(&gone).is_empty(), "a missing test passed");
 }
 
 /// The two user-namespace tests — the refspec check over a repository another uid owns

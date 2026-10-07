@@ -29,7 +29,7 @@ use super::request::{
 use super::startup::Startup;
 
 /// The boundary over `repository`, with this process's `git`.
-fn opened(repository: &Path) -> (RepositoryHandle, Updates) {
+pub(super) fn opened(repository: &Path) -> (RepositoryHandle, Updates) {
     match open_with(repository, Startup::of_this_process()) {
         Ok((handle, updates, _)) => (handle, updates),
         Err(error) => panic!("starting the worker: {error}"),
@@ -46,9 +46,7 @@ pub(crate) fn commits(handle: &RepositoryHandle, updates: &mut Updates, count: u
     handle.submit(Request::OpenHistory { rows: count });
     let seen = collect_until(updates, |u| matches!(u, Update::Rows { .. }));
     match seen.last() {
-        Some(Update::Rows { rows, .. }) if rows.len() == count => {
-            rows.iter().map(|row| row.graph.id).collect()
-        }
+        Some(Update::Rows { rows, .. }) if rows.len() == count => rows.ids().collect(),
         other => panic!("expected {count} rows, got {other:?}"),
     }
 }
@@ -67,7 +65,7 @@ pub(crate) fn recent_commits(
         Some(Update::Rows { rows, complete })
             if !rows.is_empty() && (rows.len() == at_most || *complete) =>
         {
-            rows.iter().map(|row| row.graph.id).collect()
+            rows.ids().collect()
         }
         other => panic!("expected up to {at_most} rows, got {other:?}"),
     }
@@ -595,6 +593,7 @@ fn uncached(repository: &Path, query: &FileQuery) -> FileDiff {
     let request = match of {
         Comparison::Commit(id) => cairn_git::ChangesRequest::commit(*id),
         Comparison::Between { old, new } => cairn_git::ChangesRequest::between(*old, *new),
+        Comparison::Stash(stash) => cairn_git::ChangesRequest::stash(*stash),
     };
     let engine = match cairn_git::Repository::discover(repository) {
         Ok(engine) => engine,
@@ -808,20 +807,31 @@ fn a_stat_only_index_refresh_keeps_what_is_kept() {
 /// are long settled. Caught by: either early return taken out, which reads again.
 #[test]
 fn an_identical_ask_is_answered_from_what_is_kept() {
+    // A modified file whose diff git is asked for: one past the size limits (a long
+    // document) is answered without a patch read, and decides nothing here. Found on a
+    // handle of its own, so the asks below start from nothing kept.
+    let (of, file) = {
+        let (handle, mut updates) = checkout();
+        let ids = recent_commits(&handle, &mut updates, 40);
+        ids.iter()
+            .find_map(|id| {
+                let of = Comparison::Commit(*id);
+                let files = change_set(&handle, &mut updates, of).files;
+                files
+                    .into_iter()
+                    .filter(|f| f.status == ChangeStatus::Modified)
+                    .find(|file| {
+                        let before = reads(&handle, &mut updates).0;
+                        file_answer(&handle, &mut updates, &committed(of, file));
+                        reads(&handle, &mut updates).0 > before
+                    })
+                    .map(|file| (of, file))
+            })
+            .unwrap_or_else(|| panic!("no file modified by {ids:?} asked a patch read"))
+    };
     let (handle, mut updates) = checkout();
-    let ids = recent_commits(&handle, &mut updates, 40);
     let start = reads(&handle, &mut updates);
-    let (of, file) = ids
-        .iter()
-        .find_map(|id| {
-            let of = Comparison::Commit(*id);
-            change_set(&handle, &mut updates, of)
-                .files
-                .into_iter()
-                .find(|f| f.status == ChangeStatus::Modified)
-                .map(|file| (of, file))
-        })
-        .unwrap_or_else(|| panic!("none of {ids:?} modified a file"));
+    change_set(&handle, &mut updates, of);
     let listed = reads(&handle, &mut updates).1 - start.1;
     change_set(&handle, &mut updates, of);
     assert_eq!(

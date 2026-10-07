@@ -17,14 +17,18 @@
 //! builds one viewport of rows. Above the files, Fork's Expand All (Collapse All while any file
 //! is open) and, when Expand All stopped at its line budget, how many files it left collapsed.
 //!
-//! No avatar and no ref chips (L9), and the tab never asks for anything: a parent link
+//! Above the id, the REFS row (refs-and-status R6.1, Fork's): the chips of the refs pointing at
+//! the commit, as its row in the history draws them — given to the tab laid out already, and
+//! cut at the pane's edge as Fork's Mac pane cuts them — and no row for a commit with none.
+//!
+//! No avatar (L9), and the tab never asks for anything: a parent link
 //! reports the parent and the caller decides what pressing it reaches. The commit's id, its
 //! parents and the files' paths are drawn in the diff's typeface, IBM Plex Mono (R6.6).
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use cairn_model::{ChangeSet, ChangeStatus, ChangedFile, Oid, Signature};
+use cairn_model::{ChangeSet, ChangeStatus, ChangedFile, Lane, Oid, Signature};
 use freya::prelude::*;
 
 use crate::diff_header::HIDDEN_CHANGES_NOTICE;
@@ -34,6 +38,7 @@ use crate::diff_palette::{
 };
 use crate::diff_view::{RowGeometry, draw_row};
 use crate::expansion::{Expansion, Item, Opened};
+use crate::ref_chips::{Chip, chips_row};
 use crate::toggle_glyphs::Glyph;
 use crate::{accelerators, date_text, message_lines};
 
@@ -72,6 +77,8 @@ const GAP: f32 = 10.0;
 pub const AUTHOR_CAPTION: &str = "AUTHOR";
 /// The caption over the committer's column.
 pub const COMMITTER_CAPTION: &str = "COMMITTER";
+/// The caption beside the chips of the refs pointing at the commit.
+pub const REFS_CAPTION: &str = "REFS";
 /// The caption beside the full commit id.
 pub const ID_CAPTION: &str = "SHA";
 /// The caption beside the parent links.
@@ -128,6 +135,8 @@ enum Line {
         author: String,
         committer: String,
     },
+    /// The refs pointing at the commit, drawn as its row draws them, in its lane's colour.
+    Refs(Refs),
     Id(String),
     Parents(Vec<Oid>),
     Rule,
@@ -139,9 +148,26 @@ enum Line {
     FilesBar,
 }
 
-/// The rows above the files, for `changes`. Proportional to the message, never to the
-/// files: those are read by index as they scroll into view.
-fn header_lines(changes: &ChangeSet) -> Vec<Line> {
+/// The chips of the refs pointing at a commit and the lane its row is in: what the REFS row
+/// draws (R6.1). No chips, no row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Refs {
+    pub chips: Vec<Chip>,
+    pub lane: Lane,
+}
+
+impl Default for Refs {
+    fn default() -> Self {
+        Self {
+            chips: Vec::new(),
+            lane: Lane::new(0),
+        }
+    }
+}
+
+/// The rows above the files, for `changes`. Proportional to the message and the refs drawn,
+/// never to the files: those are read by index as they scroll into view.
+fn header_lines(changes: &ChangeSet, refs: &Refs) -> Vec<Line> {
     #[cfg(test)]
     tests::HEADER_BUILDS.with(|builds| builds.set(builds.get() + 1));
     let mut lines = Vec::new();
@@ -155,6 +181,9 @@ fn header_lines(changes: &ChangeSet) -> Vec<Line> {
             author: date_text::long_date(details.author.time),
             committer: date_text::long_date(details.committer.time),
         });
+        if !refs.chips.is_empty() {
+            lines.push(Line::Refs(refs.clone()));
+        }
         lines.push(Line::Id(details.id.hex().as_str().to_owned()));
         if !details.parents.is_empty() {
             lines.push(Line::Parents(details.parents.clone()));
@@ -185,21 +214,24 @@ fn header_lines(changes: &ChangeSet) -> Vec<Line> {
 }
 
 /// Everything [`header_lines`] reads from a change set but the commit's own fields, which
-/// its id names: one commit's header is built once, however often the state it is read
-/// from is written (a file's diff arriving, from phase 06) without changing the commit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// its id names, and the refs drawn: one commit's header is built once, however often the
+/// state it is read from is written (a file's diff arriving, from phase 06) without changing
+/// the commit or its refs.
+#[derive(Debug, Clone, PartialEq)]
 struct HeaderKey {
     commit: Option<Oid>,
     needed_limit: Option<usize>,
     no_files: bool,
+    refs: Refs,
 }
 
 impl HeaderKey {
-    fn of(changes: &ChangeSet) -> Self {
+    fn of(changes: &ChangeSet, refs: &Refs) -> Self {
         Self {
             commit: changes.details.as_ref().map(|details| details.id),
             needed_limit: changes.renames.needed_limit,
             no_files: changes.files.is_empty(),
+            refs: refs.clone(),
         }
     }
 }
@@ -208,15 +240,15 @@ impl HeaderKey {
 type HeaderCache = Rc<RefCell<Option<(HeaderKey, Rc<Vec<Line>>)>>>;
 
 /// The header for `changes`: the one in `cache` while its key still holds.
-fn cached_header(cache: &HeaderCache, changes: &ChangeSet) -> Rc<Vec<Line>> {
-    let key = HeaderKey::of(changes);
+fn cached_header(cache: &HeaderCache, changes: &ChangeSet, refs: &Refs) -> Rc<Vec<Line>> {
+    let key = HeaderKey::of(changes, refs);
     let mut cached = cache.borrow_mut();
     if let Some((built_for, lines)) = cached.as_ref()
         && *built_for == key
     {
         return lines.clone();
     }
-    let lines = Rc::new(header_lines(changes));
+    let lines = Rc::new(header_lines(changes, refs));
     *cached = Some((key, lines.clone()));
     lines
 }
@@ -230,6 +262,7 @@ fn cached_header(cache: &HeaderCache, changes: &ChangeSet) -> Rc<Vec<Line>> {
 /// focused list rather than chords. A chord pressed here is left for whoever hears it.
 pub struct CommitTab {
     changes: Readable<ChangeSet>,
+    refs: Refs,
     expansion: Readable<Expansion>,
     side_by_side: bool,
     on_parent: EventHandler<Oid>,
@@ -244,6 +277,7 @@ impl CommitTab {
     pub fn new(changes: impl Into<Readable<ChangeSet>>) -> Self {
         Self {
             changes: changes.into(),
+            refs: Refs::default(),
             expansion: Readable::from_value(Expansion::new()),
             side_by_side: false,
             on_parent: EventHandler::new(|_| {}),
@@ -253,6 +287,13 @@ impl CommitTab {
             on_load: EventHandler::new(|_| {}),
             key: DiffKey::None,
         }
+    }
+
+    /// The chips of the refs pointing at the commit, laid out as its row in the history lays
+    /// them out, and that row's lane: the REFS row (R6.1).
+    pub fn refs(mut self, refs: Refs) -> Self {
+        self.refs = refs;
+        self
     }
 
     /// What the files opened in place draw, by their index in the change set.
@@ -307,6 +348,7 @@ impl CommitTab {
 impl PartialEq for CommitTab {
     fn eq(&self, other: &Self) -> bool {
         self.changes == other.changes
+            && self.refs == other.refs
             && self.expansion == other.expansion
             && self.side_by_side == other.side_by_side
             && self.key == other.key
@@ -410,7 +452,8 @@ impl Component for TabBody {
             view_width: *width.read(),
             scroll: controller,
         };
-        let length = data.content.length();
+        // The rows after the last are room for the horizontal scrollbar (`end_room`).
+        let length = crate::end_room::with_end_room(data.content.length(), DETAIL_ROW_HEIGHT);
         let border = colours().border_focus;
 
         rect()
@@ -484,7 +527,7 @@ impl Component for CommitTab {
             let changes = self.changes.read();
             let identity = changes.details.as_ref().map(|details| details.id);
             (
-                cached_header(&cache, &changes),
+                cached_header(&cache, &changes, &self.refs),
                 changes.files.len(),
                 identity,
             )
@@ -526,6 +569,10 @@ fn build_row(item: VirtualItem, data: &TabData) -> Element {
         .main_align(Alignment::Center)
         .padding(Gaps::new(0., PADDING, 0., PADDING));
     let content = &data.content;
+    if item.index >= content.length() {
+        // Room for the horizontal scrollbar after the last row (`end_room`).
+        return row.into();
+    }
     let Some(at) = item.index.checked_sub(content.lines.len()) else {
         return match content.lines.get(item.index) {
             Some(Line::FilesBar) => row.child(files_bar(content)).into(),
@@ -735,6 +782,26 @@ fn header_row(line: &Line, on_parent: &EventHandler<Oid>) -> Element {
             text(author.clone(), FONT_SIZE, colours.text_secondary),
             text(committer.clone(), FONT_SIZE, colours.text_secondary),
         ),
+        // Cut at the pane's edge, never wrapped and never counted (Fork's Mac pane).
+        Line::Refs(refs) => rect()
+            .horizontal()
+            .content(Content::Flex)
+            .width(Size::fill())
+            .height(Size::px(DETAIL_ROW_HEIGHT))
+            .cross_align(Alignment::Center)
+            .spacing(GAP)
+            .child(
+                caption(REFS_CAPTION)
+                    .width(Size::px(CAPTION_WIDTH))
+                    .text_align(TextAlign::End),
+            )
+            .child(
+                chips_row(&refs.chips, refs.lane)
+                    .width(Size::flex(1.))
+                    .height(Size::px(DETAIL_ROW_HEIGHT))
+                    .overflow(Overflow::Clip),
+            )
+            .into(),
         Line::Id(id) => labelled(
             ID_CAPTION,
             text(id.clone(), FONT_SIZE, colours.text_primary)
@@ -911,11 +978,14 @@ mod tests {
     /// the empty line after the final newline, or building a row per file here.
     #[test]
     fn the_header_is_the_message_and_never_the_files() {
-        let lines = header_lines(&set(
-            Some(details("subject\n\nbody one\r\nbody two\n", 2)),
-            10_000,
-            None,
-        ));
+        let lines = header_lines(
+            &set(
+                Some(details("subject\n\nbody one\r\nbody two\n", 2)),
+                10_000,
+                None,
+            ),
+            &Refs::default(),
+        );
         let message: Vec<&Line> = lines
             .iter()
             .filter(|line| matches!(line, Line::Subject(_) | Line::Body(_)))
@@ -936,12 +1006,12 @@ mod tests {
     /// changed nothing.
     #[test]
     fn the_header_says_what_is_missing_and_what_was_cut_short() {
-        let root = header_lines(&set(Some(details("x", 0)), 0, Some(2774)));
+        let root = header_lines(&set(Some(details("x", 0)), 0, Some(2774)), &Refs::default());
         assert!(!root.iter().any(|line| matches!(line, Line::Parents(_))));
         assert!(root.contains(&Line::CutShort(2774)));
         assert!(root.contains(&Line::NoFiles));
 
-        let merge = header_lines(&set(Some(details("x", 2)), 1, None));
+        let merge = header_lines(&set(Some(details("x", 2)), 1, None), &Refs::default());
         assert!(
             merge
                 .iter()
@@ -949,6 +1019,41 @@ mod tests {
         );
         assert!(!merge.iter().any(|line| matches!(line, Line::CutShort(_))));
         assert!(!merge.contains(&Line::NoFiles));
+    }
+
+    fn refs_of(names: &[&str]) -> Refs {
+        Refs {
+            chips: names
+                .iter()
+                .map(|name| Chip {
+                    kind: crate::ref_chips::ChipKind::Tag,
+                    text: (*name).to_owned(),
+                })
+                .collect(),
+            lane: Lane::new(2),
+        }
+    }
+
+    /// R6.1: the REFS row stands above the id, holding the chips given, and a commit with
+    /// none has no row. Caught by: a row drawn for no refs, the row below the id, or the
+    /// chips lost.
+    #[test]
+    fn the_refs_row_stands_above_the_id_and_only_when_a_ref_points_at_the_commit() {
+        let changes = set(Some(details("x", 1)), 1, None);
+        let none = header_lines(&changes, &Refs::default());
+        assert!(!none.iter().any(|line| matches!(line, Line::Refs(_))));
+
+        let two = refs_of(&["v1.0", "v1.1"]);
+        let lines = header_lines(&changes, &two);
+        let at = |wanted: fn(&Line) -> bool| lines.iter().position(wanted);
+        let refs = at(|line| matches!(line, Line::Refs(_)));
+        let id = at(|line| matches!(line, Line::Id(_)));
+        let dates = at(|line| matches!(line, Line::Dates { .. }));
+        assert!(
+            dates < refs && refs < id && refs.is_some(),
+            "REFS at {refs:?}, the dates at {dates:?}, the id at {id:?}"
+        );
+        assert_eq!(lines.get(refs.unwrap_or_default()), Some(&Line::Refs(two)));
     }
 
     /// R1: a write to the state the tab reads that leaves the commit as it was — what a
@@ -960,6 +1065,7 @@ mod tests {
         #[derive(Clone)]
         struct Fixture {
             state: State<(ChangeSet, u32)>,
+            refs: State<Refs>,
         }
         let app = || {
             let fixture = use_consume::<Fixture>();
@@ -969,7 +1075,7 @@ mod tests {
                 .map(|(changes, _)| changes, |_| true);
             rect()
                 .expanded()
-                .child(CommitTab::new(changes))
+                .child(CommitTab::new(changes).refs(fixture.refs.read().clone()))
                 .into_element()
         };
         let (mut test, fixture) = TestingRunner::new(
@@ -978,6 +1084,7 @@ mod tests {
             |runner| {
                 runner.provide_root_context(|| Fixture {
                     state: State::create((set(Some(details("one\n", 1)), 3, None), 0)),
+                    refs: State::create(Refs::default()),
                 })
             },
             1.,
@@ -1003,6 +1110,20 @@ mod tests {
             first + 1,
             "another commit did not rebuild the header once"
         );
+
+        // The refs pointing at the commit changed (a refresh moved a branch onto it): the
+        // REFS row is built again, once.
+        let mut refs = fixture.refs;
+        refs.set(refs_of(&["main"]));
+        test.sync_and_update();
+        assert_eq!(
+            builds(),
+            first + 2,
+            "new refs did not rebuild the header once"
+        );
+        state.write().1 = 9;
+        test.sync_and_update();
+        assert_eq!(builds(), first + 2, "the same refs rebuilt the header");
     }
 
     /// T6, user decision 5: each status is its bare letter, as Fork draws it — a rename and

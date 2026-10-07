@@ -1,6 +1,6 @@
 //! The painted graph column of one row.
 
-use cairn_model::GraphRow;
+use cairn_model::RowEdges;
 use freya::engine::prelude::{Paint, PaintStyle, PathBuilder, PathEffect, SkColor};
 use freya::prelude::*;
 
@@ -14,7 +14,7 @@ const DASH: [f32; 2] = [4.0, 3.0];
 
 const RING_WIDTH: f32 = 2.0;
 
-pub(crate) fn graph_cell(row: &GraphRow, parents: usize, lanes: usize) -> Canvas {
+pub(crate) fn graph_cell(row: &RowEdges, parents: usize, lanes: usize) -> Canvas {
     let geometry = graph_geometry::row_geometry(row, parents);
 
     // `RenderCallback` always compares equal: a changed drawing with an unchanged layout
@@ -74,18 +74,11 @@ fn paint_stroke(canvas: &freya::engine::prelude::Canvas, paint: &mut Paint, stro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cairn_model::{EdgeSegment, Lane, Oid};
+    use cairn_model::{EdgeSegment, Lane};
     use freya::engine::prelude::{ImageInfo, raster_n32_premul};
 
-    fn oid() -> Oid {
-        match Oid::from_bytes(&[7u8; 20]) {
-            Ok(id) => id,
-            Err(_) => unreachable!("20 bytes is a SHA-1"),
-        }
-    }
-
     /// Paints one row offscreen and reports, per pixel of `column`, whether anything was drawn.
-    fn painted_column(row: &GraphRow, parents: usize, column: f32) -> Vec<bool> {
+    fn painted_column(row: &RowEdges, parents: usize, column: f32) -> Vec<bool> {
         let width = graph_geometry::graph_width(4).ceil() as i32;
         let height = ROW_HEIGHT.ceil() as i32;
         let Some(mut surface) = raster_n32_premul((width, height)) else {
@@ -112,9 +105,8 @@ mod tests {
             .collect()
     }
 
-    fn row(lane: usize, edges: Vec<EdgeSegment>) -> GraphRow {
-        GraphRow {
-            id: oid(),
+    fn row(lane: usize, edges: Vec<EdgeSegment>) -> RowEdges {
+        RowEdges {
             lane: Lane::new(lane),
             edges,
         }

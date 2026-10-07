@@ -83,6 +83,13 @@ crates/cairn-git/src/
     fetch_settings.rs  fetch_settings — `git config --includes --null` in query form, what a
                     fetch of a remote will read, for fetch's refspec check
                     (docs/systems/credentials.md)
+    status.rs       status — `git status --porcelain=v2 -z`, the working tree's status, read
+                    again with `--untracked-files=all` where the first answer collapsed an
+                    untracked directory (docs/systems/status.md)
+    stash_changes.rs  stash_changes — `git stash show --raw -z --no-abbrev --no-color
+                    --no-ext-diff --no-textconv --no-relative --end-of-options <stash>`, what
+                    a stash changed, git reading `stash.showIncludeUntracked` itself
+                    (docs/systems/diff.md, "A stash's changes")
 ```
 
 `process` is a private module (`mod process;` in `lib.rs`). The application
@@ -225,8 +232,13 @@ Why each variable is there, with its evidence, is beside it in
   message git proposed. Both editor variables are set, because a user's
   `sequence.editor` outranks `GIT_EDITOR` for the rebase todo list.
 - **`GIT_OPTIONAL_LOCKS=0` covers `git status` and nothing else.** Porcelain
-  `diff` and `describe --dirty` refresh the index anyway. That is why a read in
-  `reads/` runs query plumbing or `status` only — and, as the two porcelain
+  `diff` and `describe --dirty` refresh the index anyway. `git status` itself is
+  a read (`reads/status.rs`): under the variable it writes neither the refreshed
+  stat information, the untracked cache nor the fsmonitor token, and leaves the
+  index byte-identical (`a_status_read_leaves_the_index_byte_identical`); under a
+  split index it advances `sharedindex.*`'s mtime and under a sparse index the
+  loose tree objects' mtimes, bytes unchanged, as the user's own `git status`
+  does. That is why a read in `reads/` runs query plumbing or `status` only — and, as the three porcelain
   exceptions the user accepted, `git diff --no-index -- /dev/null <path>` for an
   untracked file's working-tree diff, `<path>` work-tree-relative (no absolute,
   `.` or `..` component, refused before git runs) and `./-` for `-`, which reads
@@ -235,9 +247,13 @@ Why each variable is there, with its evidence, is beside it in
   --includes --null` with `--type=bool --get <key>` or `--get-all <key>`, query
   form only, in `reads/fetch_settings.rs`, which asks git what a fetch will read
   for fetch's refspec check, so the check decides on exactly what the fetch's
-  own git reads (2026-10-04) — as the module's own docs say
-  (`reads/mod.rs`, "What a read may run"); both are pinned by
-  `the_porcelain_reads_are_the_two_named_queries`, and
+  own git reads (2026-10-04); and `git stash show --raw -z --no-abbrev
+  --no-color --no-ext-diff --no-textconv --no-relative --end-of-options <stash
+  commit>`, in `reads/stash_changes.rs`, which lists what a stash changed with
+  its untracked files paired as git pairs them, git reading
+  `stash.showIncludeUntracked` itself (2026-10-07) — as the module's own docs say
+  (`reads/mod.rs`, "What a read may run"); all three are pinned by
+  `the_porcelain_reads_are_the_three_named_queries`, and
   `destructive-ops-reviewer` check 10 names them.
 - **A read may run the repository's `core.fsmonitor` hook and, on a read of the
   working tree, the path's clean filter driver — no other program.**
@@ -271,6 +287,11 @@ Why each variable is there, with its evidence, is beside it in
   own hook and filters (`reads/working_tree.rs`;
   `a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmonitor`,
   `a_clean_filter_drivers_form_is_what_is_diffed_and_it_runs_under_git`).
+  The status read runs the same: the hook or daemon, the clean filter of each
+  stat-dirty file it rehashes, and `git status` inside each submodule it looks
+  into (`reads/status.rs`); a superseded status read ends git's process group,
+  the hook it is waiting on included
+  (`a_superseded_status_read_ends_its_process_group_and_leaves_nothing_running`).
 - **`GIT_NO_LAZY_FETCH=1` needs git 2.44; the floor is 2.30.** In a partial
   clone, a read that asks for an object only the promisor remote holds would
   fetch it — a pack written, the network reached. With the variable, git
@@ -553,6 +574,17 @@ never one a repository can plant. Not residual: whether the repository
 opened is the one checked — it is opened from the path the check searched
 to, and the shapes test fails when it is opened through a second, logical
 search instead, or when the one search is made logical.
+
+Two more refusals are made as the repository opens, once gix has opened it and
+before anything reads a ref, from the repository format as git reads it (the
+common directory's own `config`, no include followed; `crates/cairn-git/src/ref_storage.rs`):
+`Error::RefStorageUnsupported` when `extensions.refStorage` names anything but
+`files` — gix reads no such setting, and would open a reftable repository only to
+fail on its first ref — and `Error::RefStorageNeedsFormatVersion1` when a
+format-version-0 repository sets it at all, as git refuses it. The open also clears
+the refs namespace gix reads from `GIT_NAMESPACE` in Cairn's own environment, which
+no `git` Cairn runs is given, so gix's refs are that `git`'s. Both are
+`docs/systems/refs.md`'s.
 
 ## The runner
 
@@ -1024,14 +1056,12 @@ then, of whatever that worker had not yet ended: the process exits, nothing
 is left to drive a late `git` to its `SIGKILL` or reap it, and such a `git`
 runs on, orphaned, holding whatever locks it holds (issue #48).
 
-What a close does not bound: the network lane, after its fetch is reaped,
-still reads the refs once more (`ref_tips`, which has no cancel and peels
-every ref) before it lets its sender go, and it read them once before the
-fetch started, so a repository with a great many refs and a cold cache can
-hold the stream's end — and the window — past `CLOSE_PATIENCE`. The window
-stays open and draws nothing until the second request closes it. The
-constants above bound the reaps, not the scans (issue #43; the scans
-themselves are #25's).
+The network lane reads no refs around a fetch: whether a fetch moved one is the
+refresh's to find out, which the window asks for on every ending, in the refs lane on the repository thread, where a
+close's stopped epochs cancel it between refs. The refresh thread's `git status`,
+which no refresh supersedes, is ended by the close like every other `git` in the
+registry, and its reap is bounded by `CLOSE_BOUND` with the rest
+(`a_close_ends_a_running_status`; issue #43).
 
 A close also ends any `git` in flight, a write included, without asking: the
 window refuses nothing and the user is told nothing about what was running.

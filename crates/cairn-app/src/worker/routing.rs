@@ -2,13 +2,17 @@
 //!
 //! | Lane or request | Thread |
 //! | --- | --- |
-//! | history (`OpenHistory`, `MoreHistory`) | `cairn-repository`, which owns the live walk |
+//! | history (`OpenHistory`, `MoreHistory`, `FindRow`, `StopFinding`) | `cairn-repository`, which owns the live walk |
 //! | changes (`Changes`) | `cairn-diff` |
 //! | file diff (`FileDiff`, `Expand`) | `cairn-diff` |
 //! | `ConfiguredContext` | `cairn-diff`, whose handle is opened again when the configuration moves, and which sends the context again each time |
 //! | `ListRemotes`, `CommandLog`, `Close`, `Fetch` | `cairn-repository` (a fetch is forwarded on to the network lane) |
 //! | `Retire` | `cairn-repository`, which frees what it is handed |
 //! | file filter (`FilterFiles`) | `cairn-repository`, whose pages are bounded, so a keystroke never waits behind a diff |
+//! | refs (`Refresh`'s first read) | `cairn-repository`, which reopens the walk from them (refs-and-status R11.2) |
+//! | ahead/behind and status (`Refresh`'s other two) | `cairn-refresh`, so neither a page nor a diff queues behind a slow status or a long divergence; ahead/behind is forwarded there by the repository thread once the refs it counts are read |
+//! | ref filter (`FilterRefs`) | `cairn-repository`, as the file filter |
+//! | Local Changes' filter (`FilterLocalChanges`) | `cairn-repository`, as the file filter |
 //! | `CancelFetch` | none: the fetch's control, from the caller's thread |
 //!
 //! [`route`] is the table, applied to every request as it is submitted: it hands each one
@@ -26,7 +30,9 @@
 use super::epoch::QueryLane;
 use std::sync::Arc;
 
-use cairn_model::ChangeSet;
+use cairn_model::{ChangeSet, Disclosure, LocalChanges, Oid, RefsSnapshot};
+
+use super::epoch::Epoch;
 
 use super::request::{Comparison, DiffQuery, FileQuery, Request, Retired};
 
@@ -38,24 +44,37 @@ pub(super) enum Thread {
     Repository,
     /// `cairn-diff`: the changes and file-diff lanes, commits and working tree alike.
     Diff,
+    /// `cairn-refresh`: status and ahead/behind.
+    Refresh,
 }
 
 /// The thread each query lane is served on: the table above, for the lanes.
 #[cfg(test)]
 pub(super) const fn thread_of(lane: QueryLane) -> Thread {
     match lane {
-        QueryLane::History | QueryLane::FileFilter => Thread::Repository,
+        QueryLane::History
+        | QueryLane::Walk
+        | QueryLane::FileFilter
+        | QueryLane::Refs
+        | QueryLane::RefFilter
+        | QueryLane::LocalChangesFilter => Thread::Repository,
         QueryLane::Changes | QueryLane::FileDiff => Thread::Diff,
+        QueryLane::AheadBehind | QueryLane::Status => Thread::Refresh,
     }
 }
 
 /// Which page of the history walk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Page {
-    /// A new walk from `HEAD`, dropping any walk open.
-    Open { rows: usize },
+    /// A new walk from every ref, dropping any walk open; `walk` is the walk lane's number
+    /// the open was given, which every page of the walk is answered under.
+    Open { rows: usize, walk: Epoch },
     /// The next rows of the walk open, or a cold restart from the last good page.
     More { rows: usize },
+    /// Pages of the walk open until one holds `target`'s row, or the walk ends.
+    Find { target: Oid, rows: usize },
+    /// Nothing: its number superseded the find in flight, which is all it is for.
+    Stop,
 }
 
 /// What the repository thread is sent.
@@ -71,6 +90,22 @@ pub(super) enum RepositoryJob {
     Filter {
         of: Comparison,
         files: Arc<ChangeSet>,
+        text: String,
+    },
+    /// The refs read again, a refresh's first read; its epoch is the refs lane's, and
+    /// `ahead_behind` the epoch the ahead/behind it forwards is answered under.
+    Refs {
+        ahead_behind: Epoch,
+    },
+    /// The sidebar's rows for a snapshot, a filter's text and what is open.
+    FilterRefs {
+        refs: Arc<RefsSnapshot>,
+        text: String,
+        disclosure: Arc<Disclosure>,
+    },
+    /// Which rows of Local Changes' two lists a filter's text leaves.
+    FilterLocalChanges {
+        changes: Arc<LocalChanges>,
         text: String,
     },
     /// Answers to free; the job does nothing else.
@@ -89,6 +124,14 @@ pub(super) enum Routed {
     ConfiguredContext,
     /// Never queued: it reaches the fetch directly, ahead of any page.
     CancelFetch,
+    /// A refresh: its refs to the repository thread ([`RepositoryJob::Refs`]), its status to
+    /// the refresh thread — each numbered by `submit`, which alone holds the epochs.
+    Refresh,
+    /// A new walk, to the repository thread as [`Page::Open`] with the walk lane's number
+    /// `submit` gave it.
+    OpenHistory {
+        rows: usize,
+    },
 }
 
 #[cfg(test)]
@@ -96,9 +139,21 @@ impl Routed {
     /// The thread this is served on; `None` for what no thread queues.
     pub(super) fn thread(&self) -> Option<Thread> {
         match self {
-            Self::Repository(_) => Some(Thread::Repository),
+            Self::Repository(_) | Self::OpenHistory { .. } => Some(Thread::Repository),
             Self::Diff(_) | Self::ConfiguredContext => Some(Thread::Diff),
             Self::CancelFetch => None,
+            // Its refs': see `lane_thread` for its ahead/behind. Its status, numbered in no
+            // lane of the refresh's, goes to the refresh thread too.
+            Self::Refresh => Some(Thread::Repository),
+        }
+    }
+
+    /// The thread `lane`'s query of this is served on: for a refresh, each of the two reads it
+    /// is numbered for (its refs and ahead/behind).
+    pub(super) fn lane_thread(&self, lane: QueryLane) -> Option<Thread> {
+        match (self, lane) {
+            (Self::Refresh, QueryLane::AheadBehind) => Some(Thread::Refresh),
+            _ => self.thread(),
         }
     }
 }
@@ -107,12 +162,14 @@ impl Routed {
 /// until it is given a thread.
 pub(super) fn route(request: Request) -> Routed {
     match request {
-        Request::OpenHistory { rows } => {
-            Routed::Repository(RepositoryJob::History(Page::Open { rows }))
-        }
+        Request::OpenHistory { rows } => Routed::OpenHistory { rows },
         Request::MoreHistory { rows } => {
             Routed::Repository(RepositoryJob::History(Page::More { rows }))
         }
+        Request::FindRow { target, rows } => {
+            Routed::Repository(RepositoryJob::History(Page::Find { target, rows }))
+        }
+        Request::StopFinding => Routed::Repository(RepositoryJob::History(Page::Stop)),
         Request::Changes { of } => Routed::Diff(DiffQuery::Changes(of)),
         Request::FileDiff(FileQuery { target, options }) => {
             Routed::Diff(DiffQuery::File(FileQuery { target, options }))
@@ -120,6 +177,19 @@ pub(super) fn route(request: Request) -> Routed {
         Request::Expand(asked) => Routed::Diff(DiffQuery::Expand(asked)),
         Request::FilterFiles { of, files, text } => {
             Routed::Repository(RepositoryJob::Filter { of, files, text })
+        }
+        Request::Refresh => Routed::Refresh,
+        Request::FilterRefs {
+            refs,
+            text,
+            disclosure,
+        } => Routed::Repository(RepositoryJob::FilterRefs {
+            refs,
+            text,
+            disclosure,
+        }),
+        Request::FilterLocalChanges { changes, text } => {
+            Routed::Repository(RepositoryJob::FilterLocalChanges { changes, text })
         }
         Request::ListRemotes => Routed::Repository(RepositoryJob::ListRemotes),
         Request::ConfiguredContext => Routed::ConfiguredContext,
@@ -136,12 +206,15 @@ pub(super) fn route(request: Request) -> Routed {
 #[cfg(test)]
 pub(super) fn unroute(routed: Routed) -> Request {
     match routed {
-        Routed::Repository(RepositoryJob::History(Page::Open { rows })) => {
-            Request::OpenHistory { rows }
-        }
+        Routed::Repository(RepositoryJob::History(Page::Open { rows, .. }))
+        | Routed::OpenHistory { rows } => Request::OpenHistory { rows },
         Routed::Repository(RepositoryJob::History(Page::More { rows })) => {
             Request::MoreHistory { rows }
         }
+        Routed::Repository(RepositoryJob::History(Page::Find { target, rows })) => {
+            Request::FindRow { target, rows }
+        }
+        Routed::Repository(RepositoryJob::History(Page::Stop)) => Request::StopFinding,
         Routed::Repository(RepositoryJob::ListRemotes) => Request::ListRemotes,
         Routed::Repository(RepositoryJob::Fetch { remote }) => Request::Fetch { remote },
         Routed::Repository(RepositoryJob::CommandLog) => Request::CommandLog,
@@ -149,6 +222,19 @@ pub(super) fn unroute(routed: Routed) -> Request {
             Request::FilterFiles { of, files, text }
         }
         Routed::Repository(RepositoryJob::Retire(retired)) => Request::Retire(retired),
+        Routed::Repository(RepositoryJob::Refs { .. }) | Routed::Refresh => Request::Refresh,
+        Routed::Repository(RepositoryJob::FilterRefs {
+            refs,
+            text,
+            disclosure,
+        }) => Request::FilterRefs {
+            refs,
+            text,
+            disclosure,
+        },
+        Routed::Repository(RepositoryJob::FilterLocalChanges { changes, text }) => {
+            Request::FilterLocalChanges { changes, text }
+        }
         Routed::Repository(RepositoryJob::Close) => Request::Close,
         Routed::Diff(DiffQuery::Changes(of)) => Request::Changes { of },
         Routed::Diff(DiffQuery::File(query)) => Request::FileDiff(query),
@@ -168,6 +254,11 @@ mod tests {
         vec![
             Request::OpenHistory { rows: 3 },
             Request::MoreHistory { rows: 3 },
+            Request::FindRow {
+                target: cairn_model::Oid::from_bytes(&[8; 20]).unwrap(),
+                rows: 3,
+            },
+            Request::StopFinding,
             Request::Changes { of: commit },
             Request::FileDiff(FileQuery {
                 target: FileTarget::WorkingTree {
@@ -200,6 +291,27 @@ mod tests {
                 }),
                 text: "lib".to_owned(),
             },
+            Request::FilterLocalChanges {
+                changes: Arc::new(cairn_model::LocalChanges::new(
+                    cairn_model::WorkingTreeStatus::Listed(vec![
+                        cairn_model::StatusEntry::Untracked(cairn_model::RepoPath::from("a")),
+                    ]),
+                )),
+                text: "a".to_owned(),
+            },
+            Request::Refresh,
+            Request::FilterRefs {
+                refs: Arc::new(cairn_model::RefsSnapshot {
+                    refs: Vec::new(),
+                    head: cairn_model::HeadState::Unborn(cairn_model::RefName::new(
+                        "refs/heads/main",
+                    )),
+                    stashes: Vec::new(),
+                    unreadable: 0,
+                }),
+                text: "main".to_owned(),
+                disclosure: Arc::new(cairn_model::Disclosure::default()),
+            },
             Request::ListRemotes,
             Request::ConfiguredContext,
             Request::Fetch {
@@ -222,26 +334,37 @@ mod tests {
         ]
     }
 
-    /// PRD R4.2: every query is served on the thread its lane is routed to, and the lanes
-    /// are routed as decided — the history on the thread that owns the walk, the changes
-    /// and file-diff lanes on the diff thread. Caught by: a diff routed to the repository
-    /// thread (it queues behind a page), the table changed without the routing, or the
+    /// PRD R4.2 and refs-and-status R11.2: every query is served on the thread its lane is
+    /// routed to, and the lanes are routed as decided — the history and the refs on the
+    /// thread that owns the walk, the changes and file-diff lanes on the diff thread, status
+    /// and ahead/behind on the refresh thread. Caught by: a diff routed to the repository
+    /// thread (it queues behind a page), a status routed to the repository or diff thread (a
+    /// page or a diff queues behind it), the table changed without the routing, or the
     /// routing without the table.
     #[test]
     fn every_query_is_served_on_the_thread_its_lane_is_routed_to() {
         assert_eq!(thread_of(QueryLane::History), Thread::Repository);
+        assert_eq!(thread_of(QueryLane::Walk), Thread::Repository);
         assert_eq!(thread_of(QueryLane::Changes), Thread::Diff);
         assert_eq!(thread_of(QueryLane::FileDiff), Thread::Diff);
         assert_eq!(thread_of(QueryLane::FileFilter), Thread::Repository);
+        assert_eq!(thread_of(QueryLane::Refs), Thread::Repository);
+        assert_eq!(thread_of(QueryLane::AheadBehind), Thread::Refresh);
+        assert_eq!(thread_of(QueryLane::Status), Thread::Refresh);
+        assert_eq!(thread_of(QueryLane::RefFilter), Thread::Repository);
+        assert_eq!(thread_of(QueryLane::LocalChangesFilter), Thread::Repository);
         for request in every_request() {
-            let lane = request.lane();
+            let lanes = request.lanes();
             let routed = route(request.clone());
-            match lane {
-                Some(lane) => assert_eq!(
-                    routed.thread(),
-                    Some(thread_of(lane)),
+            for lane in lanes {
+                assert_eq!(
+                    routed.lane_thread(*lane),
+                    Some(thread_of(*lane)),
                     "{request:?} is in the {lane:?} lane"
-                ),
+                );
+            }
+            match lanes.first() {
+                Some(_) => {}
                 // The configured context: the diff thread's, since its handle is the one the
                 // configuration's freshness opens again (phase 06 QA, T7).
                 None if request == Request::ConfiguredContext => {

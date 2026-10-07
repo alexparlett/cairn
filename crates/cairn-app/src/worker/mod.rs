@@ -12,15 +12,23 @@ mod expand_all;
 #[cfg(test)]
 mod fetch_tests;
 #[cfg(test)]
+mod find_tests;
+mod history_lane;
+#[cfg(test)]
 mod lifecycle_tests;
 mod network_lane;
 mod pool;
+mod refresh_lane;
+#[cfg(test)]
+mod refresh_tests;
 mod request;
 mod routing;
 mod startup;
 mod wake;
 #[cfg(test)]
 mod window_check_updates;
+#[cfg(test)]
+mod written_repository;
 
 pub use askpass::{PromptId, Reply};
 #[cfg(test)]
@@ -34,10 +42,11 @@ pub use pool::Updates;
 pub use pool::idle_handle;
 pub use pool::{CLOSE_PATIENCE, Replier, RepositoryHandle, open};
 #[cfg(test)]
-pub use request::WorkingSide;
+pub(crate) use refresh_tests::Refreshable;
 pub use request::{
     AllEnded, AllFrom, AllProgress, Comparison, DiffOptions, DiffQuery, ExpandQuery, ExpandedFile,
-    FileQuery, FileTarget, OpenedFile, Request, Retired, Update, expanded_diffs,
+    FileQuery, FileTarget, OpenedFile, Refreshed, Request, Retired, Update, WorkingSide,
+    expanded_diffs,
 };
 #[cfg(test)]
 pub(crate) use window_check_updates::update_within;

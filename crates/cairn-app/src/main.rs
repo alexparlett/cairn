@@ -8,10 +8,22 @@ mod diff_state;
 mod fetch_state;
 mod file_filter;
 mod history_state;
+mod local_changes_pane;
+mod local_changes_state;
+#[cfg(test)]
+mod local_changes_tests;
+mod ref_find;
+mod refresh;
+mod refresh_state;
 mod repository_path;
+mod row_finder;
 mod selection;
 mod session;
 mod shortcuts;
+mod sidebar_pane;
+mod sidebar_state;
+#[cfg(test)]
+mod sidebar_tests;
 mod status_text;
 mod window;
 #[cfg(test)]
@@ -20,7 +32,7 @@ mod worker;
 
 use std::rc::Rc;
 
-use cairn_model::{HistoryRow, RemoteSummary, RowId};
+use cairn_model::{History, RemoteSummary, RowId};
 use cairn_ui::diff_palette::DIFF_FONT_FAMILY;
 use cairn_ui::{DetailTab, DiffSettings};
 use freya::prelude::*;
@@ -61,7 +73,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     use_init_theme(dark_theme);
 
     // The one copy of the history; this scope must not read it, only `progress`.
-    let rows = use_state(Vec::<HistoryRow>::new);
+    let rows = use_state(History::new);
     let mut progress = use_state(Progress::opening);
     let selected = use_state(|| None::<RowId>);
     let fetch = use_state(|| FetchStatus::Idle);
@@ -70,6 +82,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let refused = use_state(|| None);
     let diff = use_state(DiffState::default);
     let history_scroll = use_scroll_controller(ScrollConfig::default);
+    let history_cursor = use_state(|| 0usize);
     // Session state: the tab and the pane's shape outlive every selection (R5.2).
     let detail_tab = use_state(DetailTab::default);
     let pane_collapsed = use_state(|| false);
@@ -84,6 +97,14 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     // The second commit of a comparison, and the keys a press on a row is resolved against.
     let pair = use_state(|| None);
     let held_keys = use_state(cairn_ui::accelerators::HeldKeys::default);
+    // What the last refresh answered (R10).
+    let refreshed = use_state(refresh_state::RefreshState::default);
+    // What the title bar calls the repository, once the worker has opened it.
+    let repository = use_state(|| None::<String>);
+    // The sidebar's state, for the session (refs-and-status R8).
+    let sidebar = sidebar_state::SidebarView::used();
+    // Local Changes' lists, filter and diff, for the session (refs-and-status R9).
+    let local = local_changes_state::LocalChangesView::used();
     let view = View {
         rows,
         progress,
@@ -94,6 +115,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         refused,
         diff,
         history_scroll,
+        history_cursor,
         detail_tab,
         pane_collapsed,
         pane_height,
@@ -104,6 +126,10 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         changes_list_width,
         pair,
         held_keys,
+        refreshed,
+        repository,
+        sidebar,
+        local,
     };
 
     let opened = use_hook(|| {
@@ -122,7 +148,10 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
                 let platform = Platform::get();
                 handle.submit(Request::ListRemotes);
                 handle.submit(Request::ConfiguredContext);
-                handle.submit(Request::OpenHistory { rows: PAGE_ROWS });
+                // The refs, ahead/behind and status, read for the first time: the refs'
+                // answer has no walk to compare with, so it asks for the history, which
+                // then walks from them (R10, R11.2).
+                handle.submit(Request::Refresh);
                 let submitting = handle.clone();
                 // Weak: the task must not keep the answering end alive past the window,
                 // or the acceptor could never see it go.

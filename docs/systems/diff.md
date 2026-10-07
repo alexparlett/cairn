@@ -13,12 +13,14 @@ the selection it names ("In the application", below). The window draws a
 commit's details and its changed files in the detail pane's Commit tab, with a
 file's diff opened in place under its row, and in its Changes tab a filtered file
 list beside one file's diff, unified or side by side, or two commits compared
-("The detail pane" and "The diff view", below); nothing stages anything — the patch emitter still ships
+("The detail pane" and "The diff view", below); and, in the Local Changes view, the path
+chosen in its Unstaged or Staged list beside its working-tree diff (`local-changes.md`);
+nothing stages anything — the patch emitter still ships
 with no caller, deliberately (program decision L2 in
 `docs/work/daily-loop/brainstorm.md`), because its round-trip tests are what make
 a later staging packet a feature rather than a rewrite. Which paths of a working
-tree changed — status — is not here: the working-tree query answers one path it is
-given. Intent for this surface is `docs/design/diff.md` and `docs/design/ui.md`, under
+tree changed — status — is not here (`status.md`): the working-tree query answers one path it
+is given, and Local Changes gives it the path chosen in its lists. Intent for this surface is `docs/design/diff.md` and `docs/design/ui.md`, under
 decisions D1 (`docs/design/engine.md`), D3 (`docs/design/concurrency.md`), D5
 (`docs/design/platform.md`) and D6 (`docs/design/conflicts.md`), indexed in the
 spine `docs/design/cairn.md`; the commitment it was built against is
@@ -205,7 +207,9 @@ changes into hunks by git's own rule. No diff algorithm is written here but the
 intra-line highlights, and no gix type appears in a public signature. The
 **working-tree query** answers one path's staged, unstaged or untracked diff with
 `git diff-index --cached`, `git diff-files` or `git diff --no-index`, and the side
-git reads from the working tree is git's form of the file (below).
+git reads from the working tree is git's form of the file (below). Which paths have
+such a diff — what is staged, unstaged, in conflict or untracked — is the status
+read's answer, `git status --porcelain=v2 -z` (`docs/systems/status.md`).
 
 `DiffSession` (`crates/cairn-git/src/diff.rs`) holds gix's blob resource cache for
 a run of content queries. Building one reads the index and the attribute stack,
@@ -243,7 +247,8 @@ absence of a program that could never have run.
 `Repository::changes(&GitBinary, &ChangesRequest, &impl Cancel) -> ChangeSet`
 (R2.1, R2.2, R2.9, R2.10). A request names one commit — compared with its first
 parent, or with the empty tree when it is a root commit (L5) — or two commits, tip
-against tip and never against a merge base (R7.2). A merge is compared with its
+against tip and never against a merge base (R7.2), or a stash (`ChangesRequest::stash`,
+refs-and-status R6.2; "A stash's changes" below). A merge is compared with its
 first parent like any other commit; a combined diff is out of scope by D6. The
 `GitBinary` is the one the application found at startup; the call blocks until its
 process ends, so it is a worker's call.
@@ -386,6 +391,53 @@ commits porcelain `git diff --raw` and `git log --raw`, and `--textconv` without
 patch, write nothing either. Which command runs, and that it carries no
 `--textconv`, `--ext-diff` or patch flag, is pinned on the argument vector by
 `the_query_is_diff_tree_and_never_runs_a_program` (`crates/cairn-git/src/reads/changes.rs`).
+
+### A stash's changes
+
+`ChangesRequest::stash(stash commit)` answers what `git stash show` lists, asked of `git
+stash show` itself (`crate::reads::stash_changes`: `git stash show --raw -z --no-abbrev
+--no-color --no-ext-diff --no-textconv --no-relative --end-of-options <stash commit>`, run
+as a read — the third porcelain read, accepted by the user on 2026-10-07). Why not
+plumbing: with the user's `stash.showIncludeUntracked` set, git diffs the commit the stash
+was made on against the stash's tracked tree and its untracked files *together*, so rename
+and copy detection pairs across them — a tracked file deleted beside an untracked file of
+its content is `R100 a b`, where two plumbing diffs print `D a` and `A b` — and no plumbing
+can diff one tree against two without writing a tree or an index. git reads the setting
+itself, as it reads `diff.renames`, `diff.renameLimit` and the submodule settings for the
+user's own `git stash show`: git 2.30 and 2.31, which do not know the setting, list the
+tracked changes alone, as they do for the user. The answer is parsed by the changes
+query's raw parser and sorted by the same total key; its details are the stash commit's,
+every parent among them, and its rename outcome is read as the changes query's.
+
+A file whose new side is one of those untracked files is read, line by line, between the
+commit the stash was made on and the stash's third parent, which holds it
+(`content::Trees::for_file`): the untracked commit holds the file at its new path blob for
+blob; a copy into it from a tracked file is asked as the rename it is between those two
+trees, since its source is absent from the untracked commit — the same two blobs, so the
+same lines. Expand All's pages ask such files alone, as they ask any file a page's run did
+not hold as the change set does.
+
+Pinned against git (`crates/cairn-git/tests/diff/stash.rs`, run under the host's git and
+both floors): `a_stash_lists_what_git_stash_show_lists_with_the_setting_off_and_on`
+(against `git stash show --name-status`, the pairing across the two halves required on
+2.32 and later), `each_file_of_a_stash_is_read_from_the_side_it_is_on` (alone and through
+Expand All, each side the bytes git stores),
+`a_copy_into_an_untracked_file_is_read_from_the_untracked_commit` (`diff.renames=copies`,
+2.32 and later), `a_stash_read_writes_nothing` (the git directory byte-identical, the
+tree stat-dirty), `a_stash_read_writes_nothing_and_runs_no_program_but_fsmonitor` (the
+same under a caching textconv, a driver `command`, `diff.external`, clean and smudge
+filters, `core.pager`, the untracked cache and a `core.fsmonitor` hook: no program's
+marker but the hook's may be written, and each program is run by hand to show it can
+run) and `a_stash_describes_its_stash_commit`; the argv and the read's
+environment by `the_stub_git_is_asked_stash_show_with_a_reads_environment`, the argv alone
+by `the_read_is_stash_show_in_raw_form_and_nothing_else`. Residuals: `git stash` needs a
+working tree, so a stash in a bare repository fails as git fails it (`Error::GitFailed`);
+the read sees the user's global configuration as the user's own `git stash show` does; and
+in a partial clone, where rename detection needs a blob only the promisor holds, git 2.44
+and later fail the read closed (`GIT_NO_LAZY_FETCH=1`) while git before 2.44, which ignores
+that variable, may lazy-fetch the blob — a pack written and the network reached; 2.30 and
+2.31 list no untracked file, so have none to pair — as the environment invariant's floor
+residual says of every read.
 
 ### The content query
 
@@ -1074,7 +1126,9 @@ on one.
 `Update::Changes { of, changes }` answers with the `ChangeSet`.
 `Request::FileDiff(FileQuery)` asks for one file's diff: a `FileTarget`
 (`Committed { of, file }`, the `ChangedFile` exactly as the change set named it,
-or `WorkingTree { path, side }`) and the `DiffOptions` the view chose — the
+or `WorkingTree { path, side }`, which Local Changes asks for the path chosen in its lists —
+its `WorkingSide` by the list it was chosen in, `local-changes.md`) and the `DiffOptions` the
+view chose — the
 context git is asked at, whether to compute the whitespace-ignoring ranges, and
 whether to load past R2.6's byte ceiling; the ceilings themselves are fixed.
 `Update::FileDiff { query, diff }` answers with the same query, `diff` being
@@ -1256,7 +1310,15 @@ what it compares. Two commits compared (phase 08, R7) are chosen there too
 
 **The file-diff lane is shared** (phase 08). The Changes tab's file and the Commit tab's
 files opened in place are both asked in the file-diff lane — R4.3 puts Expand All there,
-and a newer request in it supersedes it — so each asking takes the lane from the other.
+and a newer request in it supersedes it — so each asking takes the lane from the other. So
+is the path chosen in Local Changes (`diff_state/working.rs`):
+it takes the lane from both and they from it, it is asked again as its view is shown
+(`working_needs_asking`, `reask_working`), a setting moved with its view shown asks it at
+once (`Asking::Working`), and a changes query supersedes it with the rest
+(`the_working_path_and_the_commits_file_take_the_lane_from_each_other`,
+`a_setting_asks_the_working_path_when_local_changes_is_shown`). A working-tree answer is
+kept only when it names exactly the query the path chosen is asked as now
+(`DiffState::working_arrived`).
 `DiffState` records which holds it (`file_in_lane`, and the expansion's own), and the one
 that lost it while its answer was awaited is asked again, whole, as its tab is shown: the
 Changes tab's effect asks `reask_file` when `file_needs_asking`, the Commit tab's body
@@ -1383,8 +1445,28 @@ draws it, by the user's decision: git's `--name-status` letter without the simil
 score it prints after `R` and `C` (`every_status_is_its_bare_letter`) — and its path,
 both paths, `old → new`, for a rename or a copy
 (`the_commit_tab_shows_every_field_r5_3_names`;
-`a_cut_short_rename_search_is_said_above_the_files`). No avatar, no ref chips, no
-network call. The author and the committer are both drawn always, as git's `fuller`
+`a_cut_short_rename_search_is_said_above_the_files`). No avatar and no
+network call.
+
+**REFS** (refs-and-status R6.1, Fork's Finding 3): above SHA, under the dates, a REFS row
+holds the chips of the refs pointing at the commit — exactly the chips its row in the
+history draws (`cairn_ui::chips_of_row`: the current branch first with its check mark, a
+branch's upstream at the same commit folded into its chip, a tag's and a remote's glyph
+caps, a stash's `stash@{n}`), in its row's lane colour, cut at the pane's edge and never
+wrapped or counted, as Fork's Mac pane cuts them; a commit no ref points at has no REFS
+row. The window finds the selected row once per history and selection
+(`crates/cairn-app/src/row_finder.rs`: a place found stays valid while rows only append,
+a row not yet loaded is looked for only among the rows appended since the last look, and
+`History::serial` tells a reopened history from the one looked in) and lays its chips out
+for the window's width, the most the pane can show (`detail_pane::refs_of`); the tab gets
+them as `CommitTab::refs` and caches the header built from them, so the header is built
+once per commit and refs, never per frame — the chips themselves are laid out on every
+render of the Commit tab's body (a page arriving, a frame of a resize), bounded by the
+window's width, never by the refs
+(`the_refs_row_stands_above_the_id_and_only_when_a_ref_points_at_the_commit`,
+`the_header_is_built_once_per_commit_however_often_the_state_is_written`,
+`a_rows_chips_and_its_refs_row_are_drawn_against_the_refreshs_snapshot`,
+`a_row_is_looked_for_once_per_history_and_found_where_it_arrives`). The author and the committer are both drawn always, as git's `fuller`
 format draws them — the user's decision, where Fork appears to omit an identical
 committer. A person's `Name <email>` and a date are cut with an ellipsis where their
 half of the pane is narrower than they are; nothing else in the tab is cut.
@@ -1576,7 +1658,19 @@ top, scrolled deep and at the end of a 1,000-line and a 100,000-line file — th
 number at each place for both — and the end is the projection's last row, so the view's
 length is the projection's (`only_a_viewport_of_diff_rows_is_built_however_long_the_file`,
 criterion C9 for unified rows, the twin of
-`only_a_viewport_of_rows_is_built_however_long_the_history`). A unified line row is the old and the new line number, right-aligned, small and on the
+`only_a_viewport_of_rows_is_built_however_long_the_history`) and the room after it.
+**Room after the last row** (`crates/cairn-ui/src/end_room.rs`, the user's report of
+2026-10-07): Freya's `VirtualScrollView` draws its horizontal scrollbar over the bottom
+16 px of the viewport and lays out no padding, so the diff view, the Commit tab's one list
+(header, files and the rows opened under them), the Changes tab's file list and Local
+Changes' two lists each count empty rows after their last — `with_end_room`, at least
+`END_ROOM` (20 px) in whole rows: one 24 px row, two 17 px diff rows — which build empty and
+come after every row an index names, so no search, scroll to a row or `Expansion` placement
+sees them; End in the diff view reaches past them. Scrolled to the end, the last row is
+clear of the bar (`scrolled_to_the_end_the_last_row_is_clear_of_the_horizontal_scrollbar`,
+`scrolled_to_the_end_the_last_file_is_clear_of_the_horizontal_scrollbar`,
+`scrolled_to_the_end_each_lists_last_row_is_clear_of_the_horizontal_scrollbar`, and the
+Commit tab's end in `only_a_viewport_of_rows_is_built_however_many_files_are_open`). A unified line row is the old and the new line number, right-aligned, small and on the
 plain ground, a one-pixel separator, then — tinted for a change, from the separator to the
 row's end — the line, a few pixels in. There is no marker column (user decision,
 2026-10-04, reversing 2026-10-03's: Fork's default, which draws none). A removed line
@@ -1717,8 +1811,9 @@ not, whitespace ignored or not, side by side or not (unified by
 default, R6.1; toggling it asks git nothing and lets go of the change last moved to, since
 its rows are the other view's — `side_by_side_is_one_setting_for_every_diff_and_asks_nothing`,
 which also shows the setting kept across another file and another commit). Every diff view
-shares all four but the entire file, which is the Changes tab's alone: a file opened in
-place in the Commit tab, which has no bar to turn it off, is asked at the lines of context
+shares all four but the entire file, which is the Changes tab's and Local Changes' — each a
+view of one file under the bar — and never a file opened in place: a file opened in place in
+the Commit tab, which has no bar to turn it off, is asked at the lines of context
 whatever it says (`DiffSettings::line_context`, `diff_actions::in_place_options`; the
 user's decision, 2026-10-04, departing from Fork). Context moves a line per click, never
 below one (`context_moves_a_line_at_a_time_and_never_below_one`); the entire file is a
@@ -1807,7 +1902,7 @@ number) and `docs/research/diff-engine/fork-shortcuts.md`.
 | Filter persistence | the text kept across commits for the session; a file chosen before the filter hid it stays shown; "Showing N of M files" whenever a filter is active | User decision (2026-10-03): the count line keeps a sticky filter from being mistaken for a commit that touched fewer files. |
 | File list width | 35% of the pane until dragged, never below 200 px, its share kept for the session | User decision (2026-10-03). Fork's split is draggable (Finding 5); its default width is not established. |
 | A file pressed in the Commit tab | opens its diff under its row, pressed again closes it; files start collapsed; the Commit tab stays shown | Fork-measured: Finding 4 (vendor GIF; "it does not switch to Changes"; collapsed by default, by the vendor's choice). Phase 06's press, which showed the file in the Changes tab, is replaced. |
-| In-place diff's options | no bar of its own; shares the Changes tab's context, whitespace and side-by-side; never the entire file — Entire File is the Changes tab's alone (`diff_actions::in_place_options`, `DiffSettings::line_context`) | Fork-measured: Finding 4 (the vendor: no header to host options; users: the Changes tab's options govern). The entire file left out is the user's decision, 2026-10-04, departing from Fork: with no bar to turn it off, the Commit tab was left showing every file whole (`entire_file_is_the_changes_tabs_alone_and_never_reaches_a_file_opened_in_place`). While Entire File is on in the Changes tab its context buttons are disabled (`DiffSettings::more_lines` and `fewer_lines` refuse), so the Commit tab's in-place files keep the line count they had until Entire File is turned off. |
+| In-place diff's options | no bar of its own; shares the Changes tab's context, whitespace and side-by-side; never the entire file — Entire File is the Changes tab's and Local Changes', never a file opened in place (`diff_actions::in_place_options`, `DiffSettings::line_context`) | Fork-measured: Finding 4 (the vendor: no header to host options; users: the Changes tab's options govern). The entire file left out is the user's decision, 2026-10-04, departing from Fork: with no bar to turn it off, the Commit tab was left showing every file whole (`entire_file_is_the_changes_tabs_alone_and_never_reaches_a_file_opened_in_place`). While Entire File is on in the Changes tab its context buttons are disabled (`DiffSettings::more_lines` and `fewer_lines` refuse), so the Commit tab's in-place files keep the line count they had until Entire File is turned off. |
 | Expand All | right-aligned above the files; Collapse All while a file is open | Fork-measured: Finding 4 (Expand All turns into Collapse All). That it reads Collapse All while ANY file is open — one opened by a press as well — is the user's decision, 2026-10-04, kept as built: Fork's label after a single press is not recorded. |
 | Expand All's budget | 50,000 lines, both versions of each file counted, and one per file | Cairn-chosen (Q2; the PRD names a line budget, not its size): R2.6's per-file line ceiling, measured against the window check — `docs/research/diff-engine/c14-measured.md`, section 4. |
 | What the budget says | "Expand All stopped at its line budget: N files left collapsed.", left of Collapse All | User's decision, 2026-10-04, kept as built: Fork has no budget (it expands every file). |
@@ -1892,6 +1987,7 @@ The chords are Fork's and only Fork's — the user's decision of 2026-10-03, fro
 | previous / next change | Ctrl+↑ / Ctrl+↓ | ⌘↑ / ⌘↓ | in the detail pane |
 | Commit tab / Changes tab | Ctrl+Alt+1 / Ctrl+Alt+2 | ⌘⌥1 / ⌘⌥2 | anywhere |
 | extend the selection to a second commit | Ctrl+press | ⌘+press | anywhere |
+| Refresh (refs-and-status R10.1) | F5 | ⌘R | anywhere |
 | toggle side-by-side, toggle ignore whitespace, more lines, fewer lines, entire file | none | none | — |
 
 Change navigation is scoped to the pane so a text field elsewhere keeps those keys (⌘↑
@@ -1900,8 +1996,13 @@ Tree tab and is nothing yet. Fork binds no chord to the four diff toggles or the
 file, so they are actions without one, reached from the diff's header (phase 06). The
 previous and next file are not chords at all: they are the focused file list's own ↑
 and ↓, with Tab and Shift-Tab moving focus, as Fork does (the detail pane, above). No
-collapse chord: the user's decision. Every chord holds a modifier: an unmodified key
-belongs to whatever has focus.
+collapse chord: the user's decision. Every chord holds a modifier but a function key's: an
+unmodified key belongs to whatever has focus, and a function key types nothing in any of
+it. Refresh is Fork's own on each platform (`fork-dev/Docs`, `keyboard-shortcuts-mac.md`
+⌘R and `keyboard-shortcuts-windows.md` F5, read 2026-10-06): Linux takes Fork's Windows
+row, as it does for change navigation, and F5 is bound by no Linux desktop nor by any
+other action here; ⌘R is matched where R sits (`chords_are_distinct_and_every_bare_one_is_a_function_key`,
+`the_table_is_forks_chords_and_no_others`).
 
 **The contract.** A component asks `accelerators::resolve_key(event, scope)` which
 action a key press is in a scope, or `accelerators::is_chord(event)` whether it is any
@@ -1929,7 +2030,7 @@ chord alone whichever scope hears it, so Ctrl+↓ is "next change", never "next 
 (`an_accelerators_chord_does_not_move_the_selection`). Pinned by
 `the_table_is_forks_chords_and_no_others` (the whole table, spelled out per platform),
 `every_chord_resolves_to_its_action_in_its_scope_only`,
-`chords_are_distinct_and_every_one_holds_a_modifier`,
+`chords_are_distinct_and_every_bare_one_is_a_function_key`,
 `the_command_key_is_the_platforms_own`,
 `a_chord_needs_exactly_its_modifiers_and_ignores_the_locks`,
 `a_physical_chord_is_matched_by_where_the_key_sits`,
@@ -1949,9 +2050,11 @@ each with a name, an email and a `Timestamp` that keeps its own offset; the whol
 message, with `subject()` and `body()` reading it; and the parents in git's order,
 none for a shallow clone's boundary commit, whose parents the clone lacks — read from
 the shallow file by `crates/cairn-git/src/shallow.rs`, as the history walk reads it.
-It sits beside `CommitSummary` rather than replacing it — a history row draws a
-subject and one name, and carrying a committer, an offset and a whole message per
-row of a ten-year monorepo would be paying for what no row draws.
+It sits beside the history's rows rather than replacing them — a kept row holds a
+subject, one name and a parent count (`docs/systems/history-graph.md`, "What a row
+keeps"), and carrying every parent, both addresses, a committer, an offset and a whole
+message per row of a ten-year monorepo would be paying for what no row draws; the
+Commit tab reads all of them from here.
 `Timestamp::offset` spells the offset the way git writes it, `+0530` or `-0800`,
 pinned by `an_offset_reads_the_way_git_writes_it`.
 
@@ -2037,7 +2140,8 @@ per way git reads a commit's text, by
 - **The working-tree query answers one path, named by its caller.** It pairs no
   rename (a path staged by `git mv` shows as added, as `git diff --cached -- <path>`
   shows it), and `Untracked` answers `git diff --no-index` for the path whatever the
-  index holds: which paths are untracked is status's to say.
+  index holds: which paths are untracked is status's to say (`Repository::status`,
+  `git status --porcelain=v2 -z`; `docs/systems/status.md`).
 - **A clean filter whose output differs run to run** is refused as
   `ContentReadsDisagree` every time, since git's two reads of the file never agree.
 - **A failed clean filter that is not `required` is shown as git shows it**, the

@@ -610,6 +610,7 @@ fn request(of: Comparison) -> ChangesRequest {
     match of {
         Comparison::Commit(id) => ChangesRequest::commit(id),
         Comparison::Between { old, new } => ChangesRequest::between(old, new),
+        Comparison::Stash(stash) => ChangesRequest::stash(stash),
     }
 }
 
@@ -653,7 +654,15 @@ mod tests {
         let of = Comparison::Commit(oid(n));
         let query = match lane {
             QueryLane::Changes => DiffQuery::Changes(of),
-            QueryLane::FileDiff | QueryLane::History | QueryLane::FileFilter => {
+            QueryLane::FileDiff
+            | QueryLane::History
+            | QueryLane::Walk
+            | QueryLane::FileFilter
+            | QueryLane::Refs
+            | QueryLane::AheadBehind
+            | QueryLane::Status
+            | QueryLane::RefFilter
+            | QueryLane::LocalChangesFilter => {
                 DiffQuery::File(committed(n, DiffOptions::default()))
             }
         };
@@ -883,6 +892,15 @@ mod tests {
         assert_eq!(
             request(Comparison::Commit(oid(3))),
             ChangesRequest::commit(oid(3))
+        );
+        // R6.2: a stash is asked as `git stash show` lists it, never as a commit.
+        assert_eq!(
+            request(Comparison::Stash(oid(4))),
+            ChangesRequest::stash(oid(4))
+        );
+        assert_ne!(
+            ChangesRequest::stash(oid(4)),
+            ChangesRequest::commit(oid(4))
         );
     }
 

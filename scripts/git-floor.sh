@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# The oldest gits Cairn supports, built from source, under cairn-git's real-git diff
-# tests: `scripts/gate.sh --step git-floor`, part of the full gate and run by CI as its
-# own job.
+# The oldest gits Cairn supports, built from source, under cairn-git's real-git diff and
+# status tests: `scripts/gate.sh --step git-floor`, part of the full gate and run by CI as
+# its own job.
 #
 # The changes query asks the git in use (`git diff-tree`), and what that git does
 # differs by version in ways the code branches on (`crates/cairn-git/src/diff/renames.rs`:
 # what rename-limit check counts before 2.31, the 400 default and the 32,767 ceiling
-# before 2.33). The machine's own git is new, so without this those branches are read
-# from git's source and never run against it. Two gits are built: the floor
-# (`GitBinary::MINIMUM`, which this script checks it matches) and the last before 2.33,
-# which is the only one that reaches the 2.31-2.32 branch.
+# before 2.33); so does the status read (`git status`, which cannot read a sparse index
+# before 2.32, and lazily fetches in a partial clone before 2.44:
+# `crates/cairn-git/src/reads/status.rs`). The machine's own git is new, so without this
+# those branches are read from git's source and never run against it. Two gits are
+# built: the floor (`GitBinary::MINIMUM`, which this script checks it matches) and the
+# last before 2.33, which is the only one that reaches the 2.31-2.32 branch.
 #
 # Each is fetched from https://github.com/git/git by its tag and checked against the
 # commit pinned here, so a moved tag fails rather than building something else; built
@@ -19,8 +21,8 @@
 # network; a machine without them FAILS this step, naming what is missing, rather than
 # skipping it. Nothing is installed anywhere else.
 #
-# Four tests skip on these gits by design, and each run prints every test it skipped, so a
-# skip is read rather than counted as a pass:
+# Five tests skip on these gits by design, and each run prints every test it skipped, by its
+# whole name, so a skip is read rather than counted as a pass:
 #   - in_a_partial_clone_a_rename_search_fails_rather_than_fetching, on a git older than
 #     2.44, which ignores GIT_NO_LAZY_FETCH. It fails instead if
 #     CAIRN_REQUIRE_NO_LAZY_FETCH is set, so that is removed from these runs' environment,
@@ -30,6 +32,8 @@
 #     a git older than 2.38, which has no safe.bareRepository.
 #   - a_sparse_index_is_unsupported_and_says_so, on a git older than 2.32, which cannot
 #     write a sparse index (2.30.9 here).
+#   - a_copy_into_an_untracked_file_is_read_from_the_untracked_commit, on a git older than
+#     2.32, whose `git stash show` lists no untracked file (2.30.9 here).
 #   - a_read_under_the_builtin_fsmonitor_writes_only_the_daemons_own_files, on every
 #     floor: no git before 2.55 has the fsmonitor daemon on Linux.
 # CAIRN_REQUIRE_MOUNT_NAMESPACE and CAIRN_REQUIRE_SECOND_OWNER, which scripts/gate.sh's
@@ -61,11 +65,16 @@ if [ -z "$floor_minor" ] || [ "2.$floor_minor" != "${first_version%.*}" ]; then
 fi
 
 # The filtered runs, as `<cargo target>|<test filters>|<floor>`. Each floor sits one under
-# the run's count when it was set (67 and 113), so a filter that silently matches less
-# fails; raise a floor as its run gains tests.
+# the run's count when it was set (83, 119 and 17), so a filter that silently matches less
+# fails; raise a floor as its run gains tests. `--test status` is the working tree's status
+# against its oracles (C4 of the refs-and-status packet), which owes its answer to the git
+# in use as much as the diff tests do; `--test diff_engine` holds a stash's list against
+# `git stash show` (C7, `tests/diff/stash.rs`), whose untracked half git 2.30.9 does not read
+# and 2.32.7 does.
 RUNS=(
-  "--lib|diff:: reads::|66"
-  "--test diff_engine||112"
+  "--lib|diff:: reads::|82"
+  "--test diff_engine||118"
+  "--test status||16"
 )
 
 CACHE="${CAIRN_GIT_FLOOR_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/cairn/git-floor}"

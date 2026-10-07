@@ -1,29 +1,39 @@
 //! A history walk held open across pages.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 
-use cairn_model::{GraphRow, HistoryRow, LaneAssigner, Oid, RowContent};
+use cairn_model::{GraphRow, LaneAssigner, RowsPage};
 
-use super::{HistoryCursor, HistoryOrder, HistoryPage, HistoryRequest, Resolved, starting_points};
+use super::seeds::Decoration;
+use super::stream::{Next, Stream};
+use super::{
+    HistoryCursor, HistoryOrder, HistoryPage, HistoryRequest, Laid, Pending, Resolved, lay_out,
+    starting_points,
+};
 use crate::{Cancel, Error, Repository};
 
 /// Rows are handed out only once the assigner has made them final.
 pub struct HistorySession<'repo> {
     repo: &'repo gix::Repository,
-    walk: super::walk::CommitWalk<'repo>,
+    /// `None` until the first page opens the walk, under that page's cancel.
+    stream: Option<Stream<'repo>>,
     assigner: LaneAssigner,
-    /// Rows made final and not yet handed to the caller.
-    ready: VecDeque<HistoryRow>,
-    /// Walked commits still inside the window, oldest first; the front is the next row to leave.
-    pending: VecDeque<(Oid, Vec<Oid>)>,
+    /// Rows made final, each with what it draws read, and not yet handed to the caller.
+    ready: VecDeque<(GraphRow, Laid)>,
+    /// Entries laid out and still inside the window, oldest first; the front is the next row
+    /// to leave.
+    pending: VecDeque<Pending>,
     tips: super::Tips,
+    decoration: Arc<Decoration>,
     order: HistoryOrder,
     window: usize,
+    lookahead: usize,
     /// Rows earlier pages covered: laid out for lane numbering, never decoded or handed back.
     skip: usize,
     /// Position in the walk of the next row to leave the assigner.
     next_row: usize,
-    /// Commits pulled off the walk, including the replayed prefix.
+    /// Rows laid out, including the replayed prefix.
     walked: usize,
     /// Commit objects read over the session's life.
     decoded: usize,
@@ -46,26 +56,31 @@ impl std::fmt::Debug for HistorySession<'_> {
 }
 
 impl Repository {
-    /// The request's limit is ignored; [`HistorySession::next_page`] takes one.
+    /// The request's limit is ignored; [`HistorySession::next_page`] takes one. The walk is
+    /// opened by the first page, under its cancel: opening reads every tip, and a walk from
+    /// every ref has one per ref (`walk::open`).
     pub fn history_session(&self, request: &HistoryRequest) -> Result<HistorySession<'_>, Error> {
         let Resolved {
             tips,
+            decoration,
             order,
             window,
+            lookahead,
             skip,
         } = starting_points(self, request)?;
 
-        let walk = super::walk::open(self.inner(), &tips, order)?;
-
         Ok(HistorySession {
             repo: self.inner(),
-            walk,
-            assigner: LaneAssigner::with_window(window),
+            stream: None,
+            // The first row handed out carries a snapshot, so it draws without the prefix.
+            assigner: LaneAssigner::with_window(window).drawn_from(skip),
             ready: VecDeque::new(),
             pending: VecDeque::new(),
             tips,
+            decoration,
             order,
             window,
+            lookahead,
             skip,
             next_row: 0,
             walked: 0,
@@ -77,24 +92,39 @@ impl Repository {
 }
 
 impl HistorySession<'_> {
-    /// `cancel` is polled once per commit; on cancellation the work done stays in the session.
-    /// `walked` and `decoded` count this call only. Any error other than [`Error::Cancelled`]
-    /// poisons the session.
+    /// `cancel` is polled once per row laid out, per commit looked ahead at, and — on the
+    /// page that opens the walk — per tip read but the first; on cancellation the work done
+    /// stays in the session, except a cancelled open, which the next page begins again. `walked` and `decoded` count this
+    /// call only. Any error other than [`Error::Cancelled`] poisons the session.
     pub fn next_page(&mut self, limit: usize, cancel: &impl Cancel) -> Result<HistoryPage, Error> {
         let walked_before = self.walked;
         let decoded_before = self.decoded;
 
+        if self.stream.is_none() {
+            let Some(walk) = super::walk::open(self.repo, &self.tips, self.order, cancel)? else {
+                // Nothing kept: the next page opens it again.
+                return Err(Error::Cancelled { walked: 0 });
+            };
+            self.stream = Some(Stream::new(
+                walk,
+                Arc::clone(&self.decoration),
+                self.lookahead,
+            ));
+        }
+
         while self.ready.len() < limit && !self.exhausted {
-            if cancel.is_cancelled() {
+            if cancel.is_cancelled() || !self.pull(cancel)? {
                 return Err(Error::Cancelled {
                     walked: self.walked - walked_before,
                 });
             }
-            self.pull()?;
         }
 
         let take = limit.min(self.ready.len());
-        let rows: Vec<HistoryRow> = self.ready.drain(..take).collect();
+        let mut rows = RowsPage::new();
+        for (graph, laid) in self.ready.drain(..take) {
+            laid.push_to(&mut rows, graph, &self.decoration);
+        }
         self.delivered += rows.len();
         let more = !self.exhausted || !self.ready.is_empty();
 
@@ -109,9 +139,11 @@ impl HistorySession<'_> {
     /// Where a fresh query would start to continue this scroll.
     pub fn cursor(&self) -> HistoryCursor {
         HistoryCursor {
-            tips: std::sync::Arc::clone(&self.tips),
+            tips: Arc::clone(&self.tips),
+            decoration: Arc::clone(&self.decoration),
             order: self.order,
             window: self.window,
+            lookahead: self.lookahead,
             walked: self.skip + self.delivered,
         }
     }
@@ -120,40 +152,49 @@ impl HistorySession<'_> {
         self.delivered
     }
 
+    /// Commits pulled off the walk over the session's life, those looked ahead at for a
+    /// stash's base included.
+    pub fn commits_walked(&self) -> usize {
+        self.stream.as_ref().map_or(0, Stream::pulled)
+    }
+
     /// The walk reached the end and every row it produced has been handed out.
     pub fn is_exhausted(&self) -> bool {
         self.exhausted && self.ready.is_empty()
     }
 
-    /// Pulls one commit off the walk and lays it out, or notices the end.
-    fn pull(&mut self) -> Result<(), Error> {
-        let Some(next) = self.walk.next() else {
-            self.exhausted = true;
-            // No later commit is coming: the window's rows are final.
-            let rest = std::mem::take(&mut self.assigner).into_rows();
-            for graph in rest {
-                self.place(graph)?;
-            }
-            return Ok(());
+    /// Lays out the stream's next entry, or notices the end. `false` when `cancel` fired
+    /// while the stream looked ahead.
+    fn pull(&mut self, cancel: &impl Cancel) -> Result<bool, Error> {
+        let Some(stream) = self.stream.as_mut() else {
+            // Unreachable: `next_page` opens the walk before it pulls.
+            return Ok(false);
         };
-        let info = next.map_err(|source| Error::Walk {
-            source: Box::new(source),
-        })?;
-
-        let id = crate::object_id::model_id(&info.id)?;
-        let parents = super::parents_of(&info)?;
+        let entry = match stream.next(cancel)? {
+            Next::Entry(entry) => entry,
+            Next::Cancelled => return Ok(false),
+            Next::End => {
+                self.exhausted = true;
+                // No later row is coming: the window's rows are final.
+                let rest = std::mem::take(&mut self.assigner).into_rows();
+                for graph in rest {
+                    self.place(graph)?;
+                }
+                return Ok(true);
+            }
+        };
         if self.walked >= self.skip {
-            self.pending.push_back((id, parents.clone()));
+            self.pending.push_back(Pending::of(&entry));
         }
         self.walked += 1;
 
-        if let Some(graph) = self.assigner.push(id, parents) {
+        if let Some(graph) = lay_out(&mut self.assigner, &self.decoration, entry) {
             self.place(graph)?;
         }
-        Ok(())
+        Ok(true)
     }
 
-    /// Reads the commit for a final row and pairs the two, skipping the replayed prefix.
+    /// Reads what a final row draws and pairs the two, skipping the replayed prefix.
     fn place(&mut self, graph: GraphRow) -> Result<(), Error> {
         let position = self.next_row;
         self.next_row += 1;
@@ -161,16 +202,15 @@ impl HistorySession<'_> {
             // Replayed for the lanes; never read from the object database.
             return Ok(());
         }
-        let Some((id, parents)) = self.pending.pop_front() else {
-            // Unreachable: one id is pushed per commit past the prefix.
+        let Some(entry) = self.pending.pop_front() else {
+            // Unreachable: one entry is pushed per row past the prefix.
             return Ok(());
         };
-        let commit = super::summary_of_commit(self.repo, &id, &parents)?;
-        self.decoded += 1;
-        self.ready.push_back(HistoryRow {
-            content: RowContent::Commit(commit),
-            graph,
-        });
+        let laid = Laid::read(self.repo, entry)?;
+        if matches!(laid, Laid::Commit { .. }) {
+            self.decoded += 1;
+        }
+        self.ready.push_back((graph, laid));
         Ok(())
     }
 }
@@ -220,12 +260,17 @@ mod tests {
         let first = session.next_page(3, &CancelSignal::new()).unwrap();
         let second = session.next_page(3, &CancelSignal::new()).unwrap();
 
-        let paged: Vec<_> = first.rows.iter().chain(second.rows.iter()).collect();
-        assert_eq!(paged.len(), one_page.rows.len(), "row counts differ");
-        for (from_session, from_cursor) in paged.iter().zip(one_page.rows.iter()) {
+        let mut paged = cairn_model::History::new();
+        paged.append(first.rows).unwrap();
+        paged.append(second.rows).unwrap();
+        let mut whole = cairn_model::History::new();
+        whole.append(one_page.rows).unwrap();
+        assert_eq!(paged.len(), whole.len(), "row counts differ");
+        for (from_session, from_cursor) in paged.rows().zip(whole.rows()) {
             assert_eq!(from_session.id(), from_cursor.id(), "different commits");
             assert_eq!(
-                from_session.graph.lane, from_cursor.graph.lane,
+                from_session.lane(),
+                from_cursor.lane(),
                 "the same commit landed in different lanes"
             );
         }
@@ -297,7 +342,7 @@ mod tests {
 
         assert_eq!(next.rows.len(), 2);
         assert!(
-            !head.rows.iter().any(|r| r.id() == next.rows[0].id()),
+            !head.rows.ids().any(|id| next.rows.ids().next() == Some(id)),
             "the cold restart repeated a row the first session had handed out"
         );
         // Only rows handed out are decoded.

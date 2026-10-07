@@ -18,6 +18,7 @@ use cairn_ui::{
     NEXT_CHANGE_LABEL, NO_NEWLINE_AT_END, NUMBER_FONT_SIZE, NUMBER_PADDING, PREVIOUS_CHANGE_LABEL,
     SIDE_BY_SIDE_LABEL, TEXT_PADDING, number_width,
 };
+use cairn_ui::{SCROLLBAR_THICKNESS, with_end_room};
 use freya::prelude::*;
 use freya_testing::{TestingNode, TestingRunner};
 
@@ -128,8 +129,16 @@ fn built_rows(test: &TestingRunner) -> Vec<(String, bool)> {
 #[test]
 fn only_a_viewport_of_diff_rows_is_built_however_long_the_file() {
     let viewport_rows = (HEIGHT / DIFF_ROW_HEIGHT).ceil() as usize;
+    // Scrolled to the end, the empty rows after the last (`end_room`) are built and draw no
+    // text: counted here, so the end builds what the top does.
+    let room = with_end_room(1, DIFF_ROW_HEIGHT) - 1;
     let within_a_viewport = |test: &TestingRunner, place: &str| {
-        let count = built_rows(test).len();
+        let count = built_rows(test).len()
+            + if place.starts_with("at the end") {
+                room
+            } else {
+                0
+            };
         assert!(
             count >= viewport_rows && count <= viewport_rows + 2,
             "{count} rows were built for a {viewport_rows}-row viewport {place}"
@@ -224,6 +233,58 @@ fn only_a_viewport_of_diff_rows_is_built_however_long_the_file() {
             .is_some_and(|(most, least)| most - least <= 1),
         "a deeper scroll built more rows: {built:?}"
     );
+}
+
+/// The user's report (2026-10-07): scrolled to the end, the last row sits above the horizontal
+/// scrollbar, which Freya draws over the viewport's bottom, never under it — unified and side
+/// by side, over a file whose lines are wider than the view, so the bar is there to cover it.
+/// Caught by: the list exactly as long as its rows (the last row flush with the bottom edge).
+#[test]
+fn scrolled_to_the_end_the_last_row_is_clear_of_the_horizontal_scrollbar() {
+    let lines = 200u32;
+    let wide = "x".repeat(400);
+    let old: Vec<DiffLine> = (0..lines)
+        .map(|n| DiffLine::terminated(format!("line {n} {wide}")))
+        .collect();
+    let mut new = old.clone();
+    new[100] = DiffLine::terminated(format!("LINE 100 {wide}"));
+    let diff = text_diff(
+        TextDiff::new(old, new, vec![change((100, 1), (100, 1))]),
+        DisplayOverlay::none(),
+    );
+    for side_by_side in [false, true] {
+        let mut test = launch_as(
+            ShownDiff::new(diff.clone(), Context::EntireFile),
+            side_by_side,
+        );
+        test.scroll(
+            (100., 100.),
+            (0., -(f64::from(lines) * f64::from(DIFF_ROW_HEIGHT) * 4.)),
+        );
+        let last = format!("line {} {wide}", lines - 1);
+        let bottom = test
+            .find_many(|node, element| {
+                Paragraph::try_downcast(element).and_then(|paragraph| {
+                    let text: String = paragraph
+                        .spans
+                        .iter()
+                        .map(|span| span.text.as_ref())
+                        .collect();
+                    (node.is_visible() && text == last).then(|| node.layout().area.max_y())
+                })
+            })
+            .into_iter()
+            .fold(f32::MIN, f32::max);
+        assert!(
+            bottom > 0.,
+            "the last line is not drawn at the end (side by side: {side_by_side})"
+        );
+        assert!(
+            bottom <= HEIGHT - SCROLLBAR_THICKNESS,
+            "the last row ends at {bottom}, under the horizontal scrollbar over the bottom \
+             {SCROLLBAR_THICKNESS} px of the {HEIGHT} px view (side by side: {side_by_side})"
+        );
+    }
 }
 
 /// One drawn row, read with its colour ignored: the gutter's two numbers and the text —
@@ -768,8 +829,16 @@ fn side_paragraphs(test: &TestingRunner) -> Vec<(String, bool, bool)> {
 #[test]
 fn only_a_viewport_of_side_by_side_rows_is_built_however_long_the_file() {
     let viewport_rows = (HEIGHT / DIFF_ROW_HEIGHT).ceil() as usize;
+    // Scrolled to the end, the empty rows after the last (`end_room`) are built and draw no
+    // text: counted here, so the end builds what the top does.
+    let room = with_end_room(1, DIFF_ROW_HEIGHT) - 1;
     let within_a_viewport = |test: &TestingRunner, place: &str| {
-        let count = built_side_rows(test);
+        let count = built_side_rows(test)
+            + if place.starts_with("at the end") {
+                room
+            } else {
+                0
+            };
         assert!(
             count >= viewport_rows && count <= viewport_rows + 2,
             "{count} rows were built for a {viewport_rows}-row viewport {place}"

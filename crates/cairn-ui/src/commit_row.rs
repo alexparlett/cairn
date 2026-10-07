@@ -1,11 +1,14 @@
-//! One commit's row in the history list.
+//! One commit's row in the history list: its graph, the chips of the refs pointing at it
+//! (`ref_chips`), its subject — bold on `HEAD`'s row, as Fork marks it — its author, short id
+//! and date.
 
-use cairn_model::{CommitSummary, GraphRow};
+use cairn_model::{CommitSummary, RowEdges};
 use freya::prelude::*;
 
 use crate::date_text;
 use crate::graph_cell::graph_cell;
-use crate::graph_geometry::ROW_HEIGHT;
+use crate::graph_geometry::{ROW_HEIGHT, graph_width};
+use crate::ref_chips::{CHIP_GAP, Chip, chips_row};
 
 pub const AUTHOR_WIDTH: f32 = 150.0;
 pub const ID_WIDTH: f32 = 72.0;
@@ -16,30 +19,61 @@ pub const ROW_PADDING: f32 = 10.0;
 
 pub const ROW_FONT_SIZE: f32 = 13.0;
 
+/// The room a row's chips and subject share in a list `list_width` wide whose graph column
+/// is `lanes` wide: what is left of the row past its padding, the graph and the fixed
+/// columns. What [`crate::ref_chips::row_chips`] lays chips out in.
+pub fn label_room(list_width: f32, lanes: usize) -> f32 {
+    list_width
+        - 2. * ROW_PADDING
+        - (AUTHOR_WIDTH + ID_WIDTH + DATE_WIDTH)
+        - 3. * COLUMN_GAP
+        - graph_width(lanes)
+        - COLUMN_GAP
+}
+
 /// No handler, so equal content compares equal and Freya skips re-rendering.
 #[derive(Debug, PartialEq, Clone)]
 pub struct CommitRow {
     commit: CommitSummary,
-    graph: GraphRow,
+    graph: RowEdges,
     lanes: usize,
     selected: bool,
+    chips: Vec<Chip>,
+    head: bool,
     key: DiffKey,
 }
 
 impl CommitRow {
-    /// `lanes` is the graph column's width for the whole list, not for this row.
-    pub fn new(commit: CommitSummary, graph: GraphRow, lanes: usize) -> Self {
+    /// `graph` is the row's lane and every line crossing it, derived for the row drawn
+    /// ([`cairn_model::row_edges`]); `lanes` is the graph column's width for the whole list,
+    /// not for this row.
+    pub fn new(commit: CommitSummary, graph: RowEdges, lanes: usize) -> Self {
         Self {
             commit,
             graph,
             lanes,
             selected: false,
+            chips: Vec::new(),
+            head: false,
             key: DiffKey::None,
         }
     }
 
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// The chips drawn between the graph and the subject, laid out already
+    /// ([`crate::ref_chips::row_chips`]): the row only draws them.
+    pub fn chips(mut self, chips: Vec<Chip>) -> Self {
+        self.chips = chips;
+        self
+    }
+
+    /// Whether this is `HEAD`'s commit, whose subject is bold (R5.1).
+    pub fn head(mut self, head: bool) -> Self {
+        self.head = head;
         self
     }
 }
@@ -77,17 +111,34 @@ impl ComponentOwned for CommitRow {
                     .spacing(COLUMN_GAP)
                     .child(graph_cell(
                         &self.graph,
-                        self.commit.parents.len(),
+                        self.commit.parent_count,
                         self.lanes,
                     ))
                     .child(
-                        label()
-                            .text(self.commit.summary)
+                        // Chips then subject, cut at the column's edge: many chips push the
+                        // subject out of it, as in Fork (R5.3).
+                        rect()
+                            .horizontal()
+                            .content(Content::Flex)
                             .width(Size::flex(1.))
-                            .max_lines(1)
-                            .text_overflow(TextOverflow::Ellipsis)
-                            .font_size(ROW_FONT_SIZE)
-                            .color(primary),
+                            .height(Size::px(ROW_HEIGHT))
+                            .cross_align(Alignment::center())
+                            .spacing(CHIP_GAP)
+                            .overflow(Overflow::Clip)
+                            .maybe_child(
+                                (!self.chips.is_empty())
+                                    .then(|| chips_row(&self.chips, self.graph.lane)),
+                            )
+                            .child(
+                                label()
+                                    .text(self.commit.summary)
+                                    .width(Size::flex(1.))
+                                    .max_lines(1)
+                                    .text_overflow(TextOverflow::Ellipsis)
+                                    .font_size(ROW_FONT_SIZE)
+                                    .maybe(self.head, |label| label.font_weight(FontWeight::BOLD))
+                                    .color(primary),
+                            ),
                     ),
             )
             .child(

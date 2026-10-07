@@ -15,14 +15,21 @@ pub mod diff_palette;
 mod diff_row_parts;
 mod diff_settings;
 mod diff_view;
+mod end_room;
+pub use end_room::{END_ROOM, SCROLLBAR_THICKNESS, with_end_room};
 mod expansion;
 mod file_filter;
 mod graph_cell;
 pub mod graph_geometry;
 mod history_list;
 pub mod lane_palette;
+mod local_changes;
 mod message_lines;
+mod ref_chips;
+mod ref_glyphs;
 mod side_by_side_rows;
+mod sidebar;
+mod status_box;
 mod toggle_glyphs;
 mod unified_rows;
 
@@ -33,12 +40,12 @@ pub use changes_list::{
 };
 pub use commit_row::{
     AUTHOR_WIDTH, COLUMN_GAP, CommitRow, DATE_WIDTH, HistoryHeader, ID_WIDTH, ROW_FONT_SIZE,
-    ROW_PADDING,
+    ROW_PADDING, label_room,
 };
 pub use commit_tab::{
     AUTHOR_CAPTION, COLLAPSE_ALL_CAPTION, COMMITTER_CAPTION, CommitTab, DETAIL_ROW_HEIGHT,
-    EXPAND_ALL_CAPTION, ID_CAPTION, NO_FILES, PARENTS_CAPTION, READING_DIFF, budget_notice,
-    cut_short_notice, file_text, status_letter,
+    EXPAND_ALL_CAPTION, ID_CAPTION, NO_FILES, PARENTS_CAPTION, READING_DIFF, REFS_CAPTION, Refs,
+    budget_notice, cut_short_notice, file_text, status_letter,
 };
 pub use credential_prompt::CredentialPrompt;
 pub use detail_tabs::{
@@ -67,3 +74,21 @@ pub use expansion::{Expansion, Opened};
 pub use file_filter::ShownFiles;
 pub use graph_geometry::{LANE_WIDTH, MAX_DRAWN_LANES, ROW_HEIGHT, graph_width};
 pub use history_list::{HistoryList, PREFETCH_ROWS, RowRender, reveal_row};
+pub use local_changes::{
+    ChangeBadge, LIST_HEADER_HEIGHT, LISTS_SPLIT, LocalChangesList, NO_PATH_MATCHES,
+    STAGED_CAPTION, UNSTAGED_CAPTION, change_badge, change_text, list_caption,
+};
+pub use ref_chips::{
+    CHIP_FONT_SIZE, CHIP_GAP, CHIP_HEIGHT, Chip, ChipKind, TAG_INDIGO, chip_element, chips_of_row,
+    min_width, row_chips, tint,
+};
+pub use ref_glyphs::{GLYPH_SIZE, RefGlyph};
+pub use sidebar::{
+    ALL_COMMITS_CAPTION, BranchCounts, DETACHED_HEAD_CAPTION, DrawnRow, LOCAL_CHANGES_CAPTION,
+    MainView, SIDEBAR_FILTER_PLACEHOLDER, SIDEBAR_INDENT, SIDEBAR_ROW_HEIGHT, Sidebar, SidebarRefs,
+    SidebarTarget, drawn_row, local_changes_text, section_caption,
+};
+pub use status_box::{
+    NO_COMMITS_YET, StatusBox, Tracking, UPSTREAM_GONE, counts_text, current_branch, head_text,
+    name_text,
+};

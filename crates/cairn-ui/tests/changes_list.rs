@@ -10,7 +10,7 @@ use cairn_model::{
 };
 use cairn_ui::{
     ChangesList, ChangesSummary, DETAIL_ROW_HEIGHT, DIFF_HEADER_HEIGHT, FILTER_PLACEHOLDER,
-    FILTERING, NO_FILE_MATCHES, SUMMARY_HEIGHT, ShownFiles, summary_parts,
+    FILTERING, NO_FILE_MATCHES, SCROLLBAR_THICKNESS, SUMMARY_HEIGHT, ShownFiles, summary_parts,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -93,6 +93,33 @@ fn built_files(test: &TestingRunner) -> Vec<(String, bool)> {
             .filter(|label| label.text.starts_with("dir"))
             .map(|label| (label.text.to_string(), node.is_visible()))
     })
+}
+
+/// The user's report (2026-10-07): scrolled to the end, the last file's row sits above the
+/// horizontal scrollbar Freya draws over the list's bottom, never under it. Caught by: a list
+/// exactly as long as its rows (the last row flush with the bottom edge).
+#[test]
+fn scrolled_to_the_end_the_last_file_is_clear_of_the_horizontal_scrollbar() {
+    let files = 400;
+    let last = file(files - 1).new_path.display().into_owned();
+    let (mut test, _, _) = launch(change_set(files), ShownFiles::All);
+    test.scroll((100., 200.), (0., -1e7));
+    test.sync_and_update();
+    let centre = test
+        .find_many(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == last.as_str() && node.is_visible())
+                .map(|_| node.layout().area.center().y)
+        })
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("{last} is not drawn at the end"));
+    let bottom = centre + DETAIL_ROW_HEIGHT / 2.;
+    assert!(
+        bottom <= HEIGHT - SCROLLBAR_THICKNESS,
+        "the last file's row ends at {bottom}, under the scrollbar over the bottom of the \
+         {HEIGHT} px view"
+    );
 }
 
 /// R5.4, R5.5 at the largest subject's size: the list of 55,184 files builds one viewport of

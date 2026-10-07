@@ -1,14 +1,55 @@
 ---
-status: in-flight
+status: shipped
 packet: refs-and-status
 opened: 2026-10-05
+shipped: 2026-10-07
 ---
 
 # PRD — Refs and status
 
-**In flight. Authoritative while it is.** The packet's work directory is
-`docs/work/refs-and-status/`; its decisions and rejected alternatives are that
-directory's `brainstorm.md`, L1-L14. Requirements below cite them by id.
+**Shipped. Frozen — what this packet committed to, as it was committed to.** For
+how the refs, upstreams, the stash list and ahead/behind are read now, read
+`docs/systems/refs.md`; the working tree's status, `docs/systems/status.md`; the
+history walked from every ref, its compact and slim rows, labels, stash rows, the
+title bar and refresh, `docs/systems/history-graph.md`; the sidebar and a ref's
+find, `docs/systems/sidebar.md`; Local Changes, `docs/systems/local-changes.md`;
+REFS, a stash's changes and the Refresh chord, `docs/systems/diff.md`; and the
+status and stash reads as `git` invocations, `docs/systems/git-processes.md`.
+Those are the living truth and this is not. Requirements R1-R11 and acceptance
+criteria C1-C16 were met at the merge bar, each against a test that decides it;
+C11, C12 and the measured halves of C15 and C16 were met by `#[ignore]`d reporters
+on the bench machine, by reading, not asserting (C11 29.1 / 34.6 / 0.13 / 7.27 ms
+against 100 / 250 / 100 / 200 ms; C15 a find of 2.2-2.3 s against 2.64 s; C16
+52.67 MiB against 64 MiB; C12 no frame over 16.7 ms), and their numbers, logged in
+the packet's `progress.md`, were kept at teardown in
+`docs/research/refs-and-status/measured.md`.
+
+Amendments made in flight are marked inline where they changed a requirement:
+R3.4 (git reads `status.showUntrackedFiles`, two reads), R4.2 (a stash filed twice
+is one row), R6.2 (`git stash show --raw`, the third porcelain read), R7.1 (counts
+as Fork prints them, `18↓1↑`) and R10.3 (a running status left to finish, one
+follow-up behind it). The user decided at the merge bar (2026-10-07): Local
+Changes' "Showing N of M files" counts distinct paths; a failed status read stays
+`Error::GitFailed` for the whole view; F5 stays Linux's Refresh chord; a ref name
+git calls invalid stays skipped and uncounted. Every other choice the phases
+batched for the user was accepted as built. Nothing below was descoped. What the
+packet left is filed: listing ignored files (#62), reftable repositories (#63),
+`GIT_NAMESPACE` (#64), watching the file system (#65), refreshing a stale index
+(#66), greying commits off the current branch (#67), push and pull markers (#68),
+a Submodules section (#69), Hide Untracked Files (#70), Local Changes' layout menu
+(#71), whether Fork remembers the sidebar's expansion (#72), an early stop for a
+stash with no row (#73), a named state for a partial clone's failed status (#74),
+a faster ahead/behind (#75), the flaky working-tree diff tests (#76), the REFS
+row's finder trying the list's hint (#77), the nested repository's second status
+read (#78), the refs read on the repository thread (#79), `RowId` under the
+every-variant guard (#80), a `status.renameLimit` pin (#81) and `window_check`
+asserting its bar (#82); and #2 (the branch filter and hiding refs), #4 (a resident
+bound on rows), #35 (Fork's quick look, Local Changes' eye) and #36 (the tree view)
+carry the rest. The packet's work directory — the brainstorm (L1-L14), `state.md`,
+`progress.md` and the `qa-checklist.md` this file names below — was deleted at
+teardown; git history holds it, its decisions are in `docs/design/history-graph.md`,
+`docs/design/engine.md`, `docs/design/ui.md` and `docs/design/concurrency.md`, and
+the "L" ids and the work-directory paths below are to that history.
 
 Design frame: `docs/design/history-graph.md` (what the graph walks, its labels and
 its stash rows), `docs/design/ui.md` (the sidebar, the toolbar, Local Changes),
@@ -64,13 +105,25 @@ are later packets'.
   tag chain is followed to its end; a tag that peels to something other than a
   commit is listed, and identifies no commit.
 - R1.3 A symbolic ref (`refs/remotes/origin/HEAD`) is never peeled into its
-  target's name: it is listed as itself, naming the ref it points at. A symbolic
+  target's name: it is listed as itself, naming the ref it points at (the end of its
+  chain, as `%(symref)` prints it). A symbolic
   ref whose target does not exist is not listed, as `git for-each-ref` does not
   list it. A ref whose name is invalid is skipped, as git skips it; a ref that
   cannot be read is skipped and counted, never a failure of the whole snapshot.
+  A ref naming an object that is not there is skipped and counted the same way —
+  a deliberate divergence, the user's decision: git's own `for-each-ref` refuses
+  to list anything (`fatal: missing object`).
 - R1.4 Each local branch carries its upstream as git resolves it
   (`branch.<name>.remote` and `.merge`), including a local upstream
   (`remote = .`), and whether that upstream ref exists ("gone" when it does not).
+  Every upstream is resolved by hand from the configuration, as git's `set_merge`
+  does (the fifth parity rule): the last `branch.<name>.remote`; the first
+  `branch.<name>.merge`; with `remote = .`, the merge resolved as a ref name (kept
+  as written when it names no ref, or more than one); with a named remote, the
+  merge as written matched against that remote's fetch refspecs in configuration
+  order, the first match winning and a negative refspec ignored. gix answers
+  otherwise on two `merge` values, a short `merge` with a named remote and two
+  refspecs both mapping the merge.
 - R1.5 The stash list is the `refs/stash` reflog, newest first, each entry with
   its index (`stash@{n}`), its message, its commit and the commit it was made on
   (its first parent). The reflog is read so that no message length truncates or
@@ -83,7 +136,9 @@ are later packets'.
   variable.
 - R1.9 A repository whose refs live in reftable (`extensions.refStorage` set to
   anything but `files`) is refused at open with a reason saying so, where it is
-  refused for dubious ownership today. gix 0.87 opens such a repository and then
+  refused for dubious ownership today. A repository whose
+  `core.repositoryFormatVersion` is 0 and that sets `extensions.refStorage` at all,
+  `files` included, is refused beside it, as git refuses it ("v1-only extension"). gix 0.87 opens such a repository and then
   fails reading `HEAD`; reftable support is not built here (Out of scope).
 
 ### R2 — Ahead and behind (L9)
@@ -118,8 +173,11 @@ are later packets'.
 - R3.4 Untracked files are listed one per file (git's `--untracked-files=all`,
   Fork's choice), except where the user's configuration sets
   `status.showUntrackedFiles=no`, where none are listed. The setting is read as
-  git reads it; how is phase 02's to decide against `reads::fetch_settings`'s
-  precedent, and a new porcelain read needs the user.
+  git reads it. Amended by the user's decision of 2026-10-06: git itself reads it —
+  a first `git status` passes no `--untracked-files`, and a second, with
+  `--untracked-files=all`, is run only where the first collapsed an untracked
+  directory — so there is no `git config` read and no reading of the setting by gix,
+  and a tree with an untracked nested repository is read twice.
 - R3.5 Ignored files are not listed.
 - R3.6 Submodules are reported as the user's `submodule.<name>.ignore` and
   `diff.ignoreSubmodules` make `git status` report them.
@@ -132,7 +190,13 @@ are later packets'.
   objects; the fsmonitor and the clean filter run as D1 already allows. Because a
   read never writes the refreshed index back, a tree whose every file's stat
   changed stays slow to read (736 ms on rust-lang/rust) until something
-  refreshes the index; Cairn does not, in this packet.
+  refreshes the index; Cairn does not, in this packet. And a read never lazily
+  fetches (the read environment's `GIT_NO_LAZY_FETCH=1`, the user's decision of
+  2026-10-02): in a partial clone, a staged rename whose blob only the promisor
+  holds fails the whole status read on git 2.44 and later — nothing listed, no
+  pack written — where the user's own `git status` would fetch and answer; git
+  before 2.44 ignores the variable, so there a status read fetches and writes a
+  pack.
 
 ### R4 — The history walks every ref, with stash rows (L5)
 
@@ -143,7 +207,9 @@ are later packets'.
 - R4.2 Each stash whose base — the commit it was made on — is a commit the walk
   reaches is a row of its own, merged into the stream by its commit time but
   never after its base (a stash dated older than its base, by clock skew, is
-  drawn directly above it), with one edge: to that commit. A stash whose base no
+  drawn directly above it), with one edge: to that commit. A stash commit filed twice
+  in the stash list (`git stash store`) is one row, its newest entry's (the user's
+  decision, 2026-10-07); the sidebar lists every entry. A stash whose base no
   seed reaches (its branch deleted, its commit rebased or amended away, made on
   a detached `HEAD` that moved on) has no row in the graph, as in Fork
   (`fork-unreachable-stash-base.md`); it stays in the sidebar's Stashes (R8.5).
@@ -200,16 +266,22 @@ are later packets'.
   at the commit, as Fork does; a commit with none shows no row.
 - R6.2 Selecting a stash row shows its message, author and date in the Commit tab
   and, in the Changes tab, what it changed against the commit it was made on —
-  the changes query of that pair, which is what `git stash show` lists — and,
-  where the user's `stash.showIncludeUntracked` is set, the untracked files the
-  stash holds, as `git stash show` then lists them.
+  what `git stash show` lists — and, where the user's `stash.showIncludeUntracked`
+  is set, the untracked files the stash holds, as `git stash show` then lists them.
+  Amended by the user's decision of 2026-10-07: the list is asked of `git stash show`
+  itself, in raw form, as a third porcelain read, because git pairs the untracked
+  files with the tracked changes in one diff that no plumbing can ask without writing
+  a tree; git reads the setting, so git 2.30 and 2.31 list the tracked changes alone,
+  as they do for the user.
 
 ### R7 — The title bar names the branch (L9)
 
 - R7.1 The title bar shows the repository's name, marked `*` while status reports
   any change, the current branch, and its behind and ahead counts (↓n ↑m) when it
   has an upstream; a detached `HEAD` shows its short id, an unborn branch its name
-  and that it has no commit.
+  and that it has no commit. Amended by the user's decision of 2026-10-07: the counts
+  are printed as Fork prints them, behind then ahead with no space, `18↓1↑`, a zero
+  count left out and nothing for a branch level with its upstream.
 
 ### R8 — The sidebar (L8)
 
@@ -264,7 +336,11 @@ are later packets'.
   whose chord is Fork's for each platform, in the accelerator table.
 - R10.2 Nothing watches the file system.
 - R10.3 A refresh supersedes the refresh before it, lane by lane; an answer is
-  drawn only against the refresh it answers.
+  drawn only against the refresh it answers. Except status (the user's decision of
+  2026-10-07, from phase 06 QA): a refresh does not end a `git status` already
+  running; it finishes and its answer is drawn, and every refresh asked while it ran
+  is one follow-up status after it, however many there were. Only closing the
+  window ends a running status.
 - R10.4 When the refs snapshot differs from the one the history was walked from —
   any ref moved, appeared or went, `HEAD`'s state changed (a checkout that moves
   no ref still moves ✓ and the bold row), or the stash list changed — the history
@@ -320,7 +396,7 @@ here and does not restate them.
 | C7 | Rows draw each label kind with its glyph, compact labels, clipping, ✓ and the bold `HEAD` subject; a stash row draws its chip and message; the Commit tab draws REFS; selecting a stash lists what `git stash show --name-status` lists, with `stash.showIncludeUntracked` unset and set | headless tests |
 | C8 | The sidebar draws its sections in order, groups by `/`, marks the current branch, shows ahead/behind and gone; the filter narrows on a worker; pressing a ref selects its row, finding one beyond the loaded pages and cancelling when a press or scroll supersedes it; a tag on a tree says so; a stash with no row shows its changes and says so; a deep find retains only compact, slim rows (C16); a sidebar of 50,000 refs builds one viewport | headless and worker tests |
 | C9 | Local Changes draws both lists with their badges and the count by R9.2; choosing a path draws its diff from the working-tree query; a conflicted path draws its notice; 50,000 paths build one viewport | headless tests |
-| C10 | Focus, the Refresh action and a finished fetch each re-read refs and status; a moved ref, a changed stash list and a checkout that moves no ref each reopen the history, and an unchanged snapshot does not; the selection survives a reopen; a superseded refresh is never drawn; no new lane supersedes another, and the changes-to-file-diff crossing is unchanged; a slow status queues neither a page nor a diff; superseded snapshots, statuses and a reopen's replaced rows are freed off the UI thread | worker tests through the real boundary, and headless tests with focus set |
+| C10 | Focus, the Refresh action and a finished fetch each re-read refs and status; a moved ref, a changed stash list and a checkout that moves no ref each reopen the history, and an unchanged snapshot does not; the selection survives a reopen; a superseded refresh is never drawn; no new lane supersedes another, and the changes-to-file-diff crossing is unchanged; a slow status queues neither a page nor a diff; replaced or superseded snapshots, counts and statuses, and a reopen's replaced rows, are freed off the UI thread (a status is superseded by no refresh, R10.3 as amended, so only one replaced or left unread by a close) | worker tests through the real boundary, and headless tests with focus set |
 | C11 | On rust-lang/rust at `c999cef531e` (`~/Development/bench/rust`, never written), on the machine recorded in `docs/research/diff-engine/measured-baseline.md`, warm, release build, median of seven: status on a clean tree within 100 ms; status with 1,000 modified and 10,000 untracked files (on a scratch clone) within 250 ms; the refs snapshot with every ahead/behind within 100 ms, and a 10,000-ref fixture's recorded; the first page of history seeded from every ref within 200 ms, recorded beside `HEAD`'s; status with every file's stat changed recorded, not barred | an `#[ignore]`d reporter driven by `CAIRN_BENCH_REPO`, numbers in `progress.md` and, at teardown, in `docs/research/refs-and-status/` |
 | C12 | `window_check` keeps every frame under 16.7 ms of UI-thread work while the decorated history, the sidebar, the refs and a large status land | the `#[ignore]`d `window_check`, numbers recorded |
 | C13 | D1 in `docs/design/engine.md` and the root `CLAUDE.md` names status as a read git answers, with R3.8's residuals | review |

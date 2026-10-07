@@ -12,8 +12,9 @@ impl Repository {
     /// git's order, and the message exactly as written — in the characters git shows, read
     /// through the encoding the commit names (`crate::commit_encoding`).
     ///
-    /// Beside [`crate::HistoryPage`]'s `CommitSummary`, not instead of it: a row of a
-    /// ten-year monorepo pays for a subject and one name, and this pays for everything.
+    /// Beside a [`crate::HistoryPage`]'s rows, not instead of them: a row of a ten-year
+    /// monorepo keeps a subject, a name and a parent count, and this pays for everything —
+    /// every parent, both addresses, the whole message.
     pub fn commit_details(&self, id: &Oid) -> Result<CommitDetails, Error> {
         let commit =
             self.inner()
@@ -84,12 +85,14 @@ fn signature_of(
 mod tests {
     use super::*;
     use crate::HistoryRequest;
-    use cairn_model::{CommitSummary, HistoryRow, RowContent};
+    use cairn_model::{CommitSummary, History, RowContent};
 
-    /// A row's commit, with no wildcard arm: a second kind of row must fail to compile.
-    fn commit_of(row: &HistoryRow) -> &CommitSummary {
-        match &row.content {
+    /// The first row's commit, with no wildcard arm: a second kind of row must fail to
+    /// compile.
+    fn first_commit(history: &History) -> CommitSummary {
+        match history.row(0).expect("a commit").content() {
             RowContent::Commit(commit) => commit,
+            RowContent::Stash(stash) => panic!("a walk from HEAD drew a stash: {stash:?}"),
         }
     }
 
@@ -102,14 +105,18 @@ mod tests {
         let page = repo
             .history(&HistoryRequest::from_head(1), &crate::CancelSignal::new())
             .unwrap();
-        let row = page.rows.first().expect("a commit");
-        let summary = commit_of(row);
+        let mut history = History::new();
+        history.append(page.rows).unwrap();
+        let summary = first_commit(&history);
 
         let details = repo.commit_details(&summary.id).unwrap();
         assert_eq!(details.id, summary.id);
-        assert_eq!(details.parents, summary.parents);
+        assert_eq!(details.parents.len(), summary.parent_count);
         assert_eq!(details.author.name, summary.author_name);
-        assert_eq!(details.author.email, summary.author_email);
+        assert!(
+            !details.author.email.is_empty(),
+            "the details carry the author's address, which a row does not"
+        );
         assert_eq!(details.author.time.seconds, summary.author_time);
         assert_eq!(
             details.subject(),

@@ -13,6 +13,7 @@ use crate::object_id::{model_id, object_id};
 use crate::ops::GitBinary;
 use crate::{Cancel, Error, Repository};
 
+use super::content::Trees;
 use super::git_config::{invalid, last_value, parse_bool};
 use super::renames::Configured;
 use super::submodules::Hiding;
@@ -29,6 +30,17 @@ pub(super) fn changes(
     let (old, new, details) = subject(inner, request)?;
 
     let search = Configured::read(inner)?.search(git.version());
+    if let Subject::Stash(stash) = &request.subject {
+        // git reads the rename, submodule and untracked-file settings itself, as the user's
+        // own `git stash show` does (`crate::reads::stash_changes`).
+        let mut files = crate::reads::stash_changes(git, repo, stash, cancel)?;
+        sort(&mut files);
+        return Ok(ChangeSet {
+            renames: search.outcome(&files),
+            files,
+            details,
+        });
+    }
     // Read before anything is answered: `git log` refuses a value it does not accept
     // whatever the commit changed.
     let hiding = Hiding::read(inner, repo.workdir().is_some())?;
@@ -58,19 +70,38 @@ pub(super) fn changes(
         files = hide_submodules(git, repo, (&old, &new), detection, &hiding, files, cancel)?;
     }
 
-    // git lists paths in its own tree order, with a pair under its destination. The answer
-    // is sorted here by a key that is total — a destination path, then the source it came
-    // from — so the list cannot shuffle between two runs of one query.
-    files.sort_by(|left, right| {
-        left.new_path
-            .cmp(&right.new_path)
-            .then_with(|| left.old_path.cmp(&right.old_path))
-    });
+    sort(&mut files);
 
     Ok(ChangeSet {
         renames: search.outcome(&files),
         files,
         details,
+    })
+}
+
+/// git lists paths in its own tree order, with a pair under its destination: sorted here by a
+/// key that is total — a destination path, then the source it came from — so the list cannot
+/// shuffle between two runs of one query.
+fn sort(files: &mut [ChangedFile]) {
+    files.sort_by(|left, right| {
+        left.new_path
+            .cmp(&right.new_path)
+            .then_with(|| left.old_path.cmp(&right.old_path))
+    });
+}
+
+/// The trees a content query of `request`'s files reads between: its two commits and, for a
+/// stash holding untracked files, the third parent they are in.
+pub(super) fn trees(inner: &gix::Repository, request: &ChangesRequest) -> Result<Trees, Error> {
+    let (old, new, details) = subject(inner, request)?;
+    let untracked = match request.subject {
+        Subject::Stash(_) => details.and_then(|details| details.parents.get(2).copied()),
+        Subject::Commit(_) | Subject::Between { .. } => None,
+    };
+    Ok(Trees {
+        old,
+        new,
+        untracked,
     })
 }
 
@@ -85,7 +116,7 @@ pub(super) fn subject(
     // Each id is read as a commit here first, so a missing one is `ReadCommit` — the same
     // answer whichever side it is on — and git is never handed a tree or a blob as a commit.
     Ok(match &request.subject {
-        Subject::Commit(id) => {
+        Subject::Commit(id) | Subject::Stash(id) => {
             let commit = find_commit(inner, id)?;
             let details = crate::commit::details_of(&commit, id)?;
             // A root commit is compared with the empty tree (L5), which makes its diff the

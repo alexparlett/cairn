@@ -10,28 +10,34 @@
 //! the base, which the swap reverses. Each change asks what the selection now compares, so an
 //! answer for one on its way when another was chosen is never drawn.
 
-use cairn_model::{CommitSummary, HistoryRow, Oid, RowContent, RowId};
+use cairn_model::{CommitSummary, History, HistoryRow, Oid, RowContent, RowId};
 use freya::prelude::*;
 
 use crate::diff_state::Answer;
 use crate::window::View;
 use crate::worker::{Comparison, Request};
 
-/// What a row's changes are asked against. Named variant by variant: a row that is not a
-/// commit — the working tree's, when it lands — must say here what it compares, or the
-/// window does not compile.
+/// What a row's changes are asked against. Named variant by variant: a row of another kind
+/// must say here what it compares, or the window does not compile. A stash's row asks what
+/// `git stash show` lists (refs-and-status R6.2): the stash commit against the commit it was
+/// made on and, where the user's `stash.showIncludeUntracked` says so, the untracked files
+/// it holds; its Commit tab draws the stash commit's details, every parent among them.
 pub fn comparison_of(id: RowId) -> Comparison {
     match id {
         RowId::Commit(oid) => Comparison::Commit(oid),
+        RowId::Stash(stash) => Comparison::Stash(stash),
     }
 }
 
-/// Two commits selected to compare (R7): the base — the lower of the two rows, the commit the
-/// diff runs from — and the tip, each as the history drew it, for the header that names them.
+/// Two rows selected to compare (R7): the base — the lower of the two rows, the commit the
+/// diff runs from — and the tip, each as the history drew it, for the header that names them,
+/// and each row's identity, which a stash's row does not share with its commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pair {
     pub base: CommitSummary,
     pub tip: CommitSummary,
+    pub base_row: RowId,
+    pub tip_row: RowId,
 }
 
 impl Pair {
@@ -43,9 +49,9 @@ impl Pair {
         }
     }
 
-    /// The commit of the two that is not `one`.
+    /// The row of the two that is not `one`.
     pub fn other(&self, one: Option<RowId>) -> Option<RowId> {
-        let (base, tip) = (RowId::Commit(self.base.id), RowId::Commit(self.tip.id));
+        let (base, tip) = (self.base_row, self.tip_row);
         match one {
             Some(id) if id == base => Some(tip),
             Some(id) if id == tip => Some(base),
@@ -54,7 +60,7 @@ impl Pair {
     }
 
     fn holds(&self, id: RowId) -> bool {
-        id == RowId::Commit(self.base.id) || id == RowId::Commit(self.tip.id)
+        id == self.base_row || id == self.tip_row
     }
 }
 
@@ -66,10 +72,12 @@ pub fn selected_comparison(view: View) -> Option<Comparison> {
     }
 }
 
-/// The commit a loaded row draws. Named variant by variant, as [`comparison_of`] is.
-fn summary_of(row: &HistoryRow) -> &CommitSummary {
-    match &row.content {
+/// The commit a loaded row draws, copied out of the history: a stash's row draws its stash
+/// commit, its message the subject. Named variant by variant, as [`comparison_of`] is.
+fn summary_of(row: HistoryRow<'_>) -> CommitSummary {
+    match row.content() {
         RowContent::Commit(summary) => summary,
+        RowContent::Stash(stash) => stash.as_commit(),
     }
 }
 
@@ -117,13 +125,10 @@ pub fn extend(id: RowId, index: usize, view: View, submit: Option<&dyn Fn(Reques
     }
     let made = {
         let loaded = rows.peek();
-        let anchor_at = match anchor {
-            RowId::Commit(oid) => loaded_row(&loaded, oid),
-        };
-        match (anchor_at, loaded.get(index)) {
+        match (loaded.position(anchor), loaded.row(index)) {
             (Some(anchor_at), Some(pressed)) if pressed.id() == id => {
-                let (anchor_summary, pressed_summary) = match loaded.get(anchor_at) {
-                    Some(row) => (summary_of(row).clone(), summary_of(pressed).clone()),
+                let (anchor_summary, pressed_summary) = match loaded.row(anchor_at) {
+                    Some(row) => (summary_of(row), summary_of(pressed)),
                     None => return,
                 };
                 // The lower row in the list is the base (R7.2).
@@ -131,11 +136,15 @@ pub fn extend(id: RowId, index: usize, view: View, submit: Option<&dyn Fn(Reques
                     Pair {
                         base: pressed_summary,
                         tip: anchor_summary,
+                        base_row: id,
+                        tip_row: anchor,
                     }
                 } else {
                     Pair {
                         base: anchor_summary,
                         tip: pressed_summary,
+                        base_row: anchor,
+                        tip_row: id,
                     }
                 })
             }
@@ -158,6 +167,8 @@ pub fn swap(view: View, submit: Option<&dyn Fn(Request)>) {
     let swapped = pair.peek().clone().map(|held| Pair {
         base: held.tip,
         tip: held.base,
+        base_row: held.tip_row,
+        tip_row: held.base_row,
     });
     let Some(swapped) = swapped else {
         return;
@@ -189,44 +200,40 @@ fn ask(of: Comparison, view: View, submit: Option<&dyn Fn(Request)>) {
 /// Where `parent` is in the loaded history, if it is loaded. A scan of what is loaded, run
 /// once per press of a parent link and once per row pressed with the extending chord
 /// ([`extend`], to find which of the two rows is lower), never per frame.
-pub fn loaded_row(rows: &[HistoryRow], parent: Oid) -> Option<usize> {
-    let wanted = RowId::Commit(parent);
-    rows.iter().position(|row| row.id() == wanted)
+pub fn loaded_row(rows: &History, parent: Oid) -> Option<usize> {
+    rows.position(RowId::Commit(parent))
 }
 
 #[cfg(test)]
 mod tests {
-    use cairn_model::{CommitSummary, EdgeSegment, GraphRow, Lane, RowContent};
+    use cairn_model::{GraphRow, Lane, PagedCommit, RowsPage};
 
     use super::*;
 
-    fn row(n: u8) -> HistoryRow {
-        let id = Oid::from_bytes(&[n; 20]).unwrap();
-        HistoryRow {
-            content: RowContent::Commit(CommitSummary {
-                id,
-                parents: Vec::new(),
-                summary: format!("commit {n}"),
-                author_name: "Ada".to_owned(),
-                author_email: "ada@example.com".to_owned(),
-                author_time: 0,
-            }),
-            graph: GraphRow {
-                id,
-                lane: Lane::new(0),
-                edges: vec![EdgeSegment::passing(Lane::new(0))],
-            },
-        }
-    }
-
     #[test]
     fn a_parent_is_found_where_it_is_loaded_and_nowhere_else() {
-        let rows: Vec<HistoryRow> = (1..=5).map(row).collect();
+        let mut page = RowsPage::new();
+        for n in 1..=5u8 {
+            page.push(
+                GraphRow::new(Oid::from_bytes(&[n; 20]).unwrap(), Lane::new(0), Vec::new()),
+                PagedCommit {
+                    parents: 1,
+                    subject: "commit",
+                    author: "Ada",
+                    author_time: 0,
+                },
+            );
+        }
+        let mut rows = History::new();
+        rows.append(page).unwrap();
         assert_eq!(
             loaded_row(&rows, Oid::from_bytes(&[4; 20]).unwrap()),
             Some(3)
         );
         assert_eq!(loaded_row(&rows, Oid::from_bytes(&[9; 20]).unwrap()), None);
-        assert_eq!(loaded_row(&[], Oid::from_bytes(&[1; 20]).unwrap()), None);
+        assert_eq!(
+            loaded_row(&History::new(), Oid::from_bytes(&[1; 20]).unwrap()),
+            None
+        );
     }
 }

@@ -1,6 +1,6 @@
 //! View state for the history list.
 
-use cairn_model::HistoryRow;
+use cairn_model::{HistoryFull, RowsPage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
@@ -70,18 +70,47 @@ impl Progress {
         self.in_flight = true;
     }
 
-    /// `loaded` is the total rows held once the page has been added.
+    /// A find in the sidebar was stopped (refs-and-status R8.5): no page is waited for, so the
+    /// list's next visibility change may ask one. A page the find laid out before it stopped
+    /// may still arrive, and is appended as any page is.
+    pub fn stopped_finding(&mut self) {
+        self.in_flight = false;
+    }
+
+    /// `loaded` is the total rows held once the page has been added. Once the history can
+    /// hold no more ([`Self::appended`]) or the stream has ended, the failure stands.
     pub fn received(&mut self, widest_lane: usize, complete: bool, loaded: usize) {
         self.in_flight = false;
         self.lanes = self.lanes.max(widest_lane);
         self.complete = complete;
         self.loaded = loaded;
+        if self.ended {
+            return;
+        }
         self.status = match (loaded, complete) {
             // Ran out with nothing in it: empty. Nothing handed over yet: still loading.
             (0, true) => Status::Empty,
             (0, false) => Status::Loading,
             _ => Status::Ready,
         };
+    }
+
+    /// A page has been appended to the history, all of it or — when `held` says the history
+    /// is full — the rows before the first it could not hold. A full history is the end of
+    /// the scroll: nothing more is asked for, since a later page could land after the rows
+    /// that were dropped and draw a history with a hole in it. Only a reopen starts again.
+    pub fn appended(
+        &mut self,
+        widest_lane: usize,
+        complete: bool,
+        loaded: usize,
+        held: Result<(), HistoryFull>,
+    ) {
+        self.received(widest_lane, complete, loaded);
+        if let Err(full) = held {
+            self.ended = true;
+            self.status = Status::Failed(full.to_string());
+        }
     }
 
     pub fn failed(&mut self, message: String) {
@@ -99,27 +128,17 @@ impl Progress {
     }
 }
 
-/// Counts every lane a segment names, not just node lanes: a passing line's commit
-/// may be on another page.
-pub fn widest_lane(rows: &[HistoryRow]) -> usize {
-    rows.iter()
-        .map(|row| {
-            let node = row.graph.lane.index();
-            row.graph
-                .edges
-                .iter()
-                .map(|edge| edge.from.index().max(edge.to.index()))
-                .fold(node, usize::max)
-                + 1
-        })
-        .max()
-        .unwrap_or(1)
+/// The widest a page's rows draw, from the lanes each names — its node, its lane changes
+/// and, on a row with a snapshot, every line crossing into it. A passing line's commit may
+/// be on another page; over every page from the first, every lane a line crosses is named.
+pub fn widest_lane(page: &RowsPage) -> usize {
+    page.lanes_named()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cairn_model::{CommitSummary, EdgeSegment, GraphRow, Lane, Oid, RowContent};
+    use cairn_model::{GraphRow, Lane, LaneAssigner, LaneChange, Oid, PagedCommit};
 
     fn oid(n: u8) -> Oid {
         let mut bytes = [0u8; 20];
@@ -127,29 +146,31 @@ mod tests {
         Oid::from_bytes(&bytes).unwrap_or_else(|_| unreachable!("20 bytes is a SHA-1"))
     }
 
-    fn row(n: u8, lane: usize, edges: Vec<EdgeSegment>) -> HistoryRow {
-        HistoryRow {
-            content: RowContent::Commit(CommitSummary {
-                id: oid(n),
-                parents: Vec::new(),
-                summary: "s".to_owned(),
-                author_name: "a".to_owned(),
-                author_email: "a@example.com".to_owned(),
-                author_time: 0,
-            }),
-            graph: GraphRow {
-                id: oid(n),
-                lane: Lane::new(lane),
-                edges,
-            },
+    fn row(n: u8, lane: usize, changes: Vec<LaneChange>) -> RowsPage {
+        page_of([GraphRow::new(oid(n), Lane::new(lane), changes)])
+    }
+
+    fn page_of(graphs: impl IntoIterator<Item = GraphRow>) -> RowsPage {
+        let mut page = RowsPage::new();
+        for graph in graphs {
+            page.push(
+                graph,
+                PagedCommit {
+                    parents: 1,
+                    subject: "s",
+                    author: "a",
+                    author_time: 0,
+                },
+            );
         }
+        page
     }
 
     #[test]
     fn loading_and_an_empty_repository_are_different_states() {
         let mut empty = Progress::opening();
         assert_eq!(empty.status(), &Status::Loading);
-        empty.received(widest_lane(&[]), true, 0);
+        empty.received(widest_lane(&RowsPage::new()), true, 0);
         assert_eq!(empty.status(), &Status::Empty);
         assert_ne!(Status::Empty, Status::Loading);
     }
@@ -158,7 +179,7 @@ mod tests {
     #[test]
     fn an_empty_page_with_more_to_come_is_still_loading() {
         let mut progress = Progress::opening();
-        progress.received(widest_lane(&[]), false, 0);
+        progress.received(widest_lane(&RowsPage::new()), false, 0);
         assert_eq!(progress.status(), &Status::Loading);
         assert!(progress.wants_more(), "a loading view stopped asking");
     }
@@ -166,7 +187,7 @@ mod tests {
     #[test]
     fn rows_arriving_make_the_view_ready() {
         let mut progress = Progress::opening();
-        let page = vec![row(1, 0, Vec::new())];
+        let page = row(1, 0, Vec::new());
         progress.received(widest_lane(&page), false, page.len());
         assert_eq!(progress.status(), &Status::Ready);
         assert!(progress.has_rows());
@@ -275,36 +296,69 @@ mod tests {
         );
     }
 
+    /// QA's QC1: a history that can hold no more ends the scroll — it asks for nothing
+    /// more, says why, and a page that arrives anyway does not unsay it. Caught by: treating
+    /// it as a failed page, which is asked for again and appends after the dropped rows.
+    #[test]
+    fn a_full_history_stops_asking_and_keeps_saying_so() {
+        let mut progress = Progress::opening();
+        progress.appended(1, false, 64, Ok(()));
+        assert!(progress.wants_more());
+
+        progress.asked();
+        progress.appended(1, false, 100, Err(HistoryFull));
+        let said = Status::Failed("the history is too large to hold".to_owned());
+        assert_eq!(progress.status(), &said);
+        assert!(
+            !progress.wants_more(),
+            "a full history asked for another page"
+        );
+        assert_eq!(progress.loaded(), 100, "the rows it did hold were disowned");
+
+        progress.received(1, false, 164);
+        assert_eq!(progress.status(), &said, "a later page unsaid the failure");
+        assert!(!progress.wants_more());
+
+        let reopened = Progress::opening();
+        assert_eq!(reopened.status(), &Status::Loading, "a reopen starts again");
+    }
+
     /// Caught by: narrowing, which moves every subject sideways mid-scroll.
     #[test]
     fn the_graph_column_only_grows() {
         let mut progress = Progress::opening();
-        let wide = vec![row(1, 4, Vec::new())];
+        let wide = row(1, 4, Vec::new());
         progress.received(widest_lane(&wide), false, 1);
         assert_eq!(progress.lanes(), 5);
 
-        let narrow = vec![row(2, 0, Vec::new())];
+        let narrow = row(2, 0, Vec::new());
         progress.received(widest_lane(&narrow), false, 2);
         assert_eq!(progress.lanes(), 5, "the column narrowed under the reader");
     }
 
     /// Caught by: measuring nodes only.
     #[test]
-    fn a_lane_only_a_passing_line_uses_still_gets_a_column() {
-        let rows = vec![row(
-            1,
-            0,
-            vec![
-                EdgeSegment::passing(Lane::new(0)),
-                EdgeSegment::passing(Lane::new(6)),
-            ],
-        )];
+    fn a_lane_only_a_change_names_still_gets_a_column() {
+        let rows = row(1, 0, vec![LaneChange::Starts(Lane::new(6))]);
         assert_eq!(widest_lane(&rows), 7);
+    }
+
+    /// Caught by: measuring a row's own changes only, when a page's rows cross a lane
+    /// opened on an earlier page.
+    #[test]
+    fn a_lane_only_a_passing_line_uses_still_gets_a_column() {
+        // `a` opens lanes 0 to 6 to parents never walked; `x0` ends lane 0 alone.
+        let parents: Vec<Oid> = (10..17).map(oid).collect();
+        let walk = vec![(oid(1), parents.clone()), (parents[0], Vec::new())];
+        let graphs = LaneAssigner::new().drawn_from(1).assign_each(walk);
+        assert_eq!(graphs[1].changes(), [LaneChange::Ends(Lane::new(0))]);
+        let page = page_of(graphs.into_iter().skip(1));
+        assert_eq!(widest_lane(&page), 7);
     }
 
     /// Caught by: a zero-wide graph on a repository's first page.
     #[test]
     fn an_empty_page_still_reserves_a_column() {
-        assert_eq!(widest_lane(&[]), 1);
+        assert_eq!(widest_lane(&RowsPage::new()), 1);
     }
 }

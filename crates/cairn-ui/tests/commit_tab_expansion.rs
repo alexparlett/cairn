@@ -11,7 +11,8 @@ use cairn_model::{
 };
 use cairn_ui::{
     COLLAPSE_ALL_CAPTION, CommitTab, DETAIL_ROW_HEIGHT, EXPAND_ALL_CAPTION, Expansion,
-    LOAD_DIFF_CAPTION, Opened, READING_DIFF, TOO_LARGE_TO_DISPLAY, budget_notice,
+    LOAD_DIFF_CAPTION, Opened, READING_DIFF, SCROLLBAR_THICKNESS, TOO_LARGE_TO_DISPLAY,
+    budget_notice,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -402,11 +403,14 @@ fn only_a_viewport_of_rows_is_built_however_many_files_are_open() {
             .find(|(text, _, visible)| *visible && *text == last)
             .map(|(_, top, _)| top - inset + DETAIL_ROW_HEIGHT)
             .unwrap_or_else(|| panic!("the last file is not at the end"));
+        // One empty row after it is the room the horizontal scrollbar needs (`end_room`).
         assert!(
-            (bottom - HEIGHT).abs() < 1.,
-            "the last file's row ends at {bottom}, not at the bottom of the {HEIGHT} px view: \
-             the list is not exactly as long as its rows (side by side: {side_by_side})"
+            (bottom - (HEIGHT - DETAIL_ROW_HEIGHT)).abs() < 1.,
+            "the last file's row ends at {bottom}, not one row above the bottom of the {HEIGHT} \
+             px view: the list is not exactly as long as its rows and its end room (side by \
+             side: {side_by_side})"
         );
+        assert!(bottom <= HEIGHT - SCROLLBAR_THICKNESS);
     }
     // A row partly scrolled off the top is counted with the row above it: two either way.
     let fewest = built_counts.iter().min().copied().unwrap_or(0);

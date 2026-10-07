@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use cairn_git::{
     Cancel, CancelSignal, Error, HistoryOrder, HistoryPage, HistoryRequest, Repository,
 };
-use cairn_model::{CommitSummary, EdgeSegment, HistoryRow, RowContent, RowId};
+use cairn_model::{CommitSummary, EdgeSegment, History, HistoryRow, RowContent, RowId, RowsPage};
 
 use fixtures::Fixture;
 
@@ -24,29 +24,50 @@ fn open(fixture: &Fixture) -> Repository {
 }
 
 /// No wildcard arm: a new row kind must fail to compile here.
-fn hex_id(row: &HistoryRow) -> String {
+fn hex_id(row: HistoryRow<'_>) -> String {
     match row.id() {
         RowId::Commit(id) => id.to_string(),
+        RowId::Stash(id) => panic!("a walk from HEAD drew stash {id}"),
     }
 }
 
-fn commit_of(row: &HistoryRow) -> &CommitSummary {
-    match &row.content {
+fn commit_of(row: HistoryRow<'_>) -> CommitSummary {
+    match row.content() {
         RowContent::Commit(commit) => commit,
+        RowContent::Stash(stash) => panic!("a walk from HEAD drew a stash: {stash:?}"),
     }
+}
+
+/// `pages` held as the window holds them: appended, in order, to one history.
+fn held(pages: &[&RowsPage]) -> History {
+    let mut history = History::new();
+    for page in pages {
+        ok(history.append((*page).clone()), "holding a page");
+    }
+    history
 }
 
 fn ids(page: &HistoryPage) -> Vec<String> {
-    page.rows.iter().map(hex_id).collect()
+    page.rows.ids().map(|id| id.to_string()).collect()
 }
 
-fn ids_of(rows: &[HistoryRow]) -> Vec<String> {
-    rows.iter().map(hex_id).collect()
+fn ids_of(rows: &History) -> Vec<String> {
+    rows.rows().map(hex_id).collect()
 }
 
-fn lanes(rows: &[HistoryRow]) -> Vec<(String, usize)> {
-    rows.iter()
-        .map(|row| (hex_id(row), row.graph.lane.index()))
+fn lanes(rows: &History) -> Vec<(String, usize)> {
+    rows.rows()
+        .map(|row| (hex_id(row), row.lane().index()))
+        .collect()
+}
+
+/// Every row's edges, derived as the list derives each row it draws.
+fn drawn_edges(rows: &History) -> Vec<Vec<EdgeSegment>> {
+    rows.rows()
+        .map(|row| match row.edges() {
+            Some(drawn) => drawn.edges,
+            None => panic!("row {} has no snapshot within reach", row.index()),
+        })
         .collect()
 }
 
@@ -88,19 +109,25 @@ fn every_row_matches_what_git_reports() {
     }
 
     let mut text_of: HashMap<String, Vec<String>> = HashMap::new();
-    let format = "--format=%H%x1f%s%x1f%an%x1f%ae%x1f%at";
+    let format = "--format=%H%x1f%s%x1f%an%x1f%at";
     for line in fixture.git(&["log", format, "HEAD"]).lines() {
         let fields: Vec<String> = line.split('\u{1f}').map(str::to_owned).collect();
-        if fields.len() == 5 {
+        if fields.len() == 4 {
             text_of.insert(fields[0].clone(), fields);
         }
     }
 
-    for row in &page.rows {
+    let history = held(&[&page.rows]);
+    for row in history.rows() {
         let id = hex_id(row);
         let commit = commit_of(row);
-        let mine: Vec<String> = commit.parents.iter().map(ToString::to_string).collect();
-        assert_eq!(Some(&mine), parents_of.get(&id), "parents of {id}");
+        // A row keeps how many parents its commit has, not which: those are the details
+        // query's.
+        assert_eq!(
+            Some(commit.parent_count),
+            parents_of.get(&id).map(Vec::len),
+            "parents of {id}"
+        );
 
         let expected_text = match text_of.get(&id) {
             Some(fields) => fields,
@@ -108,16 +135,15 @@ fn every_row_matches_what_git_reports() {
         };
         assert_eq!(commit.summary, expected_text[1], "summary of {id}");
         assert_eq!(commit.author_name, expected_text[2], "author of {id}");
-        assert_eq!(commit.author_email, expected_text[3], "email of {id}");
         assert_eq!(
             commit.author_time.to_string(),
-            expected_text[4],
+            expected_text[3],
             "author time of {id}"
         );
         assert_eq!(
             row.id(),
-            RowId::Commit(row.graph.id),
-            "the two halves named different commits"
+            RowId::Commit(commit.id),
+            "the row's content is another commit's"
         );
     }
 }
@@ -211,27 +237,29 @@ fn two_pages_of_n_match_one_page_of_2n_including_lanes() {
     };
     let second = read(&repo, &HistoryRequest::resume(cursor, n));
 
-    let mut split = first.rows.clone();
-    split.extend(second.rows.clone());
-    assert_eq!(split.len(), whole.rows.len(), "a different number of rows");
+    let split = held(&[&first.rows, &second.rows]);
+    let whole_rows = held(&[&whole.rows]);
+    assert_eq!(split.len(), whole_rows.len(), "a different number of rows");
     assert_eq!(
         lanes(&split),
-        lanes(&whole.rows),
+        lanes(&held(&[&whole.rows])),
         "lanes moved when the page split"
     );
 
-    for (index, (apart, together)) in split.iter().zip(&whole.rows).enumerate() {
+    let (split_edges, whole_edges) = (drawn_edges(&split), drawn_edges(&whole_rows));
+    for (index, (apart, together)) in split.rows().zip(whole_rows.rows()).enumerate() {
         assert_eq!(
-            apart.content, together.content,
+            apart.content(),
+            together.content(),
             "row {index} is a different commit"
         );
+        let (apart, together) = (&split_edges[index], &whole_edges[index]);
         assert!(
-            together.graph.edges.starts_with(&apart.graph.edges),
-            "row {index} lost segments when the page split:\n  split {:?}\n  whole {:?}",
-            apart.graph.edges,
-            together.graph.edges
+            together.starts_with(apart),
+            "row {index} lost segments when the page split:\n  split {apart:?}\n  whole \
+             {together:?}",
         );
-        for gained in &together.graph.edges[apart.graph.edges.len()..] {
+        for gained in &together[apart.len()..] {
             assert!(
                 gained.out_of_order,
                 "row {index} gained {gained:?} unflagged, so the difference is not a repaint"
@@ -268,33 +296,34 @@ fn a_backward_line_across_a_page_boundary_is_a_gained_segment() {
     };
     let second = read(&repo, &HistoryRequest::resume(cursor, expected.len()));
 
-    let mut split = first.rows.clone();
-    split.extend(second.rows.clone());
+    let split = held(&[&first.rows, &second.rows]);
+    let whole_rows = held(&[&whole.rows]);
     assert_eq!(
         ids_of(&split),
-        ids_of(&whole.rows),
+        ids_of(&held(&[&whole.rows])),
         "the split lost a commit"
     );
     assert_eq!(
         lanes(&split),
-        lanes(&whole.rows),
+        lanes(&held(&[&whole.rows])),
         "lanes moved when the page split"
     );
 
     assert!(
-        repaints(&whole.rows) > 0,
+        repaints(&held(&[&whole.rows])) > 0,
         "the fixture delivered no parent early, so this decides nothing"
     );
     assert!(
-        repaints(&split) < repaints(&whole.rows),
+        repaints(&split) < repaints(&held(&[&whole.rows])),
         "the boundary-crossing line was expected to be missing from the split run"
     );
-    for (index, (apart, together)) in split.iter().zip(&whole.rows).enumerate() {
+    let (split_edges, whole_edges) = (drawn_edges(&split), drawn_edges(&whole_rows));
+    for (index, (apart, together)) in split_edges.iter().zip(&whole_edges).enumerate() {
         assert!(
-            together.graph.edges.starts_with(&apart.graph.edges),
+            together.starts_with(apart),
             "row {index} differs by more than a gained segment"
         );
-        for gained in &together.graph.edges[apart.graph.edges.len()..] {
+        for gained in &together[apart.len()..] {
             assert!(
                 gained.out_of_order,
                 "row {index} gained {gained:?} unflagged"
@@ -377,16 +406,17 @@ fn a_narrow_window_returns_every_commit() {
 
     assert_eq!(ids(&narrow), expected, "a narrow window lost a commit");
     assert_eq!(
-        lanes(&narrow.rows),
-        lanes(&generous.rows),
+        lanes(&held(&[&narrow.rows])),
+        lanes(&held(&[&generous.rows])),
         "a narrow window moved a lane"
     );
 }
 
-fn repaints(rows: &[HistoryRow]) -> usize {
-    rows.iter()
-        .flat_map(|row| &row.graph.edges)
-        .filter(|edge: &&EdgeSegment| edge.out_of_order)
+fn repaints(rows: &History) -> usize {
+    drawn_edges(rows)
+        .iter()
+        .flatten()
+        .filter(|edge| edge.out_of_order)
         .count()
 }
 
@@ -398,7 +428,7 @@ fn a_row_that_left_the_window_is_never_repainted() {
     let expected = fixture.rev_list();
     assert_eq!(expected.len(), 5, "the skew fixture changed shape");
 
-    let held = read(
+    let held_page = read(
         &repo,
         &HistoryRequest::from_head(expected.len()).with_window(8),
     );
@@ -409,24 +439,24 @@ fn a_row_that_left_the_window_is_never_repainted() {
 
     let mut from_git = expected.clone();
     from_git.sort();
-    for page in [&held, &dropped] {
+    for page in [&held_page, &dropped] {
         let mut mine = ids(page);
         mine.sort();
         assert_eq!(mine, from_git, "a commit went missing");
     }
     assert_eq!(
-        ids(&held),
+        ids(&held_page),
         ids(&dropped),
         "the window changed the walk order"
     );
 
     assert!(
-        repaints(&held.rows) > 0,
+        repaints(&held(&[&held_page.rows])) > 0,
         "the fixture never delivered a parent early, so this decides nothing:\n{:?}",
-        held.rows
+        held_page.rows
     );
     assert_eq!(
-        repaints(&dropped.rows),
+        repaints(&held(&[&dropped.rows])),
         0,
         "a row was repainted after the window made it final:\n{:?}",
         dropped.rows
@@ -490,7 +520,7 @@ fn a_sha256_repository_reads_like_any_other() {
     let tip = ok(cairn_model::Oid::parse(&expected[0]), "parsing HEAD");
     let from_tip = read(&repo, &HistoryRequest::from_commits([tip], 10));
     assert_eq!(ids(&from_tip), expected[..10]);
-    assert_eq!(commit_of(&from_tip.rows[0]).id, tip);
+    assert_eq!(from_tip.rows.ids().next(), Some(tip));
 
     let narrower = ok(
         cairn_model::Oid::parse("0123456789abcdef0123456789abcdef01234567"),
@@ -568,8 +598,8 @@ fn resuming_ignores_an_order_or_window_the_cursor_did_not_come_from() {
             .with_window(1024),
     );
     assert_eq!(
-        (ids(&meddled), lanes(&meddled.rows)),
-        (ids(&plain), lanes(&plain.rows)),
+        (ids(&meddled), lanes(&held(&[&meddled.rows]))),
+        (ids(&plain), lanes(&held(&[&plain.rows]))),
         "resuming honoured an order or window the cursor did not carry"
     );
 }
@@ -716,15 +746,15 @@ fn drain_session(
     repo: &Repository,
     request: &HistoryRequest,
     page_size: usize,
-) -> (Vec<HistoryRow>, Vec<(usize, usize)>) {
+) -> (History, Vec<(usize, usize)>) {
     let mut session = ok(repo.history_session(request), "starting a session");
-    let mut rows = Vec::new();
+    let mut rows = History::new();
     let mut cost = Vec::new();
     loop {
         let page = ok(session.next_page(page_size, &CancelSignal::new()), "paging");
         cost.push((page.walked, page.rows.len()));
         let done = page.cursor.is_none();
-        rows.extend(page.rows);
+        ok(rows.append(page.rows), "holding a page");
         if done {
             break;
         }
@@ -749,7 +779,7 @@ fn a_session_returns_what_the_cursor_path_returns_row_for_row() {
     );
     assert_eq!(
         lanes(&rows),
-        lanes(&one_shot.rows),
+        lanes(&held(&[&one_shot.rows])),
         "the same commits landed in different lanes"
     );
 }
@@ -842,7 +872,7 @@ fn cancelling_a_session_stops_the_walk_and_keeps_its_progress() {
 
     // And the rows are still the right ones.
     let expected = fixture.rev_list();
-    assert_eq!(ids_of(&resumed.rows), &expected[..4]);
+    assert_eq!(ids_of(&held(&[&resumed.rows])), &expected[..4]);
 }
 
 #[test]
@@ -867,8 +897,8 @@ fn a_cursor_taken_from_a_session_restarts_it_where_it_stopped() {
     );
     let second = ok(cold.next_page(6, &CancelSignal::new()), "paging");
 
-    assert_eq!(ids_of(&first.rows), &expected[..6]);
-    assert_eq!(ids_of(&second.rows), &expected[6..12]);
+    assert_eq!(ids_of(&held(&[&first.rows])), &expected[..6]);
+    assert_eq!(ids_of(&held(&[&second.rows])), &expected[6..12]);
     assert!(
         second.walked > second.decoded,
         "the replayed prefix should cost walk steps, and it cost none"
@@ -964,14 +994,30 @@ fn shown_parents(dir: &std::path::Path) -> Vec<(String, Vec<String>)> {
         .collect()
 }
 
-fn parents_of_rows(rows: &[HistoryRow]) -> Vec<(String, Vec<String>)> {
-    rows.iter()
-        .map(|row| {
-            let parents = commit_of(row).parents.iter().map(ToString::to_string);
-            (hex_id(row), parents.collect())
-        })
+/// Each row's commit and how many parents it keeps: a row keeps a count, and which
+/// parents they are is the graph's (below) and the details query's.
+fn parents_of_rows(rows: &History) -> Vec<(String, usize)> {
+    rows.rows()
+        .map(|row| (hex_id(row), commit_of(row).parent_count))
         .collect()
 }
+
+/// `expected` as [`parents_of_rows`] reads a history.
+fn counted(expected: &[(String, Vec<String>)]) -> Vec<(String, usize)> {
+    expected
+        .iter()
+        .map(|(id, parents)| (id.clone(), parents.len()))
+        .collect()
+}
+
+/// What a row keeps of its layout: its commit, lane, lane changes and whether it carries a
+/// snapshot.
+type KeptLayout = (
+    cairn_model::Oid,
+    cairn_model::Lane,
+    Vec<cairn_model::LaneChange>,
+    bool,
+);
 
 /// A shallow clone's boundary commits — the ones its `shallow` file lists — name parents
 /// in their objects that the clone does not have, and git shows them with none: `git log
@@ -1058,14 +1104,14 @@ fn a_shallow_clones_boundary_commits_have_the_parents_git_log_shows() {
         let request = HistoryRequest::from_head(expected.len() + 10);
         let page = read(&repo, &request);
         assert_eq!(
-            parents_of_rows(&page.rows),
-            expected,
+            parents_of_rows(&held(&[&page.rows])),
+            counted(&expected),
             "depth {depth}: the history query's parents are not git log's"
         );
         let (rows, _) = drain_session(&repo, &request, 2);
         assert_eq!(
             parents_of_rows(&rows),
-            expected,
+            counted(&expected),
             "depth {depth}: the session's parents are not git log's"
         );
 
@@ -1074,34 +1120,47 @@ fn a_shallow_clones_boundary_commits_have_the_parents_git_log_shows() {
                 let parse = |hex: &String| ok(cairn_model::Oid::parse(hex), "an id");
                 (parse(id), parents.iter().map(parse).collect())
             }));
-        let graphs: Vec<_> = page.rows.iter().map(|row| row.graph.clone()).collect();
+        let kept: Vec<KeptLayout> = held(&[&page.rows])
+            .rows()
+            .map(|row| {
+                let id = match row.id() {
+                    RowId::Commit(id) => id,
+                    RowId::Stash(id) => panic!("a walk from HEAD drew stash {id}"),
+                };
+                (id, row.lane(), row.changes().to_vec(), row.has_snapshot())
+            })
+            .collect();
+        let from_git: Vec<KeptLayout> = laid_out
+            .iter()
+            .map(|graph| {
+                (
+                    graph.id,
+                    graph.lane,
+                    graph.changes().to_vec(),
+                    graph.has_snapshot(),
+                )
+            })
+            .collect();
         assert_eq!(
-            graphs, laid_out,
+            kept, from_git,
             "depth {depth}: the graph is not the one git's parents lay out"
         );
-        let last = some_last(&page.rows);
+        let last = match drawn_edges(&held(&[&page.rows])).pop() {
+            Some(edges) => edges,
+            None => panic!("the clone answered no rows"),
+        };
         // Lines may come INTO the oldest row; none may pass it or leave it downward.
         assert!(
-            last.graph
-                .edges
-                .iter()
+            last.iter()
                 .all(|edge| edge.kind == cairn_model::EdgeKind::IntoCommit),
-            "depth {depth}: the oldest row carries {:?}, a lane held open for a parent the \
+            "depth {depth}: the oldest row carries {last:?}, a lane held open for a parent the \
              clone does not have",
-            last.graph.edges
         );
     }
     assert!(
         cut_merge,
         "no depth cut a merge at the boundary, so that case went untested"
     );
-}
-
-fn some_last(rows: &[HistoryRow]) -> &HistoryRow {
-    match rows.last() {
-        Some(row) => row,
-        None => panic!("the clone answered no rows"),
-    }
 }
 
 // Builders only this file uses; the shared ones are in `fixtures`.

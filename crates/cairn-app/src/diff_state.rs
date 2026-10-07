@@ -20,8 +20,12 @@ use cairn_ui::{Expansion, Opened, ShownFiles};
 use crate::file_filter::FileFilter;
 use crate::worker::{
     AllEnded, AllFrom, AllProgress, Comparison, DiffOptions, DiffQuery, ExpandQuery, ExpandedFile,
-    FileQuery, OpenedFile, Request, Retired,
+    FileQuery, FileTarget, OpenedFile, Request, Retired,
 };
+
+mod working;
+
+pub use working::{WorkingChoice, WorkingShown};
 
 /// An answer the window is waiting for, has, or was told failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,6 +72,8 @@ struct Opening {
 pub enum Asking {
     File,
     Expansion,
+    /// The path chosen in Local Changes, whose view is shown in place of the history.
+    Working,
 }
 
 /// The diffs `opened` holds, for a worker to free.
@@ -103,6 +109,10 @@ pub struct DiffState {
     /// Where the file selected is in the change set, when it was chosen from it: what the
     /// Changes tab's list highlights and moves from, kept rather than searched for.
     file_index: Option<usize>,
+    /// The path chosen in Local Changes and its diff (refs-and-status R9.3).
+    working: Option<working::Working>,
+    /// The path chosen's request is the one in the file-diff lane now.
+    working_in_lane: bool,
 }
 
 impl DiffState {
@@ -119,6 +129,8 @@ impl DiffState {
         let opening = self.opening.take();
         self.file_index = None;
         self.file_in_lane = false;
+        // The changes query supersedes the file-diff lane, whoever's request is in it.
+        self.working_in_lane = false;
         self.filter.changes_selected();
         let mut shown_diffs: Vec<ShownDiff> = Vec::new();
         if let Some((_, Answer::Ready(Some(shown)))) = file {
@@ -156,6 +168,7 @@ impl DiffState {
     /// expansion asked is superseded, and asked again when the Commit tab is shown.
     fn took_lane_for_file(&mut self) {
         self.file_in_lane = true;
+        self.working_in_lane = false;
         if let Some(opening) = &mut self.opening {
             opening.in_lane = false;
         }
@@ -370,6 +383,7 @@ impl DiffState {
         };
         opening.in_lane = true;
         self.file_in_lane = false;
+        self.working_in_lane = false;
         Some(Request::Expand(ExpandQuery {
             of: opening.of,
             changes,
@@ -424,9 +438,15 @@ impl DiffState {
                 expansion_asked = true;
             }
         }
+        // The path chosen in Local Changes is asked at the Changes tab's options: its view is
+        // one file's diff under the same bar.
+        let (working_asked, freed) =
+            self.working_settings_changed(options, asking == Asking::Working);
+        requests.extend(retire(freed));
         let asked = match asking {
             Asking::File if file_asked => self.reask_file(),
             Asking::Expansion if expansion_asked => self.reask_expansion(),
+            Asking::Working => working_asked,
             Asking::File | Asking::Expansion => None,
         };
         let mut ordered: Vec<Request> = asked.into_iter().collect();
@@ -552,6 +572,13 @@ pub fn answered_file(state: &DiffState) -> &ShownDiff {
     state.shown_file().unwrap_or(&NO_DIFF)
 }
 
+/// The diff drawn for the path chosen in Local Changes, or an empty one while none is: the
+/// view of the state Local Changes' diff view is handed. Whether there is one to draw is the
+/// view's to check before drawing it.
+pub fn answered_working(state: &DiffState) -> &ShownDiff {
+    state.shown_working().unwrap_or(&NO_DIFF)
+}
+
 impl DiffState {
     /// The filter's text is now `text`: what to ask of a worker, if anything — nothing for
     /// the text already asked, an empty text, or a change set not yet here.
@@ -603,10 +630,16 @@ impl DiffState {
             .is_some_and(|(selected, _)| *selected == of)
     }
 
+    /// Whether an answer to `query` is for the file selected — the commit's, or the path
+    /// chosen in Local Changes for a working-tree query.
     pub fn wants_file(&self, query: &FileQuery) -> bool {
-        self.file
-            .as_ref()
-            .is_some_and(|(selected, _)| selected == query)
+        match &query.target {
+            FileTarget::Committed { .. } => self
+                .file
+                .as_ref()
+                .is_some_and(|(selected, _)| selected == query),
+            FileTarget::WorkingTree { .. } => self.wants_working(query),
+        }
     }
 
     pub fn wants_expansion(&self, of: Comparison, options: DiffOptions) -> bool {
@@ -651,11 +684,14 @@ impl DiffState {
                     *answer = Answer::Failed(message);
                 }
             }
-            DiffQuery::File(_) => {
-                if let Some((_, answer)) = &mut self.file {
-                    *answer = Answer::Failed(message);
+            DiffQuery::File(query) => match &query.target {
+                FileTarget::Committed { .. } => {
+                    if let Some((_, answer)) = &mut self.file {
+                        *answer = Answer::Failed(message);
+                    }
                 }
-            }
+                FileTarget::WorkingTree { .. } => self.working_failed(message),
+            },
             // What no file is to blame for — the configuration git refuses — fails every file
             // still awaited, and stops Expand All.
             DiffQuery::Expand(_) => {

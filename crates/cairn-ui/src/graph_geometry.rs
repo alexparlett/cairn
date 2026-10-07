@@ -1,6 +1,6 @@
 //! Row geometry, in row-local logical pixels with `y` growing downwards.
 
-use cairn_model::{EdgeKind, EdgeSegment, GraphRow, Lane};
+use cairn_model::{EdgeKind, EdgeSegment, Lane, RowEdges};
 
 pub const ROW_HEIGHT: f32 = 26.0;
 
@@ -75,9 +75,23 @@ pub fn row_middle() -> f32 {
 }
 
 /// `parents` decides the node shape only; the lines come from the row's segments.
-pub fn row_geometry(row: &GraphRow, parents: usize) -> RowGeometry {
+///
+/// Lanes past [`MAX_DRAWN_LANES`] share the last column, so on a row thousands of open
+/// lines cross most of their strokes land on one another, pixel for pixel. Each place is
+/// painted once, by the stroke painted there last — the one whose colour showed before —
+/// so a row costs the places it paints, never the lines that cross it (refs-and-status
+/// RR2: 5,000 open lines painted 175,000 strokes a viewport).
+pub fn row_geometry(row: &RowEdges, parents: usize) -> RowGeometry {
     let middle = row_middle();
-    let strokes = row.edges.iter().map(|edge| stroke(edge, middle)).collect();
+    let mut painted = std::collections::HashSet::new();
+    let mut strokes: Vec<Stroke> = row
+        .edges
+        .iter()
+        .rev()
+        .map(|edge| stroke(edge, middle))
+        .filter(|stroke| painted.insert(place(stroke)))
+        .collect();
+    strokes.reverse();
 
     RowGeometry {
         strokes,
@@ -85,6 +99,17 @@ pub fn row_geometry(row: &GraphRow, parents: usize) -> RowGeometry {
         node_lane: row.lane,
         node: if parents > 1 { Node::Ring } else { Node::Dot },
     }
+}
+
+/// Where a stroke is painted, exactly: its ends and whether it is dashed.
+fn place(stroke: &Stroke) -> (u32, u32, u32, u32, bool) {
+    (
+        stroke.from.0.to_bits(),
+        stroke.from.1.to_bits(),
+        stroke.to.0.to_bits(),
+        stroke.to.1.to_bits(),
+        stroke.dashed,
+    )
 }
 
 /// The colour lane is the end that is not the node.
@@ -110,18 +135,9 @@ fn stroke(edge: &EdgeSegment, middle: f32) -> Stroke {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cairn_model::Oid;
 
-    fn oid() -> Oid {
-        match Oid::parse("0123456789abcdef0123456789abcdef01234567") {
-            Ok(id) => id,
-            Err(_) => unreachable!("a fixed valid hex id"),
-        }
-    }
-
-    fn row(lane: usize, edges: Vec<EdgeSegment>) -> GraphRow {
-        GraphRow {
-            id: oid(),
+    fn row(lane: usize, edges: Vec<EdgeSegment>) -> RowEdges {
+        RowEdges {
             lane: Lane::new(lane),
             edges,
         }
@@ -142,6 +158,76 @@ mod tests {
             seen.push(x);
         }
         assert_eq!(seen.len(), MAX_DRAWN_LANES);
+    }
+
+    /// RR2: thousands of lines crossing a row paint each place once, by the line painted
+    /// there last, and every place a line reaches is still painted. Caught by: a stroke per
+    /// line however many share a column, a place lost, or the wrong line's colour kept.
+    #[test]
+    fn lines_sharing_the_last_column_are_painted_once_each_place() {
+        let lanes = 5_000;
+        let mut edges: Vec<EdgeSegment> = (0..lanes)
+            .map(|lane| EdgeSegment::passing(Lane::new(lane)))
+            .collect();
+        edges.push(EdgeSegment::passing(Lane::new(MAX_DRAWN_LANES + 7)).marked_out_of_order());
+        let geometry = row_geometry(&row(0, edges.clone()), 1);
+        // One per column below the cap, the shared column once solid and once dashed.
+        assert_eq!(geometry.strokes.len(), MAX_DRAWN_LANES + 1);
+        let every: Vec<Stroke> = edges
+            .iter()
+            .map(|edge| stroke(edge, row_middle()))
+            .collect();
+        for wanted in &every {
+            assert!(
+                geometry
+                    .strokes
+                    .iter()
+                    .any(|kept| place(kept) == place(wanted)),
+                "{wanted:?}'s place is not painted"
+            );
+        }
+        let shared = geometry
+            .strokes
+            .iter()
+            .find(|kept| !kept.dashed && kept.from.0 == lane_x(Lane::new(MAX_DRAWN_LANES - 1)))
+            .unwrap_or_else(|| panic!("the shared column is not painted"));
+        assert_eq!(
+            shared.colour_lane,
+            Lane::new(lanes - 1),
+            "the shared column is not painted by the line painted there last"
+        );
+        // Below the cap nothing is merged, and the order of what is kept is the edges'.
+        let few = row_geometry(&row(0, edges[..3].to_vec()), 1);
+        assert_eq!(few.strokes, every[..3].to_vec());
+
+        // TC1: past the cap a line passing the row and a line into its node start at the same
+        // place and end at different ones; both are painted, read by their coordinates.
+        let past = Lane::new(MAX_DRAWN_LANES + 3);
+        let node = Lane::new(2);
+        let shared_x = lane_x(Lane::new(MAX_DRAWN_LANES - 1));
+        let crossed = row_geometry(
+            &row(
+                2,
+                vec![
+                    EdgeSegment::passing(past),
+                    EdgeSegment::into_commit(Lane::new(MAX_DRAWN_LANES + 9), node),
+                ],
+            ),
+            1,
+        );
+        let ends: Vec<(Point, Point)> = crossed
+            .strokes
+            .iter()
+            .map(|stroke| (stroke.from, stroke.to))
+            .collect();
+        assert_eq!(
+            ends,
+            [
+                ((shared_x, 0.0), (shared_x, ROW_HEIGHT)),
+                ((shared_x, 0.0), (lane_x(node), row_middle())),
+            ],
+            "a line past the cap lost where it ends"
+        );
     }
 
     #[test]

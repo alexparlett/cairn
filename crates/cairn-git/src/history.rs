@@ -1,13 +1,22 @@
 //! History requests, cursors and pages.
+//!
+//! A walk starts from `HEAD`, from given commits, or from a refs snapshot — every branch,
+//! remote-tracking ref, tag and `HEAD` (PRD R4.1) — whose rows then carry the refs that
+//! label them (R4.3) and whose stashes are rows of their own (R4.2; `stream`).
 
+mod seeds;
 mod session;
-mod walk;
+mod stream;
+pub(crate) mod walk;
 
 use std::sync::Arc;
 
-use cairn_model::{CommitSummary, HistoryRow, LaneAssigner, Oid, RowContent};
+use cairn_model::{GraphRow, LaneAssigner, Oid, PagedCommit, PagedStash, RefsSnapshot, RowsPage};
 
 pub use session::HistorySession;
+
+use seeds::{Decoration, RefSeeds};
+use stream::{Entry, Next, Stream};
 
 use crate::commit_encoding::CommitEncoding;
 use crate::object_id::{model_id, object_id};
@@ -47,8 +56,11 @@ type Tips = Arc<[gix::hash::ObjectId]>;
 pub struct HistoryCursor {
     /// Resolved once, when the walk began; every page of it starts here, wherever refs are now.
     tips: Tips,
+    /// The labels and stashes of the snapshot the walk began from, likewise.
+    decoration: Arc<Decoration>,
     order: HistoryOrder,
     window: usize,
+    lookahead: usize,
     walked: usize,
 }
 
@@ -63,6 +75,7 @@ impl HistoryCursor {
 enum Start {
     Head,
     Commits(Vec<Oid>),
+    Refs(Box<RefSeeds>),
     Resume(HistoryCursor),
 }
 
@@ -72,6 +85,7 @@ pub struct HistoryRequest {
     order: HistoryOrder,
     limit: usize,
     window: usize,
+    lookahead: usize,
 }
 
 impl HistoryRequest {
@@ -83,14 +97,24 @@ impl HistoryRequest {
         Self::starting(Start::Commits(tips.into_iter().collect()), limit)
     }
 
+    /// Every commit the snapshot's local branches, remote-tracking refs and tags identify,
+    /// and `HEAD`'s — git's `rev-list --branches --remotes --tags HEAD` — each row carrying
+    /// the refs that point at it and whether it is `HEAD`'s, and each stash whose base the
+    /// walk reaches a row of its own (PRD R4.1-R4.3). A tag on a tree or a blob seeds
+    /// nothing; nothing about a stash seeds the walk.
+    pub fn from_refs(snapshot: &RefsSnapshot, limit: usize) -> Self {
+        Self::starting(Start::Refs(Box::new(RefSeeds::of(snapshot))), limit)
+    }
+
     /// Continues where the page that produced `cursor` stopped.
     pub fn resume(cursor: HistoryCursor, limit: usize) -> Self {
-        let (order, window) = (cursor.order, cursor.window);
+        let (order, window, lookahead) = (cursor.order, cursor.window, cursor.lookahead);
         Self {
             start: Start::Resume(cursor),
             order,
             limit,
             window,
+            lookahead,
         }
     }
 
@@ -100,7 +124,18 @@ impl HistoryRequest {
             order: HistoryOrder::default(),
             limit,
             window: LaneAssigner::DEFAULT_WINDOW,
+            lookahead: stream::LOOKAHEAD,
         }
+    }
+
+    /// How many commits the walk looks ahead, when a stash's date comes up, for the commit
+    /// it was made on before drawing it directly above that commit instead (`stream`).
+    /// Zero is raised to one. Ignored when resuming.
+    pub fn with_stash_lookahead(mut self, commits: usize) -> Self {
+        if !matches!(self.start, Start::Resume(_)) {
+            self.lookahead = commits.max(1);
+        }
+        self
     }
 
     /// Ignored when resuming: the cursor carries the order.
@@ -123,19 +158,22 @@ impl HistoryRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryPage {
     /// Lane indices do not depend on paging; edges do. A backward line crossing a page
-    /// boundary arrives as its lower half only, still flagged out of order.
-    pub rows: Vec<HistoryRow>,
+    /// boundary arrives as its lower half only, still flagged out of order. Read by
+    /// appending to a [`cairn_model::History`].
+    pub rows: RowsPage,
     /// `None` at the end of the history; a zero limit hands back the given cursor.
     pub cursor: Option<HistoryCursor>,
-    /// Commits laid out for this page, including a replayed prefix.
+    /// Rows laid out for this page — commits and stashes — including a replayed prefix.
     pub walked: usize,
-    /// Commit objects read: one per returned row.
+    /// Commit objects read: one per returned commit's row. A stash's row reads none: its
+    /// commit was read when the walk opened.
     pub decoded: usize,
 }
 
 impl Repository {
-    /// `cancel` is polled once per commit visited. Resuming replays the walk, so page `k`
-    /// walks `k x limit` commits.
+    /// `cancel` is polled once per row laid out, per commit looked ahead at, and per tip
+    /// read to open the walk but the first (`walk::open`). Resuming replays the walk, so
+    /// page `k` walks `k x limit` rows.
     pub fn history(
         &self,
         request: &HistoryRequest,
@@ -152,34 +190,44 @@ fn read_page(
 ) -> Result<HistoryPage, Error> {
     let Resolved {
         tips,
+        decoration,
         order,
         window,
+        lookahead,
         skip,
     } = starting_points(repo, request)?;
+    let cursor_at = |walked: usize| HistoryCursor {
+        tips: Arc::clone(&tips),
+        decoration: Arc::clone(&decoration),
+        order,
+        window,
+        lookahead,
+        walked,
+    };
     if request.limit == 0 {
         // `resume` consumed the caller's cursor; hand it back.
         return Ok(HistoryPage {
-            rows: Vec::new(),
-            cursor: Some(HistoryCursor {
-                tips,
-                order,
-                window,
-                walked: skip,
-            }),
+            rows: RowsPage::new(),
+            cursor: Some(cursor_at(skip)),
             walked: 0,
             decoded: 0,
         });
     }
     let target = skip.saturating_add(request.limit);
 
-    let mut walk = walk::open(repo.inner(), &tips, order)?;
+    let Some(walk) = walk::open(repo.inner(), &tips, order, cancel)? else {
+        return Err(Error::Cancelled { walked: 0 });
+    };
+    let mut stream = Stream::new(walk, Arc::clone(&decoration), lookahead);
 
-    let mut assigner = LaneAssigner::with_window(window);
+    // The page's first row carries a snapshot, so it draws without the replayed prefix.
+    let mut assigner = LaneAssigner::with_window(window).drawn_from(skip);
     let mut page = Page {
-        rows: Vec::new(),
-        summaries: Vec::new(),
+        rows: RowsPage::new(),
+        laid: Vec::new(),
         next_row: 0,
         skip,
+        decoration: &decoration,
     };
     let mut walked = 0usize;
     let mut decoded = 0usize;
@@ -189,24 +237,24 @@ fn read_page(
         if cancel.is_cancelled() {
             return Err(Error::Cancelled { walked });
         }
-        let Some(next) = walk.next() else {
-            exhausted = true;
-            break;
+        let entry = match stream.next(cancel)? {
+            Next::Entry(entry) => entry,
+            Next::End => {
+                exhausted = true;
+                break;
+            }
+            Next::Cancelled => return Err(Error::Cancelled { walked }),
         };
-        let info = next.map_err(|source| Error::Walk {
-            source: Box::new(source),
-        })?;
-
-        let id = model_id(&info.id)?;
-        let parents = parents_of(&info)?;
         if walked >= skip && walked < target {
-            page.summaries
-                .push(summary_of_commit(repo.inner(), &id, &parents)?);
-            decoded += 1;
+            let laid = Laid::read(repo.inner(), Pending::of(&entry))?;
+            if matches!(laid, Laid::Commit { .. }) {
+                decoded += 1;
+            }
+            page.laid.push(laid);
         }
         walked += 1;
 
-        if let Some(finalised) = assigner.push(id, parents) {
+        if let Some(finalised) = lay_out(&mut assigner, &decoration, entry) {
             page.take(finalised);
         }
     }
@@ -217,17 +265,7 @@ fn read_page(
     let cursor = if exhausted {
         None
     } else {
-        next_cursor(
-            &mut walk,
-            HistoryCursor {
-                tips,
-                order,
-                window,
-                walked: target,
-            },
-            cancel,
-            walked,
-        )?
+        next_cursor(&mut stream, cursor_at(target), cancel, walked)?
     };
 
     Ok(HistoryPage {
@@ -238,9 +276,91 @@ fn read_page(
     })
 }
 
-/// Whether anything remains after `target`. One walk step, no object read.
+/// `entry` laid out, returning the row it forced out of the window: a stash's with its one
+/// line to its base, in a lane of its own ([`LaneAssigner::push_stash`]).
+fn lay_out(assigner: &mut LaneAssigner, decoration: &Decoration, entry: Entry) -> Option<GraphRow> {
+    match entry {
+        Entry::Commit { id, parents } => assigner.push(id, parents),
+        Entry::Stash(at) => {
+            let stash = decoration.stashes().get(at)?;
+            assigner.push_stash(stash.id, stash.base)
+        }
+    }
+}
+
+/// What a laid-out row draws, read once and copied into a page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Laid {
+    Commit {
+        id: Oid,
+        commit: Commit,
+    },
+    /// The stash at this index of the walk's decoration, read when the walk opened.
+    Stash(usize),
+}
+
+/// An entry laid out and not yet read: a commit by its id and how many parents the walk
+/// read for it, or a stash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pending {
+    Commit { id: Oid, parents: usize },
+    Stash(usize),
+}
+
+impl Pending {
+    fn of(entry: &Entry) -> Self {
+        match entry {
+            Entry::Commit { id, parents } => Self::Commit {
+                id: *id,
+                parents: parents.len(),
+            },
+            Entry::Stash(at) => Self::Stash(*at),
+        }
+    }
+}
+
+impl Laid {
+    /// A commit's row reads its commit; a stash's reads nothing.
+    fn read(repo: &gix::Repository, pending: Pending) -> Result<Self, Error> {
+        Ok(match pending {
+            Pending::Commit { id, parents } => Self::Commit {
+                id,
+                commit: summary_of_commit(repo, &id, parents)?,
+            },
+            Pending::Stash(at) => Self::Stash(at),
+        })
+    }
+
+    /// Appends the row `graph` lays out for this to `rows`, with its labels.
+    fn push_to(&self, rows: &mut RowsPage, graph: GraphRow, decoration: &Decoration) {
+        match self {
+            Self::Commit { id, commit } => rows.push_labelled(
+                graph,
+                commit.paged(),
+                decoration.is_head(id),
+                &decoration.labels_of(id),
+            ),
+            Self::Stash(at) => {
+                if let Some(stash) = decoration.stashes().get(*at) {
+                    rows.push_stash(
+                        graph,
+                        PagedStash {
+                            index: stash.index,
+                            base: stash.base,
+                            message: &stash.message,
+                            author: &stash.author,
+                            author_time: stash.author_time,
+                        },
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Whether anything remains after `target`: one entry of the stream, no object read.
 fn next_cursor(
-    walk: &mut walk::CommitWalk<'_>,
+    stream: &mut Stream<'_>,
     next: HistoryCursor,
     cancel: &impl Cancel,
     so_far: usize,
@@ -248,37 +368,53 @@ fn next_cursor(
     if cancel.is_cancelled() {
         return Err(Error::Cancelled { walked: so_far });
     }
-    match walk.next() {
-        Some(Ok(_)) => Ok(Some(next)),
-        Some(Err(source)) => Err(Error::Walk {
-            source: Box::new(source),
-        }),
-        None => Ok(None),
+    match stream.next(cancel)? {
+        Next::Entry(_) => Ok(Some(next)),
+        Next::End => Ok(None),
+        Next::Cancelled => Err(Error::Cancelled { walked: so_far }),
     }
 }
 
-/// `summaries` is indexed by position, not consumed in order.
-struct Page {
-    rows: Vec<HistoryRow>,
-    summaries: Vec<CommitSummary>,
+/// `laid` is indexed by position, not consumed in order.
+struct Page<'d> {
+    rows: RowsPage,
+    laid: Vec<Laid>,
     next_row: usize,
     skip: usize,
+    decoration: &'d Decoration,
 }
 
-impl Page {
-    fn take(&mut self, graph: cairn_model::GraphRow) {
+impl Page<'_> {
+    fn take(&mut self, graph: GraphRow) {
         let position = self.next_row;
         self.next_row += 1;
         let Some(offset) = position.checked_sub(self.skip) else {
             return; // Before this page starts.
         };
-        let Some(commit) = self.summaries.get(offset) else {
+        let Some(laid) = self.laid.get(offset) else {
             return; // After it ends: the walk stopped at `target`.
         };
-        self.rows.push(HistoryRow {
-            content: RowContent::Commit(commit.clone()),
-            graph,
-        });
+        laid.push_to(&mut self.rows, graph, self.decoration);
+    }
+}
+
+/// What a row draws of its commit, read once by the walk and copied into a page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Commit {
+    parents: usize,
+    subject: String,
+    author: String,
+    author_time: i64,
+}
+
+impl Commit {
+    fn paged(&self) -> PagedCommit<'_> {
+        PagedCommit {
+            parents: self.parents,
+            subject: &self.subject,
+            author: &self.author,
+            author_time: self.author_time,
+        }
     }
 }
 
@@ -292,15 +428,26 @@ fn parents_of(info: &gix::traverse::commit::Info) -> Result<Vec<Oid>, Error> {
 
 struct Resolved {
     tips: Tips,
+    decoration: Arc<Decoration>,
     order: HistoryOrder,
     window: usize,
+    lookahead: usize,
     skip: usize,
 }
 
 fn starting_points(repo: &Repository, request: &HistoryRequest) -> Result<Resolved, Error> {
+    let mut decoration = None;
     let tips = match &request.start {
-        Start::Resume(cursor) => Arc::clone(&cursor.tips),
+        Start::Resume(cursor) => {
+            decoration = Some(Arc::clone(&cursor.decoration));
+            Arc::clone(&cursor.tips)
+        }
         Start::Commits(tips) => walk_tips(repo.inner(), tips)?,
+        Start::Refs(seeds) => {
+            let (tips, resolved) = seeds::resolve(repo.inner(), seeds)?;
+            decoration = Some(Arc::new(resolved));
+            walk_tips(repo.inner(), &tips)?
+        }
         Start::Head => {
             let mut head = repo.inner().head().map_err(|source| Error::Walk {
                 source: Box::new(source),
@@ -322,8 +469,10 @@ fn starting_points(repo: &Repository, request: &HistoryRequest) -> Result<Resolv
     };
     Ok(Resolved {
         tips,
+        decoration: decoration.unwrap_or_default(),
         order: request.order,
         window: request.window,
+        lookahead: request.lookahead,
         skip,
     })
 }
@@ -347,12 +496,9 @@ fn walk_tips(repo: &gix::Repository, tips: &[Oid]) -> Result<Tips, Error> {
     Ok(object_ids.into())
 }
 
-/// The one place a walk step reads a commit object, by id: the walk hands over ids only.
-fn summary_of_commit(
-    repo: &gix::Repository,
-    id: &Oid,
-    parents: &[Oid],
-) -> Result<CommitSummary, Error> {
+/// The one place a walk step reads a commit object, by id: the walk hands over ids only,
+/// and `parents` counts the parents it read for it (`parents_of`).
+fn summary_of_commit(repo: &gix::Repository, id: &Oid, parents: usize) -> Result<Commit, Error> {
     let commit = repo
         .find_commit(object_id(id)?)
         .map_err(|source| Error::ReadCommit {
@@ -362,11 +508,7 @@ fn summary_of_commit(
     summary_from(&commit, id, parents)
 }
 
-fn summary_from(
-    commit: &gix::Commit<'_>,
-    id: &Oid,
-    parents: &[Oid],
-) -> Result<CommitSummary, Error> {
+fn summary_from(commit: &gix::Commit<'_>, id: &Oid, parents: usize) -> Result<Commit, Error> {
     let read = |source: Box<dyn std::error::Error + Send + Sync>| Error::ReadCommit {
         id: id.to_string(),
         source,
@@ -377,12 +519,10 @@ fn summary_from(
     let encoding = CommitEncoding::of_commit(commit, &decoded);
     let author = decoded.author().map_err(|e| read(Box::new(e)))?;
     let time = author.time().map_err(|e| read(Box::new(e)))?;
-    Ok(CommitSummary {
-        id: *id,
-        parents: parents.to_vec(),
-        summary: encoding.text(&decoded.message().summary()),
-        author_name: encoding.text(author.name),
-        author_email: encoding.text(author.email),
+    Ok(Commit {
+        parents,
+        subject: encoding.text(&decoded.message().summary()),
+        author: encoding.text(author.name),
         author_time: time.seconds,
     })
 }
@@ -410,16 +550,19 @@ mod tests {
             page.rows.len(),
             "decoded a commit for nothing"
         );
-        for row in &page.rows {
-            assert_eq!(
-                row.id(),
-                cairn_model::RowId::Commit(row.graph.id),
-                "the two halves named different commits"
-            );
+        let ids: Vec<Oid> = page.rows.ids().collect();
+        let mut history = cairn_model::History::new();
+        history.append(page.rows).unwrap();
+        for (row, id) in history.rows().zip(ids) {
+            assert_eq!(row.id(), cairn_model::RowId::Commit(id));
             // No wildcard arm: a new variant must fail to compile here.
-            match &row.content {
-                RowContent::Commit(commit) => {
+            match row.content() {
+                cairn_model::RowContent::Commit(commit) => {
+                    assert_eq!(commit.id, id, "the row's content is another commit's");
                     assert!(!commit.summary.is_empty(), "a commit with no summary");
+                }
+                cairn_model::RowContent::Stash(stash) => {
+                    panic!("a walk from HEAD drew a stash: {stash:?}")
                 }
             }
         }
@@ -480,7 +623,9 @@ mod tests {
                     let started = Instant::now();
                     let mut walked = 0usize;
                     let head = inner.head_id().unwrap().detach();
-                    let mut walk = walk::open(&inner, &[head], order).unwrap();
+                    let mut walk = walk::open(&inner, &[head], order, &CancelSignal::new())
+                        .unwrap()
+                        .expect("an uncancelled open was cancelled");
                     let mut assigner = LaneAssigner::new();
                     while walked < limit {
                         let Some(next) = walk.next() else { break };
@@ -515,10 +660,10 @@ mod tests {
         let tips = every_ref_tip(&repo);
         eprintln!(
             "repository {path}: {} commit-bearing ref tips, limit {limit}, \
-             GraphRow {} B fixed + EdgeSegment {} B each",
+             GraphRow {} B fixed + LaneChange {} B each",
             tips.len(),
             size_of::<cairn_model::GraphRow>(),
-            size_of::<cairn_model::EdgeSegment>(),
+            size_of::<cairn_model::LaneChange>(),
         );
         assert!(!tips.is_empty(), "no ref resolved to a commit");
 
@@ -537,7 +682,7 @@ mod tests {
                     ""
                 },
             );
-            report_layout(&page);
+            report_layout(page);
         }
     }
 
@@ -565,26 +710,32 @@ mod tests {
         tips.iter().map(|id| model_id(id).unwrap()).collect()
     }
 
-    /// Byte figures use `edges.len()`; a `GraphRow` retains `edges.capacity()`.
-    fn report_layout(page: &HistoryPage) {
-        let mut segments = Vec::with_capacity(page.rows.len());
-        let mut open_lanes = Vec::with_capacity(page.rows.len());
-        let mut bytes = Vec::with_capacity(page.rows.len());
+    /// Segments are the derived edges each row draws; bytes are what the page's rows retain
+    /// once appended to a history, every store by capacity.
+    fn report_layout(page: HistoryPage) {
+        let mut history = cairn_model::History::new();
+        history.append(page.rows).unwrap();
+        let mut segments = Vec::with_capacity(history.len());
+        let mut open_lanes = Vec::with_capacity(history.len());
         let mut out_of_order_rows = 0usize;
         let mut out_of_order_segments = 0usize;
         let mut widest_lane = 0usize;
+        // Rows with no snapshot within reach: the list would draw their node alone.
+        let mut underived = 0usize;
 
-        for row in &page.rows {
-            let graph = &row.graph;
-            segments.push(graph.edges.len());
-            bytes.push(
-                size_of::<cairn_model::GraphRow>()
-                    + graph.edges.len() * size_of::<cairn_model::EdgeSegment>(),
-            );
+        for row in history.rows() {
+            let edges = match row.edges() {
+                Some(drawn) => drawn.edges,
+                None => {
+                    underived += 1;
+                    Vec::new()
+                }
+            };
+            segments.push(edges.len());
 
             // Open = occupied by the node or either end of a segment.
-            let mut lanes = vec![graph.lane.index()];
-            for edge in &graph.edges {
+            let mut lanes = vec![row.lane().index()];
+            for edge in &edges {
                 for lane in [edge.from.index(), edge.to.index()] {
                     if !lanes.contains(&lane) {
                         lanes.push(lane);
@@ -594,7 +745,7 @@ mod tests {
             }
             open_lanes.push(lanes.len());
 
-            let flagged = graph.edges.iter().filter(|e| e.out_of_order).count();
+            let flagged = edges.iter().filter(|e| e.out_of_order).count();
             out_of_order_segments += flagged;
             if flagged > 0 {
                 out_of_order_rows += 1;
@@ -603,23 +754,24 @@ mod tests {
 
         describe("segments/row ", &mut segments);
         describe("open lanes/row", &mut open_lanes);
-        describe("bytes/row     ", &mut bytes);
 
-        let rows = page.rows.len().max(1);
+        let rows = history.len().max(1);
         eprintln!(
             "    out-of-order: {out_of_order_rows} rows ({:.3}%), {out_of_order_segments} segments",
             100.0 * out_of_order_rows as f64 / rows as f64,
         );
         eprintln!("    highest lane number used: {widest_lane}");
-
-        let p99 = percentile(&bytes, 0.99);
-        for commits in [10_000usize, 100_000, 500_000] {
-            let total = p99 * commits;
-            eprintln!(
-                "    at p99 {p99} B/row x {commits} commits = {:.1} MB retained layout",
-                total as f64 / (1024.0 * 1024.0),
-            );
-        }
+        eprintln!("    rows whose edges could not be derived: {underived}");
+        let retained = history.retained();
+        eprintln!(
+            "    retained {:.1} MiB, {} B/row: {retained:?}",
+            retained.total() as f64 / (1024.0 * 1024.0),
+            retained.total() / rows,
+        );
+        assert_eq!(
+            underived, 0,
+            "{underived} rows had no snapshot within reach, so their edges were not derived"
+        );
     }
 
     fn describe(label: &str, values: &mut [usize]) {

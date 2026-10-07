@@ -250,7 +250,9 @@ impl KeyExt for FileRows {
 
 impl Component for FileRows {
     fn render(&self) -> impl IntoElement {
-        let rows = self.data.rows;
+        // The rows after the last are room for the horizontal scrollbar (`end_room`); a row
+        // past the list's own builds empty.
+        let rows = crate::end_room::with_end_room(self.data.rows, DETAIL_ROW_HEIGHT);
         VirtualScrollView::new_with_data_controlled(self.data.clone(), build_row, self.controller)
             .length(rows)
             .item_size(DETAIL_ROW_HEIGHT)

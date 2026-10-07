@@ -5,7 +5,7 @@
 //! git shows means asking git — the changes query, whose rename and copy
 //! detection is where the two disagree — the read is a function here, built
 //! with [`crate::ops::GitBinary`]'s read builder, and the runner is reached from
-//! nowhere else but `ops/`. Five functions today, four for `crate::diff`:
+//! nowhere else but `ops/`. Seven functions today, five for `crate::diff`:
 //! [`changes`], `git diff-tree --raw` for the changes query (`diff-engine`,
 //! decision E); [`patches`], `git diff-tree -p` for the content query's
 //! changed ranges and function context, which gix's line diff placed
@@ -20,11 +20,26 @@
 //! form, what a fetch of a remote will read, because the check must decide on
 //! exactly what the fetch's own git reads and gix's reading of a linked
 //! worktree's `includeIf`, of the system file and of trust is not git's (the
-//! user's decision of 2026-10-04).
+//! user's decision of 2026-10-04); and one for the working tree's status,
+//! [`status()`], `git status --porcelain=v2 -z`, because gix's status differs from
+//! git's wherever status is hard — staged renames past its limit, conflicted paths,
+//! sparse checkouts, a lying fsmonitor hook — and starts clean filters outside
+//! `process/` (the refs-and-status packet's L1); and one for a stash's changes,
+//! [`stash_changes`], `git stash show --raw`, because with `stash.showIncludeUntracked` set
+//! git pairs a stash's untracked files with its tracked changes in one diff, which no
+//! plumbing can ask without writing a tree (refs-and-status R6.2).
 //!
 //! # What a read may run
 //!
-//! **Query plumbing, or `git status`, and two named porcelain exceptions.**
+//! **Query plumbing, or `git status`, and three named porcelain exceptions.**
+//!
+//! **The third, `git stash show --raw -z --no-abbrev --no-color --no-ext-diff
+//! --no-textconv --no-relative --end-of-options <stash commit>`** (accepted by the user on
+//! 2026-10-07), built only in [`stash_changes`], whose module docs carry its evidence: it
+//! takes no lock, reads no index and runs no program in raw form, and
+//! `a_stash_read_writes_nothing` holds the git directory byte-identical after it; git
+//! reads `stash.showIncludeUntracked` itself, so git 2.30 and 2.31, which do not know it,
+//! list what the user's own `git stash show` lists there.
 //!
 //! **The second, `git config --includes --null` with `--type=bool --get <key>`
 //! or `--get-all <key>`** (accepted by the user on 2026-10-04): query form
@@ -169,16 +184,21 @@
 //! out by its tests; that only this module and `ops/` name the runner is
 //! `the_runner_is_named_only_by_ops_and_reads`; that a read cannot build a
 //! write is the compiler's, because only `ops/` can construct the
-//! `WriteAuthority` a write needs; and that the two porcelain verbs are built
+//! `WriteAuthority` a write needs; and that the three porcelain verbs are built
 //! once each, in their accepted forms, is
-//! `the_porcelain_reads_are_the_two_named_queries` (matcher self-test
+//! `the_porcelain_reads_are_the_three_named_queries` (matcher self-test
 //! `the_porcelain_read_matcher_catches_the_shapes_it_claims`): the exact
 //! literal `"diff"` appears in this module's production code only in
 //! `working_tree.rs`, once, with `"--no-index"` the next literal on its line
 //! and `"/dev/null"` in the file — the `diff` attribute's two lines in
 //! `attributes.rs` excused by name — and the exact literal `"config"` only in
 //! `fetch_settings.rs`, once, every option literal there a query option and
-//! no `git config` setter literal anywhere here. What it cannot see is a
+//! no `git config` setter literal anywhere here; and the exact literal
+//! `"stash"` only in `stash_changes.rs`, once, `"show"` the literal after it,
+//! and no `git stash` subcommand that writes (`push`, `pop`, `apply`, `drop`,
+//! `store`, `clear`, `create`, `branch`, `save`, `export`, `import`) as a
+//! literal anywhere here.
+//! What it cannot see is a
 //! review obligation (`destructive-ops-reviewer`, check 10): a verb or option
 //! built at run time — by `format!`, `concat!` or from bytes — and whether
 //! every other verb a read runs is query plumbing or `status`, since a token
@@ -188,6 +208,8 @@ mod attributes;
 mod changes;
 mod fetch_settings;
 mod patches;
+mod stash_changes;
+mod status;
 mod working_tree;
 
 pub(crate) use attributes::{DiffAttribute, diff_attributes};
@@ -196,6 +218,8 @@ pub(crate) use fetch_settings::{FetchSettings, fetch_settings};
 #[cfg(test)]
 pub(crate) use patches::parse as parse_patches;
 pub(crate) use patches::{Algorithm, FilePatch, PatchQuery, PatchText, Reading, Scope, patches};
+pub(crate) use stash_changes::stash_changes;
+pub(crate) use status::status;
 pub(crate) use working_tree::{
     Side, WorkingTreeAnswer, WorkingTreeQuery, work_tree_relative, working_tree_patch,
 };

@@ -26,7 +26,7 @@ TEST_FULL_CMD="cargo test --workspace --all-targets"
 # --all-targets never runs doctests, and cairn-model's compile-fail pins on the
 # secret type ARE doctests. Its own step, so a red test-full does not hide it.
 TEST_DOC_CMD="cargo test --workspace --doc"
-# cairn-git's real-git diff tests against the oldest gits Cairn supports, built from
+# cairn-git's real-git diff and status tests against the oldest gits Cairn supports, built from
 # source (scripts/git-floor.sh). In the full sequence below, like `deps`: the first run
 # fetches git's source and builds two gits (a C compiler, make and zlib's headers; the
 # script names what is missing and FAILS, never skips), and later runs reuse the cached
@@ -155,11 +155,32 @@ require_user_namespaces_where_possible() {
   if [ -n "$probe" ]; then rm -rf "$probe"; fi
 }
 
+# a_reftable_repository_is_refused_at_open_and_a_files_one_opens and, for git's half,
+# the_ref_storage_setting_is_read_as_git_reads_it (crates/cairn-git/tests/refs.rs) skip
+# where the git on PATH cannot make a reftable repository (git before 2.45), and the skip
+# would read `ok`. Where this probe makes one, with the same `git init` command the tests
+# run (`git init --quiet --ref-format=reftable`), both are REQUIRED, so a refusal that
+# stops working is red; where it cannot, the gate says so once and again on the PASS
+# line. scripts/git-floor.sh runs no test binary that holds them. The guard
+# the_reftable_refusal_is_required_wherever_it_can_run pins all of it.
+REFTABLE_NOTE=""
+require_reftable_where_possible() {
+  local probe=""
+  if probe=$(mktemp -d) && git init --quiet --ref-format=reftable "$probe/repository" >/dev/null 2>&1; then
+    export CAIRN_REQUIRE_REFTABLE=1
+  else
+    REFTABLE_NOTE="a_reftable_repository_is_refused_at_open_and_a_files_one_opens and git's half of the_ref_storage_setting_is_read_as_git_reads_it (crates/cairn-git/tests/refs.rs) SKIPPED here: 'git init --ref-format=reftable' fails, so the git on PATH cannot make a reftable repository (git 2.45 or newer can)"
+    echo "gate: $REFTABLE_NOTE"
+  fi
+  if [ -n "$probe" ]; then rm -rf "$probe"; fi
+}
+
 run_test_full() {
   step "test-full"
   require_ssh_fixture_where_possible
   require_fsmonitor_daemon_where_possible
   require_user_namespaces_where_possible
+  require_reftable_where_possible
   run_body "test-full" "$TEST_FULL_CMD"
 }
 run_test_doc()  { run_cmd "test-doc"  "$TEST_DOC_CMD"; }
@@ -169,7 +190,7 @@ finish() {
   echo
   # A cap on coverage is restated where the verdict is read, not only where it happened.
   if [ "$fail" -eq 0 ]; then
-    echo "gate: PASS${SSH_FIXTURE_NOTE:+ ($SSH_FIXTURE_NOTE)}${FSMONITOR_NOTE:+ ($FSMONITOR_NOTE)}${MOUNTNS_NOTE:+ ($MOUNTNS_NOTE)}${OWNER_NOTE:+ ($OWNER_NOTE)}"
+    echo "gate: PASS${SSH_FIXTURE_NOTE:+ ($SSH_FIXTURE_NOTE)}${FSMONITOR_NOTE:+ ($FSMONITOR_NOTE)}${MOUNTNS_NOTE:+ ($MOUNTNS_NOTE)}${OWNER_NOTE:+ ($OWNER_NOTE)}${REFTABLE_NOTE:+ ($REFTABLE_NOTE)}"
   else
     echo "gate: FAIL"
   fi

@@ -69,6 +69,30 @@ pub enum Error {
     )]
     CurrentUserUnknown { path: PathBuf },
 
+    /// The repository keeps its refs somewhere other than in files — git's reftable, which
+    /// `extensions.refStorage` names in the repository's own configuration — and Cairn reads
+    /// refs only as files, so it was not opened: gix would open it and then fail on the
+    /// first ref it read (`crate::ref_storage`). `path` is the working tree's top or, for a
+    /// bare repository, its git directory; `storage` is the setting as configured. The
+    /// user's own `git` reads it; Cairn does not yet.
+    #[error(
+        "the repository at {path} keeps its refs in {storage} (extensions.refStorage), which \
+         Cairn does not read; it was not opened"
+    )]
+    RefStorageUnsupported { path: PathBuf, storage: String },
+
+    /// The repository's configuration sets `extensions.refStorage` while its
+    /// `core.repositoryFormatVersion` is 0, and git refuses such a repository ("repo version
+    /// is 0, but v1-only extension found"), whatever the storage named — so it was not
+    /// opened either. `path` is the working tree's top or, for a bare repository, its git
+    /// directory; `storage` is the setting as configured.
+    #[error(
+        "the repository at {path} sets extensions.refStorage = {storage} but its \
+         core.repositoryFormatVersion is 0, which git refuses (a version-1 extension in a \
+         version-0 repository); it was not opened"
+    )]
+    RefStorageNeedsFormatVersion1 { path: PathBuf, storage: String },
+
     /// The system or global configuration, which says whether a bare repository found by
     /// searching may be opened, could not be read; git refuses to work until it can.
     #[error("failed to read the system or global git configuration: {source}")]
@@ -266,7 +290,32 @@ pub enum Error {
         stranded_locks: Vec<PathBuf>,
     },
 
-    /// Reading the refs to see whether an operation moved any failed.
+    /// A status read was cancelled — superseded before or while `git status` ran, which is
+    /// then ended with its process group. Not a failure to report as one: the caller asked
+    /// for this by superseding it.
+    #[error("the status read was cancelled")]
+    StatusCancelled,
+
+    /// A refs query was cancelled — superseded before it finished reading. Not a failure
+    /// to report as one: the caller asked for this by superseding it.
+    #[error("the refs query was cancelled")]
+    RefsCancelled,
+
+    /// An ahead/behind query was cancelled — superseded while it walked — after answering
+    /// `branches` local branches and reading `commits_read` commit objects (the cost it
+    /// paid before it stopped); what it had counted is dropped with it. Not a failure to
+    /// report as one.
+    #[error(
+        "the ahead/behind query was cancelled after {branches} branches and {commits_read} \
+         commits read"
+    )]
+    AheadBehindCancelled {
+        branches: usize,
+        commits_read: usize,
+    },
+
+    /// Reading the refs failed: the store could not be listed, or `HEAD` could not be read.
+    /// One ref that cannot be read is skipped and counted instead (`RefsSnapshot::unreadable`).
     #[error("failed to read the refs of the repository: {source}")]
     Refs {
         #[source]

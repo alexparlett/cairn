@@ -2,11 +2,11 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: four packets shipped (`history-graph`, `credential-prompts`,
-`process-manager`, `diff-engine`). `diff-engine` passed its merge bar and was torn
-down on `feature/diff-engine`; it reaches `main` with its packet pull request,
-squash-merged by the user. `refs-and-status` (4) is planned, next on the critical
-path; the other four are briefs.**
+**Status: five packets shipped (`history-graph`, `credential-prompts`,
+`process-manager`, `diff-engine`, `refs-and-status`). `refs-and-status` passed its
+merge bar and was torn down on `feature/refs-and-status` (2026-10-07); it reaches
+`main` with its packet pull request, merged by the user. `staging-and-commit` (5) is
+next on the critical path; the other three are briefs.**
 
 ## The milestone
 
@@ -47,7 +47,7 @@ read, after a 38-fixture agreement spike.
 | 2 | `credential-prompts` | **shipped** — PRD frozen, as-built in `docs/systems/credentials.md`; work dir torn down |
 | 2a | `process-manager` | **shipped** — PRD frozen, as-built in `docs/systems/git-processes.md`; work dir torn down; leftovers #41-#49 and #25 |
 | 3 | `diff-engine` | **shipped** — PRD frozen, as-built in `docs/systems/diff.md`; work dir torn down; lands on `main` with its packet PR (squash merge); leftovers #54-#58, with #51-#53 |
-| 4 | `refs-and-status` | **planned** — PRD `docs/prd/refs-and-status.md` in flight; work dir `docs/work/refs-and-status/`; O2 closed for `git status` |
+| 4 | `refs-and-status` | **shipped** — PRD frozen, as-built in `docs/systems/refs.md`, `status.md`, `sidebar.md`, `local-changes.md` and `history-graph.md`; work dir torn down; numbers in `docs/research/refs-and-status/measured.md`; O2 closed for `git status`; leftovers #62-#82 |
 | 5 | `staging-and-commit` | brief in `roadmap.md` |
 | 6 | `remote-sync` | brief in `roadmap.md` |
 | 7 | `branch-ops` | brief in `roadmap.md` |

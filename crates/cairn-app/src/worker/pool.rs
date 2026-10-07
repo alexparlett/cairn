@@ -1,16 +1,19 @@
 //! The repository worker pool: the threads that touch the repository, and the
 //! values that cross back to the window.
 //!
-//! Four threads per open repository, started by the first, each with its own
+//! Five threads per open repository, started by the first, each with its own
 //! [`Outbox`] so the update stream ends only when every one of them has gone:
 //!
 //! - `cairn-repository` (this file): takes the `git` the application found as
 //!   it started ([`Discovery`]), opens the repository and its askpass channel,
-//!   serves the history lane and the command log, forwards each operation to
-//!   its write lane, and on its way out closes the repository — every `git`
-//!   in it ended and reaped, up to `CLOSE_BOUND` — and stops the other three.
+//!   serves the history lane and a refresh's refs (`history_lane.rs`), the
+//!   filters and the command log, forwards each operation to its write lane,
+//!   and on its way out closes the repository — every `git` in it ended and
+//!   reaped, up to `CLOSE_BOUND` — and stops the other four.
 //! - `cairn-diff` (`diff_lane.rs`): the changes and file-diff lanes, so a
 //!   page and a diff never queue behind each other.
+//! - `cairn-refresh` (`refresh_lane.rs`): status and ahead/behind, so neither
+//!   a page nor a diff queues behind a slow status.
 //! - `cairn-network` (`network_lane.rs`): the network lane, where fetch runs,
 //!   so it blocks neither the walk nor the window.
 //! - `cairn-askpass` (`askpass.rs`): accepts the helper's questions and waits
@@ -28,16 +31,17 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::time::Duration;
 
-use cairn_git::{
-    CLOSE_BOUND, Error, HistoryCursor, HistoryRequest, HistorySession, Repository, SharedRepository,
-};
+use cairn_git::{CLOSE_BOUND, SharedRepository};
+use cairn_model::{Disclosure, RefsSnapshot};
 
 use super::askpass::{AcceptorStop, Reply, STOP_DEADLINE, serve_prompts};
 use super::diff_lane::{DiffJob, Serving, serve_diffs};
 use super::discovery::Discovery;
-use super::epoch::{Epoch, Epochs};
+use super::epoch::{Epoch, Epochs, QueryLane};
+use super::history_lane::{Answering, Finding, HistoryLane};
 use super::network_lane::{FetchControl, Lane, Operation, serve_network_lane};
-use super::request::{Request, Update};
+use super::refresh_lane::{RefreshJob, Refreshing, serve_refreshes};
+use super::request::{MOST_LANES, Request, Update};
 use super::routing::{Page, RepositoryJob, Routed, route};
 use super::startup::{Backend, Startup};
 use super::wake::{Wake, Woken};
@@ -51,9 +55,7 @@ pub type Replier = Rc<dyn Fn(Reply)>;
 /// request closes it anyway: past the longest an honest close takes —
 /// `CLOSE_BOUND` for the reaps, then up to the acceptor's stop deadline — so
 /// only a worker that has stopped answering is abandoned, and the window can
-/// always be closed. It does not bound the network lane's ref scans, which
-/// run before and after a fetch and cannot be cancelled: a repository with a
-/// great many refs can hold the stream's end past it.
+/// always be closed.
 pub const CLOSE_PATIENCE: Duration = Duration::from_secs(5);
 
 const _: () = assert!(
@@ -76,6 +78,8 @@ pub fn open(
     // Created here, on the caller's thread, so a diff is routed straight to the diff
     // thread rather than forwarded by the repository thread behind a page.
     let (diff_jobs, diff_incoming) = channel::<DiffJob>();
+    // Likewise the refresh thread's: a status is asked of it directly.
+    let (refresh_jobs, refresh_incoming) = channel::<RefreshJob>();
     let (outgoing, inbox) = channel::<Envelope>();
     let (answers, answered) = channel::<Reply>();
     let wake = Wake::new();
@@ -100,6 +104,15 @@ pub fn open(
         jobs: diff_incoming,
         stop: diff_jobs.clone(),
         startup: git.startup().clone(),
+        outbox: Outbox {
+            updates: Some(outgoing.clone()),
+            wake: Arc::clone(&wake),
+        },
+        epochs: epochs.clone(),
+    };
+    let refresh = RefreshThread {
+        jobs: refresh_incoming,
+        queue: refresh_jobs.clone(),
         outbox: Outbox {
             updates: Some(outgoing),
             wake: Arc::clone(&wake),
@@ -158,6 +171,12 @@ pub fn open(
                         return;
                     }
                 };
+            outbox.send(
+                None,
+                Update::Opened {
+                    name: repository_name(&shared),
+                },
+            );
             // This repository's channel, and git pointed at it.
             let backend = Backend::open(discovery.startup(), &git);
             let threads = Threads::start(
@@ -165,7 +184,7 @@ pub fn open(
                 Arc::clone(&shared),
                 answered,
                 (network_outbox, acceptor_outbox),
-                diff,
+                (diff, refresh),
                 &worker_wake,
                 worker_control,
             );
@@ -184,6 +203,7 @@ pub fn open(
         RepositoryHandle {
             jobs,
             diff: diff_jobs,
+            refresh: refresh_jobs,
             epochs: epochs.clone(),
             control,
         },
@@ -197,6 +217,18 @@ pub fn open(
             let _ = answers.send(answer);
         }),
     ))
+}
+
+/// What the title bar calls `shared`: the last component of its working tree — of its git
+/// directory, when it is bare — which discovery has already made absolute and free of `.`
+/// and `..`, so a repository opened at `.`, `..`, a subdirectory or its `.git` is named by its
+/// own folder (`an_open_names_the_repositorys_folder_whatever_path_it_was_opened_at`).
+fn repository_name(shared: &SharedRepository) -> String {
+    let root = shared.workdir().unwrap_or_else(|| shared.git_dir());
+    root.file_name().map_or_else(
+        || root.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
 }
 
 /// [`open`] with a `git` found afresh from `startup` — the environment it is
@@ -222,7 +254,17 @@ struct DiffThread {
     epochs: Epochs,
 }
 
-/// The three threads the repository thread starts, how it reaches them, and
+/// What the refresh thread is started with: its queue, which `open` made so the handle
+/// reaches it directly, a sender of the repository thread's own — to hand it ahead/behind
+/// and to stop it with — its outbox and the epochs it is cancelled by.
+struct RefreshThread {
+    jobs: Receiver<RefreshJob>,
+    queue: Sender<RefreshJob>,
+    outbox: Outbox,
+    epochs: Epochs,
+}
+
+/// The four threads the repository thread starts, how it reaches them, and
 /// the repository they run `git` in, which stopping them closes.
 struct Threads {
     /// The network lane's queue; one lane per [`Lane`], one lane so far.
@@ -230,6 +272,9 @@ struct Threads {
     /// Told to stop as the repository closes: the handles hold the diff
     /// thread's queue open, so it is not ended by this thread going.
     diff: Sender<DiffJob>,
+    /// The refresh thread's queue: ahead/behind is handed on here, and the
+    /// thread is told to stop as the repository closes, as the diff thread is.
+    refresh: Sender<RefreshJob>,
     control: FetchControl,
     acceptor: Option<AcceptorStop>,
     shared: Arc<SharedRepository>,
@@ -241,7 +286,7 @@ impl Threads {
         shared: Arc<SharedRepository>,
         answered: Receiver<Reply>,
         (network_outbox, acceptor_outbox): (Outbox, Outbox),
-        diff: DiffThread,
+        (diff, refresh): (DiffThread, RefreshThread),
         wake: &Arc<Wake>,
         control: FetchControl,
     ) -> Self {
@@ -310,6 +355,35 @@ impl Threads {
                 drop(diff_exit);
             });
 
+        let RefreshThread {
+            jobs: refresh_jobs,
+            queue: refresh_queue,
+            outbox: refresh_outbox,
+            epochs: refresh_epochs,
+        } = refresh;
+        let refresh_exit = WorkerExit {
+            outbox: Some(refresh_outbox),
+            wake: Arc::clone(wake),
+        };
+        let refresh_shared = Arc::clone(&shared);
+        let refresh_git = git.clone();
+        // As the diff thread: one that cannot be started ends its part of the stream, and
+        // a refresh asked of it is never answered.
+        let _ = std::thread::Builder::new()
+            .name("cairn-refresh".to_owned())
+            .spawn(move || {
+                if let Some(outbox) = refresh_exit.outbox.as_ref() {
+                    let serving = Refreshing {
+                        git: &refresh_git,
+                        epochs: &refresh_epochs,
+                        jobs: &refresh_jobs,
+                        outbox,
+                    };
+                    serve_refreshes(&refresh_shared, &serving);
+                }
+                drop(refresh_exit);
+            });
+
         let running = control.clone();
         let exit = WorkerExit {
             outbox: Some(network_outbox),
@@ -338,6 +412,7 @@ impl Threads {
         Self {
             network: Some(network),
             diff: diff_stop,
+            refresh: refresh_queue,
             control,
             acceptor,
             shared,
@@ -395,6 +470,7 @@ impl Drop for Threads {
         // First, so the diff thread takes up nothing more; what it is running is
         // ended with the rest below, or by its epoch if the close stopped them.
         let _ = self.diff.send(DiffJob::Stop);
+        let _ = self.refresh.send(RefreshJob::Stop);
         self.network = None;
         // How many outlived the bound is told to nobody: the window is closing, and
         // each has had `SIGKILL`, which waiting longer cannot improve on.
@@ -411,6 +487,8 @@ pub struct RepositoryHandle {
     jobs: Sender<(Option<Epoch>, RepositoryJob)>,
     /// The diff thread's queue: the changes and file-diff lanes.
     diff: Sender<DiffJob>,
+    /// The refresh thread's queue: a refresh's status.
+    refresh: Sender<RefreshJob>,
     epochs: Epochs,
     control: FetchControl,
 }
@@ -427,13 +505,47 @@ impl RepositoryHandle {
     /// thread. A close stops the epochs first, an atomic store, so the page
     /// being walked and the diff being read are abandoned at their next poll
     /// and the close behind them is reached at once; the waiting it starts is
-    /// the repository thread's.
+    /// the repository thread's. A refresh is numbered in its two lanes and
+    /// sent to two threads — its refs to the repository thread, its status to
+    /// the refresh thread under the status lane's number, which no refresh moves
+    /// (a running status is never superseded, R10.3 as amended) — and returns its
+    /// refs' epoch.
     pub fn submit(&self, request: Request) -> Option<Epoch> {
         // Numbered before it is routed, so what it supersedes is cancelled now,
         // not when a thread gets to it.
-        let epoch = request.lane().map(|lane| self.epochs.bump(lane));
+        let lanes = request.lanes();
+        let mut numbered = [None; MOST_LANES];
+        for (slot, lane) in numbered.iter_mut().zip(lanes) {
+            *slot = Some(self.epochs.bump(*lane));
+        }
+        let epoch_of = |lane: QueryLane| {
+            lanes
+                .iter()
+                .position(|asked| *asked == lane)
+                .and_then(|at| numbered.get(at).copied().flatten())
+        };
+        let epoch = numbered[0];
         // A failed send means the worker is gone and has already said so.
         match route(request) {
+            Routed::Refresh => {
+                if let (Some(refs), Some(ahead_behind)) =
+                    (epoch_of(QueryLane::Refs), epoch_of(QueryLane::AheadBehind))
+                {
+                    let status = self.epochs.current(QueryLane::Status);
+                    let _ = self
+                        .jobs
+                        .send((Some(refs), RepositoryJob::Refs { ahead_behind }));
+                    let _ = self.refresh.send(RefreshJob::Status { epoch: status });
+                }
+            }
+            Routed::OpenHistory { rows } => {
+                if let (Some(epoch), Some(walk)) = (epoch, epoch_of(QueryLane::Walk)) {
+                    let _ = self.jobs.send((
+                        Some(epoch),
+                        RepositoryJob::History(Page::Open { rows, walk }),
+                    ));
+                }
+            }
             Routed::CancelFetch => self.control.cancel(),
             Routed::Repository(job) => {
                 if matches!(job, RepositoryJob::Close) {
@@ -473,9 +585,12 @@ pub fn idle_handle() -> (RepositoryHandle, impl Fn() -> Vec<Request>) {
 
     let (jobs, incoming) = channel::<(Option<Epoch>, RepositoryJob)>();
     let (diff, diff_incoming) = channel::<DiffJob>();
+    // A refresh's status is not read back: the refresh is, from the repository thread's queue.
+    let (refresh, _) = channel::<RefreshJob>();
     let handle = RepositoryHandle {
         jobs,
         diff,
+        refresh,
         epochs: Epochs::new(),
         control: FetchControl::default(),
     };
@@ -556,6 +671,14 @@ impl std::error::Error for OpenError {}
 pub(super) struct Envelope {
     epoch: Option<Epoch>,
     update: Update,
+}
+
+#[cfg(test)]
+impl Envelope {
+    /// What a thread sent, unwrapped, for a test of that thread alone.
+    pub(super) fn opened(self) -> (Option<Epoch>, Update) {
+        (self.epoch, self.update)
+    }
 }
 
 /// Not `Clone`: a second sender would hold the channel open past the exit wake.
@@ -645,21 +768,80 @@ fn serve(
     let repo = shared.to_worker();
     // Once, outside the loop: the scroll's session borrows `repo` across turns, so moving
     // this inside fails to compile.
-    let mut scroll = Scroll::default();
+    let mut history = HistoryLane::default();
+    let answering = Answering {
+        epochs: &epochs,
+        outbox,
+    };
 
-    while let Ok((epoch, job)) = jobs.recv() {
+    // A find in progress (R8.5): one page of it is walked whenever no other job is waiting, so
+    // a filter, a refresh or a free asked meanwhile is served between its pages, and the
+    // next page or find — whose number supersedes it — ends it.
+    let mut finding: Option<(Epoch, Finding)> = None;
+    loop {
+        let next = match finding {
+            Some((epoch, find)) => match jobs.try_recv() {
+                Ok(job) => job,
+                Err(TryRecvError::Empty) => {
+                    finding = (!epochs.is_stopping()
+                        && epochs.is_current(epoch)
+                        && history.find_page(&repo, find, epoch, &answering))
+                    .then_some((epoch, find));
+                    continue;
+                }
+                Err(TryRecvError::Disconnected) => break,
+            },
+            None => match jobs.recv() {
+                Ok(job) => job,
+                Err(_) => break,
+            },
+        };
+        let (epoch, job) = next;
         if epochs.is_stopping() {
             break;
         }
         match job {
+            RepositoryJob::History(Page::Find { target, rows }) => match epoch {
+                Some(epoch) if epochs.is_current(epoch) => {
+                    finding = Some((epoch, Finding { target, rows }));
+                }
+                // Superseded before it was picked up.
+                _ => {}
+            },
+            // Its number superseded the find; there is nothing to walk.
+            RepositoryJob::History(Page::Stop) => finding = None,
+            // An open whose walk is still the window's, superseded in the history lane by a
+            // find or a stop asked straight after it: the walk it replaces is let go of all
+            // the same, so what is asked next pages the new walk, never the old one.
+            RepositoryJob::History(Page::Open { walk, .. })
+                if epochs.is_current(walk) && !epoch.is_some_and(|e| epochs.is_current(e)) =>
+            {
+                history.replace_walk(walk);
+            }
             RepositoryJob::History(page) => match epoch {
                 Some(epoch) if epochs.is_current(epoch) => {
-                    scroll.page(&repo, page, epoch, &epochs, outbox);
+                    history.page(&repo, page, epoch, &answering);
                 }
                 // Superseded before it was picked up, and never started. (Every page is
                 // numbered: `submit` numbers what is in a lane.)
                 _ => {}
             },
+            RepositoryJob::Refs { ahead_behind } => match epoch {
+                Some(epoch) if epochs.is_current(epoch) => {
+                    history.refresh(&repo, epoch, ahead_behind, &threads.refresh, &answering);
+                }
+                // Superseded by the next refresh before it was picked up.
+                _ => {}
+            },
+            RepositoryJob::FilterRefs {
+                refs,
+                text,
+                disclosure,
+            } => {
+                if let Some(epoch) = epoch {
+                    sidebar_rows(refs, text, &disclosure, epoch, &epochs, outbox);
+                }
+            }
             RepositoryJob::ListRemotes => outbox.send(
                 None,
                 Update::Remotes {
@@ -680,11 +862,36 @@ fn serve(
                     filter_files(of, &files, text, epoch, &epochs, outbox);
                 }
             }
+            RepositoryJob::FilterLocalChanges { changes, text } => {
+                if let Some(epoch) = epoch {
+                    filter_local_changes(changes, text, epoch, &epochs, outbox);
+                }
+            }
             // Freed here, off the UI thread, which is the whole of the job.
             RepositoryJob::Retire(retired) => drop(retired),
             // The epochs were stopped as it was sent; the closing is the caller's.
             RepositoryJob::Close => break,
         }
+    }
+}
+
+/// The sidebar's rows for `refs` (R8.1-R8.3), answered while `epoch` is current: one
+/// superseded before it started, or by the next ask while it runs, stops within a few
+/// thousand refs and sends nothing. The snapshot is the window's own, shared, and handed back
+/// with the rows so the window keeps them together.
+pub(super) fn sidebar_rows(
+    refs: Arc<RefsSnapshot>,
+    text: String,
+    disclosure: &Disclosure,
+    epoch: Epoch,
+    epochs: &Epochs,
+    outbox: &Outbox,
+) {
+    if !epochs.is_current(epoch) {
+        return;
+    }
+    if let Some(rows) = refs.sidebar_rows(&text, disclosure, || epochs.is_current(epoch)) {
+        outbox.send(Some(epoch), Update::FilteredRefs { refs, text, rows });
     }
 }
 
@@ -715,112 +922,120 @@ fn filter_files(
     }
 }
 
-/// The history lane's state: the live walk, and the cursor a cold restart resumes from.
-#[derive(Default)]
-struct Scroll<'repo> {
-    session: Option<HistorySession<'repo>>,
-    /// `None` means the scroll has not started.
-    cursor: Option<HistoryCursor>,
-}
-
-impl<'repo> Scroll<'repo> {
-    /// Answers one page under `epoch`, which is also what cancels it.
-    fn page(
-        &mut self,
-        repo: &'repo Repository,
-        page: Page,
-        epoch: Epoch,
-        epochs: &Epochs,
-        outbox: &Outbox,
-    ) {
-        let rows = match page {
-            Page::Open { rows } => {
-                // A different scroll: drop the open walk first. After a fetch this is
-                // also what honours `Invalidated::refs`: the new walk starts from the
-                // refs as they are now.
-                self.session = None;
-                self.cursor = None;
-                rows
-            }
-            Page::More { rows } => rows,
-        };
-
-        if self.session.is_none() {
-            // Cold restart from the last good page.
-            let request = match self.cursor.clone() {
-                Some(at) => HistoryRequest::resume(at, rows),
-                None => HistoryRequest::from_head(rows),
-            };
-            match repo.history_session(&request) {
-                Ok(session) => self.session = Some(session),
-                Err(error) => {
-                    outbox.send(Some(epoch), no_walk(error));
-                    return;
-                }
-            }
-        }
-
-        let Some(session) = self.session.as_mut() else {
-            return;
-        };
-        match session.next_page(rows, &epochs.watch(epoch)) {
-            Ok(page) => {
-                let complete = page.cursor.is_none();
-                self.cursor = page.cursor;
-                outbox.send(
-                    Some(epoch),
-                    Update::Rows {
-                        rows: page.rows,
-                        complete,
-                    },
-                );
-            }
-            Err(Error::Cancelled { .. }) => {
-                // Superseded mid-page: the session keeps its rows. Nothing is sent.
-            }
-            Err(error) => {
-                // Drop the session; the next request cold-restarts from the last good cursor.
-                self.session = None;
-                outbox.send(
-                    Some(epoch),
-                    Update::Failed {
-                        message: error.to_string(),
-                    },
-                );
-            }
-        }
+/// Which rows of Local Changes' two lists hold `text` (refs-and-status R9), answered while
+/// `epoch` is current: one superseded before it started, or by a keystroke or a newer status
+/// while it runs, stops within a few thousand paths and sends nothing. The lists are the
+/// window's own, shared, and handed back with the rows so the window keeps the rows only for
+/// the lists they index.
+pub(super) fn filter_local_changes(
+    changes: Arc<cairn_model::LocalChanges>,
+    text: String,
+    epoch: Epoch,
+    epochs: &Epochs,
+    outbox: &Outbox,
+) {
+    if !epochs.is_current(epoch) {
+        return;
     }
-}
-
-/// `Error::UnbornHead` becomes a complete, empty page rather than a failure.
-fn no_walk(error: Error) -> Update {
-    match error {
-        Error::UnbornHead { .. } => Update::Rows {
-            rows: Vec::new(),
-            complete: true,
-        },
-        other => Update::Failed {
-            message: other.to_string(),
-        },
+    if let Some(rows) = changes.matching(&text, || epochs.is_current(epoch)) {
+        outbox.send(
+            Some(epoch),
+            Update::FilteredLocalChanges {
+                changes,
+                text,
+                rows,
+            },
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::worker::Retired;
     use std::ffi::OsString;
     use std::path::PathBuf;
     use std::task::{Context, Poll, Waker};
     use std::time::Instant;
 
-    use crate::worker::epoch::QueryLane;
+    use cairn_git::{CancelSignal, HistoryRequest, Repository};
+
     use crate::worker::fetch_tests::{BorrowedRepository, UnbornRepository, block_on, woken_by};
+    use crate::worker::routing::Page;
+
+    /// The next update but an open's own refs, which come before its first page.
+    fn after_refs(updates: &mut Updates) -> Option<Update> {
+        loop {
+            match block_on(updates.next()) {
+                Some(Update::Refs { reopen: false, .. }) => {}
+                other => return other,
+            }
+        }
+    }
 
     /// The Cairn checkout itself, opened through the real boundary.
     fn cairn() -> (RepositoryHandle, Updates) {
         match open_with(env!("CARGO_MANIFEST_DIR"), Startup::of_this_process()) {
-            Ok((handle, updates, _)) => (handle, updates),
+            Ok((handle, mut updates, _)) => {
+                crate::worker::fetch_tests::opened_as(&mut updates);
+                (handle, updates)
+            }
             Err(error) => panic!("opening the Cairn checkout: {error}"),
+        }
+    }
+
+    /// QC1, R7.1: the title bar names the repository's own folder whatever path it was opened
+    /// at — its working tree, `<it>/.`, `<it>/sub/..`, a subdirectory, its `.git` — as Fork
+    /// names a repository by its folder. Caught by: naming the path as given (`.`, `..`,
+    /// `sub`, `.git`), unresolved.
+    #[test]
+    fn an_open_names_the_repositorys_folder_whatever_path_it_was_opened_at() {
+        let fixture = UnbornRepository::new("cairn-named-by-its-folder");
+        let sub = fixture.path.join("sub");
+        std::fs::create_dir_all(sub.join("deeper"))
+            .unwrap_or_else(|error| panic!("making {}: {error}", sub.display()));
+        for at in [
+            fixture.path.clone(),
+            fixture.path.join("."),
+            sub.join(".."),
+            sub.clone(),
+            sub.join("deeper"),
+            fixture.path.join(".git"),
+        ] {
+            let (_handle, mut updates, _) = match open_with(&at, Startup::of_this_process()) {
+                Ok(opened) => opened,
+                Err(error) => panic!("starting the worker: {error}"),
+            };
+            assert_eq!(
+                crate::worker::fetch_tests::opened_as(&mut updates),
+                "cairn-named-by-its-folder",
+                "opened at {}",
+                at.display()
+            );
+        }
+        // Relative to where the application was launched, as a command line names it: the
+        // tests run in this crate's directory, inside the Cairn checkout.
+        let checkout = match cairn_git::SharedRepository::discover(env!("CARGO_MANIFEST_DIR")) {
+            Ok(shared) => shared.workdir().map(Path::to_owned),
+            Err(error) => panic!("opening the Cairn checkout: {error}"),
+        };
+        let folder = checkout
+            .and_then(|root| std::fs::canonicalize(root).ok())
+            .and_then(|root| {
+                root.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| panic!("the Cairn checkout has no folder name"));
+        for at in [".", "src", "./src/..", "../.."] {
+            let (_handle, mut updates, _) = match open_with(at, Startup::of_this_process()) {
+                Ok(opened) => opened,
+                Err(error) => panic!("starting the worker: {error}"),
+            };
+            assert_eq!(
+                crate::worker::fetch_tests::opened_as(&mut updates),
+                folder,
+                "opened at {at}"
+            );
         }
     }
 
@@ -946,8 +1161,9 @@ mod tests {
             Ok(opened) => opened,
             Err(error) => panic!("starting the worker: {error}"),
         };
+        crate::worker::fetch_tests::opened_as(&mut updates);
         handle.submit(Request::OpenHistory { rows: 8 });
-        match block_on(updates.next()) {
+        match after_refs(&mut updates) {
             Some(Update::Rows { rows, complete }) => assert!(rows.is_empty() && complete),
             other => panic!("without the setting the repository opens, got {other:?}"),
         }
@@ -1026,8 +1242,9 @@ mod tests {
             Ok(opened) => opened,
             Err(error) => panic!("starting the worker: {error}"),
         };
+        crate::worker::fetch_tests::opened_as(&mut updates);
         handle.submit(Request::OpenHistory { rows: 8 });
-        match block_on(updates.next()) {
+        match after_refs(&mut updates) {
             Some(Update::Rows { rows, complete }) => assert!(rows.is_empty() && complete),
             other => panic!("with safe.directory = * the repository opens, got {other:?}"),
         }
@@ -1044,7 +1261,11 @@ mod tests {
         );
     }
 
-    /// Caught by: deleting the unborn arm at the call site while `no_walk` stays correct.
+    /// Phase 05's hand-off: a repository with no ref and an unborn `HEAD` has a snapshot
+    /// that seeds nothing, and its walk answers the empty, complete page the window draws as
+    /// an empty history — what `from_head`'s unborn arm answered before the window walked
+    /// from every ref. Caught by: an empty seed set failing the open, or a page that says
+    /// more is coming.
     #[test]
     fn a_freshly_initialised_repository_reaches_the_view_as_an_empty_history() {
         let fixture = UnbornRepository::new("cairn-unborn-head");
@@ -1052,9 +1273,24 @@ mod tests {
             Ok(opened) => opened,
             Err(error) => panic!("starting the worker: {error}"),
         };
+        assert_eq!(
+            crate::worker::fetch_tests::opened_as(&mut updates),
+            "cairn-unborn-head"
+        );
         handle.submit(Request::OpenHistory { rows: 8 });
 
         match block_on(updates.next()) {
+            Some(Update::Refs { snapshot, reopen }) => {
+                assert!(!reopen);
+                assert!(snapshot.refs.is_empty(), "{snapshot:?}");
+                assert!(
+                    matches!(snapshot.head, cairn_model::HeadState::Unborn(_)),
+                    "{snapshot:?}"
+                );
+            }
+            other => panic!("expected the open's own refs, got {other:?}"),
+        }
+        match after_refs(&mut updates) {
             Some(Update::Rows { rows, complete }) => {
                 assert!(rows.is_empty(), "an unborn HEAD produced rows: {rows:?}");
                 assert!(complete, "an empty history said more was coming");
@@ -1062,35 +1298,6 @@ mod tests {
             other => panic!("expected an empty complete page, got {other:?}"),
         }
         drop(handle);
-    }
-
-    #[test]
-    fn a_repository_with_no_commits_yet_arrives_as_an_empty_history() {
-        let answer = no_walk(Error::UnbornHead {
-            path: PathBuf::from("/tmp/fresh"),
-        });
-        assert_eq!(
-            answer,
-            Update::Rows {
-                rows: Vec::new(),
-                complete: true
-            },
-            "an unborn HEAD was reported as a failure"
-        );
-    }
-
-    #[test]
-    fn every_other_failure_to_open_a_walk_keeps_its_sentence() {
-        let answer = no_walk(Error::NotARepository {
-            path: PathBuf::from("/tmp/nowhere"),
-        });
-        match answer {
-            Update::Failed { message } => assert!(
-                message.contains("/tmp/nowhere"),
-                "the message does not name the path: {message}"
-            ),
-            other => panic!("expected a failure, got {other:?}"),
-        }
     }
 
     #[test]
@@ -1104,7 +1311,7 @@ mod tests {
             updates.epochs.current(QueryLane::History) > before,
             "the submitter did not submit"
         );
-        match block_on(updates.next()) {
+        match after_refs(&mut updates) {
             Some(Update::Rows { rows, .. }) => assert_eq!(rows.len(), 2),
             other => panic!("expected rows, got {other:?}"),
         }
@@ -1115,46 +1322,62 @@ mod tests {
     fn a_request_is_answered_with_rows() {
         let (handle, mut updates) = cairn();
         handle.submit(Request::OpenHistory { rows: 3 });
-        match block_on(updates.next()) {
+        match after_refs(&mut updates) {
             Some(Update::Rows { rows, .. }) => assert_eq!(rows.len(), 3),
             other => panic!("expected rows, got {other:?}"),
         }
         drop(handle);
     }
 
-    /// Caught by: a failure leaving the worker unable to answer the request after it.
+    /// Caught by: a failure leaving the worker unable to answer the request after it. The
+    /// failure is a walk that cannot open — a `shallow` file that is not one — mended by
+    /// removing it.
     #[test]
     fn a_failed_request_is_answered_when_it_is_asked_again() {
         let (checkout, mut checkout_updates) = cairn();
-        checkout.submit(Request::OpenHistory { rows: 3 });
-        let expected: Vec<String> = match block_on(checkout_updates.next()) {
-            Some(Update::Rows { rows, .. }) if rows.len() == 3 => {
-                rows.iter().map(|row| row.graph.id.to_string()).collect()
-            }
-            other => panic!("expected three rows of this checkout, got {other:?}"),
+        checkout.submit(Request::OpenHistory { rows: 1 });
+        let tip = match after_refs(&mut checkout_updates) {
+            Some(Update::Rows { rows, .. }) if rows.len() == 1 => rows.ids().next(),
+            other => panic!("expected a row of this checkout, got {other:?}"),
         };
+        let Some(tip) = tip else {
+            panic!("the checkout has no first row");
+        };
+        let expected: Vec<String> =
+            match Repository::discover(env!("CARGO_MANIFEST_DIR")).and_then(|repo| {
+                repo.history(
+                    &HistoryRequest::from_commits([tip], 3),
+                    &CancelSignal::new(),
+                )
+            }) {
+                Ok(page) => page.rows.ids().map(|id| id.to_string()).collect(),
+                Err(error) => panic!("walking the checkout from {tip}: {error}"),
+            };
 
         let fixture = BorrowedRepository::new("cairn-retried-request");
-        fixture.point_main_at(&"1".repeat(40));
+        fixture.point_main_at(&tip.to_string());
+        let shallow = fixture.fixture.path.join(".git/shallow");
+        std::fs::write(&shallow, "not a commit id\n")
+            .unwrap_or_else(|error| panic!("writing {}: {error}", shallow.display()));
         let (handle, mut updates, _) =
             match open_with(&fixture.fixture.path, Startup::of_this_process()) {
                 Ok(opened) => opened,
                 Err(error) => panic!("starting the worker: {error}"),
             };
+        crate::worker::fetch_tests::opened_as(&mut updates);
 
         handle.submit(Request::OpenHistory { rows: 3 });
-        match block_on(updates.next()) {
+        match after_refs(&mut updates) {
             Some(Update::Failed { .. }) => {}
-            other => panic!("expected a missing HEAD commit to fail, got {other:?}"),
+            other => panic!("expected a walk that cannot open to fail, got {other:?}"),
         }
 
-        fixture.point_main_at(&expected[0]);
+        std::fs::remove_file(&shallow)
+            .unwrap_or_else(|error| panic!("removing {}: {error}", shallow.display()));
         handle.submit(Request::MoreHistory { rows: 3 });
-        match block_on(updates.next()) {
+        match after_refs(&mut updates) {
             Some(Update::Rows { rows, .. }) => assert_eq!(
-                rows.iter()
-                    .map(|row| row.graph.id.to_string())
-                    .collect::<Vec<_>>(),
+                rows.ids().map(|id| id.to_string()).collect::<Vec<_>>(),
                 expected,
                 "the retry did not deliver the history from the top"
             ),
@@ -1167,82 +1390,117 @@ mod tests {
     fn paging_continues_the_same_walk_rather_than_replaying_it() {
         let (handle, mut updates) = cairn();
         handle.submit(Request::OpenHistory { rows: 4 });
-        let first = match block_on(updates.next()) {
+        let first = match after_refs(&mut updates) {
             Some(Update::Rows { rows, .. }) => rows,
             other => panic!("expected rows, got {other:?}"),
         };
         handle.submit(Request::MoreHistory { rows: 4 });
-        let second = match block_on(updates.next()) {
+        let second = match after_refs(&mut updates) {
             Some(Update::Rows { rows, .. }) => rows,
             other => panic!("expected rows, got {other:?}"),
         };
 
         assert_eq!(first.len(), 4);
         assert_eq!(second.len(), 4);
-        let repeated = first
-            .iter()
-            .any(|a| second.iter().any(|b| a.id() == b.id()));
+        let repeated = first.ids().any(|a| second.ids().any(|b| a == b));
         assert!(!repeated, "the second page repeated a row from the first");
     }
 
-    /// Caught by: handing `next_page` a fresh `CancelSignal` instead of `epochs.watch(epoch)`.
-    /// A supersession landing between two batched requests looks like completion, so a round
-    /// that sees one retries; the failure is every round seeing one.
+    /// The cancel a scroll and a find share, through the real boundary: one queued page
+    /// asking for the whole of a long line of commits, superseded while it walks by a page
+    /// asking for two, stops where it is, sends nothing, and the two rows answered are the
+    /// walk's third and fourth — the walk taken up where the first page left it. The line is
+    /// written for the test (not this checkout's history, #61), long enough that walking it
+    /// takes far longer than the moment the supersession comes after; a round whose walk
+    /// finished first (a slow machine) is tried again. Caught by: handing `next_page` a fresh
+    /// `CancelSignal` instead of the epoch, or watching the walk lane's number rather than the
+    /// page's — every round's walk then runs to the end. A page starting at the walk's first
+    /// row is a reopened walk, a failure outright.
     #[test]
     fn superseding_a_request_stops_the_walk_that_is_serving_it() {
-        // Larger than this repository, so every request below would walk the whole history.
-        let whole_history = 1_000_000;
-        // Queued work, so the worker is still busy when the supersession arrives.
-        let batch = 2_000;
-        let (handle, mut updates) = cairn();
-
-        // One ordinary round trip, to name the opening row and time an answer on this machine.
-        let started = Instant::now();
-        handle.submit(Request::OpenHistory { rows: 2 });
-        let opened_on = match block_on(updates.next()) {
-            Some(Update::Rows { rows, .. }) if !rows.is_empty() => rows[0].id(),
+        let line = crate::worker::written_repository::WrittenRepository::linear(
+            "cairn-superseded-walk",
+            20_000,
+        );
+        let (handle, mut updates) = match open_with(line.path(), Startup::of_this_process()) {
+            Ok((handle, mut updates, _)) => {
+                crate::worker::fetch_tests::opened_as(&mut updates);
+                (handle, updates)
+            }
+            Err(error) => panic!("opening the line: {error}"),
+        };
+        let whole = line.commits.len();
+        let first_page = |updates: &mut Updates| match after_refs(updates) {
+            Some(Update::Rows { rows, .. }) => rows.ids().collect::<Vec<_>>(),
             other => panic!("expected the first page of a scroll, got {other:?}"),
         };
-        let answer = started.elapsed();
-        let wait = (answer * 2).clamp(
-            std::time::Duration::from_millis(1),
-            std::time::Duration::from_millis(20),
-        );
+        let queue_the_rest = |handle: &RepositoryHandle| {
+            // Posted under its own number, as `submit` would, but held to one page of the rest.
+            let epoch = handle.epochs.bump(QueryLane::History);
+            let queued = handle.jobs.send((
+                Some(epoch),
+                RepositoryJob::History(Page::More { rows: whole }),
+            ));
+            assert!(queued.is_ok(), "the worker went away");
+        };
+
+        // Unsuperseded, for how long walking the rest takes on this machine.
+        handle.submit(Request::OpenHistory { rows: 2 });
+        assert_eq!(first_page(&mut updates), line.commits[..2]);
+        let started = Instant::now();
+        queue_the_rest(&handle);
+        match after_refs(&mut updates) {
+            Some(Update::Rows {
+                rows,
+                complete: true,
+            }) => assert_eq!(rows.len(), whole - 2),
+            other => panic!("expected the rest of the line, got {other:?}"),
+        }
+        let rest = started.elapsed();
+        let wait = rest / 5;
 
         let mut ran_on = 0usize;
-        let mut never_started = 0usize;
-        for _ in 0..40 {
-            // Posted under one epoch, which `submit` cannot do.
-            let epoch = handle.epochs.bump(QueryLane::History);
-            for _ in 0..batch {
-                let queued = handle.jobs.send((
-                    Some(epoch),
-                    RepositoryJob::History(Page::Open {
-                        rows: whole_history,
-                    }),
-                ));
-                assert!(queued.is_ok(), "the worker went away mid-batch");
-            }
+        for _ in 0..20 {
+            handle.submit(Request::OpenHistory { rows: 2 });
+            assert_eq!(first_page(&mut updates), line.commits[..2]);
+            queue_the_rest(&handle);
             std::thread::sleep(wait);
-            // Supersedes the whole batch.
             handle.submit(Request::MoreHistory { rows: 2 });
-
-            match block_on(updates.next()) {
-                Some(Update::Rows { rows, .. }) => match rows.first() {
-                    Some(row) if row.id() == opened_on => return,
-                    Some(_) => never_started += 1,
-                    None => ran_on += 1,
-                },
+            match after_refs(&mut updates) {
+                Some(Update::Rows { rows, .. }) if rows.len() == 2 => {
+                    let ids: Vec<cairn_model::Oid> = rows.ids().collect();
+                    assert_ne!(
+                        ids.first(),
+                        line.commits.first(),
+                        "the next page began the walk again"
+                    );
+                    assert_eq!(
+                        ids,
+                        line.commits[2..4],
+                        "the walk was not taken up where it was"
+                    );
+                    return;
+                }
+                Some(Update::Rows { rows, .. }) if rows.len() == whole - 2 => {
+                    // The walk finished before the supersession: its page, then the empty one.
+                    ran_on += 1;
+                    match after_refs(&mut updates) {
+                        Some(Update::Rows {
+                            rows,
+                            complete: true,
+                        }) if rows.is_empty() => {}
+                        other => panic!("expected the empty end of the walk, got {other:?}"),
+                    }
+                }
                 other => panic!("expected the next page, got {other:?}"),
             }
         }
 
         panic!(
-            "no supersession ever stopped a walk: {ran_on} rounds ran to the end of the \
-             history anyway and {never_started} never started one, over a batch of {batch} \
-             requests superseded after {wait:?} (one answer took {answer:?}). A walk that \
-             finishes after being superseded means the engine was handed a cancel signal \
-             that is not the epoch — see `serve`."
+            "no supersession ever stopped a walk: {ran_on} rounds ran to the end of the line \
+             anyway, superseded after {wait:?} (the whole rest took {rest:?}). A walk that \
+             finishes after being superseded means the engine was handed a cancel signal that \
+             is not the page's epoch — see `HistoryLane::answer`."
         );
     }
 
@@ -1458,6 +1716,77 @@ mod tests {
         }
     }
 
+    /// R11.3: a refresh's superseded answers — a refs snapshot, ahead/behind, a status — come
+    /// back to be freed on a worker, never dropped on the task the UI thread drives; the
+    /// current refresh's arrive as they are. Posted by hand under real epochs. Caught by:
+    /// `Update::into_retired` dropping any of the three.
+    #[test]
+    fn a_superseded_refresh_comes_back_to_be_freed_on_a_worker() {
+        use cairn_model::{
+            AheadBehind, HeadState, RefName, RefsSnapshot, StatusEntry, WorkingTreeStatus,
+        };
+
+        let (epochs, outbox, mut updates) = inbox_only();
+        let snapshot = Arc::new(RefsSnapshot {
+            refs: Vec::new(),
+            head: HeadState::Unborn(RefName::new("refs/heads/main")),
+            stashes: Vec::new(),
+            unreadable: 0,
+        });
+        let counts = vec![(
+            RefName::new("refs/heads/main"),
+            AheadBehind {
+                ahead: 1,
+                behind: 2,
+            },
+        )];
+        let status = WorkingTreeStatus::Listed(vec![StatusEntry::Untracked(
+            cairn_model::RepoPath::from("new.txt"),
+        )]);
+        let send = |epochs: &Epochs, outbox: &Outbox| {
+            let refs = epochs.bump(QueryLane::Refs);
+            let ahead_behind = epochs.bump(QueryLane::AheadBehind);
+            let read = epochs.bump(QueryLane::Status);
+            outbox.send(
+                Some(refs),
+                Update::Refs {
+                    snapshot: Arc::clone(&snapshot),
+                    reopen: true,
+                },
+            );
+            outbox.send(
+                Some(ahead_behind),
+                Update::AheadBehind {
+                    counts: counts.clone(),
+                },
+            );
+            outbox.send(
+                Some(read),
+                Update::Status {
+                    changes: Arc::new(cairn_model::LocalChanges::new(status.clone())),
+                },
+            );
+        };
+        send(&epochs, &outbox);
+        send(&epochs, &outbox);
+
+        let retired: Vec<Retired> = (0..3)
+            .map(|_| match block_on(updates.next()) {
+                Some(Update::Superseded(retired)) => retired,
+                other => panic!("expected a superseded answer handed back, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(retired[0].refs_snapshot(), Some(&*snapshot));
+        assert_eq!(retired[1].counts(), counts.as_slice());
+        assert_eq!(retired[2].working_tree_status(), Some(&status));
+        for _ in 0..3 {
+            match block_on(updates.next()) {
+                Some(Update::Refs { .. } | Update::AheadBehind { .. } | Update::Status { .. }) => {}
+                other => panic!("expected the current refresh's answer, got {other:?}"),
+            }
+        }
+    }
+
     /// The negative for the test above: dropping everything must fail it.
     #[test]
     fn an_answer_to_the_current_request_is_returned() {
@@ -1604,7 +1933,7 @@ mod tests {
                     asking.submit(Request::OpenHistory { rows: 1 });
                 }
                 match woken_by(&waker, updates.next()) {
-                    Some(Update::Rows { .. }) => {}
+                    Some(Update::Rows { .. } | Update::Refs { .. }) => {}
                     Some(Update::WorkerLost { message }) => break Ok(message),
                     other => {
                         break Err(format!(
@@ -1762,11 +2091,13 @@ mod tests {
     fn submitting_returns_immediately_even_with_nobody_serving() {
         let (jobs, incoming) = channel::<(Option<Epoch>, RepositoryJob)>();
         let (diff, diff_incoming) = channel::<DiffJob>();
-        drop((incoming, diff_incoming));
+        let (refresh, refresh_incoming) = channel::<RefreshJob>();
+        drop((incoming, diff_incoming, refresh_incoming));
         let epochs = Epochs::new();
         let handle = RepositoryHandle {
             jobs,
             diff,
+            refresh,
             epochs: epochs.clone(),
             control: FetchControl::default(),
         };
@@ -1794,6 +2125,13 @@ mod tests {
             handle.submit(Request::ListRemotes),
             None,
             "an operation was numbered"
+        );
+        let refreshed = handle.submit(Request::Refresh);
+        assert_eq!(refreshed, Some(epochs.current(QueryLane::Refs)));
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(50),
+            "a refresh waited for {:?}",
+            started.elapsed()
         );
     }
 

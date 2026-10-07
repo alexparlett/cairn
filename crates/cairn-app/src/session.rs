@@ -9,7 +9,7 @@ use crate::PAGE_ROWS;
 use crate::fetch_state::{FetchRefusal, FetchStatus, PromptView};
 use crate::history_state::{self, Progress};
 use crate::window::View;
-use crate::worker::{PromptId, Request, Retired, Update, expanded_diffs};
+use crate::worker::{PromptId, Refreshed, Request, Retired, Update, expanded_diffs};
 
 /// What applying an update may ask of the worker: a request, and the refusal
 /// of a prompt the window will not show. Two plain callbacks, never a struct
@@ -23,11 +23,12 @@ pub struct Worker<'a> {
 }
 
 /// Applies `update` to `view`. A fetch ending takes down any dialog and
-/// refuses its prompt, which releases the helper of a git that is gone; a
-/// fetch that moved refs clears the rows and asks for the history again; a
-/// prompt arriving while no fetch is in flight — a helper orphaned by a
-/// killed git — is refused rather than shown, since the dialog could not say
-/// which remote it was for.
+/// refuses its prompt, which releases the helper of a git that is gone, and
+/// asks for a refresh, which reopens the history if the fetch moved what it
+/// draws; a prompt arriving while no fetch is in flight — a helper orphaned by
+/// a killed git — is refused rather than shown, since the dialog could not say
+/// which remote it was for. A refresh's refs that differ from those the
+/// history was walked from reopen it, keeping the selection.
 pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
     let View {
         mut rows,
@@ -37,6 +38,8 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         mut remotes,
         mut refused,
         mut diff,
+        mut refreshed,
+        mut repository,
         ..
     } = view;
     match update {
@@ -46,30 +49,33 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         } => {
             // Count before handing the rows over; afterwards it rereads the whole history.
             let widest = history_state::widest_lane(&page);
-            let loaded = {
-                let mut held = rows.write();
-                held.extend(page);
-                held.len()
+            let (loaded, held) = {
+                let mut history = rows.write();
+                let held = history.append(page);
+                (history.len(), held)
             };
-            progress.write().received(widest, complete, loaded);
+            progress.write().appended(widest, complete, loaded, held);
+            // A find in the sidebar looks through the rows that arrived (R8.5).
+            crate::ref_find::pages_arrived(view, Some(worker.submit));
         }
         Update::Failed { message } | Update::WorkerLost { message } => {
             progress.write().failed(message);
+            crate::ref_find::failed(view);
         }
         Update::Remotes { remotes: listed } => remotes.set(listed),
+        Update::Opened { name } => repository.set(Some(name)),
         Update::ConfiguredContext { context } => {
             crate::diff_actions::configured(context, view, worker.submit);
         }
         Update::FetchStarted { remote } => fetch.write().started(remote),
         Update::FetchProgress { line } => fetch.write().progressed(line),
-        Update::FetchFinished { remote, refreshed } => {
+        Update::FetchFinished { remote } => {
             withdraw(&mut prompt, worker);
             fetch.set(FetchStatus::Finished { remote });
-            reload_if(refreshed, rows, progress, worker);
+            refresh_after_an_operation(worker);
         }
         Update::FetchCancelled {
             remote,
-            refreshed,
             stranded_locks,
         } => {
             withdraw(&mut prompt, worker);
@@ -77,16 +83,72 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                 remote,
                 stranded_locks,
             });
-            reload_if(refreshed, rows, progress, worker);
+            refresh_after_an_operation(worker);
         }
-        Update::FetchFailed {
-            remote,
-            refreshed,
-            message,
-        } => {
+        Update::FetchFailed { remote, message } => {
             withdraw(&mut prompt, worker);
             fetch.set(FetchStatus::Failed { remote, message });
-            reload_if(refreshed, rows, progress, worker);
+            refresh_after_an_operation(worker);
+        }
+        // Kept for the views that draw it (phases 07-08); the snapshot it replaces is freed
+        // on a worker. A history the refs no longer draw is reopened.
+        Update::Refs { snapshot, reopen } => {
+            // The sidebar's rows are asked for the snapshot that arrived (R8).
+            let mut sidebar = view.sidebar.state;
+            let asked = sidebar.write().refs_arrived(&snapshot);
+            if !worker.closing {
+                (worker.submit)(asked);
+            }
+            let replaced = refreshed.write().refs_arrived(snapshot);
+            retire(replaced, worker);
+            if reopen && !worker.closing {
+                reopen_history(rows, progress, worker);
+                // A find looking in the history it replaced looks in the new one.
+                crate::ref_find::reopened(view, Some(worker.submit));
+            }
+        }
+        Update::AheadBehind { counts } => {
+            let replaced = refreshed.write().ahead_behind_arrived(counts);
+            retire(replaced, worker);
+        }
+        // Kept for the title bar and the sidebar's count; laid out for Local Changes' lists,
+        // drawn at once or once a filter's rows are here (R9). What either lets go of is freed
+        // on a worker.
+        Update::Status { changes } => {
+            let mut local = view.local.state;
+            let asked = local.write().status_arrived(Arc::clone(&changes));
+            let replaced = refreshed.write().status_arrived(changes);
+            for request in asked {
+                if !worker.closing || matches!(request, Request::Retire(_)) {
+                    (worker.submit)(request);
+                }
+            }
+            retire(replaced, worker);
+        }
+        Update::FilteredLocalChanges {
+            changes,
+            text,
+            rows,
+        } => {
+            let mut local = view.local.state;
+            let requests = local.write().filtered(changes, &text, rows);
+            for request in requests {
+                (worker.submit)(request);
+            }
+        }
+        Update::RefreshFailed { what, message } => {
+            // With no refs ever read, the history has nothing to walk from: say why there.
+            if what == Refreshed::Refs && refreshed.peek().refs().is_none() {
+                progress.write().failed(message.clone());
+            }
+            refreshed.write().failed(what, message);
+        }
+        // The sidebar's rows, the latest asked: kept with the snapshot they index, the ones
+        // they replace freed on a worker.
+        Update::FilteredRefs { refs, rows, .. } => {
+            let mut sidebar = view.sidebar.state;
+            let replaced = sidebar.write().rows_arrived(refs, rows);
+            retire(replaced, worker);
         }
         // Beside the fetch in flight, which it leaves as it was; the next press clears it.
         Update::FetchRefused { remote, reason } => {
@@ -129,10 +191,28 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             diff: answer,
         } => {
             let answer = answer.map(|shown| *shown);
-            if diff.peek().wants_file(&query) {
-                diff.write().file_arrived(&query, answer);
-            } else {
-                retire(Retired::of(None, answer.into_iter().collect()), worker);
+            match &query.target {
+                crate::worker::FileTarget::WorkingTree { .. } => {
+                    // Kept only for the path chosen in Local Changes, asked as it is now.
+                    let (_, freeing) = if diff.peek().wants_file(&query) {
+                        diff.write().working_arrived(&query, answer)
+                    } else {
+                        (
+                            false,
+                            Retired::of(None, answer.into_iter().collect()).map(Request::Retire),
+                        )
+                    };
+                    if let Some(request) = freeing {
+                        (worker.submit)(request);
+                    }
+                }
+                crate::worker::FileTarget::Committed { .. } => {
+                    if diff.peek().wants_file(&query) {
+                        diff.write().file_arrived(&query, answer);
+                    } else {
+                        retire(Retired::of(None, answer.into_iter().collect()), worker);
+                    }
+                }
             }
         }
         Update::Expanded {
@@ -168,21 +248,35 @@ fn retire(retired: Option<Retired>, worker: &Worker<'_>) {
     }
 }
 
-/// The refs moved: the rows on screen are of the old ones — unless the window
-/// is closing, when the history stays as it is: the worker that would answer
-/// has stopped, and clearing every row on the way out is work for nothing.
-fn reload_if(
-    refreshed: bool,
-    mut rows: State<Vec<cairn_model::HistoryRow>>,
+/// An operation finished (a fetch, today): the refs, ahead/behind and status are read again
+/// (R10.1), and the refresh decides whether the history is reopened — unless the window is
+/// closing, when the worker that would answer has stopped.
+fn refresh_after_an_operation(worker: &Worker<'_>) {
+    if !worker.closing {
+        (worker.submit)(Request::Refresh);
+    }
+}
+
+/// The refs no longer draw the history on screen (R10.4): it is reopened from them. The rows
+/// it held are handed to a worker to free rather than freed here (#52, R11.3), the new
+/// history is sized for as many authors as the old named so its first pages do not rehash
+/// their way back up, and the selection is left as it is — it is drawn again when its row
+/// arrives (R10.5).
+fn reopen_history(
+    mut rows: State<cairn_model::History>,
     mut progress: State<Progress>,
     worker: &Worker<'_>,
 ) {
-    if !refreshed || worker.closing {
-        return;
-    }
-    rows.write().clear();
+    let replaced = {
+        let mut history = rows.write();
+        let sized = cairn_model::History::with_author_capacity(history.author_count());
+        std::mem::replace(&mut *history, sized)
+    };
     progress.set(Progress::opening());
+    // The new history asked first, so its first page is not queued behind the free of the
+    // old one on the repository thread (phase 06 QA, RR4).
     (worker.submit)(Request::OpenHistory { rows: PAGE_ROWS });
+    (worker.submit)(Request::Retire(Retired::history(replaced)));
 }
 
 /// Takes down a dialog whose fetch has ended, refusing the prompt so the helper
@@ -198,31 +292,38 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use cairn_model::{CommitSummary, EdgeSegment, GraphRow, HistoryRow, Lane, Oid, RowContent};
+    use cairn_model::{GraphRow, History, Lane, Oid, PagedCommit, RowsPage};
     use freya_testing::TestingRunner;
 
     use super::*;
-    use crate::history_state::Status;
 
-    fn row(n: u8) -> HistoryRow {
+    fn oid(n: u8) -> Oid {
         let mut bytes = [0u8; 20];
         bytes[19] = n;
-        let id = Oid::from_bytes(&bytes).unwrap_or_else(|_| unreachable!("20 bytes is a SHA-1"));
-        HistoryRow {
-            content: RowContent::Commit(CommitSummary {
-                id,
-                parents: Vec::new(),
-                summary: format!("commit {n}"),
-                author_name: "Ada".to_owned(),
-                author_email: "ada@example.com".to_owned(),
-                author_time: 0,
-            }),
-            graph: GraphRow {
-                id,
-                lane: Lane::new(0),
-                edges: vec![EdgeSegment::passing(Lane::new(0))],
-            },
+        Oid::from_bytes(&bytes).unwrap_or_else(|_| unreachable!("20 bytes is a SHA-1"))
+    }
+
+    /// A page of rows `commit n` for each `n` of `ids`, each by `author`.
+    fn page(ids: impl IntoIterator<Item = u8>, author: &str) -> RowsPage {
+        let mut page = RowsPage::new();
+        for n in ids {
+            page.push(
+                GraphRow::new(oid(n), Lane::new(0), Vec::new()),
+                PagedCommit {
+                    parents: 1,
+                    subject: &format!("commit {n}"),
+                    author,
+                    author_time: 0,
+                },
+            );
         }
+        page
+    }
+
+    fn history_of(page: RowsPage) -> History {
+        let mut history = History::new();
+        history.append(page).unwrap_or_else(|full| panic!("{full}"));
+        history
     }
 
     /// What the worker was asked, and which prompts were refused (never a secret).
@@ -244,7 +345,7 @@ mod tests {
                     let mut progress = Progress::opening();
                     progress.received(1, false, 3);
                     View {
-                        rows: State::create((0..3).map(row).collect()),
+                        rows: State::create(history_of(page(0..3, "Ada"))),
                         progress: State::create(progress),
                         selected: State::create(None),
                         fetch: State::create(fetch),
@@ -257,12 +358,17 @@ mod tests {
                         pair: State::create(None),
                         held_keys: State::create(cairn_ui::accelerators::HeldKeys::default()),
                         history_scroll: ScrollController::new(0, 0, Vec::new()),
+                        history_cursor: State::create(0),
                         detail_tab: State::create(cairn_ui::DetailTab::default()),
                         pane_collapsed: State::create(false),
                         pane_height: State::create(crate::window::PANE_HEIGHT),
                         diff_settings: State::create(cairn_ui::DiffSettings::default()),
                         diff_scroll: ScrollController::new(0, 0, Vec::new()),
                         change_cursor: State::create(None),
+                        refreshed: State::create(crate::refresh_state::RefreshState::default()),
+                        repository: State::create(None),
+                        sidebar: crate::sidebar_state::SidebarView::created(),
+                        local: crate::local_changes_state::LocalChangesView::created(),
                     }
                 })
             },
@@ -591,28 +697,31 @@ mod tests {
         assert!(retired(&asked).is_empty());
     }
 
-    /// A fetch the close itself ended may still have moved refs. Caught by: reloading
-    /// anyway — every row cleared on the UI thread and a request sent to a worker that has
-    /// stopped, so the history vanishes behind "Reading history…" while the window closes.
-    #[test]
-    fn a_fetch_ended_by_the_close_leaves_the_history_as_it_is() {
-        // However it ended: the close may land just as a fetch finishes or fails.
-        for ending in [
+    /// Every way a fetch can end, none of them saying whether a ref moved: the refresh asked
+    /// after it finds out.
+    fn fetch_endings() -> [Update; 3] {
+        [
             Update::FetchFinished {
                 remote: "origin".to_owned(),
-                refreshed: true,
             },
             Update::FetchCancelled {
                 remote: "origin".to_owned(),
-                refreshed: true,
                 stranded_locks: Vec::new(),
             },
             Update::FetchFailed {
                 remote: "origin".to_owned(),
-                refreshed: true,
                 message: "some local refs could not be updated".to_owned(),
             },
-        ] {
+        ]
+    }
+
+    /// A fetch the close itself ended may still have moved refs. Caught by: refreshing
+    /// anyway — a request sent to a worker that has stopped, and a reopen that would clear
+    /// the history while the window closes.
+    #[test]
+    fn a_fetch_ended_by_the_close_asks_for_nothing() {
+        // However it ended: the close may land just as a fetch finishes or fails.
+        for ending in fetch_endings() {
             let (test, view, asked) = launch(running());
             applying_while(&test, view, &asked, ending.clone(), true);
             assert_eq!(
@@ -622,7 +731,7 @@ mod tests {
             );
             assert!(
                 asked.submitted.borrow().is_empty(),
-                "a closing repository was asked for its history again: {ending:?}"
+                "a closing repository was asked something: {ending:?}"
             );
         }
     }
@@ -634,71 +743,31 @@ mod tests {
         }
     }
 
-    /// Caught by: not clearing, not resetting, or not asking again — the graph would keep
-    /// the pre-fetch refs.
+    /// R10.1 and R10.4, the fetch's half: every ending — finished, cancelled, failed, since
+    /// one that failed or was killed may have moved refs before it stopped — asks for a
+    /// refresh and does nothing else; whether the history is reopened is the refresh's to
+    /// decide. The fetch's own tip comparison is gone: no ending carries whether a ref moved
+    /// (the field is gone from the type), clears a row or asks for the history. Caught by:
+    /// the old `reload_if` left running beside the refresh (a second reopen, rows cleared on
+    /// the UI thread), or an ending that does not refresh (a fetch that moved refs leaves the
+    /// graph stale).
     #[test]
-    fn a_fetch_that_moved_refs_clears_the_rows_and_asks_for_the_history_again() {
-        let (test, view, asked) = launch(running());
-        applying(
-            &test,
-            view,
-            &asked,
-            Update::FetchFinished {
-                remote: "origin".to_owned(),
-                refreshed: true,
-            },
-        );
-        assert!(view.rows.read().is_empty(), "the old rows stayed");
-        assert_eq!(view.progress.read().status(), &Status::Loading);
-        assert_eq!(
-            asked.submitted.borrow().as_slice(),
-            [Request::OpenHistory { rows: PAGE_ROWS }]
-        );
-        assert_eq!(
-            *view.fetch.read(),
-            FetchStatus::Finished {
-                remote: "origin".to_owned()
-            }
-        );
-    }
-
-    /// Caught by: reloading on every fetch, which loses the reader's place for nothing.
-    #[test]
-    fn a_fetch_that_moved_nothing_leaves_the_rows_alone() {
-        let (test, view, asked) = launch(running());
-        applying(
-            &test,
-            view,
-            &asked,
-            Update::FetchFinished {
-                remote: "origin".to_owned(),
-                refreshed: false,
-            },
-        );
-        assert_eq!(view.rows.read().len(), 3);
-        assert!(asked.submitted.borrow().is_empty());
-    }
-
-    /// Caught by: a cancelled or failed fetch that moved refs before it stopped leaving
-    /// the graph stale.
-    #[test]
-    fn a_cancelled_or_failed_fetch_that_moved_refs_reloads_too() {
-        for ending in [
-            Update::FetchCancelled {
-                remote: "origin".to_owned(),
-                refreshed: true,
-                stranded_locks: Vec::new(),
-            },
-            Update::FetchFailed {
-                remote: "origin".to_owned(),
-                refreshed: true,
-                message: "some local refs could not be updated".to_owned(),
-            },
-        ] {
+    fn every_fetch_ending_asks_for_a_refresh_and_touches_no_row() {
+        for ending in fetch_endings() {
             let (test, view, asked) = launch(running());
-            applying(&test, view, &asked, ending);
-            assert!(view.rows.read().is_empty());
-            assert_eq!(asked.submitted.borrow().len(), 1);
+            let progress = view.progress.read().clone();
+            applying(&test, view, &asked, ending.clone());
+            assert_eq!(
+                asked.submitted.borrow().as_slice(),
+                [Request::Refresh],
+                "{ending:?}"
+            );
+            assert_eq!(view.rows.read().len(), 3, "{ending:?} touched the rows");
+            assert_eq!(
+                *view.progress.read(),
+                progress,
+                "{ending:?} reset the history"
+            );
         }
     }
 
@@ -714,7 +783,6 @@ mod tests {
             &asked,
             Update::FetchCancelled {
                 remote: "origin".to_owned(),
-                refreshed: false,
                 stranded_locks: vec![lock.clone()],
             },
         );
@@ -731,22 +799,7 @@ mod tests {
     /// the helper behind it waits until the user notices.
     #[test]
     fn a_fetch_ending_takes_the_dialog_down_and_refuses_its_prompt() {
-        for ending in [
-            Update::FetchFinished {
-                remote: "origin".to_owned(),
-                refreshed: false,
-            },
-            Update::FetchCancelled {
-                remote: "origin".to_owned(),
-                refreshed: false,
-                stranded_locks: Vec::new(),
-            },
-            Update::FetchFailed {
-                remote: "origin".to_owned(),
-                refreshed: false,
-                message: "no".to_owned(),
-            },
-        ] {
+        for ending in fetch_endings() {
             let (test, view, asked) = launch(running());
             let id = PromptId::for_tests(9);
             applying(
@@ -1028,6 +1081,277 @@ mod tests {
             Context::Lines(6),
             "the configuration moved a context the user chose"
         );
+        drop(handle);
+    }
+
+    fn snapshot_naming(commit: Oid) -> std::sync::Arc<cairn_model::RefsSnapshot> {
+        std::sync::Arc::new(cairn_model::RefsSnapshot {
+            refs: vec![cairn_model::Ref {
+                name: cairn_model::RefName::new("refs/heads/main"),
+                kind: cairn_model::RefKind::LocalBranch,
+                target: cairn_model::RefTarget::Commit(commit),
+                symbolic: None,
+                upstream: None,
+            }],
+            head: cairn_model::HeadState::Branch(cairn_model::RefName::new("refs/heads/main")),
+            stashes: Vec::new(),
+            unreadable: 0,
+        })
+    }
+
+    /// R10.4, R10.5, R11.3 and #52, the window's half: refs that draw another history reopen
+    /// it — the old rows handed to a worker to free as one `Request::Retire`, never freed on
+    /// the UI thread, the new history sized for the authors the old one named, the history
+    /// asked for again, and the selection left as it was; refs that draw the same history
+    /// leave it, handing back only the snapshot they replace. Caught by: the old rows
+    /// replaced in place (no retirement), a reopen with `History::new` (an index with no
+    /// room), the selection cleared, or a reopen on a refresh that said not to.
+    #[test]
+    fn a_reopen_frees_the_old_rows_on_a_worker_and_keeps_the_selection() {
+        use crate::history_state::Status;
+
+        let (test, mut view, asked) = launch(FetchStatus::Idle);
+        let chosen = Some(cairn_model::RowId::Commit(oid(1)));
+        test.run_in(|| view.selected.set(chosen));
+        applying(
+            &test,
+            view,
+            &asked,
+            Update::Refs {
+                snapshot: snapshot_naming(oid(2)),
+                reopen: true,
+            },
+        );
+        let submitted: Vec<Request> = asked.submitted.borrow_mut().drain(..).collect();
+        // The sidebar's rows asked for the snapshot first (refs-and-status R8), then the reopen.
+        match submitted.as_slice() {
+            [
+                Request::FilterRefs { .. },
+                Request::OpenHistory { rows },
+                Request::Retire(retired),
+            ] => {
+                assert_eq!(retired.replaced_rows(), Some(3), "not the old rows");
+                assert_eq!(*rows, PAGE_ROWS);
+            }
+            other => panic!("expected the old rows retired and the history asked, got {other:?}"),
+        }
+        assert!(view.rows.read().is_empty(), "the old rows are still drawn");
+        assert_eq!(view.progress.read().status(), &Status::Loading);
+        assert_eq!(
+            *view.selected.read(),
+            chosen,
+            "the reopen let go of the selection"
+        );
+        assert!(
+            view.rows.read().retained().authors > History::new().retained().authors,
+            "the new history was not sized for the authors the old one named"
+        );
+
+        // The same history drawn: the rows stay, and the snapshot replaced goes to a worker.
+        let first = snapshot_naming(oid(2));
+        test.run_in(|| {
+            view.refreshed
+                .write()
+                .refs_arrived(std::sync::Arc::clone(&first))
+        });
+        applying(
+            &test,
+            view,
+            &asked,
+            Update::Refs {
+                snapshot: snapshot_naming(oid(2)),
+                reopen: false,
+            },
+        );
+        match asked.submitted.borrow().as_slice() {
+            [Request::FilterRefs { .. }, Request::Retire(retired)] => {
+                assert_eq!(retired.refs_snapshot(), Some(&*first));
+            }
+            other => panic!("expected only the replaced snapshot retired, got {other:?}"),
+        }
+    }
+
+    /// A refresh answered while the window closes reopens nothing: the worker that would
+    /// answer has stopped. Caught by: reopening anyway, clearing the history on the way out.
+    #[test]
+    fn a_refresh_answered_while_closing_reopens_nothing() {
+        let (test, view, asked) = launch(FetchStatus::Idle);
+        applying_while(
+            &test,
+            view,
+            &asked,
+            Update::Refs {
+                snapshot: snapshot_naming(oid(2)),
+                reopen: true,
+            },
+            true,
+        );
+        assert_eq!(view.rows.read().len(), 3);
+        assert!(
+            asked.submitted.borrow().is_empty(),
+            "{:?}",
+            asked.submitted.borrow()
+        );
+    }
+
+    /// R11.3: each refresh answer the window replaces — ahead/behind, a status — is handed
+    /// to a worker to free; a failed read is said beside the answer kept, which stays; a
+    /// failure to read the refs before any were read is the history's failure too, since it
+    /// has nothing to walk from. Caught by: a replaced answer dropped in place, a failure
+    /// that throws the kept answer away, or a first failure that leaves "Reading history…"
+    /// up for good.
+    #[test]
+    fn a_replaced_refresh_answer_is_freed_on_a_worker_and_a_failure_keeps_the_last() {
+        use cairn_model::{AheadBehind, RefName, StatusEntry, WorkingTreeStatus};
+
+        use crate::history_state::Status;
+        use crate::worker::Refreshed;
+
+        let (test, view, asked) = launch(FetchStatus::Idle);
+        applying(
+            &test,
+            view,
+            &asked,
+            Update::RefreshFailed {
+                what: Refreshed::Refs,
+                message: "the refs could not be listed".to_owned(),
+            },
+        );
+        assert_eq!(
+            view.progress.read().status(),
+            &Status::Failed("the refs could not be listed".to_owned())
+        );
+
+        let counts = vec![(
+            RefName::new("refs/heads/main"),
+            AheadBehind {
+                ahead: 1,
+                behind: 0,
+            },
+        )];
+        let status = WorkingTreeStatus::Listed(vec![StatusEntry::Untracked(
+            cairn_model::RepoPath::from("a.txt"),
+        )]);
+        for _ in 0..2 {
+            applying(
+                &test,
+                view,
+                &asked,
+                Update::AheadBehind {
+                    counts: counts.clone(),
+                },
+            );
+            applying(
+                &test,
+                view,
+                &asked,
+                Update::Status {
+                    changes: std::sync::Arc::new(cairn_model::LocalChanges::new(status.clone())),
+                },
+            );
+        }
+        // The status replaced is let go of by both its holders — the refresh's answers and
+        // Local Changes' lists — each handing its hold to a worker.
+        match asked.submitted.borrow().as_slice() {
+            [
+                Request::Retire(counted),
+                Request::Retire(drawn),
+                Request::Retire(read),
+            ] => {
+                assert_eq!(counted.counts(), counts.as_slice());
+                assert_eq!(drawn.working_tree_status(), Some(&status));
+                assert_eq!(read.working_tree_status(), Some(&status));
+            }
+            other => panic!("expected the replaced answers retired, got {other:?}"),
+        }
+
+        applying(
+            &test,
+            view,
+            &asked,
+            Update::RefreshFailed {
+                what: Refreshed::Status,
+                message: "git status failed".to_owned(),
+            },
+        );
+        let kept = view.refreshed.read();
+        assert_eq!(
+            kept.status(),
+            Some(&status),
+            "the failure threw the answer away"
+        );
+        assert_eq!(kept.failure(Refreshed::Status), Some("git status failed"));
+        assert_eq!(
+            kept.ahead_behind().map(|kept| kept.as_slice()),
+            Some(counts.as_slice())
+        );
+        assert_eq!(kept.failure(Refreshed::AheadBehind), None);
+    }
+
+    /// C10 through the real boundary, counting reopens: the window's first refresh opens the
+    /// history; a refresh that finds nothing changed asks for nothing; a stash pushed — the
+    /// stash list alone changed — reopens it, and so does a checkout that moves no ref
+    /// (`HEAD` onto `other`, on `HEAD`'s commit) and a branch moved; nothing changed again
+    /// reopens nothing. Each reopen is counted as the window asks for it, from what the
+    /// worker answered. Caught by: a comparison that leaves out the stash list or `HEAD`'s
+    /// state (a step that should reopen does not), one that reopens on anything (a step that
+    /// should not, does), or the old fetch comparison standing in for the refresh.
+    #[test]
+    fn a_refresh_reopens_for_a_stash_a_checkout_and_a_moved_ref_and_for_nothing_else() {
+        use crate::worker::{Refreshable, next_update};
+
+        let fixture = Refreshable::new("cairn-session-reopens");
+        let (handle, mut updates) = fixture.open();
+        let (test, view, asked) = launch(FetchStatus::Idle);
+        let mut opens = 0;
+        // Asks for a refresh and applies what arrives, handing on what applying asks, until
+        // the refresh's refs have been applied and — if they reopened the history — its first
+        // page has too. Returns how many reopens the window asked for.
+        let mut refresh = || -> usize {
+            handle.submit(Request::Refresh);
+            let mut refs_seen = false;
+            let mut reopening = false;
+            let mut asked_open = 0;
+            loop {
+                for request in asked.submitted.borrow_mut().drain(..) {
+                    if matches!(request, Request::OpenHistory { .. }) {
+                        asked_open += 1;
+                        reopening = true;
+                    }
+                    handle.submit(request);
+                }
+                if refs_seen && !reopening {
+                    return asked_open;
+                }
+                let update = next_update(&mut updates);
+                match &update {
+                    Update::Refs { .. } => refs_seen = true,
+                    Update::Rows { .. } => reopening = false,
+                    _ => {}
+                }
+                applying(&test, view, &asked, update);
+            }
+        };
+
+        opens += refresh();
+        assert_eq!(opens, 1, "the first refresh did not open the history");
+        assert!(!view.rows.read().is_empty());
+        assert_eq!(
+            refresh(),
+            0,
+            "a refresh that found nothing changed reopened"
+        );
+
+        fixture.push_stash(fixture.commits[2], "On main: wip");
+        assert_eq!(refresh(), 1, "a changed stash list did not reopen");
+
+        fixture.check_out("other");
+        assert_eq!(refresh(), 1, "a checkout that moves no ref did not reopen");
+
+        fixture.point("topic", fixture.commits[3]);
+        assert_eq!(refresh(), 1, "a moved ref did not reopen");
+
+        assert_eq!(refresh(), 0, "nothing changed, yet the history reopened");
         drop(handle);
     }
 }

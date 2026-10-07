@@ -18,7 +18,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use cairn_git::ops::{Askpass, GitBinary, GitEnvironment, Invalidated, fetch};
-use cairn_git::{Error, Repository};
+use cairn_git::{CancelSignal, Error, Repository};
 use cairn_model::PromptKind;
 
 use fixtures::Fixture;
@@ -543,23 +543,25 @@ fn a_failed_fetch_names_the_lock_files_present_and_only_those() {
     assert_eq!(failed(&local), Vec::<PathBuf>::new());
 }
 
-// ── Ref tips ────────────────────────────────────────────────────────────────
+// ── The refs a refresh reads ────────────────────────────────────────────────
 
-/// What the worker compares before and after a fetch: every ref's id as git
-/// wrote it, gaining an entry when a ref is made and changing when one moves.
-/// Over a fixture, since the Cairn checkout's own refs are whatever the
-/// machine (or a CI checkout, detached with no branch) has.
+/// What the application's refresh reads after a fetch, through the handle it
+/// already holds: every ref's id as git wrote it, gaining an entry when a ref
+/// is made and changing when one moves. Over a fixture, since the Cairn
+/// checkout's own refs are whatever the machine (or a CI checkout, detached
+/// with no branch) has.
 #[test]
-fn ref_tips_follow_the_refs_git_writes() {
+fn a_refs_read_follows_the_refs_git_writes() {
     let fixture = fixtures::braided(3);
     let repo = Repository::discover(fixture.path()).unwrap_or_else(|e| panic!("{e}"));
     let git_says = |reference: &str| fixture.git(&["rev-parse", reference]).trim().to_owned();
     let tip_of = |reference: &str| {
-        repo.ref_tips()
+        repo.refs(&CancelSignal::new())
             .unwrap_or_else(|e| panic!("{e}"))
-            .iter()
-            .find(|(name, _)| name.as_str() == reference)
-            .map(|(_, oid)| oid.to_string())
+            .snapshot
+            .find(&cairn_model::RefName::new(reference))
+            .and_then(cairn_model::Ref::commit_id)
+            .map(|oid| oid.to_string())
     };
 
     assert_eq!(tip_of("refs/heads/main"), Some(git_says("refs/heads/main")));
@@ -570,7 +572,7 @@ fn ref_tips_follow_the_refs_git_writes() {
     assert_eq!(
         tip_of("refs/tags/marker"),
         Some(git_says("refs/heads/side")),
-        "a ref git made is not in the tips"
+        "a ref git made is not in the snapshot"
     );
 
     let before = tip_of("refs/heads/side");

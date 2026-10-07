@@ -109,7 +109,25 @@ under a split index beside a sparse one. gix's status also starts the user's
 clean filter itself,
 from Cairn's own process and environment, outside `processes.md`'s one place. So
 git answers: `git status --porcelain=v2 -z`, run as a read, with nothing passed
-that overrides the user's rename or submodule settings (`reads::status`). It is
+that overrides the user's rename or submodule settings (`reads::status`).
+Untracked files are listed one per file, yet git itself reads the user's
+`status.showUntrackedFiles`: a first read passes no `--untracked-files`, so git
+applies the setting — `no` lists none, `normal` collapses an untracked directory
+to one entry — and only where that answer holds a collapsed directory does a
+second read, with `--untracked-files=all`, list its files. Cairn reads no
+configuration of its own to decide, so the setting is honoured from wherever git
+finds it — an include, a worktree's own file, the command line — as `git status`
+honours it; the price is a tree holding an untracked nested repository, which git
+lists as a directory either way, read twice every time. Like every read of the
+working tree, a status read starts what the user's own `git status` starts: the
+repository's `core.fsmonitor` hook or daemon, the clean filter driver of each
+file whose stat changed, and, inside each submodule, `git status` with that
+repository's own hook and filters ("Reads see git's form"). In a partial clone, a
+staged rename whose blob only the promisor holds fails the whole read on a git
+that honours `GIT_NO_LAZY_FETCH` (2.44 and later) — nothing listed, where the
+user's own `git status` would fetch the blob and answer — and an older git, which
+ignores the variable, fetches it, writing a pack and reaching the network: the
+floor's residual, accepted with the 2.30 floor (as built: `docs/systems/status.md`). It is
 the cheaper of the two as well, except on a tree whose every file's stat changed:
 a read never writes the refreshed index back, so git rehashes every file each
 time until something refreshes the index, where gix's in-process hashing is
@@ -118,13 +136,31 @@ index loose tree objects' mtimes, as the user's own `git status` does; neither
 changes a byte. Evidence: `docs/research/refs-and-status/status-agreement-spike.md`
 and `docs/research/refs-and-status/gix-refs-and-status-api.md`.
 
+The fifth case is what a stash changed. A stash made with its untracked files keeps
+them in a commit of their own, apart from its tracked changes, and with the user's
+`stash.showIncludeUntracked` set, `git stash show` diffs the commit the stash was made
+on against both at once — so rename and copy detection pairs a tracked file deleted
+beside an untracked file of its content as one rename, where two diffs of the halves
+print a deletion and an addition. No plumbing can diff one tree against two without
+writing a tree or an index, so git answers: `git stash show --raw -z --no-abbrev
+--no-color --no-ext-diff --no-textconv --no-relative --end-of-options <stash commit>`
+(`reads::stash_changes`), the third porcelain mode a read runs, accepted by the user. In
+raw form it prints no patch, so no textconv or external diff can run, it takes no lock
+and reads no index, and git reads the setting itself, so a git that does not know it
+lists what the user's own `git stash show` lists there.
+
 Refs stay with gix, because gix agrees with `git for-each-ref` once it is read
 with care: a symbolic ref is never peeled into its target's name, a dangling one
-is hidden, the stash reflog is read so that a long message cannot end it, and a
-branch whose upstream is local (`remote = .`) is resolved as git resolves it,
-where gix answers none.
-gix cannot read a reftable repository at all, and opens one only to fail at
-`HEAD`, so such a repository is refused at open with the reason. Evidence:
+is hidden, the stash reflog is read so that a long message cannot end it, and
+every branch's upstream is resolved by hand from the configuration as git
+resolves it — the last remote, the first merge, a local upstream (`remote = .`)
+resolved as a ref name, a named remote's merge matched literally against its
+fetch refspecs in order — where gix answers none for a local upstream and
+otherwise for a second merge, a short merge or two matching refspecs. A ref
+naming a missing object is skipped and counted, where git refuses to list
+anything. gix cannot read a reftable repository at all, and opens one only to
+fail at `HEAD`, so such a repository is refused at open with the reason, and so is
+a format-version-0 repository that names a ref storage, as git refuses it. Evidence:
 `docs/research/refs-and-status/gix-refs-and-status-api.md`.
 
 Each such read is a named function in `reads/`, runs under a read's environment
@@ -175,9 +211,9 @@ those users a diff `git diff` does not, and would hand staging a patch built fro
 content their filter exists to change. git does the converting: a working-tree
 read is `git diff-files` (the index against the working tree) or, for a file git
 does not track, `git diff --no-index -- /dev/null <path>`, the path relative to
-the top of the working tree (`./-` for `-`) — one of the two porcelain modes
-a read runs (the other is `git config` in query form, "Where git answers a
-read"), accepted because it reads no index and so has none to refresh — and the lines
+the top of the working tree (`./-` for `-`) — one of the three porcelain modes
+a read runs (the others are `git config` in query form and `git stash show` in raw
+form, "Where git answers a read"), accepted because it reads no index and so has none to refresh — and the lines
 Cairn holds for the working-tree side are rebuilt from git's own patch over the
 old side, checked against the object id git names for that content. A staged
 diff (`git diff-index --cached`) reads only objects. gix reads the index, fresh

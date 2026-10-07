@@ -20,7 +20,7 @@
 //! `git_config_bool` too, at v2.30.0 and v2.56.0 — or `--get-all <key>` for
 //! `remote.<name>.fetch`, every value in order, as `remote.c` appends each. Never a
 //! setter: no `--add`, `--unset`, `--replace-all`, `--edit` or `--rename-section`,
-//! and no `set`/`unset` subcommand (`the_porcelain_reads_are_the_two_named_queries`).
+//! and no `set`/`unset` subcommand (`the_porcelain_reads_are_the_three_named_queries`).
 //! `--type`, `--get`, `--get-all`, `--null` and `--includes` are all in git 2.18 and
 //! later (`builtin/config.c` at v2.30.0), and v2.56.0 still takes this form without a
 //! word on stderr (reproduced with 2.30.9, 2.32.7 and 2.56.0). The key always starts

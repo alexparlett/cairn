@@ -288,7 +288,9 @@ impl Component for DiffView {
                 ),
             }
         };
-        let rows = data.rows;
+        // The rows after the last are room for the horizontal scrollbar (`end_room`): laid
+        // out, and reached by End, as rows that build empty.
+        let rows = crate::end_room::with_end_room(data.rows, DIFF_ROW_HEIGHT);
         // How far the view scrolls sideways: past the unified rows' width, or through a
         // side-by-side column's overflow.
         let geometry = &data.geometry;

@@ -42,7 +42,12 @@ history-lane work, and a scroll and a find supersede each other. A new query sup
 lane only, except that a changes query also supersedes the file-diff lane;
 nothing else crosses. One counter for everything would let a scroll cancel a
 selection, or a refresh a diff. A refresh — on focus, after an operation, or
-asked for — supersedes the refresh before it, lane by lane.
+asked for — supersedes the refresh before it in the refs and ahead/behind lanes.
+Status is not superseded: a refresh leaves a running `git status` to finish, its
+answer drawn, and every refresh asked while it runs becomes one follow-up status
+after it, however many there were. Ending a status to start another would, on a
+tree whose status takes longer than the gap between refreshes, never let one
+finish; only closing the repository ends a running one.
 
 The epoch is the cancel signal itself, not just a discard filter: the engine
 polls it, so superseding a query stops its walk rather than discarding its

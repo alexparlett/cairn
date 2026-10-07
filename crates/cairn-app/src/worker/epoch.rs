@@ -1,12 +1,22 @@
 //! Request epochs, numbered per query lane, which double as the engine's cancel signal.
 //!
-//! Four lanes (PRD R4.1, packet decision L8, and phase 07's file filter): the history, the
-//! changes query, the file diff and the Changes tab's filter over a change set's files. A
-//! new query supersedes the older ones in its own lane only, with one
+//! Ten lanes (PRD R4.1, packet decision L8, phase 07's file filter, and refs-and-status
+//! R11.1): the history, the walk its pages come from, the changes query, the file diff, the
+//! Changes tab's filter over a change set's files, the refs snapshot, ahead/behind, the
+//! working tree's status, the sidebar's filter over the refs and Local Changes' filter over
+//! the status. A new query supersedes the
+//! older ones in its own lane only, with one
 //! exception — a changes query also supersedes the file-diff lane, since a file of the
 //! commit that was selected is no file of the one that is now. So a scroll never cancels a
 //! diff, a selection never cancels a scroll, and an operation, which is numbered in no
 //! lane, supersedes nothing.
+//!
+//! The history has two numbers (refs-and-status R8.5). Its query lane is what a scroll, a
+//! find in the sidebar and their stop are numbered in, each superseding the walking the last
+//! one asked for. Its walk lane moves only when a walk is opened: every page of rows is
+//! answered under the walk's number, never the query's, because a page a superseded find has
+//! already laid out is still the next page of the same walk — dropping it would leave a hole
+//! in the history the next page is appended after.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -16,8 +26,12 @@ use cairn_git::Cancel;
 /// A lane queries are numbered in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum QueryLane {
-    /// Opening and paging the history walk.
+    /// Opening and paging the history walk, finding a row in it, and stopping a find.
     History,
+    /// The walk the history's pages come from: moved by an open alone (`Request::OpenHistory`),
+    /// so a page is dropped when the walk it belongs to was replaced, and never because a
+    /// scroll or a find superseded the query that asked for it.
+    Walk,
     /// What a commit, or a pair of commits, changed.
     Changes,
     /// One file's diff, or every file's (Expand All).
@@ -25,24 +39,49 @@ pub enum QueryLane {
     /// Which of a change set's files a filter's text leaves (phase 07): a list operation,
     /// numbered so a keystroke supersedes the filter of the one before it, and nothing else.
     FileFilter,
+    /// The refs snapshot a refresh reads, on the history thread (R11.2).
+    Refs,
+    /// How far each branch and its upstream have gone apart, for the snapshot a refresh read.
+    AheadBehind,
+    /// The working tree's status, as `git status` answers it. No refresh supersedes it (R10.3
+    /// as amended, the user's decision of 2026-10-07): its number moves for nothing, so a
+    /// status is cancelled only by a close, which stops every lane.
+    Status,
+    /// Which refs and stashes the sidebar's filter text leaves (R8.3).
+    RefFilter,
+    /// Which paths of Local Changes' two lists the view's filter text leaves (R9): numbered so
+    /// a keystroke, or the lists of a status that has arrived, supersede the pass before.
+    LocalChangesFilter,
 }
 
 impl QueryLane {
     /// Every lane, in the order of their counters.
     #[cfg(test)]
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; LANES] = [
         Self::History,
+        Self::Walk,
         Self::Changes,
         Self::FileDiff,
         Self::FileFilter,
+        Self::Refs,
+        Self::AheadBehind,
+        Self::Status,
+        Self::RefFilter,
+        Self::LocalChangesFilter,
     ];
 
     fn index(self) -> usize {
         match self {
             Self::History => 0,
-            Self::Changes => 1,
-            Self::FileDiff => 2,
-            Self::FileFilter => 3,
+            Self::Walk => 1,
+            Self::Changes => 2,
+            Self::FileDiff => 3,
+            Self::FileFilter => 4,
+            Self::Refs => 5,
+            Self::AheadBehind => 6,
+            Self::Status => 7,
+            Self::RefFilter => 8,
+            Self::LocalChangesFilter => 9,
         }
     }
 
@@ -51,12 +90,21 @@ impl QueryLane {
     pub fn supersedes(self) -> &'static [Self] {
         match self {
             Self::History => &[Self::History],
+            Self::Walk => &[Self::Walk],
             Self::Changes => &[Self::Changes, Self::FileDiff],
             Self::FileDiff => &[Self::FileDiff],
             Self::FileFilter => &[Self::FileFilter],
+            Self::Refs => &[Self::Refs],
+            Self::AheadBehind => &[Self::AheadBehind],
+            Self::Status => &[Self::Status],
+            Self::RefFilter => &[Self::RefFilter],
+            Self::LocalChangesFilter => &[Self::LocalChangesFilter],
         }
     }
 }
+
+/// How many lanes there are: one counter each.
+const LANES: usize = 10;
 
 /// Which request a value belongs to: its lane, and its number there. Monotonic within a
 /// lane, and never reused.
@@ -69,7 +117,7 @@ pub struct Epoch {
 /// The current epoch of every lane, shared by cloning.
 #[derive(Debug, Clone, Default)]
 pub struct Epochs {
-    lanes: Arc<[AtomicU64; 4]>,
+    lanes: Arc<[AtomicU64; LANES]>,
     stopping: Arc<AtomicBool>,
 }
 
@@ -220,6 +268,20 @@ mod tests {
         assert_eq!(QueryLane::History.supersedes(), [QueryLane::History]);
         assert_eq!(QueryLane::FileDiff.supersedes(), [QueryLane::FileDiff]);
         assert_eq!(QueryLane::FileFilter.supersedes(), [QueryLane::FileFilter]);
+        for lane in [
+            QueryLane::Walk,
+            QueryLane::Refs,
+            QueryLane::AheadBehind,
+            QueryLane::Status,
+            QueryLane::RefFilter,
+            QueryLane::LocalChangesFilter,
+        ] {
+            assert_eq!(
+                lane.supersedes(),
+                [lane],
+                "{lane:?} crosses into another lane"
+            );
+        }
     }
 
     #[test]

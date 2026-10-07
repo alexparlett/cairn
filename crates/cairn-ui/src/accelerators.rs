@@ -16,7 +16,10 @@
 //! `docs/research/diff-engine/fork-shortcuts.md`): previous and next change are ⌘↑/⌘↓ on
 //! macOS and Ctrl+↑/Ctrl+↓ elsewhere, heard only while the detail pane has focus so a text
 //! field keeps those keys; the detail tabs are ⌘⌥1/⌘⌥2 (the 3 is kept for a File Tree tab);
-//! and a second commit is added to the selection with ⌘-click or Ctrl-click. Fork binds no
+//! a second commit is added to the selection with ⌘-click or Ctrl-click; and Refresh is ⌘R
+//! on macOS and F5 elsewhere (Fork's own lists, `fork-dev/Docs` `keyboard-shortcuts-mac.md`
+//! and `keyboard-shortcuts-windows.md`: Linux takes Fork's Windows row, whose F5 is no
+//! desktop's and no other action's). Fork binds no
 //! chord to the rest, so neither does Cairn: side-by-side, ignoring whitespace, more or fewer
 //! lines and the entire file are actions without one, reached from the diff's header
 //! (phase 06); and the previous or next file is the changed-file list's own ↑/↓, with Tab and
@@ -48,11 +51,13 @@ pub enum Action {
     ShowCommitTab,
     /// Shows the detail pane's Changes tab.
     ShowChangesTab,
+    /// Reads the refs, ahead/behind and the working tree's status again (PRD R10.1).
+    Refresh,
 }
 
 impl Action {
     /// Every action, in the order the table lists them.
-    pub const ALL: [Action; 10] = [
+    pub const ALL: [Action; 11] = [
         Action::PreviousChange,
         Action::NextChange,
         Action::ToggleSideBySide,
@@ -63,6 +68,7 @@ impl Action {
         Action::ExtendSelection,
         Action::ShowCommitTab,
         Action::ShowChangesTab,
+        Action::Refresh,
     ];
 }
 
@@ -136,6 +142,12 @@ pub fn chord(action: Action, platform: Os) -> Option<Chord> {
         Action::ExtendSelection => (command, Trigger::Press),
         Action::ShowCommitTab => (both, Trigger::Physical(Code::Digit1)),
         Action::ShowChangesTab => (both, Trigger::Physical(Code::Digit2)),
+        // Fork's Windows F5, a function key alone, on Linux; its ⌘R on macOS, the letter
+        // matched where it sits.
+        Action::Refresh => match platform {
+            Os::Linux => (Modifiers::empty(), Trigger::Named(NamedKey::F5)),
+            Os::MacOs => (command, Trigger::Physical(Code::KeyR)),
+        },
         Action::ToggleSideBySide
         | Action::ToggleIgnoreWhitespace
         | Action::MoreLines
@@ -156,7 +168,8 @@ pub fn heard_in(action: Action) -> Scope {
         | Action::EntireFile
         | Action::ExtendSelection
         | Action::ShowCommitTab
-        | Action::ShowChangesTab => Scope::Window,
+        | Action::ShowChangesTab
+        | Action::Refresh => Scope::Window,
     }
 }
 
@@ -425,6 +438,14 @@ mod tests {
                     placed(command | alt, Code::Digit2),
                     Scope::Window,
                 ),
+                (
+                    Action::Refresh,
+                    match platform {
+                        Os::Linux => keyed(M::empty(), NamedKey::F5),
+                        Os::MacOs => placed(command, Code::KeyR),
+                    },
+                    Scope::Window,
+                ),
             ];
             assert_eq!(
                 expected.map(|(action, _, _)| action),
@@ -486,21 +507,38 @@ mod tests {
         }
     }
 
-    /// No two actions share a chord on one platform, and every chord holds a modifier: an
-    /// unmodified key belongs to whatever has focus (the history list's arrows, the file
-    /// list's, Tab).
+    /// No two actions share a chord on one platform, and every chord holds a modifier but a
+    /// function key's: an unmodified key belongs to whatever has focus (the history list's
+    /// arrows, the file list's, Tab, a letter typed in a filter), and a function key types
+    /// nothing in any of them — Fork's Windows Refresh is F5 alone.
     #[test]
-    fn chords_are_distinct_and_every_one_holds_a_modifier() {
+    fn chords_are_distinct_and_every_bare_one_is_a_function_key() {
         for platform in PLATFORMS {
             let chords: Vec<(Action, Chord)> = Action::ALL
                 .into_iter()
                 .filter_map(|action| chord(action, platform).map(|chord| (action, chord)))
                 .collect();
             for (n, (first, chord_of_first)) in chords.iter().enumerate() {
-                assert_ne!(
-                    chord_modifiers(chord_of_first.held),
-                    Modifiers::empty(),
-                    "{first:?} on {platform:?} is a bare key"
+                let function_key = matches!(
+                    chord_of_first.trigger,
+                    Trigger::Named(
+                        NamedKey::F1
+                            | NamedKey::F2
+                            | NamedKey::F3
+                            | NamedKey::F4
+                            | NamedKey::F5
+                            | NamedKey::F6
+                            | NamedKey::F7
+                            | NamedKey::F8
+                            | NamedKey::F9
+                            | NamedKey::F10
+                            | NamedKey::F11
+                            | NamedKey::F12
+                    )
+                );
+                assert!(
+                    function_key || chord_modifiers(chord_of_first.held) != Modifiers::empty(),
+                    "{first:?} on {platform:?} is a bare key that is no function key"
                 );
                 for (second, chord_of_second) in &chords[n + 1..] {
                     assert_ne!(

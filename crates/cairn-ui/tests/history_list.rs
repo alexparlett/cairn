@@ -1,13 +1,20 @@
 //! Headless component tests for `HistoryList`.
 
+#[path = "../../cairn-model/tests/layout_before_compaction/mod.rs"]
+mod layout_before_compaction;
+
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
-use cairn_model::{CommitSummary, EdgeSegment, GraphRow, HistoryRow, Lane, Oid, RowContent, RowId};
+use cairn_model::{
+    GraphRow, History, Lane, LaneAssigner, Oid, PagedCommit, RowContent, RowEdges, RowId, RowsPage,
+};
 use cairn_ui::accelerators::{self, Action, Os};
 use cairn_ui::{HistoryList, PREFETCH_ROWS, ROW_HEIGHT, RowRender};
 use freya::prelude::*;
 use freya_testing::TestingRunner;
+use layout_before_compaction::AssignerBeforeCompaction;
 
 const WIDTH: f32 = 600.;
 const HEIGHT: f32 = 520.;
@@ -18,26 +25,31 @@ fn oid(n: usize) -> Oid {
     Oid::from_bytes(&bytes).unwrap_or_else(|_| unreachable!("20 bytes is a SHA-1"))
 }
 
-fn row(n: usize) -> HistoryRow {
-    HistoryRow {
-        content: RowContent::Commit(CommitSummary {
-            id: oid(n),
-            parents: Vec::new(),
-            summary: format!("commit {n}"),
-            author_name: "A".to_owned(),
-            author_email: "a@example.com".to_owned(),
-            author_time: 0,
-        }),
-        graph: GraphRow {
-            id: oid(n),
-            lane: Lane::new(0),
-            edges: vec![EdgeSegment::passing(Lane::new(0))],
-        },
+/// A page of rows `commit n` for each `n` of `range`.
+fn page(range: impl IntoIterator<Item = usize>) -> RowsPage {
+    let mut page = RowsPage::new();
+    for n in range {
+        page.push(
+            GraphRow::new(oid(n), Lane::new(0), Vec::new()),
+            PagedCommit {
+                parents: 1,
+                subject: &format!("commit {n}"),
+                author: "A",
+                author_time: 0,
+            },
+        );
     }
+    page
 }
 
-fn rows(range: std::ops::Range<usize>) -> Vec<HistoryRow> {
-    range.map(row).collect()
+fn hold(history: &mut History, page: RowsPage) {
+    history.append(page).unwrap_or_else(|full| panic!("{full}"));
+}
+
+fn rows(range: impl IntoIterator<Item = usize>) -> History {
+    let mut history = History::new();
+    hold(&mut history, page(range));
+    history
 }
 
 /// What the list reported, in order.
@@ -49,7 +61,7 @@ struct Reports {
 
 #[derive(Clone)]
 struct Fixture {
-    rows: State<Vec<HistoryRow>>,
+    rows: State<History>,
     selected: State<Option<RowId>>,
 }
 
@@ -62,11 +74,14 @@ fn list(reports: Reports) -> impl Fn() -> Element + 'static {
         let reached_end = reports.reached_end.clone();
 
         HistoryList::new(fixture.rows, |render: RowRender| {
-            let RowContent::Commit(commit) = render.row.content;
+            let subject = match render.content {
+                RowContent::Commit(commit) => commit.summary,
+                RowContent::Stash(stash) => stash.message,
+            };
             let marker = if render.selected { "> " } else { "" };
             label()
                 .height(Size::px(ROW_HEIGHT))
-                .text(format!("{marker}{}", commit.summary))
+                .text(format!("{marker}{subject}"))
                 .into()
         })
         .selected(*selected.read())
@@ -79,7 +94,7 @@ fn list(reports: Reports) -> impl Fn() -> Element + 'static {
     }
 }
 
-fn launch(initial: Vec<HistoryRow>, reports: &Reports) -> (TestingRunner, Fixture) {
+fn launch(initial: History, reports: &Reports) -> (TestingRunner, Fixture) {
     let (mut test, fixture) = TestingRunner::new(
         list(reports.clone()),
         (WIDTH, HEIGHT).into(),
@@ -153,6 +168,108 @@ fn only_a_viewport_of_rows_is_built_however_long_the_history() {
     assert!(
         built.windows(2).all(|pair| pair[0] == pair[1]),
         "a longer history or a deeper scroll built a different number of rows: {built:?}"
+    );
+}
+
+/// A history of `length` rows, each labelled by `per_row` tags, and the first `crowded` rows
+/// by `crowd` local branches more.
+fn labelled_rows(length: usize, per_row: usize, crowded: usize, crowd: usize) -> History {
+    let mut history = History::new();
+    for start in (0..length).step_by(1_000) {
+        let mut page = RowsPage::new();
+        for n in start..(start + 1_000).min(length) {
+            let mut names: Vec<String> = (0..per_row)
+                .map(|t| format!("refs/tags/r{n}-t{t}"))
+                .collect();
+            if n < crowded {
+                names.extend((0..crowd).map(|b| format!("refs/heads/r{n}/b{b:05}")));
+            }
+            names.sort();
+            let labels: Vec<cairn_model::Label<'_>> = names
+                .iter()
+                .map(|name| cairn_model::Label {
+                    name,
+                    kind: if name.starts_with("refs/heads/") {
+                        cairn_model::RefKind::LocalBranch
+                    } else {
+                        cairn_model::RefKind::Tag
+                    },
+                    current: false,
+                })
+                .collect();
+            page.push_labelled(
+                GraphRow::new(oid(n), Lane::new(0), Vec::new()),
+                PagedCommit {
+                    parents: 1,
+                    subject: &format!("commit {n}"),
+                    author: "A",
+                    author_time: 0,
+                },
+                false,
+                &labels,
+            );
+        }
+        hold(&mut history, page);
+    }
+    history
+}
+
+/// The viewport twin with labelled rows: the history list still builds one viewport of
+/// rows, and a row labelled by thousands of refs lays out only the chips its column holds
+/// (R5.3, phase 05 QA RR3). Caught by: chips laid out for every label, or labels making the
+/// list build rows past its viewport.
+#[test]
+fn only_a_viewport_of_labelled_rows_is_built_and_each_lays_out_a_columns_worth_of_chips() {
+    let viewport_rows = (HEIGHT / ROW_HEIGHT).ceil() as usize;
+    let most_chips = Rc::new(RefCell::new(0usize));
+    let history = labelled_rows(100_000, 3, 40, 5_000);
+    let counted = most_chips.clone();
+    let (mut test, _) = TestingRunner::new(
+        move || -> Element {
+            let fixture = use_consume::<Fixture>();
+            let counted = counted.clone();
+            HistoryList::new(fixture.rows, move |render: RowRender| {
+                let subject = match render.content {
+                    RowContent::Commit(commit) => commit.summary,
+                    RowContent::Stash(stash) => stash.message,
+                };
+                let mut most = counted.borrow_mut();
+                *most = (*most).max(render.chips.len());
+                label().height(Size::px(ROW_HEIGHT)).text(subject).into()
+            })
+            .into()
+        },
+        (WIDTH, HEIGHT).into(),
+        move |runner| {
+            runner.provide_root_context(|| Fixture {
+                rows: State::create(history),
+                selected: State::create(None),
+            })
+        },
+        1.,
+    );
+    test.sync_and_update();
+    test.sync_and_update();
+    for place in ["top", "deep"] {
+        if place == "deep" {
+            test.scroll((100., 100.), (0., -(90_000. * ROW_HEIGHT as f64)));
+        }
+        let count = built_rows(&test).len();
+        assert!(
+            count >= viewport_rows && count <= viewport_rows + 2,
+            "{count} rows were built for a {viewport_rows}-row viewport at the {place}"
+        );
+    }
+    let room = cairn_ui::label_room(WIDTH, 1);
+    let bound = (room / 10.).ceil() as usize + 1;
+    let most = *most_chips.borrow();
+    assert!(
+        most > 3,
+        "no crowded row laid out more than its tags: {most}"
+    );
+    assert!(
+        most <= bound,
+        "a row of 5,003 refs laid out {most} chips for {room} px (at most {bound})"
     );
 }
 
@@ -234,7 +351,7 @@ fn the_selection_follows_its_row_when_rows_arrive_below_and_above_it() {
     press(&mut test, NamedKey::PageDown);
     assert_eq!(selected_rows(&test), vec!["commit 11".to_owned()]);
 
-    held.write().extend(rows(65..129));
+    hold(&mut held.write(), page(65..129));
     test.sync_and_update();
     assert_eq!(
         selected_rows(&test),
@@ -242,7 +359,9 @@ fn the_selection_follows_its_row_when_rows_arrive_below_and_above_it() {
         "a page arriving below moved the selection"
     );
 
-    held.write().insert(0, row(0));
+    // Rows only append to a history, so a row arrives above by the history being read
+    // again with it: the reopen a fetch that moved refs asks for.
+    held.set(rows(0..129));
     test.sync_and_update();
     assert!(
         built_rows(&test).iter().any(|(text, _)| text == "commit 0"),
@@ -404,7 +523,7 @@ fn the_end_is_reported_when_it_comes_into_view_and_not_on_every_frame() {
     );
 
     let mut held = fixture.rows;
-    held.write().extend(rows(length..length * 2));
+    hold(&mut held.write(), page(length..length * 2));
     test.sync_and_update();
     test.scroll((100., 100.), (0., -2. * length as f64 * ROW_HEIGHT as f64));
     assert!(
@@ -442,4 +561,215 @@ fn the_list_is_outlined_only_while_it_has_keyboard_focus() {
     test.sync_and_update();
     test.sync_and_update();
     assert!(outlined(&test), "a keyboard-focused list was not outlined");
+}
+
+/// A walk that keeps several lanes open and hands some parents over before their children:
+/// commit `n`'s parents are `n + 1` and, every seventh, `n + 4` and `n + 9`; every
+/// thirteenth commit swaps places with the one after it.
+fn braided_walk(len: usize) -> Vec<(Oid, Vec<Oid>)> {
+    let mut walk: Vec<(Oid, Vec<Oid>)> = (0..len)
+        .map(|n| {
+            let mut parents: Vec<Oid> = [1, 4, 9]
+                .into_iter()
+                .take(if n % 7 == 0 { 3 } else { 1 })
+                .filter(|step| n + step < len)
+                .map(|step| oid(n + step))
+                .collect();
+            parents.dedup();
+            (oid(n), parents)
+        })
+        .collect();
+    for n in (0..len.saturating_sub(1)).step_by(13) {
+        walk.swap(n, n + 1);
+    }
+    walk
+}
+
+/// The QA brief's scroll: deep, then back to the top. Every row the list draws, each time it
+/// draws it, carries exactly the edges the assigner retained for it before compaction.
+/// Caught by: deriving a row from a snapshot other than its own nearest, or from state a
+/// previous row's derivation left behind.
+#[test]
+fn rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew() {
+    let length = 3_000;
+    let walk = braided_walk(length);
+    let mut before_assigner = AssignerBeforeCompaction::new();
+    let mut before = Vec::new();
+    for (id, parents) in &walk {
+        before.extend(before_assigner.push(*id, parents.clone()));
+    }
+    before.extend(before_assigner.into_rows());
+
+    let graphs = LaneAssigner::assign_all(walk.iter().cloned());
+    let index_of: HashMap<Oid, usize> = walk
+        .iter()
+        .enumerate()
+        .map(|(index, (id, _))| (*id, index))
+        .collect();
+    let mut history = History::new();
+    // Pages of the application's 64 rows, as the worker hands them over.
+    for chunk in graphs.chunks(64) {
+        let mut paged = RowsPage::new();
+        for graph in chunk {
+            paged.push(
+                graph.clone(),
+                PagedCommit {
+                    parents: walk[index_of[&graph.id]].1.len(),
+                    subject: &format!("commit {}", index_of[&graph.id]),
+                    author: "A",
+                    author_time: 0,
+                },
+            );
+        }
+        hold(&mut history, paged);
+    }
+
+    let drawn: Rc<RefCell<Vec<(usize, RowEdges)>>> = Rc::default();
+    let recorder = drawn.clone();
+    let index_of_row = index_of.clone();
+    let (mut test, _) = TestingRunner::new(
+        move || -> Element {
+            let fixture = use_consume::<Fixture>();
+            let recorder = recorder.clone();
+            let index_of = index_of_row.clone();
+            HistoryList::new(fixture.rows, move |render: RowRender| {
+                let (id, subject) = match &render.content {
+                    RowContent::Commit(commit) => (commit.id, commit.summary.clone()),
+                    RowContent::Stash(stash) => (stash.id, stash.message.clone()),
+                };
+                recorder
+                    .borrow_mut()
+                    .push((index_of[&id], render.graph.clone()));
+                label().height(Size::px(ROW_HEIGHT)).text(subject).into()
+            })
+            .into()
+        },
+        (WIDTH, HEIGHT).into(),
+        move |runner| {
+            runner.provide_root_context(|| Fixture {
+                rows: State::create(history),
+                selected: State::create(None),
+            })
+        },
+        1.,
+    );
+    test.sync_and_update();
+    let at_the_top = drawn.borrow().len();
+
+    let deep = 2_500.0 * ROW_HEIGHT as f64;
+    test.scroll((100., 100.), (0., -deep));
+    test.scroll((100., 100.), (0., deep));
+
+    let drawn = drawn.borrow();
+    for (index, graph) in drawn.iter() {
+        let old = &before[*index];
+        assert_eq!(
+            graph,
+            &RowEdges {
+                lane: old.lane,
+                edges: old.edges.clone(),
+            },
+            "row {index} drew other edges than the assigner retained for it"
+        );
+    }
+    let times_drawn = |index: usize| drawn.iter().filter(|(at, _)| *at == index).count();
+    assert!(at_the_top > 0, "nothing was drawn at the top");
+    assert!(
+        (0..5).all(|index| times_drawn(index) >= 2),
+        "the top rows were not drawn again after the scroll back"
+    );
+    assert!(
+        drawn.iter().any(|(index, _)| *index > 2_000),
+        "the scroll never reached deep rows"
+    );
+    assert!(
+        drawn
+            .iter()
+            .any(|(_, graph)| graph.edges.iter().any(|edge| edge.out_of_order)),
+        "no drawn row carried a repainted line, so the late lines decided nothing"
+    );
+}
+
+/// RR1: the list keeps where its selection sits in the hint its caller gives it, and reads it
+/// there first — so a row its caller chose (a pressed ref's, a parent link's), told to the
+/// hint, is moved from at once rather than searched for among every loaded row. A press is
+/// written to the caller's hint; and with one commit drawn twice — rows 5 and 500, a
+/// history no walk makes, built so the two ways of finding it disagree — the hint at 500
+/// moves an arrow key to 501, where a search from the top would find 5 and move to 6. Caught
+/// by: the list keeping a hint of its own and ignoring the caller's.
+#[test]
+fn the_list_moves_from_the_row_its_callers_hint_names() {
+    #[derive(Clone)]
+    struct Hinted {
+        rows: State<History>,
+        selected: State<Option<RowId>>,
+        cursor: State<usize>,
+    }
+    let reports = Reports::default();
+    let on_select = reports.selected.clone();
+    let mut history = rows(0..5);
+    hold(&mut history, page([500]));
+    hold(&mut history, page(6..500));
+    hold(&mut history, page([500]));
+    hold(&mut history, page(501..600));
+    let (mut test, hinted) = TestingRunner::new(
+        move || {
+            let hinted = use_consume::<Hinted>();
+            let mut selected = hinted.selected;
+            let on_select = on_select.clone();
+            HistoryList::new(hinted.rows, |render: RowRender| {
+                let subject = match render.content {
+                    RowContent::Commit(commit) => commit.summary,
+                    RowContent::Stash(stash) => stash.message,
+                };
+                label().height(Size::px(ROW_HEIGHT)).text(subject).into()
+            })
+            .selected(*selected.read())
+            .cursor(hinted.cursor)
+            .on_select(move |id: RowId| {
+                on_select.borrow_mut().push(id);
+                selected.set(Some(id));
+            })
+            .into_element()
+        },
+        (WIDTH, HEIGHT).into(),
+        move |runner| {
+            runner.provide_root_context(|| Hinted {
+                rows: State::create(history),
+                selected: State::create(None),
+                cursor: State::create(0),
+            })
+        },
+        1.,
+    );
+    test.sync_and_update();
+
+    let centre = test
+        .find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == "commit 3")
+                .map(|_| node.layout().area.center())
+        })
+        .unwrap_or_else(|| panic!("commit 3 is not drawn"));
+    test.click_cursor((f64::from(centre.x), f64::from(centre.y)));
+    test.sync_and_update();
+    assert_eq!(
+        *hinted.cursor.peek(),
+        3,
+        "a press did not reach the caller's hint"
+    );
+
+    let (mut selected, mut cursor) = (hinted.selected, hinted.cursor);
+    test.run_in(|| {
+        selected.set(Some(RowId::Commit(oid(500))));
+        cursor.set(500);
+    });
+    test.sync_and_update();
+    reports.selected.borrow_mut().clear();
+    press(&mut test, NamedKey::ArrowDown);
+    assert_eq!(
+        reports.selected.borrow().as_slice(),
+        [RowId::Commit(oid(501))],
+        "the arrow moved from the row a search found, not the one the hint named"
+    );
 }

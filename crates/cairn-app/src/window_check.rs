@@ -15,21 +15,32 @@
 //! frames (phase 08 QA's R2). Times are wall-clock on the machine it runs on; nothing here
 //! asserts one.
 //!
-//! Run it in a release build, warm, against the repository the bar names (read only):
+//! Run it in a release build, warm, against the repository the bar names (read only), and —
+//! for refs-and-status C12's large status — a scratch clone of it with no alternates, dirtied
+//! there and never in the bench repository:
 //!
 //! ```text
-//! CAIRN_BENCH_REPO=~/Development/bench/rust \
+//! GIT_OPTIONAL_LOCKS=0 git clone --quiet --local --no-hardlinks \
+//!   ~/Development/bench/rust "$SCRATCH/rust"   # then modify, stage and add files in it
+//! CAIRN_BENCH_REPO=~/Development/bench/rust CAIRN_SCRATCH_REPO="$SCRATCH/rust" \
 //!   cargo test -p cairn-app --release -- --ignored --nocapture window_check
 //! ```
+//!
+//! The window opens as the application opens it — the refs, ahead/behind and status read by a
+//! refresh, the history walked from every ref and labelled, the sidebar's rows laid out
+//! (refs-and-status C12) — and, on the scratch clone, Local Changes is shown over its status of
+//! thousands of paths: its lists drawn, the first path's diff asked and drawn, a list scrolled,
+//! a filter typed and a refresh landed.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use cairn_model::{DiffContent, HistoryRow, Oid, RemoteSummary, RowId};
+use cairn_model::{DiffContent, History, Oid, RemoteSummary, RowId};
 use cairn_ui::diff_palette::DIFF_FONT_FAMILY;
-use cairn_ui::{DetailTab, DiffSettings};
+use cairn_ui::{DetailTab, DiffSettings, MainView};
 use freya::prelude::*;
 use freya_testing::TestingRunner;
 use freya_testing::prelude::{PlatformEvent, WheelEventName};
@@ -81,6 +92,13 @@ fn kind(update: &Update) -> &'static str {
         Update::DiffFailed { .. } => "diff failed",
         Update::ConfiguredContext { .. } => "configured context",
         Update::Remotes { .. } => "remotes",
+        Update::Opened { .. } => "opened",
+        Update::Refs { .. } => "refs",
+        Update::AheadBehind { .. } => "ahead/behind",
+        Update::Status { .. } => "status",
+        Update::FilteredRefs { .. } => "ref filter",
+        Update::FilteredLocalChanges { .. } => "local changes filter",
+        Update::RefreshFailed { .. } => "refresh failed",
         Update::Failed { .. }
         | Update::WorkerLost { .. }
         | Update::FetchStarted { .. }
@@ -354,7 +372,7 @@ fn launch(path: &str) -> Harness {
         (WIDTH, HEIGHT).into(),
         |runner| {
             runner.provide_root_context(|| View {
-                rows: State::create(Vec::<HistoryRow>::new()),
+                rows: State::create(History::new()),
                 progress: State::create(Progress::opening()),
                 selected: State::create(None),
                 fetch: State::create(FetchStatus::Idle),
@@ -363,6 +381,7 @@ fn launch(path: &str) -> Harness {
                 refused: State::create(None),
                 diff: State::create(DiffState::default()),
                 history_scroll: ScrollController::new(0, 0, Vec::new()),
+                history_cursor: State::create(0),
                 detail_tab: State::create(DetailTab::default()),
                 pane_collapsed: State::create(false),
                 pane_height: State::create(PANE_HEIGHT),
@@ -373,15 +392,21 @@ fn launch(path: &str) -> Harness {
                 changes_list_width: State::create(crate::changes_tab::LIST_WIDTH),
                 pair: State::create(None),
                 held_keys: State::create(cairn_ui::accelerators::HeldKeys::default()),
+                refreshed: State::create(crate::refresh_state::RefreshState::default()),
+                repository: State::create(None),
+                sidebar: crate::sidebar_state::SidebarView::created(),
+                local: crate::local_changes_state::LocalChangesView::created(),
             })
         },
         1.,
     );
     test.set_fonts(HashMap::from([(DIFF_FONT_FAMILY, crate::DIFF_FONT)]));
     test.sync_and_update();
+    // As the application opens a repository: the refresh's refs open the history from every
+    // ref (refs-and-status C12).
     handle.submit(Request::ListRemotes);
     handle.submit(Request::ConfiguredContext);
-    handle.submit(Request::OpenHistory { rows: PAGE_ROWS });
+    handle.submit(Request::Refresh);
     Harness {
         test,
         view,
@@ -407,10 +432,12 @@ fn window_check() {
     let history = (WIDTH as f64 / 2., 200.);
     let pane = (WIDTH as f64 / 2., f64::from(HEIGHT) - 100.);
 
-    let opened = harness.pump(Input::Nothing, 30, |view| {
-        view.rows.peek().len() >= PAGE_ROWS
-    });
-    opened.report("opening: the first page of history");
+    let opened = harness.pump(Input::Nothing, 30, landed);
+    opened.report(
+        "opening: the refs, the first page of the decorated history, the sidebar's rows and \
+         the status",
+    );
+    describe_landed(&harness);
     // The history scrolled with nothing loading: what a scroll costs on its own, first time
     // included, to set what follows against.
     let mut scrolled = 0;
@@ -436,8 +463,7 @@ fn window_check() {
         .view
         .rows
         .peek()
-        .first()
-        .map(|row| row.id())
+        .id(0)
         .unwrap_or_else(|| panic!("no history"));
     let first = {
         let submit = harness.submit();
@@ -640,7 +666,291 @@ fn window_check() {
     scrolling.report("F1: the loaded diff scrolled, about 140 rows a frame");
     eprintln!("  the pane draws {:?}", shown(&harness.test, 12));
     eprintln!(
+        "  paint, raster snapshot encoded to PNG (an upper bound): {:.2} ms\n",
+        ms(harness.paint())
+    );
+    drop(harness);
+
+    local_changes_check(&path);
+}
+
+/// Whether the window has landed what opening it reads (refs-and-status C12): the refs, a
+/// page of the history walked from them, the sidebar's rows and the working tree's status.
+fn landed(view: View) -> bool {
+    let refreshed = view.refreshed.peek();
+    view.rows.peek().len() >= PAGE_ROWS
+        && refreshed.refs().is_some()
+        && refreshed.status().is_some()
+        && view.sidebar.state.peek().shown().is_some()
+}
+
+/// What opening landed: the refs, the labelled rows among those loaded, the status's paths.
+fn describe_landed(harness: &Harness) {
+    let view = harness.view;
+    let (refs, rows, labelled, paths) = harness.test.run_in(|| {
+        let refreshed = view.refreshed.peek();
+        let history = view.rows.peek();
+        let labelled = (0..history.len())
+            .filter_map(|index| history.row(index))
+            .filter(|row| !row.labels().is_empty())
+            .count();
+        (
+            refreshed.refs().map_or(0, |refs| refs.refs.len()),
+            history.len(),
+            labelled,
+            refreshed
+                .local_changes()
+                .map_or(0, |changes| changes.paths()),
+        )
+    });
+    eprintln!(
+        "  {refs} refs; {rows} rows loaded, {labelled} of them labelled; status lists {paths} \
+         paths\n"
+    );
+}
+
+/// C12's large status: Local Changes over a scratch clone of the bench repository, dirtied
+/// there, with thousands of paths — its lists drawn, the first path's diff asked and drawn,
+/// Unstaged scrolled, a filter typed, and a refresh landed while it is shown.
+fn local_changes_check(bench: &str) {
+    let scratch = std::env::var("CAIRN_SCRATCH_REPO")
+        .expect("set CAIRN_SCRATCH_REPO to a scratch clone of the bench repository, dirtied");
+    if let Some(refused) = scratch_refusal(Path::new(bench), Path::new(&scratch)) {
+        panic!("{refused}");
+    }
+    let mut harness = launch(&scratch);
+    let opened = harness.pump(Input::Nothing, 30, landed);
+    opened.report("scratch clone: opening, its large status among what lands");
+    describe_landed(&harness);
+    let paths = harness.test.run_in(|| {
+        harness
+            .view
+            .refreshed
+            .peek()
+            .local_changes()
+            .map_or(0, |changes| changes.paths())
+    });
+    assert!(
+        paths >= 1_000,
+        "the scratch clone's status lists only {paths} paths"
+    );
+
+    // Local Changes pressed: its lists drawn and the first path's diff asked and drawn.
+    let mut main = harness.view.sidebar.main;
+    harness.test.run_in(|| main.set(MainView::LocalChanges));
+    let shown = harness.pump(Input::Nothing, 20, |view| {
+        view.local.state.peek().has_lists()
+            && view
+                .diff
+                .peek()
+                .working_shown()
+                .is_some_and(|shown| !matches!(shown, crate::diff_state::WorkingShown::Waiting))
+    });
+    shown.report("Local Changes shown: both lists drawn, the first path's diff asked and drawn");
+    let (unstaged, staged) = harness.test.run_in(|| {
+        let state = harness.view.local.state.peek();
+        let lists = crate::local_changes_state::drawn_changes(&state);
+        (
+            lists.len(cairn_model::ChangeList::Unstaged),
+            lists.len(cairn_model::ChangeList::Staged),
+        )
+    });
+    eprintln!(
+        "  Unstaged {unstaged} rows, Staged {staged} rows; the view draws {:?}",
+        visible_texts(&harness.test, 14)
+    );
+
+    let unstaged_list = (f64::from(crate::sidebar_state::SIDEBAR_WIDTH) + 120., 150.);
+    let mut scrolled = 0;
+    let scrolling = harness.pump(
+        Input::Scroll {
+            x: unstaged_list.0,
+            y: unstaged_list.1,
+            dy: -2_400.,
+        },
+        0,
+        move |_| {
+            scrolled += 1;
+            scrolled > 120
+        },
+    );
+    scrolling.report("Unstaged scrolled, 100 rows a frame");
+
+    let mut filter = harness.view.local.filter_text;
+    harness
+        .test
+        .run_in(|| filter.set("cairn-new-05".to_owned()));
+    let filtering = harness.pump(Input::Nothing, 10, |view| {
+        let state = view.local.state.peek();
+        state.text() == "cairn-new-05" && state.is_settled()
+    });
+    filtering.report("a filter typed: its rows asked of a worker and drawn");
+    harness.test.run_in(|| filter.set(String::new()));
+    let _ = harness.pump(Input::Nothing, 5, |view| {
+        view.local.state.peek().is_settled()
+    });
+
+    // A refresh while the view is shown — what focus gained asks: the status read again, laid
+    // out on the refresh thread, the lists replaced and the chosen path asked again.
+    let before = harness
+        .test
+        .run_in(|| harness.view.local.state.peek().serial());
+    harness.handle.submit(Request::Refresh);
+    let refreshing = harness.pump(Input::Nothing, 20, move |view| {
+        view.local.state.peek().serial() > before
+            && view.diff.peek().working_choice().map(|choice| choice.lists)
+                == Some(view.local.state.peek().serial())
+    });
+    refreshing.report("a refresh landed while Local Changes is shown: the lists replaced");
+    eprintln!(
         "  paint, raster snapshot encoded to PNG (an upper bound): {:.2} ms",
         ms(harness.paint())
     );
+}
+
+/// The first `count` texts drawn anywhere in the window, top to bottom.
+fn visible_texts(test: &TestingRunner, count: usize) -> Vec<String> {
+    let mut texts: Vec<(f32, f32, String)> = test.find_many(|node, element| {
+        let area = node.layout().area;
+        let text = if let Some(label) = Label::try_downcast(element) {
+            Some(label.text.to_string())
+        } else {
+            Paragraph::try_downcast(element).map(|paragraph| {
+                paragraph
+                    .spans
+                    .iter()
+                    .map(|span| span.text.as_ref())
+                    .collect()
+            })
+        };
+        text.filter(|_| area.min_x() > crate::sidebar_state::SIDEBAR_WIDTH && area.min_y() < HEIGHT)
+            .map(|text| (area.min_y(), area.min_x(), text))
+    });
+    texts.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    texts
+        .into_iter()
+        .take(count)
+        .map(|(_, _, text)| text)
+        .collect()
+}
+
+/// Why `scratch` may not stand in for a scratch clone of `bench`, or `None` when it may: it is
+/// the bench, or inside it, or holds it; its git directory — `.git`, or the one a `.git` file's
+/// `gitdir:` line names, a symbolic link followed — or the common directory a linked worktree's
+/// `commondir` names is inside the bench; or it borrows objects through `alternates`. Read with
+/// `std::fs` alone: the check runs no `git`. A read in a repository whose git directory is the
+/// bench's would read, and could leave files in, the bench.
+fn scratch_refusal(bench: &Path, scratch: &Path) -> Option<String> {
+    let canonical = |path: &Path| {
+        std::fs::canonicalize(path).map_err(|error| format!("{}: {error}", path.display()))
+    };
+    let (bench, scratch) = match (canonical(bench), canonical(scratch)) {
+        (Ok(bench), Ok(scratch)) => (bench, scratch),
+        (Err(error), _) | (_, Err(error)) => return Some(error),
+    };
+    if scratch.starts_with(&bench) || bench.starts_with(&scratch) {
+        return Some("the scratch clone is the bench repository, inside it or holding it".into());
+    }
+    let dot = scratch.join(".git");
+    let git_dir: PathBuf = match std::fs::read_to_string(&dot) {
+        // A `.git` file: a linked worktree's, or a separate git directory's.
+        Ok(file) => match file.lines().find_map(|line| line.strip_prefix("gitdir: ")) {
+            Some(named) => scratch.join(named.trim()),
+            None => return Some(format!("{} names no git directory", dot.display())),
+        },
+        Err(_) => dot,
+    };
+    let git_dir = match canonical(&git_dir) {
+        Ok(git_dir) => git_dir,
+        Err(error) => return Some(error),
+    };
+    let common = match std::fs::read_to_string(git_dir.join("commondir")) {
+        Ok(named) => match canonical(&git_dir.join(named.trim())) {
+            Ok(common) => common,
+            Err(error) => return Some(error),
+        },
+        Err(_) => git_dir.clone(),
+    };
+    if git_dir.starts_with(&bench) || common.starts_with(&bench) {
+        return Some(format!(
+            "the scratch clone's git directory ({}) is the bench repository's",
+            common.display()
+        ));
+    }
+    if common.join("objects/info/alternates").exists() {
+        return Some(
+            "the scratch clone borrows objects through alternates: a read there could touch the \
+             bench"
+                .into(),
+        );
+    }
+    None
+}
+
+/// Phase 09 QA's TC2: the window check's guard refuses every scratch that would read the
+/// bench's git directory — the bench itself, a directory inside it, a linked worktree of it, a
+/// `.git` symbolic link to it, a clone borrowing objects — and accepts a clone of its own.
+/// Built with `std::fs` in the temporary directory; no `git` runs. Caught by: a guard that
+/// reads only `<scratch>/.git/objects/info/alternates` (a linked worktree passes).
+#[test]
+fn the_scratch_guard_refuses_whatever_shares_the_benchs_git_directory() {
+    let root = std::env::temp_dir().join(format!("cairn-scratch-guard-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let make = |path: &Path| std::fs::create_dir_all(path).unwrap_or_else(|e| panic!("{e}"));
+    let write =
+        |path: &Path, text: &str| std::fs::write(path, text).unwrap_or_else(|e| panic!("{e}"));
+    let bench = root.join("bench");
+    make(&bench.join(".git/objects/info"));
+    make(&bench.join(".git/worktrees/linked"));
+    write(&bench.join(".git/worktrees/linked/commondir"), "../..\n");
+
+    let clone = root.join("clone");
+    make(&clone.join(".git/objects/info"));
+    assert_eq!(
+        scratch_refusal(&bench, &clone),
+        None,
+        "a clone of its own was refused"
+    );
+
+    let linked = root.join("linked");
+    make(&linked);
+    write(
+        &linked.join(".git"),
+        &format!(
+            "gitdir: {}\n",
+            bench.join(".git/worktrees/linked").display()
+        ),
+    );
+    let linked_relative = root.join("linked-relative");
+    make(&linked_relative);
+    write(
+        &linked_relative.join(".git"),
+        "gitdir: ../bench/.git/worktrees/linked\n",
+    );
+    let symlinked = root.join("symlinked");
+    make(&symlinked);
+    std::os::unix::fs::symlink(bench.join(".git"), symlinked.join(".git"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let borrowing = root.join("borrowing");
+    make(&borrowing.join(".git/objects/info"));
+    write(
+        &borrowing.join(".git/objects/info/alternates"),
+        &format!("{}\n", bench.join(".git/objects").display()),
+    );
+    let inside = bench.join("sub");
+    make(&inside);
+    for (name, scratch) in [
+        ("the bench", &bench),
+        ("a directory inside it", &inside),
+        ("a linked worktree", &linked),
+        ("a linked worktree named relatively", &linked_relative),
+        ("a .git symbolic link", &symlinked),
+        ("a clone borrowing objects", &borrowing),
+    ] {
+        assert!(
+            scratch_refusal(&bench, scratch).is_some(),
+            "{name} was accepted"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
 }

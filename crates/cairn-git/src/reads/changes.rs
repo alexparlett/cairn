@@ -203,6 +203,11 @@ impl RawRecords {
         }
     }
 
+    /// How many files the records named so far.
+    pub(super) fn len(&self) -> usize {
+        self.files.len()
+    }
+
     pub(super) fn finish(self, arguments: &str) -> Result<Vec<ChangedFile>, Error> {
         let unexpected = |record: String| Error::UnexpectedGitOutput {
             arguments: arguments.to_owned(),

@@ -16,7 +16,6 @@
 //! repository thread once it has read the refs it counts, under the epoch the refresh was
 //! given, so a refresh that supersedes this one supersedes its count too.
 
-use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
@@ -55,32 +54,48 @@ pub(super) struct Refreshing<'a> {
 /// The refresh thread's loop: until it is told to stop, every handle is gone, or the
 /// repository closes. A status taken up stands for every status queued behind it: they were
 /// all asked before it began, so one read answers them all — which is how the refreshes
-/// asked while a status ran become exactly one follow-up.
+/// asked while a status ran become exactly one follow-up. The other jobs taken off the
+/// queue with them — the newest refresh's ahead/behind among them — are served before that
+/// status starts, so a count waits behind at most the status that was running when its
+/// refresh was asked, never behind the follow-up too.
 pub(super) fn serve_refreshes(shared: &SharedRepository, serving: &Refreshing<'_>) {
     let repo = shared.to_worker();
-    // Jobs read off the queue while coalescing statuses, served in their turn.
-    let mut held = VecDeque::new();
-    loop {
-        let job = match held.pop_front() {
-            Some(job) => job,
-            None => match serving.jobs.recv() {
-                Ok(job) => job,
-                Err(_) => break,
-            },
-        };
+    while let Ok(job) = serving.jobs.recv() {
         if serving.epochs.is_stopping() {
             break;
         }
         match job {
             RefreshJob::Status { epoch } => {
-                held.extend(coalesced(serving.jobs));
+                for other in coalesced(serving.jobs) {
+                    if !serve_other(&repo, other, serving) {
+                        return;
+                    }
+                }
                 status(&repo, epoch, serving);
             }
-            RefreshJob::AheadBehind { epoch, snapshot } => {
-                ahead_behind(&repo, &snapshot, epoch, serving);
+            other => {
+                if !serve_other(&repo, other, serving) {
+                    return;
+                }
             }
-            RefreshJob::Stop => break,
         }
+    }
+}
+
+/// Serves a job that is not a status; `false` when the thread is to stop.
+fn serve_other(repo: &Repository, job: RefreshJob, serving: &Refreshing<'_>) -> bool {
+    if serving.epochs.is_stopping() {
+        return false;
+    }
+    match job {
+        RefreshJob::AheadBehind { epoch, snapshot } => {
+            ahead_behind(repo, &snapshot, epoch, serving);
+            true
+        }
+        RefreshJob::Stop => false,
+        // Coalesced away before it reaches here; one that did would be answered by the
+        // status about to start.
+        RefreshJob::Status { .. } => true,
     }
 }
 

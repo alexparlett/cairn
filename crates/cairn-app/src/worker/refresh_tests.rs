@@ -284,12 +284,13 @@ fn a_refresh_cancels_neither_a_page_being_walked_nor_a_diff_being_read() {
     drop(handle);
 }
 
-/// A `status` that hangs until `$DIR/release` exists, writing its pid — the leader of its
-/// process group — to a line of `$DIR/started` as it begins; bounded, so a failing test
+/// A `status` that hangs until `$DIR/release` exists, or `$DIR/release.<pid>` releases it
+/// alone, writing its pid — the leader of its process group — to a line of `$DIR/started` as
+/// it begins; bounded, so a failing test
 /// leaves nothing running long. The stub's `PATH` is its own directory, so only the shell's
 /// builtins and programs named by their path run.
 const STATUS_HANGS: &str = "  echo $$ >> \"$DIR/started\"\n  n=0\n  \
-     while [ ! -e \"$DIR/release\" ] && [ $n -lt 600 ]; do /bin/sleep 0.05; n=$((n+1)); done\n  \
+     while [ ! -e \"$DIR/release\" ] && [ ! -e \"$DIR/release.$$\" ] && [ $n -lt 600 ]; do /bin/sleep 0.05; n=$((n+1)); done\n  \
      exit 0";
 
 /// R11.2 and the QA brief: a slow status — 736 ms on a stat-dirty rust-lang/rust — runs on
@@ -414,20 +415,26 @@ impl Drop for Release<'_> {
 
 /// R10.3 as amended (the user's decision of 2026-10-07), and phase 06 QA's DO1: refreshes
 /// asked while a `git status` runs do not end it — it runs on, finishes, and its answer is
-/// drawn — and however many there were, exactly one follow-up status runs after it, whose
-/// answer is drawn after the first's. Deterministic: the first status cannot finish before
-/// the test releases it, and the three refreshes are asked while it is held. Caught by: a
-/// refresh that supersedes the status again (the first `git` is ended and its answer never
-/// drawn), coalescing that drops the follow-up (one status), or a follow-up per refresh
-/// (four).
+/// drawn — and however many there were, exactly one follow-up status runs after it. The
+/// newest refresh's count is drawn before that follow-up finishes — it waits behind the
+/// status that was running, not behind the follow-up too — and is the one count drawn.
+/// Deterministic: each status is released by the test, one at a time. Caught by: a refresh
+/// that supersedes the status again (the first `git` is ended and its answer never drawn),
+/// coalescing that drops the follow-up (one status) or the jobs it takes off the queue (no
+/// count), a follow-up per refresh (four statuses), or the count served after the follow-up
+/// (it never arrives while the follow-up is held).
 #[test]
 fn a_refresh_leaves_a_running_status_to_finish_and_asks_one_more_after_it() {
     let fixture = Refreshable::new("cairn-refresh-status-coalesces");
     let stub = StubGit::wrapping("status", STATUS_HANGS);
     let (home, runtime) = (Home::new(), RuntimeDir::new());
     let (handle, mut updates) = with_slow_status(&fixture, &stub, (&home, &runtime));
-    let release = stub.directory.join("release");
-    let _released = Release(&release);
+    let release = |pid: i32| {
+        let file = stub.directory.join(format!("release.{pid}"));
+        std::fs::write(&file, "")
+            .unwrap_or_else(|error| panic!("writing {}: {error}", file.display()));
+    };
+    let _released = Release(&stub.directory.join("release"));
 
     handle.submit(Request::Refresh);
     let first = until_statuses_started(&stub, 1)[0];
@@ -435,25 +442,19 @@ fn a_refresh_leaves_a_running_status_to_finish_and_asks_one_more_after_it() {
         handle.submit(Request::Refresh);
     }
     // The last refresh's refs while the status is held (the earlier ones' are superseded):
-    // the refs are not held up by it, and it is still running. Its count waits behind the
-    // status on the refresh thread.
+    // the refs are not held up by it, and it is still running.
     let deadline = Instant::now() + WAIT;
-    let mut held = Answered::default();
-    let mut refs_seen = 0;
-    while refs_seen < 1 {
-        match next_by(&mut updates, deadline, &held.others) {
-            Some(update) => {
-                if matches!(update, Update::Refs { .. }) {
-                    refs_seen += 1;
-                }
-                held.take(update);
-            }
-            None => panic!("the stream ended: {held:?}"),
+    let mut answered = Answered::default();
+    while answered.refs.is_empty() {
+        match next_by(&mut updates, deadline, &answered.others) {
+            Some(update) => answered.take(update),
+            None => panic!("the stream ended: {answered:?}"),
         }
     }
     assert_eq!(
-        held.status, 0,
-        "a status was answered while it was held: {held:?}"
+        (answered.status, answered.ahead_behind),
+        (0, 0),
+        "an answer behind the held status arrived: {answered:?}"
     );
     #[cfg(target_os = "linux")]
     assert!(
@@ -466,9 +467,23 @@ fn a_refresh_leaves_a_running_status_to_finish_and_asks_one_more_after_it() {
         "a second status started beside the first"
     );
 
-    std::fs::write(&release, "")
-        .unwrap_or_else(|error| panic!("writing {}: {error}", release.display()));
-    let mut answered = Answered::default();
+    // The first released: its answer, then the newest count — before the follow-up, which
+    // is held, can finish.
+    release(first);
+    let deadline = Instant::now() + WAIT;
+    while answered.status < 1 || answered.ahead_behind < 1 {
+        match next_by(&mut updates, deadline, &answered.others) {
+            Some(update) => answered.take(update),
+            None => panic!("the stream ended after {answered:?}"),
+        }
+    }
+    assert_eq!(
+        answered.status, 1,
+        "the follow-up finished while held: {answered:?}"
+    );
+    let follow_up = until_statuses_started(&stub, 2)[1];
+
+    release(follow_up);
     let deadline = Instant::now() + WAIT;
     while answered.status < 2 {
         match next_by(&mut updates, deadline, &answered.others) {
@@ -478,6 +493,11 @@ fn a_refresh_leaves_a_running_status_to_finish_and_asks_one_more_after_it() {
     }
     let later = arriving_within(&mut updates, Duration::from_millis(1_500));
     assert_eq!(later.status, 0, "more than one follow-up status: {later:?}");
+    assert_eq!(
+        answered.ahead_behind + later.ahead_behind,
+        1,
+        "not the newest refresh's count alone: {answered:?} {later:?}"
+    );
     assert_eq!(
         statuses_started(&stub).len(),
         2,

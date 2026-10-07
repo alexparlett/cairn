@@ -3,6 +3,82 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-07 — phase 07: chips on rows, stash rows, REFS and the title bar
+
+Packet mode, on `feature/refs-and-status`. QA pending (the coordinator's, fresh reviewers).
+
+**The user's decisions, relayed by the coordinator (2026-10-07):**
+
+- **Q1 — option A: a third porcelain read.** A stash's changes are `git stash show --raw -z
+  --no-abbrev --no-color --no-ext-diff --no-textconv --no-relative --end-of-options <stash>`
+  (`reads/stash_changes.rs`), git reading `stash.showIncludeUntracked` itself, because with
+  it set git pairs a stash's untracked files with its tracked changes in one diff — verified:
+  a tracked `a` deleted beside an untracked `b` of its content is `R100 a b` in `git stash
+  show --include-untracked`, where two plumbing diffs print `D a`, `A b` — and no plumbing
+  can ask that without writing a tree. Guard renamed `the_porcelain_reads_are_the_three_named_queries`.
+- **Q2 — option (i): one row per stash commit, the newest entry's.** `git stash store` can
+  file a commit twice; `seeds::resolve` keeps the first (newest) entry of each commit.
+
+**Shipped.** Chips on rows (`ref_chips.rs`, `ref_glyphs.rs`), the bold `HEAD` subject and
+a stash row's `stash@{n}` chip (R5); the REFS row (R6.1); a stash's changes as `git stash
+show` lists them, each untracked-side file read from the third parent (R6.2); the title bar's
+status box (R7.1); and each place a row's lines reach painted once. Model: `RowLabels::find`,
+`Label::short_name`, labels kept by name, `History::serial`.
+
+**C7 and the QA brief, each pinned, each pin checked to fail under a named mutation**
+(`mutate.py`: one edit, the named tests run, the file restored and touched):
+
+| Case | Pin | Mutation it fails under |
+| --- | --- | --- |
+| Twenty refs clip, no wrap, row height kept | `twenty_refs_are_clipped_at_the_columns_edge_and_the_row_keeps_its_height` | the column's `overflow(Clip)` removed |
+| Chips stop being built at the edge | `chips_stop_being_built_at_the_rooms_edge_however_many_refs_the_commit_has`; `only_a_viewport_of_labelled_rows_is_built_and_each_lays_out_a_columns_worth_of_chips` | the loop's `if laid.full() { break }` removed (each) |
+| Compact: local+upstream one chip with glyph; a second remote keeps its chip; an upstream elsewhere not folded | `a_branch_and_its_upstream_at_one_commit_are_one_chip_and_nothing_else_is_folded` | `folded.contains` skip off; the current-first push off |
+| Only a remote-tracking upstream folds; none without a snapshot | `only_a_remote_tracking_upstream_is_folded_and_only_with_a_snapshot` | the `kind == RemoteTracking` filter off |
+| Current branch first, then the snapshot order | `the_current_branch_leads_then_branches_remotes_and_tags_in_order` | the current-first push off |
+| Each kind its glyph, before its name | `each_kind_of_chip_draws_its_glyph_before_its_name_and_a_plain_branch_none`; `every_glyph_paints_a_shape_no_other_glyph_paints` | a tag's cap removed |
+| Bold `HEAD` subject | `the_head_rows_subject_is_bold_and_no_other`; through the window, `a_rows_chips_and_its_refs_row_are_drawn_against_the_refreshs_snapshot` | the bold removed; the window's `.head(..)` removed |
+| The room spent by a lower bound | `the_room_a_chip_is_counted_by_never_exceeds_what_it_is_drawn_at` | `MIN_ADVANCE` 2 → 7 |
+| Laid out once per row built, not per frame | `a_rows_chips_are_laid_out_once_per_row_built_and_never_per_frame` | `same_refs` answering false; `room` compared unequal |
+| The window hands the list the snapshot | `a_rows_chips_and_its_refs_row_are_drawn_against_the_refreshs_snapshot` | `.refs(refs)` removed |
+| REFS row above SHA, none for a commit with no ref | that test; `the_refs_row_stands_above_the_id_and_only_when_a_ref_points_at_the_commit` | `.refs(refs_of(..))` removed |
+| The selected row found once per history | `a_row_is_looked_for_once_per_history_and_found_where_it_arrives` | the finder keyed by row alone, not history |
+| Stash row: chip before its message; asks `git stash show` | `a_stash_row_draws_its_message_and_asks_what_it_changed_on_its_base` | (was `Comparison::Commit`; red until the stash comparison) |
+| A stash lists what `git stash show --name-status` lists, unset and set | `a_stash_lists_what_git_stash_show_lists_with_the_setting_unset_and_set` (host, 2.30.9, 2.32.7) | the stash branch of `changes` skipped; `--include-untracked` added |
+| Untracked-side files read from the third parent | `each_file_of_a_stash_is_read_from_the_side_it_is_on`, `a_copy_into_an_untracked_file_is_read_from_the_untracked_commit` | `Trees::untracked` `None`; the copy-as-rename adaptation off (the fixture first had unedited copies and renames, which ask git nothing, and let the first survive; both now edit a line) |
+| One row per stash commit | `a_stash_commit_filed_twice_is_one_row_its_newest_entrys` | the `seen.insert` filter off |
+| Title bar: dirty, counts, gone, detached, unborn | `the_title_bar_names_the_repository_the_branch_and_how_far_it_is_from_its_upstream` | `*` always; gone answered as counts; the detached text |
+| The porcelain guard | `the_porcelain_read_matcher_catches_the_shapes_it_claims`, `the_porcelain_reads_are_the_three_named_queries` | the stash half unread; `show` unchecked; writing subcommands unchecked; `"pop"` in the read |
+| Lines painted once a place | `lines_sharing_the_last_column_are_painted_once_each_place` | (asserts the stroke count) |
+
+**Measured** (`measures_drawing_a_viewport_over_many_open_lanes_and_a_crowded_rows_chips`,
+`#[ignore]`d in `crates/cairn-ui/tests/drawn_lanes.rs`; release, median of seven, 1,400 ×
+900 window, the CPU raster with PNG encoding — about 26 ms of every paint figure is that
+baseline). RR2's fixture laid out as the walk lays it out, each branch tip labelled:
+
+| Open lines | Where | Build and lay out | Paint (before the dedupe) | Paint (after) |
+| --- | --- | --- | --- | --- |
+| 100 | under every line | 0.22 ms | 28.4 ms | 26.8 ms |
+| 1,000 | under every line | 0.39 ms | 50.5 ms | 26.8 ms |
+| 5,000 | under every line | 1.05 / 0.76 ms | 146.2 ms | 26.2 ms |
+| 5,000 | mid-line | 0.27 ms | 27.4 ms | 26.4 ms |
+
+Under 5,000 open lines a viewport painted 175,000 strokes, almost all onto the last column
+the lanes past `MAX_DRAWN_LANES` share: `row_geometry` now paints each place once, by the
+line painted there last. Chips: a commit with 10,000 refs lays out 15 chips for 600 px in
+0.3 µs. Labels are not the stopping rule's threat to the frame.
+
+**Decided and batched for the user (not approved):** label order (current branch, then
+local, remote-tracking, tags — Fork's local-before-remote; tags last where git puts them
+before remotes, Fork OPEN 3); compaction by the configured upstream only, read from the
+refresh's snapshot (Fork OPEN 4); chips cut by building only what a lower bound fits;
+glyphs painted as paths (generic remote a cloud); title-bar counts as Fork prints them
+(`18↓ 1↑`, a zero left out, nothing when level) where R7.1 wrote `↓n ↑m`; `HEAD detached
+at <short>` and `<name> (no commits yet)`; `upstream gone`; the repository's name the last
+component of the opened path (a subdirectory opened names the subdirectory); no `*` for an
+unreadable index; the REFS row's chips the row's, in its lane colour, laid out for the
+window's width; the title bar keeps "Cairn" and drops the full path (the notice still
+shows it); a stash's REFS row its `stash@{n}` chip; and painting each place once.
+
 ## 2026-10-07 — phase 06 QA
 
 Fresh qa-checklist (NOT READY on QC1 = TC1), responsiveness-reviewer, test-coverage-auditor,

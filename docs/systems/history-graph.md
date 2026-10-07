@@ -25,7 +25,10 @@ reaches as a row of its own ("From every ref, labelled, with stash rows" below).
 The window opens its history from the snapshot its first refresh reads on the history
 thread, and reopens it whenever a later refresh — on focus, after a fetch, on the
 Refresh action — finds what the graph draws changed ("Refresh", under the worker
-boundary below). No view draws the labels or the stash rows' chips yet (phase 07).
+boundary below). Each row draws its refs as Fork's chips between the graph and the
+subject, a stash's row its `stash@{n}` chip, and `HEAD`'s subject bold ("Chips on a
+row", under the view below); the title bar names the repository, its branch and how
+far that branch is from its upstream ("The title bar", there too).
 
 ## The path a commit takes
 
@@ -203,8 +206,12 @@ a stash store; each store holds one entry per such row, filed in row order and
 found by a binary search on the row's number, the last entry filed under a number
 read (one a row that could not be held left is never read: the row held next under
 that number filed its own after it). A row with neither costs nothing for them, and
-both stores grow in fixed chunks. A row is read as `HistoryRow::labels` (a
-`RowLabels`, iterating `Label`s) and `HistoryRow::content`. Pinned by
+both stores grow in fixed chunks. A row's labels are kept bytewise by full name — the
+snapshot's own order, into which `RowsPage::push_labelled` sorts any other — so
+`RowLabels::find` finds one by name with a binary search
+(`a_rows_labels_are_kept_by_name_and_each_is_found_by_its_own`). A row is read as
+`HistoryRow::labels` (a `RowLabels`, iterating `Label`s, each with its
+`Label::short_name`) and `HistoryRow::content`. Pinned by
 `each_row_reads_back_its_own_labels_and_no_others`,
 `a_stash_row_reads_back_as_its_stash_and_is_found_by_its_identity`,
 `a_row_held_after_one_that_could_not_be_reads_its_own_labels_and_stash` and
@@ -368,7 +375,10 @@ list. Nothing about a stash seeds the walk. When the request is resolved, each s
 commit is read for its author, its author date and its committer date, and its base's
 committer date — two reads per stash, polling nothing — and a stash whose commit cannot
 be read, dropped and pruned since the snapshot, has no row, the walk going on without it
-(`a_stash_whose_commit_is_gone_since_the_snapshot_has_no_row`); the resolved labels and
+(`a_stash_whose_commit_is_gone_since_the_snapshot_has_no_row`); and a stash commit
+`git stash store` filed twice in the list is one row, its newest entry's — a commit is
+one row in a graph (the user's decision, 2026-10-07; the sidebar lists every entry) —
+(`a_stash_commit_filed_twice_is_one_row_its_newest_entrys`); the resolved labels and
 stashes (`Decoration`) are shared by every page and cursor of the walk, as its tips are
 — the labels by reference, never copied — so a cold page resumed from a cursor carries
 the labels and stashes of the snapshot the walk began from.
@@ -755,6 +765,87 @@ import — are rejected outside `cairn-model` by
   because a single trigger row is a list that quietly stops loading on a tall
   window.
 
+### Chips on a row
+
+A row draws the refs pointing at its commit as Fork's chips between the graph and the
+subject (refs-and-status R5; `crates/cairn-ui/src/ref_chips.rs`): outlined, filled with a
+tint of the row's lane colour — a tag indigo whatever its lane — each kind told by its
+glyph and shape (R5.5): a local branch a plain chip, the current one with a check mark
+before its name; a remote-tracking ref and a tag a glyph — a generic remote's cloud (a
+forge's icon is packet 6's) and a tag — in a cap of their own at the chip's left; a
+stash's row a `stash@{n}` chip with a box. The glyphs are painted as paths on a canvas
+(`crates/cairn-ui/src/ref_glyphs.rs`), no font involved, every one in the chip's text
+colour, so what tells two kinds apart is the shape alone
+(`every_glyph_paints_a_shape_no_other_glyph_paints`, over the pixels); a chip is keyed by
+its kind and name, since a canvas is repainted only when its layout changes. `HEAD`'s
+row's subject is bold.
+
+- **Order**: the current branch first — git's `HEAD -> main` leads too — then the row's
+  refs in the snapshot's order, local branches, remote-tracking refs, tags, each by name:
+  Fork's local before remote; where Fork puts tags is not recorded
+  (`fork-refs-and-status-ui.md`, OPEN 3), and git puts them before the remote-tracking
+  refs.
+- **Compact labels** (R5.2, Fork's default): a local branch whose upstream is a
+  remote-tracking ref labelling the same row draws that upstream as the remote glyph in a
+  cap of its own chip, and the upstream draws no chip; any other remote's ref at that
+  commit keeps its chip; an upstream that is a local branch (`remote = .`) is never
+  folded; with no snapshot yet nothing is. Which ref is a branch's upstream is read from
+  the refresh's snapshot (`HistoryList::refs`); that both label the row is read from the
+  row (`RowLabels::find`).
+- **Clipped, never counted** (R5.3): the chips and the subject share the subject's
+  column, which clips them; many chips push the subject out, as in Fork. Chips stop being
+  BUILT once the column's room is spent: the list measures its width (`on_sized`), the
+  room is what the fixed columns and the graph leave (`label_room`), and each chip is
+  counted by a lower bound of its width (`min_width`: its padding, its cap and check mark,
+  and two pixels a character, under any letter's advance at the chip's size), so the
+  column is always filled to its edge and at most a column's worth of lower bounds is
+  built past it. Laying a row out reads the current branch's label and each upstream by
+  a search, and stops at the first label past the room: a commit with 10,000 refs lays
+  out 15 chips for 600 px in 0.3 µs (the reporter above).
+- **Laid out once per row built**: `render_of` lays the chips out as the list builds the
+  row (`RowRender::chips`, `RowRender::head`), and `CommitRow` only draws them, so a frame
+  that does not build the row lays nothing out
+  (`a_rows_chips_are_laid_out_once_per_row_built_and_never_per_frame`, counting layouts
+  across frames that redraw the window but not the list, and across a scroll).
+
+Pinned by `crates/cairn-ui/tests/ref_chips.rs` —
+`a_branch_and_its_upstream_at_one_commit_are_one_chip_and_nothing_else_is_folded`,
+`only_a_remote_tracking_upstream_is_folded_and_only_with_a_snapshot`,
+`the_current_branch_leads_then_branches_remotes_and_tags_in_order`,
+`chips_stop_being_built_at_the_rooms_edge_however_many_refs_the_commit_has`,
+`each_kind_of_chip_draws_its_glyph_before_its_name_and_a_plain_branch_none`,
+`the_head_rows_subject_is_bold_and_no_other`,
+`twenty_refs_are_clipped_at_the_columns_edge_and_the_row_keeps_its_height`,
+`the_room_a_chip_is_counted_by_never_exceeds_what_it_is_drawn_at`,
+`the_room_is_the_subject_columns_width` — by the viewport twin with labelled rows,
+`only_a_viewport_of_labelled_rows_is_built_and_each_lays_out_a_columns_worth_of_chips`
+(`crates/cairn-ui/tests/history_list.rs`: 100,000 rows, forty of them labelled by 5,003
+refs), and, through the window, by
+`a_rows_chips_and_its_refs_row_are_drawn_against_the_refreshs_snapshot` and
+`a_stash_row_draws_its_message_and_asks_what_it_changed_on_its_base`
+(`crates/cairn-app/src/window.rs`). The Commit tab's REFS row draws the same chips
+(`docs/systems/diff.md`, "REFS").
+
+### The title bar
+
+The title bar's status box (`cairn_ui::StatusBox`, `crates/cairn-ui/src/status_box.rs`;
+R7.1, Fork's section 9) names the repository — the last component of the path it was
+opened at, `*` after it while the last status read listed a change — then a branch glyph
+and the current branch, and its distance from its upstream as Fork prints it, behind then
+ahead, `18↓ 1↑`, a zero count left out and nothing for a branch level with its upstream;
+or `upstream gone` for a configured upstream no ref is (git's `[gone]`); a detached `HEAD`
+as `HEAD detached at <short id>` and an unborn branch as `<name> (no commits yet)`, in
+git's words. The arrows are IBM Plex Mono's, which the application embeds. The window
+builds it from what the last refresh answered (`window::status_box`): the snapshot's
+`HEAD` and the branch's upstream, the branch's counts found by name
+(`RefreshState::ahead_behind_of`, a binary search, the counts coming in the snapshot's
+order) and whether status listed anything — each as old as its answer, a status up to
+one refresh behind (R10.3 as amended). An unreadable index or no working tree draws no
+`*`. Pinned by `the_title_bar_names_the_repository_the_branch_and_how_far_it_is_from_its_upstream`
+(`crates/cairn-app/src/window.rs`: a dirty branch with counts, a gone upstream, a detached
+and an unborn `HEAD`), `a_branchs_counts_are_found_by_its_name`
+(`crates/cairn-app/src/refresh_state.rs`) and the status box's own tests.
+
 ## What enforces this
 
 | Rule | Twin |
@@ -765,6 +856,8 @@ import — are rejected outside `cairn-model` by
 | Only `crates/cairn-app/src/worker/` reaches a repository or waits | `the_ui_thread_never_waits_on_repository_work` |
 | The history list renders through a virtualizing view | `a_history_sized_list_renders_through_a_virtualizing_view` |
 | That view builds one viewport of rows at 1,000 and at 100,000 | `only_a_viewport_of_rows_is_built_however_long_the_history` |
+| ... and with labelled rows, each laying out a column's worth of chips | `only_a_viewport_of_labelled_rows_is_built_and_each_lays_out_a_columns_worth_of_chips` |
+| A row's chips are laid out once per row built, never per frame | `a_rows_chips_are_laid_out_once_per_row_built_and_never_per_frame` (`crates/cairn-ui/src/history_list.rs`) |
 | Every row draws the edges the assigner drew before rows were compacted | `every_row_draws_the_edges_the_assigner_retained_before_compaction`, `the_cairn_checkouts_rows_draw_what_the_assigner_drew_before_compaction`, `each_cold_page_and_resumed_session_draws_on_its_own_what_the_assigner_drew_for_it`, `rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew` |
 | Every row draws the subject, author, date, short id and merge marker it drew before rows were slimmed | `every_crafted_row_draws_what_it_drew_before_rows_were_slimmed`, `every_row_of_the_cairn_checkout_draws_what_it_drew_before_rows_were_slimmed`, `every_row_of_a_braided_history_draws_what_git_prints` (`crates/cairn-git/tests/slim_rows.rs`), `every_row_draws_what_it_drew_before_rows_were_slimmed` (`crates/cairn-ui/tests/drawn_rows.rs`), `the_cairn_checkouts_rows_draw_what_they_drew_before_rows_were_slimmed` and `the_windows_table_agrees_with_the_engines_table_captured_before` (`crates/cairn-app/src/window.rs`) |
 | No kept row owns a heap allocation; a history's stores grow in chunks | the `Copy` assertion beside `StoredRow` in `crates/cairn-model/src/history.rs`, `a_kept_row_is_seventy_two_bytes` (`crates/cairn-model/src/history.rs`), `appending_ten_thousand_rows_allocates_per_chunk_never_per_row` and `reading_a_rows_identity_lane_and_changes_allocates_nothing` (`crates/cairn-model/tests/history_allocations.rs`), and the store tests in `crates/cairn-model/src/chunked_store.rs` |
@@ -875,12 +968,21 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
   holding 100, 1,000 and 5,000 unmerged lines open at once
   (`measures_layout_over_unmerged_refs`): the first page from every ref took 3.1, 8.4 and
   25 ms, and deriving a 40-row viewport's edges under every line 0.03, 0.11 and 0.49 ms
-  (release; numbers in `docs/work/refs-and-status/progress.md`, phase 06). Drawing that
-  many lines is not measured yet.
-- **One stash commit twice in the stash list draws two rows with one identity.**
-  `git stash store` can file the same commit twice; each entry is a row, both
-  `RowId::Stash` of that commit, so `History::position` finds the first and selecting
-  the second highlights the first.
+  (release; numbers in `docs/work/refs-and-status/progress.md`, phase 06). Drawing them
+  is bounded by the places a row paints, not the lines crossing it (`graph_geometry::
+  row_geometry` paints each place once, the lines past `MAX_DRAWN_LANES` sharing the last
+  column): a 35-row viewport under 5,000 open lines builds and lays out in 0.76 ms and
+  paints no slower than one under 100 (`measures_drawing_a_viewport_over_many_open_lanes_and_a_crowded_rows_chips`,
+  `crates/cairn-ui/tests/drawn_lanes.rs`; before, 175,000 strokes added 119 ms a frame to
+  the CPU raster).
+- **Chips read two snapshots.** A row's labels are the snapshot its walk began from; which
+  ref is a branch's upstream, and which branch `HEAD` is on, are read from the refresh's
+  latest. A refresh that changed only an upstream's configuration reopens nothing, so the
+  fold follows it at once; between a refresh's refs arriving and the reopened history's
+  first page, a row may fold, or lead with, by the newer snapshot's word.
+- **No chip is built before the list is measured.** The list learns its width from its
+  first layout (`on_sized`), so the first frame of a list draws its rows without chips and
+  the next with them.
 - **A stash's row is at its date only when its base is near.** A stash whose base
   lies more than `LOOKAHEAD` commits below its date, or past a skewed date, is drawn
   directly above its base instead; one whose stash commit is reached through a ref

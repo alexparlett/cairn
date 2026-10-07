@@ -2,7 +2,7 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 06 done (the refresh: refs on the history thread, status and ahead/behind on a refresh thread; the window walks from every ref and reopens only when what it draws changed), QA adjudicated and confirmed findings fixed, the user's two decisions on it built; phase 07 next.** Integration branch
+**Status: phase 07 implemented (chips on rows, stash rows, the REFS row, a stash's changes as `git stash show` lists them, the title bar), full gate green; its QA is the coordinator's, pending; phase 08 next.** Integration branch
 `feature/refs-and-status`, in the worktree `.claude/worktrees/refs-and-status`,
 packet mode.
 
@@ -108,12 +108,22 @@ that most constrain implementation:
   stash's; a stash's subject is the stash list's message, its date the author date, its
   place by committer date; labels in the snapshot's order. Detail and the alternative in
   progress.md.
-- For the user's end-of-packet batch (phase 05 QA, QC4; not decided): `git stash store` can
-  file one stash commit twice; each entry is a row, both `RowId::Stash` of that commit, so
-  selecting the second highlights the first. Options: drop a repeated stash commit's later
-  entries (one row, the newest `stash@{n}`), or key `RowId::Stash` by its index (which moves
-  as stashes are pushed and dropped). Phases 07 and 08 draw and select stash rows, so it is
-  theirs to settle with the user's answer.
+- Decided by the user (2026-10-07, phase 07): **Q1** — a stash's changes are asked of `git
+  stash show --raw` itself, the third porcelain read (`reads/stash_changes.rs`), git reading
+  `stash.showIncludeUntracked`; guard `the_porcelain_reads_are_the_three_named_queries`.
+  **Q2 (phase 05 QA's QC4)** — a stash commit filed twice is one row, its newest entry's; the
+  sidebar (phase 08) still lists every entry.
+- For the user's end-of-packet batch (phase 07; not decided): label order (current branch
+  first, then local, remote-tracking, tags; Fork's tag position is OPEN 3, git puts tags
+  before remotes); compaction by the configured upstream only, read from the refresh's
+  snapshot; chips cut by building only what a lower bound of their widths fits; glyphs painted
+  as paths, the generic remote a cloud; the title bar's counts as Fork prints them, `18↓ 1↑`
+  with a zero left out, where R7.1 wrote `↓n ↑m`; `HEAD detached at <short>`, `<name> (no
+  commits yet)`, `upstream gone`; the repository named by the opened path's last component; no
+  `*` for an unreadable index; the title bar drops the full path; the REFS row drawn in the
+  row's lane colour and laid out for the window's width, a stash's REFS its `stash@{n}`; and
+  painting each place a row's lines reach once (RR2's drawing half: 5,000 open lines painted
+  175,000 strokes a viewport). Detail in progress.md, phase 07.
 - Bench hygiene (phase 05): a `--shared` scratch clone's `git stash` freshened the bench
   pack's mtime through alternates, and a plain `git status` on the bench moved its `.git`
   directory's mtime; no content changed (progress.md). Later phases: scratch clones with
@@ -134,18 +144,26 @@ fetch's `reload_if` comparison and `Repository::ref_tips` gone.
   mid-match stops (the `|| true` keep-going, a dropped `is_current` and a `None` epoch each
   slip today, since nothing asks the lane).
 
-## Handed to phase 07
+## Handed to phase 07 (done)
 
-- The window keeps what each refresh answered in `View::refreshed` (`RefreshState`: `refs`,
-  `ahead_behind`, `status`, `failure(Refreshed)`); the labels read `HistoryRow::labels`, the
-  toolbar reads `refs().head` and `ahead_behind()`. The accessors other than `refs` carry
-  `expect(dead_code)` until a view reads them.
-- RR2's drawing half: phase 06 measured layout and edge derivation (progress.md); phase 07
-  measures drawing a viewport of rows on the widest fixture.
+Every hand-off is done (progress.md, "phase 07"): the chips read `HistoryRow::labels` and the
+refresh's snapshot, the title bar `refs().head`, `ahead_behind_of` and `status()` (whose
+`expect(dead_code)` went; `ahead_behind()` keeps it for the sidebar, `failure` for the
+sidebar and Local Changes); RR2's drawing half measured, and its cost removed by painting
+each place once; chips stop being built at the column's edge (RR3); labels' order decided
+(batched above); the stash row's R6.2 Commit and Changes built on the user's Q1, QC4 on Q2.
 
-- A row's labels are uncapped (phase 05 QA, RR3): chips must stop being built at the column's
-  edge — R5.3's clip, never a "+N" — so a row labelled by thousands of refs builds what the
-  column shows, not every chip.
+## Handed to phase 08 (from 07)
+
+- The sidebar's chips and glyphs: `cairn_ui::{Chip, ChipKind, RefGlyph, chip_element, tint}`
+  draw a ref as the rows do; `RefGlyph::Current` and `RefGlyph::Branch` are there for the
+  current branch's mark.
+- `RefreshState::ahead_behind()` (each branch's counts, for the sidebar's arrows) and
+  `RefreshState::failure` still carry `expect(dead_code)`; no view says a failed refresh yet
+  — the title bar draws the last answer it has.
+- A stash's sidebar entry lists every entry, a duplicate commit's included; pressing one
+  selects its row (one per commit, its newest entry's) or, with no row, asks
+  `Comparison::Stash` of it.
 
 ## New modules and interfaces
 
@@ -276,6 +294,29 @@ Phase 06 (`docs/systems/history-graph.md`, "Refresh"):
   session's and window's C10 tests, `history_lane`'s stale-tip test; the `#[ignore]`d RR2
   reporter `measures_layout_over_unmerged_refs` in `crates/cairn-git/tests/every_ref.rs`.
 
+Phase 07 (`docs/systems/history-graph.md`, "Chips on a row" and "The title bar";
+`docs/systems/diff.md`, "REFS" and "A stash's changes"):
+
+- `cairn-model`: `RowLabels::find(name)`, `Label::short_name`; `RowsPage::push_labelled`
+  sorts labels by name; `History::serial`.
+- `cairn-git`: `ChangesRequest::stash(id)` (`Subject::Stash`); `reads::stash_changes`
+  (`src/reads/stash_changes.rs`, `git stash show --raw`); `content::Trees` carries the
+  stash's untracked commit, `Trees::for_file`; a stash commit filed twice is one row
+  (`seeds::resolve`).
+- `cairn-ui`: `ref_chips` (`Chip`, `ChipKind`, `row_chips`, `chips_of_row`, `min_width`,
+  `chip_element`, `tint`, `TAG_INDIGO`, `CHIP_*`), `ref_glyphs` (`RefGlyph`, `GLYPH_SIZE`),
+  `status_box` (`StatusBox`, `Tracking`, `head_text`, `counts_text`, `name_text`,
+  `repository_name`, `current_branch`, `NO_COMMITS_YET`, `UPSTREAM_GONE`); `RowRender::{chips,
+  head}`; `HistoryList::refs`; `CommitRow::{chips, head}`; `label_room`; `CommitTab::refs`
+  with `Refs`, `REFS_CAPTION`; `graph_geometry::row_geometry` paints each place once.
+- `cairn-app`: `Comparison::Stash`; `selection::comparison_of(RowId::Stash) =
+  Comparison::Stash`; `row_finder.rs` (`RowFinder`); `detail_pane::refs_of`;
+  `window::status_box`; `RefreshState::ahead_behind_of`.
+- Guard: `the_porcelain_reads_are_the_three_named_queries` (was `..._two_...`),
+  `STASH_READ_FILE`, `STASH_WRITING_SUBCOMMANDS`; `scripts/git-floor.sh` floors 82 and 117.
+- Tests: `crates/cairn-ui/tests/ref_chips.rs`, `crates/cairn-ui/tests/drawn_lanes.rs` (the
+  `#[ignore]`d reporter), `crates/cairn-git/tests/diff/stash.rs`.
+
 ## Validation status
 
 | Phase | Status |
@@ -286,7 +327,7 @@ Phase 06 (`docs/systems/history-graph.md`, "Refresh"):
 | 04 slim rows | done: C16 passes (comparisons pinned at `4205d5d` over crafted fixtures and the Cairn checkout; 52.6 MiB retained for all of rust-lang/rust from every ref, capacity counted, against 64 MiB; no kept row owns a heap allocation); C15 still passes (equivalence on the bench, find 2.21 s); RR1 closed; numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
 | 05 history from every ref | implemented: C6 passes (walked commits = `git rev-list --branches --remotes --tags HEAD` over whole walks, labels = `git log --decorate=full`, stash rows with and without `--include-untracked`, assigner lane and edge tests); C11 first page from every ref 7.3 ms (8.6 ms with the snapshot read) beside `HEAD`'s 7.7 ms, worst stash look-ahead 21.6 ms; C16 52.67 MiB from the snapshot; C15 equivalence holds; the app still walks from `HEAD`; QA adjudicated, confirmed findings fixed (the walk's open cancellable between tips: 103 ms first page at 50,000 tags, cancelled in 6.3 ms); full gate green |
 | 06 worker and refresh | implemented: C10 passes through the real boundary (`a_refresh_reopens_for_a_stash_a_checkout_and_a_moved_ref_and_for_nothing_else`, the refresh tests) and headless with focus set (`focus_gained_after_a_ref_moved_reopens_the_history_keeping_the_chosen_row`); every pin checked against a named mutation (progress.md); RR2 measured; full gate green; QA pending |
-| 07 labels and toolbar | not started |
+| 07 labels and toolbar | implemented: C7 passes (headless: chips, compaction, clipping, ✓, bold `HEAD`, stash chip, REFS, a stash's list against `git stash show --name-status` unset and set on the host's git and both floors); the QA brief's cases pinned; every pin checked against a named mutation (progress.md); RR2's drawing half measured; full gate green; QA pending |
 | 08 sidebar | not started |
 | 09 local changes | not started |
 | 10 QA | not started |

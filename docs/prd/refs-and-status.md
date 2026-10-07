@@ -163,7 +163,9 @@ are later packets'.
 - R4.2 Each stash whose base — the commit it was made on — is a commit the walk
   reaches is a row of its own, merged into the stream by its commit time but
   never after its base (a stash dated older than its base, by clock skew, is
-  drawn directly above it), with one edge: to that commit. A stash whose base no
+  drawn directly above it), with one edge: to that commit. A stash commit filed twice
+  in the stash list (`git stash store`) is one row, its newest entry's (the user's
+  decision, 2026-10-07); the sidebar lists every entry. A stash whose base no
   seed reaches (its branch deleted, its commit rebased or amended away, made on
   a detached `HEAD` that moved on) has no row in the graph, as in Fork
   (`fork-unreachable-stash-base.md`); it stays in the sidebar's Stashes (R8.5).
@@ -220,9 +222,13 @@ are later packets'.
   at the commit, as Fork does; a commit with none shows no row.
 - R6.2 Selecting a stash row shows its message, author and date in the Commit tab
   and, in the Changes tab, what it changed against the commit it was made on —
-  the changes query of that pair, which is what `git stash show` lists — and,
-  where the user's `stash.showIncludeUntracked` is set, the untracked files the
-  stash holds, as `git stash show` then lists them.
+  what `git stash show` lists — and, where the user's `stash.showIncludeUntracked`
+  is set, the untracked files the stash holds, as `git stash show` then lists them.
+  Amended by the user's decision of 2026-10-07: the list is asked of `git stash show`
+  itself, in raw form, as a third porcelain read, because git pairs the untracked
+  files with the tracked changes in one diff that no plumbing can ask without writing
+  a tree; git reads the setting, so git 2.30 and 2.31 list the tracked changes alone,
+  as they do for the user.
 
 ### R7 — The title bar names the branch (L9)
 

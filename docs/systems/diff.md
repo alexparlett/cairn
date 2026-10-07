@@ -245,7 +245,8 @@ absence of a program that could never have run.
 `Repository::changes(&GitBinary, &ChangesRequest, &impl Cancel) -> ChangeSet`
 (R2.1, R2.2, R2.9, R2.10). A request names one commit — compared with its first
 parent, or with the empty tree when it is a root commit (L5) — or two commits, tip
-against tip and never against a merge base (R7.2). A merge is compared with its
+against tip and never against a merge base (R7.2), or a stash (`ChangesRequest::stash`,
+refs-and-status R6.2; "A stash's changes" below). A merge is compared with its
 first parent like any other commit; a combined diff is out of scope by D6. The
 `GitBinary` is the one the application found at startup; the call blocks until its
 process ends, so it is a worker's call.
@@ -388,6 +389,44 @@ commits porcelain `git diff --raw` and `git log --raw`, and `--textconv` without
 patch, write nothing either. Which command runs, and that it carries no
 `--textconv`, `--ext-diff` or patch flag, is pinned on the argument vector by
 `the_query_is_diff_tree_and_never_runs_a_program` (`crates/cairn-git/src/reads/changes.rs`).
+
+### A stash's changes
+
+`ChangesRequest::stash(stash commit)` answers what `git stash show` lists, asked of `git
+stash show` itself (`crate::reads::stash_changes`: `git stash show --raw -z --no-abbrev
+--no-color --no-ext-diff --no-textconv --no-relative --end-of-options <stash commit>`, run
+as a read — the third porcelain read, accepted by the user on 2026-10-07). Why not
+plumbing: with the user's `stash.showIncludeUntracked` set, git diffs the commit the stash
+was made on against the stash's tracked tree and its untracked files *together*, so rename
+and copy detection pairs across them — a tracked file deleted beside an untracked file of
+its content is `R100 a b`, where two plumbing diffs print `D a` and `A b` — and no plumbing
+can diff one tree against two without writing a tree or an index. git reads the setting
+itself, as it reads `diff.renames`, `diff.renameLimit` and the submodule settings for the
+user's own `git stash show`: git 2.30 and 2.31, which do not know the setting, list the
+tracked changes alone, as they do for the user. The answer is parsed by the changes
+query's raw parser and sorted by the same total key; its details are the stash commit's,
+every parent among them, and its rename outcome is read as the changes query's.
+
+A file whose new side is one of those untracked files is read, line by line, between the
+commit the stash was made on and the stash's third parent, which holds it
+(`content::Trees::for_file`): the untracked commit holds the file at its new path blob for
+blob; a copy into it from a tracked file is asked as the rename it is between those two
+trees, since its source is absent from the untracked commit — the same two blobs, so the
+same lines. Expand All's pages ask such files alone, as they ask any file a page's run did
+not hold as the change set does.
+
+Pinned against git (`crates/cairn-git/tests/diff/stash.rs`, run under the host's git and
+both floors): `a_stash_lists_what_git_stash_show_lists_with_the_setting_unset_and_set`
+(against `git stash show --name-status`, the pairing across the two halves required on
+2.32 and later), `each_file_of_a_stash_is_read_from_the_side_it_is_on` (alone and through
+Expand All, each side the bytes git stores),
+`a_copy_into_an_untracked_file_is_read_from_the_untracked_commit` (`diff.renames=copies`,
+2.32 and later), `a_stash_read_writes_nothing` (the git directory byte-identical, the
+tree stat-dirty) and `a_stash_describes_its_stash_commit`; the argv and the read's
+environment by `the_stub_git_is_asked_stash_show_with_a_reads_environment`, the argv alone
+by `the_read_is_stash_show_in_raw_form_and_nothing_else`. Residuals: `git stash` needs a
+working tree, so a stash in a bare repository fails as git fails it (`Error::GitFailed`);
+the read sees the user's global configuration as the user's own `git stash show` does.
 
 ### The content query
 
@@ -1385,8 +1424,26 @@ draws it, by the user's decision: git's `--name-status` letter without the simil
 score it prints after `R` and `C` (`every_status_is_its_bare_letter`) — and its path,
 both paths, `old → new`, for a rename or a copy
 (`the_commit_tab_shows_every_field_r5_3_names`;
-`a_cut_short_rename_search_is_said_above_the_files`). No avatar, no ref chips, no
-network call. The author and the committer are both drawn always, as git's `fuller`
+`a_cut_short_rename_search_is_said_above_the_files`). No avatar and no
+network call.
+
+**REFS** (refs-and-status R6.1, Fork's Finding 3): above SHA, under the dates, a REFS row
+holds the chips of the refs pointing at the commit — exactly the chips its row in the
+history draws (`cairn_ui::chips_of_row`: the current branch first with its check mark, a
+branch's upstream at the same commit folded into its chip, a tag's and a remote's glyph
+caps, a stash's `stash@{n}`), in its row's lane colour, cut at the pane's edge and never
+wrapped or counted, as Fork's Mac pane cuts them; a commit no ref points at has no REFS
+row. The window finds the selected row once per history and selection
+(`crates/cairn-app/src/row_finder.rs`: a place found stays valid while rows only append,
+a row not yet loaded is looked for only among the rows appended since the last look, and
+`History::serial` tells a reopened history from the one looked in) and lays its chips out
+for the window's width, the most the pane can show (`detail_pane::refs_of`); the tab gets
+them as `CommitTab::refs` and caches them with the header, so the REFS row is built once
+per commit and refs, never per frame
+(`the_refs_row_stands_above_the_id_and_only_when_a_ref_points_at_the_commit`,
+`the_header_is_built_once_per_commit_however_often_the_state_is_written`,
+`a_rows_chips_and_its_refs_row_are_drawn_against_the_refreshs_snapshot`,
+`a_row_is_looked_for_once_per_history_and_found_where_it_arrives`). The author and the committer are both drawn always, as git's `fuller`
 format draws them — the user's decision, where Fork appears to omit an identical
 committer. A person's `Name <email>` and a date are cut with an ellipsis where their
 half of the pane is narrower than they are; nothing else in the tab is cut.

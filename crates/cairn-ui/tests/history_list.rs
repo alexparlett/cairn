@@ -171,6 +171,108 @@ fn only_a_viewport_of_rows_is_built_however_long_the_history() {
     );
 }
 
+/// A history of `length` rows, each labelled by `per_row` tags, and the first `crowded` rows
+/// by `crowd` local branches more.
+fn labelled_rows(length: usize, per_row: usize, crowded: usize, crowd: usize) -> History {
+    let mut history = History::new();
+    for start in (0..length).step_by(1_000) {
+        let mut page = RowsPage::new();
+        for n in start..(start + 1_000).min(length) {
+            let mut names: Vec<String> = (0..per_row)
+                .map(|t| format!("refs/tags/r{n}-t{t}"))
+                .collect();
+            if n < crowded {
+                names.extend((0..crowd).map(|b| format!("refs/heads/r{n}/b{b:05}")));
+            }
+            names.sort();
+            let labels: Vec<cairn_model::Label<'_>> = names
+                .iter()
+                .map(|name| cairn_model::Label {
+                    name,
+                    kind: if name.starts_with("refs/heads/") {
+                        cairn_model::RefKind::LocalBranch
+                    } else {
+                        cairn_model::RefKind::Tag
+                    },
+                    current: false,
+                })
+                .collect();
+            page.push_labelled(
+                GraphRow::new(oid(n), Lane::new(0), Vec::new()),
+                PagedCommit {
+                    parents: 1,
+                    subject: &format!("commit {n}"),
+                    author: "A",
+                    author_time: 0,
+                },
+                false,
+                &labels,
+            );
+        }
+        hold(&mut history, page);
+    }
+    history
+}
+
+/// The viewport twin with labelled rows: the history list still builds one viewport of
+/// rows, and a row labelled by thousands of refs lays out only the chips its column holds
+/// (R5.3, phase 05 QA RR3). Caught by: chips laid out for every label, or labels making the
+/// list build rows past its viewport.
+#[test]
+fn only_a_viewport_of_labelled_rows_is_built_and_each_lays_out_a_columns_worth_of_chips() {
+    let viewport_rows = (HEIGHT / ROW_HEIGHT).ceil() as usize;
+    let most_chips = Rc::new(RefCell::new(0usize));
+    let history = labelled_rows(100_000, 3, 40, 5_000);
+    let counted = most_chips.clone();
+    let (mut test, _) = TestingRunner::new(
+        move || -> Element {
+            let fixture = use_consume::<Fixture>();
+            let counted = counted.clone();
+            HistoryList::new(fixture.rows, move |render: RowRender| {
+                let subject = match render.content {
+                    RowContent::Commit(commit) => commit.summary,
+                    RowContent::Stash(stash) => stash.message,
+                };
+                let mut most = counted.borrow_mut();
+                *most = (*most).max(render.chips.len());
+                label().height(Size::px(ROW_HEIGHT)).text(subject).into()
+            })
+            .into()
+        },
+        (WIDTH, HEIGHT).into(),
+        move |runner| {
+            runner.provide_root_context(|| Fixture {
+                rows: State::create(history),
+                selected: State::create(None),
+            })
+        },
+        1.,
+    );
+    test.sync_and_update();
+    test.sync_and_update();
+    for place in ["top", "deep"] {
+        if place == "deep" {
+            test.scroll((100., 100.), (0., -(90_000. * ROW_HEIGHT as f64)));
+        }
+        let count = built_rows(&test).len();
+        assert!(
+            count >= viewport_rows && count <= viewport_rows + 2,
+            "{count} rows were built for a {viewport_rows}-row viewport at the {place}"
+        );
+    }
+    let room = cairn_ui::label_room(WIDTH, 1);
+    let bound = (room / 10.).ceil() as usize + 1;
+    let most = *most_chips.borrow();
+    assert!(
+        most > 3,
+        "no crowded row laid out more than its tags: {most}"
+    );
+    assert!(
+        most <= bound,
+        "a row of 5,003 refs laid out {most} chips for {room} px (at most {bound})"
+    );
+}
+
 /// C13, D5: an arrow held with a chord's modifiers is the accelerator's — "previous change",
 /// "next change" — resolved through the table, not the list's "next commit", though the
 /// detail pane that hears those chords does not have focus here. Caught by: the list moving

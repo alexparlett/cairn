@@ -237,21 +237,25 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
         .read()
         .as_ref()
         .and_then(|pair| pair.other(*view.selected.read()));
+    let refs = view.refreshed.read().refs().cloned();
     HistoryList::new(view.rows, move |render: RowRender| {
         // No wildcard arm: a new row kind must fail to compile here.
         match render.content {
             RowContent::Commit(commit) => CommitRow::new(commit, render.graph, render.lanes)
+                .chips(render.chips)
+                .head(render.head)
                 .selected(render.selected)
                 .into(),
-            // Drawn as its stash commit's row, its message the subject, until stash rows get
-            // their own chip (refs-and-status R5.4).
+            // A stash's row: its `stash@{n}` chip and its message as the subject (R5.4).
             RowContent::Stash(stash) => {
                 CommitRow::new(stash.as_commit(), render.graph, render.lanes)
+                    .chips(render.chips)
                     .selected(render.selected)
                     .into()
             }
         }
     })
+    .refs(refs)
     .lanes(lanes)
     .selected(*view.selected.read())
     .also_selected(second)
@@ -1003,10 +1007,14 @@ mod tests {
                         .map(|_| node.layout().area.center().y)
                 })
                 .unwrap_or_else(|| panic!("row {index} ({hex}) was not drawn"));
+            // The chips are phase 07's, and name whatever refs the checkout has today: what
+            // the row drew before is its text past them.
+            let chip_size = Some(freya::prelude::FontSize::from(cairn_ui::CHIP_FONT_SIZE));
             let mut labels: Vec<(f32, String)> = test.find_many(|node, element| {
                 let area = node.layout().area;
                 Label::try_downcast(element)
                     .filter(|_| (area.center().y - centre_y).abs() < 1.0)
+                    .filter(|label| label.text_style_data.font_size != chip_size)
                     .map(|label| (area.min_x(), label.text.to_string()))
             });
             labels.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -1050,8 +1058,20 @@ mod tests {
                 ]
             })
             .collect();
+        // As sets of texts: a row whose chips fill its column pushes its subject past the
+        // author's (R5.3, as in Fork), which a left-to-right reading would then put second.
+        // The columns' own order is `commit_row`'s tests'.
+        let sorted = |line: &Vec<String>| {
+            let mut line = line.clone();
+            line.sort();
+            line
+        };
         for (index, (now, then)) in drawn.iter().zip(&before).enumerate() {
-            assert_eq!(now, then, "main's row {index} draws something else");
+            assert_eq!(
+                sorted(now),
+                sorted(then),
+                "main's row {index} draws something else"
+            );
         }
         assert_eq!(drawn.len(), 18, "main's rows were not all drawn");
         assert!(
@@ -2225,8 +2245,131 @@ mod tests {
         (selected, other)
     }
 
-    /// A stash's row (refs-and-status R4.2), drawn as its stash commit's row until stash
-    /// rows get their own chip: its message is its subject; pressed, it is selected by its
+    /// C7 through the window: a row's chips are laid out against the refresh's snapshot — the
+    /// current branch first with its check mark and folded with its upstream at that commit,
+    /// another remote's ref its own chip — and `HEAD`'s subject is bold. Caught by: the window
+    /// not handing the list the snapshot (no fold, no current first), or the head flag dropped.
+    #[test]
+    fn a_rows_chips_are_drawn_against_the_refreshs_snapshot() {
+        use cairn_model::{
+            HeadState, Label as RefLabel, Ref, RefKind, RefName, RefTarget, RefsSnapshot, Upstream,
+        };
+
+        let (mut test, view, _) = launch(Vec::new(), received(2, true));
+        let mut page = RowsPage::new();
+        let names = [
+            "refs/heads/main",
+            "refs/remotes/mike/main",
+            "refs/remotes/origin/main",
+        ];
+        let labels: Vec<RefLabel<'_>> = names
+            .iter()
+            .map(|name| RefLabel {
+                name,
+                kind: if name.starts_with("refs/heads/") {
+                    RefKind::LocalBranch
+                } else {
+                    RefKind::RemoteTracking
+                },
+                current: *name == "refs/heads/main",
+            })
+            .collect();
+        page.push_labelled(
+            GraphRow::new(oid(0), Lane::new(0), Vec::new()),
+            PagedCommit {
+                parents: 1,
+                subject: "commit 0",
+                author: "Ada",
+                author_time: 0,
+            },
+            true,
+            &labels,
+        );
+        page.push(
+            GraphRow::new(oid(1), Lane::new(0), Vec::new()),
+            PagedCommit {
+                parents: 1,
+                subject: "commit 1",
+                author: "Ada",
+                author_time: 0,
+            },
+        );
+        let mut rows = view.rows;
+        rows.write()
+            .append(page)
+            .unwrap_or_else(|full| panic!("{full}"));
+        let listed = |name: &str, upstream: Option<&str>| Ref {
+            name: RefName::new(name),
+            kind: if name.starts_with("refs/heads/") {
+                RefKind::LocalBranch
+            } else {
+                RefKind::RemoteTracking
+            },
+            target: RefTarget::Commit(oid(0)),
+            symbolic: None,
+            upstream: upstream.map(|upstream| Upstream::Exists {
+                name: RefName::new(upstream),
+                commit: Some(oid(0)),
+            }),
+        };
+        let mut refreshed = view.refreshed;
+        let _ = refreshed
+            .write()
+            .refs_arrived(std::sync::Arc::new(RefsSnapshot {
+                refs: vec![
+                    listed("refs/heads/main", Some("refs/remotes/origin/main")),
+                    listed("refs/remotes/mike/main", None),
+                    listed("refs/remotes/origin/main", None),
+                ],
+                head: HeadState::Branch(RefName::new("refs/heads/main")),
+                stashes: Vec::new(),
+                unreadable: 0,
+            }));
+        test.sync_and_update();
+        test.sync_and_update();
+
+        let row_y = test
+            .find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == "commit 0")
+                    .map(|_| node.layout().area.center().y)
+            })
+            .unwrap_or_else(|| panic!("the labelled row was not drawn"));
+        let chips: Vec<(f32, String)> = {
+            let chip_size = Some(freya::prelude::FontSize::from(cairn_ui::CHIP_FONT_SIZE));
+            let mut found = test.find_many(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text_style_data.font_size == chip_size)
+                    .filter(|_| (node.layout().area.center().y - row_y).abs() < 1.)
+                    .map(|label| (node.layout().area.min_x(), label.text.to_string()))
+            });
+            found.sort_by(|a, b| a.0.total_cmp(&b.0));
+            found
+        };
+        let texts: Vec<&str> = chips.iter().map(|(_, text)| text.as_str()).collect();
+        assert_eq!(
+            texts,
+            ["main", "mike/main"],
+            "origin/main was not folded into main"
+        );
+        let weight = |text: &str| {
+            test.find(|_, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == text)
+                    .map(|label| label.text_style_data.font_weight)
+            })
+            .flatten()
+        };
+        assert_eq!(
+            weight("commit 0"),
+            Some(FontWeight::BOLD),
+            "HEAD's subject is not bold"
+        );
+        assert_ne!(weight("commit 1"), Some(FontWeight::BOLD));
+    }
+
+    /// A stash's row (refs-and-status R4.2, R5.4): its `stash@{n}` chip, then its message as
+    /// its subject, on one row; pressed, it is selected by its
     /// own identity and asks what the stash commit changed against the commit it was made
     /// on, its first parent (R6.2's pair, `stash^1..stash`); pressed with the extending
     /// chord beside a commit, the pair holds the stash's row, the lower of the two the base.
@@ -2252,6 +2395,25 @@ mod tests {
             .unwrap_or_else(|full| panic!("{full}"));
         hold(&mut rows.write(), (3..6).map(row).collect());
         test.sync_and_update();
+        test.sync_and_update();
+
+        let place = |text: &str| {
+            test.find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == text)
+                    .map(|_| (node.layout().area.min_x(), node.layout().area.center().y))
+            })
+            .unwrap_or_else(|| panic!("nothing reads {text:?}"))
+        };
+        let (chip, message) = (place("stash@{0}"), place("On main: wip"));
+        assert!(
+            chip.0 < message.0,
+            "the stash's chip is not before its message"
+        );
+        assert!(
+            (chip.1 - message.1).abs() < 1.,
+            "the chip is not on the stash's row"
+        );
 
         let from = submitted.borrow().len();
         click_label(&mut test, "On main: wip");

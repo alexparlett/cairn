@@ -1,10 +1,14 @@
 //! The virtualised history list.
 
-use cairn_model::{History, HistoryRow, RowContent, RowEdges, RowId};
+use std::sync::Arc;
+
+use cairn_model::{History, HistoryRow, RefsSnapshot, RowContent, RowEdges, RowId};
 use freya::prelude::*;
 
 use crate::accelerators::{self, Action, HeldKeys};
+use crate::commit_row::label_room;
 use crate::graph_geometry::ROW_HEIGHT;
+use crate::ref_chips::{Chip, row_chips};
 
 pub const PREFETCH_ROWS: usize = 24;
 
@@ -15,14 +19,19 @@ fn asks_for_more(index: usize, length: usize) -> bool {
 
 const PAGE_JUMP: usize = 10;
 
-/// What a row draws, read out of the history for that row alone: its content and its edges,
-/// and nothing else of it.
+/// What a row draws, read out of the history for that row alone: its content, its edges and
+/// its chips, and nothing else of it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RowRender {
     pub content: RowContent,
     /// The row's lane and every line crossing it, derived from the rows above it for this
     /// row alone.
     pub graph: RowEdges,
+    /// The chips the row draws, laid out for the room the list has, once as the row is built
+    /// ([`row_chips`]; a stash's row its `stash@{n}`).
+    pub chips: Vec<Chip>,
+    /// Whether this is `HEAD`'s commit, drawn bold.
+    pub head: bool,
     pub selected: bool,
     /// Width of the graph column for the whole list, in lanes.
     pub lanes: usize,
@@ -30,6 +39,7 @@ pub struct RowRender {
 
 pub struct HistoryList {
     rows: State<History>,
+    refs: Option<Arc<RefsSnapshot>>,
     lanes: usize,
     selected: Option<RowId>,
     also_selected: Option<RowId>,
@@ -46,6 +56,7 @@ impl HistoryList {
     pub fn new(rows: State<History>, row: impl Fn(RowRender) -> Element + 'static) -> Self {
         Self {
             rows,
+            refs: None,
             lanes: 1,
             selected: None,
             also_selected: None,
@@ -63,6 +74,13 @@ impl HistoryList {
     /// reveal a row the list did not choose (a parent link's, through [`reveal_row`]).
     pub fn controller(mut self, controller: ScrollController) -> Self {
         self.controller = Some(controller);
+        self
+    }
+
+    /// The refs snapshot a branch's upstream is read from, for compact labels (R5.2), and the
+    /// branch `HEAD` is on, whose chip leads its row's.
+    pub fn refs(mut self, refs: Option<Arc<RefsSnapshot>>) -> Self {
+        self.refs = refs;
         self
     }
 
@@ -115,6 +133,7 @@ impl HistoryList {
 impl PartialEq for HistoryList {
     fn eq(&self, other: &Self) -> bool {
         self.rows == other.rows
+            && same_refs(&self.refs, &other.refs)
             && self.lanes == other.lanes
             && self.selected == other.selected
             && self.also_selected == other.also_selected
@@ -142,6 +161,9 @@ impl KeyExt for HistoryList {
 #[derive(Clone)]
 struct ListData {
     rows: State<History>,
+    refs: Option<Arc<RefsSnapshot>>,
+    /// The room a row's chips and subject share, from the list's measured width.
+    room: f32,
     lanes: usize,
     selected: Option<RowId>,
     also_selected: Option<RowId>,
@@ -158,6 +180,8 @@ struct ListData {
 impl PartialEq for ListData {
     fn eq(&self, other: &Self) -> bool {
         self.rows == other.rows
+            && same_refs(&self.refs, &other.refs)
+            && self.room == other.room
             && self.lanes == other.lanes
             && self.selected == other.selected
             && self.also_selected == other.also_selected
@@ -175,12 +199,17 @@ impl Component for HistoryList {
         let controller = self.controller.unwrap_or(own);
         // A hint, checked against the row at that index before use.
         let cursor = use_state(|| 0usize);
+        // Measured, so chips stop being built at the column's edge (R5.3); none are built
+        // before the first measurement.
+        let mut width = use_state(|| 0.0f32);
 
         // Reading the length subscribes this component to the row vector.
         let length = self.rows.read().len();
 
         let data = ListData {
             rows: self.rows,
+            refs: self.refs.clone(),
+            room: label_room(*width.read(), self.lanes),
             lanes: self.lanes,
             selected: self.selected,
             also_selected: self.also_selected,
@@ -203,6 +232,7 @@ impl Component for HistoryList {
             .a11y_auto_focus(true)
             .a11y_role(AccessibilityRole::List)
             .on_key_down(self.keyboard(cursor, controller))
+            .on_sized(move |e: Event<SizedEventData>| width.set_if_modified(e.area.width()))
             .maybe(focus() == Focus::Keyboard, |el| {
                 el.border(Border::new().fill(border).width(1.))
             })
@@ -330,20 +360,40 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
         .into()
 }
 
-/// What `row` draws: its content, copied out of the history's stores, and its edges. At most
-/// a snapshot interval of rows above it is read: bounded by the interval, never by the
-/// history. Rows the assigner laid out always have a snapshot within it; a row without one
-/// draws its node alone.
+/// What `row` draws: its content, copied out of the history's stores, its edges and its
+/// chips. At most a snapshot interval of rows above it is read: bounded by the interval,
+/// never by the history. Rows the assigner laid out always have a snapshot within it; a row
+/// without one draws its node alone. Its chips are laid out here, once per row built, for
+/// the room the list has — at most the labels that fit are read (`ref_chips`) — and the row
+/// only draws them.
 fn render_of(row: HistoryRow<'_>, data: &ListData) -> RowRender {
     let id = row.id();
+    let content = row.content();
+    let labels = row.labels();
+    // No wildcard arm: a new row kind must say here what chips it draws.
+    let chips = match &content {
+        RowContent::Commit(_) => row_chips(labels, data.refs.as_deref(), data.room),
+        RowContent::Stash(stash) => vec![Chip::stash(stash.index)],
+    };
     RowRender {
-        content: row.content(),
+        content,
         graph: row.edges().unwrap_or_else(|| RowEdges {
             lane: row.lane(),
             edges: Vec::new(),
         }),
+        chips,
+        head: labels.is_head(),
         selected: data.selected == Some(id) || data.also_selected == Some(id),
         lanes: data.lanes,
+    }
+}
+
+/// The same snapshot, by identity: a refresh hands the list a new one.
+fn same_refs(one: &Option<Arc<RefsSnapshot>>, other: &Option<Arc<RefsSnapshot>>) -> bool {
+    match (one, other) {
+        (Some(one), Some(other)) => Arc::ptr_eq(one, other),
+        (None, None) => true,
+        (Some(_), None) | (None, Some(_)) => false,
     }
 }
 
@@ -539,6 +589,102 @@ mod tests {
         assert_eq!(moved_to(&Key::Named(NamedKey::Tab), Some(3), 99), None);
         assert_eq!(moved_to(&Key::Named(NamedKey::Escape), Some(3), 99), None);
         assert_eq!(moved_to(&Key::Character("j".into()), Some(3), 99), None);
+    }
+
+    /// The QA brief: a row's labels are laid out once per row built, never per frame — idle
+    /// frames lay out nothing, a scroll lays out the rows it builds. Caught by: chips laid out
+    /// in the row's own render, or a list that rebuilds its rows every frame.
+    #[test]
+    fn a_rows_chips_are_laid_out_once_per_row_built_and_never_per_frame() {
+        use crate::graph_geometry::ROW_HEIGHT;
+        use crate::ref_chips::LAYOUTS;
+        use cairn_model::{Label, RefKind};
+        use freya_testing::TestingRunner;
+
+        let mut page = RowsPage::new();
+        for n in 0..200u8 {
+            page.push_labelled(
+                GraphRow::new(oid(n), Lane::new(0), Vec::new()),
+                PagedCommit {
+                    parents: 1,
+                    subject: "commit",
+                    author: "A",
+                    author_time: 0,
+                },
+                false,
+                &[Label {
+                    name: "refs/tags/v1",
+                    kind: RefKind::Tag,
+                    current: false,
+                }],
+            );
+        }
+        let mut history = History::new();
+        history.append(page).unwrap();
+        let refs = std::sync::Arc::new(cairn_model::RefsSnapshot {
+            refs: Vec::new(),
+            head: cairn_model::HeadState::Detached(oid(0)),
+            stashes: Vec::new(),
+            unreadable: 0,
+        });
+        let (mut test, mut tick) = TestingRunner::new(
+            || -> Element {
+                let rows = use_consume::<State<History>>();
+                let refs = use_consume::<std::sync::Arc<cairn_model::RefsSnapshot>>();
+                // What else the window draws: written while the list's own props stay put.
+                let tick = use_consume::<State<u32>>();
+                rect()
+                    .expanded()
+                    .child(label().text(tick.read().to_string()))
+                    .child(
+                        HistoryList::new(rows, |render: RowRender| {
+                            crate::CommitRow::new(
+                                crate::history_list::tests::summary(&render),
+                                render.graph,
+                                render.lanes,
+                            )
+                            .chips(render.chips)
+                            .into()
+                        })
+                        .refs(Some(refs)),
+                    )
+                    .into()
+            },
+            (900., 260.).into(),
+            move |runner| {
+                runner.provide_root_context(move || State::create(history));
+                runner.provide_root_context(move || refs);
+                runner.provide_root_context(|| State::create(0u32))
+            },
+            1.,
+        );
+        test.sync_and_update();
+        test.sync_and_update();
+        let settled = LAYOUTS.with(std::cell::Cell::get);
+        assert!(settled > 0, "no row laid out its chips");
+        for n in 1..=20u32 {
+            tick.set(n);
+            test.sync_and_update();
+        }
+        assert_eq!(
+            LAYOUTS.with(std::cell::Cell::get),
+            settled,
+            "frames that redrew the window but not the list laid chips out again"
+        );
+        test.scroll((100., 100.), (0., -(40. * ROW_HEIGHT as f64)));
+        let scrolled = LAYOUTS.with(std::cell::Cell::get) - settled;
+        let viewport = (260. / ROW_HEIGHT).ceil() as usize;
+        assert!(
+            scrolled > 0 && scrolled <= 3 * (viewport + 2),
+            "a scroll of 40 rows laid out {scrolled} rows' chips for a {viewport}-row viewport"
+        );
+    }
+
+    pub(super) fn summary(render: &RowRender) -> cairn_model::CommitSummary {
+        match &render.content {
+            RowContent::Commit(commit) => commit.clone(),
+            RowContent::Stash(stash) => stash.as_commit(),
+        }
     }
 
     /// Caught by: asking only at the end, or only from one boundary row.

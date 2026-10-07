@@ -22,6 +22,8 @@ pub mod graph_geometry;
 mod history_list;
 pub mod lane_palette;
 mod message_lines;
+mod ref_chips;
+mod ref_glyphs;
 mod side_by_side_rows;
 mod toggle_glyphs;
 mod unified_rows;
@@ -33,7 +35,7 @@ pub use changes_list::{
 };
 pub use commit_row::{
     AUTHOR_WIDTH, COLUMN_GAP, CommitRow, DATE_WIDTH, HistoryHeader, ID_WIDTH, ROW_FONT_SIZE,
-    ROW_PADDING,
+    ROW_PADDING, label_room,
 };
 pub use commit_tab::{
     AUTHOR_CAPTION, COLLAPSE_ALL_CAPTION, COMMITTER_CAPTION, CommitTab, DETAIL_ROW_HEIGHT,
@@ -67,3 +69,8 @@ pub use expansion::{Expansion, Opened};
 pub use file_filter::ShownFiles;
 pub use graph_geometry::{LANE_WIDTH, MAX_DRAWN_LANES, ROW_HEIGHT, graph_width};
 pub use history_list::{HistoryList, PREFETCH_ROWS, RowRender, reveal_row};
+pub use ref_chips::{
+    CHIP_FONT_SIZE, CHIP_GAP, CHIP_HEIGHT, Chip, ChipKind, TAG_INDIGO, chip_element, min_width,
+    row_chips, tint,
+};
+pub use ref_glyphs::{GLYPH_SIZE, RefGlyph};

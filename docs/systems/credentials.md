@@ -327,9 +327,10 @@ never enters `cairn-git` and never enters application state.
   against gix 0.87.1 as linked, what a worker must do to honour it and the
   same-timestamp-tick residual gix cannot see. Fetch declares `refs` and
   `objects`. What the worker does with a declaration today is narrower than
-  the contract: it decides whether to reload the history by comparing
-  `ref_tips` before and after, and reads nothing else off the `Performed`
-  (issue #25). Pinned by `every_single_flag_counts_as_something`,
+  the contract: the window asks for a refresh when the fetch ends, which reads
+  the refs again and reopens the history when what it draws changed
+  (`docs/systems/history-graph.md`, "Refresh"), and nothing reads the
+  `Performed` itself (issue #25). Pinned by `every_single_flag_counts_as_something`,
   `declarations_combine_without_losing_a_flag`,
   `a_destructive_operation_records_what_the_user_agreed_to` and
   `an_unconfirmed_operation_carries_no_prompt`.
@@ -338,12 +339,12 @@ never enters `cairn-git` and never enters application state.
   through gitoxide, a password embedded in a URL left out and a remote without
   a URL listed without one; what the window's fetch button names
   (`the_default_is_first_a_password_is_left_out_and_a_missing_url_is_none`).
-  **`Repository::ref_tips`** (`src/refs.rs`) is the refs snapshot as the
-  handle sees it now (`docs/systems/refs.md`) — symbolic refs and tag objects
-  included — compared before and after a fetch; that it follows what git
-  writes — a ref made, a ref moved — is `ref_tips_follow_the_refs_git_writes`
-  in `tests/fetch.rs`, over a fixture, since a CI checkout is detached with
-  no local branch and its own refs decide nothing.
+  The refresh after a fetch reads the refs snapshot through the handle the
+  worker already holds (`Repository::refs`, `docs/systems/refs.md`); that it
+  follows what git writes — a ref made, a ref moved — is
+  `a_refs_read_follows_the_refs_git_writes` in `tests/fetch.rs`, over a
+  fixture, since a CI checkout is detached with no local branch and its own
+  refs decide nothing.
 - **The dialog** (`crates/cairn-ui/src/credential_prompt.rs`,
   `CredentialPrompt`). Names the remote the running operation was asked for,
   states what is wanted from where, and shows the prompt exactly as git or ssh
@@ -360,7 +361,7 @@ never enters `cairn-git` and never enters application state.
   `cancel_and_escape_both_decline_without_submitting`, and two more). The
   typed text leaves through `on_submit` as the input's `String`, moved not
   copied, and the window wraps it in `Secret::from_string` at once.
-- **The application** (`crates/cairn-app/src/worker/`). Three threads per open
+- **The application** (`crates/cairn-app/src/worker/`). Several threads per open
   repository, each with its own sender, so the update stream ends only when all
   have gone. `git` itself is found once per application, as it starts
   (`discovery.rs`; `docs/systems/git-processes.md`). `startup.rs`: on the
@@ -381,9 +382,10 @@ never enters `cairn-git` and never enters application state.
   dropping it. `network_lane.rs`: the network lane runs the fetch with a
   token from `Channel::begin`, forwards every progress line as
   `Update::FetchProgress`, and ends with `FetchFinished`, `FetchCancelled` or
-  `FetchFailed`, each carrying `refreshed` — whether a ref moved, told by
-  comparing `ref_tips` before and after, on every outcome, since a fetch that
-  failed or was killed may have moved some. `Request::CancelFetch` never
+  `FetchFailed`; on every one the window asks for a refresh, since a fetch that
+  failed or was killed may have moved some refs, and the refresh decides whether
+  the history reopens (`a_fetch_reports_progress_finishes_and_the_refresh_after_it_reopens_from_the_new_refs`,
+  `every_fetch_ending_asks_for_a_refresh_and_touches_no_row`). `Request::CancelFetch` never
   queues: the handle reaches the fetch's `FetchControl` directly (one fetch
   at a time, a second refused with a reason the window draws; a cancel that
   lands before git runs is kept and applied the

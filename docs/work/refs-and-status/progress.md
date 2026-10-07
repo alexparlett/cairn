@@ -3,6 +3,88 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-07 — phase 06: the new lanes, and refresh
+
+Packet mode, on `feature/refs-and-status`. What landed (`docs/systems/history-graph.md`,
+"Refresh"):
+
+- **Lanes and threads (R11).** Four new lanes — refs, ahead/behind, status, ref filter — each
+  superseding only itself (`each_lane_supersedes_itself_and_a_changes_query_the_file_diff_too`).
+  `Request::Refresh` is numbered in three of them as it is submitted, so it supersedes the
+  refresh before it lane by lane and no page, diff or filter. Refs are read on the repository
+  thread (`worker/history_lane.rs`, which replaces `pool.rs`'s `Scroll`), status and
+  ahead/behind on a new `cairn-refresh` thread (`worker/refresh_lane.rs`), ahead/behind handed
+  there by the repository thread once its refs are read. The sidebar's filter is the ref-filter
+  lane's `Request::FilterRefs` on the repository thread (`RefsSnapshot::matching`); phase 08
+  wires its box. A ref's find stays history-lane work, so nothing in the lane table had to
+  change shape (the stopping rule did not trigger: four entries were added).
+- **Refresh (R10).** On focus gained (`refresh.rs`, a side effect on `Platform::is_app_focused`
+  that submits on a false-to-true change — read in the fork at `caa46f8`,
+  `crates/freya-core/src/platform.rs`, set by `freya-winit` on `WindowEvent::Focused` and settable
+  in `freya-testing`), on every fetch ending, and on `Action::Refresh` — F5 on Linux, ⌘R on
+  macOS, Fork's own (`fork-dev/Docs` `keyboard-shortcuts-windows.md` "F5 - Refresh",
+  `keyboard-shortcuts-mac.md` "⌘R - Refresh", read 2026-10-06). F5 is no GNOME, KDE or Xfce
+  global chord and no Cairn chord, so no stopping rule; the table's every-chord-has-a-modifier
+  test now allows a bare function key (batched for the user, state.md). The window's first
+  refresh, at open, is what opens the history.
+- **Reopen (R10.4, R10.5, R11.3).** `RefsSnapshot::walks_as` compares the refs read with the
+  snapshot the walk began from (refs, targets, symbolic targets, `HEAD`, stash list; not
+  upstreams or the unreadable count). `Update::Refs { snapshot, reopen }`; on `reopen` the
+  window moves its `History` out and retires it (#52), builds
+  `History::with_author_capacity(old.author_count())`, asks `OpenHistory`, and keeps the
+  selection. `session::reload_if` and the network lane's `ref_tips` comparison are gone, and so
+  is `Repository::ref_tips`. Every refresh answer the window replaces, or that was superseded
+  unread, is freed on the repository thread.
+- **Hand-offs done.** `from_refs` wired; the unborn `HEAD` with no ref answers the empty,
+  complete page through the walk itself (`no_walk` and `from_head`'s use gone); a walk error
+  arrives from the first page (`history_lane::next_page`); a stale tip — commit gone between
+  refresh and open — re-reads the refs and opens once more from them when they differ
+  (`an_open_from_refs_gone_stale_reads_them_again_and_opens_from_those`); the author-capacity
+  model test; RR2 below.
+
+Pins and the mutation each was checked against (each test red under it, green without; run by
+a scratch script, the file restored after each):
+
+| Mutation | Red test |
+| --- | --- |
+| a refresh also bumps the history lane | `a_refresh_cancels_neither_a_page_being_walked_nor_a_diff_being_read` |
+| a refresh also bumps the changes lane | the same |
+| a refresh not numbered in the status lane | `a_refresh_asked_twice_at_once_draws_one_answer_of_each` |
+| the comparison ignores the stash list / `HEAD` | `a_refresh_reopens_for_a_stash_a_checkout_and_a_moved_ref_and_for_nothing_else` |
+| every refresh reopens | the same |
+| snapshots compared whole | `a_walk_is_the_same_unless_what_it_draws_changed` |
+| a reopen frees the old rows in place | `a_reopen_frees_the_old_rows_on_a_worker_and_keeps_the_selection` |
+| a reopen builds `History::new` | the same |
+| no re-read on a stale open | `an_open_from_refs_gone_stale_reads_them_again_and_opens_from_those` |
+| focus refreshes on any change / never | `gaining_focus_asks_for_a_refresh_and_nothing_else` / `focus_gained_after_a_ref_moved_reopens_the_history_keeping_the_chosen_row` |
+| the chord's arm does nothing | `the_refresh_chord_asks_for_a_refresh` |
+| a superseded snapshot dropped, not retired | `a_superseded_refresh_comes_back_to_be_freed_on_a_worker` |
+| a fetch ending does not refresh / still clears the rows | `every_fetch_ending_asks_for_a_refresh_and_touches_no_row` |
+| a replaced status freed in place; a first refs failure not shown | `a_replaced_refresh_answer_is_freed_on_a_worker_and_a_failure_keeps_the_last` |
+| `with_author_capacity` ignores its count | `a_history_sized_for_its_authors_appends_them_without_growing_its_index` |
+| a reopen while closing | `a_refresh_answered_while_closing_reopens_nothing` |
+| an open reads its own refs after a refresh read them | `a_refresh_answers_the_refs_ahead_behind_and_status_each_once` |
+| status run on the repository thread before the refs | `a_slow_status_delays_neither_a_page_nor_a_diff` |
+| the routing table's status lane on the repository thread | `every_query_is_served_on_the_thread_its_lane_is_routed_to` |
+
+RR2, measured (`measures_layout_over_unmerged_refs`, `#[ignore]`d in
+`crates/cairn-git/tests/every_ref.rs`; release, warm, median of seven, the machine in
+`docs/research/diff-engine/measured-baseline.md`): a 12,000-commit main line with N one-commit
+branches forked at distinct commits down its upper half, each dated after main's tip, so the
+walk meets every branch first and holds all N lines open — the widest the graph gets.
+
+| Branches | Rows | Widest | First page (refs read included) | Whole walk | 40 rows' edges: top / under every line / middle |
+| --- | --- | --- | --- | --- | --- |
+| 100 | 12,100 | 100 | 3.12 ms | 36.3 ms | 0.012 / 0.029 / 0.018 ms |
+| 1,000 | 13,000 | 1,000 | 8.37 ms | 61.8 ms | 0.012 / 0.112 / 0.025 ms |
+| 5,000 | 17,000 | 5,000 | 25.2 ms | 208 ms | 0.013 / 0.485 / 0.211 ms |
+
+Layout grows with the open lanes as known (the assigner scans them per row): 25 ms for the first
+page at 5,000 open lines, against 3 ms at 100 — on the history thread, inside C11's 200 ms. Edge
+derivation for a viewport, the UI thread's per-frame share, is under half a millisecond at 5,000
+lines crossing it; drawing those lines is phase 07's to measure.
+
+
 ## 2026-10-06 — phase 05 QA
 
 Fresh reviewers (`qa-checklist` READY, `test-coverage-auditor`, `responsiveness-reviewer`)

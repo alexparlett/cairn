@@ -1894,6 +1894,7 @@ The chords are Fork's and only Fork's — the user's decision of 2026-10-03, fro
 | previous / next change | Ctrl+↑ / Ctrl+↓ | ⌘↑ / ⌘↓ | in the detail pane |
 | Commit tab / Changes tab | Ctrl+Alt+1 / Ctrl+Alt+2 | ⌘⌥1 / ⌘⌥2 | anywhere |
 | extend the selection to a second commit | Ctrl+press | ⌘+press | anywhere |
+| Refresh (refs-and-status R10.1) | F5 | ⌘R | anywhere |
 | toggle side-by-side, toggle ignore whitespace, more lines, fewer lines, entire file | none | none | — |
 
 Change navigation is scoped to the pane so a text field elsewhere keeps those keys (⌘↑
@@ -1902,8 +1903,13 @@ Tree tab and is nothing yet. Fork binds no chord to the four diff toggles or the
 file, so they are actions without one, reached from the diff's header (phase 06). The
 previous and next file are not chords at all: they are the focused file list's own ↑
 and ↓, with Tab and Shift-Tab moving focus, as Fork does (the detail pane, above). No
-collapse chord: the user's decision. Every chord holds a modifier: an unmodified key
-belongs to whatever has focus.
+collapse chord: the user's decision. Every chord holds a modifier but a function key's: an
+unmodified key belongs to whatever has focus, and a function key types nothing in any of
+it. Refresh is Fork's own on each platform (`fork-dev/Docs`, `keyboard-shortcuts-mac.md`
+⌘R and `keyboard-shortcuts-windows.md` F5, read 2026-10-06): Linux takes Fork's Windows
+row, as it does for change navigation, and F5 is bound by no Linux desktop nor by any
+other action here; ⌘R is matched where R sits (`chords_are_distinct_and_every_bare_one_is_a_function_key`,
+`the_table_is_forks_chords_and_no_others`).
 
 **The contract.** A component asks `accelerators::resolve_key(event, scope)` which
 action a key press is in a scope, or `accelerators::is_chord(event)` whether it is any

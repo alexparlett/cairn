@@ -46,13 +46,23 @@ resolved, and once per stash reflog line and stash entry; a cancelled query is
 the time taken. The query fails as a whole (`Error::Refs`) only when the store cannot be
 listed or `HEAD` cannot be read.
 
-`Repository::ref_tips()` is the same snapshot, uncancellable: what the network lane
-compares before and after a fetch to decide whether the history must reload. Comparing
-snapshots sees a symbolic ref retargeted and a tag object replaced on the same commit,
-which comparing peeled ids did not. It sees only what the snapshot holds — the local
-branches, remote-tracking refs and tags, `HEAD`, each branch's upstream and the stash
-list — so a fetch that moves only a ref outside those namespaces (`refs/notes/`,
-`refs/pull/`, `refs/replace/`) is reported as having moved none.
+A refresh (`docs/systems/history-graph.md`, "Refresh") reads the snapshot again — on
+focus, after a fetch, on the Refresh action — and compares it with the one the history
+was walked from: `RefsSnapshot::walks_as` says whether the two would draw the same
+history — the same refs naming the same objects, a symbolic ref's target among them, the
+same `HEAD` and the same stash list — leaving out an upstream's configuration and the
+unreadable count, which the graph does not draw (`a_walk_is_the_same_unless_what_it_draws_changed`).
+Comparing snapshots sees a symbolic ref retargeted and a tag object replaced on the same
+commit, which comparing peeled ids did not. It sees only what the snapshot holds, so a fetch
+that moves only a ref outside those namespaces (`refs/notes/`, `refs/pull/`,
+`refs/replace/`) reopens nothing. (The network lane's own before-and-after comparison,
+`Repository::ref_tips`, is gone with phase 06.)
+
+`RefsSnapshot::matching` is the sidebar's filter (R8.3): the refs whose name past its
+namespace, and the stashes whose message, hold the text, case ignored as the Changes tab's
+file filter ignores it (`src/text_filter.rs`, shared by both); a pass over every ref, run
+on the repository thread in a lane of its own
+(`the_sidebar_filter_keeps_the_names_that_hold_its_text`).
 
 ## The five parity rules
 
@@ -172,7 +182,7 @@ The window draws either reason as it draws every failed open.
   `head_through_a_symbolic_branch_is_what_git_says`,
   `git_namespace_in_cairns_environment_is_not_honoured`,
   `a_ref_naming_a_missing_object_is_skipped_and_counted`,
-  `ref_tips_see_a_symbolic_ref_retargeted_and_a_tag_object_replaced`,
+  `a_refresh_sees_a_symbolic_ref_retargeted_and_a_tag_object_replaced`,
   `a_refs_query_stops_at_whichever_poll_is_cancelled`,
   `a_refs_query_reports_the_cost_it_paid`; and in the crate,
   `a_refspec_maps_the_merge_literally_as_git_maps_it`. Cairn's side reads the

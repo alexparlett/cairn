@@ -2,7 +2,7 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 05 done (the history from every ref, labelled, with stash rows), QA adjudicated and confirmed findings fixed; phase 06 next. The application still walks from `HEAD`: the engine's `HistoryRequest::from_refs` is wired by phase 06.** Integration branch
+**Status: phase 06 implemented (the refresh: refs on the history thread, status and ahead/behind on a refresh thread, each in its own lane; the window walks from every ref and reopens only when what it draws changed), full gate green; phase 06 QA next (the coordinator's), then phase 07.** Integration branch
 `feature/refs-and-status`, in the worktree `.claude/worktrees/refs-and-status`,
 packet mode.
 
@@ -59,8 +59,24 @@ that most constrain implementation:
   when Local Changes draws it (phase 09): keep `Error::GitFailed` (as built); a named state
   classified by the repository's state; retry without rename detection; or let status
   lazy-fetch.
-- The Refresh chord per platform (Fork: ⌘R on macOS, F5 on Windows) — phase 06,
-  from `fork-dev/Docs`' shortcut lists.
+- For the user's end-of-packet batch (phase 06; not decided): the Refresh chord is F5 on
+  Linux and ⌘R on macOS, Fork's own (`fork-dev/Docs` `keyboard-shortcuts-windows.md` and
+  `-mac.md`, read 2026-10-06; Linux takes Fork's Windows row). F5 collides with no Linux
+  desktop chord nor any Cairn chord, so it was not a stopping rule; but it is the table's
+  first chord with no modifier, so the table's rule "every chord holds a modifier" was
+  amended to "every chord holds a modifier but a function key's"
+  (`chords_are_distinct_and_every_bare_one_is_a_function_key`). The alternative is Ctrl+R
+  (⌘R's mechanical Linux row).
+- For the user's end-of-packet batch (phase 06; not decided): what reopens the history is
+  `RefsSnapshot::walks_as` — refs, their targets and symbolic targets, `HEAD`, the stash list
+  — so a refresh that finds only an upstream's configuration or the unreadable count changed
+  hands the window the new snapshot without reopening; ahead/behind is counted afresh on every
+  refresh (it is not part of the comparison, R10.4), on the refresh thread behind status.
+- For the user's end-of-packet batch (phase 06; not decided): a ref whose commit is gone
+  between a refresh and the open (deleted and pruned) makes the open read the refs again and,
+  if they differ, open once more from them (the hand-off's first option), rather than drop the
+  tip; a failed open forgets its refs, so the next open reads its own and the next refresh
+  reopens.
 - C11's first-page bar is written as 200 ms because history-graph's A7 has no
   number (L12); the user may revise it at the merge bar.
 
@@ -96,32 +112,22 @@ that most constrain implementation:
   directory's mtime; no content changed (progress.md). Later phases: scratch clones with
   no alternates, and `GIT_OPTIONAL_LOCKS=0` for any `git` run on the bench.
 
-## Handed to phase 06
+## Handed to phase 06 (done)
 
-- Open the history from the snapshot: `Scroll::page` (`crates/cairn-app/src/worker/pool.rs`)
-  builds `HistoryRequest::from_head(rows)` today; build `HistoryRequest::from_refs(&snapshot,
-  rows)` from the refs read on the history thread, so the walk, its labels and its stash rows
-  come from the snapshot the sidebar shows. `from_head`'s unborn-`HEAD` page
-  (`pool.rs::no_walk`) has no counterpart: a snapshot with no ref and an unborn `HEAD` walks
-  nothing and answers an empty, complete page — map that case to the `no_walk` page the
-  window shows today (phase 05 QA, QC7).
-- A session now opens its walk on its first `next_page`, under that page's cancel (phase 05
-  QA, RR1): `history_session` reports only what resolving the request fails on (an unborn
-  `HEAD`, a starting point of the wrong width), and a walk error — a tip that
-  is not a commit, an unreadable commit-graph setting — arrives from the first page.
-- A ref tip gone stale since the snapshot — deleted and pruned, or rewritten to a non-commit
-  — fails the open (`Error::Walk`), as a bad tip always did (phase 05 QA, QC3's sibling).
-  Decide its handling with the refresh: read the refs again and reopen, or drop the tip.
-- Measure layout and drawing on a fixture of thousands of unmerged refs (phase 05 QA, RR2):
-  the assigner scans every open lane twice per row and a drawn row's derivation walks the
-  lines crossing it, and a walk from every ref opens a lane per unmerged ref
-  (`docs/systems/history-graph.md`, Known limits). Phase 07 measures the drawing half.
-- When a refresh reopens the history, build the new `History` pre-sized from the old
-  one's author count — a `History::with_author_capacity(old.author_count())`, with a
-  model test — so a reopen does not rehash its way back up through every doubling of
-  the author index on the UI thread (phase 04 QA, RR1).
+Every hand-off is done (progress.md, "phase 06"): `from_refs` wired (`HistoryLane`); the unborn
+`HEAD` with no ref answers the empty, complete page, `no_walk` gone with `from_head`'s use; a
+walk error arrives from the first page; the stale tip re-read and reopened once; RR2 measured;
+`History::with_author_capacity` with its model test; the reopen's rows freed on a worker; the
+fetch's `reload_if` comparison and `Repository::ref_tips` gone.
 
 ## Handed to phase 07
+
+- The window keeps what each refresh answered in `View::refreshed` (`RefreshState`: `refs`,
+  `ahead_behind`, `status`, `failure(Refreshed)`); the labels read `HistoryRow::labels`, the
+  toolbar reads `refs().head` and `ahead_behind()`. The accessors other than `refs` carry
+  `expect(dead_code)` until a view reads them.
+- RR2's drawing half: phase 06 measured layout and edge derivation (progress.md); phase 07
+  measures drawing a viewport of rows on the widest fixture.
 
 - A row's labels are uncapped (phase 05 QA, RR3): chips must stop being built at the column's
   edge — R5.3's clip, never a "+N" — so a row labelled by thousands of refs builds what the
@@ -238,6 +244,24 @@ Phase 05 (`docs/systems/history-graph.md`, "From every ref, labelled, with stash
 - Tests: `crates/cairn-git/tests/every_ref.rs` (C6, and the `#[ignore]`d C11 reporter
   `measures_the_first_page_from_every_ref`); the C15/C16 reporter's seed `snapshot`.
 
+Phase 06 (`docs/systems/history-graph.md`, "Refresh"):
+
+- `cairn-model`: `RefsSnapshot::walks_as`, `RefsSnapshot::matching -> Option<RefsMatched {
+  refs, stashes }>`, `History::with_author_capacity`; `src/text_filter.rs` (`Folded`,
+  shared with `ChangeSet::files_matching`).
+- `cairn-git`: `Repository::ref_tips` removed (use `refs`).
+- `cairn-ui`: `Action::Refresh` (F5 / ⌘R, `Scope::Window`).
+- `cairn-app`: `QueryLane::{Refs, AheadBehind, Status, RefFilter}`; `Request::Refresh` (three
+  lanes, `Request::lanes`, `MOST_LANES`), `Request::FilterRefs`; `Update::{Refs { snapshot,
+  reopen }, AheadBehind, Status, RefreshFailed { what: Refreshed }, FilteredRefs}`; the fetch
+  updates lost `refreshed`; `Retired::{history, refs, ahead_behind, status}`;
+  `worker/history_lane.rs` (`HistoryLane`, replacing `Scroll`), `worker/refresh_lane.rs`
+  (`cairn-refresh`, `RefreshJob`), `refresh.rs` (`on_focus_gained`), `refresh_state.rs`
+  (`RefreshState`), `session::reopen_history`; startup submits `Refresh`, not `OpenHistory`.
+- Tests: `worker/refresh_tests.rs` (`Refreshable`, exported for the window's tests), the
+  session's and window's C10 tests, `history_lane`'s stale-tip test; the `#[ignore]`d RR2
+  reporter `measures_layout_over_unmerged_refs` in `crates/cairn-git/tests/every_ref.rs`.
+
 ## Validation status
 
 | Phase | Status |
@@ -247,7 +271,7 @@ Phase 05 (`docs/systems/history-graph.md`, "From every ref, labelled, with stash
 | 03 compact rows | implemented: C15 passes (equivalence over the fixtures, the Cairn checkout and every ref of the bench; find 2.26 s against 2.50 s before); K = 64, derived at draw time; numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
 | 04 slim rows | done: C16 passes (comparisons pinned at `4205d5d` over crafted fixtures and the Cairn checkout; 52.6 MiB retained for all of rust-lang/rust from every ref, capacity counted, against 64 MiB; no kept row owns a heap allocation); C15 still passes (equivalence on the bench, find 2.21 s); RR1 closed; numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
 | 05 history from every ref | implemented: C6 passes (walked commits = `git rev-list --branches --remotes --tags HEAD` over whole walks, labels = `git log --decorate=full`, stash rows with and without `--include-untracked`, assigner lane and edge tests); C11 first page from every ref 7.3 ms (8.6 ms with the snapshot read) beside `HEAD`'s 7.7 ms, worst stash look-ahead 21.6 ms; C16 52.67 MiB from the snapshot; C15 equivalence holds; the app still walks from `HEAD`; QA adjudicated, confirmed findings fixed (the walk's open cancellable between tips: 103 ms first page at 50,000 tags, cancelled in 6.3 ms); full gate green |
-| 06 worker and refresh | not started |
+| 06 worker and refresh | implemented: C10 passes through the real boundary (`a_refresh_reopens_for_a_stash_a_checkout_and_a_moved_ref_and_for_nothing_else`, the refresh tests) and headless with focus set (`focus_gained_after_a_ref_moved_reopens_the_history_keeping_the_chosen_row`); every pin checked against a named mutation (progress.md); RR2 measured; full gate green; QA pending |
 | 07 labels and toolbar | not started |
 | 08 sidebar | not started |
 | 09 local changes | not started |

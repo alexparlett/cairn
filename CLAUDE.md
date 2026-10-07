@@ -56,9 +56,12 @@ and a press's modifiers, which this toolkit build does not carry on a pointer
 event — resolve through one accelerator table (`cairn_ui::accelerators`).
 The engine also reads a repository's refs, upstreams, stash list and ahead/behind
 counts as git lists them (`docs/systems/refs.md`), and its working tree's status as
-`git status` answers it (`docs/systems/status.md`); no view draws either yet. It can
-walk the history from every ref, each row labelled and each stash a row of its own
-(`docs/systems/history-graph.md`); the window still walks from `HEAD`.
+`git status` answers it (`docs/systems/status.md`); no view draws either yet. The window
+walks the history from every ref, each row labelled and each stash a row of its own
+(`docs/systems/history-graph.md`), and refreshes — the refs on the history thread,
+status and ahead/behind on a refresh thread of their own, each in its own lane — when it
+gains focus, when a fetch ends and on the Refresh action (F5, ⌘R on macOS), reopening
+the history only when what it draws changed, its old rows freed on a worker.
 Nothing else mutates a repository, and there is no repository picker: one
 repository, named on the command line.
 
@@ -71,7 +74,7 @@ repository, named on the command line.
 | `crates/cairn-git/` | The repository engine: gitoxide-backed reads — the history walk (from `HEAD`, given commits, or a refs snapshot: every ref, each row labelled, each stash whose base is walked a row of its own, merged in by `src/history/stream.rs`), the refs snapshot and each branch's upstream (`src/refs.rs`, `src/refs/`), ahead and behind (`src/ahead_behind.rs`), the ref-storage refusal at open (`src/ref_storage.rs`; `docs/systems/refs.md`), the working tree's status (`src/status.rs`, asked of `git status` through `src/reads/`; `docs/systems/status.md`), and under `src/diff/` the queries answering what a commit changed (asked of `git diff-tree` through `src/reads/`), what one file's change is, and one path's working-tree diff — and under `src/ops/` every write, delegating to the `git` binary per design decision D1. Every `git` process is built in the crate-private `src/process/` — `GitBinary` (startup discovery and the 2.30 floor), `GitEnvironment` (the explicitly built environment, the only place a `Command` is built), `Askpass` (where git and ssh are sent for a secret), the runner, which streams and can kill a process, and each repository's registry of running invocations and its command log — and an invocation is typed a read or a write, a write needing the `WriteAuthority` only `ops/` can construct. `src/ops/` holds `fetch`, the first verb (not destructive, so it takes no `Confirmed`), and the confirmation-seal placeholder, and re-exports what the application needs of `process/`; `src/reads/` is where each read `git` answers lives, one named function each: today `changes`, `git diff-tree` for the changes query, whose rename and copy pairs gix and git disagree on; `patches`, `git diff-tree -p` for the content query's changed lines and function context, whose line diff gix and git disagree on too; `diff_attributes`, `git check-attr`, which says whether a path's diff driver names its own algorithm; `working_tree_patch`, one path's staged, unstaged or untracked diff (`git diff-index --cached`, `git diff-files`, `git diff --no-index`), which reads the working tree through git so its side is git's form of the file; `fetch_settings`, `git config` in query form, what a fetch of a remote will read, for fetch's refspec check (`src/ops/refspec_policy.rs`), which must decide on exactly what the fetch's own git reads; and `status`, `git status --porcelain=v2 -z` — read again with `--untracked-files=all` only where the first answer collapsed an untracked directory, so git itself reads `status.showUntrackedFiles` — the working tree's status, which gix answers differently wherever status is hard. Speaks `cairn-model` types at its boundary; `gix` types never appear in a public signature. Must never depend on `freya` or `cairn-ui`. |
 | `crates/cairn-askpass/` | The askpass helper binary `git` and `ssh` run to ask for a secret, and the library half — the `Channel` the application listens on. Links `cairn-model` and `zeroize` only: it runs in a process holding a plaintext secret. Never names the engine, the toolkit or a logging crate. |
 | `crates/cairn-ui/` | Freya components. Render `cairn-model` values, report intent through `EventHandler` props. `src/accelerators.rs` is the accelerator table, the one render file that names a modifier; `src/diff_view.rs` the diff view, drawing `src/unified_rows.rs` or `src/side_by_side_rows.rs` (each from `src/diff_row_parts.rs`), `src/diff_notice.rs` what stands in place of rows, `src/changes_list.rs` the Changes tab's filtered file list and summary, `src/diff_header.rs` its bar (whose glyphs `src/toggle_glyphs.rs` draws), `src/columns.rs` the terminal column widths tabs stop by, `src/diff_settings.rs` the diff settings — context, ignore-whitespace and side-by-side shared by every diff view, Entire File the Changes tab's alone, `src/diff_palette.rs` the diff's colour tokens and typeface, `src/commit_tab.rs` the Commit tab and `src/expansion.rs` where each file opened in place under its row falls in that tab's one list. Must never depend on `gix` or `cairn-git`, and must never touch the filesystem. |
-| `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. `src/worker/` is everything that may wait: `git` found once per application (`discovery.rs`), each repository's threads (`pool.rs`), the routing table from query lane to thread (`routing.rs`) and the per-lane epochs (`epoch.rs`), the diff thread (`diff_lane.rs`) and Expand All's line budget (`expand_all.rs`), the network lane (`network_lane.rs`) and the askpass acceptor; `src/diff_state.rs` is the diff selection and the answers kept for it; `src/selection.rs` chooses a row, or two to compare, and asks what they changed; `src/detail_pane.rs` draws the pane for the selection now and `src/changes_tab.rs` its Changes tab; `src/file_filter.rs` the Changes tab's filter as the window keeps it; `src/diff_actions.rs` chooses a file, changes the shared diff settings and moves between changes; `src/shortcuts.rs` is what each accelerator, and each button of the diff's bar, does; `assets/fonts/` holds the embedded IBM Plex Mono and its licence; `src/closing.rs` is the window's close hook, which asks the worker to close and never waits; `src/window_check.rs` is C14's window check, an `#[ignore]`d measurement of the real window over the bench repository. |
+| `crates/cairn-app/` | The binary. Owns the window, the worker threads, and the wiring between engine and UI — the only crate where the two layers meet. `src/worker/` is everything that may wait: `git` found once per application (`discovery.rs`), each repository's threads (`pool.rs`), the routing table from query lane to thread (`routing.rs`) and the per-lane epochs (`epoch.rs`), the history lane's walk and the refs it walks from (`history_lane.rs`), the refresh thread's status and ahead/behind (`refresh_lane.rs`), the diff thread (`diff_lane.rs`) and Expand All's line budget (`expand_all.rs`), the network lane (`network_lane.rs`) and the askpass acceptor; `src/refresh.rs` asks for a refresh when the window gains focus and `src/refresh_state.rs` keeps what the last refresh answered; `src/diff_state.rs` is the diff selection and the answers kept for it; `src/selection.rs` chooses a row, or two to compare, and asks what they changed; `src/detail_pane.rs` draws the pane for the selection now and `src/changes_tab.rs` its Changes tab; `src/file_filter.rs` the Changes tab's filter as the window keeps it; `src/diff_actions.rs` chooses a file, changes the shared diff settings and moves between changes; `src/shortcuts.rs` is what each accelerator, and each button of the diff's bar, does; `assets/fonts/` holds the embedded IBM Plex Mono and its licence; `src/closing.rs` is the window's close hook, which asks the worker to close and never waits; `src/window_check.rs` is C14's window check, an `#[ignore]`d measurement of the real window over the bench repository. |
 | `crates/cairn-guards/` | Test-only. The deterministic enforcement twins for the Invariants below; nothing depends on it. |
 | `scripts/`, `.githooks/`, `.github/` | The enforcement layer (contract: `docs/qa-gate.md`). |
 
@@ -253,8 +256,9 @@ copy is a different version from the fork that links.
   values (decision D3: one `cairn_git::SharedRepository` — gitoxide's
   `ThreadSafeRepository` — per repository, each worker thread taking its
   thread-local handle once, routed to by an explicit table — the history lane
-  on the repository thread that owns the live walk, the changes and file-diff
-  lanes on a diff thread of their own — and every QUERY carrying an epoch
+  and a refresh's refs on the repository thread that owns the live walk, the
+  changes and file-diff lanes on a diff thread of their own, status and
+  ahead/behind on a refresh thread of their own — and every QUERY carrying an epoch
   numbered in its lane, so a superseded query is abandoned rather than
   rendered; a query supersedes only its own lane, except that a changes query
   also supersedes the file diff, and an operation such as fetch carries none,
@@ -626,7 +630,9 @@ Project invariants:
   close, whose query arms bump their lanes' atomic counters and send to the
   thread the routing table names over an unbounded channel, whose operation
   arms (`Request::Retire`, a replaced change set handed to the repository
-  thread to free, among them) only send over one, and whose
+  thread to free, among them) only send over one, whose `Request::Refresh`
+  arm bumps three lanes' counters and sends once to the repository thread and
+  once to the refresh thread, and whose
   `CancelFetch` arm takes `FetchControl`'s mutex and calls
   `KillHandle::kill`; `worker::open`, called from `main.rs`'s `use_hook`,
   and the `Replier` closure it returns; `Updates::next`, `Wake::poll`, `Drop for Updates` (an atomic
@@ -765,7 +771,18 @@ Project invariants:
     thread in a lane of its own (`Request::FilterFiles`), never on the UI thread;
     the window keeps the indices it answers (`file_filter.rs`), and the list reads
     the chosen file's index from `DiffState` rather than searching the change set
-    for it. A history row is read through the history's stores as the list builds
+    for it; the sidebar's filter over a refs snapshot likewise (`Request::FilterRefs`,
+    `RefsSnapshot::matching`, the ref-filter lane). A refresh asks the UI thread for
+    a submit and nothing else — on focus gained (`refresh::on_focus_gained`, a side
+    effect on the toolkit's focus state), after a fetch ends, on the Refresh chord —
+    and a refresh's answers are kept by moving them in (`RefreshState`), the one
+    each replaces handed to the repository thread to free (`Request::Retire`). A
+    reopen (`session::apply`'s `reopen_history`) moves the loaded `History` out,
+    builds an empty one whose author index is allocated for the old one's author
+    count (`History::with_author_capacity`: one allocation, proportional to the
+    history's distinct authors, so its first pages do not rehash through every
+    doubling), and hands the old one to the repository thread to free, every row of
+    it (#52) — the selection kept as an id, never searched for. A history row is read through the history's stores as the list builds
     it (`render_of`, in `HistoryList`'s `build_row`): its subject and author copied
     out, and its edges derived — one lane snapshot copied and advanced through at
     most `LaneAssigner::SNAPSHOT_EVERY - 1` rows of lane changes per drawn row,
@@ -776,16 +793,13 @@ Project invariants:
     of the author index (a standard hash map, keyed by a fixed-key SipHash of the
     name), a rehash of every author so far — bounded by the history's distinct
     authors, not its rows (0.48 ms measured at 57,000 authors).
-    Two frees still happen on the UI thread rather than through
-    `Request::Retire`: `crates/cairn-app/src/session.rs`'s `reload_if`, when a
-    fetch moved refs, replaces the loaded `History` with an empty one before
-    reopening the history — the one history-sized free on the UI thread, inherited
-    from the history view and not retired to a worker, though since rows were
-    slimmed it frees the history's chunks (a few hundred for all of
-    rust-lang/rust) rather than an allocation or more for every row; and `Updates::next`
+    One free still happens on the UI thread rather than through
+    `Request::Retire`: `Updates::next`
     (`crates/cairn-app/src/worker/pool.rs`) drops each superseded answer that
     `Update::into_retired` does not retire — a page of rows, a filter's index
-    list, a failure — each bounded by a page or by the change set's file list.
+    list, a failure — each bounded by a page or by the change set's file list or
+    the refs snapshot's ref list. (`session::reload_if`, which freed the whole
+    history on the UI thread when a fetch moved refs, is gone: a reopen retires it.)
 
   Whether the virtualizing view really builds only what its viewport shows is
   pinned by a second, behavioural twin:

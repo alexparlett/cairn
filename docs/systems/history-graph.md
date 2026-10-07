@@ -17,15 +17,15 @@ the result as a virtualized list of rows with lanes, edges and four columns,
 paging as the reader scrolls. Nothing here mutates a repository, and there is no
 repository picker.
 
-**The engine walks from every ref; the application still walks from `HEAD`.**
+**The history is walked from every ref, and reopened when a refresh finds them moved.**
 `HistoryRequest::from_refs` seeds a walk from a refs snapshot — every local branch,
 remote-tracking ref and tag that identifies a commit, and `HEAD` — labels each row
 with the refs pointing at its commit, and draws each stash whose base the walk
 reaches as a row of its own ("From every ref, labelled, with stash rows" below).
-The history lane (`Scroll::page`, `crates/cairn-app/src/worker/pool.rs`) still builds
-`HistoryRequest::from_head(rows)`, so the window draws the checked-out branch's
-ancestry, unlabelled and with no stash; reading the snapshot on the history thread
-and opening the walk from it is the worker's, and is not built yet.
+The window opens its history from the snapshot its first refresh reads on the history
+thread, and reopens it whenever a later refresh — on focus, after a fetch, on the
+Refresh action — finds what the graph draws changed ("Refresh", under the worker
+boundary below). No view draws the labels or the stash rows' chips yet (phase 07).
 
 ## The path a commit takes
 
@@ -485,8 +485,9 @@ FILE, and it is a guard, not a convention — see below.
 - `Updates::next()` is an `async fn`: it `try_recv`s and otherwise parks on
   `worker/wake.rs`, a one-slot latch a worker sets. There is no timer and no
   async-runtime dependency.
-- **Epochs are numbered per lane** (`worker/epoch.rs`, PRD R4.1): `QueryLane`
-  is history, changes or file diff, and a new query supersedes the older ones in
+- **Epochs are numbered per lane** (`worker/epoch.rs`, PRD R4.1, refs-and-status
+  R11.1): `QueryLane` is history, changes, file diff, file filter, refs,
+  ahead/behind, status or ref filter, and a new query supersedes the older ones in
   its own lane only — except that a changes query also supersedes the file-diff
   lane (`QueryLane::supersedes`), since a file of the commit that was selected is
   no file of the one that is now. So a scroll never cancels a diff, a selection
@@ -534,11 +535,14 @@ FILE, and it is a guard, not a convention — see below.
   bounded (`fetch_tests::WAIT`, in `block_on` and `woken_by`), so a hang of
   that shape is a red test with a name.
 - **An explicit routing table names the thread for each lane**
-  (`worker/routing.rs`, PRD R4.2): the history lane on `cairn-repository`,
-  which owns the live walk — it borrows that thread's handle across turns and is
-  not `Send`, so it never moves — and the changes and file-diff lanes, commits,
-  comparisons and the working tree alike, on `cairn-diff`
-  (`worker/diff_lane.rs`). `route` applies it to every request as it is
+  (`worker/routing.rs`, PRD R4.2, refs-and-status R11.2): the history lane and a
+  refresh's refs on `cairn-repository`, which owns the live walk — it borrows that
+  thread's handle across turns and is not `Send`, so it never moves
+  (`worker/history_lane.rs`) — with the Changes tab's and the sidebar's filters; the
+  changes and file-diff lanes, commits, comparisons and the working tree alike, on
+  `cairn-diff` (`worker/diff_lane.rs`); and status and ahead/behind on
+  `cairn-refresh` (`worker/refresh_lane.rs`), so neither a page nor a diff queues
+  behind a slow status. `route` applies it to every request as it is
   submitted and hands each thread its own job type, so neither thread forwards
   the other's work (`every_query_is_served_on_the_thread_its_lane_is_routed_to`).
   A second thread costs the first almost nothing: measured by
@@ -556,10 +560,75 @@ FILE, and it is a guard, not a convention — see below.
   `Update` variants, and requests that carry no epoch so a scroll and a fetch
   cannot supersede each other; the credential
   dialog is a third thread (`worker/askpass.rs`) blocking on the window's
-  reply. How it honours `Invalidated::refs` is the OpenHistory path above — a
-  finished fetch makes the window ask for the history again from `HEAD`. The
+  reply. How it honours `Invalidated::refs` is the refresh below — a fetch's
+  every ending makes the window ask for one, which reopens the history if the
+  fetch moved what it draws. The
   as-built description is `docs/systems/credentials.md`; the lane, the close
   and the command log are `docs/systems/git-processes.md`.
+
+### Refresh
+
+As-built for refs-and-status R10 and R11 (phase 06). `Request::Refresh` is three
+queries, numbered as it is submitted in the refs, ahead/behind and status lanes and
+in no other, so it supersedes the refresh before it lane by lane and never a page,
+a diff or a filter (`Request::lanes`; `a_refresh_cancels_neither_a_page_being_walked_nor_a_diff_being_read`).
+Its refs go to the repository thread, its status to the refresh thread; once the refs
+are read, the repository thread hands them to the refresh thread for ahead/behind,
+under the epoch the refresh was given. A refresh asked again at once — focus
+flapping — leaves one answer of each to be drawn
+(`a_refresh_asked_twice_at_once_draws_one_answer_of_each`), and a status that hangs
+holds up neither a page nor a diff (`a_slow_status_delays_neither_a_page_nor_a_diff`).
+
+It is asked for on three occasions, and the UI thread only submits on each: the window
+gaining focus (`crates/cairn-app/src/refresh.rs`, a side effect on the toolkit's
+`Platform::is_app_focused` that submits on a false-to-true change and on nothing else —
+`gaining_focus_asks_for_a_refresh_and_nothing_else`); any fetch ending, finished,
+cancelled or failed (`session::apply`;
+`every_fetch_ending_asks_for_a_refresh_and_touches_no_row`); and the Refresh action,
+F5 on Linux and ⌘R on macOS in the accelerator table
+(`the_refresh_chord_asks_for_a_refresh`). The window's first refresh, as it opens, is
+what opens the history: there is no walk yet to compare with. Nothing watches the
+file system (R10.2).
+
+**What reopens the history.** The repository thread keeps, beside the walk
+(`HistoryLane`), the snapshot the walk began from and the snapshot the last refresh
+read. A refresh compares the refs it reads with the first by
+`RefsSnapshot::walks_as` — the same refs naming the same objects, the same `HEAD`,
+the same stash list — and answers `Update::Refs { snapshot, reopen }`. The window keeps
+the snapshot (`refresh_state.rs`, for the views phases 07-09 build) and, on `reopen`,
+reopens: the old `History` is moved out and handed to the repository thread to free
+as a `Request::Retire` (#52, R11.3), a new one is built with
+`History::with_author_capacity` of the old one's author count, the history is asked
+for again, and the selection is left as it is, drawn again when its row arrives
+(R10.5). A stash pushed, a checkout that moves no ref and a moved ref each reopen; a
+refresh that finds nothing changed does not, and neither does an upstream's
+configuration alone (`a_walk_is_the_same_unless_what_it_draws_changed`, in the model)
+(`a_refresh_reopens_for_a_stash_a_checkout_and_a_moved_ref_and_for_nothing_else`,
+counting the window's reopens through the real boundary;
+`focus_gained_after_a_ref_moved_reopens_the_history_keeping_the_chosen_row`, headless
+with focus set; `a_reopen_frees_the_old_rows_on_a_worker_and_keeps_the_selection`).
+The fetch's own before-and-after comparison of the refs, and `session::reload_if`
+that acted on it, are gone.
+
+**What an open walks from.** `OpenHistory` walks from the snapshot the last refresh
+read, so a reopen reads the refs once. With none read — a test that opens without a
+refresh, or after a failed open, which forgets them — the open reads its own and
+answers it as `Update::Refs { reopen: false }` in the history lane before its first
+page. A snapshot with no ref and an unborn `HEAD` walks nothing and answers the empty,
+complete page an unborn repository always answered
+(`a_freshly_initialised_repository_reaches_the_view_as_an_empty_history`). A ref whose
+commit has gone between the refresh and the open — deleted and pruned — fails the
+walk's open; the open then reads the refs again and, when they draw something else,
+answers them and opens once more from them
+(`an_open_from_refs_gone_stale_reads_them_again_and_opens_from_those`). A walk error
+arrives from the first page, since the session opens its walk there.
+
+**What is freed where.** Every refresh answer the window replaces — a snapshot,
+ahead/behind, a status — and every one superseded before the window read it goes to
+the repository thread to free (`a_replaced_refresh_answer_is_freed_on_a_worker_and_a_failure_keeps_the_last`,
+`a_superseded_refresh_comes_back_to_be_freed_on_a_worker`). A refresh's failure is kept
+beside the answer before it, which stays; a failure to read the refs before any were
+read is the history's failure too, since it has nothing to walk from.
 
 Every `submit` of a QUERY supersedes the queries before it in its lane (an
 operation carries no epoch), and a superseded page delivers nothing — so the
@@ -764,18 +833,21 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
   commit, which no commit the walk reaches names; the kept row says which kind it
   is. A row with no `Oid` at all (there is to be no working-tree row) would need
   the assigner keyed otherwise.
-- **The window's view is `HEAD`'s ancestry, not the repository's.** The engine's
-  `from_refs` walks every ref; the history lane builds `from_head` until the worker
-  reads a snapshot. Opening a walk from every ref reads a commit per tip: about
-  0.1 s at 50,000 tags on one line of history, cancellable between tips (above).
+- **Opening a walk from every ref reads a commit per tip**: about 0.1 s at 50,000
+  tags on one line of history, cancellable between tips (above), and a reopen pays
+  it again.
 - **Layout and drawing grow with open lanes, and every ref can open one.** The
   assigner scans every open lane twice per row laid out (`LaneAssigner::push`), a
   snapshot holds one bit per lane, and deriving a drawn row's edges walks the lines
   crossing it on the UI thread. A walk from every ref opens a lane for each ref whose
   line has not yet merged — `refs/pull/*` and stale remote-tracking refs among them —
-  so that work grows with the unmerged refs, not with the history. Measured only on
-  rust-lang/rust (105-160 lines per row) and the 50,000-tag chain (one lane); not on a
-  repository with thousands of unmerged refs.
+  so that work grows with the unmerged refs, not with the history. Measured on
+  rust-lang/rust (105-160 lines per row), the 50,000-tag chain (one lane), and a fixture
+  holding 100, 1,000 and 5,000 unmerged lines open at once
+  (`measures_layout_over_unmerged_refs`): the first page from every ref took 3.1, 8.4 and
+  25 ms, and deriving a 40-row viewport's edges under every line 0.03, 0.11 and 0.49 ms
+  (release; numbers in `docs/work/refs-and-status/progress.md`, phase 06). Drawing that
+  many lines is not measured yet.
 - **One stash commit twice in the stash list draws two rows with one identity.**
   `git stash store` can file the same commit twice; each entry is a row, both
   `RowId::Stash` of that commit, so `History::position` finds the first and selecting

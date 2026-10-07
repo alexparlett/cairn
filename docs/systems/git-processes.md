@@ -1048,14 +1048,12 @@ then, of whatever that worker had not yet ended: the process exits, nothing
 is left to drive a late `git` to its `SIGKILL` or reap it, and such a `git`
 runs on, orphaned, holding whatever locks it holds (issue #48).
 
-What a close does not bound: the network lane, after its fetch is reaped,
-still reads the refs once more (`ref_tips`, the refs snapshot with no cancel,
-which looks up every ref's object) before it lets its sender go, and it read them once before the
-fetch started, so a repository with a great many refs and a cold cache can
-hold the stream's end — and the window — past `CLOSE_PATIENCE`. The window
-stays open and draws nothing until the second request closes it. The
-constants above bound the reaps, not the scans (issue #43; the scans
-themselves are #25's).
+The network lane reads no refs around a fetch any more (phase 06 of
+refs-and-status): whether a fetch moved one is the refresh's to find out, which the
+window asks for on every ending, in the refs lane on the repository thread, where a
+close's stopped epochs cancel it between refs. What a close does not bound now is
+the reaps' own wait and the refresh thread's status, whose `git` the close ends with
+the rest (issue #43).
 
 A close also ends any `git` in flight, a write included, without asking: the
 window refuses nothing and the user is told nothing about what was running.

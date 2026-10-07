@@ -2392,7 +2392,11 @@ mod tests {
             view,
             main(),
             Some(("refs/remotes/origin/main", false)),
-            None,
+            // Counts a refresh read before the upstream went: never drawn beside `gone`.
+            Some(AheadBehind {
+                ahead: 1,
+                behind: 18,
+            }),
             0,
         );
         let shown = title(&test);

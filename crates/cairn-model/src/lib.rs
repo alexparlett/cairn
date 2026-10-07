@@ -30,6 +30,7 @@ mod repo_path;
 mod row_labels;
 mod rows_page;
 mod secret;
+mod sidebar_rows;
 mod status;
 mod text_filter;
 
@@ -67,6 +68,7 @@ pub use repo_path::RepoPath;
 pub use row_labels::{Label, RowLabels};
 pub use rows_page::{PagedCommit, PagedStash, RowsPage};
 pub use secret::Secret;
+pub use sidebar_rows::{Disclosure, SidebarRow, SidebarSection, folder_name, folder_path};
 pub use status::{
     ChangedEntry, ConflictKind, ConflictedEntry, StagedChange, StatusEntry, SubmoduleState,
     UnreadableIndex, UnstagedChange, WorkingTreeStatus,

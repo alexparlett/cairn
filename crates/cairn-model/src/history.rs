@@ -40,6 +40,15 @@ pub enum RowId {
     Stash(Oid),
 }
 
+impl RowId {
+    /// The commit the row draws: a commit's own, or a stash's stash commit.
+    pub fn oid(self) -> Oid {
+        match self {
+            Self::Commit(id) | Self::Stash(id) => id,
+        }
+    }
+}
+
 /// A history is too large for its stores' 32-bit addresses: some 4 GiB of subjects, or four
 /// billion rows or lane changes. Rows appended before it was found are kept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +76,8 @@ const STASH: u8 = 1;
 const HEAD: u8 = 1 << 1;
 /// A row's flags: refs point at its commit ([`LabelledRow`] holds them).
 const LABELLED: u8 = 1 << 2;
+/// No row: `HEAD`'s commit not held yet.
+const NO_ROW: u32 = u32::MAX;
 /// The end of a chain of authors whose names hash alike.
 const NO_AUTHOR: u32 = u32::MAX;
 
@@ -146,6 +157,8 @@ pub struct History {
     labelled: Chunks<LabelledRow, 8>,
     /// One entry for each stash's row, in row order.
     stashes: Chunks<StoredStash, 6>,
+    /// The row of `HEAD`'s commit, once it is held; [`NO_ROW`] until then.
+    head: u32,
     /// This history's own number ([`History::serial`]).
     serial: u64,
 }
@@ -214,6 +227,7 @@ impl History {
             labels: Runs::new(),
             labelled: Chunks::new(),
             stashes: Chunks::new(),
+            head: NO_ROW,
             serial: NEXT_SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
     }
@@ -263,6 +277,28 @@ impl History {
     /// Row `index`'s identity, read without its text.
     pub fn id(&self, index: usize) -> Option<RowId> {
         self.rows.get(index).map(row_id)
+    }
+
+    /// Where the row drawing `target` is — a commit's own, or a stash's by its stash commit —
+    /// among the rows a press in the sidebar can name (refs-and-status R8.5): those refs label,
+    /// every stash's and `HEAD`'s. A pass over those rows alone, never over every row: a
+    /// history of every commit of rust-lang/rust labels a few hundred.
+    pub fn labelled_position(&self, target: Oid) -> Option<usize> {
+        let holds = |row: u32| {
+            self.rows
+                .get(row as usize)
+                .is_some_and(|stored| stored.id == target)
+                .then_some(row as usize)
+        };
+        (0..self.labelled.len())
+            .filter_map(|at| self.labelled.get(at))
+            .find_map(|entry| holds(entry.row))
+            .or_else(|| {
+                (0..self.stashes.len())
+                    .filter_map(|at| self.stashes.get(at))
+                    .find_map(|entry| holds(entry.row))
+            })
+            .or_else(|| holds(self.head))
     }
 
     /// Where the row `id` is: a scan of every row, for a press, never for a frame.
@@ -347,6 +383,9 @@ impl History {
                 id: row.id,
                 flags,
             })?;
+            if row.head {
+                self.head = number;
+            }
         }
         Ok(())
     }
@@ -614,6 +653,15 @@ mod tests {
         }
     }
 
+    /// A row's commit is its own id or its stash commit, whichever kind of row it is: what a
+    /// find in the sidebar compares (refs-and-status R8.5). Caught by: a stash's row answering
+    /// its base, or either kind answering another commit.
+    #[test]
+    fn a_row_id_names_the_commit_it_draws() {
+        assert_eq!(RowId::Commit(oid(3)).oid(), oid(3));
+        assert_eq!(RowId::Stash(oid(4)).oid(), oid(4));
+    }
+
     fn summary(row: HistoryRow<'_>) -> CommitSummary {
         match row.content() {
             RowContent::Commit(commit) => commit,
@@ -732,6 +780,72 @@ mod tests {
         for row in history.rows() {
             assert_eq!(labels_of(row), (false, Vec::new()), "row {}", row.index());
         }
+    }
+
+    /// What a press in the sidebar names is found among the rows refs label, the stashes' and
+    /// `HEAD`'s — a stash by its stash commit, a commit whatever kind of row holds it — and a
+    /// commit no ref labels, though loaded, is not looked for among every row. Caught by: a
+    /// lookup that misses a stash's row or `HEAD`'s unlabelled one, answers a neighbour's row,
+    /// or scans every row (an unlabelled row found).
+    #[test]
+    fn a_labelled_row_is_found_among_the_labelled_rows_alone() {
+        use crate::RefKind::{LocalBranch, Tag};
+        let mut history = History::new();
+        let mut page = RowsPage::new();
+        page.push(
+            GraphRow::new(oid(1), Lane::new(0), Vec::new()),
+            commit("plain", "Ada", 1),
+        );
+        page.push_labelled(
+            GraphRow::new(oid(2), Lane::new(0), Vec::new()),
+            commit("main", "Ada", 1),
+            false,
+            &[label("refs/heads/main", LocalBranch, false)],
+        );
+        page.push_stash(
+            GraphRow::new(oid(3), Lane::new(1), Vec::new()),
+            crate::PagedStash {
+                index: 0,
+                base: oid(2),
+                message: "On main: wip",
+                author: "Ada",
+                author_time: 0,
+            },
+        );
+        history.append(page).unwrap();
+        let mut later = RowsPage::new();
+        later.push_labelled(
+            GraphRow::new(oid(4), Lane::new(0), Vec::new()),
+            commit("detached", "Ada", 1),
+            true,
+            &[],
+        );
+        later.push_labelled(
+            GraphRow::new(oid(5), Lane::new(0), Vec::new()),
+            commit("tagged", "Ada", 1),
+            false,
+            &[label("refs/tags/v1", Tag, false)],
+        );
+        history.append(later).unwrap();
+        assert_eq!(history.labelled_position(oid(2)), Some(1));
+        assert_eq!(
+            history.labelled_position(oid(3)),
+            Some(2),
+            "the stash's row"
+        );
+        assert_eq!(
+            history.labelled_position(oid(4)),
+            Some(3),
+            "HEAD's unlabelled row"
+        );
+        assert_eq!(history.labelled_position(oid(5)), Some(4));
+        assert_eq!(
+            history.labelled_position(oid(1)),
+            None,
+            "an unlabelled row was scanned"
+        );
+        assert_eq!(history.labelled_position(oid(9)), None);
+        assert_eq!(History::new().labelled_position(oid(2)), None);
     }
 
     /// Labels on some rows of several pages, `HEAD` on one: each row reads back exactly its

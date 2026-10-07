@@ -25,6 +25,7 @@ mod message_lines;
 mod ref_chips;
 mod ref_glyphs;
 mod side_by_side_rows;
+mod sidebar;
 mod status_box;
 mod toggle_glyphs;
 mod unified_rows;
@@ -75,6 +76,12 @@ pub use ref_chips::{
     min_width, row_chips, tint,
 };
 pub use ref_glyphs::{GLYPH_SIZE, RefGlyph};
+pub use sidebar::{
+    ALL_COMMITS_CAPTION, BranchCounts, DETACHED_HEAD_CAPTION, DrawnRow, GONE_CAPTION,
+    LOCAL_CHANGES_CAPTION, MainView, SIDEBAR_FILTER_PLACEHOLDER, SIDEBAR_INDENT,
+    SIDEBAR_ROW_HEIGHT, Sidebar, SidebarRefs, SidebarTarget, Trailing, drawn_row,
+    local_changes_text, section_caption,
+};
 pub use status_box::{
     NO_COMMITS_YET, StatusBox, Tracking, UPSTREAM_GONE, counts_text, current_branch, head_text,
     name_text,

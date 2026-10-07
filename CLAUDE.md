@@ -866,7 +866,10 @@ Project invariants:
   the projection's last row there) and its side-by-side twin
   `only_a_viewport_of_side_by_side_rows_is_built_however_long_the_file`, and for the
   Changes tab's files, `a_list_of_55184_files_builds_one_viewport_filtered_or_not`
-  (`crates/cairn-ui/tests/changes_list.rs`), hold the other lists to the same. They count
+  (`crates/cairn-ui/tests/changes_list.rs`), and for the sidebar's refs,
+  `a_sidebar_of_50000_refs_builds_one_viewport` (every folder open; top, deep and end) and
+  `a_folder_of_10000_branches_open_builds_one_viewport` (folders over a flat list stay
+  virtualized; `crates/cairn-ui/tests/sidebar.rs`), hold the other lists to the same. They count
   rows built, not work done: whether per-frame work grows with scroll depth while
   that count stays flat stays `responsiveness-reviewer`'s.
 

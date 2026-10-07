@@ -7,8 +7,9 @@
 //! snapshot of tens of thousands of refs builds one viewport.
 //!
 //! A branch draws Fork's marks: the current branch a check mark in place of its glyph and its
-//! name bold; a branch whose upstream is gone the warning triangle Fork draws, and the word
-//! `gone` where its counts would be; any other branch with an upstream its behind and ahead
+//! name bold; a branch whose upstream is gone the warning triangle Fork draws in place of its
+//! glyph — the current branch's at its right, beside the check mark, as Fork marks an active
+//! branch with an invalid upstream; any other branch with an upstream its behind and ahead
 //! counts, as the title bar prints them (`counts_text`). A line under the filter says what a
 //! press is doing — "Finding <ref>…" — or why it found nothing.
 
@@ -34,8 +35,6 @@ pub const SIDEBAR_FILTER_PLACEHOLDER: &str = "Filter";
 pub const LOCAL_CHANGES_CAPTION: &str = "Local Changes";
 /// The entry that shows the history in the main region.
 pub const ALL_COMMITS_CAPTION: &str = "All Commits";
-/// Said where a branch's counts would be when its upstream is gone: git's `[gone]`.
-pub const GONE_CAPTION: &str = "gone";
 /// What a detached `HEAD`'s row is called, as Fork names it in Branches.
 pub const DETACHED_HEAD_CAPTION: &str = "HEAD";
 const FONT_SIZE: f32 = 13.0;
@@ -338,16 +337,12 @@ pub struct DrawnRow {
     pub depth: u16,
     /// The current branch: its name drawn bold.
     pub bold: bool,
-    /// What is drawn at the row's right: a branch's counts, or that its upstream is gone.
-    pub trailing: Option<Trailing>,
+    /// A branch's counts against its upstream, drawn at the row's right.
+    pub counts: Option<String>,
+    /// The current branch's upstream is gone: the warning triangle drawn at the row's right,
+    /// the check mark keeping its place.
+    pub warning: bool,
     pub chosen: bool,
-}
-
-/// What a branch's row draws at its right.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Trailing {
-    Counts(String),
-    Gone,
 }
 
 /// What `row` of `refs` draws: its glyph, its name, how deep it sits, and a branch's marks.
@@ -365,7 +360,8 @@ pub fn drawn_row(
         text,
         depth,
         bold: false,
-        trailing: None,
+        counts: None,
+        warning: false,
         chosen: is_chosen,
     };
     Some(match row {
@@ -407,25 +403,23 @@ pub fn drawn_row(
                 RefKind::LocalBranch => {
                     let current =
                         matches!(&refs.head, HeadState::Branch(name) if *name == listed.name);
-                    let trailing = match &listed.upstream {
-                        Some(Upstream::Gone { .. }) => Some(Trailing::Gone),
+                    let gone = listed.upstream.as_ref().is_some_and(Upstream::is_gone);
+                    let counts = match &listed.upstream {
                         Some(Upstream::Exists { .. }) => counts
                             .and_then(|counts| counts_of(counts, &listed.name))
                             .map(counts_text)
-                            .filter(|text| !text.is_empty())
-                            .map(Trailing::Counts),
-                        None => None,
+                            .filter(|text| !text.is_empty()),
+                        Some(Upstream::Gone { .. }) | None => None,
                     };
-                    let glyph = if current {
-                        RefGlyph::Current
-                    } else if trailing == Some(Trailing::Gone) {
-                        RefGlyph::Gone
-                    } else {
-                        RefGlyph::Branch
+                    let glyph = match (current, gone) {
+                        (true, _) => RefGlyph::Current,
+                        (false, true) => RefGlyph::Gone,
+                        (false, false) => RefGlyph::Branch,
                     };
                     DrawnRow {
                         bold: current,
-                        trailing,
+                        counts,
+                        warning: current && gone,
                         ..plain(glyph, text, depth)
                     }
                 }
@@ -496,21 +490,19 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
                     colours.text_primary
                 }),
         )
-        .maybe_child(drawn.trailing.map(|trailing| {
-            match trailing {
-                Trailing::Counts(text) => label()
-                    .text(text)
-                    .max_lines(1)
-                    .font_family(DIFF_FONT_FAMILY)
-                    .font_size(12.)
-                    .color(colours.text_secondary),
-                Trailing::Gone => label()
-                    .text(GONE_CAPTION)
-                    .max_lines(1)
-                    .font_size(12.)
-                    .color(colours.warning),
-            }
+        .maybe_child(drawn.counts.map(|text| {
+            label()
+                .text(text)
+                .max_lines(1)
+                .font_family(DIFF_FONT_FAMILY)
+                .font_size(12.)
+                .color(colours.text_secondary)
         }))
+        .maybe_child(
+            drawn
+                .warning
+                .then(|| glyph(RefGlyph::Gone, colours.warning)),
+        )
         .into()
 }
 

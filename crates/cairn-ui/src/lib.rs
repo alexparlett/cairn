@@ -77,10 +77,9 @@ pub use ref_chips::{
 };
 pub use ref_glyphs::{GLYPH_SIZE, RefGlyph};
 pub use sidebar::{
-    ALL_COMMITS_CAPTION, BranchCounts, DETACHED_HEAD_CAPTION, DrawnRow, GONE_CAPTION,
-    LOCAL_CHANGES_CAPTION, MainView, SIDEBAR_FILTER_PLACEHOLDER, SIDEBAR_INDENT,
-    SIDEBAR_ROW_HEIGHT, Sidebar, SidebarRefs, SidebarTarget, Trailing, drawn_row,
-    local_changes_text, section_caption,
+    ALL_COMMITS_CAPTION, BranchCounts, DETACHED_HEAD_CAPTION, DrawnRow, LOCAL_CHANGES_CAPTION,
+    MainView, SIDEBAR_FILTER_PLACEHOLDER, SIDEBAR_INDENT, SIDEBAR_ROW_HEIGHT, Sidebar, SidebarRefs,
+    SidebarTarget, drawn_row, local_changes_text, section_caption,
 };
 pub use status_box::{
     NO_COMMITS_YET, StatusBox, Tracking, UPSTREAM_GONE, counts_text, current_branch, head_text,

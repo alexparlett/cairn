@@ -11,9 +11,8 @@ use cairn_model::{
     SidebarRow, StashEntry, Upstream,
 };
 use cairn_ui::{
-    BranchCounts, DETACHED_HEAD_CAPTION, GONE_CAPTION, MainView, RefGlyph,
-    SIDEBAR_FILTER_PLACEHOLDER, SIDEBAR_ROW_HEIGHT, Sidebar, SidebarRefs, SidebarTarget, Trailing,
-    drawn_row,
+    BranchCounts, DETACHED_HEAD_CAPTION, MainView, RefGlyph, SIDEBAR_FILTER_PLACEHOLDER,
+    SIDEBAR_ROW_HEIGHT, Sidebar, SidebarRefs, SidebarTarget, drawn_row,
 };
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -198,8 +197,8 @@ fn centre_of(test: &TestingRunner, text: &str) -> (f64, f64) {
 /// open folder's refs under it, folders first, a closed folder's hidden; the current branch
 /// bold with its counts behind then ahead; a gone upstream said; tags whole; every stash by
 /// its message. Caught by: a section out of Fork's order or missing, a folder flattened, the
-/// current branch drawn plain, counts or the gone upstream left out, or the count beside
-/// Local Changes missing.
+/// current branch drawn plain, its counts left out, or the count beside Local Changes
+/// missing.
 #[test]
 fn the_sidebar_draws_its_sections_in_forks_order_with_forks_marks() {
     let mut disclosure = Disclosure::default();
@@ -219,7 +218,6 @@ fn the_sidebar_draws_its_sections_in_forks_order_with_forks_marks() {
             "main",
             "2↓ 1↑",
             "topic",
-            GONE_CAPTION,
             "Remotes",
             "origin",
             "main",
@@ -243,7 +241,9 @@ fn the_sidebar_draws_its_sections_in_forks_order_with_forks_marks() {
 }
 
 /// R8.2, R5.5: each entry's glyph is its kind's shape — the current branch a check mark, a
-/// branch whose upstream is gone Fork's warning triangle, any other branch a branch, a
+/// branch whose upstream is gone Fork's warning triangle (beside the check mark when it is
+/// the current branch, as Fork marks an active branch's invalid upstream), any other branch a
+/// branch, a
 /// remote-tracking ref the remote, a tag the tag, a stash the box, a folder a folder, a
 /// detached `HEAD` the check mark — and a closed section or folder says so. Caught by: a kind
 /// drawn with another's glyph, or a gone upstream told by colour alone.
@@ -254,10 +254,10 @@ fn each_entry_draws_its_kinds_glyph() {
         .sidebar_rows("", &Disclosure::default(), || true)
         .unwrap();
     let counts = counts();
-    let drawn: Vec<(RefGlyph, String, Option<Trailing>, bool)> = rows
+    let drawn: Vec<(RefGlyph, String, Option<String>, bool)> = rows
         .iter()
         .filter_map(|row| drawn_row(*row, &refs, Some(&counts), None))
-        .map(|row| (row.glyph, row.text, row.trailing, row.bold))
+        .map(|row| (row.glyph, row.text, row.counts, row.bold))
         .collect();
     let of = |text: &str| {
         drawn
@@ -271,18 +271,13 @@ fn each_entry_draws_its_kinds_glyph() {
         (
             RefGlyph::Current,
             "main".to_owned(),
-            Some(Trailing::Counts("2↓ 1↑".to_owned())),
+            Some("2↓ 1↑".to_owned()),
             true
         )
     );
     assert_eq!(
         of("topic"),
-        (
-            RefGlyph::Gone,
-            "topic".to_owned(),
-            Some(Trailing::Gone),
-            false
-        )
+        (RefGlyph::Gone, "topic".to_owned(), None, false)
     );
     assert_eq!(of("feature").0, RefGlyph::Folder);
     assert_eq!(of("origin").0, RefGlyph::Folder);
@@ -303,7 +298,7 @@ fn each_entry_draws_its_kinds_glyph() {
         .find(|row| row.text == "main" && row.depth == 1)
         .unwrap_or_else(|| panic!("origin/main not drawn"));
     assert_eq!(remote.glyph, RefGlyph::Remote);
-    assert_eq!(remote.trailing, None, "a remote-tracking ref has no counts");
+    assert_eq!(remote.counts, None, "a remote-tracking ref has no counts");
 
     // A branch with no upstream: a branch, no counts.
     let mut plain = every_kind();
@@ -317,7 +312,23 @@ fn each_entry_draws_its_kinds_glyph() {
         .find(|row| row.text == "main")
         .unwrap_or_else(|| panic!("main not drawn"));
     assert_eq!(main.glyph, RefGlyph::Branch);
-    assert!(!main.bold);
+    assert!(!main.bold && !main.warning);
+
+    // The current branch with its upstream gone: the check mark, and the warning beside it.
+    let mut stranded = every_kind();
+    stranded.head = HeadState::Branch(RefName::new("refs/heads/topic"));
+    let rows = stranded
+        .sidebar_rows("", &Disclosure::default(), || true)
+        .unwrap();
+    let topic = rows
+        .iter()
+        .filter_map(|row| drawn_row(*row, &stranded, None, None))
+        .find(|row| row.text == "topic")
+        .unwrap_or_else(|| panic!("topic not drawn"));
+    assert_eq!(
+        (topic.glyph, topic.warning, topic.bold),
+        (RefGlyph::Current, true, true)
+    );
     let head = drawn_row(SidebarRow::DetachedHead, &plain, None, None).unwrap();
     assert_eq!(
         (head.glyph, head.text.as_str(), head.bold),

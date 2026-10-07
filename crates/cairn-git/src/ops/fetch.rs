@@ -112,14 +112,14 @@ impl FetchInProgress {
     /// Streams git's progress to `progress`, one line per redraw, until the
     /// process exits. Success is a [`Performed`] declaring `refs` and
     /// `objects` invalid — the declaration is what a fetch CAN change; whether
-    /// a ref actually moved is for the caller to see, which the worker does by
-    /// comparing [`crate::Repository::ref_tips`] before and after, on every
-    /// outcome, since a failed or killed fetch may have updated some refs
-    /// before it stopped. That comparison sees only what the refs snapshot
-    /// holds — the local branches, remote-tracking refs and tags, `HEAD`, each
-    /// branch's upstream and the stash list — so a fetch that moves only a ref
-    /// outside those namespaces (`refs/notes/`, `refs/pull/`, `refs/replace/`)
-    /// is reported as having moved none. A cancelled fetch is [`Error::GitCancelled`],
+    /// a ref actually moved is for the caller to see, which the application does
+    /// by refreshing after every outcome (a failed or killed fetch may have
+    /// updated some refs before it stopped): it reads the refs snapshot again
+    /// ([`crate::Repository::refs`]) and reopens the history when what the walk
+    /// draws differs. That comparison sees only what the refs snapshot holds —
+    /// the local branches, remote-tracking refs and tags, `HEAD` and the stash
+    /// list — so a fetch that moves only a ref outside those namespaces
+    /// (`refs/notes/`, `refs/pull/`, `refs/replace/`) reopens nothing. A cancelled fetch is [`Error::GitCancelled`],
     /// carrying every `*.lock` left under the git directory once git is gone;
     /// anything git refused is [`Error::GitFailed`] carrying its stderr —
     /// which is where "could not read Username ...: terminal prompts

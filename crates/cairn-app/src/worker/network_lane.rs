@@ -183,9 +183,8 @@ pub(super) fn serve_network_lane(
     while let Ok(operation) = operations.recv() {
         match operation {
             Operation::Fetch { remote } => {
-                // What the refs were, so the window is told whether anything moved —
-                // on every outcome, since a failed or killed fetch may have moved some.
-                let before = repo.ref_tips().ok();
+                // Whether anything moved is not this lane's to say: the window refreshes on
+                // every outcome (refs-and-status R10.1), and the refresh decides.
                 // One token for the whole invocation, retired below before the outcome
                 // goes out, so no helper of a dead git is accepted afterwards.
                 let authorised = channel.and_then(|channel| channel.begin().ok());
@@ -216,40 +215,28 @@ pub(super) fn serve_network_lane(
                 });
                 control.clear();
                 drop(authorised);
-                let refreshed = match (before, repo.ref_tips().ok()) {
-                    (Some(before), Some(after)) => before != after,
-                    // Could not tell: assume the worst, which costs a reload.
-                    _ => true,
-                };
-                outbox.send(
-                    None,
-                    fetch_outcome(remote, outcome.map(|_| ()), refreshed, prompting),
-                );
+                outbox.send(None, fetch_outcome(remote, outcome.map(|_| ()), prompting));
             }
         }
     }
 }
 
-/// The update for how a fetch ended; `refreshed` says whether a ref moved,
-/// whatever the outcome. A failure while no prompt could have been answered
-/// says so, since git's own message ("terminal prompts disabled") does not
-/// say why nothing answered.
+/// The update for how a fetch ended. A failure while no prompt could have been
+/// answered says so, since git's own message ("terminal prompts disabled") does
+/// not say why nothing answered.
 fn fetch_outcome(
     remote: String,
     outcome: Result<(), Error>,
-    refreshed: bool,
     prompting: &Result<(), String>,
 ) -> Update {
     match outcome {
-        Ok(()) => Update::FetchFinished { remote, refreshed },
+        Ok(()) => Update::FetchFinished { remote },
         Err(Error::GitCancelled { stranded_locks, .. }) => Update::FetchCancelled {
             remote,
-            refreshed,
             stranded_locks,
         },
         Err(error) => Update::FetchFailed {
             remote,
-            refreshed,
             message: match prompting {
                 Ok(()) => error.to_string(),
                 Err(why) => format!(
@@ -265,21 +252,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_outcome_carries_whether_the_refs_moved() {
+    fn every_outcome_names_how_the_fetch_ended() {
         let origin = || "origin".to_owned();
         assert_eq!(
-            fetch_outcome(origin(), Ok(()), true, &Ok(())),
-            Update::FetchFinished {
-                remote: origin(),
-                refreshed: true
-            }
-        );
-        assert_eq!(
-            fetch_outcome(origin(), Ok(()), false, &Ok(())),
-            Update::FetchFinished {
-                remote: origin(),
-                refreshed: false
-            }
+            fetch_outcome(origin(), Ok(()), &Ok(())),
+            Update::FetchFinished { remote: origin() }
         );
         assert_eq!(
             fetch_outcome(
@@ -288,15 +265,12 @@ mod tests {
                     arguments: "fetch origin".to_owned(),
                     stranded_locks: Vec::new(),
                 }),
-                true,
                 &Ok(())
             ),
             Update::FetchCancelled {
                 remote: origin(),
-                refreshed: true,
                 stranded_locks: Vec::new(),
-            },
-            "a cancelled fetch that moved refs must still say so"
+            }
         );
     }
 
@@ -312,12 +286,10 @@ mod tests {
                     arguments: "fetch origin".to_owned(),
                     stranded_locks: vec![lock.clone()],
                 }),
-                false,
                 &Ok(())
             ),
             Update::FetchCancelled {
                 remote: "origin".to_owned(),
-                refreshed: false,
                 stranded_locks: vec![lock],
             }
         );
@@ -333,7 +305,7 @@ mod tests {
                 source: std::io::Error::other("boom"),
             })
         };
-        match fetch_outcome("origin".to_owned(), failure(), false, &Ok(())) {
+        match fetch_outcome("origin".to_owned(), failure(), &Ok(())) {
             Update::FetchFailed { message, .. } => {
                 assert!(message.contains("boom"));
                 assert!(!message.contains("could not have asked"));
@@ -343,15 +315,11 @@ mod tests {
         match fetch_outcome(
             "origin".to_owned(),
             failure(),
-            true,
             &Err("the askpass helper is not at /x".to_owned()),
         ) {
-            Update::FetchFailed {
-                message, refreshed, ..
-            } => {
+            Update::FetchFailed { message, .. } => {
                 assert!(message.contains("boom"), "{message}");
                 assert!(message.contains("helper is not at /x"), "{message}");
-                assert!(refreshed);
             }
             other => panic!("{other:?}"),
         }

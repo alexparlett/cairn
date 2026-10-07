@@ -817,12 +817,12 @@ fn a_ref_naming_a_missing_object_is_skipped_and_counted() {
     assert_eq!(cairn.unreadable, 1);
 }
 
-/// `ref_tips`, what the network lane compares before and after a fetch, is the snapshot:
-/// it sees a symbolic ref retargeted to a ref on the same commit, and an annotated tag
-/// replaced by one on the same commit — each the ONLY change between its two reads, and
-/// each invisible to a comparison of peeled ids. Caught by: tips peeled again.
+/// What a refresh compares to decide whether to reopen the history (PRD R10.4,
+/// `RefsSnapshot::walks_as`) sees a symbolic ref retargeted to a ref on the same commit, and
+/// an annotated tag replaced by one on the same commit — each the ONLY change between its
+/// two reads, and each invisible to a comparison of peeled ids. Caught by: tips peeled again.
 #[test]
-fn ref_tips_see_a_symbolic_ref_retargeted_and_a_tag_object_replaced() {
+fn a_refresh_sees_a_symbolic_ref_retargeted_and_a_tag_object_replaced() {
     let fixture = every_kind();
     // Both remote-tracking refs on one commit first, so the retarget moves no id.
     fixture.git(&[
@@ -831,13 +831,14 @@ fn ref_tips_see_a_symbolic_ref_retargeted_and_a_tag_object_replaced() {
         "refs/remotes/origin/main",
     ]);
     let repo = Repository::discover(fixture.path()).unwrap();
-    let before = repo.ref_tips().unwrap();
+    let read = || repo.refs(&CancelSignal::new()).unwrap().snapshot;
+    let before = read();
     fixture.git(&[
         "symbolic-ref",
         "refs/remotes/origin/HEAD",
         "refs/remotes/origin/feature",
     ]);
-    let retargeted = repo.ref_tips().unwrap();
+    let retargeted = read();
     let peeled = |snapshot: &RefsSnapshot| {
         snapshot
             .refs
@@ -850,7 +851,10 @@ fn ref_tips_see_a_symbolic_ref_retargeted_and_a_tag_object_replaced() {
         peeled(&retargeted),
         "the retarget moved an id"
     );
-    assert_ne!(before, retargeted, "a retargeted symbolic ref was not seen");
+    assert!(
+        !before.walks_as(&retargeted),
+        "a retargeted symbolic ref was not seen"
+    );
 
     fixture.git(&[
         "tag",
@@ -861,17 +865,17 @@ fn ref_tips_see_a_symbolic_ref_retargeted_and_a_tag_object_replaced() {
         "again",
         "annotated^{commit}",
     ]);
-    let replaced = repo.ref_tips().unwrap();
+    let replaced = read();
     assert_eq!(
         peeled(&retargeted),
         peeled(&replaced),
         "the replacement moved a commit"
     );
-    assert_ne!(
-        retargeted, replaced,
+    assert!(
+        !retargeted.walks_as(&replaced),
         "a tag object replaced on the same commit was not seen"
     );
-    assert_eq!(replaced, repo.ref_tips().unwrap());
+    assert_eq!(replaced, read());
 }
 
 /// A chain of `hops` symbolic refs, `refs/heads/{prefix}-1` → ... → `refs/heads/main`.

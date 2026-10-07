@@ -653,9 +653,13 @@ mod tests {
         let of = Comparison::Commit(oid(n));
         let query = match lane {
             QueryLane::Changes => DiffQuery::Changes(of),
-            QueryLane::FileDiff | QueryLane::History | QueryLane::FileFilter => {
-                DiffQuery::File(committed(n, DiffOptions::default()))
-            }
+            QueryLane::FileDiff
+            | QueryLane::History
+            | QueryLane::FileFilter
+            | QueryLane::Refs
+            | QueryLane::AheadBehind
+            | QueryLane::Status
+            | QueryLane::RefFilter => DiffQuery::File(committed(n, DiffOptions::default())),
         };
         DiffJob::Query {
             epoch: epochs.bump(lane),

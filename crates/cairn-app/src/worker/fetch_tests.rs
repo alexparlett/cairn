@@ -419,6 +419,40 @@ pub(super) fn next_by(updates: &mut Updates, deadline: Instant, seen: &[Update])
     }
 }
 
+/// The next refs snapshot answered and whether it said to reopen the history, passing over
+/// the other answers a refresh brings.
+pub(super) fn refs_answer(updates: &mut Updates) -> (Arc<cairn_model::RefsSnapshot>, bool) {
+    let seen = collect_until(updates, |update| {
+        matches!(update, Update::Refs { .. } | Update::Failed { .. })
+    });
+    match seen.last() {
+        Some(Update::Refs { snapshot, reopen }) => (Arc::clone(snapshot), *reopen),
+        other => panic!("expected the refs, got {other:?} after {seen:?}"),
+    }
+}
+
+/// The next page of rows and whether it completes the history, passing over a refresh's
+/// answers and an open's own refs.
+pub(super) fn rows_answer(updates: &mut Updates) -> (cairn_model::RowsPage, bool) {
+    let seen = collect_until(updates, |update| {
+        matches!(update, Update::Rows { .. } | Update::Failed { .. })
+    });
+    match seen.last() {
+        Some(Update::Rows { rows, complete }) => (rows.clone(), *complete),
+        other => panic!("expected rows, got {other:?} after {seen:?}"),
+    }
+}
+
+/// The next page of rows, or what came instead, passing over an open's own refs.
+fn rows_answer_or_failure(updates: &mut Updates) -> Option<Update> {
+    loop {
+        match block_on(updates.next()) {
+            Some(Update::Refs { reopen: false, .. }) => {}
+            other => return other,
+        }
+    }
+}
+
 /// Reads updates until `stop` says so, within [`WAIT`], returning everything seen.
 pub(super) fn collect_until(
     updates: &mut Updates,
@@ -481,11 +515,13 @@ fn generated(what: &str) -> String {
 }
 
 /// PRD R4: a fetch runs off the UI thread through the boundary, reports its
-/// progress, and the history on screen is re-asked for from the new refs —
+/// progress, and the refresh the window asks after it (refs-and-status R10.1)
+/// finds the new refs and says to reopen the history, which then walks from them —
 /// the cache contract's first real test: the gix handle the worker holds
-/// serves the new commits after a `git` subprocess wrote them.
+/// serves the new refs and commits after a `git` subprocess wrote them. A
+/// refresh after that, with nothing moved, says to leave the history alone.
 #[test]
-fn a_fetch_reports_progress_finishes_and_the_history_reloads_from_the_new_refs() {
+fn a_fetch_reports_progress_finishes_and_the_refresh_after_it_reopens_from_the_new_refs() {
     // The Cairn checkout is the remote; a bare fixture takes its HEAD as `origin/main`.
     let checkout = match cairn_git::SharedRepository::discover(env!("CARGO_MANIFEST_DIR")) {
         Ok(shared) => shared.workdir().map(Path::to_owned),
@@ -512,16 +548,18 @@ fn a_fetch_reports_progress_finishes_and_the_history_reloads_from_the_new_refs()
         }
         other => panic!("expected the remotes, got {other:?}"),
     }
+    // As the window opens: a refresh, whose refs have no walk to compare with.
+    handle.submit(Request::Refresh);
+    assert!(
+        refs_answer(&mut updates).1,
+        "the first refresh did not open"
+    );
     handle.submit(Request::OpenHistory { rows: 8 });
-    match block_on(updates.next()) {
-        Some(Update::Rows { rows, complete }) => {
-            assert!(
-                rows.is_empty() && complete,
-                "an unborn HEAD had rows: {rows:?}"
-            );
-        }
-        other => panic!("expected an empty history before the fetch, got {other:?}"),
-    }
+    let (rows, complete) = rows_answer(&mut updates);
+    assert!(
+        rows.is_empty() && complete,
+        "an unborn HEAD had rows: {rows:?}"
+    );
 
     handle.submit(Request::Fetch {
         remote: "origin".to_owned(),
@@ -549,21 +587,35 @@ fn a_fetch_reports_progress_finishes_and_the_history_reloads_from_the_new_refs()
         seen.last(),
         Some(&Update::FetchFinished {
             remote: "origin".to_owned(),
-            refreshed: true
         }),
         "{seen:?}"
     );
 
-    // The same worker, the same gix handle: the history it serves now is the fetched one.
+    // The same worker, the same gix handle: the refresh after the fetch sees the fetched
+    // refs, says to reopen, and the history it then serves is the fetched one.
+    handle.submit(Request::Refresh);
+    let (snapshot, reopen) = refs_answer(&mut updates);
+    assert!(
+        reopen,
+        "the refresh after a fetch that moved refs left the history"
+    );
+    assert!(
+        snapshot
+            .find(&cairn_model::RefName::new("refs/remotes/origin/main"))
+            .is_some(),
+        "the refresh did not see the fetched ref: {snapshot:?}"
+    );
     handle.submit(Request::OpenHistory { rows: 3 });
-    match block_on(updates.next()) {
-        Some(Update::Rows { rows, .. }) => assert_eq!(
-            rows.len(),
-            3,
-            "the history did not reload from the fetched refs"
-        ),
-        other => panic!("expected the fetched history, got {other:?}"),
-    }
+    assert_eq!(
+        rows_answer(&mut updates).0.len(),
+        3,
+        "the history did not reopen from the fetched refs"
+    );
+    handle.submit(Request::Refresh);
+    assert!(
+        !refs_answer(&mut updates).1,
+        "a refresh that found nothing moved reopened the history"
+    );
     drop(handle);
 }
 
@@ -686,7 +738,7 @@ fn refusing_a_prompt_fails_the_fetch_once_and_the_worker_carries_on() {
 
     // Still serving: a query is answered, and a second fetch asks afresh.
     handle.submit(Request::OpenHistory { rows: 8 });
-    match block_on(updates.next()) {
+    match rows_answer_or_failure(&mut updates) {
         Some(Update::Rows { .. }) => {}
         other => panic!("the worker stopped serving after a refused fetch: {other:?}"),
     }
@@ -736,7 +788,7 @@ fn cancelling_a_fetch_that_waits_on_a_prompt_ends_it_as_cancelled() {
         )
     });
     // Under the runner's two-second grace period: git acted on the SIGTERM rather than
-    // being SIGKILLed, with the ref comparison and the lock search inside the bound too.
+    // being SIGKILLed, with the lock search inside the bound too.
     assert!(
         started.elapsed() < Duration::from_secs(2),
         "the cancel took {:?}: git did not act on SIGTERM",
@@ -745,10 +797,9 @@ fn cancelling_a_fetch_that_waits_on_a_prompt_ends_it_as_cancelled() {
     let stranded = match seen.last() {
         Some(Update::FetchCancelled {
             remote,
-            refreshed: false,
             stranded_locks,
         }) if remote == "origin" => stranded_locks.clone(),
-        other => panic!("expected a cancel of origin that moved nothing, got {other:?}"),
+        other => panic!("expected a cancel of origin, got {other:?}"),
     };
     let stranded: Vec<PathBuf> = stranded
         .into_iter()
@@ -763,7 +814,7 @@ fn cancelling_a_fetch_that_waits_on_a_prompt_ends_it_as_cancelled() {
     answer(Reply::Refuse { prompt: id });
 
     handle.submit(Request::OpenHistory { rows: 8 });
-    match block_on(updates.next()) {
+    match rows_answer_or_failure(&mut updates) {
         Some(Update::Rows { .. }) => {}
         other => panic!("the worker stopped serving after a cancelled fetch: {other:?}"),
     }
@@ -778,7 +829,7 @@ fn letting_go_of_the_repository_ends_the_acceptor_and_removes_its_socket() {
     let (home, runtime) = (Home::new(), RuntimeDir::new());
     let (handle, mut updates, answer) = boundary(&fixture.path, &home.path, &runtime);
     handle.submit(Request::OpenHistory { rows: 1 });
-    match block_on(updates.next()) {
+    match rows_answer_or_failure(&mut updates) {
         Some(Update::Rows { .. }) => {}
         other => panic!("{other:?}"),
     }

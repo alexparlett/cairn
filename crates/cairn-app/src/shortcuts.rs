@@ -60,6 +60,12 @@ pub fn act(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
         Action::ToggleSideBySide => diff_actions::toggle_side_by_side(view),
         // A press's chord, never a key's: resolved where the press lands.
         Action::ExtendSelection => {}
+        // Read again on the worker; the window only asks (R10.1).
+        Action::Refresh => {
+            if let Some(submit) = submit {
+                submit(Request::Refresh);
+            }
+        }
     }
 }
 

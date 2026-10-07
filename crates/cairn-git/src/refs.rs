@@ -37,7 +37,7 @@ use std::time::{Duration, Instant};
 use cairn_model::{HeadState, Ref, RefKind, RefName, RefTarget, RefsSnapshot};
 
 use crate::object_id::model_id;
-use crate::{Cancel, CancelSignal, Error, Repository};
+use crate::{Cancel, Error, Repository};
 
 /// git's limit on resolving a ref (`SYMREF_MAXDEPTH` in `refs.c`): at most this many refs
 /// are read, the ref itself included, so a chain of more than four symbolic hops does not
@@ -100,13 +100,6 @@ impl Repository {
             },
             cost,
         })
-    }
-
-    /// Every ref as the snapshot reads it, symbolic refs and tag objects included, compared
-    /// before and after an operation to tell whether it moved one: the network lane's check
-    /// after a fetch. Not cancellable.
-    pub fn ref_tips(&self) -> Result<RefsSnapshot, Error> {
-        Ok(self.refs(&CancelSignal::new())?.snapshot)
     }
 }
 
@@ -302,6 +295,7 @@ fn ref_name(name: &gix::refs::FullName) -> RefName {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CancelSignal;
 
     /// Against whatever refs this checkout has — a CI checkout is detached with no local
     /// branch, only remote-tracking refs — so nothing here names a branch. Parity with git
@@ -322,7 +316,11 @@ mod tests {
             "the refs are not in for-each-ref's order"
         );
         assert!(read.cost.refs_read >= read.snapshot.refs.len());
-        assert_eq!(repo.ref_tips().unwrap(), read.snapshot, "two reads differ");
+        assert_eq!(
+            repo.refs(&CancelSignal::new()).unwrap().snapshot,
+            read.snapshot,
+            "two reads differ"
+        );
     }
 
     /// Caught by: a refs query that polls nothing, which a superseding refresh cannot stop.

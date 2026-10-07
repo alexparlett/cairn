@@ -57,6 +57,43 @@ impl StubGit {
     /// A stub whose `--version` reports `version` and whose `verb` does what
     /// `body` says; every other verb fails.
     pub(super) fn answering(version: &str, verb: &str, body: &str) -> Self {
+        Self::scripted(|directory| {
+            format!(
+                "#!/bin/sh\nDIR='{}'\n\
+                 while case \"$1\" in --git-dir=*|--work-tree=*) true ;; *) false ;; esac; do shift; done\n\
+                 case \"$1\" in\n--version)\n  echo probed >> \"$DIR/probes\"\n  \
+                 echo 'git version {version}'\n  ;;\n{verb})\n{body}\n  ;;\n*)\n  exit 1\n  ;;\nesac\n",
+                directory.display()
+            )
+        })
+    }
+
+    /// A stub in front of the real `git` found on this process's `PATH`: `verb` does what
+    /// `body` says, and every other invocation, `--version` included, is the real git's,
+    /// with its arguments as given.
+    pub(super) fn wrapping(verb: &str, body: &str) -> Self {
+        let real = std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+            .map(|directory| directory.join("git"))
+            .find(|candidate| candidate.is_file());
+        let Some(real) = real else {
+            panic!("no git on this process's PATH");
+        };
+        Self::scripted(|directory| {
+            format!(
+                "#!/bin/sh\nDIR='{}'\nVERB=\n\
+                 for argument in \"$@\"; do case \"$argument\" in --git-dir=*|--work-tree=*) ;; \
+                 *) VERB=\"$argument\"; break ;; esac; done\n\
+                 if [ \"$VERB\" = '{verb}' ]; then\n{body}\nelse\n  exec '{}' \"$@\"\nfi\n",
+                directory.display(),
+                real.display()
+            )
+        })
+    }
+
+    /// A stub whose script is `script(directory)`, made runnable.
+    fn scripted(script: impl FnOnce(&Path) -> String) -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let directory = std::env::temp_dir().join(format!(
             "cairn-app-stub-{}-{}",
@@ -68,13 +105,7 @@ impl StubGit {
             panic!("could not make {}: {error}", directory.display());
         }
         let git = directory.join("git");
-        let script = format!(
-            "#!/bin/sh\nDIR='{}'\n\
-             while case \"$1\" in --git-dir=*|--work-tree=*) true ;; *) false ;; esac; do shift; done\n\
-             case \"$1\" in\n--version)\n  echo probed >> \"$DIR/probes\"\n  \
-             echo 'git version {version}'\n  ;;\n{verb})\n{body}\n  ;;\n*)\n  exit 1\n  ;;\nesac\n",
-            directory.display()
-        );
+        let script = script(&directory);
         if let Err(error) = std::fs::write(&git, script) {
             panic!("could not write {}: {error}", git.display());
         }
@@ -234,6 +265,11 @@ fn git_is_found_once_per_application_not_once_per_repository() {
     for _ in 0..3 {
         let (handle, mut updates) = opened(&fixture.path, &discovery);
         handle.submit(Request::OpenHistory { rows: 1 });
+        // The open's own refs, then its page.
+        match next(&mut updates) {
+            Some(Update::Refs { .. }) => {}
+            other => panic!("the repository's refs were not read: {other:?}"),
+        }
         match next(&mut updates) {
             Some(Update::Rows { .. }) => {}
             other => panic!("the repository was not served: {other:?}"),

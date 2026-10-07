@@ -14,6 +14,7 @@ use crate::detail_pane::DetailPane;
 use crate::diff_state::DiffState;
 use crate::fetch_state::{FetchRefusal, FetchStatus, PromptView};
 use crate::history_state::{Progress, Status};
+use crate::refresh_state::RefreshState;
 use crate::selection::Pair;
 use crate::worker::{Replier, Reply, Request};
 use crate::{PAGE_ROWS, selection, shortcuts, status_text};
@@ -62,6 +63,8 @@ pub struct View {
     /// The keys the window hears held, which a press on a row is resolved against (a pointer
     /// press carries no modifiers in this toolkit build): the accelerator table's.
     pub held_keys: State<HeldKeys>,
+    /// What the last refresh answered: the refs, ahead/behind and the working tree's status.
+    pub refreshed: State<RefreshState>,
 }
 
 impl std::fmt::Debug for View {
@@ -98,6 +101,8 @@ pub fn window(
             held_keys.set(HeldKeys::default());
         }
     });
+    // Coming back to the window reads the refs and the working tree again (R10.1).
+    crate::refresh::on_focus_gained(submit.clone());
 
     let list = rect()
         .width(Size::fill())
@@ -544,6 +549,7 @@ mod tests {
                     changes_list_width: State::create(crate::changes_tab::LIST_WIDTH),
                     pair: State::create(None),
                     held_keys: State::create(HeldKeys::default()),
+                    refreshed: State::create(RefreshState::default()),
                 })
             },
             1.,
@@ -3335,5 +3341,168 @@ mod tests {
             "the diff side is not drawn: {:?}",
             diff_side_labels(&test)
         );
+    }
+
+    fn toggle_focus(test: &mut TestingRunner, focused: bool) {
+        test.run_in(|| Platform::get().is_app_focused.set(focused));
+        test.sync_and_update();
+    }
+
+    /// R10.1 and the QA brief, headless with focus set: gaining focus asks for a refresh,
+    /// and that submit is all the UI thread does — no row cleared, nothing else asked;
+    /// losing focus asks nothing; each gain asks once, so focus flapping asks twice and
+    /// leaves superseding the first to the worker (`a_refresh_asked_twice_at_once_draws_one_
+    /// answer_of_each`). Caught by: no refresh on focus, one on losing it, one per render,
+    /// or work besides the submit.
+    #[test]
+    fn gaining_focus_asks_for_a_refresh_and_nothing_else() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        let from = submitted.borrow().len();
+        test.sync_and_update();
+        assert_eq!(
+            requests_since(&submitted, from),
+            [],
+            "rendering asked something"
+        );
+
+        toggle_focus(&mut test, false);
+        assert_eq!(
+            requests_since(&submitted, from),
+            [],
+            "losing focus asked something"
+        );
+        toggle_focus(&mut test, true);
+        assert_eq!(requests_since(&submitted, from), [Request::Refresh]);
+        assert_eq!(view.rows.read().len(), 10, "focus touched the rows");
+        assert_eq!(*view.progress.read(), received(10, true));
+
+        toggle_focus(&mut test, false);
+        toggle_focus(&mut test, true);
+        assert_eq!(
+            requests_since(&submitted, from),
+            [Request::Refresh, Request::Refresh]
+        );
+    }
+
+    /// R10.1: the Refresh action, through the accelerator table's chord on this platform,
+    /// asks for a refresh and nothing else. Caught by: the action placed in the table and
+    /// never acted on, or acting by more than a submit.
+    #[test]
+    fn the_refresh_chord_asks_for_a_refresh() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        let from = submitted.borrow().len();
+        press_chord(&mut test, Action::Refresh);
+        assert_eq!(requests_since(&submitted, from), [Request::Refresh]);
+        assert_eq!(view.rows.read().len(), 10);
+    }
+
+    /// C10 headless with focus set, through the real boundary: the window opens its history
+    /// from its first refresh; a row is chosen; a ref moves; the window gains focus, the
+    /// refresh finds the move and the history is reopened — the old rows retired to the
+    /// worker — and the chosen row, arriving again, is drawn chosen (R10.5); gaining focus
+    /// again with nothing moved reopens nothing. Caught by: focus that does not refresh, a
+    /// reopen that drops the selection, or one on an unchanged snapshot.
+    #[test]
+    fn focus_gained_after_a_ref_moved_reopens_the_history_keeping_the_chosen_row() {
+        use crate::session::{Worker, apply};
+        use crate::worker::{Refreshable, next_update};
+
+        let fixture = Refreshable::new("cairn-window-focus-reopens");
+        let (handle, mut updates) = fixture.open();
+        let (mut test, view, submitted) = launch(Vec::new(), Progress::opening());
+        let mut forwarded = 0;
+        // How many times the window asked for the history, and how many refs answers it
+        // applied, so far.
+        let (mut opens, mut refs) = (0, 0);
+        // Hands what the window asked to the worker and applies what comes back, until
+        // `done` holds of the window and the two counts.
+        let mut pump = |test: &mut TestingRunner, done: &dyn Fn(View, usize, usize) -> bool| {
+            loop {
+                let asked: Vec<Request> = submitted.borrow()[forwarded..].to_vec();
+                forwarded += asked.len();
+                for request in asked {
+                    if matches!(request, Request::OpenHistory { .. }) {
+                        opens += 1;
+                    }
+                    handle.submit(request);
+                }
+                if done(view, opens, refs) {
+                    return (opens, refs);
+                }
+                let update = next_update(&mut updates);
+                if matches!(update, crate::worker::Update::Refs { .. }) {
+                    refs += 1;
+                }
+                let record = {
+                    let submitted = submitted.clone();
+                    move |request| submitted.borrow_mut().push(request)
+                };
+                test.run_in(|| {
+                    apply(
+                        update,
+                        view,
+                        &Worker {
+                            submit: &record,
+                            refuse: &|_| {},
+                            closing: false,
+                        },
+                    );
+                });
+                test.sync_and_update();
+            }
+        };
+        let loaded = |view: View| {
+            let progress = view.progress.peek();
+            progress.has_rows() && *progress.status() == Status::Ready
+        };
+
+        submitted.borrow_mut().push(Request::Refresh);
+        let (opened, _) = pump(&mut test, &|view, opens, _| opens == 1 && loaded(view));
+        assert_eq!(opened, 1, "the first refresh did not open");
+        let chosen = fixture.commits[1];
+        let subject = {
+            let rows = view.rows.peek();
+            let Some(at) = rows.position(RowId::Commit(chosen)) else {
+                panic!("the chosen commit was not drawn");
+            };
+            match rows.row(at).map(|row| row.content()) {
+                Some(cairn_model::RowContent::Commit(commit)) => commit.summary,
+                Some(cairn_model::RowContent::Stash(stash)) => stash.message,
+                None => unreachable!("the row was found"),
+            }
+        };
+        for _ in 0..3 {
+            test.sync_and_update();
+        }
+        click_label(&mut test, &subject);
+        test.sync_and_update();
+        assert_eq!(*view.selected.peek(), Some(RowId::Commit(chosen)));
+
+        fixture.point("topic", fixture.commits[3]);
+        toggle_focus(&mut test, false);
+        toggle_focus(&mut test, true);
+        let (reopened, seen) = pump(&mut test, &|view, opens, _| opens == 2 && loaded(view));
+        assert_eq!(
+            reopened, 2,
+            "focus after a moved ref did not reopen the history"
+        );
+        assert!(
+            submitted.borrow().iter().any(|request| matches!(
+                request,
+                Request::Retire(retired) if retired.replaced_rows().is_some()
+            )),
+            "the old rows were not handed to the worker"
+        );
+        assert_eq!(
+            *view.selected.peek(),
+            Some(RowId::Commit(chosen)),
+            "the selection was lost"
+        );
+
+        // Nothing moved: the refresh's refs arrive, and nothing reopens.
+        toggle_focus(&mut test, false);
+        toggle_focus(&mut test, true);
+        let (quiet, _) = pump(&mut test, &|_, _, refs| refs > seen);
+        assert_eq!(quiet, 2, "focus with nothing moved reopened the history");
     }
 }

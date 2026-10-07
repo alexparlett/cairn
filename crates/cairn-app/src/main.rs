@@ -8,6 +8,8 @@ mod diff_state;
 mod fetch_state;
 mod file_filter;
 mod history_state;
+mod refresh;
+mod refresh_state;
 mod repository_path;
 mod selection;
 mod session;
@@ -84,6 +86,8 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     // The second commit of a comparison, and the keys a press on a row is resolved against.
     let pair = use_state(|| None);
     let held_keys = use_state(cairn_ui::accelerators::HeldKeys::default);
+    // What the last refresh answered (R10).
+    let refreshed = use_state(refresh_state::RefreshState::default);
     let view = View {
         rows,
         progress,
@@ -104,6 +108,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         changes_list_width,
         pair,
         held_keys,
+        refreshed,
     };
 
     let opened = use_hook(|| {
@@ -122,7 +127,10 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
                 let platform = Platform::get();
                 handle.submit(Request::ListRemotes);
                 handle.submit(Request::ConfiguredContext);
-                handle.submit(Request::OpenHistory { rows: PAGE_ROWS });
+                // The refs, ahead/behind and status, read for the first time: the refs'
+                // answer has no walk to compare with, so it asks for the history, which
+                // then walks from them (R10, R11.2).
+                handle.submit(Request::Refresh);
                 let submitting = handle.clone();
                 // Weak: the task must not keep the answering end alive past the window,
                 // or the acceptor could never see it go.

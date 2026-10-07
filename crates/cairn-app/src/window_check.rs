@@ -81,6 +81,11 @@ fn kind(update: &Update) -> &'static str {
         Update::DiffFailed { .. } => "diff failed",
         Update::ConfiguredContext { .. } => "configured context",
         Update::Remotes { .. } => "remotes",
+        Update::Refs { .. } => "refs",
+        Update::AheadBehind { .. } => "ahead/behind",
+        Update::Status { .. } => "status",
+        Update::FilteredRefs { .. } => "ref filter",
+        Update::RefreshFailed { .. } => "refresh failed",
         Update::Failed { .. }
         | Update::WorkerLost { .. }
         | Update::FetchStarted { .. }
@@ -373,6 +378,7 @@ fn launch(path: &str) -> Harness {
                 changes_list_width: State::create(crate::changes_tab::LIST_WIDTH),
                 pair: State::create(None),
                 held_keys: State::create(cairn_ui::accelerators::HeldKeys::default()),
+                refreshed: State::create(crate::refresh_state::RefreshState::default()),
             })
         },
         1.,

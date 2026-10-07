@@ -1,8 +1,10 @@
 //! Request epochs, numbered per query lane, which double as the engine's cancel signal.
 //!
-//! Four lanes (PRD R4.1, packet decision L8, and phase 07's file filter): the history, the
-//! changes query, the file diff and the Changes tab's filter over a change set's files. A
-//! new query supersedes the older ones in its own lane only, with one
+//! Eight lanes (PRD R4.1, packet decision L8, phase 07's file filter, and refs-and-status
+//! R11.1): the history, the changes query, the file diff, the Changes tab's filter over a
+//! change set's files, the refs snapshot, ahead/behind, the working tree's status and the
+//! sidebar's filter over the refs. A new query supersedes the older ones in its own lane
+//! only, with one
 //! exception — a changes query also supersedes the file-diff lane, since a file of the
 //! commit that was selected is no file of the one that is now. So a scroll never cancels a
 //! diff, a selection never cancels a scroll, and an operation, which is numbered in no
@@ -25,16 +27,28 @@ pub enum QueryLane {
     /// Which of a change set's files a filter's text leaves (phase 07): a list operation,
     /// numbered so a keystroke supersedes the filter of the one before it, and nothing else.
     FileFilter,
+    /// The refs snapshot a refresh reads, on the history thread (R11.2).
+    Refs,
+    /// How far each branch and its upstream have gone apart, for the snapshot a refresh read.
+    AheadBehind,
+    /// The working tree's status, as `git status` answers it.
+    Status,
+    /// Which refs and stashes the sidebar's filter text leaves (R8.3).
+    RefFilter,
 }
 
 impl QueryLane {
     /// Every lane, in the order of their counters.
     #[cfg(test)]
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; LANES] = [
         Self::History,
         Self::Changes,
         Self::FileDiff,
         Self::FileFilter,
+        Self::Refs,
+        Self::AheadBehind,
+        Self::Status,
+        Self::RefFilter,
     ];
 
     fn index(self) -> usize {
@@ -43,6 +57,10 @@ impl QueryLane {
             Self::Changes => 1,
             Self::FileDiff => 2,
             Self::FileFilter => 3,
+            Self::Refs => 4,
+            Self::AheadBehind => 5,
+            Self::Status => 6,
+            Self::RefFilter => 7,
         }
     }
 
@@ -54,9 +72,16 @@ impl QueryLane {
             Self::Changes => &[Self::Changes, Self::FileDiff],
             Self::FileDiff => &[Self::FileDiff],
             Self::FileFilter => &[Self::FileFilter],
+            Self::Refs => &[Self::Refs],
+            Self::AheadBehind => &[Self::AheadBehind],
+            Self::Status => &[Self::Status],
+            Self::RefFilter => &[Self::RefFilter],
         }
     }
 }
+
+/// How many lanes there are: one counter each.
+const LANES: usize = 8;
 
 /// Which request a value belongs to: its lane, and its number there. Monotonic within a
 /// lane, and never reused.
@@ -69,7 +94,7 @@ pub struct Epoch {
 /// The current epoch of every lane, shared by cloning.
 #[derive(Debug, Clone, Default)]
 pub struct Epochs {
-    lanes: Arc<[AtomicU64; 4]>,
+    lanes: Arc<[AtomicU64; LANES]>,
     stopping: Arc<AtomicBool>,
 }
 
@@ -220,6 +245,18 @@ mod tests {
         assert_eq!(QueryLane::History.supersedes(), [QueryLane::History]);
         assert_eq!(QueryLane::FileDiff.supersedes(), [QueryLane::FileDiff]);
         assert_eq!(QueryLane::FileFilter.supersedes(), [QueryLane::FileFilter]);
+        for lane in [
+            QueryLane::Refs,
+            QueryLane::AheadBehind,
+            QueryLane::Status,
+            QueryLane::RefFilter,
+        ] {
+            assert_eq!(
+                lane.supersedes(),
+                [lane],
+                "{lane:?} crosses into another lane"
+            );
+        }
     }
 
     #[test]

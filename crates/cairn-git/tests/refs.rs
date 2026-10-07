@@ -817,6 +817,76 @@ fn a_ref_naming_a_missing_object_is_skipped_and_counted() {
     assert_eq!(cairn.unreadable, 1);
 }
 
+/// Every file under `dir`, by path, with its bytes: the whole git directory, objects, refs,
+/// logs, index and configuration alike.
+fn every_file(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    let mut files = BTreeMap::new();
+    let mut pending = vec![dir.to_owned()];
+    while let Some(next) = pending.pop() {
+        let entries =
+            std::fs::read_dir(&next).unwrap_or_else(|e| panic!("{}: {e}", next.display()));
+        for entry in entries {
+            let path = entry
+                .unwrap_or_else(|e| panic!("{}: {e}", next.display()))
+                .path();
+            if path.is_dir() && !path.is_symlink() {
+                pending.push(path);
+            } else {
+                let bytes =
+                    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+                files.insert(path, bytes);
+            }
+        }
+    }
+    files
+}
+
+/// The refs read and the ahead/behind read are reads: over every kind of ref, upstreams
+/// ahead, behind, gone and local, an unreadable ref, a lock file and a stash list, the whole
+/// git directory is byte-identical after both — no file written, added or removed, the index
+/// and every ref and log among them. The fixture is first checked to give each read something
+/// to do (refs listed, a stash, a branch counted). Caught by: either read writing anything
+/// under `.git` — a ref packed or rewritten, a reflog appended, the index refreshed, a lock
+/// left behind.
+#[test]
+fn the_refs_and_ahead_behind_reads_leave_the_git_directory_byte_identical() {
+    let fixture = every_kind();
+    write(&fixture, "file.txt", "stashed\n");
+    fixture.git(&["stash", "push", "--quiet", "-m", "a stash"]);
+    let git_dir = fixture.path().join(".git");
+    let before = every_file(&git_dir);
+    for required in ["index", "HEAD", "config", "packed-refs", "logs/refs/stash"] {
+        assert!(
+            before.contains_key(&git_dir.join(required)),
+            "{required} is not among the files compared"
+        );
+    }
+
+    let repo = Repository::discover(fixture.path()).unwrap_or_else(|e| panic!("{e}"));
+    let snapshot = repo
+        .refs(&CancelSignal::new())
+        .unwrap_or_else(|e| panic!("{e}"))
+        .snapshot;
+    assert!(!snapshot.refs.is_empty() && snapshot.stashes.len() == 1);
+    assert!(snapshot.unreadable > 0, "no unreadable ref was skipped");
+    let counted = repo
+        .ahead_behind(&snapshot, &CancelSignal::new())
+        .unwrap_or_else(|e| panic!("{e}"))
+        .counts;
+    assert!(!counted.is_empty(), "no branch was counted");
+
+    let after = every_file(&git_dir);
+    let changed: std::collections::BTreeSet<_> = before
+        .keys()
+        .chain(after.keys())
+        .filter(|path| before.get(*path) != after.get(*path))
+        .collect();
+    assert!(
+        changed.is_empty(),
+        "a refs or ahead/behind read wrote under the git directory: {changed:?}"
+    );
+}
+
 /// What a refresh compares to decide whether to reopen the history (PRD R10.4,
 /// `RefsSnapshot::walks_as`) sees a symbolic ref retargeted to a ref on the same commit, and
 /// an annotated tag replaced by one on the same commit — each the ONLY change between its

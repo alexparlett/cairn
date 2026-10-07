@@ -3,7 +3,11 @@
 How the engine answers what has changed in a working tree: which paths are staged,
 changed, in conflict or untracked, and the states in which git lists nothing. The
 answer is git's own — `git status --porcelain=v2 -z`, run as a read — parsed into plain
-data. Nothing here writes. No view draws any of it yet.
+data. Nothing here writes. What draws it: the title bar's star for a repository with a
+change (`docs/systems/history-graph.md`, "The title bar"), the count beside the sidebar's
+Local Changes (`docs/systems/sidebar.md`), and Local Changes' two lists, laid out over it on
+the refresh thread (`docs/systems/local-changes.md`); a refresh reads it on that thread
+(`history-graph.md`, "Refresh").
 
 Spec: `docs/prd/refs-and-status.md` (R3). Design: `docs/design/engine.md` (D1, the
 fourth read git answers). Evidence:

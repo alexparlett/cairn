@@ -4,7 +4,12 @@ How the engine reads a repository's refs: the refs snapshot, the five rules that
 gix's answer git's, each local branch's upstream, the stash list, ahead and behind,
 and the repositories refused at open because their refs are not files. Nothing here
 writes, and nothing here starts a process: every answer is gix's, read in process.
-No view draws any of it yet.
+What draws it: the history's chips and the Commit tab's REFS row
+(`docs/systems/history-graph.md`, "Chips on a row"; `docs/systems/diff.md`, "REFS"), the
+title bar's current branch and its counts (`history-graph.md`, "The title bar"), and the
+sidebar's Branches, Remotes, Tags and Stashes (`docs/systems/sidebar.md`); a refresh reads
+it on the repository thread and ahead/behind on the refresh thread (`history-graph.md`,
+"Refresh").
 
 Spec: `docs/prd/refs-and-status.md` (R1, R2). Evidence:
 `docs/research/refs-and-status/gix-refs-and-status-api.md`.
@@ -55,8 +60,8 @@ unreadable count, which the graph does not draw (`a_walk_is_the_same_unless_what
 Comparing snapshots sees a symbolic ref retargeted and a tag object replaced on the same
 commit, which comparing peeled ids did not. It sees only what the snapshot holds, so a fetch
 that moves only a ref outside those namespaces (`refs/notes/`, `refs/pull/`,
-`refs/replace/`) reopens nothing. (The network lane's own before-and-after comparison,
-`Repository::ref_tips`, is gone with phase 06.)
+`refs/replace/`) reopens nothing. The network lane keeps no comparison of its own: a fetch
+that ends asks a refresh, and the refresh's snapshot is what is compared.
 
 `RefsSnapshot::matching` is the sidebar's filter (R8.3): the refs whose name past its
 namespace, and the stashes whose message, hold the text, case ignored as the Changes tab's
@@ -186,7 +191,9 @@ The window draws either reason as it draws every failed open.
   `a_ref_naming_a_missing_object_is_skipped_and_counted`,
   `a_refresh_sees_a_symbolic_ref_retargeted_and_a_tag_object_replaced`,
   `a_refs_query_stops_at_whichever_poll_is_cancelled`,
-  `a_refs_query_reports_the_cost_it_paid`; and in the crate,
+  `a_refs_query_reports_the_cost_it_paid`,
+  `the_refs_and_ahead_behind_reads_leave_the_git_directory_byte_identical` (the whole git
+  directory compared byte for byte around both reads); and in the crate,
   `a_refspec_maps_the_merge_literally_as_git_maps_it`. Cairn's side reads the
   developer's global configuration and git's side does not, so each fixture sets
   again, locally, the keys the snapshot reads that a global file could set

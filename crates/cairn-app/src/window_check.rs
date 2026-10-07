@@ -15,12 +15,22 @@
 //! frames (phase 08 QA's R2). Times are wall-clock on the machine it runs on; nothing here
 //! asserts one.
 //!
-//! Run it in a release build, warm, against the repository the bar names (read only):
+//! Run it in a release build, warm, against the repository the bar names (read only), and —
+//! for refs-and-status C12's large status — a scratch clone of it with no alternates, dirtied
+//! there and never in the bench repository:
 //!
 //! ```text
-//! CAIRN_BENCH_REPO=~/Development/bench/rust \
+//! GIT_OPTIONAL_LOCKS=0 git clone --quiet --local --no-hardlinks \
+//!   ~/Development/bench/rust "$SCRATCH/rust"   # then modify, stage and add files in it
+//! CAIRN_BENCH_REPO=~/Development/bench/rust CAIRN_SCRATCH_REPO="$SCRATCH/rust" \
 //!   cargo test -p cairn-app --release -- --ignored --nocapture window_check
 //! ```
+//!
+//! The window opens as the application opens it — the refs, ahead/behind and status read by a
+//! refresh, the history walked from every ref and labelled, the sidebar's rows laid out
+//! (refs-and-status C12) — and, on the scratch clone, Local Changes is shown over its status of
+//! thousands of paths: its lists drawn, the first path's diff asked and drawn, a list scrolled,
+//! a filter typed and a refresh landed.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -29,7 +39,7 @@ use std::time::{Duration, Instant};
 
 use cairn_model::{DiffContent, History, Oid, RemoteSummary, RowId};
 use cairn_ui::diff_palette::DIFF_FONT_FAMILY;
-use cairn_ui::{DetailTab, DiffSettings};
+use cairn_ui::{DetailTab, DiffSettings, MainView};
 use freya::prelude::*;
 use freya_testing::TestingRunner;
 use freya_testing::prelude::{PlatformEvent, WheelEventName};
@@ -391,9 +401,11 @@ fn launch(path: &str) -> Harness {
     );
     test.set_fonts(HashMap::from([(DIFF_FONT_FAMILY, crate::DIFF_FONT)]));
     test.sync_and_update();
+    // As the application opens a repository: the refresh's refs open the history from every
+    // ref (refs-and-status C12).
     handle.submit(Request::ListRemotes);
     handle.submit(Request::ConfiguredContext);
-    handle.submit(Request::OpenHistory { rows: PAGE_ROWS });
+    handle.submit(Request::Refresh);
     Harness {
         test,
         view,
@@ -419,10 +431,12 @@ fn window_check() {
     let history = (WIDTH as f64 / 2., 200.);
     let pane = (WIDTH as f64 / 2., f64::from(HEIGHT) - 100.);
 
-    let opened = harness.pump(Input::Nothing, 30, |view| {
-        view.rows.peek().len() >= PAGE_ROWS
-    });
-    opened.report("opening: the first page of history");
+    let opened = harness.pump(Input::Nothing, 30, landed);
+    opened.report(
+        "opening: the refs, the first page of the decorated history, the sidebar's rows and \
+         the status",
+    );
+    describe_landed(&harness);
     // The history scrolled with nothing loading: what a scroll costs on its own, first time
     // included, to set what follows against.
     let mut scrolled = 0;
@@ -651,7 +665,179 @@ fn window_check() {
     scrolling.report("F1: the loaded diff scrolled, about 140 rows a frame");
     eprintln!("  the pane draws {:?}", shown(&harness.test, 12));
     eprintln!(
+        "  paint, raster snapshot encoded to PNG (an upper bound): {:.2} ms\n",
+        ms(harness.paint())
+    );
+    drop(harness);
+
+    local_changes_check(&path);
+}
+
+/// Whether the window has landed what opening it reads (refs-and-status C12): the refs, a
+/// page of the history walked from them, the sidebar's rows and the working tree's status.
+fn landed(view: View) -> bool {
+    let refreshed = view.refreshed.peek();
+    view.rows.peek().len() >= PAGE_ROWS
+        && refreshed.refs().is_some()
+        && refreshed.status().is_some()
+        && view.sidebar.state.peek().shown().is_some()
+}
+
+/// What opening landed: the refs, the labelled rows among those loaded, the status's paths.
+fn describe_landed(harness: &Harness) {
+    let view = harness.view;
+    let (refs, rows, labelled, paths) = harness.test.run_in(|| {
+        let refreshed = view.refreshed.peek();
+        let history = view.rows.peek();
+        let labelled = (0..history.len())
+            .filter_map(|index| history.row(index))
+            .filter(|row| !row.labels().is_empty())
+            .count();
+        (
+            refreshed.refs().map_or(0, |refs| refs.refs.len()),
+            history.len(),
+            labelled,
+            refreshed
+                .local_changes()
+                .map_or(0, |changes| changes.paths()),
+        )
+    });
+    eprintln!(
+        "  {refs} refs; {rows} rows loaded, {labelled} of them labelled; status lists {paths} \
+         paths\n"
+    );
+}
+
+/// C12's large status: Local Changes over a scratch clone of the bench repository, dirtied
+/// there, with thousands of paths — its lists drawn, the first path's diff asked and drawn,
+/// Unstaged scrolled, a filter typed, and a refresh landed while it is shown.
+fn local_changes_check(bench: &str) {
+    let scratch = std::env::var("CAIRN_SCRATCH_REPO")
+        .expect("set CAIRN_SCRATCH_REPO to a scratch clone of the bench repository, dirtied");
+    let (bench_at, scratch_at) = (
+        std::fs::canonicalize(bench).unwrap_or_else(|error| panic!("{bench}: {error}")),
+        std::fs::canonicalize(&scratch).unwrap_or_else(|error| panic!("{scratch}: {error}")),
+    );
+    assert!(
+        !scratch_at.starts_with(&bench_at) && !bench_at.starts_with(&scratch_at),
+        "the scratch clone is the bench repository, or inside it"
+    );
+    assert!(
+        !scratch_at.join(".git/objects/info/alternates").exists(),
+        "the scratch clone borrows the bench's objects: a read there could touch the bench"
+    );
+    let mut harness = launch(&scratch);
+    let opened = harness.pump(Input::Nothing, 30, landed);
+    opened.report("scratch clone: opening, its large status among what lands");
+    describe_landed(&harness);
+    let paths = harness.test.run_in(|| {
+        harness
+            .view
+            .refreshed
+            .peek()
+            .local_changes()
+            .map_or(0, |changes| changes.paths())
+    });
+    assert!(
+        paths >= 1_000,
+        "the scratch clone's status lists only {paths} paths"
+    );
+
+    // Local Changes pressed: its lists drawn and the first path's diff asked and drawn.
+    let mut main = harness.view.sidebar.main;
+    harness.test.run_in(|| main.set(MainView::LocalChanges));
+    let shown = harness.pump(Input::Nothing, 20, |view| {
+        view.local.state.peek().has_lists()
+            && view
+                .diff
+                .peek()
+                .working_shown()
+                .is_some_and(|shown| !matches!(shown, crate::diff_state::WorkingShown::Waiting))
+    });
+    shown.report("Local Changes shown: both lists drawn, the first path's diff asked and drawn");
+    let (unstaged, staged) = harness.test.run_in(|| {
+        let state = harness.view.local.state.peek();
+        let lists = crate::local_changes_state::drawn_changes(&state);
+        (
+            lists.len(cairn_model::ChangeList::Unstaged),
+            lists.len(cairn_model::ChangeList::Staged),
+        )
+    });
+    eprintln!(
+        "  Unstaged {unstaged} rows, Staged {staged} rows; the view draws {:?}",
+        visible_texts(&harness.test, 14)
+    );
+
+    let unstaged_list = (f64::from(crate::sidebar_state::SIDEBAR_WIDTH) + 120., 150.);
+    let mut scrolled = 0;
+    let scrolling = harness.pump(
+        Input::Scroll {
+            x: unstaged_list.0,
+            y: unstaged_list.1,
+            dy: -2_400.,
+        },
+        0,
+        move |_| {
+            scrolled += 1;
+            scrolled > 120
+        },
+    );
+    scrolling.report("Unstaged scrolled, 100 rows a frame");
+
+    let mut filter = harness.view.local.filter_text;
+    harness
+        .test
+        .run_in(|| filter.set("cairn-new-05".to_owned()));
+    let filtering = harness.pump(Input::Nothing, 10, |view| {
+        let state = view.local.state.peek();
+        state.text() == "cairn-new-05" && state.is_settled()
+    });
+    filtering.report("a filter typed: its rows asked of a worker and drawn");
+    harness.test.run_in(|| filter.set(String::new()));
+    let _ = harness.pump(Input::Nothing, 5, |view| {
+        view.local.state.peek().is_settled()
+    });
+
+    // A refresh while the view is shown — what focus gained asks: the status read again, laid
+    // out on the refresh thread, the lists replaced and the chosen path asked again.
+    let before = harness
+        .test
+        .run_in(|| harness.view.local.state.peek().serial());
+    harness.handle.submit(Request::Refresh);
+    let refreshing = harness.pump(Input::Nothing, 20, move |view| {
+        view.local.state.peek().serial() > before
+            && view.diff.peek().working_choice().map(|choice| choice.lists)
+                == Some(view.local.state.peek().serial())
+    });
+    refreshing.report("a refresh landed while Local Changes is shown: the lists replaced");
+    eprintln!(
         "  paint, raster snapshot encoded to PNG (an upper bound): {:.2} ms",
         ms(harness.paint())
     );
+}
+
+/// The first `count` texts drawn anywhere in the window, top to bottom.
+fn visible_texts(test: &TestingRunner, count: usize) -> Vec<String> {
+    let mut texts: Vec<(f32, f32, String)> = test.find_many(|node, element| {
+        let area = node.layout().area;
+        let text = if let Some(label) = Label::try_downcast(element) {
+            Some(label.text.to_string())
+        } else {
+            Paragraph::try_downcast(element).map(|paragraph| {
+                paragraph
+                    .spans
+                    .iter()
+                    .map(|span| span.text.as_ref())
+                    .collect()
+            })
+        };
+        text.filter(|_| area.min_x() > crate::sidebar_state::SIDEBAR_WIDTH && area.min_y() < HEIGHT)
+            .map(|text| (area.min_y(), area.min_x(), text))
+    });
+    texts.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    texts
+        .into_iter()
+        .take(count)
+        .map(|(_, _, text)| text)
+        .collect()
 }

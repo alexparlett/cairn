@@ -2,7 +2,7 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 09 implemented (Local Changes, read only; C12's window check landing refs, the sidebar and an 11,000-path status), QA pending (the coordinator's); phase 10 next.** Integration branch
+**Status: phase 09 done (Local Changes, read only; C12's window check landing refs, the sidebar and an 11,000-path status), QA adjudicated, confirmed findings fixed and the user's Fork decisions built; phase 10 next.** Integration branch
 `feature/refs-and-status`, in the worktree `.claude/worktrees/refs-and-status`,
 packet mode.
 
@@ -99,17 +99,24 @@ that most constrain implementation:
   at teardown); a ninth query lane, `QueryLane::Walk`. Detail in progress.md, phase 08.
 - C11's first-page bar is written as 200 ms because history-graph's A7 has no
   number (L12); the user may revise it at the merge bar.
-- For the user's end-of-packet batch (phase 09; not decided): Local Changes draws the filter
-  field but not Fork's eye (quick look), layout menu or collapse-all chevron (the Changes tab's
-  precedent; the menu's items are out of scope); badges are the Commit tab's letters (`A` for
-  added and untracked, `T`, `S` for a submodule) where Fork draws `+`, `M` for a type change and
-  a submodule icon; rows in path-byte order; the count is distinct paths (a staged deletion and
-  an untracked file of one name once), where phase 08 counted entries; the view's diff takes the
+- Decided by the user (2026-10-07, phase 09 QA): **1** Local Changes' badges are Fork's, told
+  apart by shape — `+` for added and untracked, `M` for a type change as for a modification, a
+  submodule glyph painted as a shape (`RefGlyph::Submodule`), Fork's triangle for a conflict;
+  colour only reinforces; Local Changes only (the Commit tab keeps its letters). **2** A
+  draggable splitter between Unstaged and Staged, not remembered across sessions. **3** Natural
+  row order (`cairn_model::natural_order`, through `path_order`), untracked mixed in, the search
+  for a chosen path in the same order. **4** The filter field is the only toolbar control; the
+  eye, Hide Untracked Files and the layout menu are issues to file (below).
+- For the user's end-of-packet batch (phase 09; not decided): the count is distinct paths (a
+  staged deletion and an untracked file of one name once, R9.2's wording), where phase 08
+  counted entries and Fork's is said to equal git status's entries; the view's diff takes the
   Changes tab's options, Entire File included; a refresh re-asks the path chosen, its last diff
-  drawn meanwhile, and a path gone chooses the first; Unstaged and Staged split the side in
-  equal halves; "Showing N of M files" counts rows. Detail in progress.md, phase 09. The status
-  failure question above is drawn as built: the message for the whole view, the last lists kept
-  under it.
+  drawn meanwhile, and a path gone from the status chooses the first (a path the filter hides
+  stays chosen, the Changes tab's rule). **QC3c (open):** "Showing N of M files" under Local
+  Changes' filter counts rows — a path in both lists twice — while the sidebar counts distinct
+  paths and the caption says "files": should M match the sidebar's count, or the caption say
+  rows? The status failure question above is drawn as built: the message for the whole view,
+  the last lists kept under it.
 
 - For the user's end-of-packet batch (phase 04; not decided): authors are numbered on
   the window's side — a page names its own authors once and `History::append` adds only
@@ -201,9 +208,10 @@ each place once; chips stop being built at the column's edge (RR3); labels' orde
 
 ## Handed to phase 10
 
-- Issues to file at teardown, besides those listed above: Local Changes' tree view is #36
-  already; Fork's eye (quick look) and the layout menu's Hide Untracked Files, if the user wants
-  them.
+- Issues to file at teardown, besides those listed above (the user's decision 4, 2026-10-07):
+  Local Changes' toolbar beyond its filter field — Fork's eye (side-by-side quick look), Hide
+  Untracked Files, and the layout menu (tree, list and combined list; Show Ignored Files) —
+  each an issue; the tree view itself is #36 already.
 
 ## New modules and interfaces
 
@@ -395,8 +403,12 @@ Phase 09 (`docs/systems/local-changes.md` is the as-built account):
 - `cairn-model`: `src/local_changes.rs` — `LocalChanges` (`new`, `status`, `into_status`,
   `paths`, `len`, `is_empty`, `get`, `row_of`, `matching`), `ChangeList` (`ALL`),
   `ChangeKind`, `PathState`, `LocalChange { path, from, kind, state }`, `MatchedRows`.
-- `cairn-ui`: `src/local_changes.rs` — `LocalChangesList`, `badge_letter`, `change_text`,
-  `list_caption`, `UNSTAGED_CAPTION`, `STAGED_CAPTION`, `NO_PATH_MATCHES`, `LIST_HEADER_HEIGHT`.
+- `cairn-ui`: `src/local_changes.rs` — `LocalChangesList` (`split`), `ChangeBadge`,
+  `change_badge`, `change_text`, `list_caption`, `UNSTAGED_CAPTION`, `STAGED_CAPTION`,
+  `NO_PATH_MATCHES`, `LIST_HEADER_HEIGHT`, `LISTS_SPLIT`; `RefGlyph::Submodule`.
+- `cairn-model` (QA): `path_order`; the lists sorted and searched in it.
+- `cairn-app` (QA): `LocalChangesView::lists_split`; `local_changes_pane::follow` and `Follow`
+  (the decision `follow_the_lists` applies); `window_check::scratch_refusal`.
 - `cairn-app`: `QueryLane::LocalChangesFilter`; `Request::FilterLocalChanges { changes, text }`,
   `Update::FilteredLocalChanges { changes, text, rows }`, `Update::Status { changes:
   Arc<LocalChanges> }`, `Retired::status(Arc<LocalChanges>)`; `pool::filter_local_changes`;
@@ -425,5 +437,5 @@ Phase 09 (`docs/systems/local-changes.md` is the as-built account):
 | 06 worker and refresh | implemented: C10 passes through the real boundary (`a_refresh_reopens_for_a_stash_a_checkout_and_a_moved_ref_and_for_nothing_else`, the refresh tests) and headless with focus set (`focus_gained_after_a_ref_moved_reopens_the_history_keeping_the_chosen_row`); every pin checked against a named mutation (progress.md); RR2 measured; full gate green; QA pending |
 | 07 labels and toolbar | done: C7 passes (headless: chips, compaction, clipping, ✓, bold `HEAD`, stash chip, REFS, a stash's list against `git stash show --name-status` off and on, on the host's git and both floors); the QA brief's cases pinned; every pin checked against a named mutation (progress.md); RR2's drawing half measured; QA adjudicated, confirmed findings fixed (the title bar names the repository's folder, `Update::Opened`; the stash read's options guarded); full gate green |
 | 08 sidebar | done: C8 passes (headless and through the real boundary; the twins `a_sidebar_of_50000_refs_builds_one_viewport`, `a_folder_of_10000_branches_open_builds_one_viewport`); the QA brief's cases pinned; every pin checked against a named mutation (progress.md); a find of the bench's oldest commit 2.23-2.25 s and 52.67 MiB retained through the boundary, cancelled halfway with no row after the stop; QA adjudicated, confirmed findings fixed (TC1's cancel pinned on lines of commits written for the tests, a stop alone, the list's hint the window's), the user's Fork decisions built; full gate green |
-| 09 local changes | implemented: C9 passes (headless and through the real boundary; the twin `a_status_of_50000_paths_builds_one_viewport_filtered_or_not`); the QA brief's cases pinned; every pin checked against a named mutation (progress.md); C12 measured (every frame under 16.7 ms, two runs; an 11,000-path status on a scratch clone, the bench untouched); C11 complete in progress.md; full gate green; QA pending |
+| 09 local changes | implemented: C9 passes (headless and through the real boundary; the twin `a_status_of_50000_paths_builds_one_viewport_filtered_or_not`); the QA brief's cases pinned; every pin checked against a named mutation (progress.md); C12 measured (every frame under 16.7 ms; an 11,000-path status on a scratch clone, the bench untouched); C11 complete in progress.md; QA adjudicated, confirmed findings fixed (the follow decision pure and pinned, the scratch guard following linked worktrees, badge shapes read pixel for pixel, the filter's mid-pass cancel), the user's Fork decisions built; full gate green |
 | 10 QA | not started |

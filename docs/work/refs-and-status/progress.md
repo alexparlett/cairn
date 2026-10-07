@@ -3,6 +3,58 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-07 — phase 09 QA
+
+Fresh qa-checklist (NOT READY), responsiveness-reviewer, test-coverage-auditor; adjudicated by
+a fresh qa-confirm, run by the coordinator. **The user ruled on the Local Changes Fork
+questions (2026-10-07):**
+
+1. **Badges: Fork's, told apart by shape** — `+` for added and untracked, `M` for a type change
+   as for a modification, a submodule glyph painted as a shape (`RefGlyph::Submodule`, a box in
+   a box, no font), Fork's triangle for a conflict; colour only reinforces. Local Changes only:
+   the Commit tab keeps its letters.
+2. **A draggable splitter between Unstaged and Staged**, its share kept for the session and
+   never beyond it (`LocalChangesView::lists_split`).
+3. **Natural row order**: `cairn_model::natural_order` through `path_order` (bytes break a tie
+   between paths that read alike), untracked mixed in; `row_of` searches in the same order.
+4. **Toolbar: the filter field only**; the eye, Hide Untracked Files and the layout menu are
+   issues to file (state.md, "Handed to phase 10").
+
+Fixes, each pin checked against a named mutation:
+
+| Finding / decision | Pin | Mutation it fails under |
+| --- | --- | --- |
+| TC1: the fixed loop, reintroduced, only hung the tests | `an_empty_status_lets_a_path_go_once_and_then_decides_nothing`, `the_path_chosen_follows_the_lists_as_decided` (`local_changes_pane::follow`, a pure `Follow` decision: Keep / ReAsk / ChooseFirst / LetGo / Nothing; the effect writes a let-go only while a path is chosen) | `None if chosen.is_some() \|\| true`: both red with a message in 0.05 s, and no window test hangs under it |
+| TC2: the scratch guard missed a linked worktree or a `.git` symlink | `the_scratch_guard_refuses_whatever_shares_the_benchs_git_directory` (`window_check::scratch_refusal`, `std::fs` only: `.git` file `gitdir:`, symlink followed, `commondir`, alternates; fixtures built without git) | the git-directory and common-directory check removed (a linked worktree accepted) |
+| TC3, TC4, decision 1 | `every_kind_of_change_draws_its_badges_shape` (every kind drawn; each painted badge's cell read pixel for pixel against its glyph's own paint), `both_lists_draw_their_paths_with_their_badges`, `each_kind_of_change_has_forks_badge`, `every_glyph_paints_a_shape_no_other_glyph_paints` (now with `Submodule`) | a glyph's cell an empty rect; the submodule painted as the triangle; an added path drawn `A` |
+| Decision 2 | `the_splitter_between_the_lists_drags` (cairn-ui: the handle dragged 100 px, the Staged heading moves and the share is written); `a_dragged_height_becomes_unstageds_share` | the dragged share not written |
+| Decision 3 | `each_list_is_in_natural_order_and_found_in_it` (`b10` after `B2`, case ignored, two non-UTF-8 paths that read alike told apart by bytes, every row found by `row_of`) | the lists sorted bytewise; `row_of` searching bytewise |
+| TC5 | `a_local_changes_filter_superseded_mid_pass_stops_and_sends_nothing` (400,000 paths, the lane's function with the outbox read raw, as `a_sidebar_ask_superseded_mid_pass_stops_and_sends_nothing`; green five runs of five) | the pass's keep-going closure `\|\| true` |
+| RR-note: "no diff is drawn under no row" overclaimed | `a_filter_hiding_the_path_chosen_keeps_it_chosen_and_drawn` (the filter hides the path chosen: its diff still drawn, no row highlighted, nothing else chosen, a refresh asks it again); docs say the Changes tab's rule (`local_changes_pane.rs`, `local-changes.md`) | a path the filter hides treated as gone (also red in `the_path_chosen_follows_the_lists_as_decided`) |
+| RR1: the 15.76 ms F1 Load Diff frame called the existing phase's | The phase 09 entry corrected in place: no update landed in that frame and its cause is unexplained. Three more runs after the badge and splitter changes: F1 Load Diff max 6.67 ms (a file diff applied in it) / 2.96 / 2.93 ms; C14 recorded 1.12 / 3.20 ms there; run 2 gave 2.98 ms. It did not reproduce in four runs | — |
+| QC2 | `diff.md` (the settings paragraph and the in-place options row), the root `CLAUDE.md` cairn-ui row, `diff_settings.rs` and `diff_actions::in_place_options` docs: Entire File is the Changes tab's and Local Changes', never a file opened in place | — |
+| QC3a | `local-changes.md` "Where it is not Fork's" names the count (distinct paths, R9.2; Fork's said to be git status's entries, its doubling OPEN 9), the rows count under the filter, and Entire File shared | — |
+
+**C12 re-run** after the badge and splitter changes (three runs, a fresh scratch clone of
+11,000 paths, release, the bench untouched by `find -newer` after the clone and all three
+runs): every frame under 16.7 ms. Scratch: opening max 6.60 / 6.87 / 8.35 ms; Local Changes
+shown 6.72 / 6.92 / 6.90 ms; Unstaged scrolled 1.29 / 1.17 / 1.15 ms; a filter typed 0.72 /
+0.84 / 1.17 ms; a refresh landed 0.73 / 0.81 / 0.60 ms. Bench: opening 7.50 / 6.63 / 6.65 ms;
+the largest other frame the first Commit tab draw, 6.44 / 6.32 / 6.23 ms.
+
+**For the user's batch (not decided), QC3c:** "Showing N of M files" counts rows (a path in
+both lists twice) while the sidebar counts distinct paths and the caption says "files": should
+M match the sidebar's count, or the caption say rows?
+
+**Dismissed** (qa-confirm): QC1 — the `|| true` in the worktree was a reviewer's mutation, now
+reverted; QC3b — Entire File shared under Local Changes' own bar is the Fork-like case, so only
+QC2's rewording; QC4 — every Freya API used (`VirtualScrollView::new_with_data_controlled`,
+`ResizableContainer`/`ResizablePanel::on_resized`, `use_a11y`, `use_focus`,
+`scroll_with_arrows`) is present in the fork at `caa46f8`, verified; the inherited RR-notes —
+a failed send after the worker ended dropping a `Retire`'s last hold on the UI thread, the
+filter sharing the repository thread with history pages (bounded, cancellable), and the re-ask
+on each refresh (R9.3) — acknowledged acceptable.
+
 ## 2026-10-07 — phase 09: Local Changes, read only, and the window check
 
 Packet mode, on `feature/refs-and-status`. QA pending (the coordinator's, fresh reviewers).
@@ -117,9 +169,9 @@ refs and the status before its first phase ends:
 Applying a status of 11,000 paths costs 0.004-0.014 ms (the lists arrive laid out; the window
 moves an `Arc`). The status landed after 77 ms on the bench (clean) and about 110 ms on the
 scratch clone (11,000 paths, two reads); the first path's diff about 60-80 ms after the view was
-shown. The F1 Load Diff frame at 15.76 ms in run 1 (2.98 ms in run 2) is the existing phase's,
-not this phase's; no frame crossed 16.7 ms. The slowest scratch frames (7-9 ms) are the view's
-first draw.
+shown. The F1 Load Diff frame at 15.76 ms in run 1 (2.98 ms in run 2) is unexplained — no
+update landed in it — and did not reproduce (corrected after QA, RR1; see "phase 09 QA"); no
+frame crossed 16.7 ms. The slowest scratch frames (7-9 ms) are the view's first draw.
 
 **C11, complete** — every number on the machine in `measured-baseline.md`, release, warm,
 median of seven, measured in the phases named; nothing here was re-measured:

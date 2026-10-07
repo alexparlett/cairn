@@ -10,8 +10,8 @@ nuance that run must not lose.
 | 1 | `history-graph` | **shipped** | — |
 | 2 | `credential-prompts` | **shipped** | 1 |
 | 2a | `process-manager` | **shipped** | 2 |
-| 3 | `diff-engine` | **shipped** (merge bar passed and torn down; lands on `main` with its packet PR) | 1, 2a |
-| 4 | `refs-and-status` | **planned** (PRD in flight, `docs/work/refs-and-status/`) | 1, 2a (O2 picked `git status`), 3 |
+| 3 | `diff-engine` | **shipped** | 1, 2a |
+| 4 | `refs-and-status` | **shipped** (merge bar passed and torn down; lands on `main` with its packet PR) | 1, 2a (O2 picked `git status`), 3 |
 | 5 | `staging-and-commit` | brief only | 2, 2a, 3, 4 |
 | 6 | `remote-sync` | brief only | 2, 2a, 4 |
 | 7 | `branch-ops` | brief only | 2a, 4 |
@@ -115,50 +115,44 @@ Windows' tab chords and date padding), #58 (gaps in the gate's required-test pin
 #51, #52, #53; and #29-#37, the deferred diff features, with what this packet built
 toward each recorded on #29 and #31-#35.
 
-## 4. refs-and-status — planned
+## 4. refs-and-status — shipped
 
-`docs/prd/refs-and-status.md` (in flight), work directory
-`docs/work/refs-and-status/`, evidence `docs/research/refs-and-status/`. Planned
-2026-10-05. **O2 is closed** (its decision L1): status is `git status
---porcelain=v2 -z` run as a read — gix's status differed from git's on 12 of 38
-fixtures, three silently, and starts clean filters outside `process/` — so this
-packet depends on 2a. Also locked: the walk seeds from every ref with stashes as
-rows of their own, no working-tree row (Fork has none), Fork's labels, sidebar
-and toolbar, a read-only Local Changes view wired to packet 3's working-tree
-query, and Fork's refresh (focus, after an operation, a chord; no watching).
-And, after measuring a deep find on rust-lang/rust (1.4 GiB retained, 89% of it
-per-row edges): compact rows whose edges are derived as drawn, and no cap on the
-history — a deliberate deviation from Fork, which caps its list and does nothing
-for a ref past it.
-The brief as written at program planning follows.
+`docs/prd/refs-and-status.md` (frozen), evidence `docs/research/refs-and-status/` —
+among it `measured.md` (C11, C12, C15 and C16's numbers on rust-lang/rust). Merge bar
+passed on 2026-10-07; the work directory was torn down and the packet lands on `main`
+as one pull request. As built: `docs/systems/refs.md` (refs, upstreams, the stash list,
+ahead/behind, the reftable refusal), `docs/systems/status.md` (status as `git status`
+answers it), `docs/systems/history-graph.md` (the walk from every ref, compact and slim
+rows, labels, stash rows, the title bar, refresh), `docs/systems/sidebar.md`,
+`docs/systems/local-changes.md`, and what it added to `docs/systems/diff.md` and
+`docs/systems/git-processes.md`. **O2 is closed** (its decision L1): status is `git
+status --porcelain=v2 -z` run as a read — gix's status differed from git's on 12 of 38
+fixtures, three silently, and starts clean filters outside `process/` — which made it
+D1's fourth read git answers, beside the changes, content and working-tree queries; a
+stash's changes became the third porcelain read (`git stash show --raw`), accepted by
+the user.
 
+**Built:** the refs snapshot under five parity rules (every upstream resolved by hand,
+as git's `set_merge` does), ahead/behind as two hidden walks, the reftable refusal at
+open; status read by git, twice only where an untracked directory collapsed, with C4's
+oracles on git 2.30 and 2.32 (`git-floor`); compact rows whose edges are derived as
+drawn, and slim rows in chunked stores (all of rust-lang/rust from every ref in
+52.67 MiB, against 1.4 GiB before), with no cap on the history — a deliberate deviation
+from Fork; the walk from every ref, each ref Fork's chip and each stash whose base is
+walked a row of its own; the title bar's branch and counts; refresh on focus, after a
+fetch and on F5/⌘R, reopening only when what the graph draws changed and freeing the old
+rows on a worker (closing #52's cause); Fork's sidebar with a filter on a worker and a
+find that pages the held walk; and a read-only Local Changes view wired to packet 3's
+working-tree query.
 
-**Builds:** refs enumeration (branches, remotes, tags, stashes) and working-tree
-status (changed, staged, untracked, ignored, conflicted). Ref decoration on the
-graph — the thing that makes the graph readable rather than a list of hashes.
-Stashes shown inline in the commit list, the way Fork does it, rather than in a
-side panel. The graph walks every ref by default — branches, remotes and tags —
-as Fork's "All Commits" view does. Today the application walks from `HEAD` only
-(`HistoryRequest::from_head` in `crates/cairn-app/src/worker/pool.rs`), so a
-branch not reachable from the checkout never appears; this packet switches it to
-`HistoryRequest::from_commits` over the enumerated refs.
-
-**Open:** O2 — `gix-status` or `git status --porcelain=v2`. D1 says reads use gix,
-but status is unusually exposed to `core.fsmonitor`, sparse checkout and
-attributes, which is precisely the divergence class D1 warns about. Measure
-agreement against `git` on a repository configured for each before committing.
-
-**Carries a measured bar (L6):** status on a large, dirty working tree. This is
-the query a client runs most often and the one most likely to feel slow.
-
-**Out:** acting on any ref (packet 7), staging (packet 5).
-
-**Inherited from packet 3:** the single-path working-tree diff
-query and the diff view itself. This packet owns the changed-path enumeration
-that neither of them has, so whichever of 4 and 5 lands first wires the Local
-Changes list to them. Note for O2: gix's status runs the user's clean filter
-driver when it hashes a working-tree file, as git does for packet 3's working-tree diff, so a
-filtered path belongs in the agreement measurement rather than beside it.
+**Leaves on the doorstep:** for 5, Local Changes as the view staging adds to (its lists,
+the path chosen and its diff, the follow through each refresh) and status as git reports
+it; for 6, the generic remote glyph the forge's icon replaces and the ahead/behind counts
+push and pull move (#68 marks the commits); for 7 and 8, the refs snapshot, the sidebar's
+sections and the find. Left as issues: #62-#82 — listing ignored files, reftable,
+`GIT_NAMESPACE`, watching, refreshing a stale index, greying and push/pull markers, a
+Submodules section, Local Changes' toolbar, and the measured or reviewed follow-ups — and
+#2, #4, #35 and #36, which it built toward.
 
 ## 5. staging-and-commit — brief
 
@@ -198,7 +192,7 @@ Cairn's mockup shows header actions and a selection gutter
 
 **Out:** merge, rebase, cherry-pick, revert, reset (all Tier 4, second lap).
 
-**Inherited from packet 4** (as planned): the Local Changes view, read only —
+**Inherited from packet 4** (as built, `docs/systems/local-changes.md`): the Local Changes view, read only —
 Unstaged above Staged, the badges, each path's diff — which this packet adds
 stage, discard and the commit box to; and status as `git status` reports it.
 
@@ -227,7 +221,7 @@ are not.
 choice is. It must not live only in config, where a user finds it by being
 surprised.
 
-**Inherited from packet 4** (as planned): remote-tracking labels draw a generic
+**Inherited from packet 4** (as built, `docs/systems/history-graph.md`): remote-tracking labels draw a generic
 remote glyph where Fork draws the forge's icon; identifying the forge here is
 what replaces it.
 

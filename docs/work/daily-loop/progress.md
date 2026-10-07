@@ -3,6 +3,15 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-07 — refs-and-status shipped and torn down
+
+Packet 4 passed its merge bar (every C1-C16 met; full gate green) and the user accepted
+its batched decisions as built. Torn down on `feature/refs-and-status`: PRD
+`docs/prd/refs-and-status.md` stamped shipped; as-built in `docs/systems/refs.md`,
+`status.md`, `sidebar.md`, `local-changes.md` and `history-graph.md`; measured numbers
+in `docs/research/refs-and-status/measured.md`; leftovers filed as #62-#82. O2 stays
+closed for `git status`. Next on the critical path: `staging-and-commit`.
+
 ## 2026-10-05 — refs-and-status planned; O2 closed
 
 Packet 4 planned with `/feature-plan`: PRD `docs/prd/refs-and-status.md`, work

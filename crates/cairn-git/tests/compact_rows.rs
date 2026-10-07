@@ -275,8 +275,8 @@ fn request_for(repo: &Repository, seed: &str) -> HistoryRequest {
 
 /// Reporter. Env: `CAIRN_BENCH_REPO`; `CAIRN_C15_MODE` — `find` (time a find of
 /// `CAIRN_FIND_TARGET`, or of the last row, paging as the window does and appending every
-/// page to one `History`; what it retains, by capacity, held to C16's 64 MiB or to
-/// `CAIRN_C16_MIB`),
+/// page to one `History`; what it retains, by capacity, held to C16's 64 MiB or to a lower
+/// `CAIRN_C16_MIB`, which can never raise it),
 /// `equivalence` (every row of the whole history against the frozen assigner), or
 /// `derive` (the worst-case derivation at each snapshot interval in `CAIRN_C15_KS`);
 /// `CAIRN_FIND_SEED` is `head`, `refs` (every ref's commit, unlabelled) or `snapshot` (the
@@ -352,8 +352,11 @@ fn find(repo: &Repository, seed: &str) {
         "RssAnon {anon_before} -> {anon_after} kB (+{:.1} MiB)",
         (anon_after.saturating_sub(anon_before)) as f64 / 1024.0,
     );
-    // C16's bar: every row of the history and the stores they read, by capacity.
-    let ceiling = env("CAIRN_C16_MIB").map_or(64.0, |mib| ok(mib.parse::<f64>(), "CAIRN_C16_MIB"));
+    // C16's bar: every row of the history and the stores they read, by capacity. The
+    // override can only tighten it: a ceiling above C16's 64 MiB is held to 64.
+    let ceiling = env("CAIRN_C16_MIB")
+        .map_or(64.0, |mib| ok(mib.parse::<f64>(), "CAIRN_C16_MIB"))
+        .min(64.0);
     assert!(
         mib(retained.total()) <= ceiling,
         "{:.1} MiB retained, past C16's {ceiling} MiB",

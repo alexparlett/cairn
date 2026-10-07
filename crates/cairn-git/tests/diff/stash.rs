@@ -283,7 +283,10 @@ fn a_stash_describes_its_stash_commit() {
 #[test]
 fn a_copy_into_an_untracked_file_is_read_from_the_untracked_commit() {
     if git().version() < since(32) {
-        eprintln!("SKIPPED a_copy_into_an_untracked_file: git before 2.32 lists no untracked file");
+        eprintln!(
+            "SKIPPED a_copy_into_an_untracked_file_is_read_from_the_untracked_commit: \
+             git before 2.32 lists no untracked file"
+        );
         return;
     }
     let repo = Repo::new("stash-copy");

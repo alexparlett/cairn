@@ -565,9 +565,13 @@ fn measures_a_find_through_the_boundary() {
         scans[0].as_secs_f64() * 1e3,
         scans[6].as_secs_f64() * 1e3,
     );
-    let ceiling = std::env::var("CAIRN_C16_MIB").ok().map_or(64.0, |mib| {
-        mib.parse::<f64>().unwrap_or_else(|error| panic!("{error}"))
-    });
+    // C16's 64 MiB, or a lower `CAIRN_C16_MIB`: the override can only tighten the bar.
+    let ceiling = std::env::var("CAIRN_C16_MIB")
+        .ok()
+        .map_or(64.0, |mib| {
+            mib.parse::<f64>().unwrap_or_else(|error| panic!("{error}"))
+        })
+        .min(64.0);
     assert!(
         mib(retained.total()) <= ceiling,
         "{:.1} MiB retained, past C16's {ceiling} MiB",

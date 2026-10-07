@@ -1,14 +1,55 @@
 ---
-status: in-flight
+status: shipped
 packet: refs-and-status
 opened: 2026-10-05
+shipped: 2026-10-07
 ---
 
 # PRD — Refs and status
 
-**In flight. Authoritative while it is.** The packet's work directory is
-`docs/work/refs-and-status/`; its decisions and rejected alternatives are that
-directory's `brainstorm.md`, L1-L14. Requirements below cite them by id.
+**Shipped. Frozen — what this packet committed to, as it was committed to.** For
+how the refs, upstreams, the stash list and ahead/behind are read now, read
+`docs/systems/refs.md`; the working tree's status, `docs/systems/status.md`; the
+history walked from every ref, its compact and slim rows, labels, stash rows, the
+title bar and refresh, `docs/systems/history-graph.md`; the sidebar and a ref's
+find, `docs/systems/sidebar.md`; Local Changes, `docs/systems/local-changes.md`;
+REFS, a stash's changes and the Refresh chord, `docs/systems/diff.md`; and the
+status and stash reads as `git` invocations, `docs/systems/git-processes.md`.
+Those are the living truth and this is not. Requirements R1-R11 and acceptance
+criteria C1-C16 were met at the merge bar, each against a test that decides it;
+C11, C12 and the measured halves of C15 and C16 were met by `#[ignore]`d reporters
+on the bench machine, by reading, not asserting (C11 29.1 / 34.6 / 0.13 / 7.27 ms
+against 100 / 250 / 100 / 200 ms; C15 a find of 2.2-2.3 s against 2.64 s; C16
+52.67 MiB against 64 MiB; C12 no frame over 16.7 ms), and their numbers, logged in
+the packet's `progress.md`, were kept at teardown in
+`docs/research/refs-and-status/measured.md`.
+
+Amendments made in flight are marked inline where they changed a requirement:
+R3.4 (git reads `status.showUntrackedFiles`, two reads), R4.2 (a stash filed twice
+is one row), R6.2 (`git stash show --raw`, the third porcelain read), R7.1 (counts
+as Fork prints them, `18↓1↑`) and R10.3 (a running status left to finish, one
+follow-up behind it). The user decided at the merge bar (2026-10-07): Local
+Changes' "Showing N of M files" counts distinct paths; a failed status read stays
+`Error::GitFailed` for the whole view; F5 stays Linux's Refresh chord; a ref name
+git calls invalid stays skipped and uncounted. Every other choice the phases
+batched for the user was accepted as built. Nothing below was descoped. What the
+packet left is filed: listing ignored files (#62), reftable repositories (#63),
+`GIT_NAMESPACE` (#64), watching the file system (#65), refreshing a stale index
+(#66), greying commits off the current branch (#67), push and pull markers (#68),
+a Submodules section (#69), Hide Untracked Files (#70), Local Changes' layout menu
+(#71), whether Fork remembers the sidebar's expansion (#72), an early stop for a
+stash with no row (#73), a named state for a partial clone's failed status (#74),
+a faster ahead/behind (#75), the flaky working-tree diff tests (#76), the REFS
+row's finder trying the list's hint (#77), the nested repository's second status
+read (#78), the refs read on the repository thread (#79), `RowId` under the
+every-variant guard (#80), a `status.renameLimit` pin (#81) and `window_check`
+asserting its bar (#82); and #2 (the branch filter and hiding refs), #4 (a resident
+bound on rows), #35 (Fork's quick look, Local Changes' eye) and #36 (the tree view)
+carry the rest. The packet's work directory — the brainstorm (L1-L14), `state.md`,
+`progress.md` and the `qa-checklist.md` this file names below — was deleted at
+teardown; git history holds it, its decisions are in `docs/design/history-graph.md`,
+`docs/design/engine.md`, `docs/design/ui.md` and `docs/design/concurrency.md`, and
+the "L" ids and the work-directory paths below are to that history.
 
 Design frame: `docs/design/history-graph.md` (what the graph walks, its labels and
 its stash rows), `docs/design/ui.md` (the sidebar, the toolbar, Local Changes),

@@ -497,7 +497,7 @@ FILE, and it is a guard, not a convention — see below.
   async-runtime dependency.
 - **Epochs are numbered per lane** (`worker/epoch.rs`, PRD R4.1, refs-and-status
   R11.1): `QueryLane` is history, walk, changes, file diff, file filter, refs,
-  ahead/behind, status or ref filter, and a new query supersedes the older ones in
+  ahead/behind, status, ref filter or Local Changes' filter, and a new query supersedes the older ones in
   its own lane only — except that a changes query also supersedes the file-diff
   lane (`QueryLane::supersedes`), since a file of the commit that was selected is
   no file of the one that is now, and that nothing supersedes the status lane: a
@@ -559,7 +559,7 @@ FILE, and it is a guard, not a convention — see below.
   (`worker/routing.rs`, PRD R4.2, refs-and-status R11.2): the history lane and a
   refresh's refs on `cairn-repository`, which owns the live walk — it borrows that
   thread's handle across turns and is not `Send`, so it never moves
-  (`worker/history_lane.rs`) — with the Changes tab's and the sidebar's filters; the
+  (`worker/history_lane.rs`) — with the Changes tab's, the sidebar's and Local Changes' filters; the
   changes and file-diff lanes, commits, comparisons and the working tree alike, on
   `cairn-diff` (`worker/diff_lane.rs`); and status and ahead/behind on
   `cairn-refresh` (`worker/refresh_lane.rs`), so neither a page nor a diff queues
@@ -589,7 +589,7 @@ FILE, and it is a guard, not a convention — see below.
 
 ### Refresh
 
-As-built for refs-and-status R10 and R11 (phase 06). `Request::Refresh` is three
+As-built for refs-and-status R10 and R11. `Request::Refresh` is three
 reads. Its refs and ahead/behind are numbered as it is submitted, in the refs and
 ahead/behind lanes and in no other, so it supersedes the refresh before it lane by lane
 and never a page, a diff or a filter (`Request::lanes`;
@@ -616,8 +616,8 @@ thread.
 
 **What a refresh costs, as built.** The refs are read on the repository thread (R11.2,
 kept by the user's decision of 2026-10-07), so a scroll page asked while a refresh reads
-them waits behind one refs read — about 22 ms at 10,500 refs warm, more at 40,000 and
-cold, measured by phase 06's QA — at most once per trigger; a refresh never cancels the page. A status, once
+them waits behind one refs read — about 28 ms for the snapshot of a 10,001-ref
+fixture warm (`docs/research/refs-and-status/measured.md`, section 2), more cold — at most once per trigger; a refresh never cancels the page. A status, once
 started, runs to its end whatever refreshes arrive, so a window switched faster than a
 status takes still gets one, followed by at most one more; each status is a full stat of
 the tree (736 ms on a stat-dirty rust-lang/rust), which a refresh asked while one runs
@@ -781,8 +781,8 @@ A row draws the refs pointing at its commit as Fork's chips between the graph an
 subject (refs-and-status R5; `crates/cairn-ui/src/ref_chips.rs`): outlined, filled with a
 tint of the row's lane colour — a tag indigo whatever its lane — each kind told by its
 glyph and shape (R5.5): a local branch a plain chip, the current one with a check mark
-before its name; a remote-tracking ref and a tag a glyph — a generic remote's cloud (a
-forge's icon is packet 6's) and a tag — in a cap of their own at the chip's left; a
+before its name; a remote-tracking ref and a tag a glyph — a generic remote's cloud
+(whatever the forge) and a tag — in a cap of their own at the chip's left; a
 stash's row a `stash@{n}` chip with a box. The glyphs are painted as paths on a canvas
 (`crates/cairn-ui/src/ref_glyphs.rs`), no font involved, every one in the chip's text
 colour, so what tells two kinds apart is the shape alone
@@ -885,7 +885,8 @@ and an unborn `HEAD`), `a_branchs_counts_are_found_by_its_name`
 
 The first five live in `crates/cairn-guards/tests/invariants.rs`; the sixth is a
 headless component test in `crates/cairn-ui/tests/history_list.rs`; the rest are
-the model, engine, list and window tests named under "What a row keeps". The
+the model, engine, list and window tests named under "What a row keeps" and "Chips on
+a row". The
 slimmed rows' comparisons hold them to tables of what the rows drew before. The
 engine's (`crates/cairn-git/tests/slim_rows.rs`) and the list's
 (`crates/cairn-ui/tests/drawn_rows.rs`) were committed at `4205d5d`, the one before
@@ -971,7 +972,7 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
   Fork and Sourcetree. Tracked as issue #5.
 - **`GraphRow` still keys a row by `Oid`.** A stash's row is keyed by its stash
   commit, which no commit the walk reaches names; the kept row says which kind it
-  is. A row with no `Oid` at all (there is to be no working-tree row) would need
+  is. A row with no `Oid` at all (Cairn draws no working-tree row) would need
   the assigner keyed otherwise.
 - **Opening a walk from every ref reads a commit per tip**: about 0.1 s at 50,000
   tags on one line of history, cancellable between tips (above), and a reopen pays
@@ -986,7 +987,7 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
   holding 100, 1,000 and 5,000 unmerged lines open at once
   (`measures_layout_over_unmerged_refs`): the first page from every ref took 3.1, 8.4 and
   25 ms, and deriving a 40-row viewport's edges under every line 0.03, 0.11 and 0.49 ms
-  (release; numbers in `docs/work/refs-and-status/progress.md`, phase 06). Drawing them
+  (release; numbers in `docs/research/refs-and-status/measured.md`, section 2). Drawing them
   is bounded by the places a row paints, not the lines crossing it (`graph_geometry::
   row_geometry` paints each place once, the lines past `MAX_DRAWN_LANES` sharing the last
   column): a 35-row viewport under 5,000 open lines builds and lays out in 0.76 ms and

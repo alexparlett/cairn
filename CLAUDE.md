@@ -1046,4 +1046,5 @@ same fork and rev as `freya`): `crates/cairn-ui/tests/` for components, and
 - `docs/research/<slug>/` — the evidence behind decisions, kept after teardown;
   `docs/research/diff-engine/c14-measured.md` is Cairn's measured diff and
   window numbers on the bench repository, against git's own in
-  `measured-baseline.md` beside it.
+  `measured-baseline.md` beside it, and `docs/research/refs-and-status/measured.md`
+  its refs, status, retained-row and window numbers on the same repository.

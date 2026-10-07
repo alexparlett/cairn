@@ -1311,7 +1311,7 @@ what it compares. Two commits compared (phase 08, R7) are chosen there too
 **The file-diff lane is shared** (phase 08). The Changes tab's file and the Commit tab's
 files opened in place are both asked in the file-diff lane — R4.3 puts Expand All there,
 and a newer request in it supersedes it — so each asking takes the lane from the other. So
-is the path chosen in Local Changes (refs-and-status phase 09, `diff_state/working.rs`):
+is the path chosen in Local Changes (`diff_state/working.rs`):
 it takes the lane from both and they from it, it is asked again as its view is shown
 (`working_needs_asking`, `reask_working`), a setting moved with its view shown asks it at
 once (`Asking::Working`), and a changes query supersedes it with the rest

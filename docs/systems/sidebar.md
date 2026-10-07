@@ -1,6 +1,6 @@
 # Sidebar
 
-How the window's sidebar is built today: what it draws, where its rows are laid out, and
+How the window's sidebar is built: what it draws, where its rows are laid out, and
 what pressing an entry does — including finding a ref whose row is not loaded yet by paging
 the history's walk. Spec: `docs/prd/refs-and-status.md` R8 (criterion C8). Fork is the
 standard (`docs/research/refs-and-status/fork-refs-and-status-ui.md`, section 5); every place
@@ -50,7 +50,7 @@ place and commit), and is let go of when a row is chosen in the history.
 
 ## Where its rows are laid out
 
-The rows are `cairn_model::SidebarRow`s — twelve bytes each, a section, a folder, a ref, a
+The rows are `cairn_model::SidebarRow`s — eight bytes each (`a_sidebar_row_is_eight_bytes`), a section, a folder, a ref, a
 stash or a detached `HEAD`, a ref, folder or stash naming its place in the snapshot — laid
 out by `RefsSnapshot::sidebar_rows(text, &Disclosure, keep_going)`
 (`crates/cairn-model/src/sidebar_rows.rs`): every section's caption and, under each open
@@ -116,7 +116,7 @@ A section's or folder's row opens or closes it and asks the rows again. A ref, a
   at once, walking nothing. Such a stash is known to have no row only at the walk's end, so
   its press pages the whole history first, every page kept — bounded by the history and
   cancellable by the next press or scroll like any find (2.2 s on rust-lang/rust); stopping
-  early, at the base's commit date, is a follow-up, filed as an issue.
+  early, at the base's commit date, is #73.
 
 **What supersedes a find.** A find is history-lane work: the next press, a scroll of the
 list, a row chosen in it, or its own row found supersedes it, and nothing else does. A
@@ -209,7 +209,7 @@ page asked.
   sessions (the user's decision, 2026-10-07). Whether Fork keeps it is not settled: the
   research records only that Fork for Windows 2.23 stores "collapse state" per worktree
   (`fork-refs-and-status-ui.md`, section 2), which may mean the sidebar's folders or
-  something else; an issue is to be filed to find out and decide.
+  something else; finding out is #72.
 - Fork's local-only icon is drawn as a shape of its own rather than Fork's grey, since a
   colour alone may not tell two kinds apart.
 - Pinned, Worktrees and Submodules, the tab strip of refs and search, double-click checkout,

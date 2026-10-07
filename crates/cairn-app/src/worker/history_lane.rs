@@ -13,7 +13,7 @@
 //! history lane, and answer it there before the first page: no refresh has read one (or the
 //! last open failed, which forgets it), and a walk that fails to open from it — a ref's
 //! commit deleted and pruned between the refresh and the open — when the refs read again
-//! differ: the open is then made once more, from them (the decision phase 05 handed on).
+//! differ: the open is then made once more, from them.
 //!
 //! A find (R8.5) pages the same walk forward, a page at a time, until a page holds the row
 //! looked for or the walk ends; `pool::serve` walks one of its pages whenever no other job is
@@ -416,7 +416,7 @@ mod tests {
         }
     }
 
-    /// The decision phase 05 handed on: a ref whose commit has gone since the refresh read
+    /// A stale tip: a ref whose commit has gone since the refresh read
     /// it — deleted and pruned in between — fails the walk's open from that snapshot; the
     /// open reads the refs again, says so in the history lane, and opens once more from
     /// them, so the first page arrives rather than a failure. The stale snapshot is the

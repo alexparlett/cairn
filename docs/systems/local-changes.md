@@ -1,9 +1,9 @@
 # Local Changes
 
-How the window's Local Changes view is built today: the two lists it draws over the working
+How the window's Local Changes view is built: the two lists it draws over the working
 tree's status, how a path is chosen and its diff asked, and what keeps a diff from being drawn
 for any path but the one chosen. Read only: nothing in it stages, unstages, discards or commits
-(refs-and-status R9.6; packet 5 adds that). Spec: `docs/prd/refs-and-status.md` R9 (criterion
+(refs-and-status R9.6). Spec: `docs/prd/refs-and-status.md` R9 (criterion
 C9). Fork is the standard (`docs/research/refs-and-status/fork-refs-and-status-ui.md`, section
 6); every place Cairn's view is not Fork's is named under "Where it is not Fork's". The status
 itself — what `git status` lists and how it is read — is `status.md`; the working-tree query
@@ -143,8 +143,8 @@ so the last hold on a status of tens of thousands of paths is never dropped on t
   `the_filters_count_is_of_distinct_paths_a_path_in_both_lists_once`,
   `every_kind_of_change_draws_its_badges_shape` (each painted badge's cell read pixel for pixel
   against its glyph), `the_splitter_between_the_lists_drags`, the badge rule
-  `each_kind_of_change_has_forks_badge` and `every_glyph_paints_a_shape_no_other_glyph_paints`
-  (`ref_glyphs.rs`), and the viewport twin
+  `each_kind_of_change_has_forks_badge` (a unit test in `crates/cairn-ui/src/local_changes.rs`)
+  and `every_glyph_paints_a_shape_no_other_glyph_paints` (`ref_glyphs.rs`), and the viewport twin
   `a_status_of_50000_paths_builds_one_viewport_filtered_or_not` (top, deep and end, filtered and
   not), named in the root `CLAUDE.md`'s virtualization invariant.
 - The selection (`crates/cairn-app/src/diff_state/working.rs`):
@@ -193,11 +193,11 @@ so the last hold on a status of tens of thousands of paths is never dropped on t
   combined list, Hide Untracked Files and Show Ignored Files; Cairn draws flat lists only (the
   tree view is #36), lists untracked files unless the user's `status.showUntrackedFiles` says
   no, and never lists ignored files (R3.4, R3.5). The filter field is the only control above
-  the lists (the user's decision, 2026-10-07): the layout menu, Hide Untracked Files, the
-  collapse-all chevron and the eye (Fork's side-by-side quick look) are not drawn, and issues
-  are to be filed for them.
+  the lists (the user's decision, 2026-10-07): the layout menu and its
+  collapse-all chevron (#71), Hide Untracked Files (#70), Show Ignored Files (#62) and the eye
+  (Fork's side-by-side quick look, #35) are not drawn.
 - Fork's Stage and Unstage buttons on the headings, and the commit box under the diff, are
-  packet 5's (R9.6).
+  not built (R9.6).
 - The submodule's badge is a shape of Cairn's drawing (a box in a box); Fork's own submodule
   icon is not recorded.
 - The count beside Local Changes is the distinct paths status lists (R9.2's wording), where
@@ -210,7 +210,6 @@ so the last hold on a status of tens of thousands of paths is never dropped on t
   under the bar.
 - A status that could not be read — a partial clone's staged rename on git 2.44 and later among
   the causes — is said for the whole view, where a failed diff fails one path; the lists of
-  the last status read stay drawn under it. Whether to name that state, retry without rename
-  detection, or let status fetch is open for the user.
+  the last status read stay drawn under it. Naming that state is #74.
 - Pressing a ref in the sidebar returns the main region to the history; Fork's own behaviour
   on that press from Local Changes is not recorded.

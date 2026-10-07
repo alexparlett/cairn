@@ -65,7 +65,7 @@ that ends asks a refresh, and the refresh's snapshot is what is compared.
 
 `RefsSnapshot::matching` is the sidebar's filter (R8.3): the refs whose name past its
 namespace, and the stashes whose message, hold the text, case ignored as the Changes tab's
-file filter ignores it (`src/text_filter.rs`, shared by both)
+file filter ignores it (`crates/cairn-model/src/text_filter.rs`, which every filter shares)
 (`the_sidebar_filter_keeps_the_names_that_hold_its_text`). `RefsSnapshot::sidebar_rows`
 lays the sidebar's rows out from what it keeps — sections, folders split at `/`, what is
 open — in one pass over every ref, run on the repository thread in a lane of its own
@@ -105,7 +105,7 @@ git run in the same fixture at test time (`crates/cairn-git/tests/refs.rs`):
 `SharedRepository::discover_as` clears the namespace on the repository every handle is
 made from, and the refs shown are the ones the `git` Cairn runs (which is never given
 the variable) sees. gix restores it whenever its configuration is re-read in place
-(`config_snapshot_mut`), which nothing in Cairn does.
+(`config_snapshot_mut`), which nothing in Cairn does. Whether to honour it is #64.
 
 **Skipped and counted.** A ref whose content is not a ref, or whose symbolic chain runs
 past git's depth, is skipped and counted in `unreadable`; git skips it too, warning
@@ -152,10 +152,11 @@ walk sees — a shallow clone's boundary grafted, as the history walk grafts it.
 object read goes through `Polled`, which fails once `cancel` says so: the frontier gix
 paints before a hiding walk's first commit is one long call, and a refused read is what
 stops it. So no commit-graph is used (a commit read from one never reaches `Polled`),
-though git would use one. `cancel` is also polled before each branch and after each
-commit counted; a cancelled query is `Error::AheadBehindCancelled { branches,
-commits_read }` — the branches answered and the commits read before it stopped — and what
-it had counted is not answered.
+though git would use one — so a long divergence costs two to three times git's time
+(`docs/research/refs-and-status/measured.md`, section 2; a faster count is #75). `cancel`
+is also polled before each branch and after each commit counted; a cancelled query is
+`Error::AheadBehindCancelled { branches, commits_read }` — the branches answered and the
+commits read before it stopped — and what it had counted is not answered.
 
 ## Refused at open
 
@@ -168,7 +169,7 @@ format 0 with no extension, as git and gix open it (`crates/cairn-git/src/ref_st
 
 - `Error::RefStorageUnsupported { path, storage }` when `extensions.refStorage` names
   anything but `files`. gix 0.87 reads no such setting; it would open a reftable
-  repository and fail on the first ref it read.
+  repository and fail on the first ref it read. Opening one is #63.
 - `Error::RefStorageNeedsFormatVersion1 { path, storage }` when
   `core.repositoryFormatVersion` is 0 and `extensions.refStorage` is set at all, `files`
   or `reftable`, as git refuses it ("repo version is 0, but v1-only extension found");

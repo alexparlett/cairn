@@ -67,7 +67,7 @@ file is not git's — so git reads it: the first read passes no `--untracked-fil
 under `no` git lists no untracked path, which is the answer. Only a collapsed directory
 shows the user did not say `no` and git used its `normal` mode, and only then is the
 second read worth its cost. A nested repository is listed as `dir/` under every mode,
-so a tree holding one is always read twice. No `git config` read is added, so a read
+so a tree holding one is always read twice (#78). No `git config` read is added, so a read
 here runs `git status` and nothing else.
 
 **Parsing.** Porcelain v2's `1` (an ordinary change), `2` (a rename or copy, whose
@@ -101,7 +101,7 @@ the repository's registry, whichever of the two reads it was in
 `a_status_read_superseded_during_its_second_read_ends_it`,
 `a_status_read_superseded_before_it_starts_runs_nothing`). In the application, only a
 close cancels a status: a refresh leaves one that is running to finish and asks one more
-after it (refs-and-status R10.3 as amended; `docs/systems/history-graph.md`, "Refresh").
+after it (refs-and-status R10.3; `docs/systems/history-graph.md`, "Refresh").
 
 ## What a status read writes and runs
 
@@ -126,7 +126,7 @@ read policy's):
   with that repository's own hook and filters — the programs D1 allows a read;
 - because a read never writes the refreshed stat back, a tree whose every file's stat
   changed is rehashed in full on every read until something refreshes the index, which
-  nothing in Cairn does;
+  nothing in Cairn does (#66);
 - staged rename detection compares blobs, and a read never lazily fetches one
   (`GIT_NO_LAZY_FETCH=1`, `crate::reads`): in a partial clone, a staged rename whose
   blob only the promisor holds fails the WHOLE read on git 2.44 and later —

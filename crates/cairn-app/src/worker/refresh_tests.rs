@@ -107,12 +107,13 @@ impl Refreshable {
 
 /// What one refresh's three answers were, read until all three have arrived.
 #[derive(Debug, Default)]
-struct Answered {
-    refs: Vec<bool>,
-    ahead_behind: usize,
-    status: usize,
+pub(super) struct Answered {
+    /// Each refs answer's `reopen`.
+    pub(super) refs: Vec<bool>,
+    pub(super) ahead_behind: usize,
+    pub(super) status: usize,
     /// Every other update seen meanwhile.
-    others: Vec<Update>,
+    pub(super) others: Vec<Update>,
 }
 
 impl Answered {
@@ -130,8 +131,9 @@ impl Answered {
     }
 }
 
-/// Reads until a refresh's three answers have all arrived.
-fn one_refresh(updates: &mut Updates) -> Answered {
+/// Reads until a refresh's three answers have all arrived: what a test asks next can then
+/// not be overtaken by a refresh answer from the refresh thread.
+pub(super) fn one_refresh(updates: &mut Updates) -> Answered {
     let deadline = Instant::now() + WAIT;
     let mut answered = Answered::default();
     while !answered.all_three() {
@@ -192,12 +194,15 @@ fn a_refresh_answers_the_refs_ahead_behind_and_status_each_once() {
 }
 
 /// The QA brief: focus flapping — two refreshes asked at once, as Alt+Tab twice quickly asks
-/// them — draws one answer of each kind, the second refresh's; the first's is superseded in
-/// each of its lanes, cancelled where it was still running and dropped where it had finished,
-/// before the window reads it. Deterministic: the second is numbered before any answer can be
-/// read, and an answer is drawn only while its number is current. Caught by: a refresh
-/// numbered in fewer than its three lanes (two answers of the lane left out arrive), or a
-/// refresh that supersedes nothing.
+/// them — draws one refs answer and one count, the second refresh's; the first's are
+/// superseded in their lanes, cancelled where still running and dropped where finished,
+/// before the window reads them. Deterministic: the second is numbered before any answer can
+/// be read, and an answer is drawn only while its number is current. Status is not
+/// superseded (R10.3 as amended): one status answers both when the second is asked before
+/// the first starts, and a status and one follow-up when after — never more
+/// (`a_refresh_leaves_a_running_status_to_finish_and_asks_one_more_after_it` pins which,
+/// with a status that hangs). Caught by: a refresh numbered in fewer than its two lanes (two
+/// answers of the lane left out arrive), or a refresh that supersedes nothing.
 #[test]
 fn a_refresh_asked_twice_at_once_draws_one_answer_of_each() {
     let fixture = Refreshable::new("cairn-refresh-flapping");
@@ -208,9 +213,18 @@ fn a_refresh_asked_twice_at_once_draws_one_answer_of_each() {
     let later = arriving_within(&mut updates, Duration::from_millis(1_500));
     assert_eq!(answered.refs.len(), 1, "{answered:?}");
     assert_eq!(
-        (later.refs.len(), later.ahead_behind, later.status),
-        (0, 0, 0),
+        answered.ahead_behind, 1,
+        "a superseded refresh's count was drawn: {answered:?}"
+    );
+    assert_eq!(
+        (later.refs.len(), later.ahead_behind),
+        (0, 0),
         "a superseded refresh was drawn: {later:?}"
+    );
+    assert!(
+        (1..=2).contains(&(answered.status + later.status)),
+        "two refreshes drew {} statuses: {answered:?} {later:?}",
+        answered.status + later.status
     );
     // What the first had finished comes back only to be freed.
     assert!(
@@ -270,11 +284,11 @@ fn a_refresh_cancels_neither_a_page_being_walked_nor_a_diff_being_read() {
     drop(handle);
 }
 
-/// A `status` that hangs until `$DIR/release` exists, saying `$DIR/started` as it begins;
-/// bounded, so a failing test leaves nothing running long.
-/// The stub's `PATH` is its own directory, so only the shell's builtins and programs named
-/// by their path run.
-const STATUS_HANGS: &str = "  : > \"$DIR/started\"\n  n=0\n  \
+/// A `status` that hangs until `$DIR/release` exists, writing its pid — the leader of its
+/// process group — to a line of `$DIR/started` as it begins; bounded, so a failing test
+/// leaves nothing running long. The stub's `PATH` is its own directory, so only the shell's
+/// builtins and programs named by their path run.
+const STATUS_HANGS: &str = "  echo $$ >> \"$DIR/started\"\n  n=0\n  \
      while [ ! -e \"$DIR/release\" ] && [ $n -lt 600 ]; do /bin/sleep 0.05; n=$((n+1)); done\n  \
      exit 0";
 
@@ -348,5 +362,171 @@ fn a_slow_status_delays_neither_a_page_nor_a_diff() {
         }
         other => panic!("expected the released status, got {other:?}"),
     }
+    drop(handle);
+}
+
+/// The pids of the statuses the stub has started, in order.
+fn statuses_started(stub: &StubGit) -> Vec<i32> {
+    std::fs::read_to_string(stub.directory.join("started"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| line.trim().parse().ok())
+        .collect()
+}
+
+/// Waits, within [`WAIT`], until the stub has started `count` statuses.
+fn until_statuses_started(stub: &StubGit, count: usize) -> Vec<i32> {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let started = statuses_started(stub);
+        if started.len() >= count {
+            return started;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{} of {count} statuses started",
+            started.len()
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// The boundary over `fixture`, its `git status` the stub's.
+fn with_slow_status(
+    fixture: &Refreshable,
+    stub: &StubGit,
+    around: (&Home, &RuntimeDir),
+) -> (RepositoryHandle, Updates) {
+    match super::pool::open(fixture.path(), &Discovery::new(stub.startup(Some(around)))) {
+        Ok((handle, updates, _)) => (handle, updates),
+        Err(error) => panic!("starting the worker: {error}"),
+    }
+}
+
+/// Writes `path` when dropped, however the test ends, so a stub held on it lets go.
+struct Release<'a>(&'a Path);
+
+impl Drop for Release<'_> {
+    fn drop(&mut self) {
+        let _ = std::fs::write(self.0, "");
+    }
+}
+
+/// R10.3 as amended (the user's decision of 2026-10-07), and phase 06 QA's DO1: refreshes
+/// asked while a `git status` runs do not end it — it runs on, finishes, and its answer is
+/// drawn — and however many there were, exactly one follow-up status runs after it, whose
+/// answer is drawn after the first's. Deterministic: the first status cannot finish before
+/// the test releases it, and the three refreshes are asked while it is held. Caught by: a
+/// refresh that supersedes the status again (the first `git` is ended and its answer never
+/// drawn), coalescing that drops the follow-up (one status), or a follow-up per refresh
+/// (four).
+#[test]
+fn a_refresh_leaves_a_running_status_to_finish_and_asks_one_more_after_it() {
+    let fixture = Refreshable::new("cairn-refresh-status-coalesces");
+    let stub = StubGit::wrapping("status", STATUS_HANGS);
+    let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let (handle, mut updates) = with_slow_status(&fixture, &stub, (&home, &runtime));
+    let release = stub.directory.join("release");
+    let _released = Release(&release);
+
+    handle.submit(Request::Refresh);
+    let first = until_statuses_started(&stub, 1)[0];
+    for _ in 0..3 {
+        handle.submit(Request::Refresh);
+    }
+    // The last refresh's refs while the status is held (the earlier ones' are superseded):
+    // the refs are not held up by it, and it is still running. Its count waits behind the
+    // status on the refresh thread.
+    let deadline = Instant::now() + WAIT;
+    let mut held = Answered::default();
+    let mut refs_seen = 0;
+    while refs_seen < 1 {
+        match next_by(&mut updates, deadline, &held.others) {
+            Some(update) => {
+                if matches!(update, Update::Refs { .. }) {
+                    refs_seen += 1;
+                }
+                held.take(update);
+            }
+            None => panic!("the stream ended: {held:?}"),
+        }
+    }
+    assert_eq!(
+        held.status, 0,
+        "a status was answered while it was held: {held:?}"
+    );
+    #[cfg(target_os = "linux")]
+    assert!(
+        !super::lifecycle_tests::alive_in_group(first).is_empty(),
+        "a refresh ended the status that was running"
+    );
+    assert_eq!(
+        statuses_started(&stub),
+        [first],
+        "a second status started beside the first"
+    );
+
+    std::fs::write(&release, "")
+        .unwrap_or_else(|error| panic!("writing {}: {error}", release.display()));
+    let mut answered = Answered::default();
+    let deadline = Instant::now() + WAIT;
+    while answered.status < 2 {
+        match next_by(&mut updates, deadline, &answered.others) {
+            Some(update) => answered.take(update),
+            None => panic!("the stream ended after {answered:?}"),
+        }
+    }
+    let later = arriving_within(&mut updates, Duration::from_millis(1_500));
+    assert_eq!(later.status, 0, "more than one follow-up status: {later:?}");
+    assert_eq!(
+        statuses_started(&stub).len(),
+        2,
+        "not exactly the held status and one follow-up"
+    );
+    drop(handle);
+}
+
+/// R10.3 as amended and phase 06 QA's DO1: a status no refresh ends is still ended by a
+/// close — the window's `Request::Close` while the `git status` hangs, a second refresh
+/// queued behind it, ends the stream within the close's bound, nothing answers a status,
+/// and the status's process group is gone. Caught by: a status read whose cancel no longer
+/// sees a close (the stream waits out the stub).
+#[test]
+fn a_close_ends_a_running_status() {
+    let fixture = Refreshable::new("cairn-refresh-status-closed");
+    let stub = StubGit::wrapping("status", STATUS_HANGS);
+    let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let (handle, mut updates) = with_slow_status(&fixture, &stub, (&home, &runtime));
+    let release = stub.directory.join("release");
+    handle.submit(Request::Refresh);
+    let running = until_statuses_started(&stub, 1)[0];
+    handle.submit(Request::Refresh);
+
+    let started = Instant::now();
+    handle.submit(Request::Close);
+    let mut seen = Vec::new();
+    while let Some(update) = next_by(&mut updates, started + WAIT, &seen) {
+        seen.push(update);
+    }
+    let took = started.elapsed();
+    // Released only now, so a stub the close missed would still be running below.
+    let _released = Release(&release);
+    assert!(
+        took < cairn_git::CLOSE_BOUND + Duration::from_secs(2),
+        "the close waited {took:?} on a status"
+    );
+    assert!(
+        !seen
+            .iter()
+            .any(|update| matches!(update, Update::Status { .. })),
+        "a status was answered though the close ended it: {seen:?}"
+    );
+    #[cfg(target_os = "linux")]
+    assert_eq!(
+        super::lifecycle_tests::alive_in_group(running),
+        Vec::<i32>::new(),
+        "the status git outlived the close"
+    );
+    assert_eq!(statuses_started(&stub), [running], "the queued status ran");
     drop(handle);
 }

@@ -130,7 +130,7 @@ impl Routed {
     /// The thread `lane`'s query of this is served on: for a refresh, each of its three reads'.
     pub(super) fn lane_thread(&self, lane: QueryLane) -> Option<Thread> {
         match (self, lane) {
-            (Self::Refresh, QueryLane::AheadBehind | QueryLane::Status) => Some(Thread::Refresh),
+            (Self::Refresh, QueryLane::AheadBehind) => Some(Thread::Refresh),
             _ => self.thread(),
         }
     }

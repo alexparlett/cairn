@@ -550,9 +550,13 @@ fn a_fetch_reports_progress_finishes_and_the_refresh_after_it_reopens_from_the_n
     }
     // As the window opens: a refresh, whose refs have no walk to compare with.
     handle.submit(Request::Refresh);
-    assert!(
-        refs_answer(&mut updates).1,
-        "the first refresh did not open"
+    // The whole refresh — its ahead/behind and status come from another thread — so none
+    // of it arrives among the fetch's updates below (phase 06 QA, TC1).
+    let first = super::refresh_tests::one_refresh(&mut updates);
+    assert_eq!(
+        first.refs,
+        [true],
+        "the first refresh did not open: {first:?}"
     );
     handle.submit(Request::OpenHistory { rows: 8 });
     let (rows, complete) = rows_answer(&mut updates);

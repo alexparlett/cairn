@@ -31,7 +31,9 @@ pub enum QueryLane {
     Refs,
     /// How far each branch and its upstream have gone apart, for the snapshot a refresh read.
     AheadBehind,
-    /// The working tree's status, as `git status` answers it.
+    /// The working tree's status, as `git status` answers it. No refresh supersedes it (R10.3
+    /// as amended, the user's decision of 2026-10-07): its number moves for nothing, so a
+    /// status is cancelled only by a close, which stops every lane.
     Status,
     /// Which refs and stashes the sidebar's filter text leaves (R8.3).
     RefFilter,

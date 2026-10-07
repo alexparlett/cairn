@@ -327,13 +327,16 @@ pub enum Request {
     /// configuration moved, so an edit reaches a session that has not moved its context.
     ConfiguredContext,
     /// Reads the refs, ahead/behind and the working tree's status again (refs-and-status
-    /// R10): on focus gained, after an operation, and on the Refresh action. Three queries,
-    /// each in a lane of its own, superseding the refresh before it lane by lane and nothing
-    /// else — no page, no diff, no filter. The refs are read on the history thread and
-    /// answered by [`Update::Refs`], saying whether the history must be reopened; ahead/behind
-    /// is counted for that snapshot, and status read, on the refresh thread
-    /// ([`Update::AheadBehind`], [`Update::Status`]), so neither a page nor a diff queues
-    /// behind a slow one. A failure is [`Update::RefreshFailed`].
+    /// R10): on focus gained, after an operation, and on the Refresh action. Three reads. The
+    /// refs and ahead/behind are numbered in lanes of their own, superseding the refresh
+    /// before them lane by lane and nothing else — no page, no diff, no filter. Status is
+    /// not superseded (R10.3 as amended, the user's decision of 2026-10-07): a refresh
+    /// leaves a running `git status` to finish, and every refresh asked while it runs is
+    /// one follow-up status after it; only a close ends it. The refs are read on the
+    /// history thread and answered by [`Update::Refs`], saying whether the history must be
+    /// reopened; ahead/behind is counted for that snapshot, and status read, on the refresh
+    /// thread ([`Update::AheadBehind`], [`Update::Status`]), so neither a page nor a diff
+    /// queues behind a slow one. A failure is [`Update::RefreshFailed`].
     Refresh,
     /// Which of `refs`' refs and stashes hold `text` in a name (the sidebar's filter, R8.3),
     /// answered by [`Update::FilteredRefs`]: a pass over every ref, run on the repository
@@ -377,12 +380,12 @@ pub enum Request {
     Close,
 }
 
-/// The most lanes one request is numbered in: a refresh's three.
-pub(super) const MOST_LANES: usize = 3;
+/// The most lanes one request is numbered in: a refresh's two.
+pub(super) const MOST_LANES: usize = 2;
 
 impl Request {
     /// The lanes a query is numbered in, superseding what each has in flight — one lane,
-    /// but a refresh's three; none for an operation, which is numbered in none — a scroll
+    /// but a refresh's two; none for an operation, which is numbered in none — a scroll
     /// must not cancel a fetch, nor a fetch a scroll or a diff. No arm defaults, so a new
     /// request does not compile until it is placed.
     pub fn lanes(&self) -> &'static [QueryLane] {
@@ -391,7 +394,8 @@ impl Request {
             Self::Changes { .. } => &[QueryLane::Changes],
             Self::FileDiff(_) | Self::Expand(_) => &[QueryLane::FileDiff],
             Self::FilterFiles { .. } => &[QueryLane::FileFilter],
-            Self::Refresh => &[QueryLane::Refs, QueryLane::AheadBehind, QueryLane::Status],
+            // Not the status lane: a refresh never supersedes a status (R10.3 as amended).
+            Self::Refresh => &[QueryLane::Refs, QueryLane::AheadBehind],
             Self::FilterRefs { .. } => &[QueryLane::RefFilter],
             Self::ListRemotes
             | Self::ConfiguredContext
@@ -672,11 +676,11 @@ mod tests {
         ] {
             assert_eq!(query.lanes(), [lane], "{query:?}");
         }
-        // A refresh is its three reads, each in its own lane, and nothing else: no page, no
-        // diff, no filter is superseded by one.
+        // A refresh is numbered in the refs and ahead/behind lanes and nothing else: no page,
+        // no diff, no filter is superseded by one, and no status (R10.3 as amended).
         assert_eq!(
             Request::Refresh.lanes(),
-            [QueryLane::Refs, QueryLane::AheadBehind, QueryLane::Status]
+            [QueryLane::Refs, QueryLane::AheadBehind]
         );
         assert!(Request::Refresh.lanes().len() <= MOST_LANES);
         for operation in [

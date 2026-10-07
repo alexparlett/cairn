@@ -1,13 +1,22 @@
 //! The refresh thread, `cairn-refresh`: the working tree's status and each branch's
 //! ahead/behind (refs-and-status R11.2), on a thread of their own so neither a history page
 //! nor a diff queues behind a slow status (736 ms on a stat-dirty rust-lang/rust) or a long
-//! divergence. Each query is numbered in its own lane and cancelled by the next refresh's
-//! number there: a superseded status ends its `git`, a superseded count stops its walk.
+//! divergence.
+//!
+//! Ahead/behind is numbered in its lane and cancelled by the next refresh's number there: a
+//! superseded count stops its walk. Status is not (R10.3 as amended, the user's decision of
+//! 2026-10-07): restarting `git status` on every focus gain meant a window switched faster
+//! than a status takes never got one, each switch paying a full stat of the tree. A running
+//! status finishes and is answered; every refresh asked while it ran is one follow-up
+//! status after it, however many there were ([`serve_refreshes`] coalesces the status jobs
+//! queued when it takes one up); and only a close ends a running one, by stopping every
+//! lane (and ending every `git` the repository runs).
 //!
 //! Status is asked by the window's refresh directly; ahead/behind is forwarded here by the
 //! repository thread once it has read the refs it counts, under the epoch the refresh was
 //! given, so a refresh that supersedes this one supersedes its count too.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
@@ -22,7 +31,8 @@ use super::request::{Refreshed, Update};
 /// What the refresh thread is sent.
 #[derive(Debug)]
 pub(super) enum RefreshJob {
-    /// The working tree's status, under the status lane's `epoch`.
+    /// The working tree's status, under the status lane's `epoch` — which no refresh moves,
+    /// so only a close cancels it.
     Status { epoch: Epoch },
     /// Every local branch of `snapshot` counted against its upstream, under the
     /// ahead/behind lane's `epoch`.
@@ -43,15 +53,29 @@ pub(super) struct Refreshing<'a> {
 }
 
 /// The refresh thread's loop: until it is told to stop, every handle is gone, or the
-/// repository closes.
+/// repository closes. A status taken up stands for every status queued behind it: they were
+/// all asked before it began, so one read answers them all — which is how the refreshes
+/// asked while a status ran become exactly one follow-up.
 pub(super) fn serve_refreshes(shared: &SharedRepository, serving: &Refreshing<'_>) {
     let repo = shared.to_worker();
-    while let Ok(job) = serving.jobs.recv() {
+    // Jobs read off the queue while coalescing statuses, served in their turn.
+    let mut held = VecDeque::new();
+    loop {
+        let job = match held.pop_front() {
+            Some(job) => job,
+            None => match serving.jobs.recv() {
+                Ok(job) => job,
+                Err(_) => break,
+            },
+        };
         if serving.epochs.is_stopping() {
             break;
         }
         match job {
-            RefreshJob::Status { epoch } => status(&repo, epoch, serving),
+            RefreshJob::Status { epoch } => {
+                held.extend(coalesced(serving.jobs));
+                status(&repo, epoch, serving);
+            }
             RefreshJob::AheadBehind { epoch, snapshot } => {
                 ahead_behind(&repo, &snapshot, epoch, serving);
             }
@@ -60,14 +84,21 @@ pub(super) fn serve_refreshes(shared: &SharedRepository, serving: &Refreshing<'_
     }
 }
 
+/// Every job queued now but the statuses, which the status about to be read answers.
+fn coalesced(jobs: &Receiver<RefreshJob>) -> Vec<RefreshJob> {
+    jobs.try_iter()
+        .filter(|job| !matches!(job, RefreshJob::Status { .. }))
+        .collect()
+}
+
 fn status(repo: &Repository, epoch: Epoch, serving: &Refreshing<'_>) {
-    // Superseded before it started: nothing is run.
+    // The repository closing: nothing is run.
     if !serving.epochs.is_current(epoch) {
         return;
     }
     match repo.status(serving.git, &serving.epochs.watch(epoch)) {
         Ok(status) => serving.outbox.send(Some(epoch), Update::Status { status }),
-        // Superseded while git ran, which the cancel ended: not a failure.
+        // Ended by a close, which the cancel saw: not a failure.
         Err(Error::StatusCancelled) => {}
         Err(error) => serving.outbox.send(
             Some(epoch),

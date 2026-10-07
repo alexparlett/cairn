@@ -486,9 +486,11 @@ impl RepositoryHandle {
     /// thread. A close stops the epochs first, an atomic store, so the page
     /// being walked and the diff being read are abandoned at their next poll
     /// and the close behind them is reached at once; the waiting it starts is
-    /// the repository thread's. A refresh is numbered in its three lanes and
+    /// the repository thread's. A refresh is numbered in its two lanes and
     /// sent to two threads — its refs to the repository thread, its status to
-    /// the refresh thread — and returns its refs' epoch.
+    /// the refresh thread under the status lane's number, which no refresh moves
+    /// (a running status is never superseded, R10.3 as amended) — and returns its
+    /// refs' epoch.
     pub fn submit(&self, request: Request) -> Option<Epoch> {
         // Numbered before it is routed, so what it supersedes is cancelled now,
         // not when a thread gets to it.
@@ -507,11 +509,10 @@ impl RepositoryHandle {
         // A failed send means the worker is gone and has already said so.
         match route(request) {
             Routed::Refresh => {
-                if let (Some(refs), Some(ahead_behind), Some(status)) = (
-                    epoch_of(QueryLane::Refs),
-                    epoch_of(QueryLane::AheadBehind),
-                    epoch_of(QueryLane::Status),
-                ) {
+                if let (Some(refs), Some(ahead_behind)) =
+                    (epoch_of(QueryLane::Refs), epoch_of(QueryLane::AheadBehind))
+                {
+                    let status = self.epochs.current(QueryLane::Status);
                     let _ = self
                         .jobs
                         .send((Some(refs), RepositoryJob::Refs { ahead_behind }));

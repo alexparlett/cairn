@@ -1156,6 +1156,15 @@ fn ahead_and_behind_are_what_rev_list_counts() {
     let repo = Repository::discover(fixture.path()).unwrap();
     let snapshot = repo.refs(&CancelSignal::new()).unwrap().snapshot;
     let read = repo.ahead_behind(&snapshot, &CancelSignal::new()).unwrap();
+    // In the snapshot's order, bytewise by name, each branch once: the window finds a
+    // branch's counts by a binary search (`RefreshState::ahead_behind_of`).
+    assert!(
+        read.counts
+            .windows(2)
+            .all(|pair| pair[0].0.as_str().as_bytes() < pair[1].0.as_str().as_bytes()),
+        "the counts are not in bytewise order by name: {:?}",
+        read.counts
+    );
     let counted: BTreeMap<_, _> = read
         .counts
         .iter()

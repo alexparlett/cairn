@@ -11,9 +11,10 @@
 //! row selected.
 //!
 //! Where a pressed ref's row is, among those loaded, is looked up among the rows refs label,
-//! the stashes' and `HEAD`'s (`History::labelled_position`) — a few hundred for the whole of
-//! rust-lang/rust, never every loaded row — since every ref labels its commit's row in a walk
-//! from the snapshot the sidebar lists. A find then looks through each page as it arrives,
+//! the stashes' and `HEAD`'s (`History::labelled_position`) — a pass that grows with the
+//! labelled rows, never with every loaded row: a few hundred for the whole of rust-lang/rust,
+//! a fraction of a millisecond at 50,000 refs — since every ref labels its commit's row in a
+//! walk from the snapshot the sidebar lists. A find then looks through each page as it arrives,
 //! never a page twice. (A ref moved since the walk began labels no loaded row until the
 //! refresh that saw it reopens the history, which it does at once; meanwhile its press pages
 //! the walk, and finds the commit only in a page still to come.)

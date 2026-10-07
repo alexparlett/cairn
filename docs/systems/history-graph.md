@@ -514,7 +514,11 @@ FILE, and it is a guard, not a convention — see below.
 - **The epoch IS the cancel signal.** `Superseded` (`worker/epoch.rs`)
   implements `cairn_git::Cancel` as "is my epoch still current in its lane", so
   superseding a request stops its walk at the next commit rather than
-  discarding a finished answer (`superseding_a_request_stops_the_walk_that_is_serving_it`),
+  discarding a finished answer
+  (`a_page_asked_under_a_superseded_number_walks_nothing_and_the_next_takes_the_walk_up`,
+  on the lane itself, and `superseding_a_request_stops_the_walk_that_is_serving_it`, one
+  queued page superseded mid-walk through the boundary — both over lines of commits written
+  for them, `worker/written_repository.rs`),
   and ends a diff's `git` process group at the runner's next poll
   (`a_superseded_diff_kills_its_git`). An answer that finished anyway is dropped
   as it arrives, by `Updates::next`
@@ -845,7 +849,7 @@ launch at `.`, `..`, a subdirectory or its `.git` names the repository and not t
 given (`an_open_names_the_repositorys_folder_whatever_path_it_was_opened_at`); nothing
 until it is open — `*` after it while the last status read listed a change — then a branch glyph
 and the current branch, and its distance from its upstream as Fork prints it, behind then
-ahead, `18↓ 1↑`, a zero count left out and nothing for a branch level with its upstream;
+ahead, `18↓1↑` (no space, as Fork prints it), a zero count left out and nothing for a branch level with its upstream;
 or `upstream gone` for a configured upstream no ref is (git's `[gone]`); a detached `HEAD`
 as `HEAD detached at <short id>` and an unborn branch as `<name> (no commits yet)`, in
 git's words. The arrows are IBM Plex Mono's, which the application embeds. The window

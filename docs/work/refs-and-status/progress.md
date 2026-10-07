@@ -3,6 +3,41 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-07 — phase 08 QA
+
+Fresh qa-checklist (NOT READY on QC-B1), responsiveness-reviewer, test-coverage-auditor;
+adjudicated by a fresh qa-confirm, run by the coordinator. **The user ruled on the Fork
+questions (2026-10-07):**
+
+1. **Sort: Fork's natural order, folders first** — case ignored, digit runs read as numbers
+   (`b2` before `b10`), at every level and for tags (`cairn_model::natural_order`). `main`
+   treated as `master` (Fork Mac RN 1.0.97) is NOT done: the research record lists it among
+   Fork's sorting changes but does not say what Fork does with `master`.
+2. **A distinct no-upstream glyph**: `RefGlyph::LocalOnly`, a single line of commits with its
+   newest hollow, beside the branch glyph (an upstream) and the warning (gone) — shape, not
+   colour.
+3. **Expansion is not remembered across sessions** (as built); `sidebar.md` now cites the one
+   ambiguous research line (section 2, Windows 2.23's "collapse state" per worktree). The
+   coordinator files an issue at teardown.
+4. **(a)** counts unspaced, `18↓1↑`, in the sidebar and the title bar; **(b)** while filtering,
+   a closed section opens too; **(c)** while filtering, a section with no match draws no
+   caption; **(d)** the symbolic remote `HEAD` listed as `origin/HEAD` under its remote.
+
+Fixes, each pin checked against a named mutation:
+
+| Finding / decision | Pin | Mutation it fails under |
+| --- | --- | --- |
+| TC1 / QC-B1: the cancel pin could not fail | `a_page_asked_under_a_superseded_number_walks_nothing_and_the_next_takes_the_walk_up` (the lane, deterministic: an open of 2 under e1, two bumps, `More { 1_000_000 }` under the stale number sends nothing and keeps the session, `More { 2 }` under the current one answers `commits[2..4]`, not complete); `superseding_a_request_stops_the_walk_that_is_serving_it` reworked (one queued `More { whole }` of a 20,000-commit line, superseded by `MoreHistory { 2 }` after a fifth of the unsuperseded walk's time; passes only on the walk's third and fourth rows, a page starting at its first row a failure outright; a round whose walk finished first retried) | `session.next_page(rows, &CancelSignal::new())` (both red); `watch(self.walk.unwrap_or(epoch))` in `page`/`answer` (both red) |
+| The fixture for both | `a_written_line_is_read_back_as_written` | (SHA-1's published vectors; the engine reads the line back in order) |
+| TC2: a stop alone | `a_stop_alone_ends_the_find_and_leaves_the_walk_where_it_stood` (a find of one row a page over a line three windows long, stopped, `ListRemotes` behind the stop answered, no find page after it within 200 ms and none `complete`, then `MoreHistory { 3 }` continues the walk) | the stop numbered in no lane AND its arm ending nothing; the stop routed to another thread and numbered in no lane. Each mechanism alone is covered by the other (the lane's bump cancels the find's next page; the arm clears it), so a single one of the two passes, by design |
+| RR1: a sidebar press left the list's hint stale | `the_list_moves_from_the_row_its_callers_hint_names` (cairn-ui: a press reaches the caller's hint; with one commit at rows 5 and 500 the hint at 500 moves ↓ to 501, a search would give 6); window `pressing_a_loaded_ref_selects_its_row_and_brings_it_into_view`, `pressing_a_ref_past_the_loaded_rows_finds_it_by_paging`, `a_parent_link_selects_a_loaded_parent_and_ignores_an_unloaded_one` now require `View::history_cursor` at the row | the list keeping its own hint; `bring_into_view` and `follow_parent` not setting it (all three window tests red) |
+| Decision 1 | `each_level_is_in_natural_order_folders_first`, `natural_order_reads_numbers_as_numbers_and_ignores_case` | leaves unsorted; `natural_order` as a bytewise compare |
+| Decision 2 | `each_entry_draws_its_kinds_glyph` (main Branch, login LocalOnly, topic Gone); `every_glyph_paints_a_shape_no_other_glyph_paints` | no upstream drawn as `Branch` |
+| Decision 4a | `counts_are_behind_then_ahead_and_a_zero_is_left_out`; the title-bar test; the sidebar order test | counts joined with a space (status box and title bar red) |
+| Decisions 4b, 4c | `a_filter_keeps_what_matches_with_every_section_and_folder_open` | a closed section left closed while filtering; an empty caption kept |
+| Decision 4d | `the_sidebar_draws_its_sections_in_forks_order_with_forks_marks` | a symbolic remote ref drawn by its last part |
+| QC-D1, TC3, QC-D2, RR2, RR3, TC-residual, QC-note | docs: `sidebar.md` (pins, the order `FilterRefs` before `OpenHistory` that keeps `labelled_position` right — pinned by `a_reopen_frees_the_old_rows_on_a_worker_and_keeps_the_selection` — the stash with no row paging the whole history, what waits behind a find page, `labelled_position`'s growth, the expansion line), `history-graph.md`, the phase-08 entry's pin row and equivalent-mutant reason corrected in place, `ref_find.rs`'s doc | — |
+
 ## 2026-10-07 — phase 08: the sidebar, its filter, and finding a ref
 
 Packet mode, on `feature/refs-and-status`. QA pending (the coordinator's, fresh reviewers).
@@ -51,14 +86,17 @@ edit, the named tests run, the file restored):
 | A stash with no row: changes shown, says so | `a_stash_with_no_row_shows_its_changes_and_says_it_is_not_in_the_graph`; worker `a_find_for_a_row_the_walk_never_reaches_ends_with_the_walk` | the stash's `selection::choose` skipped; the complete check skipped |
 | The filter on a worker, the answer drawn, replaced rows freed off the UI thread (QA brief) | `typing_in_the_sidebars_filter_asks_a_worker_and_draws_its_answer` | the pane's side effect never submitting |
 | TC3: an answer arrives, a superseded one is dropped, one superseded mid-pass stops | `the_sidebars_rows_are_answered_on_a_worker_and_a_newer_ask_supersedes_the_older`; `a_sidebar_ask_superseded_mid_pass_stops_and_sends_nothing` | the answer sent under no epoch; `|| true` keep-going |
-| The find's cancel is the epoch | `superseding_a_request_stops_the_walk_that_is_serving_it` (reworked: pages are now the walk's, so an open run to its end arrives whole, and only the next page's two rows say the walk stopped) | `next_page` given a fresh `CancelSignal` |
+| The find's cancel is the epoch | `superseding_a_request_stops_the_walk_that_is_serving_it` — **false at 87ebb03** (phase 08 QA's TC1): with queued superseded opens each replacing the walk, the test passed under a fresh `CancelSignal` too; replaced in QA by `a_page_asked_under_a_superseded_number_walks_nothing_and_the_next_takes_the_walk_up` and a reworked pool test, both red under that mutation (see "phase 08 QA") | `next_page` given a fresh `CancelSignal` |
 | The current branch's folders revealed only when it becomes current | `the_current_branchs_folders_open_when_it_becomes_current` | revealed on every refresh |
 | `labelled_position` covers stashes and `HEAD`, scans no unlabelled row | `a_labelled_row_is_found_among_the_labelled_rows_alone` | the stashes' pass removed; the `HEAD` row removed |
 
 Equivalent mutants, noted: the serve loop's `is_current` check before each find page and
-`Page::Stop` clearing `finding` (a stale find's page is cancelled by its own epoch at its
-first poll and sends nothing); the ref filter's pre-pass `is_current` (`keep_going` is asked
-before the first entry).
+`Page::Stop` clearing `finding` — each stands in for the other while both are in place, and
+without the first a stale find's page is cancelled by its own epoch at its first poll and
+sends nothing, except on a walk already exhausted, which polls no cancel and sends one empty
+`complete: true` page, harmless (corrected in phase 08 QA's TC3; this said "sends nothing"
+outright); the ref filter's pre-pass `is_current` (`keep_going` is asked before the first
+entry).
 
 **Measured** — `measures_a_find_through_the_boundary` (`#[ignore]`d,
 `crates/cairn-app/src/worker/find_tests.rs`), release, warm, median of seven after a

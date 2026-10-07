@@ -24,19 +24,27 @@ Left of the main region, behind a draggable splitter (`window::beside`, Freya's
 - **One virtualized list** of the refs (`cairn_ui::Sidebar`, `crates/cairn-ui/src/sidebar.rs`):
   the sections **Branches**, **Remotes**, **Tags** and **Stashes**, in that order, each a
   caption that opens and closes it. Branches and remote-tracking refs are grouped into
-  folders split at `/` — a remote's refs under a folder named for the remote — each folder
-  a row that opens and closes; tags are listed whole (`release/2.0`); every stash entry is
-  listed by its message, a stash commit filed twice included. A detached `HEAD` is the first
-  row under Branches, as Fork draws it. At each level folders come first and then the refs,
-  each in the snapshot's order (bytewise by name).
+  folders split at `/` — a remote's refs under a folder named for the remote, its symbolic
+  `HEAD` listed as `origin/HEAD` rather than a bare `HEAD` — each folder a row that opens
+  and closes; tags are listed whole (`release/2.0`); every stash entry is listed by its
+  message, a stash commit filed twice included. A detached `HEAD` is the first row under
+  Branches, as Fork draws it. At each level folders come first and then the refs, each in
+  Fork's natural order — case ignored, a run of digits read as its number, so `b2` before
+  `b10` (`cairn_model::natural_order`) — and tags in the same order; stashes keep the stash
+  list's. (Among Fork's sorting changes its release notes list `main` "treated as
+  `master`"; the research record does not say what Fork does with `master`, so nothing is
+  done for it.)
 
 Each entry's glyph is its kind's shape, painted (`cairn_ui::RefGlyph`; the shapes differ
 pixel for pixel, `every_glyph_paints_a_shape_no_other_glyph_paints`): a branch, a remote,
-a tag, a stash's box, a folder; the current branch a check mark with its name bold; a
-branch whose upstream is configured but gone Fork's warning triangle in place of its glyph
-— the current branch's at its right, beside the check mark, as Fork marks an active branch
-with an invalid upstream; any other branch with an upstream its behind and ahead counts at
-its right, printed as the title bar prints them (`counts_text`: `18↓ 1↑`, a zero left out).
+a tag, a stash's box, a folder; the current branch a check mark with its name bold. A
+local branch draws Fork's three upstream states, each its own shape: with an upstream, the
+branch glyph; with none, a single line of commits, its newest hollow (`RefGlyph::LocalOnly`,
+Fork's local-only icon, told by shape rather than Fork's grey); with its upstream configured
+but gone, Fork's warning triangle in place of its glyph — the current branch's at its right,
+beside the check mark, as Fork marks an active branch with an invalid upstream. A branch
+with an upstream draws its behind and ahead counts at its right, unspaced as Fork prints
+them and as the title bar prints them (`counts_text`: `18↓1↑`, a zero left out).
 What one row draws is `cairn_ui::drawn_row`, read out of the snapshot for that row alone.
 The entry last pressed is drawn chosen, by identity (a ref by its name, a stash by its
 place and commit), and is let go of when a row is chosen in the history.
@@ -49,9 +57,9 @@ out by `RefsSnapshot::sidebar_rows(text, &Disclosure, keep_going)`
 (`crates/cairn-model/src/sidebar_rows.rs`): every section's caption and, under each open
 one, the refs whose names hold the filter's text (`RefsSnapshot::matching`'s rule, the name
 past its namespace, case ignored) and the stashes whose messages do, folders opened as the
-`Disclosure` says. While the filter holds text every folder is drawn open, so a match is
-never hidden behind a closed one; a closed section stays closed. The pass asks
-`keep_going` before its first entry and every few thousand after.
+`Disclosure` says. While the filter holds text every section and folder is drawn open, a
+closed one too, so a match is never hidden, and a section nothing matched in draws no
+caption. The pass asks `keep_going` before its first entry and every few thousand after.
 
 It runs on the repository thread, in the ref-filter lane: `Request::FilterRefs { refs,
 text, disclosure }` is answered by `Update::FilteredRefs { refs, text, rows }`, the
@@ -84,9 +92,16 @@ A section's or folder's row opens or closes it and asks the rows again. A ref, a
 - **A ref that names no commit** — a tag on a tree or a blob — says so at once ("<tag>
   names no commit, so it is not in the graph") and walks nothing.
 - **A row already loaded** is looked up among the rows refs label, every stash's and
-  `HEAD`'s (`History::labelled_position`): a pass over a few hundred rows for the whole of
-  rust-lang/rust, never every loaded row, since every ref labels its commit's row in a walk
-  from the snapshot the sidebar lists.
+  `HEAD`'s (`History::labelled_position`): a pass that grows with the labelled rows, never
+  with every loaded row — a few hundred for the whole of rust-lang/rust, a fraction of a
+  millisecond at 50,000 refs. It is right because every ref the sidebar lists labels its
+  commit's row in the walk the window holds: `session::apply` asks the sidebar's rows for a
+  refresh's snapshot (`Request::FilterRefs`) before it asks the reopen that snapshot's moved
+  refs need (`Request::OpenHistory`), both on the repository thread, which serves them in
+  order (`a_reopen_frees_the_old_rows_on_a_worker_and_keeps_the_selection` pins the order),
+  so the rows a press is read from never name a ref the history is not walked from. The row
+  found is told to the history list's cursor hint (`View::history_cursor`), so the next
+  arrow key starts from it without searching.
 - **A row not loaded yet** is found by paging the held walk forward:
   `Request::FindRow { target, rows }` — `ref_find::FIND_PAGE_ROWS` rows a page — while the
   sidebar says "Finding <ref>…". Every page is answered as `Update::Rows`, as a scroll's
@@ -99,7 +114,10 @@ A section's or folder's row opens or closes it and asks the rows again. A ref, a
   moved since the walk began — and the sidebar says it is not in the graph; a stash's
   changes are shown all the same, `selection::choose` given its `RowId::Stash`, which no
   loaded row has, so none is drawn selected. With the history already complete it says so
-  at once, walking nothing.
+  at once, walking nothing. Such a stash is known to have no row only at the walk's end, so
+  its press pages the whole history first, every page kept — bounded by the history and
+  cancellable by the next press or scroll like any find (2.2 s on rust-lang/rust); stopping
+  early, at the base's commit date, is a follow-up, filed as an issue.
 
 **What supersedes a find.** A find is history-lane work: the next press, a scroll of the
 list, a row chosen in it, or its own row found supersedes it, and nothing else does. A
@@ -125,6 +143,11 @@ a reopen replaced are dropped. An open superseded in the query lane before it st
 **A find shares its thread.** On the repository thread a find walks one page whenever no
 other job is waiting (`pool::serve`'s `finding`), so a filter keystroke, a refresh's refs or
 a free asked meanwhile is served between its pages; the next history-lane request ends it.
+A repository-thread job that is not history-lane work — the sidebar's rows
+(`FilterRefs`), the Changes tab's filter (`FilterFiles`), a refresh's refs, a free — waits
+for at most the one 512-row page being walked (a few milliseconds warm, tens cold), eight
+times a scroll's 64-row page; a history-lane request does not wait, since its number cancels
+the page mid-walk.
 Cancelling is the walk's own: the epoch is the cancel signal the engine polls once per
 commit, so a superseded find stops mid-page and the walk keeps what it laid out for the next
 page asked.
@@ -132,7 +155,10 @@ page asked.
 ## What enforces this
 
 - Layout: `sections_come_in_forks_order_and_branches_and_remotes_fold_at_slashes`,
-  `a_filter_keeps_what_matches_with_every_folder_open`, `a_detached_head_is_the_first_branch_row`,
+  `a_filter_keeps_what_matches_with_every_section_and_folder_open`,
+  `each_level_is_in_natural_order_folders_first`,
+  `natural_order_reads_numbers_as_numbers_and_ignores_case`,
+  `a_detached_head_is_the_first_branch_row`,
   `a_folder_is_named_by_its_path_and_a_branch_reveals_its_folders`, `a_stop_is_honoured_mid_pass`
   (`crates/cairn-model/src/sidebar_rows.rs`);
   `a_labelled_row_is_found_among_the_labelled_rows_alone` (`crates/cairn-model/src/history.rs`).
@@ -146,12 +172,17 @@ page asked.
   `a_find_pages_the_walk_until_a_page_holds_the_row_and_no_further`,
   `a_second_find_supersedes_the_first_and_no_page_is_lost`,
   `a_stopped_find_leaves_the_walk_for_the_next_page`,
+  `a_stop_alone_ends_the_find_and_leaves_the_walk_where_it_stood`,
   `the_pages_a_find_laid_out_before_it_was_stopped_still_arrive`,
   `a_find_for_a_row_the_walk_never_reaches_ends_with_the_walk`,
   `the_sidebars_rows_are_answered_on_a_worker_and_a_newer_ask_supersedes_the_older`,
-  `a_sidebar_ask_superseded_mid_pass_stops_and_sends_nothing`; and
-  `superseding_a_request_stops_the_walk_that_is_serving_it` (`worker/pool.rs`) for the
-  cancel a find shares with a scroll.
+  `a_sidebar_ask_superseded_mid_pass_stops_and_sends_nothing`; and, for the cancel a find
+  shares with a scroll, over lines of commits written object by object for the test
+  (`worker/written_repository.rs`, not this checkout's history):
+  `a_page_asked_under_a_superseded_number_walks_nothing_and_the_next_takes_the_walk_up`
+  (`worker/history_lane.rs`, deterministic) and
+  `superseding_a_request_stops_the_walk_that_is_serving_it` (`worker/pool.rs`, one queued
+  page of a long line superseded mid-walk).
 - The window (`crates/cairn-app/src/sidebar_tests.rs`, headless, updates applied through
   `session::apply`): `pressing_a_loaded_ref_selects_its_row_and_brings_it_into_view`,
   `pressing_a_ref_past_the_loaded_rows_finds_it_by_paging`,
@@ -175,11 +206,13 @@ page asked.
 
 - Fork caps its history and does nothing when a pressed ref is past it; Cairn finds it
   however deep it is (the PRD's named deviation).
-- Fork's sorting default is not recorded; Cairn lists folders first, each level in the
-  snapshot's order (Fork's "alphabetically, folders first" option). Folders open closed,
-  but for the current branch's; Fork's remembered expansion is not kept across sessions.
-- Fork's greyed icon for a branch with no upstream is not drawn: it would be told from a
-  pushed branch's by colour alone, which the product's rules forbid.
+- Folders open closed, but for the current branch's, and what is open is not kept across
+  sessions (the user's decision, 2026-10-07). Whether Fork keeps it is not settled: the
+  research records only that Fork for Windows 2.23 stores "collapse state" per worktree
+  (`fork-refs-and-status-ui.md`, section 2), which may mean the sidebar's folders or
+  something else; an issue is to be filed to find out and decide.
+- Fork's local-only icon is drawn as a shape of its own rather than Fork's grey, since a
+  colour alone may not tell two kinds apart.
 - Pinned, Worktrees and Submodules, the tab strip of refs and search, double-click checkout,
   ⌘-click compare from the sidebar, and keyboard navigation of the sidebar are not built.
 - A find's page is `FIND_PAGE_ROWS` rows, so the page holding the row may carry up to that

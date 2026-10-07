@@ -2,7 +2,7 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 08 implemented (the sidebar, its filter on the repository thread, a pressed ref found by paging the held walk), full gate green; its QA pending (the coordinator's); phase 09 next.** Integration branch
+**Status: phase 08 done (the sidebar, its filter on the repository thread, a pressed ref found by paging the held walk), QA adjudicated, confirmed findings fixed and the user's Fork decisions built; phase 09 next.** Integration branch
 `feature/refs-and-status`, in the worktree `.claude/worktrees/refs-and-status`,
 packet mode.
 
@@ -84,15 +84,19 @@ that most constrain implementation:
   if they differ, open once more from them (the hand-off's first option), rather than drop the
   tip; a failed open forgets its refs, so the next open reads its own and the next refresh
   reopens.
-- For the user's end-of-packet batch (phase 08; not decided): folders first at each level
-  (Fork's "alphabetically, folders first" option; its default is not recorded); folders open
-  closed but for the current branch's, revealed when it becomes current; the filter opens
-  every folder and leaves a closed section closed, every caption drawn; a detached `HEAD` row
-  first in Branches; counts as the title bar prints them; a gone upstream as Fork's warning
-  icon alone; no greyed icon for a branch with no upstream (colour alone); stash entries by
-  message; the notices' wording and place; any scroll of the list supersedes a find; a find's
-  page is 512 rows; a stash with no row is known only at the walk's end; a ninth query lane,
-  `QueryLane::Walk`. Detail in progress.md, phase 08.
+- Decided by the user (2026-10-07, phase 08 QA): **1** Fork's natural order, folders first
+  (case ignored, numbers as numbers, every level and tags; `main` as `master` not done — the
+  research does not say what it means); **2** a no-upstream branch its own glyph shape
+  (`RefGlyph::LocalOnly`); **3** expansion not remembered across sessions, as built — the
+  research line is ambiguous, an issue to be filed at teardown; **4** counts unspaced
+  `18↓1↑` (sidebar and title bar), closed sections open while filtering, no caption for a
+  section with no match, `origin/HEAD` listed whole.
+- For the user's end-of-packet batch (phase 08; not decided): folders open closed but for the
+  current branch's, revealed when it becomes current; a detached `HEAD` row first in Branches;
+  a gone upstream as Fork's warning icon alone; stash entries by message; the notices' wording
+  and place; any scroll of the list supersedes a find; a find's page is 512 rows; a stash with
+  no row is known only at the walk's end (an issue for an early stop at its base's date, filed
+  at teardown); a ninth query lane, `QueryLane::Walk`. Detail in progress.md, phase 08.
 - C11's first-page bar is written as 200 ms because history-graph's A7 has no
   number (L12); the user may revise it at the merge bar.
 
@@ -346,7 +350,8 @@ Phase 08 (`docs/systems/sidebar.md` is the as-built account):
 - `cairn-ui`: `src/sidebar.rs` — `Sidebar`, `SidebarRefs`, `SidebarTarget` (`of`),
   `MainView`, `BranchCounts`, `DrawnRow`, `drawn_row`, `local_changes_text`,
   `section_caption`, `SIDEBAR_ROW_HEIGHT`, `SIDEBAR_INDENT`, the captions; `RefGlyph::{Folder,
-  Gone, Opened, Closed}`.
+  Gone, Opened, Closed, LocalOnly}`; `HistoryList::cursor`; `counts_text` unspaced.
+  `cairn-model` also: `natural_order`.
 - `cairn-app`: `QueryLane::Walk`; `Request::{FindRow { target, rows }, StopFinding}`,
   `Request::FilterRefs { refs, text, disclosure }`, `Update::FilteredRefs { refs, text, rows
   }`; `Retired::sidebar`; `routing::Page::{Open { rows, walk }, Find, Stop}`,
@@ -356,11 +361,16 @@ Phase 08 (`docs/systems/sidebar.md` is the as-built account):
   `SIDEBAR_WIDTH`), `sidebar_pane.rs` (`SidebarPane`, `local_changes_count`), `ref_find.rs`
   (`press`, `pages_arrived`, `superseded`, `row_chosen`, `reopened`, `failed`, `Find`,
   `FIND_PAGE_ROWS`, the notices); `Progress::stopped_finding`; `window::beside`,
-  `LOCAL_CHANGES_PLACEHOLDER`; `RefreshState::ahead_behind` now `Option<&BranchCounts>`.
+  `LOCAL_CHANGES_PLACEHOLDER`; `RefreshState::ahead_behind` now `Option<&BranchCounts>`;
+  `View::history_cursor` (the list's hint, set by `ref_find`'s `bring_into_view` and
+  `follow_parent`).
 - Tests: `crates/cairn-ui/tests/sidebar.rs`, `crates/cairn-app/src/sidebar_tests.rs`,
   `crates/cairn-app/src/worker/find_tests.rs` (with the `#[ignore]`d
-  `measures_a_find_through_the_boundary`); window tests run in a window as wide again as the
-  sidebar (`LEFT`).
+  `measures_a_find_through_the_boundary`); `crates/cairn-app/src/worker/written_repository.rs`
+  (`WrittenRepository::linear`: a line of commits written object by object with `std::fs`,
+  SHA-1 and stored-deflate zlib spelled out, for worker tests that need a history of known
+  length without this checkout's or a `git` run); window tests run in a window as wide again as
+  the sidebar (`LEFT`).
 
 ## Validation status
 
@@ -373,6 +383,6 @@ Phase 08 (`docs/systems/sidebar.md` is the as-built account):
 | 05 history from every ref | implemented: C6 passes (walked commits = `git rev-list --branches --remotes --tags HEAD` over whole walks, labels = `git log --decorate=full`, stash rows with and without `--include-untracked`, assigner lane and edge tests); C11 first page from every ref 7.3 ms (8.6 ms with the snapshot read) beside `HEAD`'s 7.7 ms, worst stash look-ahead 21.6 ms; C16 52.67 MiB from the snapshot; C15 equivalence holds; the app still walks from `HEAD`; QA adjudicated, confirmed findings fixed (the walk's open cancellable between tips: 103 ms first page at 50,000 tags, cancelled in 6.3 ms); full gate green |
 | 06 worker and refresh | implemented: C10 passes through the real boundary (`a_refresh_reopens_for_a_stash_a_checkout_and_a_moved_ref_and_for_nothing_else`, the refresh tests) and headless with focus set (`focus_gained_after_a_ref_moved_reopens_the_history_keeping_the_chosen_row`); every pin checked against a named mutation (progress.md); RR2 measured; full gate green; QA pending |
 | 07 labels and toolbar | done: C7 passes (headless: chips, compaction, clipping, ✓, bold `HEAD`, stash chip, REFS, a stash's list against `git stash show --name-status` off and on, on the host's git and both floors); the QA brief's cases pinned; every pin checked against a named mutation (progress.md); RR2's drawing half measured; QA adjudicated, confirmed findings fixed (the title bar names the repository's folder, `Update::Opened`; the stash read's options guarded); full gate green |
-| 08 sidebar | implemented: C8 passes (headless and through the real boundary; the twins `a_sidebar_of_50000_refs_builds_one_viewport`, `a_folder_of_10000_branches_open_builds_one_viewport`); the QA brief's cases pinned; every pin checked against a named mutation (progress.md); a find of the bench's oldest commit 2.23-2.25 s and 52.67 MiB retained through the boundary, cancelled halfway with no row after the stop; full gate green; QA pending |
+| 08 sidebar | done: C8 passes (headless and through the real boundary; the twins `a_sidebar_of_50000_refs_builds_one_viewport`, `a_folder_of_10000_branches_open_builds_one_viewport`); the QA brief's cases pinned; every pin checked against a named mutation (progress.md); a find of the bench's oldest commit 2.23-2.25 s and 52.67 MiB retained through the boundary, cancelled halfway with no row after the stop; QA adjudicated, confirmed findings fixed (TC1's cancel pinned on lines of commits written for the tests, a stop alone, the list's hint the window's), the user's Fork decisions built; full gate green |
 | 09 local changes | not started |
 | 10 QA | not started |

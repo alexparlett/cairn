@@ -4,7 +4,9 @@
 //! check mark for the current branch, a branch for any other branch with an upstream and the
 //! title bar's, a single line of commits for a branch with none (Fork's local-only icon); and,
 //! in the sidebar, a folder, a warning triangle for a branch whose upstream is gone (Fork's
-//! icon for it), and the triangle that says whether a section or folder is open.
+//! icon for it), and the triangle that says whether a section or folder is open; and, in Local
+//! Changes, the submodule's badge (a box holding a smaller one) and the same warning triangle
+//! for a conflicted path.
 //!
 //! Each is painted as a path on a canvas — strokes and fills, never a character — so no font
 //! is needed and none can be missing. Each is drawn in one colour, the chip's text colour, so
@@ -46,10 +48,12 @@ pub enum RefGlyph {
     Opened,
     /// A closed section or folder: a triangle pointing right.
     Closed,
+    /// A submodule's badge in Local Changes: a box holding a smaller, filled one.
+    Submodule,
 }
 
 impl RefGlyph {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Remote,
         Self::Tag,
         Self::Stash,
@@ -60,6 +64,7 @@ impl RefGlyph {
         Self::Gone,
         Self::Opened,
         Self::Closed,
+        Self::Submodule,
     ];
 
     /// The glyph in `colour`, on a canvas of its own size.
@@ -190,6 +195,27 @@ pub(crate) fn paint(canvas: &freya::engine::prelude::Canvas, glyph: RefGlyph, co
                 .line_to((5.0, 8.6))
                 .close();
             canvas.draw_path(&path.detach(), &paint);
+        }
+        RefGlyph::Submodule => {
+            // A repository inside another: a box outlined, a smaller box filled inside it.
+            paint.set_style(PaintStyle::Stroke);
+            let mut outer = PathBuilder::new();
+            outer
+                .move_to((1.0, 1.0))
+                .line_to((9.0, 1.0))
+                .line_to((9.0, 9.0))
+                .line_to((1.0, 9.0))
+                .close();
+            canvas.draw_path(&outer.detach(), &paint);
+            paint.set_style(PaintStyle::Fill);
+            let mut inner = PathBuilder::new();
+            inner
+                .move_to((3.4, 3.4))
+                .line_to((6.6, 3.4))
+                .line_to((6.6, 6.6))
+                .line_to((3.4, 6.6))
+                .close();
+            canvas.draw_path(&inner.detach(), &paint);
         }
         RefGlyph::Closed => {
             paint.set_style(PaintStyle::Fill);

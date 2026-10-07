@@ -32,6 +32,9 @@ pub struct LocalChangesView {
     pub state: State<LocalChangesState>,
     pub filter_text: State<String>,
     pub list_width: State<f32>,
+    /// Unstaged's share of the two lists' height, as the splitter between them was last
+    /// dragged: the session's, never kept beyond it (the user's decision, 2026-10-07).
+    pub lists_split: State<f32>,
     /// The diff's scroll: the view's own, so the Changes tab's is where it was when it is
     /// shown again.
     pub scroll: ScrollController,
@@ -46,6 +49,7 @@ impl LocalChangesView {
             state: use_state(LocalChangesState::default),
             filter_text: use_state(String::new),
             list_width: use_state(|| LIST_WIDTH),
+            lists_split: use_state(|| cairn_ui::LISTS_SPLIT),
             scroll: use_scroll_controller(ScrollConfig::default),
             cursor: use_state(|| None),
         }
@@ -58,6 +62,7 @@ impl LocalChangesView {
             state: State::create(LocalChangesState::default()),
             filter_text: State::create(String::new()),
             list_width: State::create(LIST_WIDTH),
+            lists_split: State::create(cairn_ui::LISTS_SPLIT),
             scroll: ScrollController::new(0, 0, Vec::new()),
             cursor: State::create(None),
         }

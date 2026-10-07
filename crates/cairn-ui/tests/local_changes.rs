@@ -6,12 +6,13 @@ use std::rc::Rc;
 
 use cairn_model::{
     ChangeList, ChangedEntry, ConflictKind, ConflictedEntry, LocalChanges, RepoPath, Similarity,
-    StagedChange, StatusEntry, UnstagedChange, WorkingTreeStatus,
+    StagedChange, StatusEntry, SubmoduleState, UnstagedChange, WorkingTreeStatus,
 };
 use cairn_ui::{
-    DETAIL_ROW_HEIGHT, FILTERING, LIST_HEADER_HEIGHT, LocalChangesList, NO_PATH_MATCHES,
-    STAGED_CAPTION, ShownFiles, UNSTAGED_CAPTION,
+    DETAIL_ROW_HEIGHT, FILTERING, GLYPH_SIZE, LIST_HEADER_HEIGHT, LocalChangesList,
+    NO_PATH_MATCHES, RefGlyph, STAGED_CAPTION, ShownFiles, UNSTAGED_CAPTION,
 };
+use freya::engine::prelude::{FontCollection, ImageInfo, raster_n32_premul};
 use freya::prelude::*;
 use freya_testing::TestingRunner;
 
@@ -27,6 +28,7 @@ struct Fixture {
     staged: State<ShownFiles>,
     filter: State<String>,
     chosen: State<Option<(ChangeList, usize)>>,
+    split: State<f32>,
 }
 
 type Heard = Rc<RefCell<Vec<(ChangeList, usize)>>>;
@@ -48,6 +50,7 @@ fn launch(changes: LocalChanges) -> (TestingRunner, Fixture, Heard) {
                         fixture.staged,
                         fixture.filter,
                     )
+                    .split(fixture.split)
                     .chosen(*fixture.chosen.read())
                     .on_choose(move |pressed: (ChangeList, usize)| {
                         hearing.borrow_mut().push(pressed);
@@ -64,6 +67,7 @@ fn launch(changes: LocalChanges) -> (TestingRunner, Fixture, Heard) {
                 staged: State::create(ShownFiles::All),
                 filter: State::create(String::new()),
                 chosen: State::create(None),
+                split: State::create(cairn_ui::LISTS_SPLIT),
             })
         },
         1.,
@@ -172,8 +176,8 @@ fn both_lists_draw_their_paths_with_their_badges() {
     for (text, badge, in_staged) in [
         ("old.rs → moved.rs", "R", true),
         ("gone.rs", "D", false),
-        ("new/one.rs", "A", false),
-        ("new/two.rs", "A", false),
+        ("new/one.rs", "+", false),
+        ("new/two.rs", "+", false),
     ] {
         let drawn = row(text);
         assert_eq!(drawn.len(), 1, "{text}");
@@ -190,6 +194,146 @@ fn both_lists_draw_their_paths_with_their_badges() {
     let clash = row("clash.rs");
     assert_eq!(clash.len(), 1);
     assert_eq!(clash[0].1, None, "a conflict drawn with a letter");
+    assert_eq!(
+        glyph_on(&test, clash[0].0),
+        Some(mask_of(RefGlyph::Gone)),
+        "a conflict's badge is not Fork's triangle"
+    );
+}
+
+/// Which pixels of a `GLYPH_SIZE` square a canvas's callback paints.
+fn painted(on_render: &RenderCallback) -> Vec<bool> {
+    let side = GLYPH_SIZE as i32;
+    let mut surface =
+        raster_n32_premul((side, side)).unwrap_or_else(|| panic!("no raster surface"));
+    let mut fonts = FontCollection::new();
+    let style = TextStyleState::default();
+    let mut context = CanvasContext {
+        canvas: surface.canvas(),
+        font_collection: &mut fonts,
+        size: Size2D::new(GLYPH_SIZE, GLYPH_SIZE),
+        text_style_state: &style,
+    };
+    on_render.call(&mut context);
+    let info = ImageInfo::new_n32_premul((side, side), None);
+    let stride = info.min_row_bytes();
+    let mut pixels = vec![0u8; stride * side as usize];
+    assert!(surface.read_pixels(&info, &mut pixels, stride, (0, 0)));
+    (0..side as usize)
+        .flat_map(|y| (0..side as usize).map(move |x| (x, y)))
+        .map(|(x, y)| pixels.get(y * stride + x * 4 + 3).copied().unwrap_or(0) > 96)
+        .collect()
+}
+
+/// What `glyph` paints, as a badge's canvas would.
+fn mask_of(glyph: RefGlyph) -> Vec<bool> {
+    let element: Element = glyph.draw(Color::WHITE).into();
+    let Element::Element { element, .. } = element else {
+        panic!("a glyph is an element");
+    };
+    let canvas = Canvas::try_downcast(&*element).unwrap_or_else(|| panic!("a glyph is a canvas"));
+    let mask = painted(&canvas.on_render);
+    assert!(
+        mask.iter().filter(|p| **p).count() >= 8,
+        "{glyph:?} paints nothing"
+    );
+    mask
+}
+
+/// What the canvas drawn on the row centred at `y` paints, if one is drawn there.
+fn glyph_on(test: &TestingRunner, y: f32) -> Option<Vec<bool>> {
+    let canvases: Vec<(f32, CanvasElement)> = test.find_many(|node, element| {
+        Canvas::try_downcast(element).map(|canvas| (node.layout().area.center().y, canvas))
+    });
+    canvases
+        .into_iter()
+        .find(|(at, _)| (at - y).abs() < 3.)
+        .map(|(_, canvas)| painted(&canvas.on_render))
+}
+
+/// The user's decision (2026-10-07), TC3 and TC4: every kind of change is drawn with Fork's
+/// badge, told by its shape — `M` for a modification and a type change, `+` for an added and an
+/// untracked path, `D`, `R`, `C`, and, painted, the submodule's box and the conflict's triangle,
+/// each badge cell holding exactly the glyph's shape. Caught by: a kind given another's badge,
+/// the Commit tab's letters (`A`, `T`, `S`), or a glyph's cell drawing anything but the glyph
+/// (an empty rect, the other glyph).
+#[test]
+fn every_kind_of_change_draws_its_badges_shape() {
+    let changes = LocalChanges::new(WorkingTreeStatus::Listed(vec![
+        changed("added.rs", Some(StagedChange::Added), None),
+        changed(
+            "copy.rs",
+            Some(StagedChange::Copied {
+                from: RepoPath::from("source.rs"),
+                similarity: Similarity::from_percent(100),
+            }),
+            None,
+        ),
+        changed("deleted.rs", None, Some(UnstagedChange::Deleted)),
+        changed("modified.rs", None, Some(UnstagedChange::Modified)),
+        changed(
+            "renamed.rs",
+            Some(StagedChange::Renamed {
+                from: RepoPath::from("was.rs"),
+                similarity: Similarity::from_percent(90),
+            }),
+            None,
+        ),
+        changed("typed.rs", None, Some(UnstagedChange::TypeChanged)),
+        StatusEntry::Changed(ChangedEntry {
+            path: RepoPath::from("vendor"),
+            staged: None,
+            unstaged: Some(UnstagedChange::Modified),
+            submodule: Some(SubmoduleState {
+                new_commits: true,
+                modified_content: false,
+                untracked_content: false,
+            }),
+        }),
+        StatusEntry::Conflicted(ConflictedEntry {
+            path: RepoPath::from("xclash.rs"),
+            kind: ConflictKind::BothAdded,
+            submodule: None,
+        }),
+        StatusEntry::Untracked(RepoPath::from("zuntracked.rs")),
+    ]));
+    let (test, _, _) = launch(changes);
+    let line = |text: &str| -> (f32, f32) {
+        labels(&test)
+            .into_iter()
+            .find(|(drawn, ..)| drawn == text)
+            .map(|(_, x, y)| (x, y))
+            .unwrap_or_else(|| panic!("{text} is not drawn: {:?}", labels(&test)))
+    };
+    for (text, letter) in [
+        ("added.rs", "+"),
+        ("zuntracked.rs", "+"),
+        ("source.rs → copy.rs", "C"),
+        ("deleted.rs", "D"),
+        ("modified.rs", "M"),
+        ("was.rs → renamed.rs", "R"),
+        ("typed.rs", "M"),
+    ] {
+        let (x, y) = line(text);
+        assert_eq!(badge_of(&test, y, x).as_deref(), Some(letter), "{text}");
+        assert_eq!(
+            glyph_on(&test, y),
+            None,
+            "{text} drew a glyph besides its letter"
+        );
+    }
+    for (text, glyph) in [
+        ("vendor", RefGlyph::Submodule),
+        ("xclash.rs", RefGlyph::Gone),
+    ] {
+        let (x, y) = line(text);
+        assert_eq!(badge_of(&test, y, x), None, "{text} drew a letter");
+        assert_eq!(
+            glyph_on(&test, y),
+            Some(mask_of(glyph)),
+            "{text}'s badge is not {glyph:?}"
+        );
+    }
 }
 
 /// R9.1's order: each list in its paths' order, Unstaged's rows under its heading in that order.
@@ -387,5 +531,39 @@ fn a_status_of_50000_paths_builds_one_viewport_filtered_or_not() {
             .iter()
             .any(|(path, visible)| *visible && *path == last_unstaged),
         "the end of Unstaged is not its last row, {last_unstaged}"
+    );
+}
+
+/// The user's decision (2026-10-07): a draggable splitter between Unstaged and Staged, the
+/// share dragged to written where the caller keeps it. Caught by: two fixed halves (the Staged
+/// heading does not move), or a drag that keeps nothing.
+#[test]
+fn the_splitter_between_the_lists_drags() {
+    let (mut test, fixture, _) = launch(every_kind());
+    let before = y_of(&test, STAGED_CAPTION)[0];
+    let handle = test
+        .find(|node, element| {
+            let area = node.layout().area;
+            Rect::try_downcast(element)
+                .filter(|_| area.height() == ResizableContext::HANDLE_SIZE && area.width() > 300.)
+                .map(|_| f64::from(area.center().y))
+        })
+        .expect("a splitter between the lists");
+    test.press_cursor((200., handle));
+    test.move_cursor((200., handle + 60.));
+    test.sync_and_update();
+    test.move_cursor((200., handle + 100.));
+    test.sync_and_update();
+    test.release_cursor((200., handle + 100.));
+    test.sync_and_update();
+    let after = y_of(&test, STAGED_CAPTION)[0];
+    assert!(
+        after > before + 60.,
+        "the Staged heading moved from {before} to {after}"
+    );
+    assert!(
+        *fixture.split.read() > cairn_ui::LISTS_SPLIT + 10.,
+        "the share dragged to was not kept: {}",
+        fixture.split.read()
     );
 }

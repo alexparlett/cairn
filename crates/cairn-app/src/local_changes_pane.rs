@@ -245,6 +245,7 @@ impl Component for LocalChangesPane {
             readable.map(|state| shown_rows(state, ChangeList::Staged), |_| true),
             view.local.filter_text,
         )
+        .split(view.local.lists_split)
         .chosen(chosen)
         .on_choose(move |(list, row): (ChangeList, usize)| {
             diff_actions::choose_working(list, row, view, choosing.as_deref());

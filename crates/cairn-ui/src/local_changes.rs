@@ -1,12 +1,14 @@
 //! Local Changes' left side (refs-and-status R9.1, R9.5): a filter field, then Unstaged above
-//! Staged, each headed by its name and each one flat, virtualised list of paths with Fork's
-//! badges (`fork-refs-and-status-ui.md` section 6). The diff of the path chosen is the caller's,
-//! on the right.
+//! Staged behind a draggable splitter, each headed by its name and each one flat, virtualised
+//! list of paths with Fork's badges (`fork-refs-and-status-ui.md` section 6). The diff of the
+//! path chosen is the caller's, on the right.
 //!
-//! **A row.** Its badge — the change's letter (`M`, `A` for an added or untracked path, `D`,
-//! `R`, `C`, `T`, `S` for a submodule) or, for a conflicted path, Fork's warning triangle — then
-//! its path, a rename's or a copy's source before it. The badge is coloured as the Commit tab's
-//! letters are, and no two kinds share a shape, so none is told by colour alone.
+//! **A row.** Its badge, then its path, a rename's or a copy's source before it. The badges are
+//! Fork's, told apart by their shape (the user's decision, 2026-10-07): `M` for a modified file
+//! and a type change alike, `+` for an added or untracked one, `D`, `R`, `C`, and, painted as
+//! shapes rather than set in a font, a submodule's box (`RefGlyph::Submodule`) and Fork's
+//! warning triangle for a conflict (`RefGlyph::Gone`). Colour only reinforces the shape
+//! ([`change_badge`]). The Commit tab keeps its own letters.
 //!
 //! **What it asks.** Nothing: a row pressed, or reached with ↑ or ↓ in its focused list, is
 //! reported by its list and its place there, and the caller decides what that shows. Each list
@@ -44,19 +46,36 @@ pub fn list_caption(list: ChangeList) -> &'static str {
     }
 }
 
-/// The letter a change's badge carries; `None` for a conflicted path, whose badge is Fork's
-/// warning triangle, painted.
-pub fn badge_letter(kind: ChangeKind) -> Option<&'static str> {
+/// A row's badge: a letter, or a glyph painted as a shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeBadge {
+    Letter(&'static str),
+    Glyph(RefGlyph),
+}
+
+/// Fork's badge for a kind of change (the user's decision, 2026-10-07): a type change drawn as
+/// a modification, as Fork draws it; an added and an untracked path one `+`; a submodule and a
+/// conflict painted.
+pub fn change_badge(kind: ChangeKind) -> ChangeBadge {
     match kind {
-        ChangeKind::Modified => Some("M"),
-        ChangeKind::Added => Some("A"),
-        ChangeKind::Deleted => Some("D"),
-        ChangeKind::Renamed => Some("R"),
-        ChangeKind::Copied => Some("C"),
-        ChangeKind::TypeChanged => Some("T"),
-        ChangeKind::Submodule => Some("S"),
-        ChangeKind::Conflicted => None,
+        ChangeKind::Modified | ChangeKind::TypeChanged => ChangeBadge::Letter("M"),
+        ChangeKind::Added => ChangeBadge::Letter("+"),
+        ChangeKind::Deleted => ChangeBadge::Letter("D"),
+        ChangeKind::Renamed => ChangeBadge::Letter("R"),
+        ChangeKind::Copied => ChangeBadge::Letter("C"),
+        ChangeKind::Submodule => ChangeBadge::Glyph(RefGlyph::Submodule),
+        ChangeKind::Conflicted => ChangeBadge::Glyph(RefGlyph::Gone),
     }
+}
+
+/// The least a drag leaves either list, in pixels: its heading and a few rows.
+const LIST_MIN_PIXELS: f32 = 80.0;
+
+/// Unstaged's share of the two lists' height, in percent, once dragged to `upper_px` in a split
+/// `split_px` tall (its handle included); `None` while the split is unmeasured.
+fn share_of(upper_px: f32, split_px: f32) -> Option<f32> {
+    let room = split_px - ResizableContext::HANDLE_SIZE;
+    (room > 0. && upper_px.is_finite()).then(|| (upper_px / room * 100.).clamp(0., 100.))
 }
 
 /// A row's text: its path, or its source and its path for a rename or a copy, as the Commit
@@ -75,10 +94,15 @@ pub struct LocalChangesList {
     unstaged: Readable<ShownFiles>,
     staged: Readable<ShownFiles>,
     filter: Writable<String>,
+    /// Unstaged's share of the two lists' height, in percent: the caller's to keep.
+    split: Option<Writable<f32>>,
     chosen: Option<(ChangeList, usize)>,
     on_choose: EventHandler<(ChangeList, usize)>,
     key: DiffKey,
 }
+
+/// Unstaged's share of the two lists' height until the splitter between them is dragged.
+pub const LISTS_SPLIT: f32 = 50.0;
 
 impl LocalChangesList {
     pub fn new(
@@ -92,10 +116,19 @@ impl LocalChangesList {
             unstaged: unstaged.into(),
             staged: staged.into(),
             filter: filter.into(),
+            split: None,
             chosen: None,
             on_choose: EventHandler::new(|_| {}),
             key: DiffKey::None,
         }
+    }
+
+    /// Where the splitter between Unstaged and Staged stands, as Unstaged's share in percent:
+    /// read when the split is laid out, written when it is dragged. Without one the split is
+    /// the component's own, from [`LISTS_SPLIT`].
+    pub fn split(mut self, split: impl Into<Writable<f32>>) -> Self {
+        self.split = Some(split.into());
+        self
     }
 
     /// The path chosen, by its list and its row there: drawn highlighted, and where ↑ and ↓
@@ -139,6 +172,11 @@ impl KeyExt for LocalChangesList {
 impl Component for LocalChangesList {
     fn render(&self) -> impl IntoElement {
         let colours = get_theme_or_default().read().colors().clone();
+        // The split's height as last laid out, which turns a dragged height into a share; and
+        // the share itself when the caller keeps none. Peeked: a measurement redraws nothing.
+        let mut split_height = use_state(|| 0f32);
+        let own_split = use_state(|| LISTS_SPLIT);
+        let mut split: Writable<f32> = self.split.clone().unwrap_or_else(|| own_split.into());
         // Lengths only: nothing here walks the paths.
         let (unstaged, staged, total, waiting) = {
             let changes = self.changes.read();
@@ -185,12 +223,33 @@ impl Component for LocalChangesList {
                 )
                 .into()
         } else {
+            // Peeked: the share only matters when the split is laid out anew.
+            let share = *split.peek();
             rect()
                 .width(Size::fill())
                 .height(Size::flex(1.))
-                .content(Content::Flex)
-                .child(section(ChangeList::Unstaged, &self.unstaged, unstaged))
-                .child(section(ChangeList::Staged, &self.staged, staged))
+                .on_sized(move |e: Event<SizedEventData>| {
+                    split_height.set_if_modified(e.area.height())
+                })
+                .child(
+                    ResizableContainer::new()
+                        .direction(Direction::Vertical)
+                        .panel(
+                            ResizablePanel::new(PanelSize::percent(share))
+                                .min_pixels(LIST_MIN_PIXELS)
+                                .on_resized(move |dragged: f32| {
+                                    if let Some(share) = share_of(dragged, *split_height.peek()) {
+                                        split.set(share);
+                                    }
+                                })
+                                .child(section(ChangeList::Unstaged, &self.unstaged, unstaged)),
+                        )
+                        .panel(
+                            ResizablePanel::new(PanelSize::percent(100. - share))
+                                .min_pixels(LIST_MIN_PIXELS)
+                                .child(section(ChangeList::Staged, &self.staged, staged)),
+                        ),
+                )
                 .into()
         };
         rect()
@@ -216,7 +275,7 @@ impl Component for LocalChangesList {
     }
 }
 
-/// One list under its heading: half the side, its rows virtualised.
+/// One list under its heading, its rows virtualised.
 #[derive(Clone)]
 struct ListSection {
     list: ChangeList,
@@ -274,8 +333,7 @@ impl Component for ListSection {
             list_id,
         };
         rect()
-            .width(Size::fill())
-            .height(Size::flex(1.))
+            .expanded()
             .content(Content::Flex)
             .child(
                 rect()
@@ -401,21 +459,22 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
 /// One path's row: its badge and its text.
 fn change_row(change: &LocalChange<'_>) -> Element {
     let colours = get_theme_or_default().read().colors().clone();
+    // Colour reinforces the shape and never stands in for it.
     let colour = match change.kind {
         ChangeKind::Added => colours.success,
         ChangeKind::Deleted => colours.error,
         ChangeKind::Modified | ChangeKind::TypeChanged | ChangeKind::Conflicted => colours.warning,
         ChangeKind::Renamed | ChangeKind::Copied | ChangeKind::Submodule => colours.info,
     };
-    let badge: Element = match badge_letter(change.kind) {
-        Some(letter) => label()
+    let badge: Element = match change_badge(change.kind) {
+        ChangeBadge::Letter(letter) => label()
             .text(letter)
             .font_size(FONT_SIZE)
             .font_weight(FontWeight::BOLD)
             .color(colour)
             .into(),
         // A canvas repaints only when its layout changes: keyed by what it draws.
-        None => RefGlyph::Gone.draw(colour).key("conflicted").into(),
+        ChangeBadge::Glyph(glyph) => glyph.draw(colour).key(format!("{glyph:?}")).into(),
     };
     rect()
         .horizontal()
@@ -442,38 +501,51 @@ fn change_row(change: &LocalChange<'_>) -> Element {
 mod tests {
     use super::*;
 
-    /// R9.1: each kind of change has a badge no other kind has — a letter, or the conflict's
-    /// triangle — so none is told by colour alone. Caught by: two kinds given one letter, or a
-    /// conflict drawn as a letter another kind carries.
+    /// The user's decision (2026-10-07): Fork's badges, told apart by shape — a type change
+    /// drawn as a modification and an added path as an untracked one (`+`), every other kind a
+    /// badge of its own, the submodule's and the conflict's painted. Caught by: a kind given
+    /// another's badge, or the Commit tab's letters back (`A`, `T`, `S`).
     #[test]
-    fn each_kind_of_change_has_a_badge_of_its_own() {
+    fn each_kind_of_change_has_forks_badge() {
+        use ChangeBadge::{Glyph, Letter};
         let kinds = [
             ChangeKind::Modified,
+            ChangeKind::TypeChanged,
             ChangeKind::Added,
             ChangeKind::Deleted,
             ChangeKind::Renamed,
             ChangeKind::Copied,
-            ChangeKind::TypeChanged,
             ChangeKind::Submodule,
             ChangeKind::Conflicted,
         ];
-        let badges: Vec<Option<&str>> = kinds.iter().map(|kind| badge_letter(*kind)).collect();
+        let badges: Vec<ChangeBadge> = kinds.iter().map(|kind| change_badge(*kind)).collect();
         assert_eq!(
             badges,
             [
-                Some("M"),
-                Some("A"),
-                Some("D"),
-                Some("R"),
-                Some("C"),
-                Some("T"),
-                Some("S"),
-                None
+                Letter("M"),
+                Letter("M"),
+                Letter("+"),
+                Letter("D"),
+                Letter("R"),
+                Letter("C"),
+                Glyph(RefGlyph::Submodule),
+                Glyph(RefGlyph::Gone),
             ]
         );
-        let mut letters: Vec<&str> = badges.iter().flatten().copied().collect();
-        letters.sort_unstable();
-        letters.dedup();
-        assert_eq!(letters.len(), kinds.len() - 1, "two kinds share a letter");
+        let mut distinct = badges.clone();
+        distinct.dedup();
+        assert_eq!(distinct.len(), kinds.len() - 1, "two kinds share a badge");
+    }
+
+    /// The splitter's pixels become Unstaged's share of the room the two lists split, the
+    /// handle left out; an unmeasured split keeps the share as it was. Caught by: the pixels
+    /// stored as the share.
+    #[test]
+    fn a_dragged_height_becomes_unstageds_share() {
+        let split = 400. + ResizableContext::HANDLE_SIZE;
+        assert_eq!(share_of(100., split), Some(25.));
+        assert_eq!(share_of(500., split), Some(100.));
+        assert_eq!(share_of(100., 0.), None);
+        assert_eq!(share_of(f32::NAN, split), None);
     }
 }

@@ -3,6 +3,79 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-07 — merge bar: the user's decisions and the drift fixed
+
+The packet's independent QA returned MERGE BAR: READY, with documentation drift to fix first.
+**The user decided, at the merge bar (2026-10-07):**
+
+1. **Local Changes' "Showing N of M files" counts distinct paths**, matching the sidebar's
+   Local Changes (N), not rows (phase 09's QC3c). Built: the filter's pass counts N on the
+   worker by a merge of the two lists' rows left (`MatchedRows::paths`); M is
+   `LocalChanges::paths`; the window keeps N with the rows
+   (`local_changes_state::shown_paths`) and hands it to the list
+   (`LocalChangesList::shown_paths`). Pins, each red under counting rows (the caption back to
+   `unstaged + staged` of the rows' total, and `MatchedRows::paths` set to the rows' count):
+   `what_a_filter_leaves_is_counted_in_distinct_paths` (model),
+   `the_filters_count_is_of_distinct_paths_a_path_in_both_lists_once` (cairn-ui; "2 of 7"
+   under the mutation) and `the_filters_count_is_the_sidebars_distinct_paths_a_path_in_both_lists_once`
+   (the window through the real filter pass; "Showing 2 of 6 files" under the mutation).
+2. **A failed status read stays the built `Error::GitFailed`** for the whole view, the last
+   lists kept (phase 02 QA's open question). A named state for a partial-clone status failure
+   is an issue to file at teardown (state.md, "Handed to phase 10").
+3. **F5 stays Linux's Refresh chord**; the bare-function-key rule is kept.
+4. **Invalid ref names stay skipped and uncounted** in `RefsSnapshot::unreadable` (phase 01's
+   QC-F6).
+
+Merge-bar findings fixed:
+
+| Finding | Fix |
+| --- | --- |
+| W1 | `docs/design/concurrency.md`: refs and ahead/behind superseded, a running status left to finish, every refresh meanwhile one follow-up, only a close ends one |
+| W2 | `docs/design/engine.md`, the status case: the two-read `--untracked-files=all` scheme (git reads `status.showUntrackedFiles`), the programs a status read starts (fsmonitor hook or daemon, clean filters, `git status` in each submodule), the partial-clone residual (fails closed on 2.44 and later, fetches before) |
+| W3 | `docs/systems/refs.md` and `status.md` point at what draws them |
+| W4 | `history-graph.md` names the snapshot's readers, not phases |
+| W5 | state.md's phase 06 row: done |
+| W6 | `the_refs_and_ahead_behind_reads_leave_the_git_directory_byte_identical` (`crates/cairn-git/tests/refs.rs`): every file under `.git` compared byte for byte around both reads, over `every_kind` with a stash. Red with `std::fs::write` of `.git/index` at the top of `Repository::refs`, and with a write of `.git/logs/HEAD` at the top of `Repository::ahead_behind`; restored after each |
+| W7 | this entry, below |
+| W8 | `diff.md` cites `chords_are_distinct_and_every_bare_one_is_a_function_key` |
+| W9 | `reads/mod.rs`'s list of writing `git stash` subcommands has `export` and `import` (the guard's roster had them) |
+| N1, N2 | PRD R3.4 and R7.1 amended inline with the user's decisions (two reads; `18↓1↑`, a zero left out) |
+| N3 | `git-processes.md`'s reads table names `stash_changes.rs` |
+| N4 | the stash read's residual worded "before 2.44 may lazy-fetch (2.30 and 2.31 list no untracked file)" in `reads/stash_changes.rs`, `diff.md` and `destructive-ops-reviewer.md` (wording only) |
+| N5 | `scripts/git-floor.sh`'s skip roster names `a_copy_into_an_untracked_file_is_read_from_the_untracked_commit`, whose skip now prints its whole name |
+| N6 | `CAIRN_C16_MIB` can only lower C16's 64 MiB (`compact_rows.rs` and `find_tests.rs`) |
+| N10 | state.md: `18↓1↑` unspaced in the phase 07 item; L13's row keeps a parent count |
+| N11 | `refs.md` and `git-processes.md` say as-built what was phase-dated |
+| N12, N7-N9 | carried into state.md, "Handed to phase 10" |
+
+**The user's report at the merge bar (2026-10-07):** in the Commit tab with files opened in
+place (a stash row, Expand All), the last diff row sat flush against the pane's bottom, under
+the horizontal scrollbar. Freya's `VirtualScrollView` (fork `caa46f8`) draws that bar as an
+overlay over the viewport's bottom 16 px and lays out no padding, so the Commit tab's list,
+the diff view, the Changes list and Local Changes' two lists — each can scroll sideways —
+now count empty rows after their last (`crates/cairn-ui/src/end_room.rs`, `with_end_room`, at
+least 20 px in whole rows), built empty and after every indexed row. Pins, each red with the
+room removed: `scrolled_to_the_end_the_last_row_is_clear_of_the_horizontal_scrollbar`
+(diff view, unified and side by side), `scrolled_to_the_end_the_last_file_is_clear_of_the_horizontal_scrollbar`
+(Changes list), `scrolled_to_the_end_each_lists_last_row_is_clear_of_the_horizontal_scrollbar`
+(Local Changes) and `only_a_viewport_of_rows_is_built_however_many_files_are_open` (the
+Commit tab's end one row above the bottom); the diff view's viewport twins count the room's
+empty rows at the end. The history list and the sidebar were not changed.
+
+**W7, phase 07 QA's dismissals RR5-RR7 named with their bounds** (the phase 07 QA entry logged
+them only as "bounded, no defect claimed"; that entry stands as written):
+
+- **RR5** — a row's chips read its labels as it is built: at most 2·chips + 1 label reads
+  (`ref_chips::row_chips`: the current branch's label and each upstream found by a binary
+  search, the labels read in order only until the column's room is spent) — bounded by the
+  column, never by the refs on the commit.
+- **RR6** — `graph_geometry::row_geometry` builds a `HashSet` of the places a row's lines reach,
+  once per row built: O(lanes crossing the row), and a row is built only in the viewport.
+- **RR7** — the title bar's status box, built by `window::status_box` per window render: one
+  `HeadState` clone and two binary searches (the current branch in the snapshot,
+  `RefsSnapshot::find`, and its counts, `RefreshState::ahead_behind_of`) — O(log refs) a
+  render.
+
 ## 2026-10-07 — phase 09 QA
 
 Fresh qa-checklist (NOT READY), responsiveness-reviewer, test-coverage-auditor; adjudicated by

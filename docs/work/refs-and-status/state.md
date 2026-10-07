@@ -2,7 +2,7 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 09 done (Local Changes, read only; C12's window check landing refs, the sidebar and an 11,000-path status), QA adjudicated, confirmed findings fixed and the user's Fork decisions built; phase 10 next.** Integration branch
+**Status: phase 09 done (Local Changes, read only; C12's window check landing refs, the sidebar and an 11,000-path status), QA adjudicated, confirmed findings fixed and the user's Fork decisions built; the packet's independent QA returned MERGE BAR: READY, its documentation drift and notes fixed and the user's four merge-bar decisions recorded and built and the user's end-room report fixed (2026-10-07, below); full gate green; phase 10 next.** Integration branch
 `feature/refs-and-status`, in the worktree `.claude/worktrees/refs-and-status`,
 packet mode.
 
@@ -31,8 +31,8 @@ that most constrain implementation:
   history; a reopen frees its old rows off the UI thread (#52).
 - **Slim rows** (L14): one id, a parent count, shared text and author stores, no
   email, no per-row allocation (phase 04).
-- **Compact rows, no cap** (brainstorm L13): a row keeps its id, parents, text,
-  lane and only the lane changes at it; the drawn edges are derived. A deep find
+- **Compact rows, no cap** (brainstorm L13): a row keeps its id, a parent count, text,
+  lane and only the lane changes at it (slimmed from L13's parents by L14); the drawn edges are derived. A deep find
   pages as planned and retains only compact rows (C16: 64 MiB for all of
   rust-lang/rust, against 1.4 GiB today). A deliberate deviation from Fork, which
   caps its list and does nothing when a ref is past it.
@@ -48,32 +48,6 @@ that most constrain implementation:
 
 ## Open questions
 
-- Decided by the user (2026-10-07, phase 06 QA): **RR1** — the refs stay read on the
-  repository thread (R11.2), so a page asked during a refresh waits behind one refs read;
-  the cost is written in `docs/systems/history-graph.md`, "Refresh". **RR2** — status is
-  coalesced, not superseded: R10.3 amended so a refresh leaves a running `git status` to
-  finish (its answer drawn) and every refresh asked meanwhile is one follow-up; only a close
-  ends one. Ahead/behind and refs still supersede lane by lane.
-
-- For the user's end-of-packet batch (QA finding QC-F6, phase 01): a ref whose name git
-  calls invalid (`refs/heads/bad..name`) is skipped silently, as gix skips it, and not
-  counted in `RefsSnapshot::unreadable`, though git warns `ignoring ref with broken name`.
-  Kept as built; whether it should be counted is the user's call.
-
-- For the user's end-of-packet batch (phase 02 QA; not decided): a failed status read —
-  the partial-clone case among them, where a staged rename needs a blob only the promisor
-  holds — blanks the whole working-tree view, where a failed diff fails one query. Options
-  when Local Changes draws it (phase 09): keep `Error::GitFailed` (as built); a named state
-  classified by the repository's state; retry without rename detection; or let status
-  lazy-fetch.
-- For the user's end-of-packet batch (phase 06; not decided): the Refresh chord is F5 on
-  Linux and ⌘R on macOS, Fork's own (`fork-dev/Docs` `keyboard-shortcuts-windows.md` and
-  `-mac.md`, read 2026-10-06; Linux takes Fork's Windows row). F5 collides with no Linux
-  desktop chord nor any Cairn chord, so it was not a stopping rule; but it is the table's
-  first chord with no modifier, so the table's rule "every chord holds a modifier" was
-  amended to "every chord holds a modifier but a function key's"
-  (`chords_are_distinct_and_every_bare_one_is_a_function_key`). The alternative is Ctrl+R
-  (⌘R's mechanical Linux row).
 - For the user's end-of-packet batch (phase 06; not decided): what reopens the history is
   `RefsSnapshot::walks_as` — refs, their targets and symbolic targets, `HEAD`, the stash list
   — so a refresh that finds only an upstream's configuration or the unreadable count changed
@@ -84,13 +58,6 @@ that most constrain implementation:
   if they differ, open once more from them (the hand-off's first option), rather than drop the
   tip; a failed open forgets its refs, so the next open reads its own and the next refresh
   reopens.
-- Decided by the user (2026-10-07, phase 08 QA): **1** Fork's natural order, folders first
-  (case ignored, numbers as numbers, every level and tags; `main` as `master` not done — the
-  research does not say what it means); **2** a no-upstream branch its own glyph shape
-  (`RefGlyph::LocalOnly`); **3** expansion not remembered across sessions, as built — the
-  research line is ambiguous, an issue to be filed at teardown; **4** counts unspaced
-  `18↓1↑` (sidebar and title bar), closed sections open while filtering, no caption for a
-  section with no match, `origin/HEAD` listed whole.
 - For the user's end-of-packet batch (phase 08; not decided): folders open closed but for the
   current branch's, revealed when it becomes current; a detached `HEAD` row first in Branches;
   a gone upstream as Fork's warning icon alone; stash entries by message; the notices' wording
@@ -99,24 +66,13 @@ that most constrain implementation:
   at teardown); a ninth query lane, `QueryLane::Walk`. Detail in progress.md, phase 08.
 - C11's first-page bar is written as 200 ms because history-graph's A7 has no
   number (L12); the user may revise it at the merge bar.
-- Decided by the user (2026-10-07, phase 09 QA): **1** Local Changes' badges are Fork's, told
-  apart by shape — `+` for added and untracked, `M` for a type change as for a modification, a
-  submodule glyph painted as a shape (`RefGlyph::Submodule`), Fork's triangle for a conflict;
-  colour only reinforces; Local Changes only (the Commit tab keeps its letters). **2** A
-  draggable splitter between Unstaged and Staged, not remembered across sessions. **3** Natural
-  row order (`cairn_model::natural_order`, through `path_order`), untracked mixed in, the search
-  for a chosen path in the same order. **4** The filter field is the only toolbar control; the
-  eye, Hide Untracked Files and the layout menu are issues to file (below).
 - For the user's end-of-packet batch (phase 09; not decided): the count is distinct paths (a
   staged deletion and an untracked file of one name once, R9.2's wording), where phase 08
   counted entries and Fork's is said to equal git status's entries; the view's diff takes the
   Changes tab's options, Entire File included; a refresh re-asks the path chosen, its last diff
   drawn meanwhile, and a path gone from the status chooses the first (a path the filter hides
-  stays chosen, the Changes tab's rule). **QC3c (open):** "Showing N of M files" under Local
-  Changes' filter counts rows — a path in both lists twice — while the sidebar counts distinct
-  paths and the caption says "files": should M match the sidebar's count, or the caption say
-  rows? The status failure question above is drawn as built: the message for the whole view,
-  the last lists kept under it.
+  stays chosen, the Changes tab's rule). (QC3c and the status failure, once here, are decided
+  below.)
 
 - For the user's end-of-packet batch (phase 04; not decided): authors are numbered on
   the window's side — a page names its own authors once and `History::append` adds only
@@ -139,17 +95,13 @@ that most constrain implementation:
   stash's; a stash's subject is the stash list's message, its date the author date, its
   place by committer date; labels in the snapshot's order. Detail and the alternative in
   progress.md.
-- Decided by the user (2026-10-07, phase 07): **Q1** — a stash's changes are asked of `git
-  stash show --raw` itself, the third porcelain read (`reads/stash_changes.rs`), git reading
-  `stash.showIncludeUntracked`; guard `the_porcelain_reads_are_the_three_named_queries`.
-  **Q2 (phase 05 QA's QC4)** — a stash commit filed twice is one row, its newest entry's; the
-  sidebar (phase 08) still lists every entry.
 - For the user's end-of-packet batch (phase 07; not decided): label order (current branch
   first, then local, remote-tracking, tags; Fork's tag position is OPEN 3, git puts tags
   before remotes); compaction by the configured upstream only, read from the refresh's
   snapshot; chips cut by building only what a lower bound of their widths fits; glyphs painted
-  as paths, the generic remote a cloud; the title bar's counts as Fork prints them, `18↓ 1↑`
-  with a zero left out, where R7.1 wrote `↓n ↑m`; `HEAD detached at <short>`, `<name> (no
+  as paths, the generic remote a cloud; the title bar's counts as Fork prints them, `18↓1↑`
+  with a zero left out (unspaced as the user decided at phase 08 QA's 4; R7.1 amended), where
+  R7.1 wrote `↓n ↑m`; `HEAD detached at <short>`, `<name> (no
   commits yet)`, `upstream gone`; the repository named by the opened path's last component; no
   `*` for an unreadable index; the title bar drops the full path; the REFS row drawn in the
   row's lane colour and laid out for the window's width, a stash's REFS its `stash@{n}`; and
@@ -159,6 +111,50 @@ that most constrain implementation:
   pack's mtime through alternates, and a plain `git status` on the bench moved its `.git`
   directory's mtime; no content changed (progress.md). Later phases: scratch clones with
   no alternates, and `GIT_OPTIONAL_LOCKS=0` for any `git` run on the bench.
+
+## Decided by the user (closed open questions)
+
+- **The merge bar (2026-10-07), the user's four decisions:**
+  1. Local Changes' "Showing N of M files" counts DISTINCT PATHS, matching the sidebar's
+     Local Changes (N), not rows (was QC3c): built — the filter's pass counts N on the worker
+     (`MatchedRows::paths`), M is `LocalChanges::paths`; pinned by
+     `what_a_filter_leaves_is_counted_in_distinct_paths`,
+     `the_filters_count_is_of_distinct_paths_a_path_in_both_lists_once` and
+     `the_filters_count_is_the_sidebars_distinct_paths_a_path_in_both_lists_once`, each red
+     under counting rows; `local-changes.md` says so.
+  2. A failed status read stays the built `Error::GitFailed` for the whole view, the last
+     lists kept under it (was phase 02 QA's open question; the partial-clone case among
+     them). A named state for a partial-clone status failure is an issue to file (below).
+  3. F5 stays Linux's Refresh chord (⌘R on macOS); the table's rule that a bare chord must
+     be a function key is kept (`chords_are_distinct_and_every_bare_one_is_a_function_key`).
+  4. A ref whose name git calls invalid (`refs/heads/bad..name`) stays skipped silently and
+     uncounted in `RefsSnapshot::unreadable`, as gix skips it (was QA finding QC-F6, phase 01).
+- Decided by the user (2026-10-07, phase 06 QA): **RR1** — the refs stay read on the
+  repository thread (R11.2), so a page asked during a refresh waits behind one refs read;
+  the cost is written in `docs/systems/history-graph.md`, "Refresh". **RR2** — status is
+  coalesced, not superseded: R10.3 amended so a refresh leaves a running `git status` to
+  finish (its answer drawn) and every refresh asked meanwhile is one follow-up; only a close
+  ends one. Ahead/behind and refs still supersede lane by lane.
+- Decided by the user (2026-10-07, phase 07): **Q1** — a stash's changes are asked of `git
+  stash show --raw` itself, the third porcelain read (`reads/stash_changes.rs`), git reading
+  `stash.showIncludeUntracked`; guard `the_porcelain_reads_are_the_three_named_queries`.
+  **Q2 (phase 05 QA's QC4)** — a stash commit filed twice is one row, its newest entry's; the
+  sidebar (phase 08) still lists every entry.
+- Decided by the user (2026-10-07, phase 08 QA): **1** Fork's natural order, folders first
+  (case ignored, numbers as numbers, every level and tags; `main` as `master` not done — the
+  research does not say what it means); **2** a no-upstream branch its own glyph shape
+  (`RefGlyph::LocalOnly`); **3** expansion not remembered across sessions, as built — the
+  research line is ambiguous, an issue to be filed at teardown; **4** counts unspaced
+  `18↓1↑` (sidebar and title bar), closed sections open while filtering, no caption for a
+  section with no match, `origin/HEAD` listed whole.
+- Decided by the user (2026-10-07, phase 09 QA): **1** Local Changes' badges are Fork's, told
+  apart by shape — `+` for added and untracked, `M` for a type change as for a modification, a
+  submodule glyph painted as a shape (`RefGlyph::Submodule`), Fork's triangle for a conflict;
+  colour only reinforces; Local Changes only (the Commit tab keeps its letters). **2** A
+  draggable splitter between Unstaged and Staged, not remembered across sessions. **3** Natural
+  row order (`cairn_model::natural_order`, through `path_order`), untracked mixed in, the search
+  for a chosen path in the same order. **4** The filter field is the only toolbar control; the
+  eye, Hide Untracked Files and the layout menu are issues to file (below).
 
 ## Handed to phase 06 (done)
 
@@ -208,10 +204,39 @@ each place once; chips stop being built at the column's edge (RR3); labels' orde
 
 ## Handed to phase 10
 
-- Issues to file at teardown, besides those listed above (the user's decision 4, 2026-10-07):
-  Local Changes' toolbar beyond its filter field — Fork's eye (side-by-side quick look), Hide
-  Untracked Files, and the layout menu (tree, list and combined list; Show Ignored Files) —
-  each an issue; the tree view itself is #36 already.
+- Issues to file at teardown (the `file-issue` skill; GitHub while the remote exists), each
+  with its evidence in progress.md:
+  - Local Changes' toolbar beyond its filter field (the user's phase 09 decision 4,
+    2026-10-07) — Fork's eye (side-by-side quick look), Hide Untracked Files, and the layout
+    menu (tree, list and combined list; Show Ignored Files) — each an issue; the tree view
+    itself is #36 already.
+  - Research whether Fork remembers the sidebar's expansion across sessions (the user's
+    phase 08 decision 3: not remembered, as built; the research line is ambiguous).
+  - An early stop for a stash whose base no ref reaches: known today only at the walk's end
+    (phase 08 RR2), it could stop at its base's date.
+  - A named state for a status read that fails in a partial clone (the user's merge-bar
+    decision 2: `Error::GitFailed` for the whole view stays, as built), classified by the
+    repository's state.
+  - A faster ahead/behind on a large divergence (phase 01: about two to three times git's
+    time — 3.02 s against 1.14 s at 169,679 ahead — since gix's hidden frontier reads far more
+    than the divergence and no commit-graph is used so every read can be cancelled).
+  - The flaky `diff::working_tree::*` tests ("changed the git directory"), pre-existing from
+    #59: they pass on a rerun.
+  - `row_finder` could check the history list's index hint first, for an O(1) find of the
+    selected row before its pass over the loaded ids (phase 07 QA's RR2 note).
+  - A tree with an untracked nested repository is read twice on every refresh (phase 02 QA's
+    QC-F3, the accepted cost of the two-read untracked scheme): whether to cache that the
+    second read is needed.
+  - The refs read stays on the repository thread (the user's phase 06 QA RR1), so a history
+    page asked during a refresh waits behind one refs read (measured in
+    `docs/systems/history-graph.md`, "Refresh"): revisit if that wait grows on a repository
+    with many refs.
+  - `RowId` is not in the every-variant guard's roster (merge-bar note N8): a partial read of
+    it (`if let RowId::Commit(..)`) compiles silently once a third kind exists.
+  - `status.renameLimit` has no fixture (merge-bar note N9): the status read passes nothing
+    that overrides it, but no test holds a rename past the limit against git's answer.
+  - `window_check` records C12's frames but asserts no 16.7 ms bar (merge-bar note N7): a
+    frame past it is read from the numbers, not failed.
 
 ## New modules and interfaces
 
@@ -425,6 +450,14 @@ Phase 09 (`docs/systems/local-changes.md` is the as-built account):
   the state tests in `diff_state/working.rs` and `local_changes_state.rs`, two boundary tests in
   `worker/refresh_tests.rs`; `window_check` takes `CAIRN_SCRATCH_REPO`.
 
+Merge bar (`progress.md`, "merge bar"):
+
+- `cairn-model`: `MatchedRows::paths` (the distinct paths a filter left).
+- `cairn-ui`: `LocalChangesList::shown_paths`; `src/end_room.rs` (`END_ROOM`,
+  `SCROLLBAR_THICKNESS`, `with_end_room`), counted after the last row of the Commit tab's
+  list, the diff view, the Changes list and Local Changes' lists.
+- `cairn-app`: `local_changes_state::shown_paths`.
+
 ## Validation status
 
 | Phase | Status |
@@ -434,8 +467,8 @@ Phase 09 (`docs/systems/local-changes.md` is the as-built account):
 | 03 compact rows | implemented: C15 passes (equivalence over the fixtures, the Cairn checkout and every ref of the bench; find 2.26 s against 2.50 s before); K = 64, derived at draw time; numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
 | 04 slim rows | done: C16 passes (comparisons pinned at `4205d5d` over crafted fixtures and the Cairn checkout; 52.6 MiB retained for all of rust-lang/rust from every ref, capacity counted, against 64 MiB; no kept row owns a heap allocation); C15 still passes (equivalence on the bench, find 2.21 s); RR1 closed; numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
 | 05 history from every ref | implemented: C6 passes (walked commits = `git rev-list --branches --remotes --tags HEAD` over whole walks, labels = `git log --decorate=full`, stash rows with and without `--include-untracked`, assigner lane and edge tests); C11 first page from every ref 7.3 ms (8.6 ms with the snapshot read) beside `HEAD`'s 7.7 ms, worst stash look-ahead 21.6 ms; C16 52.67 MiB from the snapshot; C15 equivalence holds; the app still walks from `HEAD`; QA adjudicated, confirmed findings fixed (the walk's open cancellable between tips: 103 ms first page at 50,000 tags, cancelled in 6.3 ms); full gate green |
-| 06 worker and refresh | implemented: C10 passes through the real boundary (`a_refresh_reopens_for_a_stash_a_checkout_and_a_moved_ref_and_for_nothing_else`, the refresh tests) and headless with focus set (`focus_gained_after_a_ref_moved_reopens_the_history_keeping_the_chosen_row`); every pin checked against a named mutation (progress.md); RR2 measured; full gate green; QA pending |
+| 06 worker and refresh | done: C10 passes through the real boundary (`a_refresh_reopens_for_a_stash_a_checkout_and_a_moved_ref_and_for_nothing_else`, the refresh tests) and headless with focus set (`focus_gained_after_a_ref_moved_reopens_the_history_keeping_the_chosen_row`); every pin checked against a named mutation (progress.md); RR2 measured; QA adjudicated, confirmed findings fixed (TC1's fetch test drains the whole refresh; status coalesced, R10.3 amended, the user's RR2; RR1 kept by the user; TC3 handed to phase 08, done); full gate green |
 | 07 labels and toolbar | done: C7 passes (headless: chips, compaction, clipping, ✓, bold `HEAD`, stash chip, REFS, a stash's list against `git stash show --name-status` off and on, on the host's git and both floors); the QA brief's cases pinned; every pin checked against a named mutation (progress.md); RR2's drawing half measured; QA adjudicated, confirmed findings fixed (the title bar names the repository's folder, `Update::Opened`; the stash read's options guarded); full gate green |
 | 08 sidebar | done: C8 passes (headless and through the real boundary; the twins `a_sidebar_of_50000_refs_builds_one_viewport`, `a_folder_of_10000_branches_open_builds_one_viewport`); the QA brief's cases pinned; every pin checked against a named mutation (progress.md); a find of the bench's oldest commit 2.23-2.25 s and 52.67 MiB retained through the boundary, cancelled halfway with no row after the stop; QA adjudicated, confirmed findings fixed (TC1's cancel pinned on lines of commits written for the tests, a stop alone, the list's hint the window's), the user's Fork decisions built; full gate green |
-| 09 local changes | implemented: C9 passes (headless and through the real boundary; the twin `a_status_of_50000_paths_builds_one_viewport_filtered_or_not`); the QA brief's cases pinned; every pin checked against a named mutation (progress.md); C12 measured (every frame under 16.7 ms; an 11,000-path status on a scratch clone, the bench untouched); C11 complete in progress.md; QA adjudicated, confirmed findings fixed (the follow decision pure and pinned, the scratch guard following linked worktrees, badge shapes read pixel for pixel, the filter's mid-pass cancel), the user's Fork decisions built; full gate green |
+| 09 local changes | done: C9 passes (headless and through the real boundary; the twin `a_status_of_50000_paths_builds_one_viewport_filtered_or_not`); the QA brief's cases pinned; every pin checked against a named mutation (progress.md); C12 measured (every frame under 16.7 ms; an 11,000-path status on a scratch clone, the bench untouched); C11 complete in progress.md; QA adjudicated, confirmed findings fixed (the follow decision pure and pinned, the scratch guard following linked worktrees, badge shapes read pixel for pixel, the filter's mid-pass cancel), the user's Fork decisions built; full gate green |
 | 10 QA | not started |

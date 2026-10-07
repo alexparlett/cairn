@@ -68,7 +68,9 @@ pub use repo_path::RepoPath;
 pub use row_labels::{Label, RowLabels};
 pub use rows_page::{PagedCommit, PagedStash, RowsPage};
 pub use secret::Secret;
-pub use sidebar_rows::{Disclosure, SidebarRow, SidebarSection, folder_name, folder_path};
+pub use sidebar_rows::{
+    Disclosure, SidebarRow, SidebarSection, folder_name, folder_path, natural_order,
+};
 pub use status::{
     ChangedEntry, ConflictKind, ConflictedEntry, StagedChange, StatusEntry, SubmoduleState,
     UnreadableIndex, UnstagedChange, WorkingTreeStatus,

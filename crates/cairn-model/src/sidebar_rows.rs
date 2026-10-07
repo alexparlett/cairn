@@ -5,15 +5,20 @@
 //! ref, so a worker's — the window keeps the rows it answers and reads each ref's name from
 //! the snapshot by index as it draws the row.
 //!
-//! At each level of a section, folders come first and then the refs, each in the snapshot's
-//! order (bytewise by name): Fork's "alphabetically, folders first". A ref's name sorts every
-//! name under one folder together — the names between two that start `feature/` start
-//! `feature/` too — so a folder is a run of the refs at its level.
+//! At each level of a section, folders come first and then the refs, each in natural order —
+//! case ignored, a run of digits read as a number, so `b2` comes before `b10` and `Alpha`
+//! before `beta` before `Gamma` ([`natural_order`]): Fork's natural sort, folders first (the
+//! user's decision, 2026-10-07). Tags are listed whole in the same order; stashes in the stash
+//! list's. The snapshot's own order (bytewise by name) sorts every name under one folder
+//! together — the names between two that start `feature/` start `feature/` too — so a folder
+//! is found as a run of the refs at its level, and only then put in its place.
 //!
-//! While the filter holds text every folder is drawn open, so what matches is never hidden
-//! behind a closed one; a closed section stays closed. A detached `HEAD` is the first row
-//! under Branches, as Fork draws it.
+//! While the filter holds text every section and folder is drawn open, so what matches is
+//! never hidden behind a closed one, and a section with no match has no caption (the user's
+//! decision, 2026-10-07). A detached `HEAD` is the first row under Branches, as Fork draws
+//! it.
 
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
 use crate::refs::{HeadState, RefKind, RefsSnapshot};
@@ -165,6 +170,52 @@ fn short_len(name: &str) -> usize {
     crate::RefName::new(name).shorthand().len()
 }
 
+/// Fork's natural order of two names: case ignored, each run of ASCII digits compared as the
+/// number it spells (`b2` before `b10`), everything else character by character as Unicode
+/// lowercases it. Names that differ only in case or in a number's leading zeros are put in
+/// bytewise order, so the order is total.
+pub fn natural_order(one: &str, other: &str) -> Ordering {
+    let (mut a, mut b) = (one, other);
+    loop {
+        match (a.chars().next(), b.chars().next()) {
+            (None, None) => return one.cmp(other),
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
+                let (digits_a, rest_a) = split_digits(a);
+                let (digits_b, rest_b) = split_digits(b);
+                let (value_a, value_b) = (
+                    digits_a.trim_start_matches('0'),
+                    digits_b.trim_start_matches('0'),
+                );
+                let by_value = value_a
+                    .len()
+                    .cmp(&value_b.len())
+                    .then_with(|| value_a.cmp(value_b));
+                if by_value != Ordering::Equal {
+                    return by_value;
+                }
+                (a, b) = (rest_a, rest_b);
+            }
+            (Some(x), Some(y)) => {
+                let by_letter = x.to_lowercase().cmp(y.to_lowercase());
+                if by_letter != Ordering::Equal {
+                    return by_letter;
+                }
+                (a, b) = (&a[x.len_utf8()..], &b[y.len_utf8()..]);
+            }
+        }
+    }
+}
+
+/// `name`'s leading run of ASCII digits, and the rest.
+fn split_digits(name: &str) -> (&str, &str) {
+    let end = name
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(name.len());
+    name.split_at(end)
+}
+
 /// How many entries are laid out between two asks of `keep_going`.
 struct Pass<F> {
     keep_going: F,
@@ -202,7 +253,8 @@ impl RefsSnapshot {
         let filtering = !text.is_empty();
         let mut rows = Vec::new();
         for section in SidebarSection::ALL {
-            let open = disclosure.is_section_open(section);
+            let open = filtering || disclosure.is_section_open(section);
+            let caption = rows.len();
             rows.push(SidebarRow::Section { section, open });
             if !open {
                 continue;
@@ -233,22 +285,34 @@ impl RefsSnapshot {
                                 .is_some_and(|listed| listed.kind == kind)
                         })
                         .collect();
+                    let lay_out = LayOut {
+                        snapshot: self,
+                        disclosure,
+                        filtering,
+                    };
                     if section.has_folders() {
-                        let lay_out = LayOut {
-                            snapshot: self,
-                            disclosure,
-                            filtering,
-                        };
                         lay_out.level(&listed, 0, &mut rows, &mut pass)?;
                     } else {
+                        let mut tags = Vec::with_capacity(listed.len());
                         for index in listed {
                             if !pass.tick() {
                                 return None;
                             }
-                            rows.push(SidebarRow::Ref { index, depth: 0 });
+                            tags.push(index);
                         }
+                        tags.sort_by(|a, b| {
+                            natural_order(lay_out.short_name(*a), lay_out.short_name(*b))
+                        });
+                        rows.extend(
+                            tags.into_iter()
+                                .map(|index| SidebarRow::Ref { index, depth: 0 }),
+                        );
                     }
                 }
+            }
+            // While filtering, a section nothing matched in draws no caption.
+            if filtering && rows.len() == caption + 1 {
+                rows.pop();
             }
         }
         Some(rows)
@@ -262,13 +326,17 @@ struct LayOut<'a> {
 }
 
 impl LayOut<'_> {
-    /// The `depth`th part of the name of the ref at `index`, and whether more parts follow it.
-    fn part(&self, index: u32, depth: usize) -> (&str, bool) {
-        let short = self
-            .snapshot
+    /// The name of the ref at `index` past its namespace.
+    fn short_name(&self, index: u32) -> &str {
+        self.snapshot
             .refs
             .get(index as usize)
-            .map_or("", |listed| listed.name.shorthand());
+            .map_or("", |listed| listed.name.shorthand())
+    }
+
+    /// The `depth`th part of the name of the ref at `index`, and whether more parts follow it.
+    fn part(&self, index: u32, depth: usize) -> (&str, bool) {
+        let short = self.short_name(index);
         let mut parts = short.splitn(depth + 2, '/');
         let part = parts.nth(depth).unwrap_or("");
         (part, parts.next().is_some())
@@ -311,6 +379,13 @@ impl LayOut<'_> {
             folders.push(refs.get(at..end).unwrap_or(&[]));
             at = end;
         }
+        // Folders first, then the refs, each in natural order.
+        let by_part = |a: u32, b: u32| natural_order(self.part(a, depth).0, self.part(b, depth).0);
+        folders.sort_by(|a, b| match (a.first(), b.first()) {
+            (Some(&a), Some(&b)) => by_part(a, b),
+            _ => Ordering::Equal,
+        });
+        leaves.sort_by(|&a, &b| by_part(a, b));
         for folder in folders {
             let Some(&first) = folder.first() else {
                 continue;
@@ -466,14 +541,17 @@ mod tests {
         );
     }
 
-    /// R8.3: the filter keeps the refs whose name holds the text and the stashes whose
-    /// message does, and draws every folder open so a match is never hidden; a closed section
-    /// stays closed, its caption drawn. Caught by: matches left inside closed folders, a
-    /// closed section opened by typing, or a folder drawn with nothing in it.
+    /// R8.3 and the user's decision (2026-10-07): the filter keeps the refs whose name holds
+    /// the text and the stashes whose message does, and draws every section and folder open —
+    /// a closed one too — so a match is never hidden; a section nothing matched in draws no
+    /// caption. Caught by: matches left inside a closed folder or section, or a caption drawn
+    /// over nothing.
     #[test]
-    fn a_filter_keeps_what_matches_with_every_folder_open() {
+    fn a_filter_keeps_what_matches_with_every_section_and_folder_open() {
+        let mut names = NAMES.to_vec();
+        names.push("refs/tags/login-v1");
         let snapshot = snapshot(
-            NAMES,
+            &names,
             HeadState::Branch(RefName::new("refs/heads/main")),
             &["On main: login wip"],
         );
@@ -492,11 +570,84 @@ mod tests {
                 "origin/ open",
                 "  feature/ open",
                 "    refs/remotes/origin/feature/login",
-                "[Tags]",
+                "[Tags open]",
+                "refs/tags/login-v1",
                 "[Stashes open]",
                 "stash On main: login wip",
             ]
         );
+        let rows = snapshot.sidebar_rows("v1.0", &disclosure, || true).unwrap();
+        assert_eq!(
+            drawn(&snapshot, &rows),
+            ["[Tags open]", "refs/tags/v1.0"],
+            "a section nothing matched in drew its caption"
+        );
+        // With no text, the closed section is closed again.
+        let rows = snapshot.sidebar_rows("", &disclosure, || true).unwrap();
+        assert!(drawn(&snapshot, &rows).contains(&"[Tags]".to_owned()));
+    }
+
+    /// The user's decision (2026-10-07): Fork's natural order, folders first — at each level
+    /// folders, then refs, each with case ignored and numbers read as numbers; tags the same.
+    /// Caught by: bytewise order (`Gamma` before `alpha`, `b10` before `b2`), or folders mixed
+    /// in among the refs.
+    #[test]
+    fn each_level_is_in_natural_order_folders_first() {
+        let snapshot = snapshot(
+            &[
+                "refs/heads/b10",
+                "refs/heads/b2",
+                "refs/heads/Gamma",
+                "refs/heads/alpha",
+                "refs/heads/Beta",
+                "refs/heads/Zone/x",
+                "refs/heads/area/y",
+                "refs/tags/v1.10",
+                "refs/tags/V1.2",
+                "refs/tags/v1.9",
+            ],
+            HeadState::Branch(RefName::new("refs/heads/alpha")),
+            &[],
+        );
+        let rows = snapshot
+            .sidebar_rows("", &Disclosure::default(), || true)
+            .unwrap();
+        assert_eq!(
+            drawn(&snapshot, &rows),
+            [
+                "[Branches open]",
+                "area/",
+                "Zone/",
+                "refs/heads/alpha",
+                "refs/heads/b2",
+                "refs/heads/b10",
+                "refs/heads/Beta",
+                "refs/heads/Gamma",
+                "[Remotes open]",
+                "[Tags open]",
+                "refs/tags/V1.2",
+                "refs/tags/v1.9",
+                "refs/tags/v1.10",
+                "[Stashes open]",
+            ]
+        );
+    }
+
+    /// The order itself: case ignored, a digit run read as its number, and a total order for
+    /// names alike but for case or leading zeros. Caught by: a bytewise comparison, digits
+    /// compared as text, or two different names called equal.
+    #[test]
+    fn natural_order_reads_numbers_as_numbers_and_ignores_case() {
+        use std::cmp::Ordering::{Greater, Less};
+        assert_eq!(natural_order("b2", "b10"), Less);
+        assert_eq!(natural_order("b10", "b9"), Greater);
+        assert_eq!(natural_order("alpha", "Beta"), Less);
+        assert_eq!(natural_order("Gamma", "beta"), Greater);
+        assert_eq!(natural_order("release-2", "release-10"), Less);
+        assert_eq!(natural_order("v1.2.3", "v1.10.0"), Less);
+        assert_eq!(natural_order("a", "a1"), Less);
+        assert_eq!(natural_order("Main", "main"), "Main".cmp("main"));
+        assert_eq!(natural_order("a01", "a1"), "a01".cmp("a1"));
     }
 
     /// Fork's detached `HEAD`: the first row under Branches, kept by a filter that `HEAD`

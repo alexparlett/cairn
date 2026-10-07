@@ -2,7 +2,7 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 07 done (chips on rows, stash rows, the REFS row, a stash's changes as `git stash show` lists them, the title bar), QA adjudicated and confirmed findings fixed; phase 08 next.** Integration branch
+**Status: phase 08 implemented (the sidebar, its filter on the repository thread, a pressed ref found by paging the held walk), full gate green; its QA pending (the coordinator's); phase 09 next.** Integration branch
 `feature/refs-and-status`, in the worktree `.claude/worktrees/refs-and-status`,
 packet mode.
 
@@ -84,6 +84,15 @@ that most constrain implementation:
   if they differ, open once more from them (the hand-off's first option), rather than drop the
   tip; a failed open forgets its refs, so the next open reads its own and the next refresh
   reopens.
+- For the user's end-of-packet batch (phase 08; not decided): folders first at each level
+  (Fork's "alphabetically, folders first" option; its default is not recorded); folders open
+  closed but for the current branch's, revealed when it becomes current; the filter opens
+  every folder and leaves a closed section closed, every caption drawn; a detached `HEAD` row
+  first in Branches; counts as the title bar prints them; a gone upstream as Fork's warning
+  icon alone; no greyed icon for a branch with no upstream (colour alone); stash entries by
+  message; the notices' wording and place; any scroll of the list supersedes a find; a find's
+  page is 512 rows; a stash with no row is known only at the walk's end; a ninth query lane,
+  `QueryLane::Walk`. Detail in progress.md, phase 08.
 - C11's first-page bar is written as 200 ms because history-graph's A7 has no
   number (L12); the user may revise it at the merge bar.
 
@@ -137,12 +146,12 @@ walk error arrives from the first page; the stale tip re-read and reopened once;
 `History::with_author_capacity` with its model test; the reopen's rows freed on a worker; the
 fetch's `reload_if` comparison and `Repository::ref_tips` gone.
 
-## Handed to phase 08
+## Handed to phase 08 (done)
 
-- Phase 06 QA's TC3: the phase that first submits `Request::FilterRefs` adds a boundary test
-  of the ref-filter lane — an answer arrives, a superseded one is dropped, and one superseded
-  mid-match stops (the `|| true` keep-going, a dropped `is_current` and a `None` epoch each
-  slip today, since nothing asks the lane).
+- Phase 06 QA's TC3: done — `the_sidebars_rows_are_answered_on_a_worker_and_a_newer_ask_supersedes_the_older`
+  (red with the answer sent under no epoch) and `a_sidebar_ask_superseded_mid_pass_stops_and_sends_nothing`
+  (red with `|| true`); the dropped pre-pass `is_current` is an equivalent mutant, since
+  `keep_going` is asked before the first entry (progress.md, phase 08).
 
 ## Handed to phase 07 (done)
 
@@ -153,17 +162,26 @@ sidebar and Local Changes); RR2's drawing half measured, and its cost removed by
 each place once; chips stop being built at the column's edge (RR3); labels' order decided
 (batched above); the stash row's R6.2 Commit and Changes built on the user's Q1, QC4 on Q2.
 
-## Handed to phase 08 (from 07)
+## Handed to phase 08 (from 07, done)
 
-- The sidebar's chips and glyphs: `cairn_ui::{Chip, ChipKind, RefGlyph, chip_element, tint}`
-  draw a ref as the rows do; `RefGlyph::Current` and `RefGlyph::Branch` are there for the
-  current branch's mark.
-- `RefreshState::ahead_behind()` (each branch's counts, for the sidebar's arrows) and
-  `RefreshState::failure` still carry `expect(dead_code)`; no view says a failed refresh yet
-  — the title bar draws the last answer it has.
-- A stash's sidebar entry lists every entry, a duplicate commit's included; pressing one
-  selects its row (one per commit, its newest entry's) or, with no row, asks
-  `Comparison::Stash` of it.
+- The glyphs: the sidebar draws `RefGlyph` (with `Folder`, `Gone`, `Opened`, `Closed` added)
+  and `counts_text`; Fork's sidebar draws icons, not chips, so `chip_element` is not used
+  there.
+- `RefreshState::ahead_behind()` is the sidebar's counts (now shared, `BranchCounts`), and
+  `RefreshState::failure(Refreshed::Refs)` is said under the sidebar's filter; neither carries
+  `expect(dead_code)` now.
+- Every stash entry is listed, a duplicate commit's included; pressing one selects its row
+  (found by its stash commit, whichever entry) or, with no row, shows `Comparison::Stash` with
+  no row selected and says it is not in the graph.
+
+## Handed to phase 09
+
+- Local Changes' content: `MainView::LocalChanges` draws `window::LOCAL_CHANGES_PLACEHOLDER`
+  in the main region; phase 09 puts its lists there. `sidebar_pane::local_changes_count` is
+  R9.2's count (the paths status listed); `RefreshState::failure(Refreshed::Status)` is there
+  for Local Changes to say.
+- C12's `window_check` should land the sidebar beside the history (it draws today with
+  `SidebarView::created()`, nothing answered).
 
 ## New modules and interfaces
 
@@ -318,6 +336,32 @@ Phase 07 (`docs/systems/history-graph.md`, "Chips on a row" and "The title bar";
 - Tests: `crates/cairn-ui/tests/ref_chips.rs`, `crates/cairn-ui/tests/drawn_lanes.rs` (the
   `#[ignore]`d reporter), `crates/cairn-git/tests/diff/stash.rs`.
 
+Phase 08 (`docs/systems/sidebar.md` is the as-built account):
+
+- `cairn-model`: `src/sidebar_rows.rs` — `SidebarRow` (`Section`, `Folder { first, depth,
+  open }`, `Ref { index, depth }`, `DetachedHead`, `Stash { index }`), `SidebarSection`
+  (`ALL`), `Disclosure` (`is_section_open`, `is_folder_open`, `toggle_section`,
+  `toggle_folder`, `reveal`), `RefsSnapshot::sidebar_rows`, `folder_name`, `folder_path`;
+  `RowId::oid`; `History::labelled_position` (and a kept `HEAD` row).
+- `cairn-ui`: `src/sidebar.rs` — `Sidebar`, `SidebarRefs`, `SidebarTarget` (`of`),
+  `MainView`, `BranchCounts`, `DrawnRow`, `drawn_row`, `local_changes_text`,
+  `section_caption`, `SIDEBAR_ROW_HEIGHT`, `SIDEBAR_INDENT`, the captions; `RefGlyph::{Folder,
+  Gone, Opened, Closed}`.
+- `cairn-app`: `QueryLane::Walk`; `Request::{FindRow { target, rows }, StopFinding}`,
+  `Request::FilterRefs { refs, text, disclosure }`, `Update::FilteredRefs { refs, text, rows
+  }`; `Retired::sidebar`; `routing::Page::{Open { rows, walk }, Find, Stop}`,
+  `Routed::OpenHistory`; `HistoryLane::{find_page, replace_walk}`, `history_lane::Finding`;
+  `pool::sidebar_rows`; `serve`'s find step between jobs; `View::sidebar` (`SidebarView`:
+  `state`, `filter_text`, `main`, `width`, `finding`); `sidebar_state.rs` (`SidebarState`,
+  `SIDEBAR_WIDTH`), `sidebar_pane.rs` (`SidebarPane`, `local_changes_count`), `ref_find.rs`
+  (`press`, `pages_arrived`, `superseded`, `row_chosen`, `reopened`, `failed`, `Find`,
+  `FIND_PAGE_ROWS`, the notices); `Progress::stopped_finding`; `window::beside`,
+  `LOCAL_CHANGES_PLACEHOLDER`; `RefreshState::ahead_behind` now `Option<&BranchCounts>`.
+- Tests: `crates/cairn-ui/tests/sidebar.rs`, `crates/cairn-app/src/sidebar_tests.rs`,
+  `crates/cairn-app/src/worker/find_tests.rs` (with the `#[ignore]`d
+  `measures_a_find_through_the_boundary`); window tests run in a window as wide again as the
+  sidebar (`LEFT`).
+
 ## Validation status
 
 | Phase | Status |
@@ -329,6 +373,6 @@ Phase 07 (`docs/systems/history-graph.md`, "Chips on a row" and "The title bar";
 | 05 history from every ref | implemented: C6 passes (walked commits = `git rev-list --branches --remotes --tags HEAD` over whole walks, labels = `git log --decorate=full`, stash rows with and without `--include-untracked`, assigner lane and edge tests); C11 first page from every ref 7.3 ms (8.6 ms with the snapshot read) beside `HEAD`'s 7.7 ms, worst stash look-ahead 21.6 ms; C16 52.67 MiB from the snapshot; C15 equivalence holds; the app still walks from `HEAD`; QA adjudicated, confirmed findings fixed (the walk's open cancellable between tips: 103 ms first page at 50,000 tags, cancelled in 6.3 ms); full gate green |
 | 06 worker and refresh | implemented: C10 passes through the real boundary (`a_refresh_reopens_for_a_stash_a_checkout_and_a_moved_ref_and_for_nothing_else`, the refresh tests) and headless with focus set (`focus_gained_after_a_ref_moved_reopens_the_history_keeping_the_chosen_row`); every pin checked against a named mutation (progress.md); RR2 measured; full gate green; QA pending |
 | 07 labels and toolbar | done: C7 passes (headless: chips, compaction, clipping, ✓, bold `HEAD`, stash chip, REFS, a stash's list against `git stash show --name-status` off and on, on the host's git and both floors); the QA brief's cases pinned; every pin checked against a named mutation (progress.md); RR2's drawing half measured; QA adjudicated, confirmed findings fixed (the title bar names the repository's folder, `Update::Opened`; the stash read's options guarded); full gate green |
-| 08 sidebar | not started |
+| 08 sidebar | implemented: C8 passes (headless and through the real boundary; the twins `a_sidebar_of_50000_refs_builds_one_viewport`, `a_folder_of_10000_branches_open_builds_one_viewport`); the QA brief's cases pinned; every pin checked against a named mutation (progress.md); a find of the bench's oldest commit 2.23-2.25 s and 52.67 MiB retained through the boundary, cancelled halfway with no row after the stop; full gate green; QA pending |
 | 09 local changes | not started |
 | 10 QA | not started |

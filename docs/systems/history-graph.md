@@ -496,7 +496,7 @@ FILE, and it is a guard, not a convention — see below.
   `worker/wake.rs`, a one-slot latch a worker sets. There is no timer and no
   async-runtime dependency.
 - **Epochs are numbered per lane** (`worker/epoch.rs`, PRD R4.1, refs-and-status
-  R11.1): `QueryLane` is history, changes, file diff, file filter, refs,
+  R11.1): `QueryLane` is history, walk, changes, file diff, file filter, refs,
   ahead/behind, status or ref filter, and a new query supersedes the older ones in
   its own lane only — except that a changes query also supersedes the file-diff
   lane (`QueryLane::supersedes`), since a file of the commit that was selected is
@@ -505,7 +505,12 @@ FILE, and it is a guard, not a convention — see below.
   one ("Refresh", below). So a scroll never cancels a diff, a selection
   never cancels a scroll, and an operation, numbered in no lane, supersedes
   nothing (`each_lane_supersedes_itself_and_a_changes_query_the_file_diff_too`;
-  through the real boundary, `crates/cairn-app/src/worker/diff_tests.rs`).
+  through the real boundary, `crates/cairn-app/src/worker/diff_tests.rs`). The
+  history has two: its query lane, which an open, a scroll's page, a find in the
+  sidebar and its stop are numbered in, and its walk lane, which only an open
+  moves and every page of rows is answered under — so a page a superseded find had
+  laid out still arrives, and a reopen's replaced walk's pages do not
+  (`docs/systems/sidebar.md`, "Pressing an entry").
 - **The epoch IS the cancel signal.** `Superseded` (`worker/epoch.rs`)
   implements `cairn_git::Cancel` as "is my epoch still current in its lane", so
   superseding a request stops its walk at the next commit rather than

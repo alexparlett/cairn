@@ -60,9 +60,11 @@ that moves only a ref outside those namespaces (`refs/notes/`, `refs/pull/`,
 
 `RefsSnapshot::matching` is the sidebar's filter (R8.3): the refs whose name past its
 namespace, and the stashes whose message, hold the text, case ignored as the Changes tab's
-file filter ignores it (`src/text_filter.rs`, shared by both); a pass over every ref, run
-on the repository thread in a lane of its own
-(`the_sidebar_filter_keeps_the_names_that_hold_its_text`).
+file filter ignores it (`src/text_filter.rs`, shared by both)
+(`the_sidebar_filter_keeps_the_names_that_hold_its_text`). `RefsSnapshot::sidebar_rows`
+lays the sidebar's rows out from what it keeps — sections, folders split at `/`, what is
+open — in one pass over every ref, run on the repository thread in a lane of its own
+(`docs/systems/sidebar.md`).
 
 ## The five parity rules
 

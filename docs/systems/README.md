@@ -21,3 +21,6 @@ contract. Each is kept current in the same change that invalidates it.
   five rules that make gix's answer git's, each branch's upstream, the stash list,
   ahead and behind, and the repositories refused at open because their refs are not
   files.
+- `sidebar.md` — the window's sidebar: Local Changes and All Commits, the filter,
+  the sections of refs and their folders laid out on a worker, and pressing an
+  entry — its row selected, or found by paging the history's walk.

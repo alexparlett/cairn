@@ -3,6 +3,106 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-07 — phase 08: the sidebar, its filter, and finding a ref
+
+Packet mode, on `feature/refs-and-status`. QA pending (the coordinator's, fresh reviewers).
+
+**Shipped.** The sidebar left of the main region behind a draggable splitter: Local Changes
+(N) and All Commits, which switch the main region (Local Changes a placeholder for phase 09);
+a filter box; Branches, Remotes, Tags and Stashes in one `VirtualScrollView`, branches and
+remotes in folders split at `/`, folders first, the current branch's folders revealed when
+it becomes current, a detached `HEAD` the first branch row; the current branch's check mark
+and bold, each branch's counts (`counts_text`), Fork's warning icon for a gone upstream
+(beside the check mark on the current branch); a press's notice under the filter. The rows
+are `cairn_model::SidebarRow`s laid out on the repository thread (`RefsSnapshot::sidebar_rows`,
+`Request::FilterRefs` now carrying the `Disclosure`, `Update::FilteredRefs` the rows and their
+snapshot); the window keeps them (`sidebar_state.rs`), freeing replaced ones on a worker
+(`Retired::sidebar`). Pressing a ref (`ref_find.rs`): its row selected and revealed — looked up
+among the labelled, stash and `HEAD` rows (`History::labelled_position`) — or found by
+`Request::FindRow`, paging the held walk 512 rows a page on the repository thread, one page
+whenever no other job waits; `Request::StopFinding` for a scroll (a side effect on the list's
+scroll position), a row chosen, or a row found in a page; a reopen re-asks the find. Pages are
+answered under a new lane's number, `QueryLane::Walk`, which only an open moves, so a
+superseded find's pages still arrive; an open superseded before it started still lets go of
+the old walk (`HistoryLane::replace_walk`). A tag on a tree says so at once; a stash with no
+row, at the walk's end, shows its changes with no row selected. `RefreshState` keeps
+ahead/behind shared (`BranchCounts`), and both its `expect(dead_code)`s are gone.
+
+**C8 and the QA brief, each pinned, each pin checked to fail under a named mutation** (one
+edit, the named tests run, the file restored):
+
+| Case | Pin | Mutation it fails under |
+| --- | --- | --- |
+| Sections in Fork's order, folders at `/`, folders first, closed folders hide | `sections_come_in_forks_order_and_branches_and_remotes_fold_at_slashes`; headless `the_sidebar_draws_its_sections_in_forks_order_with_forks_marks` | leaves laid out before folders; a closed folder's refs laid out |
+| The filter opens every folder, a closed section stays closed | `a_filter_keeps_what_matches_with_every_folder_open` | `filtering` dropped from the folder's `open` |
+| Current ✓ and bold, counts, gone, kinds' glyphs | `each_entry_draws_its_kinds_glyph`; the headless order test | gone drawn as a branch; `bold: false`; the current branch's `warning: false` |
+| 50,000 refs build one viewport (C8, the twin) | `a_sidebar_of_50000_refs_builds_one_viewport` | the list a `ScrollView` of every row (50,000 built) |
+| A folder of 10,000 open builds one viewport (QA brief) | `a_folder_of_10000_branches_open_builds_one_viewport` | the same (10,000 built) |
+| A loaded ref selected and revealed, nothing paged | `pressing_a_loaded_ref_selects_its_row_and_brings_it_into_view` | the loaded lookup skipped; `labelled_position` answering `None` |
+| A ref past the loaded rows found by paging, "Finding…", stopped once found | `pressing_a_ref_past_the_loaded_rows_finds_it_by_paging`; worker `a_find_pages_the_walk_until_a_page_holds_the_row_and_no_further` | no `StopFinding` on found; the worker paging on past a found row |
+| Two quick presses draw only the second (QA brief) | `two_quick_presses_draw_only_the_second`; worker `a_second_find_supersedes_the_first_and_no_page_is_lost` | the first find kept over the second |
+| A scroll supersedes a find (QA brief) | `a_scroll_of_the_list_supersedes_a_find`; worker `a_stopped_find_leaves_the_walk_for_the_next_page` | the scroll effect never stopping |
+| A row chosen supersedes a find | `a_row_chosen_during_a_find_supersedes_it` | `row_chosen` removed from `on_select` |
+| The list's end asks no page during a find | `a_find_is_not_superseded_by_the_list_reaching_its_end` | the `on_reach_end` guard removed |
+| A superseded find's laid-out pages still arrive | `the_pages_a_find_laid_out_before_it_was_stopped_still_arrive` | pages sent under the query's epoch |
+| An open superseded before it ran replaces the walk | `a_find_pages_the_walk_until_a_page_holds_the_row_and_no_further` and three more | `replace_walk` not called (four find tests time out) |
+| A reopen re-asks the find | `a_reopen_during_a_find_asks_it_again_of_the_new_walk` | `ref_find::reopened` not called |
+| A tag on a tree says so, pages nothing | `a_tag_on_a_tree_says_it_is_not_in_the_graph` | (asserts no `FindRow` and the notice) |
+| A stash with no row: changes shown, says so | `a_stash_with_no_row_shows_its_changes_and_says_it_is_not_in_the_graph`; worker `a_find_for_a_row_the_walk_never_reaches_ends_with_the_walk` | the stash's `selection::choose` skipped; the complete check skipped |
+| The filter on a worker, the answer drawn, replaced rows freed off the UI thread (QA brief) | `typing_in_the_sidebars_filter_asks_a_worker_and_draws_its_answer` | the pane's side effect never submitting |
+| TC3: an answer arrives, a superseded one is dropped, one superseded mid-pass stops | `the_sidebars_rows_are_answered_on_a_worker_and_a_newer_ask_supersedes_the_older`; `a_sidebar_ask_superseded_mid_pass_stops_and_sends_nothing` | the answer sent under no epoch; `|| true` keep-going |
+| The find's cancel is the epoch | `superseding_a_request_stops_the_walk_that_is_serving_it` (reworked: pages are now the walk's, so an open run to its end arrives whole, and only the next page's two rows say the walk stopped) | `next_page` given a fresh `CancelSignal` |
+| The current branch's folders revealed only when it becomes current | `the_current_branchs_folders_open_when_it_becomes_current` | revealed on every refresh |
+| `labelled_position` covers stashes and `HEAD`, scans no unlabelled row | `a_labelled_row_is_found_among_the_labelled_rows_alone` | the stashes' pass removed; the `HEAD` row removed |
+
+Equivalent mutants, noted: the serve loop's `is_current` check before each find page and
+`Page::Stop` clearing `finding` (a stale find's page is cancelled by its own epoch at its
+first poll and sends nothing); the ref filter's pre-pass `is_current` (`keep_going` is asked
+before the first entry).
+
+**Measured** — `measures_a_find_through_the_boundary` (`#[ignore]`d,
+`crates/cairn-app/src/worker/find_tests.rs`), release, warm, median of seven after a
+warm-up, `~/Development/bench/rust` at `c999cef531e` (read only: its `.git` listing and the
+two directories' mtimes identical before and after every run), AMD Ryzen 7 9800X3D, Linux
+7.2.8-2-cachyos. Through the real boundary — the repository thread paging the held walk 512
+rows a find page, every page appended to one `History` as the window appends it:
+
+| Find | Row | Median | Range | Rows kept | Retained (capacity) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| the oldest commit, `c01efc669f0` (the walk's last row) | 345,544 | **2,227-2,250 ms** over three runs | 2,213-2,285 | 345,545 | **52.67 MiB** (159 B/row) |
+| `refs/tags/release-0.1` (early history) | 337,965 | **2,208 ms** | 2,191-2,214 | 337,984 | 51.54 MiB |
+
+Against C15's 10% over 2.4 s (2.64 s) and C16's 64 MiB: met, neither stopping rule hit; the
+same as the engine-only reporter's 2,265 ms / 52.67 MiB (phase 05), so the boundary adds
+nothing measurable. **Cancel**: a find stopped halfway (at 1.1 s, 155-160k rows kept), as a
+scroll stops it: no row arrived after the stop — the page being walked was cancelled at its
+next commit and kept in the session — and the next page asked began exactly at the row after
+the last one kept. The press's lookup among the labelled rows of a 345,545-row history: under
+a microsecond (a whole-history id scan, the first version, was 4.75 ms on the UI thread, and
+was replaced by `History::labelled_position`).
+
+**Decided and batched for the user (not approved):** folders first at each level, each in the
+snapshot's (bytewise) order — Fork's "alphabetically, folders first" option, its default not
+recorded; folders open closed, the current branch's opened when it becomes current (first
+snapshot, a checkout) and expansion not remembered across sessions; while filtering every
+folder is open, a closed section stays closed, and every section's caption is drawn even when
+empty; a detached `HEAD` is a `HEAD` row first under Branches with the check mark, bold; the
+counts printed as the title bar prints them (Fork's Mac order, behind first); the gone
+upstream as Fork's warning icon alone (in place of the branch icon; beside the check mark on
+the current branch); Fork's greyed icon for a branch with no upstream not drawn (colour
+alone); `Local Changes (N)` with N the paths status listed, the count left out at zero or
+before a status; stash entries by their message; `origin/HEAD` listed as `HEAD` under its
+remote, as git lists it; the notices' wording ("Finding <ref>…", "<ref> is not in the
+graph", "<tag> names no commit, so it is not in the graph") and place (under the filter); the
+refs read's failure said there too; a press returns the main region to the history; any move
+of the list's scroll position supersedes a find, and a row chosen in the list lets go of the
+entry pressed; a find's page is 512 rows (up to 511 rows kept past the target); a stash with
+no row is known so only at the walk's end (its press pages the whole history first, 2.2 s on
+the bench); a reopen during a find asks it again of the new walk; a ninth query lane,
+`QueryLane::Walk`; the sidebar 240 px wide until dragged, at least 140, the main region at
+least 240; and pressing looks a row up among labelled rows only (a ref moved since the walk
+began, until the refresh's reopen, pages the walk).
+
 ## 2026-10-07 — phase 07 QA
 
 Fresh qa-checklist (NOT READY on QC1), test-coverage-auditor, responsiveness-reviewer,

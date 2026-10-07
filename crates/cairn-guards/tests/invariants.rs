@@ -1850,9 +1850,34 @@ const CONFIG_READ_FILE: &str = "crates/cairn-git/src/reads/fetch_settings.rs";
 const STASH_READ_FILE: &str = "crates/cairn-git/src/reads/stash_changes.rs";
 
 /// `git stash`'s subcommands but `show` (and `list`, which reads): each writes a stash,
-/// the working tree or a branch, and none may be a literal anywhere in `reads/`.
+/// the working tree, a branch or a ref (`export` writes a ref, `import` the stash), and none
+/// may be a literal anywhere in `reads/`.
 const STASH_WRITING_SUBCOMMANDS: &[&str] = &[
-    "push", "pop", "apply", "drop", "store", "clear", "create", "branch", "save",
+    "push", "pop", "apply", "drop", "store", "clear", "create", "branch", "save", "export",
+    "import",
+];
+
+/// Every option the `git stash show` read may pass: the raw form, and the refusals of every
+/// program and presentation setting porcelain would otherwise read. Any literal of
+/// [`STASH_READ_FILE`]'s production code that starts with `-` must be one of these, and each
+/// of [`STASH_SHOW_REQUIRED`] must be there: no patch (`-p`, which could run textconv or an
+/// external diff), and no untracked option (`-u`, `--include-untracked`,
+/// `--only-untracked`), since git reads `stash.showIncludeUntracked` itself.
+const STASH_SHOW_OPTIONS: &[&str] = &[
+    "--raw",
+    "-z",
+    "--no-abbrev",
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-relative",
+    "--end-of-options",
+];
+const STASH_SHOW_REQUIRED: &[&str] = &[
+    "--raw",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--end-of-options",
 ];
 
 /// Every option the `git config` read may pass: the query form, and nothing that chooses
@@ -1892,8 +1917,8 @@ const DIFF_ATTRIBUTE_LINES: &[(&str, &str)] = &[
     ),
 ];
 
-/// What the reads of `reads/` say about the two porcelain verbs, as `path:line ..` for each
-/// way they break the two accepted exceptions. `diff`: the exact literal `"diff"` (plain,
+/// What the reads of `reads/` say about the three porcelain verbs, as `path:line ..` for each
+/// way they break the three accepted exceptions. `diff`: the exact literal `"diff"` (plain,
 /// byte or raw) appears in production code of [`PORCELAIN_READ_FILE`] alone, exactly once,
 /// with the next literal on its line `"--no-index"`, and that file's production code holds
 /// `"/dev/null"` — but for the attribute lines of [`DIFF_ATTRIBUTE_LINES`], each of which
@@ -1901,7 +1926,11 @@ const DIFF_ATTRIBUTE_LINES: &[(&str, &str)] = &[
 /// in production code of [`CONFIG_READ_FILE`] alone, exactly once; every literal there that
 /// starts with `-` is one of [`CONFIG_QUERY_OPTIONS`], which must include `--get` or
 /// `--get-all`; no literal there is one of [`CONFIG_SETTER_SUBCOMMANDS`]; and no literal in
-/// any file is one of [`CONFIG_SETTER_OPTIONS`]. Comments and test modules are not read; a
+/// any file is one of [`CONFIG_SETTER_OPTIONS`]. `stash` ([`stash_read_violations`]): the
+/// exact literal `"stash"` appears in production code of [`STASH_READ_FILE`] alone, exactly
+/// once, `"show"` the literal after it; every literal there that starts with `-` is one of
+/// [`STASH_SHOW_OPTIONS`], each of [`STASH_SHOW_REQUIRED`] among them; and no literal in any
+/// file is one of [`STASH_WRITING_SUBCOMMANDS`]. Comments and test modules are not read; a
 /// verb or an option built by `format!` or `concat!` is not seen.
 fn porcelain_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
     let mut found = diff_read_violations(files);
@@ -1912,16 +1941,28 @@ fn porcelain_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
 
 /// The `git stash show` third of [`porcelain_read_violations`]: the exact literal `"stash"`
 /// appears in production code of [`STASH_READ_FILE`] alone, exactly once, the next literal
-/// after it `"show"`; and no literal anywhere in `reads/` is one of
-/// [`STASH_WRITING_SUBCOMMANDS`].
+/// after it `"show"`; every literal there that starts with `-` is one of
+/// [`STASH_SHOW_OPTIONS`], each of [`STASH_SHOW_REQUIRED`] among them; and no literal
+/// anywhere in `reads/` is one of [`STASH_WRITING_SUBCOMMANDS`].
 fn stash_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
     let mut found = Vec::new();
     let mut verbs = 0usize;
+    let mut passed: Vec<String> = Vec::new();
     for (path, source) in files {
         let at = |line: usize| format!("{}:{line}", path.display());
         let home = *path == Path::new(STASH_READ_FILE);
         let literals = production_string_literals(source);
         for (index, (line, text)) in literals.iter().enumerate() {
+            if home && text.starts_with('-') {
+                if STASH_SHOW_OPTIONS.contains(&text.as_str()) {
+                    passed.push(text.clone());
+                } else {
+                    found.push(format!(
+                        "{} passes `{text}` to the stash read, which is not one of its options",
+                        at(*line)
+                    ));
+                }
+            }
             if STASH_WRITING_SUBCOMMANDS.contains(&text.as_str()) {
                 found.push(format!(
                     "{} names `{text}`, a `git stash` subcommand that writes, in reads/",
@@ -1955,6 +1996,13 @@ fn stash_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
             "reads/ names the verb `stash` {verbs} times in production code; the one accepted \
              stash read is built once, in {STASH_READ_FILE}"
         ));
+    }
+    for required in STASH_SHOW_REQUIRED {
+        if !passed.iter().any(|option| option == required) {
+            found.push(format!(
+                "{STASH_READ_FILE} does not pass `{required}`, which the stash read must"
+            ));
+        }
     }
     found
 }
@@ -2148,7 +2196,9 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
                            const BOOLEAN: [&str; 2] = [\"--type=bool\", \"--get\"];\n\
                            const EVERY_VALUE: [&str; 1] = [\"--get-all\"];\n";
     let stash_home = Path::new(STASH_READ_FILE);
-    let accepted_stash = "fn s() { let a = [\"stash\",\n \"show\",\n \"--raw\"]; }";
+    let accepted_stash = "fn s() { let a = [\"stash\",\n \"show\",\n \"--raw\", \"-z\", \
+                          \"--no-abbrev\", \"--no-color\", \"--no-ext-diff\", \
+                          \"--no-textconv\", \"--no-relative\", \"--end-of-options\"]; }";
     // The `diff` cases are judged beside the accepted config and stash reads, unless they
     // bring their own; the `config` and `stash` cases below bring theirs beside the rest.
     let verdict = |files: &[(&Path, &str)]| {
@@ -2432,7 +2482,49 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
     for (shape, files) in refused_stash {
         assert!(!stash_verdict(files).is_empty(), "{shape} was not caught");
     }
-    for subcommand in STASH_WRITING_SUBCOMMANDS {
+    // The stash read's options: one outside the list, and each required one dropped.
+    for added in [
+        "-p",
+        "--patch",
+        "--ext-diff",
+        "--textconv",
+        "-u",
+        "--include-untracked",
+        "--only-untracked",
+        "--stat",
+    ] {
+        let source = accepted_stash.replace("\"--raw\"", &format!("\"--raw\", \"{added}\""));
+        assert!(
+            !stash_verdict(&[(stash_home, &source)]).is_empty(),
+            "`{added}` in the stash read was not caught"
+        );
+    }
+    for required in STASH_SHOW_REQUIRED {
+        let source = accepted_stash.replace(&format!(", \"{required}\""), "");
+        let source = source.replace(&format!("\"{required}\", "), "");
+        assert!(
+            !source.contains(&format!("\"{required}\"")),
+            "{required} was not removed"
+        );
+        assert!(
+            !stash_verdict(&[(stash_home, &source)]).is_empty(),
+            "the stash read without `{required}` was not caught"
+        );
+    }
+    // An option in another read is that read's: only the stash read's are held to the list.
+    assert!(
+        stash_verdict(&[
+            (stash_home, accepted_stash),
+            (other, "fn b() { x.args([\"-p\", \"--stat\"]); }")
+        ])
+        .is_empty(),
+        "another read's options were held to the stash read's list"
+    );
+    // Spelled out apart from the roster, so an entry dropped from it fails here.
+    for subcommand in [
+        "push", "pop", "apply", "drop", "store", "clear", "create", "branch", "save", "export",
+        "import",
+    ] {
         let source = format!("fn b() {{ x.arg(\"{subcommand}\"); }}");
         assert!(
             !stash_verdict(&[(stash_home, accepted_stash), (other, &source)]).is_empty(),

@@ -86,7 +86,7 @@ WARNING tier:
    the repository — refs, objects, the index, the working tree, config — is
    built with `GitBinary::write_invocation`, and every function in
    `crates/cairn-git/src/reads/` runs query plumbing or `git status` and
-   nothing else — with two accepted exceptions. The first (the user's decision of
+   nothing else — with three accepted exceptions. The first (the user's decision of
    2026-10-03): `git diff --no-index -- /dev/null <path>`, built only by
    `reads::working_tree_patch` for the side asked about as untracked, with
    `<path>` a work-tree-relative path (no absolute, `.` or `..` component;
@@ -109,12 +109,23 @@ WARNING tier:
    of 2026-10-07): `git stash show --raw -z --no-abbrev --no-color
    --no-ext-diff --no-textconv --no-relative --end-of-options <stash commit>`,
    built only by `reads::stash_changes`, for a stash's changes with its
-   untracked files paired as git pairs them; raw form is the exception — a
-   patch form (`-p`, which could run textconv or an external diff), any other
-   `git stash` subcommand (each but `list` writes a stash, the working tree or
-   a branch), or `stash` built anywhere else is a finding. All three literals
-   are pinned by `the_porcelain_reads_are_the_three_named_queries` — run it;
-   what it cannot see, a verb or an option built at run time, is this check.
+   untracked files paired as git pairs them. That argv alone is the
+   exception: dropping or adding any option — a patch form (`-p`, `--patch`,
+   which could run textconv or an external diff), `--ext-diff`, `--textconv`,
+   or an untracked option (`-u`, `--include-untracked`, `--only-untracked`,
+   which would override the setting git reads itself) — or any revision after
+   `--end-of-options` other than a full stash-commit id, any other `git stash`
+   subcommand (each but `show` and `list` writes a stash, the working tree, a
+   branch or a ref: `push`, `pop`, `apply`, `drop`, `store`, `clear`, `create`,
+   `branch`, `save`, `export`, `import`), or `stash` built anywhere else, is a
+   finding. In a partial clone it lazy-fetches on git 2.32 to 2.43 — a pack
+   written and the network reached — where rename detection needs a blob only
+   the promisor holds, since those gits ignore `GIT_NO_LAZY_FETCH`; 2.44 and
+   later fail closed. All three are pinned by
+   `the_porcelain_reads_are_the_three_named_queries` — the verbs, the stash
+   read's options against `STASH_SHOW_OPTIONS` (and `STASH_SHOW_REQUIRED`
+   present), the writing subcommands — run it; what it cannot see, a verb, an
+   option or a revision built at run time, is this check.
    A read runs with `GIT_OPTIONAL_LOCKS=0`, which only `status`
    honours, so a porcelain `diff` or `describe --dirty` built as a read still
    rewrites the index, and a plumbing writer (`update-ref`, `update-index`,

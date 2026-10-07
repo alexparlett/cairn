@@ -447,9 +447,13 @@ Project invariants:
   of `CONFIG_SETTER_OPTIONS` (`--add`, `--unset`, `--unset-all`,
   `--replace-all`, `--edit`, `--rename-section`, `--remove-section`); and the
   exact literal `"stash"` appears only in `reads/stash_changes.rs`, once, with
-  `"show"` the literal after it, and no literal anywhere in `reads/` is one of
+  `"show"` the literal after it, every literal there starting with `-` is one
+  of `STASH_SHOW_OPTIONS` (`--raw`, `-z`, `--no-abbrev`, `--no-color`,
+  `--no-ext-diff`, `--no-textconv`, `--no-relative`, `--end-of-options`), each
+  of `STASH_SHOW_REQUIRED` (`--raw`, `--no-ext-diff`, `--no-textconv`,
+  `--end-of-options`) among them, and no literal anywhere in `reads/` is one of
   `STASH_WRITING_SUBCOMMANDS` (`push`, `pop`, `apply`, `drop`, `store`,
-  `clear`, `create`, `branch`, `save`). Whether
+  `clear`, `create`, `branch`, `save`, `export`, `import`). Whether
   a read in `reads/` really runs query plumbing, `status`, `git diff
   --no-index -- /dev/null <path>`, `git config` in query form or `git stash
   show` in raw form beyond those

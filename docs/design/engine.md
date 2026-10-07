@@ -118,6 +118,19 @@ index loose tree objects' mtimes, as the user's own `git status` does; neither
 changes a byte. Evidence: `docs/research/refs-and-status/status-agreement-spike.md`
 and `docs/research/refs-and-status/gix-refs-and-status-api.md`.
 
+The fifth case is what a stash changed. A stash made with its untracked files keeps
+them in a commit of their own, apart from its tracked changes, and with the user's
+`stash.showIncludeUntracked` set, `git stash show` diffs the commit the stash was made
+on against both at once — so rename and copy detection pairs a tracked file deleted
+beside an untracked file of its content as one rename, where two diffs of the halves
+print a deletion and an addition. No plumbing can diff one tree against two without
+writing a tree or an index, so git answers: `git stash show --raw -z --no-abbrev
+--no-color --no-ext-diff --no-textconv --no-relative --end-of-options <stash commit>`
+(`reads::stash_changes`), the third porcelain mode a read runs, accepted by the user. In
+raw form it prints no patch, so no textconv or external diff can run, it takes no lock
+and reads no index, and git reads the setting itself, so a git that does not know it
+lists what the user's own `git stash show` lists there.
+
 Refs stay with gix, because gix agrees with `git for-each-ref` once it is read
 with care: a symbolic ref is never peeled into its target's name, a dangling one
 is hidden, the stash reflog is read so that a long message cannot end it, and
@@ -180,9 +193,9 @@ those users a diff `git diff` does not, and would hand staging a patch built fro
 content their filter exists to change. git does the converting: a working-tree
 read is `git diff-files` (the index against the working tree) or, for a file git
 does not track, `git diff --no-index -- /dev/null <path>`, the path relative to
-the top of the working tree (`./-` for `-`) — one of the two porcelain modes
-a read runs (the other is `git config` in query form, "Where git answers a
-read"), accepted because it reads no index and so has none to refresh — and the lines
+the top of the working tree (`./-` for `-`) — one of the three porcelain modes
+a read runs (the others are `git config` in query form and `git stash show` in raw
+form, "Where git answers a read"), accepted because it reads no index and so has none to refresh — and the lines
 Cairn holds for the working-tree side are rebuilt from git's own patch over the
 old side, checked against the object id git names for that content. A staged
 diff (`git diff-index --cached`) reads only objects. gix reads the index, fresh

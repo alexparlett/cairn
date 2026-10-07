@@ -426,7 +426,11 @@ tree stat-dirty) and `a_stash_describes_its_stash_commit`; the argv and the read
 environment by `the_stub_git_is_asked_stash_show_with_a_reads_environment`, the argv alone
 by `the_read_is_stash_show_in_raw_form_and_nothing_else`. Residuals: `git stash` needs a
 working tree, so a stash in a bare repository fails as git fails it (`Error::GitFailed`);
-the read sees the user's global configuration as the user's own `git stash show` does.
+the read sees the user's global configuration as the user's own `git stash show` does; and
+in a partial clone, where rename detection needs a blob only the promisor holds, git 2.44
+and later fail the read closed (`GIT_NO_LAZY_FETCH=1`) while git 2.32 to 2.43, which ignore
+that variable, lazy-fetch the blob — a pack written and the network reached — as the
+environment invariant's floor residual says of every read.
 
 ### The content query
 

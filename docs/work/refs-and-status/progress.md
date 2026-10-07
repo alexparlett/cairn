@@ -3,6 +3,27 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-07 — teardown
+
+**The user accepted every remaining batched decision in `state.md` as built, and approved
+teardown (2026-10-07).** Each "Decided by the user" item was checked against a living doc:
+the merge bar's four (distinct paths in "Showing N of M", `local-changes.md`; a failed status
+read kept as `Error::GitFailed`, `status.md` and `local-changes.md`; F5 and the bare-chord rule,
+`diff.md`; invalid ref names skipped uncounted, `refs.md`), RR1 and RR2 (`history-graph.md`,
+"Refresh"; PRD R10.3, R11.2), Q1 and Q2 (PRD R6.2, R4.2; `diff.md`, `history-graph.md`), and
+phase 08's and 09's Fork decisions (`sidebar.md`, `local-changes.md`) — all present; none had
+to be added. The batched open questions of phases 04-09 are described as built in
+`history-graph.md`, `sidebar.md` and `local-changes.md`.
+
+Teardown: the PRD stamped `shipped`; C11, C12, C15 and C16's numbers moved to
+`docs/research/refs-and-status/measured.md`; the systems docs spot-checked against the code by
+two fresh readers and their stale sentences fixed (the Local Changes filter's lane and thread
+named, packet and phase tags dropped, `SidebarRow` corrected to eight bytes and pinned by
+`a_sidebar_row_is_eight_bytes`, the refs read's cost cited from the measurement); the PRD's
+out-of-scope items and the "Handed to phase 10" list filed as #62-#82, with #2, #4, #35 and #36
+referenced rather than duplicated; the roadmap marks packet 4 shipped. This directory is then
+deleted; git history holds it.
+
 ## 2026-10-07 — merge bar: the user's decisions and the drift fixed
 
 The packet's independent QA returned MERGE BAR: READY, with documentation drift to fix first.

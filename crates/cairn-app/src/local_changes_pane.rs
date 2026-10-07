@@ -24,6 +24,7 @@ use cairn_model::{
     ChangeList, ChangeStatus, ChangedFile, LocalChanges, ShownDiff, UnreadableIndex,
     WorkingTreeStatus,
 };
+use cairn_ui::accelerators::{self, Scope};
 use cairn_ui::{DiffHeader, DiffNotice, DiffNoticeView, DiffView, LocalChangesList, ShownFiles};
 use freya::prelude::*;
 
@@ -252,9 +253,18 @@ impl Component for LocalChangesPane {
         let mut width = view.local.list_width;
         // Peeked: the share only matters when the split is laid out anew.
         let list_share = *width.peek();
+        let hearing = self.submit.clone();
         rect()
             .expanded()
             .content(Content::Flex)
+            // The diff's own chords (previous and next change), heard from inside the view, as
+            // the detail pane hears them from inside it.
+            .on_key_down(move |e: Event<KeyboardEventData>| {
+                if let Some(action) = accelerators::resolve_key(&e, Scope::Detail) {
+                    e.stop_propagation();
+                    shortcuts::act(action, view, hearing.as_deref());
+                }
+            })
             .maybe_child(failure.map(banner))
             .child(
                 rect()

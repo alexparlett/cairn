@@ -523,3 +523,122 @@ fn typing_in_the_filter_asks_a_worker_and_the_lists_draw_its_answer() {
         "{drawn:?}"
     );
 }
+
+/// A diff of `path` with a change every ten of its `lines` lines.
+fn many_changes(path: &str, lines: u32, context: Context) -> Box<ShownDiff> {
+    let old: Vec<DiffLine> = (0..lines)
+        .map(|k| DiffLine::terminated(format!("line {k}")))
+        .collect();
+    let new: Vec<DiffLine> = (0..lines)
+        .map(|k| {
+            DiffLine::terminated(if k % 10 == 5 {
+                format!("LINE {k}")
+            } else {
+                format!("line {k}")
+            })
+        })
+        .collect();
+    let changes = (0..lines / 10)
+        .map(|k| ChangedRange::new(LineSpan::at(k * 10 + 5, 1), LineSpan::at(k * 10 + 5, 1)))
+        .collect();
+    let mut shown = diff_of(path, "", context);
+    let file = shown.diff().file.clone();
+    *shown = ShownDiff::new(
+        FileDiff {
+            file,
+            content: DiffContent::Text {
+                text: TextDiff::new(old, new, changes),
+                overlay: DisplayOverlay::none(),
+            },
+        },
+        context,
+    );
+    shown
+}
+
+/// R6.2 in Local Changes: next and previous change move its diff — its own scroll, not the
+/// Changes tab's — heard from inside the view, as the detail pane hears them. Caught by: a
+/// chord unheard with the detail pane gone, or one that moves the Changes tab's diff.
+#[test]
+fn next_change_moves_local_changes_own_diff() {
+    use cairn_ui::accelerators::{self, Action};
+    use freya_testing::prelude::{KeyboardEventName, PlatformEvent};
+
+    let (mut test, view, submitted) = launch();
+    apply(&mut test, view, &submitted, status(every_kind()));
+    open_local_changes(&mut test);
+    let query = asked(&submitted)
+        .pop()
+        .unwrap_or_else(|| panic!("nothing asked"));
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::FileDiff {
+            query: query.clone(),
+            diff: Some(many_changes("both.rs", 200, query.options.context)),
+        },
+    );
+    // Inside the diff, right of the lists, under the bar.
+    test.click_cursor((f64::from(WIDTH) - 200., 300.));
+    test.sync_and_update();
+    let chord = accelerators::chord(Action::NextChange, accelerators::Os::current())
+        .unwrap_or_else(|| panic!("next change has no chord"));
+    let (key, code, modifiers) = chord
+        .key_press()
+        .unwrap_or_else(|| panic!("the chord is no key press"));
+    for _ in 0..3 {
+        test.send_event(PlatformEvent::Keyboard {
+            name: KeyboardEventName::KeyDown,
+            key: key.clone(),
+            code,
+            modifiers,
+        });
+        test.sync_and_update();
+        test.sync_and_update();
+    }
+    let (_, local_y): (i32, i32) = view.local.scroll.into();
+    let (_, changes_y): (i32, i32) = view.diff_scroll.into();
+    assert!(local_y < 0, "next change did not move Local Changes' diff");
+    assert_eq!(changes_y, 0, "the Changes tab's diff moved");
+    assert_eq!(
+        view.local
+            .cursor
+            .read()
+            .as_ref()
+            .map(|cursor| cursor.change),
+        Some(2)
+    );
+}
+
+/// The handed-over `RefreshState::failure(Refreshed::Status)`: a status that could not be read
+/// is said — in place of the lists before any was read, over the lists kept after. Caught by:
+/// a failure said nowhere ("Reading…" for good), or the lists kept thrown away.
+#[test]
+fn a_status_that_could_not_be_read_is_said() {
+    use crate::local_changes_pane::status_failure;
+    use crate::worker::Refreshed;
+
+    let (mut test, view, submitted) = launch();
+    let failed = || Update::RefreshFailed {
+        what: Refreshed::Status,
+        message: "git status failed".to_owned(),
+    };
+    apply(&mut test, view, &submitted, failed());
+    open_local_changes(&mut test);
+    let said = status_failure("git status failed");
+    assert!(labels(&test).contains(&said), "{:?}", labels(&test));
+
+    apply(&mut test, view, &submitted, status(every_kind()));
+    assert!(
+        !labels(&test).contains(&said),
+        "a failure said over a status read since"
+    );
+    apply(&mut test, view, &submitted, failed());
+    let drawn = labels(&test);
+    assert!(drawn.contains(&said), "{drawn:?}");
+    assert!(
+        drawn.contains(&"clash.rs".to_owned()),
+        "the lists kept were thrown away"
+    );
+}

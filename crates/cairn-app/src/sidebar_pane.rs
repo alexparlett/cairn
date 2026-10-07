@@ -83,3 +83,32 @@ impl Component for SidebarPane {
             .on_main(move |chosen: MainView| main.set(chosen))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use cairn_model::{ChangedEntry, RepoPath, StagedChange, StatusEntry, UnreadableIndex};
+
+    use super::*;
+
+    /// R9.2: the count is of distinct paths — a staged deletion and an untracked file of the same
+    /// name, which git lists apart, once — and nothing where git gave no list. Caught by: the
+    /// entries counted, or a count shown for an unreadable index.
+    #[test]
+    fn the_count_beside_local_changes_is_of_distinct_paths() {
+        let listed = LocalChanges::new(WorkingTreeStatus::Listed(vec![
+            StatusEntry::Changed(ChangedEntry {
+                path: RepoPath::from("gone.rs"),
+                staged: Some(StagedChange::Deleted),
+                unstaged: None,
+                submodule: None,
+            }),
+            StatusEntry::Untracked(RepoPath::from("gone.rs")),
+            StatusEntry::Untracked(RepoPath::from("new.rs")),
+        ]));
+        assert_eq!(local_changes_count(Some(&listed)), Some(2));
+        assert_eq!(local_changes_count(None), None);
+        let unreadable =
+            LocalChanges::new(WorkingTreeStatus::IndexUnreadable(UnreadableIndex::Sparse));
+        assert_eq!(local_changes_count(Some(&unreadable)), None);
+    }
+}

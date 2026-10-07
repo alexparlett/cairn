@@ -117,9 +117,10 @@ fn folder_depth(path: &str) -> Option<usize> {
         .map(|rest| rest.matches('/').count())
 }
 
-/// One row of the sidebar's refs. `Copy` and twelve bytes: a list of tens of thousands of
-/// them costs no allocation of its own. A ref, a folder and a stash name their place in the
-/// snapshot the rows were laid out from, which the window keeps beside them.
+/// One row of the sidebar's refs. `Copy` and eight bytes (`a_sidebar_row_is_eight_bytes`): a
+/// list of tens of thousands of them costs no allocation of its own. A ref, a folder and a
+/// stash name their place in the snapshot the rows were laid out from, which the window keeps
+/// beside them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SidebarRow {
     /// A section's caption.
@@ -419,6 +420,13 @@ mod tests {
 
     fn oid(n: u8) -> Oid {
         Oid::from_bytes(&[n; 20]).unwrap()
+    }
+
+    /// Pins the size the doc comment and `docs/systems/sidebar.md` state: a row that grows
+    /// grows every list of tens of thousands of them.
+    #[test]
+    fn a_sidebar_row_is_eight_bytes() {
+        assert_eq!(std::mem::size_of::<SidebarRow>(), 8);
     }
 
     fn snapshot(names: &[&str], head: HeadState, stashes: &[&str]) -> RefsSnapshot {

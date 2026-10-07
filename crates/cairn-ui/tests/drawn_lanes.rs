@@ -109,8 +109,8 @@ fn median(mut samples: Vec<Duration>) -> f64 {
 #[test]
 #[ignore = "a measurement; run with --release"]
 fn measures_drawing_a_viewport_over_many_open_lanes_and_a_crowded_rows_chips() {
-    println!("| Open lines | Where | Build and lay out | Paint |");
-    println!("| --- | --- | --- | --- |");
+    eprintln!("| Open lines | Where | Build and lay out | Paint |");
+    eprintln!("| --- | --- | --- | --- |");
     for branches in [100usize, 1_000, 5_000] {
         let history = wide(branches);
         let lanes = history
@@ -152,7 +152,7 @@ fn measures_drawing_a_viewport_over_many_open_lanes_and_a_crowded_rows_chips() {
                     painted.push(paint);
                 }
             }
-            println!(
+            eprintln!(
                 "| {branches} | {place} | {:.2} ms | {:.2} ms |",
                 median(built),
                 median(painted)
@@ -192,7 +192,7 @@ fn measures_drawing_a_viewport_over_many_open_lanes_and_a_crowded_rows_chips() {
         built = row_chips(row.labels(), None, 600.).len();
         samples.push(started.elapsed());
     }
-    println!(
+    eprintln!(
         "\nA row of 10,000 refs: {built} chips laid out for 600 px in {:.4} ms (median of 101)",
         median(samples)
     );

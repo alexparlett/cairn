@@ -2,7 +2,7 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 07 implemented (chips on rows, stash rows, the REFS row, a stash's changes as `git stash show` lists them, the title bar), full gate green; its QA is the coordinator's, pending; phase 08 next.** Integration branch
+**Status: phase 07 done (chips on rows, stash rows, the REFS row, a stash's changes as `git stash show` lists them, the title bar), QA adjudicated and confirmed findings fixed; phase 08 next.** Integration branch
 `feature/refs-and-status`, in the worktree `.claude/worktrees/refs-and-status`,
 packet mode.
 
@@ -309,11 +309,12 @@ Phase 07 (`docs/systems/history-graph.md`, "Chips on a row" and "The title bar";
   `repository_name`, `current_branch`, `NO_COMMITS_YET`, `UPSTREAM_GONE`); `RowRender::{chips,
   head}`; `HistoryList::refs`; `CommitRow::{chips, head}`; `label_room`; `CommitTab::refs`
   with `Refs`, `REFS_CAPTION`; `graph_geometry::row_geometry` paints each place once.
-- `cairn-app`: `Comparison::Stash`; `selection::comparison_of(RowId::Stash) =
+- `cairn-app`: `Update::Opened { name }` and `View::repository` (phase 07 QA); `Comparison::Stash`; `selection::comparison_of(RowId::Stash) =
   Comparison::Stash`; `row_finder.rs` (`RowFinder`); `detail_pane::refs_of`;
   `window::status_box`; `RefreshState::ahead_behind_of`.
 - Guard: `the_porcelain_reads_are_the_three_named_queries` (was `..._two_...`),
-  `STASH_READ_FILE`, `STASH_WRITING_SUBCOMMANDS`; `scripts/git-floor.sh` floors 82 and 117.
+  `STASH_READ_FILE`, `STASH_WRITING_SUBCOMMANDS`, `STASH_SHOW_OPTIONS`, `STASH_SHOW_REQUIRED`;
+  `scripts/git-floor.sh` floors 82 and 118.
 - Tests: `crates/cairn-ui/tests/ref_chips.rs`, `crates/cairn-ui/tests/drawn_lanes.rs` (the
   `#[ignore]`d reporter), `crates/cairn-git/tests/diff/stash.rs`.
 
@@ -327,7 +328,7 @@ Phase 07 (`docs/systems/history-graph.md`, "Chips on a row" and "The title bar";
 | 04 slim rows | done: C16 passes (comparisons pinned at `4205d5d` over crafted fixtures and the Cairn checkout; 52.6 MiB retained for all of rust-lang/rust from every ref, capacity counted, against 64 MiB; no kept row owns a heap allocation); C15 still passes (equivalence on the bench, find 2.21 s); RR1 closed; numbers in progress.md; QA adjudicated, confirmed findings fixed; full gate green |
 | 05 history from every ref | implemented: C6 passes (walked commits = `git rev-list --branches --remotes --tags HEAD` over whole walks, labels = `git log --decorate=full`, stash rows with and without `--include-untracked`, assigner lane and edge tests); C11 first page from every ref 7.3 ms (8.6 ms with the snapshot read) beside `HEAD`'s 7.7 ms, worst stash look-ahead 21.6 ms; C16 52.67 MiB from the snapshot; C15 equivalence holds; the app still walks from `HEAD`; QA adjudicated, confirmed findings fixed (the walk's open cancellable between tips: 103 ms first page at 50,000 tags, cancelled in 6.3 ms); full gate green |
 | 06 worker and refresh | implemented: C10 passes through the real boundary (`a_refresh_reopens_for_a_stash_a_checkout_and_a_moved_ref_and_for_nothing_else`, the refresh tests) and headless with focus set (`focus_gained_after_a_ref_moved_reopens_the_history_keeping_the_chosen_row`); every pin checked against a named mutation (progress.md); RR2 measured; full gate green; QA pending |
-| 07 labels and toolbar | implemented: C7 passes (headless: chips, compaction, clipping, ✓, bold `HEAD`, stash chip, REFS, a stash's list against `git stash show --name-status` unset and set on the host's git and both floors); the QA brief's cases pinned; every pin checked against a named mutation (progress.md); RR2's drawing half measured; full gate green; QA pending |
+| 07 labels and toolbar | done: C7 passes (headless: chips, compaction, clipping, ✓, bold `HEAD`, stash chip, REFS, a stash's list against `git stash show --name-status` off and on, on the host's git and both floors); the QA brief's cases pinned; every pin checked against a named mutation (progress.md); RR2's drawing half measured; QA adjudicated, confirmed findings fixed (the title bar names the repository's folder, `Update::Opened`; the stash read's options guarded); full gate green |
 | 08 sidebar | not started |
 | 09 local changes | not started |
 | 10 QA | not started |

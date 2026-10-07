@@ -3,6 +3,65 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-07 — phase 07 QA
+
+Fresh qa-checklist (NOT READY on QC1), test-coverage-auditor, responsiveness-reviewer,
+destructive-ops-reviewer, gate-integrity-reviewer; adjudicated by a fresh qa-confirm (20
+confirmed, 6 dismissed, none escalated), run by the coordinator. Fixes, each pin checked
+against a named mutation:
+
+- **QC1 (must fix).** The title bar named the command line's path as given (`.`, `..`, a
+  subdirectory, `.git`). The repository thread now sends `Update::Opened { name }` once
+  discovery has resolved the repository — its working tree's last component, its git
+  directory's when bare — kept in `View::repository`; nothing is named until then.
+  `an_open_names_the_repositorys_folder_whatever_path_it_was_opened_at` opens a fixture at
+  itself, `/.`, `sub/..`, `sub`, `sub/deeper` and `.git`, and the checkout at `.`, `src`,
+  `./src/..` and `../..` relative to the test's directory (red when the name is the git
+  directory's); the title test applies the update and requires the name, and nothing before
+  it (red when `Opened` sets nothing). Canonicalising the root was dropped: discovery already
+  answers it absolute and resolved, and the mutation removing it survived. Every boundary test
+  helper that opens a repository now reads `Opened` first (`fetch_tests::opened_as`).
+- **GI1.** `export` and `import` are on `STASH_WRITING_SUBCOMMANDS`; the self-test spells
+  the eleven out apart from the roster (red when one is dropped from it).
+- **GI2/DO3.** `STASH_SHOW_OPTIONS` and `STASH_SHOW_REQUIRED`: every `-` literal of the
+  stash read must be listed, the four required present. Self-test refuses `-p`, `--patch`,
+  `--ext-diff`, `--textconv`, `-u`, `--include-untracked`, `--only-untracked`, `--stat` and
+  each required flag dropped; red with either check disabled, and the real tree red with
+  `--no-textconv` dropped or `-u` added.
+- **GI3, GI4, DO4.** The reviewer, the guard's doc comment and `docs/design/engine.md`
+  (a fifth case, the stash) say three exceptions; the reviewer says that argv alone, any
+  revision but a full stash-commit id, the full subcommand list and the 2.32-2.43 lazy fetch.
+- **DO1.** `reads/stash_changes.rs` and `diff.md` state that git 2.32-2.43 lazy-fetch in a
+  partial clone and 2.44+ fail closed.
+- **DO2.** `a_stash_read_writes_nothing_and_runs_no_program_but_fsmonitor`: a caching
+  textconv, a driver `command`, `diff.external`, clean and smudge filters, `core.pager`, the
+  untracked cache and an fsmonitor hook; no marker, the git directory byte-identical, each
+  program run by hand. Red with `--no-ext-diff` swapped for `--ext-diff -p` (the answer no
+  longer parses). Named in the root CLAUDE.md's pin list and `diff.md`; git-floor's
+  `diff_engine` floor 118.
+- **TC1.** The paint-once test adds a line past the cap into the node beside one passing it,
+  read by coordinates; red when the end is dropped from `place`'s key.
+- **TC2.** The gone-upstream title case supplies counts; red when a gone upstream is answered
+  by its counts.
+- **TC-obs a, b.** The writes-nothing test requires every file read; the parity test is named
+  and worded off/on (a true unset would read the developer's global configuration through the
+  engine's git, which the oracle's isolated git does not).
+- **QC2.** The ahead/behind parity test requires bytewise order by name; red when the
+  engine counts the branches in reverse.
+- **RR1, RR3, QC5, QC6.** Docs: a sideways resize rebuilds the visible rows each frame,
+  bounded by viewport × lanes; the REFS chips are laid out each Commit-tab render, bounded
+  by width, only the header cached; the chips' cost cites its test; a comma.
+
+Notes (no action): RR2 — `row_finder`'s pass is stated accurately; a later O(1) improvement
+is to check the list's index hint first. RR4 — one chipless first frame; a stash chip
+ignores the width by design (one chip).
+
+Dismissed, with reasons: QC3 — a false hit on `"branch"` in `reads/` fails loudly, and its
+remedy would be scoping like `CONFIG_SETTER_SUBCOMMANDS`; QC4 — the window's slimmed-rows
+test compares unordered on purpose (explained there), and chip order is pinned in
+`ref_chips.rs`; RR5-RR7 — bounded, no defect claimed; TC-obs c — the stub argv test's literal
+argv is pinned by its sibling.
+
 ## 2026-10-07 — phase 07: chips on rows, stash rows, REFS and the title bar
 
 Packet mode, on `feature/refs-and-status`. QA pending (the coordinator's, fresh reviewers).

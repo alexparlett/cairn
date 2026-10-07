@@ -54,9 +54,7 @@ pub type Replier = Rc<dyn Fn(Reply)>;
 /// request closes it anyway: past the longest an honest close takes —
 /// `CLOSE_BOUND` for the reaps, then up to the acceptor's stop deadline — so
 /// only a worker that has stopped answering is abandoned, and the window can
-/// always be closed. It does not bound the network lane's ref scans, which
-/// run before and after a fetch and cannot be cancelled: a repository with a
-/// great many refs can hold the stream's end past it.
+/// always be closed.
 pub const CLOSE_PATIENCE: Duration = Duration::from_secs(5);
 
 const _: () = assert!(
@@ -1083,7 +1081,11 @@ mod tests {
         );
     }
 
-    /// Caught by: deleting the unborn arm at the call site while `no_walk` stays correct.
+    /// Phase 05's hand-off: a repository with no ref and an unborn `HEAD` has a snapshot
+    /// that seeds nothing, and its walk answers the empty, complete page the window draws as
+    /// an empty history — what `from_head`'s unborn arm answered before the window walked
+    /// from every ref. Caught by: an empty seed set failing the open, or a page that says
+    /// more is coming.
     #[test]
     fn a_freshly_initialised_repository_reaches_the_view_as_an_empty_history() {
         let fixture = UnbornRepository::new("cairn-unborn-head");
@@ -1093,6 +1095,17 @@ mod tests {
         };
         handle.submit(Request::OpenHistory { rows: 8 });
 
+        match block_on(updates.next()) {
+            Some(Update::Refs { snapshot, reopen }) => {
+                assert!(!reopen);
+                assert!(snapshot.refs.is_empty(), "{snapshot:?}");
+                assert!(
+                    matches!(snapshot.head, cairn_model::HeadState::Unborn(_)),
+                    "{snapshot:?}"
+                );
+            }
+            other => panic!("expected the open's own refs, got {other:?}"),
+        }
         match after_refs(&mut updates) {
             Some(Update::Rows { rows, complete }) => {
                 assert!(rows.is_empty(), "an unborn HEAD produced rows: {rows:?}");

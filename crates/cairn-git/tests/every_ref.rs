@@ -1322,3 +1322,123 @@ fn measures_the_first_page_from_every_ref() {
     let (median, low, high) = median(samples);
     eprintln!("CANCELLED BEFORE THE OPEN median={median:.2} ms [{low:.2}-{high:.2}]");
 }
+
+/// Phase 05 QA's RR2, measured by phase 06: what a walk from every ref costs when thousands
+/// of refs are unmerged, each opening a lane of its own. A fixture of a main line of
+/// `MAIN` commits with `branches` branches of one commit each, forked from main at even
+/// steps down its upper half and each dated after main's tip — so the walk meets every
+/// branch first and holds every one of their lines open down to its fork, the widest the
+/// graph gets — is built with `git fast-import`; then, for each width, the first page
+/// from every ref, the whole walk paged to its end and the widest row, and the per-frame
+/// derivation of a viewport's edges at the top and in the middle (`row_edges`, what drawing
+/// a row reads; phase 07 measures the drawing itself). Median of seven, warm, release:
+/// `cargo test --release -p cairn-git --test every_ref measures_layout_over_unmerged_refs --
+/// --ignored --nocapture`.
+#[test]
+#[ignore = "a measurement; run with --release"]
+fn measures_layout_over_unmerged_refs() {
+    use std::io::Write;
+    use std::time::{Duration, Instant};
+
+    const MAIN: usize = 12_000;
+    const PAGE: usize = 64;
+    const VIEWPORT: usize = 40;
+    const RUNS: usize = 7;
+    let ms = |d: Duration| d.as_secs_f64() * 1e3;
+    let median = |mut samples: Vec<Duration>| {
+        samples.sort_unstable();
+        ms(samples[samples.len() / 2])
+    };
+
+    for branches in [100usize, 1_000, 5_000] {
+        let fixture = fixtures::unborn();
+        let mut stream = String::new();
+        let at = |n: usize| fixtures::EPOCH + 60 * n as i64;
+        for n in 0..MAIN {
+            stream.push_str(&format!(
+                "commit refs/heads/main\nmark :{}\ncommitter C <c@e> {} +0000\ndata 1\nm\n{}\n",
+                n + 1,
+                at(n * 4),
+                if n == 0 {
+                    String::new()
+                } else {
+                    format!("from :{n}\n")
+                }
+            ));
+        }
+        for b in 0..branches {
+            let fork = MAIN - 1 - (b * (MAIN / 2)) / branches.max(1);
+            stream.push_str(&format!(
+                "commit refs/heads/b{b}\ncommitter C <c@e> {} +0000\ndata 1\nb\nfrom :{}\n\n",
+                at(MAIN * 4 + b),
+                fork + 1
+            ));
+        }
+        let mut child = ok(
+            std::process::Command::new("git")
+                .args(["fast-import", "--quiet"])
+                .current_dir(fixture.path())
+                .stdin(std::process::Stdio::piped())
+                .spawn(),
+            "starting fast-import",
+        );
+        if let Some(stdin) = child.stdin.as_mut() {
+            ok(stdin.write_all(stream.as_bytes()), "feeding fast-import");
+        }
+        let status = ok(child.wait(), "running fast-import");
+        assert!(status.success(), "fast-import failed");
+
+        let (mut first, mut whole) = (Vec::new(), Vec::new());
+        let (mut top, mut widest_at, mut middle) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut rows, mut widest) = (0usize, 0usize);
+        for run in 0..=RUNS {
+            let repo = ok(Repository::discover(fixture.path()), "opening the fixture");
+            let started = Instant::now();
+            let snapshot = ok(repo.refs(&CancelSignal::new()), "reading the refs").snapshot;
+            let request = HistoryRequest::from_refs(&snapshot, PAGE);
+            let mut session = ok(repo.history_session(&request), "opening the session");
+            let mut history = History::new();
+            let page = ok(
+                session.next_page(PAGE, &CancelSignal::new()),
+                "the first page",
+            );
+            let first_page = started.elapsed();
+            widest = page.rows.lanes_named();
+            ok(history.append(page.rows), "holding the page");
+            while !session.is_exhausted() {
+                let page = ok(session.next_page(PAGE, &CancelSignal::new()), "a page");
+                widest = widest.max(page.rows.lanes_named());
+                ok(history.append(page.rows), "holding a page");
+            }
+            let walked = started.elapsed();
+            rows = history.len();
+            let derive = |from: usize| {
+                let started = Instant::now();
+                for index in from..(from + VIEWPORT).min(history.len()) {
+                    assert!(cairn_model::row_edges(&history, index).is_some());
+                }
+                started.elapsed()
+            };
+            // The top; the first main-line rows, under every branch's line; and the middle.
+            let (at_top, at_widest, in_middle) =
+                (derive(0), derive(branches), derive(history.len() / 2));
+            if run > 0 {
+                first.push(first_page);
+                whole.push(walked);
+                top.push(at_top);
+                widest_at.push(at_widest);
+                middle.push(in_middle);
+            }
+        }
+        eprintln!(
+            "UNMERGED branches={branches} rows={rows} widest_lanes={widest} \
+             first_page={:.2} ms whole_walk={:.2} ms viewport_edges_top={:.3} ms \
+             viewport_edges_widest={:.3} ms viewport_edges_middle={:.3} ms",
+            median(first),
+            median(whole),
+            median(top),
+            median(widest_at),
+            median(middle)
+        );
+    }
+}

@@ -18,14 +18,14 @@ use crate::window::View;
 use crate::worker::{Comparison, Request};
 
 /// What a row's changes are asked against. Named variant by variant: a row of another kind
-/// must say here what it compares, or the window does not compile. A stash's row compares
-/// the stash commit with its first parent, the commit it was made on — `stash^1..stash`, what
-/// `git stash show` lists (refs-and-status R6.2) — which is a commit's comparison of the
-/// stash commit: its Commit tab draws the stash commit's details, every parent among them.
+/// must say here what it compares, or the window does not compile. A stash's row asks what
+/// `git stash show` lists (refs-and-status R6.2): the stash commit against the commit it was
+/// made on and, where the user's `stash.showIncludeUntracked` says so, the untracked files
+/// it holds; its Commit tab draws the stash commit's details, every parent among them.
 pub fn comparison_of(id: RowId) -> Comparison {
     match id {
         RowId::Commit(oid) => Comparison::Commit(oid),
-        RowId::Stash(stash) => Comparison::Commit(stash),
+        RowId::Stash(stash) => Comparison::Stash(stash),
     }
 }
 

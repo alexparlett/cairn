@@ -2589,11 +2589,10 @@ mod tests {
 
     /// A stash's row (refs-and-status R4.2, R5.4): its `stash@{n}` chip, then its message as
     /// its subject, on one row; pressed, it is selected by its
-    /// own identity and asks what the stash commit changed against the commit it was made
-    /// on, its first parent (R6.2's pair, `stash^1..stash`); pressed with the extending
+    /// own identity and asks what `git stash show` lists of it (R6.2); pressed with the extending
     /// chord beside a commit, the pair holds the stash's row, the lower of the two the base.
-    /// Caught by: a stash's row drawing nothing, selected as a commit's, or compared with
-    /// anything but its first parent.
+    /// Caught by: a stash's row drawing nothing, selected as a commit's, or asking a commit's
+    /// comparison of its stash commit rather than `git stash show`'s.
     #[test]
     fn a_stash_row_draws_its_message_and_asks_what_it_changed_on_its_base() {
         let (mut test, view, submitted) = launch((0..3).map(row).collect(), received(6, true));
@@ -2640,7 +2639,8 @@ mod tests {
         assert_eq!(selection(view), (Some(RowId::Stash(oid(90))), None));
         assert_eq!(
             changes_asked(&submitted, from),
-            [Comparison::Commit(oid(90))]
+            [Comparison::Stash(oid(90))],
+            "a stash's row asks what `git stash show` lists"
         );
 
         let from = submitted.borrow().len();

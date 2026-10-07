@@ -105,9 +105,16 @@ WARNING tier:
    `rename-section`, `remove-section` — or another file chosen (`--file`,
    `--global`, `--system`, `--blob`), or `config` built anywhere else, is a
    finding; and the check that reads it must refuse the fetch when the read
-   fails, never read a failure as an unset key. Both literals are pinned by
-   `the_porcelain_reads_are_the_two_named_queries` — run it; what it cannot
-   see, a verb or an option built at run time, is this check.
+   fails, never read a failure as an unset key. The third (the user's decision
+   of 2026-10-07): `git stash show --raw -z --no-abbrev --no-color
+   --no-ext-diff --no-textconv --no-relative --end-of-options <stash commit>`,
+   built only by `reads::stash_changes`, for a stash's changes with its
+   untracked files paired as git pairs them; raw form is the exception — a
+   patch form (`-p`, which could run textconv or an external diff), any other
+   `git stash` subcommand (each but `list` writes a stash, the working tree or
+   a branch), or `stash` built anywhere else is a finding. All three literals
+   are pinned by `the_porcelain_reads_are_the_three_named_queries` — run it;
+   what it cannot see, a verb or an option built at run time, is this check.
    A read runs with `GIT_OPTIONAL_LOCKS=0`, which only `status`
    honours, so a porcelain `diff` or `describe --dirty` built as a read still
    rewrites the index, and a plumbing writer (`update-ref`, `update-index`,

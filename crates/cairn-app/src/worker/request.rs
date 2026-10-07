@@ -23,6 +23,10 @@ pub enum Comparison {
     Commit(Oid),
     /// Two commits, tip against tip, `old` the base (R7.2).
     Between { old: Oid, new: Oid },
+    /// A stash commit, as `git stash show` lists it (refs-and-status R6.2): against the
+    /// commit it was made on, with its untracked files where the user's
+    /// `stash.showIncludeUntracked` says so.
+    Stash(Oid),
 }
 
 /// Which of a path's working-tree diffs (R3.1).

@@ -593,6 +593,7 @@ fn uncached(repository: &Path, query: &FileQuery) -> FileDiff {
     let request = match of {
         Comparison::Commit(id) => cairn_git::ChangesRequest::commit(*id),
         Comparison::Between { old, new } => cairn_git::ChangesRequest::between(*old, *new),
+        Comparison::Stash(stash) => cairn_git::ChangesRequest::stash(*stash),
     };
     let engine = match cairn_git::Repository::discover(repository) {
         Ok(engine) => engine,

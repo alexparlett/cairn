@@ -234,7 +234,7 @@ Why each variable is there, with its evidence, is beside it in
   index byte-identical (`a_status_read_leaves_the_index_byte_identical`); under a
   split index it advances `sharedindex.*`'s mtime and under a sparse index the
   loose tree objects' mtimes, bytes unchanged, as the user's own `git status`
-  does. That is why a read in `reads/` runs query plumbing or `status` only — and, as the two porcelain
+  does. That is why a read in `reads/` runs query plumbing or `status` only — and, as the three porcelain
   exceptions the user accepted, `git diff --no-index -- /dev/null <path>` for an
   untracked file's working-tree diff, `<path>` work-tree-relative (no absolute,
   `.` or `..` component, refused before git runs) and `./-` for `-`, which reads
@@ -243,9 +243,13 @@ Why each variable is there, with its evidence, is beside it in
   --includes --null` with `--type=bool --get <key>` or `--get-all <key>`, query
   form only, in `reads/fetch_settings.rs`, which asks git what a fetch will read
   for fetch's refspec check, so the check decides on exactly what the fetch's
-  own git reads (2026-10-04) — as the module's own docs say
-  (`reads/mod.rs`, "What a read may run"); both are pinned by
-  `the_porcelain_reads_are_the_two_named_queries`, and
+  own git reads (2026-10-04); and `git stash show --raw -z --no-abbrev
+  --no-color --no-ext-diff --no-textconv --no-relative --end-of-options <stash
+  commit>`, in `reads/stash_changes.rs`, which lists what a stash changed with
+  its untracked files paired as git pairs them, git reading
+  `stash.showIncludeUntracked` itself (2026-10-07) — as the module's own docs say
+  (`reads/mod.rs`, "What a read may run"); all three are pinned by
+  `the_porcelain_reads_are_the_three_named_queries`, and
   `destructive-ops-reviewer` check 10 names them.
 - **A read may run the repository's `core.fsmonitor` hook and, on a read of the
   working tree, the path's clean filter driver — no other program.**

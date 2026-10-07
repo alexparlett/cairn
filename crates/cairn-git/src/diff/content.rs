@@ -41,11 +41,80 @@ use super::hunk_grouping::Grouping;
 const LFS_PREFIX: &[u8] = b"version https://git-lfs.github.com/spec/";
 const LFS_MAX_BYTES: usize = 1024;
 
-/// The two commits a content query's file changed between, as `git` is given them.
+/// The two commits a content query's file changed between, as `git` is given them, and —
+/// for a stash that holds untracked files — the third parent they are in, which is the new
+/// side of a file `git stash show` listed from them (refs-and-status R6.2).
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Trees {
     pub(super) old: Oid,
     pub(super) new: Oid,
+    pub(super) untracked: Option<Oid>,
+}
+
+impl Trees {
+    /// The trees `file` is read between, and the file as git is asked about it there. A file
+    /// a stash's untracked commit holds at its new path, blob for blob, is read against
+    /// that commit; a copy from a tracked file into it is asked as the rename it is between
+    /// those two trees, since the copy's source is absent from the untracked commit — the
+    /// same two blobs, so the same lines.
+    fn for_file<'f>(
+        &self,
+        repo: &Repository,
+        file: &'f ChangedFile,
+    ) -> Result<(Trees, std::borrow::Cow<'f, ChangedFile>), Error> {
+        use std::borrow::Cow;
+        let elsewhere = (*self, Cow::Borrowed(file));
+        let Some(untracked) = self.untracked else {
+            return Ok(elsewhere);
+        };
+        let similarity = match file.status {
+            ChangeStatus::Added => None,
+            ChangeStatus::Renamed(similarity) | ChangeStatus::Copied(similarity) => {
+                Some(similarity)
+            }
+            ChangeStatus::Deleted | ChangeStatus::Modified | ChangeStatus::TypeChanged => {
+                return Ok(elsewhere);
+            }
+        };
+        if !holds(repo.inner(), &untracked, file)? {
+            return Ok(elsewhere);
+        }
+        let trees = Trees {
+            old: self.old,
+            new: untracked,
+            untracked: None,
+        };
+        let asked = match (file.status, similarity) {
+            (ChangeStatus::Copied(_), Some(similarity)) => Cow::Owned(ChangedFile {
+                status: ChangeStatus::Renamed(similarity),
+                ..file.clone()
+            }),
+            _ => Cow::Borrowed(file),
+        };
+        Ok((trees, asked))
+    }
+}
+
+/// Whether the commit `holder`'s tree has `file`'s new side at its new path.
+fn holds(repo: &gix::Repository, holder: &Oid, file: &ChangedFile) -> Result<bool, Error> {
+    use gix::bstr::ByteSlice as _;
+    let unreadable = |source: Box<dyn std::error::Error + Send + Sync>| Error::DiffFile {
+        path: file.new_path.to_string(),
+        source,
+    };
+    let tree = repo
+        .find_commit(crate::object_id::object_id(holder)?)
+        .map_err(|e| unreadable(Box::new(e)))?
+        .tree()
+        .map_err(|e| unreadable(Box::new(e)))?;
+    let entry = tree
+        .lookup_entry(file.new_path.as_bytes().split_str("/"))
+        .map_err(|e| unreadable(Box::new(e)))?;
+    let wanted = file
+        .new_id
+        .map(|id| crate::object_id::object_id(&id))
+        .transpose()?;
+    Ok(entry.is_some_and(|entry| Some(entry.object_id()) == wanted))
 }
 
 /// What reading a file's two versions decided before git is asked anything.
@@ -438,13 +507,14 @@ struct Asker<'a, C: Cancel> {
 impl<C: Cancel> Asker<'_, C> {
     fn query<'q>(
         &'q self,
+        trees: &'q Trees,
         algorithm: Option<Algorithm>,
         ignore_whitespace: bool,
         scope: Scope<'q>,
     ) -> PatchQuery<'q> {
         PatchQuery {
-            old: &self.trees.old,
-            new: &self.trees.new,
+            old: &trees.old,
+            new: &trees.new,
             context: git_context(self.options.context),
             algorithm,
             ignore_whitespace,
@@ -466,7 +536,7 @@ impl<C: Cancel> Asker<'_, C> {
         alone: &mut Vec<(usize, Option<Algorithm>)>,
     ) -> Result<(), Error> {
         let ask = |ignore_whitespace: bool| {
-            let query = self.query(algorithm, ignore_whitespace, scope);
+            let query = self.query(&self.trees, algorithm, ignore_whitespace, scope);
             patches(self.git, self.repo, &query, self.cancel).map(by_paths)
         };
         let exact = ask(false)?;
@@ -515,10 +585,11 @@ impl<C: Cancel> Asker<'_, C> {
         old: &[DiffLine],
         new: &[DiffLine],
     ) -> Result<(Reading, Option<Reading>), Error> {
+        let (trees, asked) = self.trees.for_file(self.repo, file)?;
         let ask = |ignore_whitespace: bool| -> Result<Reading, Error> {
-            let query = self.query(algorithm, ignore_whitespace, Scope::File(file));
+            let query = self.query(&trees, algorithm, ignore_whitespace, Scope::File(&asked));
             let answer = by_paths(patches(self.git, self.repo, &query, self.cancel)?);
-            match (lookup(&answer, file), ignore_whitespace) {
+            match (lookup(&answer, &asked), ignore_whitespace) {
                 (Found::Text(text), _) => against(file, text, old, new, ignore_whitespace),
                 (Found::Left | Found::Unprinted, true) => Ok(Reading::default()),
                 (Found::Left, false) => Err(Error::ContentReadsDisagree {

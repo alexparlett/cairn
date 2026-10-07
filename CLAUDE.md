@@ -185,7 +185,7 @@ copy is a different version from the fork that links.
   never `--ignored`, a rename option or `--ignore-submodules`) — and each such
   read is a named function in
   `cairn-git/src/reads/`, run as a read invocation: query plumbing (never a plumbing writer such as
-  `update-ref`, `update-index` or `write-tree`), `status`, or one of the two
+  `update-ref`, `update-index` or `write-tree`), `status`, or one of the three
   porcelain exceptions, each accepted by the user — for an untracked file,
   `git diff --no-index -- /dev/null <path>`, `<path>` work-tree-relative (no
   absolute, `.` or `..` component, refused before git runs) and given as `./-`
@@ -194,7 +194,14 @@ copy is a different version from the fork that links.
   refspec check, `git config --includes --null` with `--type=bool --get <key>`
   or `--get-all <key>`, query form only and never a setter
   (`reads::fetch_settings`, 2026-10-04: the check must read the remote exactly
-  as the fetch's own git will, and fails closed when the read fails) — only,
+  as the fetch's own git will, and fails closed when the read fails); and, for
+  a stash's changes, `git stash show --raw -z --no-abbrev --no-color
+  --no-ext-diff --no-textconv --no-relative --end-of-options <stash commit>`
+  (`reads::stash_changes`, 2026-10-07, accepted by the user: with
+  `stash.showIncludeUntracked` set, git pairs a stash's untracked files with
+  its tracked changes in one diff no plumbing can ask without writing a tree,
+  and git reads the setting itself, as the user's own `git stash show` does,
+  git 2.30 and 2.31 ignoring it) — only,
   `GIT_OPTIONAL_LOCKS=0`, `GIT_NO_LAZY_FETCH=1`, no askpass token. Everywhere gix
   agrees with git, a read spawns no process — that is the whole reason the split
   pays. D1 is amended for the programs git itself starts on a read, each exactly
@@ -415,9 +422,9 @@ Project invariants:
   what no twin sees is a path-call start inside `process/environment.rs`, the
   one file allowed to name `Command`. (`nix` named outside `process/` is
   caught by the process twin, and `fork` inside it is `unsafe`, which the
-  workspace forbids.) That is `qa-checklist`'s (its item 7). The two porcelain
+  workspace forbids.) That is `qa-checklist`'s (its item 7). The three porcelain
   verbs a read runs are pinned by
-  `the_porcelain_reads_are_the_two_named_queries` (self-test
+  `the_porcelain_reads_are_the_three_named_queries` (self-test
   `the_porcelain_read_matcher_catches_the_shapes_it_claims`): in the production
   code of `crates/cairn-git/src/reads/`, the exact literal `"diff"` appears only
   in `reads/working_tree.rs`, once, with `"--no-index"` the next literal on its
@@ -429,9 +436,14 @@ Project invariants:
   `--get-all`, one of the last two required), none there is a
   `CONFIG_SETTER_SUBCOMMANDS` word, and no literal anywhere in `reads/` is one
   of `CONFIG_SETTER_OPTIONS` (`--add`, `--unset`, `--unset-all`,
-  `--replace-all`, `--edit`, `--rename-section`, `--remove-section`). Whether
+  `--replace-all`, `--edit`, `--rename-section`, `--remove-section`); and the
+  exact literal `"stash"` appears only in `reads/stash_changes.rs`, once, with
+  `"show"` the literal after it, and no literal anywhere in `reads/` is one of
+  `STASH_WRITING_SUBCOMMANDS` (`push`, `pop`, `apply`, `drop`, `store`,
+  `clear`, `create`, `branch`, `save`). Whether
   a read in `reads/` really runs query plumbing, `status`, `git diff
-  --no-index -- /dev/null <path>` or `git config` in query form beyond those
+  --no-index -- /dev/null <path>`, `git config` in query form or `git stash
+  show` in raw form beyond those
   literals — a verb or option built at run time (`format!`, `concat!`, bytes)
   is not seen, and
   `GIT_OPTIONAL_LOCKS=0` covers `status` alone, so a porcelain `diff`

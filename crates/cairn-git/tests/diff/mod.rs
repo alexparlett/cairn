@@ -13,6 +13,7 @@ mod inputs;
 mod ownership;
 mod parity;
 mod patches;
+mod stash;
 mod working_tree;
 
 /// `unwrap` and `expect` are denied outside a test function, and a helper shared by several

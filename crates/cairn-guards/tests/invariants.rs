@@ -1844,6 +1844,17 @@ const PORCELAIN_READ_FILE: &str = "crates/cairn-git/src/reads/working_tree.rs";
 /// what a fetch of a remote will read, asked of git (the user's decision of 2026-10-04).
 const CONFIG_READ_FILE: &str = "crates/cairn-git/src/reads/fetch_settings.rs";
 
+/// The one file that may build the third porcelain read, `git stash show` in raw form —
+/// what a stash changed, untracked files paired as git pairs them (the user's decision of
+/// 2026-10-07).
+const STASH_READ_FILE: &str = "crates/cairn-git/src/reads/stash_changes.rs";
+
+/// `git stash`'s subcommands but `show` (and `list`, which reads): each writes a stash,
+/// the working tree or a branch, and none may be a literal anywhere in `reads/`.
+const STASH_WRITING_SUBCOMMANDS: &[&str] = &[
+    "push", "pop", "apply", "drop", "store", "clear", "create", "branch", "save",
+];
+
 /// Every option the `git config` read may pass: the query form, and nothing that chooses
 /// another file or another type. Any literal of [`CONFIG_READ_FILE`]'s production code
 /// that starts with `-` must be one of these.
@@ -1895,6 +1906,56 @@ const DIFF_ATTRIBUTE_LINES: &[(&str, &str)] = &[
 fn porcelain_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
     let mut found = diff_read_violations(files);
     found.extend(config_read_violations(files));
+    found.extend(stash_read_violations(files));
+    found
+}
+
+/// The `git stash show` third of [`porcelain_read_violations`]: the exact literal `"stash"`
+/// appears in production code of [`STASH_READ_FILE`] alone, exactly once, the next literal
+/// after it `"show"`; and no literal anywhere in `reads/` is one of
+/// [`STASH_WRITING_SUBCOMMANDS`].
+fn stash_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut verbs = 0usize;
+    for (path, source) in files {
+        let at = |line: usize| format!("{}:{line}", path.display());
+        let home = *path == Path::new(STASH_READ_FILE);
+        let literals = production_string_literals(source);
+        for (index, (line, text)) in literals.iter().enumerate() {
+            if STASH_WRITING_SUBCOMMANDS.contains(&text.as_str()) {
+                found.push(format!(
+                    "{} names `{text}`, a `git stash` subcommand that writes, in reads/",
+                    at(*line)
+                ));
+            }
+            if text != "stash" {
+                continue;
+            }
+            verbs += 1;
+            if !home {
+                found.push(format!(
+                    "{} names the porcelain verb `stash` outside {STASH_READ_FILE}",
+                    at(*line)
+                ));
+                continue;
+            }
+            if !literals
+                .get(index + 1)
+                .is_some_and(|(_, next)| next == "show")
+            {
+                found.push(format!(
+                    "{} names `stash` without `show` as the literal after it",
+                    at(*line)
+                ));
+            }
+        }
+    }
+    if verbs != 1 {
+        found.push(format!(
+            "reads/ names the verb `stash` {verbs} times in production code; the one accepted \
+             stash read is built once, in {STASH_READ_FILE}"
+        ));
+    }
     found
 }
 
@@ -2031,20 +2092,23 @@ fn diff_read_violations(files: &[(&Path, &str)]) -> Vec<String> {
     found
 }
 
-/// The two porcelain verbs a read runs are `git diff --no-index`, built once, by the
-/// working-tree read, against `/dev/null` (the user's decision of 2026-10-03), and `git
-/// config` in query form, built once, by the fetch-settings read (the user's decision of
-/// 2026-10-04); check 10 of `destructive-ops-reviewer`. Porcelain `git diff` against the
-/// working tree refreshes the index whatever `GIT_OPTIONAL_LOCKS` says, and `git config`
-/// with a setter writes the configuration, so a second `"diff"` or `"config"` in `reads/`,
-/// an option outside the query form in the config read, or a setter anywhere in `reads/`
-/// is the regression this catches. Scoped to those literals; a verb or option built at run
-/// time (`format!`), and whether every other verb a read runs is query plumbing, stay the
-/// reviewer's.
+/// The three porcelain verbs a read runs are `git diff --no-index`, built once, by the
+/// working-tree read, against `/dev/null` (the user's decision of 2026-10-03), `git config`
+/// in query form, built once, by the fetch-settings read (the user's decision of
+/// 2026-10-04), and `git stash show`, built once, by the stash read (the user's decision of
+/// 2026-10-07); check 10 of `destructive-ops-reviewer`. Porcelain `git diff` against the
+/// working tree refreshes the index whatever `GIT_OPTIONAL_LOCKS` says, `git config` with a
+/// setter writes the configuration, and every `git stash` subcommand but `show` and `list`
+/// writes a stash, the working tree or a branch, so a second `"diff"`, `"config"` or
+/// `"stash"` in `reads/`, an option outside the query form in the config read, a setter
+/// anywhere in `reads/`, `stash` without `show` after it, or a writing stash subcommand
+/// anywhere in `reads/` is the regression this catches. Scoped to those literals; a verb or
+/// option built at run time (`format!`), and whether every other verb a read runs is query
+/// plumbing, stay the reviewer's.
 #[test]
-fn the_porcelain_reads_are_the_two_named_queries() {
+fn the_porcelain_reads_are_the_three_named_queries() {
     let sources = rust_sources(READS_DIR);
-    for home in [PORCELAIN_READ_FILE, CONFIG_READ_FILE] {
+    for home in [PORCELAIN_READ_FILE, CONFIG_READ_FILE, STASH_READ_FILE] {
         assert!(
             sources.iter().any(|(path, _)| path == Path::new(home)),
             "{home} is gone; this guard names it as the home of a porcelain read — move the \
@@ -2066,8 +2130,10 @@ fn the_porcelain_reads_are_the_two_named_queries() {
         found.is_empty(),
         "a porcelain read escaped its accepted shape: {found:?}. A read runs query plumbing, \
          `status`, `git diff --no-index -- /dev/null <path>` built in {PORCELAIN_READ_FILE}, \
-         or `git config` in query form built in {CONFIG_READ_FILE}; porcelain `git diff` \
-         rewrites the index it reads, and a `git config` setter the configuration."
+         `git config` in query form built in {CONFIG_READ_FILE}, or `git stash show` built \
+         in {STASH_READ_FILE}; porcelain `git diff` rewrites the index it reads, a `git \
+         config` setter the configuration, and any other `git stash` the stashes or the \
+         working tree."
     );
 }
 
@@ -2081,12 +2147,17 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
     let accepted_config = "const QUERY: [&str; 3] = [\"config\", \"--includes\", \"--null\"];\n\
                            const BOOLEAN: [&str; 2] = [\"--type=bool\", \"--get\"];\n\
                            const EVERY_VALUE: [&str; 1] = [\"--get-all\"];\n";
-    // The `diff` cases are judged beside the accepted config read, unless they bring their
-    // own; the `config` cases below bring theirs beside the accepted diff read.
+    let stash_home = Path::new(STASH_READ_FILE);
+    let accepted_stash = "fn s() { let a = [\"stash\",\n \"show\",\n \"--raw\"]; }";
+    // The `diff` cases are judged beside the accepted config and stash reads, unless they
+    // bring their own; the `config` and `stash` cases below bring theirs beside the rest.
     let verdict = |files: &[(&Path, &str)]| {
         let mut all = files.to_vec();
         if !files.iter().any(|(path, _)| *path == config_home) {
             all.push((config_home, accepted_config));
+        }
+        if !files.iter().any(|(path, _)| *path == stash_home) {
+            all.push((stash_home, accepted_stash));
         }
         porcelain_read_violations(&all)
     };
@@ -2205,7 +2276,7 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
     }
     // The config read: once, in its file, in query form, and no setter anywhere.
     let config_verdict = |files: &[(&Path, &str)]| {
-        let mut all = vec![(home, accepted)];
+        let mut all = vec![(home, accepted), (stash_home, accepted_stash)];
         all.extend_from_slice(files);
         porcelain_read_violations(&all)
     };
@@ -2289,6 +2360,84 @@ fn the_porcelain_read_matcher_catches_the_shapes_it_claims() {
     ];
     for (shape, files) in refused_config {
         assert!(!config_verdict(files).is_empty(), "{shape} was not caught");
+    }
+
+    // The stash read: once, in its file, `show` after it, and no writing subcommand anywhere.
+    let stash_verdict = |files: &[(&Path, &str)]| {
+        let mut all = vec![(home, accepted), (config_home, accepted_config)];
+        all.extend_from_slice(files);
+        porcelain_read_violations(&all)
+    };
+    assert!(
+        stash_verdict(&[(stash_home, accepted_stash)]).is_empty(),
+        "the accepted stash read, `show` on the next line"
+    );
+    assert!(
+        stash_verdict(&[
+            (stash_home, accepted_stash),
+            (
+                other,
+                "#[cfg(test)]\nmod tests {\n    fn t() { [\"stash\", \"pop\"]; }\n}\n"
+            ),
+        ])
+        .is_empty(),
+        "a test module's stash"
+    );
+    let refused_stash: &[(&str, &[(&Path, &str)])] = &[
+        (
+            "`stash` in another file",
+            &[
+                (stash_home, accepted_stash),
+                (other, "fn b() { x.args([\"stash\", \"show\"]); }"),
+            ],
+        ),
+        (
+            "a second `stash` in its file",
+            &[(
+                stash_home,
+                "fn s() { [\"stash\", \"show\"]; [\"stash\", \"show\"]; }",
+            )],
+        ),
+        (
+            "`stash` without `show` after it",
+            &[(stash_home, "fn s() { [\"stash\", \"list\"]; }")],
+        ),
+        (
+            "`stash push` in its file",
+            &[(stash_home, "fn s() { [\"stash\", \"push\"]; }")],
+        ),
+        (
+            "a writing subcommand beside the accepted read",
+            &[(
+                stash_home,
+                "fn s() { [\"stash\", \"show\"]; x.arg(\"pop\"); }",
+            )],
+        ),
+        (
+            "a writing subcommand elsewhere in reads/",
+            &[
+                (stash_home, accepted_stash),
+                (other, "fn b() { x.arg(\"drop\"); }"),
+            ],
+        ),
+        (
+            "a writing subcommand as a raw string",
+            &[
+                (stash_home, accepted_stash),
+                (other, "fn b() { x.arg(r#\"store\"#); }"),
+            ],
+        ),
+        ("no stash read at all", &[(stash_home, "fn s() {}")]),
+    ];
+    for (shape, files) in refused_stash {
+        assert!(!stash_verdict(files).is_empty(), "{shape} was not caught");
+    }
+    for subcommand in STASH_WRITING_SUBCOMMANDS {
+        let source = format!("fn b() {{ x.arg(\"{subcommand}\"); }}");
+        assert!(
+            !stash_verdict(&[(stash_home, accepted_stash), (other, &source)]).is_empty(),
+            "`{subcommand}` was not caught"
+        );
     }
 
     // The literals are read where they are, lines counted through a multi-line string.

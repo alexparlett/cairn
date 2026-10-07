@@ -40,6 +40,10 @@ enum Subject {
     Commit(Oid),
     /// Two commits, tip against tip and never against a merge base (R7.2).
     Between { old: Oid, new: Oid },
+    /// A stash commit against the commit it was made on, with the untracked files it holds
+    /// where the user's `stash.showIncludeUntracked` says so: what `git stash show` lists
+    /// (refs-and-status R6.2), asked of it (`crate::reads::stash_changes`).
+    Stash(Oid),
 }
 
 /// What to compare (R2.1).
@@ -61,6 +65,18 @@ impl ChangesRequest {
     pub fn between(old: Oid, new: Oid) -> Self {
         Self {
             subject: Subject::Between { old, new },
+        }
+    }
+
+    /// What the stash commit `stash` changed, as `git stash show` lists it (R6.2): against
+    /// its first parent, the commit it was made on, and — when the user's
+    /// `stash.showIncludeUntracked` is set, on a git that reads it (2.32 and later) — the
+    /// untracked files its third parent holds, paired with the rest as git pairs them. A
+    /// file whose new side is one of those untracked files is read, line by line, from that
+    /// third parent.
+    pub fn stash(stash: Oid) -> Self {
+        Self {
+            subject: Subject::Stash(stash),
         }
     }
 }
@@ -197,8 +213,7 @@ impl DiffSession<'_> {
         options: &ContentOptions,
         cancel: &impl Cancel,
     ) -> Result<FileDiff, Error> {
-        let (old, new, _) = changes::subject(self.repo.inner(), request)?;
-        let trees = content::Trees { old, new };
+        let trees = changes::trees(self.repo.inner(), request)?;
         content::file_diff(
             self.repo,
             &mut self.cache,
@@ -248,8 +263,7 @@ impl DiffSession<'_> {
         options: &ContentOptions,
         cancel: &impl Cancel,
     ) -> Result<Page, Error> {
-        let (old, new, _) = changes::subject(self.repo.inner(), request)?;
-        let trees = content::Trees { old, new };
+        let trees = changes::trees(self.repo.inner(), request)?;
         content::page(
             self.repo,
             &mut self.cache,

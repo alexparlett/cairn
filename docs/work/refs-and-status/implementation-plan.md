@@ -84,7 +84,7 @@ repeated in the table.
 - **Every `git` subprocess runs with an environment Cairn built** and a read adds
   `GIT_OPTIONAL_LOCKS=0` and `GIT_NO_LAZY_FETCH=1`. `reads::status` is built as a
   read invocation, never anything else. The porcelain-reads guard
-  (`the_porcelain_reads_are_the_two_named_queries`) checks only `"diff"` and
+  (`the_porcelain_reads_are_the_three_named_queries`) checks only `"diff"` and
   `"config"` literals; `"status"` passes it, which is why
   `destructive-ops-reviewer` reads the verb and every option (issue #54 would
   make that a guard).

@@ -35,6 +35,14 @@ destructive-ops-reviewer; adjudicated by a fresh qa-confirm. Fixes:
   UI thread calls, and the Refresh arm's two bumps.
 - **DO2.** git-processes.md says the close ends the refresh thread's status and bounds its reap.
 - **RR4.** A reopen asks the new history before handing the old to the worker to free.
+- **Follow-up review of the coalescing (fresh responsiveness-reviewer):** a refresh's count
+  asked during a running status was served after the follow-up status, behind two; the jobs
+  coalescing takes off the queue are now served before the follow-up starts. The coalescing
+  test releases each status alone (`$DIR/release.<pid>`) and requires the newest count before
+  the follow-up is released, and exactly one count in all — red under "the taken jobs served
+  after the follow-up" and "coalescing drops the jobs it takes"; S1-S3 above re-checked.
+  Stale docs fixed: `routing.rs`'s refresh comments, history-graph.md's lane rule and freeing
+  paragraph, PRD C10's freeing clause, and status.md's cancellation (only a close, in the app).
 - **RR1, the user's decision: kept.** The refs stay on the repository thread; the cost is in
   history-graph.md, "Refresh".
 - **TC3** handed to phase 08 (state.md).

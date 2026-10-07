@@ -95,7 +95,9 @@ as a `core.fsmonitor` hook — and answers `Error::StatusCancelled`, leaving not
 the repository's registry, whichever of the two reads it was in
 (`a_superseded_status_read_ends_its_process_group_and_leaves_nothing_running`,
 `a_status_read_superseded_during_its_second_read_ends_it`,
-`a_status_read_superseded_before_it_starts_runs_nothing`).
+`a_status_read_superseded_before_it_starts_runs_nothing`). In the application, only a
+close cancels a status: a refresh leaves one that is running to finish and asks one more
+after it (refs-and-status R10.3 as amended; `docs/systems/history-graph.md`, "Refresh").
 
 ## What a status read writes and runs
 

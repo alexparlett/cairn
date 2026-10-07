@@ -490,7 +490,9 @@ FILE, and it is a guard, not a convention — see below.
   ahead/behind, status or ref filter, and a new query supersedes the older ones in
   its own lane only — except that a changes query also supersedes the file-diff
   lane (`QueryLane::supersedes`), since a file of the commit that was selected is
-  no file of the one that is now. So a scroll never cancels a diff, a selection
+  no file of the one that is now, and that nothing supersedes the status lane: a
+  refresh sends its status under the lane's unmoved number, so only a close cancels
+  one ("Refresh", below). So a scroll never cancels a diff, a selection
   never cancels a scroll, and an operation, numbered in no lane, supersedes
   nothing (`each_lane_supersedes_itself_and_a_changes_query_the_file_diff_too`;
   through the real boundary, `crates/cairn-app/src/worker/diff_tests.rs`).
@@ -584,7 +586,9 @@ up neither a page nor a diff (`a_slow_status_delays_neither_a_page_nor_a_diff`).
 refresh leaves a running `git status` to finish, and its answer is drawn; every refresh
 asked while it ran becomes one follow-up status after it, however many there were — the
 refresh thread takes up a status job and drops every other status job queued behind it,
-since one read answers them all (`serve_refreshes`). The status lane's number is never
+since one read answers them all, serving the other jobs it took off the queue — the newest
+refresh's ahead/behind — before that status starts, so a count waits behind at most the
+status that was running when its refresh was asked (`serve_refreshes`). The status lane's number is never
 moved by a refresh, so only a close cancels a status — by stopping every lane, and by
 ending every `git` in the repository's registry, either of which ends it
 (`a_refresh_leaves_a_running_status_to_finish_and_asks_one_more_after_it`,
@@ -648,8 +652,9 @@ answers them and opens once more from them
 arrives from the first page, since the session opens its walk there.
 
 **What is freed where.** Every refresh answer the window replaces — a snapshot,
-ahead/behind, a status — and every one superseded before the window read it goes to
-the repository thread to free (`a_replaced_refresh_answer_is_freed_on_a_worker_and_a_failure_keeps_the_last`,
+ahead/behind, a status — and every snapshot or count superseded before the window read
+it goes to the repository thread to free (a status is never superseded: one is dropped
+unread only when a close has stopped every lane, which frees it with the worker) (`a_replaced_refresh_answer_is_freed_on_a_worker_and_a_failure_keeps_the_last`,
 `a_superseded_refresh_comes_back_to_be_freed_on_a_worker`). A refresh's failure is kept
 beside the answer before it, which stays; a failure to read the refs before any were
 read is the history's failure too, since it has nothing to walk from.

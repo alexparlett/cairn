@@ -122,12 +122,14 @@ impl Routed {
             Self::Repository(_) => Some(Thread::Repository),
             Self::Diff(_) | Self::ConfiguredContext => Some(Thread::Diff),
             Self::CancelFetch => None,
-            // Its first read's: see `lane_thread` for the other two.
+            // Its refs': see `lane_thread` for its ahead/behind. Its status, numbered in no
+            // lane of the refresh's, goes to the refresh thread too.
             Self::Refresh => Some(Thread::Repository),
         }
     }
 
-    /// The thread `lane`'s query of this is served on: for a refresh, each of its three reads'.
+    /// The thread `lane`'s query of this is served on: for a refresh, each of the two reads it
+    /// is numbered for (its refs and ahead/behind).
     pub(super) fn lane_thread(&self, lane: QueryLane) -> Option<Thread> {
         match (self, lane) {
             (Self::Refresh, QueryLane::AheadBehind) => Some(Thread::Refresh),

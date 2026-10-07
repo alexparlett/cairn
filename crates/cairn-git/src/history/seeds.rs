@@ -138,7 +138,8 @@ impl Decoration {
 /// decoration. A detached `HEAD` naming what is not a commit seeds nothing, as it labels
 /// nothing. A stash whose commit cannot be read — dropped and pruned since the snapshot —
 /// has no row, as the snapshot's own stash read skips an entry it cannot read; the walk
-/// goes on without it. Reads two commits per stash and, for a detached `HEAD`, one header;
+/// goes on without it. A stash commit filed more than once is one row, its newest entry's.
+/// Reads two commits per stash and, for a detached `HEAD`, one header;
 /// the labels are shared, not copied.
 pub(super) fn resolve(
     repo: &gix::Repository,
@@ -156,9 +157,14 @@ pub(super) fn resolve(
             tips.push(id);
         }
     }
+    // One row per stash commit (the user's decision, 2026-10-07): `git stash store` can file
+    // one commit twice, and a commit is one row in a graph — the newest entry's, the list
+    // being newest first. The sidebar lists every entry from the snapshot.
+    let mut seen = HashSet::new();
     let stashes = seeds
         .stashes
         .iter()
+        .filter(|entry| seen.insert(entry.commit))
         .filter_map(|entry| stash_of(repo, entry).ok())
         .collect();
     Ok((

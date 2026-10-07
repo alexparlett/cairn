@@ -1176,6 +1176,61 @@ fn a_stash_whose_commit_is_gone_since_the_snapshot_has_no_row() {
     assert_eq!(commits.len(), 1);
 }
 
+/// QC4, the user's decision (2026-10-07): `git stash store` files one stash commit twice in
+/// the list; the graph draws it once, as its newest entry, `stash@{0}`, while the snapshot
+/// keeps both entries for the sidebar. Caught by: one row per entry (two rows sharing one
+/// identity), or the older entry's index drawn.
+#[test]
+fn a_stash_commit_filed_twice_is_one_row_its_newest_entrys() {
+    let fixture = fixtures::unborn();
+    let mut clock = Clock(fixtures::EPOCH);
+    commit(&fixture, &mut clock, "f", "1\n", "one");
+    write(&fixture, "f", "wip\n");
+    git_at(
+        &fixture,
+        clock.tick(),
+        &["stash", "push", "--quiet", "-m", "twice"],
+    );
+    let stashed = rev_parse(&fixture, "stash@{0}");
+    write(&fixture, "f", "other\n");
+    git_at(
+        &fixture,
+        clock.tick(),
+        &["stash", "push", "--quiet", "-m", "between"],
+    );
+    git_at(
+        &fixture,
+        clock.tick(),
+        &["stash", "store", "-m", "filed again", &stashed],
+    );
+    let listed = fixture.git(&["stash", "list", "--format=%H"]);
+    let listed: Vec<&str> = listed.lines().collect();
+    assert_eq!(listed.len(), 3);
+    assert_eq!(listed.first(), Some(&stashed.as_str()));
+    assert_eq!(listed.get(2), Some(&stashed.as_str()));
+
+    let repo = ok(Repository::discover(fixture.path()), "opening the fixture");
+    let read = ok(repo.refs(&CancelSignal::new()), "reading the refs");
+    assert_eq!(
+        read.snapshot.stashes.len(),
+        3,
+        "the snapshot keeps every entry"
+    );
+    let rows = page_all(&repo, &HistoryRequest::from_refs(&read.snapshot, 10), 10);
+    let drawn: Vec<(String, usize)> = rows
+        .rows()
+        .filter_map(stash_of)
+        .map(|stash| (stash.id.to_string(), stash.index))
+        .collect();
+    let between = rev_parse(&fixture, "stash@{1}");
+    assert_eq!(drawn.len(), 2, "{drawn:?}");
+    assert!(drawn.contains(&(stashed.clone(), 0)), "{drawn:?}");
+    assert!(drawn.contains(&(between, 1)), "{drawn:?}");
+    let ids: Vec<RowId> = rows.rows().map(|row| row.id()).collect();
+    let unique: BTreeSet<String> = ids.iter().map(|id| format!("{id:?}")).collect();
+    assert_eq!(unique.len(), ids.len(), "two rows share one identity");
+}
+
 /// RR1: opening a walk from every ref reads each tip, and polls the cancel before each but
 /// the first, on both routes: cancelled at its sixth poll, a walk from fifty tags stops
 /// having read six tips and laid nothing out, and a session cancelled there pages, once

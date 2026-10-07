@@ -3498,6 +3498,10 @@ mod tests {
             Some(RowId::Commit(chosen)),
             "the selection was lost"
         );
+        assert!(
+            view.rows.peek().position(RowId::Commit(chosen)).is_some(),
+            "the chosen commit did not arrive again in the reopened rows"
+        );
 
         // Nothing moved: the refresh's refs arrive, and nothing reopens.
         toggle_focus(&mut test, false);

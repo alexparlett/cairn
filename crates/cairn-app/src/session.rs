@@ -216,8 +216,10 @@ fn reopen_history(
         std::mem::replace(&mut *history, sized)
     };
     progress.set(Progress::opening());
-    (worker.submit)(Request::Retire(Retired::history(replaced)));
+    // The new history asked first, so its first page is not queued behind the free of the
+    // old one on the repository thread (phase 06 QA, RR4).
     (worker.submit)(Request::OpenHistory { rows: PAGE_ROWS });
+    (worker.submit)(Request::Retire(Retired::history(replaced)));
 }
 
 /// Takes down a dialog whose fetch has ended, refusing the prompt so the helper
@@ -1061,7 +1063,7 @@ mod tests {
         );
         let submitted: Vec<Request> = asked.submitted.borrow_mut().drain(..).collect();
         match submitted.as_slice() {
-            [Request::Retire(retired), Request::OpenHistory { rows }] => {
+            [Request::OpenHistory { rows }, Request::Retire(retired)] => {
                 assert_eq!(retired.replaced_rows(), Some(3), "not the old rows");
                 assert_eq!(*rows, PAGE_ROWS);
             }

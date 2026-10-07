@@ -1,7 +1,8 @@
 //! What the last refresh answered, as the window keeps it (refs-and-status R10): the refs
 //! snapshot, each branch's ahead/behind and the working tree's status, each kept until the
-//! next answer replaces it, and each read's failure beside it. No view draws them yet —
-//! the labels and toolbar, the sidebar and Local Changes do, from phases 07-09.
+//! next answer replaces it, and each read's failure beside it. The history's chips and the
+//! title bar read the refs, the title bar the current branch's counts and whether status
+//! listed a change; the sidebar and Local Changes read the rest, from phases 08-09.
 //!
 //! An answer replaced is handed back, never dropped here: the window sends it to a worker to
 //! free (`Request::Retire`), since a snapshot of tens of thousands of refs, or a status of
@@ -53,17 +54,24 @@ impl RefreshState {
     /// Each local branch's distance from its upstream, if counted.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "the toolbar and sidebar read it from phase 07 on")
+        expect(dead_code, reason = "the sidebar reads it from phase 08 on")
     )]
     pub fn ahead_behind(&self) -> Option<&[(RefName, AheadBehind)]> {
         self.ahead_behind.last.as_deref()
     }
 
+    /// `branch`'s distance from its upstream, if it was counted: a binary search, since the
+    /// counts come in the snapshot's order, by name.
+    pub fn ahead_behind_of(&self, branch: &RefName) -> Option<AheadBehind> {
+        let counts = self.ahead_behind.last.as_deref()?;
+        counts
+            .binary_search_by(|(name, _)| name.as_str().as_bytes().cmp(branch.as_str().as_bytes()))
+            .ok()
+            .and_then(|at| counts.get(at))
+            .map(|(_, counts)| *counts)
+    }
+
     /// The working tree's status, if read.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Local Changes reads it from phase 09 on")
-    )]
     pub fn status(&self) -> Option<&WorkingTreeStatus> {
         self.status.last.as_ref()
     }
@@ -73,7 +81,7 @@ impl RefreshState {
         not(test),
         expect(
             dead_code,
-            reason = "the views that draw each answer say so from phase 07 on"
+            reason = "the sidebar and Local Changes say so from phases 08-09 on"
         )
     )]
     pub fn failure(&self, what: Refreshed) -> Option<&str> {
@@ -109,5 +117,36 @@ impl RefreshState {
             Refreshed::Status => &mut self.status.failure,
         };
         *failure = Some(message);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A branch's counts are found by its name among every branch counted, and a branch not
+    /// counted (no upstream, a gone one) has none. Caught by: a neighbour's counts answered,
+    /// or the search reading an order the counts are not in.
+    #[test]
+    fn a_branchs_counts_are_found_by_its_name() {
+        let mut state = RefreshState::default();
+        assert_eq!(state.ahead_behind_of(&RefName::new("refs/heads/a")), None);
+        let counted = |ahead, behind| AheadBehind { ahead, behind };
+        let _ = state.ahead_behind_arrived(vec![
+            (RefName::new("refs/heads/a"), counted(1, 0)),
+            (RefName::new("refs/heads/a/b"), counted(2, 3)),
+            (RefName::new("refs/heads/main"), counted(0, 7)),
+            (RefName::new("refs/heads/z"), counted(4, 4)),
+        ]);
+        for (name, wanted) in [
+            ("refs/heads/a", Some(counted(1, 0))),
+            ("refs/heads/a/b", Some(counted(2, 3))),
+            ("refs/heads/main", Some(counted(0, 7))),
+            ("refs/heads/z", Some(counted(4, 4))),
+            ("refs/heads/gone", None),
+            ("refs/heads/mai", None),
+        ] {
+            assert_eq!(state.ahead_behind_of(&RefName::new(name)), wanted, "{name}");
+        }
     }
 }

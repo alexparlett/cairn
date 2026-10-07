@@ -25,6 +25,7 @@ mod message_lines;
 mod ref_chips;
 mod ref_glyphs;
 mod side_by_side_rows;
+mod status_box;
 mod toggle_glyphs;
 mod unified_rows;
 
@@ -74,3 +75,7 @@ pub use ref_chips::{
     min_width, row_chips, tint,
 };
 pub use ref_glyphs::{GLYPH_SIZE, RefGlyph};
+pub use status_box::{
+    NO_COMMITS_YET, StatusBox, Tracking, UPSTREAM_GONE, counts_text, current_branch, head_text,
+    name_text, repository_name,
+};

@@ -2,11 +2,12 @@
 
 use std::rc::Rc;
 
-use cairn_model::{History, RemoteSummary, RowContent, RowId, Secret};
+use cairn_model::{History, RemoteSummary, RowContent, RowId, Secret, Upstream, WorkingTreeStatus};
 use cairn_ui::accelerators::{self, HeldKeys, Scope};
 use cairn_ui::{
     ChangeCursor, CommitRow, CredentialPrompt, DETAIL_STRIP_HEIGHT, DetailTab, DiffSettings,
-    HistoryHeader, HistoryList, ROW_HEIGHT, RowRender,
+    HistoryHeader, HistoryList, ROW_HEIGHT, RowRender, StatusBox, Tracking, current_branch,
+    repository_name,
 };
 use freya::prelude::*;
 
@@ -134,7 +135,7 @@ pub fn window(
             held.write().heard(&e, false);
         })
         .child(title_bar(
-            opened,
+            status_box(opened, &view.refreshed.read()),
             &counted,
             &fetch,
             view.fetch,
@@ -281,8 +282,37 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     .into()
 }
 
+/// The status box for the repository at `path` (R7.1): its name, `*` while the last status
+/// listed a change, the current branch and its distance from its upstream, from what the last
+/// refresh answered — each as old as the answer it is read from (a status may be one refresh
+/// behind, R10.3 as amended).
+fn status_box(path: &str, refreshed: &RefreshState) -> StatusBox {
+    let refs = refreshed.refs();
+    let head = refs.map(|refs| refs.head.clone());
+    let tracking = refs
+        .and_then(|refs| {
+            let branch = current_branch(&refs.head)?;
+            Some(match refs.find(branch)?.upstream.as_ref()? {
+                Upstream::Gone { .. } => Tracking::Gone,
+                Upstream::Exists { .. } => refreshed
+                    .ahead_behind_of(branch)
+                    .map_or(Tracking::Untold, Tracking::Counts),
+            })
+        })
+        .unwrap_or(Tracking::Untold);
+    let dirty = match refreshed.status() {
+        Some(WorkingTreeStatus::Listed(entries)) => !entries.is_empty(),
+        Some(WorkingTreeStatus::IndexUnreadable(_) | WorkingTreeStatus::NoWorkingTree) | None => {
+            false
+        }
+    };
+    StatusBox::new(repository_name(path), head)
+        .dirty(dirty)
+        .tracking(tracking)
+}
+
 fn title_bar(
-    path: &str,
+    status: StatusBox,
     counted: &str,
     fetch: &FetchStatus,
     fetch_state: State<FetchStatus>,
@@ -299,13 +329,10 @@ fn title_bar(
         .padding(Gaps::new(8., 12., 8., 12.))
         .child(label().text("Cairn").theme_color().font_size(16.))
         .child(
-            label()
-                .text(path.to_owned())
-                .max_lines(1)
-                .text_overflow(TextOverflow::Ellipsis)
+            rect()
                 .width(Size::flex(1.))
-                .font_size(13.)
-                .color(get_theme_or_default().read().colors().text_secondary),
+                .overflow(Overflow::Clip)
+                .child(status),
         )
         .child(
             label()
@@ -2243,6 +2270,164 @@ mod tests {
             .as_ref()
             .and_then(|pair| pair.other(selected));
         (selected, other)
+    }
+
+    /// The title bar's texts: every label above the column headings.
+    fn title(test: &TestingRunner) -> Vec<String> {
+        let headings = test
+            .find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == "Author")
+                    .map(|_| node.layout().area.min_y())
+            })
+            .unwrap_or_else(|| panic!("no column headings"));
+        test.find_many(|node, element| {
+            Label::try_downcast(element)
+                .filter(|_| node.layout().area.max_y() <= headings)
+                .map(|label| label.text.to_string())
+        })
+    }
+
+    /// What a refresh answered, handed to the window as `session::apply` would keep it: refs
+    /// with `HEAD` at `head`, one branch `main` whose upstream is `upstream` (gone when it is
+    /// not listed), counts for `main`, and a status listing `changed` paths.
+    fn refreshed_with(
+        test: &mut TestingRunner,
+        view: View,
+        head: cairn_model::HeadState,
+        upstream: Option<(&str, bool)>,
+        counts: Option<cairn_model::AheadBehind>,
+        changed: usize,
+    ) {
+        use cairn_model::{Ref, RefKind, RefName, RefTarget, RefsSnapshot, StatusEntry, Upstream};
+        let mut refs = vec![Ref {
+            name: RefName::new("refs/heads/main"),
+            kind: RefKind::LocalBranch,
+            target: RefTarget::Commit(oid(0)),
+            symbolic: None,
+            upstream: upstream.map(|(name, exists)| {
+                if exists {
+                    Upstream::Exists {
+                        name: RefName::new(name),
+                        commit: Some(oid(1)),
+                    }
+                } else {
+                    Upstream::Gone {
+                        name: RefName::new(name),
+                    }
+                }
+            }),
+        }];
+        if let Some((name, true)) = upstream {
+            refs.push(Ref {
+                name: RefName::new(name),
+                kind: RefKind::RemoteTracking,
+                target: RefTarget::Commit(oid(1)),
+                symbolic: None,
+                upstream: None,
+            });
+        }
+        let mut refreshed = view.refreshed;
+        let mut state = refreshed.write();
+        let _ = state.refs_arrived(std::sync::Arc::new(RefsSnapshot {
+            refs,
+            head,
+            stashes: Vec::new(),
+            unreadable: 0,
+        }));
+        if let Some(counts) = counts {
+            let _ = state.ahead_behind_arrived(vec![(RefName::new("refs/heads/main"), counts)]);
+        }
+        let _ = state.status_arrived(WorkingTreeStatus::Listed(
+            (0..changed)
+                .map(|n| {
+                    StatusEntry::Untracked(cairn_model::RepoPath::from(format!("new-{n}").as_str()))
+                })
+                .collect(),
+        ));
+        drop(state);
+        test.sync_and_update();
+    }
+
+    /// R7.1, the QA brief: the title bar names the repository — `*` while status lists a
+    /// change — the current branch and its counts behind then ahead; a gone upstream says so
+    /// and draws no counts; a detached `HEAD` its short id; an unborn branch its name and that
+    /// it has no commit. Caught by: the star drawn for a clean tree or missed for a dirty one,
+    /// another branch's counts, counts drawn for a gone upstream, or a detached or unborn
+    /// `HEAD` drawn as a branch.
+    #[test]
+    fn the_title_bar_names_the_repository_the_branch_and_how_far_it_is_from_its_upstream() {
+        use cairn_model::{AheadBehind, HeadState, RefName};
+        let main = || HeadState::Branch(RefName::new("refs/heads/main"));
+
+        let (mut test, view, _) = launch((0..2).map(row).collect(), received(2, true));
+        assert!(
+            title(&test).contains(&"engine".to_owned()),
+            "{:?}",
+            title(&test)
+        );
+        refreshed_with(
+            &mut test,
+            view,
+            main(),
+            Some(("refs/remotes/origin/main", true)),
+            Some(AheadBehind {
+                ahead: 1,
+                behind: 18,
+            }),
+            2,
+        );
+        let shown = title(&test);
+        for wanted in ["engine*", "main", "18↓ 1↑"] {
+            assert!(
+                shown.contains(&wanted.to_owned()),
+                "no {wanted:?} in {shown:?}"
+            );
+        }
+
+        let (mut test, view, _) = launch((0..2).map(row).collect(), received(2, true));
+        refreshed_with(
+            &mut test,
+            view,
+            main(),
+            Some(("refs/remotes/origin/main", false)),
+            None,
+            0,
+        );
+        let shown = title(&test);
+        for wanted in ["engine", "main", cairn_ui::UPSTREAM_GONE] {
+            assert!(
+                shown.contains(&wanted.to_owned()),
+                "no {wanted:?} in {shown:?}"
+            );
+        }
+        assert!(
+            !shown
+                .iter()
+                .any(|text| text.contains('↓') || text.contains('↑')),
+            "{shown:?}"
+        );
+
+        let (mut test, view, _) = launch((0..2).map(row).collect(), received(2, true));
+        refreshed_with(&mut test, view, HeadState::Detached(oid(1)), None, None, 0);
+        let detached = format!("HEAD detached at {}", oid(1).short().as_str());
+        assert!(title(&test).contains(&detached), "{:?}", title(&test));
+
+        let (mut test, view, _) = launch(Vec::new(), received(0, true));
+        refreshed_with(
+            &mut test,
+            view,
+            HeadState::Unborn(RefName::new("refs/heads/trunk")),
+            None,
+            None,
+            1,
+        );
+        let shown = title(&test);
+        assert!(
+            shown.contains(&"trunk (no commits yet)".to_owned()),
+            "{shown:?}"
+        );
+        assert!(shown.contains(&"engine*".to_owned()), "{shown:?}");
     }
 
     /// C7 through the window: a row's chips are laid out against the refresh's snapshot — the

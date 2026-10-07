@@ -27,6 +27,7 @@ struct Fixture {
     unstaged: State<ShownFiles>,
     staged: State<ShownFiles>,
     filter: State<String>,
+    shown_paths: State<Option<usize>>,
     chosen: State<Option<(ChangeList, usize)>>,
     split: State<f32>,
 }
@@ -50,6 +51,7 @@ fn launch(changes: LocalChanges) -> (TestingRunner, Fixture, Heard) {
                         fixture.staged,
                         fixture.filter,
                     )
+                    .shown_paths(*fixture.shown_paths.read())
                     .split(fixture.split)
                     .chosen(*fixture.chosen.read())
                     .on_choose(move |pressed: (ChangeList, usize)| {
@@ -66,6 +68,7 @@ fn launch(changes: LocalChanges) -> (TestingRunner, Fixture, Heard) {
                 unstaged: State::create(ShownFiles::All),
                 staged: State::create(ShownFiles::All),
                 filter: State::create(String::new()),
+                shown_paths: State::create(None),
                 chosen: State::create(None),
                 split: State::create(cairn_ui::LISTS_SPLIT),
             })
@@ -412,6 +415,7 @@ fn the_filter_says_what_it_leaves() {
         mut filter,
         mut unstaged,
         mut staged,
+        mut shown_paths,
         ..
     } = fixture;
     test.run_in(|| {
@@ -421,22 +425,76 @@ fn the_filter_says_what_it_leaves() {
     });
     test.sync_and_update();
     assert!(!y_of(&test, FILTERING).is_empty());
+    // clash.rs in Unstaged, moved.rs in Staged: two paths of the six.
     test.run_in(|| {
         unstaged.set(ShownFiles::Filtered(vec![1]));
-        staged.set(ShownFiles::Filtered(vec![0]));
+        staged.set(ShownFiles::Filtered(vec![1]));
+        shown_paths.set(Some(2));
     });
     test.sync_and_update();
     assert!(
-        !y_of(&test, "Showing 2 of 7 files").is_empty(),
+        !y_of(&test, "Showing 2 of 6 files").is_empty(),
         "{:?}",
         labels(&test)
     );
     test.run_in(|| {
         unstaged.set(ShownFiles::Filtered(Vec::new()));
         staged.set(ShownFiles::Filtered(Vec::new()));
+        shown_paths.set(Some(0));
     });
     test.sync_and_update();
     assert!(!y_of(&test, NO_PATH_MATCHES).is_empty());
+}
+
+/// The user's decision (2026-10-07): "Showing N of M files" counts distinct paths, as the
+/// sidebar's Local Changes (N) does — a path with a staged and an unstaged change is in both
+/// lists and is one file of the status's six — on both sides of the count, with the filter's
+/// rows and their count as the filter's own pass answers them. Caught by: counting rows ("2 of
+/// 7"), or counting paths on one side only ("1 of 7", "2 of 6").
+#[test]
+fn the_filters_count_is_of_distinct_paths_a_path_in_both_lists_once() {
+    let changes = every_kind();
+    assert_eq!(
+        changes.len(ChangeList::Unstaged) + changes.len(ChangeList::Staged),
+        7
+    );
+    assert_eq!(changes.paths(), 6);
+    let matched = changes
+        .matching("both", || true)
+        .unwrap_or_else(|| unreachable!("never told to stop"));
+    assert_eq!(
+        (
+            matched.of(ChangeList::Unstaged).len(),
+            matched.of(ChangeList::Staged).len()
+        ),
+        (1, 1),
+        "both.rs is in both lists"
+    );
+    let (mut test, fixture, _) = launch(changes);
+    let Fixture {
+        mut filter,
+        mut unstaged,
+        mut staged,
+        mut shown_paths,
+        ..
+    } = fixture;
+    test.run_in(|| {
+        filter.set("both".to_owned());
+        unstaged.set(ShownFiles::Filtered(matched.unstaged.clone()));
+        staged.set(ShownFiles::Filtered(matched.staged.clone()));
+        shown_paths.set(Some(matched.paths));
+    });
+    test.sync_and_update();
+    assert!(
+        !y_of(&test, "Showing 1 of 6 files").is_empty(),
+        "{:?}",
+        labels(&test)
+    );
+    assert_eq!(
+        y_of(&test, "both.rs").len(),
+        2,
+        "the path's two rows are drawn"
+    );
 }
 
 fn many(paths: usize) -> LocalChanges {

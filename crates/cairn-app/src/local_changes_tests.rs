@@ -519,7 +519,59 @@ fn typing_in_the_filter_asks_a_worker_and_the_lists_draw_its_answer() {
         "{drawn:?}"
     );
     assert!(
-        drawn.contains(&"Showing 2 of 6 files".to_owned()),
+        drawn.contains(&"Showing 2 of 5 files".to_owned()),
+        "{drawn:?}"
+    );
+}
+
+/// The user's decision (2026-10-07): under Local Changes' filter, "Showing N of M files" counts
+/// distinct paths, as the sidebar's "Local Changes (N)" does — a path with a staged and an
+/// unstaged change, in both lists, is one file — through the real filter pass a worker runs and
+/// the window keeping its answer. Caught by: counting rows ("Showing 2 of 6 files"), or
+/// counting paths on one side only.
+#[test]
+fn the_filters_count_is_the_sidebars_distinct_paths_a_path_in_both_lists_once() {
+    let (mut test, view, submitted) = launch();
+    apply(&mut test, view, &submitted, status(every_kind()));
+    open_local_changes(&mut test);
+    assert!(labels(&test).contains(&"Local Changes (5)".to_owned()));
+    let mut text = view.local.filter_text;
+    test.run_in(|| text.set("both".to_owned()));
+    for _ in 0..3 {
+        test.sync_and_update();
+    }
+    let lists = view
+        .refreshed
+        .read()
+        .local_changes()
+        .cloned()
+        .unwrap_or_else(|| panic!("no status kept"));
+    let rows = lists
+        .matching("both", || true)
+        .unwrap_or_else(|| unreachable!("never told to stop"));
+    assert_eq!(
+        rows.unstaged.len() + rows.staged.len(),
+        2,
+        "both.rs in both lists"
+    );
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::FilteredLocalChanges {
+            changes: lists,
+            text: "both".to_owned(),
+            rows,
+        },
+    );
+    let drawn = labels(&test);
+    assert_eq!(
+        drawn.iter().filter(|text| *text == "both.rs").count(),
+        2,
+        "{drawn:?}"
+    );
+    assert!(
+        drawn.contains(&"Showing 1 of 5 files".to_owned()),
         "{drawn:?}"
     );
 }

@@ -34,7 +34,7 @@ use freya::prelude::*;
 
 use crate::detail_pane::notice;
 use crate::diff_state::{WorkingChoice, WorkingShown, answered_working};
-use crate::local_changes_state::{drawn_changes, shown_rows};
+use crate::local_changes_state::{drawn_changes, shown_paths, shown_rows};
 use crate::window::View;
 use crate::worker::{FileQuery, Refreshed, Request};
 use crate::{diff_actions, shortcuts};
@@ -272,6 +272,7 @@ impl Component for LocalChangesPane {
                 .map(|row| (choice.list, row))
         });
         let empty = drawn_changes(&local).is_empty();
+        let shown_paths = shown_paths(&local);
         drop(local);
 
         let choosing = self.submit.clone();
@@ -282,6 +283,7 @@ impl Component for LocalChangesPane {
             readable.map(|state| shown_rows(state, ChangeList::Staged), |_| true),
             view.local.filter_text,
         )
+        .shown_paths(shown_paths)
         .split(view.local.lists_split)
         .chosen(chosen)
         .on_choose(move |(list, row): (ChangeList, usize)| {

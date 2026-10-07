@@ -89,11 +89,15 @@ pub struct LocalChange<'a> {
     pub state: PathState,
 }
 
-/// Which rows of each list a filter's text leaves, by their place in the list, in order.
+/// Which rows of each list a filter's text leaves, by their place in the list, in order, and
+/// how many distinct paths those rows show — a path left in both lists counted once, as
+/// [`LocalChanges::paths`] counts the status's (the user's decision, 2026-10-07: "Showing N of M
+/// files" counts paths, as the sidebar's count does).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MatchedRows {
     pub unstaged: Vec<u32>,
     pub staged: Vec<u32>,
+    pub paths: usize,
 }
 
 impl MatchedRows {
@@ -139,7 +143,12 @@ impl LocalChanges {
             unstaged.sort_unstable_by(by_path);
             staged.sort_unstable_by(by_path);
         }
-        let paths = distinct_paths(&status, &unstaged, &staged);
+        let paths = match &status {
+            WorkingTreeStatus::Listed(entries) => {
+                distinct_paths(entries, unstaged.iter().copied(), staged.iter().copied())
+            }
+            WorkingTreeStatus::IndexUnreadable(_) | WorkingTreeStatus::NoWorkingTree => 0,
+        };
         Self {
             status,
             unstaged,
@@ -207,7 +216,9 @@ impl LocalChanges {
     /// Which rows of each list hold `text` in their path, or in a rename's or a copy's source —
     /// the rule of the Changes tab's filter (`ChangeSet::files_matching`), case ignored. A pass
     /// over every row: run on a worker. `keep_going` is asked every few thousand rows, and a
-    /// `false` abandons the pass (`None`): a newer text superseded it.
+    /// `false` abandons the pass (`None`): a newer text superseded it. The distinct paths the
+    /// rows left show are counted there too, by a merge of the two lists' rows, which are in
+    /// one order.
     pub fn matching(
         &self,
         text: &str,
@@ -238,6 +249,15 @@ impl LocalChanges {
                 }
             }
         }
+        let entry = |list: ChangeList| {
+            let indices = self.list(list);
+            move |row: &u32| indices.get(*row as usize).copied().unwrap_or(u32::MAX)
+        };
+        matched.paths = distinct_paths(
+            self.entries(),
+            matched.unstaged.iter().map(entry(ChangeList::Unstaged)),
+            matched.staged.iter().map(entry(ChangeList::Staged)),
+        );
         Some(matched)
     }
 }
@@ -262,18 +282,20 @@ fn path_at(entries: &[StatusEntry], index: u32) -> &[u8] {
         .map_or(&[], |entry| entry.path().as_bytes())
 }
 
-/// The distinct paths of two lists, each in its paths' order: their union, counted by a merge.
-fn distinct_paths(status: &WorkingTreeStatus, unstaged: &[u32], staged: &[u32]) -> usize {
-    let WorkingTreeStatus::Listed(entries) = status else {
-        return 0;
-    };
+/// The distinct paths of two lists of entries, each in its paths' order and each listing a path
+/// at most once: their union, counted by a merge.
+fn distinct_paths(
+    entries: &[StatusEntry],
+    unstaged: impl Iterator<Item = u32>,
+    staged: impl Iterator<Item = u32>,
+) -> usize {
     let path = |index: u32| path_at(entries, index);
-    let (mut one, mut two) = (unstaged.iter().peekable(), staged.iter().peekable());
+    let (mut one, mut two) = (unstaged.peekable(), staged.peekable());
     let mut count = 0;
     loop {
         match (one.peek(), two.peek()) {
             (Some(a), Some(b)) => {
-                match path_order(path(**a), path(**b)) {
+                match path_order(path(*a), path(*b)) {
                     std::cmp::Ordering::Less => {
                         one.next();
                     }
@@ -643,7 +665,39 @@ mod tests {
         // Unstaged: README, src/Lib.rs, src/main.rs; Staged: docs/new.md, src/Lib.rs.
         assert_eq!(matched.of(ChangeList::Unstaged), [1, 2]);
         assert_eq!(matched.of(ChangeList::Staged), [0, 1]);
+        // src/Lib.rs in both lists, src/main.rs and docs/new.md (by its source) once each.
+        assert_eq!(matched.paths, 3);
         assert_eq!(changes.matching("src", || false), None);
+    }
+
+    /// The user's decision (2026-10-07): what a filter leaves is counted in distinct paths, as
+    /// the status is — a path left in both lists once, and a staged deletion and an untracked
+    /// file of one name once — and a path left in one list alone once. Caught by: counting the
+    /// rows left (4 for "gone" and "both" alike), or counting only one list's rows.
+    #[test]
+    fn what_a_filter_leaves_is_counted_in_distinct_paths() {
+        let changes = LocalChanges::new(WorkingTreeStatus::Listed(vec![
+            changed("gone.txt", Some(StagedChange::Deleted), None),
+            changed(
+                "both.txt",
+                Some(StagedChange::Modified),
+                Some(UnstagedChange::Modified),
+            ),
+            untracked("gone.txt"),
+            untracked("new.txt"),
+        ]));
+        let paths = |text: &str| {
+            changes
+                .matching(text, || true)
+                .unwrap_or_else(|| unreachable!("never told to stop"))
+                .paths
+        };
+        assert_eq!(paths("both"), 1);
+        assert_eq!(paths("gone"), 1);
+        assert_eq!(paths("txt"), 3);
+        assert_eq!(paths("new"), 1);
+        assert_eq!(paths("nothing"), 0);
+        assert_eq!(paths("o"), 2);
     }
 
     /// The user's decision (2026-10-07): each list is in Fork's natural order — case ignored,

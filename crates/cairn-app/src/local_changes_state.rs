@@ -69,11 +69,14 @@ impl LocalChangesView {
     }
 }
 
-/// The lists drawn: a status's, and the rows of each the filter left, or all of them.
+/// The lists drawn: a status's, and the rows of each the filter left, or all of them, with the
+/// distinct paths those rows show as the filter's pass counted them (`None` while every row is
+/// shown or the rows are on their way).
 #[derive(Debug)]
 struct Drawn {
     changes: Arc<LocalChanges>,
     shown: [ShownFiles; 2],
+    shown_paths: Option<usize>,
 }
 
 #[derive(Debug, Default)]
@@ -103,6 +106,12 @@ pub fn drawn_changes(state: &LocalChangesState) -> &LocalChanges {
         .drawn
         .as_ref()
         .map_or(&*NO_CHANGES, |drawn| drawn.changes.as_ref())
+}
+
+/// How many distinct paths the filter's rows drawn show, as the filter's pass counted them
+/// (`MatchedRows::paths`); `None` while every row is drawn or none is yet.
+pub fn shown_paths(state: &LocalChangesState) -> Option<usize> {
+    state.drawn.as_ref().and_then(|drawn| drawn.shown_paths)
 }
 
 /// The rows of `list` the filter leaves, as the list reads them.
@@ -150,9 +159,19 @@ impl LocalChangesState {
             .or(self.drawn.as_ref().map(|drawn| &drawn.changes))
     }
 
-    /// `changes` drawn with `shown` rows; what it replaces handed back to be freed on a worker.
-    fn draw(&mut self, changes: Arc<LocalChanges>, shown: [ShownFiles; 2]) -> Vec<Request> {
-        let replaced = self.drawn.replace(Drawn { changes, shown });
+    /// `changes` drawn with `shown` rows, which show `shown_paths` distinct paths; what it
+    /// replaces handed back to be freed on a worker.
+    fn draw(
+        &mut self,
+        changes: Arc<LocalChanges>,
+        shown: [ShownFiles; 2],
+        shown_paths: Option<usize>,
+    ) -> Vec<Request> {
+        let replaced = self.drawn.replace(Drawn {
+            changes,
+            shown,
+            shown_paths,
+        });
         self.serial += 1;
         replaced
             .map(|drawn| retire(drawn.changes))
@@ -166,7 +185,7 @@ impl LocalChangesState {
         if self.text.is_empty() {
             let mut requests: Vec<Request> = self.pending.take().map(retire).into_iter().collect();
             self.answered.clear();
-            requests.extend(self.draw(changes, [ShownFiles::All, ShownFiles::All]));
+            requests.extend(self.draw(changes, [ShownFiles::All, ShownFiles::All], None));
             return requests;
         }
         let asked = Request::FilterLocalChanges {
@@ -178,7 +197,11 @@ impl LocalChangesState {
         if self.drawn.is_none() {
             // Nothing to keep drawing meanwhile: the lists wait for their first rows.
             if let Some(pending) = self.pending.take() {
-                requests.extend(self.draw(pending, [ShownFiles::Waiting, ShownFiles::Waiting]));
+                requests.extend(self.draw(
+                    pending,
+                    [ShownFiles::Waiting, ShownFiles::Waiting],
+                    None,
+                ));
             }
         }
         requests
@@ -195,10 +218,11 @@ impl LocalChangesState {
         if self.text.is_empty() {
             self.answered.clear();
             return match self.pending.take() {
-                Some(pending) => self.draw(pending, [ShownFiles::All, ShownFiles::All]),
+                Some(pending) => self.draw(pending, [ShownFiles::All, ShownFiles::All], None),
                 None => {
                     if let Some(drawn) = &mut self.drawn {
                         drawn.shown = [ShownFiles::All, ShownFiles::All];
+                        drawn.shown_paths = None;
                     }
                     Vec::new()
                 }
@@ -213,6 +237,7 @@ impl LocalChangesState {
             && self.answered.is_empty()
         {
             drawn.shown = [ShownFiles::Waiting, ShownFiles::Waiting];
+            drawn.shown_paths = None;
         }
         vec![Request::FilterLocalChanges {
             changes: newest,
@@ -236,15 +261,20 @@ impl LocalChangesState {
         if !wanted {
             return vec![retire(changes)];
         }
-        let MatchedRows { unstaged, staged } = rows;
+        let MatchedRows {
+            unstaged,
+            staged,
+            paths,
+        } = rows;
         let shown = [ShownFiles::Filtered(unstaged), ShownFiles::Filtered(staged)];
         self.answered = self.text.clone();
         let mut requests = Vec::new();
         match self.pending.take() {
-            Some(pending) => requests.extend(self.draw(pending, shown)),
+            Some(pending) => requests.extend(self.draw(pending, shown, Some(paths))),
             None => {
                 if let Some(drawn) = &mut self.drawn {
                     drawn.shown = shown;
+                    drawn.shown_paths = Some(paths);
                 }
             }
         }
@@ -326,6 +356,7 @@ mod tests {
             MatchedRows {
                 unstaged: vec![1],
                 staged: Vec::new(),
+                paths: 1,
             },
         );
         assert!(state.is_settled());
@@ -353,6 +384,7 @@ mod tests {
             MatchedRows {
                 unstaged: vec![1, 2],
                 staged: Vec::new(),
+                paths: 2,
             },
         );
         assert_eq!(
@@ -366,6 +398,10 @@ mod tests {
             shown_rows(&state, ChangeList::Unstaged),
             &ShownFiles::Filtered(vec![1, 2])
         );
+        assert_eq!(shown_paths(&state), Some(2));
+        // Cleared, every row is drawn and no count of what a filter left is kept.
+        let _ = state.filter("");
+        assert_eq!(shown_paths(&state), None);
     }
 
     /// Clearing the filter draws every row of the newest lists at once, a status waiting for

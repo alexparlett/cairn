@@ -76,8 +76,12 @@ until its rows come: the lists before it stay drawn with their own rows meanwhil
 one status is never read by an index into another, and a refresh never empties the view while
 a filter is typed (`crates/cairn-app/src/local_changes_state.rs`). Until the first answer for a
 text, the lists say "Filtering…" rather than counting every row as matched; then "Showing N of
-M files" (rows, so a path in both lists counts twice); "No path matches the filter." when it
-leaves none.
+M files", both counts in distinct paths, as the sidebar's count is (the user's decision,
+2026-10-07): M is the status's (`LocalChanges::paths`) and N the rows the filter left, counted
+by the same pass that left them (`MatchedRows::paths`, a merge of the two lists' rows on the
+worker), so a path left in both lists is one file; the window keeps N with the rows
+(`local_changes_state::shown_paths`) and hands it to the list (`LocalChangesList::shown_paths`).
+"No path matches the filter." when it leaves none.
 
 ## Choosing a path, and asking its diff
 
@@ -131,10 +135,12 @@ so the last hold on a status of tens of thousands of paths is never dropped on t
   `each_list_is_in_natural_order_and_found_in_it`,
   `each_change_is_drawn_as_its_kind_with_a_sources_path`, `the_count_is_of_distinct_paths`,
   `a_path_is_found_by_its_list_and_name`, `a_filter_leaves_each_lists_rows_that_hold_its_text`,
+  `what_a_filter_leaves_is_counted_in_distinct_paths`,
   `fifty_thousand_paths_are_laid_out_in_order`.
 - Drawing (`crates/cairn-ui/tests/local_changes.rs`):
   `both_lists_draw_their_paths_with_their_badges`, `each_list_is_in_its_paths_order`,
   `a_press_and_the_arrows_choose_a_row_of_its_list`, `the_filter_says_what_it_leaves`,
+  `the_filters_count_is_of_distinct_paths_a_path_in_both_lists_once`,
   `every_kind_of_change_draws_its_badges_shape` (each painted badge's cell read pixel for pixel
   against its glyph), `the_splitter_between_the_lists_drags`, the badge rule
   `each_kind_of_change_has_forks_badge` and `every_glyph_paints_a_shape_no_other_glyph_paints`
@@ -161,6 +167,7 @@ so the last hold on a status of tens of thousands of paths is never dropped on t
   `a_path_in_both_lists_draws_each_lists_diff_and_the_answers_cannot_cross`,
   `a_refresh_that_removes_the_chosen_path_draws_no_stale_diff_under_no_row`,
   `typing_in_the_filter_asks_a_worker_and_the_lists_draw_its_answer`,
+  `the_filters_count_is_the_sidebars_distinct_paths_a_path_in_both_lists_once`,
   `next_change_moves_local_changes_own_diff`, `a_status_that_could_not_be_read_is_said`,
   `a_filter_hiding_the_path_chosen_keeps_it_chosen_and_drawn`; and
   `local_changes_and_all_commits_switch_the_main_region` (`sidebar_tests.rs`).
@@ -196,7 +203,9 @@ so the last hold on a status of tens of thousands of paths is never dropped on t
 - The count beside Local Changes is the distinct paths status lists (R9.2's wording), where
   Fork's is said to equal the entries `git status` lists; whether Fork counts a path with both
   staged and unstaged changes twice is OPEN in the research (its OPEN 9). "Showing N of M
-  files" under the filter counts rows, so a path in both lists counts twice there.
+  files" under the filter counts distinct paths on both sides too, so it agrees with the
+  sidebar's count (the user's decision, 2026-10-07), though the lists draw a path in both of
+  them as two rows.
 - Entire File applies here, shared with the Changes tab, as it does to every view of one file
   under the bar.
 - A status that could not be read — a partial clone's staged rename on git 2.44 and later among

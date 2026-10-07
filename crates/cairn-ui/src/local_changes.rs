@@ -94,6 +94,9 @@ pub struct LocalChangesList {
     unstaged: Readable<ShownFiles>,
     staged: Readable<ShownFiles>,
     filter: Writable<String>,
+    /// How many distinct paths the filter's rows show (`MatchedRows::paths`, counted where the
+    /// rows were); `None` while every row is shown.
+    shown_paths: Option<usize>,
     /// Unstaged's share of the two lists' height, in percent: the caller's to keep.
     split: Option<Writable<f32>>,
     chosen: Option<(ChangeList, usize)>,
@@ -116,11 +119,22 @@ impl LocalChangesList {
             unstaged: unstaged.into(),
             staged: staged.into(),
             filter: filter.into(),
+            shown_paths: None,
             split: None,
             chosen: None,
             on_choose: EventHandler::new(|_| {}),
             key: DiffKey::None,
         }
+    }
+
+    /// How many distinct paths the filter's rows show, as the pass that left them counted them
+    /// (`cairn_model::MatchedRows::paths`): said under the filter as "Showing N of M files",
+    /// M the status's distinct paths ([`LocalChanges::paths`]), so a path in both lists counts
+    /// once on both sides, as the sidebar's count does (the user's decision, 2026-10-07).
+    /// `None` — the default — while every row is shown.
+    pub fn shown_paths(mut self, shown_paths: Option<usize>) -> Self {
+        self.shown_paths = shown_paths;
+        self
     }
 
     /// Where the splitter between Unstaged and Staged stands, as Unstaged's share in percent:
@@ -150,6 +164,7 @@ impl PartialEq for LocalChangesList {
         self.changes == other.changes
             && self.unstaged == other.unstaged
             && self.staged == other.staged
+            && self.shown_paths == other.shown_paths
             && self.chosen == other.chosen
             && self.key == other.key
     }
@@ -177,14 +192,15 @@ impl Component for LocalChangesList {
         let mut split_height = use_state(|| 0f32);
         let own_split = use_state(|| LISTS_SPLIT);
         let mut split: Writable<f32> = self.split.clone().unwrap_or_else(|| own_split.into());
-        // Lengths only: nothing here walks the paths.
+        // Lengths and counts only: nothing here walks the paths. The caption counts distinct
+        // paths, never rows, so a path in both lists is one file of the sidebar's count.
         let (unstaged, staged, total, waiting) = {
             let changes = self.changes.read();
             let (unstaged, staged) = (self.unstaged.read(), self.staged.read());
             (
                 unstaged.len(changes.len(ChangeList::Unstaged)),
                 staged.len(changes.len(ChangeList::Staged)),
-                changes.len(ChangeList::Unstaged) + changes.len(ChangeList::Staged),
+                changes.paths(),
                 *unstaged == ShownFiles::Waiting || *staged == ShownFiles::Waiting,
             )
         };
@@ -194,7 +210,7 @@ impl Component for LocalChangesList {
                 .text(if waiting {
                     FILTERING.to_owned()
                 } else {
-                    filter_count(unstaged + staged, total)
+                    filter_count(self.shown_paths.unwrap_or(total), total)
                 })
                 .max_lines(1)
                 .font_size(12.)

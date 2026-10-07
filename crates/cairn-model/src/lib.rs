@@ -20,6 +20,7 @@ mod graph;
 mod history;
 mod lane_assignment;
 mod line_selection;
+mod local_changes;
 mod oid;
 mod patch;
 mod patch_apply;
@@ -55,6 +56,9 @@ pub use graph::{EdgeKind, EdgeSegment, GraphRow, Lane, LaneChange};
 pub use history::{History, HistoryFull, HistoryRow, RetainedBytes, RowContent, RowId};
 pub use lane_assignment::LaneAssigner;
 pub use line_selection::Selection;
+pub use local_changes::{
+    ChangeKind, ChangeList, LocalChange, LocalChanges, MatchedRows, PathState,
+};
 pub use oid::{Oid, OidHex, OidParseError};
 pub use patch::{PATCH_CONTEXT, Patch, emit_patch};
 pub use patch_apply::{PatchApplyError, apply_patch, apply_patch_in_reverse};

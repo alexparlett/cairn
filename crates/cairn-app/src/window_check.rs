@@ -34,6 +34,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -714,18 +715,9 @@ fn describe_landed(harness: &Harness) {
 fn local_changes_check(bench: &str) {
     let scratch = std::env::var("CAIRN_SCRATCH_REPO")
         .expect("set CAIRN_SCRATCH_REPO to a scratch clone of the bench repository, dirtied");
-    let (bench_at, scratch_at) = (
-        std::fs::canonicalize(bench).unwrap_or_else(|error| panic!("{bench}: {error}")),
-        std::fs::canonicalize(&scratch).unwrap_or_else(|error| panic!("{scratch}: {error}")),
-    );
-    assert!(
-        !scratch_at.starts_with(&bench_at) && !bench_at.starts_with(&scratch_at),
-        "the scratch clone is the bench repository, or inside it"
-    );
-    assert!(
-        !scratch_at.join(".git/objects/info/alternates").exists(),
-        "the scratch clone borrows the bench's objects: a read there could touch the bench"
-    );
+    if let Some(refused) = scratch_refusal(Path::new(bench), Path::new(&scratch)) {
+        panic!("{refused}");
+    }
     let mut harness = launch(&scratch);
     let opened = harness.pump(Input::Nothing, 30, landed);
     opened.report("scratch clone: opening, its large status among what lands");
@@ -840,4 +832,125 @@ fn visible_texts(test: &TestingRunner, count: usize) -> Vec<String> {
         .take(count)
         .map(|(_, _, text)| text)
         .collect()
+}
+
+/// Why `scratch` may not stand in for a scratch clone of `bench`, or `None` when it may: it is
+/// the bench, or inside it, or holds it; its git directory — `.git`, or the one a `.git` file's
+/// `gitdir:` line names, a symbolic link followed — or the common directory a linked worktree's
+/// `commondir` names is inside the bench; or it borrows objects through `alternates`. Read with
+/// `std::fs` alone: the check runs no `git`. A read in a repository whose git directory is the
+/// bench's would read, and could leave files in, the bench.
+fn scratch_refusal(bench: &Path, scratch: &Path) -> Option<String> {
+    let canonical = |path: &Path| {
+        std::fs::canonicalize(path).map_err(|error| format!("{}: {error}", path.display()))
+    };
+    let (bench, scratch) = match (canonical(bench), canonical(scratch)) {
+        (Ok(bench), Ok(scratch)) => (bench, scratch),
+        (Err(error), _) | (_, Err(error)) => return Some(error),
+    };
+    if scratch.starts_with(&bench) || bench.starts_with(&scratch) {
+        return Some("the scratch clone is the bench repository, inside it or holding it".into());
+    }
+    let dot = scratch.join(".git");
+    let git_dir: PathBuf = match std::fs::read_to_string(&dot) {
+        // A `.git` file: a linked worktree's, or a separate git directory's.
+        Ok(file) => match file.lines().find_map(|line| line.strip_prefix("gitdir: ")) {
+            Some(named) => scratch.join(named.trim()),
+            None => return Some(format!("{} names no git directory", dot.display())),
+        },
+        Err(_) => dot,
+    };
+    let git_dir = match canonical(&git_dir) {
+        Ok(git_dir) => git_dir,
+        Err(error) => return Some(error),
+    };
+    let common = match std::fs::read_to_string(git_dir.join("commondir")) {
+        Ok(named) => match canonical(&git_dir.join(named.trim())) {
+            Ok(common) => common,
+            Err(error) => return Some(error),
+        },
+        Err(_) => git_dir.clone(),
+    };
+    if git_dir.starts_with(&bench) || common.starts_with(&bench) {
+        return Some(format!(
+            "the scratch clone's git directory ({}) is the bench repository's",
+            common.display()
+        ));
+    }
+    if common.join("objects/info/alternates").exists() {
+        return Some(
+            "the scratch clone borrows objects through alternates: a read there could touch the \
+             bench"
+                .into(),
+        );
+    }
+    None
+}
+
+/// Phase 09 QA's TC2: the window check's guard refuses every scratch that would read the
+/// bench's git directory — the bench itself, a directory inside it, a linked worktree of it, a
+/// `.git` symbolic link to it, a clone borrowing objects — and accepts a clone of its own.
+/// Built with `std::fs` in the temporary directory; no `git` runs. Caught by: a guard that
+/// reads only `<scratch>/.git/objects/info/alternates` (a linked worktree passes).
+#[test]
+fn the_scratch_guard_refuses_whatever_shares_the_benchs_git_directory() {
+    let root = std::env::temp_dir().join(format!("cairn-scratch-guard-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let make = |path: &Path| std::fs::create_dir_all(path).unwrap_or_else(|e| panic!("{e}"));
+    let write =
+        |path: &Path, text: &str| std::fs::write(path, text).unwrap_or_else(|e| panic!("{e}"));
+    let bench = root.join("bench");
+    make(&bench.join(".git/objects/info"));
+    make(&bench.join(".git/worktrees/linked"));
+    write(&bench.join(".git/worktrees/linked/commondir"), "../..\n");
+
+    let clone = root.join("clone");
+    make(&clone.join(".git/objects/info"));
+    assert_eq!(
+        scratch_refusal(&bench, &clone),
+        None,
+        "a clone of its own was refused"
+    );
+
+    let linked = root.join("linked");
+    make(&linked);
+    write(
+        &linked.join(".git"),
+        &format!(
+            "gitdir: {}\n",
+            bench.join(".git/worktrees/linked").display()
+        ),
+    );
+    let linked_relative = root.join("linked-relative");
+    make(&linked_relative);
+    write(
+        &linked_relative.join(".git"),
+        "gitdir: ../bench/.git/worktrees/linked\n",
+    );
+    let symlinked = root.join("symlinked");
+    make(&symlinked);
+    std::os::unix::fs::symlink(bench.join(".git"), symlinked.join(".git"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let borrowing = root.join("borrowing");
+    make(&borrowing.join(".git/objects/info"));
+    write(
+        &borrowing.join(".git/objects/info/alternates"),
+        &format!("{}\n", bench.join(".git/objects").display()),
+    );
+    let inside = bench.join("sub");
+    make(&inside);
+    for (name, scratch) in [
+        ("the bench", &bench),
+        ("a directory inside it", &inside),
+        ("a linked worktree", &linked),
+        ("a linked worktree named relatively", &linked_relative),
+        ("a .git symbolic link", &symlinked),
+        ("a clone borrowing objects", &borrowing),
+    ] {
+        assert!(
+            scratch_refusal(&bench, scratch).is_some(),
+            "{name} was accepted"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
 }

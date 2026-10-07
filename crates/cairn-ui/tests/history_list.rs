@@ -689,3 +689,87 @@ fn rows_scrolled_away_and_back_draw_the_edges_the_assigner_drew() {
         "no drawn row carried a repainted line, so the late lines decided nothing"
     );
 }
+
+/// RR1: the list keeps where its selection sits in the hint its caller gives it, and reads it
+/// there first — so a row its caller chose (a pressed ref's, a parent link's), told to the
+/// hint, is moved from at once rather than searched for among every loaded row. A press is
+/// written to the caller's hint; and with one commit drawn twice — rows 5 and 500, a
+/// history no walk makes, built so the two ways of finding it disagree — the hint at 500
+/// moves an arrow key to 501, where a search from the top would find 5 and move to 6. Caught
+/// by: the list keeping a hint of its own and ignoring the caller's.
+#[test]
+fn the_list_moves_from_the_row_its_callers_hint_names() {
+    #[derive(Clone)]
+    struct Hinted {
+        rows: State<History>,
+        selected: State<Option<RowId>>,
+        cursor: State<usize>,
+    }
+    let reports = Reports::default();
+    let on_select = reports.selected.clone();
+    let mut history = rows(0..5);
+    hold(&mut history, page([500]));
+    hold(&mut history, page(6..500));
+    hold(&mut history, page([500]));
+    hold(&mut history, page(501..600));
+    let (mut test, hinted) = TestingRunner::new(
+        move || {
+            let hinted = use_consume::<Hinted>();
+            let mut selected = hinted.selected;
+            let on_select = on_select.clone();
+            HistoryList::new(hinted.rows, |render: RowRender| {
+                let subject = match render.content {
+                    RowContent::Commit(commit) => commit.summary,
+                    RowContent::Stash(stash) => stash.message,
+                };
+                label().height(Size::px(ROW_HEIGHT)).text(subject).into()
+            })
+            .selected(*selected.read())
+            .cursor(hinted.cursor)
+            .on_select(move |id: RowId| {
+                on_select.borrow_mut().push(id);
+                selected.set(Some(id));
+            })
+            .into_element()
+        },
+        (WIDTH, HEIGHT).into(),
+        move |runner| {
+            runner.provide_root_context(|| Hinted {
+                rows: State::create(history),
+                selected: State::create(None),
+                cursor: State::create(0),
+            })
+        },
+        1.,
+    );
+    test.sync_and_update();
+
+    let centre = test
+        .find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == "commit 3")
+                .map(|_| node.layout().area.center())
+        })
+        .unwrap_or_else(|| panic!("commit 3 is not drawn"));
+    test.click_cursor((f64::from(centre.x), f64::from(centre.y)));
+    test.sync_and_update();
+    assert_eq!(
+        *hinted.cursor.peek(),
+        3,
+        "a press did not reach the caller's hint"
+    );
+
+    let (mut selected, mut cursor) = (hinted.selected, hinted.cursor);
+    test.run_in(|| {
+        selected.set(Some(RowId::Commit(oid(500))));
+        cursor.set(500);
+    });
+    test.sync_and_update();
+    reports.selected.borrow_mut().clear();
+    press(&mut test, NamedKey::ArrowDown);
+    assert_eq!(
+        reports.selected.borrow().as_slice(),
+        [RowId::Commit(oid(501))],
+        "the arrow moved from the row a search found, not the one the hint named"
+    );
+}

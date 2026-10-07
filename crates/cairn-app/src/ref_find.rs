@@ -289,6 +289,9 @@ fn bring_into_view(index: usize, view: View, submit: Option<&dyn Fn(Request)>) {
         return;
     };
     selection::choose(id, view, submit);
+    // Told to the list, so its next arrow key starts here.
+    let mut cursor = view.history_cursor;
+    cursor.set(index);
     let mut scroll = view.history_scroll;
     reveal_row(&mut scroll, index);
 }

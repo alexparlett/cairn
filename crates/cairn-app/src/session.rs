@@ -319,6 +319,7 @@ mod tests {
                         pair: State::create(None),
                         held_keys: State::create(cairn_ui::accelerators::HeldKeys::default()),
                         history_scroll: ScrollController::new(0, 0, Vec::new()),
+                        history_cursor: State::create(0),
                         detail_tab: State::create(cairn_ui::DetailTab::default()),
                         pane_collapsed: State::create(false),
                         pane_height: State::create(crate::window::PANE_HEIGHT),

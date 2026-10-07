@@ -369,6 +369,7 @@ fn launch(path: &str) -> Harness {
                 refused: State::create(None),
                 diff: State::create(DiffState::default()),
                 history_scroll: ScrollController::new(0, 0, Vec::new()),
+                history_cursor: State::create(0),
                 detail_tab: State::create(DetailTab::default()),
                 pane_collapsed: State::create(false),
                 pane_height: State::create(PANE_HEIGHT),

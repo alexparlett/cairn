@@ -249,6 +249,9 @@ fn follow_parent(parent: Oid, view: View, submit: Option<&dyn Fn(Request)>) {
         return;
     };
     selection::choose(RowId::Commit(parent), view, submit);
+    // Told to the list, so its next arrow key starts here.
+    let mut cursor = view.history_cursor;
+    cursor.set(index);
     let mut scroll = view.history_scroll;
     reveal_row(&mut scroll, index);
 }

@@ -49,6 +49,10 @@ pub struct View {
     pub diff: State<DiffState>,
     /// The commit list's scroll, shared so a parent link can bring its row into view.
     pub history_scroll: ScrollController,
+    /// Where the commit list's selection sits, shared so a row chosen outside the list — a
+    /// pressed ref's, a parent link's — is told to it and the next arrow key starts there
+    /// rather than searching the loaded rows.
+    pub history_cursor: State<usize>,
     /// The detail pane's tab, kept for the session (R5.2).
     pub detail_tab: State<DetailTab>,
     pub pane_collapsed: State<bool>,
@@ -317,6 +321,7 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     .also_selected(second)
     .held(view.held_keys)
     .controller(view.history_scroll)
+    .cursor(view.history_cursor)
     // Choosing a row asks what it changed; the pane draws the answer for that row alone. It
     // supersedes a find in the sidebar, and the entry pressed there is let go of.
     .on_select(move |id: RowId| {
@@ -637,6 +642,7 @@ mod tests {
                     refused: State::create(None),
                     diff: State::create(DiffState::default()),
                     history_scroll: ScrollController::new(0, 0, Vec::new()),
+                    history_cursor: State::create(0),
                     detail_tab: State::create(DetailTab::default()),
                     pane_collapsed: State::create(false),
                     pane_height: State::create(PANE_HEIGHT),
@@ -1954,6 +1960,8 @@ mod tests {
         test.sync_and_update();
         test.sync_and_update();
         assert_eq!(*view.selected.read(), Some(RowId::Commit(oid(45))));
+        // Told to the list, so its next arrow key starts at the parent without a search.
+        assert_eq!(*view.history_cursor.read(), 45);
         let asked: Vec<Request> = submitted
             .borrow()
             .iter()

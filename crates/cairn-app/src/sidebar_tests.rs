@@ -158,6 +158,7 @@ fn launch(loaded: usize, complete: bool) -> (TestingRunner, View, Submitted) {
                     refused: State::create(None),
                     diff: State::create(DiffState::default()),
                     history_scroll: ScrollController::new(0, 0, Vec::new()),
+                    history_cursor: State::create(0),
                     detail_tab: State::create(DetailTab::default()),
                     pane_collapsed: State::create(false),
                     pane_height: State::create(PANE_HEIGHT),
@@ -349,6 +350,8 @@ fn pressing_a_loaded_ref_selects_its_row_and_brings_it_into_view() {
     assert_eq!(changes_asked(&submitted), [Comparison::Commit(oid(150))]);
     assert!(finds(&submitted).is_empty(), "a loaded row was looked for");
     assert!(row_shown(&test, 150), "the row was not brought into view");
+    // Told to the list, so its next arrow key starts at the row without a search (RR1).
+    assert_eq!(*view.history_cursor.read(), 150);
 }
 
 /// R8.5, R8.6: a ref past the loaded rows is found by paging the walk — "Finding <ref>…" said
@@ -386,6 +389,7 @@ fn pressing_a_ref_past_the_loaded_rows_finds_it_by_paging() {
         row_shown(&test, 150),
         "the found row was not brought into view"
     );
+    assert_eq!(*view.history_cursor.read(), 150, "the list was not told");
 }
 
 /// The QA brief: a press during a find supersedes it, and two quick presses draw only the

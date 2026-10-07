@@ -78,6 +78,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let refused = use_state(|| None);
     let diff = use_state(DiffState::default);
     let history_scroll = use_scroll_controller(ScrollConfig::default);
+    let history_cursor = use_state(|| 0usize);
     // Session state: the tab and the pane's shape outlive every selection (R5.2).
     let detail_tab = use_state(DetailTab::default);
     let pane_collapsed = use_state(|| false);
@@ -108,6 +109,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         refused,
         diff,
         history_scroll,
+        history_cursor,
         detail_tab,
         pane_collapsed,
         pane_height,

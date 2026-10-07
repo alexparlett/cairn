@@ -49,6 +49,7 @@ pub struct HistoryList {
     on_reach_end: EventHandler<()>,
     row: Callback<RowRender, Element>,
     controller: Option<ScrollController>,
+    cursor: Option<State<usize>>,
     key: DiffKey,
 }
 
@@ -66,6 +67,7 @@ impl HistoryList {
             on_reach_end: EventHandler::new(|()| {}),
             row: Callback::new(row),
             controller: None,
+            cursor: None,
             key: DiffKey::None,
         }
     }
@@ -79,6 +81,16 @@ impl HistoryList {
 
     /// The refs snapshot a branch's upstream is read from, for compact labels (R5.2), and the
     /// branch `HEAD` is on, whose chip leads its row's.
+    /// Keeps where the selection sits in `cursor` rather than a state of its own, so its
+    /// caller — which selects rows the list did not choose, a pressed ref's or a parent link's —
+    /// can say where the row it chose is, and the next arrow key finds it there at once
+    /// instead of searching the loaded rows. A hint: checked against the row at that index
+    /// before use.
+    pub fn cursor(mut self, cursor: State<usize>) -> Self {
+        self.cursor = Some(cursor);
+        self
+    }
+
     pub fn refs(mut self, refs: Option<Arc<RefsSnapshot>>) -> Self {
         self.refs = refs;
         self
@@ -138,6 +150,7 @@ impl PartialEq for HistoryList {
             && self.selected == other.selected
             && self.also_selected == other.also_selected
             && self.controller == other.controller
+            && self.cursor == other.cursor
             && self.key == other.key
     }
 }
@@ -197,8 +210,10 @@ impl Component for HistoryList {
         // Resolved unconditionally, so the hook count holds whichever controller is used.
         let own = use_scroll_controller(ScrollConfig::default);
         let controller = self.controller.unwrap_or(own);
-        // A hint, checked against the row at that index before use.
-        let cursor = use_state(|| 0usize);
+        // A hint, checked against the row at that index before use; the caller's when given,
+        // resolved unconditionally so the hook count holds either way.
+        let own_cursor = use_state(|| 0usize);
+        let cursor = self.cursor.unwrap_or(own_cursor);
         // Measured, so chips stop being built at the column's edge (R5.3); none are built
         // before the first measurement.
         let mut width = use_state(|| 0.0f32);

@@ -25,11 +25,12 @@
 //! a bare repository is refused by git, and the answer is [`Error::GitFailed`]. Run as a
 //! read, with `GIT_OPTIONAL_LOCKS=0` and `GIT_NO_LAZY_FETCH=1`: in a partial clone, the
 //! blobs rename detection compares may be the promisor's alone, and git 2.44 and later then
-//! fails rather than fetching them, as [`super::changes`] does. Git 2.32 to 2.43 ignore
-//! `GIT_NO_LAZY_FETCH`, so there this read lazy-fetches them — a pack written and the
+//! fails rather than fetching them, as [`super::changes`] does. Git before 2.44 ignores
+//! `GIT_NO_LAZY_FETCH`, so there this read may lazy-fetch them — a pack written and the
 //! network reached — where the setting pairs an untracked file by an inexact rename
-//! (reproduced on 2.32.7 in a `blob:none` clone); git 2.30 and 2.31 list no untracked file,
-//! so pair none. The floor's residual (root `CLAUDE.md`, the environment invariant).
+//! (reproduced on 2.32.7 in a `blob:none` clone; git 2.30 and 2.31 list no untracked file,
+//! so have none to pair). The floor's residual (root `CLAUDE.md`, the environment
+//! invariant).
 
 use cairn_model::{ChangedFile, Oid};
 

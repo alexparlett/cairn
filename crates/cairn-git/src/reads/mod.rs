@@ -196,7 +196,8 @@
 //! no `git config` setter literal anywhere here; and the exact literal
 //! `"stash"` only in `stash_changes.rs`, once, `"show"` the literal after it,
 //! and no `git stash` subcommand that writes (`push`, `pop`, `apply`, `drop`,
-//! `store`, `clear`, `create`, `branch`, `save`) as a literal anywhere here.
+//! `store`, `clear`, `create`, `branch`, `save`, `export`, `import`) as a
+//! literal anywhere here.
 //! What it cannot see is a
 //! review obligation (`destructive-ops-reviewer`, check 10): a verb or option
 //! built at run time — by `format!`, `concat!` or from bytes — and whether

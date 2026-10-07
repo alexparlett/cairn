@@ -86,6 +86,10 @@ crates/cairn-git/src/
     status.rs       status — `git status --porcelain=v2 -z`, the working tree's status, read
                     again with `--untracked-files=all` where the first answer collapsed an
                     untracked directory (docs/systems/status.md)
+    stash_changes.rs  stash_changes — `git stash show --raw -z --no-abbrev --no-color
+                    --no-ext-diff --no-textconv --no-relative --end-of-options <stash>`, what
+                    a stash changed, git reading `stash.showIncludeUntracked` itself
+                    (docs/systems/diff.md, "A stash's changes")
 ```
 
 `process` is a private module (`mod process;` in `lib.rs`). The application
@@ -1052,9 +1056,8 @@ then, of whatever that worker had not yet ended: the process exits, nothing
 is left to drive a late `git` to its `SIGKILL` or reap it, and such a `git`
 runs on, orphaned, holding whatever locks it holds (issue #48).
 
-The network lane reads no refs around a fetch any more (phase 06 of
-refs-and-status): whether a fetch moved one is the refresh's to find out, which the
-window asks for on every ending, in the refs lane on the repository thread, where a
+The network lane reads no refs around a fetch: whether a fetch moved one is the
+refresh's to find out, which the window asks for on every ending, in the refs lane on the repository thread, where a
 close's stopped epochs cancel it between refs. The refresh thread's `git status`,
 which no refresh supersedes, is ended by the close like every other `git` in the
 registry, and its reap is bounded by `CLOSE_BOUND` with the rest

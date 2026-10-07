@@ -118,9 +118,10 @@ WARNING tier:
    subcommand (each but `show` and `list` writes a stash, the working tree, a
    branch or a ref: `push`, `pop`, `apply`, `drop`, `store`, `clear`, `create`,
    `branch`, `save`, `export`, `import`), or `stash` built anywhere else, is a
-   finding. In a partial clone it lazy-fetches on git 2.32 to 2.43 — a pack
+   finding. In a partial clone it may lazy-fetch on git before 2.44 — a pack
    written and the network reached — where rename detection needs a blob only
-   the promisor holds, since those gits ignore `GIT_NO_LAZY_FETCH`; 2.44 and
+   the promisor holds, since those gits ignore `GIT_NO_LAZY_FETCH` (2.30 and
+   2.31 list no untracked half, so have no untracked file to pair); 2.44 and
    later fail closed. All three are pinned by
    `the_porcelain_reads_are_the_three_named_queries` — the verbs, the stash
    read's options against `STASH_SHOW_OPTIONS` (and `STASH_SHOW_REQUIRED`

@@ -434,9 +434,10 @@ by `the_read_is_stash_show_in_raw_form_and_nothing_else`. Residuals: `git stash`
 working tree, so a stash in a bare repository fails as git fails it (`Error::GitFailed`);
 the read sees the user's global configuration as the user's own `git stash show` does; and
 in a partial clone, where rename detection needs a blob only the promisor holds, git 2.44
-and later fail the read closed (`GIT_NO_LAZY_FETCH=1`) while git 2.32 to 2.43, which ignore
-that variable, lazy-fetch the blob — a pack written and the network reached — as the
-environment invariant's floor residual says of every read.
+and later fail the read closed (`GIT_NO_LAZY_FETCH=1`) while git before 2.44, which ignores
+that variable, may lazy-fetch the blob — a pack written and the network reached; 2.30 and
+2.31 list no untracked file, so have none to pair — as the environment invariant's floor
+residual says of every read.
 
 ### The content query
 
@@ -2017,7 +2018,7 @@ chord alone whichever scope hears it, so Ctrl+↓ is "next change", never "next 
 (`an_accelerators_chord_does_not_move_the_selection`). Pinned by
 `the_table_is_forks_chords_and_no_others` (the whole table, spelled out per platform),
 `every_chord_resolves_to_its_action_in_its_scope_only`,
-`chords_are_distinct_and_every_one_holds_a_modifier`,
+`chords_are_distinct_and_every_bare_one_is_a_function_key`,
 `the_command_key_is_the_platforms_own`,
 `a_chord_needs_exactly_its_modifiers_and_ignores_the_locks`,
 `a_physical_chord_is_matched_by_where_the_key_sits`,

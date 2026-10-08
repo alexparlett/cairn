@@ -3,6 +3,46 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-08 — phase 02 QA, adjudicated and fixed
+
+Four fresh reviewers, adjudicated by a fresh `qa-confirm`. Confirmed findings fixed in
+focused commits, behaviour changes test-first (each new test seen to fail before its fix):
+
+- 1: `action_patch` returns the empty patch for an empty selection before anything else;
+  an empty untracked file's stage, unstage and discard, and a `ModeChangeOnly` type
+  change, wrote headers or `deleted file mode` before
+  (`a_selection_of_nothing_makes_no_patch_by_any_action`).
+- 2: the whole-index pairing read runs only for a path absent from `HEAD` or the index
+  (`only_a_path_that_can_be_in_a_pair_asks_the_whole_index`, which counts the reads in
+  the command log; it failed with the read running for a copy's modified source).
+- 3: `scripts/git-floor.sh`'s floors raised to one under the runs' counts (84 and 134).
+- 4: C3 decides a deletion from the case and checks the patch's header against it; an
+  unborn branch's addition unstaged whole leaves no entry.
+- 5: the partial-clone residual of the staged pairing stated in `docs/systems/diff.md` and
+  pinned on both arms (`in_a_partial_clone_a_staged_pairing_fails_rather_than_fetching`).
+- 6: the write-nothing pin asks a staged `git mv` with an edit, so both pairing reads
+  run under it, and requires that they did.
+- 7: C3's awkward names gain CR, DEL, BEL, BS, VT and FF.
+- Optional, done: C3 gains a staged copy under `diff.renames=copies`, unstaged as content
+  at the copy's path with real git (`lines_of_a_staged_copy_unstage_as_content_at_its_path`).
+
+Carried forward to phases 03 and 07 in state.md: 8, 9 and the destructive carry list.
+
+Batched for the user's review at the end of the packet — not decided:
+
+- 10: PRD R2.1's text against the insertion-then-removal refinement of
+  `TextDiff::inverted` (no reviewer found the refinement wrong).
+- 11: whether C21 gains a selection-to-diff row for a staged rename (the cost of the
+  pairing read under `diff.renameLimit=0`).
+
+Dismissed, with the adjudicator's reasons:
+
+- 12 (the `ContentReadsDisagree` retry is unbounded): it is not —
+  `worker/diff_lane.rs`'s `READ_ATTEMPTS` is 3, and `asking_again` stops at 3 and on
+  cancel.
+- 13 (C4 derives its expected mode from `drawn.file.inverted()`): the `assert_ne`
+  beside it is decisive whatever the expected value says; style only.
+
 ## 2026-10-08 — phase 02, the patch engine (packet mode)
 
 Built on `feature/staging-and-commit`; full gate green (git-floor included); QA

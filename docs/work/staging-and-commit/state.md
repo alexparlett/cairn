@@ -4,8 +4,9 @@ The cross-session cheat sheet. Every session updates this before ending.
 
 **Status: phase 01 (the seal) done on `feature/staging-and-commit` in packet
 mode: QA adjudicated, every confirmed fix and the user's three decisions of
-2026-10-08 applied, full gate green. Phase 02 (the patch engine) built in packet
-mode, full gate green, QA pending (the coordinator dispatches it). Phases 03-12 not
+2026-10-08 applied, full gate green. Phase 02 (the patch engine) done in packet
+mode: QA adjudicated, confirmed fixes applied, full gate green; items 10-11 batched for
+the user's review at the end of the packet. Phases 03-12 not
 started.**
 
 ## Locked decisions
@@ -178,6 +179,22 @@ rename or copy is paired as `git diff --cached` pairs it"):
   edited by the phase agent (an instruction file); for the user or C22's update.
 - **Phase 08**: drawing the mode row (R9.4) selects through `Selection::select_mode`.
 
+From phase 02's QA (adjudicated 2026-10-08):
+
+- **Phases 03 and 07** (QA item 8): a rename's SOURCE path is paired too
+  (`reads::working_tree::names`): where the user's `status.renames` differs from
+  `diff.renames`, status lists the deleted source as a row of its own while its staged
+  diff is the rename, and an unstage built from it acts at the NEW path. The verb and the
+  gesture decide which row offers what, and on which path, with a test.
+- **Phase 03 / C22** (QA item 9): the root `CLAUDE.md` repo map and D1's list of reads
+  must name `action_patch`, the inversions and `reads::staged_pairing` (the C22 item
+  above); phase 03's QA checks it.
+- **Phase 03, the destructive verbs** (QA carry list):
+  - emit the patch from the exact `FileDiff` the user acknowledged, never from a re-read;
+  - no `--recount`, `--3way` or `--unidiff-zero` on any apply;
+  - a whole discard of an untracked file must say it cannot be recovered;
+  - an all-lines discard of an added file goes to the file verb (the item above).
+
 ## Carried forward from phase 01's QA (owned by the phase named)
 
 - **Phase 03** (QA item 18): an empty `DiscardFiles` renders "the changes in 0
@@ -221,7 +238,7 @@ rename or copy is paired as `git diff --cached` pairs it"):
 | Phase | Status |
 | --- | --- |
 | 01 seal | done — QA adjudicated, all confirmed fixes and the user's three decisions (items 6, 13, 34a) applied, full gate green |
-| 02 patch engine | built, gate green, QA pending |
+| 02 patch engine | done — QA adjudicated, confirmed fixes applied, full gate green; items 10-11 batched for the user |
 | 03 write verbs | not started |
 | 04 local lane | not started |
 | 05 commit engine | not started |

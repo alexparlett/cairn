@@ -859,7 +859,22 @@ read found, or the index moved between the two reads and the answer is
 come from the pair's two ids, the diff driver's algorithm from the source path, and
 the pair's lines from git's own patch, as for a modification (exact and, under `-w`,
 whitespace-ignoring). A path in no pair is read alone, `--no-renames`, which is then
-exactly git's answer.
+exactly git's answer. Only a path absent from `HEAD` (a destination) or from the index (a
+rename's source) can be in a pair — git pairs no modified path as a destination without
+`-B`, and a copy's source keeps its own record — so only such a path asks the whole
+index; a path on both sides is read alone at once
+(`only_a_path_that_can_be_in_a_pair_asks_the_whole_index`, which counts the whole-index
+reads in the command log under `diff.renames=copies`).
+
+**Residual: a partial clone.** The whole-index read compares blobs wherever detection is
+inexact, and a read never fetches (`GIT_NO_LAZY_FETCH=1`). In a blob-less partial clone,
+a staged inexact rename whose source blob only the promisor holds makes the read fail on
+git 2.44 and later — the staged diff of that destination is `Error::GitFailed`, nothing
+fetched — where the user's own `git diff --cached` would fetch and show the rename; git
+before 2.44 ignores the variable and fetches, writing a pack. Only a path absent from one
+side asks the whole index, so a modified path in such a clone is unaffected. Pinned on
+both arms by `in_a_partial_clone_a_staged_pairing_fails_rather_than_fetching`, as the
+status read's is.
 
 Pinned by C7, `the_staged_diff_pairs_renames_and_copies_as_git_diff_cached_does`
 (`crates/cairn-git/tests/diff/staged_renames.rs`): under `diff.renames` unset, `true`,
@@ -1163,6 +1178,12 @@ One visible consequence: a whole inverted replacement is written `+old` before
 (`crates/cairn-model/tests/diff_patch.rs`), against `diffs::mirrored_result`, which
 states git's mirrored rule off the changed ranges and inverts nothing.
 
+**A selection of nothing is no patch**, by any action, before anything else is
+decided — even for a change with no lines, an empty file added (whose inversion a
+selection of none of its lines would otherwise hold whole, as a deletion) or a type change
+whose content did not move (`a_selection_of_nothing_makes_no_patch_by_any_action`). An
+empty file is staged, unstaged or discarded by its file verb.
+
 **Whole-file only** (R2.3, L17c): a deletion on either side and a type change make no
 patch for part of themselves — the empty patch, as a selection of nothing makes —
 decided on the diff AS DRAWN, before any inversion; every state that is not text
@@ -1192,8 +1213,9 @@ carries no `rename from`, so the index keeps the rename and the lines go back.
 host's git and, through `git-floor`, 2.30.9 and 2.32.7): for a modification, an
 untracked file, an intent-to-add file, CRLF under `core.autocrlf=true`, a clean
 filter driver (rot13 both ways, `required`), an unborn branch, a mode change beside
-edits on both sides, a staged rename, and paths with a space, a tab, a quote, a
-backslash, a newline, a control byte and invalid UTF-8, every applicable action over
+edits on both sides, a staged rename, a staged copy under `diff.renames=copies`, and
+paths with a space, a tab, a quote, a backslash, a newline, a carriage return, BEL, BS,
+VT, FF, DEL, another control byte and invalid UTF-8, every applicable action over
 every line, only additions, only removals, the first and the last line of each
 change, every other changed line and three seeded selections is applied with the
 command R3 names — `git apply --cached --whitespace=nowarn -` or `git apply
@@ -1204,7 +1226,10 @@ the changed ranges for stage, and for unstage and discard git's mirrored rule as
 whole-file patch applied in reverse by real `git apply -R` in a scratch directory and
 by the reference applier, which must agree. `git diff` or `git diff --cached`
 afterwards must print exactly the lines the selection left out, stage and unstage must
-leave the working tree's bytes alone, and discard the index entry. C4,
+leave the working tree's bytes alone, and discard the index entry. Whether the file goes
+is decided from the case — every line of an added file undone — and the patch's `deleted
+file mode` is checked against it, never read from it; every line of an unborn branch's
+staged addition unstaged leaves no entry and the file in place. C4,
 `a_selection_of_lines_moves_no_mode_and_the_mode_moves_alone`, reads the mode back
 from the index and the file after each action: lines alone move no mode, the mode
 alone moves no line.

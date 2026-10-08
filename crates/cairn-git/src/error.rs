@@ -451,6 +451,11 @@ pub enum Refusal {
     /// The path is a directory or a special file, not a file `git status` lists one per
     /// file: nothing a discard deletes or restores.
     NotAFile,
+    /// A directory on the path is not a real directory — a file, or a symlink — so the path
+    /// is not in the working tree as git holds it: restoring it would replace what stands
+    /// there (a file no prompt named, or a link), and hashing it would read through a link
+    /// to a file outside the working tree.
+    Obstructed,
     /// The path has no unstaged change — the working tree matches the index — so there is
     /// nothing to discard; staged changes are never discarded (R3.6).
     NoUnstagedChange,
@@ -480,6 +485,10 @@ impl std::fmt::Display for Refusal {
                  commit only it has"
             }
             Self::NotAFile => "the path is not a file: a directory or a special file",
+            Self::Obstructed => {
+                "a directory on the path is a file or a symlink, which restoring the path would \
+                 replace"
+            }
             Self::NoUnstagedChange => {
                 "the path has no unstaged change to discard, and staged changes are never \
                  discarded"

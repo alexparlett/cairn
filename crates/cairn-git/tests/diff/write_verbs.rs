@@ -1074,3 +1074,67 @@ fn a_write_names_the_lock_files_around_it() {
         |locks: &[std::path::PathBuf]| locks.iter().any(|path| path.ends_with("index.lock"));
     assert!(named(&performed.locks().before) && named(&performed.locks().after));
 }
+
+// --- A path whose parent is not a real directory (QA item 1) ---
+
+/// `d/a` tracked, then deleted with its directory, and an untracked FILE `d` made where the
+/// directory was: `git restore --worktree -- d/a` would unlink `d` to make the directory
+/// back, destroying a file no prompt named. The builder refuses the path, and a re-check
+/// refuses it when the file appears after the confirmation — with `d` intact both times.
+#[test]
+fn a_file_where_a_deleted_files_directory_was_is_never_destroyed() {
+    let make = || {
+        let repo = Repo::new("parent-file");
+        repo.write("d/a", b"tracked\n");
+        repo.commit("base");
+        std::fs::remove_dir_all(repo.path().join("d")).unwrap_or_else(|e| panic!("{e}"));
+        repo
+    };
+    let repo = make();
+    repo.write("d", b"an untracked file where the directory was\n");
+    assert_eq!(status(&repo), [" D d/a", "?? d"]);
+    let outcome = ops::discard_files_consequence(git(), &engine(&repo), &[RepoPath::new("d/a")]);
+    assert!(is_refused(&outcome, Refusal::Obstructed), "{outcome:?}");
+
+    let repo = make();
+    let consequence = ok(
+        ops::discard_files_consequence(git(), &engine(&repo), &[RepoPath::new("d/a")]),
+        "the consequence, while nothing is at d",
+    );
+    repo.write("d", b"made after the confirmation\n");
+    let outcome = ops::discard_files(git(), &engine(&repo), Confirmed::by_user(consequence), None);
+    assert!(
+        matches!(&outcome, Err(Error::ChangedSinceConfirmed { path }) if path == "d/a"),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        on_disk(&repo, "d"),
+        Some(b"made after the confirmation\n".to_vec())
+    );
+}
+
+/// `d/a` tracked, and `d` replaced by a symlink to a directory outside the working tree
+/// holding an `a` of its own: hashing `d/a` would read a file outside the working tree, and
+/// `git restore` would replace the link with a directory. Refused before any prompt, by a
+/// discard of files and of lines alike, and the file outside untouched.
+#[test]
+fn a_symlinked_parent_is_never_followed_out_of_the_working_tree() {
+    let repo = Repo::new("parent-link");
+    repo.write("d/a", b"tracked\n");
+    repo.commit("base");
+    let outside = Repo::new("parent-link-outside");
+    outside.write("a", b"outside the working tree\n");
+    std::fs::remove_dir_all(repo.path().join("d")).unwrap_or_else(|e| panic!("{e}"));
+    std::os::unix::fs::symlink(outside.path(), repo.path().join("d"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let outcome = ops::discard_files_consequence(git(), &engine(&repo), &[RepoPath::new("d/a")]);
+    assert!(is_refused(&outcome, Refusal::Obstructed), "{outcome:?}");
+    assert_eq!(
+        on_disk(&outside, "a"),
+        Some(b"outside the working tree\n".to_vec())
+    );
+    assert!(
+        std::fs::symlink_metadata(repo.path().join("d"))
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    );
+}

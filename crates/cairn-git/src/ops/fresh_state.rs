@@ -147,6 +147,11 @@ pub(super) enum OnDisk {
     /// The file changed while it was read: its length is not what it was when the read
     /// began, so no id can be named for it.
     Changing,
+    /// A directory on the path is not a real directory — a file, or a symlink — so nothing
+    /// is at the path as git holds it, and what stands in the way is not the path's to
+    /// replace (QA item 1 of phase 03: `git restore` would unlink a file standing where a
+    /// deleted file's directory was, or replace a symlinked directory with a real one).
+    Obstructed,
 }
 
 impl OnDisk {
@@ -154,7 +159,9 @@ impl OnDisk {
     pub(super) fn id(&self) -> Option<&Oid> {
         match self {
             Self::File { id, .. } | Self::Symlink { id, .. } => Some(id),
-            Self::Absent | Self::Directory | Self::Other | Self::Changing => None,
+            Self::Absent | Self::Directory | Self::Other | Self::Changing | Self::Obstructed => {
+                None
+            }
         }
     }
 
@@ -162,7 +169,9 @@ impl OnDisk {
     pub(super) fn bytes(&self) -> Option<u64> {
         match self {
             Self::File { bytes, .. } | Self::Symlink { bytes, .. } => Some(*bytes),
-            Self::Absent | Self::Directory | Self::Other | Self::Changing => None,
+            Self::Absent | Self::Directory | Self::Other | Self::Changing | Self::Obstructed => {
+                None
+            }
         }
     }
 }
@@ -179,6 +188,28 @@ fn in_work_tree(repo: &Repository, path: &RepoPath) -> Result<PathBuf, Error> {
     Ok(workdir.join(std::ffi::OsStr::from_bytes(path.as_bytes())))
 }
 
+/// Whether a directory on `path`, below the working tree's top, is not a real directory: a
+/// file, a symlink or a special file, each looked at without following a link. A directory
+/// that is missing is no obstruction — nothing is in the way of making it.
+fn obstructed(repo: &Repository, path: &RepoPath) -> std::io::Result<bool> {
+    let Some(workdir) = repo.workdir() else {
+        return Ok(false);
+    };
+    let mut components: Vec<&[u8]> = path.as_bytes().split(|byte| *byte == b'/').collect();
+    components.pop();
+    let mut at = workdir.to_owned();
+    for component in components {
+        at.push(std::ffi::OsStr::from_bytes(component));
+        match std::fs::symlink_metadata(&at) {
+            Ok(metadata) if metadata.file_type().is_dir() => {}
+            Ok(_) => return Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(false)
+}
+
 /// The working-tree file at `path` now, hashed as its bytes are (module docs).
 pub(super) fn on_disk(repo: &Repository, path: &RepoPath) -> Result<OnDisk, Error> {
     let file = in_work_tree(repo, path)?;
@@ -186,14 +217,17 @@ pub(super) fn on_disk(repo: &Repository, path: &RepoPath) -> Result<OnDisk, Erro
         path: path.to_string(),
         source,
     };
+    if obstructed(repo, path).map_err(unreadable)? {
+        return Ok(OnDisk::Obstructed);
+    }
     let metadata = match std::fs::symlink_metadata(&file) {
         Ok(metadata) => metadata,
-        // A parent that is a file now (`ENOTDIR`) leaves no file at the path either.
-        Err(error)
-            if error.kind() == std::io::ErrorKind::NotFound
-                || error.kind() == std::io::ErrorKind::NotADirectory =>
-        {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(OnDisk::Absent);
+        }
+        // A directory on the path became a file between the look above and this one.
+        Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => {
+            return Ok(OnDisk::Obstructed);
         }
         Err(error) => return Err(unreadable(error)),
     };
@@ -269,7 +303,11 @@ pub(super) fn git_form(
             hash_object(git, repo, path, &CancelSignal::new()).map(Some)
         }
         OnDisk::Symlink { id, .. } => Ok(Some(*id)),
-        OnDisk::Absent | OnDisk::Directory | OnDisk::Other | OnDisk::Changing => Ok(None),
+        OnDisk::Absent
+        | OnDisk::Directory
+        | OnDisk::Other
+        | OnDisk::Changing
+        | OnDisk::Obstructed => Ok(None),
     }
 }
 

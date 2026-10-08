@@ -124,6 +124,9 @@ pub fn discard_lines_consequence(
         IndexSide::Absent | IndexSide::Entry { .. } => {}
     }
     let disk = on_disk(repo, path)?;
+    if disk == OnDisk::Obstructed {
+        return Err(refused(path, Refusal::Obstructed));
+    }
     let form = git_form(git, repo, path, &disk)?;
     if on_disk(repo, path)? != disk {
         return Err(moved_while_read(path));
@@ -470,6 +473,7 @@ fn not_a_file(repo: &Repository, path: &RepoPath, disk: &OnDisk) -> Result<Optio
     match disk {
         OnDisk::Directory => directory_refusal(repo, path).map(Some),
         OnDisk::Other => Ok(Some(refused(path, Refusal::NotAFile))),
+        OnDisk::Obstructed => Ok(Some(refused(path, Refusal::Obstructed))),
         OnDisk::Changing => Ok(Some(moved_while_read(path))),
         OnDisk::Absent | OnDisk::File { .. } | OnDisk::Symlink { .. } => Ok(None),
     }

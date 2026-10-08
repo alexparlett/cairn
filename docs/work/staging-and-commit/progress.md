@@ -3,6 +3,28 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-08 — phase 01, the user's three decisions applied
+
+The user decided the three items the adjudication left with them (relayed by the
+packet coordinator):
+
+- **Item 6, the empty roster**: assert it non-empty. The guard now asserts
+  `!DESTRUCTIVE_OPERATIONS.is_empty()`, its doc comment says so, and emptying the
+  roster was seen to fail the guard. The placeholder row satisfies it until phase
+  03.
+- **Item 13, the amend prompt**: conditional wording. `Consequence::Amend` carries
+  `reflog: Reflog`; the prompt says "The old commit stays in Show Lost Commits."
+  only for `Reflog::Written`, and "The old commit can't be recovered afterwards:
+  this repository keeps no reflog." for `NotWritten`, with full-literal tests for
+  both arms. What decides it was checked against git 2.56: an amend writes the entry
+  under `core.logAllRefUpdates=true` (the non-bare default), writes none under
+  `false` set from the start, and still appends under `false` set after the logs
+  exist; a bare repository leaves the setting unset, and git's default there is
+  `false`. R10.6 and R6.4 are amended with a dated note; the engine's computation
+  is phase 05's (state.md).
+- **Item 34a, R1.2's bytes**: R1.2 amended to Fork's wording — lines per modified
+  path and bytes per untracked file (L8) — with a dated note; no code change.
+
 ## 2026-10-08 — phase 01 QA, adjudicated and fixed
 
 Eight fresh reviewers, adjudicated by a fresh `qa-confirm`. Confirmed findings

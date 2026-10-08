@@ -54,9 +54,12 @@ Stash and `.gitignore` are packet 5b's (`stash-and-ignore`, L1).
   confirmation dialog's component and the commit box (R10.6).
 - R1.2 A `Confirmed` carries a `Consequence`, an engine-computed `cairn-model`
   value naming what the operation will destroy — per operation: the paths, the
-  lines and bytes per path, the blob ids the destruction is computed against, a
-  commit's id, a lock file's path and age — and the prompt text rendered from it.
-  The prompt is rendered from the `Consequence`, never typed beside it.
+  lines per modified path and the bytes per untracked file (Fork's wording, L8),
+  the blob ids the destruction is computed against, a commit's id, a lock file's
+  path and age — and the prompt text rendered from it. The prompt is rendered
+  from the `Consequence`, never typed beside it. (Amended 2026-10-08, the user's
+  decision on phase 01's QA item 34a: "the lines and bytes per path" became
+  lines per modified path and bytes per untracked file.)
 - R1.3 Every destructive operation of this packet (R1.5) takes `Confirmed` by
   value, and the guard holds the roster: a destructive operation without it, or
   a roster entry with no such operation, fails.
@@ -215,9 +218,11 @@ literally.
   against the empty tree, and unstaging from it is R3.4's `git rm --cached -q --`,
   since there is no `HEAD^`. Amend is unavailable with no `HEAD` (an unborn
   branch) and while a merge is in progress (R6.9).
-- R6.4 Amend is destructive (R1.5): its `Consequence` is `HEAD`'s id, subject and
+- R6.4 Amend is destructive (R1.5): its `Consequence` is `HEAD`'s id, subject,
+  whether git will write the reflog entry R10.6's text depends on, and
   whether a remote already has it — from the upstream's ahead count, or, with no
-  upstream, a hidden walk of `HEAD --not --remotes`.
+  upstream, a hidden walk of `HEAD --not --remotes`. (Reflog state added
+  2026-10-08 with R10.6, the user's decision.)
 - R6.5 Commit and amend carry an askpass token (R5.1) and stream their stderr to
   the operation log (R12.1).
 - R6.6 Whether a `pre-commit` or `commit-msg` hook exists is answered from the
@@ -328,10 +333,19 @@ literally.
   kept. The output is drawn through a virtualizing view or bounded to the retained
   tail, never a `ScrollView`.
 - R10.6 In amend mode the button reads `Amend <short id>` above "Replaces <short
-  id> '<subject>'. The old commit stays in Show Lost Commits."; pressing it builds
-  the `Confirmed` from that text and R6.4's `Consequence`. When a remote already
+  id> '<subject>'. The old commit stays in Show Lost Commits." when git will write
+  the reflog entry that keeps the replaced commit findable, and above "Replaces
+  <short id> '<subject>'. The old commit can't be recovered afterwards: this
+  repository keeps no reflog." when it will not; pressing it builds the
+  `Confirmed` from that text and R6.4's `Consequence`, which carries which of the
+  two holds (`cairn_model::Reflog`). git writes the entry when
+  `core.logAllRefUpdates` is `true` (the default with a working tree; `false` in a
+  bare repository) or `always`, or, whatever it is set to, when the ref's log
+  already exists, since git appends to an existing log. When a remote already
   has `HEAD`, R7.4's dialog asks first: "<short id> is already on <remote ref>.
-  Sharing the amended commit needs a force push."
+  Sharing the amended commit needs a force push." (Amended 2026-10-08, the user's
+  decision on phase 01's QA item 13: the recovery sentence is conditional on the
+  reflog, never promised unconditionally.)
 - R10.7 The draft survives refreshes, a failed hook and Amend's toggling, for the
   life of the window.
 - R10.8 With a merge in progress (R6.9) the box fills an empty draft with git's

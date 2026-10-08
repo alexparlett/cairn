@@ -2,9 +2,9 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: phase 01 (the seal) built on `feature/staging-and-commit` in packet
-mode, QA adjudicated and its fixes landed; it waits on three user decisions
-(below) before it is done. Phases 02-12 not started.**
+**Status: phase 01 (the seal) done on `feature/staging-and-commit` in packet
+mode: QA adjudicated, every confirmed fix and the user's three decisions of
+2026-10-08 applied, full gate green. Phases 02-12 not started.**
 
 ## Locked decisions
 
@@ -73,8 +73,11 @@ Phase 01:
   Vec<DiscardedFile> }`, each `DiscardedFile { path, loss: FileLoss }`, `FileLoss`
   `Modified { index: Oid, working_tree: Option<Oid>, lines: Option<usize> }` or
   `Untracked { working_tree: Oid, bytes: u64 }`; `Amend { commit: Oid, subject,
-  published: Publication }`, `Publication` `Unpublished`, `Upstream(RefName)` or
-  `SomeRemote`; `RemoveLock { path: PathBuf, modified: SystemTime, read_at:
+  published: Publication, reflog: Reflog }`, `Publication` `Unpublished`,
+  `Upstream(RefName)` or `SomeRemote`, `Reflog` `Written` or `NotWritten` (the
+  prompt promises "stays in Show Lost Commits" only for `Written`, and otherwise
+  says the old commit can't be recovered because the repository keeps no reflog —
+  R10.6 as amended); `RemoveLock { path: PathBuf, modified: SystemTime, read_at:
   SystemTime, bytes: u64, device: u64, inode: u64 }` (the age rendered is
   `read_at - modified`, so the renderer reads no clock; mtime, size, device and
   inode are what the re-check compares). Every path and subject is escaped as git
@@ -140,22 +143,29 @@ Phase 01:
   the lock can be undone, and says "corrupt the repository" where the index is
   what is at risk; settle the wording there.
 
-## Waiting on the user (phase 01 is not done until these are applied)
+## The user's decisions on phase 01's QA (2026-10-08), applied
 
-- **QA item 6**: whether `DESTRUCTIVE_OPERATIONS` must be non-empty (the
-  placeholder row counts until phase 03), or may be empty with the vacuity stated
-  as a residual.
-- **QA item 13**: the amend prompt's "The old commit stays in Show Lost Commits."
-  (R10.6's locked wording) — left as it is until answered.
-- **QA item 34a**: R1.2's "the lines and bytes per path" against
-  `FileLoss::Modified` and `DiscardLines`, which carry no bytes — left as they are
-  until answered.
+- **Item 6**: `DESTRUCTIVE_OPERATIONS` is never empty, and the guard asserts it.
+  **Phase 03** must replace the `describe_destructive` row with its real
+  operations in the same change that deletes the placeholder, or the guard fails.
+- **Item 13**: R10.6 amended — the amend prompt's recovery sentence is
+  conditional on the reflog (`Consequence::Amend`'s `reflog: Reflog`). Phase 01
+  defines the field and both renderings. **Phase 05** computes it in the engine
+  (R6.4, amended): `Written` when git will write the entry — `core.logAllRefUpdates`
+  `true` (the default with a working tree; `false` when bare) or `always`, or the
+  ref's log file already existing, since git appends to an existing log (checked
+  with git 2.56 in phase 01) — read as git reads the setting, with a test for each
+  arm against real git, including a bare repository and a log that exists under
+  `false`. Phase 10 should confirm that what Show Lost Commits walks (C20: the
+  reflogs of `HEAD` and each local branch) is the entry this decides.
+- **Item 34a**: R1.2 amended to Fork's wording, lines per modified path and bytes
+  per untracked file (L8); no code change.
 
 ## Validation status
 
 | Phase | Status |
 | --- | --- |
-| 01 seal | QA adjudicated, confirmed fixes landed, full gate green; pending the three user decisions above (items 6, 13, 34a) — not done until they are applied |
+| 01 seal | done — QA adjudicated, all confirmed fixes and the user's three decisions (items 6, 13, 34a) applied, full gate green |
 | 02 patch engine | not started |
 | 03 write verbs | not started |
 | 04 local lane | not started |

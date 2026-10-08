@@ -1171,3 +1171,77 @@ fn a_discard_applies_the_patch_it_was_confirmed_with() {
     );
     assert_eq!(on_disk(&repo, "file.txt"), Some(b"x\ny\n".to_vec()));
 }
+
+// --- A discard that does not discard everything it was confirmed for (QA items 3, 4) ---
+
+/// QA item 3: `git clean` deletes what it can and exits non-zero on what it cannot — here a
+/// file in a directory the user may not write — after `git restore` has already run. The
+/// outcome is not a bare failure: it carries the record of what ran, quoting the prompt the
+/// user accepted, git's failure, and exactly the confirmed paths still as they were,
+/// found by reading each again after the run.
+#[test]
+fn a_discard_that_fails_part_way_says_what_it_did_and_what_is_left() {
+    let repo = modified_and_untracked("partial");
+    repo.write("ro/kept.txt", b"cannot be removed\n");
+    let paths = [
+        RepoPath::new("a.txt"),
+        RepoPath::new("dir/u.txt"),
+        RepoPath::new("ro/kept.txt"),
+    ];
+    let consequence = ok(
+        ops::discard_files_consequence(git(), &engine(&repo), &paths),
+        "the consequence",
+    );
+    let prompt = consequence.prompt();
+    let read_only = repo.path().join("ro");
+    std::fs::set_permissions(&read_only, std::fs::Permissions::from_mode(0o555))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let outcome = ops::discard_files(git(), &engine(&repo), Confirmed::by_user(consequence), None);
+    std::fs::set_permissions(&read_only, std::fs::Permissions::from_mode(0o755))
+        .unwrap_or_else(|e| panic!("{e}"));
+    match outcome {
+        Err(Error::DiscardIncomplete {
+            performed,
+            kept,
+            failure,
+        }) => {
+            assert_eq!(performed.acknowledged(), Some(prompt.as_str()));
+            assert_eq!(kept, ["ro/kept.txt"]);
+            assert!(
+                matches!(failure.as_deref(), Some(Error::GitFailed { arguments, .. }) if arguments.contains("clean")),
+                "{failure:?}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(on_disk(&repo, "a.txt"), Some(lines(base).into_bytes()));
+    assert_eq!(on_disk(&repo, "dir/u.txt"), None);
+    assert_eq!(
+        on_disk(&repo, "ro/kept.txt"),
+        Some(b"cannot be removed\n".to_vec())
+    );
+}
+
+/// QA item 4: a path git does not list — an ignored file — reaches `git clean -f`, which
+/// leaves it and exits 0. The discard does not claim it: the outcome names it as kept.
+/// (Whether such a path is refused before any prompt is phase 07's.)
+#[test]
+fn a_file_git_clean_leaves_is_named_as_kept() {
+    let repo = Repo::new("ignored");
+    repo.write(".gitignore", b"ignored.txt\n");
+    repo.commit("base");
+    repo.write("ignored.txt", b"ignored\n");
+    let consequence = ok(
+        ops::discard_files_consequence(git(), &engine(&repo), &[RepoPath::new("ignored.txt")]),
+        "the consequence",
+    );
+    let outcome = ops::discard_files(git(), &engine(&repo), Confirmed::by_user(consequence), None);
+    match outcome {
+        Err(Error::DiscardIncomplete { kept, failure, .. }) => {
+            assert_eq!(kept, ["ignored.txt"]);
+            assert!(failure.is_none(), "{failure:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(on_disk(&repo, "ignored.txt"), Some(b"ignored\n".to_vec()));
+}

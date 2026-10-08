@@ -165,8 +165,15 @@ did not move — when anything it names moved (R1.4).
 
 - Between a re-check and git's run is a window no check closes — the user's own
   `git checkout -p` has it too.
-- `discard_files` is two writes: where `git clean` fails after `git restore`
-  succeeded, the restore has happened, and the failure says which verb failed.
+- `discard_files` is two writes, and `git clean` deletes what it can before it
+  exits non-zero on the rest. So every confirmed file is read again after the run,
+  and a discard that did not take every one answers `Error::DiscardIncomplete`: the
+  `Performed` record (quoting the accepted prompt), git's failure if one failed, and
+  the confirmed paths still exactly as they were — found by reading each again, never
+  by parsing git's prose. That also names a file `git clean -f` leaves alone, an
+  ignored one (`a_discard_that_fails_part_way_says_what_it_did_and_what_is_left`,
+  `a_file_git_clean_leaves_is_named_as_kept`). Whether a path `git status` never
+  listed is refused before any prompt is phase 07's.
 - A discard of files counts each tracked file's lines by reading its unstaged diff
   as the diff view does, one read per file: exact, and proportional to the files
   selected.

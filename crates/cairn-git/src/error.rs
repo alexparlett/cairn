@@ -374,6 +374,26 @@ pub enum Error {
     #[error("{path} changed since you confirmed; nothing was discarded")]
     ChangedSinceConfirmed { path: String },
 
+    /// A discard of files ran but did not discard every file it was confirmed for: a `git`
+    /// failed part way — `git clean` deletes what it can and exits non-zero on the rest,
+    /// after `git restore` has run — or git left a file it does not touch (an ignored file,
+    /// under `git clean -f`). Not a bare failure, since something was destroyed:
+    /// `performed` is the record of the operation, quoting the prompt the user accepted;
+    /// `kept` is every confirmed path still exactly as it was confirmed, found by reading
+    /// each again after the run, never by parsing git's prose; `failure` is git's error,
+    /// when one failed. The refresh after it shows the rest.
+    #[error(
+        "the discard did not take every file: {} kept as {} were{}",
+        Paths(kept),
+        if kept.len() == 1 { "it" } else { "they" },
+        Failure(failure.as_deref())
+    )]
+    DiscardIncomplete {
+        performed: Box<crate::ops::Performed>,
+        kept: Vec<String>,
+        failure: Option<Box<Error>>,
+    },
+
     /// The remote's configuration could not be read — `git config` failed, was
     /// cancelled or answered what it never prints, or a configured refspec does
     /// not parse — so the fetch could not be checked and did not run.
@@ -541,6 +561,30 @@ impl std::fmt::Display for PresentLocks<'_> {
             write!(f, "{}", path.display())?;
         }
         Ok(())
+    }
+}
+
+/// Paths in a message, comma-separated.
+struct Paths<'a>(&'a [String]);
+
+impl std::fmt::Display for Paths<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0.is_empty() {
+            return f.write_str("nothing");
+        }
+        f.write_str(&self.0.join(", "))
+    }
+}
+
+/// A failure beside a partial outcome: nothing when there was none.
+struct Failure<'a>(Option<&'a Error>);
+
+impl std::fmt::Display for Failure<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Some(error) => write!(f, "; {error}"),
+            None => Ok(()),
+        }
     }
 }
 

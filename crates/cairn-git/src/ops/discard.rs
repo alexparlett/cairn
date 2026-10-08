@@ -32,8 +32,13 @@
 //! still lists whole is a nested repository, which is refused, so `-d` is never passed and
 //! a file added beside a deleted one is never taken. `git clean` reads no pathspec file, so
 //! its paths go on `argv`, split into invocations of at most [`CLEAN_ARGUMENT_BYTES`] each,
-//! all after the one re-check made before the first (R3.5). The two verbs are two writes:
-//! where the second fails, the first has happened, and the failure says which.
+//! all after the one re-check made before the first (R3.5). The two verbs are two writes,
+//! and `git clean` deletes what it can before it exits non-zero on the rest, so a failure
+//! after the first write is no bare failure: every confirmed file is read again after the
+//! run, and a discard that did not take every one answers [`Error::DiscardIncomplete`],
+//! carrying the record of what ran (quoting the accepted prompt), git's failure, and the
+//! paths still as they were confirmed — which also names a file git leaves alone, an
+//! ignored one under `git clean -f`.
 //!
 //! **The re-check** compares the index entry, read with gix from the index file now, and the
 //! working-tree file, hashed as its bytes are now — so any byte changed since the
@@ -309,30 +314,20 @@ pub fn discard_files(
     confirmed: Confirmed,
     token: Option<&AskpassToken>,
 ) -> Result<Performed, Error> {
-    let (tracked, untracked) = match confirmed.consequence() {
+    let files = match confirmed.consequence() {
         Consequence::DiscardFiles { files } => {
             if files.is_empty() {
                 return Err(Error::NoPaths);
             }
             let index = IndexNow::read(repo)?;
             for file in files {
-                recheck(repo, &index, file)?;
+                if !as_confirmed(repo, &index, file)? {
+                    return Err(Error::ChangedSinceConfirmed {
+                        path: file.path.to_string(),
+                    });
+                }
             }
-            let (tracked, untracked): (Vec<&DiscardedFile>, Vec<&DiscardedFile>) =
-                files.iter().partition(|file| match file.loss {
-                    FileLoss::Modified { .. } => true,
-                    FileLoss::Untracked { .. } => false,
-                });
-            (
-                tracked
-                    .into_iter()
-                    .map(|file| file.path.clone())
-                    .collect::<Vec<_>>(),
-                untracked
-                    .into_iter()
-                    .map(|file| file.path.clone())
-                    .collect::<Vec<_>>(),
-            )
+            files.clone()
         }
         Consequence::DiscardLines { path, .. } => {
             return Err(refused(path, Refusal::NotWhatWasConfirmed));
@@ -341,7 +336,62 @@ pub fn discard_files(
             return Err(refused(&RepoPath::new(""), Refusal::NotWhatWasConfirmed));
         }
     };
+    let (tracked, untracked): (Vec<RepoPath>, Vec<RepoPath>) = {
+        let (tracked, untracked): (Vec<&DiscardedFile>, Vec<&DiscardedFile>) =
+            files.iter().partition(|file| match file.loss {
+                FileLoss::Modified { .. } => true,
+                FileLoss::Untracked { .. } => false,
+            });
+        (
+            tracked.into_iter().map(|file| file.path.clone()).collect(),
+            untracked
+                .into_iter()
+                .map(|file| file.path.clone())
+                .collect(),
+        )
+    };
     let before = locks_now(repo);
+    let failure = write_the_discard(git, repo, token, &tracked, &untracked).err();
+    let count = files.len();
+    let performed = Performed::destructive(
+        format!(
+            "discarded the changes in {count} {}",
+            if count == 1 { "file" } else { "files" }
+        ),
+        confirmed,
+        Invalidated::working_tree().and(Invalidated::index()),
+    )
+    .with_locks(locks_around(repo, before));
+    // Whatever git said, each confirmed file is read again: one still exactly as it was
+    // confirmed was not discarded — a write that failed part way, or a file git leaves
+    // alone (an ignored one, under `git clean -f`) — and the outcome says so by path.
+    let index = IndexNow::read(repo)?;
+    let mut kept = Vec::new();
+    for file in &files {
+        if as_confirmed(repo, &index, file)? {
+            kept.push(file.path.to_string());
+        }
+    }
+    if failure.is_none() && kept.is_empty() {
+        Ok(performed)
+    } else {
+        Err(Error::DiscardIncomplete {
+            performed: Box::new(performed),
+            kept,
+            failure: failure.map(Box::new),
+        })
+    }
+}
+
+/// The two writes of a discard of files, in order, stopping at the first that fails: the
+/// tracked files restored, then the untracked ones deleted batch by batch.
+fn write_the_discard(
+    git: &GitBinary,
+    repo: &Repository,
+    token: Option<&AskpassToken>,
+    tracked: &[RepoPath],
+    untracked: &[RepoPath],
+) -> Result<(), Error> {
     if !tracked.is_empty() {
         let mut arguments = vec![OsString::from("restore"), OsString::from("--worktree")];
         arguments.extend(PATHSPEC_FILE.map(OsString::from));
@@ -350,10 +400,10 @@ pub fn discard_files(
             repo,
             token,
             &arguments,
-            Some(checked_pathspec_file(&tracked)?),
+            Some(checked_pathspec_file(tracked)?),
         )?;
     }
-    for batch in clean_batches(&untracked) {
+    for batch in clean_batches(untracked) {
         let mut arguments: Vec<OsString> = ["clean", "-f", "--"].map(OsString::from).into();
         arguments.extend(batch.iter().map(|path| {
             use std::os::unix::ffi::OsStringExt as _;
@@ -361,21 +411,14 @@ pub fn discard_files(
         }));
         run(git, repo, token, &arguments, None)?;
     }
-    let count = tracked.len() + untracked.len();
-    Ok(Performed::destructive(
-        format!(
-            "discarded the changes in {count} {}",
-            if count == 1 { "file" } else { "files" }
-        ),
-        confirmed,
-        Invalidated::working_tree().and(Invalidated::index()),
-    )
-    .with_locks(locks_around(repo, before)))
+    Ok(())
 }
 
-/// One file of a discard re-read against what was confirmed of it (R1.4): a tracked file's
-/// index entry and bytes, an untracked file's absence from the index, bytes and size.
-fn recheck(repo: &Repository, index: &IndexNow, file: &DiscardedFile) -> Result<(), Error> {
+/// Whether one file of a discard is still exactly as it was confirmed (R1.4): a tracked
+/// file's index entry, bytes and executable bit, an untracked file's absence from the index,
+/// bytes, executable bit and size. Before the run, `false` refuses it; after, `true` says it
+/// was not discarded.
+fn as_confirmed(repo: &Repository, index: &IndexNow, file: &DiscardedFile) -> Result<bool, Error> {
     let path = &file.path;
     let side = index.side(path)?;
     let disk = on_disk(repo, path)?;
@@ -405,13 +448,7 @@ fn recheck(repo: &Repository, index: &IndexNow, file: &DiscardedFile) -> Result<
                 && disk.bytes() == Some(*bytes)
         }
     };
-    if unchanged {
-        Ok(())
-    } else {
-        Err(Error::ChangedSinceConfirmed {
-            path: path.to_string(),
-        })
-    }
+    Ok(unchanged)
 }
 
 /// The paths of one `git clean` each, in order: as many as fit [`CLEAN_ARGUMENT_BYTES`],

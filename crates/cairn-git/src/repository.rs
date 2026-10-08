@@ -308,6 +308,15 @@ impl Repository {
         &self.inner
     }
 
+    /// Every `*.lock` file under the repository's git directories now — the ones a write
+    /// that was ended before it could clean up leaves behind, which every later write to
+    /// that file fails on (staging-and-commit R4.9, #44). Listed as the repository opens, so
+    /// a lock a write stranded when the window closed under it is named the next time.
+    /// A finding, not a verdict: a lock a git in a terminal holds this instant is listed too.
+    pub fn lock_files(&self) -> Vec<std::path::PathBuf> {
+        crate::ops::stranded_locks::stranded_locks(self.git_dir(), self.inner.common_dir())
+    }
+
     /// The registry and log every handle on this repository shares.
     pub(crate) fn processes(&self) -> &Arc<Processes> {
         &self.processes
@@ -317,6 +326,37 @@ impl Repository {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R4.9: the lock files a repository has are listed — none in a clean one, and an
+    /// `index.lock` left in its git directory by name. Caught by: a listing that misses the
+    /// git directory's own locks, or reports one that is not there.
+    #[test]
+    fn the_lock_files_present_are_listed_by_path() {
+        let directory =
+            std::env::temp_dir().join(format!("cairn-lock-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        // The git Cairn would find, so the fixture is made by the binary it runs.
+        let git = crate::ops::GitBinary::discover(&crate::ops::Askpass::new(
+            "/nonexistent/cairn-askpass",
+            None,
+        ))
+        .unwrap();
+        let initialised = std::process::Command::new(git.path())
+            .args(["init", "-q", "."])
+            .current_dir(&directory)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(initialised.status.success(), "{initialised:?}");
+        let repo = Repository::discover(&directory).unwrap();
+        assert_eq!(repo.lock_files(), Vec::<std::path::PathBuf>::new());
+        let lock = repo.git_dir().join("index.lock");
+        std::fs::write(&lock, "").unwrap();
+        assert_eq!(repo.lock_files(), [lock]);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
 
     #[test]
     fn discovers_this_repository_from_a_nested_path() {

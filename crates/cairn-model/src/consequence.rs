@@ -49,6 +49,10 @@ pub enum Consequence {
         /// re-check compares, so an edit git's form does not show — line
         /// endings alone — still refuses.
         on_disk: Oid,
+        /// Whether the working-tree file is executable, as its mode is on disk: with
+        /// `on_disk`, what the re-check compares, so a `chmod` after the confirmation
+        /// refuses rather than being silently undone.
+        executable: bool,
         /// The lines selected in the unstaged diff (index to working tree):
         /// its added lines are deleted, its removed lines put back. The patch
         /// the operation applies is built from exactly this selection.
@@ -112,6 +116,10 @@ pub enum FileLoss {
         /// compares, so any byte changed after the confirmation — a line ending
         /// included — refuses.
         working_tree: Option<Oid>,
+        /// Whether the working-tree file is executable, as its mode is on disk (`false`
+        /// when it is deleted): compared by the re-check with `working_tree`, so a
+        /// `chmod` after the confirmation refuses rather than being silently undone.
+        executable: bool,
         /// Changed lines of the unstaged diff; `None` for a change that has no
         /// lines (binary).
         lines: Option<usize>,
@@ -121,6 +129,8 @@ pub enum FileLoss {
         /// The file's bytes as they are on disk, hashed with no filter (a
         /// symlink as its target).
         working_tree: Oid,
+        /// Whether it is executable, as its mode is on disk; compared by the re-check.
+        executable: bool,
         bytes: u64,
     },
 }
@@ -165,6 +175,7 @@ impl Consequence {
                 index: _,
                 working_tree: _,
                 on_disk: _,
+                executable: _,
                 selection,
                 mode,
             } => format!(
@@ -228,6 +239,7 @@ impl Consequence {
                 index: _,
                 working_tree: _,
                 on_disk: _,
+                executable: _,
                 selection,
                 mode,
             } => match (selection.len(), mode) {
@@ -291,11 +303,13 @@ fn discard_files_prompt(files: &[DiscardedFile]) -> String {
             FileLoss::Modified {
                 index: _,
                 working_tree: None,
+                executable: _,
                 lines: _,
             } => restored += 1,
             FileLoss::Modified {
                 index: _,
                 working_tree: Some(_),
+                executable: _,
                 lines: counted_lines,
             } => {
                 modified += 1;
@@ -306,6 +320,7 @@ fn discard_files_prompt(files: &[DiscardedFile]) -> String {
             }
             FileLoss::Untracked {
                 working_tree: _,
+                executable: _,
                 bytes,
             } => {
                 untracked += 1;
@@ -470,6 +485,7 @@ mod tests {
             loss: FileLoss::Modified {
                 index: oid(1),
                 working_tree: Some(oid(2)),
+                executable: false,
                 lines,
             },
         }
@@ -481,6 +497,7 @@ mod tests {
             loss: FileLoss::Modified {
                 index: oid(1),
                 working_tree: None,
+                executable: false,
                 lines: Some(9),
             },
         }
@@ -491,6 +508,7 @@ mod tests {
             path: RepoPath::from(path),
             loss: FileLoss::Untracked {
                 working_tree: oid(3),
+                executable: false,
                 bytes,
             },
         }
@@ -514,6 +532,7 @@ mod tests {
             index: Some(oid(1)),
             working_tree: oid(2),
             on_disk: oid(4),
+            executable: false,
             selection,
             mode: None,
         }
@@ -654,6 +673,7 @@ mod tests {
             index: None,
             working_tree: oid(2),
             on_disk: oid(4),
+            executable: false,
             selection: selection(0, 1),
             mode: None,
         };
@@ -677,6 +697,7 @@ mod tests {
                 index: Some(oid(1)),
                 working_tree: oid(2),
                 on_disk: oid(4),
+                executable: false,
                 selection,
                 mode: Some((FileMode::Regular, FileMode::Executable)),
             }
@@ -697,6 +718,26 @@ mod tests {
         assert_eq!(alone.action(), "Discard Mode Change");
         let one = with_mode(selection(0, 1));
         assert_eq!(one.action(), "Discard 1 Line and Mode Change");
+    }
+
+    /// Phase 03's QA item 2: the executable bit is part of what a discard re-checks, so two
+    /// consequences that differ in it alone are different values — and, until the user
+    /// settles how a mode change is worded, render the same words.
+    #[test]
+    fn the_executable_bit_is_compared_but_not_yet_worded() {
+        let with = |executable| Consequence::DiscardFiles {
+            files: vec![DiscardedFile {
+                path: RepoPath::from("run.sh"),
+                loss: FileLoss::Modified {
+                    index: oid(1),
+                    working_tree: Some(oid(2)),
+                    executable,
+                    lines: Some(1),
+                },
+            }],
+        };
+        assert_ne!(with(true), with(false));
+        assert_eq!(with(true).prompt(), with(false).prompt());
     }
 
     /// R10.6's text, and the force push named exactly when a remote has the commit.
@@ -832,6 +873,7 @@ mod tests {
                 path: RepoPath::new(vec![b'a', 0xff, b'\t']),
                 loss: FileLoss::Untracked {
                     working_tree: oid(3),
+                    executable: false,
                     bytes: 1,
                 },
             }],

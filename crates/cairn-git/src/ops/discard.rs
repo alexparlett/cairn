@@ -146,6 +146,7 @@ pub fn discard_lines_consequence(
         index: diff.file.old_id,
         working_tree: form,
         on_disk: on_disk_id,
+        executable: disk.executable(),
         selection,
         mode,
     })
@@ -171,6 +172,7 @@ pub fn discard_lines(
             index,
             working_tree,
             on_disk: disk_id,
+            executable,
             selection,
             mode: _,
         } => {
@@ -188,7 +190,7 @@ pub fn discard_lines(
                 return Err(changed());
             }
             let disk = on_disk(repo, path)?;
-            if disk.id() != Some(disk_id) {
+            if disk.id() != Some(disk_id) || disk.executable() != *executable {
                 return Err(changed());
             }
             if git_form(git, repo, path, &disk)?.as_ref() != Some(working_tree) {
@@ -268,6 +270,7 @@ pub fn discard_files_consequence(
                 FileLoss::Modified {
                     index: id,
                     working_tree: disk.id().copied(),
+                    executable: disk.executable(),
                     lines,
                 }
             }
@@ -279,6 +282,7 @@ pub fn discard_files_consequence(
                 match (disk.id(), disk.bytes()) {
                     (Some(id), Some(bytes)) => FileLoss::Untracked {
                         working_tree: *id,
+                        executable: disk.executable(),
                         bytes,
                     },
                     _ => {
@@ -384,22 +388,25 @@ fn recheck(repo: &Repository, index: &IndexNow, file: &DiscardedFile) -> Result<
         FileLoss::Modified {
             index,
             working_tree,
+            executable,
             lines: _,
         } => {
             let entry = matches!(&side, IndexSide::Entry { id, mode, .. }
                 if id == index && *mode != Some(cairn_model::FileMode::Submodule));
             let file_now = match working_tree {
-                Some(id) => disk.id() == Some(id),
+                Some(id) => disk.id() == Some(id) && disk.executable() == *executable,
                 None => disk == OnDisk::Absent,
             };
             entry && file_now
         }
         FileLoss::Untracked {
             working_tree,
+            executable,
             bytes,
         } => {
             side == IndexSide::Absent
                 && disk.id() == Some(working_tree)
+                && disk.executable() == *executable
                 && disk.bytes() == Some(*bytes)
         }
     };

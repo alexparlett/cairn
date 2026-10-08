@@ -130,10 +130,12 @@ pub(super) fn index_side(repo: &Repository, path: &RepoPath) -> Result<IndexSide
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum OnDisk {
     Absent,
-    /// A regular file: its bytes hashed as a blob, and their count.
+    /// A regular file: its bytes hashed as a blob, their count, and whether its owner may
+    /// execute it — the bit git records as `100755`.
     File {
         id: Oid,
         bytes: u64,
+        executable: bool,
     },
     /// A symlink: its target hashed as a blob, as git stores it, and the target's length.
     Symlink {
@@ -162,6 +164,19 @@ impl OnDisk {
             Self::Absent | Self::Directory | Self::Other | Self::Changing | Self::Obstructed => {
                 None
             }
+        }
+    }
+
+    /// Whether it is an executable file; a link, or nothing, is not.
+    pub(super) fn executable(&self) -> bool {
+        match self {
+            Self::File { executable, .. } => *executable,
+            Self::Absent
+            | Self::Symlink { .. }
+            | Self::Directory
+            | Self::Other
+            | Self::Changing
+            | Self::Obstructed => false,
         }
     }
 
@@ -285,6 +300,7 @@ pub(super) fn on_disk(repo: &Repository, path: &RepoPath) -> Result<OnDisk, Erro
     Ok(OnDisk::File {
         id: model_id(&id)?,
         bytes: expected,
+        executable: std::os::unix::fs::PermissionsExt::mode(&metadata.permissions()) & 0o100 != 0,
     })
 }
 

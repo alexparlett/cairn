@@ -242,7 +242,8 @@ fn a_stale_discard_writes_nothing_where_git_apply_would_land_it_at_an_offset() {
 #[test]
 fn a_discard_of_lines_refuses_whatever_moved_after_the_confirmation() {
     type Move = fn(&Repo);
-    let moves: [(&str, Move); 3] = [
+    let moves: [(&str, Move); 4] = [
+        ("its mode alone", |repo| repo.chmod("file.txt", 0o755)),
         ("an edit", |repo| {
             repo.write(
                 "file.txt",
@@ -326,7 +327,13 @@ fn both() -> [RepoPath; 2] {
 #[test]
 fn a_discard_of_files_refuses_whatever_moved_after_the_confirmation() {
     type Move = fn(&Repo);
-    let moves: [(&str, Move); 7] = [
+    let moves: [(&str, Move); 9] = [
+        ("the tracked file's mode alone", |repo| {
+            repo.chmod("a.txt", 0o755)
+        }),
+        ("the untracked file's mode alone", |repo| {
+            repo.chmod("dir/u.txt", 0o755)
+        }),
         ("the tracked file edited", |repo| {
             repo.write("a.txt", b"typed\n");
         }),

@@ -182,7 +182,8 @@ struct Case {
     repo: Repo,
     /// The path the selection is made on: a rename's destination.
     path: Vec<u8>,
-    /// A staged rename's source, which `git diff --cached` names beside the destination.
+    /// A staged rename's or copy's source, which `git diff --cached` names beside the
+    /// destination.
     renamed_from: Option<Vec<u8>>,
     /// Not in the index at all: its diff is the untracked one, and what `git diff` shows of
     /// it afterwards is `--no-index`'s.
@@ -354,6 +355,11 @@ impl Case {
                 b"--no-textconv",
             ];
             match action {
+                // A pair is read as git pairs it within its two paths: a rename or a copy,
+                // and only its own record, not a copy source's modification beside it.
+                PatchAction::Unstage if self.renamed_from.is_some() => {
+                    args.extend([&b"--cached"[..], b"-C", b"--diff-filter=RC"]);
+                }
                 PatchAction::Unstage => args.extend([&b"--cached"[..], b"-M"]),
                 PatchAction::Stage | PatchAction::Discard => args.push(b"--no-renames"),
             }
@@ -717,7 +723,21 @@ fn run(case: &Case) -> usize {
                 panic!("{at}: git apply refused it: {refused}\n{patch:?}");
             }
 
-            let deletes = patch.text().contains("\ndeleted file mode ");
+            // Whether the file goes, decided from the case and never from the patch under
+            // test: undoing every line of an added file, and nothing else, takes it away.
+            let deletes = drawn.file.status == ChangeStatus::Added
+                && action != PatchAction::Stage
+                && selection.holds_every_change(text);
+            assert_eq!(
+                patch.text().contains("\ndeleted file mode "),
+                deletes,
+                "{at}: the patch {} the file\n{patch:?}",
+                if deletes {
+                    "does not delete"
+                } else {
+                    "deletes"
+                }
+            );
             let (side, derived) = match action {
                 PatchAction::Stage => (text.old_content(), forward_rule(text, &selection)),
                 PatchAction::Unstage | PatchAction::Discard => {
@@ -958,8 +978,29 @@ fn lines_on_an_unborn_branch_stage_unstage_and_discard_as_git_says() {
         );
         checked += 1;
     }
+    // Every line unstaged on an unborn branch takes the entry away, as the whole of an
+    // addition undone does.
     case.restore(&saved);
-    assert_eq!(checked, 3);
+    let every = Selection::with_every_change(text);
+    let patch = action_patch(PatchAction::Unstage, &drawn, &every);
+    git_bytes(
+        case.dir(),
+        &[b"apply", b"--cached", b"--whitespace=nowarn", b"-"],
+        Some(patch.as_bytes()),
+    )
+    .unwrap_or_else(|e| panic!("unborn, unstage every line: {e}\n{patch:?}"));
+    assert_eq!(
+        case.staged(b"first.txt"),
+        None,
+        "unborn, unstage every line: the entry stayed"
+    );
+    assert!(
+        on_disk(&case.repo, b"first.txt").exists(),
+        "unborn, unstage every line: the working tree lost the file"
+    );
+    checked += 1;
+    case.restore(&saved);
+    assert_eq!(checked, 4);
     let mut case = case;
     case.actions = vec![PatchAction::Stage, PatchAction::Discard];
     check(&case);
@@ -1020,6 +1061,49 @@ fn lines_of_a_staged_rename_unstage_as_content_at_its_new_path() {
     assert_eq!(case.staged(b"old.txt"), None);
 }
 
+/// C3 and R2.6 for a copy: a staged copy of an edited source, drawn as `git diff --cached`
+/// pairs it under `diff.renames=copies`, its lines unstaged as content at the copy's path
+/// with real git — the one place `ChangedFile::inverted`'s copy arm reaches `git apply`.
+#[test]
+fn lines_of_a_staged_copy_unstage_as_content_at_its_path() {
+    let mut case = Case::new("staged copy", b"copy.txt");
+    case.repo.config("diff.renames", "copies");
+    write(&case.repo, b"src.txt", &joined(&head_lines(), "\n"));
+    case.repo.commit("base");
+    write(&case.repo, b"copy.txt", &joined(&index_lines(), "\n"));
+    let mut source = head_lines();
+    source.push("the source moved on".to_owned());
+    write(&case.repo, b"src.txt", &joined(&source, "\n"));
+    case.repo.git(&["add", "copy.txt", "src.txt"]);
+    write(&case.repo, b"copy.txt", &joined(&work_lines(), "\n"));
+    case.renamed_from = Some(b"src.txt".to_vec());
+    let staged = case.drawn(PatchAction::Unstage);
+    assert!(
+        staged.file.is_copy(),
+        "the staged diff is not the copy git pairs: {:?}",
+        staged.file
+    );
+    let patch = action_patch(
+        PatchAction::Unstage,
+        &staged,
+        &Selection::with_every_change(staged.text().unwrap_or_else(|| panic!("no text"))),
+    );
+    assert!(
+        patch
+            .text()
+            .starts_with("diff --git a/copy.txt b/copy.txt\n")
+            && !patch.text().contains("copy from")
+            && !patch.text().contains("deleted file"),
+        "unstaging lines of a copy did not change content at its path:\n{patch:?}"
+    );
+    check(&case);
+    // The source is untouched by any of it.
+    let (_, id) = case
+        .staged(b"src.txt")
+        .unwrap_or_else(|| panic!("the source left the index"));
+    assert_eq!(case.blob(&id), joined(&source, "\n"));
+}
+
 /// C3: each awkward name, modified, through every action: the path lines are C-quoted as
 /// git quotes them (R2.5), and `git apply` finds the file each names.
 #[test]
@@ -1032,6 +1116,12 @@ fn lines_of_awkwardly_named_files_stage_unstage_and_discard_as_git_says() {
         ("a newline", b"new\nline.txt"),
         ("a control byte", b"ctl\x01.txt"),
         ("invalid UTF-8", b"bad\xff.txt"),
+        ("a carriage return", b"cr\r.txt"),
+        ("a delete byte", b"del\x7f.txt"),
+        ("a bell", b"bell\x07.txt"),
+        ("a backspace", b"bs\x08.txt"),
+        ("a vertical tab", b"vt\x0b.txt"),
+        ("a form feed", b"ff\x0c.txt"),
     ] {
         let case = edited(name, path, "\n", |_| {});
         // The emitted headers are git's own, byte for byte.

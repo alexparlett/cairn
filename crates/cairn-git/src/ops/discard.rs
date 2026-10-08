@@ -497,6 +497,9 @@ pub(crate) fn clean_batches(paths: &[RepoPath]) -> Vec<&[RepoPath]> {
     batches
 }
 
+/// A mode change as a diff draws it: the old side's mode, then the new side's.
+type ModeChange = (FileMode, FileMode);
+
 /// How many lines of `path`'s unstaged diff a discard takes back, read as the diff is drawn,
 /// and its mode change, as the diff draws it (index, then working tree):
 /// `None` for a change that is not text (binary, an LFS pointer, past the load-anyway
@@ -505,7 +508,7 @@ fn unstaged_change(
     git: &GitBinary,
     repo: &Repository,
     path: &RepoPath,
-) -> Result<(Option<usize>, Option<(FileMode, FileMode)>), Error> {
+) -> Result<(Option<usize>, Option<ModeChange>), Error> {
     let options = ContentOptions {
         load_anyway: true,
         ..ContentOptions::default()

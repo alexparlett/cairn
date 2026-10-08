@@ -340,7 +340,7 @@ fn discard_files_prompt(files: &[DiscardedFile]) -> String {
                 lines,
                 mode,
             } => {
-                modified.add(*lines);
+                add_lines(&mut modified, *lines);
                 modes.extend(*mode);
             }
             FileLoss::Emptied {
@@ -348,7 +348,7 @@ fn discard_files_prompt(files: &[DiscardedFile]) -> String {
                 working_tree: _,
                 executable: _,
                 lines,
-            } => emptied.add(*lines),
+            } => add_lines(&mut emptied, *lines),
             FileLoss::Untracked {
                 working_tree: _,
                 executable: _,
@@ -370,7 +370,7 @@ fn discard_files_prompt(files: &[DiscardedFile]) -> String {
             )),
             several => Some(counted(several.len(), "mode change", "mode changes")),
         };
-        let detail = match (modified.detail(mode.is_some()), mode) {
+        let detail = match (line_detail(&modified, mode.is_some()), mode) {
             (Some(lines), None) => lines,
             (None, Some(mode)) => mode,
             (Some(lines), Some(mode)) if modified.files == 1 => format!("{lines} and {mode}"),
@@ -383,9 +383,7 @@ fn discard_files_prompt(files: &[DiscardedFile]) -> String {
         parts.push(format!(
             "{} emptied ({})",
             counted(emptied.files, "new file", "new files"),
-            emptied
-                .detail(false)
-                .unwrap_or_else(|| counted(0, "line", "lines"))
+            line_detail(&emptied, false).unwrap_or_else(|| counted(0, "line", "lines"))
         ));
     }
     if restored > 0 {
@@ -415,29 +413,29 @@ struct Lines {
     binary: usize,
 }
 
-impl Lines {
-    fn add(&mut self, lines: Option<usize>) {
-        self.files += 1;
-        match lines {
-            Some(n) => self.lines += n,
-            None => self.binary += 1,
-        }
+/// One more file of a kind, with its lines (`None` for one that is not text). Free
+/// functions rather than an impl, so `impl Consequence` stays this file's one impl block.
+fn add_lines(kind: &mut Lines, lines: Option<usize>) {
+    kind.files += 1;
+    match lines {
+        Some(n) => kind.lines += n,
+        None => kind.binary += 1,
     }
+}
 
-    /// The lines and the files without them, in words — "14 lines", "binary", "14 lines,
-    /// 1 binary" — or nothing where the only change beside them is a mode (`moded`) and
-    /// there is no line to count: never "0 lines" for a mode change.
-    fn detail(&self, moded: bool) -> Option<String> {
-        let text = self.files - self.binary;
-        match (self.lines, self.binary) {
-            (0, 0) if moded => None,
-            (lines, 0) => Some(counted(lines, "line", "lines")),
-            (0, _) if moded || text == 0 => Some("binary".to_owned()),
-            (lines, binary) => Some(format!(
-                "{}, {binary} binary",
-                counted(lines, "line", "lines")
-            )),
-        }
+/// A kind's lines and its files without them, in words — "14 lines", "binary", "14 lines,
+/// 1 binary" — or nothing where the only change beside them is a mode (`moded`) and there
+/// is no line to count: never "0 lines" for a mode change.
+fn line_detail(kind: &Lines, moded: bool) -> Option<String> {
+    let text = kind.files - kind.binary;
+    match (kind.lines, kind.binary) {
+        (0, 0) if moded => None,
+        (lines, 0) => Some(counted(lines, "line", "lines")),
+        (0, _) if moded || text == 0 => Some("binary".to_owned()),
+        (lines, binary) => Some(format!(
+            "{}, {binary} binary",
+            counted(lines, "line", "lines")
+        )),
     }
 }
 

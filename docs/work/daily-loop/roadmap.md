@@ -1,6 +1,6 @@
 # Roadmap — daily-loop
 
-Build order for the nine packets that reach D7. Order lives here, never in the
+Build order for the ten packets that reach D7. Order lives here, never in the
 design spine. Each packet gets its own `/feature-plan` run when it starts, writing
 its PRD and phases against then-current code — the briefs below carry the design
 nuance that run must not lose.
@@ -12,17 +12,20 @@ nuance that run must not lose.
 | 2a | `process-manager` | **shipped** | 2 |
 | 3 | `diff-engine` | **shipped** | 1, 2a |
 | 4 | `refs-and-status` | **shipped** (merge bar passed and torn down; lands on `main` with its packet PR) | 1, 2a (O2 picked `git status`), 3 |
-| 5 | `staging-and-commit` | brief only | 2, 2a, 3, 4 |
+| 5 | `staging-and-commit` | planned (PRD `docs/prd/staging-and-commit.md`) | 2, 2a, 3, 4 |
+| 5b | `stash-and-ignore` | brief only | 5 |
 | 6 | `remote-sync` | brief only | 2, 2a, 4 |
 | 7 | `branch-ops` | brief only | 2a, 4 |
 | 8 | `worktrees` | brief only | 2a, 4 |
 
 2a depends on 2. 3 depends on 2a, and 4 on 1, 2a (O2 sent status to `git`) and
 3 (whose working-tree query its Local Changes view opens). Every packet that
-spawns `git` depends on 2a. 6, 7 and 8 are
-independent of each other. The local write lane is built by whichever of 5 and 7
-lands first. The critical path to D7 is 1 → 2 → 2a → 3 → 5, with 4 needed before 5.
-2a was inserted on 2026-10-02 and numbered so the other packets keep theirs.
+spawns `git` depends on 2a. 5b depends on 5, whose local write lane, confirmation
+seal and activity popover it builds on. 6, 7 and 8 are independent of each other.
+The local write lane is built by 5, which 7 then uses. The critical path to D7 is
+1 → 2 → 2a → 3 → 5, with 4 needed before 5. 2a was inserted on 2026-10-02 and 5b on
+2026-10-07 (staging-and-commit's L1, L21), each numbered so the other packets keep
+theirs.
 
 ---
 
@@ -154,53 +157,80 @@ sections and the find. Left as issues: #62-#82 — listing ignored files, reftab
 Submodules section, Local Changes' toolbar, and the measured or reviewed follow-ups — and
 #2, #4, #35 and #36, which it built toward.
 
-## 5. staging-and-commit — brief
+## 5. staging-and-commit — planned
 
-**Builds:** stage and unstage by file, hunk and line. Discard by file, hunk and
-line. Clean untracked files. Commit and amend. `.gitignore` editing. Stash
-create, apply, pop and drop.
+PRD `docs/prd/staging-and-commit.md` (in flight), work directory
+`docs/work/staging-and-commit/` (decisions L1-L21 in its `brainstorm.md`, twelve
+phases), evidence `docs/research/staging-and-commit/`. Planned on 2026-10-07.
 
-**This is the first packet with destructive operations**, so it carries the debts
-the architecture has been saving up:
+**Builds:** the local write lane (its own thread, FIFO with a queued state,
+operation ids, a write counter that discards a status begun before the latest write
+ended, refresh by `Invalidated`, quiet while a commit runs); the confirmation seal
+bound to an engine-computed `Consequence` and re-checked before each destructive
+operation runs; stage, unstage and discard by file, hunk, line and mode change, in
+Fork's routes and gesture, with unstage and discard as inverted diffs through the
+forward emitter; commit and amend through Fork's commit box, with hooks, the `Git
+Error` dialog and its skip; Show Lost Commits (the reflog view, program L4) with
+`Create Branch Here…`; and the activity popover, quoting each confirmed prompt.
 
-- Every destructive operation takes `Confirmed` and is reviewed by
-  `destructive-ops-reviewer`. This is the packet where that reviewer stops being
-  theoretical.
-- **The reflog view ships here (L4)** — amend and stash drop destroy committed
-  work, and a client that can do that before it can show you the reflog has no
-  recovery story but the terminal.
-- **The operation log becomes visible here.** `ops::Performed` already records the
-  prompt the user accepted; this is where a user can read it back.
-- **O3, the auto-stash question (L5).** The reflog does nothing for a discarded
-  uncommitted edit — there is no recovery for that class at all, which makes the
-  confirmation dialog the only barrier. Decide deliberately whether Cairn
-  auto-stashes first. Do not inherit a default.
+**Leaves out:** stash and `.gitignore`, moved to 5b (its L1, L21). **O3 is closed**
+(its L2): a discarded uncommitted edit is protected by its confirmation alone, as in
+Fork — no backup, no auto-stash, no Trash, no undo. "Clean untracked" is absorbed
+into discard (its L8): an untracked row is discarded by deleting it, with the same
+dialog, and there is no Clean command. Push, Commit and Push and the forge stay
+packet 6's; every other ref operation packet 7's; Tier 4 the second lap's.
 
-**Depends on packet 3 for patch construction and packet 2 for the backend** —
-`git apply --cached` is how a partial stage happens. Three things packet 3 will
-leave on the doorstep. Its patch emitter and round-trip tests are built for this
-packet to consume, and a patch is always emitted at three lines of context from
-the exact diff, never from a whitespace-ignoring view, which is what Fork gets
-wrong. `git apply --cached`
-feeds its patch on stdin, which the runner gains in packet 2a; this packet adds
-the local write lane it designs, and `destructive-ops-reviewer` reviews both. And
-the staging affordance is undecided on purpose: Fork floats Stage and Discard
-over a hovered chunk and narrows them by drag-selection — Discard on unstaged
-chunks only, since Fork refuses to discard staged changes by design — while
-Cairn's mockup shows header actions and a selection gutter
-(`docs/research/diff-engine/fork-detail-and-diff-ui.md`).
+**Inherited from packet 4** (as built, `docs/systems/local-changes.md`): the Local
+Changes view, read only — Unstaged above Staged, the badges, each path's diff — which
+this packet adds stage, discard and the commit box to; and status as `git status`
+reports it. Its "the filter field is the only control above the lists" gives way to
+Fork's header buttons (its L7).
 
-**Out:** merge, rebase, cherry-pick, revert, reset (all Tier 4, second lap).
+## 5b. stash-and-ignore — brief
 
-**Inherited from packet 4** (as built, `docs/systems/local-changes.md`): the Local Changes view, read only —
-Unstaged above Staged, the badges, each path's diff — which this packet adds
-stage, discard and the commit box to; and status as `git status` reports it.
+**Builds:** stash create through Fork's dialog (a message, and `Stage new files`,
+which stages untracked files so the stash includes them); `Save Snapshot…`, a stash
+that leaves the changes in place; apply through Fork's `Apply Stash` dialog, whose
+`Delete stash after applying` is the difference between apply and pop; drop, which
+is destructive, takes `Confirmed`, and is run by the id the prompt named, checked
+against `stash@{n}` immediately before it runs; `Stash N Files…` from the file
+context menu; and the context menu's `Ignore ›` submenu — `Ignore '<file>'` at
+once, `Ignore All Files in '<folder>'…` and `Custom Pattern…` through Fork's `Add
+Pattern to .gitignore` dialog with a live preview of the files that match — writing
+the root `.gitignore` only, as Fork does.
+
+**Facts the planning research found that it must meet**
+(`docs/research/staging-and-commit/git-write-verbs.md` §7 and §9,
+`fork-staging-and-commit.md` §4 and §6):
+
+- `git stash push` is not atomic: one push wrote the index six times and committed
+  five ref transactions, and a kill during its `reset --hard` left the entry stored,
+  the working tree half reset and a stale `index.lock`.
+- "No local changes to save" exits 0 and stores nothing, so success is not a stash.
+- `git stash drop` takes only `stash@{n}` — an object id is refused — and later
+  entries renumber, so a drop by index races any other stash; hence the id check
+  above, through the seal's pre-run re-check.
+- A dropped stash is in no reflog: Show Lost Commits cannot draw it, and only
+  `git fsck` finds it until `gc` prunes it. The drop's prompt must say so.
+- An intent-to-add entry in the index makes `git stash push` fail ("Entry not
+  uptodate. Cannot merge.") and change nothing.
+- `--staged` is absent below git 2.35 (`unknown option`, 129 on 2.30), so a
+  staged-only stash degrades on the floor (program memory: the floor stays 2.30);
+  Fork has none either.
+- A `.gitignore` write is a file write, with no git verb: where it lives in `ops/`,
+  and whether D1 is amended for it, is this packet's decision.
+- Appending to a `.gitignore` without a final newline joins two patterns into one
+  that ignores neither; the write must add the newline first.
+
+**Depends on 5:** the local write lane, the seal and its `Consequence`, and the
+activity popover a drop's prompt is quoted in.
 
 ## 6. remote-sync — brief
 
 **Builds:** pull and push. Upstream tracking. Remote add, edit and remove.
 Force push with `--force-with-lease` as the default and plain `--force` made hard
-to reach. Push and delete tags. Prune.
+to reach. Push and delete tags. Prune. **Commit and Push**, Fork's commit-box
+gesture, left out of packet 5 to be designed with push: it is this packet's.
 
 **Also builds the forge links (D9), and they are not a footnote.** "Create pull
 request for this branch" is one of the most-used context-menu commands in Fork, so
@@ -238,7 +268,9 @@ contradict D2.
 ## 7. branch-ops — brief
 
 **Builds:** create, rename and delete branches. Checkout and switch. Create and
-delete tags.
+delete tags. Packet 5's minimal `Create Branch Here…` (a name, then
+`git branch -- <name> <oid>`, on a commit Show Lost Commits draws) exists to reuse:
+create branch grows from it rather than beside it.
 
 **The non-obvious destructive case:** checkout is destructive exactly when the
 working tree is dirty, which is the moment a user least expects a checkout to

@@ -25,18 +25,6 @@ projections of that one answer, and a projection is addressable — a view asks 
 the row count and any single row without building every row, so a file of any
 length costs one viewport of work per frame.
 
-A changed line is identified by its line number on its own side, so a
-**selection** is a set of those identities, independent of presentation, context
-and expansion. The patch emitter takes a file diff and a selection and returns a
-patch `git apply --cached` accepts, always with three lines of context whatever
-the view shows, and the same patch in reverse removes exactly the selection.
-
-What a user stages is the exact diff, never the displayed one. Ignoring
-whitespace produces a second set of ranges for display only, which the emitter
-cannot reach by construction. Display context, expansion and side-by-side change
-what is drawn and never what the emitter reads. Hidden changes are announced:
-with whitespace ignored, the view says that some changes are hidden.
-
 A file that is not diffed as text carries its state instead of lines — binary
 with both sizes, too large with the limit it crossed, a Git LFS pointer, a
 submodule with both commit ids, a mode change only, conflicted, or unsupported
@@ -54,6 +42,72 @@ intra-line highlights git has no equivalent of, and gix types stop at the
 seam. A working-tree diff shows what `git diff`
 shows, filters included (`engine.md`, "Reads see git's form"). Spec:
 `docs/prd/diff-engine.md` R1-R3. As built: `docs/systems/diff.md`.
+
+## Selections and patches
+
+A changed line is identified by its line number on its own side, so a
+**selection** is a set of those identities, independent of presentation, context
+and expansion. A mode change is an item of its own beside them: a selection of
+lines carries no `old mode` or `new mode`, and a mode change stages alone, as
+`git add -p` asks about it separately. The patch emitter takes a file diff and a
+selection and returns a patch `git apply` accepts, always at three lines of
+context whatever the view shows, with every path line C-quoted exactly as git's
+own `quote_c_style` quotes it — a raw tab in a path line is a patch git refuses.
+
+There is one emit rule, the forward one, and every action reaches it through a
+diff. Staging lines applies the unstaged diff — index to working tree — to the
+index (`git apply --cached`); unstaging lines applies the staged diff — `HEAD` to
+index — inverted, to the index; discarding lines applies the unstaged diff
+inverted, to the working tree (`git apply`). A file diff, a selection and a changed
+file each have a pure inversion — the sides swapped, each change's two spans
+swapped, the removed and added sets swapped, paths, modes and ids swapped and an
+addition made a deletion — so no patch is applied with `-R`, and the model holds
+one rule rather than a rule and its mirror. The mirror keeps one use: applied in
+reverse, it is the tests' independent derivation of the same index and working
+tree, beside the reference applier and real git on both floors.
+
+Part of an untracked or newly added file can be staged — a `new file mode` patch
+of the selected lines — or discarded, as a partial deletion emitted as a
+modification, as Fork allows; discarding all of an untracked file deletes it
+(`ui.md`, "Discard"). Some changes are whole-file only, because no patch of lines
+expresses them: a deletion on either side (`git add -p`'s rule), a binary file, a
+Git LFS pointer, a file past the size limits, a submodule, a type change and a
+conflicted file. They are staged with `git add`, unstaged with `git reset`, which
+works on an unborn branch where `git restore --staged` fails, and discarded with
+`git restore --worktree` — but for two. A submodule is never discarded: `git
+restore` leaves its checked-out commit where it was, only `git submodule update`
+moves it back, and no prompt can count what is dirty inside it, so its row offers
+no discard and says why. A conflicted file is staged whole, which marks it
+resolved, and offers neither lines nor a discard; resolving its content is the
+conflict view's (`conflicts.md`). Unstaging lines of a staged rename emits a
+content-only patch at its new path; unstaging it whole resets both of its paths.
+
+The staged side pairs renames and copies as `git diff --cached` does under the
+user's configuration, so a staged rename is drawn and unstaged as a rename, never
+as a deletion beside an addition.
+
+What is staged is what was drawn and selected. Every `git apply` runs with
+`--whitespace=nowarn`, so the user's `apply.whitespace` can neither strip
+whitespace from staged lines under `fix` nor refuse them under `error` — a
+deliberate departure from `git add -p`, which honours it. And before every apply
+the operation checks the content its patch was built from: for a stage, that the
+index entry's blob is the diff's old side; for an unstage, that it is the new side;
+for a discard, that the index entry is the old side — or, for part of an untracked
+file, that the index holds no entry for it — and that the working-tree file,
+hashed in git's form (`git hash-object --path`, a read that runs the clean filter
+the diff ran and writes no object), is the drawn new side. A stale patch writes
+nothing and says which path moved; unchecked, git would apply it at an offset and
+report success.
+
+What a user stages is the exact diff, never the displayed one. Ignoring whitespace
+produces a second set of ranges for display only, which the emitter cannot reach
+by construction, and with whitespace ignored the view says that some changes are
+hidden; in Local Changes, where the gestures are, the setting is disabled and the
+exact diff is drawn (`ui.md`, "Staging gestures"). Display context, expansion and
+side-by-side change what is drawn and never what the emitter reads. Spec:
+`docs/prd/staging-and-commit.md` R2, R3. Evidence:
+`docs/research/staging-and-commit/patch-mechanics-spike.md` and
+`git-write-verbs.md` beside it.
 
 ## The detail pane
 

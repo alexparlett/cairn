@@ -41,7 +41,7 @@ No risk, and most of the perceived quality of a git client lives here.
 | File / path history | All commits touching a path. |
 | Commit search | `--grep`, author, date, and `-S`/`-G` pickaxe. Fork under-serves this; at scale it is badly missed. A differentiator. |
 | Compare arbitrary revisions | Two commits, or a branch against its upstream. |
-| Reflog view | Fork sells this as "restore lost commits". It is the recovery story for commit-level destruction — see Recovery below. |
+| Reflog view | Fork sells this as "restore lost commits": Show Lost Commits, a mode of the graph that draws what only a reflog reaches, dimmed (`ui.md`). It is the recovery story for commit-level destruction — see Recovery below. |
 | Stash contents | Fork shows stashes inline in the commit list, each a row of its own, as well as in its sidebar; worth copying. |
 | Submodule status | Which submodules exist, which are dirty, which are behind. |
 | Image diffs | Fork advertises this. Common, concrete, moderate cost once the diff foundation exists. |
@@ -55,11 +55,12 @@ No risk, and most of the perceived quality of a git client lives here.
 | Stage / unstage file | |
 | Stage / unstage hunk | |
 | Stage / unstage line | Fork headline. Requires the patch-capable diff model. |
-| Discard file changes **[D]** | |
+| Discard file changes **[D]** | Confirmed, never backed up (Recovery, below). Staged changes are never discardable. |
 | Discard hunk / line **[D]** | |
-| Clean untracked files **[D]** | |
+| Delete untracked files **[D]** | Discard on an untracked row, through the same dialog. There is no Clean command, as in Fork (`ui.md`, "Discard"). |
 | Commit | Must run hooks — the whole reason writes go through `git` (`engine.md`). |
-| Amend **[D]** | Rewrites a commit; the old one survives only in the reflog. |
+| Amend **[D]** | Rewrites a commit; the old one survives only in the reflog, where Show Lost Commits draws it. |
+| Remove a stale `index.lock` **[D]** | Offered only while Cairn runs no `git` in the repository, its prompt naming the lock's age and saying another program may own it; the one mutation not made by `git`, which has no verb for it (`engine.md`). |
 | `.gitignore` editing | |
 | Stash create / apply / pop | |
 | Stash drop **[D]** | |
@@ -144,14 +145,14 @@ One mechanism, several commands, no API token and no network call from Cairn
 | --- | --- |
 | Preferences | |
 | Light / dark theme | `ui.md`, "Palette and type". |
-| Accelerator table | One logical-action-to-chord map, not per-component literals (`platform.md`). |
+| Accelerator table | One map from a logical action to its chords per platform, not per-component literals (`platform.md`). |
 | Command palette | |
 | Open in terminal / editor | |
 | External diff / merge tool | The escape hatch conflict resolution depends on (`conflicts.md`). |
 | Update mechanism | |
 | Accessibility | Keyboard reachability throughout; lane identity legible without colour. |
 | Error and notification surface | |
-| Operation log | Fed by `ops::Performed` — it quotes the prompt the user accepted. Half the recovery story. |
+| Operation log | Fork's Activity popover, for the session only, fed by `ops::Performed` and the command log — it quotes the prompt the user accepted and points at the way back where there is one (`ui.md`, "Activity"). |
 
 ## Recovery: two classes, two stories
 
@@ -159,19 +160,29 @@ The most important structural point in this document, and the one easiest to get
 wrong by assuming reflog covers everything.
 
 **Committed work** — reset `--hard`, branch delete, rebase, amend, squash. The
-reflog holds it, so recovery means *making the reflog visible and usable*. That
-is why the reflog view ships alongside the first commit-level destructive
-operation and not later.
+reflog holds it, so recovery means *making the reflog visible and usable*: Show
+Lost Commits draws every commit a reflog still reaches into the graph, dimmed, and
+`Create Branch Here…` puts a branch back on one (`ui.md`). That is why the reflog
+view ships alongside the first commit-level destructive operation and not later,
+and why an amend's confirmation can say where the old commit stays.
 
-**Uncommitted work** — discard file, discard hunk, discard line, clean untracked,
-reset `--hard` over a dirty tree. **The reflog does not help at all. There is no
-recovery.** A confirmation dialog is the only barrier, which makes it a thin one.
+**Uncommitted work** — discard file, discard hunk, discard line, delete untracked,
+reset `--hard` over a dirty tree. **The reflog does not help at all, and Cairn
+keeps no backup of its own.** A discarded edit is protected by its confirmation
+alone, as in Fork, whose maintainer has refused a Trash and an undo for discard.
+So the confirmation carries the whole weight: it says what is lost and how much,
+computed by the engine and re-checked before the discard runs, and that it cannot
+be undone — because it cannot (`engine.md`, "The confirmation seal").
 
-The option worth considering for that second class: Cairn **auto-stashes before a
-destructive working-tree operation**, giving the one thing git itself does not — a
-way back from a discarded edit. It would be a genuine differentiator and it fits
-the `Confirmed` design rather than fighting it. Not decided — open in `cairn.md`,
-"Still open".
+Every backup weighed costs more than it buys. A hidden snapshot under a private
+ref covers hunk and line discards, but turns every discard into a write that takes
+the index lock, runs clean filters over every dirty file, grows the object store,
+needs an expiry, and shows in `git log --all`. A visible stash per discard fills
+the stash list, and a stash drop then destroys the backup. The OS Trash covers
+whole files only — not the common hunk and line discards, nor index content — and
+is a filesystem write outside git that other clients keep patching. An in-app undo
+applies a stale snapshot over newer edits, which is itself destructive. Evidence:
+`docs/research/staging-and-commit/precedent-study.md`.
 
 ## Explicitly out of scope
 

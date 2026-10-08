@@ -20,7 +20,11 @@ Cairn built, never one it inherited: `GIT_TERMINAL_PROMPT=0` stops git falling
 back to a tty, and `GIT_ASKPASS` and `SSH_ASKPASS` (with
 `SSH_ASKPASS_REQUIRE=force`) name Cairn's own askpass helper. git calls the helper
 with the prompt as an argument and reads the answer from its stdout; the helper
-round-trips the prompt to a dialog in the running window. Verified against git
+round-trips the prompt to a dialog in the running window. The same dialog appears
+during a local write, not only a fetch or a push — a passphrase for an encrypted
+SSH signing key under a commit, a credential an LFS smudge asks for during a
+discard — since every write carries the helper's token (`processes.md`, "The
+environment"). Verified against git
 2.55.0's documentation:
 `docs/research/credential-prompts/git-credential-delegation.md`.
 

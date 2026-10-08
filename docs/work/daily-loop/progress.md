@@ -3,6 +3,18 @@
 Running log, newest first. Historical record: entries are never retro-edited.
 Correct course in a new entry.
 
+## 2026-10-07 — staging-and-commit planned; O3 closed; 5b inserted
+
+Packet 5 planned with `/feature-plan`: PRD `docs/prd/staging-and-commit.md`, work
+directory `docs/work/staging-and-commit/` (L1-L21, twelve phases), evidence in seven
+records under `docs/research/staging-and-commit/`. O3 closed by its L2: a discarded
+uncommitted edit is protected by its confirmation alone, as Fork does it, after a
+precedent study weighed a hidden snapshot, a stash per discard, the OS Trash and an
+in-app undo. The brief split in two (its L1, L21): stash and `.gitignore` moved to a
+new packet 5b, `stash-and-ignore`, which depends on 5, and "clean untracked" was
+absorbed into discard. The living design docs were rewritten to the decisions in
+the same change.
+
 ## 2026-10-07 — refs-and-status shipped and torn down
 
 Packet 4 passed its merge bar (every C1-C16 met; full gate green) and the user accepted

@@ -7,7 +7,11 @@ Intent, not as-built; `docs/systems/` describes what exists. Spine:
 
 Every repository read goes through `gix`, in process, unless gix's answer to it
 differs from git's. Every mutation goes through the `git` binary, invoked from
-`crates/cairn-git/src/ops/` and nowhere else. A read runs the `git` CLI only where
+`crates/cairn-git/src/ops/` and nowhere else, with one exception: git has no verb
+that removes a lock, so removing a stale `index.lock` the user confirmed is a
+filesystem deletion of exactly that file, made in `ops/` after re-checking the
+lock's age and identity against what was confirmed. A guard holds every
+filesystem-mutating call to `ops/`, so the exception cannot widen unseen. A read runs the `git` CLI only where
 showing what git shows means asking git, and each such read is a named function
 in `crates/cairn-git/src/reads/`. The changes query — which paths a commit or a
 comparison changed, with their renames and copies — is one, because rename and
@@ -44,6 +48,56 @@ branch-switch checkout (`gix_worktree_state::checkout` is reachable only from th
 clone path), no reset, rebase, cherry-pick, revert or stash, and no
 hunk-staging helper. Verified against the gix 0.87.1 source:
 `docs/research/backend-split/gix-write-path-coverage.md`.
+
+The working tree's writes are each a named operation in `ops/`, run as a write
+invocation with literal pathspecs — git's global `--literal-pathspecs` option
+before the verb, as the reads that name paths pass it, never the
+`GIT_LITERAL_PATHSPECS` variable, since an invocation's environment is built in
+one place (`processes.md`) — and `--` or `--end-of-options` before any path, many
+paths passed on stdin by `--pathspec-from-file=- --pathspec-file-nul` where the
+verb takes it. git exports literal mode to the hooks it runs under these verbs
+(`post-index-change`, and `post-checkout` where a verb runs it), so a hook's own
+globbed pathspec matches literally: a residual of the option, stated rather than
+implied.
+
+- **Lines and mode changes**: `git apply --cached` to stage or unstage and
+  `git apply` to discard, the patch on stdin and `--whitespace=nowarn` always
+  (`diff.md`, "Selections and patches").
+- **Whole files**: `git add` to stage; `git reset -q --` to unstage, which works on
+  an unborn branch, `git reset -q -- <old> <new>` for a staged rename,
+  `git reset -q HEAD^ --` out of an amend and `git rm --cached -q --` out of a root
+  commit's amend, which has no `HEAD^`; `git restore --worktree --` to discard. A
+  submodule is never discarded: `git restore` exits 0 and leaves its commit where
+  it was, only `git submodule update` moves it back, and no prompt can count what
+  is dirty inside it. A conflicted path is staged with `git add`, which marks it
+  resolved, and takes neither a patch of lines nor a discard; resolving its content
+  is the conflict view's (`conflicts.md`).
+- **Untracked files**: `git clean -f --` with the exact paths status listed —
+  never a pattern, and never the list `git clean -n` prints, which is localised
+  and quoted — adding `-d` only for a collapsed directory; a nested repository is
+  refused, because deleting it deletes history the prompt cannot count. `git
+  clean` takes no pathspec file, so its paths go on `argv`, split across several
+  invocations under one re-check of what was confirmed when the list is long.
+- **Commits**: `git commit -F -` and `git commit --amend -F -`, the message on
+  stdin so it is never on `argv` or in the command log. No `--cleanup` is passed,
+  so the user's `commit.cleanup` decides exactly as it does for their own
+  `git commit -F`; `--no-verify` is passed only from the hook failure's skip
+  (`ui.md`, "The commit box"); the author is git's own identity — the one the
+  user's terminal would commit with, since the identity variables are inherited
+  (`processes.md`, "The environment") — and git's own error is shown when it has
+  none. With a merge in progress the commit is the merge commit; during a rebase,
+  cherry-pick or revert Cairn does not commit, since continuing one is that
+  operation's own. A non-UTF-8 `i18n.commitEncoding` is refused with its reason,
+  since transcoding the message would need a dependency.
+- **Recovering a lost commit**: `git branch -- <name> <oid>`.
+- **A stale lock**: no verb exists, so `Remove index.lock…` deletes exactly
+  `<gitdir>/index.lock` through the filesystem, in `ops/`, once the lock is
+  re-checked as the one whose age the user confirmed — the single mutation not
+  made by `git`.
+
+Fetch, in the network lane, sits beside them (`credentials.md`). Spec:
+`docs/prd/staging-and-commit.md` R3, R6. Evidence, each verb run on git 2.30.9,
+2.32.7 and 2.56.0: `docs/research/staging-and-commit/git-write-verbs.md`.
 
 Reads go to gitoxide because reads are what a GUI does constantly, and its
 performance work aims squarely at large repositories. Keeping the CLI off the read
@@ -151,7 +205,8 @@ lists what the user's own `git stash show` lists there.
 
 Refs stay with gix, because gix agrees with `git for-each-ref` once it is read
 with care: a symbolic ref is never peeled into its target's name, a dangling one
-is hidden, the stash reflog is read so that a long message cannot end it, and
+is hidden, a reflog — the stash's, and `HEAD`'s and each branch's for Show Lost
+Commits — is read whole so that a long message cannot end it, and
 every branch's upstream is resolved by hand from the configuration as git
 resolves it — the last remote, the first merge, a local upstream (`remote = .`)
 resolved as a ref name, a named remote's merge matched literally against its
@@ -163,11 +218,25 @@ fail at `HEAD`, so such a repository is refused at open with the reason, and so 
 a format-version-0 repository that names a ref storage, as git refuses it. Evidence:
 `docs/research/refs-and-status/gix-refs-and-status-api.md`.
 
-Each such read is a named function in `reads/`, runs under a read's environment
-— no optional locks, no askpass token — and is cancelled by its query's epoch
-like any gix walk (`processes.md`, `concurrency.md`). A new one is a decision,
-argued from a measured disagreement, never a convenience. Evidence:
-`docs/research/diff-engine/rename-parity-spike.md`.
+A write also needs answers only git can give, and asks them as reads, each query
+plumbing. Before any discard, of lines or of files, `git hash-object --path=<p> --
+<p>`, without `-w`, hashes the working-tree file in git's form — through the clean
+filter the diff ran, writing no object — to check it is still the side that was
+drawn and confirmed (`diff.md`, "Selections and patches"). `git rev-parse
+--git-path hooks` says where git looks for hooks, `core.hooksPath` included, so a
+failed commit offers to skip its hooks only where a `pre-commit` or `commit-msg`
+hook exists and is executable. Neither is argued from a measured disagreement with
+gix: each is a question only git can answer — git's form of a working-tree file
+through the user's filters, and git's resolution of the hooks path — so asking git
+is the only way to ask it. They run inside the operation that needs them, on the
+local lane, and end with it rather than by a query's epoch. Spec:
+`docs/prd/staging-and-commit.md` R3.9.
+
+Each read git answers is a named function in `reads/` and runs under a read's
+environment — no optional locks, no askpass token. One a query asks is cancelled by
+its query's epoch like any gix walk (`processes.md`, `concurrency.md`). A new one
+is a decision — argued from a measured disagreement where gix has an answer, never
+a convenience. Evidence: `docs/research/diff-engine/rename-parity-spike.md`.
 
 ## Behind the seam
 
@@ -259,11 +328,39 @@ Spec: `docs/prd/diff-engine.md` R3; as built: `docs/systems/diff.md`; evidence:
 
 ## The confirmation seal
 
-Every destructive operation takes `cairn_model::Confirmed` by value, and the
-token's only constructor records the prompt the user acknowledged. "Remember to
-ask first" is exactly the kind of rule that holds for a year and then quietly
-does not; a value the function demands moves it from review to the compiler, and
-lets the operation log quote the prompt afterwards. The limit is honest: the type
-guarantees a prompt happened, not that it was true, which is what
-`destructive-ops-reviewer` exists for. What the prompt says, and in what order, is
-`ui.md`'s.
+Every destructive operation takes `cairn_model::Confirmed` by value, and the token
+is bound to a `Consequence`: an engine-computed value naming what the operation
+will destroy — the paths, the lines and bytes of each, the blob ids the loss was
+computed against, a commit's id, a lock file's path and age — from which the
+prompt is rendered, never typed beside it. The token is neither `Clone` nor `Copy`,
+so one confirmation buys one operation, and only the confirmation surfaces on a
+roster the guard holds construct it: the confirmation dialog, and the commit box,
+whose amend button's visible text is its prompt (`ui.md`). The destructive
+operations are a roster of the guard's too — discarding lines, discarding files,
+deleting untracked files, amending, and removing a stale `index.lock` — and an
+operation on it without the token, or a roster entry with no such operation,
+fails.
+
+Immediately before it runs, each destructive operation re-reads the state its
+`Consequence` names and refuses, writing nothing, when anything moved: a file
+edited since the prompt, a file added to a directory about to be deleted, `HEAD`
+moved before an amend, a lock removed and made again. A stale confirmation is an
+outcome of its own, "changed since you confirmed", never a failure of git's. The
+time between the prompt and the run is where a race would otherwise make the
+prompt's words untrue — a stash dropped by an index another stash now holds, a
+deletion list stale since it was counted, a hunk landing at an offset.
+
+"Remember to ask first" is exactly the kind of rule that holds for a year and then
+quietly does not; a value the function demands moves it from review to the
+compiler, and lets the activity popover quote the prompt afterwards, since every
+destructive operation's `Performed` records it. The limit is honest: the type
+guarantees a prompt happened and that what it named has not moved, not that its
+words were true, which is what `destructive-ops-reviewer` exists for. What the
+prompt says, and in what order, is `ui.md`'s.
+
+Staging, unstaging, committing and creating a branch are not destructive.
+Unstaging a staged version the working tree no longer holds leaves that blob
+unreachable; Fork does not confirm it and neither does Cairn, a residual that
+stays `destructive-ops-reviewer`'s. No destructive operation takes a backup first:
+what a confirmation protects is said in `feature-inventory.md`, "Recovery". Spec:
+`docs/prd/staging-and-commit.md` R1.

@@ -39,8 +39,16 @@ token does not already buy.
 
 Every process runs with an environment Cairn built: the inherited roster, git's
 terminal prompt off, ssh forced to the askpass helper, and both askpass variables
-naming Cairn's helper (`credentials.md`). On top of that base, every invocation
-also gets:
+naming Cairn's helper (`credentials.md`). The inherited roster is a spelled-out
+list of the parent's variables, each a deliberate leak of the user's environment to
+git with its reason beside it; among them are `GNUPGHOME`, `DISPLAY`,
+`WAYLAND_DISPLAY` and `XAUTHORITY`, so that GPG's pinentry, started under a signed
+commit, can reach the user's desktop rather than a terminal nobody is watching
+(#18), and `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`,
+`GIT_COMMITTER_EMAIL` and `EMAIL`, so that a commit carries the identity the
+user's terminal would — a per-project one set by direnv included. The date
+variables are not inherited, since a stale one would stamp every commit. On top of
+that base, every invocation also gets:
 
 - **`GIT_EDITOR=false` and `GIT_SEQUENCE_EDITOR=false`.** A GUI has no terminal,
   and git still launches `core.editor` when `TERM` is unset, so a verb that wants
@@ -64,6 +72,11 @@ A **read** additionally gets:
   side effect of looking at it; a refresh, if one is ever wanted, is a write.
 - **No askpass token.** A read never asks the user for anything, so the helper it
   could reach fails closed.
+
+Every **write** carries an **askpass token**, every local write as well as a
+fetch, so a prompt during any write reaches the window: a passphrase for an
+SSH signing key under a commit, a credential an LFS smudge asks for while a discard
+restores a file. The window shows the prompt whichever lane's write asked for it.
 
 **The locale stays the user's.** Cairn parses only output git does not translate —
 `-z` records, `--raw`, porcelain v2 — and classifies a failure by its exit code
@@ -103,8 +116,11 @@ progress.
   cost of handling partial writes by hand.
 - **stdout is handed over, not hoarded.** The caller consumes stdout as it
   arrives, NUL-separated records for a `-z` format, and can stop early by
-  cancelling. Where a caller wants the whole answer it states a ceiling, and
-  crossing it is an error, never a silently shortened answer.
+  cancelling. Where a read wants the whole answer it states a ceiling, and
+  crossing it is an error, never a silently shortened answer. Only a read can be
+  collected under a ceiling — the type refuses one on a write — because a crossed
+  ceiling is a failure even when git then exits cleanly, and a write that took
+  effect must never be reported as one that did not.
 - **stdin is written by the caller's bytes and then closed.** git reads a patch
   to its end before it takes a lock, so a stdin left open would hold the
   operation forever.
@@ -140,7 +156,10 @@ reused while any member lives, so that rule closes all but a narrow race, stated
 below. A cancel that loses the race to a clean exit is a success: git finished,
 and reporting otherwise would tell the user an operation did not happen when it
 did. After a cancelled write, the lock files git left behind are listed for the
-user, never deleted for them.
+user, never deleted unasked: a stale `index.lock` is removed only by a confirmed
+`Remove index.lock…`, offered only while Cairn runs no `git` in that repository,
+its prompt naming the lock's age and saying another program may still own it
+(`ui.md`, "Activity").
 
 What a group kill does not reach, stated rather than implied:
 
@@ -152,8 +171,13 @@ What a group kill does not reach, stated rather than implied:
   start it ends the cache too, and the next operation prompts again.
 - **A child reading the terminal.** When Cairn was started from a terminal, a
   child in its own group that opens `/dev/tty` and reads is stopped rather than
-  refused. The askpass settings exist to stop exactly those reads; anything else
-  that tries waits until it is cancelled.
+  refused, because that group is in the background of the terminal's session. The
+  askpass settings exist to stop exactly those reads; anything else that tries
+  waits until it is cancelled — a `commit-msg` or `pre-commit` hook that asks the
+  user a question on `/dev/tty` among them, which stops the commit until it is
+  cancelled. Starting `git` in a session of its own (`setsid`) would make the
+  open fail instead, but it needs an `unsafe` `pre_exec`, which the workspace
+  forbids, so this stays a stated residual.
 - **A crash.** A child cannot be told to die with its parent without `unsafe`, so
   if Cairn itself dies, its children run on. Each one's next write to a closed
   pipe ends it.
@@ -165,24 +189,36 @@ What a group kill does not reach, stated rather than implied:
 
 No invocation has a timeout. A `pre-commit` hook running a test suite and a push
 of a large pack are both legitimately long; the window shows how long an
-operation has run and offers its cancel instead.
+operation has run instead, and offers a cancel where the operation has one: a
+network operation, and among local writes only a commit or an amend, whose hooks
+are the one local write that may run for minutes (`concurrency.md`,
+"Operations"). A discard whose LFS smudge runs long is not cancellable; the window
+shows its elapsed time and the local lane waits for it.
 
 ## Failure
 
 A failed invocation reports its arguments, its exit status and the retained tail
 of its stderr, so "git failed" is never the whole message. A cancelled read is not
 a cancelled write: a read reports that it was cancelled and nothing more, while a
-cancelled write reports which lock files it left. When a write fails and a lock
-file it needs is present, Cairn names the file — another git process, or a stale
-lock — rather than retrying: git never waits on `index.lock`, and a retry Cairn
-invented could re-run a mutation the user confirmed once.
+cancelled or unwatched write reports that it may have taken effect — the refresh
+after it shows what did — and which lock files it left. Every local write's
+outcome carries the lock files present before it and stranded after it. When a
+write fails and a lock file it needs is present, Cairn names the file — another
+git process, or a stale lock — rather than retrying: git never waits on
+`index.lock`, and a retry Cairn invented could re-run a mutation the user
+confirmed once.
 
 ## Lifecycle
 
 Cairn finds `git` and checks its version once, at startup, and every thread that
 runs `git` holds a copy of that answer. Each open repository keeps a registry of
-its running invocations. Closing a repository, or the window, ends every one of
-them the way a cancel does and waits a bounded time for their reaps.
+its running invocations. Closing a repository, or the window, ends every read and
+network operation the way a cancel does and waits a bounded time for their reaps.
+A local write is let finish instead, since ending one mid-write is what strands a
+lock: the first close waits for it and says which ("Finishing commit…"); a second
+close after the window's patience ends it as a cancel would, and a lock that
+leaves behind is named the next time the repository opens (`concurrency.md`,
+"Operations").
 
 ## The command log
 

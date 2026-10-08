@@ -116,17 +116,21 @@ impl Confirmed {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime};
 
     use super::*;
 
     /// Caught by: a prompt typed or rendered apart from the consequence it carries.
     #[test]
     fn the_prompt_is_the_one_rendered_from_the_consequence() {
+        let read_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
         let consequence = Consequence::RemoveLock {
             path: PathBuf::from("/repo/.git/index.lock"),
-            age: Duration::from_secs(90),
+            modified: read_at - Duration::from_secs(90),
+            read_at,
             bytes: 0,
+            device: 1,
+            inode: 2,
         };
         let expected = consequence.prompt();
         let confirmed = Confirmed::by_user(consequence.clone());

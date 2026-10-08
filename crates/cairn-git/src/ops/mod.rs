@@ -347,10 +347,14 @@ mod tests {
     #[test]
     fn a_destructive_operation_records_what_the_user_agreed_to() {
         let repo = Repository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let read_at = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000);
         let consequence = cairn_model::Consequence::RemoveLock {
             path: repo.git_dir().join("index.lock"),
-            age: std::time::Duration::from_secs(120),
+            modified: read_at - std::time::Duration::from_secs(120),
+            read_at,
             bytes: 0,
+            device: 1,
+            inode: 2,
         };
         let prompt = consequence.prompt();
         let performed = describe_destructive(&repo, Confirmed::by_user(consequence));

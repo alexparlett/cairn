@@ -236,8 +236,15 @@ fn a_stale_discard_writes_nothing_where_git_apply_would_land_it_at_an_offset() {
 #[test]
 fn a_discard_of_lines_refuses_whatever_moved_after_the_confirmation() {
     type Move = fn(&Repo);
-    let moves: [(&str, Move); 4] = [
+    let moves: [(&str, Move); 5] = [
         ("its mode alone", |repo| repo.chmod("file.txt", 0o755)),
+        // The bytes and the index unchanged, git's form of the file moved: what only the
+        // git-form comparison sees (QA item 6).
+        ("its git form alone, by a filter attribute", |repo| {
+            repo.config("filter.rot.clean", "tr a-zA-Z n-za-mN-ZA-M");
+            repo.config("filter.rot.smudge", "tr a-zA-Z n-za-mN-ZA-M");
+            repo.write(".gitattributes", b"file.txt filter=rot\n");
+        }),
         ("an edit", |repo| {
             repo.write(
                 "file.txt",

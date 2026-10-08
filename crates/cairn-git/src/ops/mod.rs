@@ -216,7 +216,8 @@ use cairn_model::Confirmed;
 
 pub(crate) use authority::WriteAuthority;
 pub use discard::{
-    discard_files, discard_files_consequence, discard_lines, discard_lines_consequence,
+    CLEAN_ARGUMENT_BYTES, discard_files, discard_files_consequence, discard_lines,
+    discard_lines_consequence,
 };
 pub use fetch::{FetchCancel, FetchInProgress, fetch};
 pub use stage::{UnstageTo, stage_files, stage_lines, unstage_files, unstage_lines};

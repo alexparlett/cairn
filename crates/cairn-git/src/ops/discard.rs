@@ -48,7 +48,9 @@ use cairn_model::{
     FileLoss, PatchAction, RepoPath, Selection,
 };
 
-use super::fresh_state::{IndexSide, OnDisk, git_form, holds_a_repository, index_side, on_disk};
+use super::fresh_state::{
+    IndexNow, IndexSide, OnDisk, git_form, holds_a_repository, index_side, on_disk,
+};
 use super::local_write::{PATHSPEC_FILE, locks_around, locks_now, run};
 use super::stage::{checked_pathspec_file, patch_of, refused};
 use super::{GitBinary, Invalidated, Performed};
@@ -60,7 +62,7 @@ use crate::{CancelSignal, ContentOptions, Error, Refusal, Repository, WorkingTre
 /// on, where `git clean` took 1.5 MiB of 100-byte paths and the kernel refused 1.9 MiB with
 /// `E2BIG` (`progress.md`, phase 03): the rest of `ARG_MAX` is the environment's and the
 /// other arguments'. A path is at most `PATH_MAX`, 4 KiB, so one always fits.
-pub(crate) const CLEAN_ARGUMENT_BYTES: usize = 64 * 1024;
+pub const CLEAN_ARGUMENT_BYTES: usize = 64 * 1024;
 
 /// What `git apply` is given for a discard: the patch on stdin, on the working tree.
 const APPLY_WORKTREE: [&str; 3] = ["apply", "--whitespace=nowarn", "-"];
@@ -84,12 +86,12 @@ pub fn discard_lines_consequence(
     let path = &diff.file.new_path;
     match &diff.content {
         DiffContent::Submodule { .. } => return Err(refused(path, Refusal::Submodule)),
+        DiffContent::Conflicted => return Err(refused(path, Refusal::Conflicted)),
         DiffContent::Text { .. }
         | DiffContent::ModeChangeOnly
         | DiffContent::Binary { .. }
         | DiffContent::TooLarge { .. }
         | DiffContent::LfsPointer { .. }
-        | DiffContent::Conflicted
         | DiffContent::Unsupported { .. } => {}
     }
     let mode = match (
@@ -235,6 +237,7 @@ pub fn discard_files_consequence(
     if paths.is_empty() {
         return Err(Error::NoPaths);
     }
+    let index = IndexNow::read(repo)?;
     let mut files: Vec<DiscardedFile> = Vec::with_capacity(paths.len());
     for path in paths {
         if files.iter().any(|file| &file.path == path) {
@@ -244,7 +247,7 @@ pub fn discard_files_consequence(
         if path.as_bytes().ends_with(b"/") {
             return Err(directory_refusal(repo, path)?);
         }
-        let loss = match index_side(repo, path)? {
+        let loss = match index.side(path)? {
             IndexSide::Conflicted => return Err(refused(path, Refusal::Conflicted)),
             IndexSide::Entry {
                 mode: Some(cairn_model::FileMode::Submodule),
@@ -309,8 +312,9 @@ pub fn discard_files(
             if files.is_empty() {
                 return Err(Error::NoPaths);
             }
+            let index = IndexNow::read(repo)?;
             for file in files {
-                recheck(repo, file)?;
+                recheck(repo, &index, file)?;
             }
             let (tracked, untracked): (Vec<&DiscardedFile>, Vec<&DiscardedFile>) =
                 files.iter().partition(|file| match file.loss {
@@ -369,9 +373,9 @@ pub fn discard_files(
 
 /// One file of a discard re-read against what was confirmed of it (R1.4): a tracked file's
 /// index entry and bytes, an untracked file's absence from the index, bytes and size.
-fn recheck(repo: &Repository, file: &DiscardedFile) -> Result<(), Error> {
+fn recheck(repo: &Repository, index: &IndexNow, file: &DiscardedFile) -> Result<(), Error> {
     let path = &file.path;
-    let side = index_side(repo, path)?;
+    let side = index.side(path)?;
     let disk = on_disk(repo, path)?;
     let unchanged = match &file.loss {
         FileLoss::Modified {

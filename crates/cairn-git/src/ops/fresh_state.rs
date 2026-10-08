@@ -76,41 +76,54 @@ impl IndexSide {
     }
 }
 
-/// The index entry at `path` now. A repository with no index file has no entries, as git
-/// reads it.
-pub(super) fn index_side(repo: &Repository, path: &RepoPath) -> Result<IndexSide, Error> {
-    let inner = repo.inner();
-    let index = match inner.open_index() {
-        Ok(index) => index,
-        Err(gix::worktree::open_index::Error::IndexFile(gix::index::file::init::Error::Io(
-            error,
-        ))) if error.kind() == std::io::ErrorKind::NotFound => return Ok(IndexSide::Absent),
-        Err(source) => {
-            return Err(Error::ReadIndex {
+/// The index file as it is on disk now, read once for every path a write names; `None`
+/// where there is no index file, which git reads as an index with no entries.
+pub(super) struct IndexNow(Option<gix::index::File>);
+
+impl IndexNow {
+    pub(super) fn read(repo: &Repository) -> Result<Self, Error> {
+        match repo.inner().open_index() {
+            Ok(index) => Ok(Self(Some(index))),
+            Err(gix::worktree::open_index::Error::IndexFile(
+                gix::index::file::init::Error::Io(error),
+            )) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self(None)),
+            Err(source) => Err(Error::ReadIndex {
                 source: Box::new(source),
-            });
+            }),
         }
-    };
-    let Some(range) = index.entry_range(path.as_bytes().as_bstr()) else {
-        return Ok(IndexSide::Absent);
-    };
-    let entries = index.entries().get(range).unwrap_or_default();
-    if entries
-        .iter()
-        .any(|entry| entry.stage() != gix::index::entry::Stage::Unconflicted)
-    {
-        return Ok(IndexSide::Conflicted);
     }
-    let Some(entry) = entries.first() else {
-        return Ok(IndexSide::Absent);
-    };
-    Ok(IndexSide::Entry {
-        id: model_id(&entry.id)?,
-        mode: FileMode::from_octal(&format!("{:o}", entry.mode.bits())),
-        intent_to_add: entry
-            .flags
-            .contains(gix::index::entry::Flags::INTENT_TO_ADD),
-    })
+
+    /// What this index holds at `path`.
+    pub(super) fn side(&self, path: &RepoPath) -> Result<IndexSide, Error> {
+        let Some(index) = &self.0 else {
+            return Ok(IndexSide::Absent);
+        };
+        let Some(range) = index.entry_range(path.as_bytes().as_bstr()) else {
+            return Ok(IndexSide::Absent);
+        };
+        let entries = index.entries().get(range).unwrap_or_default();
+        if entries
+            .iter()
+            .any(|entry| entry.stage() != gix::index::entry::Stage::Unconflicted)
+        {
+            return Ok(IndexSide::Conflicted);
+        }
+        let Some(entry) = entries.first() else {
+            return Ok(IndexSide::Absent);
+        };
+        Ok(IndexSide::Entry {
+            id: model_id(&entry.id)?,
+            mode: FileMode::from_octal(&format!("{:o}", entry.mode.bits())),
+            intent_to_add: entry
+                .flags
+                .contains(gix::index::entry::Flags::INTENT_TO_ADD),
+        })
+    }
+}
+
+/// The index entry at `path` now, the index file read for it alone.
+pub(super) fn index_side(repo: &Repository, path: &RepoPath) -> Result<IndexSide, Error> {
+    IndexNow::read(repo)?.side(path)
 }
 
 /// The working-tree file at one path, as its bytes are now.

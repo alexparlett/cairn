@@ -672,6 +672,104 @@ mod tests {
         }
     }
 
+    /// R2.6: the whole-index read asks plumbing for the user's detection, porcelain's view
+    /// of an intent-to-add entry and nothing but renames and copies, with no pathspec at all;
+    /// the paired content read asks the same across both paths, in place of `--no-renames`.
+    /// Caught by: a pathspec on the whole-index read (a one-path pathspec pairs nothing), a
+    /// missing `--ita-invisible-in-index` (plumbing pairs a deleted empty file with an
+    /// intent-to-add one), or `--no-renames` left on the paired read.
+    #[test]
+    fn the_staged_pairing_reads_the_whole_index_and_the_pair_reads_both_paths() {
+        let commit = Oid::parse(COMMIT).unwrap();
+        let whole = strings(pairing_arguments(
+            &commit,
+            Detection::Copies { limit: 1000 },
+        ));
+        assert_eq!(
+            whole,
+            [
+                "diff-index",
+                "--cached",
+                "-z",
+                "--raw",
+                "--no-abbrev",
+                "-C",
+                "-l1000",
+                "--diff-filter=RC",
+                "--ita-invisible-in-index",
+                "--end-of-options",
+                COMMIT,
+            ]
+        );
+        assert!(!whole.iter().any(|a| a == "-p" || a == "--"), "{whole:?}");
+
+        let (old, new) = (RepoPath::new("a/old.rs"), RepoPath::new("b/new.rs"));
+        let mut asked = query(Side::Staged { commit: &commit }, &new);
+        asked.paired = Some(Paired {
+            detection: Detection::Renames { limit: 0 },
+            old: &old,
+            new: &new,
+        });
+        let paired = strings(arguments(&asked));
+        assert!(!paired.iter().any(|a| a == "--no-renames"), "{paired:?}");
+        for wanted in ["-M", "-l0", "--diff-filter=RC", "--ita-invisible-in-index"] {
+            assert!(paired.iter().any(|a| a == wanted), "{wanted} in {paired:?}");
+        }
+        assert_eq!(
+            paired[paired.len() - 5..],
+            [
+                "--",
+                ":(literal)a/old.rs",
+                r":(exclude,glob)a/old.rs/**",
+                ":(literal)b/new.rs",
+                r":(exclude,glob)b/new.rs/**",
+            ]
+        );
+    }
+
+    /// A path is in a pair as a rename's or a copy's destination, or as a rename's source —
+    /// never as a copy's, which keeps its own record. Caught by: a copy's source answered
+    /// with the copy, or a pair matched on one side only.
+    #[test]
+    fn a_path_is_in_a_pair_by_the_record_git_shows_it_in() {
+        let pair = |status: ChangeStatus| ChangedFile {
+            status,
+            old_path: RepoPath::new("src"),
+            new_path: RepoPath::new("dst"),
+            old_mode: Some(FileMode::Regular),
+            new_mode: Some(FileMode::Regular),
+            old_id: None,
+            new_id: None,
+        };
+        let similarity = cairn_model::Similarity::from_percent(90);
+        let renamed = pair(ChangeStatus::Renamed(similarity));
+        let copied = pair(ChangeStatus::Copied(similarity));
+        assert!(names(&renamed, &RepoPath::new("dst")));
+        assert!(names(&renamed, &RepoPath::new("src")));
+        assert!(names(&copied, &RepoPath::new("dst")));
+        assert!(
+            !names(&copied, &RepoPath::new("src")),
+            "a copy's source kept no record"
+        );
+        assert!(!names(&renamed, &RepoPath::new("other")));
+
+        let (src, dst) = (RepoPath::new("src"), RepoPath::new("dst"));
+        let asked = Paired {
+            detection: Detection::Renames { limit: 0 },
+            old: &src,
+            new: &dst,
+        };
+        assert_eq!(
+            one_pair(vec![renamed.clone()], asked),
+            Ok(Some(renamed.clone()))
+        );
+        assert_eq!(one_pair(Vec::new(), asked), Ok(None));
+        let mut elsewhere = renamed.clone();
+        elsewhere.old_path = RepoPath::new("third");
+        assert!(one_pair(vec![elsewhere], asked).is_err());
+        assert!(one_pair(vec![renamed.clone(), copied], asked).is_err());
+    }
+
     /// Only a path relative to the top of the working tree, with no `.` or `..` component,
     /// is given to `--no-index`. Caught by: a component compared as a prefix (`..x` and
     /// `.hidden` are names), or a leading or embedded `..` let through.

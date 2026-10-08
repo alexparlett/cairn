@@ -1694,6 +1694,178 @@ fn runner_violations(path: &Path, source: &str) -> Vec<String> {
 /// fails if any of that visibility is widened, which would compile quietly. Over `cairn-git`
 /// alone, because the runner's names are crate-private: another crate cannot name them, which
 /// the visibility pins below keep true.
+/// What R4.8 rests on, in `process/runner.rs` and `process/cli.rs`: the bounded-output
+/// helpers declared once each, inside `impl Invocation<Read>`; the ceiling `drive` takes typed
+/// by the invocation's kind, a write's ceiling type `Infallible`, so no generic helper can hand a
+/// write a ceiling; and the compile-time pin present, in code, under no `cfg` that could
+/// compile it away.
+fn bounded_helper_violations(runner: &str, cli: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let runner_code = code_without_strings(runner);
+    let runner_production = code_without_test_modules(&runner_code);
+    let read_alone = runner_production
+        .split("impl Invocation<Read> {")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}").next())
+        .unwrap_or_default();
+    for helper in ["collect", "finish_within"] {
+        let declared = cairn_guards::function_signatures(&runner_production)
+            .into_iter()
+            .filter(|signature| signature.name == helper)
+            .count();
+        let on_a_read = cairn_guards::function_signatures(read_alone)
+            .iter()
+            .any(|signature| signature.name == helper);
+        if declared != 1 || !on_a_read {
+            found.push(format!(
+                "runner.rs should declare `{helper}` once, in `impl Invocation<Read> {{`; a \
+                 ceiling on a write can report a completed change as refused"
+            ));
+        }
+    }
+    let drive_takes_the_kinds_ceiling = cairn_guards::function_signatures(&runner_production)
+        .iter()
+        .any(|signature| {
+            signature.name == "drive"
+                && signature
+                    .parameters
+                    .iter()
+                    .any(|parameter| parameter.replace(' ', "") == "ceiling:Option<K::Ceiling>")
+        });
+    if !drive_takes_the_kinds_ceiling {
+        found.push(
+            "`Invocation::drive` no longer takes `ceiling: Option<K::Ceiling>`; a ceiling typed \
+             apart from the kind lets a generic helper give a write one"
+                .to_owned(),
+        );
+    }
+    let cli_production = code_without_test_modules(&code_without_strings(cli));
+    let write_kind = cli_production
+        .split("impl Kind for Write {")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}").next())
+        .unwrap_or_default();
+    if !write_kind.contains("type Ceiling = std::convert::Infallible;") {
+        found.push(
+            "a write's `Kind::Ceiling` is no longer `std::convert::Infallible`; a ceiling a \
+             write can hold is a ceiling a write can cross"
+                .to_owned(),
+        );
+    }
+    for (function, lines) in [
+        ("the_bounded_output_helpers_exist_on_a_read_alone", &[][..]),
+        (
+            "helpers_by_kind",
+            &[
+                "let Absent = write.collect(",
+                "let Absent = another_write.finish_within(",
+            ][..],
+        ),
+    ] {
+        let declaration = format!("fn {function}(");
+        let Some(at) = runner_code.find(&declaration) else {
+            found.push(format!(
+                "runner.rs lost `{function}`, the pin that stops compiling when a \
+                 bounded-output helper is given to a write"
+            ));
+            continue;
+        };
+        // The attributes on it: everything since the item before it ended.
+        let since = runner_code[..at].rfind(['}', ';']).map_or(0, |end| end + 1);
+        let attributes = &runner_code[since..at];
+        if attributes.contains("#[cfg") || attributes.contains("#[ignore") {
+            found.push(format!(
+                "runner.rs puts `{function}` under a `cfg` or `ignore`: a pin compiled away \
+                 decides nothing"
+            ));
+        }
+        for line in lines {
+            if !runner_code.contains(line) {
+                found.push(format!("runner.rs's pin no longer reads `{line}`"));
+            }
+        }
+    }
+    found
+}
+
+/// The R4.8 check over the real files, and over each way of eroding them.
+#[test]
+fn the_bounded_output_helper_check_catches_the_shapes_it_claims() {
+    let read = |file: &str| {
+        rust_sources(PROCESS_DIR)
+            .into_iter()
+            .find(|(path, _)| path == &Path::new(PROCESS_DIR).join(file))
+            .map(|(_, source)| source)
+            .unwrap_or_else(|| panic!("{PROCESS_DIR}/{file} is gone"))
+    };
+    let (runner, cli) = (read("runner.rs"), read("cli.rs"));
+    assert_eq!(
+        bounded_helper_violations(&runner, &cli),
+        Vec::<String>::new()
+    );
+    let runner_shapes = [
+        (
+            "the helpers widened to every kind",
+            "impl Invocation<Read> {",
+            "impl<K: Kind> Invocation<K> {",
+        ),
+        (
+            "drive given a plain ceiling",
+            "ceiling: Option<K::Ceiling>,",
+            "ceiling: Option<usize>,",
+        ),
+        (
+            "the pin compiled away",
+            "    #[test]\n    fn the_bounded_output_helpers_exist_on_a_read_alone()",
+            "    #[test]\n    #[cfg(any())]\n    fn the_bounded_output_helpers_exist_on_a_read_alone()",
+        ),
+        (
+            "the pinned function compiled away",
+            "    fn helpers_by_kind(",
+            "    #[cfg(any())]\n    fn helpers_by_kind(",
+        ),
+        (
+            "the pin ignored",
+            "    #[test]\n    fn the_bounded_output_helpers_exist_on_a_read_alone()",
+            "    #[test]\n    #[ignore]\n    fn the_bounded_output_helpers_exist_on_a_read_alone()",
+        ),
+        (
+            "the pin's write call commented out",
+            "let Absent = write.collect(",
+            "// let Absent = write.collect(",
+        ),
+        (
+            "the pin renamed",
+            "fn the_bounded_output_helpers_exist_on_a_read_alone()",
+            "fn some_other_test()",
+        ),
+    ];
+    for (shape, from, to) in runner_shapes {
+        assert!(
+            runner.contains(from),
+            "the {shape} fixture no longer applies to runner.rs"
+        );
+        let changed = runner.replacen(from, to, 1);
+        assert!(
+            !bounded_helper_violations(&changed, &cli).is_empty(),
+            "the R4.8 check missed {shape}"
+        );
+    }
+    let write_ceiling = "type Ceiling = std::convert::Infallible;";
+    assert!(
+        cli.contains(write_ceiling),
+        "the write-ceiling fixture no longer applies to cli.rs"
+    );
+    assert!(
+        !bounded_helper_violations(
+            &runner,
+            &cli.replacen(write_ceiling, "type Ceiling = usize;", 1)
+        )
+        .is_empty(),
+        "the R4.8 check missed a write given a byte-count ceiling"
+    );
+}
+
 #[test]
 fn the_runner_is_named_only_by_ops_and_reads() {
     let mut scanned = 0usize;
@@ -1701,6 +1873,7 @@ fn the_runner_is_named_only_by_ops_and_reads() {
     let mut ops_docs = None;
     let mut library = None;
     let mut runner = None;
+    let mut cli = None;
     for (path, source) in rust_sources(ENGINE_SOURCE_DIR) {
         scanned += 1;
         let found = runner_violations(&path, &source);
@@ -1728,6 +1901,8 @@ fn the_runner_is_named_only_by_ops_and_reads() {
             library = Some(source);
         } else if path == Path::new(PROCESS_DIR).join("runner.rs") {
             runner = Some(source);
+        } else if path == Path::new(PROCESS_DIR).join("cli.rs") {
+            cli = Some(source);
         }
     }
     assert!(
@@ -1744,32 +1919,11 @@ fn the_runner_is_named_only_by_ops_and_reads() {
     // The bounded-output helpers are a read's alone (staging-and-commit R4.8): the type is the
     // enforcement, and the pin that fails to compile when either is given to a write must stay.
     let runner = runner.unwrap_or_else(|| panic!("{PROCESS_DIR}/runner.rs is gone"));
-    let runner_production = code_without_test_modules(&code_without_strings(&runner));
-    let read_alone = runner_production
-        .split("impl Invocation<Read> {")
-        .nth(1)
-        .and_then(|rest| rest.split("\n}").next())
-        .unwrap_or_default();
-    for helper in ["collect", "finish_within"] {
-        let declared = cairn_guards::function_signatures(&runner_production)
-            .into_iter()
-            .filter(|signature| signature.name == helper)
-            .count();
-        assert!(
-            declared == 1
-                && cairn_guards::function_signatures(read_alone)
-                    .iter()
-                    .any(|signature| signature.name == helper),
-            "{PROCESS_DIR}/runner.rs should declare `{helper}` once, in `impl Invocation<Read> {{`; \
-             a ceiling on a write can report a completed change as refused (R4.8)"
-        );
-    }
+    let cli = cli.unwrap_or_else(|| panic!("{PROCESS_DIR}/cli.rs is gone"));
+    let found = bounded_helper_violations(&runner, &cli);
     assert!(
-        runner.contains("fn the_bounded_output_helpers_exist_on_a_read_alone()")
-            && runner.contains("let Absent = write.collect(")
-            && runner.contains("let Absent = another_write.finish_within("),
-        "{PROCESS_DIR}/runner.rs lost the pin that stops compiling when a bounded-output \
-         helper is given to a write"
+        found.is_empty(),
+        "a ceiling can reach a write, or the pin that says it cannot is gone: {found:?}"
     );
 
     let library = library.unwrap_or_else(|| panic!("{ENGINE_SOURCE_DIR}/lib.rs is gone"));

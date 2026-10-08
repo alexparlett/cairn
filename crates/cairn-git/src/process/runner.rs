@@ -401,8 +401,10 @@ impl<K: Kind> Invocation<K> {
         cancel: &impl Cancel,
         stdout: &mut dyn FnMut(&[u8]) -> Flow,
         progress: &mut dyn FnMut(&str),
-        ceiling: Option<usize>,
+        ceiling: Option<K::Ceiling>,
     ) -> Result<String, Error> {
+        // A write's ceiling type has no value, so only a read reaches the arm below.
+        let ceiling = ceiling.map(K::ceiling_bytes);
         let arguments = std::mem::take(&mut self.arguments);
         let Some(mut driver) = self.driver.take() else {
             return Err(Error::GitUnwatched {

@@ -116,6 +116,16 @@ impl Write {
 /// What an invocation's kind decides: what it adds to the base environment,
 /// and what its cancellation and failure report.
 pub(crate) trait Kind {
+    /// What a ceiling on this kind's stdout can be: a byte count for a read,
+    /// and no value at all for a write — `Infallible` has none, so the only
+    /// ceiling a write's invocation can be driven under is no ceiling (R4.8 of
+    /// `docs/prd/staging-and-commit.md`). A crossed ceiling outranks a clean
+    /// exit, and a write's completed change must never be reported refused.
+    type Ceiling: Copy;
+
+    /// The bytes a ceiling allows.
+    fn ceiling_bytes(ceiling: Self::Ceiling) -> usize;
+
     fn profile(&self) -> Profile<'_>;
 
     /// The error for a cancelled invocation, built after the reap.
@@ -128,6 +138,12 @@ pub(crate) trait Kind {
 /// A read writes nothing, so it leaves nothing behind and fails on no lock of
 /// its own: its cancellation is that and nothing else (R5.2).
 impl Kind for Read {
+    type Ceiling = usize;
+
+    fn ceiling_bytes(ceiling: usize) -> usize {
+        ceiling
+    }
+
     fn profile(&self) -> Profile<'_> {
         Profile::Read
     }
@@ -146,6 +162,12 @@ impl Kind for Read {
 /// names those present, which is what a write fails on (R5.2, R5.3). Listed,
 /// never removed.
 impl Kind for Write {
+    type Ceiling = std::convert::Infallible;
+
+    fn ceiling_bytes(ceiling: std::convert::Infallible) -> usize {
+        match ceiling {}
+    }
+
     fn profile(&self) -> Profile<'_> {
         Profile::Write {
             token: self.token.as_ref(),

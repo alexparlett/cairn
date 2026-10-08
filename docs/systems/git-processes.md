@@ -618,7 +618,10 @@ The two bounded-output helpers, `collect` and `finish_within`, exist on an
 `docs/prd/staging-and-commit.md`, #45 item 2): a crossed ceiling outranks a
 clean exit, so a write collected under one could complete its change and be
 reported refused. A write is driven with `finish` or `records`, which take all
-it prints. The compiler refuses either helper on an `Invocation<Write>`; the pin
+it prints. The ceiling `Invocation::drive` takes is the kind's own type,
+`Kind::Ceiling`: a byte count for a read, `Infallible` for a write, which has no
+value, so not even a helper generic over every kind can hand a write a ceiling.
+The compiler refuses either helper on an `Invocation<Write>`; the pin
 is `the_bounded_output_helpers_exist_on_a_read_alone` in `runner.rs`, a function
 that compiles only while a write's calls of those names resolve to a fallback
 trait's and a read's to the real helpers (a doctest cannot name a crate-private

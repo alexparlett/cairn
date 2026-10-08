@@ -423,9 +423,13 @@ Project invariants:
   authority keeps its private field, its `pub(in crate::ops)` constructor and
   no `Clone`/`Copy`/`Default`, and the doctests stay, and `process/runner.rs`
   declares the bounded-output helpers `collect` and `finish_within` once each,
-  in `impl Invocation<Read>`, beside their pin
+  in `impl Invocation<Read>`, `Invocation::drive` takes its ceiling as the
+  kind's `Kind::Ceiling` — `Infallible` for a write, so no generic helper can
+  give a write one — and the pin
   `the_bounded_output_helpers_exist_on_a_read_alone`, which stops compiling
-  when either is given to a write (staging-and-commit R4.8) (self-test
+  when either helper is given to a write, stays in code under no `cfg` or
+  `ignore` (staging-and-commit R4.8; matcher `bounded_helper_violations`,
+  self-test `the_bounded_output_helper_check_catches_the_shapes_it_claims`) (self-test
   `the_runner_matcher_catches_the_shapes_it_claims`, and
   `the_unguarded_routes_to_a_process_now_fail_a_twin` over the four routes
   `docs/research/process-manager/runner-and-worker-as-built.md` section 3

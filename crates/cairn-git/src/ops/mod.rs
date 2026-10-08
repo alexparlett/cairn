@@ -5,10 +5,15 @@
 //! anywhere else fails the gate.
 //!
 //! Operations that can destroy work a user cannot recover from `git reflog`
-//! alone — force push, hard reset, branch deletion, history rewrites — take a
-//! [`cairn_model::Confirmed`] by value. The token cannot be forged, so the type
-//! system, not a review, is what keeps a destructive path from being reached
-//! without a prompt.
+//! alone — discarding changes, deleting untracked files, amending, removing a
+//! lock, and later force push, hard reset and history rewrites — take a
+//! [`cairn_model::Confirmed`] by value. The token carries the
+//! [`cairn_model::Consequence`] the engine computed and the prompt rendered
+//! from it; it is neither `Clone` nor `Copy`, and only the confirmation
+//! surfaces on the guard's roster build it. Every such operation is on the
+//! guard's destructive-operation roster, which requires it to take the token
+//! by value (`destructive_operations_are_sealed_behind_the_confirmation_token`),
+//! and re-reads the state its `Consequence` names immediately before it runs.
 //!
 //! # How a mutation runs
 //!
@@ -33,7 +38,8 @@
 //! - The runner (crate-private) adds the arguments and runs the process as
 //!   the leader of its own process group, with a thread on each pipe and
 //!   standard input closed unless it is fed: stdout handed over as it arrives
-//!   or collected under a ceiling, stderr forwarded line by line and kept as a
+//!   or, for a read alone, collected under a ceiling (a write's clean exit is
+//!   never outranked by one), stderr forwarded line by line and kept as a
 //!   bounded tail, and killable from another thread, which is what a long
 //!   fetch needs. A cancel is `SIGTERM` to the group, then `SIGKILL` after a
 //!   bounded grace period, so git gets to remove the lock files it holds; what
@@ -273,8 +279,9 @@ impl Invalidated {
 /// for the worker that must honour what it invalidated.
 ///
 /// The fields are private so that a record carrying an acknowledged prompt can
-/// only be built from a [`Confirmed`] token: the log quotes what the user
-/// agreed to, and no operation can write that quote by hand.
+/// only be built from a [`Confirmed`] token: the log quotes the prompt rendered
+/// from the [`cairn_model::Consequence`] the user agreed to (R1.6), and no
+/// operation can write that quote by hand.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Performed {
     description: String,
@@ -292,14 +299,15 @@ impl Performed {
         }
     }
 
-    /// A destructive mutation: the prompt is taken from the token, never typed.
+    /// A destructive mutation: the prompt is taken from the token, never typed,
+    /// and the token is spent here, so the record is the end of its life.
     pub(crate) fn destructive(
         description: impl Into<String>,
-        confirmed: &Confirmed,
+        confirmed: Confirmed,
         invalidated: Invalidated,
     ) -> Self {
         Self {
-            acknowledged: Some(confirmed.acknowledged().to_owned()),
+            acknowledged: Some(confirmed.prompt().to_owned()),
             ..Self::new(description, invalidated)
         }
     }
@@ -308,7 +316,8 @@ impl Performed {
         &self.description
     }
 
-    /// The prompt the user acknowledged, when the operation needed one.
+    /// The prompt the user acknowledged, rendered from the operation's
+    /// `Consequence`, when the operation needed one.
     pub fn acknowledged(&self) -> Option<&str> {
         self.acknowledged.as_deref()
     }
@@ -318,13 +327,14 @@ impl Performed {
     }
 }
 
-/// Placeholder proving the seal compiles end to end; replaced by the first real
-/// destructive operation. It performs no I/O.
+/// Placeholder proving the seal compiles end to end, and the destructive-operation
+/// roster's one row until the first real destructive operation replaces it. It
+/// performs no I/O.
 pub fn describe_destructive(repo: &Repository, confirmed: Confirmed) -> Performed {
     let _ = repo.inner();
     Performed::destructive(
         format!("no-op against {}", repo.git_dir().display()),
-        &confirmed,
+        confirmed,
         Invalidated::NOTHING,
     )
 }
@@ -333,11 +343,24 @@ pub fn describe_destructive(repo: &Repository, confirmed: Confirmed) -> Performe
 mod tests {
     use super::*;
 
+    /// R1.6: the record quotes the prompt rendered from the consequence, word for word.
     #[test]
     fn a_destructive_operation_records_what_the_user_agreed_to() {
         let repo = Repository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
-        let performed = describe_destructive(&repo, Confirmed::by_user("Discard 3 local commits?"));
-        assert_eq!(performed.acknowledged(), Some("Discard 3 local commits?"));
+        let consequence = cairn_model::Consequence::RemoveLock {
+            path: repo.git_dir().join("index.lock"),
+            age: std::time::Duration::from_secs(120),
+            bytes: 0,
+        };
+        let prompt = consequence.prompt();
+        let performed = describe_destructive(&repo, Confirmed::by_user(consequence));
+        assert_eq!(performed.acknowledged(), Some(prompt.as_str()));
+        assert!(
+            performed
+                .acknowledged()
+                .is_some_and(|text| text.contains("2 minutes ago")),
+            "the record does not quote the rendered prompt: {performed:?}"
+        );
         assert_eq!(
             performed.description(),
             format!("no-op against {}", repo.git_dir().display())

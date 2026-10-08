@@ -230,13 +230,19 @@ impl<'a, K: Kind> GitCommand<'a, K> {
         self.start_with(&os_thread)
     }
 
-    /// Starts and collects to the end, for a test whose stub or real `git`
-    /// writes little: never cancelled, and a ceiling far above what any test
-    /// prints.
+    /// Starts and gathers everything to the end, for a test whose stub or real
+    /// `git` writes little: never cancelled. Through [`Invocation::finish`],
+    /// which every kind has, since the bounded-output helpers are a read's
+    /// alone.
     #[cfg(test)]
     pub(crate) fn collected(self) -> Result<Output, Error> {
-        self.start()?
-            .collect(&crate::CancelSignal::new(), 16 * 1024 * 1024, |_| {})
+        let mut stdout = Vec::new();
+        let output = self.start()?.finish(
+            &crate::CancelSignal::new(),
+            |chunk| stdout.extend_from_slice(chunk),
+            |_| {},
+        )?;
+        Ok(Output::new(stdout, output.stderr().to_owned()))
     }
 
     /// [`GitCommand::start`] with no thread able to start, for a test outside

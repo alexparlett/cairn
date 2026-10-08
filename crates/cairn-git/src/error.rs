@@ -239,19 +239,14 @@ pub enum Error {
 
     /// git wrote more to stdout than the caller said it would take, so the
     /// process was ended and nothing it wrote is returned: an answer cut short
-    /// would look like a whole one. For a write, `stranded_locks` lists the lock
-    /// files present once it was reaped, as for a cancelled one; empty for a
-    /// read.
+    /// would look like a whole one. Only a read is given a ceiling (the
+    /// bounded-output helpers exist on a read alone), so it leaves no lock
+    /// behind to list.
     #[error(
         "git {arguments} wrote more than {ceiling} bytes; the answer was refused, not cut \
-         short{}",
-        StrandedLocks(stranded_locks)
+         short"
     )]
-    GitOutputTooLarge {
-        arguments: String,
-        ceiling: usize,
-        stranded_locks: Vec<PathBuf>,
-    },
+    GitOutputTooLarge { arguments: String, ceiling: usize },
 
     /// Cairn lost hold of a running git. A thread to read or feed one of its
     /// pipes could not start, or writing its input failed: the process was

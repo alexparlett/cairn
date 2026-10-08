@@ -5,7 +5,9 @@
 //! group and hands the [`Child`] here, where each pipe gets its own thread
 //! (`pipes.rs`) and the caller gets an [`Invocation`]. The caller then drives
 //! it on its own thread with [`Invocation::finish`], [`Invocation::records`] or
-//! [`Invocation::collect`], or drops it, which ends it on a reaper thread.
+//! — on a read alone, since a ceiling must never outrank a write's clean exit —
+//! [`Invocation::collect`] or [`Invocation::finish_within`], or drops it, which
+//! ends it on a reaper thread.
 //! `start` itself runs on the caller's thread and may wait — it spawns, and a
 //! pipe thread that cannot start makes it end the process there — so it is a
 //! worker's call; what the UI thread may call is [`KillHandle::kill`] and the
@@ -54,8 +56,8 @@
 //! whole: the signal can land after git made its change and before it exited.
 //! A failure carries the arguments, the status and the retained stderr, and a
 //! failed write the lock files present; so do the outcomes the runner itself
-//! ends a process for — a crossed ceiling, a failed stdin write, a pipe thread
-//! that could not start.
+//! ends a process for — a failed stdin write, a pipe thread that could not
+//! start — and a read's crossed ceiling carries the ceiling.
 
 use std::process::{Child, ChildStdin};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError, sync_channel};
@@ -64,7 +66,7 @@ use std::time::{Duration, Instant};
 
 use cairn_model::CommandExit;
 
-use super::cli::{GitDirs, Kind, Output};
+use super::cli::{GitDirs, Kind, Output, Read};
 use super::group::{Group, KillHandle, Spawner, ThreadStarter, os_thread};
 use super::pipes::{self, EVENTS_BOUND, Event, Records, Tail};
 use super::registry::{Registration, exit_of};
@@ -280,17 +282,13 @@ fn ended_by_the_runner<K: Kind>(
     arguments: String,
     why: RunnerEnded,
 ) -> Error {
-    let stranded_locks = kind.present_locks(dirs);
     match why {
-        RunnerEnded::Ceiling(ceiling) => Error::GitOutputTooLarge {
-            arguments,
-            ceiling,
-            stranded_locks,
-        },
+        // Only a read is given a ceiling, and a read leaves no lock behind.
+        RunnerEnded::Ceiling(ceiling) => Error::GitOutputTooLarge { arguments, ceiling },
         RunnerEnded::Lost(source) => Error::GitUnwatched {
             arguments,
             source,
-            stranded_locks,
+            stranded_locks: kind.present_locks(dirs),
         },
     }
 }
@@ -349,37 +347,6 @@ impl<K: Kind> Invocation<K> {
         .map(|stderr| Output::new(Vec::new(), stderr))
     }
 
-    /// As [`Invocation::finish`], but taking at most `ceiling` bytes of stdout:
-    /// the chunk that would cross it is not handed on, the process is ended at
-    /// once, and the answer is [`Error::GitOutputTooLarge`], as for
-    /// [`Invocation::collect`]. Unlike `collect`, what arrived is the caller's as
-    /// it arrived, so a failed exit ([`Error::GitFailed`]) still leaves the
-    /// caller holding everything git printed before it — which a read whose
-    /// verb exits non-zero with an answer (`git diff --no-index`) reads.
-    pub(crate) fn finish_within(
-        self,
-        cancel: &impl Cancel,
-        ceiling: usize,
-        mut stdout: impl FnMut(&[u8]),
-        mut progress: impl FnMut(&str),
-    ) -> Result<Output, Error> {
-        let mut taken = 0usize;
-        self.drive(
-            cancel,
-            &mut |chunk| {
-                taken = taken.saturating_add(chunk.len());
-                if taken > ceiling {
-                    return Flow::Stop;
-                }
-                stdout(chunk);
-                Flow::Continue
-            },
-            &mut progress,
-            Some(ceiling),
-        )
-        .map(|stderr| Output::new(Vec::new(), stderr))
-    }
-
     /// As [`Invocation::finish`], with stdout split into the NUL-terminated
     /// records of a `-z` format, each handed to `record` as soon as it is whole.
     /// A last record without its NUL is handed on only if the invocation
@@ -406,31 +373,6 @@ impl<K: Kind> Invocation<K> {
             splitter.finish(&mut record);
         }
         outcome.map(|stderr| Output::new(Vec::new(), stderr))
-    }
-
-    /// Waits for the end and hands back the whole of stdout — or
-    /// [`Error::GitOutputTooLarge`] if git writes more than `ceiling` bytes, in
-    /// which case it is ended at once and nothing it wrote is returned.
-    pub(crate) fn collect(
-        self,
-        cancel: &impl Cancel,
-        ceiling: usize,
-        mut progress: impl FnMut(&str),
-    ) -> Result<Output, Error> {
-        let mut collected = Vec::new();
-        let stderr = self.drive(
-            cancel,
-            &mut |chunk| {
-                if collected.len() + chunk.len() > ceiling {
-                    return Flow::Stop;
-                }
-                collected.extend_from_slice(chunk);
-                Flow::Continue
-            },
-            &mut progress,
-            Some(ceiling),
-        )?;
-        Ok(Output::new(collected, stderr))
     }
 
     /// The leader's pid, for a test that reads the process table.
@@ -498,6 +440,72 @@ impl<K: Kind> Invocation<K> {
             });
         }
         Ok(ended.tail)
+    }
+}
+
+/// The bounded-output helpers, on a read alone (R4.8 of
+/// `docs/prd/staging-and-commit.md`, #45 item 2). A ceiling ends the process
+/// the moment stdout crosses it and reports [`Error::GitOutputTooLarge`]
+/// whatever git does next, so a write collected under one could complete its
+/// change and still be reported refused. A write is driven with
+/// [`Invocation::finish`] or [`Invocation::records`], which take everything it
+/// prints; the compiler refuses either helper on an `Invocation<Write>`
+/// (`the_bounded_output_helpers_exist_on_a_read_alone`).
+impl Invocation<Read> {
+    /// As [`Invocation::finish`], but taking at most `ceiling` bytes of stdout:
+    /// the chunk that would cross it is not handed on, the process is ended at
+    /// once, and the answer is [`Error::GitOutputTooLarge`], as for
+    /// [`Invocation::collect`]. Unlike `collect`, what arrived is the caller's as
+    /// it arrived, so a failed exit ([`Error::GitFailed`]) still leaves the
+    /// caller holding everything git printed before it — which a read whose
+    /// verb exits non-zero with an answer (`git diff --no-index`) reads.
+    pub(crate) fn finish_within(
+        self,
+        cancel: &impl Cancel,
+        ceiling: usize,
+        mut stdout: impl FnMut(&[u8]),
+        mut progress: impl FnMut(&str),
+    ) -> Result<Output, Error> {
+        let mut taken = 0usize;
+        self.drive(
+            cancel,
+            &mut |chunk| {
+                taken = taken.saturating_add(chunk.len());
+                if taken > ceiling {
+                    return Flow::Stop;
+                }
+                stdout(chunk);
+                Flow::Continue
+            },
+            &mut progress,
+            Some(ceiling),
+        )
+        .map(|stderr| Output::new(Vec::new(), stderr))
+    }
+
+    /// Waits for the end and hands back the whole of stdout — or
+    /// [`Error::GitOutputTooLarge`] if git writes more than `ceiling` bytes, in
+    /// which case it is ended at once and nothing it wrote is returned.
+    pub(crate) fn collect(
+        self,
+        cancel: &impl Cancel,
+        ceiling: usize,
+        mut progress: impl FnMut(&str),
+    ) -> Result<Output, Error> {
+        let mut collected = Vec::new();
+        let stderr = self.drive(
+            cancel,
+            &mut |chunk| {
+                if collected.len() + chunk.len() > ceiling {
+                    return Flow::Stop;
+                }
+                collected.extend_from_slice(chunk);
+                Flow::Continue
+            },
+            &mut progress,
+            Some(ceiling),
+        )?;
+        Ok(Output::new(collected, stderr))
     }
 }
 
@@ -754,7 +762,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    use super::super::cli::Read;
+    use super::super::cli::{Kind, Output, Read, Write};
     use super::super::group::{TERMINATION_GRACE, os_thread};
     use super::super::pipes;
     use super::super::stub_git::{StubGit, discover_retrying};
@@ -780,6 +788,54 @@ mod tests {
 
     fn never() -> CancelSignal {
         CancelSignal::new()
+    }
+
+    /// R4.8 at the type (#45 item 2): the bounded-output helpers exist on a read
+    /// alone. Stable Rust has no in-crate `compile_fail` test and a doctest cannot
+    /// name a crate-private type, so the pin is a function that compiles only while
+    /// it holds. `Fallback` gives every kind a method of each helper's name that
+    /// answers `Absent`; an inherent method is chosen over a trait's wherever one
+    /// applies. So a write's calls resolve to `Fallback`'s and must answer
+    /// `Absent`, which stops compiling the moment either helper is given to an
+    /// `Invocation<Write>` (its inherent method answers a `Result`); and a read's
+    /// resolve to the real helpers, whose `Result` is spelled out, so a fallback
+    /// standing in for a helper a read lost does not compile either. Never called:
+    /// type-checking it is the test.
+    fn helpers_by_kind(
+        write: Invocation<Write>,
+        another_write: Invocation<Write>,
+        read: Invocation<Read>,
+        another_read: Invocation<Read>,
+    ) {
+        struct Absent;
+        trait Fallback: Sized {
+            fn collect(self, _: &CancelSignal, _: usize, _: fn(&str)) -> Absent {
+                Absent
+            }
+            fn finish_within(
+                self,
+                _: &CancelSignal,
+                _: usize,
+                _: fn(&[u8]),
+                _: fn(&str),
+            ) -> Absent {
+                Absent
+            }
+        }
+        impl<K: Kind> Fallback for Invocation<K> {}
+
+        let Absent = write.collect(&never(), 1, |_| {});
+        let Absent = another_write.finish_within(&never(), 1, |_| {}, |_| {});
+        let _: Result<Output, Error> = read.collect(&never(), 1, |_| {});
+        let _: Result<Output, Error> = another_read.finish_within(&never(), 1, |_| {}, |_| {});
+    }
+
+    #[test]
+    fn the_bounded_output_helpers_exist_on_a_read_alone() {
+        // Naming the function is what makes the compiler check it: see its comment.
+        let pin: fn(Invocation<Write>, Invocation<Write>, Invocation<Read>, Invocation<Read>) =
+            helpers_by_kind;
+        let _ = pin;
     }
 
     /// A stub that hangs in a background `sleep` — a grandchild holding stdout and
@@ -987,14 +1043,9 @@ mod tests {
         });
         let took = begun.elapsed();
         match outcome {
-            Err(Error::GitOutputTooLarge {
-                arguments,
-                ceiling,
-                stranded_locks,
-            }) => {
+            Err(Error::GitOutputTooLarge { arguments, ceiling }) => {
                 assert_eq!(arguments, "stub");
                 assert_eq!(ceiling, 1024 * 1024);
-                assert!(stranded_locks.is_empty(), "a read reported locks");
             }
             other => panic!("expected the ceiling error, got {other:?}"),
         }

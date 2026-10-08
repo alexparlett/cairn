@@ -388,9 +388,7 @@ mod tests {
             .in_repository(&handle)
             .args(["mktree", "--missing"])
             .input(listing)
-            .start()
-            .unwrap()
-            .collect(&CancelSignal::new(), 1024, |_| {})
+            .collected()
             .unwrap()
             .stdout_text()
             .trim()
@@ -614,10 +612,11 @@ mod tests {
         assert!(!repo.join(".git/index.lock").exists());
     }
 
-    /// R5.2 for the writes the runner ends itself: a crossed ceiling and a pipe
-    /// thread that could not start each list the lock files present after the
-    /// reap, as a cancel does — here a stale one planted beforehand. Caught by:
-    /// either error built without the write's lock search.
+    /// R5.2 for the writes the runner ends itself: a pipe thread that could not
+    /// start lists the lock files present after the reap, as a cancel does —
+    /// here a stale one planted beforehand. Caught by: the error built without
+    /// the write's lock search. (A crossed ceiling, the runner's other ending,
+    /// cannot reach a write: the bounded-output helpers are a read's alone.)
     #[test]
     fn a_write_the_runner_ends_lists_the_locks_present() {
         let scratch = Scratch::new("runner-ended-write");
@@ -638,20 +637,6 @@ mod tests {
                 .map(|path| std::fs::canonicalize(path).unwrap())
                 .collect()
         };
-
-        let over = git
-            .write_invocation(WriteAuthority::new())
-            .in_repository(&handle)
-            .arg("commit")
-            .start()
-            .unwrap()
-            .collect(&CancelSignal::new(), 1024, |_| {});
-        match over {
-            Err(Error::GitOutputTooLarge { stranded_locks, .. }) => {
-                assert_eq!(listed(&stranded_locks), std::slice::from_ref(&stale));
-            }
-            other => panic!("expected the ceiling error, got {other:?}"),
-        }
 
         let unwatched = git
             .write_invocation(WriteAuthority::new())
@@ -877,9 +862,7 @@ mod tests {
             .arg("-C")
             .arg(&clone)
             .args(["cat-file", "-p", &blob])
-            .start()
-            .unwrap()
-            .collect(&CancelSignal::new(), 1024, |_| {})
+            .collected()
             .unwrap_or_else(|error| panic!("the same cat-file as a write: {error}"));
         assert_eq!(written.stdout_text(), "only the promisor holds this\n");
         assert_ne!(

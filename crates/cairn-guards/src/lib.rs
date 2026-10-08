@@ -1648,6 +1648,189 @@ pub fn renames_type(source: &str, name: &str) -> Vec<usize> {
     lines.into_iter().collect()
 }
 
+/// A function's signature as written: from `fn` to the brace or semicolon that ends it.
+#[derive(Debug, PartialEq, Eq)]
+pub struct FunctionSignature {
+    pub name: String,
+    /// The 1-based line of its `fn`.
+    pub line: usize,
+    /// Declared with a bare `pub` (qualifiers such as `const` allowed between), so another
+    /// crate can call it; `pub(crate)` and the other restricted forms are not.
+    pub public: bool,
+    /// From `fn` to the end of the signature: generics, parameters, return type and `where`
+    /// clause, with comments and the contents of strings blanked.
+    pub text: String,
+    /// Each parameter as written, split at its top-level commas and trimmed; `self` and
+    /// `&self` included.
+    pub parameters: Vec<String>,
+}
+
+/// Every function `source` declares or defines — free functions, methods, trait items —
+/// read from code with comments and strings blanked. A function pointer type (`fn(&str)`)
+/// declares nothing and is skipped.
+pub fn function_signatures(source: &str) -> Vec<FunctionSignature> {
+    let code = code_without_strings(source);
+    let bytes = code.as_bytes();
+    let mut found = Vec::new();
+    for offset in ident_offsets(&code, "fn") {
+        let name_start = skip_whitespace(bytes, offset + "fn".len());
+        let name_end = (name_start..bytes.len())
+            .find(|&i| !is_ident_byte(bytes[i]))
+            .unwrap_or(bytes.len());
+        if name_end == name_start {
+            continue;
+        }
+        // The signature ends at the first `{` or `;` outside parentheses and brackets: a body,
+        // or a declaration with none (`[u8; 4]` holds a `;` of its own).
+        let mut depth = 0usize;
+        let mut end = name_end;
+        while let Some(&byte) = bytes.get(end) {
+            match byte {
+                b'(' | b'[' => depth += 1,
+                b')' | b']' => depth = depth.saturating_sub(1),
+                b'{' | b';' if depth == 0 => break,
+                _ => {}
+            }
+            end += 1;
+        }
+        let mut open = skip_whitespace(bytes, name_end);
+        if bytes.get(open) == Some(&b'<') {
+            open = skip_whitespace(bytes, angle_end_past_arrows(bytes, open));
+        }
+        let parameters = if bytes.get(open) == Some(&b'(') {
+            let close = balanced_end(bytes, open);
+            split_at_top_level_commas(&code[open + 1..close.saturating_sub(1).max(open + 1)])
+        } else {
+            Vec::new()
+        };
+        found.push(FunctionSignature {
+            name: code[name_start..name_end].to_owned(),
+            line: line_at(&code, offset),
+            public: unrestricted_pub_before(&code[..offset]),
+            text: code[offset..end].to_owned(),
+            parameters,
+        });
+    }
+    found
+}
+
+/// Whether `signature` takes the type `name` by value, and in no other way: exactly one
+/// parameter whose whole type is a path ending in `name` (`c: Confirmed`,
+/// `mut c: cairn_model::Confirmed`), and `name` spelled nowhere else in the signature — not
+/// behind a reference, in an `Option`, a `Box` or an `impl Into<..>`, in a generic bound, in
+/// a second parameter or in the return type.
+pub fn takes_by_value(signature: &FunctionSignature, name: &str) -> bool {
+    let by_value = signature
+        .parameters
+        .iter()
+        .filter(|parameter| {
+            parameter_type(parameter).is_some_and(|ty| {
+                let ty = ty.trim().trim_start_matches("::");
+                ty.rsplit("::").next() == Some(name)
+                    && ty
+                        .split("::")
+                        .all(|segment| !segment.is_empty() && segment.bytes().all(is_ident_byte))
+            })
+        })
+        .count();
+    by_value == 1 && ident_offsets(&signature.text, name).len() == 1
+}
+
+/// The type of a parameter (`pattern: Type`): what follows its first lone `:`.
+fn parameter_type(parameter: &str) -> Option<&str> {
+    let bytes = parameter.as_bytes();
+    (0..bytes.len())
+        .find(|&i| {
+            bytes[i] == b':' && bytes.get(i + 1) != Some(&b':') && (i == 0 || bytes[i - 1] != b':')
+        })
+        .map(|colon| &parameter[colon + 1..])
+}
+
+/// `text` split at the commas outside every bracket, each piece trimmed, empty pieces (a
+/// trailing comma's) dropped.
+fn split_at_top_level_commas(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut pieces = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (i, &byte) in bytes.iter().enumerate() {
+        match byte {
+            b'(' | b'[' | b'{' | b'<' => depth += 1,
+            // The `>` of a `->` closes nothing.
+            b'>' if i > 0 && bytes[i - 1] == b'-' => {}
+            b')' | b']' | b'}' | b'>' => depth = depth.saturating_sub(1),
+            b',' if depth == 0 => {
+                pieces.push(text[start..i].trim().to_owned());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    pieces.push(text[start..].trim().to_owned());
+    pieces.retain(|piece| !piece.is_empty());
+    pieces
+}
+
+/// [`balanced_angle_end`], with the `>` of a `->` (an `Fn() -> T` bound) closing nothing.
+fn angle_end_past_arrows(bytes: &[u8], open: usize) -> usize {
+    let mut depth = 0usize;
+    for (i, &byte) in bytes.iter().enumerate().skip(open) {
+        match byte {
+            b'<' => depth += 1,
+            b'>' if i > 0 && bytes[i - 1] == b'-' => {}
+            b'>' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return i + 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    bytes.len()
+}
+
+/// 1-based lines where `source` spells a path into the type `name` — `Name::Variant`,
+/// `module::Name::new`, `use module::Name::*`, `<Name>::Variant` — in code. Holding a value
+/// of the type, or calling a method on one, spells no such path.
+pub fn names_a_path_into(source: &str, name: &str) -> Vec<usize> {
+    let code = code_without_strings(source);
+    let bytes = code.as_bytes();
+    let mut lines = BTreeSet::new();
+    for offset in ident_offsets(&code, name) {
+        let mut after = skip_whitespace(bytes, offset + name.len());
+        if bytes.get(after) == Some(&b'>') && code[..offset].trim_end().ends_with('<') {
+            after = skip_whitespace(bytes, after + 1);
+        }
+        if code[after..].starts_with("::") {
+            lines.insert(line_at(&code, offset));
+        }
+    }
+    lines.into_iter().collect()
+}
+
+/// 1-based lines where `source` opens an `impl` block — a line that starts with `impl ` or
+/// `impl<` — whose header, up to its `{`, names `name`: `impl Name {`, `impl Trait for Name`,
+/// `impl From<Name> for T`, a bound on it. An `impl Trait` in a parameter's or a return
+/// type's position opens no block and is not read.
+pub fn opens_an_impl_naming(source: &str, name: &str) -> Vec<usize> {
+    let code = code_without_strings(source);
+    let mut lines = BTreeSet::new();
+    let mut offset = 0usize;
+    for line in code.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("impl ") || trimmed.starts_with("impl<") {
+            let start = offset + (line.len() - trimmed.len());
+            let end = code[start..].find('{').map_or(code.len(), |at| start + at);
+            if !ident_offsets(&code[start..end], name).is_empty() {
+                lines.insert(line_at(&code, start));
+            }
+        }
+        offset += line.len();
+    }
+    lines.into_iter().collect()
+}
+
 /// One past the `>` closing the `<` at `open`.
 fn balanced_angle_end(bytes: &[u8], open: usize) -> usize {
     let mut depth = 0usize;

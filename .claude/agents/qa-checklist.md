@@ -59,8 +59,8 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
 7. **Destructive operations** (any diff under `crates/cairn-git/src/ops/`,
    `crates/cairn-git/src/process/` or `crates/cairn-git/src/reads/`, or a new
    call site reaching one): the operation takes `cairn_model::Confirmed` by
-   value, the prompt text handed to `Confirmed::by_user` names the actual
-   consequence (what is lost, how much, whether it is recoverable), and nothing
+   value, the prompt `Consequence::prompt` renders for the `Consequence` handed
+   to `Confirmed::by_user` names the actual consequence (what is lost, how much, whether it is recoverable), and nothing
    constructs the token outside a user acknowledgement path. Also: no
    `std::process::Command` reached through a spelling the terminal-prompt guard
    cannot read — a `type` alias for it, a wrapper crate that spawns, a macro

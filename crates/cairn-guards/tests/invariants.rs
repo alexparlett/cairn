@@ -1700,6 +1700,7 @@ fn the_runner_is_named_only_by_ops_and_reads() {
     let mut authority_file = None;
     let mut ops_docs = None;
     let mut library = None;
+    let mut runner = None;
     for (path, source) in rust_sources(ENGINE_SOURCE_DIR) {
         scanned += 1;
         let found = runner_violations(&path, &source);
@@ -1725,6 +1726,8 @@ fn the_runner_is_named_only_by_ops_and_reads() {
             ops_docs = Some(source);
         } else if path == Path::new(ENGINE_SOURCE_DIR).join("lib.rs") {
             library = Some(source);
+        } else if path == Path::new(PROCESS_DIR).join("runner.rs") {
+            runner = Some(source);
         }
     }
     assert!(
@@ -1737,6 +1740,37 @@ fn the_runner_is_named_only_by_ops_and_reads() {
             "{dir} is gone, and this guard exempts it by path: move the guard with the module"
         );
     }
+
+    // The bounded-output helpers are a read's alone (staging-and-commit R4.8): the type is the
+    // enforcement, and the pin that fails to compile when either is given to a write must stay.
+    let runner = runner.unwrap_or_else(|| panic!("{PROCESS_DIR}/runner.rs is gone"));
+    let runner_production = code_without_test_modules(&code_without_strings(&runner));
+    let read_alone = runner_production
+        .split("impl Invocation<Read> {")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}").next())
+        .unwrap_or_default();
+    for helper in ["collect", "finish_within"] {
+        let declared = cairn_guards::function_signatures(&runner_production)
+            .into_iter()
+            .filter(|signature| signature.name == helper)
+            .count();
+        assert!(
+            declared == 1
+                && cairn_guards::function_signatures(read_alone)
+                    .iter()
+                    .any(|signature| signature.name == helper),
+            "{PROCESS_DIR}/runner.rs should declare `{helper}` once, in `impl Invocation<Read> {{`; \
+             a ceiling on a write can report a completed change as refused (R4.8)"
+        );
+    }
+    assert!(
+        runner.contains("fn the_bounded_output_helpers_exist_on_a_read_alone()")
+            && runner.contains("let Absent = write.collect(")
+            && runner.contains("let Absent = another_write.finish_within("),
+        "{PROCESS_DIR}/runner.rs lost the pin that stops compiling when a bounded-output \
+         helper is given to a write"
+    );
 
     let library = library.unwrap_or_else(|| panic!("{ENGINE_SOURCE_DIR}/lib.rs is gone"));
     let library = code_without_strings(&library);
@@ -4027,34 +4061,885 @@ fn the_element_matcher_catches_the_shapes_it_claims() {
     );
 }
 
+/// The token a destructive operation takes, and the file that defines it.
+const CONFIRMED_TYPE: &str = "Confirmed";
+const CONFIRMED_TYPE_FILE: &str = "crates/cairn-model/src/confirm.rs";
+
+/// Its one constructor. The name is what the confirmation-surface roster is keyed on: it is
+/// spelled however the token is reached (`Confirmed::by_user`, an alias's `T::by_user`,
+/// `<Confirmed>::by_user`, `let mint = Confirmed::by_user;`).
+const CONFIRMED_CONSTRUCTOR: &str = "by_user";
+
+/// What the engine computes and the prompt is rendered from, and the types it is built of.
+const CONSEQUENCE_FILE: &str = "crates/cairn-model/src/consequence.rs";
+const CONSEQUENCE_TYPES: &[&str] = &["Consequence", "DiscardedFile", "FileLoss", "Publication"];
+
+/// Traits that would duplicate the token or build one without the constructor.
+const CONFIRMED_FORBIDDEN_TRAITS: &[&str] = &["Clone", "Copy", "Default", "Deserialize", "Decode"];
+
+/// Production files outside `cairn-model` allowed to name [`CONFIRMED_CONSTRUCTOR`]: the
+/// confirmation surfaces, each a place a person reads a prompt rendered from a `Consequence`
+/// and presses the button that accepts it. Empty until the confirmation dialog
+/// (staging-and-commit phase 06) and the commit box (phase 09) exist, so today nothing may
+/// build the token; a row whose file no longer names the constructor fails.
+const CONFIRMATION_SURFACES: &[&str] = &[];
+
+/// Every destructive operation, by file and function: each takes `Confirmed` by value, and
+/// every function in `crates/cairn-git/src` that names `Confirmed` is one of these or
+/// [`CONFIRMED_RECORD`]. `describe_destructive` is the placeholder the first real operations
+/// replace (staging-and-commit phase 03), and its row goes with it.
+const DESTRUCTIVE_OPERATIONS: &[(&str, &str)] =
+    &[("crates/cairn-git/src/ops/mod.rs", "describe_destructive")];
+
+/// The one function naming `Confirmed` that is not an operation: the record that spends the
+/// token, quoting its prompt (`Performed::destructive`, R1.6). It takes it by value too.
+const CONFIRMED_RECORD: (&str, &str) = ("crates/cairn-git/src/ops/mod.rs", "destructive");
+
+/// Crates whose production code may spell a path into a `Consequence` (a variant, a part):
+/// the model that defines and renders it, and the engine that computes it.
+const CONSEQUENCE_BUILDERS: &[&str] = &["cairn-model", "cairn-git"];
+
+/// Every crate under `crates/` but the guards, whose fixtures spell the shapes they forbid.
+fn sealed_crates() -> Vec<String> {
+    let crates_dir = repo_root().join("crates");
+    let entries = std::fs::read_dir(&crates_dir)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", crates_dir.display()));
+    let mut crates: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().join("Cargo.toml").is_file())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|krate| krate != "cairn-guards")
+        .collect();
+    crates.sort();
+    crates
+}
+
+/// Each production file of `krates`' `src/`, as (path, code with comments, strings and test
+/// modules blanked); files a parent declares under `#[cfg(test)]` are test code and left out.
+fn production_code(krates: &[String]) -> Vec<(std::path::PathBuf, String)> {
+    let mut files = Vec::new();
+    for krate in krates {
+        let src = format!("crates/{krate}/src");
+        if !repo_root().join(&src).is_dir() {
+            continue;
+        }
+        let sources = rust_sources(&src);
+        let test_only = test_only_module_files(&sources);
+        for (path, source) in sources {
+            if !test_only.contains(&path) {
+                let code = code_without_test_modules(&code_without_strings(&source));
+                files.push((path, code));
+            }
+        }
+    }
+    files
+}
+
+/// What `confirm.rs` must say for the type to be the seal: two private fields, a
+/// `Consequence` and the prompt; no derive or impl that copies or conjures one; one inherent
+/// impl, with exactly the constructor taking a `Consequence` and two readers; and the
+/// `compile_fail` pins, each the passing scaffold plus its one refused line.
+fn confirmed_type_violations(source: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let production = code_without_test_modules(&code_without_strings(source));
+    match cairn_guards::type_declarations(&production)
+        .into_iter()
+        .find(|declaration| declaration.name == CONFIRMED_TYPE)
+    {
+        Some(declaration) => {
+            let fields: Vec<String> = declaration
+                .body
+                .split(',')
+                .map(|field| field.split_whitespace().collect::<Vec<_>>().join(" "))
+                .filter(|field| !field.is_empty())
+                .collect();
+            if declaration.keyword != "struct"
+                || fields != ["consequence: Consequence", "prompt: String"]
+            {
+                found.push(format!(
+                    "`{CONFIRMED_TYPE}` should be a struct of exactly two private fields, \
+                     `consequence: Consequence` and `prompt: String`; found {fields:?}"
+                ));
+            }
+        }
+        None => found.push(format!(
+            "{CONFIRMED_TYPE_FILE} no longer declares `{CONFIRMED_TYPE}`"
+        )),
+    }
+    if !production.contains("pub struct Confirmed {") {
+        found.push("`Confirmed` is no longer declared `pub struct Confirmed {`".to_owned());
+    }
+    for line in derives_or_implements(&production, CONFIRMED_TYPE, CONFIRMED_FORBIDDEN_TRAITS) {
+        found.push(format!(
+            "line {line} gives `{CONFIRMED_TYPE}` one of {CONFIRMED_FORBIDDEN_TRAITS:?}: a copy is \
+             one confirmation spent twice, and `Default` or `Deserialize` a token nobody confirmed"
+        ));
+    }
+    let impls: Vec<String> = production
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("impl ") || line.starts_with("impl<"))
+        .map(str::to_owned)
+        .collect();
+    if impls != ["impl Confirmed {"] {
+        found.push(format!(
+            "{CONFIRMED_TYPE_FILE} should open exactly one impl block, `impl Confirmed {{`; found \
+             {impls:?}. `From`, `Default` or any trait impl is a second way to the token."
+        ));
+    }
+    let functions: Vec<&str> = production
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("pub fn "))
+        .filter_map(|rest| rest.split('(').next())
+        .collect();
+    if functions != [CONFIRMED_CONSTRUCTOR, "consequence", "prompt"] {
+        found.push(format!(
+            "{CONFIRMED_TYPE_FILE}'s public functions should be exactly `{CONFIRMED_CONSTRUCTOR}`, \
+             `consequence` and `prompt`; found {functions:?}"
+        ));
+    }
+    if production
+        .lines()
+        .any(|line| line.contains("pub(") && line.contains("fn "))
+    {
+        found.push(format!(
+            "{CONFIRMED_TYPE_FILE} declares a restricted-visibility function; every way to the \
+             token is the one public constructor"
+        ));
+    }
+    if !production.contains("pub fn by_user(consequence: Consequence) -> Self {")
+        || !production.contains("let prompt = consequence.prompt();")
+    {
+        found.push(format!(
+            "`{CONFIRMED_TYPE}::{CONFIRMED_CONSTRUCTOR}` no longer takes a `Consequence` alone and \
+             renders the prompt from it; a prompt passed beside it can be typed"
+        ));
+    }
+    const SCAFFOLD: &str = "/// fn scaffold(consequence: cairn_model::Consequence) {\n\
+         ///     let confirmed = cairn_model::Confirmed::by_user(consequence);\n\
+         ///     let _ = confirmed.prompt();\n";
+    if !source.contains(&format!("/// ```\n{SCAFFOLD}/// }}\n/// ```")) {
+        found.push(format!(
+            "{CONFIRMED_TYPE_FILE} lost the passing scaffold of its compile-fail doctests; \
+             without it the refused blocks could all fail for a reason unrelated to the seal"
+        ));
+    }
+    let refused_blocks: Vec<&str> = source
+        .split("/// ```compile_fail\n")
+        .skip(1)
+        .filter_map(|block| block.split("/// ```\n").next())
+        .collect();
+    for refused in [
+        "let _ = confirmed.clone();",
+        "let spent = confirmed; let _ = confirmed.prompt();",
+        "let _ = cairn_model::Confirmed::by_user(String::from(\"Discard 3 files?\"));",
+        "let _ = cairn_model::Confirmed { consequence: unreachable!(), prompt: String::new() };",
+        "let _ = cairn_model::Confirmed::default();",
+        "let _: cairn_model::Confirmed = String::from(\"Discard 3 files?\").into();",
+    ] {
+        let expected = format!("{SCAFFOLD}///     {refused}\n/// }}\n");
+        if !refused_blocks.contains(&expected.as_str()) {
+            found.push(format!(
+                "{CONFIRMED_TYPE_FILE} no longer pins `{refused}` in a compile_fail doctest that \
+                 is the passing scaffold plus that one line"
+            ));
+        }
+    }
+    found
+}
+
+/// The destructive-operation roster over `crates/cairn-git/src`'s production code: every
+/// function that names `Confirmed` is on the roster (or is the record that spends it) and
+/// takes it by value; every roster row names such a function in its file; and no public
+/// function in `ops/` takes a `Consequence` without the token beside it, which would be a
+/// destructive operation reached with nobody's confirmation.
+fn destructive_roster_violations(
+    files: &[(&Path, &str)],
+    roster: &[(&str, &str)],
+    record: (&str, &str),
+) -> Vec<String> {
+    let mut found = Vec::new();
+    let rostered = |path: &Path, name: &str| {
+        roster
+            .iter()
+            .chain(std::iter::once(&record))
+            .any(|(file, function)| Path::new(file) == path && *function == name)
+    };
+    for (path, code) in files {
+        for signature in cairn_guards::function_signatures(code) {
+            let names_token = !mentions_crate(&signature.text, CONFIRMED_TYPE).is_empty();
+            if names_token {
+                if !path.starts_with(OPS_DIR) {
+                    found.push(format!(
+                        "{}:{} `{}` names `{CONFIRMED_TYPE}` outside {OPS_DIR}: every destructive \
+                         operation is a mutation, and only ops/ mutates",
+                        path.display(),
+                        signature.line,
+                        signature.name
+                    ));
+                } else if !rostered(path, &signature.name) {
+                    found.push(format!(
+                        "{}:{} `{}` takes a `{CONFIRMED_TYPE}` but is not on \
+                         DESTRUCTIVE_OPERATIONS; a destructive operation is a roster row",
+                        path.display(),
+                        signature.line,
+                        signature.name
+                    ));
+                }
+                if !cairn_guards::takes_by_value(&signature, CONFIRMED_TYPE) {
+                    found.push(format!(
+                        "{}:{} `{}` names `{CONFIRMED_TYPE}` other than as one parameter taken by \
+                         value (a reference, an `Option`, a bound, a second one, a return): \
+                         `{}`. By value is what spends one confirmation on one operation.",
+                        path.display(),
+                        signature.line,
+                        signature.name,
+                        signature
+                            .text
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    ));
+                }
+                continue;
+            }
+            let takes_consequence = signature
+                .parameters
+                .iter()
+                .any(|parameter| !mentions_crate(parameter, "Consequence").is_empty());
+            if signature.public && takes_consequence && path.starts_with(OPS_DIR) {
+                found.push(format!(
+                    "{}:{} public `{}` takes a `Consequence` without a `{CONFIRMED_TYPE}`: an \
+                     operation acting on what it would destroy, with nobody's confirmation",
+                    path.display(),
+                    signature.line,
+                    signature.name
+                ));
+            }
+        }
+    }
+    for (file, function) in roster.iter().chain(std::iter::once(&record)) {
+        let takes_it = files
+            .iter()
+            .filter(|(path, _)| *path == Path::new(file))
+            .flat_map(|(_, code)| cairn_guards::function_signatures(code))
+            .any(|signature| {
+                signature.name == *function
+                    && cairn_guards::takes_by_value(&signature, CONFIRMED_TYPE)
+            });
+        if !takes_it {
+            found.push(format!(
+                "the roster names `{function}` in {file}, and no function of that name there takes \
+                 a `{CONFIRMED_TYPE}` by value; a dead row is a destructive operation nobody \
+                 checks"
+            ));
+        }
+    }
+    found
+}
+
+/// The confirmation-surface roster over production code: only `surfaces` name the
+/// constructor, and each of them does.
+fn confirmation_surface_violations(files: &[(&Path, &str)], surfaces: &[&str]) -> Vec<String> {
+    let mut found = Vec::new();
+    for (path, code) in files {
+        if *path == Path::new(CONFIRMED_TYPE_FILE) {
+            continue;
+        }
+        let hits = mentions_crate(code, CONFIRMED_CONSTRUCTOR);
+        if !hits.is_empty() && !surfaces.iter().any(|surface| Path::new(surface) == *path) {
+            found.push(format!(
+                "{}:{} names `{CONFIRMED_TYPE}::{CONFIRMED_CONSTRUCTOR}` in production code \
+                 outside CONFIRMATION_SURFACES: a token built where no person read its prompt",
+                path.display(),
+                hits[0]
+            ));
+        }
+    }
+    for surface in surfaces {
+        let names_it = files.iter().any(|(path, code)| {
+            *path == Path::new(surface) && !mentions_crate(code, CONFIRMED_CONSTRUCTOR).is_empty()
+        });
+        if !names_it {
+            found.push(format!(
+                "CONFIRMATION_SURFACES lists `{surface}`, which does not build a \
+                 `{CONFIRMED_TYPE}` in production code; a dead row is a hole nobody sees"
+            ));
+        }
+    }
+    found
+}
+
+/// Production code outside [`CONSEQUENCE_BUILDERS`] holds a `Consequence` and asks it for its
+/// words; it never spells a path into one or its parts, which is how one is built by hand.
+fn consequence_forgery_violations(files: &[(&Path, &str)]) -> Vec<String> {
+    let mut found = Vec::new();
+    for (path, code) in files {
+        for name in CONSEQUENCE_TYPES {
+            let hits = if *name == "Consequence" {
+                cairn_guards::names_a_path_into(code, name)
+            } else {
+                mentions_crate(code, name)
+            };
+            if let Some(line) = hits.first() {
+                found.push(format!(
+                    "{}:{line} spells `{name}`'s variants or parts outside the engine and the \
+                     model: a `Consequence` is computed by cairn-git from the repository, never \
+                     built by hand",
+                    path.display()
+                ));
+            }
+        }
+    }
+    found
+}
+
+/// Over every file of every crate but the guards, `src/` and `tests/` alike: no impl block for
+/// the token outside its file, none for the `Consequence` or its parts outside theirs, and no
+/// second name for any of them.
+fn seal_route_violations(files: &[(&Path, &str)]) -> Vec<String> {
+    let mut found = Vec::new();
+    for (path, source) in files {
+        let owned = [(CONFIRMED_TYPE, CONFIRMED_TYPE_FILE)].into_iter().chain(
+            CONSEQUENCE_TYPES
+                .iter()
+                .map(|name| (*name, CONSEQUENCE_FILE)),
+        );
+        for (name, home) in owned {
+            if *path != Path::new(home)
+                && let Some(line) = cairn_guards::opens_an_impl_naming(source, name).first()
+            {
+                found.push(format!(
+                    "{}:{line} opens an impl naming `{name}` outside {home}: `From`, `Default`, a \
+                     trait whose method returns one — each a way to the token or a forged \
+                     consequence the guard cannot see",
+                    path.display()
+                ));
+            }
+            if let Some(line) = cairn_guards::renames_type(source, name).first() {
+                found.push(format!(
+                    "{}:{line} gives `{name}` another name; past it the constructor and the \
+                     variants are spelled without the names the guard reads",
+                    path.display()
+                ));
+            }
+        }
+    }
+    found
+}
+
+/// The confirmation seal (staging-and-commit R1, C1): `Confirmed` is neither `Clone` nor
+/// `Copy`, carries a `Consequence` and the prompt rendered from it, and is built only by the
+/// confirmation surfaces on [`CONFIRMATION_SURFACES`]; every destructive operation is on
+/// [`DESTRUCTIVE_OPERATIONS`] and takes it by value; and a `Consequence` is spelled only by the
+/// engine and the model. What the compiler refuses — `.clone()`, a literal, `Default`, a
+/// conversion, a constructor given text — is pinned by `confirm.rs`'s doctests, whose presence
+/// this checks; what it cannot refuse is read here.
 #[test]
 fn destructive_operations_are_sealed_behind_the_confirmation_token() {
     let (_, confirm) = rust_sources("crates/cairn-model/src")
         .into_iter()
-        .find(|(p, _)| p.ends_with("confirm.rs"))
+        .find(|(path, _)| path == Path::new(CONFIRMED_TYPE_FILE))
         .unwrap_or_else(|| {
-            panic!("cairn-model/src/confirm.rs is gone; the seal it defines is an invariant")
+            panic!("{CONFIRMED_TYPE_FILE} is gone; the seal it defines is an invariant")
         });
-    let code = code_only(&confirm);
+    let found = confirmed_type_violations(&confirm);
+    assert!(
+        found.is_empty(),
+        "the confirmation token is weaker than the seal: {found:?}"
+    );
+    let (_, consequence) = rust_sources("crates/cairn-model/src")
+        .into_iter()
+        .find(|(path, _)| path == Path::new(CONSEQUENCE_FILE))
+        .unwrap_or_else(|| panic!("{CONSEQUENCE_FILE} is gone; the prompt is rendered there"));
+    assert!(
+        code_without_strings(&consequence).contains("pub fn prompt(&self) -> String {"),
+        "{CONSEQUENCE_FILE} no longer renders the prompt beside the type \
+         (`pub fn prompt(&self) -> String`); a prompt rendered elsewhere can drift from it"
+    );
+
+    let crates = sealed_crates();
+    for builder in CONSEQUENCE_BUILDERS {
+        assert!(
+            crates.iter().any(|krate| krate == builder),
+            "CONSEQUENCE_BUILDERS names `{builder}`, which is not a crate under crates/"
+        );
+    }
+    let production = production_code(&crates);
+    let production: Vec<(&Path, &str)> = production
+        .iter()
+        .map(|(path, code)| (path.as_path(), code.as_str()))
+        .collect();
+
+    let engine: Vec<(&Path, &str)> = production
+        .iter()
+        .filter(|(path, _)| path.starts_with(ENGINE_SOURCE_DIR))
+        .copied()
+        .collect();
+    assert!(
+        engine.iter().any(|(path, _)| path.starts_with(OPS_DIR)),
+        "the destructive-operation roster scanned no file of {OPS_DIR}"
+    );
+    let found = destructive_roster_violations(&engine, DESTRUCTIVE_OPERATIONS, CONFIRMED_RECORD);
+    assert!(
+        found.is_empty(),
+        "the destructive-operation roster is broken: {found:?}"
+    );
 
     assert!(
-        code.contains("acknowledged: String"),
-        "Confirmed's field stopped being private data: the token is only proof because it \
-         cannot be built without the prompt text the user saw."
+        production.len() > engine.len(),
+        "the confirmation-surface roster scanned no production file outside the engine"
     );
-    let constructors = code.matches("pub fn ").count();
+    let found = confirmation_surface_violations(&production, CONFIRMATION_SURFACES);
+    assert!(
+        found.is_empty(),
+        "a Confirmed is built outside the confirmation surfaces: {found:?}"
+    );
+
+    let viewers: Vec<(&Path, &str)> = production
+        .iter()
+        .filter(|(path, _)| {
+            !CONSEQUENCE_BUILDERS
+                .iter()
+                .any(|builder| path.starts_with(format!("crates/{builder}")))
+        })
+        .copied()
+        .collect();
+    assert!(
+        viewers
+            .iter()
+            .any(|(path, _)| path.starts_with("crates/cairn-app/src")),
+        "the consequence-forgery check scanned no file of cairn-app"
+    );
+    let found = consequence_forgery_violations(&viewers);
+    assert!(
+        found.is_empty(),
+        "a Consequence is built by hand: {found:?}"
+    );
+
+    let everything: Vec<(std::path::PathBuf, String)> = crates
+        .iter()
+        .flat_map(|krate| rust_sources(format!("crates/{krate}")))
+        .collect();
+    assert!(
+        !everything.is_empty(),
+        "the seal-route check scanned nothing"
+    );
+    let everything: Vec<(&Path, &str)> = everything
+        .iter()
+        .map(|(path, source)| (path.as_path(), source.as_str()))
+        .collect();
+    let found = seal_route_violations(&everything);
+    assert!(found.is_empty(), "a route around the seal: {found:?}");
+}
+
+/// The four matchers of the seal, each over the shapes it claims and the ones it must let pass.
+#[test]
+fn the_confirmation_seal_matchers_catch_the_shapes_they_claim() {
+    // The token's file: the real one passes, and each weakening is seen.
+    let (_, confirm) = rust_sources("crates/cairn-model/src")
+        .into_iter()
+        .find(|(path, _)| path == Path::new(CONFIRMED_TYPE_FILE))
+        .unwrap_or_else(|| panic!("{CONFIRMED_TYPE_FILE} is gone"));
+    assert_eq!(confirmed_type_violations(&confirm), Vec::<String>::new());
+    let weakened = [
+        (
+            "Clone derived",
+            "#[derive(Debug, PartialEq, Eq)]",
+            "#[derive(Debug, Clone, PartialEq, Eq)]",
+        ),
+        (
+            "Copy derived",
+            "#[derive(Debug, PartialEq, Eq)]",
+            "#[derive(Debug, Clone, Copy, PartialEq, Eq)]",
+        ),
+        (
+            "Default derived",
+            "#[derive(Debug, PartialEq, Eq)]",
+            "#[derive(Debug, Default, PartialEq, Eq)]",
+        ),
+        (
+            "a public field",
+            "    prompt: String,\n}",
+            "    pub prompt: String,\n}",
+        ),
+        (
+            "a third field",
+            "    prompt: String,\n}",
+            "    prompt: String,\n    note: String,\n}",
+        ),
+        (
+            "the text field it was",
+            "    consequence: Consequence,\n",
+            "    acknowledged: String,\n",
+        ),
+        (
+            "a From impl",
+            "impl Confirmed {",
+            "impl From<Consequence> for Confirmed {\n    fn from(c: Consequence) -> Self { Self::by_user(c) }\n}\n\nimpl Confirmed {",
+        ),
+        (
+            "a second constructor",
+            "    /// What the person accepted losing",
+            "    pub fn from_text(text: String) -> Self { unreachable!() }\n\n    /// What the person accepted losing",
+        ),
+        (
+            "a crate-visible constructor",
+            "    /// What the person accepted losing",
+            "    pub(crate) fn quietly(c: Consequence) -> Self { Self::by_user(c) }\n\n    /// What the person accepted losing",
+        ),
+        (
+            "a prompt passed beside the consequence",
+            "pub fn by_user(consequence: Consequence) -> Self {",
+            "pub fn by_user(consequence: Consequence, prompt: String) -> Self {",
+        ),
+        (
+            "a refused block changed",
+            "///     let _ = confirmed.clone();",
+            "///     let _ = confirmed.clone(); // ",
+        ),
+        (
+            "the passing scaffold gone",
+            "/// ```\n/// fn scaffold",
+            "/// ```text\n/// fn scaffold",
+        ),
+    ];
+    for (shape, from, to) in weakened {
+        assert!(
+            confirm.contains(from),
+            "the {shape} fixture no longer applies to {CONFIRMED_TYPE_FILE}"
+        );
+        let changed = confirm.replacen(from, to, 1);
+        assert!(
+            !confirmed_type_violations(&changed).is_empty(),
+            "the token check missed {shape}"
+        );
+    }
+
+    // The signature reader the roster stands on.
+    let by_value = [
+        "pub fn discard(git: &GitBinary, confirmed: Confirmed) -> Result<Performed, Error> {}",
+        "fn discard(mut confirmed: cairn_model::Confirmed) {}",
+        "pub fn discard(\n    git: &GitBinary,\n    repo: &Repository,\n    confirmed: Confirmed,\n) -> Performed {}",
+        "fn discard(&self, f: impl Fn(&str) -> bool, confirmed: Confirmed) {}",
+        "fn discard<F: Fn() -> u8>(f: F, confirmed: ::cairn_model::Confirmed);",
+    ];
+    for source in by_value {
+        let signature = cairn_guards::function_signatures(source)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("no signature read from {source:?}"));
+        assert!(
+            cairn_guards::takes_by_value(&signature, CONFIRMED_TYPE),
+            "a by-value token was not read as one: {source:?} ({signature:?})"
+        );
+    }
+    let not_by_value = [
+        ("a reference", "pub fn discard(confirmed: &Confirmed) {}"),
+        (
+            "a mutable reference",
+            "pub fn discard(confirmed: &mut Confirmed) {}",
+        ),
+        (
+            "an Option",
+            "pub fn discard(confirmed: Option<Confirmed>) {}",
+        ),
+        ("a Box", "pub fn discard(confirmed: Box<Confirmed>) {}"),
+        (
+            "an impl Into",
+            "pub fn discard(confirmed: impl Into<Confirmed>) {}",
+        ),
+        (
+            "a generic bound",
+            "pub fn discard<C: Into<Confirmed>>(confirmed: C) {}",
+        ),
+        (
+            "a where clause",
+            "pub fn discard<C>(confirmed: C) where C: Into<Confirmed> {}",
+        ),
+        (
+            "two tokens",
+            "pub fn discard(a: Confirmed, b: Confirmed) {}",
+        ),
+        (
+            "a returned token",
+            "pub fn discard(c: Confirmed) -> Confirmed {}",
+        ),
+        ("a slice", "pub fn discard(c: &[Confirmed]) {}"),
+        ("a tuple", "pub fn discard(c: (Confirmed, u8)) {}"),
+    ];
+    for (shape, source) in not_by_value {
+        let signature = cairn_guards::function_signatures(source)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("no signature read from the {shape} shape"));
+        assert!(
+            !cairn_guards::takes_by_value(&signature, CONFIRMED_TYPE),
+            "{shape} was read as a token taken by value: {source:?}"
+        );
+    }
+    let read = cairn_guards::function_signatures(
+        "type F = fn(Confirmed);\npub(crate) const fn a(x: u8) -> [u8; 2] { [x; 2] }\npub fn b(&self) {}",
+    );
+    let read: Vec<(&str, bool, usize)> = read
+        .iter()
+        .map(|s| (s.name.as_str(), s.public, s.parameters.len()))
+        .collect();
     assert_eq!(
-        constructors, 2,
-        "Confirmed should expose exactly two public functions (`by_user` and `acknowledged`); \
-         found {constructors}. A second way to build the token is a second way to reach a \
-         destructive operation without a prompt."
+        read,
+        [("a", false, 1), ("b", true, 1)],
+        "a fn pointer, visibility or parameters misread"
     );
 
-    let ops = rust_sources("crates/cairn-git/src/ops");
+    // The destructive-operation roster.
+    let ops = |name: &str| format!("{OPS_DIR}/{name}");
+    let record_file = ops("mod.rs");
+    let record_source = "impl Performed {\n    pub(crate) fn destructive(d: String, confirmed: Confirmed) -> Self {}\n}\n";
+    let discard_file = ops("discard.rs");
+    let roster: &[(&str, &str)] = &[(&discard_file, "discard_files")];
+    let record = (record_file.as_str(), "destructive");
+    let check = |discard: &str| {
+        destructive_roster_violations(
+            &[
+                (Path::new(&record_file), record_source),
+                (Path::new(&discard_file), discard),
+            ],
+            roster,
+            record,
+        )
+    };
+    assert_eq!(
+        check(
+            "pub fn discard_files(git: &GitBinary, confirmed: Confirmed) -> Performed {}\nfn helper(c: &Consequence) {}\npub fn compute() -> Consequence {}"
+        ),
+        Vec::<String>::new(),
+        "a rostered by-value operation, a private helper reading the consequence and a public \
+         function computing one must all pass"
+    );
+    let broken = [
+        (
+            "a rostered operation taking a reference",
+            "pub fn discard_files(confirmed: &Confirmed) {}",
+        ),
+        (
+            "a rostered operation taking an Option",
+            "pub fn discard_files(confirmed: Option<Confirmed>) {}",
+        ),
+        (
+            "a roster row with no function",
+            "pub fn discard_lines(confirmed: Confirmed) {}",
+        ),
+        (
+            "an unrostered operation taking the token",
+            "pub fn discard_files(c: Confirmed) {}\npub fn amend(c: Confirmed) {}",
+        ),
+        (
+            "an operation taking the consequence without the token",
+            "pub fn discard_files(c: Confirmed) {}\npub fn delete(consequence: Consequence) {}",
+        ),
+        (
+            "a borrowed consequence on the public surface",
+            "pub fn discard_files(c: Confirmed) {}\npub fn delete(consequence: &Consequence) {}",
+        ),
+    ];
+    for (shape, source) in broken {
+        assert!(
+            !check(source).is_empty(),
+            "the roster missed {shape}: {source:?}"
+        );
+    }
+    let outside = destructive_roster_violations(
+        &[
+            (Path::new(&record_file), record_source),
+            (
+                Path::new(&discard_file),
+                "pub fn discard_files(c: Confirmed) {}",
+            ),
+            (
+                Path::new("crates/cairn-git/src/history.rs"),
+                "pub fn rewrite(c: Confirmed) {}",
+            ),
+        ],
+        roster,
+        record,
+    );
     assert!(
-        ops.iter().any(|(_, s)| code_only(s).contains("Confirmed")),
-        "no operation in cairn-git/src/ops takes a Confirmed token; either the module is empty \
-         of destructive work (delete this guard's expectation) or the seal was dropped."
+        !outside.is_empty(),
+        "the roster missed a token taken outside ops/"
+    );
+    let no_record = destructive_roster_violations(
+        &[(
+            Path::new(&discard_file),
+            "pub fn discard_files(c: Confirmed) {}",
+        )],
+        roster,
+        record,
+    );
+    assert!(!no_record.is_empty(), "the roster missed the record gone");
+
+    // The confirmation-surface roster, over production code as the guard prepares it.
+    let surface = "crates/cairn-ui/src/confirmation.rs";
+    let prepared = |source: &str| code_without_test_modules(&code_without_strings(source));
+    let builds = [
+        (
+            "a direct call",
+            "fn f(c: Consequence) -> Confirmed { Confirmed::by_user(c) }",
+        ),
+        (
+            "a qualified call",
+            "let t = cairn_model::Confirmed::by_user(consequence);",
+        ),
+        (
+            "an alias",
+            "use cairn_model::Confirmed as Token;\nlet t = Token::by_user(c);",
+        ),
+        ("a qualified self type", "let t = <Confirmed>::by_user(c);"),
+        ("a function value", "let mint = Confirmed::by_user;"),
+        (
+            "a helper named for tests",
+            "pub fn confirmed_for_tests(c: Consequence) -> Confirmed { Confirmed::by_user(c) }",
+        ),
+        (
+            "a helper under a cfg that is not test alone",
+            "#[cfg(any(test, feature = \"testing\"))]\npub fn make(c: Consequence) -> Confirmed { Confirmed::by_user(c) }",
+        ),
+    ];
+    for (shape, source) in builds {
+        let code = prepared(source);
+        let found = confirmation_surface_violations(
+            &[(Path::new("crates/cairn-app/src/window.rs"), &code)],
+            &[],
+        );
+        assert!(
+            !found.is_empty(),
+            "the surface roster missed {shape}: {source:?}"
+        );
+        let found = confirmation_surface_violations(&[(Path::new(surface), &code)], &[surface]);
+        assert_eq!(
+            found,
+            Vec::<String>::new(),
+            "a listed surface was refused for {shape}"
+        );
+    }
+    let in_a_test =
+        prepared("#[cfg(test)]\nmod tests {\n    fn t() { let _ = Confirmed::by_user(c); }\n}");
+    assert_eq!(
+        confirmation_surface_violations(
+            &[(Path::new("crates/cairn-git/src/ops/x.rs"), &in_a_test)],
+            &[]
+        ),
+        Vec::<String>::new(),
+        "a test module was read as production code"
+    );
+    let holds = prepared("fn submit(confirmed: Confirmed) { send(confirmed) }");
+    let found = confirmation_surface_violations(&[(Path::new(surface), &holds)], &[surface]);
+    assert!(
+        !found.is_empty(),
+        "a listed surface that builds nothing was not refused"
+    );
+    assert!(
+        !confirmation_surface_violations(&[], &[surface]).is_empty(),
+        "a listed surface that does not exist was not refused"
+    );
+    assert_eq!(
+        confirmation_surface_violations(&[(Path::new("crates/cairn-app/src/x.rs"), &holds)], &[]),
+        Vec::<String>::new(),
+        "holding and passing a token was read as building one"
+    );
+
+    // Forging a consequence outside the engine and the model.
+    let forged = [
+        (
+            "a variant built",
+            "let c = Consequence::DiscardLines { path, index, working_tree, added, removed };",
+        ),
+        (
+            "a qualified variant",
+            "let c = cairn_model::Consequence::Amend { commit, subject, published };",
+        ),
+        ("a glob of the variants", "use cairn_model::Consequence::*;"),
+        (
+            "a grouped import of a variant",
+            "use cairn_model::Consequence::{RemoveLock};",
+        ),
+        (
+            "a qualified self type",
+            "let c = <Consequence>::RemoveLock { path, age, bytes };",
+        ),
+        (
+            "a variant matched",
+            "match c { Consequence::Amend { .. } => {} }",
+        ),
+        ("a part built", "let f = DiscardedFile { path, loss };"),
+        (
+            "a loss named",
+            "let l = FileLoss::Untracked { working_tree, bytes };",
+        ),
+        ("a publication named", "let p = Publication::Unpublished;"),
+    ];
+    for (shape, source) in forged {
+        let code = prepared(source);
+        assert!(
+            !consequence_forgery_violations(&[(Path::new("crates/cairn-app/src/x.rs"), &code)])
+                .is_empty(),
+            "the forgery check missed {shape}: {source:?}"
+        );
+    }
+    let viewing = prepared(
+        "use cairn_model::{Confirmed, Consequence};\nfn show(c: &Consequence) -> String { c.prompt() }\nfn label(c: &Consequence) -> String { c.action() }",
+    );
+    assert_eq!(
+        consequence_forgery_violations(&[(Path::new("crates/cairn-ui/src/x.rs"), &viewing)]),
+        Vec::<String>::new(),
+        "holding a consequence and asking it for its words was read as forging one"
+    );
+
+    // Routes around the seal, in any file.
+    let routes = [
+        (
+            "a From impl for the token",
+            "impl From<Consequence> for Confirmed {\n    fn from(c: Consequence) -> Self { todo!() }\n}",
+        ),
+        (
+            "a Default impl for the token",
+            "impl Default for Confirmed {\n    fn default() -> Self { todo!() }\n}",
+        ),
+        (
+            "a trait building a consequence",
+            "impl Sample for Consequence {\n    fn sample() -> Self { Self::RemoveLock { path, age, bytes } }\n}",
+        ),
+        (
+            "a generic impl bounded on the token",
+            "impl<T: Into<Confirmed>> Mint for T {\n}",
+        ),
+        ("a renamed token", "use cairn_model::Confirmed as Token;"),
+        (
+            "an aliased consequence",
+            "type Loss = cairn_model::Consequence;",
+        ),
+        ("a renamed part", "use cairn_model::FileLoss as Loss;"),
+    ];
+    for (shape, source) in routes {
+        assert!(
+            !seal_route_violations(&[(Path::new("crates/cairn-app/tests/x.rs"), source)])
+                .is_empty(),
+            "the route check missed {shape}: {source:?}"
+        );
+    }
+    let fine =
+        "fn takes(c: impl Into<Confirmed>) {}\nimpl Window {\n    fn f(&self, c: Confirmed) {}\n}";
+    assert_eq!(
+        seal_route_violations(&[(Path::new("crates/cairn-app/src/x.rs"), fine)]),
+        Vec::<String>::new(),
+        "an `impl Trait` argument or an impl for another type was read as an impl for the token"
+    );
+    assert_eq!(
+        seal_route_violations(&[(
+            Path::new(CONFIRMED_TYPE_FILE),
+            "impl Confirmed {\n    pub fn prompt(&self) -> &str { &self.prompt }\n}"
+        )]),
+        Vec::<String>::new(),
+        "the token's own impl was refused in its own file"
     );
 }
 

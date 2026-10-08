@@ -266,3 +266,101 @@ fn only_a_path_that_can_be_in_a_pair_asks_the_whole_index() {
         );
     }
 }
+
+/// The packs under a git directory's object store, by name: a lazy fetch adds one.
+fn packs(git_dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(git_dir.join("objects/pack"))
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// In a blob-less partial clone whose sparse checkout left a file's blob with the promisor
+/// alone, a staged inexact rename of that file makes the whole-index pairing read compare
+/// the missing blob. A read never fetches it (`GIT_NO_LAZY_FETCH=1`, git 2.44 and later):
+/// git fails, so the staged diff of the destination fails — `Error::GitFailed` — and no pack
+/// is written, where the user's own `git diff --cached` would fetch and show the rename. A
+/// git older than 2.44 ignores the variable: there the read fetches, writing a pack, and
+/// answers the rename — the floor's residual, pinned so that it is seen, as the status
+/// read's is (`in_a_partial_clone_a_status_read_fails_rather_than_fetching`).
+#[test]
+fn in_a_partial_clone_a_staged_pairing_fails_rather_than_fetching() {
+    let source = Repo::new("partial-pairing-source");
+    source.config("uploadpack.allowFilter", "true");
+    source.write("in/i.txt", b"i\n");
+    let big: String = (1..=200).map(|n| format!("{n}\n")).collect();
+    source.write("out/big", big.as_bytes());
+    source.commit("base");
+    let holder = Repo::new("partial-pairing-holder");
+    let clone_path = holder.path().join("clone");
+    let url = format!("file://{}", source.path().display());
+    holder.git(&[
+        "clone",
+        "-q",
+        "--filter=blob:none",
+        "--no-checkout",
+        &url,
+        &clone_path.to_string_lossy(),
+    ]);
+    let clone = Repo::borrowed(&clone_path);
+    clone.git(&["sparse-checkout", "init", "--cone"]);
+    clone.git(&["sparse-checkout", "set", "in"]);
+    clone.git(&["checkout", "-q", "main"]);
+    let missing = || {
+        clone
+            .git(&["rev-list", "--objects", "--missing=print", "HEAD"])
+            .lines()
+            .any(|line| line.starts_with('?'))
+    };
+    assert!(
+        missing(),
+        "the clone holds every blob, so nothing is lazy here"
+    );
+    clone.git(&["update-index", "--force-remove", "out/big"]);
+    let renamed: String = (1..=199).map(|n| format!("{n}\n")).collect();
+    clone.write("in/big2", renamed.as_bytes());
+    clone.git(&["add", "in/big2"]);
+    assert!(missing(), "building the fixture fetched the blob");
+    let before = packs(&clone_path.join(".git"));
+
+    let engine = super::ok(
+        cairn_git::Repository::discover(&clone_path),
+        "the clone opens",
+    );
+    let outcome = engine.working_tree_diff(
+        super::git(),
+        &RepoPath::from("in/big2"),
+        WorkingTreeDiff::Staged,
+        &cairn_git::ContentOptions::default(),
+        &cairn_git::CancelSignal::new(),
+    );
+    if super::git().version() >= super::since(44) {
+        assert!(
+            matches!(outcome, Err(cairn_git::Error::GitFailed { .. })),
+            "git {}: a pairing over a blob the clone lacks did not fail: {outcome:?}",
+            super::git().version()
+        );
+        assert_eq!(packs(&clone_path.join(".git")), before, "the read fetched");
+        assert!(missing(), "the read fetched the blob");
+    } else {
+        // The floor's residual: git ignores GIT_NO_LAZY_FETCH, fetches, and answers.
+        let answer = super::ok(outcome, "the floor's answer");
+        assert!(
+            answer.as_ref().is_some_and(|diff| diff.file.is_rename()),
+            "git {}: {answer:?}",
+            super::git().version()
+        );
+        assert_ne!(
+            packs(&clone_path.join(".git")),
+            before,
+            "git {} did not fetch, so the residual stated is wrong",
+            super::git().version()
+        );
+    }
+}

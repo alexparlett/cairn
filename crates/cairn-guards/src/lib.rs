@@ -1634,7 +1634,9 @@ pub fn renames_type(source: &str, name: &str) -> Vec<usize> {
             continue;
         }
         // `type X = ..Name..;` — the statement starts with `type` and has `=` before this name.
-        let start = code[..offset].rfind(';').map_or(0, |at| at + 1);
+        // A statement starts after the `;` of the one before it, or after a brace: the `}` that
+        // ends an item (`struct A {}` then `type T = Name;`) or the `{` that opens a block.
+        let start = code[..offset].rfind([';', '}', '{']).map_or(0, |at| at + 1);
         let statement = &code[start..offset];
         let is_type_item = ident_offsets(statement, "type").first().is_some_and(|at| {
             statement[..*at].trim().is_empty()
@@ -1814,21 +1816,44 @@ pub fn names_a_path_into(source: &str, name: &str) -> Vec<usize> {
 /// `impl From<Name> for T`, a bound on it. An `impl Trait` in a parameter's or a return
 /// type's position opens no block and is not read.
 pub fn opens_an_impl_naming(source: &str, name: &str) -> Vec<usize> {
+    impl_headers(source)
+        .into_iter()
+        .filter(|(_, header)| !ident_offsets(header, name).is_empty())
+        .map(|(line, _)| line)
+        .collect()
+}
+
+/// Every `impl` block `source` opens, as (1-based line, header from `impl` up to its `{`, with
+/// its whitespace collapsed): a line that starts with `impl ` or `impl<` once any attributes
+/// written ahead of it on the same line (`#[allow(x)] impl ..`) are stepped over. An `impl
+/// Trait` in a parameter's or a return type's position opens no block and is not read.
+pub fn impl_headers(source: &str) -> Vec<(usize, String)> {
     let code = code_without_strings(source);
-    let mut lines = BTreeSet::new();
+    let bytes = code.as_bytes();
+    let mut headers = Vec::new();
     let mut offset = 0usize;
     for line in code.split_inclusive('\n') {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("impl ") || trimmed.starts_with("impl<") {
-            let start = offset + (line.len() - trimmed.len());
-            let end = code[start..].find('{').map_or(code.len(), |at| start + at);
-            if !ident_offsets(&code[start..end], name).is_empty() {
-                lines.insert(line_at(&code, start));
+        // Indentation only: a blank line's newline is not stepped over into the next line.
+        let mut at = offset + (line.len() - line.trim_start_matches([' ', '\t']).len());
+        while bytes.get(at) == Some(&b'#') {
+            let open = skip_whitespace(bytes, at + 1);
+            if bytes.get(open) != Some(&b'[') {
+                break;
             }
+            at = balanced_end(bytes, open);
+            while matches!(bytes.get(at), Some(b' ' | b'\t')) {
+                at += 1;
+            }
+        }
+        let rest = &code[at.min(code.len())..];
+        if rest.starts_with("impl ") || rest.starts_with("impl<") {
+            let end = rest.find('{').map_or(rest.len(), |brace| brace);
+            let header = rest[..end].split_whitespace().collect::<Vec<_>>().join(" ");
+            headers.push((line_at(&code, at), header));
         }
         offset += line.len();
     }
-    lines.into_iter().collect()
+    headers
 }
 
 /// One past the `>` closing the `<` at `open`.

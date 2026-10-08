@@ -627,38 +627,56 @@ Project invariants:
   the passing scaffold plus one line. Twin against what the compiler cannot
   refuse: `destructive_operations_are_sealed_behind_the_confirmation_token`
   (matcher self-test `the_confirmation_seal_matchers_catch_the_shapes_they_claim`,
-  matchers `function_signatures`, `takes_by_value`, `names_a_path_into` and
-  `opens_an_impl_naming` in `crates/cairn-guards/src/lib.rs`), each part with a
-  nonzero-files assertion: the token's file keeps exactly its two private fields,
-  derives none of `Clone`, `Copy`, `Default`, `Deserialize` or `Decode`, opens one
-  impl block with exactly `by_user`, `consequence` and `prompt`, and keeps its
-  doctests; the **destructive-operation roster** (`DESTRUCTIVE_OPERATIONS`, file
-  and function) — every function in `crates/cairn-git/src`'s production code
-  whose signature names `Confirmed` is in `ops/`, is on the roster or is the record
-  that spends the token (`CONFIRMED_RECORD`, `Performed::destructive`), and takes
-  it as exactly one by-value parameter, never behind a reference, an `Option`, a
-  bound or in the return; every row names such a function; and no `pub` function
-  in `ops/` takes a `Consequence` without the token (its one row today is the
-  placeholder `ops::describe_destructive`, which phase 03's operations replace);
+  matchers `function_signatures`, `takes_by_value`, `names_a_path_into`,
+  `opens_an_impl_naming` and `impl_headers` in `crates/cairn-guards/src/lib.rs`),
+  each part with a nonzero-files assertion: the token's file keeps exactly its two
+  private fields, derives or implements none of `Clone`, `Copy`, `Default`,
+  `Deserialize`, `Decode`, `From`, `TryFrom` or `FromStr`, opens one impl block
+  (attributes ahead of an `impl` on its line stepped over), declares exactly the
+  functions `pub fn by_user`, `pub fn consequence` and `pub fn prompt` — no other,
+  private, `const` or restricted one — and no `const`, `static`, `macro_rules!` or
+  `mod` item, names `by_user` once and builds the token once, and keeps its
+  doctests; the `Consequence`'s file (`consequence.rs`) derives or implements none
+  of `Default`, `Deserialize`, `Decode`, `From`, `TryFrom` or `FromStr` for it or a
+  part, opens one impl block, `impl Consequence`, and renders the prompt there;
+  the **destructive-operation roster** (`DESTRUCTIVE_OPERATIONS`, file and
+  function) — every function in `crates/cairn-git/src`'s production code whose
+  signature names `Confirmed` is in `ops/`, is on the roster or is the record that
+  spends the token (`CONFIRMED_RECORD`: `destructive` in `Performed`'s inherent
+  impl in `ops/mod.rs`, excused by that place and not by its name), and takes it
+  as exactly one by-value parameter, never behind a reference, an `Option`, a
+  bound or in the return; every row names a function that exists; no `pub`
+  function in `ops/` takes a `Consequence` without the token; and no type of the
+  engine's production code keeps a `Confirmed` in a field outside
+  `CONFIRMED_HOLDERS` (empty: a token held in a type reaches an operation behind
+  a reference) (the roster's one row today is the placeholder
+  `ops::describe_destructive`, which phase 03's operations replace);
   the **confirmation-surface roster** (`CONFIRMATION_SURFACES`, empty until the
   confirmation dialog and the commit box exist) — no production file of any crate
   but the guards, `confirm.rs` aside, names `by_user` unless it is on the roster,
   and every row does, so a helper "for tests" outside a `#[cfg(test)]` module, an
-  alias's `T::by_user` and a stored `Confirmed::by_user` all fail; no production
+  alias's `T::by_user` and a stored `Confirmed::by_user` all fail, and the scan is
+  required to have read `cairn-ui`'s and `cairn-app`'s `src/`; no production
   file outside `cairn-model` and `cairn-git` (`CONSEQUENCE_BUILDERS`) spells a
   path into a `Consequence` or names its parts (`DiscardedFile`, `FileLoss`,
   `Publication`), so the render crates hold one and ask it for its words but never
   build one; and nowhere, `src/` or `tests/`, does a file but the type's own open
-  an impl naming `Confirmed`, `Consequence` or its parts, or rename one. Residual
-  review obligations, `destructive-ops-reviewer`'s: whether a `Consequence` is
+  an impl naming `Confirmed`, `Consequence` or its parts, or rename one (`use ..
+  as`, or a `type` alias wherever it follows another item). Residual review
+  obligations, `destructive-ops-reviewer`'s: whether a `Consequence` is
   computed rightly from the repository and re-checked against it before the
-  operation runs (R1.4), whether a prompt that IS rendered from it is honest and
-  sufficient, which operations are destructive at all (an operation left off the
-  roster that takes no token is not seen), and a roster surface building the token
-  from anything but the `Consequence` it drew; and the matchers read spellings, so
-  a token reached through a macro, or a closure in `ops/` taking one, is
-  `qa-checklist`'s. Test code (test modules, `#[cfg(test)]` module files,
-  `tests/`) may build tokens, since it cannot ship.
+  operation runs (R1.4); that an operation derives every target — each path, each
+  line — from `confirmed.consequence()`, never from a parameter beside it; whether
+  a prompt that IS rendered from it is honest and sufficient; which operations are
+  destructive at all (an operation left off the roster that takes no token is not
+  seen); a roster surface building the token from anything but the `Consequence`
+  it drew; and, since `Consequence` is `Clone`, a surface building two tokens from
+  one acknowledgement. `qa-checklist`'s: the matchers read spellings, so a token
+  reached through a macro, a closure in `ops/` taking one, and a public function
+  in `cairn-model` or `cairn-git` that builds a `Consequence` from values its
+  caller passes — through which a render crate could forge one without spelling a
+  path into it — are not seen. Test code (test modules, `#[cfg(test)]` module
+  files, `tests/`) may build tokens, since it cannot ship.
 - **No `unsafe`, anywhere.** Twin: `unsafe_code = "forbid"` in the workspace lint
   table (compiler tier, so it cannot be locally overridden).
 - **Shipping code never panics on a path a user can reach**: `unwrap`, `expect`,

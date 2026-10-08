@@ -17,6 +17,7 @@ mod staged_renames;
 mod staging;
 mod stash;
 mod working_tree;
+mod write_baseline;
 mod write_verbs;
 
 /// `unwrap` and `expect` are denied outside a test function, and a helper shared by several

@@ -5,8 +5,7 @@ of Fork on an ordinary day. Graph, diff, stage by hunk and line, commit, branch,
 fetch/pull/push, and the forge links (D9) — "create pull request for this branch"
 is among the most-used commands in Fork, so the bar is not met without it.
 
-A program rather than a packet — it spans eight packets, two of which are already
-filed. Program design lives in `docs/design/` (`cairn.md` for the spine and the
+A program rather than a packet — it spans ten packets (`roadmap.md`). Program design lives in `docs/design/` (`cairn.md` for the spine and the
 map of per-feature docs, `feature-inventory.md` for the surface); this directory holds the build order and
 the briefs.
 

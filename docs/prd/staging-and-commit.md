@@ -1,0 +1,483 @@
+---
+status: in-flight
+packet: staging-and-commit
+opened: 2026-10-07
+---
+
+# PRD — Staging and commit
+
+**In flight. Authoritative while it is.** The packet's work directory is
+`docs/work/staging-and-commit/`; its decisions and rejected alternatives are that
+directory's `brainstorm.md`, L1-L26. Requirements below cite them by id.
+
+Design frame: `docs/design/ui.md` (Local Changes, the staging gesture, the commit
+box, the confirmation dialog, Show Lost Commits, the activity popover),
+`docs/design/diff.md` (selections and patches, the inverted diff),
+`docs/design/engine.md` (D1: the writes this packet runs and the reads beside
+them), `docs/design/concurrency.md` (the local write lane),
+`docs/design/processes.md` (prompts during a local write, the inherited roster),
+`docs/design/feature-inventory.md` ("Recovery"). Program:
+`docs/work/daily-loop/roadmap.md` packet 5, under program decisions L4 (the reflog
+ships with the first commit-level destructive operation), L5 (closed here as L2)
+and L6 (a measured bar). Evidence, all under `docs/research/staging-and-commit/`:
+`write-path-as-built.md`, `staging-surface-as-built.md`,
+`fork-staging-and-commit.md`, `git-write-verbs.md`, `precedent-study.md`,
+`freya-ui-apis.md`, `patch-mechanics-spike.md`.
+
+## What this packet delivers
+
+The working tree becomes something Cairn changes, not only shows. In Local
+Changes, a file, a hunk, a run of lines or a mode change can be staged, unstaged
+or discarded, as Fork does it: double-click, Return, drag between the lists, the
+header buttons or the context menu for files; a hovered chunk's floating buttons,
+narrowed by a drag-selection, for hunks and lines. A commit box under the diff
+commits what is staged, or amends `HEAD`. Every destructive operation — a discard,
+deleting untracked files, an amend, removing a stale lock — is sealed behind a
+confirmation that names what it costs, computed by the engine and re-checked the
+moment before it runs. What a destructive operation on commits leaves behind is
+recoverable from Show Lost Commits, and every operation can be read back,
+with the prompt the user accepted, in the activity popover.
+
+In build order: the seal; the patch engine's inversions; the write verbs; the
+local write lane; commit and amend in the engine; the render layer's keys,
+dialogs and menus; Local Changes' actions; the diff's gestures; the commit box;
+Show Lost Commits; and the activity popover.
+
+Stash and `.gitignore` are packet 5b's (`stash-and-ignore`, L1).
+
+## Requirements
+
+### R1 — The seal is bound to what it costs (L3)
+
+- R1.1 `cairn_model::Confirmed` derives no `Clone` and no `Copy`, and is
+  constructed only by the confirmation surfaces on a roster the guard holds: the
+  confirmation dialog's component and the commit box (R10.6).
+- R1.2 A `Confirmed` carries a `Consequence`, an engine-computed `cairn-model`
+  value naming what the operation will destroy — per operation: the paths, the
+  lines and bytes per path, the blob ids the destruction is computed against, a
+  commit's id, a lock file's path and age — and the prompt text rendered from it.
+  The prompt is rendered from the `Consequence`, never typed beside it.
+- R1.3 Every destructive operation of this packet (R1.5) takes `Confirmed` by
+  value, and the guard holds the roster: a destructive operation without it, or
+  a roster entry with no such operation, fails.
+- R1.4 Immediately before it runs, a destructive operation re-reads the state its
+  `Consequence` names and refuses, writing nothing, when anything differs; the
+  refusal is an outcome of its own ("changed since you confirmed"), never a
+  failure of git's.
+- R1.5 Destructive here: discard lines (R3.3), discard files and delete untracked
+  files (R3.5), amend (R6.4), remove `index.lock` (R12.4). Not destructive: stage
+  and unstage of files, lines or a mode change, commit, create a branch (R11.3).
+- R1.6 `ops::Performed` records the `Consequence`'s prompt for every destructive
+  operation, as today's `Performed::destructive` records the token's text.
+
+### R2 — The patch engine (L17, L18)
+
+- R2.1 `TextDiff`, `Selection` and `ChangedFile` gain pure inversions — old and
+  new sides swapped, each change's two spans swapped, the selection's removed and
+  added sets swapped, paths, modes and ids swapped and added with deleted — so
+  unstage and discard emit through the existing forward rule and no `-R` is run
+  (L17a).
+- R2.2 What each action emits: stage lines — the unstaged diff (index to working
+  tree) as it is; unstage lines — the staged diff (`HEAD` to index) inverted;
+  discard lines — the unstaged diff inverted. Always at three lines of context,
+  from the exact diff (R1.6 of `diff-engine`).
+- R2.3 An untracked or newly added file's lines can be staged (a `new file mode`
+  patch of the selected lines) and discarded (a partial deletion, emitted as a
+  modification) (L17b). Deletions on either side, binary files, LFS pointers,
+  files past the size limits, submodules, type changes and conflicted paths are
+  whole-file only (L17c, L25); a submodule is staged and unstaged whole and never
+  discarded (R3.10), and a conflicted path is staged whole and never discarded
+  (R3.11).
+- R2.4 A mode change is its own selectable item: `Selection` holds it apart from
+  lines, and a selection of lines alone emits no `old mode`/`new mode` (L17d).
+- R2.5 Every path line the emitter writes is C-quoted exactly as git's
+  `quote_c_style` quotes it (L17e).
+- R2.6 The staged diff pairs renames and copies as `git diff --cached` does under
+  the user's configuration (L18). Unstaging lines of a staged rename emits a
+  content-only patch at its new path.
+- R2.7 The reference applier verifies each emitted patch against the side it
+  applies to, and a second, independent derivation — the mirrored rule applied in
+  reverse — must produce the same result (the tests' oracle, E1b).
+
+### R3 — The write verbs (L8, L16, L17)
+
+Each a named operation in `crates/cairn-git/src/ops/`, built as a write
+invocation, run with git's global `--literal-pathspecs` option before the verb (the
+precedent of `reads/patches.rs` and `reads/working_tree.rs`; never the
+`GIT_LITERAL_PATHSPECS` variable, since an invocation's environment is built only in
+`process/environment.rs` and the environment twin refuses one set anywhere else) and
+`--end-of-options` or `--` before paths, many paths passed by
+`--pathspec-from-file=- --pathspec-file-nul` where the verb takes it. Residual,
+stated in `docs/design/engine.md`: git exports literal-pathspec mode to the hooks it
+runs under these verbs (`GIT_LITERAL_PATHSPECS=1` in a `post-index-change` or
+`post-checkout` hook's environment), so a hook's own globbed pathspec matches
+literally.
+
+- R3.1 Stage lines or a mode change: `git apply --cached --whitespace=nowarn -`,
+  the patch on stdin.
+- R3.2 Unstage lines or a mode change: `git apply --cached --whitespace=nowarn -`,
+  the inverted patch on stdin.
+- R3.3 Discard lines or a mode change (destructive): `git apply --whitespace=nowarn -`
+  on the working tree, the inverted patch on stdin.
+- R3.4 Stage files: `git add`; unstage files: `git reset -q --` (which works on an
+  unborn branch); unstage a staged rename whole: `git reset -q -- <old> <new>`;
+  unstage out of an amend: `git reset -q HEAD^ --` (R6.3), and out of a root
+  commit's amend, which has no `HEAD^`: `git rm --cached -q --`.
+- R3.5 Discard files (destructive): `git restore --worktree --`, never for a
+  submodule (R3.10) or a conflicted path (R3.11); delete untracked files
+  (destructive): `git clean -f --` the exact paths status listed, `-d` only for a
+  collapsed directory row; a nested repository is refused before any confirmation
+  (L8). `git clean` takes no pathspec file, so its paths go on `argv` after `--`;
+  a list past a bound is split across several invocations, all under the one
+  `Consequence` re-check made before the first (R1.4). The bound is phase 03's to
+  measure: `argv`'s limit for a very large selection is unverified
+  (`git-write-verbs.md` §11). There is no Clean command and no Discard All.
+- R3.6 Staged changes are never discardable (L8): no verb, no gesture.
+- R3.7 Before every apply (R3.1-R3.3) the operation checks the content it was
+  built from (L17f): for stage, the index entry's blob is the diff's old id; for
+  unstage, its new id; for discard, the index entry is the old id and the working
+  tree file hashed in git's form (`git hash-object --path=<p> -- <p>`, a read,
+  no `-w`) is the drawn new side; for a partial discard of an untracked file,
+  which has no index entry, that the index holds no entry for the path and the
+  working-tree hash is the drawn new side. The index is read with gix. A stale
+  patch writes nothing and reports which path moved.
+- R3.8 Every local outcome carries the lock files present before and stranded
+  after it (#44), and its error names them.
+- R3.9 `git hash-object` (R3.7, and R1.4's re-check of every discard, of lines
+  or of files) and `git rev-parse --git-path hooks` (R6.6) are reads in
+  `crates/cairn-git/src/reads/`, each a named function, query plumbing under a
+  read's environment, run inside the operation that needs it on the local lane
+  and ended with that operation, never by a query's epoch; D1's list of reads
+  git answers names them.
+- R3.10 A submodule's changes are not discardable (L24): `git restore -- <sub>`
+  exits 0 and leaves the submodule's commit where it was (`git-write-verbs.md`
+  §3), only `git submodule update` moves it back, and no prompt can count what is
+  dirty inside it. No verb discards one, and a submodule row offers no discard by
+  any route and says why.
+- R3.11 A conflicted path is staged whole with `git add`, which marks it resolved,
+  as Fork does (L25); it takes no line or mode patch and no discard (Fork refuses,
+  TrackerWin #1859), by any verb. Resolving a conflict's content is the second
+  lap's (D6).
+
+### R4 — The local write lane (L4, L15)
+
+- R4.1 Local writes run on a thread of their own, which requests reach directly,
+  never through the repository thread.
+- R4.2 Writes run one at a time in the order asked; a write asked while another
+  runs is queued and drawn as queued; nothing is refused for being second.
+- R4.3 Each write carries an operation id; its cancel names that id (#47's shape
+  for the local lane). Only a commit or an amend is cancellable, and only while
+  it runs.
+- R4.4 A status read that began before the latest write ended is discarded, never
+  drawn. This narrows refs-and-status R10.3 (`docs/prd/refs-and-status.md`,
+  frozen; the user's decision that a running status is never superseded): such a
+  status's answer is dropped and the refresh after the write draws instead, but its
+  process is not ended — only closing the window ends a running status.
+- R4.5 After a write, Cairn refreshes what its `Invalidated` declares and no more:
+  a stage, unstage or discard refreshes status; a commit or an amend refreshes
+  refs, status and the history; creating a branch refreshes refs and the history.
+- R4.6 While a commit runs, Cairn starts no refresh of its own (focus, the Refresh
+  chord, after another operation) and no queued index write; they run after it
+  ends.
+- R4.7 A cancelled or unwatched write reports that it may have taken effect; the
+  refresh after it shows what did (#45 item 1).
+- R4.8 The runner's bounded-output helpers are callable on reads only, at the
+  type (#45 item 2).
+- R4.9 The first close requested during a local write waits for it, saying which
+  ("Finishing commit…"), and never kills it; a second request after
+  `CLOSE_PATIENCE` closes anyway, as today, and a lock it strands is named the
+  next time the repository opens (#45 item 3, #44 item 2).
+
+### R5 — Prompts and the environment during a write (L11)
+
+- R5.1 Every local write carries an askpass token (L11), and the window shows a
+  prompt during any write, not only during a fetch.
+- R5.2 `GNUPGHOME`, `DISPLAY`, `WAYLAND_DISPLAY` and `XAUTHORITY` (#18, L11), and
+  the five identity variables `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`,
+  `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL` and `EMAIL` (L26), join the
+  inherited roster (`process/environment.rs`'s `INHERITED`), each with its reason
+  beside it. The date variables (`GIT_AUTHOR_DATE`, `GIT_COMMITTER_DATE`) do not:
+  a stale one would stamp every commit.
+- R5.3 A hook that opens `/dev/tty` when Cairn was launched from a terminal stops
+  rather than failing; this is stated as a residual in `docs/design/processes.md`
+  and filed, not fixed (L11).
+
+### R6 — Commit and amend in the engine (L9, L10, L11, L12)
+
+- R6.1 Commit is `git commit -F -`, the message on stdin; no `--cleanup` is
+  passed, so `commit.cleanup` and git's `-F` default decide; `--no-verify` is
+  passed only from the hook failure's skip (R10.5). A non-UTF-8
+  `i18n.commitEncoding` is refused before git runs, with its reason.
+- R6.2 Amend is `git commit --amend -F -` with the same rules.
+- R6.3 In amend mode the staged list is the index against `HEAD^` (the plumbing
+  the working-tree query already runs, `git diff-index --cached`), and unstaging
+  from it is R3.4's `git reset -q HEAD^ --`. A root commit's amend compares
+  against the empty tree, and unstaging from it is R3.4's `git rm --cached -q --`,
+  since there is no `HEAD^`. Amend is unavailable with no `HEAD` (an unborn
+  branch) and while a merge is in progress (R6.9).
+- R6.4 Amend is destructive (R1.5): its `Consequence` is `HEAD`'s id, subject and
+  whether a remote already has it — from the upstream's ahead count, or, with no
+  upstream, a hidden walk of `HEAD --not --remotes`.
+- R6.5 Commit and amend carry an askpass token (R5.1) and stream their stderr to
+  the operation log (R12.1).
+- R6.6 Whether a `pre-commit` or `commit-msg` hook exists is answered from the
+  hooks directory git resolves (`git rev-parse --git-path hooks`, so
+  `core.hooksPath` counts); a hook counts when its file exists and is executable,
+  as git runs it.
+- R6.7 Recent commit messages are the messages of the latest 10 commits on the
+  current branch, newest first, as Fork's are (`fork-staging-and-commit.md` §5,
+  Tracker #720), read from the history on a worker; nothing is stored.
+- R6.8 The commit identity is git's (L10, L26): Cairn passes no author or
+  committer and reads no identity of its own, so git uses the one the user's
+  terminal would — its configuration and R5.2's inherited identity variables —
+  and when git has none, its own error is shown in R10.5's dialog.
+- R6.9 The engine reports the operation in progress as git records it (L25): a
+  merge (`MERGE_HEAD`, with git's `MERGE_MSG`), a rebase, a cherry-pick or a
+  revert. With a merge in progress, R6.1's commit is the merge commit, its message
+  the user's draft; with a rebase, cherry-pick or revert in progress, commit and
+  amend are refused with the operation's name before git runs.
+
+### R7 — Keys, dialogs and menus in the render layer (L5, L7, L8, L19)
+
+- R7.1 One pre-key policy serves every text field: accelerator chords and lone
+  modifier keys reach the window unclaimed; ⌘Return / Ctrl+Enter commits without
+  a newline; a primary+letter chord that is not an editing binding types nothing.
+  The filter fields adopt it, closing the hole where a focused field hid the
+  window's chords and held modifiers.
+- R7.2 The accelerator table maps an action to a list of distinct chords per
+  platform, where it held at most one (L22), so Fork's alternates survive — stage
+  on Return and ⌘S, discard on Backspace, Delete and Ctrl+Shift+D. The root
+  `CLAUDE.md` modifier invariant ("at most one chord per platform") and its twin
+  are amended with it, in phase 06. The table admits bare Enter, Backspace and
+  Delete in exactly one scope — a focused file list or diff in Local Changes — and
+  the pinned rule is amended to say so; nowhere else is a bare chord other than a
+  function key.
+- R7.3 New actions, each with Fork's chords per platform (Linux as Fork for
+  Windows) and heard in its own scope only, so no chord but commit's fires while
+  the commit box holds focus: in Local Changes' list-and-diff scope, stage/unstage
+  the selection (Return or ⌘S; Enter or Ctrl+Shift+S), stage all / unstage all
+  (⌥⇧⌘S; Ctrl+Alt+Shift+S) and discard the selection (⌫ or ⇧⌘D; Backspace, Delete
+  or Ctrl+Shift+D); in the commit box, commit (⌘Return; Ctrl+Enter); in the
+  history, Show Lost Commits (⌘⇧.; Ctrl+Shift+.); and, in Local Changes' lists,
+  the multi-select presses (Ctrl/⌘-click, Shift-click, Shift+↑/↓).
+- R7.4 A confirmation dialog: modal to assistive technology and to the keyboard
+  (Tab stays inside it; the window's chords do nothing while it is open), focus
+  on Cancel, its prompt and its button rendered from a `Consequence`, Escape
+  cancels.
+- R7.5 A context menu host is mounted at the window root, so every menu opens
+  without the toolkit panicking for want of one.
+- R7.6 Edge auto-scroll for a drag over a virtualized list, timed with
+  `async-io`'s timer (L5); the drag is tracked by the list, never by a row.
+
+### R8 — Local Changes acts (L6, L7, L8)
+
+- R8.1 Both lists take a multi-selection. The lists stay flat (a tree view is
+  #36, not built here); a collapsed untracked-directory row, where status lists
+  one, acts on everything under it.
+- R8.2 Files stage and unstage by double-click, R7.3's chords, a drag from one
+  list to the other (one drop zone per list), the header's `Stage` / `Unstage`
+  (⌥-held: Stage All / Unstage All) and the double-chevron Stage All, and the
+  context menu (Stage or Unstage, Discard Changes…, Stage All, Copy Path).
+- R8.3 After a stage or unstage, the selection moves to the nearest remaining path
+  in the list it left (Fork, Tracker #514).
+- R8.4 Discard on the unstaged side only, through R7.4's dialog: Fork's words with
+  counts (L8), the button naming the count. The confirmation cannot be skipped
+  (L8): no modifier, setting or other route reaches a discard without the dialog.
+  A selection of untracked rows deletes them; a nested repository among them
+  refuses with its reason before any dialog.
+- R8.5 Ignore Whitespace is disabled in Local Changes, and the diff drawn there is
+  always the exact one; the shared setting is untouched (L6).
+- R8.6 A queued, running or failed write is drawn where the user acted; a stale
+  patch's refusal names its path.
+- R8.7 A conflicted row stages whole, by every R8.2 route, as `git add`, which
+  marks it resolved (R3.11, L25); it offers no line gesture and no discard by any
+  route.
+- R8.8 A submodule row offers no discard by any route, and says why (R3.10, L24).
+
+### R9 — The diff's staging gesture (L5, L17d)
+
+- R9.1 In Local Changes' diff only, hovering a chunk outlines it and floats its
+  actions: `Stage` and `Discard Changes…` in the unstaged diff, `Unstage` in the
+  staged one. They take no focus, live outside the recycled rows, and follow the
+  hover after the rows change.
+- R9.2 A drag-selection across lines narrows the floating actions and R7.3's
+  chords to the selected changed lines (`Stage 2 Lines`, `Discard 2 Lines`); with
+  nothing selected the chords act on the whole file. The drag continues across
+  rows the virtual list unmounts, and auto-scrolls at the edges (R7.6).
+- R9.3 In side by side, a selection stays within the column it began in.
+- R9.4 A mode change is drawn as a row of its own with its own actions (R2.4).
+- R9.5 The Commit and Changes tabs draw no staging action.
+
+### R10 — The commit box (L9, L11, L12)
+
+- R10.1 Under Local Changes' diff: a subject field with a characters-left counter
+  (soft at 50, red past 70), a multi-line description with a ruler at column 72,
+  `Amend`, and `Commit N Files`, disabled while nothing is staged and not
+  amending. `Amend` is disabled with no `HEAD` and while a merge is in progress
+  (R6.3).
+- R10.2 Recent Commit Messages (R6.7) as a menu beside the subject and ↑/↓ in an
+  empty or recalled subject; a recalled message fills both fields.
+- R10.3 Ticking `Amend` fills an empty draft with `HEAD`'s message and shows
+  R6.3's staged list; the draft the user had is kept and returns when Amend is
+  unticked; Amend unticks itself after the commit.
+- R10.4 A running commit is drawn as busy with its elapsed time and a Cancel; the
+  hooks' output streams into the operation log (R12).
+- R10.5 A failed commit opens Fork's `Git Error` dialog — the command and git's
+  output with ANSI sequences stripped — offering `Skip pre-commit hooks and
+  commit` only where R6.6 finds a `pre-commit` or `commit-msg` hook; the draft is
+  kept. The output is drawn through a virtualizing view or bounded to the retained
+  tail, never a `ScrollView`.
+- R10.6 In amend mode the button reads `Amend <short id>` above "Replaces <short
+  id> '<subject>'. The old commit stays in Show Lost Commits."; pressing it builds
+  the `Confirmed` from that text and R6.4's `Consequence`. When a remote already
+  has `HEAD`, R7.4's dialog asks first: "<short id> is already on <remote ref>.
+  Sharing the amended commit needs a force push."
+- R10.7 The draft survives refreshes, a failed hook and Amend's toggling, for the
+  life of the window.
+- R10.8 With a merge in progress (R6.9) the box fills an empty draft with git's
+  `MERGE_MSG` and its commit is the merge commit, as Fork's is (L25). During a
+  rebase, cherry-pick or revert the box is disabled and names the operation in
+  progress.
+
+### R11 — Show Lost Commits (L13)
+
+- R11.1 A toggle (R7.3's chord, and a control in the history's toolbar area) adds
+  every entry of `HEAD`'s reflog and of each local branch's reflog to the walk's
+  tips, and draws the commits no ref reaches dimmed.
+- R11.2 A reflog is read whole, never through gix's newest-first iterator, which
+  stops at a line over 4 KiB.
+- R11.3 A dimmed commit's context menu offers `Create Branch Here…`: a name, then
+  `git branch -- <name> <oid>`, a write in `ops/`, refused with git's reason when
+  the name is taken or invalid.
+- R11.4 The toggle is a reopen of the history like any other (refs-and-status
+  R10), cancellable and off the UI thread.
+
+### R12 — The activity popover (L14, L15)
+
+- R12.1 Fork's Activity popover, off the toolbar's status: one entry per
+  operation of the session, newest first, bounded — its name, start time,
+  duration, outcome, the prompt it confirmed when it had one, each `git` it ran
+  (from the command log) with its stderr tail, and a recovery pointer where one
+  exists (an amend points at the replaced commit, which Show Lost Commits draws).
+  The list is virtualized and each stderr tail is drawn through a virtualizing
+  view or bounded, never a `ScrollView`.
+- R12.2 Credentials in a URL (`scheme://user:secret@host`) are removed from every
+  stderr line before it is drawn (#46, for display).
+- R12.3 Nothing about the log persists past the window (L14). It closes #41.
+- R12.4 Where an outcome names a stranded `index.lock` and Cairn's registry holds
+  no running `git` for that repository, the entry offers `Remove index.lock…`
+  (destructive): its `Consequence` the lock's path and age, its prompt saying
+  another program may still own it. git has no verb that removes a lock, so this
+  is the one file Cairn deletes without `git` (L23, D1 amended): a `std` filesystem
+  removal of exactly `<gitdir>/index.lock`, made in `ops/` only, after re-checking
+  the lock's age and identity against its `Consequence` (R1.4), so a lock removed
+  and made again since the prompt is refused.
+- R12.5 A guard holds every filesystem-mutating call in production code (removing,
+  writing, renaming, creating or changing the permissions of a file or directory)
+  to `crates/cairn-git/src/ops/` (L23), with a nonzero-files assertion and a
+  matcher self-test; what writes outside any repository (the askpass channel's
+  socket directory, `crates/cairn-askpass/src/channel.rs`) is an exceptions roster
+  of the guard's whose rows fail when no longer needed. Packet 5b's `.gitignore`
+  write reuses it. D1 in `docs/design/engine.md` and the root `CLAUDE.md` state
+  the one exception to "every mutation goes through `git`" and its reason.
+
+### R13 — Measured (L20)
+
+- R13.1 On a plain, non-shared clone of rust-lang/rust at `c999cef531e` on tmpfs
+  — never `~/Development/bench/rust` itself — warm, release build, median of
+  seven: stage a hunk, unstage a hunk, discard a hunk and commit, each from the
+  press until the refreshed lists are drawn; Show Lost Commits from the toggle to
+  its first frame.
+- R13.2 git's own time for each verb plus one status read is measured first, into
+  `docs/research/staging-and-commit/measured-baseline.md`; this PRD's C21 then
+  gains its margin by amendment, before any Cairn number is taken.
+
+## Product rules
+
+- **What is staged is what was selected, from the exact diff.** No view setting,
+  no user `apply.whitespace`, no stale index changes what a patch stages.
+- **A destructive operation states its cost first, and only what it will cost.**
+  The prompt is computed by the engine and re-checked before the operation runs.
+- **No backup is promised.** A discard says it cannot be undone, because it
+  cannot (L2).
+- **Fork's mechanics, every deviation named:** Cancel focused in the discard
+  dialog (L8); Ignore Whitespace disabled in Local Changes (L6); prompts that count
+  what is lost by kind and size, where Fork's name a count (L8); the amend button
+  naming the commit it replaces (L12); the activity popover quoting each confirmed
+  prompt and pointing at the way back (L14); `Remove index.lock…` (L15, L23); a
+  nested repository refused before any dialog (L8); a submodule row offering no
+  discard, where Fork offers `Discard Submodule Changes` (L24); the commit box
+  disabled during a rebase, cherry-pick or revert, where Fork pre-fills git's
+  message for a cherry-pick or revert (L25); a Show Lost Commits control in the
+  history's toolbar area, where Fork has only the View menu item and the chord and
+  refused a toolbar button (TrackerWin #378); Show Lost Commits seeded from
+  `HEAD`'s and the local branches' reflogs, where Fork's mode reaches every reflog
+  (`git log --all --reflog`, TrackerWin #1307); and no Commit and Push until push
+  exists (L9).
+- **Writes go through `git`; only `ops/` writes.** The one exception is removing a
+  stale `index.lock`, which git has no verb for, done in `ops/` (R12.4). Every read
+  this packet adds is a named function in `reads/`.
+- **The UI thread never waits on a write.** A write is asked and its outcome
+  arrives.
+- **No network call of Cairn's own.** A hook may make one; Cairn does not.
+
+## Acceptance criteria
+
+The single authoritative copy. `docs/work/staging-and-commit/qa-checklist.md`
+points here and does not restate them.
+
+| # | Criterion | Pinned by |
+| --- | --- | --- |
+| C1 | `Confirmed` is neither `Clone` nor `Copy` and cannot be built outside the roster's surfaces; every rostered destructive operation takes it by value and every such operation is rostered; the prompt is rendered from the `Consequence` | `compile_fail` doctests in `cairn-model`, and a guard with a nonzero-files assertion and a matcher self-test |
+| C2 | Each destructive operation refuses, writing nothing, when the state its `Consequence` names moved between confirmation and run: a discarded file edited, an untracked file added to a deletion's directory, `HEAD` moved before an amend, a lock removed and recreated | integration tests in `cairn-git` against real `git` |
+| C3 | For every case — modification, untracked file, intent-to-add, CRLF under `core.autocrlf`, a clean filter, an unborn branch, a mode change beside edits, a staged rename, and paths with a space, a tab, a quote, a backslash, a newline and invalid UTF-8 — staging, unstaging and discarding a selection of lines leaves the index and working tree equal to the reference applier's answer and to the mirrored-rule derivation's, and `git diff`/`git diff --cached` afterwards show exactly the unselected changes; on the host's git and on 2.30.9 and 2.32.7 (`git-floor`) | integration tests in `cairn-git` |
+| C4 | A selection of lines alone stages no mode change, and a mode change stages alone | integration test |
+| C5 | With `apply.whitespace=fix` and `=error` set, staging trailing-whitespace lines stages them byte for byte; with `apply.ignoreWhitespace=change` set, staging a selection stages exactly the selected lines (phase 03 measures the setting's effect first, and where it changes what is staged every `apply` pins `-c apply.ignoreWhitespace=false`, which C9 then checks) | integration test |
+| C6 | A patch whose index entry or working-tree file moved after it was built writes nothing and names its path, on content where `git apply` alone would land at an offset (spike E6) | integration test |
+| C7 | The staged diff of a staged rename equals `git diff --cached`'s pairing under `diff.renames` unset, `false` and `copies` | integration test against real `git` |
+| C8 | File verbs: staging, unstaging (including on an unborn branch and out of an amend), discarding and deleting untracked files leave the state `git status` reports as expected; deleting names only status's paths, adds `-d` only for a collapsed directory, splits a list past R3.5's bound into several invocations under one re-check, and refuses a nested repository before any confirmation; staged changes offer no discard anywhere; a submodule's changes offer no discard anywhere, and its row says why, and no verb discards one | integration tests and headless tests |
+| C9 | Every verb's argv is exactly what R3 names — `--literal-pathspecs` before the verb (and no `GIT_LITERAL_PATHSPECS` in its environment), `--whitespace=nowarn`, the pathspec file where used, no `-R` | stub-git tests printing argv |
+| C10 | Writes queue in order and draw as queued; a stage asked during a running commit waits for it (against a stub git's long-running write in phase 04, then against real `git commit` in phase 05); a status begun before a write ended is never drawn; a write refreshes exactly what its `Invalidated` names; no refresh starts during a commit (stub, then real, as above); a cancel names its operation and reaches only that one | worker tests through the real boundary |
+| C11 | A close during a commit waits and says so (stub, then real, as C10); a second close after `CLOSE_PATIENCE` closes; a stranded `index.lock` is named on the next open and in the failed write's error | worker tests, and headless tests |
+| C12 | A local write whose child asks for a secret shows the prompt and is answered (an SSH-signing key with a passphrase, through the sshd fixture's key setup or a stub `ssh-keygen`; the stub's long-running write in phase 04, a real signed `git commit` in phase 05); the inherited roster holds R5.2's nine, each with its reason, and neither date variable; a commit made with `GIT_AUTHOR_EMAIL` set in Cairn's environment has that author | integration test, the process environment twin's roster |
+| C13 | Commit and amend: the message reaches git byte for byte under every `commit.cleanup` value as `git commit -F` would leave it; a `pre-commit` hook's failure shows its output and the skip offers only where a hook exists (`.git/hooks`, `core.hooksPath`); the draft survives it; a non-UTF-8 `i18n.commitEncoding` is refused; amend's staged list equals `git diff --cached --name-status HEAD^`, and a root commit's amend works, unstaging from it with `git rm --cached -q --`; Amend is disabled on an unborn branch; with no identity configured, git's own error is shown; recent messages equal `git log -n 10 --format=%B HEAD`'s | integration tests in `cairn-git`, headless tests |
+| C14 | Amend's button text and dialog are rendered from its `Consequence`; the dialog appears exactly when a remote has `HEAD` (an upstream at `HEAD`, behind it, none with another remote branch containing it, none at all) | integration and headless tests |
+| C15 | Every text field hands accelerator chords and held modifiers to the window: with a filter field focused, F5 refreshes and a Ctrl/⌘-click extends the selection (failing first on today's code); ⌘Return / Ctrl+Enter in the description commits without a newline | headless tests |
+| C16 | The accelerator table maps each action to a list of distinct chords per platform, and every chord of R7.3's lists resolves per platform; each new action resolves only in its R7.3 scope — with the commit box focused, the stage, unstage, discard and Show Lost Commits chords resolve to nothing and the commit chord commits; the pin admits bare Enter, Backspace and Delete only in Local Changes' list-and-diff scope; the root `CLAUDE.md` modifier invariant and its twin, amended in phase 06, hold a list per action | the table's tests, the modifier guard |
+| C17 | The discard dialog: modal (Tab stays inside, a window chord does nothing), focus on Cancel, Escape cancels, its text and button from the `Consequence` (`Discard Changes in 3 Files`, `Discard 2 Lines`) | headless tests |
+| C18 | Local Changes: each of R8.2's routes stages and unstages a multi-selection; a drag between the lists auto-scrolls and survives rows unmounting mid-drag; the selection moves to the nearest remaining path; Ignore Whitespace is disabled and the diff exact | headless tests |
+| C19 | The gesture: a hovered chunk's actions stage, unstage and discard exactly that chunk; a drag-selection narrows them to its lines, across rows the virtual list unmounted; side by side keeps a selection in one column; the Commit and Changes tabs draw no action; a 10,000-line diff with the gesture builds one viewport | headless tests, and a viewport twin |
+| C20 | Show Lost Commits: the commits it adds equal `git rev-list <every id git reflog show --format=%H lists for HEAD and each local branch> --not --branches --remotes --tags HEAD`, on a fixture with an amended, a reset-away and a 4 KiB-message entry; those rows are dimmed; `Create Branch Here…` creates the branch git would; the activity popover lists each operation with its prompt, its `git`, its scrubbed stderr and its recovery pointer, and `Remove index.lock…` appears exactly when R12.4 says and removes exactly `<gitdir>/index.lock` and nothing else; the filesystem-mutation guard (R12.5) fails on a removal, write or rename outside `ops/` | integration and headless tests |
+| C21 | On R13.1's clone and machine (the one `docs/research/diff-engine/measured-baseline.md` records): stage, unstage and discard a hunk and commit within git's own time plus one status read plus a margin written here at R13.2's amendment; Show Lost Commits' first frame recorded; `window_check` keeps every frame under 16.7 ms of UI-thread work while a hook runs and a stage lands | `#[ignore]`d reporters driven by `CAIRN_BENCH_REPO`, numbers in `progress.md` and, at teardown, in `docs/research/staging-and-commit/` |
+| C22 | D1 in `docs/design/engine.md` and the root `CLAUDE.md` names R3.9's two reads, the write verbs and the one file deletion made without `git` (R12.4); the destructive-operation roster, the confirmation-surface roster, the chord lists and the bare-key scope, the gesture's viewport twin (C19) and the filesystem-mutation guard (R12.5) each have their twin named in `CLAUDE.md` | review |
+| C23 | `scripts/gate.sh` passes | the gate |
+| C24 | Conflicts and operations in progress (L25): staging a conflicted row runs `git add` and `git status` then reports it resolved; a conflicted row offers no line gesture and no discard by any route, and no verb takes a patch or a discard for one; with a merge in progress the engine reports it, the commit box holds `MERGE_MSG`'s text, its commit has `HEAD` and `MERGE_HEAD` as parents, and Amend is disabled; during a rebase, a cherry-pick and a revert the engine reports each, commit and amend are refused before git runs, and the commit box is disabled and names it | integration tests in `cairn-git` against real `git`, headless tests |
+
+C21 is not automated, for the reason `history-graph`'s A7 was not: a timing
+assertion in CI is flaky and bound to a machine.
+
+## Out of scope
+
+Another packet's: stash create, Save Snapshot, apply, pop and drop, and
+`.gitignore` editing (5b, `stash-and-ignore`); push, Commit and Push, and the
+forge (packet 6); every other ref operation — rename, delete, checkout (packet 7);
+merge, rebase, cherry-pick, revert and reset, and resolving a conflicted file
+(the second lap).
+
+Not built, as in Fork (L9): an author override, empty commits and an up-front
+skip-hooks.
+
+Not done, and filed with the `file-issue` skill at teardown: a backup before
+discard (L2, should the decision be revisited); Fork's per-repository sign-off
+setting and the commit box showing author and signing; pre-filling an empty draft
+from `commit.template`, as Fork does (`fork-staging-and-commit.md` §5, "Template";
+`git commit -F` ignores the template); wrapping a paragraph at the ruler; a
+configurable subject limit; transcoding to a non-UTF-8 `i18n.commitEncoding`; a
+hook reading `/dev/tty` (L11's residual); discarding a submodule's changes
+(L24); a forced close orphaning a process that holds `index.lock` (#48 item 2);
+the effect of `apply.ignoreWhitespace` on staging, unverified (phase 03 measures
+it, C5; if it changes what is staged, every `apply` pins
+`-c apply.ignoreWhitespace=false` and the PRD says so); a persisted operation log;
+the index refresh (#66); fetch's cancel tied to its operation (#47's remainder); a
+Commit-tab "restore this file" from a lost commit; and the reflog as a list of
+entries.

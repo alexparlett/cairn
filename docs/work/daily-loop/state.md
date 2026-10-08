@@ -6,7 +6,9 @@ The cross-session cheat sheet. Every session updates this before ending.
 `process-manager`, `diff-engine`, `refs-and-status`). `refs-and-status` passed its
 merge bar and was torn down on `feature/refs-and-status` (2026-10-07); it reaches
 `main` with its packet pull request, merged by the user. `staging-and-commit` (5) is
-next on the critical path; the other three are briefs.**
+planned (2026-10-07: PRD `docs/prd/staging-and-commit.md`, work directory
+`docs/work/staging-and-commit/`) and next to implement, on the critical path; 5b
+(`stash-and-ignore`) was inserted after it; the other four are briefs.**
 
 ## The milestone
 
@@ -37,7 +39,9 @@ patch model independent of either. O2 (`gix-status` versus
 status is the most divergence-prone read there is — and `diff-engine` has since
 amended D1 for the filter drivers that status also runs. **O2 is closed** by
 `refs-and-status` (its L1, 2026-10-05): `git status --porcelain=v2 -z`, run as a
-read, after a 38-fixture agreement spike.
+read, after a 38-fixture agreement spike. **O3 is closed** by `staging-and-commit`
+(its L2, 2026-10-07): a discarded uncommitted edit is protected by its confirmation
+alone, as in Fork — no backup, no auto-stash.
 
 ## Packet status
 
@@ -48,7 +52,8 @@ read, after a 38-fixture agreement spike.
 | 2a | `process-manager` | **shipped** — PRD frozen, as-built in `docs/systems/git-processes.md`; work dir torn down; leftovers #41-#49 and #25 |
 | 3 | `diff-engine` | **shipped** — PRD frozen, as-built in `docs/systems/diff.md`; work dir torn down; lands on `main` with its packet PR (squash merge); leftovers #54-#58, with #51-#53 |
 | 4 | `refs-and-status` | **shipped** — PRD frozen, as-built in `docs/systems/refs.md`, `status.md`, `sidebar.md`, `local-changes.md` and `history-graph.md`; work dir torn down; numbers in `docs/research/refs-and-status/measured.md`; O2 closed for `git status`; leftovers #62-#82 |
-| 5 | `staging-and-commit` | brief in `roadmap.md` |
+| 5 | `staging-and-commit` | **planned** — PRD `docs/prd/staging-and-commit.md` (in flight), work dir `docs/work/staging-and-commit/`, evidence `docs/research/staging-and-commit/`; O3 closed; next to implement |
+| 5b | `stash-and-ignore` | brief in `roadmap.md`; depends on 5 |
 | 6 | `remote-sync` | brief in `roadmap.md` |
 | 7 | `branch-ops` | brief in `roadmap.md` |
 | 8 | `worktrees` | brief in `roadmap.md` |

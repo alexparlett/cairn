@@ -49,11 +49,11 @@ One hard seam. `cairn-git` answers questions and performs operations;
 them, and neither side leaks its own types across. Reads go through gitoxide,
 writes through the `git` binary — and so does any read where gix would show
 something git does not — and every destructive write demands a confirmation
-token carrying the words the user saw (`engine.md`). Every `git` process is built
-in one place, in its own process group, and can always be cancelled
-(`processes.md`). Cairn holds no
-credential; git's helpers do, and prompts reach the window through Cairn's own
-askpass helper (`credentials.md`). The UI thread never waits on a repository:
+token carrying the words the user saw, bound to what the engine computed it will
+destroy and re-checked the moment before it runs (`engine.md`). Every `git`
+process is built in one place, in its own process group, and can always be
+ended (`processes.md`). Cairn holds no credential; git's helpers do, and prompts
+reach the window through Cairn's own askpass helper (`credentials.md`). The UI thread never waits on a repository:
 work runs on a few routed worker threads per repository, and a superseded query
 is cancelled, not rendered (`concurrency.md`).
 
@@ -85,7 +85,7 @@ back to Fork daily. The build order is `docs/work/daily-loop/roadmap.md`.
 | `worktrees.md` | Worktrees as a first-class surface |
 | `forge-links.md` | Forge URLs in, forge APIs out |
 | `platform.md` | Linux first, the macOS disciplines, the toolkit |
-| `ui.md` | The layout, kept from Fork, and every deviation from it |
+| `ui.md` | The layout, kept from Fork, and every deviation from it; staging, discard, the commit box, Show Lost Commits and the activity popover |
 | `feature-inventory.md` | The whole feature surface, tiered by risk, and what is out of scope |
 
 **Decision index.** The decisions locked with the user, which other documents
@@ -114,11 +114,6 @@ cite by number; each lives in the document that designs it.
   one worktree behind a commit in another (`concurrency.md`, `worktrees.md`).
 - **Interactive rebase.** The operation Fork is most valued for and the one with
   the largest UI surface: its own program, not a packet.
-- **Whether Cairn auto-stashes before destructive working-tree operations.** The
-  reflog covers destroyed *commits*; nothing covers a discarded uncommitted edit,
-  so for that class a confirmation dialog is the only barrier. An automatic stash
-  would be a real differentiator and fits the confirmation seal. It must be
-  decided before any discard operation ships (`feature-inventory.md`, "Recovery").
 - **Syntax highlighting in diffs**, and whether the diff and conflict views share
   a component (`diff.md`).
 - **The menu bar on both platforms** (`platform.md`).

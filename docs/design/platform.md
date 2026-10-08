@@ -14,7 +14,9 @@ Two disciplines keep macOS reachable at near-zero cost:
 1. **Platform surface stays in `cairn-app`.** `cairn-model` and `cairn-git` are
    portable; they stay that way.
 2. **Keyboard shortcuts resolve through one accelerator table** mapping a logical
-   action to a per-platform chord. No component names a literal `Ctrl`.
+   action to its list of chords per platform — more than one where Fork binds
+   alternates, as it binds stage to both Return and ⌘S. No component names a
+   literal `Ctrl`.
 
 Credentials raise no platform question, because git's helpers hold them
 (`credentials.md`).

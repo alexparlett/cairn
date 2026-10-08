@@ -8,8 +8,9 @@ mode: QA adjudicated, every confirmed fix and the user's three decisions of
 mode: QA adjudicated, confirmed fixes applied, full gate green; items 10-11 batched for
 the user's review at the end of the packet. Phase 03 (the write verbs) built in packet
 mode: QA adjudicated, confirmed fixes and the user's four decisions (2, 3, 5, 6) applied,
-C21's margin decided (a flat 50 ms) and amended, full gate green. Phases 04-12 not
-started.**
+C21's margin decided (a flat 50 ms) and amended, full gate green. Phase 04 (the local
+lane) built in packet mode, gate green, QA pending; two items batched for the user
+(progress.md's phase 04 entry). Phases 05-12 not started.**
 
 ## Locked decisions
 
@@ -199,9 +200,51 @@ Phase 03 (`docs/systems/staging.md`):
   (an intent-to-add file, which the discard leaves empty); every working-tree id is the bytes
   on disk hashed with no filter.
 
+Phase 04 (`docs/systems/git-processes.md`, "The local write lane"):
+
+- **`crate::worker::LocalWrite`** (`crates/cairn-app/src/worker/local_lane.rs`): `StageLines {
+  diff: Box<FileDiff>, selection }`, `UnstageLines { .. }`, `StageFiles { paths }`,
+  `UnstageFiles { paths, to: UnstageTarget }` (`Head`, `Commit(Oid)`, `Nothing`),
+  `DiscardLines(Confirmed)`, `DiscardFiles(Confirmed)`, and `#[cfg(test)] HeldCommit {
+  remote }`; `what()` names it ("staging 1 file", "commit"). **Phase 05 adds `Commit` and
+  `Amend`**: `is_commit` true, `read_again` `Everything`, and `perform` calls
+  `lane.install(id, Box::new(move || cancel.cancel()))` once git runs — the tests that drive
+  `HeldCommit` are the ones to re-run against `git commit`.
+- **Requests**: `Request::Write { id: OperationId, write }`, `Request::CancelWrite { id }`,
+  `Request::RefreshStatus` (status alone). `Request` is no longer `Clone` (a test-only
+  `Clone` refuses a destructive write). Ask a write with `local_writes::ask(&mut writes,
+  submit, write)`, which takes the id and keeps it queued.
+- **Updates**: `WriteStarted { id }`, `WriteEnded { id, ending: WriteEnding, read_again:
+  ReadAgain }`; `Opened { name, locks }` (the lock files as the repository opened).
+  `WriteEnding::{Done(Done), Stale { path, message }, Refused, Failed { message, locks },
+  MayHaveTakenEffect { message, locks }, Incomplete { done, kept, message }, NotRun }`;
+  `Done { description, acknowledged, locks_before, locks_after }`.
+- **Window state**: `View::writes: State<LocalWrites>` (`crates/cairn-app/src/local_writes.rs`):
+  `queued()`, `running()`, `last()`, `locks()`, `closing_on()`; `Closing::when_requested`.
+- **`cairn_git::SharedRepository::lock_files`**: every `*.lock` under the git directories.
+- **The environment twin** reads `INHERITED`: `INHERITED_PINS` (R5.2's nine, each with a
+  comment of its own) and `INHERITED_NEVER` (no `*_DATE`).
+
+## Carried forward from phase 04 (owned by the phase named)
+
+- **Phase 05**: `Commit`/`Amend` in `LocalWrite` (above); the `expect(dead_code)` on
+  `LaneState::install` and `Request::CancelWrite` go with them; re-run C10/C11/C12's
+  commit-dependent tests against `git commit` with a slow hook.
+- **Phase 07**: ask writes through `local_writes::ask`; draw a write queued and its outcome
+  (`LocalWrites::queued`, `last`); decide where `discard_*_consequence` is asked (a worker's
+  call; the local lane orders it after the writes ahead of it).
+- **Phase 09**: a Cancel the commit box draws is for the running commit (`CancelWrite` of a
+  queued one does nothing, R4.3).
+- **Phase 11**: the activity popover reads `WriteEnding`/`Done`; measure the open's lock
+  listing (`SharedRepository::lock_files`, a walk of `refs/`) on the bench repository.
+- **The user** (batched, progress.md's phase 04 entry): the second close during a write
+  (design says end it as a cancel; built per PRD R4.9, the window closes and the write runs
+  on); a prompt carries no owner when a fetch and a write ask at once.
+
 ## Carried forward from phase 03 (owned by the phase named)
 
-- **Phase 04**: the lane calls the verbs above on its own thread; the verbs take the
+- **Phase 04** (done: the lane runs every verb with its write's token; the consequences
+  carried to phase 07): the lane calls the verbs above on its own thread; the verbs take the
   write's token; `discard_*_consequence` are reads the window asks for before a dialog.
 - **Phase 05**: `hooks_path` re-export; `UnstageTo::Commit`/`Nothing` for amend; the root
   amend's `git rm --cached` refusal; C13's root-commit case.
@@ -300,7 +343,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 01 seal | done — QA adjudicated, all confirmed fixes and the user's three decisions (items 6, 13, 34a) applied, full gate green |
 | 02 patch engine | done — QA adjudicated, confirmed fixes applied, full gate green; items 10-11 batched for the user |
 | 03 write verbs | done — QA adjudicated, fixes and the user's decisions applied, full gate green |
-| 04 local lane | not started |
+| 04 local lane | built, gate green, QA pending |
 | 05 commit engine | not started |
 | 06 render foundations | not started |
 | 07 Local Changes actions | not started |

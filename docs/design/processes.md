@@ -177,7 +177,7 @@ What a group kill does not reach, stated rather than implied:
   user a question on `/dev/tty` among them, which stops the commit until it is
   cancelled. Starting `git` in a session of its own (`setsid`) would make the
   open fail instead, but it needs an `unsafe` `pre_exec`, which the workspace
-  forbids, so this stays a stated residual.
+  forbids, so this stays a stated residual (#86).
 - **A crash.** A child cannot be told to die with its parent without `unsafe`, so
   if Cairn itself dies, its children run on. Each one's next write to a closed
   pipe ends it.

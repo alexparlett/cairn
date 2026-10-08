@@ -440,8 +440,10 @@ never enters `cairn-git` and never enters application state.
   a ref clears the rows, resets the progress and asks for the history from
   `HEAD` again (one that moved nothing leaves the reader's place alone); a
   fetch ending with a dialog still up refuses that prompt, which releases the
-  helper; a prompt arriving with no fetch in flight is refused rather than
-  shown. The update task holds the answering end weakly, so the window's last
+  helper — unless a local write runs, whose prompt it may be; a prompt arriving
+  with neither a fetch nor a local write in flight is refused rather than
+  shown (a local write's prompts: `docs/systems/git-processes.md`, "The local
+  write lane"). The update task holds the answering end weakly, so the window's last
   reference is what lets the acceptor go. Pinned by
   `a_prompt_draws_the_dialog_and_its_answer_leaves_as_a_secret_for_that_prompt`,
   `cancelling_the_dialog_refuses_that_prompt`,
@@ -601,9 +603,11 @@ must not reopen by accident, each with the reason that locked it.
   `GIT_SSL_CAINFO`, `GIT_SSL_CAPATH`, the only `GIT_*` names on the roster;
   not `CURL_CA_BUNDLE`, which the curl tool reads and libcurl does not)
   and Kerberos (`KRB5CCNAME`, `KRB5_CONFIG`) — each with its reason beside it
-  and all pinned by `the_environment_is_exactly_the_deliberate_entries`. Still
-  open on #18: `DISPLAY`/`WAYLAND_DISPLAY`, `GNUPGHOME`, and pinning
-  `GIT_EDITOR` to fail closed when a verb that opens an editor lands. Issue
+  and all pinned by `the_environment_is_exactly_the_deliberate_entries`. Of
+  what #18 left open, staging-and-commit decided the rest: `GNUPGHOME`,
+  `DISPLAY`, `WAYLAND_DISPLAY` and `XAUTHORITY` joined the roster for a signing
+  pinentry, beside the identity variables (L11, L26; `docs/systems/git-processes.md`,
+  "The environment"), and `GIT_EDITOR` is pinned to `false`. Issue
   #22 decided a user-set askpass program is not an exception (D2, amended),
   and holds the future setting that would make one.
 - **L6** A secret never travels on `argv` (`/proc` makes it world-readable);

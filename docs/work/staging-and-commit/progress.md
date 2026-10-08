@@ -3,6 +3,114 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-08 — phase 04, the local write lane (packet mode)
+
+Built on `feature/staging-and-commit`; gate green; QA pending (the coordinator dispatches the
+fresh reviewers implementation-plan.md names: `responsiveness-reviewer`,
+`destructive-ops-reviewer`, `gate-integrity-reviewer`, `test-coverage-auditor`).
+
+What shipped (`docs/systems/git-processes.md`, "The local write lane"):
+
+- **The lane** (R4.1-R4.3): `crates/cairn-app/src/worker/local_lane.rs`, the `cairn-local`
+  thread. `Request::Write { id, write: LocalWrite }` routed by `submit` straight to its
+  queue; FIFO; `OperationId` taken by the window as it asks (`OperationId::next`,
+  `local_writes::ask`); `Update::WriteStarted` / `WriteEnded { id, ending, read_again }`;
+  `Request::CancelWrite { id }` reaching `LaneState` directly, ending only a running
+  commit with that id. `LocalWrite` carries the six phase-03 verbs, a discard its
+  `Confirmed`; `UnstageTarget` is `UnstageTo` in the window's words.
+- **Freshness** (R4.4-R4.6): `LaneState`'s write clock ticks at a write's start and end
+  under the lock the lane announces under; the refresh thread reads no status while a
+  write runs and sends one only if the clock did not tick while it was read (same lock).
+  A write's ending names what to read again (`ReadAgain::Status` →
+  `Request::RefreshStatus`, new, status alone; `ReadAgain::Everything` →
+  `Request::Refresh`); the window asks exactly that. While a commit runs, a refresh is
+  kept back at `submit` and at the repository thread's refs, the refresh thread's status
+  and ahead/behind; the commit's ending says `Everything`.
+- **Endings** (R4.7, R4.9): `WriteEnding::{Done, Stale, Refused, Failed,
+  MayHaveTakenEffect, Incomplete, NotRun}`, each with its lock files. Closing marks the
+  lane closing, joins it (the write running finishes; ones queued end `NotRun`), then ends
+  the rest; the window says "Finishing <write>…" (`Closing::when_requested`,
+  `status_text::closing_line`). `Update::Opened` carries `SharedRepository::lock_files`
+  (new), and the window names the locks last listed (`status_text::locks_line`).
+- **Prompts and the roster** (R5): one askpass token per write; the window shows a prompt
+  while a fetch or a write is in flight, titled by the write when no fetch runs. R5.2's nine
+  joined `INHERITED`, each with its reason, and the environment twin reads the roster
+  (`INHERITED_PINS`, `INHERITED_NEVER`). R5.3's residual was already stated in
+  `docs/design/processes.md`; filed as #86 and cited there.
+- Window state: `crates/cairn-app/src/local_writes.rs` (`LocalWrites`), `View::writes`.
+
+Tests: C10 — `writes_asked_faster_than_they_run_run_in_order_each_with_its_own_ending`,
+`a_status_begun_before_a_write_ended_is_never_drawn`,
+`a_commit_keeps_refreshes_back_and_a_stage_asked_meanwhile_waits_for_it`,
+`a_cancel_names_its_commit_and_never_reaches_the_one_queued_behind_it`,
+`a_writes_ending_reads_again_what_it_says_and_no_more`; C11 —
+`a_close_during_a_commit_waits_for_it_and_ends_nothing`,
+`a_lock_left_behind_is_named_as_the_repository_opens_and_by_the_write_it_fails`,
+`the_window_is_told_once_as_the_first_close_is_asked`,
+`the_window_names_the_write_it_waits_on_its_prompt_and_the_locks_found`; C12 —
+`a_prompt_a_stages_hook_raises_is_shown_and_answered` (a real `git add` whose
+`post-index-change` hook asks through the helper),
+`a_prompt_a_commit_raises_is_shown_and_answered`,
+`a_prompt_is_shown_while_a_write_runs_and_its_ending_takes_it_down`, and the twin's
+roster check with its self-test. Mutations that redden them, checked by hand: sending a
+status whatever the clock (the stale-status test), never keeping a refresh back (the
+commit test), not joining the lane on close (the close test).
+
+Decisions and deviations:
+
+- **The commit-dependent halves run against `LocalWrite::HeldCommit`**, a variant compiled
+  for tests alone: `ops::fetch` through a stub `git` whose `fetch` is held, asks or ends as
+  the test says — the one long-running, cancellable write the engine has before phase 05,
+  which the lane treats as a commit (`is_commit`, `ReadAgain::Everything`). Phase 05 adds
+  `Commit`/`Amend` to `LocalWrite` and re-runs those tests against `git commit`.
+- **`Request` is no longer `Clone`**: a destructive write carries its `Confirmed`, spent
+  once. Tests keep `Clone` through a test-only impl on `LocalWrite` that refuses to copy a
+  destructive write.
+- **A status skipped or dropped is always replaced**: a write's ending always names status
+  at least (every local verb's `Invalidated` has the index or the working tree), and the
+  window asks it unless it is closing. So the stopping rule (a dropped status no later read
+  replaces) did not trigger.
+- **Fetch's types and behaviour are unchanged**: the local lane is a sibling, not reached
+  through `Threads::perform`; the one new fetch behaviour arises only beside a running local
+  write (a fetch's ending leaves a prompt up while a write runs). Not a stopping-rule change.
+- **No roster variable carries a secret**: `XAUTHORITY` is a path to the cookie, never it.
+- **The open's lock listing is on `Update::Opened`**, made on the repository thread before
+  its first answer, so a stream's order is fixed (a separate update from another thread
+  would land anywhere in a test reading in order). It walks `refs/` once per open; not
+  measured on the bench repository (phase 11 may).
+- **A cancel for a queued commit does nothing** (R4.3: only while it runs); a Cancel the
+  commit box draws (phase 09) must be for the running one.
+
+Batched for the user (no stopping rule; recorded for the packet's end):
+
+1. **The second close during a write.** `docs/design/processes.md`, "Lifecycle", says a
+   second close past the patience "ends it as a cancel would"; PRD R4.9 says it "closes
+   anyway, as today". Built per the PRD: the window closes and the write's `git` is left to
+   run on, orphaned — it finishes, or its next write to a pipe nobody reads ends it — and a
+   lock it leaves is named the next time the repository opens. Ending it with `SIGTERM`
+   first needs a non-waiting "end everything" the UI thread can call (the registry's
+   `end_all` waits). Recommendation: accept the PRD's behaviour and amend the design's
+   sentence; or file the non-waiting end as a follow-up.
+2. **A prompt carries no owner.** With a fetch and a local write in flight at once, the
+   ending of one leaves a prompt up that may have been the other's; it stays until answered
+   or cancelled, and the acceptor serves nothing else meanwhile. Tagging a prompt with its
+   operation needs `cairn-askpass`'s `Prompt` to say which token asked. Recommendation:
+   accept for now (rare: two writes asking at once); file if phase 11 shows it.
+
+Carried forward:
+
+- **Phase 05**: `LocalWrite::Commit`/`Amend` (`is_commit` true, `ReadAgain::Everything`,
+  `perform` installing the cancel with `LaneState::install`, whose and
+  `Request::CancelWrite`'s `expect(dead_code)` then go); re-run the `HeldCommit` tests
+  against `git commit` with a slow hook (C10, C11, C12's halves).
+- **Phase 07**: asking writes (`local_writes::ask`, whose `expect(dead_code)` then goes),
+  drawing a write queued where the user acted and its outcome (`LocalWrites::queued`,
+  `last`); where the window asks `discard_*_consequence` before a dialog (they run `git`,
+  so a worker's call; the local lane orders them after the writes ahead, which a
+  consequence computed while a stage is queued would otherwise race).
+- **Phase 11**: the activity popover reads `WriteEnding` and `Done`; the open's lock listing
+  measured on the bench repository.
+
 ## 2026-10-08 — phase 03 QA, adjudicated and fixed; the user's four decisions applied
 
 Four fresh reviewers, adjudicated by a fresh `qa-confirm`

@@ -21,7 +21,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
-use crate::{Oid, RefName, RepoPath, Selection};
+use crate::{FileMode, Oid, RefName, RepoPath, Selection};
 
 /// What one destructive operation will destroy, as the engine read it.
 ///
@@ -31,21 +31,32 @@ use crate::{Oid, RefName, RepoPath, Selection};
 /// (`brainstorm.md` L8), and one prompt is one confirmation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Consequence {
-    /// Selected lines of one path's unstaged change, put back to the index's
-    /// version (or, for an untracked file, removed from it) in the working
-    /// tree.
+    /// Selected lines of one path's unstaged change, and its mode change when
+    /// that is selected too, put back to the index's version (or, for an
+    /// untracked file, removed from it) in the working tree. Never a selection
+    /// of nothing: the engine refuses to build one.
     DiscardLines {
         path: RepoPath,
         /// The index entry's blob the lines were computed against; `None` for
-        /// an untracked file, which has no entry.
+        /// an untracked file, which has no entry, or an intent-to-add one.
         index: Option<Oid>,
-        /// The working-tree file as git hashes it, the side the lines are
-        /// taken from.
+        /// The working-tree file in git's form — through its clean filter and
+        /// line-ending conversion, as `git hash-object --path` hashes it — the
+        /// side the lines are taken from.
         working_tree: Oid,
+        /// The working-tree file's bytes as they are on disk, hashed with no
+        /// filter (a symlink as its target, as git stores one): what the
+        /// re-check compares, so an edit git's form does not show — line
+        /// endings alone — still refuses.
+        on_disk: Oid,
         /// The lines selected in the unstaged diff (index to working tree):
         /// its added lines are deleted, its removed lines put back. The patch
         /// the operation applies is built from exactly this selection.
         selection: Selection,
+        /// The mode change discarded, as the diff draws it: the index's mode,
+        /// then the working tree's, which the discard puts back to the first.
+        /// Present exactly when the selection holds the mode.
+        mode: Option<(FileMode, FileMode)>,
     },
     /// Whole files: each tracked file's unstaged change restored from the
     /// index, each untracked file deleted. Never empty when the engine builds
@@ -95,8 +106,11 @@ pub enum FileLoss {
     Modified {
         /// The index entry's blob, what the file becomes.
         index: Oid,
-        /// The working-tree file as git hashes it; `None` when it is deleted
-        /// in the working tree, and discarding brings it back.
+        /// The working-tree file's bytes as they are on disk, hashed with no
+        /// filter (a symlink as its target); `None` when it is deleted in the
+        /// working tree, and discarding brings it back. What the re-check
+        /// compares, so any byte changed after the confirmation — a line ending
+        /// included — refuses.
         working_tree: Option<Oid>,
         /// Changed lines of the unstaged diff; `None` for a change that has no
         /// lines (binary).
@@ -104,7 +118,8 @@ pub enum FileLoss {
     },
     /// An untracked file, deleted.
     Untracked {
-        /// The file as git hashes it.
+        /// The file's bytes as they are on disk, hashed with no filter (a
+        /// symlink as its target).
         working_tree: Oid,
         bytes: u64,
     },
@@ -149,10 +164,12 @@ impl Consequence {
                 path,
                 index: _,
                 working_tree: _,
+                on_disk: _,
                 selection,
+                mode,
             } => format!(
                 "Do you want to discard {} in {}? You can't undo this action.",
-                counted(selection.len(), "line", "lines"),
+                discarded_lines(selection.len(), *mode),
                 quoted(path.as_bytes())
             ),
             Self::DiscardFiles { files } => discard_files_prompt(files),
@@ -210,8 +227,19 @@ impl Consequence {
                 path: _,
                 index: _,
                 working_tree: _,
+                on_disk: _,
                 selection,
-            } => format!("Discard {}", counted(selection.len(), "Line", "Lines")),
+                mode,
+            } => match (selection.len(), mode) {
+                (0, Some(_)) => "Discard Mode Change".to_owned(),
+                (lines, Some(_)) => {
+                    format!(
+                        "Discard {} and Mode Change",
+                        counted(lines, "Line", "Lines")
+                    )
+                }
+                (lines, None) => format!("Discard {}", counted(lines, "Line", "Lines")),
+            },
             Self::DiscardFiles { files } => {
                 format!(
                     "Discard Changes in {}",
@@ -311,6 +339,21 @@ fn discard_files_prompt(files: &[DiscardedFile]) -> String {
         "Do you want to discard the changes in {what}? {}. You can't undo this action.",
         parts.join(", ")
     )
+}
+
+/// What a discard of lines takes, in words: the lines, the mode change, or both. The
+/// mode change is named with both modes, as the diff draws them (`old mode`, `new mode`).
+fn discarded_lines(lines: usize, mode: Option<(FileMode, FileMode)>) -> String {
+    match (lines, mode) {
+        (0, Some((from, to))) => format!("the mode change ({} to {})", from.octal(), to.octal()),
+        (lines, Some((from, to))) => format!(
+            "{} and the mode change ({} to {})",
+            counted(lines, "line", "lines"),
+            from.octal(),
+            to.octal()
+        ),
+        (lines, None) => counted(lines, "line", "lines"),
+    }
 }
 
 fn counted(n: usize, one: &str, many: &str) -> String {
@@ -470,7 +513,9 @@ mod tests {
             path: RepoPath::from(path),
             index: Some(oid(1)),
             working_tree: oid(2),
+            on_disk: oid(4),
             selection,
+            mode: None,
         }
     }
 
@@ -608,13 +653,50 @@ mod tests {
             path: RepoPath::from("new.txt"),
             index: None,
             working_tree: oid(2),
+            on_disk: oid(4),
             selection: selection(0, 1),
+            mode: None,
         };
         assert_eq!(
             one.prompt(),
             "Do you want to discard 1 line in new.txt? You can't undo this action."
         );
         assert_eq!(one.action(), "Discard 1 Line");
+    }
+
+    /// Phase 01's QA item 19: a mode change selected for discard is named, with both modes,
+    /// beside the lines or alone — never "0 lines". Caught by: counting the selection's lines
+    /// alone, or rendering the mode the discard restores as the one it removes.
+    #[test]
+    fn a_discarded_mode_change_is_named_with_its_modes() {
+        let with_mode = |lines: Selection| {
+            let mut selection = lines;
+            selection.select_mode();
+            Consequence::DiscardLines {
+                path: RepoPath::from("run.sh"),
+                index: Some(oid(1)),
+                working_tree: oid(2),
+                on_disk: oid(4),
+                selection,
+                mode: Some((FileMode::Regular, FileMode::Executable)),
+            }
+        };
+        let both = with_mode(selection(1, 1));
+        assert_eq!(
+            both.prompt(),
+            "Do you want to discard 2 lines and the mode change (100644 to 100755) in run.sh? \
+             You can't undo this action."
+        );
+        assert_eq!(both.action(), "Discard 2 Lines and Mode Change");
+        let alone = with_mode(Selection::empty());
+        assert_eq!(
+            alone.prompt(),
+            "Do you want to discard the mode change (100644 to 100755) in run.sh? You can't \
+             undo this action."
+        );
+        assert_eq!(alone.action(), "Discard Mode Change");
+        let one = with_mode(selection(0, 1));
+        assert_eq!(one.action(), "Discard 1 Line and Mode Change");
     }
 
     /// R10.6's text, and the force push named exactly when a remote has the commit.

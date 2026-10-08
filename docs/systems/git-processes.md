@@ -14,8 +14,10 @@ and the runner: each process leads its own process group, each pipe it uses has
 a thread, stdout is handed over as it arrives or, for a read alone, collected
 under a ceiling, stderr is kept as a bounded tail, and an invocation ends by a cancel signal, a
 kill handle or a drop — `SIGTERM` to the group, then `SIGKILL` after two
-seconds. The version probe and fetch run on it like everything else; the
-paths they ran on before are gone, and a guard keeps them gone. Each open
+seconds. The version probe, fetch and the local write verbs — staging,
+unstaging and discarding lines and files (`docs/systems/staging.md`) — run on it
+like everything else; the paths the first two ran on before are gone, and a guard
+keeps them gone. Each open
 repository keeps a registry of the invocations running in it, which closing
 it ends and waits on, and a bounded log of every one that is over. In the
 application, `git` is found once, as it starts; a fetch runs in the network
@@ -70,6 +72,16 @@ crates/cairn-git/src/
   ops/          every mutation; constructs WriteAuthority; re-exports what the app needs
     authority.rs    WriteAuthority, and the tests that need one (real `git` writes among them)
     fetch.rs        fetch, built as a write
+    stage.rs        stage_lines, unstage_lines (`git apply --cached`), stage_files (`git add`),
+                    unstage_files (`git reset -q`, `git rm --cached -q`), UnstageTo
+                    (docs/systems/staging.md)
+    discard.rs      discard_lines (`git apply`), discard_files (`git restore --worktree`,
+                    `git clean -f --`), each taking Confirmed, and the two Consequence builders
+    fresh_state.rs  the index entry (gix) and the working-tree file (its bytes, and its git form
+                    through reads/hash_object.rs) read fresh for a stale check or a re-check
+    local_write.rs  how a local write runs: `--literal-pathspecs`, stdin, the locks around it
+    recording_stub.rs  (tests) a `git` that records its argv, environment and stdin, then
+                    runs the real one
     refspec_policy.rs  the remotes fetch refuses, decided over git's own answer
                        (reads/fetch_settings.rs; docs/systems/credentials.md)
     stranded_locks.rs  every `*.lock` under a git directory; the runner reports them for a write
@@ -90,6 +102,11 @@ crates/cairn-git/src/
                     --no-ext-diff --no-textconv --no-relative --end-of-options <stash>`, what
                     a stash changed, git reading `stash.showIncludeUntracked` itself
                     (docs/systems/diff.md, "A stash's changes")
+    hash_object.rs  hash_object — `git hash-object --path=<p> -- <p>`, never `-w`: a
+                    working-tree file's id in git's form, for a discard's stale check
+                    (docs/systems/staging.md)
+    hooks_path.rs   hooks_path — `git rev-parse --git-path hooks`, where git runs hooks from;
+                    landed for the commit engine (staging-and-commit phase 05)
 ```
 
 `process` is a private module (`mod process;` in `lib.rs`). The application
@@ -183,8 +200,25 @@ dialog and the commit box exist); `Performed::destructive` spends it, recording
 its prompt on the operation's `Performed` (R1.6). Which functions take it is the
 guard's destructive-operation roster: every function of `crates/cairn-git/src`
 naming `Confirmed` is in `ops/`, on the roster or the record, and takes it by
-value (`destructive_operations_are_sealed_behind_the_confirmation_token`). Its one
-row today is the placeholder `ops::describe_destructive`, which performs nothing.
+value (`destructive_operations_are_sealed_behind_the_confirmation_token`). Its rows
+today are `ops::discard_lines` and `ops::discard_files` (`ops/discard.rs`), which
+replaced the placeholder `describe_destructive`; the roster is never empty, and the
+guard asserts it.
+
+Every local write verb is built as a write too, in one place
+(`ops/local_write.rs`'s `run`): git's global `--literal-pathspecs` first on its
+arguments — never the `GIT_LITERAL_PATHSPECS` variable, which the environment
+twin refuses outside `process/environment.rs` — its input (a patch, or a
+NUL-separated pathspec file) written to stdin and closed, a cancel signal nobody
+holds (only a commit or an amend is cancellable, R4.3), stdout drained and
+dropped, and the lock files under the git directories listed before it starts
+and after it is over, on its `Performed` (`Performed::locks`, R3.8; a failure's
+error carries those present after it, as every write's does). Its arguments, its
+environment and its stdin are pinned against a `git` that records them and then
+runs the real one (`ops/recording_stub.rs`, in the tests of `ops/stage.rs` and
+`ops/discard.rs`): each verb's argv after the location, the write's environment
+with no read pin and no `GIT_LITERAL_PATHSPECS`, and the model's patch or the
+pathspec file byte for byte; a discard's `hash-object` is recorded as a read.
 
 Fetch is built as a write (`ops/fetch.rs`): `FetchInProgress` holds its
 `Invocation<Write>`, `FetchCancel` its `KillHandle`, and `finish` drives it

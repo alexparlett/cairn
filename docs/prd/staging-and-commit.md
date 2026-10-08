@@ -146,12 +146,19 @@ literally.
   patch writes nothing and reports which path moved.
 - R3.8 Every local outcome carries the lock files present before and stranded
   after it (#44), and its error names them.
-- R3.9 `git hash-object` (R3.7, and R1.4's re-check of every discard, of lines
-  or of files) and `git rev-parse --git-path hooks` (R6.6) are reads in
+- R3.9 `git hash-object` (R3.7, and R1.4's re-check of a discard of lines) and
+  `git rev-parse --git-path hooks` (R6.6) are reads in
   `crates/cairn-git/src/reads/`, each a named function, query plumbing under a
   read's environment, run inside the operation that needs it on the local lane
   and ended with that operation, never by a query's epoch; D1's list of reads
-  git answers names them.
+  git answers names them. R1.4's re-check of every discard, of lines or of files,
+  also compares the working-tree file's bytes as they are on disk, hashed in
+  process with no filter (what `git hash-object --no-filters` gives, and a
+  symlink as its target, which `hash-object` cannot give), so an edit git's form
+  does not show — a line ending alone — refuses it; a discard of files compares
+  those bytes alone. (Amended 2026-10-08: phase 03's decision on phase 01's QA
+  item 25, which left the deletion re-check's hashing to it; batched for the
+  user's review.)
 - R3.10 A submodule's changes are not discardable (L24): `git restore -- <sub>`
   exits 0 and leaves the submodule's commit where it was (`git-write-verbs.md`
   §3), only `git submodule update` moves it back, and no prompt can count what is
@@ -489,9 +496,11 @@ from `commit.template`, as Fork does (`fork-staging-and-commit.md` §5, "Templat
 configurable subject limit; transcoding to a non-UTF-8 `i18n.commitEncoding`; a
 hook reading `/dev/tty` (L11's residual); discarding a submodule's changes
 (L24); a forced close orphaning a process that holds `index.lock` (#48 item 2);
-the effect of `apply.ignoreWhitespace` on staging, unverified (phase 03 measures
-it, C5; if it changes what is staged, every `apply` pins
-`-c apply.ignoreWhitespace=false` and the PRD says so); a persisted operation log;
+pinning `apply.ignoreWhitespace` on every `apply` (measured unnecessary in phase
+03, on git 2.30.9, 2.32.7 and 2.56.0 over 400 selections: it changes nothing a
+fresh patch stages, only letting a patch land on context moved by whitespace,
+which R3.7's stale check refuses first; C5 holds the case); a persisted operation
+log;
 the index refresh (#66); fetch's cancel tied to its operation (#47's remainder); a
 Commit-tab "restore this file" from a lost commit; and the reflog as a list of
 entries.

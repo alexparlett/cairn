@@ -219,10 +219,14 @@ a format-version-0 repository that names a ref storage, as git refuses it. Evide
 `docs/research/refs-and-status/gix-refs-and-status-api.md`.
 
 A write also needs answers only git can give, and asks them as reads, each query
-plumbing. Before any discard, of lines or of files, `git hash-object --path=<p> --
-<p>`, without `-w`, hashes the working-tree file in git's form — through the clean
-filter the diff ran, writing no object — to check it is still the side that was
-drawn and confirmed (`diff.md`, "Selections and patches"). `git rev-parse
+plumbing. Before a discard of lines, `git hash-object --path=<p> -- <p>`, without
+`-w`, hashes the working-tree file in git's form — through the clean filter the
+diff ran, writing no object — to check it is still the side that was drawn and
+confirmed (`diff.md`, "Selections and patches"). Every discard, of lines or of
+files, also compares the file's bytes as they are on disk, hashed in process with
+no filter — a symlink as its target, as git stores one — so an edit git's form does
+not show, a line ending alone, still refuses it (`docs/prd/staging-and-commit.md`
+R3.9). `git rev-parse
 --git-path hooks` says where git looks for hooks, `core.hooksPath` included, so a
 failed commit offers to skip its hooks only where a `pre-commit` or `commit-msg`
 hook exists and is executable. Neither is argued from a measured disagreement with

@@ -29,3 +29,6 @@ contract. Each is kept current in the same change that invalidates it.
 - `local-changes.md` — the Local Changes view: Unstaged and Staged laid out over a status on
   a worker, the filter, a path chosen and its working-tree diff asked and drawn for that path
   alone, and how the path chosen follows each refresh.
+- `staging.md` — staging, unstaging and discarding in the engine: the write verbs and
+  their arguments, the stale check before every patch, the discards sealed behind a
+  confirmation and the re-check before they run.

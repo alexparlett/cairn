@@ -3,6 +3,16 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-08 — phase 03, C21's margin decided
+
+The user chose C21's margin on 2026-10-08, relayed by the coordinator: a flat 50 ms per
+verb, added to git's own time plus one status read (option A of the phase 03 report). From
+`measured-baseline.md`'s highest sums the bars are about 93 ms to stage (42.9 + 50), 93 ms
+to unstage (42.8 + 50), 76 ms to discard (25.8 + 50) and 87 ms to commit (37.4 + 50).
+PRD C21 and R13.2 amended. Batched item 1 is closed; items 2-7 stay batched.
+`measured-baseline.md` is evidence and not retro-edited (docs/CLAUDE.md); its section 4
+already set out the 50 ms option, and the PRD records the decision.
+
 ## 2026-10-08 — phase 03, the write verbs (packet mode; stopped for C21's margin)
 
 Built on `feature/staging-and-commit`; QA pending (the coordinator dispatches the fresh

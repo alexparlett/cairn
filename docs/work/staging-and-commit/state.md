@@ -7,9 +7,8 @@ mode: QA adjudicated, every confirmed fix and the user's three decisions of
 2026-10-08 applied, full gate green. Phase 02 (the patch engine) done in packet
 mode: QA adjudicated, confirmed fixes applied, full gate green; items 10-11 batched for
 the user's review at the end of the packet. Phase 03 (the write verbs) built in packet
-mode, full gate green, QA pending — stopped at R13.2 awaiting the user's C21 margin
-(git's baseline is `docs/research/staging-and-commit/measured-baseline.md`). Phases 04-12
-not started.**
+mode, full gate green, QA pending; C21's margin decided by the user (a flat 50 ms) and
+amended into the PRD. Phases 04-12 not started.**
 
 ## Locked decisions
 
@@ -52,10 +51,9 @@ that most constrain implementation:
 
 ## Open questions
 
-- C21's margin — git's own numbers are measured
-  (`docs/research/staging-and-commit/measured-baseline.md`: stage or unstage a hunk 17.7 ms,
-  discard 0.7 ms, commit 11-12 ms, one status read 23.7-25.1 ms); the margin is the
-  user's, then written into the PRD by amendment (R13.2).
+- ~~C21's margin~~ — decided by the user on 2026-10-08: a flat 50 ms per verb over
+  git's own time plus one status read (≈93 ms stage, ≈93 ms unstage, ≈76 ms discard,
+  ≈87 ms commit); PRD C21 and R13.2 amended. Phase 11 measures Cairn against these.
 - Fork's chunk-discard dialog default button and how Fork stages lines of an
   untracked file — the user may check on their own Fork; Cairn's choices (Cancel
   focused, a partial new-file patch) stand regardless.
@@ -289,7 +287,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | --- | --- |
 | 01 seal | done — QA adjudicated, all confirmed fixes and the user's three decisions (items 6, 13, 34a) applied, full gate green |
 | 02 patch engine | done — QA adjudicated, confirmed fixes applied, full gate green; items 10-11 batched for the user |
-| 03 write verbs | built, full gate green, QA pending — awaiting the user's C21 margin (R13.2) |
+| 03 write verbs | built, full gate green, QA pending; C21's margin decided (50 ms) and amended |
 | 04 local lane | not started |
 | 05 commit engine | not started |
 | 06 render foundations | not started |

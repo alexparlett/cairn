@@ -1404,7 +1404,14 @@ fn a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmoni
     );
     repo.write("a.txt", b"one\ntwo\n");
     repo.write("b.txt", b"one\ntwo\n");
+    let lines: String = (0..10).map(|n| format!("line {n}\n")).collect();
+    repo.write("d.txt", lines.as_bytes());
     repo.commit("two files");
+    // A staged rename with an edit, staged before any filter is configured: its staged
+    // diff runs the whole-index pairing read and the paired content read (R2.6).
+    repo.git(&["mv", "d.txt", "e.txt"]);
+    repo.write("e.txt", lines.replace("line 4", "line four").as_bytes());
+    repo.git(&["add", "e.txt"]);
     let clean_mark = upper_filter(&repo, "mark");
     repo.config("filter.mark.smudge", &smudge.display().to_string());
     repo.config("diff.trap.textconv", &trap.display().to_string());
@@ -1430,6 +1437,7 @@ fn a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmoni
         ("a.txt", WorkingTreeDiff::Unstaged),
         ("b.txt", WorkingTreeDiff::Unstaged),
         ("c.txt", WorkingTreeDiff::Untracked),
+        ("e.txt", WorkingTreeDiff::Staged),
     ] {
         for ignore_whitespace in [false, true] {
             let answer = ok(
@@ -1445,10 +1453,16 @@ fn a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmoni
                 ),
                 "an answer",
             );
+            if path == "e.txt" {
+                assert!(
+                    answer.as_ref().is_some_and(|diff| diff.file.is_rename()),
+                    "the staged rename was not paired: {answer:?}"
+                );
+            }
             read += usize::from(answer.is_some_and(|diff| diff.text().is_some()));
         }
     }
-    assert_eq!(read, 8, "a query answered no text");
+    assert_eq!(read, 10, "a query answered no text");
     assert!(
         snapshot(&repo.path().join(".git")) == before,
         "the git directory changed under a read"
@@ -1471,6 +1485,16 @@ fn a_working_tree_query_writes_nothing_and_runs_only_the_clean_filter_and_fsmoni
         "the repository's core.fsmonitor did not run"
     );
     let log = shared.command_log();
+    let pairing = |patch: bool| {
+        log.iter().any(|record| {
+            record.arguments.iter().any(|a| a == "--diff-filter=RC")
+                && record.arguments.iter().any(|a| a == "-p") == patch
+        })
+    };
+    assert!(
+        pairing(false) && pairing(true),
+        "the staged rename's two reads did not both run, so they were not held to this"
+    );
     for record in &log {
         let verb = record
             .arguments

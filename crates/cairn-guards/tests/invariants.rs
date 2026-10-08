@@ -4240,7 +4240,13 @@ const CONFIRMED_CONSTRUCTOR: &str = "by_user";
 
 /// What the engine computes and the prompt is rendered from, and the types it is built of.
 const CONSEQUENCE_FILE: &str = "crates/cairn-model/src/consequence.rs";
-const CONSEQUENCE_TYPES: &[&str] = &["Consequence", "DiscardedFile", "FileLoss", "Publication"];
+const CONSEQUENCE_TYPES: &[&str] = &[
+    "Consequence",
+    "DiscardedFile",
+    "FileLoss",
+    "Publication",
+    "Reflog",
+];
 
 /// Traits that would duplicate the token or build one without the constructor.
 const CONFIRMED_FORBIDDEN_TRAITS: &[&str] = &[
@@ -4276,7 +4282,10 @@ const CONFIRMATION_SURFACES: &[&str] = &[];
 /// Every destructive operation, by file and function: each takes `Confirmed` by value, and
 /// every function in `crates/cairn-git/src` that names `Confirmed` is one of these or
 /// [`CONFIRMED_RECORD`]. `describe_destructive` is the placeholder the first real operations
-/// replace (staging-and-commit phase 03), and its row goes with it.
+/// replace (staging-and-commit phase 03), and its row goes with it. The roster is never empty
+/// (the user's decision, 2026-10-08): an empty one would check every token-taking function
+/// against nothing, so the guard asserts a row, and the placeholder's row is that row until
+/// phase 03's operations replace it.
 const DESTRUCTIVE_OPERATIONS: &[(&str, &str)] =
     &[("crates/cairn-git/src/ops/mod.rs", "describe_destructive")];
 
@@ -4825,6 +4834,12 @@ fn destructive_operations_are_sealed_behind_the_confirmation_token() {
     assert!(
         engine.iter().any(|(path, _)| path.starts_with(OPS_DIR)),
         "the destructive-operation roster scanned no file of {OPS_DIR}"
+    );
+    assert!(
+        !DESTRUCTIVE_OPERATIONS.is_empty(),
+        "DESTRUCTIVE_OPERATIONS is empty: a roster of no operations checks every function \
+         taking a token against nothing (the user's decision, 2026-10-08, is that it is never \
+         empty)"
     );
     let found = destructive_roster_violations(&engine, DESTRUCTIVE_OPERATIONS, CONFIRMED_RECORD);
     assert!(
@@ -5399,6 +5414,7 @@ fn the_confirmation_seal_matchers_catch_the_shapes_they_claim() {
             "let l = FileLoss::Untracked { working_tree, bytes };",
         ),
         ("a publication named", "let p = Publication::Unpublished;"),
+        ("a reflog state named", "let r = Reflog::Written;"),
     ];
     for (shape, source) in forged {
         let code = prepared(source);

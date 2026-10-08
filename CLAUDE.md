@@ -649,8 +649,9 @@ Project invariants:
   function in `ops/` takes a `Consequence` without the token; and no type of the
   engine's production code keeps a `Confirmed` in a field outside
   `CONFIRMED_HOLDERS` (empty: a token held in a type reaches an operation behind
-  a reference) (the roster's one row today is the placeholder
-  `ops::describe_destructive`, which phase 03's operations replace);
+  a reference); and the roster is never empty, asserted (the user's decision,
+  2026-10-08), its one row today the placeholder `ops::describe_destructive`,
+  which phase 03's operations replace;
   the **confirmation-surface roster** (`CONFIRMATION_SURFACES`, empty until the
   confirmation dialog and the commit box exist) — no production file of any crate
   but the guards, `confirm.rs` aside, names `by_user` unless it is on the roster,
@@ -659,7 +660,7 @@ Project invariants:
   required to have read `cairn-ui`'s and `cairn-app`'s `src/`; no production
   file outside `cairn-model` and `cairn-git` (`CONSEQUENCE_BUILDERS`) spells a
   path into a `Consequence` or names its parts (`DiscardedFile`, `FileLoss`,
-  `Publication`), so the render crates hold one and ask it for its words but never
+  `Publication`, `Reflog`), so the render crates hold one and ask it for its words but never
   build one; and nowhere, `src/` or `tests/`, does a file but the type's own open
   an impl naming `Confirmed`, `Consequence` or its parts, or rename one (`use ..
   as`, or a `type` alias wherever it follows another item). Residual review

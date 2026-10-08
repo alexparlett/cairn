@@ -57,6 +57,9 @@ pub enum Consequence {
         /// The replaced commit's subject, as the history draws it.
         subject: String,
         published: Publication,
+        /// Whether git will record the move in a reflog, which is where Show Lost
+        /// Commits finds the replaced commit.
+        reflog: Reflog,
     },
     /// A lock file removed by Cairn itself, since git has no verb for it.
     RemoveLock {
@@ -107,6 +110,25 @@ pub enum FileLoss {
     },
 }
 
+/// Whether git records an amend's move of the branch and `HEAD` in a reflog —
+/// and so whether the replaced commit can be found again afterwards (R10.6,
+/// decided by the user on 2026-10-08).
+///
+/// git writes the entry when `core.logAllRefUpdates` is `true` or `always` —
+/// `true` by default in a repository with a working tree, `false` in a bare one
+/// — or, whatever it is set to, when the ref's log file already exists, since
+/// git appends to an existing log (checked with git 2.56: an amend under
+/// `false` from the start writes no `.git/logs`, and under `false` set after
+/// the logs exist still appends to them). The engine reads which (phase 05).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reflog {
+    /// git will write the entry: the replaced commit stays findable.
+    Written,
+    /// git will write none: nothing in the repository points at the replaced
+    /// commit afterwards.
+    NotWritten,
+}
+
 /// Whether a remote already has the commit an amend replaces.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Publication {
@@ -138,13 +160,19 @@ impl Consequence {
                 commit,
                 subject,
                 published,
+                reflog,
             } => {
                 let short = commit.short();
                 let short = short.as_str();
                 let subject = escaped(subject.as_bytes());
-                let replaces = format!(
-                    "Replaces {short} '{subject}'. The old commit stays in Show Lost Commits."
-                );
+                let afterwards = match reflog {
+                    Reflog::Written => "The old commit stays in Show Lost Commits.",
+                    Reflog::NotWritten => {
+                        "The old commit can't be recovered afterwards: this repository keeps no \
+                         reflog."
+                    }
+                };
+                let replaces = format!("Replaces {short} '{subject}'. {afterwards}");
                 match published {
                     Publication::Unpublished => replaces,
                     Publication::Upstream(upstream) => format!(
@@ -194,6 +222,7 @@ impl Consequence {
                 commit,
                 subject: _,
                 published: _,
+                reflog: _,
             } => format!("Amend {}", commit.short().as_str()),
             Self::RemoveLock {
                 path,
@@ -596,6 +625,7 @@ mod tests {
             commit,
             subject: "Fix the parser".to_owned(),
             published,
+            reflog: Reflog::Written,
         };
         assert_eq!(commit.short().as_str(), "abababa");
         assert_eq!(
@@ -617,6 +647,43 @@ mod tests {
              Replaces abababa 'Fix the parser'. The old commit stays in Show Lost Commits."
         );
         assert_eq!(amend(Publication::Unpublished).action(), "Amend abababa");
+    }
+
+    /// R10.6 as the user decided it on 2026-10-08: "stays in Show Lost Commits" only when
+    /// git will write the reflog entry that keeps the old commit findable, and otherwise
+    /// that it cannot be recovered and why. Caught by: the promise made whatever the
+    /// repository keeps.
+    #[test]
+    fn an_amend_promises_recovery_only_where_a_reflog_is_written() {
+        let amend = |published, reflog| Consequence::Amend {
+            commit: oid(0xab),
+            subject: "Fix the parser".to_owned(),
+            published,
+            reflog,
+        };
+        assert_eq!(
+            amend(Publication::Unpublished, Reflog::Written).prompt(),
+            "Replaces abababa 'Fix the parser'. The old commit stays in Show Lost Commits."
+        );
+        assert_eq!(
+            amend(Publication::Unpublished, Reflog::NotWritten).prompt(),
+            "Replaces abababa 'Fix the parser'. The old commit can't be recovered afterwards: \
+             this repository keeps no reflog."
+        );
+        assert_eq!(
+            amend(
+                Publication::Upstream(RefName::new("refs/remotes/origin/main")),
+                Reflog::NotWritten
+            )
+            .prompt(),
+            "abababa is already on origin/main. Sharing the amended commit needs a force \
+             push. Replaces abababa 'Fix the parser'. The old commit can't be recovered \
+             afterwards: this repository keeps no reflog."
+        );
+        assert_eq!(
+            amend(Publication::Unpublished, Reflog::NotWritten).action(),
+            "Amend abababa"
+        );
     }
 
     #[test]
@@ -696,6 +763,7 @@ mod tests {
             commit: oid(0xab),
             subject: "Fix\u{2028}Replaces nothing\u{7}".to_owned(),
             published: Publication::Unpublished,
+            reflog: Reflog::Written,
         };
         assert_eq!(
             subject.prompt(),

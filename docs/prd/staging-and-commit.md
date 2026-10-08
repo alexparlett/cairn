@@ -59,7 +59,13 @@ Stash and `.gitignore` are packet 5b's (`stash-and-ignore`, L1).
   path and age — and the prompt text rendered from it. The prompt is rendered
   from the `Consequence`, never typed beside it. (Amended 2026-10-08, the user's
   decision on phase 01's QA item 34a: "the lines and bytes per path" became
-  lines per modified path and bytes per untracked file.)
+  lines per modified path and bytes per untracked file. Amended again
+  2026-10-08, the user's decisions 5 and 6 on phase 03's QA: a mode change
+  discarded with a whole file is named with both modes beside its lines — "1
+  modified (2 lines and the mode change (100644 to 100755))" — and never reads "0
+  lines"; and a file added with `git add -N`, which `git restore` leaves empty
+  with its intent-to-add entry in place, is named as that — "1 new file emptied
+  (20 lines)".)
 - R1.3 Every destructive operation of this packet (R1.5) takes `Confirmed` by
   value, and the guard holds the roster: a destructive operation without it, or
   a roster entry with no such operation, fails.
@@ -127,10 +133,17 @@ literally.
   unstage out of an amend: `git reset -q HEAD^ --` (R6.3), and out of a root
   commit's amend, which has no `HEAD^`: `git rm --cached -q --`.
 - R3.5 Discard files (destructive): `git restore --worktree --`, never for a
-  submodule (R3.10) or a conflicted path (R3.11); delete untracked files
-  (destructive): `git clean -f --` the exact paths status listed, `-d` only for a
-  collapsed directory row; a nested repository is refused before any confirmation
-  (L8). `git clean` takes no pathspec file, so its paths go on `argv` after `--`;
+  submodule (R3.10) or a conflicted path (R3.11) — an intent-to-add file is left
+  empty with its entry in place, as `git restore` leaves it (R1.2); delete
+  untracked files (destructive): `git clean -f --` the exact files status listed,
+  never `-d`: status lists untracked files one per file, and the one directory it
+  lists whole, a nested repository, is refused before any confirmation (L8), so
+  a file added beside a confirmed one is never taken and the discard goes ahead
+  for the confirmed files; a path any of whose directories is not a real
+  directory — a file, or a symlink — is refused before any confirmation and by the
+  re-check after one, since restoring it would replace what stands there. (Amended
+  2026-10-08, the user's decision 3 on phase 03's QA, to what is built: it read
+  "`-d` only for a collapsed directory row".) `git clean` takes no pathspec file, so its paths go on `argv` after `--`;
   a list past a bound is split across several invocations, all under the one
   `Consequence` re-check made before the first (R1.4). The bound is phase 03's to
   measure: `argv`'s limit for a very large selection is unverified
@@ -152,13 +165,14 @@ literally.
   read's environment, run inside the operation that needs it on the local lane
   and ended with that operation, never by a query's epoch; D1's list of reads
   git answers names them. R1.4's re-check of every discard, of lines or of files,
-  also compares the working-tree file's bytes as they are on disk, hashed in
-  process with no filter (what `git hash-object --no-filters` gives, and a
-  symlink as its target, which `hash-object` cannot give), so an edit git's form
-  does not show — a line ending alone — refuses it; a discard of files compares
-  those bytes alone. (Amended 2026-10-08: phase 03's decision on phase 01's QA
-  item 25, which left the deletion re-check's hashing to it; batched for the
-  user's review.)
+  also compares the working-tree file's bytes and executable bit as they are on
+  disk — the bytes hashed in process with no filter (what `git hash-object
+  --no-filters` gives, and a symlink as its target, which `hash-object` cannot
+  give) — so an edit git's form does not show, a line ending alone, or a `chmod`
+  refuses it; a discard of files compares the bytes and the executable bit alone.
+  (Amended 2026-10-08 by phase 03 on phase 01's QA item 25, which left the
+  deletion re-check's hashing to it, and ratified by the user on 2026-10-08,
+  reworded to the bytes and the executable bit.)
 - R3.10 A submodule's changes are not discardable (L24): `git restore -- <sub>`
   exits 0 and leaves the submodule's commit where it was (`git-write-verbs.md`
   §3), only `git submodule update` moves it back, and no prompt can count what is
@@ -454,13 +468,13 @@ points here and does not restate them.
 | # | Criterion | Pinned by |
 | --- | --- | --- |
 | C1 | `Confirmed` is neither `Clone` nor `Copy` and cannot be built outside the roster's surfaces; every rostered destructive operation takes it by value and every such operation is rostered; the prompt is rendered from the `Consequence` | `compile_fail` doctests in `cairn-model`, and a guard with a nonzero-files assertion and a matcher self-test |
-| C2 | Each destructive operation refuses, writing nothing, when the state its `Consequence` names moved between confirmation and run: a discarded file edited, an untracked file added to a deletion's directory, `HEAD` moved before an amend, a lock removed and recreated | integration tests in `cairn-git` against real `git` |
+| C2 | Each destructive operation refuses, writing nothing, when the state its `Consequence` names moved between confirmation and run: a discarded file edited or chmodded, a file or a symlink standing at a confirmed path's directory (an untracked file added beside a confirmed deletion is never taken, and the discard goes ahead — amended 2026-10-08, the user's decision 3), `HEAD` moved before an amend, a lock removed and recreated | integration tests in `cairn-git` against real `git` |
 | C3 | For every case — modification, untracked file, intent-to-add, CRLF under `core.autocrlf`, a clean filter, an unborn branch, a mode change beside edits, a staged rename, and paths with a space, a tab, a quote, a backslash, a newline and invalid UTF-8 — staging, unstaging and discarding a selection of lines leaves the index and working tree equal to the reference applier's answer and to the mirrored-rule derivation's, and `git diff`/`git diff --cached` afterwards show exactly the unselected changes; on the host's git and on 2.30.9 and 2.32.7 (`git-floor`) | integration tests in `cairn-git` |
 | C4 | A selection of lines alone stages no mode change, and a mode change stages alone | integration test |
 | C5 | With `apply.whitespace=fix` and `=error` set, staging trailing-whitespace lines stages them byte for byte; with `apply.ignoreWhitespace=change` set, staging a selection stages exactly the selected lines (phase 03 measures the setting's effect first, and where it changes what is staged every `apply` pins `-c apply.ignoreWhitespace=false`, which C9 then checks) | integration test |
 | C6 | A patch whose index entry or working-tree file moved after it was built writes nothing and names its path, on content where `git apply` alone would land at an offset (spike E6) | integration test |
 | C7 | The staged diff of a staged rename equals `git diff --cached`'s pairing under `diff.renames` unset, `false` and `copies` | integration test against real `git` |
-| C8 | File verbs: staging, unstaging (including on an unborn branch and out of an amend), discarding and deleting untracked files leave the state `git status` reports as expected; deleting names only status's paths, adds `-d` only for a collapsed directory, splits a list past R3.5's bound into several invocations under one re-check, and refuses a nested repository before any confirmation; staged changes offer no discard anywhere; a submodule's changes offer no discard anywhere, and its row says why, and no verb discards one | integration tests and headless tests |
+| C8 | File verbs: staging, unstaging (including on an unborn branch and out of an amend), discarding and deleting untracked files leave the state `git status` reports as expected; deleting names only status's paths, never passes `-d` (amended 2026-10-08, the user's decision 3), splits a list past R3.5's bound into several invocations under one re-check, and refuses a nested repository before any confirmation; staged changes offer no discard anywhere; a submodule's changes offer no discard anywhere, and its row says why, and no verb discards one | integration tests and headless tests |
 | C9 | Every verb's argv is exactly what R3 names — `--literal-pathspecs` before the verb (and no `GIT_LITERAL_PATHSPECS` in its environment), `--whitespace=nowarn`, the pathspec file where used, no `-R` | stub-git tests printing argv |
 | C10 | Writes queue in order and draw as queued; a stage asked during a running commit waits for it (against a stub git's long-running write in phase 04, then against real `git commit` in phase 05); a status begun before a write ended is never drawn; a write refreshes exactly what its `Invalidated` names; no refresh starts during a commit (stub, then real, as above); a cancel names its operation and reaches only that one | worker tests through the real boundary |
 | C11 | A close during a commit waits and says so (stub, then real, as C10); a second close after `CLOSE_PATIENCE` closes; a stranded `index.lock` is named on the next open and in the failed write's error | worker tests, and headless tests |

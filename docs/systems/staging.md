@@ -111,16 +111,26 @@ re-reads the repository the moment before it runs, refusing with
 `Error::ChangedSinceConfirmed` — writing nothing at all, not even the files that
 did not move — when anything it names moved (R1.4).
 
-- **What is compared.** The index entry (gix), and the working-tree file hashed
-  as its bytes are on disk, with no filter, streamed by gix's hasher (a symlink
-  as its target) — so any byte changed since the confirmation refuses, a line
-  ending under `core.autocrlf` included, which git's form would not show (phase
-  01's QA item 25). A discard of lines compares the file's git form too, since
-  that is what its patch was built against
+- **What is compared.** The index entry (gix), and the working-tree file's bytes
+  hashed as they are on disk, with no filter, streamed by gix's hasher (a symlink
+  as its target), and its executable bit — so any byte changed since the
+  confirmation refuses, a line ending under `core.autocrlf` included, which git's
+  form would not show, and so does a `chmod` (PRD R3.9, ratified by the user). A
+  discard of lines compares the file's git form too, since that is what its patch
+  was built against — a filter attribute added after the confirmation moves it
+  while the bytes stay
   (`a_discard_of_lines_refuses_whatever_moved_after_the_confirmation`,
   `a_discard_of_files_refuses_whatever_moved_after_the_confirmation`: an edit,
-  the line endings alone, the entry restaged, an untracked file edited, removed,
-  replaced by a directory or staged). A builder reads a file's bytes before and
+  the mode alone, the line endings alone, the git form alone, the entry
+  restaged, an untracked file edited, removed, replaced by a directory or
+  staged).
+- **Every directory on a path is a real one.** Each is looked at without
+  following a link; a path behind a file or a symlink is refused before any
+  prompt (`Refusal::Obstructed`) and by the re-check after one, since `git
+  restore` would unlink a file standing where a deleted file's directory was, and
+  hashing through a symlinked directory reads a file outside the working tree
+  (`a_file_where_a_deleted_files_directory_was_is_never_destroyed`,
+  `a_symlinked_parent_is_never_followed_out_of_the_working_tree`). A builder reads a file's bytes before and
   after its slower reads and answers `Error::ContentReadsDisagree` when they
   differ, so a prompt never counts one version and confirms another.
 - **A discard of lines applies the patch it was confirmed with.** The builder emits
@@ -139,9 +149,12 @@ did not move — when anything it names moved (R1.4).
   directory (`a_nested_repository_is_refused_before_any_confirmation`); and a path
   with no unstaged change, since staged changes are never discarded
   (`staged_changes_are_never_discarded`, R3.6).
-- **A mode change selected for discard** is named with both modes ("discard 2
-  lines and the mode change (100644 to 100755)"), and put back
-  (`a_mode_change_selected_for_discard_is_named_and_put_back`).
+- **A mode change** is named with both modes, as the diff draws them — selected
+  for a discard of lines ("discard 2 lines and the mode change (100644 to
+  100755)") or discarded with a whole file ("1 modified (2 lines and the mode
+  change (100644 to 100755))", and alone never "0 lines") — and put back
+  (`a_mode_change_selected_for_discard_is_named_and_put_back`,
+  `a_whole_files_mode_change_is_named_and_put_back`).
 - **Files.** Tracked files are restored from the index by `git restore
   --worktree` (a file deleted in the working tree comes back); untracked files
   are deleted by `git clean -f --` with exactly the paths `git status` listed,
@@ -156,9 +169,10 @@ did not move — when anything it names moved (R1.4).
   pointer) — all after the one re-check made before the first
   (`a_long_list_is_deleted_in_batches_after_one_recheck`,
   `a_list_past_the_bound_is_split_and_every_path_kept_in_order`). An
-  intent-to-add path is a tracked file whose index blob is empty: `git restore`
-  leaves it empty, as the user's own `git restore` does, and the prompt counts its
-  lines as modified.
+  intent-to-add file's index blob is the empty one, so `git restore` leaves it
+  empty with its entry in place, as the user's own `git restore` does, and the
+  prompt names it so — "1 new file emptied (20 lines)" (`FileLoss::Emptied`,
+  `an_intent_to_add_files_discard_empties_it_and_says_so`).
 - The `Performed` records the prompt the user accepted (R1.6).
 
 ## Residuals
@@ -177,8 +191,6 @@ did not move — when anything it names moved (R1.4).
 - A discard of files counts each tracked file's lines by reading its unstaged diff
   as the diff view does, one read per file: exact, and proportional to the files
   selected.
-- A mode change in a discard of whole files is restored without being named; the
-  prompt counts lines only.
 - git exports `--literal-pathspecs` to the hooks it runs under these verbs
   (`GIT_LITERAL_PATHSPECS=1` in a `post-index-change` or `post-checkout` hook), so a
   hook's own globbed pathspec matches literally (R3).

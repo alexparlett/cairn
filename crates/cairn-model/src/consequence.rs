@@ -127,6 +127,26 @@ pub enum FileLoss {
         /// Changed lines of the unstaged diff; `None` for a change that has no
         /// lines (binary).
         lines: Option<usize>,
+        /// The mode change the restore takes back, as the diff draws it: the
+        /// index's mode, then the working tree's. Named in the prompt with both
+        /// modes beside the lines (the user's decision of 2026-10-08), so a file
+        /// whose only change is its mode never reads as "0 lines".
+        mode: Option<(FileMode, FileMode)>,
+    },
+    /// A file added with `git add -N`, whose index entry is the empty blob:
+    /// `git restore` writes that entry back, so the discard leaves the file
+    /// EMPTY and the entry in place, as the user's own `git restore` does (the
+    /// user's decision of 2026-10-08), and the prompt names it as emptied.
+    Emptied {
+        /// The intent-to-add entry's blob, the empty one, what the file becomes.
+        index: Oid,
+        /// The working-tree file's bytes as they are on disk, hashed with no
+        /// filter (a symlink as its target).
+        working_tree: Oid,
+        /// Whether it is executable, as its mode is on disk; compared by the re-check.
+        executable: bool,
+        /// Its lines, every one added; `None` for a file that is not text.
+        lines: Option<usize>,
     },
     /// An untracked file, deleted.
     Untracked {
@@ -298,9 +318,9 @@ fn discard_files_prompt(files: &[DiscardedFile]) -> String {
         [only] => quoted(only.path.as_bytes()),
         _ => counted(files.len(), "file", "files"),
     };
-    let mut modified = 0usize;
-    let mut lines = 0usize;
-    let mut binary = 0usize;
+    let mut modified = Lines::default();
+    let mut modes: Vec<(FileMode, FileMode)> = Vec::new();
+    let mut emptied = Lines::default();
     let mut restored = 0usize;
     let mut untracked = 0usize;
     let mut untracked_bytes = 0u64;
@@ -311,19 +331,24 @@ fn discard_files_prompt(files: &[DiscardedFile]) -> String {
                 working_tree: None,
                 executable: _,
                 lines: _,
+                mode: _,
             } => restored += 1,
             FileLoss::Modified {
                 index: _,
                 working_tree: Some(_),
                 executable: _,
-                lines: counted_lines,
+                lines,
+                mode,
             } => {
-                modified += 1;
-                match counted_lines {
-                    Some(n) => lines += n,
-                    None => binary += 1,
-                }
+                modified.add(*lines);
+                modes.extend(*mode);
             }
+            FileLoss::Emptied {
+                index: _,
+                working_tree: _,
+                executable: _,
+                lines,
+            } => emptied.add(*lines),
             FileLoss::Untracked {
                 working_tree: _,
                 executable: _,
@@ -334,14 +359,34 @@ fn discard_files_prompt(files: &[DiscardedFile]) -> String {
             }
         }
     }
-    let mut parts = Vec::with_capacity(3);
-    if modified > 0 {
-        let detail = match (modified - binary, binary) {
-            (_, 0) => counted(lines, "line", "lines"),
-            (0, _) => "binary".to_owned(),
-            (_, binary) => format!("{}, {binary} binary", counted(lines, "line", "lines")),
+    let mut parts = Vec::with_capacity(4);
+    if modified.files > 0 {
+        let mode = match modes.as_slice() {
+            [] => None,
+            [(from, to)] if modified.files == 1 => Some(format!(
+                "the mode change ({} to {})",
+                from.octal(),
+                to.octal()
+            )),
+            several => Some(counted(several.len(), "mode change", "mode changes")),
         };
-        parts.push(format!("{modified} modified ({detail})"));
+        let detail = match (modified.detail(mode.is_some()), mode) {
+            (Some(lines), None) => lines,
+            (None, Some(mode)) => mode,
+            (Some(lines), Some(mode)) if modified.files == 1 => format!("{lines} and {mode}"),
+            (Some(lines), Some(mode)) => format!("{lines}, {mode}"),
+            (None, None) => counted(0, "line", "lines"),
+        };
+        parts.push(format!("{} modified ({detail})", modified.files));
+    }
+    if emptied.files > 0 {
+        parts.push(format!(
+            "{} emptied ({})",
+            counted(emptied.files, "new file", "new files"),
+            emptied
+                .detail(false)
+                .unwrap_or_else(|| counted(0, "line", "lines"))
+        ));
     }
     if restored > 0 {
         parts.push(format!(
@@ -360,6 +405,40 @@ fn discard_files_prompt(files: &[DiscardedFile]) -> String {
         "Do you want to discard the changes in {what}? {}. You can't undo this action.",
         parts.join(", ")
     )
+}
+
+/// The lines of a kind of file in a discard, and how many of those files are not text.
+#[derive(Default)]
+struct Lines {
+    files: usize,
+    lines: usize,
+    binary: usize,
+}
+
+impl Lines {
+    fn add(&mut self, lines: Option<usize>) {
+        self.files += 1;
+        match lines {
+            Some(n) => self.lines += n,
+            None => self.binary += 1,
+        }
+    }
+
+    /// The lines and the files without them, in words — "14 lines", "binary", "14 lines,
+    /// 1 binary" — or nothing where the only change beside them is a mode (`moded`) and
+    /// there is no line to count: never "0 lines" for a mode change.
+    fn detail(&self, moded: bool) -> Option<String> {
+        let text = self.files - self.binary;
+        match (self.lines, self.binary) {
+            (0, 0) if moded => None,
+            (lines, 0) => Some(counted(lines, "line", "lines")),
+            (0, _) if moded || text == 0 => Some("binary".to_owned()),
+            (lines, binary) => Some(format!(
+                "{}, {binary} binary",
+                counted(lines, "line", "lines")
+            )),
+        }
+    }
 }
 
 /// What a discard of lines takes, in words: the lines, the mode change, or both. The
@@ -493,6 +572,7 @@ mod tests {
                 working_tree: Some(oid(2)),
                 executable: false,
                 lines,
+                mode: None,
             },
         }
     }
@@ -505,6 +585,7 @@ mod tests {
                 working_tree: None,
                 executable: false,
                 lines: Some(9),
+                mode: None,
             },
         }
     }
@@ -742,6 +823,7 @@ mod tests {
                     working_tree: Some(oid(2)),
                     executable,
                     lines: Some(1),
+                    mode: None,
                 },
             }],
         };
@@ -782,6 +864,87 @@ mod tests {
         };
         assert_ne!(with("a"), with("b"));
         assert_eq!(with("a").prompt(), with("b").prompt());
+    }
+
+    /// The user's decision 6 (2026-10-08): a whole file's mode change is named with both
+    /// modes beside its lines, and a file whose only change is its mode never reads "0
+    /// lines". Full prompts, one file and several.
+    #[test]
+    fn a_whole_files_mode_change_is_named_never_counted_as_no_lines() {
+        let file = |path: &str, lines: usize, mode: Option<(FileMode, FileMode)>| DiscardedFile {
+            path: RepoPath::from(path),
+            loss: FileLoss::Modified {
+                index: oid(1),
+                working_tree: Some(oid(2)),
+                executable: false,
+                lines: Some(lines),
+                mode,
+            },
+        };
+        let changed = Some((FileMode::Regular, FileMode::Executable));
+        let alone = Consequence::DiscardFiles {
+            files: vec![file("run.sh", 0, changed)],
+        };
+        assert_eq!(
+            alone.prompt(),
+            "Do you want to discard the changes in run.sh? 1 modified (the mode change \
+             (100644 to 100755)). You can't undo this action."
+        );
+        let beside = Consequence::DiscardFiles {
+            files: vec![file("run.sh", 2, changed)],
+        };
+        assert_eq!(
+            beside.prompt(),
+            "Do you want to discard the changes in run.sh? 1 modified (2 lines and the mode \
+             change (100644 to 100755)). You can't undo this action."
+        );
+        let several = Consequence::DiscardFiles {
+            files: vec![
+                file("a.rs", 10, None),
+                file("run.sh", 0, changed),
+                file("tool", 3, Some((FileMode::Executable, FileMode::Regular))),
+            ],
+        };
+        assert_eq!(
+            several.prompt(),
+            "Do you want to discard the changes in 3 files? 3 modified (13 lines, 2 mode \
+             changes). You can't undo this action."
+        );
+    }
+
+    /// The user's decision 5 (2026-10-08): an intent-to-add file's discard leaves it empty, as
+    /// `git restore` does, and the prompt says so — never "modified".
+    #[test]
+    fn an_intent_to_add_file_is_named_as_emptied() {
+        let emptied = |path: &str, lines: Option<usize>| DiscardedFile {
+            path: RepoPath::from(path),
+            loss: FileLoss::Emptied {
+                index: oid(1),
+                working_tree: oid(2),
+                executable: false,
+                lines,
+            },
+        };
+        let one = Consequence::DiscardFiles {
+            files: vec![emptied("new.txt", Some(5))],
+        };
+        assert_eq!(
+            one.prompt(),
+            "Do you want to discard the changes in new.txt? 1 new file emptied (5 lines). You \
+             can't undo this action."
+        );
+        let two = Consequence::DiscardFiles {
+            files: vec![
+                emptied("a.txt", Some(5)),
+                emptied("b.bin", None),
+                modified("c.rs", Some(1)),
+            ],
+        };
+        assert_eq!(
+            two.prompt(),
+            "Do you want to discard the changes in 3 files? 1 modified (1 line), 2 new files \
+             emptied (5 lines, 1 binary). You can't undo this action."
+        );
     }
 
     /// R10.6's text, and the force push named exactly when a remote has the commit.

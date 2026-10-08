@@ -51,7 +51,7 @@ use std::ffi::OsString;
 
 use cairn_model::{
     AskpassToken, ChangeStatus, Confirmed, Consequence, DiffContent, DiscardedFile, FileDiff,
-    FileLoss, PatchAction, RepoPath, Selection,
+    FileLoss, FileMode, PatchAction, RepoPath, Selection,
 };
 
 use super::fresh_state::{
@@ -258,20 +258,32 @@ pub fn discard_files_consequence(
                 mode: Some(cairn_model::FileMode::Submodule),
                 ..
             } => return Err(refused(path, Refusal::Submodule)),
-            IndexSide::Entry { id, .. } => {
+            IndexSide::Entry {
+                id, intent_to_add, ..
+            } => {
                 let disk = on_disk(repo, path)?;
                 if let Some(refusal) = not_a_file(repo, path, &disk)? {
                     return Err(refusal);
                 }
-                let lines = unstaged_lines(git, repo, path)?;
+                let (lines, mode) = unstaged_change(git, repo, path)?;
                 if on_disk(repo, path)? != disk {
                     return Err(moved_while_read(path));
                 }
-                FileLoss::Modified {
-                    index: id,
-                    working_tree: disk.id().copied(),
-                    executable: disk.executable(),
-                    lines,
+                match (intent_to_add, disk.id()) {
+                    // `git restore` writes the empty blob back: the file is emptied.
+                    (true, Some(working_tree)) => FileLoss::Emptied {
+                        index: id,
+                        working_tree: *working_tree,
+                        executable: disk.executable(),
+                        lines,
+                    },
+                    (true, None) | (false, _) => FileLoss::Modified {
+                        index: id,
+                        working_tree: disk.id().copied(),
+                        executable: disk.executable(),
+                        lines,
+                        mode,
+                    },
                 }
             }
             IndexSide::Absent => {
@@ -339,7 +351,7 @@ pub fn discard_files(
     let (tracked, untracked): (Vec<RepoPath>, Vec<RepoPath>) = {
         let (tracked, untracked): (Vec<&DiscardedFile>, Vec<&DiscardedFile>) =
             files.iter().partition(|file| match file.loss {
-                FileLoss::Modified { .. } => true,
+                FileLoss::Modified { .. } | FileLoss::Emptied { .. } => true,
                 FileLoss::Untracked { .. } => false,
             });
         (
@@ -428,14 +440,27 @@ fn as_confirmed(repo: &Repository, index: &IndexNow, file: &DiscardedFile) -> Re
             working_tree,
             executable,
             lines: _,
+            mode: _,
         } => {
-            let entry = matches!(&side, IndexSide::Entry { id, mode, .. }
-                if id == index && *mode != Some(cairn_model::FileMode::Submodule));
+            let entry = matches!(&side, IndexSide::Entry { id, mode, intent_to_add }
+                if id == index
+                    && *mode != Some(cairn_model::FileMode::Submodule)
+                    && (!*intent_to_add || working_tree.is_none()));
             let file_now = match working_tree {
                 Some(id) => disk.id() == Some(id) && disk.executable() == *executable,
                 None => disk == OnDisk::Absent,
             };
             entry && file_now
+        }
+        FileLoss::Emptied {
+            index,
+            working_tree,
+            executable,
+            lines: _,
+        } => {
+            matches!(&side, IndexSide::Entry { id, intent_to_add: true, .. } if id == index)
+                && disk.id() == Some(working_tree)
+                && disk.executable() == *executable
         }
         FileLoss::Untracked {
             working_tree,
@@ -472,14 +497,15 @@ pub(crate) fn clean_batches(paths: &[RepoPath]) -> Vec<&[RepoPath]> {
     batches
 }
 
-/// How many lines of `path`'s unstaged diff a discard takes back, read as the diff is drawn:
+/// How many lines of `path`'s unstaged diff a discard takes back, read as the diff is drawn,
+/// and its mode change, as the diff draws it (index, then working tree):
 /// `None` for a change that is not text (binary, an LFS pointer, past the load-anyway
 /// ceiling, unreadable), and [`Refusal::NoUnstagedChange`] where git's diff of it is empty.
-fn unstaged_lines(
+fn unstaged_change(
     git: &GitBinary,
     repo: &Repository,
     path: &RepoPath,
-) -> Result<Option<usize>, Error> {
+) -> Result<(Option<usize>, Option<(FileMode, FileMode)>), Error> {
     let options = ContentOptions {
         load_anyway: true,
         ..ContentOptions::default()
@@ -494,13 +520,19 @@ fn unstaged_lines(
     else {
         return Err(refused(path, Refusal::NoUnstagedChange));
     };
+    let mode = match (diff.file.old_mode, diff.file.new_mode) {
+        (Some(old), Some(new)) if old != new => Some((old, new)),
+        _ => None,
+    };
     match &diff.content {
-        DiffContent::Text { text, .. } => Ok(Some(Selection::with_every_change(text).len())),
-        DiffContent::ModeChangeOnly => Ok(Some(0)),
+        DiffContent::Text { text, .. } => {
+            Ok((Some(Selection::with_every_change(text).len()), mode))
+        }
+        DiffContent::ModeChangeOnly => Ok((Some(0), mode)),
         DiffContent::Binary { .. }
         | DiffContent::TooLarge { .. }
         | DiffContent::LfsPointer { .. }
-        | DiffContent::Unsupported { .. } => Ok(None),
+        | DiffContent::Unsupported { .. } => Ok((None, mode)),
         DiffContent::Submodule { .. } => Err(refused(path, Refusal::Submodule)),
         DiffContent::Conflicted => Err(refused(path, Refusal::Conflicted)),
     }

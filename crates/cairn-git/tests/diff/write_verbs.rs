@@ -379,12 +379,12 @@ fn a_discard_of_files_refuses_whatever_moved_after_the_confirmation() {
     }
 }
 
-/// C2's "an untracked file added to a deletion's directory", as Cairn deletes: only the files
-/// `git status` listed, one per file and never a directory, so a file added beside a
-/// confirmed one is no part of what the prompt counted and is never taken — the deletion
-/// goes ahead for exactly the confirmed file, and the newcomer survives (a deviation from
-/// C2's wording, whose case presumed a collapsed directory deleted with `-d`; recorded in
-/// `progress.md`, phase 03).
+/// C2 as amended (the user's decision 3 of 2026-10-08): Cairn deletes only the files `git
+/// status` listed, one per file and never a directory (no `-d`), so an untracked file added
+/// beside a confirmed one is no part of what the prompt counted and is never taken, and the
+/// discard of the confirmed file goes ahead. What stands at a confirmed path's directory is
+/// refused instead (`a_file_where_a_deleted_files_directory_was_is_never_destroyed`,
+/// `a_symlinked_parent_is_never_followed_out_of_the_working_tree`).
 #[test]
 fn a_file_added_beside_a_confirmed_deletion_is_never_taken() {
     let repo = modified_and_untracked("c2-beside");
@@ -1244,4 +1244,76 @@ fn a_file_git_clean_leaves_is_named_as_kept() {
         other => panic!("{other:?}"),
     }
     assert_eq!(on_disk(&repo, "ignored.txt"), Some(b"ignored\n".to_vec()));
+}
+
+// --- The user's decisions 5 and 6 of 2026-10-08 ---
+
+/// Decision 5: an intent-to-add file's discard is `git restore`'s — the file left EMPTY, its
+/// intent-to-add entry in place — and the prompt says it is emptied, never "modified".
+#[test]
+fn an_intent_to_add_files_discard_empties_it_and_says_so() {
+    let repo = Repo::new("intent-to-add");
+    repo.write("tracked.txt", b"t\n");
+    repo.commit("base");
+    repo.write("new.txt", lines(base).as_bytes());
+    repo.git(&["add", "-N", "new.txt"]);
+    let consequence = ok(
+        ops::discard_files_consequence(git(), &engine(&repo), &[RepoPath::new("new.txt")]),
+        "the consequence",
+    );
+    assert_eq!(
+        consequence.prompt(),
+        "Do you want to discard the changes in new.txt? 1 new file emptied (20 lines). You \
+         can't undo this action."
+    );
+    ok(
+        ops::discard_files(git(), &engine(&repo), Confirmed::by_user(consequence), None),
+        "the discard",
+    );
+    assert_eq!(on_disk(&repo, "new.txt"), Some(Vec::new()));
+    assert_eq!(repo.git(&["ls-files", "--", "new.txt"]).trim(), "new.txt");
+}
+
+/// Decision 6: a whole file's mode change is named with both modes — alone, and beside its
+/// lines — and put back by the discard.
+#[test]
+fn a_whole_files_mode_change_is_named_and_put_back() {
+    for (edited, prompt) in [
+        (
+            false,
+            "Do you want to discard the changes in run.sh? 1 modified (the mode change (100644 \
+             to 100755)). You can't undo this action.",
+        ),
+        (
+            true,
+            "Do you want to discard the changes in run.sh? 1 modified (2 lines and the mode \
+             change (100644 to 100755)). You can't undo this action.",
+        ),
+    ] {
+        let repo = Repo::new("whole-mode");
+        repo.write("run.sh", lines(base).as_bytes());
+        repo.commit("base");
+        if edited {
+            repo.write(
+                "run.sh",
+                lines(|n| if n == 5 { "edited".into() } else { base(n) }).as_bytes(),
+            );
+        }
+        repo.chmod("run.sh", 0o755);
+        let consequence = ok(
+            ops::discard_files_consequence(git(), &engine(&repo), &[RepoPath::new("run.sh")]),
+            "the consequence",
+        );
+        assert_eq!(consequence.prompt(), prompt);
+        ok(
+            ops::discard_files(git(), &engine(&repo), Confirmed::by_user(consequence), None),
+            "the discard",
+        );
+        let mode = std::fs::metadata(repo.path().join("run.sh"))
+            .map(|metadata| metadata.permissions().mode() & 0o111)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(mode, 0, "the mode was not put back");
+        assert_eq!(on_disk(&repo, "run.sh"), Some(lines(base).into_bytes()));
+        assert_eq!(status(&repo), Vec::<String>::new());
+    }
 }

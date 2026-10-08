@@ -111,8 +111,11 @@ pub struct Offered<'a> {
 /// Which of a path's working-tree diffs to answer (R3.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkingTreeDiff {
-    /// `HEAD` against the index: what `git diff --cached -- <path>` shows. Against the empty
-    /// tree on an unborn branch, as git compares it.
+    /// `HEAD` against the index: what `git diff --cached` shows for the path — a rename or
+    /// a copy paired as it pairs them over the whole index, under the user's
+    /// `diff.renames` (staging-and-commit R2.6), where `git diff --cached -- <path>` would
+    /// show the destination alone as an addition. Against the empty tree on an unborn
+    /// branch, as git compares it.
     Staged,
     /// The index against the working tree: what `git diff -- <path>` shows.
     Unstaged,
@@ -315,9 +318,17 @@ impl Repository {
     /// in git's form, computed and written nowhere — or absent where the answer did not
     /// read it (a side refused as too large).
     ///
+    /// A staged diff is the pair the path belongs to where the user's `git diff --cached`
+    /// pairs it into a rename or a copy — the record carrying both paths, the lines those
+    /// two blobs differ in — asked first over the whole index with the user's rename
+    /// detection, one more process, and then across the pair's two paths
+    /// (`crate::reads::staged_pairing`); a pair that moved between the two reads is
+    /// [`Error::ContentReadsDisagree`].
+    ///
     /// The index and the attributes are read fresh for every call (R3.3) and nothing is
-    /// written (R3.5). It blocks on one `git` process, two with whitespace ignored, and one
-    /// more where a diff driver may name an algorithm (`check-attr`); `cancel` is polled
+    /// written (R3.5). It blocks on one `git` process, two with whitespace ignored, one more
+    /// for a staged diff under rename detection, and one more where a diff driver may name
+    /// an algorithm (`check-attr`); `cancel` is polled
     /// while each runs, and a superseded query answers [`Error::ContentCancelled`]. Lines
     /// git printed that are not the content it named are [`Error::ContentReadsDisagree`]
     /// — the file changed while git read it: ask again. A failure of git's, such as a

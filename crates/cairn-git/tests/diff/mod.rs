@@ -13,6 +13,7 @@ mod inputs;
 mod ownership;
 mod parity;
 mod patches;
+mod staged_renames;
 mod stash;
 mod working_tree;
 

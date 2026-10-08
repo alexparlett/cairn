@@ -12,6 +12,12 @@
 //! list), and the sizes of the blobs on each side, so a file too large to draw is refused
 //! before git diffs it. gix also reads every blob git names, by the id git names it with.
 //!
+//! The staged side pairs a rename or a copy as the user's `git diff --cached` pairs it, under
+//! their `diff.renames` and `diff.renameLimit` (R2.6, L18): which pair the path belongs to is
+//! asked of the whole index first (`crate::reads::staged_pairing`), and that pair's diff is
+//! then read across both its paths, so a staged rename is drawn as git draws it and not as an
+//! addition beside a deletion (`crate::reads`' working-tree module, "Renames").
+//!
 //! The stale-read guard is three checks. Every line git prints is checked against the side
 //! it belongs to (`PatchText::new_side`, `PatchText::read_against`). The rebuilt working-tree
 //! side is hashed and must be the object id git printed for it on the patch's `index` line,
@@ -30,14 +36,15 @@ use gix::bstr::ByteSlice as _;
 use crate::object_id::{model_id, object_id};
 use crate::ops::GitBinary;
 use crate::reads::{
-    PatchText, Reading, Side, WorkingTreeAnswer, WorkingTreeQuery, work_tree_relative,
-    working_tree_patch,
+    Detection, Paired, PatchText, Reading, Side, WorkingTreeAnswer, WorkingTreeQuery,
+    staged_pairing, work_tree_relative, working_tree_patch,
 };
 use crate::{Cancel, Error, Repository};
 
 use super::algorithm::{Algorithms, PathAlgorithm};
 use super::content::{crossed_line_limit, git_context, lfs_pointer, text_content};
 use super::hunk_grouping::Grouping;
+use super::renames::Configured;
 use super::submodules::working_tree_ignore;
 use super::{ContentOptions, WorkingTreeDiff};
 
@@ -78,6 +85,7 @@ pub(super) fn working_tree_diff(
     // What the index says first: it decides some answers outright, and names the blob a
     // staged or an unstaged diff has on one side.
     let mut staged_commit: Option<Oid> = None;
+    let mut pair: Option<(Detection, ChangedFile)> = None;
     let sizes = match which {
         WorkingTreeDiff::Untracked => Sizes {
             old: Some(0),
@@ -124,12 +132,24 @@ pub(super) fn working_tree_diff(
                 }
                 let (commit, head_blob) = head_side(inner, path)?;
                 staged_commit = Some(commit);
-                Sizes {
-                    old: Some(match head_blob {
-                        Some(id) => size_of(inner, id, path)?,
-                        None => 0,
-                    }),
-                    new: Some(index_size),
+                // R2.6: the pair `git diff --cached` puts the path in, if any; its sides are
+                // the pair's two blobs, at two paths.
+                let detection = Configured::read(inner)?.search(git.version()).detection();
+                if let Some(paired) = staged_pairing(git, repo, &commit, detection, path, cancel)? {
+                    let sizes = Sizes {
+                        old: Some(side_size(inner, &paired.old_id, path)?),
+                        new: Some(side_size(inner, &paired.new_id, path)?),
+                    };
+                    pair = Some((detection, paired));
+                    sizes
+                } else {
+                    Sizes {
+                        old: Some(match head_blob {
+                            Some(id) => size_of(inner, id, path)?,
+                            None => 0,
+                        }),
+                        new: Some(index_size),
+                    }
                 }
             } else {
                 Sizes {
@@ -144,6 +164,8 @@ pub(super) fn working_tree_diff(
         (WorkingTreeDiff::Untracked, _) => Side::Untracked,
         (WorkingTreeDiff::Staged | WorkingTreeDiff::Unstaged, _) => Side::Unstaged,
     };
+    // A pair's diff driver is its source's, as git reads it for the old side.
+    let old_path = pair.as_ref().map_or(path, |(_, paired)| &paired.old_path);
     let (algorithm, ignore_submodules) = if side == Side::Untracked {
         // Every line of an untracked file is added whatever the algorithm, and it has no
         // submodule to ignore.
@@ -151,7 +173,7 @@ pub(super) fn working_tree_diff(
     } else {
         (
             Algorithms::read(inner, git.version())?
-                .for_old_paths(git, repo, &[path], cancel)?
+                .for_old_paths(git, repo, &[old_path], cancel)?
                 .pop()
                 .and_then(PathAlgorithm::flag),
             working_tree_ignore(inner, path)?,
@@ -161,6 +183,16 @@ pub(super) fn working_tree_diff(
         repo,
         git,
         path,
+        pair: pair.as_ref().map(|(detection, paired)| {
+            (
+                Paired {
+                    detection: *detection,
+                    old: &paired.old_path,
+                    new: &paired.new_path,
+                },
+                paired,
+            )
+        }),
         options,
         cancel,
         side,
@@ -195,6 +227,9 @@ struct Asker<'a, C: Cancel> {
     repo: &'a Repository,
     git: &'a GitBinary,
     path: &'a RepoPath,
+    /// The staged side's rename or copy, and the record the whole-index read found for it,
+    /// which the paired read must answer again.
+    pair: Option<(Paired<'a>, &'a ChangedFile)>,
     options: &'a ContentOptions,
     cancel: &'a C,
     side: Side<'a>,
@@ -216,6 +251,7 @@ impl<C: Cancel> Asker<'_, C> {
         let query = WorkingTreeQuery {
             side: self.side,
             path: self.path,
+            paired: self.pair.map(|(paired, _)| paired),
             context: git_context(self.options.context),
             algorithm: self.algorithm,
             ignore_whitespace,
@@ -223,7 +259,29 @@ impl<C: Cancel> Asker<'_, C> {
             raw_only,
             ceiling: usize::try_from(output).unwrap_or(usize::MAX),
         };
-        working_tree_patch(self.git, self.repo, &query, self.cancel)
+        let answer = working_tree_patch(self.git, self.repo, &query, self.cancel)?;
+        self.same_pair(answer)
+    }
+
+    /// The paired read's record is the pair the whole-index read found, or the index moved
+    /// between the two reads and the answer is asked again (`ContentReadsDisagree`).
+    fn same_pair(&self, answer: WorkingTreeAnswer) -> Result<WorkingTreeAnswer, Error> {
+        let Some((_, expected)) = self.pair else {
+            return Ok(answer);
+        };
+        let found = match &answer {
+            WorkingTreeAnswer::Unlisted => None,
+            WorkingTreeAnswer::Listed { file, .. } => Some(file),
+            WorkingTreeAnswer::PastCeiling { file } => file.as_ref(),
+        };
+        match found {
+            Some(file) if file == expected => Ok(answer),
+            // Git ended before its record arrived whole: nothing to compare.
+            None if matches!(answer, WorkingTreeAnswer::PastCeiling { .. }) => Ok(answer),
+            Some(_) | None => Err(self.disagree(
+                "the index changed between git's two reads of a staged rename or copy".to_owned(),
+            )),
+        }
     }
 
     fn working_tree(&self) -> bool {
@@ -430,10 +488,16 @@ impl<C: Cancel> Asker<'_, C> {
         }
 
         // A file added, deleted or changed in type is one change of every line, as git
-        // prints it, and so is its whitespace-ignoring reading; a modification is asked
-        // again with `-w` when the view wants that reading.
+        // prints it, and so is its whitespace-ignoring reading; a modification — and a
+        // staged rename or copy, whose two blobs git diffed line by line — is asked again
+        // with `-w` when the view wants that reading.
         let readings = match exact {
-            Some(exact) if file.status == ChangeStatus::Modified => {
+            Some(exact)
+                if matches!(
+                    file.status,
+                    ChangeStatus::Modified | ChangeStatus::Renamed(_) | ChangeStatus::Copied(_)
+                ) =>
+            {
                 let ignoring = if self.options.ignore_whitespace {
                     Some(self.ignoring(&old, &new, named, output)?)
                 } else {
@@ -684,6 +748,14 @@ fn head_side(
         .filter(|entry| entry.mode().is_blob_or_symlink())
         .map(|entry| entry.object_id());
     Ok((model_id(&head)?, blob))
+}
+
+/// The size of one side of a pair, from the id git named for it: zero for an absent side.
+fn side_size(repo: &gix::Repository, id: &Option<Oid>, path: &RepoPath) -> Result<u64, Error> {
+    match not_null(*id) {
+        Some(id) => size_of(repo, object_id(&id)?, path),
+        None => Ok(0),
+    }
 }
 
 fn size_of(repo: &gix::Repository, id: gix::hash::ObjectId, path: &RepoPath) -> Result<u64, Error> {

@@ -33,7 +33,7 @@ fn engine(repo: &Repo) -> Repository {
     ok(Repository::discover(repo.path()), "the fixture opens")
 }
 
-fn ask(repo: &Repo, path: &str, which: WorkingTreeDiff) -> Option<FileDiff> {
+pub(super) fn ask(repo: &Repo, path: &str, which: WorkingTreeDiff) -> Option<FileDiff> {
     ask_with(repo, path, which, &ContentOptions::default())
 }
 
@@ -91,6 +91,27 @@ fn git_diff(repo: &Repo, path: &str, which: WorkingTreeDiff, extra: &[&str]) -> 
     porcelain(repo, &args)
 }
 
+/// What the user's `git diff --cached` prints for a rename or a copy it paired: the pair's
+/// two paths as the pathspec, within which git pairs them as it does over the whole index,
+/// and only the pair's own record, not a copy source's modification beside it.
+fn git_diff_pair(repo: &Repo, file: &cairn_model::ChangedFile, extra: &[&str]) -> String {
+    let (old, new) = (file.old_path.display(), file.new_path.display());
+    let mut args = vec![
+        "diff",
+        "--cached",
+        "-U3",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        "--diff-filter=RC",
+    ];
+    args.extend_from_slice(extra);
+    args.extend(["--", &old, &new]);
+    porcelain(repo, &args)
+}
+
 /// Every file under `dir`, by path, with its bytes.
 fn snapshot(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut files = BTreeMap::new();
@@ -138,10 +159,25 @@ fn answers_writing_nothing(
 
 /// Cairn's answer and git's, hunk for hunk with the function context; `None` is git
 /// printing nothing at all.
-fn same_as_git(repo: &Repo, path: &str, which: WorkingTreeDiff, answer: &Option<FileDiff>) {
+pub(super) fn same_as_git(
+    repo: &Repo,
+    path: &str,
+    which: WorkingTreeDiff,
+    answer: &Option<FileDiff>,
+) {
     for whitespace in [false, true] {
         let extra: &[&str] = if whitespace { &["-w"] } else { &[] };
-        let theirs = git_diff(repo, path, which, extra);
+        // A staged rename or copy is what `git diff --cached` pairs (R2.6); a pathspec of
+        // its destination alone would show git an addition.
+        let theirs = match answer {
+            Some(diff)
+                if which == WorkingTreeDiff::Staged
+                    && (diff.file.is_rename() || diff.file.is_copy()) =>
+            {
+                git_diff_pair(repo, &diff.file, extra)
+            }
+            Some(_) | None => git_diff(repo, path, which, extra),
+        };
         let ours = match answer {
             None => {
                 assert_eq!(

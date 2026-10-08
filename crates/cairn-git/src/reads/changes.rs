@@ -208,6 +208,12 @@ impl RawRecords {
         self.files.len()
     }
 
+    /// The files the records named so far, handed over: a reader that keeps only some of
+    /// a long answer takes them as they arrive rather than holding every one.
+    pub(super) fn take_files(&mut self) -> Vec<ChangedFile> {
+        std::mem::take(&mut self.files)
+    }
+
     pub(super) fn finish(self, arguments: &str) -> Result<Vec<ChangedFile>, Error> {
         let unexpected = |record: String| Error::UnexpectedGitOutput {
             arguments: arguments.to_owned(),

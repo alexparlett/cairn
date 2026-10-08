@@ -57,8 +57,31 @@
 //! porcelain applies to a submodule with no `ignore` of its own (passed by the caller as
 //! `--ignore-submodules`, which plumbing honours, from `crate::diff`); and `diff-index
 //! --cached` lists an intent-to-add entry as an empty file added where `git diff --cached`
-//! lists nothing, which the caller decides from the index before asking. Rename detection
-//! is off in plumbing and cannot pair one path anyway; `--no-renames` says so.
+//! lists nothing, which the caller decides from the index before asking.
+//!
+//! **Renames.** Plumbing reads no `diff.renames`, and a pathspec of one path cannot pair it
+//! — `git diff --cached -- <new>` itself shows a staged rename as an addition. What the
+//! user's `git diff --cached` pairs is decided over the whole index, so the staged side asks
+//! twice where the user's detection is on (R2.6, L18):
+//!
+//! 1. [`staged_pairing`]: `git diff-index --cached -z --raw --no-abbrev <-M|-C> -l<n>
+//!    --diff-filter=RC --ita-invisible-in-index --end-of-options <commit>`, over the whole
+//!    index and with no content, keeping only the rename or copy whose destination is the
+//!    path, or the rename whose source it is. `--ita-invisible-in-index` is porcelain's own
+//!    reading of an intent-to-add entry (without it plumbing pairs a deleted empty file with
+//!    one), and `--diff-filter=RC` leaves out every other record, an unmerged one included.
+//! 2. The content read above, given both paths as its pathspec and the same detection and
+//!    filter in place of `--no-renames`: with one source and one destination queued, git
+//!    finds the same pair at the same score, since a pair's similarity is the two blobs'
+//!    alone. Its record must be the pair the first read found, or the index moved between
+//!    them ([`Error::ContentReadsDisagree`], which the caller asks again on).
+//!
+//! Where detection is off, or the path is in no pair, the read is the one-path read with
+//! `--no-renames`, which is then exactly git's answer. Reproduced with git 2.30.9, 2.32.7
+//! and 2.56.0 against `git diff --cached --raw` under `diff.renames` unset, `false` and
+//! `copies` (C7, `crates/cairn-git/tests/diff/staged_renames.rs`). The unstaged side needs no
+//! pairing: `git diff` pairs nothing between the index and the working tree but an
+//! intent-to-add entry, whose own diff is its addition.
 //!
 //! **Exit status.** `diff-index` and `diff-files` exit 0 with an answer. `diff --no-index`
 //! exits 1 when the two sides differ — always, against `/dev/null` — and also 1 when it
@@ -74,8 +97,9 @@ use std::os::unix::ffi::OsStringExt as _;
 
 use cairn_model::{ChangedFile, Oid, RepoPath};
 
-use super::Algorithm;
+use super::changes::RawRecords;
 use super::patches::{Parser, PatchText};
+use super::{Algorithm, Detection};
 use crate::ops::GitBinary;
 use crate::{Cancel, Error, Repository};
 
@@ -91,11 +115,23 @@ pub(crate) enum Side<'a> {
     Untracked,
 }
 
+/// A rename or a copy the staged side reads as one change: the detection that found it,
+/// and its two paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Paired<'a> {
+    pub(crate) detection: Detection,
+    pub(crate) old: &'a RepoPath,
+    pub(crate) new: &'a RepoPath,
+}
+
 /// One working-tree read.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct WorkingTreeQuery<'a> {
     pub(crate) side: Side<'a>,
     pub(crate) path: &'a RepoPath,
+    /// For the staged side only: the pair [`staged_pairing`] found the path in, read as
+    /// one change across both its paths. `None` reads the path alone, `--no-renames`.
+    pub(crate) paired: Option<Paired<'a>>,
     /// The context the view groups at; raised to one, never zero.
     pub(crate) context: u32,
     /// `None` passes no algorithm, so git applies a diff driver's own.
@@ -162,6 +198,10 @@ pub(crate) fn working_tree_patch(
         Side::Untracked => RepoPath::new(no_index_operand(query.path)),
         Side::Staged { .. } | Side::Unstaged => query.path.clone(),
     };
+    let named = |files: Vec<ChangedFile>| match query.paired {
+        Some(paired) => one_pair(files, paired),
+        None => one_for(files, query.path, &printed),
+    };
     let outcome = git
         .read_invocation()
         .in_repository(repo)
@@ -182,7 +222,7 @@ pub(crate) fn working_tree_patch(
             return Ok(WorkingTreeAnswer::PastCeiling {
                 file: parser
                     .records_so_far()
-                    .and_then(|files| one_for(files, query.path, &printed).ok().flatten()),
+                    .and_then(|files| named(files).ok().flatten()),
             });
         }
         Err(other) => return Err(other),
@@ -192,7 +232,7 @@ pub(crate) fn working_tree_patch(
         record,
     };
     let (files, sections) = parser.finish_listing(query.raw_only).map_err(unexpected)?;
-    let Some(file) = one_for(files, query.path, &printed).map_err(unexpected)? else {
+    let Some(file) = named(files).map_err(unexpected)? else {
         if let Some(Err(error)) = failure {
             return Err(error);
         }
@@ -229,6 +269,130 @@ fn one_for(
         Some(file) => Err(format!("a record for {}", file.new_path)),
         None => Ok(None),
     }
+}
+
+/// The one record git printed for a pair, `Err` for any other record or a second one. Its
+/// paths are git's own, source and destination; that it is the very pair asked about, at
+/// the same score, is the caller's to check.
+fn one_pair(files: Vec<ChangedFile>, paired: Paired<'_>) -> Result<Option<ChangedFile>, String> {
+    let mut files = files.into_iter();
+    let first = files.next();
+    if files.next().is_some() {
+        return Err("more than one record for one rename or copy".to_owned());
+    }
+    match first {
+        Some(file) if &file.old_path == paired.old && &file.new_path == paired.new => {
+            Ok(Some(file))
+        }
+        Some(file) => Err(format!(
+            "a record for {} -> {}",
+            file.old_path, file.new_path
+        )),
+        None => Ok(None),
+    }
+}
+
+/// The rename or copy the user's `git diff --cached` pairs `path` into, if any: the one
+/// whose destination is `path`, or the rename whose source it is (module docs, "Renames").
+///
+/// Over the whole index, as porcelain decides it, with `detection` the user's
+/// (`crate::diff`'s reading of `diff.renames` and `diff.renameLimit`); only the records
+/// that name `path` are kept as they arrive, so a long answer is never held. `None` where
+/// `path` is in no pair — git's answer for it is then its own record, read alone. Never
+/// called with [`Detection::Off`], which pairs nothing; given it, it answers `None` and
+/// starts nothing. `cancel` is polled while git runs and a superseded read is
+/// [`Error::ContentCancelled`]; a failure is [`Error::GitFailed`], and a record this
+/// parser does not know [`Error::UnexpectedGitOutput`].
+pub(crate) fn staged_pairing(
+    git: &GitBinary,
+    repo: &Repository,
+    commit: &Oid,
+    detection: Detection,
+    path: &RepoPath,
+    cancel: &impl Cancel,
+) -> Result<Option<ChangedFile>, Error> {
+    if detection == Detection::Off {
+        return Ok(None);
+    }
+    if cancel.is_cancelled() {
+        return Err(Error::ContentCancelled);
+    }
+    let arguments = pairing_arguments(commit, detection);
+    let mut records = RawRecords::default();
+    let mut found: Vec<ChangedFile> = Vec::new();
+    let outcome = git
+        .read_invocation()
+        .in_repository(repo)
+        .args(&arguments)
+        .start()?
+        .records(
+            cancel,
+            |record| {
+                records.push(record);
+                found.extend(
+                    records
+                        .take_files()
+                        .into_iter()
+                        .filter(|file| names(file, path)),
+                );
+            },
+            |_| {},
+        );
+    match outcome {
+        Ok(_) => {}
+        Err(Error::GitReadCancelled { .. }) => return Err(Error::ContentCancelled),
+        Err(other) => return Err(other),
+    }
+    let described = arguments
+        .iter()
+        .map(|argument| argument.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join(" ");
+    records.finish(&described)?;
+    let mut found = found.into_iter();
+    let first = found.next();
+    if let Some(second) = found.next() {
+        return Err(Error::UnexpectedGitOutput {
+            arguments: described,
+            record: format!(
+                "{path} paired twice, into {} and {}",
+                first.map_or_else(String::new, |file| file.new_path.to_string()),
+                second.new_path
+            ),
+        });
+    }
+    Ok(first)
+}
+
+/// Whether `file` is the pair `path` belongs to: a rename or a copy TO it, or a rename FROM
+/// it. A copy from it is not: the source of a copy is still there, with a record of its own.
+fn names(file: &ChangedFile, path: &RepoPath) -> bool {
+    use cairn_model::ChangeStatus;
+    match file.status {
+        ChangeStatus::Renamed(_) => &file.new_path == path || &file.old_path == path,
+        ChangeStatus::Copied(_) => &file.new_path == path,
+        ChangeStatus::Added
+        | ChangeStatus::Deleted
+        | ChangeStatus::Modified
+        | ChangeStatus::TypeChanged => false,
+    }
+}
+
+fn pairing_arguments(commit: &Oid, detection: Detection) -> Vec<OsString> {
+    let mut arguments: Vec<OsString> = ["diff-index", "--cached", "-z", "--raw", "--no-abbrev"]
+        .map(OsString::from)
+        .into();
+    arguments.extend(detection.arguments().into_iter().map(OsString::from));
+    arguments.extend(
+        [
+            "--diff-filter=RC",
+            "--ita-invisible-in-index",
+            "--end-of-options",
+        ]
+        .map(OsString::from),
+    );
+    arguments.push(commit.to_string().into());
+    arguments
 }
 
 /// `Ok` for a path as git holds one in a working tree: relative to its top, with no `.` or
@@ -327,14 +491,19 @@ fn arguments(query: &WorkingTreeQuery<'_>) -> Vec<OsString> {
         // Plumbing reads none of `NO_INDEX_PRESENTATION` but this one.
         arguments.extend(["-c", "diff.suppressBlankEmpty=false"].map(OsString::from));
     }
-    match query.side {
-        Side::Staged { .. } => {
+    match (query.side, query.paired) {
+        (Side::Staged { .. }, Some(paired)) => {
+            arguments.extend(["diff-index", "--cached"].map(OsString::from));
+            arguments.extend(paired.detection.arguments().into_iter().map(OsString::from));
+            arguments.extend(["--diff-filter=RC", "--ita-invisible-in-index"].map(OsString::from));
+        }
+        (Side::Staged { .. }, None) => {
             arguments.extend(["diff-index", "--cached", "--no-renames"].map(OsString::from));
         }
-        Side::Unstaged => {
+        (Side::Unstaged, _) => {
             arguments.extend(["diff-files", "--no-renames"].map(OsString::from));
         }
-        Side::Untracked => arguments.extend(["diff", "--no-index"].map(OsString::from)),
+        (Side::Untracked, _) => arguments.extend(["diff", "--no-index"].map(OsString::from)),
     }
     arguments.extend(["-z", "--raw", "--no-abbrev"].map(OsString::from));
     if !query.raw_only {
@@ -358,7 +527,13 @@ fn arguments(query: &WorkingTreeQuery<'_>) -> Vec<OsString> {
             arguments.push("--end-of-options".into());
             arguments.push(commit.to_string().into());
             arguments.push("--".into());
-            arguments.extend(pathspec(query.path));
+            match query.paired {
+                Some(paired) => {
+                    arguments.extend(pathspec(paired.old));
+                    arguments.extend(pathspec(paired.new));
+                }
+                None => arguments.extend(pathspec(query.path)),
+            }
         }
         Side::Unstaged => {
             arguments.push("--".into());
@@ -409,6 +584,7 @@ mod tests {
         WorkingTreeQuery {
             side,
             path,
+            paired: None,
             context: 3,
             algorithm: Some(Algorithm::Myers),
             ignore_whitespace: false,

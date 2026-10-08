@@ -15,7 +15,11 @@
 //! diff driver names an algorithm of its own; and [`working_tree_patch`], one
 //! path's staged, unstaged or untracked diff — `git diff-index --cached`,
 //! `git diff-files`, `git diff --no-index` — which reads the working tree
-//! through git, so its side is git's form of the file (`diff-engine` phase 03);
+//! through git, so its side is git's form of the file (`diff-engine` phase 03),
+//! with [`staged_pairing`] beside it, `git diff-index --cached --raw` over the
+//! whole index, the rename or copy the user's `git diff --cached` pairs a path
+//! into, since plumbing reads no `diff.renames` and a one-path pathspec pairs
+//! nothing (`staging-and-commit` R2.6);
 //! and one for fetch's refspec check, [`fetch_settings`], `git config` in query
 //! form, what a fetch of a remote will read, because the check must decide on
 //! exactly what the fetch's own git reads and gix's reading of a linked
@@ -221,7 +225,8 @@ pub(crate) use patches::{Algorithm, FilePatch, PatchQuery, PatchText, Reading, S
 pub(crate) use stash_changes::stash_changes;
 pub(crate) use status::status;
 pub(crate) use working_tree::{
-    Side, WorkingTreeAnswer, WorkingTreeQuery, work_tree_relative, working_tree_patch,
+    Paired, Side, WorkingTreeAnswer, WorkingTreeQuery, staged_pairing, work_tree_relative,
+    working_tree_patch,
 };
 
 /// The read as the diff thread will run it: built here from a `GitBinary` copy

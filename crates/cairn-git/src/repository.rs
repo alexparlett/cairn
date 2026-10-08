@@ -266,6 +266,18 @@ impl SharedRepository {
         &self.git_dir
     }
 
+    /// Every `*.lock` file under the repository's git directories now — the ones a write
+    /// that was ended before it could clean up leaves behind, which every later write to
+    /// that file fails on (staging-and-commit R4.9, #44): its git directory and, for a linked
+    /// worktree, the common one. Listed as the repository opens, so a lock a write stranded
+    /// when the window closed under it is named the next time. A finding, not a verdict: a
+    /// lock a git in a terminal holds this instant is listed too. A directory listing, so a
+    /// worker's call: everything under `refs/` is walked.
+    pub fn lock_files(&self) -> Vec<std::path::PathBuf> {
+        let common = self.inner.common_dir.as_deref().unwrap_or(&self.git_dir);
+        crate::ops::stranded_locks::stranded_locks(&self.git_dir, common)
+    }
+
     /// The working tree root, or `None` for a bare repository.
     pub fn workdir(&self) -> Option<&Path> {
         self.workdir.as_deref()
@@ -308,15 +320,6 @@ impl Repository {
         &self.inner
     }
 
-    /// Every `*.lock` file under the repository's git directories now — the ones a write
-    /// that was ended before it could clean up leaves behind, which every later write to
-    /// that file fails on (staging-and-commit R4.9, #44). Listed as the repository opens, so
-    /// a lock a write stranded when the window closed under it is named the next time.
-    /// A finding, not a verdict: a lock a git in a terminal holds this instant is listed too.
-    pub fn lock_files(&self) -> Vec<std::path::PathBuf> {
-        crate::ops::stranded_locks::stranded_locks(self.git_dir(), self.inner.common_dir())
-    }
-
     /// The registry and log every handle on this repository shares.
     pub(crate) fn processes(&self) -> &Arc<Processes> {
         &self.processes
@@ -350,7 +353,7 @@ mod tests {
             .output()
             .unwrap();
         assert!(initialised.status.success(), "{initialised:?}");
-        let repo = Repository::discover(&directory).unwrap();
+        let repo = SharedRepository::discover(&directory).unwrap();
         assert_eq!(repo.lock_files(), Vec::<std::path::PathBuf>::new());
         let lock = repo.git_dir().join("index.lock");
         std::fs::write(&lock, "").unwrap();

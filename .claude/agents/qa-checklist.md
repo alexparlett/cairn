@@ -60,8 +60,15 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
    `crates/cairn-git/src/process/` or `crates/cairn-git/src/reads/`, or a new
    call site reaching one): the operation takes `cairn_model::Confirmed` by
    value, the prompt `Consequence::prompt` renders for the `Consequence` handed
-   to `Confirmed::by_user` names the actual consequence (what is lost, how much, whether it is recoverable), and nothing
-   constructs the token outside a user acknowledgement path. Also: no
+   to `Confirmed::by_user` names the actual consequence (what is lost, how much,
+   whether it is recoverable), and nothing constructs the token outside a user
+   acknowledgement path. The seal's guard
+   (`destructive_operations_are_sealed_behind_the_confirmation_token`) reads
+   spellings, so these are yours: a token reached through a macro; a closure in
+   `ops/` taking one, which is no function the roster reads; and a public
+   function in `cairn-model` or `cairn-git` that builds a `Consequence` from
+   values its caller passes, through which a render crate could forge one
+   without spelling a path into it. Also: no
    `std::process::Command` reached through a spelling the terminal-prompt guard
    cannot read — a `type` alias for it, a wrapper crate that spawns, a macro
    that expands to one — anywhere but `crates/cairn-git/src/process/environment.rs`;

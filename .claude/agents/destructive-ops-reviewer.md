@@ -25,9 +25,13 @@ SUFFICIENT.
 
 Apply `docs/qa-gate.md`'s Review diff scope rule. If nothing under
 `crates/cairn-git/src/ops/`, `crates/cairn-git/src/process/` or
-`crates/cairn-git/src/reads/` changed and no
+`crates/cairn-git/src/reads/` changed, neither
+`crates/cairn-model/src/consequence.rs` nor `crates/cairn-model/src/confirm.rs`
+changed, no file on the guard's `CONFIRMATION_SURFACES` roster changed, and no
 changed file constructs a `Confirmed` or a `WriteAuthority`, or calls into
-`ops`, report "out of scope" and STOP. A change to the `git` subprocess
+`ops`, report "out of scope" and STOP. A diff that changes only a prompt — the
+renderer in `consequence.rs`, or a surface that draws it — IS in scope: checks
+2 to 4 own it. A change to the `git` subprocess
 environment (`crates/cairn-git/src/process/environment.rs`) IS in scope even
 when no operation changed: check 9 owns it. A new or changed read in `reads/` IS in scope: check 10 owns it, and a read
 that calls into `ops` or builds a `Confirmed` need not exist for it to matter.
@@ -60,7 +64,11 @@ CRITICAL, each one a finding on its own:
 4. **Counts and names computed after the prompt.** If the prompt says "3 commits"
    but the number is read again inside the operation, the user agreed to a
    different thing than what runs. The quantities in the prompt must be the
-   quantities acted on.
+   quantities acted on: an operation derives every target — each path, each
+   line — from `confirmed.consequence()`, never from a parameter beside it, and
+   re-reads the repository to compare against the `Consequence` before it runs
+   (R1.4). And since `Consequence` is `Clone`, a confirmation surface that builds
+   two tokens from one acknowledgement spends one prompt on two operations.
 5. **No reflog or recovery path where git would have left one.** A rewrite that
    moves a ref must leave the old tip findable. If the implementation bypasses
    the reflog (a raw ref write, a loose-ref clobber), say so.

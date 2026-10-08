@@ -460,7 +460,7 @@
       <li><span class="n c">1</span><span><b>What is lost, how much, recoverable — in that order</b>, in words, before the button. Spine pillar 3. Fork's dialog says "Are you sure?".</span></li>
       <li><span class="n c">2</span><span><b>"Recoverable: No" is stated, not implied.</b> A discarded uncommitted edit is the one class of destruction the reflog does not cover (<b>feature-inventory, Recovery</b>).</span></li>
       <li><span class="n c">3</span><span><b>Stash first</b> is offered as an option, on by default — the open auto-stash question (<b>daily-loop O3</b>) shown as UI rather than decided silently.</span></li>
-      <li><span class="n c">4</span><span><b>The button names the consequence.</b> Its text and the prompt above it are the string handed to <code>Confirmed::by_user</code>: what the user saw is what the type records.</span></li>
+      <li><span class="n c">4</span><span><b>The button names the consequence.</b> Its text and the prompt above it are rendered from the engine's <code>Consequence</code>, the value handed to <code>Confirmed::by_user</code>: what the user saw is what the type records.</span></li>
       <li><span class="n c">5</span><span><b>The operation log quotes what was acknowledged.</b> <code>ops::Performed</code> already carries it; this is where a person reads it back.</span></li>
     </ol>
   </section>

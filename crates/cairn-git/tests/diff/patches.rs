@@ -55,19 +55,25 @@ fn diffs_of(engine: &Repository, commit: &Oid) -> Vec<FileDiff> {
         .collect()
 }
 
+/// Every line and the mode change: the whole of a file's change, which since R2.4 is two
+/// items.
+fn everything(text: &TextDiff) -> Selection {
+    let mut selection = Selection::with_every_change(text);
+    selection.select_mode();
+    selection
+}
+
 /// The patch for one file with every change in it selected, or `None` when the model says
 /// this file has no patch at all.
 fn whole_patch(diff: &FileDiff) -> Option<Patch> {
     match &diff.content {
-        DiffContent::Text { text, .. } => Some(emit_patch(
-            &diff.file,
-            text,
-            &Selection::with_every_change(text),
-        )),
+        DiffContent::Text { text, .. } => Some(emit_patch(&diff.file, text, &everything(text))),
         // The whole change is the mode, so the headers are the whole patch.
-        DiffContent::ModeChangeOnly => {
-            Some(emit_patch(&diff.file, &no_lines(), &Selection::empty()))
-        }
+        DiffContent::ModeChangeOnly => Some(emit_patch(
+            &diff.file,
+            &no_lines(),
+            &everything(&no_lines()),
+        )),
         DiffContent::Binary { .. }
         | DiffContent::TooLarge { .. }
         | DiffContent::LfsPointer { .. }
@@ -296,8 +302,23 @@ impl Seeded {
 }
 
 /// The selections C2 names, in order: every line, no lines, only additions, only removals,
-/// the first line of every change, the last line of every change, then seeded ones.
+/// the first line of every change, the last line of every change, then seeded ones — each
+/// with the mode change selected too, so a file whose mode changed is staged with its new
+/// mode and the check of the staged mode below holds. A selection of lines without the
+/// mode is staging-and-commit's C4 (`staging.rs`).
 fn selections(text: &TextDiff, seeds: usize) -> Vec<(String, Selection)> {
+    selections_of_lines(text, seeds)
+        .into_iter()
+        .map(|(name, mut selection)| {
+            if !selection.is_empty() {
+                selection.select_mode();
+            }
+            (name, selection)
+        })
+        .collect()
+}
+
+fn selections_of_lines(text: &TextDiff, seeds: usize) -> Vec<(String, Selection)> {
     let mut out = vec![
         ("every line".to_owned(), Selection::with_every_change(text)),
         ("no lines".to_owned(), Selection::empty()),

@@ -289,6 +289,46 @@ impl TextDiff {
         &self.changes
     }
 
+    /// The same change seen from its other end (R2.1): the new side becomes the old and the
+    /// old the new, each change's two spans swapped. Unstage and discard are the forward
+    /// patch rule ([`crate::emit_patch`]) over this, so no `git apply -R` ever runs (L17a).
+    ///
+    /// A change that both removes and adds lines comes out as **two** changes at one place:
+    /// its insertion first, then its removal. The forward rule keeps an unselected removed
+    /// line where it stood, ahead of whatever is added beside it; in an inverted diff the
+    /// removed lines are the original's additions, so left as one change a partial
+    /// selection would put the original's surviving additions ahead of the lines it
+    /// restores — the reverse of the order the diff drew them in, and of what git's own
+    /// `reset -p` and `checkout -p` leave, which apply the mirrored patch in reverse
+    /// (`patch-mechanics-spike.md` E1b). Written as an insertion and then a removal, what is
+    /// restored lands ahead of what stays, old lines before new as in the diff drawn. The
+    /// two sides' content, and every line's number on its own side, are unchanged by the
+    /// split; only the grouping differs, so inverting twice gives the same sides and not
+    /// necessarily the same changes.
+    ///
+    /// Pure, and costs what the file has lines: the sides are copied.
+    pub fn inverted(&self) -> TextDiff {
+        let mut changes = Vec::with_capacity(self.changes.len());
+        for change in &self.changes {
+            if change.removed.is_empty() || change.added.is_empty() {
+                changes.push(ChangedRange::new(change.added, change.removed));
+                continue;
+            }
+            // In the inverted diff, the original's added lines are the old side and its
+            // removed lines the new. The insertion sits ahead of the old run it replaces...
+            changes.push(ChangedRange::new(
+                LineSpan::new(change.added.start(), 0),
+                change.removed,
+            ));
+            // ...and the removal follows it, starting where the insertion ended.
+            changes.push(ChangedRange::new(
+                change.added,
+                LineSpan::new(change.removed.end(), 0),
+            ));
+        }
+        TextDiff::new(self.new.clone(), self.old.clone(), changes)
+    }
+
     /// The whole old side as it sits on disk. Materialises the file: the projections
     /// never call it, and a view has no reason to.
     pub fn old_content(&self) -> Vec<u8> {
@@ -542,6 +582,104 @@ mod tests {
             lines(10),
             vec![change((5, 1), (5, 1)), change((1, 1), (1, 1))],
         );
+    }
+
+    /// R2.1: the sides swap, so the inverted diff's old side is the original's new side
+    /// byte for byte, and its changes are the original's with their spans swapped.
+    /// Caught by: a side left in place, or a span left unswapped.
+    #[test]
+    fn inverting_swaps_the_sides_and_each_changes_spans() {
+        let text = TextDiff::new(
+            split_lines(b"a\nb\nc\nd\ne\n"),
+            split_lines(b"a\nX\nY\nc\ne\nf"),
+            vec![
+                // b replaced by X Y
+                change((1, 1), (1, 2)),
+                // d removed
+                change((3, 1), (4, 0)),
+                // f added at the end, with no newline
+                change((5, 0), (5, 1)),
+            ],
+        );
+        let inverted = text.inverted();
+        assert_eq!(inverted.old_content(), text.new_content());
+        assert_eq!(inverted.new_content(), text.old_content());
+        assert_eq!(
+            inverted.changes(),
+            &[
+                // the replacement, as its insertion and then its removal
+                change((1, 0), (1, 1)),
+                change((1, 2), (2, 0)),
+                // a removal inverted is an insertion, and an insertion a removal
+                change((4, 0), (3, 1)),
+                change((5, 1), (5, 0)),
+            ],
+        );
+    }
+
+    /// The order a partial selection leaves lines in, which is what the split is for: the
+    /// inverted replacement restores its old lines AHEAD of the new lines that stay, as the
+    /// diff drew them and as git's mirrored `-R` patch leaves them. Caught by: inverting a
+    /// replacement as one change, which the forward rule then reads as "keep the new lines,
+    /// then add the old" — `B b`, where git leaves `b B`.
+    #[test]
+    fn an_inverted_replacement_puts_its_insertion_ahead_of_its_removal() {
+        let text = TextDiff::new(
+            split_lines(b"b\n"),
+            split_lines(b"B\n"),
+            vec![change((0, 1), (0, 1))],
+        );
+        let inverted = text.inverted();
+        let [insertion, removal] = inverted.changes() else {
+            panic!("a replacement inverted to {:?}", inverted.changes());
+        };
+        assert!(insertion.is_insertion(), "{insertion:?}");
+        assert!(removal.is_removal(), "{removal:?}");
+        assert_eq!(
+            inverted
+                .new_line(insertion.added.start())
+                .map(DiffLine::bytes),
+            Some(&b"b"[..]),
+            "the insertion is not the original's removed line"
+        );
+        assert_eq!(
+            inverted
+                .old_line(removal.removed.start())
+                .map(DiffLine::bytes),
+            Some(&b"B"[..]),
+            "the removal is not the original's added line"
+        );
+    }
+
+    /// Inverting twice gives the original sides back, whatever the grouping of its changes;
+    /// and the inverted diff of a diff with no changes is the same diff.
+    #[test]
+    fn inverting_twice_gives_the_original_sides() {
+        let text = TextDiff::new(
+            split_lines(b"one\ntwo\nthree\n"),
+            split_lines(b"one\nTWO\nthree\nfour\n"),
+            vec![change((1, 1), (1, 1)), change((3, 0), (3, 1))],
+        );
+        let twice = text.inverted().inverted();
+        assert_eq!(twice.old_content(), text.old_content());
+        assert_eq!(twice.new_content(), text.new_content());
+        let numbers = |diff: &TextDiff| -> (Vec<u32>, Vec<u32>) {
+            let mut removed = Vec::new();
+            let mut added = Vec::new();
+            for change in diff.changes() {
+                removed.extend(change.removed.numbers().map(LineNumber::index));
+                added.extend(change.added.numbers().map(LineNumber::index));
+            }
+            (removed, added)
+        };
+        assert_eq!(
+            numbers(&twice),
+            numbers(&text),
+            "inverting twice moved a changed line"
+        );
+
+        let unchanged = TextDiff::new(split_lines(b"x\n"), split_lines(b"x\n"), Vec::new());
+        assert_eq!(unchanged.inverted(), unchanged);
     }
 
     #[test]

@@ -1,19 +1,26 @@
-//! Which changed lines a patch is to carry.
+//! Which changed lines, and whether the mode change, a patch is to carry.
 
 use std::collections::BTreeSet;
 
 use crate::{ChangedRange, LineNumber, TextDiff};
 
-/// A set of changed lines, each named by its line number on its own side (R1.3).
+/// A set of changed lines, each named by its line number on its own side (R1.3), and
+/// whether the file's mode change is selected (R2.4).
 ///
 /// A removed line is named by its old number and an added line by its new one, so a
 /// selection says nothing about hunks, context or which view was on screen when it was
 /// made. That is why it survives every projection of the same diff unchanged (C4), and
 /// why the patch built from it does too.
+///
+/// The mode change is an item of its own, apart from the lines, as `git add -p` asks it
+/// apart (L17d): a selection of lines alone carries no `old mode`/`new mode`, and a
+/// selection of the mode alone carries nothing else. Nothing selects it but
+/// [`Self::select_mode`] — not [`Self::with_every_change`], not [`Self::select_change`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Selection {
     removed: BTreeSet<LineNumber>,
     added: BTreeSet<LineNumber>,
+    mode: bool,
 }
 
 impl Selection {
@@ -22,8 +29,9 @@ impl Selection {
         Self::default()
     }
 
-    /// Every changed line of a diff — what staging a whole file selects. Costs what the
-    /// file has changed lines; see [`Self::holds_every_change`].
+    /// Every changed line of a diff — what staging every line of a file selects; the mode
+    /// change, which is not a line, is left out (R2.4). Costs what the file has changed
+    /// lines; see [`Self::holds_every_change`].
     pub fn with_every_change(text: &TextDiff) -> Self {
         let mut selection = Self::empty();
         for change in text.changes() {
@@ -54,6 +62,20 @@ impl Selection {
         self.added.remove(&line);
     }
 
+    /// Selects the file's mode change: the patch carries `old mode`/`new mode` where the
+    /// file's mode changed, and nothing for it where it did not.
+    pub fn select_mode(&mut self) {
+        self.mode = true;
+    }
+
+    pub fn unselect_mode(&mut self) {
+        self.mode = false;
+    }
+
+    pub fn holds_mode(&self) -> bool {
+        self.mode
+    }
+
     pub fn holds_removed(&self, line: LineNumber) -> bool {
         self.removed.contains(&line)
     }
@@ -62,13 +84,26 @@ impl Selection {
         self.added.contains(&line)
     }
 
+    /// Nothing selected, neither a line nor the mode change.
     pub fn is_empty(&self) -> bool {
-        self.removed.is_empty() && self.added.is_empty()
+        self.removed.is_empty() && self.added.is_empty() && !self.mode
     }
 
-    /// How many changed lines are selected, both sides together.
+    /// How many changed lines are selected, both sides together. The mode change is not a
+    /// line and is not counted: a selection of the mode alone has no lines.
     pub fn len(&self) -> usize {
         self.removed.len() + self.added.len()
+    }
+
+    /// The same selection of the inverted diff (R2.1): a removed line of the original is an
+    /// added line of [`TextDiff::inverted`], by the same number, and an added line a removed
+    /// one. The mode change stays selected or not, since undoing it is still the mode.
+    pub fn inverted(&self) -> Selection {
+        Selection {
+            removed: self.added.clone(),
+            added: self.removed.clone(),
+            mode: self.mode,
+        }
     }
 
     pub fn removed(&self) -> impl Iterator<Item = LineNumber> + '_ {
@@ -81,7 +116,7 @@ impl Selection {
 
     /// Whether every changed line of `text` is selected — the difference between staging
     /// a whole file and staging part of it, which decides whether a deletion stays a
-    /// deletion.
+    /// deletion. The mode change is not a line and does not count.
     ///
     /// Reads every changed LINE, not every change, so a file with tens of thousands of them
     /// costs milliseconds. [`crate::emit_patch`] asks it once, off the UI thread. A
@@ -188,6 +223,62 @@ mod tests {
         assert!(
             !selection.holds_every_change(&text),
             "a selection missing a removed line passed as complete"
+        );
+    }
+
+    /// R2.4: the mode change is selected by itself and by nothing else. Caught by: selecting
+    /// every change, or one change, also selecting the mode — a line selection carrying it.
+    #[test]
+    fn the_mode_change_is_an_item_of_its_own() {
+        let text = diff();
+        let lines = Selection::with_every_change(&text);
+        assert!(
+            !lines.holds_mode(),
+            "selecting every line selected the mode"
+        );
+        let mut one = Selection::empty();
+        one.select_change(&text.changes()[0]);
+        assert!(!one.holds_mode(), "selecting a change selected the mode");
+
+        let mut mode = Selection::empty();
+        mode.select_mode();
+        assert!(mode.holds_mode());
+        assert!(
+            !mode.is_empty(),
+            "a selection of the mode alone read as empty"
+        );
+        assert_eq!(mode.len(), 0, "the mode change was counted as a line");
+        assert!(
+            !mode.holds_every_change(&text),
+            "the mode alone held every changed line"
+        );
+        mode.unselect_mode();
+        assert!(mode.is_empty());
+    }
+
+    /// R2.1: the inverted selection names the same lines of the inverted diff — a removed
+    /// line is an added one by the same number, and the reverse — and keeps the mode.
+    /// Caught by: a set left on its side, or the mode dropped on the way.
+    #[test]
+    fn inverting_a_selection_swaps_its_sides_and_keeps_the_mode() {
+        let mut selection = Selection::empty();
+        selection.select_removed(LineNumber::from_index(2));
+        selection.select_added(LineNumber::from_index(5));
+        selection.select_added(LineNumber::from_index(6));
+        selection.select_mode();
+        let inverted = selection.inverted();
+        let removed: Vec<u32> = inverted.removed().map(LineNumber::index).collect();
+        let added: Vec<u32> = inverted.added().map(LineNumber::index).collect();
+        assert_eq!(removed, vec![5, 6]);
+        assert_eq!(added, vec![2]);
+        assert!(inverted.holds_mode(), "inverting dropped the mode change");
+        assert_eq!(inverted.inverted(), selection);
+
+        let text = diff();
+        let every = Selection::with_every_change(&text);
+        assert!(
+            every.inverted().holds_every_change(&text.inverted()),
+            "every line of a diff is not every line of its inversion"
         );
     }
 

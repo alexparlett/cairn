@@ -108,6 +108,45 @@ impl ChangedFile {
             _ => false,
         }
     }
+
+    /// The same path's change seen from its other end (R2.1): paths, modes and ids swapped,
+    /// an addition a deletion and a deletion an addition, a rename renamed back — so the
+    /// forward patch rule over the inverted file and [`crate::TextDiff::inverted`] undoes
+    /// the original (L17a).
+    ///
+    /// A copy is the one change that does not invert into its own kind: `B` copied from `A`
+    /// left `A` where it was, so undoing it is `B` deleted — a deletion at the copy's
+    /// destination, carrying its mode and id, and nothing of the source. Inverted as a copy
+    /// back it would say "copy `B` to `A`", a path that already exists.
+    pub fn inverted(&self) -> ChangedFile {
+        let status = match self.status {
+            ChangeStatus::Added => ChangeStatus::Deleted,
+            ChangeStatus::Deleted => ChangeStatus::Added,
+            ChangeStatus::Copied(_) => {
+                return ChangedFile {
+                    status: ChangeStatus::Deleted,
+                    old_path: self.new_path.clone(),
+                    new_path: self.new_path.clone(),
+                    old_mode: self.new_mode,
+                    new_mode: None,
+                    old_id: self.new_id,
+                    new_id: None,
+                };
+            }
+            status @ (ChangeStatus::Modified
+            | ChangeStatus::TypeChanged
+            | ChangeStatus::Renamed(_)) => status,
+        };
+        ChangedFile {
+            status,
+            old_path: self.new_path.clone(),
+            new_path: self.old_path.clone(),
+            old_mode: self.new_mode,
+            new_mode: self.old_mode,
+            old_id: self.new_id,
+            new_id: self.old_id,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -180,6 +219,100 @@ mod tests {
         assert!(at("f", ChangeStatus::Renamed(similarity)).is_rename());
         assert!(!at("f", ChangeStatus::Renamed(similarity)).is_copy());
         assert!(at("f", ChangeStatus::Copied(similarity)).is_copy());
+    }
+
+    fn id(byte: u8) -> Option<Oid> {
+        Oid::from_bytes(&[byte; 20]).ok()
+    }
+
+    /// R2.1: everything with two sides swaps them. Caught by: a field left on its side —
+    /// a path, a mode or an id — which a patch then writes the wrong way round.
+    #[test]
+    fn inverting_swaps_paths_modes_and_ids() {
+        let similarity = Similarity::from_percent(80);
+        let renamed = ChangedFile {
+            status: ChangeStatus::Renamed(similarity),
+            old_path: RepoPath::from("old.rs"),
+            new_path: RepoPath::from("new.rs"),
+            old_mode: Some(FileMode::Regular),
+            new_mode: Some(FileMode::Executable),
+            old_id: id(1),
+            new_id: id(2),
+        };
+        assert_eq!(
+            renamed.inverted(),
+            ChangedFile {
+                status: ChangeStatus::Renamed(similarity),
+                old_path: RepoPath::from("new.rs"),
+                new_path: RepoPath::from("old.rs"),
+                old_mode: Some(FileMode::Executable),
+                new_mode: Some(FileMode::Regular),
+                old_id: id(2),
+                new_id: id(1),
+            }
+        );
+        assert_eq!(renamed.inverted().inverted(), renamed);
+
+        for status in [ChangeStatus::Modified, ChangeStatus::TypeChanged] {
+            let mut file = at("f", status);
+            file.new_mode = Some(FileMode::Symlink);
+            file.old_id = id(3);
+            file.new_id = id(4);
+            let inverted = file.inverted();
+            assert_eq!(inverted.status, status, "{status:?} changed kind");
+            assert_eq!(inverted.old_mode, Some(FileMode::Symlink));
+            assert_eq!(inverted.new_mode, Some(FileMode::Regular));
+            assert_eq!((inverted.old_id, inverted.new_id), (id(4), id(3)));
+        }
+    }
+
+    /// An addition undone is a deletion and the reverse, the absent side moving with it.
+    /// Caught by: a status left as it was, which writes `new file mode` over a file being
+    /// taken away.
+    #[test]
+    fn an_addition_inverts_to_a_deletion_and_a_deletion_to_an_addition() {
+        let added = ChangedFile {
+            status: ChangeStatus::Added,
+            old_path: RepoPath::from("n"),
+            new_path: RepoPath::from("n"),
+            old_mode: None,
+            new_mode: Some(FileMode::Executable),
+            old_id: None,
+            new_id: id(5),
+        };
+        let deleted = added.inverted();
+        assert_eq!(deleted.status, ChangeStatus::Deleted);
+        assert_eq!(deleted.old_mode, Some(FileMode::Executable));
+        assert_eq!(deleted.new_mode, None);
+        assert_eq!((deleted.old_id, deleted.new_id), (id(5), None));
+        assert_eq!(deleted.inverted(), added);
+    }
+
+    /// A copy undone is its destination deleted, the source left alone. Caught by: a copy
+    /// inverted into a copy back onto its source, which already exists.
+    #[test]
+    fn a_copy_inverts_to_its_destination_deleted() {
+        let copied = ChangedFile {
+            status: ChangeStatus::Copied(Similarity::from_percent(100)),
+            old_path: RepoPath::from("a"),
+            new_path: RepoPath::from("b"),
+            old_mode: Some(FileMode::Regular),
+            new_mode: Some(FileMode::Executable),
+            old_id: id(6),
+            new_id: id(7),
+        };
+        assert_eq!(
+            copied.inverted(),
+            ChangedFile {
+                status: ChangeStatus::Deleted,
+                old_path: RepoPath::from("b"),
+                new_path: RepoPath::from("b"),
+                old_mode: Some(FileMode::Executable),
+                new_mode: None,
+                old_id: id(7),
+                new_id: None,
+            }
+        );
     }
 
     /// Caught by: reading a mode change off a side that does not exist, which would put

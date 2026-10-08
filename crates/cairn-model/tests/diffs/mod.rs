@@ -248,6 +248,59 @@ pub fn expected_lines(text: &TextDiff, selection: &Selection) -> Vec<DiffLine> {
     out
 }
 
+/// What undoing a selection leaves of the NEW side, computed without inverting anything:
+/// git's mirrored rule (`patch-mechanics-spike.md` E1b) — a patch of the original diff in
+/// which an unselected addition is context and an unselected removal is dropped, applied in
+/// reverse — read straight off the changed ranges. A selected removal comes back, an
+/// unselected addition stays, a selected addition goes, and within one change what comes
+/// back stands ahead of what stays, as the removed lines stand ahead of the added ones in
+/// the diff. It shares no code with `TextDiff::inverted` or the emitter, which is the point:
+/// unstage and discard are judged against it.
+pub fn mirrored_lines(text: &TextDiff, selection: &Selection) -> Vec<DiffLine> {
+    let mut out: Vec<DiffLine> = Vec::new();
+    let mut cursor = 0u32;
+    for change in text.changes() {
+        for index in cursor..change.added.start().index() {
+            if let Some(line) = text.new_line(LineNumber::from_index(index)) {
+                out.push(line.clone());
+            }
+        }
+        for line in change.removed.numbers() {
+            if selection.holds_removed(line)
+                && let Some(back) = text.old_line(line)
+            {
+                out.push(back.clone());
+            }
+        }
+        for line in change.added.numbers() {
+            if !selection.holds_added(line)
+                && let Some(stays) = text.new_line(line)
+            {
+                out.push(stays.clone());
+            }
+        }
+        cursor = change.added.end().index();
+    }
+    for index in cursor..(text.new_lines().len() as u32) {
+        if let Some(line) = text.new_line(LineNumber::from_index(index)) {
+            out.push(line.clone());
+        }
+    }
+    out
+}
+
+/// [`mirrored_lines`] as bytes.
+pub fn mirrored_result(text: &TextDiff, selection: &Selection) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for line in &mirrored_lines(text, selection) {
+        bytes.extend_from_slice(line.bytes());
+        if line.ends_with_newline() {
+            bytes.push(b'\n');
+        }
+    }
+    bytes
+}
+
 /// Whether a result is a file a patch could be taken of again: only its last line may run
 /// off the end. A selection that keeps an unterminated last line and adds lines after it
 /// makes one that is not, which is what `git apply` makes of the same patch.

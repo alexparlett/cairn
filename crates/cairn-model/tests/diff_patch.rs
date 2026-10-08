@@ -11,11 +11,15 @@
 mod diffs;
 
 use cairn_model::{
-    Context, Hunks, LineNumber, PATCH_CONTEXT, Patch, Selection, SideBySideRow, SideBySideRows,
-    TextDiff, UnifiedRow, UnifiedRows, apply_patch, apply_patch_in_reverse, emit_patch,
+    Context, DiffContent, DisplayOverlay, FileDiff, Hunks, LineNumber, PATCH_CONTEXT, Patch,
+    PatchAction, Selection, SideBySideRow, SideBySideRows, TextDiff, UnifiedRow, UnifiedRows,
+    action_patch, apply_patch, apply_patch_in_reverse, emit_patch,
 };
 
-use diffs::{Fixture, corpus, expected_lines, expected_result, is_a_well_formed_file};
+use diffs::{
+    Fixture, corpus, expected_lines, expected_result, is_a_well_formed_file, mirrored_lines,
+    mirrored_result,
+};
 
 /// Every context a view can be in, plus the two it opens and closes at.
 fn every_context() -> Vec<Context> {
@@ -439,4 +443,77 @@ fn a_patch_is_the_same_bytes_whatever_the_view_was_built_at() {
         three.text().contains("@@ -13,4 +13,4 @@"),
         "the second hunk did not stop at the end of the file: {three:?}"
     );
+}
+
+/// R2.1, R2.7: unstage and discard — the forward rule over the inverted diff — undo exactly
+/// what git's mirrored rule says, for every seeded selection over every awkward case, and
+/// stage is the forward rule as it always was. Caught by: an inversion that leaves a span
+/// or a set on its side (the patch does not apply to the new side), and one that inverts a
+/// replacement as one change (what stays lands ahead of what comes back).
+///
+/// The oracle is `diffs::mirrored_result`, which never inverts; that real `git apply` agrees
+/// with both is `cairn-git`'s C3.
+#[test]
+fn undoing_a_selection_leaves_what_the_mirrored_rule_says() {
+    for fixture in corpus()
+        .into_iter()
+        .chain(corpus().into_iter().map(Fixture::with_ids))
+    {
+        let Fixture { name, file, text } = fixture;
+        let drawn = FileDiff {
+            file,
+            content: DiffContent::Text {
+                text: text.clone(),
+                overlay: DisplayOverlay::default(),
+            },
+        };
+        let mut selections = vec![
+            Selection::with_every_change(&text),
+            every_other_change(&text),
+        ];
+        selections.extend((1..=24u64).map(|seed| diffs::seeded_selection(&text, seed)));
+
+        for (at, selection) in selections.iter().enumerate() {
+            let whole_only = matches!(drawn.file.status, cairn_model::ChangeStatus::Deleted)
+                && !selection.holds_every_change(&text);
+            for action in [PatchAction::Unstage, PatchAction::Discard] {
+                let patch = action_patch(action, &drawn, selection);
+                if text.changes().is_empty() {
+                    // An empty file added or deleted: its headers are its whole change, and
+                    // there are no lines for the rule to say anything about.
+                    continue;
+                }
+                if whole_only || selection.is_empty() {
+                    assert!(patch.is_empty(), "{name}, {action:?} {at}: {patch:?}");
+                    continue;
+                }
+                // A kept unterminated line with lines after it is not a file a patch is
+                // taken of again (as in the reverse test above).
+                if !is_a_well_formed_file(&mirrored_lines(&text, selection)) {
+                    continue;
+                }
+                let applied =
+                    apply_patch(&text.new_content(), patch.as_bytes()).unwrap_or_else(|e| {
+                        panic!(
+                            "{name}, {action:?} {at}: did not apply to the new side: {e}\n{patch:?}"
+                        )
+                    });
+                assert_eq!(
+                    applied,
+                    mirrored_result(&text, selection),
+                    "{name}, {action:?} {at}: not what the mirrored rule leaves\n{patch:?}"
+                );
+            }
+            let staged = action_patch(PatchAction::Stage, &drawn, selection);
+            if !whole_only && is_a_well_formed_file(&expected_lines(&text, selection)) {
+                let applied = apply_patch(&text.old_content(), staged.as_bytes())
+                    .unwrap_or_else(|e| panic!("{name}, stage {at}: {e}\n{staged:?}"));
+                assert_eq!(
+                    applied,
+                    expected_result(&text, selection),
+                    "{name}, stage {at}"
+                );
+            }
+        }
+    }
 }

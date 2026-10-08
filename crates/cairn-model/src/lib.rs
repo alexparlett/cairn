@@ -1,7 +1,9 @@
 //! Commit, ref, graph, lane, diff and status types shared by the engine and the UI, and
 //! the record of a `git` invocation the engine's command log keeps.
 
+mod action_patch;
 mod askpass;
+mod c_quote;
 mod change_set;
 mod changed_file;
 mod chunked_store;
@@ -36,6 +38,7 @@ mod sidebar_rows;
 mod status;
 mod text_filter;
 
+pub use action_patch::{PatchAction, action_patch};
 pub use askpass::{AskpassToken, HELPER_PROGRAM, SOCKET_VARIABLE, TOKEN_VARIABLE};
 pub use change_set::{ChangeSet, RenameDetection};
 pub use changed_file::{ChangeStatus, ChangedFile, FileMode, Similarity};

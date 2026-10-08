@@ -18,10 +18,20 @@
 //! - `\ No newline at end of file` follows the line it belongs to, whatever marker that
 //!   line ended up with.
 //! - A deletion with some removals left out is a modification of the file, not a deletion.
+//! - The mode change is its own item (R2.4): `old mode`/`new mode` are written only when the
+//!   selection holds it, so a selection of lines alone stages no mode change and a
+//!   selection of the mode alone is the two header lines and nothing else.
+//! - Every path is written as git's `quote_c_style` writes it (R2.5, `crate::c_quote`),
+//!   and a `---`/`+++` line naming a path with a space ends in a tab, as `git diff`'s does.
+//!
+//! Unstage and discard are this same rule over the inverted diff ([`TextDiff::inverted`],
+//! [`Selection::inverted`], [`ChangedFile::inverted`]); [`crate::action_patch`] is what
+//! chooses which, and what refuses a selection of part of a whole-file-only change.
 
 use std::borrow::Cow;
 use std::fmt;
 
+use crate::c_quote::{quoted, quoted_with_prefix};
 use crate::{
     ChangeStatus, ChangedFile, Context, DiffLine, HunkHeader, Hunks, LineNumber, LineSpan, Oid,
     RepoPath, Selection, TextDiff,
@@ -69,9 +79,10 @@ impl fmt::Debug for Patch {
 
 /// Builds the patch for one file and one selection.
 ///
-/// Returns an empty patch when the file has changes to select and none of them is
-/// selected. A file whose change is not in its lines at all — a rename, a mode change, an
-/// empty file added or deleted — still gets its headers, because that is the whole change.
+/// Returns an empty patch when nothing it would carry is selected: no line of a file with
+/// lines to select, and not the mode change of a file whose mode changed. A file whose
+/// change is in neither — a rename, a copy, an empty file added or deleted — still gets its
+/// headers, because they are the whole change.
 pub fn emit_patch(file: &ChangedFile, text: &TextDiff, selection: &Selection) -> Patch {
     if matches!(file.status, ChangeStatus::TypeChanged) {
         return emit_type_change(file, text, selection);
@@ -81,13 +92,17 @@ pub fn emit_patch(file: &ChangedFile, text: &TextDiff, selection: &Selection) ->
         .changes()
         .iter()
         .any(|change| !change.removed.is_empty() || !change.added.is_empty());
-    if selectable && hunks_emitted == 0 {
+    let mode = file.mode_changed() && selection.holds_mode();
+    // Nothing selected: no line, and not the mode. A modification has nothing else to
+    // carry; a rename, a copy or an empty file added or deleted is its headers.
+    if hunks_emitted == 0 && !mode && (selectable || matches!(file.status, ChangeStatus::Modified))
+    {
         return Patch::empty();
     }
 
     let whole = selection.holds_every_change(text);
     let mut out = Vec::new();
-    write_headers(&mut out, file, whole, hunks_emitted > 0);
+    write_headers(&mut out, file, whole, mode, hunks_emitted > 0);
     out.extend_from_slice(&body);
     Patch(out)
 }
@@ -105,6 +120,9 @@ pub fn emit_patch(file: &ChangedFile, text: &TextDiff, selection: &Selection) ->
 /// a repository can hold, and the second section would land on a path the first had left in
 /// place. A selection that does not hold every change therefore emits nothing, exactly as a
 /// selection that holds none of them does.
+///
+/// The mode is part of the kind here, not an item of its own: a file becoming a symlink is
+/// one change, so the lines alone carry it and the mode item adds nothing.
 fn emit_type_change(file: &ChangedFile, text: &TextDiff, selection: &Selection) -> Patch {
     if !selection.holds_every_change(text) {
         return Patch::empty();
@@ -293,16 +311,16 @@ impl Draft {
     }
 }
 
-fn write_headers(out: &mut Vec<u8>, file: &ChangedFile, whole: bool, has_hunks: bool) {
-    out.extend_from_slice(b"diff --git a/");
-    out.extend_from_slice(file.old_path.as_bytes());
-    out.extend_from_slice(b" b/");
-    out.extend_from_slice(file.new_path.as_bytes());
+/// The headers, in the order and the spelling `git diff` writes them (`diff.c`'s
+/// `builtin_diff` and `fill_metainfo`). `mode` is whether the mode change is selected.
+fn write_headers(out: &mut Vec<u8>, file: &ChangedFile, whole: bool, mode: bool, has_hunks: bool) {
+    out.extend_from_slice(b"diff --git ");
+    out.extend_from_slice(&quoted_with_prefix(b"a/", file.old_path.as_bytes()));
+    out.push(b' ');
+    out.extend_from_slice(&quoted_with_prefix(b"b/", file.new_path.as_bytes()));
     out.push(b'\n');
 
-    if file.mode_changed()
-        && let (Some(old), Some(new)) = (file.old_mode, file.new_mode)
-    {
+    if mode && let (Some(old), Some(new)) = (file.old_mode, file.new_mode) {
         write_text(
             out,
             &format!("old mode {}\nnew mode {}\n", old.octal(), new.octal()),
@@ -336,12 +354,12 @@ fn write_headers(out: &mut Vec<u8>, file: &ChangedFile, whole: bool, has_hunks: 
         if matches!(file.status, ChangeStatus::Added) {
             write_text(out, "--- /dev/null\n");
         } else {
-            write_path_line(out, "--- a/", &file.old_path);
+            write_file_line(out, "--- ", b"a/", &file.old_path);
         }
         if deleting {
             write_text(out, "+++ /dev/null\n");
         } else {
-            write_path_line(out, "+++ b/", &file.new_path);
+            write_file_line(out, "+++ ", b"b/", &file.new_path);
         }
     }
 }
@@ -377,10 +395,24 @@ fn write_text(out: &mut Vec<u8>, text: &str) {
     out.extend_from_slice(text.as_bytes());
 }
 
-/// A path goes out as the bytes git stores, so that a patch names the file git names.
+/// A `rename from`/`copy to` line: the path quoted on its own, as git writes it, so the
+/// bytes it names are the bytes git stores.
 fn write_path_line(out: &mut Vec<u8>, prefix: &str, path: &RepoPath) {
     write_text(out, prefix);
-    out.extend_from_slice(path.as_bytes());
+    out.extend_from_slice(&quoted(path.as_bytes()));
+    out.push(b'\n');
+}
+
+/// A `---`/`+++` line: the side's prefix and the path quoted together, then — when what was
+/// written holds a space, quoted or not — a tab, which `git diff` adds so that GNU `patch`
+/// reads a name with a space to its end (`diff.c`, `DIFF_SYMBOL_FILEPAIR_MINUS`).
+fn write_file_line(out: &mut Vec<u8>, marker: &str, side: &[u8], path: &RepoPath) {
+    let label = quoted_with_prefix(side, path.as_bytes());
+    write_text(out, marker);
+    out.extend_from_slice(&label);
+    if label.contains(&b' ') {
+        out.push(b'\t');
+    }
     out.push(b'\n');
 }
 
@@ -765,11 +797,68 @@ mod tests {
             old_id: None,
             new_id: None,
         };
+        let mut mode = Selection::empty();
+        mode.select_mode();
         assert_eq!(
-            patch_text(&moded, &unchanged, &Selection::empty()),
+            patch_text(&moded, &unchanged, &mode),
             "diff --git a/k.txt b/k.txt\n\
              old mode 100644\n\
              new mode 100755\n"
+        );
+        assert!(
+            emit_patch(&moded, &unchanged, &Selection::empty()).is_empty(),
+            "a mode change nobody selected was emitted"
+        );
+    }
+
+    /// R2.4: on a file whose mode changed beside its lines, the lines and the mode are two
+    /// items. Caught by: writing `old mode`/`new mode` whenever the mode changed (the rule
+    /// before this packet), or dropping the lines when the mode is selected.
+    #[test]
+    fn the_lines_and_the_mode_change_are_selected_apart() {
+        let file = ChangedFile {
+            status: ChangeStatus::Modified,
+            old_path: RepoPath::from("run.sh"),
+            new_path: RepoPath::from("run.sh"),
+            old_mode: Some(FileMode::Regular),
+            new_mode: Some(FileMode::Executable),
+            old_id: None,
+            new_id: None,
+        };
+        let (_, text) = modified(b"a\nb\nc\n", b"a\nB\nc\n", vec![change((1, 1), (1, 1))]);
+
+        let lines = Selection::with_every_change(&text);
+        let patch = patch_text(&file, &text, &lines);
+        assert!(
+            !patch.contains("old mode"),
+            "lines alone carried the mode: {patch}"
+        );
+        assert!(patch.contains("-b\n+B\n"), "{patch}");
+
+        let mut mode = Selection::empty();
+        mode.select_mode();
+        assert_eq!(
+            patch_text(&file, &text, &mode),
+            "diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n",
+            "the mode alone carried more than the mode"
+        );
+
+        let mut both = Selection::with_every_change(&text);
+        both.select_mode();
+        let patch = patch_text(&file, &text, &both);
+        assert!(
+            patch.starts_with("diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n"),
+            "{patch}"
+        );
+        assert!(patch.contains("-b\n+B\n"), "{patch}");
+
+        // A mode selected on a file whose mode did not change carries nothing for it.
+        let (same, text) = modified(b"a\n", b"A\n", vec![change((0, 1), (0, 1))]);
+        let mut both = Selection::with_every_change(&text);
+        both.select_mode();
+        assert_eq!(
+            emit_patch(&same, &text, &both),
+            emit_patch(&same, &text, &Selection::with_every_change(&text))
         );
     }
 
@@ -842,7 +931,42 @@ mod tests {
         );
     }
 
-    /// A path git cannot spell as text still has to name the same file.
+    /// R2.5: every path line is C-quoted as `git diff` writes it, and a `---`/`+++` line
+    /// naming a space ends in a tab. The spellings are what git 2.56.0 and 2.30.9 printed
+    /// for these names; that git applies them is `cairn-git`'s C3.
+    #[test]
+    fn every_path_line_is_quoted_as_git_quotes_it() {
+        let file = ChangedFile {
+            status: ChangeStatus::Renamed(crate::Similarity::from_percent(90)),
+            old_path: RepoPath::new(b"sp ace".to_vec()),
+            new_path: RepoPath::new(b"t\tb \"q\"".to_vec()),
+            old_mode: Some(FileMode::Regular),
+            new_mode: Some(FileMode::Regular),
+            old_id: None,
+            new_id: None,
+        };
+        let text = TextDiff::new(
+            split_lines(b"a\nb\n"),
+            split_lines(b"a\nB\n"),
+            vec![change((1, 1), (1, 1))],
+        );
+        assert_eq!(
+            patch_text(&file, &text, &Selection::with_every_change(&text)),
+            "diff --git a/sp ace \"b/t\\tb \\\"q\\\"\"\n\
+             similarity index 90%\n\
+             rename from sp ace\n\
+             rename to \"t\\tb \\\"q\\\"\"\n\
+             --- a/sp ace\t\n\
+             +++ \"b/t\\tb \\\"q\\\"\"\t\n\
+             @@ -1,2 +1,2 @@\n\
+             \x20a\n\
+             -b\n\
+             +B\n"
+        );
+    }
+
+    /// A path git cannot spell as text still has to name the same file: its bytes go out
+    /// escaped, every one, and `git apply` reads them back (C3's invalid UTF-8 case).
     #[test]
     fn a_path_goes_out_as_the_bytes_git_stores() {
         let file = ChangedFile {
@@ -860,10 +984,15 @@ mod tests {
             vec![change((0, 1), (0, 1))],
         );
         let patch = emit_patch(&file, &text, &Selection::with_every_change(&text));
-        let header = b"diff --git a/d\xff/f b/d\xff/f\n";
-        assert!(
-            patch.as_bytes().starts_with(header),
-            "the path was rewritten on its way into the patch"
+        assert_eq!(
+            patch.text(),
+            "diff --git \"a/d\\377/f\" \"b/d\\377/f\"\n\
+             --- \"a/d\\377/f\"\n\
+             +++ \"b/d\\377/f\"\n\
+             @@ -1 +1 @@\n\
+             -a\n\
+             +b\n",
+            "the path was not escaped byte for byte"
         );
     }
 }

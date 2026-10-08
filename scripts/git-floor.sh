@@ -21,7 +21,7 @@
 # network; a machine without them FAILS this step, naming what is missing, rather than
 # skipping it. Nothing is installed anywhere else.
 #
-# Six tests skip on these gits by design, and each run prints every test it skipped, by its
+# Seven tests skip on these gits by design, and each run prints every test it skipped, by its
 # whole name, so a skip is read rather than counted as a pass:
 #   - in_a_partial_clone_a_rename_search_fails_rather_than_fetching, and (in the `ops::`
 #     run) a_read_in_a_partial_clone_does_not_fetch_a_missing_object, on a git older than

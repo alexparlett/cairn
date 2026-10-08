@@ -8,8 +8,9 @@
 //! patch's `index` line. What a discard compares that id with must be computed the same way,
 //! by git, from the file as it is now: `hash-object` with `--path` names the path whose
 //! attributes apply, and the file argument is read from the working tree. Without `-w` it
-//! writes nothing: no object, no index, no ref (`hashing_a_file_writes_nothing`, which holds
-//! the git directory byte-identical after it). It reads no index entry for the path and
+//! writes nothing: no object, no index, no ref (`hashing_a_file_gives_git_diffs_id_and_writes_nothing`, which
+//! holds the git directory byte-identical after it; and
+//! `hashing_a_file_runs_only_the_clean_filter_and_writes_nothing`). It reads no index entry for the path and
 //! takes no lock; as a read of the working tree it runs the path's clean filter driver, as
 //! `git diff-files` does for the diff it is compared with (D1 as amended, `crate::reads`).
 //!
@@ -212,5 +213,57 @@ mod tests {
                 "{path}: the fixture's form is its bytes, so it decides nothing"
             );
         }
+    }
+
+    /// What `hash-object --path` runs: the path's clean filter, and nothing else a read must
+    /// not — no textconv, no external diff, no smudge filter, each configured to leave a
+    /// marker — and it writes nothing under the git directory. The clean filter's marker is
+    /// required to appear, so the markers are proved able to.
+    #[test]
+    fn hashing_a_file_runs_only_the_clean_filter_and_writes_nothing() {
+        let fixture = Fixture::new();
+        let markers = fixture.path().with_extension("markers");
+        let _ = std::fs::remove_dir_all(&markers);
+        std::fs::create_dir_all(&markers).unwrap();
+        let leaves =
+            |name: &str, then: &str| format!("touch '{}'; {then}", markers.join(name).display());
+        fixture.git(&["config", "diff.marked.textconv", &leaves("textconv", "cat")]);
+        fixture.git(&["config", "diff.external", &leaves("external", "true")]);
+        fixture.git(&["config", "filter.marked.smudge", &leaves("smudge", "cat")]);
+        fixture.git(&["config", "filter.marked.clean", &leaves("clean", "cat")]);
+        std::fs::write(
+            fixture.path().join(".gitattributes"),
+            "* diff=marked filter=marked\n",
+        )
+        .unwrap();
+        std::fs::write(fixture.path().join("file.txt"), "one\n").unwrap();
+        fixture.git(&["add", "-A"]);
+        fixture.git(&["commit", "-qm", "base"]);
+        std::fs::write(fixture.path().join("file.txt"), "two\n").unwrap();
+        let _ = std::fs::remove_dir_all(&markers);
+        std::fs::create_dir_all(&markers).unwrap();
+
+        let git = GitBinary::discover(&Askpass::new("/nonexistent/cairn-askpass", None)).unwrap();
+        let repo = Repository::discover(fixture.path()).unwrap();
+        let before = fixture.git_dir_snapshot();
+        hash_object(
+            &git,
+            &repo,
+            &RepoPath::new("file.txt"),
+            &CancelSignal::new(),
+        )
+        .unwrap();
+        assert_eq!(fixture.git_dir_snapshot(), before, "hashing wrote");
+        let ran: Vec<String> = std::fs::read_dir(&markers)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            ran,
+            ["clean"],
+            "hash-object ran another program than the clean filter"
+        );
+        let _ = std::fs::remove_dir_all(&markers);
     }
 }

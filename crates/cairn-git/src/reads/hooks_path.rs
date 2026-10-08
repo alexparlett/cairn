@@ -122,4 +122,68 @@ mod tests {
         assert_eq!(canonical(ask()), canonical(elsewhere));
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    /// Every file under `directory`, with its bytes, for a before-and-after.
+    fn snapshot(directory: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut found = Vec::new();
+        let mut pending = vec![directory.to_owned()];
+        while let Some(directory) = pending.pop() {
+            for entry in std::fs::read_dir(&directory).unwrap().flatten() {
+                let path = entry.path();
+                if entry.file_type().unwrap().is_dir() {
+                    pending.push(path);
+                } else {
+                    found.push((path.clone(), std::fs::read(&path).unwrap()));
+                }
+            }
+        }
+        found.sort();
+        found
+    }
+
+    /// `rev-parse --git-path` runs no program — not a filter, not a textconv, not an external
+    /// diff, each configured to leave a marker — and writes nothing under the git directory.
+    #[test]
+    fn the_hooks_path_read_writes_nothing_and_runs_nothing() {
+        let root =
+            std::env::temp_dir().join(format!("cairn-hooks-path-runs-{}", std::process::id()));
+        let markers = root.with_extension("markers");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&markers);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&markers).unwrap();
+        git(&root, &["init", "-q", "."]);
+        let leaves =
+            |name: &str, then: &str| format!("touch '{}'; {then}", markers.join(name).display());
+        git(
+            &root,
+            &["config", "diff.marked.textconv", &leaves("textconv", "cat")],
+        );
+        git(
+            &root,
+            &["config", "diff.external", &leaves("external", "true")],
+        );
+        git(
+            &root,
+            &["config", "filter.marked.smudge", &leaves("smudge", "cat")],
+        );
+        git(
+            &root,
+            &["config", "filter.marked.clean", &leaves("clean", "cat")],
+        );
+        std::fs::write(root.join(".gitattributes"), "* diff=marked filter=marked\n").unwrap();
+        let gitbin =
+            GitBinary::discover(&Askpass::new("/nonexistent/cairn-askpass", None)).unwrap();
+        let repo = Repository::discover(&root).unwrap();
+        let before = snapshot(&root.join(".git"));
+        hooks_path(&gitbin, &repo, &CancelSignal::new()).unwrap();
+        assert_eq!(snapshot(&root.join(".git")), before, "the read wrote");
+        assert_eq!(
+            std::fs::read_dir(&markers).unwrap().count(),
+            0,
+            "the read ran a program"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&markers);
+    }
 }

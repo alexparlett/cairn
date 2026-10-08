@@ -11,8 +11,8 @@ helper does with the environment described here, and fetch end to end, are
 **What exists:** one crate-private module that builds every `git` process, an
 invocation typed as a read or a write, the two environments those kinds get,
 and the runner: each process leads its own process group, each pipe it uses has
-a thread, stdout is handed over as it arrives or collected under a ceiling,
-stderr is kept as a bounded tail, and an invocation ends by a cancel signal, a
+a thread, stdout is handed over as it arrives or, for a read alone, collected
+under a ceiling, stderr is kept as a bounded tail, and an invocation ends by a cancel signal, a
 kill handle or a drop — `SIGTERM` to the group, then `SIGKILL` after two
 seconds. The version probe and fetch run on it like everything else; the
 paths they ran on before are gone, and a guard keeps them gone. Each open
@@ -172,6 +172,19 @@ An invocation is a `GitCommand<'_, K>`, and `K` says what kind:
   visible to `process/` alone. The version probe is the one invocation built
   outside the two builders. It runs before there is a `GitBinary`, and it is a
   read.
+
+On top of the write seal sits the confirmation seal, for the writes that
+destroy: each takes a `cairn_model::Confirmed` by value. The token carries the
+`cairn_model::Consequence` the engine computed — what the operation will destroy
+— and the prompt rendered from it (`Consequence::prompt`), is neither `Clone` nor
+`Copy`, and is built only by `Confirmed::by_user`, whose callers in production
+code are the guard's confirmation-surface roster (empty until the confirmation
+dialog and the commit box exist); `Performed::destructive` spends it, recording
+its prompt on the operation's `Performed` (R1.6). Which functions take it is the
+guard's destructive-operation roster: every function of `crates/cairn-git/src`
+naming `Confirmed` is in `ops/`, on the roster or the record, and takes it by
+value (`destructive_operations_are_sealed_behind_the_confirmation_token`). Its one
+row today is the placeholder `ops::describe_destructive`, which performs nothing.
 
 Fetch is built as a write (`ops/fetch.rs`): `FetchInProgress` holds its
 `Invocation<Write>`, `FetchCancel` its `KillHandle`, and `finish` drives it
@@ -597,7 +610,19 @@ each taking the cancel signal it polls:
   records of a `-z` format and hands each on as soon as it is whole;
 - `collect(cancel, ceiling, progress)` returns the whole of stdout, or
   `Error::GitOutputTooLarge { ceiling }` once git writes more — the process is
-  ended at once and nothing it wrote is returned.
+  ended at once and nothing it wrote is returned; `finish_within(cancel,
+  ceiling, stdout, progress)` is `finish` under the same ceiling.
+
+The two bounded-output helpers, `collect` and `finish_within`, exist on an
+`Invocation<Read>` alone (`impl Invocation<Read>` in `runner.rs`; R4.8 of
+`docs/prd/staging-and-commit.md`, #45 item 2): a crossed ceiling outranks a
+clean exit, so a write collected under one could complete its change and be
+reported refused. A write is driven with `finish` or `records`, which take all
+it prints. The compiler refuses either helper on an `Invocation<Write>`; the pin
+is `the_bounded_output_helpers_exist_on_a_read_alone` in `runner.rs`, a function
+that compiles only while a write's calls of those names resolve to a fallback
+trait's and a read's to the real helpers (a doctest cannot name a crate-private
+type, and stable Rust has no in-crate `compile_fail`).
 
 `GitCommand::input(bytes)` gives the process those bytes on stdin, written and
 then closed; without it stdin is `/dev/null`. `Invocation::kill_handle()` hands
@@ -785,11 +810,10 @@ a completed invocation reported as cancelled (accepted by the user on
 
 `Invocation::drive` decides, after the reap, in this order:
 
-1. A crossed ceiling is `Error::GitOutputTooLarge { arguments, ceiling,
-   stranded_locks }`, whatever the exit status: a write collected under a
-   ceiling that git then completes is reported as this error though its change
-   stands — harmless while no write is collected; whether a ceiling may
-   outrank a write's clean exit, or a write may have one at all, is issue #45
+1. A crossed ceiling is `Error::GitOutputTooLarge { arguments, ceiling }`,
+   whatever the exit status. Only a read is given a ceiling — the helpers that
+   take one exist on a read alone — so no write's completed change is ever
+   reported as this error, and the error lists no lock files: a read leaves none
    (`a_collect_over_its_ceiling_is_refused_whole_and_the_process_ended`;
    `output_exactly_at_the_ceiling_is_collected_and_one_byte_over_is_refused`).
 2. A failed stdin write, a pipe thread that could not start, or a `try_wait`

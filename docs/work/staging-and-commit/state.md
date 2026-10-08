@@ -2,9 +2,8 @@
 
 The cross-session cheat sheet. Every session updates this before ending.
 
-**Status: planned. No phase has started. No code exists for this packet.**
-Integration branch `feature/staging-and-commit` does not exist yet; phase 01
-creates it from `main` and pushes it.
+**Status: phase 01 (the seal) done on `feature/staging-and-commit`, in packet
+mode. Phases 02-12 not started.**
 
 ## Locked decisions
 
@@ -57,13 +56,61 @@ that most constrain implementation:
 
 ## New modules and interfaces
 
-None yet.
+Phase 01:
+
+- **`cairn_model::Confirmed`** (`crates/cairn-model/src/confirm.rs`): two private
+  fields, `consequence: Consequence` and `prompt: String`; derives `Debug`,
+  `PartialEq`, `Eq` only — no `Clone`, `Copy` or `Default`. One constructor,
+  `Confirmed::by_user(consequence: Consequence) -> Self`, which renders the prompt
+  from the consequence; readers `consequence(&self) -> &Consequence` (for the
+  operation's re-check) and `prompt(&self) -> &str` (for the log). Six
+  `compile_fail` doctests beside a passing scaffold.
+- **`cairn_model::Consequence`** (`crates/cairn-model/src/consequence.rs`), plain
+  data, `Clone`, built by the engine with struct literals: `DiscardLines { path,
+  index: Option<Oid>, working_tree: Oid, added, removed }`; `DiscardFiles { files:
+  Vec<DiscardedFile> }`, each `DiscardedFile { path, loss: FileLoss }`, `FileLoss`
+  `Modified { index: Oid, working_tree: Option<Oid>, lines: Option<usize> }` or
+  `Untracked { working_tree: Oid, bytes: u64 }`; `Amend { commit: Oid, subject,
+  published: Publication }`, `Publication` `Unpublished`, `Upstream(RefName)` or
+  `SomeRemote`; `RemoveLock { path: PathBuf, age: Duration, bytes: u64 }`.
+  `Consequence::prompt()` renders the prompt (L8's words for a discard, R10.6's for
+  an amend) and `Consequence::action()` the button's label (`Discard 2 Lines`,
+  `Discard Changes in 3 Files`, `Amend <short>`, `Remove index.lock`). **Discarding
+  files and deleting untracked files share `DiscardFiles`** — a deviation from the
+  phase doc's five variants, because Fork confirms a mixed selection in one dialog
+  with one prompt (L8), and one prompt is one confirmation; phase 03's operation
+  for it restores the tracked files and deletes the untracked ones under one
+  re-check. An untracked directory row is not modelled (status lists untracked
+  files one per file; a nested repository is refused before any consequence);
+  phase 03 extends the type, with a test, if it needs one. A mode change selected
+  for discard is not modelled either (phase 02/03).
+- **`ops::Performed::destructive(description, confirmed: Confirmed, invalidated)`**
+  now takes the token by value and records `confirmed.prompt()` (R1.6): the record
+  spends it. `ops::describe_destructive` remains the placeholder; phase 03 deletes
+  it and its roster row.
+- **The bounded-output helpers** `Invocation::collect` and `finish_within` are on
+  `impl Invocation<Read>` alone (R4.8); a write is driven with `finish` or
+  `records`. `Error::GitOutputTooLarge` lost its `stranded_locks` field (only a
+  read reaches it). The `#[cfg(test)]` `GitCommand::collected` gathers through
+  `finish`, so tests still collect a write's output.
+- **The guard's rosters** (`crates/cairn-guards/tests/invariants.rs`, in
+  `destructive_operations_are_sealed_behind_the_confirmation_token`):
+  `DESTRUCTIVE_OPERATIONS` (file, function) — phase 03 adds discard lines, discard
+  files, phase 05 amend, phase 11 remove-lock, and 03 removes the
+  `describe_destructive` row; `CONFIRMED_RECORD` (`Performed::destructive`);
+  `CONFIRMATION_SURFACES` (files) — empty; phase 06 adds the dialog component,
+  phase 09 the commit box. `CONSEQUENCE_BUILDERS` (`cairn-model`, `cairn-git`):
+  production code anywhere else may hold a `Consequence` and call its methods but
+  never spell `Consequence::` or its parts' names — **so phase 09, which must know
+  whether an amend is published to decide on the dialog, adds a method to
+  `Consequence` (for example `needs_force_push()`) rather than matching on
+  `Publication` in `cairn-app`.**
 
 ## Validation status
 
 | Phase | Status |
 | --- | --- |
-| 01 seal | not started |
+| 01 seal | done — gate green, QA run (see progress.md) |
 | 02 patch engine | not started |
 | 03 write verbs | not started |
 | 04 local lane | not started |

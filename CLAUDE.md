@@ -550,7 +550,14 @@ Project invariants:
   `("GIT_EDITOR", "false")` and `("GIT_SEQUENCE_EDITOR", "false")`, its
   `READ_ONLY` table carries each of `READ_ONLY_PINS` —
   `("GIT_OPTIONAL_LOCKS", "0")` and `("GIT_NO_LAZY_FETCH", "1")` — and is
-  applied, and
+  applied, its `INHERITED` roster, read with its comments, carries each of
+  `INHERITED_PINS` — staging-and-commit R5.2's nine: `GNUPGHOME`, `DISPLAY`,
+  `WAYLAND_DISPLAY` and `XAUTHORITY`, so a signing pinentry reaches the desktop,
+  and `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`,
+  `GIT_COMMITTER_EMAIL` and `EMAIL`, so a commit is by the terminal's identity —
+  each with a comment of its own beside it (its reason), carries no `*_DATE`
+  variable (`INHERITED_NEVER`, `GIT_AUTHOR_DATE` and `GIT_COMMITTER_DATE`: a
+  stale one would stamp every commit) and is read, and
   its production code names `"GIT_ASKPASS"`, `"SSH_ASKPASS"`, the socket
   variable and the token variable (matcher self-test
   `the_process_environment_matcher_catches_the_shapes_it_claims`); and

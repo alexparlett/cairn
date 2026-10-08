@@ -106,12 +106,19 @@ const READ_ONLY: &[(&str, &str)] = &[
 /// the user's configuration out, `GIT_ASKPASS` may be meant for something
 /// else), which includes `GIT_SSH_COMMAND` and `GIT_SSH` — a user who sets
 /// those in a shell rather than in `core.sshCommand` will find Cairn ignores
-/// them, and that is the cost of never inheriting a git override. The two
-/// exceptions, `GIT_SSL_CAINFO` and `GIT_SSL_CAPATH`, name a CA bundle and
-/// nothing else (issue #18). Display (`DISPLAY`, `WAYLAND_DISPLAY`) and
-/// signing (`GNUPGHOME`) variables remain open questions for the user on
-/// that issue, not omissions. `GIT_EDITOR` and `EDITOR` are not inherited
-/// either: [`ALWAYS`] pins the editor to `false`.
+/// them, and that is the cost of never inheriting a git override. The
+/// exceptions are named one by one: `GIT_SSL_CAINFO` and `GIT_SSL_CAPATH`,
+/// which name a CA bundle and nothing else (issue #18), and the four identity
+/// variables of staging-and-commit L26, which name who a commit is by. Never
+/// the date variables (`GIT_AUTHOR_DATE`, `GIT_COMMITTER_DATE`): a stale one
+/// left in a shell would stamp every commit Cairn makes with it (R5.2).
+/// `GIT_EDITOR` and `EDITOR` are not inherited either: [`ALWAYS`] pins the
+/// editor to `false`.
+///
+/// Every local write runs the user's hooks, filters and signing programs with
+/// this environment too (staging-and-commit R5), so it is what a `pre-commit`
+/// hook and `gpg` see; each entry is a deliberate leak of the user's
+/// environment, `destructive-ops-reviewer`'s check 9.
 const INHERITED: &[&str] = &[
     // Credential helpers, `ssh`, LFS filters and hooks are found on it.
     "PATH",
@@ -180,6 +187,37 @@ const INHERITED: &[&str] = &[
     // its default place.
     "KRB5CCNAME",
     "KRB5_CONFIG",
+    // Signing and the desktop, decided on #18 by staging-and-commit L11 (R5.2): a commit
+    // under `commit.gpgSign` runs `gpg`, whose agent asks for a key's passphrase through
+    // a pinentry on the user's desktop.
+    //
+    // GnuPG's home, when the user keeps their keys anywhere but `~/.gnupg`: without it
+    // `gpg` finds no secret key and every signed commit fails.
+    "GNUPGHOME",
+    // The X display a graphical pinentry (and an `ssh-askpass` the user configured
+    // themselves) opens its window on; without it the passphrase is never asked for.
+    "DISPLAY",
+    // The Wayland display, the same for a pinentry built for Wayland.
+    "WAYLAND_DISPLAY",
+    // Where the X cookie a pinentry presents to the display lives when it is not
+    // `~/.Xauthority`: a path, never the cookie itself; without it the display refuses
+    // the pinentry's connection.
+    "XAUTHORITY",
+    // Identity, staging-and-commit L26 (R5.2): the terminal's identity is the one Cairn
+    // commits with, so a per-project identity set in the shell (direnv) is honoured
+    // exactly as the user's own `git commit` honours it, ahead of `user.name`.
+    //
+    // The author's name a commit records, over `user.name` and `author.name`.
+    "GIT_AUTHOR_NAME",
+    // The author's email a commit records, over `user.email` and `author.email`.
+    "GIT_AUTHOR_EMAIL",
+    // The committer's name, over `user.name` and `committer.name`.
+    "GIT_COMMITTER_NAME",
+    // The committer's email, over `user.email` and `committer.email`.
+    "GIT_COMMITTER_EMAIL",
+    // git's fallback for an email no configuration sets, before it guesses one from the
+    // host name.
+    "EMAIL",
 ];
 
 /// Every variable a `git` subprocess will see, but for the per-invocation
@@ -279,12 +317,19 @@ mod tests {
                 "ALL_PROXY",
                 "CAIRN_ASKPASS_SOCKET",
                 "DBUS_SESSION_BUS_ADDRESS",
+                "DISPLAY",
+                "EMAIL",
                 "GIT_ASKPASS",
+                "GIT_AUTHOR_EMAIL",
+                "GIT_AUTHOR_NAME",
+                "GIT_COMMITTER_EMAIL",
+                "GIT_COMMITTER_NAME",
                 "GIT_EDITOR",
                 "GIT_SEQUENCE_EDITOR",
                 "GIT_SSL_CAINFO",
                 "GIT_SSL_CAPATH",
                 "GIT_TERMINAL_PROMPT",
+                "GNUPGHOME",
                 "HOME",
                 "HTTPS_PROXY",
                 "KRB5CCNAME",
@@ -302,6 +347,8 @@ mod tests {
                 "SSL_CERT_DIR",
                 "SSL_CERT_FILE",
                 "TMPDIR",
+                "WAYLAND_DISPLAY",
+                "XAUTHORITY",
                 "XDG_CACHE_HOME",
                 "XDG_CONFIG_HOME",
                 "XDG_RUNTIME_DIR",
@@ -397,8 +444,15 @@ mod tests {
             [
                 "ALL_PROXY",
                 "DBUS_SESSION_BUS_ADDRESS",
+                "DISPLAY",
+                "EMAIL",
+                "GIT_AUTHOR_EMAIL",
+                "GIT_AUTHOR_NAME",
+                "GIT_COMMITTER_EMAIL",
+                "GIT_COMMITTER_NAME",
                 "GIT_SSL_CAINFO",
                 "GIT_SSL_CAPATH",
+                "GNUPGHOME",
                 "HOME",
                 "HTTPS_PROXY",
                 "KRB5CCNAME",
@@ -414,6 +468,8 @@ mod tests {
                 "SSL_CERT_DIR",
                 "SSL_CERT_FILE",
                 "TMPDIR",
+                "WAYLAND_DISPLAY",
+                "XAUTHORITY",
                 "XDG_CACHE_HOME",
                 "XDG_CONFIG_HOME",
                 "XDG_RUNTIME_DIR",
@@ -434,9 +490,9 @@ mod tests {
             "SSH_ASKPASS_REQUIRE",
             "CAIRN_ASKPASS_SOCKET",
             "CAIRN_ASKPASS_TOKEN",
-            "DISPLAY",
-            "WAYLAND_DISPLAY",
-            "GNUPGHOME",
+            // A stale date would stamp every commit (staging-and-commit R5.2).
+            "GIT_AUTHOR_DATE",
+            "GIT_COMMITTER_DATE",
             "GIT_EDITOR",
             "EDITOR",
             // curl reads the proxy for plain HTTP in lower case only (httpoxy).
@@ -456,10 +512,10 @@ mod tests {
         for poison in [
             "GIT_DIR",
             "GIT_CONFIG_GLOBAL",
-            "DISPLAY",
+            "GIT_AUTHOR_DATE",
+            "GIT_COMMITTER_DATE",
             "HTTP_PROXY",
             "CURL_CA_BUNDLE",
-            "GNUPGHOME",
             "CAIRN_ASKPASS_TOKEN",
         ] {
             assert_eq!(environment.get(poison), None, "{poison} reached git");

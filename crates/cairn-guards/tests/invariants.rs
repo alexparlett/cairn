@@ -3517,6 +3517,25 @@ fn every_git_invocation_disables_the_terminal_prompt() {
         mentions_crate(&production, "READ_ONLY").len() >= 2,
         "READ_ONLY is declared in {PROCESS_ENVIRONMENT_FILE} but never applied; a read must get it."
     );
+    // The inherited roster (staging-and-commit R5.2, C12): read with its comments, since each
+    // pinned entry must carry its reason beside it.
+    let inherited = const_table(&source, "INHERITED").unwrap_or_else(|| {
+        panic!(
+            "{PROCESS_ENVIRONMENT_FILE} no longer declares a `const INHERITED` roster; what git \
+             sees of the user's environment would be unenumerated"
+        )
+    });
+    let problems = inherited_roster_problems(inherited);
+    assert!(
+        problems.is_empty(),
+        "{PROCESS_ENVIRONMENT_FILE}'s INHERITED roster: {}",
+        problems.join("; ")
+    );
+    assert!(
+        mentions_crate(&production, "INHERITED").len() >= 2,
+        "INHERITED is declared in {PROCESS_ENVIRONMENT_FILE} but never read; the constructor \
+         must copy it from the parent."
+    );
     // The helper is named in the constructor, from the `Askpass` it is given, not from a table.
     let constructor = code_without_test_modules(&with_strings);
     for variable in ["\"GIT_ASKPASS\"", "\"SSH_ASKPASS\"", "SOCKET_VARIABLE"] {
@@ -3560,6 +3579,100 @@ const READ_ONLY_PINS: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// What the inherited roster must copy from the parent (staging-and-commit R5.2, L11 and L26),
+/// each with what goes wrong without it. Each must be an entry of `INHERITED` with a comment
+/// of its own beside it — the reason, which is what makes the leak deliberate.
+const INHERITED_PINS: &[(&str, &str)] = &[
+    (
+        "GNUPGHOME",
+        "without it gpg finds no secret key kept outside ~/.gnupg and every signed commit fails",
+    ),
+    (
+        "DISPLAY",
+        "without it a graphical pinentry never opens, so a signing passphrase is never asked",
+    ),
+    (
+        "WAYLAND_DISPLAY",
+        "without it a Wayland pinentry never opens, so a signing passphrase is never asked",
+    ),
+    (
+        "XAUTHORITY",
+        "without it the X display refuses a pinentry whose cookie is not in ~/.Xauthority",
+    ),
+    (
+        "GIT_AUTHOR_NAME",
+        "without it a per-project identity set in the shell is not the one Cairn commits with",
+    ),
+    (
+        "GIT_AUTHOR_EMAIL",
+        "without it a per-project identity set in the shell is not the one Cairn commits with",
+    ),
+    (
+        "GIT_COMMITTER_NAME",
+        "without it a per-project identity set in the shell is not the one Cairn commits with",
+    ),
+    (
+        "GIT_COMMITTER_EMAIL",
+        "without it a per-project identity set in the shell is not the one Cairn commits with",
+    ),
+    (
+        "EMAIL",
+        "without it git's fallback for an unset user.email is a guess from the host name",
+    ),
+];
+
+/// Never inherited (R5.2): a stale date left in a shell would stamp every commit with it.
+const INHERITED_NEVER: &[&str] = &["GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"];
+
+/// The entries of an `INHERITED` roster's text (comments kept), in order, each with whether a
+/// comment stands beside it: on a line of its own since the entry before, or after it on its
+/// line. A name in a comment is no entry.
+fn inherited_entries(table: &str) -> Vec<(String, bool)> {
+    let mut entries = Vec::new();
+    let mut reason = false;
+    for line in table.lines() {
+        let (code, comment) = match line.find("//") {
+            Some(at) => (&line[..at], line[at + 2..].trim()),
+            None => (line, ""),
+        };
+        let names: Vec<&str> = code.split('"').skip(1).step_by(2).collect();
+        if names.is_empty() {
+            reason |= !comment.is_empty();
+            continue;
+        }
+        for name in names {
+            entries.push((name.to_owned(), reason || !comment.is_empty()));
+        }
+        reason = false;
+    }
+    entries
+}
+
+/// What is wrong with an `INHERITED` roster: a pinned variable missing, a pinned one with no
+/// reason beside it, or a date variable (any `*_DATE`) inherited.
+fn inherited_roster_problems(table: &str) -> Vec<String> {
+    let entries = inherited_entries(table);
+    let mut problems = Vec::new();
+    for (pin, why) in INHERITED_PINS {
+        match entries.iter().find(|(name, _)| name == pin) {
+            None => problems.push(format!("{pin} is missing: {why}")),
+            Some((_, false)) => problems.push(format!(
+                "{pin} has no reason beside it; each inherited variable is a deliberate leak and \
+                 says why"
+            )),
+            Some((_, true)) => {}
+        }
+    }
+    for (name, _) in &entries {
+        if INHERITED_NEVER.contains(&name.as_str()) || name.ends_with("_DATE") {
+            problems.push(format!(
+                "{name} is inherited; a stale date in the shell would stamp every commit (R5.2)"
+            ));
+        }
+    }
+    problems
+}
+
 /// The text of the table `const <name>: ..` declares in `source` (strings kept, comments
 /// blanked), from its declaration to its closing `];`; `None` when there is no such table. The
 /// name is matched whole, so `READ_ONLY_EXTRA` is not `READ_ONLY`.
@@ -3583,6 +3696,98 @@ fn missing_pins<'a>(table: &str, pins: &'a [(&str, &str, &str)]) -> Vec<(String,
 
 #[test]
 fn the_process_environment_matcher_catches_the_shapes_it_claims() {
+    // The inherited pins, spelled out apart from the roster, so a pin dropped from it fails.
+    assert_eq!(
+        INHERITED_PINS
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>(),
+        [
+            "GNUPGHOME",
+            "DISPLAY",
+            "WAYLAND_DISPLAY",
+            "XAUTHORITY",
+            "GIT_AUTHOR_NAME",
+            "GIT_AUTHOR_EMAIL",
+            "GIT_COMMITTER_NAME",
+            "GIT_COMMITTER_EMAIL",
+            "EMAIL",
+        ],
+        "INHERITED_PINS no longer names exactly R5.2's nine"
+    );
+    assert_eq!(
+        INHERITED_NEVER,
+        ["GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"],
+        "INHERITED_NEVER no longer names the two date variables"
+    );
+    let every_pin = |extra: &str| {
+        let mut table =
+            String::from("const INHERITED: &[&str] = &[\n    // PATH.\n    \"PATH\",\n");
+        for (name, _) in INHERITED_PINS {
+            table.push_str(&format!("    // Why {name}.\n    \"{name}\",\n"));
+        }
+        table.push_str(extra);
+        table.push_str("];\nconst OTHER: &[&str] = &[\"GIT_AUTHOR_DATE\"];");
+        table
+    };
+    let whole = every_pin("");
+    let table = const_table(&whole, "INHERITED")
+        .unwrap_or_else(|| panic!("the table matcher missed an INHERITED roster"));
+    assert_eq!(
+        inherited_roster_problems(table),
+        Vec::<String>::new(),
+        "the roster matcher fired on a roster that carries every pin with its reason, a date \
+         variable in the next table notwithstanding"
+    );
+    for (shape, source, reported) in [
+        (
+            "a pin missing",
+            every_pin("").replace("    // Why EMAIL.\n    \"EMAIL\",\n", ""),
+            "EMAIL is missing",
+        ),
+        (
+            "a pin only in a comment",
+            every_pin("").replace("    \"EMAIL\",\n", "    // \"EMAIL\",\n"),
+            "EMAIL is missing",
+        ),
+        (
+            "a pin with no reason of its own, the comment above it the entry before's",
+            every_pin("").replace("    // Why DISPLAY.\n", ""),
+            "DISPLAY has no reason",
+        ),
+        (
+            "the author date inherited",
+            every_pin("    // A date.\n    \"GIT_AUTHOR_DATE\",\n"),
+            "GIT_AUTHOR_DATE is inherited",
+        ),
+        (
+            "the committer date inherited",
+            every_pin("    // A date.\n    \"GIT_COMMITTER_DATE\",\n"),
+            "GIT_COMMITTER_DATE is inherited",
+        ),
+        (
+            "another date inherited",
+            every_pin("    \"SOURCE_DATE\", // a date\n"),
+            "SOURCE_DATE is inherited",
+        ),
+    ] {
+        let table = const_table(&source, "INHERITED")
+            .unwrap_or_else(|| panic!("the table matcher missed the roster in {shape}"));
+        let problems = inherited_roster_problems(table);
+        assert!(
+            problems.len() == 1 && problems[0].contains(reported),
+            "the roster matcher did not report exactly {reported:?} for {shape}: {problems:?}"
+        );
+    }
+    // A trailing comment is a reason beside its entry.
+    assert_eq!(
+        inherited_entries(
+            "const INHERITED: &[&str] = &[\n    \"HOME\", // the user's\n    \"PATH\",\n];"
+        ),
+        [("HOME".to_owned(), true), ("PATH".to_owned(), false)],
+        "the entry reader misread a trailing comment"
+    );
+
     // The read pins, spelled out apart from the roster, so a pin dropped from it fails here.
     assert_eq!(
         READ_ONLY_PINS

@@ -14,6 +14,7 @@ mod ownership;
 mod parity;
 mod patches;
 mod staged_renames;
+mod staging;
 mod stash;
 mod working_tree;
 

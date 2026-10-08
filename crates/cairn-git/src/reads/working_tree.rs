@@ -77,7 +77,10 @@
 //!    them ([`Error::ContentReadsDisagree`], which the caller asks again on).
 //!
 //! Where detection is off, or the path is in no pair, the read is the one-path read with
-//! `--no-renames`, which is then exactly git's answer. Reproduced with git 2.30.9, 2.32.7
+//! `--no-renames`, which is then exactly git's answer. The caller asks the whole index only
+//! for a path absent from `HEAD` or from the index: a path on both sides is in no pair,
+//! since git pairs no modified path as a destination without `-B` and a copy's source keeps
+//! its own record (`only_a_path_that_can_be_in_a_pair_asks_the_whole_index`). Reproduced with git 2.30.9, 2.32.7
 //! and 2.56.0 against `git diff --cached --raw` under `diff.renames` unset, `false` and
 //! `copies` (C7, `crates/cairn-git/tests/diff/staged_renames.rs`). The unstaged side needs no
 //! pairing: `git diff` pairs nothing between the index and the working tree but an

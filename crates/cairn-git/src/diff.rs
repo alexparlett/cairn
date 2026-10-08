@@ -323,11 +323,13 @@ impl Repository {
     /// two blobs differ in — asked first over the whole index with the user's rename
     /// detection, one more process, and then across the pair's two paths
     /// (`crate::reads::staged_pairing`); a pair that moved between the two reads is
-    /// [`Error::ContentReadsDisagree`].
+    /// [`Error::ContentReadsDisagree`]. Only a path absent from `HEAD` or from the index
+    /// can be in a pair, so only such a path asks the whole index.
     ///
     /// The index and the attributes are read fresh for every call (R3.3) and nothing is
     /// written (R3.5). It blocks on one `git` process, two with whitespace ignored, one more
-    /// for a staged diff under rename detection, and one more where a diff driver may name
+    /// for a staged path absent from one side under rename detection, and one more where a
+    /// diff driver may name
     /// an algorithm (`check-attr`); `cancel` is polled
     /// while each runs, and a superseded query answers [`Error::ContentCancelled`]. Lines
     /// git printed that are not the content it named are [`Error::ContentReadsDisagree`]

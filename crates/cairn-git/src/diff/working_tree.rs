@@ -133,9 +133,19 @@ pub(super) fn working_tree_diff(
                 let (commit, head_blob) = head_side(inner, path)?;
                 staged_commit = Some(commit);
                 // R2.6: the pair `git diff --cached` puts the path in, if any; its sides are
-                // the pair's two blobs, at two paths.
+                // the pair's two blobs, at two paths. Only a path missing from one side can
+                // be in one — a destination is absent from `HEAD`, a rename's source from the
+                // index — since without `-B` git pairs no modified path as a destination,
+                // and a copy's source keeps its own record; a path on both sides is asked
+                // alone, and the whole index is not searched for it.
+                let pairable = head_blob.is_none() || entry.is_none();
                 let detection = Configured::read(inner)?.search(git.version()).detection();
-                if let Some(paired) = staged_pairing(git, repo, &commit, detection, path, cancel)? {
+                let paired = if pairable {
+                    staged_pairing(git, repo, &commit, detection, path, cancel)?
+                } else {
+                    None
+                };
+                if let Some(paired) = paired {
                     let sizes = Sizes {
                         old: Some(side_size(inner, &paired.old_id, path)?),
                         new: Some(side_size(inner, &paired.new_id, path)?),

@@ -207,3 +207,62 @@ fn git_diff_cached_of_one_path_pairs_nothing() {
     let one = repo.git(&["diff", "--cached", "--name-status", "--", "new.txt"]);
     assert_eq!(one.trim(), "A\tnew.txt", "a one-path diff paired after all");
 }
+
+/// The whole-index read runs only for a path that can be in a pair — one absent from
+/// `HEAD` (a destination) or from the index (a rename's source). A path in both is its
+/// own record whatever detection finds: git pairs no modified path as a destination
+/// without `-B`, and a copy's source keeps its own record. Caught by: asking the whole
+/// index on every staged query, which costs a monorepo's rename search per file viewed.
+/// Under `diff.renames=copies` the copy's modified source is the hardest such path, and it
+/// still answers exactly git's record.
+#[test]
+fn only_a_path_that_can_be_in_a_pair_asks_the_whole_index() {
+    let repo = staged_rewrites(&[("diff.renames", "copies")]);
+    let records = porcelain_records(&repo);
+    let shared = super::ok(
+        cairn_git::SharedRepository::discover(repo.path()),
+        "the fixture opens",
+    );
+    let engine = shared.to_worker();
+    let pairing_runs = || {
+        shared
+            .command_log()
+            .iter()
+            .filter(|record| {
+                record.arguments.iter().any(|a| a == "--diff-filter=RC")
+                    && !record.arguments.iter().any(|a| a == "-p")
+            })
+            .count()
+    };
+    for (path, pairs) in [
+        ("src.txt", false),
+        ("plain.txt", false),
+        ("new.txt", true),
+        ("old.txt", true),
+        ("copy.txt", true),
+        ("added.txt", true),
+    ] {
+        let before = pairing_runs();
+        let answer = super::ok(
+            engine.working_tree_diff(
+                super::git(),
+                &RepoPath::from(path),
+                WorkingTreeDiff::Staged,
+                &cairn_git::ContentOptions::default(),
+                &cairn_git::CancelSignal::new(),
+            ),
+            path,
+        );
+        assert_eq!(
+            pairing_runs() - before,
+            usize::from(pairs),
+            "{path}: the whole-index read ran {} times",
+            pairing_runs() - before
+        );
+        assert_eq!(
+            answer.map(|diff| diff.file),
+            record_for(&records, path).cloned(),
+            "{path} is not git's record"
+        );
+    }
+}

@@ -219,13 +219,7 @@ fn a_stale_discard_writes_nothing_where_git_apply_would_land_it_at_an_offset() {
         "git apply would not land the stale discard at an offset, so this decides nothing: \
          {status} {stderr}"
     );
-    let outcome = ops::discard_lines(
-        git(),
-        &engine(&repo),
-        &drawn,
-        Confirmed::by_user(consequence),
-        None,
-    );
+    let outcome = ops::discard_lines(git(), &engine(&repo), Confirmed::by_user(consequence), None);
     assert!(
         matches!(&outcome, Err(Error::ChangedSinceConfirmed { path }) if path == "file.txt"),
         "{outcome:?}"
@@ -283,13 +277,8 @@ fn a_discard_of_lines_refuses_whatever_moved_after_the_confirmation() {
         );
         moved(&repo);
         let before = snapshot(repo.path());
-        let outcome = ops::discard_lines(
-            git(),
-            &engine(&repo),
-            &drawn,
-            Confirmed::by_user(consequence),
-            None,
-        );
+        let outcome =
+            ops::discard_lines(git(), &engine(&repo), Confirmed::by_user(consequence), None);
         assert!(
             matches!(&outcome, Err(Error::ChangedSinceConfirmed { path }) if path == "file.txt"),
             "{what}: {outcome:?}"
@@ -1004,13 +993,7 @@ fn a_mode_change_selected_for_discard_is_named_and_put_back() {
          You can't undo this action."
     );
     ok(
-        ops::discard_lines(
-            git(),
-            &engine(&repo),
-            &drawn,
-            Confirmed::by_user(consequence),
-            None,
-        ),
+        ops::discard_lines(git(), &engine(&repo), Confirmed::by_user(consequence), None),
         "the discard",
     );
     assert_eq!(on_disk(&repo, "file.txt"), Some(lines(base).into_bytes()));
@@ -1144,4 +1127,40 @@ fn a_symlinked_parent_is_never_followed_out_of_the_working_tree() {
         std::fs::symlink_metadata(repo.path().join("d"))
             .is_ok_and(|metadata| metadata.file_type().is_symlink())
     );
+}
+
+/// QA item 5: a discard applies the patch built from the diff the user confirmed, never one
+/// rebuilt from a diff handed in later. A diff of the same two blobs can align their lines
+/// otherwise (`x` then `y x` added, or `x y` added before `x`), and the same selection then
+/// names other lines; here the confirmed selection is the third line, which the other
+/// alignment does not even change.
+#[test]
+fn a_discard_applies_the_patch_it_was_confirmed_with() {
+    let repo = Repo::new("confirmed-patch");
+    repo.write("file.txt", b"x\n");
+    repo.commit("base");
+    repo.write("file.txt", b"x\ny\nx\n");
+    let drawn = diff_of(&repo, "file.txt", WorkingTreeDiff::Unstaged);
+    let text = drawn
+        .text()
+        .unwrap_or_else(|| panic!("no text: {:?}", drawn.content));
+    assert_eq!(
+        text.changes(),
+        [cairn_model::ChangedRange::new(
+            cairn_model::LineSpan::at(1, 0),
+            cairn_model::LineSpan::at(1, 2)
+        )],
+        "git aligned the fixture otherwise, so this decides nothing"
+    );
+    let mut third = Selection::empty();
+    third.select_added(cairn_model::LineNumber::from_index(2));
+    let consequence = ok(
+        ops::discard_lines_consequence(git(), &engine(&repo), &drawn, third),
+        "the consequence",
+    );
+    ok(
+        ops::discard_lines(git(), &engine(&repo), Confirmed::by_user(consequence), None),
+        "the discard",
+    );
+    assert_eq!(on_disk(&repo, "file.txt"), Some(b"x\ny\n".to_vec()));
 }

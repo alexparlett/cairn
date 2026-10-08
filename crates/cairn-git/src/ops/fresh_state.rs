@@ -76,6 +76,33 @@ impl IndexSide {
     }
 }
 
+impl IndexSide {
+    /// Whether this holds the entry a discard was confirmed against: that blob, not added
+    /// with `git add -N`; or, for `None`, no entry or an intent-to-add one. A discard of
+    /// lines writes only the working tree, so the entry's mode does not enter into it.
+    pub(super) fn holds(&self, id: Option<&Oid>) -> bool {
+        match (self, id) {
+            (Self::Absent, None) => true,
+            (
+                Self::Entry {
+                    intent_to_add: true,
+                    ..
+                },
+                None,
+            ) => true,
+            (
+                Self::Entry {
+                    id: entry,
+                    intent_to_add: false,
+                    ..
+                },
+                Some(id),
+            ) => entry == id,
+            (Self::Absent | Self::Conflicted | Self::Entry { .. }, _) => false,
+        }
+    }
+}
+
 /// The index file as it is on disk now, read once for every path a write names; `None`
 /// where there is no index file, which git reads as an index with no entries.
 pub(super) struct IndexNow(Option<gix::index::File>);

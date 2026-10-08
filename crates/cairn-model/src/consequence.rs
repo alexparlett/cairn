@@ -21,7 +21,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
-use crate::{FileMode, Oid, RefName, RepoPath, Selection};
+use crate::{FileMode, Oid, Patch, RefName, RepoPath, Selection};
 
 /// What one destructive operation will destroy, as the engine read it.
 ///
@@ -61,6 +61,10 @@ pub enum Consequence {
         /// then the working tree's, which the discard puts back to the first.
         /// Present exactly when the selection holds the mode.
         mode: Option<(FileMode, FileMode)>,
+        /// The patch the discard applies, emitted from the diff the user confirmed
+        /// with this selection: what runs is what was confirmed, never a patch built
+        /// again from a later diff, whose lines could align otherwise.
+        patch: Patch,
     },
     /// Whole files: each tracked file's unstaged change restored from the
     /// index, each untracked file deleted. Never empty when the engine builds
@@ -178,6 +182,7 @@ impl Consequence {
                 executable: _,
                 selection,
                 mode,
+                patch: _,
             } => format!(
                 "Do you want to discard {} in {}? You can't undo this action.",
                 discarded_lines(selection.len(), *mode),
@@ -242,6 +247,7 @@ impl Consequence {
                 executable: _,
                 selection,
                 mode,
+                patch: _,
             } => match (selection.len(), mode) {
                 (0, Some(_)) => "Discard Mode Change".to_owned(),
                 (lines, Some(_)) => {
@@ -535,6 +541,7 @@ mod tests {
             executable: false,
             selection,
             mode: None,
+            patch: Patch::empty(),
         }
     }
 
@@ -676,6 +683,7 @@ mod tests {
             executable: false,
             selection: selection(0, 1),
             mode: None,
+            patch: Patch::empty(),
         };
         assert_eq!(
             one.prompt(),
@@ -700,6 +708,7 @@ mod tests {
                 executable: false,
                 selection,
                 mode: Some((FileMode::Regular, FileMode::Executable)),
+                patch: Patch::empty(),
             }
         };
         let both = with_mode(selection(1, 1));
@@ -738,6 +747,41 @@ mod tests {
         };
         assert_ne!(with(true), with(false));
         assert_eq!(with(true).prompt(), with(false).prompt());
+    }
+
+    /// Phase 03's QA item 5: the patch a discard of lines applies is part of the value the user
+    /// confirms, so a consequence with another patch is another consequence; the prompt is
+    /// rendered from the selection and does not change with it.
+    #[test]
+    fn the_confirmed_patch_is_part_of_the_value() {
+        let with = |patch: &str| Consequence::DiscardLines {
+            path: RepoPath::from("file.txt"),
+            index: Some(oid(1)),
+            working_tree: oid(2),
+            on_disk: oid(4),
+            executable: false,
+            selection: selection(1, 0),
+            mode: None,
+            patch: crate::emit_patch(
+                &crate::ChangedFile {
+                    status: crate::ChangeStatus::Modified,
+                    old_path: RepoPath::from(patch),
+                    new_path: RepoPath::from(patch),
+                    old_mode: Some(FileMode::Regular),
+                    new_mode: Some(FileMode::Executable),
+                    old_id: Some(oid(1)),
+                    new_id: Some(oid(2)),
+                },
+                &crate::TextDiff::new(Vec::new(), Vec::new(), Vec::new()),
+                &{
+                    let mut mode = Selection::empty();
+                    mode.select_mode();
+                    mode
+                },
+            ),
+        };
+        assert_ne!(with("a"), with("b"));
+        assert_eq!(with("a").prompt(), with("b").prompt());
     }
 
     /// R10.6's text, and the force push named exactly when a remote has the commit.

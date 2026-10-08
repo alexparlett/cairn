@@ -123,9 +123,11 @@ did not move — when anything it names moved (R1.4).
   replaced by a directory or staged). A builder reads a file's bytes before and
   after its slower reads and answers `Error::ContentReadsDisagree` when they
   differ, so a prompt never counts one version and confirms another.
-- **The diff a discard of lines is handed** must be the one confirmed — its path
-  and both ids the `Consequence`'s — or it is refused
-  (`Refusal::NotWhatWasConfirmed`): the patch comes from that diff, never a re-read.
+- **A discard of lines applies the patch it was confirmed with.** The builder emits
+  it from the diff the user selected in and the `Consequence` carries it; the
+  operation takes no diff, so a later diff of the same blobs whose lines align
+  otherwise cannot move the selection onto other lines
+  (`a_discard_applies_the_patch_it_was_confirmed_with`).
 - **Refused before any prompt** (`Error::Refused`, with a `Refusal`): a selection
   of nothing, or the mode alone where there is no mode change (no "Discard 0
   Lines"); no file at all (`Error::NoPaths`); part of a change only a file verb

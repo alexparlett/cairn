@@ -625,7 +625,6 @@ fn through_the_verb(
             ops::discard_lines(
                 super::git(),
                 &engine,
-                drawn,
                 cairn_model::Confirmed::by_user(consequence),
                 None,
             )

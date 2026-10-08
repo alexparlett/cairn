@@ -19,9 +19,10 @@
 //! unstaged or untracked diff, inverted, never applied with `-R` — given to
 //! `git apply --whitespace=nowarn -` on the working tree, which cleans the file on read and
 //! smudges it on write, so a git-form patch lands on a CRLF or filtered file and the file
-//! keeps its own form. The diff handed to [`discard_lines`] must be the one confirmed: its
-//! path and both its ids are checked against the `Consequence`, which is what the patch's
-//! targets come from. Every line of a new file is not discarded by patch — that deletes the
+//! keeps its own form. The patch is emitted once, by [`discard_lines_consequence`], and
+//! carried in the `Consequence` the user confirms; [`discard_lines`] applies exactly those
+//! bytes and takes no diff, so a later diff of the same blobs whose lines align otherwise
+//! can never move the selection onto other lines (phase 03's QA item 5). Every line of a new file is not discarded by patch — that deletes the
 //! file — but by [`discard_files`], whose prompt says the file is deleted
 //! ([`Refusal::WholeFileOnly`]; phase 02's carry-forward).
 //!
@@ -113,7 +114,7 @@ pub fn discard_lines_consequence(
     {
         return Err(refused(path, Refusal::WholeFileOnly));
     }
-    patch_of(PatchAction::Discard, diff, &selection)?;
+    let patch = patch_of(PatchAction::Discard, diff, &selection)?;
     match index_side(repo, path)? {
         IndexSide::Conflicted => return Err(refused(path, Refusal::Conflicted)),
         side if !side.is_old_side(diff.file.old_id.as_ref(), diff.file.old_mode) => {
@@ -149,20 +150,20 @@ pub fn discard_lines_consequence(
         executable: disk.executable(),
         selection,
         mode,
+        patch,
     })
 }
 
-/// Discards the lines `confirmed` names, from `diff` — which must be the diff its
-/// `Consequence` was computed from ([`Refusal::NotWhatWasConfirmed`] otherwise) — with
-/// `git apply --whitespace=nowarn -` on the working tree (R3.3).
+/// Discards the lines `confirmed` names, applying the patch its `Consequence` carries —
+/// emitted from the diff the user confirmed, never rebuilt — with `git apply
+/// --whitespace=nowarn -` on the working tree (R3.3).
 ///
-/// Re-reads the index entry, the file's bytes and its git form first, and refuses with
-/// [`Error::ChangedSinceConfirmed`], writing nothing, when any differs from the
-/// `Consequence` (R1.4). The [`Performed`] records the prompt the user accepted.
+/// Re-reads the index entry, the file's bytes, its executable bit and its git form first,
+/// and refuses with [`Error::ChangedSinceConfirmed`], writing nothing, when any differs from
+/// the `Consequence` (R1.4). The [`Performed`] records the prompt the user accepted.
 pub fn discard_lines(
     git: &GitBinary,
     repo: &Repository,
-    diff: &FileDiff,
     confirmed: Confirmed,
     token: Option<&AskpassToken>,
 ) -> Result<Performed, Error> {
@@ -173,20 +174,14 @@ pub fn discard_lines(
             working_tree,
             on_disk: disk_id,
             executable,
-            selection,
+            selection: _,
             mode: _,
+            patch,
         } => {
-            let confirmed_diff = diff.file.new_path == *path
-                && diff.file.old_id == *index
-                && diff.file.new_id.as_ref() == Some(working_tree);
-            if !confirmed_diff {
-                return Err(refused(path, Refusal::NotWhatWasConfirmed));
-            }
             let changed = || Error::ChangedSinceConfirmed {
                 path: path.to_string(),
             };
-            let side = index_side(repo, path)?;
-            if !side.is_old_side(index.as_ref(), diff.file.old_mode) {
+            if !index_side(repo, path)?.holds(index.as_ref()) {
                 return Err(changed());
             }
             let disk = on_disk(repo, path)?;
@@ -196,15 +191,15 @@ pub fn discard_lines(
             if git_form(git, repo, path, &disk)?.as_ref() != Some(working_tree) {
                 return Err(changed());
             }
-            (
-                path.clone(),
-                patch_of(PatchAction::Discard, diff, selection)?,
-            )
+            if patch.is_empty() {
+                return Err(refused(path, Refusal::NothingSelected));
+            }
+            (path.clone(), patch.clone())
         }
         Consequence::DiscardFiles { .. }
         | Consequence::Amend { .. }
         | Consequence::RemoveLock { .. } => {
-            return Err(refused(&diff.file.new_path, Refusal::NotWhatWasConfirmed));
+            return Err(refused(&RepoPath::new(""), Refusal::NotWhatWasConfirmed));
         }
     };
     let before = locks_now(repo);
@@ -549,7 +544,7 @@ mod tests {
         let selection = RecordingStub::first_change(&diff);
         let consequence = discard_lines_consequence(&git, &repo, &diff, selection.clone()).unwrap();
         stub.forget();
-        discard_lines(&git, &repo, &diff, Confirmed::by_user(consequence), None).unwrap();
+        discard_lines(&git, &repo, Confirmed::by_user(consequence), None).unwrap();
         let recorded = stub.recorded();
         assert_eq!(recorded.len(), 2, "{recorded:?}");
         assert_eq!(

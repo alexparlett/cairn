@@ -459,10 +459,8 @@ pub enum Refusal {
     /// The path has no unstaged change — the working tree matches the index — so there is
     /// nothing to discard; staged changes are never discarded (R3.6).
     NoUnstagedChange,
-    /// What a destructive operation was handed is not what its confirmation names: a
-    /// confirmation of another operation, or a diff of another path, side or blob than the
-    /// one a discard of lines was confirmed on. The patch is built only from the diff the
-    /// user confirmed.
+    /// A destructive operation was handed a confirmation of another operation: a discard
+    /// of lines given a discard of files' token, or the reverse.
     NotWhatWasConfirmed,
 }
 

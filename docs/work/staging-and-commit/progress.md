@@ -3,6 +3,69 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-08 — phase 03 QA, adjudicated and fixed; the user's four decisions applied
+
+Four fresh reviewers, adjudicated by a fresh `qa-confirm`
+(`scratchpad/qa03/adjudication.md`). Confirmed findings fixed in focused commits, behaviour
+changes test-first (each new test seen to fail on the code before its fix):
+
+- 1 (critical): a deleted tracked `d/a` with an untracked file `d` where its directory
+  was read as absent, so `git restore` would unlink `d`; a symlinked `d` was hashed outside
+  the working tree. Every directory on a path is now looked at without following links, and
+  an obstructed path is refused before any prompt (`Refusal::Obstructed`) and by the
+  re-check (`a_file_where_a_deleted_files_directory_was_is_never_destroyed`,
+  `a_symlinked_parent_is_never_followed_out_of_the_working_tree`).
+- 2 (engine half): the executable bit is recorded in every discard's `Consequence` and
+  re-checked, so a `chmod` after the confirmation refuses (the mode moves in both C2 tests).
+- 3, 4: a discard of files reads every confirmed file again after the run and answers
+  `Error::DiscardIncomplete { performed, kept, failure }` when it did not take every one —
+  `git clean` failing part way after `git restore` ran, or leaving an ignored file
+  (`a_discard_that_fails_part_way_says_what_it_did_and_what_is_left`,
+  `a_file_git_clean_leaves_is_named_as_kept`). Item 4's refusal of paths status never
+  listed is carried to phase 07 (state.md).
+- 5: `Consequence::DiscardLines` carries the patch emitted from the confirmed diff, and
+  `discard_lines` applies exactly it and takes no diff
+  (`a_discard_applies_the_patch_it_was_confirmed_with`; the model's
+  `the_confirmed_patch_is_part_of_the_value`).
+- 6: the git-form comparison is decisive — a filter attribute added after the
+  confirmation moves git's form with the bytes unchanged; with the comparison removed the
+  test fails (checked by hand).
+- 7: `hashing_a_file_runs_only_the_clean_filter_and_writes_nothing` and
+  `the_hooks_path_read_writes_nothing_and_runs_nothing`, named in the root `CLAUDE.md`'s
+  list of reads held to the clean filter and fsmonitor.
+- 8: git-floor's floors raised to 128, 166 and 16 (counts 129, 167, 17).
+- 9: `reads/hash_object.rs`'s anchor fixed. 10: git-floor's skip count is seven.
+
+The user's decisions of 2026-10-08 (relayed by the coordinator), applied — batched items
+2, 3, 5 and 6 of the phase 03 entry closed:
+
+- **Decision 2** (batched 2): R3.9's amendment ratified, reworded to "the bytes and the
+  executable bit"; `docs/design/engine.md` matches.
+- **Decision 3** (batched 3): C2, R3.5 and C8 amended to what is built — a file added
+  beside a confirmed one is never taken and the discard proceeds, a path behind a file or a
+  symlink is refused, `-d` is never passed.
+- **Decision 5** (batched 5): an intent-to-add file's discard keeps `git restore`'s
+  behaviour, worded honestly: `FileLoss::Emptied`, "1 new file emptied (20 lines)"
+  (`an_intent_to_add_file_is_named_as_emptied`,
+  `an_intent_to_add_files_discard_empties_it_and_says_so`); R1.2 amended.
+- **Decision 6** (batched 6): a whole file's mode change is named — `FileLoss::Modified`
+  carries `mode`, "1 modified (2 lines and the mode change (100644 to 100755))", and alone
+  never "0 lines" (`a_whole_files_mode_change_is_named_never_counted_as_no_lines`,
+  `a_whole_files_mode_change_is_named_and_put_back`); R1.2 amended.
+
+Still batched for the user: 4 (pinning `apply.ignoreWhitespace` anyway) and 7 (a discard
+of files reads one diff per tracked file to count its lines).
+
+Dismissed, with the adjudicator's reasons:
+
+- 11 (`IndexNow` freshness): `IndexNow::read` calls `open_index()`, which in gix 0.87.1
+  (`src/repository/index.rs`) builds a fresh `File::at` each call — no cache, no mtime gate.
+- 12 (`hash-object` lazily fetching through `.gitattributes` on git before 2.44 in a sparse
+  partial clone): the accepted residual the root `CLAUDE.md`'s environment invariant already
+  states; the 2.30 floor is the user's decision.
+- `write_verbs`' 24 tests in 0.04 s looked too fast: 0.21 s single-threaded, a `git` spawn
+  takes under a millisecond on this host, and no test returns early. Not a defect.
+
 ## 2026-10-08 — phase 03, C21's margin decided
 
 The user chose C21's margin on 2026-10-08, relayed by the coordinator: a flat 50 ms per

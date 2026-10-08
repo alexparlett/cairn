@@ -7,8 +7,9 @@ mode: QA adjudicated, every confirmed fix and the user's three decisions of
 2026-10-08 applied, full gate green. Phase 02 (the patch engine) done in packet
 mode: QA adjudicated, confirmed fixes applied, full gate green; items 10-11 batched for
 the user's review at the end of the packet. Phase 03 (the write verbs) built in packet
-mode, full gate green, QA pending; C21's margin decided by the user (a flat 50 ms) and
-amended into the PRD. Phases 04-12 not started.**
+mode: QA adjudicated, confirmed fixes and the user's four decisions (2, 3, 5, 6) applied,
+C21's margin decided (a flat 50 ms) and amended, full gate green. Phases 04-12 not
+started.**
 
 ## Locked decisions
 
@@ -174,13 +175,15 @@ Phase 03 (`docs/systems/staging.md`):
   (`git reset -q`), `UnstageTo::Commit(Oid)` (out of an amend: `HEAD`'s parent) and
   `UnstageTo::Nothing` (out of a root commit's amend: `git rm --cached -q`, which git refuses
   where the staged content differs from both the file and `HEAD` — phase 05's to meet);
-  `discard_lines(git, repo, &FileDiff, Confirmed, token)` (the diff must be the one the
-  consequence was built from) and `discard_files(git, repo, Confirmed, token)`.
+  `discard_lines(git, repo, Confirmed, token)` (it applies the patch the `Consequence`
+  carries — no diff is passed) and `discard_files(git, repo, Confirmed, token)`, which
+  answers `Error::DiscardIncomplete { performed, kept, failure }` when it did not take
+  every confirmed file (the lane must log `performed`, whose prompt the user accepted).
 - **The builders**: `discard_lines_consequence(git, repo, &FileDiff, Selection)` and
   `discard_files_consequence(git, repo, &[RepoPath])` — computed on a worker (they run
   `git`), each refusing before any prompt with `Error::Refused { path, why: Refusal }`
   (`NothingSelected`, `WholeFileOnly`, `Conflicted`, `Submodule`, `NestedRepository`,
-  `NotAFile`, `NoUnstagedChange`, `NotWhatWasConfirmed`) or `Error::NoPaths`. A selection of
+  `NotAFile`, `Obstructed`, `NoUnstagedChange`, `NotWhatWasConfirmed`) or `Error::NoPaths`. A selection of
   every line of a new file is `WholeFileOnly`: phase 08 routes it to `discard_files`.
 - **Outcomes to draw**: `Error::ChangedSinceRead { path }` (a stale patch, R3.7) and
   `Error::ChangedSinceConfirmed { path }` (R1.4), never git's failure; `Performed::locks()`
@@ -190,8 +193,11 @@ Phase 03 (`docs/systems/staging.md`):
 - `crate::reads::hash_object` (used by the stale check) and `reads/hooks_path.rs`'s
   `hooks_path` — **phase 05**: re-export it from `reads/mod.rs` (it is module-private and
   `expect(dead_code)` until then).
-- `Consequence::DiscardLines` gained `on_disk: Oid` and `mode: Option<(FileMode,
-  FileMode)>`; `FileLoss`'s working-tree ids are the bytes on disk hashed with no filter.
+- `Consequence::DiscardLines` gained `on_disk: Oid`, `executable: bool`, `mode:
+  Option<(FileMode, FileMode)>` and `patch: Patch`; `FileLoss::Modified` gained
+  `executable` and `mode`, `FileLoss::Untracked` `executable`, and `FileLoss::Emptied` is new
+  (an intent-to-add file, which the discard leaves empty); every working-tree id is the bytes
+  on disk hashed with no filter.
 
 ## Carried forward from phase 03 (owned by the phase named)
 
@@ -199,16 +205,22 @@ Phase 03 (`docs/systems/staging.md`):
   write's token; `discard_*_consequence` are reads the window asks for before a dialog.
 - **Phase 05**: `hooks_path` re-export; `UnstageTo::Commit`/`Nothing` for amend; the root
   amend's `git rm --cached` refusal; C13's root-commit case.
+- **Phase 07** (phase 03's QA item 4): `discard_files_consequence` accepts any path
+  absent from the index as untracked, so an ignored file or a path inside a nested
+  repository reaches `git clean -f`, which leaves it (the outcome now names it as kept).
+  Phase 07 either refuses a path `git status` did not list before any prompt, or states in
+  `docs/systems/staging.md` that the caller owns that, with a test of the `Absent` arm.
 - **Phase 07**: the dialog's `Consequence` from `discard_files_consequence` (a nested
   repository, a submodule, a conflicted path and a staged-only path are refused by it
   before any dialog); the rename source row's whole-file unstage resets the source alone,
-  both paths unstage the rename; an intent-to-add file's discard leaves it empty (batched
-  item 5 in progress.md).
+  both paths unstage the rename; an intent-to-add file's discard leaves it empty and says
+  so (the user's decision 5).
 - **Phase 08**: `discard_lines_consequence` takes the `Selection` by value; a mode-only
   selection where the diff has a mode change is allowed and named.
 - **Phase 11 / C22**: the root `CLAUDE.md` still has to name the one file deletion made
   without `git` (R12.4) when it exists.
-- **Phase 12 / the user**: items 1-7 batched in progress.md's phase 03 entry.
+- **Phase 12 / the user**: items 4 and 7 batched in progress.md's phase 03 entry (the
+  rest decided by the user on 2026-10-08).
 
 ## Carried forward from phase 02 (owned by the phase named)
 
@@ -287,7 +299,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | --- | --- |
 | 01 seal | done — QA adjudicated, all confirmed fixes and the user's three decisions (items 6, 13, 34a) applied, full gate green |
 | 02 patch engine | done — QA adjudicated, confirmed fixes applied, full gate green; items 10-11 batched for the user |
-| 03 write verbs | built, full gate green, QA pending; C21's margin decided (50 ms) and amended |
+| 03 write verbs | done — QA adjudicated, fixes and the user's decisions applied, full gate green |
 | 04 local lane | not started |
 | 05 commit engine | not started |
 | 06 render foundations | not started |

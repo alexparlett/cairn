@@ -1,7 +1,7 @@
 //! The repository worker pool: the threads that touch the repository, and the
 //! values that cross back to the window.
 //!
-//! Five threads per open repository, started by the first, each with its own
+//! Six threads per open repository, started by the first, each with its own
 //! [`Outbox`] so the update stream ends only when every one of them has gone:
 //!
 //! - `cairn-repository` (this file): takes the `git` the application found as
@@ -9,13 +9,17 @@
 //!   serves the history lane and a refresh's refs (`history_lane.rs`), the
 //!   filters and the command log, forwards each operation to its write lane,
 //!   and on its way out closes the repository — every `git` in it ended and
-//!   reaped, up to `CLOSE_BOUND` — and stops the other four.
+//!   reaped, up to `CLOSE_BOUND`, once the write the local lane is running has
+//!   ended — and stops the other five.
 //! - `cairn-diff` (`diff_lane.rs`): the changes and file-diff lanes, so a
 //!   page and a diff never queue behind each other.
 //! - `cairn-refresh` (`refresh_lane.rs`): status and ahead/behind, so neither
 //!   a page nor a diff queues behind a slow status.
 //! - `cairn-network` (`network_lane.rs`): the network lane, where fetch runs,
 //!   so it blocks neither the walk nor the window.
+//! - `cairn-local` (`local_lane.rs`): the local write lane, where every write
+//!   to the index, the working tree and a local ref runs, one at a time, in the
+//!   order asked; reached directly, so a write never waits behind a page.
 //! - `cairn-askpass` (`askpass.rs`): accepts the helper's questions and waits
 //!   on the window for each answer.
 //!
@@ -29,6 +33,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use cairn_git::{CLOSE_BOUND, SharedRepository};
@@ -39,6 +44,7 @@ use super::diff_lane::{DiffJob, Serving, serve_diffs};
 use super::discovery::Discovery;
 use super::epoch::{Epoch, Epochs, QueryLane};
 use super::history_lane::{Answering, Finding, HistoryLane};
+use super::local_lane::{LaneState, Local, LocalJob, serve_local_lane};
 use super::network_lane::{FetchControl, Lane, Operation, serve_network_lane};
 use super::refresh_lane::{RefreshJob, Refreshing, serve_refreshes};
 use super::request::{MOST_LANES, Request, Update};
@@ -55,7 +61,11 @@ pub type Replier = Rc<dyn Fn(Reply)>;
 /// request closes it anyway: past the longest an honest close takes —
 /// `CLOSE_BOUND` for the reaps, then up to the acceptor's stop deadline — so
 /// only a worker that has stopped answering is abandoned, and the window can
-/// always be closed.
+/// always be closed. The one close that may honestly take longer is one that
+/// waits on a local write — a commit in its hooks (staging-and-commit R4.9) —
+/// which the window says it is finishing; a second request past this closes
+/// the window then too, leaving the write to finish or not, and a lock it
+/// strands is named the next time the repository opens.
 pub const CLOSE_PATIENCE: Duration = Duration::from_secs(5);
 
 const _: () = assert!(
@@ -80,6 +90,9 @@ pub fn open(
     let (diff_jobs, diff_incoming) = channel::<DiffJob>();
     // Likewise the refresh thread's: a status is asked of it directly.
     let (refresh_jobs, refresh_incoming) = channel::<RefreshJob>();
+    // And the local lane's: a write is sent to it directly (staging-and-commit R4.1).
+    let (local_jobs, local_incoming) = channel::<LocalJob>();
+    let lane = LaneState::default();
     let (outgoing, inbox) = channel::<Envelope>();
     let (answers, answered) = channel::<Reply>();
     let wake = Wake::new();
@@ -114,10 +127,20 @@ pub fn open(
         jobs: refresh_incoming,
         queue: refresh_jobs.clone(),
         outbox: Outbox {
-            updates: Some(outgoing),
+            updates: Some(outgoing.clone()),
             wake: Arc::clone(&wake),
         },
         epochs: epochs.clone(),
+        lane: lane.clone(),
+    };
+    let local = LocalThread {
+        jobs: local_incoming,
+        stop: local_jobs.clone(),
+        outbox: Outbox {
+            updates: Some(outgoing),
+            wake: Arc::clone(&wake),
+        },
+        lane: lane.clone(),
     };
     let worker_epochs = epochs.clone();
     let worker_wake = Arc::clone(&wake);
@@ -175,6 +198,8 @@ pub fn open(
                 None,
                 Update::Opened {
                     name: repository_name(&shared),
+                    // A lock a write left when a close gave up on it among them (R4.9).
+                    locks: shared.lock_files(),
                 },
             );
             // This repository's channel, and git pointed at it.
@@ -184,7 +209,7 @@ pub fn open(
                 Arc::clone(&shared),
                 answered,
                 (network_outbox, acceptor_outbox),
-                (diff, refresh),
+                (diff, refresh, local),
                 &worker_wake,
                 worker_control,
             );
@@ -204,6 +229,8 @@ pub fn open(
             jobs,
             diff: diff_jobs,
             refresh: refresh_jobs,
+            local: local_jobs,
+            lane,
             epochs: epochs.clone(),
             control,
         },
@@ -262,9 +289,22 @@ struct RefreshThread {
     queue: Sender<RefreshJob>,
     outbox: Outbox,
     epochs: Epochs,
+    /// The local lane's state: a status read while a write runs is dropped, and none starts
+    /// while a commit runs.
+    lane: LaneState,
 }
 
-/// The four threads the repository thread starts, how it reaches them, and
+/// What the local lane is started with: its queue, which `open` made so the handle reaches it
+/// directly, a sender of the repository thread's own to stop it with, its outbox and the state
+/// it shares with the handle and the refresh thread.
+struct LocalThread {
+    jobs: Receiver<LocalJob>,
+    stop: Sender<LocalJob>,
+    outbox: Outbox,
+    lane: LaneState,
+}
+
+/// The five threads the repository thread starts, how it reaches them, and
 /// the repository they run `git` in, which stopping them closes.
 struct Threads {
     /// The network lane's queue; one lane per [`Lane`], one lane so far.
@@ -276,6 +316,12 @@ struct Threads {
     /// thread is told to stop as the repository closes, as the diff thread is.
     refresh: Sender<RefreshJob>,
     control: FetchControl,
+    /// The local lane's queue, to stop it with as the repository closes.
+    local: Option<Sender<LocalJob>>,
+    /// The local lane, waited for as the repository closes: the write it runs is never ended
+    /// by a close (staging-and-commit R4.9).
+    local_thread: Option<JoinHandle<()>>,
+    lane: LaneState,
     acceptor: Option<AcceptorStop>,
     shared: Arc<SharedRepository>,
 }
@@ -286,7 +332,7 @@ impl Threads {
         shared: Arc<SharedRepository>,
         answered: Receiver<Reply>,
         (network_outbox, acceptor_outbox): (Outbox, Outbox),
-        (diff, refresh): (DiffThread, RefreshThread),
+        (diff, refresh, local): (DiffThread, RefreshThread, LocalThread),
         wake: &Arc<Wake>,
         control: FetchControl,
     ) -> Self {
@@ -360,6 +406,7 @@ impl Threads {
             queue: refresh_queue,
             outbox: refresh_outbox,
             epochs: refresh_epochs,
+            lane: refresh_lane,
         } = refresh;
         let refresh_exit = WorkerExit {
             outbox: Some(refresh_outbox),
@@ -376,6 +423,7 @@ impl Threads {
                     let serving = Refreshing {
                         git: &refresh_git,
                         epochs: &refresh_epochs,
+                        lane: &refresh_lane,
                         jobs: &refresh_jobs,
                         outbox,
                     };
@@ -383,6 +431,43 @@ impl Threads {
                 }
                 drop(refresh_exit);
             });
+
+        let LocalThread {
+            jobs: local_jobs,
+            stop: local_stop,
+            outbox: local_outbox,
+            lane,
+        } = local;
+        let local_exit = WorkerExit {
+            outbox: Some(local_outbox),
+            wake: Arc::clone(wake),
+        };
+        let local_shared = Arc::clone(&shared);
+        let local_git = git.clone();
+        let local_channel = channel.clone();
+        let local_prompting = prompting.clone();
+        let local_lane = lane.clone();
+        // As the diff thread: one that cannot be started ends its part of the stream, and a
+        // write asked of it is never answered.
+        let local_thread = std::thread::Builder::new()
+            .name("cairn-local".to_owned())
+            .spawn(move || {
+                if let Some(outbox) = local_exit.outbox.as_ref() {
+                    let serving = Local {
+                        git: &local_git,
+                        channel: local_channel.as_ref(),
+                        prompting: &local_prompting,
+                        lane: &local_lane,
+                        jobs: &local_jobs,
+                        outbox,
+                    };
+                    serve_local_lane(&local_shared, &serving);
+                }
+                // This thread may hold the last reference to the channel: let it go first.
+                drop(local_channel);
+                drop(local_exit);
+            })
+            .ok();
 
         let running = control.clone();
         let exit = WorkerExit {
@@ -414,6 +499,9 @@ impl Threads {
             diff: diff_stop,
             refresh: refresh_queue,
             control,
+            local: Some(local_stop),
+            local_thread,
+            lane,
             acceptor,
             shared,
         }
@@ -472,6 +560,17 @@ impl Drop for Threads {
         let _ = self.diff.send(DiffJob::Stop);
         let _ = self.refresh.send(RefreshJob::Stop);
         self.network = None;
+        // The local lane starts nothing more, and the write it is running — a commit in its
+        // hooks, say — is waited for, never ended (staging-and-commit R4.9): the window says
+        // which, and a second close after its patience closes it anyway. Waited for here, on
+        // the repository thread; the acceptor still answers a prompt the write is waiting on.
+        self.lane.close();
+        if let Some(local) = self.local.take() {
+            let _ = local.send(LocalJob::Stop);
+        }
+        if let Some(local) = self.local_thread.take() {
+            let _ = local.join();
+        }
         // How many outlived the bound is told to nobody: the window is closing, and
         // each has had `SIGKILL`, which waiting longer cannot improve on.
         let _ = self.shared.end_invocations(CLOSE_BOUND);
@@ -489,6 +588,11 @@ pub struct RepositoryHandle {
     diff: Sender<DiffJob>,
     /// The refresh thread's queue: a refresh's status.
     refresh: Sender<RefreshJob>,
+    /// The local lane's queue: a write.
+    local: Sender<LocalJob>,
+    /// What the local lane shares: a refresh asked while a commit runs is kept back, and a
+    /// cancel reaches the write it names.
+    lane: LaneState,
     epochs: Epochs,
     control: FetchControl,
 }
@@ -511,6 +615,12 @@ impl RepositoryHandle {
     /// (a running status is never superseded, R10.3 as amended) — and returns its
     /// refs' epoch.
     pub fn submit(&self, request: Request) -> Option<Epoch> {
+        // Kept back while a commit runs, and so numbered nowhere: the commit's ending says to
+        // read everything again (staging-and-commit R4.6).
+        if matches!(request, Request::Refresh | Request::RefreshStatus) && self.lane.defer_refresh()
+        {
+            return None;
+        }
         // Numbered before it is routed, so what it supersedes is cancelled now,
         // not when a thread gets to it.
         let lanes = request.lanes();
@@ -547,6 +657,17 @@ impl RepositoryHandle {
                 }
             }
             Routed::CancelFetch => self.control.cancel(),
+            Routed::Write { id, write } => {
+                let _ = self.local.send(LocalJob::Write {
+                    id,
+                    write: Box::new(write),
+                });
+            }
+            Routed::CancelWrite(id) => self.lane.cancel(id),
+            Routed::RefreshStatus => {
+                let status = self.epochs.current(QueryLane::Status);
+                let _ = self.refresh.send(RefreshJob::Status { epoch: status });
+            }
             Routed::Repository(job) => {
                 if matches!(job, RepositoryJob::Close) {
                     self.epochs.stop();
@@ -585,12 +706,16 @@ pub fn idle_handle() -> (RepositoryHandle, impl Fn() -> Vec<Request>) {
 
     let (jobs, incoming) = channel::<(Option<Epoch>, RepositoryJob)>();
     let (diff, diff_incoming) = channel::<DiffJob>();
-    // A refresh's status is not read back: the refresh is, from the repository thread's queue.
-    let (refresh, _) = channel::<RefreshJob>();
+    // A refresh's status is read back as a status alone: a refresh's own is read back, from
+    // the repository thread's queue.
+    let (refresh, refresh_incoming) = channel::<RefreshJob>();
+    let (local, local_incoming) = channel::<LocalJob>();
     let handle = RepositoryHandle {
         jobs,
         diff,
         refresh,
+        local,
+        lane: LaneState::default(),
         epochs: Epochs::new(),
         control: FetchControl::default(),
     };
@@ -603,7 +728,20 @@ pub fn idle_handle() -> (RepositoryHandle, impl Fn() -> Vec<Request>) {
             DiffJob::ConfiguredContext => Some(unroute(Routed::ConfiguredContext)),
             DiffJob::Stop => None,
         });
-        repository.chain(diffs).collect()
+        let asked: Vec<Request> = repository.chain(diffs).collect();
+        // Only a status asked alone: a refresh's own was read back from its refs above.
+        let statuses = refresh_incoming.try_iter().count();
+        let refreshes = asked
+            .iter()
+            .filter(|request| matches!(request, Request::Refresh))
+            .count();
+        let alone = std::iter::repeat_with(|| Request::RefreshStatus)
+            .take(statuses.saturating_sub(refreshes));
+        let writes = local_incoming.try_iter().filter_map(|job| match job {
+            LocalJob::Write { id, write } => Some(unroute(Routed::Write { id, write: *write })),
+            LocalJob::Stop => None,
+        });
+        asked.into_iter().chain(alone).chain(writes).collect()
     })
 }
 
@@ -826,6 +964,8 @@ fn serve(
                 // numbered: `submit` numbers what is in a lane.)
                 _ => {}
             },
+            // Kept back while a commit runs: its ending reads everything again (R4.6).
+            RepositoryJob::Refs { .. } if threads.lane.defer_refresh() => {}
             RepositoryJob::Refs { ahead_behind } => match epoch {
                 Some(epoch) if epochs.is_current(epoch) => {
                     history.refresh(&repo, epoch, ahead_behind, &threads.refresh, &answering);
@@ -2092,12 +2232,15 @@ mod tests {
         let (jobs, incoming) = channel::<(Option<Epoch>, RepositoryJob)>();
         let (diff, diff_incoming) = channel::<DiffJob>();
         let (refresh, refresh_incoming) = channel::<RefreshJob>();
-        drop((incoming, diff_incoming, refresh_incoming));
+        let (local, local_incoming) = channel::<LocalJob>();
+        drop((incoming, diff_incoming, refresh_incoming, local_incoming));
         let epochs = Epochs::new();
         let handle = RepositoryHandle {
             jobs,
             diff,
             refresh,
+            local,
+            lane: LaneState::default(),
             epochs: epochs.clone(),
             control: FetchControl::default(),
         };

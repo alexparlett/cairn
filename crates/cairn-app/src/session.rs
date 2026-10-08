@@ -9,7 +9,7 @@ use crate::PAGE_ROWS;
 use crate::fetch_state::{FetchRefusal, FetchStatus, PromptView};
 use crate::history_state::{self, Progress};
 use crate::window::View;
-use crate::worker::{PromptId, Refreshed, Request, Retired, Update, expanded_diffs};
+use crate::worker::{PromptId, ReadAgain, Refreshed, Request, Retired, Update, expanded_diffs};
 
 /// What applying an update may ask of the worker: a request, and the refusal
 /// of a prompt the window will not show. Two plain callbacks, never a struct
@@ -22,13 +22,16 @@ pub struct Worker<'a> {
     pub closing: bool,
 }
 
-/// Applies `update` to `view`. A fetch ending takes down any dialog and
-/// refuses its prompt, which releases the helper of a git that is gone, and
-/// asks for a refresh, which reopens the history if the fetch moved what it
-/// draws; a prompt arriving while no fetch is in flight — a helper orphaned by
-/// a killed git — is refused rather than shown, since the dialog could not say
-/// which remote it was for. A refresh's refs that differ from those the
-/// history was walked from reopen it, keeping the selection.
+/// Applies `update` to `view`. A fetch or a local write ending takes down any
+/// dialog — unless the other is still in flight, whose prompt it may be — and
+/// refuses its prompt, which releases the helper of a git that is gone; a
+/// fetch's ending asks for a refresh, which reopens the history if the fetch
+/// moved what it draws, and a write's asks for what the write says to read
+/// again (staging-and-commit R4.5). A prompt arriving while neither a fetch
+/// nor a write is in flight — a helper orphaned by a killed git — is refused
+/// rather than shown, since the dialog could not say what asked. A refresh's
+/// refs that differ from those the history was walked from reopen it, keeping
+/// the selection.
 pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
     let View {
         mut rows,
@@ -40,6 +43,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         mut diff,
         mut refreshed,
         mut repository,
+        mut writes,
         ..
     } = view;
     match update {
@@ -63,14 +67,19 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             crate::ref_find::failed(view);
         }
         Update::Remotes { remotes: listed } => remotes.set(listed),
-        Update::Opened { name } => repository.set(Some(name)),
+        Update::Opened { name, locks } => {
+            repository.set(Some(name));
+            writes.write().locks_at_open(locks);
+        }
         Update::ConfiguredContext { context } => {
             crate::diff_actions::configured(context, view, worker.submit);
         }
         Update::FetchStarted { remote } => fetch.write().started(remote),
         Update::FetchProgress { line } => fetch.write().progressed(line),
         Update::FetchFinished { remote } => {
-            withdraw(&mut prompt, worker);
+            if !writes.peek().is_running() {
+                withdraw(&mut prompt, worker);
+            }
             fetch.set(FetchStatus::Finished { remote });
             refresh_after_an_operation(worker);
         }
@@ -78,7 +87,9 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             remote,
             stranded_locks,
         } => {
-            withdraw(&mut prompt, worker);
+            if !writes.peek().is_running() {
+                withdraw(&mut prompt, worker);
+            }
             fetch.set(FetchStatus::Cancelled {
                 remote,
                 stranded_locks,
@@ -86,9 +97,30 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             refresh_after_an_operation(worker);
         }
         Update::FetchFailed { remote, message } => {
-            withdraw(&mut prompt, worker);
+            if !writes.peek().is_running() {
+                withdraw(&mut prompt, worker);
+            }
             fetch.set(FetchStatus::Failed { remote, message });
             refresh_after_an_operation(worker);
+        }
+        Update::WriteStarted { id } => writes.write().started(id),
+        Update::WriteEnded {
+            id,
+            ending,
+            read_again,
+        } => {
+            writes.write().ended(id, ending);
+            if !fetch.peek().is_in_flight() {
+                withdraw(&mut prompt, worker);
+            }
+            // What the write left stale and no more (R4.5): a read begun before it ended is
+            // dropped by the worker (R4.4), so this is the one that shows it.
+            if !worker.closing {
+                (worker.submit)(match read_again {
+                    ReadAgain::Everything => Request::Refresh,
+                    ReadAgain::Status => Request::RefreshStatus,
+                });
+            }
         }
         // Kept for the views that draw it (phases 07-08); the snapshot it replaces is freed
         // on a worker. A history the refs no longer draw is reopened.
@@ -156,8 +188,9 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         }
         // Answered for whoever asks; no view draws the log in this packet (PRD R8.3).
         Update::CommandLog { .. } => {}
+        // A fetch's, or a local write's — a hook, a signing key, an LFS filter (R5.1).
         Update::Prompt { id, text } => {
-            if fetch.read().is_in_flight() {
+            if fetch.peek().is_in_flight() || writes.peek().is_running() {
                 prompt.set(Some(PromptView { id, text }));
             } else {
                 (worker.refuse)(id);
@@ -279,8 +312,9 @@ fn reopen_history(
     (worker.submit)(Request::Retire(Retired::history(replaced)));
 }
 
-/// Takes down a dialog whose fetch has ended, refusing the prompt so the helper
-/// still waiting on it is released: the git behind it is gone or failing anyway.
+/// Takes down a dialog whose fetch or write has ended, refusing the prompt so the
+/// helper still waiting on it is released: the git behind it is gone or failing
+/// anyway.
 fn withdraw(prompt: &mut State<Option<PromptView>>, worker: &Worker<'_>) {
     if let Some(shown) = prompt.write().take() {
         (worker.refuse)(shown.id);
@@ -369,6 +403,7 @@ mod tests {
                         repository: State::create(None),
                         sidebar: crate::sidebar_state::SidebarView::created(),
                         local: crate::local_changes_state::LocalChangesView::created(),
+                        writes: State::create(crate::local_writes::LocalWrites::default()),
                     }
                 })
             },
@@ -818,8 +853,8 @@ mod tests {
         }
     }
 
-    /// Caught by: showing a prompt with no fetch in flight, which the dialog could only
-    /// attribute to "git".
+    /// Caught by: showing a prompt with neither a fetch nor a write in flight, which the
+    /// dialog could only attribute to "git".
     #[test]
     fn a_prompt_with_no_fetch_in_flight_is_refused_not_shown() {
         let (test, view, asked) = launch(FetchStatus::Idle);
@@ -835,6 +870,114 @@ mod tests {
         );
         assert_eq!(*view.prompt.read(), None);
         assert_eq!(asked.refused.borrow().as_slice(), [id]);
+    }
+
+    /// A write's id and its news, as the lane sends them.
+    fn write_news(id: crate::worker::OperationId, read_again: ReadAgain) -> [Update; 2] {
+        [
+            Update::WriteStarted { id },
+            Update::WriteEnded {
+                id,
+                ending: crate::worker::WriteEnding::Refused {
+                    message: "nothing selected".to_owned(),
+                },
+                read_again,
+            },
+        ]
+    }
+
+    /// Staging-and-commit R4.5: a write's ending asks for what it says to read again and no
+    /// more — status alone after a stage, everything after a commit (or a refresh it kept
+    /// back) — once, and nothing while the window closes. Caught by: a full refresh after
+    /// every write (the refs and the history read again for a stage), none at all (the
+    /// write's result never drawn), or a request to a worker that has stopped.
+    #[test]
+    fn a_writes_ending_reads_again_what_it_says_and_no_more() {
+        for (read_again, expected) in [
+            (ReadAgain::Status, Request::RefreshStatus),
+            (ReadAgain::Everything, Request::Refresh),
+        ] {
+            let (test, view, asked) = launch(FetchStatus::Idle);
+            let id = crate::worker::OperationId::for_tests(3);
+            for update in write_news(id, read_again) {
+                applying(&test, view, &asked, update);
+            }
+            assert_eq!(asked.submitted.borrow().as_slice(), [expected]);
+            assert!(!view.writes.read().is_running());
+
+            let (test, view, asked) = launch(FetchStatus::Idle);
+            for update in write_news(id, read_again) {
+                applying_while(&test, view, &asked, update, true);
+            }
+            assert!(
+                asked.submitted.borrow().is_empty(),
+                "a closing repository was asked to read again"
+            );
+        }
+    }
+
+    /// R5.1: a prompt is shown while a local write runs, as during a fetch, and the write's
+    /// ending takes it down — unless a fetch is in flight, whose prompt it may be; a fetch's
+    /// ending leaves one up while a write runs, for the same reason. Caught by: a prompt
+    /// refused during a write (a hook or a signing key can never ask), or one ending taking
+    /// down the other's prompt.
+    #[test]
+    fn a_prompt_is_shown_while_a_write_runs_and_its_ending_takes_it_down() {
+        let id = crate::worker::OperationId::for_tests(5);
+        let prompt = || Update::Prompt {
+            id: PromptId::for_tests(8),
+            text: "Enter passphrase for key '/k': ".to_owned(),
+        };
+        let [started, ended] = write_news(id, ReadAgain::Status);
+
+        let (test, view, asked) = launch(FetchStatus::Idle);
+        applying(&test, view, &asked, started.clone());
+        applying(&test, view, &asked, prompt());
+        assert!(view.prompt.read().is_some(), "a write's prompt was refused");
+        applying(&test, view, &asked, ended.clone());
+        assert_eq!(*view.prompt.read(), None, "the dialog outlived its write");
+        assert_eq!(asked.refused.borrow().as_slice(), [PromptId::for_tests(8)]);
+
+        // A fetch in flight: the write's ending leaves the prompt, which may be the fetch's.
+        let (test, view, asked) = launch(running());
+        applying(&test, view, &asked, started.clone());
+        applying(&test, view, &asked, prompt());
+        applying(&test, view, &asked, ended);
+        assert!(
+            view.prompt.read().is_some(),
+            "a write's ending took the fetch's prompt"
+        );
+        assert!(asked.refused.borrow().is_empty());
+
+        // A write running: a fetch's ending leaves the prompt, which may be the write's.
+        for ending in fetch_endings() {
+            let (test, view, asked) = launch(running());
+            applying(&test, view, &asked, started.clone());
+            applying(&test, view, &asked, prompt());
+            applying(&test, view, &asked, ending.clone());
+            assert!(
+                view.prompt.read().is_some(),
+                "{ending:?} took a running write's prompt"
+            );
+        }
+    }
+
+    /// R4.9: the lock files present as the repository opened are kept for the window to name.
+    #[test]
+    fn the_locks_found_as_the_repository_opened_are_kept_for_the_window() {
+        let lock = std::path::PathBuf::from("/r/.git/index.lock");
+        let (test, view, asked) = launch(FetchStatus::Idle);
+        applying(
+            &test,
+            view,
+            &asked,
+            Update::Opened {
+                name: "engine".to_owned(),
+                locks: vec![lock.clone()],
+            },
+        );
+        assert_eq!(view.writes.read().locks(), [lock]);
+        assert!(asked.submitted.borrow().is_empty());
     }
 
     /// PRD R7.2, the hop between the worker and the window: a refusal lands in the view

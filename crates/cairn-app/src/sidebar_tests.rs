@@ -174,6 +174,7 @@ fn launch(loaded: usize, complete: bool) -> (TestingRunner, View, Submitted) {
                     repository: State::create(Some("engine".to_owned())),
                     sidebar: SidebarView::created(),
                     local: crate::local_changes_state::LocalChangesView::created(),
+                    writes: State::create(crate::local_writes::LocalWrites::default()),
                 }
             })
         },

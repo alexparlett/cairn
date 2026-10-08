@@ -460,7 +460,7 @@ fn rows_answer_or_failure(updates: &mut Updates) -> Option<Update> {
 /// (`Update::Opened`), which every open that succeeds sends before anything else.
 pub(super) fn opened_as(updates: &mut Updates) -> String {
     match next_by(updates, Instant::now() + WAIT, &[]) {
-        Some(Update::Opened { name }) => name,
+        Some(Update::Opened { name, .. }) => name,
         other => panic!("the open did not first say what it opened: {other:?}"),
     }
 }

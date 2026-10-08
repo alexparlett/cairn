@@ -15,6 +15,7 @@ use cairn_model::{
 
 use super::askpass::PromptId;
 use super::epoch::QueryLane;
+use super::local_lane::{LocalWrite, OperationId, ReadAgain, WriteEnding};
 
 /// What a changes query compares (R2.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -298,7 +299,10 @@ impl Retired {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Not `Clone`: a destructive write carries the `Confirmed` the user gave it, which is spent
+/// once. A test may copy one that carries none.
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(Clone))]
 pub enum Request {
     /// Starts a walk from every ref (refs-and-status R4.1), abandoning any walk already open:
     /// from the refs snapshot the last refresh read on the history thread, or — when none has
@@ -360,6 +364,10 @@ pub enum Request {
     /// thread ([`Update::AheadBehind`], [`Update::Status`]), so neither a page nor a diff
     /// queues behind a slow one. A failure is [`Update::RefreshFailed`].
     Refresh,
+    /// Reads the working tree's status again, and nothing else: what a write to the index or
+    /// the working tree leaves stale (staging-and-commit R4.5). On the refresh thread, as a
+    /// refresh's status is, never superseding one that runs; answered by [`Update::Status`].
+    RefreshStatus,
     /// The sidebar's rows for `refs` (R8.1-R8.3): its sections, the refs and stashes whose
     /// names hold `text`, in folders, as far as `disclosure` opens them
     /// (`RefsSnapshot::sidebar_rows`), answered by [`Update::FilteredRefs`]. A pass over
@@ -386,6 +394,18 @@ pub enum Request {
     Fetch { remote: String },
     /// Kills the fetch in flight, if any.
     CancelFetch,
+    /// Runs `write` on the local write lane (staging-and-commit R4): straight to its thread,
+    /// queued behind the write running, in the order asked, answered by
+    /// [`Update::WriteStarted`] and [`Update::WriteEnded`] under `id`, which the window
+    /// chose ([`OperationId::next`]) so it can draw the write queued from the moment it asks.
+    Write { id: OperationId, write: LocalWrite },
+    /// Cancels the write `id` names, if it is a commit and running; nothing otherwise (R4.3).
+    /// Never queued: it reaches the lane's state directly, ahead of any write.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "commit, phase 05, is the first write to cancel")
+    )]
+    CancelWrite { id: OperationId },
     /// Every `git` invocation this repository has run that is over, oldest
     /// first, answered by [`Update::CommandLog`].
     #[cfg_attr(
@@ -432,6 +452,10 @@ impl Request {
             | Self::ConfiguredContext
             | Self::Fetch { .. }
             | Self::CancelFetch
+            | Self::Write { .. }
+            | Self::CancelWrite { .. }
+            // Status is numbered in its lane, which nothing moves (R10.3 as amended).
+            | Self::RefreshStatus
             | Self::CommandLog
             | Self::Retire(_)
             | Self::Close => &[],
@@ -469,9 +493,12 @@ pub enum Update {
     /// The repository is open: `name` is what the title bar calls it — the last component of
     /// its working tree, or of its git directory when it is bare, as Fork names a
     /// repository's folder — whatever path it was opened at (`.`, a subdirectory, its `.git`).
-    /// Sent once, first, tied to no request.
+    /// Sent once, first, tied to no request. `locks` is every lock file under its git
+    /// directories as it opened — one a write left when a close gave up on it among them
+    /// (staging-and-commit R4.9) — for the window to name.
     Opened {
         name: String,
+        locks: Vec<PathBuf>,
     },
     /// The default remote first, when there is one.
     Remotes {
@@ -563,6 +590,18 @@ pub enum Update {
         text: String,
         rows: MatchedRows,
     },
+    /// A local write has started (staging-and-commit R4.2): the writes asked before it have
+    /// ended, and it is no longer queued.
+    WriteStarted {
+        id: OperationId,
+    },
+    /// A local write has ended, how, and what the window reads again after it (R4.5): what
+    /// its `Invalidated` names, or everything when a commit kept a refresh back (R4.6).
+    WriteEnded {
+        id: OperationId,
+        ending: WriteEnding,
+        read_again: ReadAgain,
+    },
     /// The repository's command log, oldest first, as far back as it keeps.
     CommandLog {
         records: Vec<CommandRecord>,
@@ -648,6 +687,8 @@ impl Update {
             | Self::FetchFailed { .. }
             | Self::FetchRefused { .. }
             | Self::Prompt { .. }
+            | Self::WriteStarted { .. }
+            | Self::WriteEnded { .. }
             | Self::CommandLog { .. }
             | Self::FilteredFiles { .. }
             | Self::DiffFailed { .. } => None,
@@ -765,6 +806,16 @@ mod tests {
                 remote: "origin".to_owned(),
             },
             Request::CancelFetch,
+            Request::Write {
+                id: OperationId::next(),
+                write: LocalWrite::StageFiles {
+                    paths: vec![RepoPath::from("a")],
+                },
+            },
+            Request::CancelWrite {
+                id: OperationId::next(),
+            },
+            Request::RefreshStatus,
             Request::CommandLog,
             Request::Retire(Retired(Box::default())),
             Request::Close,

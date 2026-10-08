@@ -16,6 +16,9 @@ mod find_tests;
 mod history_lane;
 #[cfg(test)]
 mod lifecycle_tests;
+mod local_lane;
+#[cfg(test)]
+mod local_lane_tests;
 mod network_lane;
 mod pool;
 mod refresh_lane;
@@ -36,6 +39,7 @@ pub(crate) use diff_tests::{Configurable, changes_answer, checkout, commits, nex
 pub use discovery::Discovery;
 #[cfg(test)]
 pub(crate) use expand_all::EXPAND_ALL_LINES;
+pub use local_lane::{LocalWrite, OperationId, ReadAgain, WriteEnding};
 #[cfg(test)]
 pub use pool::Updates;
 #[cfg(test)]

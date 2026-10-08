@@ -12,6 +12,7 @@ mod local_changes_pane;
 mod local_changes_state;
 #[cfg(test)]
 mod local_changes_tests;
+mod local_writes;
 mod ref_find;
 mod refresh;
 mod refresh_state;
@@ -105,6 +106,8 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let sidebar = sidebar_state::SidebarView::used();
     // Local Changes' lists, filter and diff, for the session (refs-and-status R9).
     let local = local_changes_state::LocalChangesView::used();
+    // The local writes, for the session (staging-and-commit R4).
+    let writes = use_state(local_writes::LocalWrites::default);
     let view = View {
         rows,
         progress,
@@ -130,6 +133,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         repository,
         sidebar,
         local,
+        writes,
     };
 
     let opened = use_hook(|| {
@@ -145,6 +149,11 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         move || match worker::open(&path, &git) {
             Ok((handle, mut updates, reply)) => {
                 closing.opened(handle.clone());
+                // The first close asked while a write runs waits for it, and says which (R4.9).
+                closing.when_requested(move || {
+                    let mut told = writes;
+                    told.write().closing();
+                });
                 let platform = Platform::get();
                 handle.submit(Request::ListRemotes);
                 handle.submit(Request::ConfiguredContext);

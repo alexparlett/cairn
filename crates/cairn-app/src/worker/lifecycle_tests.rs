@@ -68,9 +68,10 @@ impl StubGit {
         })
     }
 
-    /// A stub in front of the real `git` found on this process's `PATH`: `verb` does what
-    /// `body` says, and every other invocation, `--version` included, is the real git's,
-    /// with its arguments as given.
+    /// A stub in front of the real `git` found on this process's `PATH`: `verb` — the first
+    /// argument past the repository's location and a local write's `--literal-pathspecs` —
+    /// does what `body` says, and every other invocation, `--version` included, is the real
+    /// git's, with its arguments as given.
     pub(super) fn wrapping(verb: &str, body: &str) -> Self {
         let real = std::env::var_os("PATH")
             .into_iter()
@@ -83,7 +84,7 @@ impl StubGit {
         Self::scripted(|directory| {
             format!(
                 "#!/bin/sh\nDIR='{}'\nVERB=\n\
-                 for argument in \"$@\"; do case \"$argument\" in --git-dir=*|--work-tree=*) ;; \
+                 for argument in \"$@\"; do case \"$argument\" in --git-dir=*|--work-tree=*|--literal-pathspecs) ;; \
                  *) VERB=\"$argument\"; break ;; esac; done\n\
                  if [ \"$VERB\" = '{verb}' ]; then\n{body}\nelse\n  exec '{}' \"$@\"\nfi\n",
                 directory.display(),
@@ -93,7 +94,7 @@ impl StubGit {
     }
 
     /// A stub whose script is `script(directory)`, made runnable.
-    fn scripted(script: impl FnOnce(&Path) -> String) -> Self {
+    pub(super) fn scripted(script: impl FnOnce(&Path) -> String) -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let directory = std::env::temp_dir().join(format!(
             "cairn-app-stub-{}-{}",

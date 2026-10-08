@@ -99,6 +99,8 @@ fn kind(update: &Update) -> &'static str {
         Update::FilteredRefs { .. } => "ref filter",
         Update::FilteredLocalChanges { .. } => "local changes filter",
         Update::RefreshFailed { .. } => "refresh failed",
+        Update::WriteStarted { .. } => "write started",
+        Update::WriteEnded { .. } => "write ended",
         Update::Failed { .. }
         | Update::WorkerLost { .. }
         | Update::FetchStarted { .. }
@@ -396,6 +398,7 @@ fn launch(path: &str) -> Harness {
                 repository: State::create(None),
                 sidebar: crate::sidebar_state::SidebarView::created(),
                 local: crate::local_changes_state::LocalChangesView::created(),
+                writes: State::create(crate::local_writes::LocalWrites::default()),
             })
         },
         1.,

@@ -17,6 +17,7 @@ use crate::fetch_state::{FetchRefusal, FetchStatus, PromptView};
 use crate::history_state::{Progress, Status};
 use crate::local_changes_pane::LocalChangesPane;
 use crate::local_changes_state::LocalChangesView;
+use crate::local_writes::LocalWrites;
 use crate::refresh_state::RefreshState;
 use crate::selection::Pair;
 use crate::sidebar_pane::SidebarPane;
@@ -83,6 +84,9 @@ pub struct View {
     pub sidebar: SidebarView,
     /// Local Changes: its lists, its filter and its diff's scroll (refs-and-status R9).
     pub local: LocalChangesView,
+    /// The local writes: queued, running and ended, the lock files last listed, and whether
+    /// the window waits on one to close (staging-and-commit R4).
+    pub writes: State<LocalWrites>,
 }
 
 impl std::fmt::Debug for View {
@@ -108,6 +112,16 @@ pub fn window(
     let counted = status_text::loaded_count(&view.progress.read());
     let fetch = view.fetch.read().clone();
     let prompt = view.prompt.read().clone();
+    // What the window says about the local writes: which it waits on to close (R4.9), and the
+    // lock files last listed (R3.8, R4.9).
+    let (closing_on, locks, asker) = {
+        let writes = view.writes.read();
+        (
+            status_text::closing_line(&writes),
+            status_text::locks_line(writes.locks()),
+            writes.running().map(|asked| asked.what.clone()),
+        )
+    };
     let refused = view.refused.read().clone();
     let hearing = submit.clone();
     // The keys held are let go of when the window loses focus: a release made while another
@@ -184,6 +198,8 @@ pub fn window(
                 .as_ref()
                 .map(|refusal| banner(status_text::refusal_line(refusal), false)),
         )
+        .maybe_child(closing_on.map(|line| banner(line, false)))
+        .maybe_child(locks.map(|line| banner(line, false)))
         .child(beside(
             SidebarPane::new(view, submit.clone()).into(),
             match *view.sidebar.main.read() {
@@ -192,7 +208,7 @@ pub fn window(
             },
             view,
         ))
-        .maybe_child(prompt.map(|prompt| dialog(prompt, &fetch, view.prompt, answer)))
+        .maybe_child(prompt.map(|prompt| dialog(prompt, &fetch, asker, view.prompt, answer)))
         .into()
 }
 
@@ -263,12 +279,18 @@ fn split(list: Rect, pane: Element, view: View) -> Element {
 fn dialog(
     prompt: PromptView,
     fetch: &FetchStatus,
+    writing: Option<String>,
     mut showing: State<Option<PromptView>>,
     answer: Option<Replier>,
 ) -> Element {
-    // A prompt is only shown while a fetch is in flight (`session::apply` refuses one
-    // otherwise), so the fallback names what asked when that holds no remote.
-    let remote = fetch.remote_in_flight().unwrap_or("git").to_owned();
+    // A prompt is only shown while a fetch or a local write is in flight (`session::apply`
+    // refuses one otherwise): the fetch's remote names what asked, or else the write — "Commit
+    // is asking for a credential" — and the fallback names git when neither holds a name.
+    let remote = fetch
+        .remote_in_flight()
+        .map(str::to_owned)
+        .or_else(|| writing.map(|what| status_text::capitalised(&what)))
+        .unwrap_or_else(|| "git".to_owned());
     let id = prompt.id;
     let on_submit = answer.clone();
     let on_cancel = answer;
@@ -659,6 +681,7 @@ pub(crate) mod tests {
                     repository: State::create(Some("engine".to_owned())),
                     sidebar: SidebarView::created(),
                     local: crate::local_changes_state::LocalChangesView::created(),
+                    writes: State::create(crate::local_writes::LocalWrites::default()),
                 })
             },
             1.,
@@ -1348,6 +1371,62 @@ pub(crate) mod tests {
         assert!(
             !shown.iter().any(|text| text == "failed to read commit abc"),
             "the failure stayed up after the retry worked"
+        );
+    }
+
+    /// Staging-and-commit R4.9, R5.1 and C11 drawn: a prompt raised while a local write runs is
+    /// titled by the write; the first close asked while it runs says which write the window
+    /// waits on; and the lock files a write's ending or the open named are said, by path.
+    /// Caught by: a close that waits in silence, a prompt titled "git", or lock files dropped
+    /// between the state and the window.
+    #[test]
+    fn the_window_names_the_write_it_waits_on_its_prompt_and_the_locks_found() {
+        let (mut test, view, _, _) = launch_with(
+            (0..3).map(row).collect(),
+            received(3, true),
+            FetchStatus::Idle,
+            Some(PromptView {
+                id: crate::worker::PromptId::for_tests(2),
+                text: "Enter passphrase for key '/k': ".to_owned(),
+            }),
+        );
+        let id = crate::worker::OperationId::for_tests(11);
+        let mut writes = view.writes;
+        writes.write().asked(
+            id,
+            &crate::worker::LocalWrite::StageFiles {
+                paths: vec![cairn_model::RepoPath::from("src/a.rs")],
+            },
+        );
+        writes.write().started(id);
+        test.sync_and_update();
+        let shown = texts(&test);
+        assert!(
+            shown
+                .iter()
+                .any(|t| t == "Staging 1 file is asking for a credential"),
+            "the dialog does not name the write: {shown:?}"
+        );
+        assert!(
+            !shown.iter().any(|t| t.starts_with("Finishing")),
+            "waiting on a close nobody asked for: {shown:?}"
+        );
+
+        writes.write().closing();
+        writes
+            .write()
+            .locks_at_open(vec![std::path::PathBuf::from("/r/.git/index.lock")]);
+        test.sync_and_update();
+        let shown = texts(&test);
+        assert!(
+            shown.iter().any(|t| t == "Finishing staging 1 file…"),
+            "the close does not say which write it waits on: {shown:?}"
+        );
+        assert!(
+            shown
+                .iter()
+                .any(|t| t.starts_with("Lock files remain") && t.ends_with("/r/.git/index.lock")),
+            "the lock found is not named: {shown:?}"
         );
     }
 
@@ -2545,6 +2624,7 @@ pub(crate) mod tests {
             crate::session::apply(
                 crate::worker::Update::Opened {
                     name: "folder".to_owned(),
+                    locks: Vec::new(),
                 },
                 view,
                 &crate::session::Worker {

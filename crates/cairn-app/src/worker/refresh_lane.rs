@@ -15,6 +15,12 @@
 //! Status is asked by the window's refresh directly; ahead/behind is forwarded here by the
 //! repository thread once it has read the refs it counts, under the epoch the refresh was
 //! given, so a refresh that supersedes this one supersedes its count too.
+//!
+//! A write in the local lane changes what status reads (staging-and-commit R4.4): a status is
+//! not read while a write runs, and one that began before a write ended is dropped rather than
+//! drawn — the window reads status again after every write, and that read shows it. While a
+//! commit runs no read starts here at all, ahead/behind included (R4.6): the commit's ending
+//! reads everything again. Both are the lane's state ([`LaneState`]).
 
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
@@ -24,6 +30,7 @@ use cairn_git::{Error, Repository, SharedRepository};
 use cairn_model::{LocalChanges, RefsSnapshot};
 
 use super::epoch::{Epoch, Epochs};
+use super::local_lane::LaneState;
 use super::pool::Outbox;
 use super::request::{Refreshed, Update};
 
@@ -47,6 +54,9 @@ pub(super) enum RefreshJob {
 pub(super) struct Refreshing<'a> {
     pub git: &'a GitBinary,
     pub epochs: &'a Epochs,
+    /// The local lane's: whether a write runs, a commit among them, and the clock a status is
+    /// stamped by.
+    pub lane: &'a LaneState,
     pub jobs: &'a Receiver<RefreshJob>,
     pub outbox: &'a Outbox,
 }
@@ -111,24 +121,31 @@ fn status(repo: &Repository, epoch: Epoch, serving: &Refreshing<'_>) {
     if !serving.epochs.is_current(epoch) {
         return;
     }
-    match repo.status(serving.git, &serving.epochs.watch(epoch)) {
-        // Laid out as Local Changes' lists here, off the UI thread: a sort of every path.
-        Ok(status) => serving.outbox.send(
-            Some(epoch),
-            Update::Status {
-                changes: Arc::new(LocalChanges::new(status)),
-            },
-        ),
-        // Ended by a close, which the cancel saw: not a failure.
-        Err(Error::StatusCancelled) => {}
-        Err(error) => serving.outbox.send(
-            Some(epoch),
-            Update::RefreshFailed {
-                what: Refreshed::Status,
-                message: error.to_string(),
-            },
-        ),
+    // A commit running: kept back, and its ending reads everything again (R4.6).
+    if serving.lane.defer_refresh() {
+        return;
     }
+    // Another write running: its ending reads status again, so a read now would be dropped.
+    let Some(stamp) = serving.lane.stamp() else {
+        return;
+    };
+    let answer = match repo.status(serving.git, &serving.epochs.watch(epoch)) {
+        // Laid out as Local Changes' lists here, off the UI thread: a sort of every path.
+        Ok(status) => Update::Status {
+            changes: Arc::new(LocalChanges::new(status)),
+        },
+        // Ended by a close, which the cancel saw: not a failure.
+        Err(Error::StatusCancelled) => return,
+        Err(error) => Update::RefreshFailed {
+            what: Refreshed::Status,
+            message: error.to_string(),
+        },
+    };
+    // Drawn only if no write started or ended while it was read (R4.4); dropped otherwise,
+    // and freed here, off the UI thread.
+    serving
+        .lane
+        .if_unchanged(stamp, || serving.outbox.send(Some(epoch), answer));
 }
 
 fn ahead_behind(
@@ -137,7 +154,7 @@ fn ahead_behind(
     epoch: Epoch,
     serving: &Refreshing<'_>,
 ) {
-    if !serving.epochs.is_current(epoch) {
+    if !serving.epochs.is_current(epoch) || serving.lane.defer_refresh() {
         return;
     }
     match repo.ahead_behind(snapshot, &serving.epochs.watch(epoch)) {

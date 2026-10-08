@@ -1,7 +1,10 @@
-//! Status text for the history list and the fetch.
+//! Status text for the history list, the fetch and the local writes.
+
+use std::path::PathBuf;
 
 use crate::fetch_state::{FetchRefusal, FetchStatus};
 use crate::history_state::{Progress, Status};
+use crate::local_writes::LocalWrites;
 
 /// What the title bar says about the fetch, or `None` when there is nothing to say.
 pub fn fetch_line(fetch: &FetchStatus) -> Option<String> {
@@ -43,6 +46,39 @@ pub fn fetch_line(fetch: &FetchStatus) -> Option<String> {
             why_it_failed(message)
         )),
     }
+}
+
+/// What the window says while it waits on a local write to close (staging-and-commit R4.9):
+/// "Finishing commit…". `None` when it is not closing, or no write runs.
+pub fn closing_line(writes: &LocalWrites) -> Option<String> {
+    writes
+        .closing_on()
+        .map(|asked| format!("Finishing {}…", asked.what))
+}
+
+/// What the window says about the lock files last listed — as the repository opened, or
+/// around a write's ending (R3.8, R4.9) — or `None` when there are none. Named in full and
+/// hedged as a cancelled fetch's are: a listing cannot tell a lock a git left behind from one
+/// a git in a terminal holds this instant.
+pub fn locks_line(locks: &[PathBuf]) -> Option<String> {
+    (!locks.is_empty()).then(|| {
+        format!(
+            "Lock files remain under the git directory and will fail later writes while they              are there — stale if no other git is running here, and then safe to remove: {}",
+            locks
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })
+}
+
+/// `phrase` with its first letter in capitals, to open a sentence.
+pub fn capitalised(phrase: &str) -> String {
+    let mut letters = phrase.chars();
+    letters.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(letters).collect()
+    })
 }
 
 /// What the window says about a fetch it asked for and the worker refused.

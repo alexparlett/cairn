@@ -14,6 +14,9 @@
 //! | ref filter (`FilterRefs`) | `cairn-repository`, as the file filter |
 //! | Local Changes' filter (`FilterLocalChanges`) | `cairn-repository`, as the file filter |
 //! | `CancelFetch` | none: the fetch's control, from the caller's thread |
+//! | `Write` | `cairn-local`, the local write lane, reached directly, so a write never waits behind a page or a find (staging-and-commit R4.1) |
+//! | `CancelWrite` | none: the local lane's state, from the caller's thread |
+//! | `RefreshStatus` | `cairn-refresh`, as a refresh's status |
 //!
 //! [`route`] is the table, applied to every request as it is submitted: it hands each one
 //! to its thread as that thread's own job type, so a thread is never sent work it does not
@@ -33,6 +36,7 @@ use std::sync::Arc;
 use cairn_model::{ChangeSet, Disclosure, LocalChanges, Oid, RefsSnapshot};
 
 use super::epoch::Epoch;
+use super::local_lane::{LocalWrite, OperationId};
 
 use super::request::{Comparison, DiffQuery, FileQuery, Request, Retired};
 
@@ -46,6 +50,8 @@ pub(super) enum Thread {
     Diff,
     /// `cairn-refresh`: status and ahead/behind.
     Refresh,
+    /// `cairn-local`: the local write lane.
+    Local,
 }
 
 /// The thread each query lane is served on: the table above, for the lanes.
@@ -113,8 +119,8 @@ pub(super) enum RepositoryJob {
     Close,
 }
 
-/// Where a request goes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Where a request goes. Not `Clone`, as a request is not.
+#[derive(Debug, PartialEq, Eq)]
 pub(super) enum Routed {
     Repository(RepositoryJob),
     Diff(DiffQuery),
@@ -132,6 +138,15 @@ pub(super) enum Routed {
     OpenHistory {
         rows: usize,
     },
+    /// A local write, straight to the local lane.
+    Write {
+        id: OperationId,
+        write: LocalWrite,
+    },
+    /// Never queued: it reaches the local lane's state directly.
+    CancelWrite(OperationId),
+    /// A status alone, to the refresh thread under the status lane's number.
+    RefreshStatus,
 }
 
 #[cfg(test)]
@@ -141,7 +156,9 @@ impl Routed {
         match self {
             Self::Repository(_) | Self::OpenHistory { .. } => Some(Thread::Repository),
             Self::Diff(_) | Self::ConfiguredContext => Some(Thread::Diff),
-            Self::CancelFetch => None,
+            Self::Write { .. } => Some(Thread::Local),
+            Self::RefreshStatus => Some(Thread::Refresh),
+            Self::CancelFetch | Self::CancelWrite(_) => None,
             // Its refs': see `lane_thread` for its ahead/behind. Its status, numbered in no
             // lane of the refresh's, goes to the refresh thread too.
             Self::Refresh => Some(Thread::Repository),
@@ -198,6 +215,9 @@ pub(super) fn route(request: Request) -> Routed {
         Request::Retire(retired) => Routed::Repository(RepositoryJob::Retire(retired)),
         Request::Close => Routed::Repository(RepositoryJob::Close),
         Request::CancelFetch => Routed::CancelFetch,
+        Request::Write { id, write } => Routed::Write { id, write },
+        Request::CancelWrite { id } => Routed::CancelWrite(id),
+        Request::RefreshStatus => Routed::RefreshStatus,
     }
 }
 
@@ -241,6 +261,9 @@ pub(super) fn unroute(routed: Routed) -> Request {
         Routed::Diff(DiffQuery::Expand(asked)) => Request::Expand(asked),
         Routed::ConfiguredContext => Request::ConfiguredContext,
         Routed::CancelFetch => Request::CancelFetch,
+        Routed::Write { id, write } => Request::Write { id, write },
+        Routed::CancelWrite(id) => Request::CancelWrite { id },
+        Routed::RefreshStatus => Request::RefreshStatus,
     }
 }
 
@@ -319,6 +342,16 @@ mod tests {
             },
             Request::CancelFetch,
             Request::CommandLog,
+            Request::Write {
+                id: OperationId::for_tests(1),
+                write: crate::worker::LocalWrite::StageFiles {
+                    paths: vec![cairn_model::RepoPath::from("a")],
+                },
+            },
+            Request::CancelWrite {
+                id: OperationId::for_tests(1),
+            },
+            Request::RefreshStatus,
             Request::Retire(
                 Retired::of(
                     Some(Arc::new(cairn_model::ChangeSet {
@@ -353,9 +386,28 @@ mod tests {
         assert_eq!(thread_of(QueryLane::Status), Thread::Refresh);
         assert_eq!(thread_of(QueryLane::RefFilter), Thread::Repository);
         assert_eq!(thread_of(QueryLane::LocalChangesFilter), Thread::Repository);
-        for request in every_request() {
+        // Staging-and-commit R4.1: a write goes straight to the local lane, never through the
+        // repository thread, where it would wait behind a page or a find; a status asked alone
+        // goes where a refresh's does; a write's cancel queues nowhere.
+        let write = Request::Write {
+            id: OperationId::for_tests(2),
+            write: crate::worker::LocalWrite::StageFiles { paths: Vec::new() },
+        };
+        assert_eq!(route(write).thread(), Some(Thread::Local));
+        assert_eq!(
+            route(Request::RefreshStatus).thread(),
+            Some(Thread::Refresh)
+        );
+        assert_eq!(
+            route(Request::CancelWrite {
+                id: OperationId::for_tests(2)
+            })
+            .thread(),
+            None
+        );
+        for (request, asked) in every_request().into_iter().zip(every_request()) {
             let lanes = request.lanes();
-            let routed = route(request.clone());
+            let routed = route(asked);
             for lane in lanes {
                 assert_eq!(
                     routed.lane_thread(*lane),
@@ -379,8 +431,8 @@ mod tests {
     /// Caught by: routing that loses or changes what was asked on the way.
     #[test]
     fn routing_keeps_every_request_whole() {
-        for request in every_request() {
-            assert_eq!(unroute(route(request.clone())), request);
+        for (request, asked) in every_request().into_iter().zip(every_request()) {
+            assert_eq!(unroute(route(asked)), request);
         }
     }
 }

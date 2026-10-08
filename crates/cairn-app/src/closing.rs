@@ -8,6 +8,11 @@
 //! repository never opened, or whose worker has already gone, closes at once.
 //! A second request after [`CLOSE_PATIENCE`] closes it anyway, so a worker
 //! that has stopped answering cannot keep the window open for good.
+//!
+//! A local write running when the window is asked to close — a commit in its
+//! hooks — is waited for and never ended (staging-and-commit R4.9): the
+//! worker ends nothing until it has, and the window says which write it is
+//! waiting for, through what [`Closing::when_requested`] was given.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -20,7 +25,10 @@ use crate::worker::{CLOSE_PATIENCE, RepositoryHandle, Request};
 /// Shared by the window's close hook and the task that drives the worker's
 /// updates; cloning shares it.
 #[derive(Clone, Default)]
-pub struct Closing(Rc<RefCell<Stage>>);
+pub struct Closing(Rc<RefCell<Stage>>, Rc<RefCell<Option<Tell>>>);
+
+/// What a close asked tells the window: see [`Closing::when_requested`].
+type Tell = Rc<dyn Fn()>;
 
 #[derive(Default)]
 enum Stage {
@@ -45,6 +53,12 @@ impl Closing {
         }
     }
 
+    /// `tell` is called as the first close is asked of an open repository: what
+    /// the window uses to say which write it is waiting on (R4.9).
+    pub fn when_requested(&self, tell: impl Fn() + 'static) {
+        *self.1.borrow_mut() = Some(Rc::new(tell));
+    }
+
     /// The window's close hook. Never waits: it sends at most one request.
     pub fn requested(&self) -> CloseDecision {
         let mut stage = self.0.borrow_mut();
@@ -55,6 +69,11 @@ impl Closing {
                 *stage = Stage::Closing {
                     since: Instant::now(),
                 };
+                drop(stage);
+                let tell = self.1.borrow().clone();
+                if let Some(tell) = tell {
+                    tell();
+                }
                 CloseDecision::KeepOpen
             }
             Stage::Closing { since } if since.elapsed() >= CLOSE_PATIENCE => CloseDecision::Close,
@@ -156,5 +175,31 @@ mod tests {
             "the stream ending did not close the window"
         );
         assert_eq!(closing.requested(), CloseDecision::Close);
+    }
+
+    /// Staging-and-commit R4.9: the window is told as the first close is asked of an open
+    /// repository — what it says which write it waits on with — and only then: not again on
+    /// the second request, not for a window with no repository. Caught by: a close that waits
+    /// on a write in silence, or one told on every request.
+    #[test]
+    fn the_window_is_told_once_as_the_first_close_is_asked() {
+        let told = Rc::new(std::cell::Cell::new(0));
+        let closing = Closing::default();
+        let counting = Rc::clone(&told);
+        closing.when_requested(move || counting.set(counting.get() + 1));
+        assert_eq!(closing.requested(), CloseDecision::Close);
+        assert_eq!(told.get(), 0, "told with no repository to close");
+
+        let (handle, _asked) = crate::worker::idle_handle();
+        let closing = Closing::default();
+        let counting = Rc::clone(&told);
+        closing.when_requested(move || counting.set(counting.get() + 1));
+        closing.opened(handle);
+        assert_eq!(closing.requested(), CloseDecision::KeepOpen);
+        assert_eq!(told.get(), 1, "not told as the close was asked");
+        assert_eq!(closing.requested(), CloseDecision::KeepOpen);
+        closing.asked_long_ago();
+        assert_eq!(closing.requested(), CloseDecision::Close);
+        assert_eq!(told.get(), 1, "told again on a later request");
     }
 }

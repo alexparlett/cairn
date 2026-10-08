@@ -285,7 +285,11 @@ a read runs (the others are `git config` in query form and `git stash show` in r
 form, "Where git answers a read"), accepted because it reads no index and so has none to refresh — and the lines
 Cairn holds for the working-tree side are rebuilt from git's own patch over the
 old side, checked against the object id git names for that content. A staged
-diff (`git diff-index --cached`) reads only objects. gix reads the index, fresh
+diff (`git diff-index --cached`) reads only objects; a staged rename or copy is
+paired as the user's `git diff --cached` pairs it, by a first `git diff-index
+--cached --raw --diff-filter=RC` over the whole index with their rename detection,
+since plumbing reads no `diff.renames` and a pathspec of one path pairs nothing
+(Spec: `docs/prd/staging-and-commit.md` R2.6). gix reads the index, fresh
 for every query, for what git's answer does not say alone, and every blob git
 names.
 

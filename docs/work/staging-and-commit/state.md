@@ -4,7 +4,9 @@ The cross-session cheat sheet. Every session updates this before ending.
 
 **Status: phase 01 (the seal) done on `feature/staging-and-commit` in packet
 mode: QA adjudicated, every confirmed fix and the user's three decisions of
-2026-10-08 applied, full gate green. Phases 02-12 not started.**
+2026-10-08 applied, full gate green. Phase 02 (the patch engine) built in packet
+mode, full gate green, QA pending (the coordinator dispatches it). Phases 03-12 not
+started.**
 
 ## Locked decisions
 
@@ -52,8 +54,11 @@ that most constrain implementation:
 - Fork's chunk-discard dialog default button and how Fork stages lines of an
   untracked file — the user may check on their own Fork; Cairn's choices (Cancel
   focused, a partial new-file patch) stand regardless.
-- Whether a `new file mode` patch applies against an intent-to-add entry
-  (`patch-mechanics-spike.md` E3b tested only a modification patch) — phase 02.
+- ~~Whether a `new file mode` patch applies against an intent-to-add entry~~ —
+  settled in phase 02: it does, on git 2.30.9, 2.32.7 and 2.56.0, leaving a real
+  entry with the lines selected (`a_new_file_patch_applies_over_an_intent_to_add_entry`,
+  `crates/cairn-git/tests/diff/staging.rs`), so an intent-to-add path stages through
+  the same rule as an untracked one.
 
 ## New modules and interfaces
 
@@ -123,6 +128,56 @@ Phase 01:
   `Consequence` (for example `needs_force_push()`) rather than matching on
   `Publication` in `cairn-app`.**
 
+Phase 02 (`docs/systems/diff.md`, "Stage, unstage and discard" and "A staged
+rename or copy is paired as `git diff --cached` pairs it"):
+
+- **`cairn_model::action_patch(PatchAction, &FileDiff, &Selection) -> Patch`**
+  (`crates/cairn-model/src/action_patch.rs`), `PatchAction` `Stage | Unstage |
+  Discard`: what each verb of R3.1-R3.3 carries. Give it the diff the selection was
+  made on — the staged `FileDiff` for `Unstage`, the unstaged or untracked one
+  otherwise — exactly as the engine answered it. Stage is `emit_patch` as drawn;
+  unstage and discard are `emit_patch` over the inversion; apply with `git apply
+  --cached --whitespace=nowarn -` (stage, unstage) or `git apply --whitespace=nowarn
+  -` (discard), never `-R`. Empty patch = nothing to apply (nothing selected, part
+  of a whole-file-only change, or a state that is not text): phase 03's verb must
+  refuse an empty patch rather than run `git apply` on nothing, and route whole-file
+  changes to its file verbs.
+- **Inversions**: `TextDiff::inverted` (a replacement inverts into its insertion
+  then its removal — see Decisions in progress.md), `Selection::inverted`,
+  `ChangedFile::inverted` (a copy inverts to its destination deleted).
+- **`Selection`'s mode item**: `select_mode`, `unselect_mode`, `holds_mode`;
+  `with_every_change` selects lines only; `len` counts lines only; `is_empty` is
+  false for the mode alone. A whole-file stage by patch must select the mode too.
+- **Quoting**: `emit_patch` writes every path line as git's `quote_c_style`
+  (`crates/cairn-model/src/c_quote.rs`, crate-private), with git's trailing tab on a
+  `---`/`+++` label holding a space.
+- **`crate::reads::staged_pairing`** (`crates/cairn-git/src/reads/working_tree.rs`)
+  and `WorkingTreeQuery::paired`: the staged side of `Repository::working_tree_diff`
+  now answers a staged rename or copy as git pairs it (status `Renamed`/`Copied`,
+  both paths), one more read process under rename detection. A paired read that
+  moved between its two reads is `ContentReadsDisagree` (the diff lane asks again).
+- **Test harness for later phases**: `crates/cairn-git/tests/diff/staging.rs` builds
+  each C3 case and checks an apply against three oracles; phase 03's verbs can
+  reuse its cases (`edited`, `Case`) and oracles (`forward_rule`, `mirrored_rule`,
+  `left_out`) to test through the real operations.
+
+## Carried forward from phase 02 (owned by the phase named)
+
+- **Phase 03**: `Consequence::DiscardLines` counts `Selection::len`, which counts
+  lines only, so a selection holding the mode change renders no word for it (and a
+  mode-only one "Discard 0 Lines"); this is phase 01's item 19, now concrete. Phase
+  03's discard verb decides how a mode selected for discard is confirmed, with a test.
+- **Phase 03**: a whole selection of an untracked or intent-to-add file's lines
+  discards as a `deleted file mode` patch, which `git apply` honours by deleting the
+  file — but L8 routes deleting an untracked file to `git clean` under
+  `DiscardFiles`. The verb (or phase 07/08's gesture) must route an all-lines
+  discard of an added file to the file verb, or confirm it as a deletion.
+- **Phase 03 / C22**: the root `CLAUDE.md` (repo map's `cairn-model` and `cairn-git`
+  rows, and D1's list of reads) does not yet name `action_patch`, the inversions or
+  `reads::staged_pairing`; `docs/design/engine.md` and `docs/systems/diff.md` do. Not
+  edited by the phase agent (an instruction file); for the user or C22's update.
+- **Phase 08**: drawing the mode row (R9.4) selects through `Selection::select_mode`.
+
 ## Carried forward from phase 01's QA (owned by the phase named)
 
 - **Phase 03** (QA item 18): an empty `DiscardFiles` renders "the changes in 0
@@ -166,7 +221,7 @@ Phase 01:
 | Phase | Status |
 | --- | --- |
 | 01 seal | done — QA adjudicated, all confirmed fixes and the user's three decisions (items 6, 13, 34a) applied, full gate green |
-| 02 patch engine | not started |
+| 02 patch engine | built, gate green, QA pending |
 | 03 write verbs | not started |
 | 04 local lane | not started |
 | 05 commit engine | not started |

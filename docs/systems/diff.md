@@ -15,10 +15,12 @@ file's diff opened in place under its row, and in its Changes tab a filtered fil
 list beside one file's diff, unified or side by side, or two commits compared
 ("The detail pane" and "The diff view", below); and, in the Local Changes view, the path
 chosen in its Unstaged or Staged list beside its working-tree diff (`local-changes.md`);
-nothing stages anything — the patch emitter still ships
-with no caller, deliberately (program decision L2 in
-`docs/work/daily-loop/brainstorm.md`), because its round-trip tests are what make
-a later staging packet a feature rather than a rewrite. Which paths of a working
+nothing stages anything yet — the patch emitter, and since
+`staging-and-commit` phase 02 the stage, unstage and discard patches built on it
+(`action_patch`, "Stage, unstage and discard", below), still ship with no caller,
+deliberately (program decision L2 in `docs/work/daily-loop/brainstorm.md`): their
+round trips against real `git apply` are what make the write verbs a feature rather
+than a rewrite. Which paths of a working
 tree changed — status — is not here (`status.md`): the working-tree query answers one path it
 is given, and Local Changes gives it the path chosen in its lists. Intent for this surface is `docs/design/diff.md` and `docs/design/ui.md`, under
 decisions D1 (`docs/design/engine.md`), D3 (`docs/design/concurrency.md`), D5
@@ -97,6 +99,16 @@ the same bytes each time.
 zero, which is how the lines are indexed, and `one_based()` is the number a gutter
 and a hunk header show. Having one type rather than two coordinate systems is what
 keeps the off-by-one out of the header arithmetic.
+
+**The mode change is an item of its own** (`staging-and-commit` R2.4, L17d): a
+`Selection` holds it apart from the lines (`select_mode`, `unselect_mode`,
+`holds_mode`), as `git add -p` asks it apart. Nothing else selects it —
+`with_every_change` and `select_change` select lines — so a selection of lines
+alone writes no `old mode`/`new mode`, and a selection of the mode alone writes the
+two header lines and nothing else. `len` counts lines only; `is_empty` is false for
+the mode alone. `the_mode_change_is_an_item_of_its_own`,
+`the_lines_and_the_mode_change_are_selected_apart`, and against real git, C4
+(`a_selection_of_lines_moves_no_mode_and_the_mode_moves_alone`, below).
 
 ## Rows are reached one at a time
 
@@ -666,7 +678,8 @@ git -c diff.suppressBlankEmpty=false <verb> -z --raw --no-abbrev -p --full-index
     [--ignore-submodules=<v>] <what> -- <path>
 ```
 
-with `diff-index --cached --no-renames --end-of-options <HEAD or the empty tree>`,
+with `diff-index --cached --no-renames --end-of-options <HEAD or the empty tree>`
+(or, for a staged rename or copy, the pair's read below),
 `diff-files --no-renames`, or `diff --no-index` and `/dev/null <path>` — `<path>`
 relative to the top of the working tree, and `./-` for the path `-` — porcelain,
 the one exception to a read's plumbing-only rule (accepted by the user, with the
@@ -814,6 +827,51 @@ as stdin, and its record named `-` again);
 `a_staged_file_on_an_unborn_branch_and_beside_a_directory_is_that_file` for the
 empty tree and a file where `HEAD` had a directory. The same suite runs on git
 2.30.9 and 2.32.7 in `git-floor`.
+
+#### A staged rename or copy is paired as `git diff --cached` pairs it
+
+`staging-and-commit` R2.6, L18. Plumbing reads no `diff.renames`, and a pathspec of
+one path pairs nothing — `git diff --cached -- <new>` itself shows a staged rename as
+an addition (`git_diff_cached_of_one_path_pairs_nothing`) — so the staged side
+decides the pair over the whole index first. `crate::reads::staged_pairing` runs
+
+```text
+git diff-index --cached -z --raw --no-abbrev <-M|-C> -l<limit> --diff-filter=RC
+    --ita-invisible-in-index --end-of-options <HEAD or the empty tree>
+```
+
+with the detection and limit the user's `diff.renames` and `diff.renameLimit` give
+porcelain, read in process by the same `diff::renames::Configured` the changes query
+uses, and keeps, of the records as they stream, only the rename or copy whose
+destination is the path or the rename whose source it is — a copy's source keeps a
+record of its own. `--ita-invisible-in-index` is porcelain's reading of an
+intent-to-add entry: without it plumbing pairs a deleted empty file with one, which
+`git diff --cached` never shows. `--diff-filter=RC` leaves out every other record, an
+unmerged one included. With detection off it starts nothing.
+
+Where the path is in a pair, the content read asks `diff-index --cached` with that
+detection, `--diff-filter=RC` and `--ita-invisible-in-index` in place of
+`--no-renames`, and both paths' literal pathspecs: with one source and one
+destination queued, git finds the same pair at the same score, a pair's similarity
+being its two blobs' alone. The record it prints must be the one the whole-index
+read found, or the index moved between the two reads and the answer is
+`Error::ContentReadsDisagree`, which the diff lane asks again on. The sides' sizes
+come from the pair's two ids, the diff driver's algorithm from the source path, and
+the pair's lines from git's own patch, as for a modification (exact and, under `-w`,
+whitespace-ignoring). A path in no pair is read alone, `--no-renames`, which is then
+exactly git's answer.
+
+Pinned by C7, `the_staged_diff_pairs_renames_and_copies_as_git_diff_cached_does`
+(`crates/cairn-git/tests/diff/staged_renames.rs`): under `diff.renames` unset, `true`,
+`false`, `copies`, and a `diff.renameLimit` that cuts the search short, every path of
+a fixture holding a rename with an edit, a copy of an edited source, a deleted empty
+file beside an intent-to-add one, a plain edit and an unrelated addition answers
+exactly the record porcelain `git diff --cached --raw` over the whole index shows for
+it, and the pair's hunks are `git diff --cached`'s for the pair; on git 2.30.9, 2.32.7
+and the host's. `every_discriminating_file_reads_as_git_diff_shows_it_staged_and_unstaged`
+compares a paired answer's hunks with git's for the pair, not for its destination
+alone. The unstaged side pairs nothing: `git diff` pairs only an intent-to-add entry
+with a path gone from the working tree, and that entry's own diff is its addition.
 
 ### The display-only overlay
 
@@ -1036,8 +1094,27 @@ them against real `git apply` is criteria C1-C3, which land with the engine in
   selection leaves it out, because the content it makes is neither blob and a
   wrong id there is a lie a three-way apply could act on.
   `the_index_line_follows_gits_own_rule`, `a_partial_selection_claims_no_blob_id`.
-- Paths go out as the bytes git stores (`RepoPath`), so a patch names the file git
-  names even when the path is not text.
+- **Every path line is C-quoted exactly as git's `quote_c_style` writes it**
+  (`staging-and-commit` R2.5, L17e; `crates/cairn-model/src/c_quote.rs`): unquoted
+  when nothing in it needs quoting, otherwise in double quotes with `"` and `\`
+  escaped, BEL, BS, TAB, LF, VT, FF and CR as their letters, and every other control
+  byte, DEL and every byte above `0x7f` as a three-digit octal escape — git's
+  `cq_lookup` under `core.quotePath`'s default, the form `git diff` prints. The
+  prefix goes inside the quotes (`"a/ta\tb"`), `rename from`/`copy to` quote the
+  name alone, and a `---`/`+++` line whose label holds a space ends in a tab, as
+  `git diff`'s does. `git apply` refuses a raw tab (`patch-mechanics-spike.md` E5),
+  so this is not cosmetic. `each_awkward_name_is_spelled_as_git_spells_it`,
+  `only_printable_ascii_but_quote_and_backslash_goes_out_as_itself`,
+  `every_path_line_is_quoted_as_git_quotes_it`; against git itself, C3's
+  `lines_of_awkwardly_named_files_stage_unstage_and_discard_as_git_says` compares the
+  emitted path lines with `git diff`'s byte for byte and applies them, for a space, a
+  tab, a quote, a backslash, a newline, a control byte and invalid UTF-8.
+- **The mode change goes out only when the selection holds it** (R2.4): `old
+  mode`/`new mode` are written for a file whose mode changed only under
+  `holds_mode`, and a selection of the mode alone is those headers and nothing else.
+  A modification with nothing selected — no line, not the mode — is the empty patch;
+  a rename, a copy or an empty file added or deleted with no lines is still its
+  headers. A type change's mode is part of its kind, carried by its lines.
 - **A type change is two file patches at one path**, the old kind deleted and the
   new kind added, which is what `git diff` writes and the only form `git apply`
   takes: one `diff --git` carrying `old mode`/`new mode` is refused with "wrong
@@ -1048,6 +1125,89 @@ them against real `git apply` is criteria C1-C3, which land with the engine in
   nothing. `a_type_change_is_written_as_a_deletion_and_an_addition` and
   `a_type_change_that_is_not_wholly_selected_emits_nothing`, with C1 and C3 proving
   both directions against real `git apply`.
+
+## Stage, unstage and discard
+
+`action_patch(PatchAction, &FileDiff, &Selection)`
+(`crates/cairn-model/src/action_patch.rs`, `staging-and-commit` R2.1-R2.3, L17) is
+what each of the three actions emits, over the diff the selection was made on: one
+forward rule, `emit_patch`, given the diff as drawn to **stage** (the unstaged or
+untracked diff, applied with `git apply --cached`), and the diff **inverted** to
+**unstage** (the staged diff, `git apply --cached`) and to **discard** (the unstaged
+or untracked diff, `git apply` on the working tree). No patch is ever applied with
+`-R` (L17a).
+
+**The inversion** is three pure functions. `TextDiff::inverted` swaps the sides and
+each change's spans; `Selection::inverted` swaps the removed and added sets (a
+removed line of the original is an added line of the inversion by the same number)
+and keeps the mode; `ChangedFile::inverted` swaps paths, modes and ids, an addition
+becoming a deletion and the reverse, a rename renamed back — and a copy becoming its
+destination deleted, since undoing a copy leaves its source where it was.
+**A change that both removes and adds lines inverts into two changes at one place,
+its insertion and then its removal.** The forward rule keeps an unselected removed
+line where it stood, ahead of what is added beside it; in an inverted diff the
+removed lines are the original's additions, so inverted as one change a partial
+selection would leave the original's surviving additions ahead of the lines it
+restores — `B b` where git's own `reset -p`/`checkout -p`, which apply the mirrored
+patch with `-R`, leave `b B`. As an insertion then a removal, what comes back stands
+ahead of what stays, old before new as the diff drew them. This is a refinement of
+R2.1's "each change's two spans swapped", made because without it C3's mirrored
+oracle disagrees with the inversion on any partial selection inside one replacement
+(both the model's property test and the real-git test fail on the unsplit version).
+One visible consequence: a whole inverted replacement is written `+old` before
+`-new`, which `git apply` applies the same. `inverting_swaps_the_sides_and_each_changes_spans`,
+`an_inverted_replacement_puts_its_insertion_ahead_of_its_removal`,
+`inverting_swaps_paths_modes_and_ids`, `a_copy_inverts_to_its_destination_deleted`,
+`inverting_a_selection_swaps_its_sides_and_keeps_the_mode`; and over the corpus,
+`undoing_a_selection_leaves_what_the_mirrored_rule_says`
+(`crates/cairn-model/tests/diff_patch.rs`), against `diffs::mirrored_result`, which
+states git's mirrored rule off the changed ranges and inverts nothing.
+
+**Whole-file only** (R2.3, L17c): a deletion on either side and a type change make no
+patch for part of themselves — the empty patch, as a selection of nothing makes —
+decided on the diff AS DRAWN, before any inversion; every state that is not text
+(binary, an LFS pointer, past the limits, a submodule, a conflicted path,
+unsupported) makes no patch at all, by any action. Each is its file verb's, whole.
+`part_of_a_deletion_or_a_type_change_makes_no_patch`,
+`a_state_that_is_not_text_makes_no_patch`. A `ModeChangeOnly` diff is the mode's
+headers when the mode is selected and nothing otherwise.
+
+**Part of an added file** — untracked, newly staged, or intent-to-add — is not
+whole-file only (L17b): its lines stage as a `new file mode` patch of the lines
+selected, and discard (or unstage) as a partial deletion, which the forward rule
+writes as a modification, the file kept; all of it undone is the file deleted.
+`part_of_an_added_file_is_staged_new_and_discarded_as_a_modification`. **A `new file
+mode` patch applies over an intent-to-add entry** on git 2.30.9, 2.32.7 and 2.56.0
+and leaves a real entry holding the lines selected
+(`a_new_file_patch_applies_over_an_intent_to_add_entry`; the question
+`patch-mechanics-spike.md` E3b left open), so an intent-to-add path stages through
+the same rule as an untracked one.
+
+**Unstaging or discarding lines of a rename or a copy changes content only, at the
+path it now has** (R2.6, L17c): the patch names the new path on both sides and
+carries no `rename from`, so the index keeps the rename and the lines go back.
+`unstaging_lines_of_a_rename_or_a_copy_changes_content_at_its_new_path`.
+
+**C3 and C4 against real git** (`crates/cairn-git/tests/diff/staging.rs`, on the
+host's git and, through `git-floor`, 2.30.9 and 2.32.7): for a modification, an
+untracked file, an intent-to-add file, CRLF under `core.autocrlf=true`, a clean
+filter driver (rot13 both ways, `required`), an unborn branch, a mode change beside
+edits on both sides, a staged rename, and paths with a space, a tab, a quote, a
+backslash, a newline, a control byte and invalid UTF-8, every applicable action over
+every line, only additions, only removals, the first and the last line of each
+change, every other changed line and three seeded selections is applied with the
+command R3 names — `git apply --cached --whitespace=nowarn -` or `git apply
+--whitespace=nowarn -`, never `-R` — and the result (the index blob, or the working
+tree hashed in git's form) must equal the reference applier's reading of the same
+patch AND an independent derivation from the forward diff: the forward rule read off
+the changed ranges for stage, and for unstage and discard git's mirrored rule as a
+whole-file patch applied in reverse by real `git apply -R` in a scratch directory and
+by the reference applier, which must agree. `git diff` or `git diff --cached`
+afterwards must print exactly the lines the selection left out, stage and unstage must
+leave the working tree's bytes alone, and discard the index entry. C4,
+`a_selection_of_lines_moves_no_mode_and_the_mode_moves_alone`, reads the mode back
+from the index and the file after each action: lines alone move no mode, the mode
+alone moves no line.
 
 ## The reference applier
 

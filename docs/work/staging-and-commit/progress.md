@@ -3,6 +3,58 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-08 — phase 02, the patch engine (packet mode)
+
+Built on `feature/staging-and-commit`; full gate green (git-floor included); QA
+pending — the coordinator dispatches the fresh reviewers. What shipped:
+`TextDiff::inverted`, `Selection::inverted`, `ChangedFile::inverted` (R2.1);
+`Selection`'s mode item (R2.4); C-quoted path lines (R2.5); `action_patch`, what
+stage, unstage and discard emit, refusing part of a whole-file-only change (R2.2,
+R2.3); the staged side of the working-tree query pairing renames and copies as `git
+diff --cached` does (R2.6), unstaging lines of a rename as content at its new path.
+C3, C4 and C7 pass against real git on 2.56.0, 2.30.9 and 2.32.7
+(`crates/cairn-git/tests/diff/staging.rs`, `staged_renames.rs`); the intent-to-add
+question is settled (state.md). No stopping rule fired: every floor git applied
+every case as the host's did; the staged pairing is query plumbing (`diff-index`),
+no porcelain read; no case needed `-R`.
+
+Decisions taken in the phase (none is a stopping rule; the first is batched for the
+user's review, as a refinement of R2.1's wording):
+
+- **An inverted replacement is two changes, its insertion then its removal.** R2.1
+  says "each change's two spans swapped". Swapped as one change, the forward rule
+  leaves what stays of a partial selection inside one replacement AHEAD of what it
+  restores (`B b`), where git's mirrored patch applied with `-R` — E1b, and what git's
+  own `reset -p`/`checkout -p` edits do — leaves `b B`; the two oracles C3 names then
+  disagree on every mixed selection. With the split, the inversion, the reference
+  applier, the mirrored rule as the model states it and real `git apply -R` all agree
+  on every case and seed; the unsplit inversion fails both the model's property test
+  and C3 (checked by mutation). Visible cost: a whole inverted replacement is written
+  `+old` before `-new`, which git applies identically. Still one forward rule, still
+  no `-R`.
+- **The C3 mirrored oracle is grounded in real git**: written in the test from the
+  forward diff (it inverts nothing), applied in reverse both by real `git apply -R`
+  on a scratch file outside any repository and by the reference applier, which must
+  agree; the reference applier then reads Cairn's own patch, and git applies it.
+- **The staged pairing reads the whole index once** (`git diff-index --cached --raw
+  -z -M|-C -l<n> --diff-filter=RC --ita-invisible-in-index`), keeping only the
+  records naming the path as they stream, then reads the pair's lines across both
+  paths with the same detection; a record that moved between the two reads is
+  `ContentReadsDisagree`. `--ita-invisible-in-index` was found needed: plumbing
+  otherwise pairs a deleted empty file with an intent-to-add one, which `git diff
+  --cached` never shows (C7's fixture holds that case; dropping the flag fails C7).
+  `--diff-filter=RC` also drops an unmerged entry's `U` record, which the raw parser
+  would refuse.
+- **A staged rename's source path answers the rename record too**, since that
+  record is the only thing `git diff --cached` shows for it; a copy's source keeps
+  its own record.
+- **The mode item is selected by nothing but `select_mode`**: whole-file round
+  trips (`tests/diff/patches.rs`, diff-engine's C1-C3) now select it explicitly.
+- **Path lines carry git's trailing tab** after a `---`/`+++` label holding a
+  space (`diff.c`), so the emitted headers equal `git diff`'s byte for byte, which
+  C3 compares for every awkward name.
+- The root `CLAUDE.md` was not edited (state.md, carried forward).
+
 ## 2026-10-08 — phase 01, the user's three decisions applied
 
 The user decided the three items the adjudication left with them (relayed by the

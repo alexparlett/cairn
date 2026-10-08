@@ -200,18 +200,28 @@
 //! showing the pre-fetch refs.
 
 mod authority;
+mod discard;
 mod fetch;
+mod fresh_state;
+mod local_write;
+#[cfg(all(test, unix))]
+mod recording_stub;
 mod refspec_policy;
+mod stage;
 pub(crate) mod stranded_locks;
+
+use std::path::PathBuf;
 
 use cairn_model::Confirmed;
 
 pub(crate) use authority::WriteAuthority;
+pub use discard::{
+    discard_files, discard_files_consequence, discard_lines, discard_lines_consequence,
+};
 pub use fetch::{FetchCancel, FetchInProgress, fetch};
+pub use stage::{UnstageTo, stage_files, stage_lines, unstage_files, unstage_lines};
 
 pub use crate::process::{Askpass, GitBinary, GitEnvironment, GitVersion};
-
-use crate::Repository;
 
 /// What a mutation left stale in a gitoxide handle; see the module docs for what
 /// honouring each flag means.
@@ -287,6 +297,19 @@ pub struct Performed {
     description: String,
     acknowledged: Option<String>,
     invalidated: Invalidated,
+    locks: Locks,
+}
+
+/// The lock files under a repository's git directory around a local write (R3.8, #44):
+/// those present before it started — another git's, or a stale one, either of which the
+/// write may have failed on had it needed that file — and those present once it was over.
+/// A finding, not a verdict: a listing cannot tell a lock a running git holds from one a
+/// killed git stranded. Empty for an operation that does not list them (fetch, which
+/// reports what a cancel strands on its error).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Locks {
+    pub before: Vec<PathBuf>,
+    pub after: Vec<PathBuf>,
 }
 
 impl Performed {
@@ -296,7 +319,13 @@ impl Performed {
             description: description.into(),
             acknowledged: None,
             invalidated,
+            locks: Locks::default(),
         }
+    }
+
+    /// The record with the lock files found around the write.
+    pub(crate) fn with_locks(self, locks: Locks) -> Self {
+        Self { locks, ..self }
     }
 
     /// A destructive mutation: the prompt is taken from the token, never typed,
@@ -325,53 +354,16 @@ impl Performed {
     pub fn invalidated(&self) -> Invalidated {
         self.invalidated
     }
-}
 
-/// Placeholder proving the seal compiles end to end, and the destructive-operation
-/// roster's one row until the first real destructive operation replaces it. It
-/// performs no I/O.
-pub fn describe_destructive(repo: &Repository, confirmed: Confirmed) -> Performed {
-    let _ = repo.inner();
-    Performed::destructive(
-        format!("no-op against {}", repo.git_dir().display()),
-        confirmed,
-        Invalidated::NOTHING,
-    )
+    /// The lock files present before the write and after it (R3.8).
+    pub fn locks(&self) -> &Locks {
+        &self.locks
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// R1.6: the record quotes the prompt rendered from the consequence, word for word.
-    #[test]
-    fn a_destructive_operation_records_what_the_user_agreed_to() {
-        let repo = Repository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
-        let read_at = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000);
-        let consequence = cairn_model::Consequence::RemoveLock {
-            path: repo.git_dir().join("index.lock"),
-            modified: read_at - std::time::Duration::from_secs(120),
-            read_at,
-            bytes: 0,
-            device: 1,
-            inode: 2,
-        };
-        let prompt = consequence.prompt();
-        let performed = describe_destructive(&repo, Confirmed::by_user(consequence));
-        assert_eq!(performed.acknowledged(), Some(prompt.as_str()));
-        assert!(
-            performed
-                .acknowledged()
-                .is_some_and(|text| text.contains("2 minutes ago")),
-            "the record does not quote the rendered prompt: {performed:?}"
-        );
-        assert_eq!(
-            performed.description(),
-            format!("no-op against {}", repo.git_dir().display())
-        );
-        assert_eq!(performed.invalidated(), Invalidated::NOTHING);
-        assert!(!performed.invalidated().anything());
-    }
 
     #[test]
     fn an_unconfirmed_operation_carries_no_prompt() {

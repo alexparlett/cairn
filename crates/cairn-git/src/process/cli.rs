@@ -401,13 +401,6 @@ impl Output {
     }
 
     /// Bytes, because paths are bytes: decode at the point that knows the format.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "fetch reads nothing from stdout; the first operation to will be status"
-        )
-    )]
     pub(crate) fn stdout(&self) -> &[u8] {
         &self.stdout
     }

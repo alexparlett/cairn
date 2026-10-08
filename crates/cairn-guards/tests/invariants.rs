@@ -4281,13 +4281,16 @@ const CONFIRMATION_SURFACES: &[&str] = &[];
 
 /// Every destructive operation, by file and function: each takes `Confirmed` by value, and
 /// every function in `crates/cairn-git/src` that names `Confirmed` is one of these or
-/// [`CONFIRMED_RECORD`]. `describe_destructive` is the placeholder the first real operations
-/// replace (staging-and-commit phase 03), and its row goes with it. The roster is never empty
-/// (the user's decision, 2026-10-08): an empty one would check every token-taking function
-/// against nothing, so the guard asserts a row, and the placeholder's row is that row until
-/// phase 03's operations replace it.
-const DESTRUCTIVE_OPERATIONS: &[(&str, &str)] =
-    &[("crates/cairn-git/src/ops/mod.rs", "describe_destructive")];
+/// [`CONFIRMED_RECORD`]. Discarding lines (R3.3) and discarding files — a tracked file's
+/// unstaged change restored, an untracked file deleted (R3.5) — replaced the placeholder
+/// `describe_destructive` in staging-and-commit phase 03; phase 05 adds amend and phase 11
+/// removing `index.lock`. The roster is never empty (the user's decision, 2026-10-08): an
+/// empty one would check every token-taking function against nothing, so the guard asserts
+/// a row.
+const DESTRUCTIVE_OPERATIONS: &[(&str, &str)] = &[
+    ("crates/cairn-git/src/ops/discard.rs", "discard_lines"),
+    ("crates/cairn-git/src/ops/discard.rs", "discard_files"),
+];
 
 /// The one function naming `Confirmed` that is not an operation: the record that spends the
 /// token, quoting its prompt (`Performed::destructive`, R1.6) — by file, the type whose inherent

@@ -26,7 +26,7 @@ pub use diff::{
     ChangesRequest, ContentOptions, DiffInputs, DiffSession, LineBudget, Offered, PAGE_FILES,
     PAGE_LINES, Page, StagedInputs, WorkingTreeDiff,
 };
-pub use error::{Error, RefusedWrite};
+pub use error::{Error, Refusal, RefusedWrite};
 pub use history::{HistoryCursor, HistoryOrder, HistoryPage, HistoryRequest, HistorySession};
 pub use refs::{RefsCost, RefsRead};
 pub use repository::{CLOSE_BOUND, Repository, SharedRepository};

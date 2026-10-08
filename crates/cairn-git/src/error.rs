@@ -332,6 +332,48 @@ pub enum Error {
         write: RefusedWrite,
     },
 
+    /// The index file could not be read, so what a write is checked against is unknown and
+    /// nothing was written.
+    #[error("failed to read the index: {source}")]
+    ReadIndex {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// A working-tree file could not be read to be hashed, so what a write is checked
+    /// against is unknown and nothing was written.
+    #[error("failed to read {path} in the working tree: {source}")]
+    ReadWorkingTree {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// A write verb was refused before any `git` ran, because what it was asked to do is
+    /// not something it does (`docs/prd/staging-and-commit.md` R3): `why` says what, for
+    /// the caller to show. Nothing was written.
+    #[error("{path}: {why}; nothing was written")]
+    Refused { path: String, why: Refusal },
+
+    /// A verb of files was given no path at all. Nothing was written, and for a discard no
+    /// confirmation can be made: a prompt that counts nothing is refused before one is
+    /// offered.
+    #[error("no path was given; nothing was written")]
+    NoPaths,
+
+    /// What a patch was built from moved after it was read (R3.7): the index entry, or for
+    /// a discard the working-tree file, is no longer the side the drawn diff names. The
+    /// patch was not applied — `git apply` could otherwise land it at an offset, on lines
+    /// the user never saw — and nothing was written; the remedy is to read the diff again.
+    #[error("{path} changed after its diff was read; nothing was written")]
+    ChangedSinceRead { path: String },
+
+    /// What a destructive operation's `Consequence` names moved between the confirmation
+    /// and the run (R1.4): a file edited, replaced or removed, an entry restaged. The
+    /// operation refused, writing nothing — an outcome of its own, never git's failure.
+    #[error("{path} changed since you confirmed; nothing was discarded")]
+    ChangedSinceConfirmed { path: String },
+
     /// The remote's configuration could not be read — `git config` failed, was
     /// cancelled or answered what it never prints, or a configured refspec does
     /// not parse — so the fetch could not be checked and did not run.
@@ -381,6 +423,69 @@ impl std::fmt::Display for RefusedWrite {
                 "be read in place of the remote's configuration, which Cairn refuses on sight \
                  (a branches/ file fetches into a local branch; define the remote with `git \
                  remote add` and remove the file)"
+            }
+        })
+    }
+}
+
+/// Why a write verb refused before any `git` ran; see [`Error::Refused`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// A verb of lines was given a selection of nothing: no line and no mode change.
+    NothingSelected,
+    /// The change is taken whole, by a file verb, never by a patch of part of it — a
+    /// deletion, a type change, a state that is not text — or the selection is every line
+    /// of a file that is new, whose discard deletes it: that is the file verb's, whose
+    /// prompt says the file is deleted (R2.3, L8).
+    WholeFileOnly,
+    /// The path is conflicted: it is staged whole with `git add`, which marks it resolved,
+    /// and takes no patch and no discard by any verb (R3.11, L25).
+    Conflicted,
+    /// A submodule's changes are never discarded: `git restore` leaves its commit where it
+    /// was, only `git submodule update` moves it back, and no prompt can count what is
+    /// dirty inside it (R3.10, L24).
+    Submodule,
+    /// An untracked directory holding a repository of its own: deleting it would take
+    /// every commit only it has, so it is refused before any confirmation (R3.5, L8).
+    NestedRepository,
+    /// The path is a directory or a special file, not a file `git status` lists one per
+    /// file: nothing a discard deletes or restores.
+    NotAFile,
+    /// The path has no unstaged change — the working tree matches the index — so there is
+    /// nothing to discard; staged changes are never discarded (R3.6).
+    NoUnstagedChange,
+    /// What a destructive operation was handed is not what its confirmation names: a
+    /// confirmation of another operation, or a diff of another path, side or blob than the
+    /// one a discard of lines was confirmed on. The patch is built only from the diff the
+    /// user confirmed.
+    NotWhatWasConfirmed,
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NothingSelected => "nothing is selected",
+            Self::WholeFileOnly => {
+                "this change is staged, unstaged or discarded as a whole file, never in part"
+            }
+            Self::Conflicted => {
+                "the path is conflicted, so it is staged whole and is never patched or discarded"
+            }
+            Self::Submodule => {
+                "a submodule's changes are never discarded: only `git submodule update` moves \
+                 its commit back, and nothing can count what is changed inside it"
+            }
+            Self::NestedRepository => {
+                "a repository nested in the working tree is never deleted: it would take every \
+                 commit only it has"
+            }
+            Self::NotAFile => "the path is not a file: a directory or a special file",
+            Self::NoUnstagedChange => {
+                "the path has no unstaged change to discard, and staged changes are never \
+                 discarded"
+            }
+            Self::NotWhatWasConfirmed => {
+                "what the discard was handed is not what its confirmation names"
             }
         })
     }

@@ -1,7 +1,8 @@
-//! staging-and-commit's C3 and C4: a selection of lines staged, unstaged and discarded with
-//! real `git apply`, as R3.1-R3.3 will run it — `git apply --cached --whitespace=nowarn -` to
-//! stage and to unstage, `git apply --whitespace=nowarn -` to discard, never `-R` — over the
-//! engine's own working-tree diffs and the model's [`action_patch`].
+//! staging-and-commit's C3 and C4: a selection of lines staged, unstaged and discarded through
+//! the engine's own verbs (`cairn_git::ops::stage_lines`, `unstage_lines`, `discard_lines`),
+//! which run `git apply --cached --whitespace=nowarn -` to stage and to unstage and `git apply
+//! --whitespace=nowarn -` to discard, never `-R` — over the engine's own working-tree diffs and
+//! the model's [`action_patch`].
 //!
 //! Each result is held to three oracles, none of which is the code under test:
 //!
@@ -27,7 +28,7 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use cairn_git::{CancelSignal, ContentOptions, Repository, WorkingTreeDiff};
+use cairn_git::{CancelSignal, ContentOptions, Repository, WorkingTreeDiff, ops};
 use cairn_model::{
     ChangeStatus, DiffContent, DiffLine, FileDiff, LineNumber, PatchAction, RepoPath, Selection,
     TextDiff, action_patch, apply_patch, apply_patch_in_reverse,
@@ -571,6 +572,70 @@ fn reversed_by_git(content: &[u8], hunk: &[u8]) -> Vec<u8> {
     result
 }
 
+/// `action` run through the verb R3 names for it (`cairn_git::ops`), as the application
+/// runs it — the stale check, `--literal-pathspecs`, the patch on stdin — so every case of C3
+/// is a case of the verbs too. A discard of every line of a new file is the one exception:
+/// the verb refuses it as whole-file only, since deleting the file is the file verb's, whose
+/// prompt says so (phase 02's carry-forward), and the patch's meaning is then still held to
+/// the oracles by applying it with git itself.
+fn through_the_verb(
+    case: &Case,
+    action: PatchAction,
+    drawn: &FileDiff,
+    selection: &Selection,
+    patch: &cairn_model::Patch,
+    deletes: bool,
+    at: &str,
+) {
+    let engine = case.engine();
+    let outcome = match action {
+        PatchAction::Stage => ops::stage_lines(super::git(), &engine, drawn, selection, None),
+        PatchAction::Unstage => ops::unstage_lines(super::git(), &engine, drawn, selection, None),
+        PatchAction::Discard if deletes => {
+            match ops::discard_lines_consequence(super::git(), &engine, drawn, selection.clone()) {
+                Err(cairn_git::Error::Refused {
+                    why: cairn_git::Refusal::WholeFileOnly,
+                    ..
+                }) => {}
+                other => {
+                    panic!("{at}: deleting a new file was not left to the file verb: {other:?}")
+                }
+            }
+            if let Err(refused) = git_bytes(
+                case.dir(),
+                &[b"apply", b"--whitespace=nowarn", b"-"],
+                Some(patch.as_bytes()),
+            ) {
+                panic!("{at}: git apply refused it: {refused}\n{patch:?}");
+            }
+            return;
+        }
+        PatchAction::Discard => {
+            let consequence = ok(
+                ops::discard_lines_consequence(super::git(), &engine, drawn, selection.clone()),
+                &format!("{at}: the discard's consequence"),
+            );
+            assert!(
+                consequence
+                    .prompt()
+                    .contains(&format!("discard {} line", selection.len())),
+                "{at}: the prompt does not count the selection: {}",
+                consequence.prompt()
+            );
+            ops::discard_lines(
+                super::git(),
+                &engine,
+                drawn,
+                cairn_model::Confirmed::by_user(consequence),
+                None,
+            )
+        }
+    };
+    if let Err(refused) = outcome {
+        panic!("{at}: the verb refused it: {refused}\n{patch:?}");
+    }
+}
+
 fn bytes_of(lines: &[DiffLine]) -> Vec<u8> {
     let mut out = Vec::new();
     for line in lines {
@@ -713,21 +778,12 @@ fn run(case: &Case) -> usize {
             let staged_before = case.staged(&target);
             let file_before = std::fs::read(on_disk(&case.repo, &case.path)).ok();
 
-            let apply: &[&[u8]] = match action {
-                PatchAction::Discard => &[b"apply", b"--whitespace=nowarn", b"-"],
-                PatchAction::Stage | PatchAction::Unstage => {
-                    &[b"apply", b"--cached", b"--whitespace=nowarn", b"-"]
-                }
-            };
-            if let Err(refused) = git_bytes(case.dir(), apply, Some(patch.as_bytes())) {
-                panic!("{at}: git apply refused it: {refused}\n{patch:?}");
-            }
-
             // Whether the file goes, decided from the case and never from the patch under
             // test: undoing every line of an added file, and nothing else, takes it away.
             let deletes = drawn.file.status == ChangeStatus::Added
                 && action != PatchAction::Stage
                 && selection.holds_every_change(text);
+            through_the_verb(case, action, &drawn, &selection, &patch, deletes, &at);
             assert_eq!(
                 patch.text().contains("\ndeleted file mode "),
                 deletes,

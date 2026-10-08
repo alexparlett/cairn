@@ -211,6 +211,8 @@
 mod attributes;
 mod changes;
 mod fetch_settings;
+mod hash_object;
+mod hooks_path;
 mod patches;
 mod stash_changes;
 mod status;
@@ -219,6 +221,7 @@ mod working_tree;
 pub(crate) use attributes::{DiffAttribute, diff_attributes};
 pub(crate) use changes::{Detection, Submodules, changes};
 pub(crate) use fetch_settings::{FetchSettings, fetch_settings};
+pub(crate) use hash_object::hash_object;
 #[cfg(test)]
 pub(crate) use patches::parse as parse_patches;
 pub(crate) use patches::{Algorithm, FilePatch, PatchQuery, PatchText, Reading, Scope, patches};

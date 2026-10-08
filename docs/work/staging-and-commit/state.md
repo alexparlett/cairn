@@ -6,8 +6,10 @@ The cross-session cheat sheet. Every session updates this before ending.
 mode: QA adjudicated, every confirmed fix and the user's three decisions of
 2026-10-08 applied, full gate green. Phase 02 (the patch engine) done in packet
 mode: QA adjudicated, confirmed fixes applied, full gate green; items 10-11 batched for
-the user's review at the end of the packet. Phases 03-12 not
-started.**
+the user's review at the end of the packet. Phase 03 (the write verbs) built in packet
+mode, full gate green, QA pending — stopped at R13.2 awaiting the user's C21 margin
+(git's baseline is `docs/research/staging-and-commit/measured-baseline.md`). Phases 04-12
+not started.**
 
 ## Locked decisions
 
@@ -50,8 +52,10 @@ that most constrain implementation:
 
 ## Open questions
 
-- C21's margin — written into the PRD by amendment once phase 03 has measured
-  git's own numbers (R13.2).
+- C21's margin — git's own numbers are measured
+  (`docs/research/staging-and-commit/measured-baseline.md`: stage or unstage a hunk 17.7 ms,
+  discard 0.7 ms, commit 11-12 ms, one status read 23.7-25.1 ms); the margin is the
+  user's, then written into the PRD by amendment (R13.2).
 - Fork's chunk-discard dialog default button and how Fork stages lines of an
   untracked file — the user may check on their own Fork; Cairn's choices (Cancel
   focused, a partial new-file patch) stand regardless.
@@ -162,18 +166,64 @@ rename or copy is paired as `git diff --cached` pairs it"):
   reuse its cases (`edited`, `Case`) and oracles (`forward_rule`, `mirrored_rule`,
   `left_out`) to test through the real operations.
 
+Phase 03 (`docs/systems/staging.md`):
+
+- **The verbs** (`cairn_git::ops`, each `-> Result<Performed, Error>`, each taking
+  `token: Option<&AskpassToken>` last, for phase 04's lane): `stage_lines(git, repo, diff,
+  &Selection, token)` and `unstage_lines(..)` (give them the diff the selection was made on:
+  unstaged/untracked for stage, staged for unstage); `stage_files(git, repo, &[RepoPath],
+  token)`; `unstage_files(git, repo, &[RepoPath], &UnstageTo, token)` with `UnstageTo::Head`
+  (`git reset -q`), `UnstageTo::Commit(Oid)` (out of an amend: `HEAD`'s parent) and
+  `UnstageTo::Nothing` (out of a root commit's amend: `git rm --cached -q`, which git refuses
+  where the staged content differs from both the file and `HEAD` — phase 05's to meet);
+  `discard_lines(git, repo, &FileDiff, Confirmed, token)` (the diff must be the one the
+  consequence was built from) and `discard_files(git, repo, Confirmed, token)`.
+- **The builders**: `discard_lines_consequence(git, repo, &FileDiff, Selection)` and
+  `discard_files_consequence(git, repo, &[RepoPath])` — computed on a worker (they run
+  `git`), each refusing before any prompt with `Error::Refused { path, why: Refusal }`
+  (`NothingSelected`, `WholeFileOnly`, `Conflicted`, `Submodule`, `NestedRepository`,
+  `NotAFile`, `NoUnstagedChange`, `NotWhatWasConfirmed`) or `Error::NoPaths`. A selection of
+  every line of a new file is `WholeFileOnly`: phase 08 routes it to `discard_files`.
+- **Outcomes to draw**: `Error::ChangedSinceRead { path }` (a stale patch, R3.7) and
+  `Error::ChangedSinceConfirmed { path }` (R1.4), never git's failure; `Performed::locks()`
+  (`Locks { before, after }`, R3.8); `Invalidated`: stage/unstage → index, discard lines →
+  working tree, discard files → index and working tree.
+- `ops::CLEAN_ARGUMENT_BYTES` (64 KiB): `git clean`'s paths per invocation.
+- `crate::reads::hash_object` (used by the stale check) and `reads/hooks_path.rs`'s
+  `hooks_path` — **phase 05**: re-export it from `reads/mod.rs` (it is module-private and
+  `expect(dead_code)` until then).
+- `Consequence::DiscardLines` gained `on_disk: Oid` and `mode: Option<(FileMode,
+  FileMode)>`; `FileLoss`'s working-tree ids are the bytes on disk hashed with no filter.
+
+## Carried forward from phase 03 (owned by the phase named)
+
+- **Phase 04**: the lane calls the verbs above on its own thread; the verbs take the
+  write's token; `discard_*_consequence` are reads the window asks for before a dialog.
+- **Phase 05**: `hooks_path` re-export; `UnstageTo::Commit`/`Nothing` for amend; the root
+  amend's `git rm --cached` refusal; C13's root-commit case.
+- **Phase 07**: the dialog's `Consequence` from `discard_files_consequence` (a nested
+  repository, a submodule, a conflicted path and a staged-only path are refused by it
+  before any dialog); the rename source row's whole-file unstage resets the source alone,
+  both paths unstage the rename; an intent-to-add file's discard leaves it empty (batched
+  item 5 in progress.md).
+- **Phase 08**: `discard_lines_consequence` takes the `Selection` by value; a mode-only
+  selection where the diff has a mode change is allowed and named.
+- **Phase 11 / C22**: the root `CLAUDE.md` still has to name the one file deletion made
+  without `git` (R12.4) when it exists.
+- **Phase 12 / the user**: items 1-7 batched in progress.md's phase 03 entry.
+
 ## Carried forward from phase 02 (owned by the phase named)
 
-- **Phase 03**: `Consequence::DiscardLines` counts `Selection::len`, which counts
+- **Phase 03** (done: `DiscardLines.mode`, named in the prompt): `Consequence::DiscardLines` counts `Selection::len`, which counts
   lines only, so a selection holding the mode change renders no word for it (and a
   mode-only one "Discard 0 Lines"); this is phase 01's item 19, now concrete. Phase
   03's discard verb decides how a mode selected for discard is confirmed, with a test.
-- **Phase 03**: a whole selection of an untracked or intent-to-add file's lines
+- **Phase 03** (done: refused as `WholeFileOnly`, left to `discard_files`): a whole selection of an untracked or intent-to-add file's lines
   discards as a `deleted file mode` patch, which `git apply` honours by deleting the
   file — but L8 routes deleting an untracked file to `git clean` under
   `DiscardFiles`. The verb (or phase 07/08's gesture) must route an all-lines
   discard of an added file to the file verb, or confirm it as a deletion.
-- **Phase 03 / C22**: the root `CLAUDE.md` (repo map's `cairn-model` and `cairn-git`
+- **Phase 03 / C22** (done): the root `CLAUDE.md` (repo map's `cairn-model` and `cairn-git`
   rows, and D1's list of reads) does not yet name `action_patch`, the inversions or
   `reads::staged_pairing`; `docs/design/engine.md` and `docs/systems/diff.md` do. Not
   edited by the phase agent (an instruction file); for the user or C22's update.
@@ -181,15 +231,15 @@ rename or copy is paired as `git diff --cached` pairs it"):
 
 From phase 02's QA (adjudicated 2026-10-08):
 
-- **Phases 03 and 07** (QA item 8): a rename's SOURCE path is paired too
+- **Phases 03 and 07** (QA item 8; the engine's half done, `a_rename_sources_row_unstages_its_lines_at_the_new_path`): a rename's SOURCE path is paired too
   (`reads::working_tree::names`): where the user's `status.renames` differs from
   `diff.renames`, status lists the deleted source as a row of its own while its staged
   diff is the rename, and an unstage built from it acts at the NEW path. The verb and the
   gesture decide which row offers what, and on which path, with a test.
-- **Phase 03 / C22** (QA item 9): the root `CLAUDE.md` repo map and D1's list of reads
+- **Phase 03 / C22** (QA item 9; done): the root `CLAUDE.md` repo map and D1's list of reads
   must name `action_patch`, the inversions and `reads::staged_pairing` (the C22 item
   above); phase 03's QA checks it.
-- **Phase 03, the destructive verbs** (QA carry list):
+- **Phase 03, the destructive verbs** (QA carry list; each done — the patch from the confirmed diff, checked against the `Consequence`; no `--recount`/`--3way`/`--unidiff-zero`; the file verb's prompt says the file is deleted and can't be undone):
   - emit the patch from the exact `FileDiff` the user acknowledged, never from a re-read;
   - no `--recount`, `--3way` or `--unidiff-zero` on any apply;
   - a whole discard of an untracked file must say it cannot be recovered;
@@ -197,13 +247,13 @@ From phase 02's QA (adjudicated 2026-10-08):
 
 ## Carried forward from phase 01's QA (owned by the phase named)
 
-- **Phase 03** (QA item 18): an empty `DiscardFiles` renders "the changes in 0
+- **Phase 03** (QA item 18; done: the builders refuse, `NoPaths` and `NothingSelected`): an empty `DiscardFiles` renders "the changes in 0
   files? ." and a zero-line `DiscardLines` "discard 0 lines"; "never empty" is a
   doc comment, not a check. The builder that computes either refuses empty input,
   with a test — or the type is made non-empty then.
-- **Phase 03** (QA item 19): no variant expresses a mode change selected for
+- **Phase 03** (QA item 19; done: `DiscardLines.mode`): no variant expresses a mode change selected for
   discard (R2.4); add it with the operation, with a test.
-- **Phase 03** (QA item 25): the working-tree blob in a `Consequence` is hashed
+- **Phase 03** (QA item 25; done: the bytes on disk, hashed with no filter, re-checked): the working-tree blob in a `Consequence` is hashed
   through clean filters, so an edit that changes only line endings after the
   confirmation matches and is lost. Decide the deletion re-check's hashing
   (consider `git hash-object --no-filters` for it) and test it.
@@ -218,7 +268,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 ## The user's decisions on phase 01's QA (2026-10-08), applied
 
 - **Item 6**: `DESTRUCTIVE_OPERATIONS` is never empty, and the guard asserts it.
-  **Phase 03** must replace the `describe_destructive` row with its real
+  **Phase 03** (done) must replace the `describe_destructive` row with its real
   operations in the same change that deletes the placeholder, or the guard fails.
 - **Item 13**: R10.6 amended — the amend prompt's recovery sentence is
   conditional on the reflog (`Consequence::Amend`'s `reflog: Reflog`). Phase 01
@@ -239,7 +289,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | --- | --- |
 | 01 seal | done — QA adjudicated, all confirmed fixes and the user's three decisions (items 6, 13, 34a) applied, full gate green |
 | 02 patch engine | done — QA adjudicated, confirmed fixes applied, full gate green; items 10-11 batched for the user |
-| 03 write verbs | not started |
+| 03 write verbs | built, full gate green, QA pending — awaiting the user's C21 margin (R13.2) |
 | 04 local lane | not started |
 | 05 commit engine | not started |
 | 06 render foundations | not started |

@@ -3,6 +3,105 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-08 — phase 03, the write verbs (packet mode; stopped for C21's margin)
+
+Built on `feature/staging-and-commit`; QA pending (the coordinator dispatches the fresh
+reviewers). Stopped at R13.2's stopping rule: git's baseline exists
+(`docs/research/staging-and-commit/measured-baseline.md`), and C21's margin is the user's.
+
+What shipped (`docs/systems/staging.md`):
+
+- `ops::stage_lines`, `unstage_lines` (`git apply --cached --whitespace=nowarn -`),
+  `discard_lines` (`git apply --whitespace=nowarn -`), `stage_files` (`git add`),
+  `unstage_files` with `UnstageTo::{Head, Commit(id), Nothing}` (`git reset -q`, `git
+  reset -q <id>`, `git rm --cached -q`), `discard_files` (`git restore --worktree`, then
+  `git clean -f --` in batches) — every one a write with `--literal-pathspecs` before the
+  verb, many paths in a NUL pathspec file on stdin, the locks listed before and after on
+  `Performed::locks` (R3.8), taking `Option<&AskpassToken>` for phase 04.
+- The stale check (R3.7): the index read fresh with gix (`IndexNow`, once per call), the
+  working tree's git form by `reads::hash_object` (`git hash-object --path=<p> -- <p>`,
+  never `-w`) and its bytes hashed in process; `reads::hooks_path` (`git rev-parse
+  --git-path hooks`) landed for phase 05, module-private until then.
+- `discard_lines_consequence` and `discard_files_consequence` build each `Consequence`;
+  `discard_lines` and `discard_files` take `Confirmed` by value, re-check before the first
+  write and replaced `describe_destructive` on the roster in the same change.
+- `Consequence::DiscardLines` gained `on_disk` (the bytes' hash) and `mode` (named in the
+  prompt with both modes); `FileLoss`'s working-tree id is the bytes' hash.
+- New errors: `Error::Refused { path, why: Refusal }`, `NoPaths`, `ChangedSinceRead`,
+  `ChangedSinceConfirmed`, `ReadIndex`, `ReadWorkingTree`.
+- C3 now runs through the verbs; `tests/diff/write_verbs.rs` holds C2's discard halves,
+  C5, C6, C8's engine half and C9's effect; the recording `git` (`ops/recording_stub.rs`)
+  holds C9's argv. `scripts/git-floor.sh` runs `ops::` too, floors 126/158/16.
+
+Measurements and decisions:
+
+- **`git clean`'s argv bound** (R3.5): `ops::CLEAN_ARGUMENT_BYTES`, 64 KiB per invocation,
+  each path counted as its bytes, its NUL and its 8-byte pointer. Measured on this host:
+  `getconf ARG_MAX` 2,097,152; `git --literal-pathspecs clean -n -- <names>` took 1,536 KiB
+  of 100-byte names and the kernel refused 1,900 KiB (`E2BIG`, the pointers and the
+  environment counted); one argument of 128 KiB is refused (`MAX_ARG_STRLEN`). 64 KiB is
+  half Linux's smallest `ARG_MAX` (32 pages), a sixteenth of macOS's 1 MiB. A list past it
+  runs as several `git clean`s after one re-check
+  (`a_long_list_is_deleted_in_batches_after_one_recheck`: 700 paths, 2 invocations).
+- **`apply.ignoreWhitespace`**: measured on 2.30.9, 2.32.7 and 2.56.0 over 400
+  selections of a whitespace-heavy diff, staged with and without `-c
+  apply.ignoreWhitespace=change` (and `=false`): every staged blob identical, every apply
+  succeeded. The setting only lets a patch land on context that moved by whitespace (a
+  stale index: exit 0 with it, exit 1 without), which the stale check refuses first. Not
+  pinned; C5 holds the case; PRD's filed list amended.
+- **`hash-object` reproduces the diff's git form** of a CRLF file under `core.autocrlf`
+  and of a rot13-filtered file, with `--path` and with several paths at once, on 2.30.9,
+  2.32.7 and 2.56.0, and writes nothing — so that stopping rule did not fire. A symlink
+  is hashed in process (as its target), since `hash-object` reads the file it points to.
+- **No verb behaved differently on 2.30.9** in what Cairn passes: `--end-of-options`
+  before a commit after `--pathspec-from-file` is refused by 2.30's `reset` ("must come
+  before non-option arguments") where 2.56 takes it, so the commit is passed as its hex
+  id with no `--end-of-options` (an id cannot be an option); every verb as built passes
+  the same tests on 2.30.9, 2.32.7 and 2.56.0.
+- **Hashing for the re-check** (phase 01's QA item 25): every discard compares the
+  file's bytes hashed with no filter, so a line ending changed after the confirmation
+  refuses; a discard of lines also compares git's form (R3.7). PRD R3.9 amended — for the
+  user's review.
+- **The mode in a discard of lines** (QA item 19): `Consequence::DiscardLines.mode`, the
+  prompt "discard 2 lines and the mode change (100644 to 100755)", the label "Discard 2
+  Lines and Mode Change" / "Discard Mode Change"; a selection of the mode alone with no
+  mode change is refused as nothing selected (QA item 18's zero-line prompt).
+- **Every line of a new file discarded** is refused as `WholeFileOnly` and left to
+  `discard_files`, whose prompt says "1 untracked file deleted (N bytes). You can't undo
+  this action." (phase 02's carry-forward).
+- **The rename source row** (phase 02's QA item 8): its staged diff is the rename, and
+  its lines unstage at the new path, the source's entry untouched; its own whole-file
+  unstage resets the source alone; both paths named unstage the rename whole.
+- **R3.8 as built**: a success carries the locks before and after; a failure carries
+  git's own report of those present after it (`GitFailed.present_locks`,
+  `GitCancelled`/`GitUnwatched`'s `stranded_locks`), which names any lock that was there
+  before and still is.
+- The bench repository's `.git` was unchanged by everything: `find .git -newer <marker>`
+  listed nothing before the clone, after it and after every baseline run.
+
+Batched for the user's review — not decided:
+
+1. **C21's margin** (the stopping rule): proposed below in the phase's report.
+2. **R3.9's amendment**: a discard of files re-checks the bytes on disk hashed in process,
+   not `git hash-object` (which cannot hash a symlink as git stores it and would not see a
+   line ending changed under `core.autocrlf`).
+3. **C2's "an untracked file added to a deletion's directory"**: Cairn never deletes a
+   directory (status lists files one per file; the one directory it lists whole, a nested
+   repository, is refused), so such a file is never taken and the deletion of the
+   confirmed files proceeds (`a_file_added_beside_a_confirmed_deletion_is_never_taken`) —
+   not refused, as C2's wording has it. A confirmed file replaced by a directory is refused.
+4. **`apply.ignoreWhitespace`**: not pinned, as measured; pinning `-c
+   apply.ignoreWhitespace=false` anyway would close the window between the stale check
+   and `git apply` for a whitespace-only move.
+5. **An intent-to-add file's discard of files** runs `git restore --worktree`, which
+   leaves the file EMPTY (git's own behaviour, verified on 2.30.9 and 2.56.0) and the
+   intent-to-add entry in place; the prompt counts its lines as modified. Deleting it
+   instead (as an untracked file) would be two writes.
+6. **A mode change in a discard of whole files** is restored without the prompt naming
+   it (`FileLoss::Modified` counts lines only).
+7. **A discard of files reads each tracked file's unstaged diff to count its lines** —
+   exact, but one read per file selected.
+
 ## 2026-10-08 — phase 02 QA, adjudicated and fixed
 
 Four fresh reviewers, adjudicated by a fresh `qa-confirm`. Confirmed findings fixed in

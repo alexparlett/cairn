@@ -21,10 +21,11 @@
 # network; a machine without them FAILS this step, naming what is missing, rather than
 # skipping it. Nothing is installed anywhere else.
 #
-# Five tests skip on these gits by design, and each run prints every test it skipped, by its
+# Six tests skip on these gits by design, and each run prints every test it skipped, by its
 # whole name, so a skip is read rather than counted as a pass:
-#   - in_a_partial_clone_a_rename_search_fails_rather_than_fetching, on a git older than
-#     2.44, which ignores GIT_NO_LAZY_FETCH. It fails instead if
+#   - in_a_partial_clone_a_rename_search_fails_rather_than_fetching, and (in the `ops::`
+#     run) a_read_in_a_partial_clone_does_not_fetch_a_missing_object, on a git older than
+#     2.44, which ignores GIT_NO_LAZY_FETCH. Each fails instead if
 #     CAIRN_REQUIRE_NO_LAZY_FETCH is set, so that is removed from these runs' environment,
 #     and so is CAIRN_REQUIRE_FSMONITOR_DAEMON: these gits have no fsmonitor daemon.
 #   - a_bare_repository_is_answered_under_safe_bare_repository_explicit and

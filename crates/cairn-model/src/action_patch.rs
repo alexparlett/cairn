@@ -47,9 +47,16 @@ pub enum PatchAction {
 /// staged diff for [`PatchAction::Unstage`], the unstaged or untracked one otherwise — and
 /// `selection`, its lines named on their own sides and the mode change apart.
 ///
-/// Empty when there is nothing to do: nothing selected, or part of a change that is whole
-/// only (module docs). Pure; costs what the file has lines, since an inversion copies them.
+/// Empty when there is nothing to do: nothing selected — not a line, not the mode — even
+/// for a change with no lines (an empty file added or deleted, which its file verb takes),
+/// or part of a change that is whole only (module docs). Pure; costs what the file has lines, since an inversion copies them.
 pub fn action_patch(action: PatchAction, diff: &FileDiff, selection: &Selection) -> Patch {
+    // Nothing selected is nothing to do, whatever the change: an empty file added or a
+    // type change with no lines would otherwise be held whole by a selection of none of
+    // its lines, and emitted as its headers.
+    if selection.is_empty() {
+        return Patch::empty();
+    }
     let no_lines;
     let text = match &diff.content {
         DiffContent::Text { text, .. } => text,
@@ -376,6 +383,38 @@ mod tests {
             "diff --git a/f b/f\nold mode 100644\nnew mode 100755\n"
         );
         assert!(action_patch(PatchAction::Stage, &only_mode, &Selection::empty()).is_empty());
+    }
+
+    /// R2.3, L17c: a selection of nothing makes no patch, by any action, even where the
+    /// change has no lines to select — an empty file added (whose inversion is a whole
+    /// deletion, since nothing selected holds every one of its no lines) or a type change
+    /// whose content did not move. Caught by: leaving the empty case to `emit_patch`, which
+    /// writes an empty file's headers as its whole change.
+    #[test]
+    fn a_selection_of_nothing_makes_no_patch_by_any_action() {
+        let empty_added = diff(
+            ChangeStatus::Added,
+            TextDiff::new(Vec::new(), Vec::new(), Vec::new()),
+        );
+        let mut typed = diff(
+            ChangeStatus::TypeChanged,
+            TextDiff::new(Vec::new(), Vec::new(), Vec::new()),
+        );
+        typed.content = DiffContent::ModeChangeOnly;
+        for drawn in [&empty_added, &typed] {
+            for action in [
+                PatchAction::Stage,
+                PatchAction::Unstage,
+                PatchAction::Discard,
+            ] {
+                let patch = action_patch(action, drawn, &Selection::empty());
+                assert!(
+                    patch.is_empty(),
+                    "{action:?} of nothing selected in a {:?} wrote\n{patch:?}",
+                    drawn.file.status
+                );
+            }
+        }
     }
 
     /// Every state that is not text is whole-file only, by every action.

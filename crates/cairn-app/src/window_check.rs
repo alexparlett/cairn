@@ -1026,8 +1026,19 @@ fn writes_check() {
     }
     let root = PathBuf::from(&scratch);
     let read = |path: &Path| std::fs::read(path).unwrap_or_else(|e| panic!("{e}"));
+    // A file replaced as git replaces one — a sibling written with the file's mode, then renamed
+    // over it — never truncated in place: a worker still reading the old one through a map (the
+    // index, as gix reads it) keeps it whole, where a truncation under the map is a SIGBUS.
     let write = |path: &Path, bytes: &[u8]| {
-        std::fs::write(path, bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let mut beside = path.as_os_str().to_owned();
+        beside.push(".cairn-check");
+        let beside = PathBuf::from(beside);
+        std::fs::write(&beside, bytes).unwrap_or_else(|e| panic!("{}: {e}", beside.display()));
+        if let Ok(was) = std::fs::metadata(path) {
+            std::fs::set_permissions(&beside, was.permissions())
+                .unwrap_or_else(|e| panic!("{}: {e}", beside.display()));
+        }
+        std::fs::rename(&beside, path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     };
     let head_file = root.join(".git/HEAD");
     assert_eq!(

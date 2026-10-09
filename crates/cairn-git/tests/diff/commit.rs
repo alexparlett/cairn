@@ -673,6 +673,66 @@ fn the_dialog_is_asked_exactly_when_a_remote_has_head() {
     assert_eq!(published(&clone), Publication::SomeRemote, "detached");
 }
 
+/// Phase 05's QA item 4: with a commit-graph, whether a remote has `HEAD` is answered from
+/// the graph, cut at `HEAD`'s generation, and the answer is the object walk's and git's own —
+/// `HEAD` far behind a remote tip, on a side branch no remote reaches, at the tip, and a new
+/// commit the graph does not hold (the object walk's again). Caught by: the cut made at the
+/// wrong generation (a reached `HEAD` called unpublished), or a commit outside the graph
+/// answered from it.
+#[test]
+fn the_pushed_check_answers_from_a_commit_graph_as_git_does() {
+    let (_origin, clone) = cloned("graph");
+    for n in 0..30 {
+        clone.write("a.txt", format!("{n}\n").as_bytes());
+        clone.commit(&format!("ahead {n}"));
+    }
+    clone.git(&["update-ref", "refs/remotes/origin/far", "HEAD"]);
+    clone.git(&["checkout", "-q", "-b", "side", "HEAD~20"]);
+    clone.write("side.txt", b"side\n");
+    clone.commit("on a side branch");
+    clone.git(&["checkout", "-q", "main"]);
+    clone.git(&["commit-graph", "write", "--reachable"]);
+    assert!(clone.path().join(".git/objects/info/commit-graph").exists());
+    let by_git = |head: &str| {
+        !clone
+            .git(&["for-each-ref", "--contains", head, "refs/remotes/"])
+            .trim()
+            .is_empty()
+    };
+    for (what, head, expected) in [
+        (
+            "far behind a remote tip",
+            "origin/far~25",
+            Publication::SomeRemote,
+        ),
+        ("at a remote tip", "origin/far", Publication::SomeRemote),
+        ("on a side branch", "side", Publication::Unpublished),
+    ] {
+        clone.git(&["checkout", "-q", "--detach", head]);
+        assert_eq!(published(&clone), expected, "{what}");
+        assert_eq!(
+            by_git("HEAD"),
+            expected == Publication::SomeRemote,
+            "git: {what}"
+        );
+    }
+    // A commit the graph does not hold: the object walk answers.
+    clone.git(&["checkout", "-q", "--detach", "origin/far~3"]);
+    clone.write("new.txt", b"new\n");
+    clone.commit("not in the graph");
+    assert_eq!(published(&clone), Publication::Unpublished);
+    clone.write("newer.txt", b"newer\n");
+    clone.commit("above it");
+    clone.git(&["update-ref", "refs/remotes/origin/new", "HEAD"]);
+    clone.git(&["checkout", "-q", "--detach", "HEAD^"]);
+    assert_eq!(
+        published(&clone),
+        Publication::SomeRemote,
+        "a remote tip outside the graph"
+    );
+    assert!(by_git("HEAD"));
+}
+
 /// C14: the button's text and the prompt are rendered from the engine's `Consequence`:
 /// `HEAD`'s short id and subject.
 #[test]

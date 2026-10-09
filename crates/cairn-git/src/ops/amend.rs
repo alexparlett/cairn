@@ -11,8 +11,10 @@
 //!   local branch — the same walk hidden by every remote-tracking ref, `HEAD --not
 //!   --remotes`, so `Publication::Unpublished` means what it says: no remote-tracking ref
 //!   reaches it. Each walk is cancellable at every object it reads
-//!   (`crate::history::walk::hiding`). It knows only what was last fetched, as `git branch
-//!   -r --contains` does.
+//!   (`crate::history::walk::hiding`) — or, where the commit-graph holds `HEAD` and every
+//!   tip it is hidden by, answered from the graph alone, cut at `HEAD`'s generation as git's
+//!   own check is (`crate::history::walk::reaches_through_graph`), cancellable at every
+//!   commit. It knows only what was last fetched, as `git branch -r --contains` does.
 //! - **Whether git will write the reflog entry** that keeps the replaced commit findable
 //!   ([`Reflog`]): git appends an entry for `HEAD`, and for the branch it names, when
 //!   `core.logAllRefUpdates` is `true` or `always` — or, unset, unless the repository is bare
@@ -116,6 +118,11 @@ fn reaches(
         return Ok(true);
     }
     let reads = std::cell::Cell::new(0);
+    // With a commit-graph holding them all, the graph answers alone, cut at `HEAD`'s
+    // generation as git cuts it; otherwise the object walk does.
+    if let Some(answer) = walk::reaches_through_graph(repo.inner(), tip, &hidden, cancel, &reads) {
+        return answer;
+    }
     let mut walk = walk::hiding(repo.inner(), tip, hidden, cancel, &reads)?;
     match walk.next() {
         None => Ok(true),

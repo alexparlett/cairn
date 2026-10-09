@@ -2311,7 +2311,14 @@ and to assistive technology (`a11y_modal`: Tab and Shift-Tab move between its tw
 only), focus starts on Cancel — a deliberate deviation from Fork, which styles Discard the
 default (L8) — Escape and a press outside it cancel, and once answered it ignores every
 later press, so one acknowledgement builds one token
-(`crates/cairn-ui/tests/confirm_dialog.rs`). Each confirmation has a serial
+(`crates/cairn-ui/tests/confirm_dialog.rs`). Its buttons, and every dialog's — the Git Error
+dialog's, Create Branch's, the credential prompt's — sit in the platform's order
+(`cairn_ui::button_order::ordered`, the user's decision E, 2026-10-09): on Linux the primary
+first and Cancel or Close last, as Fork for Windows; on macOS Cancel first and the primary
+last, as Fork for macOS; each dialog draws in this build's platform unless a test names
+another (`.platform(Os)`), and a confirmation's focus is on Cancel on both
+(`every_dialogs_buttons_follow_the_platforms_order`,
+`a_confirmation_starts_on_cancel_on_both_platforms`, `crates/cairn-ui/tests/dialog_buttons.rs`). Each confirmation has a serial
 (`Confirming::serial`), which is the dialog's identity and its key: a confirmation replaced
 by another, or opened by the last one's answer, is a new dialog — its own handlers, focus on
 Cancel and one token afresh — and its words are rendered once, as it mounts, the consequence

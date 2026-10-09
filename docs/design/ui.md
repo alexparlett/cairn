@@ -42,6 +42,16 @@ Kept, and why:
   (`cairn.md`, "Still open"); tabs are the least-committing surface to show.
 - **A detail pane below the graph**, behind a draggable splitter, with Commit and
   Changes tabs (`diff.md`).
+- **Dialog buttons in the platform's order** (the user's decision E): on Linux
+  Fork for Windows' — the primary button first, Cancel (or Close) last; on macOS Fork for
+  macOS' — Cancel first, the primary last. Every Cairn dialog follows it: the confirmation,
+  the Git Error dialog, Create Branch and the credential prompt (`cairn_ui::button_order`).
+  Which button holds focus is not the order's: a destructive confirmation starts on Cancel on
+  both platforms (below).
+- **A right-click selects the row it lands on** (the user's decision C; Fork for Windows), so
+  the detail pane follows and the menu acts on what is shown; a right-click inside a selection
+  already made — a compared pair in the history, several paths in Local Changes' lists — keeps
+  the whole selection. Every list row's menu does this.
 
 ## What changes, and why
 
@@ -258,15 +268,26 @@ reset-away commit is found there, until git expires its entry (`gc.reflogExpireU
 
 ### Create Branch
 
-Recovery is Fork's: `New Branch…` on any commit row — a dimmed one's too — opens Fork's Create
-Branch dialog: the commit read only, a name refused before git runs by git's own rules or
-because a branch has it (the reason beside the buttons), "Check out after create" remembered,
-and — while it is ticked and the working tree has changes — "Local changes": "Don't change",
-which checks out over them or shows git's refusal in the Git Error dialog with the name kept
-for the next try, and "Discard", which names every change and every overwritten untracked file
-it loses in Cairn's confirmation before it runs, where Fork's asks nothing, and is never the
-remembered choice. Fork's "Stash and reapply" waits for stashing. Checking out a branch is
-otherwise the branch operations' design. Spec: `docs/prd/staging-and-commit.md` R11.3.
+Recovery is Fork's: `New Branch…` on any commit row — a dimmed one's too — or Fork's chord,
+Ctrl+Shift+B (⇧⌘B), at `HEAD`, opens Fork's Create Branch dialog, under its title "Use '/' as
+a path separator to create folders": the commit read only, a name refused before git runs —
+by git's own rules, because a branch has it or a branch's folder holds it, or because it holds
+`@{` ("A branch name can't contain '@{'", the user's decision F) — the reason said inside the
+dialog beside the buttons behind Fork's warning triangle, never in the Git Error dialog (the
+user's decision B), and, while the check waits behind a running write, which write it waits
+for ("Waiting for commit to finish…", decision D); "Check out after create" remembered; and —
+while it is ticked and the working tree has changes — "Local changes": "Don't change", which
+checks out over them or shows git's refusal of the checkout in the Git Error dialog with the
+name kept for the next try, and "Discard", which names what it loses in Cairn's confirmation
+before it runs, where Fork's asks nothing, and is never the remembered choice. That
+confirmation (decision A) is titled "Discard changes", its button "Discard Changes and Check
+Out", and its prompt names the changed files as the discard dialog does and, in a sentence of
+its own, each folder and nested repository deleted for being in the way: "Do you want to
+create branch recovered at abababa, check it out and discard the changes in 3 files (a.rs,
+b.rs and new.rs)? 2 modified (14 lines), 1 new file deleted (3 lines). Deleted because the
+branch has a file there: folder d/ (4 untracked files) and repository vendor/lib/ with its
+history. You can't undo this action." Fork's "Stash and reapply" waits for stashing. Checking
+out a branch is otherwise the branch operations' design. Spec: `docs/prd/staging-and-commit.md` R11.3.
 
 ### Activity
 

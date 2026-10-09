@@ -19,10 +19,10 @@ Changes acts on files) done in packet mode: QA adjudicated, fixes and the user's
 multi-selection's diffs drawn together) done in packet mode: QA adjudicated, fixes and the
 user's decisions (2026-10-09) applied, full gate green. Phase 09 (the commit box) done in
 packet mode: QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green
-at 18fea48. Phase 10 (Show Lost Commits) built in packet mode: Show Lost Commits with its check
+at 18fea48. Phase 10 (Show Lost Commits) done in packet mode: Show Lost Commits with its check
 box, and Fork's Create Branch dialog with its sealed Discard, as the user decided (2026-10-09);
-QA adjudicated, its fixes landed, full gate green, six items with the user (below). Phases 11-12
-not started.**
+QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green.
+Phases 11-12 not started.**
 
 ## Locked decisions
 
@@ -438,8 +438,10 @@ verb table):
   ticked, enabled, on_toggle)` (shared with Amend); `HistoryList::on_new_branch(EventHandler<(Oid,
   String)>)`, `NEW_BRANCH_CAPTION`; `CreateBranchDialog::new(serial, at, subject, name).ready()
   .refusal().checkout().local_changes().on_checkout().on_local().on_create().on_cancel()`,
-  `LocalChoice::{Keep, Discard}` and Fork's captions, `CREATE_BRANCH_SUBTITLE`;
-  `accelerators::Action::NewBranch` (Ctrl+Shift+B, ⇧⌘B, `Scope::Window`).
+  `LocalChoice::{Keep, Discard}` and Fork's captions, `CREATE_BRANCH_SUBTITLE`,
+  `.waiting(Option<String>)`; `accelerators::Action::NewBranch` (Ctrl+Shift+B, ⇧⌘B,
+  `Scope::Window`); `button_order::ordered(platform, actions, cancel)` and `.platform(Os)` on
+  `ConfirmDialog`, `GitErrorDialog`, `CreateBranchDialog` and `CredentialPrompt`.
 - **Create Branch's engine**: `cairn_model::BranchName::{Free, Taken, Refused { reason }}` and
   `refusal(name)`; `Consequence::CheckoutDiscarding { branch, at, head, changes: Vec<LostChange>,
   kept_untracked }`, `LostChange`, `ChangeLoss::{Changed { kind, index, working_tree, executable,
@@ -480,21 +482,17 @@ verb table):
   `HEAD`, heard anywhere (`fork-create-branch-evidence.md` §1); the dialog's subtitle ("Use '/'
   as a path separator to create folders"); a refusal said in the buttons' row, left of them,
   behind Fork's warning triangle (§2: TrackerWin #2472, Tracker #1911).
-- **With the user (QA's held items, 2026-10-09) — today's behaviour kept, nothing decided**:
-  (A) the Discard confirmation's wording, title and button, the new losses' words among them —
-  a directory in the way and a nested repository removed are said in interim words, "N
-  directory/directories in the way removed (N untracked file(s), size)" and "N nested
-  repository/repositories removed (N file(s), size)" (`cairn_model::consequence`), awaiting the
-  user; (B) a refusal inline or in the Git Error dialog — inline today, a name a branch's
-  directory holds included; (C) whether a right-click selects the row — it does not today; (D) a
-  "checking…" state while the name's check waits behind a write — none today; (E) the buttons'
-  order on Linux — Cancel then the primary today; (F) names holding `@{` — git's
-  `check-ref-format --branch` answer today.
-- **Derived, not separately decided — awaiting the user** (phase 10's QA, item 21): the discard
-  confirmation's title ("Discard changes", Local Changes'), its button ("Discard Changes and Check
-  Out") and its prompt (L8's form); an engine refusal of Discard said inline in the dialog; the
-  buttons in Cairn's existing order; a right-click opening the menu without selecting the row.
-  Each is held item A, B, E or C above.
+- **Decided by the user (2026-10-09), QA's held items A-F, built**: (A) the Discard
+  confirmation titled "Discard changes", its button "Discard Changes and Check Out", its prompt
+  naming each folder and nested repository deleted by its path in a sentence of its own, the
+  first three named and the rest counted (`cairn_model::consequence`); (B) a name's refusal
+  inside the dialog beside the buttons behind ⚠, never the Git Error dialog; (C) a right-click
+  selects its row, keeping a selection it lands in — the history's list (Local Changes' lists
+  already did); (D) "Waiting for <write> to finish…" beside the buttons while the name's check
+  waits behind a write; (E) every dialog's buttons in the platform's order, the primary first
+  on Linux and last on macOS, focus on Cancel for a confirmation on both
+  (`cairn_ui::button_order`); (F) a name holding `@{` refused before git is asked, "A branch
+  name can't contain '@{'". The derived choices QA's item 21 carried are settled by these.
 - **Phase 11 (the user's decision A, 2026-10-09)**: read each Show Lost Commits tip id once
   (today a lookup and then the walk's date read, ~41 ms of the 49.8 ms at 10,000 entries) and take
   the dates from a commit-graph where one is present, measured on the bench clone with
@@ -838,6 +836,6 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 07 Local Changes actions | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green |
 | 08 diff gesture | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green |
 | 09 commit box | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green at 18fea48 |
-| 10 lost commits | QA fixes landed; six items with the user |
+| 10 lost commits | done — QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green |
 | 11 activity and measured | not started |
 | 12 QA | not started |

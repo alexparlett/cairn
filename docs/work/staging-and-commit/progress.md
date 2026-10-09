@@ -3,6 +3,52 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 10, the user's decisions on QA's six held items (packet mode)
+
+The user decided the six items QA held, accepting the recommendations in the coordinator's
+mockups (2026-10-09, relayed by the coordinator). Each was built test-first: every new test
+failed on the code before it.
+
+- **A — the Discard confirmation** (the user's decision): titled "Discard changes", its button
+  "Discard Changes and Check Out", its prompt naming the changed files as the files prompt
+  does and, in a sentence of its own, each folder and nested repository deleted by its path —
+  "Deleted because the branch has a file there: folder d/ (4 untracked files) and repository
+  vendor/lib/ with its history." — the first three named and the rest counted ("and N more");
+  a discard with nothing but such deletions asks "Do you want to create branch x at abc1234 and
+  check it out?". The interim words are gone. The `Consequence` already carried each path
+  (`LostChange::path`). Full-literal tests:
+  `a_directory_or_a_nested_repository_in_the_way_is_named_lost`. The changed files' own words
+  ("1 new file deleted (3 lines)") are L8's, kept; the mockup's "1 staged (3 lines)" was read
+  as an example, not a change to them.
+- **B — refusals stay inside the dialog** (the user's decision): beside the buttons with ⚠, as
+  built; a name's refusal never opens the Git Error dialog. git's refusal of the write itself
+  (a checkout that would overwrite, a race) still opens it, as R11.3 says.
+- **C — a right-click selects its row** (the user's decision, Fork for Windows): in the history
+  list, unless it lands on the selected row or either row of a compared pair, which keeps the
+  whole selection (`a_right_click_selects_its_row_and_keeps_a_selection_it_lands_in`). Local
+  Changes' lists already chose a row outside the selection and kept a selection the press
+  landed in (`each_rows_menu_offers_forks_items_and_no_discard_where_none_is_allowed`,
+  `a_drag_the_menu_and_a_double_press_stage_what_is_selected`).
+- **D — the wait said** (the user's decision): while the name's check waits behind a write on
+  the local lane, the dialog says "Waiting for <write> to finish…" beside the buttons, naming
+  the running write (or the first queued) in the words the window already uses for it
+  (`LocalWrite::what`: "commit", "staging 2 files", "creating branch x"), so the commit's reads
+  "Waiting for commit to finish…" where the mockup read "the commit"; nothing otherwise
+  (`a_check_waiting_behind_a_write_is_said_beside_the_buttons`,
+  `a_name_check_waiting_behind_a_write_says_which_write`).
+- **E — button order per platform** (the user's decision): on Linux the primary first and
+  Cancel (or Close) last, as Fork for Windows; on macOS Cancel first and the primary last, as
+  Fork for macOS; `cairn_ui::button_order::ordered`, used by the confirmation, the Git Error
+  dialog, Create Branch and the credential prompt, each drawing in this build's platform
+  unless a test names another (`.platform(Os)`); a confirmation's focus stays on Cancel on both
+  (`every_dialogs_buttons_follow_the_platforms_order`,
+  `a_confirmation_starts_on_cancel_on_both_platforms`). `docs/design/ui.md` and R7.4 record it.
+- **F — `@{` refused** (the user's decision): before git is asked, "A branch name can't
+  contain '@{'" (`a_name_holding_at_brace_is_refused_in_cairns_words`).
+
+The PRD (R7.4, R7.4a, R11.3), `docs/design/ui.md` and the systems docs record each. The
+`git-floor` diff_engine floor rose to 201 with F's test.
+
 ## 2026-10-09 — phase 10, QA fixes (packet mode)
 
 Five fresh reviewers and a fresh qa-confirm adjudicated phase 10 (the coordinator's

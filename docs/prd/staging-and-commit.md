@@ -310,7 +310,12 @@ literally.
 - R7.4 A confirmation dialog: modal to assistive technology and to the keyboard
   (Tab stays inside it; the window's chords do nothing while it is open), focus
   on Cancel, its prompt and its button rendered from a `Consequence`, Escape
-  cancels.
+  cancels. Every dialog's buttons sit in the platform's order — on Linux the primary first
+  and Cancel last (Fork for Windows), on macOS Cancel first and the primary last (Fork for
+  macOS) — focus on Cancel on both (amended 2026-10-09, the user's decision E).
+- R7.4a A right-click on a list row selects it — the history's or Local Changes' lists' — so
+  the detail pane follows and its menu acts on what is shown; one inside a selection already
+  made keeps the whole selection (added 2026-10-09, the user's decision C; Fork for Windows).
 - R7.5 A context menu host is mounted at the window root, so every menu opens
   without the toolkit panicking for want of one.
 - R7.6 Edge auto-scroll for a drag over a virtualized list, timed with
@@ -452,9 +457,15 @@ literally.
     create"; Cancel, and "Create" — "Create and Checkout" while the box is ticked. Return
     presses the button, Escape cancels.
   - A name is refused inline, before git runs, by git's own rules (`git check-ref-format
-    --branch`, a read) and when a local branch has it: the button disabled, the reason beside
-    it — Fork's words for a name taken ("Branch test already exists"), git's for a name it
-    refuses.
+    --branch`, a read), when a local branch has it, when a branch's folder holds it or it
+    would hold a branch (git's words), and when it holds `@{` ("A branch name can't contain
+    '@{'", the user's decision F, 2026-10-09): the button disabled, the reason inside the
+    dialog beside the buttons behind Fork's warning triangle, never in the Git Error dialog
+    (decision B) — Fork's words for a name taken ("Branch test already exists"), git's for a
+    name it refuses. While the check waits behind a running write, the same place says which
+    ("Waiting for commit to finish…", decision D). Under the title, Fork's "Use '/' as a path
+    separator to create folders"; Fork's chord, Ctrl+Shift+B (⇧⌘B), opens the dialog at
+    `HEAD` (Fork-settled at phase 10's QA).
   - "Check out after create" is sticky for the session (decision 1); across restarts once
     Cairn has a settings store (issue #89).
   - Unticked: `git branch -- <name> <oid>`. Ticked, while the working tree has staged,
@@ -463,9 +474,14 @@ literally.
     overwritten") shown in Fork's Git Error dialog with git's own words and the name kept for
     the next opening; "Discard" (decision 3): destructive (R1.5) — an engine-computed
     `Consequence` naming every staged and unstaged change to a tracked file lost and every
-    untracked file the commit's tree overwrites, counted as the discard prompts count (lines
-    per changed file, bytes per untracked file, untracked files kept said), confirmed through
-    the confirmation dialog, re-checked before `git checkout -q -f -b <name> <oid> --` runs
+    untracked file the commit's tree overwrites, or deletes for being in a folder or nested
+    repository where the commit holds a file, counted as the discard prompts count (lines per
+    changed file, bytes per untracked file, untracked files kept said) and each such folder
+    and repository named by its path — "Deleted because the branch has a file there: folder
+    d/ (4 untracked files) and repository vendor/lib/ with its history", the first three
+    named and the rest counted — under the title "Discard changes" and the button "Discard
+    Changes and Check Out" (the user's decision A, 2026-10-09), confirmed through the
+    confirmation dialog, re-checked before `git checkout -q -f -b <name> <oid> --` runs
     (R1.4), refused before any prompt during an operation in progress, over a conflicted path
     or a submodule's change; never the remembered choice. Fork's third choice, "Stash and
     reapply", waits for packet 5b, which builds stashing (decision 2: a temporary, stated

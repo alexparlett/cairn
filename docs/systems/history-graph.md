@@ -951,7 +951,10 @@ The way back to a lost commit — or to any — is Fork's Create Branch dialog
 user's decisions of 2026-10-09; evidence
 `docs/research/staging-and-commit/fork-create-branch-evidence.md`), opened by `New Branch…` in
 any commit row's context menu, a lost row's too, a stash's row offering none
-(`HistoryList::on_new_branch`, `every_commit_rows_menu_offers_new_branch_at_its_commit`), or at
+(`HistoryList::on_new_branch`, `every_commit_rows_menu_offers_new_branch_at_its_commit`) — the
+right-click selecting its row first unless it lands in the selection already made, either of a
+compared pair (the user's decision C, 2026-10-09;
+`a_right_click_selects_its_row_and_keeps_a_selection_it_lands_in`) — or at
 `HEAD` by Fork's New Branch chord, Ctrl+Shift+B (⇧⌘B on macOS), heard anywhere
 (`Action::NewBranch`, `create_branch::open_at_head`): `HEAD`'s commit as the last refresh read
 it, its subject the row's where `History::labelled_position` finds it loaded, nothing opened
@@ -965,10 +968,17 @@ before the refs are read, on an unborn `HEAD`, or over a dialog already up
   (`the_dialog_is_forks_its_button_following_the_box`).
 - Each change of the name asks the engine (`Request::CheckBranchName`, the branch-name lane on
   the local lane, `Repository::branch_name`): the button is enabled only for an answer of
-  "free" to the text shown, and a refusal is said in the buttons' row, left of them, behind
-  the warning triangle (`RefGlyph::Gone`) — "Branch <name> already exists", git's reason for a
-  name it does not take, or git's words for a name a branch's directory holds (`'refs/heads/foo/bar'
-  exists; cannot create 'refs/heads/foo'`, either way round)
+  "free" to the text shown, and a refusal is said inside the dialog, in the buttons' row,
+  left of them, behind the warning triangle (`RefGlyph::Gone`), never in the Git Error dialog
+  (the user's decision B, 2026-10-09) — "Branch <name> already exists", git's reason for a
+  name it does not take, git's words for a name a branch's directory holds
+  (`'refs/heads/foo/bar' exists; cannot create 'refs/heads/foo'`, either way round), or "A
+  branch name can't contain '@{'", said before git is asked (decision F;
+  `a_name_holding_at_brace_is_refused_in_cairns_words`). While the check waits behind a write
+  on the local lane, the same place names it — "Waiting for commit to finish…", the running
+  write's or else the first queued (decision D;
+  `a_check_waiting_behind_a_write_is_said_beside_the_buttons`,
+  `a_name_check_waiting_behind_a_write_says_which_write`)
   (`a_refusal_is_said_beside_the_buttons_behind_the_warning_glyph`,
   `a_name_clashing_with_a_branchs_directory_is_refused_before_git_runs`,
   `only_a_ready_name_is_created_and_every_change_is_reported`,

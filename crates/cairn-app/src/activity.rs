@@ -528,6 +528,7 @@ mod tests {
             exit,
             cancelled: false,
             stderr: stderr.to_owned(),
+            stderr_cut: false,
         }
     }
 

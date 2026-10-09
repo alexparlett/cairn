@@ -255,15 +255,18 @@ fn fetch_outcome(
             remote,
             stranded_locks,
         },
-        Err(error) => Update::FetchFailed {
-            remote,
-            message: crate::shown_output::scrubbed(&match prompting {
-                Ok(()) => error.to_string(),
-                Err(why) => format!(
-                    "{error}. Cairn could not have asked for a credential in this session: {why}"
-                ),
-            }),
-        },
+        Err(error) => {
+            let error = super::local_lane::scrubbed_error(error);
+            Update::FetchFailed {
+                remote,
+                message: crate::shown_output::scrubbed(&match prompting {
+                    Ok(()) => error.to_string(),
+                    Err(why) => format!(
+                        "{error}. Cairn could not have asked for a credential in this session: {why}"
+                    ),
+                }),
+            }
+        }
     }
 }
 

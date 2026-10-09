@@ -4,17 +4,16 @@
 //! remote URL carried. Every text of git's the window keeps goes through here: a commit's
 //! streamed output and the output the engine kept of a failure (`commit_box_state`), a failed
 //! branch's output (`create_branch`) and the activity popover's (`activity`).
+//!
+//! Where a text was cut is the engine's to say (phase 11's QA, TC5): a command log record's
+//! `stderr_cut`, an `Error::GitFailed`'s `stderr_cut` offsets. The lanes scrub with it
+//! ([`scrubbed_at`]), before anything leaves them; the window's own pass over what it keeps
+//! reads every text from a line's start, and changes nothing the lane's left.
 
 use cairn_model::Scrubber;
 
 use crate::commit_box_state::strip_ansi;
 use crate::worker::WriteEnding;
-
-/// The smallest tail the engine cuts git's output to from the front — a commit's stdout,
-/// 64 KiB (`cairn-git`'s `ops/commit.rs`) — so a text at least this long may begin part-way
-/// through a line, and is read as if it did: its first line's leading run up to an `@` is
-/// taken for the end of a userinfo. A shorter text was never cut.
-pub const MAY_BE_CUT_BYTES: usize = 64 * 1024;
 
 /// Lines arriving one at a time, shown in order, with a URL cut at a line's end carried over.
 #[derive(Debug, Clone, Default)]
@@ -31,29 +30,47 @@ impl ShownLines {
 
 /// A text kept whole — by the engine, or a record of the command log — as the lines drawn.
 pub fn shown_lines(text: &str) -> Vec<String> {
-    let mut shown = ShownLines {
-        scrubber: if text.len() >= MAY_BE_CUT_BYTES {
-            Scrubber::after_cut()
-        } else {
-            Scrubber::new()
-        },
-    };
+    let mut shown = ShownLines::default();
     text.lines().map(|line| shown.line(line)).collect()
 }
 
-/// `text` with the userinfo of every URL in it removed and nothing else changed — what the
-/// workers do to every message and output of git's they hand the window, so even a message the
-/// window draws as it is (a write's ending, a fetch's failure) carries no token.
+/// `text` with the userinfo of every URL in it removed and nothing else changed, read from a
+/// line's start — what the workers do to every message of git's they hand the window, so even a
+/// message the window draws as it is (a write's ending, a fetch's failure) carries no token.
 pub fn scrubbed(text: &str) -> String {
-    let mut scrubber = if text.len() >= MAY_BE_CUT_BYTES {
-        Scrubber::after_cut()
-    } else {
-        Scrubber::new()
-    };
-    text.split('\n')
-        .map(|line| scrubber.line(line))
-        .collect::<Vec<_>>()
-        .join("\n")
+    scrubbed_at(text, &[])
+}
+
+/// [`scrubbed`], for a text the engine says was cut: each part beginning at one of `cut`'s byte
+/// offsets (each at a line's start in `text`, or `0`) is read as begun part-way through a line,
+/// so a URL cut there loses its userinfo too; the parts are scrubbed apart.
+pub fn scrubbed_at(text: &str, cut: &[usize]) -> String {
+    let mut starts: Vec<usize> = cut
+        .iter()
+        .copied()
+        .filter(|at| *at <= text.len() && text.is_char_boundary(*at))
+        .collect();
+    starts.push(0);
+    starts.sort_unstable();
+    starts.dedup();
+    let mut shown = String::with_capacity(text.len());
+    for (at, start) in starts.iter().enumerate() {
+        let end = starts.get(at + 1).copied().unwrap_or(text.len());
+        let mut scrubber = if cut.contains(start) {
+            Scrubber::after_cut()
+        } else {
+            Scrubber::new()
+        };
+        let part = &text[*start..end];
+        shown.push_str(
+            &part
+                .split('\n')
+                .map(|line| scrubber.line(line))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+    shown
 }
 
 /// A write's ending as the window keeps it: every message of it, git's words in them, scrubbed
@@ -117,8 +134,22 @@ mod tests {
         let shown = shown_lines(text);
         assert_eq!(shown, ["remote: https://host/r", "see https://", "host/x"]);
         assert!(shown.iter().all(|line| !line.contains("SECRET")));
-        let long = format!("er:SECRET@host/x\n{}", "y".repeat(MAY_BE_CUT_BYTES));
-        assert!(shown_lines(&long)[0] == "host/x");
+        // Phase 11's QA (TC5): a cut is the engine's to say, never a length's — a long text
+        // never said to be cut keeps its first line whole, and a short one said to be cut, at
+        // its front or after another part, loses the userinfo its cut began inside.
+        let long = format!("ada@example.com wrote this\n{}", "y".repeat(64 * 1024 + 1));
+        assert!(shown_lines(&long)[0] == "ada@example.com wrote this");
+        assert_eq!(scrubbed(&long), long);
+        assert_eq!(scrubbed_at("er:SECRET@host/x", &[0]), "host/x");
+        assert_eq!(
+            scrubbed_at("out line\ner:SECRET@host/x", &[9]),
+            "out line\nhost/x"
+        );
+        assert_eq!(
+            scrubbed_at("a@b out\ner:SECRET@host/x", &[8]),
+            "a@b out\nhost/x",
+            "a part not cut kept"
+        );
         let mut streamed = ShownLines::default();
         assert_eq!(streamed.line("to https://tok"), "to https://");
         assert_eq!(streamed.line("en@host/r"), "host/r");

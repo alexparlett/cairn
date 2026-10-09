@@ -226,6 +226,7 @@ fn stderr_reaches_the_error_when_git_fails() {
             arguments,
             status,
             stderr,
+            stderr_cut: _,
             present_locks,
         } => {
             assert_eq!(arguments, "--version");

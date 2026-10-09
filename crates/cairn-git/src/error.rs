@@ -235,6 +235,11 @@ pub enum Error {
         arguments: String,
         status: ExitStatus,
         stderr: String,
+        /// The byte offsets in `stderr` where retained text begins part-way through a line —
+        /// `0` when its front was cut to the runner's tail, and, for a commit's, where its
+        /// stderr's cut tail follows stdout's — so a view scrubs a URL cut there
+        /// (staging-and-commit R12.2). Empty when nothing was cut.
+        stderr_cut: Vec<usize>,
         present_locks: Vec<PathBuf>,
     },
 
@@ -639,6 +644,8 @@ pub enum LockRefusal {
     NoLock,
     /// `index.lock` is not a plain file (a directory, a symbolic link).
     NotAFile,
+    /// `index.lock` could not be looked at: permission denied, an I/O error.
+    Unreadable(std::io::ErrorKind),
     /// Cairn runs this many `git` invocations in the repository now; the lock may be one of
     /// theirs.
     GitRunning(usize),
@@ -652,6 +659,7 @@ impl std::fmt::Display for LockRefusal {
         match self {
             Self::NoLock => f.write_str("there is no index.lock"),
             Self::NotAFile => f.write_str("index.lock is not a file"),
+            Self::Unreadable(kind) => write!(f, "index.lock could not be read ({kind})"),
             Self::GitRunning(1) => f.write_str("Cairn is running git in this repository"),
             Self::GitRunning(n) => {
                 write!(f, "Cairn is running {n} git processes in this repository")
@@ -766,6 +774,7 @@ mod tests {
             arguments: "add x".to_owned(),
             status,
             stderr: "fatal: no".to_owned(),
+            stderr_cut: Vec::new(),
             present_locks: Vec::new(),
         };
         assert_eq!(
@@ -776,6 +785,7 @@ mod tests {
             arguments: "add x".to_owned(),
             status,
             stderr: "fatal: Unable to create index.lock".to_owned(),
+            stderr_cut: Vec::new(),
             present_locks: vec![PathBuf::from("/r/.git/index.lock")],
         };
         let text = locked.to_string();

@@ -472,6 +472,91 @@ fn the_command_log_is_answered_through_the_worker_with_the_fetch_in_it() {
     until_the_stream_ends(&mut updates, CLOSE_BOUND);
 }
 
+/// Phase 11's QA (TC10): a fetch whose git writes a remote URL with a token — whole, split over
+/// two lines, and in the failure it ends with — sends the window no update that carries the
+/// token: not its progress, not what it ran, not its failure. Caught by: any of the lane's
+/// scrubs left out.
+#[test]
+fn no_update_of_a_fetch_carries_a_token_its_git_wrote() {
+    let stub = StubGit::new(
+        "  echo 'remote: see https://ada:ghp_SECRETTOKEN@example.com/r' >&2\n  \
+         echo 'retry at https://ada:ghp_SECRET' >&2\n  \
+         echo 'TOKEN@example.com/again' >&2\n  \
+         echo 'fatal: https://ada:ghp_SECRETTOKEN@example.com/r denied' >&2\n  exit 128",
+    );
+    let fixture = with_origin(
+        &format!("cairn-scrubbed-fetch-{}", std::process::id()),
+        "/nonexistent/remote.git",
+    );
+    let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let discovery = Discovery::new(stub.startup(Some((&home, &runtime))));
+    let (handle, mut updates) = opened(&fixture.path, &discovery);
+    handle.submit(Request::Fetch {
+        remote: "origin".to_owned(),
+    });
+    let seen = collect_until(&mut updates, |u| {
+        matches!(
+            u,
+            Update::FetchFinished { .. }
+                | Update::FetchFailed { .. }
+                | Update::FetchCancelled { .. }
+        )
+    });
+    assert!(
+        matches!(seen.last(), Some(Update::FetchFailed { .. })),
+        "{seen:?}"
+    );
+    assert!(
+        seen.iter()
+            .any(|update| matches!(update, Update::FetchProgress { line } if line.contains("example.com/again"))),
+        "{seen:?}"
+    );
+    assert!(
+        seen.iter()
+            .any(|update| matches!(update, Update::OperationRan { .. })),
+        "{seen:?}"
+    );
+    let shown = format!("{seen:?}");
+    assert!(
+        !shown.contains("SECRET") && !shown.contains("TOKEN"),
+        "{shown}"
+    );
+    handle.submit(Request::Close);
+    until_the_stream_ends(&mut updates, CLOSE_BOUND);
+}
+
+/// Phase 11's QA (TC11), the fetch's half: a fetch that fails while a stale `index.lock` is
+/// there, no git of Cairn's running once it ends, offers its removal with what it ran; and none
+/// is offered for a fetch that ends with no lock named. Caught by: the network lane's offer
+/// never computed, or computed whatever its ending named.
+#[test]
+fn a_failed_fetch_naming_a_stale_index_lock_offers_its_removal() {
+    for stale in [true, false] {
+        let stub = StubGit::new("  echo 'fatal: refused' >&2\n  exit 128");
+        let fixture = with_origin(
+            &format!("cairn-fetch-lock-{stale}-{}", std::process::id()),
+            "/nonexistent/remote.git",
+        );
+        if stale {
+            std::fs::write(fixture.path.join(".git/index.lock"), b"").unwrap();
+        }
+        let (home, runtime) = (Home::new(), RuntimeDir::new());
+        let discovery = Discovery::new(stub.startup(Some((&home, &runtime))));
+        let (handle, mut updates) = opened(&fixture.path, &discovery);
+        handle.submit(Request::Fetch {
+            remote: "origin".to_owned(),
+        });
+        let seen = collect_until(&mut updates, |u| matches!(u, Update::FetchFailed { .. }));
+        let offered = seen.iter().find_map(|update| match update {
+            Update::OperationRan { lock, .. } => Some(lock.is_some()),
+            _ => None,
+        });
+        assert_eq!(offered, Some(stale), "stale={stale}: {seen:?}");
+        handle.submit(Request::Close);
+        until_the_stream_ends(&mut updates, CLOSE_BOUND);
+    }
+}
+
 /// PRD G14: closing a repository with a fetch in flight ends and reaps its
 /// whole group — the leader and a grandchild holding its pipes — within
 /// `CLOSE_BOUND`, and the update stream ends with nothing left running and the

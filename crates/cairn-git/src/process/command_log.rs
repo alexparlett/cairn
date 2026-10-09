@@ -98,6 +98,8 @@ fn fit(record: &mut CommandRecord, limit: usize) {
         cut += 1;
     }
     record.stderr.drain(..cut);
+    // Cut from the front: said, so a view scrubs its first line as begun part-way.
+    record.stderr_cut |= cut > 0;
     if record.held_bytes() <= limit {
         return;
     }
@@ -140,6 +142,7 @@ mod tests {
             exit: CommandExit::Code(0),
             cancelled: false,
             stderr,
+            stderr_cut: false,
         }
     }
 
@@ -217,6 +220,10 @@ mod tests {
         let kept = &log.records()[0];
         assert!(kept.held_bytes() <= LOG_BYTES);
         assert!(kept.stderr.ends_with("the end."));
+        assert!(
+            kept.stderr_cut,
+            "a stderr cut to fit was not said to be cut"
+        );
         assert_eq!(kept.arguments, ["fetch"]);
 
         let mut long = record(1, "said".to_owned());

@@ -675,6 +675,7 @@ mod tests {
                 arguments,
                 status,
                 stderr,
+                stderr_cut: _,
                 present_locks,
             }) => {
                 assert_eq!(arguments, "add tracked");
@@ -721,6 +722,7 @@ mod tests {
                 arguments,
                 status,
                 stderr,
+                stderr_cut: _,
                 present_locks,
             }) => {
                 assert_eq!(

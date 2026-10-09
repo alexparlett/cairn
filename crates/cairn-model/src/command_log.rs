@@ -31,6 +31,10 @@ pub struct CommandRecord {
     /// The end of what it wrote to stderr: the tail the runner retains, at
     /// most 256 KiB, trailing whitespace trimmed. Empty when it never started.
     pub stderr: String,
+    /// `stderr` was cut from the front — by the runner's tail or the log's
+    /// byte bound — so its first line may begin part-way through a line: what
+    /// a view needs to scrub a URL cut there (staging-and-commit R12.2).
+    pub stderr_cut: bool,
 }
 
 /// How a recorded invocation ended.
@@ -73,6 +77,7 @@ mod tests {
             exit: CommandExit::Code(0),
             cancelled: false,
             stderr: "From x".to_owned(),
+            stderr_cut: false,
         }
     }
 
@@ -104,6 +109,7 @@ mod tests {
             exit,
             cancelled,
             stderr,
+            stderr_cut,
         } = record();
         assert_eq!(arguments.len(), 2);
         assert!(directory.is_some());
@@ -112,6 +118,7 @@ mod tests {
         assert_eq!(exit, CommandExit::Code(0));
         assert!(!cancelled);
         assert_eq!(stderr, "From x");
+        assert!(!stderr_cut);
     }
 
     /// Plain data: a record compares by every field and survives a clone, so a

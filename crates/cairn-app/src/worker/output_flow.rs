@@ -165,6 +165,29 @@ mod tests {
             "the newest line was let go"
         );
 
+        // Wide lines while the window is behind: held by bytes, not count (phase 11's QA, TC8).
+        let wide_line = |n: usize| format!("{n:06}{}", "w".repeat(64 * 1024));
+        let mut sent_wide = Vec::new();
+        let mut wide_flow = OutputFlow::new(Arc::new(AtomicUsize::new(IN_FLIGHT_BYTES)));
+        for n in 0..40 {
+            let line = wide_line(n);
+            wide_flow.read(&[&line], &mut |lines, receipt| {
+                sent_wide.push((lines, receipt))
+            });
+        }
+        assert!(sent_wide.is_empty());
+        assert!(
+            wide_flow.held_bytes <= HELD_BYTES + wide_line(0).len(),
+            "{} bytes held",
+            wide_flow.held_bytes
+        );
+        assert!(wide_flow.held.len() < 40, "nothing let go of by bytes");
+        assert_eq!(
+            wide_flow.held.back(),
+            Some(&wide_line(39)),
+            "the newest let go of"
+        );
+
         // The window drops what it was sent: the bytes come back, and the next read sends.
         sent.clear();
         assert_eq!(budget.load(Ordering::Acquire), 0);

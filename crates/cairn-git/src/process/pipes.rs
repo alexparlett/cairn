@@ -143,6 +143,18 @@ impl Lines {
 #[derive(Debug, Default)]
 pub(super) struct Tail {
     text: String,
+    /// A prefix was let go of, and what is kept may begin part-way through a
+    /// line: inside one, or at a piece of a line [`Lines`] sent in pieces.
+    cut: bool,
+}
+
+/// What a [`Tail`] kept: its text, and whether that may begin part-way
+/// through a line (staging-and-commit phase 11's QA, TC5: said by the engine,
+/// never guessed from a length).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct Retained {
+    pub(crate) text: String,
+    pub(crate) cut: bool,
 }
 
 impl Tail {
@@ -170,6 +182,16 @@ impl Tail {
         {
             start += newline + 1;
         }
+        // Kept from a line's start only where the line before it ended there: not
+        // part-way, and not a piece of a line sent in pieces, which is as long as
+        // the window.
+        let at_a_line_start = start > 0
+            && self.text.as_bytes()[start - 1] == b'\n'
+            && self.text[..start - 1]
+                .rfind('\n')
+                .map_or(start - 1, |before| start - 2 - before)
+                < TAIL_BYTES;
+        self.cut |= !at_a_line_start;
         self.text.drain(..start);
     }
 
@@ -179,12 +201,15 @@ impl Tail {
         self.text.len()
     }
 
-    /// The retained text, trailing whitespace trimmed.
-    pub(super) fn into_text(mut self) -> String {
+    /// The retained text, trailing whitespace trimmed, and whether it was cut.
+    pub(super) fn into_text(mut self) -> Retained {
         self.cut();
         let kept = self.text.trim_end().len();
         self.text.truncate(kept);
-        self.text
+        Retained {
+            text: self.text,
+            cut: self.cut,
+        }
     }
 }
 
@@ -271,11 +296,21 @@ mod tests {
         for n in 0..40_000 {
             tail.push(&format!("line {n:06} of a long stderr"));
         }
-        let text = tail.into_text();
+        let Retained { text, cut } = tail.into_text();
         assert!(text.len() <= TAIL_BYTES, "{}", text.len());
         assert!(text.len() > TAIL_BYTES - 64, "{}", text.len());
         assert!(text.ends_with("line 039999 of a long stderr"));
         assert!(text.starts_with("line "), "{:?}", &text[..20]);
+        assert!(!cut, "kept from a line's start, after a line that ended");
+        let mut short = Tail::default();
+        short.push("all of it");
+        assert_eq!(
+            short.into_text(),
+            Retained {
+                text: "all of it".to_owned(),
+                cut: false
+            }
+        );
     }
 
     /// R3.5, while the process runs: what is held never grows past twice the
@@ -301,8 +336,17 @@ mod tests {
         let mut tail = Tail::default();
         tail.push("first");
         tail.push(&format!("{}end", "é".repeat(TAIL_BYTES)));
-        let text = tail.into_text();
+        let Retained { text, cut } = tail.into_text();
         assert!(text.len() <= TAIL_BYTES);
         assert!(text.ends_with("éend"));
+        assert!(cut, "kept from part-way through a line");
+        // A line sent in pieces: the kept text starts at a piece, part-way through the line.
+        let mut pieces = Tail::default();
+        let mut lines = Lines::default();
+        for piece in lines.push(&vec![b'x'; TAIL_BYTES * 2]) {
+            pieces.push(&piece);
+        }
+        pieces.push("the end");
+        assert!(pieces.into_text().cut, "a piece's start taken for a line's");
     }
 }

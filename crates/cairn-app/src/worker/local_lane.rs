@@ -587,7 +587,7 @@ impl WriteEnding {
                     Some(performed.invalidated()),
                 );
             }
-            Err(error) => error,
+            Err(error) => scrubbed_error(error),
         };
         // Scrubbed before it leaves the lane (R12.2): git's stderr is in the message, and a
         // remote URL with a token in it is never drawn.
@@ -626,7 +626,7 @@ impl WriteEnding {
                 message,
                 locks: present_locks,
                 command: Some(crate::shown_output::scrubbed(&format!("git {arguments}"))),
-                output: crate::shown_output::scrubbed(&stderr),
+                output: stderr,
             },
             Error::DiscardIncomplete {
                 performed, kept, ..
@@ -1103,6 +1103,38 @@ fn after(commit: bool, asked: ReadAgain, invalidated: Option<Invalidated>) -> Re
     }
 }
 
+/// `error` with git's stderr in it scrubbed of a URL's userinfo where the engine kept it — a
+/// failure's, and the failure a partial discard carries — each part the engine says was cut
+/// read as begun part-way through a line (phase 11's QA, TC5), so the message formatted from it
+/// carries no token whatever was cut.
+pub(super) fn scrubbed_error(error: Error) -> Error {
+    match error {
+        Error::GitFailed {
+            arguments,
+            status,
+            stderr,
+            stderr_cut,
+            present_locks,
+        } => Error::GitFailed {
+            arguments,
+            status,
+            stderr: crate::shown_output::scrubbed_at(&stderr, &stderr_cut),
+            stderr_cut: Vec::new(),
+            present_locks,
+        },
+        Error::DiscardIncomplete {
+            performed,
+            kept,
+            failure,
+        } => Error::DiscardIncomplete {
+            performed,
+            kept,
+            failure: failure.map(|failure| Box::new(scrubbed_error(*failure))),
+        },
+        other => other,
+    }
+}
+
 /// The command log's records of what this thread ran in `repo` since `mark`, each argument and
 /// its stderr scrubbed of a URL's userinfo before it leaves the lane (R12.2).
 pub(super) fn ran_since(repo: &Repository, mark: cairn_git::CommandMark) -> Vec<CommandRecord> {
@@ -1114,7 +1146,11 @@ pub(super) fn ran_since(repo: &Repository, mark: cairn_git::CommandMark) -> Vec<
                 .iter()
                 .map(|argument| crate::shown_output::scrubbed(argument))
                 .collect(),
-            stderr: crate::shown_output::scrubbed(&record.stderr),
+            stderr: crate::shown_output::scrubbed_at(
+                &record.stderr,
+                if record.stderr_cut { &[0] } else { &[] },
+            ),
+            stderr_cut: false,
             ..record
         })
         .collect()
@@ -1129,6 +1165,19 @@ pub(super) fn removable_lock(repo: &Repository, locks: &[PathBuf]) -> Option<Con
         return None;
     }
     ops::remove_lock_consequence(repo).ok()
+}
+
+/// The write's askpass operation, if one began, and what its ending says of prompting: the
+/// session's, or — where the channel could not make a token — why not.
+fn token_and_prompting<O, E: std::fmt::Display>(
+    began: Option<Result<O, E>>,
+    session: &Result<(), String>,
+) -> (Option<O>, Result<(), String>) {
+    match began {
+        Some(Ok(operation)) => (Some(operation), session.clone()),
+        Some(Err(why)) => (None, Err(no_token(&why))),
+        None => (None, session.clone()),
+    }
 }
 
 /// Why a write had no askpass token, as its ending says it.
@@ -1156,14 +1205,12 @@ fn run(
     // Named as the window names the write, so a prompt it raises is titled by it (R5.1).
     // A token that could not be had is said in the ending, as a channel never opened is
     // (phase 04's QA item 11): a write that then fails for want of a prompt says why.
-    let (authorised, prompting) = match serving
-        .channel
-        .map(|channel| channel.begin_for(crate::status_text::capitalised(&write.what())))
-    {
-        Some(Ok(operation)) => (Some(operation), serving.prompting.clone()),
-        Some(Err(why)) => (None, Err(no_token(&why))),
-        None => (None, serving.prompting.clone()),
-    };
+    let (authorised, prompting) = token_and_prompting(
+        serving
+            .channel
+            .map(|channel| channel.begin_for(crate::status_text::capitalised(&write.what()))),
+        serving.prompting,
+    );
     let outcome = write.perform(
         serving.git,
         repo,
@@ -1207,10 +1254,15 @@ mod tests {
     /// `.ok()`, the write failing with no word of the token.
     #[test]
     fn a_token_that_could_not_be_made_is_said_in_the_ending() {
-        let (ending, _) = WriteEnding::of(
-            Err(Error::NoPaths),
-            &Err(no_token(&"could not generate an askpass token")),
-        );
+        // Phase 11's QA (TC9): the choice `run` makes, its failing arm.
+        let (operation, prompting) =
+            token_and_prompting::<(), _>(Some(Err("could not generate an askpass token")), &Ok(()));
+        assert!(operation.is_none());
+        let (began, fine) = token_and_prompting::<u8, &str>(Some(Ok(7)), &Ok(()));
+        assert_eq!((began, fine), (Some(7), Ok(())));
+        let (_, never) = token_and_prompting::<u8, &str>(None, &Err("no channel".to_owned()));
+        assert_eq!(never, Err("no channel".to_owned()));
+        let (ending, _) = WriteEnding::of(Err(Error::NoPaths), &prompting);
         let WriteEnding::Refused { message } = ending else {
             panic!("{ending:?}");
         };
@@ -1219,6 +1271,79 @@ mod tests {
                 && message.contains("could not generate an askpass token"),
             "{message}"
         );
+    }
+
+    /// Phase 11's QA (TC11): `Remove index.lock…` is offered only where the ending names the
+    /// stale `index.lock` — not for one naming only another lock, nor one naming none — though
+    /// the lock is there either way. Caught by: an offer made on the lock's presence alone.
+    #[test]
+    fn the_lock_is_offered_only_where_the_ending_names_it() {
+        let dir = std::env::temp_dir().join(format!("cairn-lock-offer-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let program = cairn_git::ops::GitBinary::discover(&cairn_git::ops::Askpass::new(
+            "/nonexistent/cairn-askpass",
+            None,
+        ))
+        .unwrap();
+        let status = std::process::Command::new(program.path())
+            .args(["init", "-q"])
+            .current_dir(&dir)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let repo = SharedRepository::discover(&dir).unwrap().to_worker();
+        let index_lock = repo.git_dir().join("index.lock");
+        std::fs::write(&index_lock, b"").unwrap();
+        let head_lock = repo.git_dir().join("HEAD.lock");
+        assert!(
+            removable_lock(&repo, &[]).is_none(),
+            "offered for an ending naming no lock"
+        );
+        assert!(
+            removable_lock(&repo, &[head_lock]).is_none(),
+            "offered for an ending naming another lock"
+        );
+        assert!(removable_lock(&repo, &[index_lock]).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Phase 11's QA (TC5): a failure whose stderr the engine says was cut — at its front, or
+    /// after stdout's part — loses the userinfo its cut began inside, in the message and the
+    /// output alike, and one never said to be cut keeps its first line whole. Caught by: the
+    /// cut ignored, or guessed from a length.
+    #[test]
+    fn a_failures_cut_output_is_scrubbed_where_the_engine_says_it_was_cut() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let failed = |stderr: &str, cut: Vec<usize>| Error::GitFailed {
+            arguments: "commit -q -F -".to_owned(),
+            status: std::process::ExitStatus::from_raw(1 << 8),
+            stderr: stderr.to_owned(),
+            stderr_cut: cut,
+            present_locks: Vec::new(),
+        };
+        for (stderr, cut) in [
+            ("er:TOKEN@host/r denied", vec![0]),
+            ("stdout's line\ner:TOKEN@host/r denied", vec![14]),
+        ] {
+            let (ending, _) = WriteEnding::of(Err(failed(stderr, cut)), &Ok(()));
+            let WriteEnding::Failed {
+                message, output, ..
+            } = ending
+            else {
+                panic!("{ending:?}");
+            };
+            assert!(!message.contains("TOKEN"), "{message}");
+            assert!(
+                !output.contains("TOKEN") && output.ends_with("host/r denied"),
+                "{output}"
+            );
+        }
+        let (ending, _) = WriteEnding::of(Err(failed("ada@example.com: hook", vec![])), &Ok(()));
+        let WriteEnding::Failed { output, .. } = ending else {
+            panic!("{ending:?}");
+        };
+        assert_eq!(output, "ada@example.com: hook");
     }
 
     /// The user's decision (2026-10-09): Stage All and Unstage All take the rows a filter shows

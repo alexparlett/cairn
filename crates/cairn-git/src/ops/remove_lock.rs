@@ -14,9 +14,10 @@
 //!
 //! What a check cannot close: another program — a `git` in a terminal, an editor's git
 //! integration — may take a lock between the re-check and the removal, and nothing in `std`
-//! removes a file only if it is still the inode it was. Cairn's own `git` cannot (the registry
-//! is checked, and the local write lane runs one write at a time); another program's is the
-//! window the prompt warns of.
+//! removes a file only if it is still the inode it was. Nor does the registry count every
+//! process Cairn started: a hook's child left running in the background, its pipes closed, is
+//! no longer counted once its `git` is reaped, and a `git` it starts can hold the lock. Only an
+//! invocation Cairn is still driving is refused; the rest is the window the prompt warns of.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -47,9 +48,10 @@ fn look(path: &Path) -> Result<Option<Seen>, Error> {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => {
+        // Unreadable — permission denied, an I/O error: said as that, never as "not a file".
+        Err(error) => {
             return Err(Error::LockRefused {
-                why: LockRefusal::NotAFile,
+                why: LockRefusal::Unreadable(error.kind()),
             });
         }
     };
@@ -262,11 +264,73 @@ mod tests {
         assert!(matches!(refused, Error::LockChangedSinceConfirmed { .. }));
         assert!(lock.exists());
 
+        // Rewritten in place: the same inode and size, another time (phase 11's QA, TC2).
+        let consequence = remove_lock_consequence(&repo).unwrap();
+        let written = std::fs::metadata(&lock).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&lock)
+            .unwrap()
+            .set_modified(written.modified().unwrap() - std::time::Duration::from_secs(90))
+            .unwrap();
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            let now = std::fs::metadata(&lock).unwrap();
+            assert_eq!((now.ino(), now.len()), (written.ino(), written.len()));
+        }
+        let refused = remove_index_lock(&repo, Confirmed::by_user(consequence)).unwrap_err();
+        assert!(
+            matches!(refused, Error::LockChangedSinceConfirmed { .. }),
+            "{refused:?}"
+        );
+        assert!(lock.exists(), "a lock with another time was removed");
+
+        // A directory in its place since.
+        let consequence = remove_lock_consequence(&repo).unwrap();
+        std::fs::remove_file(&lock).unwrap();
+        std::fs::create_dir(&lock).unwrap();
+        let refused = remove_index_lock(&repo, Confirmed::by_user(consequence)).unwrap_err();
+        assert!(
+            matches!(refused, Error::LockChangedSinceConfirmed { .. }),
+            "{refused:?}"
+        );
+        assert!(lock.is_dir(), "the directory was removed");
+        std::fs::remove_dir(&lock).unwrap();
+
         // Gone since.
+        std::fs::write(&lock, b"one").unwrap();
         let consequence = remove_lock_consequence(&repo).unwrap();
         std::fs::remove_file(&lock).unwrap();
         let refused = remove_index_lock(&repo, Confirmed::by_user(consequence)).unwrap_err();
         assert!(matches!(refused, Error::LockChangedSinceConfirmed { .. }));
+    }
+
+    /// Phase 11's QA (QC4): a lock that cannot be read — its directory's search permission gone
+    /// — is refused as unreadable, never as "not a file". Skipped as root, who reads it anyway.
+    #[test]
+    fn an_unreadable_lock_is_said_to_be_unreadable() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = scratch();
+        let git_dir = dir.path().join(".git");
+        std::fs::write(git_dir.join("index.lock"), b"").unwrap();
+        let repo = open(&dir);
+        std::fs::set_permissions(&git_dir, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let readable = std::fs::symlink_metadata(git_dir.join("index.lock")).is_ok();
+        let answer = remove_lock_consequence(&repo);
+        std::fs::set_permissions(&git_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if readable {
+            eprintln!("SKIPPED: this user reads a directory without search permission (root)");
+            return;
+        }
+        assert!(
+            matches!(
+                answer,
+                Err(Error::LockRefused {
+                    why: LockRefusal::Unreadable(std::io::ErrorKind::PermissionDenied)
+                })
+            ),
+            "{answer:?}"
+        );
     }
 
     /// R12.4: nothing to offer with no lock, or a lock that is a directory or a link; and a

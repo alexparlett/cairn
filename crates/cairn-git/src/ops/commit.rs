@@ -262,19 +262,41 @@ fn run(
             arguments,
             status,
             stderr,
+            stderr_cut,
             present_locks,
-        }) => Err(Error::GitFailed {
-            arguments,
-            status,
-            stderr: [stdout.tail(), stderr]
-                .into_iter()
-                .filter(|part| !part.trim().is_empty())
-                .collect::<Vec<_>>()
-                .join("\n"),
-            present_locks,
-        }),
+        }) => {
+            let (joined, cut) = joined_output(stdout.tail(), (stderr, stderr_cut.contains(&0)));
+            Err(Error::GitFailed {
+                arguments,
+                status,
+                stderr: joined,
+                stderr_cut: cut,
+                present_locks,
+            })
+        }
         Err(other) => Err(other),
     }
+}
+
+/// stdout's tail, then stderr's, the blank ones left out, joined by a newline — and where in
+/// the text each part that was cut from its front now begins (phase 11's QA, TC5), so a view
+/// scrubs a URL cut there with nothing guessed.
+fn joined_output(stdout: (String, bool), stderr: (String, bool)) -> (String, Vec<usize>) {
+    let mut joined = String::new();
+    let mut cut = Vec::new();
+    for (part, part_cut) in [stdout, stderr] {
+        if part.trim().is_empty() {
+            continue;
+        }
+        if !joined.is_empty() {
+            joined.push('\n');
+        }
+        if part_cut {
+            cut.push(joined.len());
+        }
+        joined.push_str(&part);
+    }
+    (joined, cut)
 }
 
 /// A `&dyn Cancel` where a walk wants a sized one.
@@ -291,6 +313,8 @@ impl Cancel for Polled<'_> {
 struct Lines {
     partial: Vec<u8>,
     tail: Vec<u8>,
+    /// The tail let go of a prefix: it may begin part-way through a line.
+    cut: bool,
 }
 
 impl Lines {
@@ -299,6 +323,7 @@ impl Lines {
         if self.tail.len() > STDOUT_TAIL {
             let excess = self.tail.len() - STDOUT_TAIL;
             self.tail.drain(..excess);
+            self.cut = true;
         }
         self.partial.extend_from_slice(chunk);
         // Each line handed on where it lies, the consumed prefix dropped once per chunk: a
@@ -334,14 +359,17 @@ impl Lines {
 
     /// The tail, starting at a character's start: a cut that fell inside one leaves its
     /// continuation bytes out rather than reading them as U+FFFD.
-    fn tail(&self) -> String {
+    fn tail(&self) -> (String, bool) {
         let start = self
             .tail
             .iter()
             .take(3)
             .take_while(|byte| (**byte & 0xC0) == 0x80)
             .count();
-        String::from_utf8_lossy(&self.tail[start..]).into_owned()
+        (
+            String::from_utf8_lossy(&self.tail[start..]).into_owned(),
+            self.cut,
+        )
     }
 }
 
@@ -503,8 +531,24 @@ mod tests {
         assert_eq!(pieces, 1, "a line with no end was kept whole");
         assert!(lines.partial.is_empty());
         lines.push(b"\nend\n", &mut |_| {});
-        assert_eq!(lines.tail().len(), STDOUT_TAIL);
-        assert!(lines.tail().ends_with("\nend\n"));
+        assert_eq!(lines.tail().0.len(), STDOUT_TAIL);
+        assert!(lines.tail().0.ends_with("\nend\n"));
+    }
+
+    /// Phase 11's QA (TC5): the kept output says where each cut part begins — stdout's front,
+    /// and stderr's after stdout's — and nothing for parts that were not cut. Caught by: a cut
+    /// guessed from a length, or the offset of stderr's part lost in the join.
+    #[test]
+    fn the_kept_output_says_where_each_cut_part_begins() {
+        let (text, cut) = joined_output(("out".to_owned(), true), ("err".to_owned(), true));
+        assert_eq!(text, "out\nerr");
+        assert_eq!(cut, [0, 4]);
+        let (text, cut) = joined_output(("out".to_owned(), false), ("err".to_owned(), true));
+        assert_eq!((text.as_str(), cut), ("out\nerr", vec![4]));
+        let (text, cut) = joined_output((" ".to_owned(), true), ("err".to_owned(), false));
+        assert_eq!((text.as_str(), cut), ("err", vec![]));
+        let (_, cut) = joined_output(("out".to_owned(), false), ("err".to_owned(), false));
+        assert!(cut.is_empty());
     }
 
     /// Phase 05's QA item 11: a cut — the tail's front, or a piece of a line with no end — that
@@ -537,12 +581,51 @@ mod tests {
         let mut text = "€".as_bytes().to_vec();
         text.extend(vec![b'y'; STDOUT_TAIL - 1]);
         lines.push(&text, &mut |_| {});
-        let tail = lines.tail();
+        let (tail, cut) = lines.tail();
         assert!(
             !tail.contains('\u{FFFD}'),
             "the tail began inside a character"
         );
         assert_eq!(tail.len(), STDOUT_TAIL - 1);
+        assert!(
+            cut,
+            "a tail one byte short of the bound, cut, read as whole"
+        );
+        let mut whole = Lines::default();
+        whole.push(b"short\n", &mut |_| {});
+        assert!(!whole.tail().1, "an uncut tail said to be cut");
+        // Phase 11's QA (TC12): two and three continuation bytes left at the tail's front, and
+        // a piece cut through a four-byte character at every byte of it.
+        for (character, left) in [("€", 2), ("😀", 3)] {
+            let mut lines = Lines::default();
+            let mut text = character.as_bytes().to_vec();
+            text.extend(vec![b'y'; STDOUT_TAIL - left]);
+            lines.push(&text, &mut |_| {});
+            let (tail, _) = lines.tail();
+            assert!(
+                !tail.contains('\u{FFFD}'),
+                "{left} continuation bytes read as U+FFFD"
+            );
+            assert_eq!(tail.len(), STDOUT_TAIL - left);
+        }
+        for at in 1..4 {
+            let mut seen = Vec::new();
+            let mut lines = Lines::default();
+            let mut long = vec![b'x'; STDOUT_TAIL + 1 - at];
+            long.extend_from_slice("😀".as_bytes());
+            lines.push(&long[..=STDOUT_TAIL], &mut |line| {
+                seen.push(line.to_owned())
+            });
+            lines.push(&long[STDOUT_TAIL + 1..], &mut |line| {
+                seen.push(line.to_owned())
+            });
+            lines.push(b"\n", &mut |line| seen.push(line.to_owned()));
+            assert!(
+                seen.iter().all(|line| !line.contains('\u{FFFD}')),
+                "cut {at} bytes into a four-byte character"
+            );
+            assert_eq!(seen.last().map(String::as_str), Some("😀"), "cut {at}");
+        }
         assert_eq!(whole_characters("a€".as_bytes()), 4);
         assert_eq!(whole_characters(&"a€".as_bytes()[..3]), 1);
         assert_eq!(

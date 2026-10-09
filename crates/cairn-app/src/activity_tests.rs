@@ -89,6 +89,7 @@ fn record(arguments: &[&str], stderr: &str, code: i32) -> CommandRecord {
         exit: CommandExit::Code(code),
         cancelled: false,
         stderr: stderr.to_owned(),
+        stderr_cut: false,
     }
 }
 

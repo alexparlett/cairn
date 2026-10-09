@@ -37,6 +37,7 @@ use cairn_model::{CommandExit, CommandRecord};
 
 use super::command_log::{CommandLog, Origin};
 use super::group::{Group, TERMINATION_GRACE};
+use super::pipes::Retained;
 use super::runner::DRAIN_BOUND;
 
 /// How long closing a repository waits for its invocations to be reaped: 3 s.
@@ -196,15 +197,15 @@ impl Registration {
 
     /// The process never started.
     pub(super) fn not_started(self) {
-        self.finish(CommandExit::NotStarted, false, String::new());
+        self.finish(CommandExit::NotStarted, false, Retained::default());
     }
 
     /// The invocation is over: one record, and out of the registry.
-    pub(super) fn finish(mut self, exit: CommandExit, cancelled: bool, stderr: String) {
+    pub(super) fn finish(mut self, exit: CommandExit, cancelled: bool, stderr: Retained) {
         self.book(exit, cancelled, stderr);
     }
 
-    fn book(&mut self, exit: CommandExit, cancelled: bool, stderr: String) {
+    fn book(&mut self, exit: CommandExit, cancelled: bool, stderr: Retained) {
         if self.finished {
             return;
         }
@@ -216,7 +217,8 @@ impl Registration {
             duration: self.clock.elapsed(),
             exit,
             cancelled,
-            stderr,
+            stderr: stderr.text,
+            stderr_cut: stderr.cut,
         };
         self.processes.leave(self.id.take(), self.origin, record);
     }
@@ -226,7 +228,7 @@ impl Drop for Registration {
     /// Never the path an invocation takes — each ends by [`Registration::finish`]
     /// — but if one ever did not, it is still recorded, as an end nobody saw.
     fn drop(&mut self) {
-        self.book(CommandExit::Unknown, false, String::new());
+        self.book(CommandExit::Unknown, false, Retained::default());
     }
 }
 

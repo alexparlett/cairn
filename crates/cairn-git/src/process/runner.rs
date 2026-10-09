@@ -68,7 +68,7 @@ use cairn_model::CommandExit;
 
 use super::cli::{GitDirs, Kind, Output, Read};
 use super::group::{Group, KillHandle, Spawner, ThreadStarter, os_thread};
-use super::pipes::{self, EVENTS_BOUND, Event, Records, Tail};
+use super::pipes::{self, EVENTS_BOUND, Event, Records, Retained, Tail};
 use super::registry::{Registration, exit_of};
 use crate::{Cancel, Error};
 
@@ -152,7 +152,7 @@ struct Ended {
     signalled_while_running: bool,
     asked_to_end: bool,
     stopped: bool,
-    tail: String,
+    tail: Retained,
 }
 
 impl Ended {
@@ -457,11 +457,12 @@ impl<K: Kind> Invocation<K> {
             return Err(Error::GitFailed {
                 arguments,
                 status,
-                stderr: ended.tail,
+                stderr_cut: ended.tail.cut.then_some(0).into_iter().collect(),
+                stderr: ended.tail.text,
                 present_locks: self.kind.present_locks(self.dirs.as_ref()),
             });
         }
-        Ok(ended.tail)
+        Ok(ended.tail.text)
     }
 }
 
@@ -582,7 +583,7 @@ impl Driver {
                 signalled_while_running: false,
                 asked_to_end: group.ending(),
                 stopped: false,
-                tail: String::new(),
+                tail: Retained::default(),
             };
             self.record(&ended);
             return ended;
@@ -1706,6 +1707,7 @@ mod tests {
                 arguments,
                 status,
                 stderr,
+                stderr_cut: _,
                 present_locks,
             }) => {
                 assert_eq!(arguments, "stub");

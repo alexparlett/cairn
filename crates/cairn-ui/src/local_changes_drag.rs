@@ -12,6 +12,11 @@
 //! **What ends a drag without a drop**: Escape; a press heard while a drag is on, which can
 //! only come once the drag's own release was made where the window could not hear it (the
 //! toolkit forgets the button as the pointer leaves the window); and the window losing focus.
+//! A press is heard anywhere over the lists and their filter by the platform's mouse-down, and
+//! elsewhere in the window by the global pointer-down — which a text field cancels as it takes
+//! its press, so a press on another view's text field (the sidebar's filter) after a lost
+//! release is not heard, and a release over the other list after it still drops: a residual,
+//! named in `docs/systems/local-changes.md`.
 
 use cairn_model::{ChangeList, RepoPath};
 use freya::prelude::*;
@@ -125,6 +130,14 @@ impl ListDrag {
         // A row's own press, heard first, arms afresh; any other press while a drag is on means
         // its release was lost.
         .on_global_pointer_down(move |_: Event<PointerEventData>| {
+            if drag.peek().is_dragging() {
+                drag.set(Drag::Idle);
+            }
+        })
+        // The same for a press on the filter field: a text field cancels the global down (and
+        // its own release) as it takes the press, but not the platform's mouse-down, which
+        // reaches this root before any pointer-down handler — a row's arming among them.
+        .on_mouse_down(move |_: Event<MouseEventData>| {
             if drag.peek().is_dragging() {
                 drag.set(Drag::Idle);
             }

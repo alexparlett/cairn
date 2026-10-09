@@ -8,8 +8,9 @@ use cairn_model::{
     ChangeList, ChangedEntry, ConflictKind, ConflictedEntry, LocalChanges, RepoPath, Similarity,
     StagedChange, StatusEntry, SubmoduleState, UnstagedChange, WorkingTreeStatus,
 };
+use cairn_ui::accelerators::HeldKeys;
 use cairn_ui::{
-    DETAIL_ROW_HEIGHT, FILTERING, GLYPH_SIZE, LIST_HEADER_HEIGHT, LocalChangesList,
+    DETAIL_ROW_HEIGHT, FILTERING, GLYPH_SIZE, LIST_HEADER_HEIGHT, ListSelection, LocalChangesList,
     NO_PATH_MATCHES, RefGlyph, SCROLLBAR_THICKNESS, STAGED_CAPTION, ShownFiles, UNSTAGED_CAPTION,
 };
 use freya::engine::prelude::{FontCollection, ImageInfo, raster_n32_premul};
@@ -30,6 +31,8 @@ struct Fixture {
     shown_paths: State<Option<usize>>,
     chosen: State<Option<(ChangeList, usize)>>,
     split: State<f32>,
+    selection: State<ListSelection>,
+    held: State<HeldKeys>,
 }
 
 type Heard = Rc<RefCell<Vec<(ChangeList, usize)>>>;
@@ -54,6 +57,8 @@ fn launch(changes: LocalChanges) -> (TestingRunner, Fixture, Heard) {
                     .shown_paths(*fixture.shown_paths.read())
                     .split(fixture.split)
                     .chosen(*fixture.chosen.read())
+                    .selection(fixture.selection)
+                    .held(fixture.held)
                     .on_choose(move |pressed: (ChangeList, usize)| {
                         hearing.borrow_mut().push(pressed);
                         chosen.set(Some(pressed));
@@ -71,6 +76,8 @@ fn launch(changes: LocalChanges) -> (TestingRunner, Fixture, Heard) {
                 shown_paths: State::create(None),
                 chosen: State::create(None),
                 split: State::create(cairn_ui::LISTS_SPLIT),
+                selection: State::create(ListSelection::default()),
+                held: State::create(HeldKeys::default()),
             })
         },
         1.,
@@ -590,6 +597,47 @@ fn a_status_of_50000_paths_builds_one_viewport_filtered_or_not() {
             .any(|(path, visible)| *visible && *path == last_unstaged),
         "the end of Unstaged is not its last row, {last_unstaged}"
     );
+}
+
+/// Phase 07's QA item 2: with every one of Unstaged's 50,000 paths selected — each row drawn
+/// selected by a search as it is built — and the window's held keys handed in, each list still
+/// builds one viewport, at the top and deep. Caught by: a selection drawn by walking it per
+/// row or per frame into building every row, or a held key that rebuilds the list whole.
+#[test]
+fn a_status_of_50000_paths_all_selected_builds_one_viewport() {
+    let changes = many(PATHS);
+    let every: Vec<RepoPath> = (0..PATHS)
+        .filter_map(|row| changes.get(ChangeList::Unstaged, row))
+        .map(|change| change.path.clone())
+        .collect();
+    let (mut test, fixture, _) = launch(changes);
+    let mut selection = fixture.selection;
+    let anchor = every[0].clone();
+    test.run_in(|| {
+        selection.set(ListSelection::spanning(
+            ChangeList::Unstaged,
+            anchor,
+            every.iter().cloned(),
+        ))
+    });
+    test.sync_and_update();
+    assert_eq!(fixture.selection.read().len(), PATHS);
+    let viewport = ((HEIGHT - 40. - 2. * LIST_HEADER_HEIGHT) / DETAIL_ROW_HEIGHT).ceil() as usize;
+    let within = |test: &TestingRunner, place: &str| {
+        let built = built(test).len();
+        assert!(
+            built >= viewport / 2 && built <= viewport + 6,
+            "{built} rows built, all selected, for a viewport of about {viewport} {place}"
+        );
+    };
+    within(&test, "at the top");
+    test.scroll((100., 120.), (0., -(PATHS as f64) * 12.));
+    test.sync_and_update();
+    within(&test, "deep");
+    let mut held = fixture.held;
+    test.run_in(|| held.set(HeldKeys::default()));
+    test.sync_and_update();
+    within(&test, "deep, the held keys written");
 }
 
 /// The user's report (2026-10-07): scrolled to the end, each list's last row sits above the

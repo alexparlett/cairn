@@ -398,8 +398,11 @@ fn a_drag_drops_on_the_other_list_only_and_survives_its_row() {
     drag(&mut test, a, (a.0, a.1 + 2. * DETAIL_ROW_HEIGHT as f64));
     test.release_cursor((a.0, a.1 + 2. * DETAIL_ROW_HEIGHT as f64));
     test.sync_and_update();
+    // Over Staged first, then released outside both lists, over the filter (QA item 9).
     let filter = (100., 15.);
-    drag(&mut test, a, filter);
+    drag(&mut test, a, into_staged);
+    test.move_cursor(filter);
+    test.sync_and_update();
     test.release_cursor(filter);
     test.sync_and_update();
     drag(&mut test, a, into_staged);
@@ -543,4 +546,51 @@ fn each_rows_menu_offers_forks_items_and_no_discard_where_none_is_allowed() {
     );
     // Both headings are still drawn under it all.
     assert!(texts(&test).iter().any(|t| t == UNSTAGED_CAPTION));
+}
+
+/// Phase 07's QA item 8: a drag ends without a drop when a press is heard while it is on — its
+/// own release was made where the window could not hear it — and when the window loses focus;
+/// the release over the other list after either drops nothing. Caught by: a drag kept through
+/// a press, or through focus lost, which drops on the next release over the other list.
+#[test]
+fn a_press_heard_mid_drag_or_focus_lost_ends_the_drag_without_a_drop() {
+    let (mut test, _, log) = launch(lists());
+    let staged_heading = at(&test, STAGED_CAPTION);
+    let into_staged = (
+        staged_heading.0 + 40.,
+        staged_heading.1 + DETAIL_ROW_HEIGHT as f64 * 2.,
+    );
+    let start = |test: &mut TestingRunner| {
+        let from = at(test, "a.rs");
+        test.press_cursor(from);
+        test.move_cursor((from.0, from.1 + 10.));
+        test.sync_and_update();
+        test.move_cursor(into_staged);
+        test.sync_and_update();
+    };
+    // A press outside every row while the drag is on: its release was lost.
+    start(&mut test);
+    test.press_cursor((100., 15.));
+    test.sync_and_update();
+    test.move_cursor(into_staged);
+    test.sync_and_update();
+    test.release_cursor(into_staged);
+    test.sync_and_update();
+    // The window losing focus mid-drag.
+    start(&mut test);
+    test.run_in(|| Platform::get().is_app_focused.set(false));
+    // The effect that hears focus runs on the frame after the next.
+    test.sync_and_update();
+    test.sync_and_update();
+    test.run_in(|| Platform::get().is_app_focused.set(true));
+    test.sync_and_update();
+    test.release_cursor(into_staged);
+    test.sync_and_update();
+    assert!(
+        heard(&log)
+            .iter()
+            .all(|heard| !matches!(heard, Heard::Intent(ListIntent::Drop { .. }))),
+        "a drag dropped after it ended: {:?}",
+        heard(&log)
+    );
 }

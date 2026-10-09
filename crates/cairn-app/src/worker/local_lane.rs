@@ -903,6 +903,10 @@ pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                 epoch,
                 cancel,
             } => {
+                // Superseded while it waited its turn: no `git` is started for it.
+                if cairn_git::Cancel::is_cancelled(&cancel) || serving.lane.is_closing() {
+                    continue;
+                }
                 let reading = Counting {
                     superseded: &cancel,
                     lane: serving.lane,

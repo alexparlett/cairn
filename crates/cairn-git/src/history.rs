@@ -101,7 +101,10 @@ fn open_stream<'repo>(
         };
         let refs = tips.len();
         let mut all = tips.to_vec();
-        all.extend(reflog_tips.into_iter().filter(|id| !tips.contains(id)));
+        // A set, not a scan of the tips per reflog id: thousands of each on a long reflog.
+        let mut seen: std::collections::HashSet<gix::hash::ObjectId> =
+            tips.iter().copied().collect();
+        all.extend(reflog_tips.into_iter().filter(|id| seen.insert(*id)));
         *tips = all.into();
         *marking = Marking::Read { refs };
     }

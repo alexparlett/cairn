@@ -1879,3 +1879,48 @@ fn create_branchs_reads_are_answered_on_the_lane() {
         other => panic!("{other:?}"),
     }
 }
+
+/// Phase 10's QA, item 13: a name's check superseded before its turn on the lane runs no `git`
+/// — only the newest of two asked behind a held write starts `check-ref-format`, and only its
+/// answer arrives. Caught by: a check that polls its cancel only once `git` is running.
+#[test]
+fn a_name_check_superseded_before_its_turn_runs_no_git() {
+    let fixture = with_files("cairn-lane-name-checks", &["a"]);
+    let body = format!(
+        "{}\n",
+        held("adds").replace("  exit 0", "  exec \"$REAL\" \"$@\"")
+    );
+    let checks = "  echo $$ >> \"$DIR/checks\"\n  exec \"$REAL\" \"$@\"".to_owned();
+    let stub = stub(&[("add", &body), ("check-ref-format", &checks)]);
+    let _released = ReleaseAll(&stub);
+    let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let (handle, mut updates, _reply) = boundary(&fixture.path, &stub, (&home, &runtime));
+    let staged_a = ask(&handle, stage(&["a"]));
+    until_pids(&stub, "adds", 1);
+    for name in ["first", "second"] {
+        handle.submit(Request::CheckBranchName {
+            name: name.to_owned(),
+        });
+    }
+    let _ = std::fs::write(stub.directory.join("release"), "");
+    let mut seen = until_ended(&mut updates, staged_a);
+    seen.extend(collect_until(&mut updates, |update| {
+        matches!(update, Update::BranchName { .. })
+    }));
+    let answered: Vec<&str> = seen
+        .iter()
+        .filter_map(|update| match update {
+            Update::BranchName { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(answered, ["second"]);
+    let after = after_the_repository_thread(&handle, &mut updates);
+    assert!(
+        !after
+            .iter()
+            .any(|update| matches!(update, Update::BranchName { .. })),
+        "{after:?}"
+    );
+    assert_eq!(pids(&stub, "checks").len(), 1, "a superseded check ran git");
+}

@@ -909,6 +909,49 @@ fn a_close_during_a_commit_waits_for_it_and_ends_nothing() {
     );
 }
 
+/// R6.1 and R10.5 through the lane (phase 05's QA item 8): a commit whose `pre-commit` hook
+/// fails ends `Failed` with the hook's words and commits nothing; asked again with
+/// `skip_hooks`, it commits past the hook. Caught by: the skip dropped, or passed when not
+/// asked for, between the window's write and the engine's `Hooks`.
+#[test]
+fn a_failing_hook_fails_a_commit_and_the_skip_commits_past_it() {
+    let fixture = to_commit("cairn-lane-hook-skip", &["a"]);
+    let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let (handle, mut updates, _reply) = real_boundary(&fixture.path, (&home, &runtime));
+    staged(&handle, &mut updates, &["a"]);
+    hook(
+        &fixture.path,
+        "pre-commit",
+        "echo 'lint failed' >&2\nexit 3\n",
+    );
+    let head = fixture.path.join(".git/refs/heads/main");
+
+    let refused = ask(&handle, commit());
+    let seen = until_ended(&mut updates, refused);
+    match ending_of(&seen, refused) {
+        (WriteEnding::Failed { message, .. }, ReadAgain::Everything) => {
+            assert!(message.contains("lint failed"), "{message}");
+        }
+        other => panic!("a failing hook's commit ended {other:?}"),
+    }
+    assert!(!head.exists(), "the commit was made past a failing hook");
+
+    let skipped = ask(
+        &handle,
+        LocalWrite::Commit {
+            message: "past the hook\n".to_owned(),
+            skip_hooks: true,
+        },
+    );
+    let seen = until_ended(&mut updates, skipped);
+    assert!(
+        matches!(ending_of(&seen, skipped).0, WriteEnding::Done(_)),
+        "the skip did not commit: {seen:?}"
+    );
+    assert!(head.is_file(), "the skip committed nothing");
+    drop(handle);
+}
+
 /// C11 and R4.9: a lock file left in the git directory — by a write a close gave up on, say
 /// — is named as the repository opens, and by the write that fails on it. Caught by: an open
 /// that lists nothing, or a failed write that drops the locks git failed on.

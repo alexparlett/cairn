@@ -256,6 +256,16 @@ impl<T: Copy + 'static, const SHIFT: u32> Chunks<T, SHIFT> {
             .and_then(|run| run.first().copied())
     }
 
+    /// Item `number`, to change in place: its chunk never moves, so nothing else does.
+    pub(crate) fn get_mut(&mut self, number: usize) -> Option<&mut T> {
+        let chunk = number >> SHIFT;
+        let offset = number & ((1 << SHIFT) - 1);
+        if number >= self.len {
+            return None;
+        }
+        self.runs.chunks.get_mut(chunk)?.get_mut(offset)
+    }
+
     pub(crate) fn bytes(&self) -> usize {
         self.runs.bytes()
     }
@@ -346,6 +356,25 @@ mod tests {
             "the run after a whole chunk's did not go back to the chunk being filled"
         );
         assert_eq!(runs.chunks[1].capacity(), 16);
+    }
+
+    /// Caught by: an item changed in place reading back under another number, a change
+    /// reaching past the chunk boundary, or a number past the end handed out.
+    #[test]
+    fn an_item_changed_in_place_is_that_item_alone() {
+        let mut items: Chunks<u32, 2> = Chunks::new();
+        for n in 0..10 {
+            items.push(n).unwrap();
+        }
+        for number in [0, 3, 4, 9] {
+            if let Some(item) = items.get_mut(number) {
+                *item += 100;
+            }
+        }
+        let read: Vec<u32> = (0..10).filter_map(|n| items.get(n)).collect();
+        assert_eq!(read, [100, 1, 2, 103, 104, 5, 6, 7, 8, 109]);
+        assert!(items.get_mut(10).is_none(), "a number past the end");
+        assert!(items.get_mut(usize::MAX).is_none());
     }
 
     /// Caught by: an address past 32 bits wrapping onto chunk zero.

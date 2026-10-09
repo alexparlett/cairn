@@ -76,6 +76,8 @@ const STASH: u8 = 1;
 const HEAD: u8 = 1 << 1;
 /// A row's flags: refs point at its commit ([`LabelledRow`] holds them).
 const LABELLED: u8 = 1 << 2;
+/// A row's flags: no ref reaches its commit, only a reflog's entry (staging-and-commit R11.1).
+const LOST: u8 = 1 << 3;
 /// No row: `HEAD`'s commit not held yet.
 const NO_ROW: u32 = u32::MAX;
 /// The end of a chain of authors whose names hash alike.
@@ -93,7 +95,8 @@ struct StoredRow {
     /// Saturating: only whether a commit has more than one parent is drawn.
     parents: u16,
     id: Oid,
-    /// [`STASH`], [`HEAD`] and [`LABELLED`]: the byte the row's other fields leave free.
+    /// [`STASH`], [`HEAD`], [`LABELLED`] and [`LOST`]: the byte the row's other fields leave
+    /// free.
     flags: u8,
 }
 
@@ -330,6 +333,9 @@ impl History {
             if row.head {
                 flags |= HEAD;
             }
+            if row.lost {
+                flags |= LOST;
+            }
             let page_labels = page
                 .labels
                 .get(row.labels.0..row.labels.1)
@@ -385,6 +391,16 @@ impl History {
             })?;
             if row.head {
                 self.head = number;
+            }
+        }
+        // Rows drawn as lost that a ref reaches after all: the page names each with its
+        // commit, so a row of another history, or another row, is never changed.
+        for &(number, id) in &page.reached {
+            if let Some(stored) = self.rows.get_mut(number)
+                && stored.id == id
+                && stored.flags & STASH == 0
+            {
+                stored.flags &= !LOST;
             }
         }
         Ok(())
@@ -623,6 +639,12 @@ impl<'h> HistoryRow<'h> {
         })
     }
 
+    /// Whether no ref reaches the row's commit — only a reflog's entry does — so Show Lost
+    /// Commits draws it dimmed (staging-and-commit R11.1). Never a stash's row.
+    pub fn is_lost(&self) -> bool {
+        self.row.flags & LOST != 0
+    }
+
     /// The refs pointing at the row's commit, and whether it is `HEAD`'s (PRD R4.3), from
     /// the snapshot the walk began from. A stash's row carries none: `refs/stash` labels no
     /// row.
@@ -702,6 +724,60 @@ mod tests {
             .map(|label| (label.name.to_owned(), label.kind, label.current))
             .collect();
         (labels.is_head(), read)
+    }
+
+    /// Show Lost Commits (staging-and-commit R11.1): a row pushed as lost reads back lost, its
+    /// content a commit's as any row's; every other kind of row does not; and a later page's
+    /// `reached` clears exactly the row it names, by number and commit — a page naming
+    /// another commit at that number, a stash's row or a number past the end changes
+    /// nothing, and the rows around it keep what they were. Caught by: the flag dropped or
+    /// set on another row, a correction applied by number alone, or one clearing a
+    /// neighbour.
+    #[test]
+    fn a_lost_row_reads_back_lost_until_a_page_says_a_ref_reaches_it() {
+        let mut history = History::new();
+        let mut first = RowsPage::new();
+        first.push_labelled(
+            GraphRow::new(oid(1), Lane::new(0), Vec::new()),
+            commit("tip", "Ada", 1),
+            true,
+            &[label("refs/heads/main", crate::RefKind::LocalBranch, true)],
+        );
+        first.push_lost(
+            GraphRow::new(oid(2), Lane::new(1), Vec::new()),
+            commit("amended away", "Ada", 1),
+        );
+        first.push_lost(
+            GraphRow::new(oid(3), Lane::new(1), Vec::new()),
+            commit("reset away", "Grace", 1),
+        );
+        assert!(first.is_lost(1) && first.is_lost(2) && !first.is_lost(0));
+        history.append(first).unwrap();
+        page_stash(&mut history, oid(9), 0, oid(2), "WIP on lost");
+        let lost =
+            |history: &History| -> Vec<bool> { history.rows().map(|row| row.is_lost()).collect() };
+        assert_eq!(lost(&history), [false, true, true, false]);
+        assert_eq!(summary(history.row(1).unwrap()).summary, "amended away");
+        assert_eq!(summary(history.row(2).unwrap()).author_name, "Grace");
+
+        // Another commit at row 1, the stash's row, and a row past the end: nothing changes.
+        let mut wrong = RowsPage::new();
+        wrong.reached(1, oid(3));
+        wrong.reached(3, oid(9));
+        wrong.reached(40, oid(2));
+        history.append(wrong).unwrap();
+        assert_eq!(lost(&history), [false, true, true, false]);
+
+        // Row 2 reached, with a row of its own on the same page: row 1 stays lost.
+        let mut next = RowsPage::new();
+        next.push(
+            GraphRow::new(oid(4), Lane::new(0), Vec::new()),
+            commit("parent", "Ada", 1),
+        );
+        next.reached(2, oid(3));
+        history.append(next).unwrap();
+        assert_eq!(lost(&history), [false, true, false, false, false]);
+        assert_eq!(history.len(), 5);
     }
 
     /// Stashes on pages of their own and among commits: each reads back as its stash —

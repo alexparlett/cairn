@@ -12,16 +12,26 @@
 //! its full id, and the `--` after it says it is no path. Checking out is this packet's only
 //! through Create Branch; checking out a branch is branch-ops'.
 //!
-//! What the seal does not count: an ignored file at a path the commit holds a file at, which
-//! git overwrites on any checkout, kept or not, as the user's own `git checkout` does; and a
-//! submodule's or a conflicted path's state, which the discard refuses before any prompt.
+//! The untracked files are read whatever `status.showUntrackedFiles` says
+//! (`reads::untracked_paths`), and every proper prefix of each is looked up in the commit's
+//! tree: a file the tree holds at the path is overwritten; untracked files under a directory
+//! the tree holds a file at are deleted with that directory; a repository nested in the working
+//! tree where the tree holds anything is deleted whole — each named in the `Consequence` with
+//! what is under it (phase 10's QA, items 1-3).
+//!
+//! What the seal does not count: an ignored file or directory at a path the commit holds a
+//! file at, which git deletes on any checkout, kept or discarding, as the user's own `git
+//! checkout` does — a whole ignored directory included; and a submodule's or a conflicted
+//! path's state, which the discard refuses before any prompt. A directory or nested repository
+//! named lost is compared again by the count and the bytes of what is under it, so an edit that
+//! keeps a file's size inside it is not seen by the re-check.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 
 use cairn_model::{
-    AskpassToken, ChangeLoss, ChangedKind, Confirmed, Consequence, LostChange, Oid, RepoPath,
-    StagedChange, StatusEntry, UnstagedChange, WorkingTreeStatus,
+    AskpassToken, ChangeLoss, ChangedKind, Confirmed, Consequence, LostChange, Oid, RemovedKind,
+    RepoPath, StagedChange, StatusEntry, UnstagedChange, WorkingTreeStatus,
 };
 
 use super::fresh_state::{IndexNow, IndexSide, on_disk};
@@ -91,7 +101,6 @@ pub fn checkout_discarding_consequence(
     let target = target_tree(repo, at)?;
     // By path, so the prompt and the re-check read them in one order.
     let mut kinds: BTreeMap<RepoPath, ChangedKind> = BTreeMap::new();
-    let mut untracked: Vec<RepoPath> = Vec::new();
     for entry in entries {
         match entry {
             StatusEntry::Conflicted(conflict) => {
@@ -111,7 +120,8 @@ pub fn checkout_discarding_consequence(
                     kinds.entry(path).or_insert(kind);
                 }
             }
-            StatusEntry::Untracked(path) => untracked.push(path),
+            // Read again below, whatever the display setting hides.
+            StatusEntry::Untracked(_) => {}
         }
     }
     if kinds.is_empty() {
@@ -147,27 +157,10 @@ pub fn checkout_discarding_consequence(
             path,
         });
     }
-    let mut kept_untracked = 0usize;
-    untracked.sort();
-    for path in untracked {
-        let in_the_way = !path.as_bytes().ends_with(b"/") && holds(&target, &path)?;
-        if !in_the_way {
-            kept_untracked += 1;
-            continue;
-        }
-        let disk = on_disk(repo, &path)?;
-        match (disk.id(), disk.bytes()) {
-            (Some(id), Some(bytes)) => changes.push(LostChange {
-                path,
-                loss: ChangeLoss::Overwritten {
-                    working_tree: *id,
-                    executable: disk.executable(),
-                    bytes,
-                },
-            }),
-            _ => kept_untracked += 1,
-        }
-    }
+    let (lost, kept_untracked) = untracked_losses(git, repo, &target, cancel)?;
+    changes.extend(lost);
+    // By path, a tracked change before an untracked loss at the same path.
+    changes.sort_by(|one, other| one.path.cmp(&other.path));
     Ok(Consequence::CheckoutDiscarding {
         branch: branch.to_owned(),
         at,
@@ -320,14 +313,152 @@ fn target_tree(repo: &Repository, at: Oid) -> Result<gix::Tree<'_>, Error> {
         .map_err(|source| read(Box::new(source)))
 }
 
-/// Whether `tree` holds anything at `path`.
-fn holds(tree: &gix::Tree<'_>, path: &RepoPath) -> Result<bool, Error> {
-    tree.lookup_entry(path.as_bytes().split(|byte| *byte == b'/'))
-        .map(|entry| entry.is_some())
+/// What `tree` holds at `parts`: nothing, a tree, or something else (a file, a link, a
+/// submodule).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Held {
+    Nothing,
+    Tree,
+    File,
+}
+
+fn held(tree: &gix::Tree<'_>, parts: &[&[u8]]) -> Result<Held, Error> {
+    let entry = tree
+        .lookup_entry(parts.iter().copied())
         .map_err(|source| Error::ReadCommit {
             id: tree.id.to_string(),
             source: Box::new(source),
-        })
+        })?;
+    Ok(match entry {
+        None => Held::Nothing,
+        Some(entry) if entry.mode().is_tree() => Held::Tree,
+        Some(_) => Held::File,
+    })
+}
+
+/// Every untracked path `git checkout -f` of `tree` would lose, and how many it keeps (phase
+/// 10's QA, items 1-3): the untracked paths read whatever `status.showUntrackedFiles` says; a
+/// file at a path the tree holds is overwritten; everything under a directory the tree holds a
+/// file at — any directory on the way, the deepest file-held one taken — is deleted with that
+/// directory, named once; and a nested repository at, or under, a path the tree holds is
+/// deleted whole, its own `.git` among it.
+fn untracked_losses(
+    git: &GitBinary,
+    repo: &Repository,
+    tree: &gix::Tree<'_>,
+    cancel: &impl Cancel,
+) -> Result<(Vec<LostChange>, usize), Error> {
+    let mut overwritten = Vec::new();
+    // By path, and whether it is a nested repository rather than a directory.
+    let mut removed: BTreeMap<(RepoPath, bool), (usize, u64)> = BTreeMap::new();
+    let mut kept = 0usize;
+    for path in crate::reads::untracked_paths(git, repo, cancel)? {
+        if cancel.is_cancelled() {
+            return Err(Error::ConsequenceCancelled);
+        }
+        let nested = path.as_bytes().ends_with(b"/");
+        let trimmed = path
+            .as_bytes()
+            .strip_suffix(b"/")
+            .unwrap_or(path.as_bytes());
+        let parts: Vec<&[u8]> = trimmed.split(|byte| *byte == b'/').collect();
+        // The first directory on the way the tree holds a file at.
+        let mut blocked_at = None;
+        let mut whole = Held::Nothing;
+        for end in 1..=parts.len() {
+            let here = held(tree, parts.get(..end).unwrap_or_default())?;
+            if end < parts.len() {
+                match here {
+                    Held::Tree => continue,
+                    Held::File => blocked_at = Some(end),
+                    Held::Nothing => {}
+                }
+                break;
+            }
+            whole = here;
+        }
+        let (count, bytes) = if nested {
+            content_under(repo, trimmed)?
+        } else {
+            let disk = on_disk(repo, &RepoPath::new(trimmed.to_vec()))?;
+            (1, disk.bytes().unwrap_or(0))
+        };
+        match (blocked_at, nested, whole) {
+            (Some(end), _, _) => {
+                let directory = RepoPath::new(parts.get(..end).unwrap_or_default().join(&b'/'));
+                let tally = removed.entry((directory, false)).or_default();
+                tally.0 += count;
+                tally.1 = tally.1.saturating_add(bytes);
+            }
+            (None, true, Held::Tree | Held::File) => {
+                let tally = removed
+                    .entry((RepoPath::new(trimmed.to_vec()), true))
+                    .or_default();
+                tally.0 += count;
+                tally.1 = tally.1.saturating_add(bytes);
+            }
+            (None, false, Held::Tree | Held::File) => {
+                let disk = on_disk(repo, &path)?;
+                match (disk.id(), disk.bytes()) {
+                    (Some(id), Some(bytes)) => overwritten.push(LostChange {
+                        path,
+                        loss: ChangeLoss::Overwritten {
+                            working_tree: *id,
+                            executable: disk.executable(),
+                            bytes,
+                        },
+                    }),
+                    _ => kept += 1,
+                }
+            }
+            (None, _, Held::Nothing) => kept += 1,
+        }
+    }
+    let mut lost = overwritten;
+    lost.extend(
+        removed
+            .into_iter()
+            .map(|((path, repository), (files, bytes))| LostChange {
+                path,
+                loss: ChangeLoss::Removed {
+                    kind: if repository {
+                        RemovedKind::Repository
+                    } else {
+                        RemovedKind::Directory
+                    },
+                    files,
+                    bytes,
+                },
+            }),
+    );
+    Ok((lost, kept))
+}
+
+/// The files under the working tree's `relative` directory and their bytes, links not
+/// followed: what a nested repository deleted whole holds.
+fn content_under(repo: &Repository, relative: &[u8]) -> Result<(usize, u64), Error> {
+    let top = repo.workdir().unwrap_or(repo.git_dir());
+    let root = top.join(gix::path::from_byte_slice(relative));
+    let mut pending = vec![root.clone()];
+    let (mut files, mut bytes) = (0usize, 0u64);
+    while let Some(directory) = pending.pop() {
+        let entries = std::fs::read_dir(&directory).map_err(|source| Error::ReadWorkingTree {
+            path: String::from_utf8_lossy(relative).into_owned(),
+            source,
+        })?;
+        for entry in entries.flatten() {
+            let Ok(metadata) = entry.path().symlink_metadata() else {
+                continue;
+            };
+            if metadata.is_dir() {
+                pending.push(entry.path());
+            } else {
+                files += 1;
+                bytes = bytes.saturating_add(metadata.len());
+            }
+        }
+    }
+    Ok((files, bytes))
 }
 
 /// The first thing `now` differs from `confirmed` in, named for the refusal: a path, or

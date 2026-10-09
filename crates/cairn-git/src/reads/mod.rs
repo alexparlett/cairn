@@ -35,7 +35,8 @@
 //! Branch's name, [`branch_name`], `git check-ref-format --branch`, because whether git takes a
 //! name as a branch's is git's rule to apply (staging-and-commit R11.3), with
 //! [`change_lines`] beside it, `git diff-index --cached --numstat` and `git diff-files
-//! --numstat`, the lines Create Branch's discard counts.
+//! --numstat`, the lines Create Branch's discard counts, and [`untracked_paths`], `git ls-files
+//! --others --exclude-standard`, every untracked path whatever the display setting says.
 //!
 //! # What a read may run
 //!
@@ -222,6 +223,7 @@ mod hooks_path;
 mod patches;
 mod stash_changes;
 mod status;
+mod untracked;
 mod working_tree;
 
 pub(crate) use attributes::{DiffAttribute, diff_attributes};
@@ -236,6 +238,7 @@ pub(crate) use patches::parse as parse_patches;
 pub(crate) use patches::{Algorithm, FilePatch, PatchQuery, PatchText, Reading, Scope, patches};
 pub(crate) use stash_changes::stash_changes;
 pub(crate) use status::status;
+pub(crate) use untracked::untracked_paths;
 pub(crate) use working_tree::{
     Paired, Side, WorkingTreeAnswer, WorkingTreeQuery, staged_pairing, staged_since,
     work_tree_relative, working_tree_patch,

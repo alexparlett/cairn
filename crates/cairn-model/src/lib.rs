@@ -53,6 +53,7 @@ pub use commit_hooks::CommitHooks;
 pub use confirm::Confirmed;
 pub use consequence::{
     ChangeLoss, ChangedKind, Consequence, DiscardedFile, FileLoss, LostChange, Publication, Reflog,
+    RemovedKind,
 };
 pub use diff_content::{DiffContent, DiffLimits, FileDiff, SizeLimit};
 pub use diff_function_context::FunctionContext;

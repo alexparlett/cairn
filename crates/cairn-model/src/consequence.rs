@@ -148,6 +148,23 @@ pub enum ChangeLoss {
         executable: bool,
         bytes: u64,
     },
+    /// Untracked content at a path the checked-out commit holds a file at — the path itself,
+    /// or a directory on the way to it — which git's `checkout -f` deletes whole with
+    /// everything under it: the files counted, and their bytes.
+    Removed {
+        kind: RemovedKind,
+        files: usize,
+        bytes: u64,
+    },
+}
+
+/// What untracked content a checkout that discards deletes whole.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemovedKind {
+    /// A directory of untracked files.
+    Directory,
+    /// A repository nested in the working tree, its own `.git` among what is deleted.
+    Repository,
 }
 
 /// How a tracked path differs from `HEAD`, for the prompt's words.
@@ -576,6 +593,8 @@ fn checkout_discarding_prompt(
     let (mut modified, mut added) = (Lines::default(), Lines::default());
     let mut deleted = 0usize;
     let (mut overwritten, mut overwritten_bytes) = (0usize, 0u64);
+    // (directories, files under them, bytes), and the same for nested repositories.
+    let (mut directories, mut repositories) = ((0usize, 0usize, 0u64), (0usize, 0usize, 0u64));
     for change in changes {
         match &change.loss {
             ChangeLoss::Changed {
@@ -603,6 +622,15 @@ fn checkout_discarding_prompt(
             } => {
                 overwritten += 1;
                 overwritten_bytes = overwritten_bytes.saturating_add(*bytes);
+            }
+            ChangeLoss::Removed { kind, files, bytes } => {
+                let tally = match kind {
+                    RemovedKind::Directory => &mut directories,
+                    RemovedKind::Repository => &mut repositories,
+                };
+                tally.0 += 1;
+                tally.1 += files;
+                tally.2 = tally.2.saturating_add(*bytes);
             }
         }
     }
@@ -636,7 +664,25 @@ fn checkout_discarding_prompt(
             size(overwritten_bytes)
         ));
     }
-    let kept = match (kept_untracked, overwritten) {
+    // Interim words, awaiting the user's (phase 10's QA, held item A).
+    if directories.0 > 0 {
+        parts.push(format!(
+            "{} in the way removed ({}, {})",
+            counted(directories.0, "directory", "directories"),
+            counted(directories.1, "untracked file", "untracked files"),
+            size(directories.2)
+        ));
+    }
+    if repositories.0 > 0 {
+        parts.push(format!(
+            "{} removed ({}, {})",
+            counted(repositories.0, "nested repository", "nested repositories"),
+            counted(repositories.1, "file", "files"),
+            size(repositories.2)
+        ));
+    }
+    let lost_untracked = overwritten + directories.0 + repositories.0;
+    let kept = match (kept_untracked, lost_untracked) {
         (0, _) => "",
         (_, 0) => " Untracked files are kept.",
         _ => " Other untracked files are kept.",
@@ -918,6 +964,40 @@ mod tests {
         );
         assert!(!kept.needs_force_push() && kept.replaces().is_none());
         assert_eq!(kept.amended(), None);
+    }
+
+    /// Phase 10's QA (items 1-2): a directory of untracked files, or a nested repository, that
+    /// the checkout deletes whole is named lost with what is under it, and never counted among
+    /// the untracked files kept. The words are interim, awaiting the user (held item A).
+    /// Caught by: such a loss left out of the prompt, or "Untracked files are kept." said when
+    /// every untracked file is lost.
+    #[test]
+    fn a_directory_or_a_nested_repository_in_the_way_is_named_lost() {
+        let removed = |path: &str, kind: RemovedKind, files: usize, bytes: u64| LostChange {
+            path: RepoPath::from(path),
+            loss: ChangeLoss::Removed { kind, files, bytes },
+        };
+        let consequence = checkout(
+            vec![
+                lost("f", ChangedKind::Modified, Some(1)),
+                removed("d", RemovedKind::Directory, 2, 15),
+                removed("nested", RemovedKind::Repository, 30, 4096),
+            ],
+            0,
+        );
+        assert_eq!(
+            consequence.prompt(),
+            "Do you want to create branch topic at abababa, check it out and discard the \
+             changes in 3 files (f, d and nested)? 1 modified (1 line), 1 directory in the way \
+             removed (2 untracked files, 15 bytes), 1 nested repository removed (30 files, 4.0 \
+             KiB). You can't undo this action."
+        );
+        let some_kept = checkout(vec![removed("d", RemovedKind::Directory, 1, 3)], 2);
+        assert!(
+            some_kept
+                .prompt()
+                .contains("Other untracked files are kept.")
+        );
     }
 
     fn deleted(path: &str) -> DiscardedFile {

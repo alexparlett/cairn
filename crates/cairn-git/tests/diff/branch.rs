@@ -287,7 +287,7 @@ fn a_discarding_checkout_names_every_loss_and_then_loses_exactly_those() {
         .map(|change| {
             let kind = match &change.loss {
                 ChangeLoss::Changed { kind, .. } => Some(*kind),
-                ChangeLoss::Overwritten { .. } => None,
+                ChangeLoss::Overwritten { .. } | ChangeLoss::Removed { .. } => None,
             };
             (change.path.to_string(), kind)
         })
@@ -316,7 +316,7 @@ fn a_discarding_checkout_names_every_loss_and_then_loses_exactly_those() {
         .iter()
         .map(|change| match &change.loss {
             ChangeLoss::Changed { lines, .. } => lines.unwrap_or_default() as u64,
-            ChangeLoss::Overwritten { .. } => 0,
+            ChangeLoss::Overwritten { .. } | ChangeLoss::Removed { .. } => 0,
         })
         .sum();
     assert_eq!(ours, gits_lines, "lines counted as git counts them");
@@ -476,4 +476,179 @@ fn a_discarding_checkout_is_refused_where_it_cannot_count_the_loss() {
             ..
         })
     ));
+}
+
+/// What a discarding checkout's consequence names, by path: each loss as a word, and the
+/// untracked files it says are kept.
+fn losses(consequence: &Consequence) -> (Vec<(String, String)>, usize) {
+    let Consequence::CheckoutDiscarding {
+        changes,
+        kept_untracked,
+        ..
+    } = consequence
+    else {
+        panic!("{consequence:?}");
+    };
+    let named = changes
+        .iter()
+        .map(|change| {
+            let word = match &change.loss {
+                ChangeLoss::Changed { kind, .. } => format!("{kind:?}"),
+                ChangeLoss::Overwritten { .. } => "overwritten".to_owned(),
+                ChangeLoss::Removed {
+                    kind,
+                    files,
+                    bytes: _,
+                } => format!("removed {kind:?} of {files}"),
+            };
+            (change.path.to_string(), word)
+        })
+        .collect();
+    (named, *kept_untracked)
+}
+
+/// QA 1 (phase 10, CRITICAL): untracked files under a directory where the checked-out commit
+/// holds a FILE are deleted by `git checkout -f` with the directory; the consequence names the
+/// directory and what is in it, and never says they are kept — and the variant where a tracked
+/// file was replaced by an untracked directory. Caught by: only an untracked file's own path
+/// looked up in the commit's tree (gix stops at the file on the way).
+#[test]
+fn untracked_files_under_a_directory_the_commit_holds_as_a_file_are_named_lost() {
+    let repo = Repo::new("dir-in-the-way");
+    repo.write("d", b"a file\n");
+    repo.write("f", b"1\n");
+    let older = repo.commit("d is a file");
+    repo.git(&["rm", "-q", "d"]);
+    repo.commit("d gone");
+    std::fs::create_dir_all(repo.path().join("d/e")).unwrap_or_default();
+    repo.write("d/n.txt", b"mine\n");
+    repo.write("d/e/m.txt", b"also mine\n");
+    repo.write("f", b"edited\n");
+    let consequence = ok(
+        ops::checkout_discarding_consequence(
+            git(),
+            &engine(&repo),
+            "b",
+            older,
+            &CancelSignal::new(),
+        ),
+        "the consequence",
+    );
+    let (named, kept) = losses(&consequence);
+    assert_eq!(
+        named,
+        [
+            ("d".to_owned(), "removed Directory of 2".to_owned()),
+            ("f".to_owned(), "Modified".to_owned()),
+        ]
+    );
+    assert_eq!(kept, 0, "{}", consequence.prompt());
+    assert!(
+        !consequence.prompt().contains("kept"),
+        "{}",
+        consequence.prompt()
+    );
+    ok(
+        ops::create_branch_discarding(git(), &engine(&repo), Confirmed::by_user(consequence), None),
+        "the checkout",
+    );
+    assert!(
+        !repo.path().join("d/n.txt").exists(),
+        "git kept what was named lost"
+    );
+
+    // A tracked file replaced by an untracked directory, the checkout of HEAD itself.
+    let repo = Repo::new("file-replaced-by-dir");
+    repo.write("x", b"tracked\n");
+    let head = repo.commit("x");
+    std::fs::remove_file(repo.path().join("x")).unwrap_or_default();
+    std::fs::create_dir_all(repo.path().join("x")).unwrap_or_default();
+    repo.write("x/f", b"untracked\n");
+    let consequence = ok(
+        ops::checkout_discarding_consequence(
+            git(),
+            &engine(&repo),
+            "b",
+            head,
+            &CancelSignal::new(),
+        ),
+        "the consequence",
+    );
+    let (named, kept) = losses(&consequence);
+    assert_eq!(
+        named,
+        [
+            ("x".to_owned(), "Deleted".to_owned()),
+            ("x".to_owned(), "removed Directory of 1".to_owned()),
+        ]
+    );
+    assert_eq!(kept, 0);
+}
+
+/// QA 2 (phase 10, CRITICAL): a nested repository where the commit holds a file is deleted
+/// whole — its work and its own `.git` — so the consequence names it as a repository lost.
+/// Caught by: a status record ending in `/` counted as kept.
+#[test]
+fn a_nested_repository_the_commit_holds_a_file_at_is_named_lost() {
+    let repo = Repo::new("nested-in-the-way");
+    repo.write("nested", b"a file\n");
+    repo.write("f", b"1\n");
+    let older = repo.commit("nested is a file");
+    repo.git(&["rm", "-q", "nested"]);
+    repo.commit("nested gone");
+    let inner = Repo::borrowed(&repo.path().join("nested"));
+    std::fs::create_dir_all(inner.path()).unwrap_or_default();
+    inner.git(&["init", "--quiet", "."]);
+    inner.write("work.txt", b"my work\n");
+    repo.write("f", b"edited\n");
+    let consequence = ok(
+        ops::checkout_discarding_consequence(
+            git(),
+            &engine(&repo),
+            "b",
+            older,
+            &CancelSignal::new(),
+        ),
+        "the consequence",
+    );
+    let (named, kept) = losses(&consequence);
+    assert!(
+        named
+            .iter()
+            .any(|(path, word)| path == "nested" && word.starts_with("removed Repository")),
+        "{named:?}"
+    );
+    assert_eq!(kept, 0, "{}", consequence.prompt());
+}
+
+/// QA 3 (phase 10, CRITICAL): with `status.showUntrackedFiles=no` an untracked file the commit
+/// holds is still named overwritten: the untracked files are read whatever the display setting
+/// says. Caught by: the untracked list taken from a status that honours `no`.
+#[test]
+fn an_untracked_file_in_the_way_is_named_whatever_status_shows() {
+    let repo = Repo::new("untracked-hidden");
+    repo.write("u.txt", b"committed\n");
+    repo.write("f", b"1\n");
+    let older = repo.commit("u.txt");
+    repo.git(&["rm", "-q", "u.txt"]);
+    repo.commit("u.txt gone");
+    repo.config("status.showUntrackedFiles", "no");
+    repo.write("u.txt", b"my untracked work\n");
+    repo.write("f", b"edited\n");
+    let consequence = ok(
+        ops::checkout_discarding_consequence(
+            git(),
+            &engine(&repo),
+            "b",
+            older,
+            &CancelSignal::new(),
+        ),
+        "the consequence",
+    );
+    let (named, _) = losses(&consequence);
+    assert!(
+        named.contains(&("u.txt".to_owned(), "overwritten".to_owned())),
+        "{named:?}: {}",
+        consequence.prompt()
+    );
 }

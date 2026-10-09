@@ -5001,6 +5001,7 @@ const CONSEQUENCE_TYPES: &[&str] = &[
     "LostChange",
     "ChangeLoss",
     "ChangedKind",
+    "RemovedKind",
 ];
 
 /// Traits that would duplicate the token or build one without the constructor.

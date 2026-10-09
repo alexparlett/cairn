@@ -1245,33 +1245,68 @@ fn writes_check() {
         ms(slowest_landing)
     );
 
-    // A hook running: a commit whose `pre-commit` writes a line every 50 ms for two seconds,
-    // every frame timed while it runs and as its ending lands.
+    // A hook running, every frame timed while it runs and as its ending lands: one that writes
+    // a line every 50 ms for two seconds; one that writes 20,000 lines as fast as it can, each
+    // flushed; and one that writes five lines of 200 KiB with no newline in them — each with the
+    // activity popover closed, then open on the running commit (phase 11's QA, app item 4).
     let hook = root.join(".git/hooks/pre-commit");
-    write(
-        &hook,
-        b"#!/bin/sh\ni=0\nwhile [ $i -lt 40 ]; do echo \"hook line $i\"; i=$((i+1)); sleep 0.05; done\n",
-    );
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))
-            .unwrap_or_else(|e| panic!("{e}"));
+    let hooks: [(&str, &[u8]); 3] = [
+        (
+            "a line every 50 ms for 2 s",
+            b"#!/bin/sh\ni=0\nwhile [ $i -lt 40 ]; do echo \"hook line $i\"; i=$((i+1)); sleep 0.05; done\n",
+        ),
+        (
+            "20,000 lines, each flushed",
+            b"#!/bin/sh\ni=0\nwhile [ $i -lt 20000 ]; do echo \"hook line $i of a hook that says a lot\"; i=$((i+1)); done\n",
+        ),
+        (
+            "five lines of 200 KiB",
+            b"#!/bin/sh\nfor i in 1 2 3 4 5; do head -c 204800 /dev/zero | tr '\\0' x; echo; done\n",
+        ),
+    ];
+    let mut worst_hook_frame = Duration::ZERO;
+    for (what, script) in hooks {
+        for open in [false, true] {
+            write(&hook, script);
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))
+                    .unwrap_or_else(|e| panic!("{e}"));
+            }
+            write(&head_file, format!("{SUBJECT}\n").as_bytes());
+            set_up(&mut harness, &staged_index, &edited, staged);
+            harness.handle.submit(Request::CommitReads);
+            let _ = harness.pump(Stimulus::Nothing, 3, |_| true);
+            harness
+                .test
+                .run_in(|| subject.set("A commit past a running hook".to_owned()));
+            let submit: Rc<dyn Fn(Request)> = Rc::new(harness.submit());
+            let view = harness.view;
+            harness
+                .test
+                .run_in(|| crate::commit_box_pane::pressed(view, Some(submit)));
+            if open {
+                // Opened once the commit is running: its entry is the newest, and selected.
+                let _ = harness.pump(Stimulus::Nothing, 0, |view| view.writes.peek().is_running());
+                let mut activity = harness.view.activity;
+                harness.test.run_in(|| activity.write().open());
+            }
+            let running = harness.pump(Stimulus::Nothing, 5, move |view| {
+                rows(view, staged) == 0 && !view.writes.peek().is_running()
+            });
+            running.report(&format!(
+                "a commit while its pre-commit hook writes {what}, the activity popover {}",
+                if open { "open on it" } else { "closed" }
+            ));
+            worst_hook_frame = worst_hook_frame.max(running.slowest.0);
+            let mut activity = harness.view.activity;
+            harness.test.run_in(|| activity.write().close());
+        }
     }
-    set_up(&mut harness, &staged_index, &edited, staged);
-    harness.handle.submit(Request::CommitReads);
-    let _ = harness.pump(Stimulus::Nothing, 3, |_| true);
-    harness
-        .test
-        .run_in(|| subject.set("A commit past a running hook".to_owned()));
-    let submit: Rc<dyn Fn(Request)> = Rc::new(harness.submit());
-    let view = harness.view;
-    harness
-        .test
-        .run_in(|| crate::commit_box_pane::pressed(view, Some(submit)));
-    let running = harness.pump(Stimulus::Nothing, 5, move |view| {
-        rows(view, staged) == 0 && !view.writes.peek().is_running()
-    });
-    running.report("a commit while its pre-commit hook writes a line every 50 ms for 2 s");
+    eprintln!(
+        "the slowest frame while any hook ran: {:.2} ms\n",
+        ms(worst_hook_frame)
+    );
     std::fs::remove_file(&hook).unwrap_or_else(|e| panic!("{e}"));
     write(&head_file, format!("{SUBJECT}\n").as_bytes());
 

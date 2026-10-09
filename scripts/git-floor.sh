@@ -66,7 +66,7 @@ if [ -z "$floor_minor" ] || [ "2.$floor_minor" != "${first_version%.*}" ]; then
 fi
 
 # The filtered runs, as `<cargo target>|<test filters>|<floor>`. Each floor sits one under
-# the run's count when it was set (141, 200, 18 and 4), so a filter that silently matches less
+# the run's count when it was set (141, 201, 18 and 4), so a filter that silently matches less
 # fails; raise a floor as its run gains tests. `ops::` is the write verbs' argv tests, whose
 # recording `git` runs the git in use (staging-and-commit phase 03), beside fetch's stubs;
 # `--test diff_engine` holds the write verbs' effects too (`tests/diff/write_verbs.rs`, and
@@ -80,7 +80,7 @@ fi
 # and whose oracle that git reads.
 RUNS=(
   "--lib|diff:: reads:: ops::|140"
-  "--test diff_engine||199"
+  "--test diff_engine||200"
   "--test status||17"
   "--test lost_commits||3"
 )

@@ -7,7 +7,7 @@
 //! same-user processes — is in the crate docs; this module implements the
 //! permissions that model rests on and refuses to serve if they did not take.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::io::{self, Read};
@@ -108,10 +108,11 @@ impl std::error::Error for Error {
     }
 }
 
-/// The tokens currently good for a prompt.
-type Live = Arc<Mutex<BTreeSet<AskpassToken>>>;
+/// The tokens currently good for a prompt, each with the name of the operation it was issued
+/// for, when it was given one.
+type Live = Arc<Mutex<BTreeMap<AskpassToken, Option<String>>>>;
 
-fn live(tokens: &Live) -> std::sync::MutexGuard<'_, BTreeSet<AskpassToken>> {
+fn live(tokens: &Live) -> std::sync::MutexGuard<'_, BTreeMap<AskpassToken, Option<String>>> {
     tokens.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -179,7 +180,7 @@ impl Channel {
             directory,
             path,
             listener,
-            tokens: Arc::new(Mutex::new(BTreeSet::new())),
+            tokens: Arc::new(Mutex::new(BTreeMap::new())),
         })
     }
 
@@ -189,10 +190,22 @@ impl Channel {
     }
 
     /// Issues the token for one git invocation. Prompts presenting it are
-    /// served until the returned [`Operation`] is dropped.
+    /// served until the returned [`Operation`] is dropped; they name no
+    /// operation ([`Prompt::operation`]).
     pub fn begin(&self) -> Result<Operation, Error> {
+        self.issue(None)
+    }
+
+    /// [`Channel::begin`], for the operation `name` — "origin", "Commit" — which
+    /// every prompt presenting the token carries, so the window says what is
+    /// asking whatever else runs beside it.
+    pub fn begin_for(&self, name: impl Into<String>) -> Result<Operation, Error> {
+        self.issue(Some(name.into()))
+    }
+
+    fn issue(&self, name: Option<String>) -> Result<Operation, Error> {
         let token = token::fresh().map_err(|source| Error::Token { source })?;
-        live(&self.tokens).insert(token.clone());
+        live(&self.tokens).insert(token.clone(), name);
         Ok(Operation {
             token,
             tokens: Arc::clone(&self.tokens),
@@ -220,12 +233,13 @@ impl Channel {
             let _ = protocol::write_refusal(&mut stream);
             return Err(Error::Malformed);
         };
-        if !live(&self.tokens).contains(&request.token) {
+        let Some(operation) = live(&self.tokens).get(&request.token).cloned() else {
             let _ = protocol::write_refusal(&mut stream);
             return Err(Error::UnknownToken);
-        }
+        };
         Ok(Prompt {
             text: String::from_utf8_lossy(&request.prompt).into_owned(),
+            operation,
             token: request.token,
             stream: Some(stream),
             tokens: Arc::clone(&self.tokens),
@@ -307,6 +321,8 @@ impl Drop for Operation {
 #[derive(Debug)]
 pub struct Prompt {
     text: String,
+    /// The name the token's operation was issued under, if any.
+    operation: Option<String>,
     token: AskpassToken,
     stream: Option<UnixStream>,
     tokens: Live,
@@ -318,6 +334,12 @@ impl Prompt {
     /// is for showing, never parsing on the wire.
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// The operation whose token the helper presented, as [`Channel::begin_for`]
+    /// named it; `None` for one issued by [`Channel::begin`].
+    pub fn operation(&self) -> Option<&str> {
+        self.operation.as_deref()
     }
 
     /// Hands the secret to the helper, which writes it to git. The token

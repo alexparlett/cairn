@@ -1,17 +1,20 @@
-# Staging and discarding
+# Staging, discarding and committing
 
-How the engine stages, unstages and discards today: the write verbs in
-`crates/cairn-git/src/ops/`, the stale check before every patch, and the
-confirmation each discard is sealed behind. As-built: everything here is code that
-exists, with the test that pins each rule named beside it. The commitment is
-`docs/prd/staging-and-commit.md` (R1, R3; in flight); the patches the verbs carry
+How the engine stages, unstages, discards, commits and amends today: the write verbs
+in `crates/cairn-git/src/ops/`, the stale check before every patch, the
+confirmation each discard and an amend are sealed behind, and what the commit box
+reads beside them. As-built: everything here is code that exists, with the test
+that pins each rule named beside it. The commitment is
+`docs/prd/staging-and-commit.md` (R1, R3, R6; in flight); the patches the verbs carry
 are the model's (`docs/systems/diff.md`, "Stage, unstage and discard"); how every
-`git` process is built and run is `docs/systems/git-processes.md`.
+`git` process is built and run, and the local write lane each verb runs on, is
+`docs/systems/git-processes.md`.
 
-**What exists:** the engine half. Six verbs, two `Consequence` builders and the
-reads they stand on. Nothing in the application calls them yet: the local write
-lane is staging-and-commit phase 04, and the views that act are phases 07-09. So
-no window stages, unstages or discards today.
+**What exists:** the engine half and the lane. Eight verbs, three `Consequence`
+builders and the reads they stand on; the application runs every verb on its local
+write lane (`docs/systems/git-processes.md`, "The local write lane"), and no view
+asks for one yet — the views that act are staging-and-commit phases 07-09. So no
+window stages, unstages, discards or commits today.
 
 ## The verbs
 
@@ -31,8 +34,8 @@ askpass token where its caller has one.
 | `stage_files` | `add --pathspec-from-file=- --pathspec-file-nul` | the paths, NUL-terminated | no |
 | `unstage_files` (`UnstageTo::Head`) | `reset -q --pathspec-from-file=- --pathspec-file-nul` | the paths | no |
 | `unstage_files` (`UnstageTo::Commit(id)`) | `reset -q --pathspec-from-file=- --pathspec-file-nul <id>` | the paths | no |
-| `unstage_files` (`UnstageTo::Nothing`) | `rm --cached -q --pathspec-from-file=- --pathspec-file-nul` | the paths | no |
-| `discard_files` | `restore --worktree --pathspec-from-file=- --pathspec-file-nul`, then `clean -f -- <paths>` | the tracked paths; nothing | yes |
+| `unstage_files` (`UnstageTo::Nothing`) | `rm --cached -f -q --pathspec-from-file=- --pathspec-file-nul` | the paths | no |
+| `discard_files` | `restore --worktree --pathspec-from-file=- --pathspec-file-nul`, then `clean -f -q -- <paths>` | the tracked paths; nothing | yes |
 
 Pinned against a `git` that records its argv, environment and stdin and then
 runs the real one (`ops/recording_stub.rs`):
@@ -65,8 +68,10 @@ is pinned against real git on the host's git and, through
   restore --staged` does not
   (`unstaging_on_an_unborn_branch_leaves_the_file_untracked`); out of an amend,
   against `HEAD`'s parent, given by its id; out of a root commit's amend, which
-  has no parent, `git rm --cached -q`, which git refuses where the staged content
-  differs from both the file and `HEAD`
+  has no parent, `git rm --cached -f -q`: without `-f` git refuses a path whose
+  staged content differs from both the file and `HEAD` — exactly the path an
+  amend's staged list shows edited — and with it the staged content goes and the
+  file stays, as `git reset` would leave them
   (`unstaging_out_of_an_amend_puts_back_the_parents_entry_or_none`). A staged
   rename unstages whole by naming both its paths; one path unstages its side
   alone (`a_staged_rename_unstages_whole_by_both_paths_and_one_path_alone_by_its_own`).
@@ -77,6 +82,12 @@ is pinned against real git on the host's git and, through
 - **Staging a conflicted path** is `git add`, which marks it resolved (R3.11).
 - **Every path is literal**: a file named `*.txt` is staged alone, and `git clean`
   of `st*` leaves `stx` (`every_path_is_read_literally_never_as_a_pattern`).
+- **Every verb is silent on success**, so one left running by a second close, its
+  pipes unread, finishes rather than dying of `SIGPIPE` at its next line (the
+  user's decision 12): `git clean` is given `-q`, without which it names each file
+  it removes, and `git restore --worktree` and `git apply` print nothing
+  (`the_destructive_verbs_say_nothing_on_success_so_an_orphan_finishes`, on every
+  floor).
 
 ## The stale check
 
@@ -157,7 +168,7 @@ did not move — when anything it names moved (R1.4).
   `a_whole_files_mode_change_is_named_and_put_back`).
 - **Files.** Tracked files are restored from the index by `git restore
   --worktree` (a file deleted in the working tree comes back); untracked files
-  are deleted by `git clean -f --` with exactly the paths `git status` listed,
+  are deleted by `git clean -f -q --` with exactly the paths `git status` listed,
   each a file. git lists untracked files one per file (`docs/systems/status.md`),
   and the one directory it still lists whole is a nested repository, which is
   refused, so `-d` is never passed and a file added beside a confirmed deletion is
@@ -174,6 +185,125 @@ did not move — when anything it names moved (R1.4).
   prompt names it so — "1 new file emptied (20 lines)" (`FileLoss::Emptied`,
   `an_intent_to_add_files_discard_empties_it_and_says_so`).
 - The `Performed` records the prompt the user accepted (R1.6).
+
+## Commit and amend
+
+`ops::commit` and `ops::amend` (`crates/cairn-git/src/ops/commit.rs`) run `git
+commit -q -F -` and `git commit -q --amend -F -`, the message on stdin byte for
+byte, as a write with the operation's askpass token (R6.1, R6.2, R6.5) — and never
+`--literal-pathspecs`: a commit takes no pathspec, and git would export the mode to
+every hook it runs, where a `pre-commit` hook's own `git diff -- '*.rs'` would then
+match nothing. `-q` leaves out the summary git prints once the commit is made.
+
+| Verb | `git` | stdin | Destructive |
+| --- | --- | --- | --- |
+| `commit` | `commit -q [--no-verify] -F -` | the message | no |
+| `amend` | `commit -q --amend [--no-verify] -F -` | the message | yes |
+
+- **The message is git's to clean.** No `--cleanup` is passed, so `commit.cleanup`
+  and git's default for `-F` (`whitespace`: `#` lines kept) decide what is
+  stored — byte for byte what `git commit -F <file>` stores from the same bytes,
+  under every value and none, with `core.commentChar` unset and `;`, and a draft
+  of `#` and `;` lines, CRLF endings, trailing spaces and blank lines, a scissors
+  line and non-ASCII text, by commit and by amend, on the host's git and both
+  floors (`a_message_is_stored_as_git_commit_f_stores_it_under_every_cleanup`,
+  `crates/cairn-git/tests/diff/commit.rs`). The message never reaches `argv`, so
+  neither the process table nor the command log holds it.
+- **A non-UTF-8 `i18n.commitEncoding`** is refused before git runs
+  (`Error::CommitRefused`, `CommitRefusal::CommitEncoding`), its name read as git
+  reads it — `UTF-8` or `UTF8` in any case
+  (`a_non_utf8_commit_encoding_is_refused_before_git_runs`,
+  `utf8_is_named_as_git_names_it`).
+- **Hooks run as git runs them.** `Hooks::Skip` — `--no-verify`, which skips
+  `pre-commit` and `commit-msg` and nothing else — is passed only for the hook
+  failure's skip (R10.5). `Repository::commit_hooks` says which of the two git
+  would run (R6.6, `CommitHooks`): in the directory `reads::hooks_path` resolves
+  (`git rev-parse --git-path hooks`, so `core.hooksPath` counts), a file `access(2)`
+  would let this process execute, following a link
+  (`a_failing_pre_commit_hook_fails_the_commit_with_its_output_and_the_skip_commits`,
+  `a_hook_counts_where_access_would_let_its_owner_run_it`). A failing hook fails
+  the commit with git's output — stdout's tail ahead of stderr's, since git says
+  "nothing to commit" and "would make it empty" on stdout — and nothing is
+  committed, the change still staged and no lock left.
+- **The identity is git's** (R6.8): nothing is passed and nothing read, so a commit
+  is by the inherited identity variables over the configuration, as a terminal's
+  is (`a_commit_is_by_the_identity_in_cairns_environment`), and with none, git's
+  own error is the failure (`with_no_identity_gits_own_error_is_the_outcome`).
+- **While it runs** a commit is the one write that can be cancelled (R4.3): its
+  `CommitWatch` is polled before git starts — a commit cancelled there writes
+  nothing (`Error::CommitCancelledBeforeRunning`,
+  `a_commit_cancelled_before_git_runs_writes_nothing`) — is handed an
+  `ops::CommitCancel` as git starts, which ends git's process group as a fetch's
+  cancel does, and is given every line git or a hook writes as it arrives.
+- **What it invalidates:** the refs, the index (a hook may stage) and the objects.
+
+**The operation in progress** (R6.9, L25) is `Repository::operation_in_progress`
+(`crates/cairn-git/src/operation_in_progress.rs`), the files git's `wt_status`
+reads — `MERGE_HEAD` (with `MERGE_MSG`), `rebase-apply/` (`applying` in it for
+`git am`), `rebase-merge/`, `CHERRY_PICK_HEAD`, `REVERT_HEAD` and the sequencer's
+next command — rather than gix's `Repository::state`, which checks in another order
+and never reads the sequencer, so a cherry-pick sequence whose stopped pick was
+committed would read as nothing. A rebase, `git am`, a cherry-pick or a revert
+refuses a commit and an amend before git runs, naming it; a merge's commit is the
+merge commit, its parents `HEAD` and `MERGE_HEAD`, and an amend is refused during
+it
+(`a_merge_in_progress_commits_the_merge_and_refuses_an_amend`,
+`a_rebase_am_cherry_pick_or_revert_in_progress_refuses_commit_and_amend`, each
+state made by real git and checked against what `git status` says).
+
+**What the commit box reads** beside the verbs, each on a worker:
+`Repository::recent_messages`, the messages of the last `RECENT_MESSAGES` (ten)
+commits `HEAD` reaches in `git log`'s order, each as written
+(`recent_messages_are_git_logs_last_ten`); and `Repository::amend_staged`, amend's
+staged list (R6.3): the index against `HEAD`'s parent — the empty tree for a root
+commit — through `reads::staged_since`, `git diff-index --cached --raw` over the
+whole index with the user's rename detection, what `git diff --cached
+--name-status HEAD^` lists (`amends_staged_list_is_the_index_against_heads_parent`).
+Amend is unavailable on an unborn branch (`amend_is_unavailable_on_an_unborn_branch`);
+a root commit amends (`a_root_commits_amend_works_and_unstages_with_rm_cached`).
+
+### Amend, sealed
+
+`amend` takes a `Confirmed` by value and is a row of the destructive-operation
+roster. Its `Consequence::Amend` is computed by `ops::amend_consequence`
+(`crates/cairn-git/src/ops/amend.rs`), from the repository now:
+
+- **`HEAD`'s id and subject**, as the history draws it.
+- **Whether a remote already has it** (`Publication`, R6.4). With an upstream that
+  is a remote-tracking ref and exists, whether it reaches `HEAD` — its ahead count
+  is zero — answered by the walk `HEAD --not <upstream>`, which stops at the first
+  commit it yields; with none — a detached `HEAD`, no upstream, a gone one, one that
+  is a local branch — the same walk hidden by every remote-tracking ref, `HEAD --not
+  --remotes`. Each is cancellable at every object read
+  (`the_dialog_is_asked_exactly_when_a_remote_has_head`: an upstream at, ahead of
+  and behind `HEAD`, a branch with no upstream at a remote's commit and past it, a
+  fork whose remote branch was deleted, a local upstream, a detached `HEAD`).
+- **Whether git will write the reflog entry** (`Reflog`, R6.4 and R10.6 as amended):
+  when `core.logAllRefUpdates` is `true` or `always` — or, unset, unless the
+  repository is bare, which a linked worktree of a bare repository is not — or,
+  whatever it is set to, when `HEAD`'s or the branch's log already exists, since git
+  appends to a log it finds. Each arm checked against the entry git then writes
+  (`whether_the_reflog_is_written_is_what_git_then_does`: the default, `false` with
+  no log and with one, `always`, and a bare repository's worktree with the setting
+  unset and `false`).
+
+Refused before any of it: an unborn branch and any operation in progress, a merge
+among them. Before git runs, `amend` computes the `Consequence` again and refuses
+with `Error::AmendChangedSinceConfirmed`, writing nothing, when it differs from the
+confirmed one — `HEAD` moved, a remote came to hold it, the reflog setting changed
+(R1.4, `an_amend_refuses_when_head_moved_or_was_published_since_it_was_confirmed`);
+its `Performed` quotes the accepted prompt (R1.6,
+`an_amend_records_its_prompt_and_a_commit_invalidates_what_it_moves`).
+
+**What the walk costs** on rust-lang/rust (340,228 commits, the bench clone at
+`c999cef531e`, 13 remote-tracking refs, release build, warm; the
+`the_pushed_check_on_a_large_repository` reporter): an upstream at `HEAD`, a branch
+at a remote's tip, and a new commit whose upstream is behind it, each under 3 ms; a
+new commit with no upstream, 91-99 ms; a detached `HEAD` at a commit 2,000 or
+30,000 first parents back — `HEAD` reached only after painting from every remote
+tip — 1.1-1.3 s, which is git's own walk without a commit-graph (`git -c
+core.commitGraph=false rev-list -1 HEAD --not --remotes`, 1.14 s; 0.08 s with the
+graph, which the walk does not read so it can be cancelled at every object).
 
 ## Residuals
 
@@ -193,4 +323,20 @@ did not move — when anything it names moved (R1.4).
   selected.
 - git exports `--literal-pathspecs` to the hooks it runs under these verbs
   (`GIT_LITERAL_PATHSPECS=1` in a `post-index-change` or `post-checkout` hook), so a
-  hook's own globbed pathspec matches literally (R3).
+  hook's own globbed pathspec matches literally (R3). A commit is not run with it.
+- Between an amend's re-check and git's run is the same window; `git commit
+  --amend` amends whatever `HEAD` is when it runs.
+- The pushed check knows only what was last fetched, as `git branch -r --contains`
+  does; with an upstream, only the upstream is asked, so a commit another remote
+  branch holds while the upstream is behind it reads as unpublished (R6.4 as
+  written).
+- `Reflog::Written` says git will append the amend's entry, whose old id is the
+  replaced commit. Show Lost Commits as C20 words it seeds from each entry's new id
+  (`git reflog show --format=%H`), so a replaced commit no entry names as its new id
+  — a log created by the amend itself — would not be found unless its seed reads
+  old ids too, as `git rev-list --reflog` does: phase 10's to settle.
+- A commit or amend left running by a second close can still die of `SIGPIPE` at a
+  line its hook writes.
+- A hook owned by another user counts when the group's or others' execute bit is
+  set, whether or not this user is in the file's group: the process's groups are
+  not read.

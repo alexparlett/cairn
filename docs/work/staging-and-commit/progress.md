@@ -3,6 +3,124 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 05, the commit engine (packet mode)
+
+Built on `feature/staging-and-commit`; full gate green; QA pending (the coordinator dispatches
+the reviewers). No stopping rule was met:
+
+- **`-F -` against `git commit -F <file>`**: byte-identical under every `commit.cleanup` value
+  and none, `core.commentChar` unset and `;`, with `#`/`;` lines, CRLF, trailing spaces and
+  blank lines, a scissors line and non-ASCII text, by commit and by amend, on git 2.30.9,
+  2.32.7 and 2.56.0 (checked by hand first, then pinned:
+  `a_message_is_stored_as_git_commit_f_stores_it_under_every_cleanup`).
+- **The floors amend as the host does**: every test of `crates/cairn-git/tests/diff/commit.rs`
+  passes on 2.30.9 and 2.32.7 (amend, root amend, merge, rebase, `git am`, cherry-pick and its
+  sequence, revert, the reflog arms, the publication cases).
+- **The pushed check stays bounded on rust-lang/rust** (a plain `git clone --no-hardlinks` of
+  the bench at `c999cef531e` in `/tmp`, its 13 remote-tracking refs fetched from the bench's
+  own, deleted after; release build, warm, the `the_pushed_check_on_a_large_repository`
+  reporter, three rounds each):
+
+  | `HEAD` | Publication | Time |
+  | --- | --- | --- |
+  | `main` at the tip, upstream `origin/main` | upstream | 0.2-2.7 ms |
+  | `main` at the tip, no upstream | some remote | 0.2-2.2 ms |
+  | a new commit on the tip, no upstream | unpublished | 91-99 ms |
+  | a new commit, upstream behind it | unpublished | 0.2-2.4 ms |
+  | detached at `main~2000` | some remote | 1.10-1.12 s |
+  | detached at `main~30000` (2013) | some remote | 1.30-1.31 s |
+
+  git's own `rev-list -1 HEAD --not --remotes` in the last state: 1.14 s without a
+  commit-graph, 0.08-0.10 s with it (`for-each-ref --contains` 0.01 s). The walk reads no
+  commit-graph so it stays cancellable at every object read; bounded by the history, as git's
+  is without a graph, and on a worker. Judged bounded, not stopped for; the cost and the
+  commit-graph option are carried to phase 11.
+- The bench was read only: `find ~/Development/bench/rust/.git -newer <marker>` empty before and
+  after the clone and the fetch from it.
+
+What shipped, by acceptance criterion (engine halves; the views are phases 06-09):
+
+- **C13**: the message test above; `a_non_utf8_commit_encoding_is_refused_before_git_runs`;
+  `a_failing_pre_commit_hook_fails_the_commit_with_its_output_and_the_skip_commits` (output on
+  the failure and streamed, nothing committed, no lock, the skip commits; `.git/hooks`,
+  `core.hooksPath`, a non-executable hook not counted);
+  `amends_staged_list_is_the_index_against_heads_parent` (against `git diff --cached
+  --name-status HEAD^`, a rename paired) and the root commit's against the empty tree;
+  `a_root_commits_amend_works_and_unstages_with_rm_cached`;
+  `amend_is_unavailable_on_an_unborn_branch`; `with_no_identity_gits_own_error_is_the_outcome`;
+  `recent_messages_are_git_logs_last_ten`.
+- **C14**: `the_dialog_is_asked_exactly_when_a_remote_has_head`, `the_amend_button_and_prompt_name_head`.
+- **C24**: `a_merge_in_progress_commits_the_merge_and_refuses_an_amend`,
+  `a_rebase_am_cherry_pick_or_revert_in_progress_refuses_commit_and_amend` (every state made by
+  real git; `git status`'s words checked beside the engine's answer).
+- **C2 (amend)**: `an_amend_refuses_when_head_moved_or_was_published_since_it_was_confirmed`.
+- **R6.4's reflog** (the user's decision on phase 01's item 13):
+  `whether_the_reflog_is_written_is_what_git_then_does`, each arm against the entry git then
+  writes. Found doing it: git's own `git reflog` lists each entry's NEW id, so with the logs
+  removed and the default setting, the amend writes an entry whose OLD id is the replaced
+  commit, which `git reflog show --format=%H` (C20's seed) never lists. Carried to phase 10.
+- **C12 (identity)**: `a_commit_is_by_the_identity_in_cairns_environment`.
+- **C10-C12's commit halves on real `git commit`** (`worker/local_lane_tests.rs`, a commit held
+  in its `pre-commit` hook): `a_commit_keeps_refreshes_back_and_a_stage_asked_meanwhile_waits_for_it`,
+  `a_refresh_asked_before_a_commit_draws_nothing_while_it_runs`,
+  `a_cancel_names_its_commit_and_never_reaches_the_one_queued_behind_it`,
+  `a_close_ends_a_fetch_at_once_while_it_waits_on_a_commit`,
+  `a_close_during_a_commit_waits_for_it_and_ends_nothing`,
+  `a_signed_commits_prompt_is_titled_by_the_commit_while_a_fetch_runs` (a real `gpg.format=ssh`
+  commit, its signing program a stand-in `ssh-keygen` that asks through `SSH_ASKPASS` — no real
+  key, agent or `~/.gnupg` touched), and `an_amend_through_the_lane_quotes_its_prompt_and_keeps_refreshes_back`.
+  Each ran five times green.
+
+The carries from phases 03 and 04: `hooks_path` re-exported; `UnstageTo::Commit`/`Nothing`
+exercised through amend; the root amend's refusal met (`-f`, below); `HeldCommit` deleted; the
+`deferred` override deleted (item 7), every commit's ending reading everything
+(`a_commits_ending_reads_everything_whatever_it_did`); the fixed 500/700 ms windows and the
+`< 100 ms` bound replaced (item 9) by the repository thread's answer to a later
+`Request::CommandLog`, a held process's mark, or a held `git add` the asks must return before —
+the one time waited out is the close's patience, which is what that test tests; a prompt titled
+by its own operation (item 13: `Channel::begin_for`, `Prompt::operation`, `Update::Prompt`'s
+`asking`); `install()`'s kill under the lane's lock documented as a `try_lock` and a `killpg`;
+`-q` on `git clean` with a test that `restore` and `apply` are silent on success
+(`the_destructive_verbs_say_nothing_on_success_so_an_orphan_finishes`); the banner. Re-carried:
+`Request::CancelWrite`'s `expect(dead_code)` (phase 09 first constructs it).
+
+Decisions taken here (each stated in the PRD as amended or in `docs/systems/staging.md`):
+
+1. **`git rm --cached -f -q`** out of a root commit's amend: without `-f`, git refuses a path
+   whose staged content differs from both the file and `HEAD` — exactly what an amend's list
+   shows edited. `-f` drops the staged blob from the index as `git reset` would; `--cached`
+   keeps the file. R3.4 amended, for the user's ratification.
+2. **`git commit -q`**, and no `--literal-pathspecs` on a commit (git exports it to the hooks,
+   where a `pre-commit` hook's globbed pathspec would match nothing). R6.1 amended.
+3. **`git am` refuses a commit and an amend** as a rebase does; R6.9 names a merge, a rebase, a
+   cherry-pick and a revert, and `git status` reports an `am` session as one of them. Batched.
+4. **The operation in progress is read as git's `wt_status` reads it**, not through gix's
+   `Repository::state`, whose order differs and which misses a cherry-pick sequence whose
+   stopped pick was committed (the API checked against the vendored gix 0.87.1).
+5. **An upstream that is a local branch is no remote** (`branch.<b>.remote = .`): the pushed
+   check falls back to every remote-tracking ref, as for none.
+6. **A cancel before git runs stops the commit's checks** (an amend's walk can be long) and
+   ends `NotRun`; once git runs, the lane's `install` path the phase doc names.
+7. **The commit's output reaches the window as `Update::WriteOutput`** per line, as a fetch's
+   progress does; and a failure carries stdout's tail ahead of stderr's, since git says why on
+   stdout for "nothing to commit" and an amend that would be empty.
+
+Batched for the user (no stopping rule; none blocks the packet):
+
+- **A.** Ratify decision 1 (`-f` on the root amend's unstage) — or prefer refusing that path
+  with git's words.
+- **B.** R6.4 as written asks only the upstream when there is one: with the upstream behind
+  `HEAD` and another remote branch holding it, the amend reads as unpublished and no dialog is
+  asked. Recommendation: fall through to `HEAD --not --remotes` when the upstream does not hold
+  it (a second walk only in that case).
+- **C.** Decision 3 (`git am` refused). Recommendation: keep.
+- **D.** Phase 10's seed for Show Lost Commits (the reflog finding above). Recommendation: seed
+  from each entry's old and new ids, as `git rev-list --reflog` does, so `Reflog::Written`
+  always means findable.
+- **E.** R10.8's prefill keeps git's `# Conflicts:` comment lines from `MERGE_MSG`, which a `-F`
+  commit under the default cleanup stores. Recommendation: the box strips git's comment lines
+  from the prefill as git's own editor cleanup would (phase 09).
+
 ## 2026-10-09 — phase 04 QA, adjudicated and fixed; the user's decisions 12 and 14 applied
 
 Five fresh reviewers (`responsiveness-reviewer`, `destructive-ops-reviewer`,

@@ -76,10 +76,13 @@ crates/cairn-git/src/
     authority.rs    WriteAuthority, and the tests that need one (real `git` writes among them)
     fetch.rs        fetch, built as a write
     stage.rs        stage_lines, unstage_lines (`git apply --cached`), stage_files (`git add`),
-                    unstage_files (`git reset -q`, `git rm --cached -q`), UnstageTo
+                    unstage_files (`git reset -q`, `git rm --cached -f -q`), UnstageTo
                     (docs/systems/staging.md)
     discard.rs      discard_lines (`git apply`), discard_files (`git restore --worktree`,
-                    `git clean -f --`), each taking Confirmed, and the two Consequence builders
+                    `git clean -f -q --`), each taking Confirmed, and the two Consequence builders
+    commit.rs       commit and amend (`git commit -q [--amend] -F -`, the message on stdin),
+                    Hooks, CommitWatch, CommitCancel — amend taking Confirmed
+    amend.rs        amend_consequence: HEAD, whether a remote has it, whether git logs it
     fresh_state.rs  the index entry (gix) and the working-tree file (its bytes, and its git form
                     through reads/hash_object.rs) read fresh for a stale check or a re-check
     local_write.rs  how a local write runs: `--literal-pathspecs`, stdin, the locks around it
@@ -108,8 +111,11 @@ crates/cairn-git/src/
     hash_object.rs  hash_object — `git hash-object --path=<p> -- <p>`, never `-w`: a
                     working-tree file's id in git's form, for a discard's stale check
                     (docs/systems/staging.md)
-    hooks_path.rs   hooks_path — `git rev-parse --git-path hooks`, where git runs hooks from;
-                    landed for the commit engine (staging-and-commit phase 05)
+    hooks_path.rs   hooks_path — `git rev-parse --git-path hooks`, where git runs hooks from,
+                    for `Repository::commit_hooks` (docs/systems/staging.md)
+    working_tree.rs working_tree_patch, staged_pairing and staged_since — `git diff-index
+                    --cached`, `git diff-files`, `git diff --no-index`; staged_since is amend's
+                    staged list, the index against HEAD's parent (docs/systems/staging.md)
 ```
 
 `process` is a private module (`mod process;` in `lib.rs`). The application
@@ -125,7 +131,8 @@ On the application's side, in `crates/cairn-app/src/`:
   worker/startup.rs       Startup, Backend — a repository's channel, and git pointed at it
   worker/network_lane.rs  the network lane's loop: Operation, Lane, FetchControl, Refusal
   worker/local_lane.rs    the local write lane's loop: LocalWrite, OperationId, WriteEnding,
-                          ReadAgain, LaneState — the write clock, a commit's quiet, a cancel by id
+                          ReadAgain, LaneState — the write clock, a commit's quiet, a cancel by
+                          id, a commit's cancel installed as git starts
   worker/pool.rs          the repository thread: serves the history lane, Request::Close and
                           Request::CommandLog, spawns the cairn-diff and cairn-network
                           threads, Threads::drop
@@ -1090,14 +1097,15 @@ boundary, with a stub fetch that hangs), `a_second_fetch_is_refused_naming_the_f
 
 Every write to the index, the working tree and a local ref runs on the
 `cairn-local` thread (`worker/local_lane.rs`, spawned by `Threads::start`;
-staging-and-commit R4, `docs/design/concurrency.md`, "Operations"): today the
-verbs of `docs/systems/staging.md` — `stage_lines`, `unstage_lines`,
-`stage_files`, `unstage_files`, `discard_lines` and `discard_files`, each a
-`LocalWrite`, a discard carrying the `Confirmed` the user gave it — and from
-phase 05 commit and amend. Until then the commit the lane's tests drive is
-`LocalWrite::HeldCommit`, compiled for tests alone: a stub `git`'s `fetch`,
-long-running and cancellable, which the lane treats as a commit; phase 05 runs
-the same tests against `git commit`.
+staging-and-commit R4, `docs/design/concurrency.md`, "Operations"): the verbs of
+`docs/systems/staging.md` — `stage_lines`, `unstage_lines`, `stage_files`,
+`unstage_files`, `discard_lines`, `discard_files`, `commit` and `amend`, each a
+`LocalWrite`, a discard and an amend carrying the `Confirmed` the user gave it.
+The tests below drive real `git commit`s, held in their `pre-commit` hook for as
+long as a test says, and wait on the answer to a later request — the repository
+thread's to `Request::CommandLog` — or on a mark a held process wrote, never on a
+fixed time, to see that nothing happened meanwhile; only the close's patience,
+which is a length of time, is waited out.
 
 - **Reached directly, in order** (R4.1, R4.2). `Request::Write { id, write }`
   is routed by `submit` straight to the lane's queue — never through the
@@ -1110,8 +1118,9 @@ the same tests against `git commit`.
   running until `Update::WriteEnded { id, ending, read_again }`
   (`crates/cairn-app/src/local_writes.rs`, `LocalWrites`). Pinned by
   `writes_asked_faster_than_they_run_run_in_order_each_with_its_own_ending`
-  (`worker/local_lane_tests.rs`: five stages asked in microseconds, each `git
-  add` held a third of a second, start and end in order, the stale one dropped)
+  (`worker/local_lane_tests.rs`: five stages asked while the first's `git add` is
+  still held — each ask returning before it finishes — start and end in order, the
+  stale one dropped)
   and `writes_are_queued_in_order_until_each_starts_and_end_with_their_locks`
   (`local_writes.rs`).
 - **Endings** (`WriteEnding`, R4.7). `Done` — the `Performed`'s description, the
@@ -1121,15 +1130,19 @@ the same tests against `git commit`.
   run; `Refused`; `Failed`, with the lock files git failed beside; `Incomplete`,
   a discard of files that did not take every file; `MayHaveTakenEffect`, a
   cancelled or unwatched write, with what it stranded; and `NotRun`, a write
-  whose turn came as the repository closed. A failure while no prompt could have
-  been answered says why, as a fetch's does.
+  whose turn came as the repository closed, or a commit cancelled before its
+  `git` started. A commit refused before git runs — a rebase in progress, a
+  non-UTF-8 commit encoding — is `Refused`, and an amend whose `Consequence`
+  moved since its confirmation is `Stale` at `HEAD`. A failure while no prompt
+  could have been answered says why, as a fetch's does.
   (`every_ending_says_what_happened_and_what_to_read_again`,
   `confirmed_discards_run_through_the_lane_and_quote_their_prompts`.)
 - **What is read again** (R4.5). Each ending carries `read_again`: what the
   write's `Invalidated` names — status alone (`Request::RefreshStatus`, routed
   to the refresh thread) for a write to the index or the working tree,
   everything (`Request::Refresh`) for one that moved a ref — or, for a write
-  that did not run, what it could have changed. The window asks exactly that,
+  that did not run, what it could have changed — and everything after a commit or
+  an amend, however it ended. The window asks exactly that,
   unless it is closing (`a_writes_ending_reads_again_what_it_says_and_no_more`,
   `session.rs`).
 - **The write clock** (R4.4). `LaneState`, one mutex the handle, the
@@ -1148,37 +1161,60 @@ the same tests against `git commit`.
 - **Quiet while a commit runs** (R4.6). While a commit runs, a refresh asked of
   the handle — on focus, the Refresh chord, after a fetch — is kept back rather
   than numbered or sent, and one reaching the repository thread's refs, the
-  refresh thread's status or ahead/behind is kept back as it is taken up; the
-  lane remembers it, and the commit's ending says to read everything again, so
-  none is lost and the window asks one. Index writes queued behind the commit
-  wait for it by the lane's order
+  refresh thread's status or ahead/behind is kept back as it is taken up, and
+  dropped: a commit's ending always says to read everything again, whatever it
+  did — a hook may have moved anything — so none is lost and the window asks one.
+  Index writes queued behind the commit wait for it by the lane's order
   (`a_commit_keeps_refreshes_back_and_a_stage_asked_meanwhile_waits_for_it`, the
   handle's gate; `a_refresh_asked_before_a_commit_draws_nothing_while_it_runs`, the
   refresh thread's, with a refresh's reads queued behind a held status as the commit
-  starts; `a_refresh_is_kept_back_only_while_a_commit_runs_and_its_ending_says_so`).
+  starts; `an_amend_through_the_lane_quotes_its_prompt_and_keeps_refreshes_back`;
+  `a_refresh_is_kept_back_only_while_a_commit_runs`,
+  `a_commits_ending_reads_everything_whatever_it_did`).
   The repository thread's gate on a refresh's refs is not driven by a test: its refs
   are read before a test can start a commit behind them.
 - **Cancel by id** (R4.3). `Request::CancelWrite { id }` reaches `LaneState`
-  directly, never queued; it ends the write it names only when that is a commit
-  and is running — at once once git runs, or as git starts if it came first — so
-  a cancel for a write still queued, for one that is not a commit, or one that
-  arrives after its write ended, reaches nothing, and never the write behind it
-  (`a_cancel_names_its_commit_and_never_reaches_the_one_queued_behind_it`,
-  `a_cancel_reaches_the_running_commit_it_names_and_nothing_else`). No write
-  but the test's commit is cancellable before phase 05.
+  directly, never queued; it ends the write it names only when that is a commit or
+  an amend and is running. Before its `git` starts the cancel is kept, and the
+  commit's checks — an amend's re-read of its `Consequence`, the walk among them —
+  poll it, so it stops there writing nothing (`NotRun`); as git starts, the commit
+  hands the lane its `ops::CommitCancel`, installed under its id
+  (`LaneState::install`), which a cancel kept until then calls at once and a later
+  one calls under the lane's lock — `KillHandle::kill`, an atomic mark, a
+  `try_lock` and a `killpg`, never a wait on the process, so the UI thread's hold
+  of that lock stays an assignment's. A cancel for a write still queued, for one
+  that is not a commit, or one that arrives after its write ended, reaches nothing,
+  and never the write behind it
+  (`a_cancel_names_its_commit_and_never_reaches_the_one_queued_behind_it`: real
+  commits, the first killed in its hook and committing nothing, the second
+  committing what is staged; `a_cancel_reaches_the_running_commit_it_names_and_nothing_else`,
+  `a_cancel_before_git_runs_is_kept_for_the_commit_it_names`).
+- **A commit's output** (R6.5). Each line a running commit's `git` or one of its
+  hooks writes, stdout's and stderr's alike, reaches the window as
+  `Update::WriteOutput { id, line }` as it arrives; no view draws it yet (the Git
+  Error dialog, phase 09; the activity popover, phase 11), and a failure carries
+  git's words in its ending.
 - **Prompts during a write** (R5.1, L11). Every write begins a channel operation
-  of its own and runs with its token, retired before its ending is sent, so a
-  hook, a signing program or an LFS filter it runs can ask through the helper.
-  The window shows a prompt while a fetch or a local write is in flight, titled
-  by the fetch's remote or else the write ("Commit is asking for a credential"),
-  and a write's ending takes a prompt down unless a fetch is in flight, whose
-  prompt it may be — and a fetch's ending leaves one up while a write runs
-  (`a_prompt_a_stages_hook_raises_is_shown_and_answered`: a real `git add`
-  whose `post-index-change` hook asks; `a_prompt_a_commit_raises_is_shown_and_answered`;
-  `a_prompt_is_shown_while_a_write_runs_and_its_ending_takes_it_down`). A prompt
-  carries no owner, so where a fetch and a write run at once and one ends, a
-  prompt the ended one raised stays up until it is answered or cancelled, and
-  the acceptor serves nothing else meanwhile.
+  of its own, under the name the window gives it (`Channel::begin_for`, "Commit",
+  "Staging 1 file"; a fetch's under its remote), and runs with its token, retired
+  before its ending is sent, so a hook, a signing program or an LFS filter it runs
+  can ask through the helper. The acceptor reads which operation a helper's token
+  was issued for and sends it on the prompt (`Update::Prompt`'s `asking`), so the
+  window titles each prompt by its own operation ("Commit is asking for a
+  credential") even with a fetch and a write both in flight. The window shows a
+  prompt while either is in flight, and a write's ending takes a prompt down
+  unless a fetch is in flight, whose prompt it may be — and a fetch's ending
+  leaves one up while a write runs
+  (`a_prompt_a_stages_hook_raises_is_shown_and_answered`: a real `git add` whose
+  `post-index-change` hook asks;
+  `a_signed_commits_prompt_is_titled_by_the_commit_while_a_fetch_runs`: a real
+  `gpg.format=ssh` commit whose signing program asks while a fetch is held;
+  `a_prompt_is_titled_by_its_own_operation_with_a_fetch_and_a_write_in_flight`,
+  `a_prompt_names_the_operation_whose_token_it_presented`,
+  `a_prompt_is_shown_while_a_write_runs_and_its_ending_takes_it_down`). Where a
+  fetch and a write run at once and one ends, a prompt the ended one raised stays
+  up until it is answered or cancelled, and the acceptor serves nothing else
+  meanwhile.
 - **Lock files** (R3.8, R4.9). Before it runs any write, the lane lists every lock
   file under the git directories as the repository opened
   (`SharedRepository::lock_files`, the listing a cancel uses, which walks every
@@ -1221,7 +1257,8 @@ runs on the UI thread:
    its hooks — runs to its end, however long, and is never ended by the close
    (staging-and-commit R4.9; the acceptor still answers a prompt it waits on).
    The window, told as the first close is asked (`Closing::when_requested`),
-   says which write it waits on: "Finishing commit…" (`status_text::closing_line`).
+   says which write it waits on, and that closing again leaves it unfinished:
+   "Finishing commit… Closing again leaves it unfinished." (`status_text::closing_line`).
    Then it calls `SharedRepository::end_invocations(CLOSE_BOUND)`: every `git` in
    the registry is ended the way a cancel ends it, and the thread waits up to
    `CLOSE_BOUND` for their reaps. Past the fetch's cancel the registry is the
@@ -1279,14 +1316,17 @@ stopped answering, and never ends the write (the user's decision of 2026-10-09,
 keeping R4.9): the write's `git` is left to run on, orphaned, with nobody
 reading its pipes — it finishes, or its next write to a pipe ends it with
 `SIGPIPE` — and a lock it leaves is named the next time the repository opens
-(`Update::LocksAtOpen`). That residual is wider today than it will stay: `git clean -f` lists each file
-it removes on stdout, so an orphaned discard of untracked files dies at its next
-line, part way through its batch (`-q`, and a check of `restore` and `apply`
-for the same, are carried to the commit engine's phase), and the closing banner
-does not yet say that closing again leaves the write unfinished. Pinned by `a_close_during_a_commit_waits_for_it_and_ends_nothing`
-(the stream stays open past `CLOSE_BOUND`, the commit's group alive, until
-the test releases it; then its ending, the queued write `NotRun`, and the
-stream's end), `the_window_is_told_once_as_the_first_close_is_asked`
+(`Update::LocksAtOpen`). So every local verb is silent on success: `git clean`
+is given `-q`, without which it names each file it removes and an orphaned
+discard would die at its next line, part way through its batch; `git restore
+--worktree` and `git apply` print nothing; and a commit is `git commit -q`
+(`the_destructive_verbs_say_nothing_on_success_so_an_orphan_finishes`). What
+cannot be quieted — an error, a hook's own output — can still end an orphan
+there. The closing banner says that closing again leaves the write unfinished.
+Pinned by `a_close_during_a_commit_waits_for_it_and_ends_nothing`
+(a real commit held in its hook: the stream stays open past `CLOSE_BOUND`, the
+commit's `git` and its hook alive, until the test releases it; then its ending,
+the queued write `NotRun`, and the stream's end), `the_window_is_told_once_as_the_first_close_is_asked`
 (`closing.rs`) and `the_window_names_the_write_it_waits_on_its_prompt_and_the_locks_found`
 (`window.rs`, headless).
 

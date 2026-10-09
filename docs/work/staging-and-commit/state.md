@@ -10,7 +10,9 @@ the user's review at the end of the packet. Phase 03 (the write verbs) built in 
 mode: QA adjudicated, confirmed fixes and the user's four decisions (2, 3, 5, 6) applied,
 C21's margin decided (a flat 50 ms) and amended, full gate green. Phase 04 (the local
 lane) done in packet mode: QA adjudicated, confirmed fixes and the user's decisions 12 and
-14 (2026-10-09) applied, full gate green. Phases 05-12 not started.**
+14 (2026-10-09) applied, full gate green. Phase 05 (the commit engine) built in packet
+mode, full gate green, QA pending (the coordinator runs it); items batched for the user in
+progress.md's phase 05 entry. Phases 06-12 not started.**
 
 ## Locked decisions
 
@@ -227,12 +229,89 @@ Phase 04 (`docs/systems/git-processes.md`, "The local write lane"):
 - **The environment twin** reads `INHERITED`: `INHERITED_PINS` (R5.2's nine, each with a
   comment of its own) and `INHERITED_NEVER` (no `*_DATE`).
 
+Phase 05 (`docs/systems/staging.md`, "Commit and amend"; `docs/systems/git-processes.md`, "The
+local write lane"):
+
+- **`cairn_git::ops::commit(git, repo, message: &str, hooks: Hooks, token, watch:
+  CommitWatch<'_>) -> Result<Performed, Error>`** and **`ops::amend(git, repo, confirmed:
+  Confirmed, message, hooks, token, watch)`** (`crates/cairn-git/src/ops/commit.rs`): `git
+  commit -q [--amend] [--no-verify] -F -`, the message on stdin, no `--literal-pathspecs`.
+  `Hooks::{Run, Skip}` (`Skip` is `--no-verify`, the hook failure's skip only). `CommitWatch {
+  cancel: &dyn Cancel, running: &mut dyn FnMut(CommitCancel), output: &mut dyn FnMut(&str) }`:
+  `cancel` is polled before git starts (`Error::CommitCancelledBeforeRunning`), `running` is
+  handed the `CommitCancel` as git starts, `output` every stdout and stderr line. A failure is
+  `Error::GitFailed` whose `stderr` is stdout's tail then stderr's (git says "nothing to
+  commit" on stdout). Refusals before git runs: `Error::CommitRefused { why: CommitRefusal }`
+  — `InProgress(OperationInProgress)`, `NothingToAmend`, `CommitEncoding { encoding }`,
+  `NotWhatWasConfirmed`. Amend re-computes its `Consequence` and answers
+  `Error::AmendChangedSinceConfirmed` when it differs. Invalidates refs, index and objects.
+- **`ops::amend_consequence(repo, cancel) -> Result<Consequence, Error>`**
+  (`crates/cairn-git/src/ops/amend.rs`): `Consequence::Amend { commit, subject, published,
+  reflog }` — the publication from the upstream (a remote-tracking ref that exists) or, with
+  none, every remote-tracking ref (`walk::hiding`, now many hidden tips), the reflog as
+  R6.4/R10.6 say. Rostered in `DESTRUCTIVE_OPERATIONS`.
+- **Reads** (each `Repository` method): `operation_in_progress() -> Option<OperationInProgress>`
+  (git's `wt_status` files, not gix's `state()`); `commit_hooks(git, cancel) -> CommitHooks`
+  (`reads::hooks_path`, now re-exported, plus `access`-like bits); `recent_messages(cancel) ->
+  Vec<String>` (`RECENT_MESSAGES` = 10, `git log`'s order); `amend_staged(git, cancel) ->
+  Vec<ChangedFile>` (`reads::staged_since`: the index against `HEAD^` or the empty tree, the
+  user's rename detection; `Error::UnbornHead` with no `HEAD`).
+- **Model**: `cairn_model::OperationInProgress { Merge { message: Option<String> }, Rebase,
+  ApplyingPatches, CherryPick, Revert }` with `refuses_commit`, `refuses_amend`, `name`;
+  `cairn_model::CommitHooks { pre_commit, commit_msg }` with `skippable`.
+- **Changed verbs**: `UnstageTo::Nothing` is `git rm --cached -f -q` (an amend's edited path);
+  `git clean -f -q --`.
+- **Askpass**: `Channel::begin_for(name)` names a token's operation; `Prompt::operation()`.
+  `Update::Prompt { id, text, asking: Option<String> }`; `PromptView.asking`; the dialog is
+  titled by it ("git" when `None`). `FetchStatus::remote_in_flight` is gone.
+- **Lane**: `LocalWrite::Commit { message, skip_hooks }`, `LocalWrite::Amend { confirmed,
+  message, skip_hooks }` (`what()` "commit", "amend"; both read everything again however they
+  end). `Update::WriteOutput { id, line }` (no view draws it yet). `LocalWrite::HeldCommit` and
+  the `deferred` override are gone; `LaneState::end(announce: impl FnOnce())`. A pre-git cancel
+  ends `NotRun`; `CommitRefused` ends `Refused`; `AmendChangedSinceConfirmed` ends `Stale` at
+  `HEAD`. The closing banner: "Finishing commit… Closing again leaves it unfinished."
+
+## Carried forward from phase 05 (owned by the phase named)
+
+- **Phase 07 or 09**: no engine query diffs one file of amend's staged list against `HEAD^`
+  (`WorkingTreeDiff::Staged` diffs against `HEAD`); the view that shows an amend's file needs
+  one (a `staged_since`-based side in `diff/working_tree.rs`), with a test.
+- **Phase 09**: `Request::CancelWrite`'s `expect(dead_code)` stays until the commit box cancels;
+  `LocalWrites::running` is `expect(dead_code)` until a view draws the write running. Draw
+  `Update::WriteOutput` (the Git Error dialog: the command and git's output, ANSI stripped, from
+  the failure's `GitFailed` — stdout's tail then stderr's). R10.8's `MERGE_MSG` prefill:
+  `OperationInProgress::Merge.message` is git's file as it stands, with git's own `# Conflicts:`
+  comment lines, which `-F` under the default cleanup (`whitespace`) keeps in the commit —
+  where the user's `git commit` (editor, `strip`) drops them; decide (with the user) whether the
+  box strips git's comment lines from the prefill. Still: `Consequence::needs_force_push()` (phase
+  01's note) and rendering the amend prompt's parts separately (phase 01 QA item 21).
+- **Phase 10**: `Reflog::Written` means git appends the amend's entry, whose OLD id is the
+  replaced commit. C20 seeds Show Lost Commits from `git reflog show --format=%H` (each entry's
+  NEW id), so a replaced commit no entry names as its new id — a log the amend itself created —
+  is not found unless the seed reads old ids too, as `git rev-list --reflog` does (measured in
+  phase 05: default config, logs removed, amend → the replaced commit is only an old id). Settle
+  the seed (old and new ids) or the rule, with the user.
+- **Phase 11**: the pushed check's cost (`docs/systems/staging.md`, "What the walk costs"):
+  under 3 ms to ~100 ms where `HEAD` is near a remote tip, 1.1-1.3 s on rust-lang/rust for a
+  detached `HEAD` far behind every remote tip (git's own walk without a commit-graph, 1.14 s;
+  0.08 s with it), and an amend pays it twice (consequence, re-check before git runs). Consider
+  the commit-graph's generation numbers, keeping the walk cancellable.
+- **Residual, stated in `docs/systems/staging.md`**: a hook owned by another user counts on the
+  group's bit without reading this user's groups; a commit left orphaned by a second close can
+  still die at a line its hook writes; with an upstream behind `HEAD`, another remote branch
+  holding `HEAD` reads as unpublished (R6.4 as written; batched for the user).
+
 ## Carried forward from phase 04 (owned by the phase named)
 
-- **Phase 05**: `Commit`/`Amend` in `LocalWrite` (above); the `expect(dead_code)` on
-  `LaneState::install` and `Request::CancelWrite` go with them; re-run C10/C11/C12's
-  commit-dependent tests against `git commit` with a slow hook.
-- **Phase 05, from phase 04's QA** (adjudicated 2026-10-09):
+- **Phase 05** (done, except `Request::CancelWrite`'s `expect(dead_code)`, re-carried to phase
+  09, which first constructs it outside tests): `Commit`/`Amend` in `LocalWrite`;
+  `LaneState::install`'s `expect(dead_code)` gone; C10/C11/C12's commit-dependent tests re-run
+  against `git commit` with a slow hook.
+- **Phase 05, from phase 04's QA** (adjudicated 2026-10-09; each done in phase 05 — item 7 by
+  deleting the override, a commit's ending reading everything whatever it did, pinned by
+  `a_commits_ending_reads_everything_whatever_it_did`; item 9 except the close-patience wait,
+  which is the time under test; item 13 by naming each token's operation; `-q` on `git clean`,
+  `restore` and `apply` checked silent; the banner):
   - item 7: the `deferred` override in `local_lane.rs`'s `run` (a refresh kept back makes the
     ending `ReadAgain::Everything`) is unobservable while the only commit already reads
     everything — pin it against a real commit (an amend that a refresh was kept back for),
@@ -270,8 +349,10 @@ Phase 04 (`docs/systems/git-processes.md`, "The local write lane"):
 - **Phase 04** (done: the lane runs every verb with its write's token; the consequences
   carried to phase 07): the lane calls the verbs above on its own thread; the verbs take the
   write's token; `discard_*_consequence` are reads the window asks for before a dialog.
-- **Phase 05**: `hooks_path` re-export; `UnstageTo::Commit`/`Nothing` for amend; the root
-  amend's `git rm --cached` refusal; C13's root-commit case.
+- **Phase 05** (done: `hooks_path` re-exported; `UnstageTo::Commit`/`Nothing` exercised by
+  amend's tests; the root amend's refusal met with `-f`; C13's root-commit case): `hooks_path`
+  re-export; `UnstageTo::Commit`/`Nothing` for amend; the root amend's `git rm --cached`
+  refusal; C13's root-commit case.
 - **Phase 07** (phase 03's QA item 4): `discard_files_consequence` accepts any path
   absent from the index as untracked, so an ignored file or a path inside a nested
   repository reaches `git clean -f`, which leaves it (the outcome now names it as kept).
@@ -355,7 +436,9 @@ From phase 02's QA (adjudicated 2026-10-08):
   ref's log file already existing, since git appends to an existing log (checked
   with git 2.56 in phase 01) — read as git reads the setting, with a test for each
   arm against real git, including a bare repository and a log that exists under
-  `false`. Phase 10 should confirm that what Show Lost Commits walks (C20: the
+  `false` (done in phase 05: `whether_the_reflog_is_written_is_what_git_then_does`, a bare
+  repository through its linked worktree, since a bare one has no work tree to amend in;
+  see phase 05's carry to phase 10). Phase 10 should confirm that what Show Lost Commits walks (C20: the
   reflogs of `HEAD` and each local branch) is the entry this decides.
 - **Item 34a**: R1.2 amended to Fork's wording, lines per modified path and bytes
   per untracked file (L8); no code change.
@@ -368,7 +451,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 02 patch engine | done — QA adjudicated, confirmed fixes applied, full gate green; items 10-11 batched for the user |
 | 03 write verbs | done — QA adjudicated, fixes and the user's decisions applied, full gate green |
 | 04 local lane | done — QA adjudicated, fixes and the user's decisions 12 and 14 applied, full gate green |
-| 05 commit engine | not started |
+| 05 commit engine | built — full gate green, QA pending (coordinator) |
 | 06 render foundations | not started |
 | 07 Local Changes actions | not started |
 | 08 diff gesture | not started |

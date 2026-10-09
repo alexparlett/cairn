@@ -131,11 +131,15 @@ literally.
 - R3.4 Stage files: `git add`; unstage files: `git reset -q --` (which works on an
   unborn branch); unstage a staged rename whole: `git reset -q -- <old> <new>`;
   unstage out of an amend: `git reset -q HEAD^ --` (R6.3), and out of a root
-  commit's amend, which has no `HEAD^`: `git rm --cached -q --`.
+  commit's amend, which has no `HEAD^`: `git rm --cached -f -q --`. (Amended
+  2026-10-09 by phase 05, for the user's ratification: `-f`, since `git rm --cached`
+  alone refuses a path whose staged content differs from both the file and `HEAD` —
+  the path an amend's staged list shows edited — where the unstage drops that content
+  as `git reset` would and keeps the file.)
 - R3.5 Discard files (destructive): `git restore --worktree --`, never for a
   submodule (R3.10) or a conflicted path (R3.11) — an intent-to-add file is left
   empty with its entry in place, as `git restore` leaves it (R1.2); delete
-  untracked files (destructive): `git clean -f --` the exact files status listed,
+  untracked files (destructive): `git clean -f -q --` the exact files status listed,
   never `-d`: status lists untracked files one per file, and the one directory it
   lists whole, a nested repository, is refused before any confirmation (L8), so
   a file added beside a confirmed one is never taken and the discard goes ahead
@@ -147,7 +151,7 @@ literally.
   a list past a bound is split across several invocations, all under the one
   `Consequence` re-check made before the first (R1.4). The bound is phase 03's to
   measure: `argv`'s limit for a very large selection is unverified
-  (`git-write-verbs.md` §11). There is no Clean command and no Discard All.
+  (`git-write-verbs.md` §11). There is no Clean command and no Discard All. (`-q` added 2026-10-09 in phase 05, the user's decision 12 on phase 04's QA: a `git clean` left running by a second close then finishes its batch rather than dying of `SIGPIPE` at its first line.)
 - R3.6 Staged changes are never discardable (L8): no verb, no gesture.
 - R3.7 Before every apply (R3.1-R3.3) the operation checks the content it was
   built from (L17f): for stage, the index entry's blob is the diff's old id; for
@@ -231,7 +235,11 @@ literally.
 - R6.1 Commit is `git commit -F -`, the message on stdin; no `--cleanup` is
   passed, so `commit.cleanup` and git's `-F` default decide; `--no-verify` is
   passed only from the hook failure's skip (R10.5). A non-UTF-8
-  `i18n.commitEncoding` is refused before git runs, with its reason.
+  `i18n.commitEncoding` is refused before git runs, with its reason. (Amended
+  2026-10-09 by phase 05: `-q` beside it, which leaves out only the summary git
+  prints once the commit is made, as `-q` keeps `git clean` quiet for the user's
+  decision 12 of 2026-10-09; and no `--literal-pathspecs`, which git would export
+  to the hooks.)
 - R6.2 Amend is `git commit --amend -F -` with the same rules.
 - R6.3 In amend mode the staged list is the index against `HEAD^` (the plumbing
   the working-tree query already runs, `git diff-index --cached`), and unstaging

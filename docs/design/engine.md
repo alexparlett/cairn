@@ -65,29 +65,37 @@ implied.
   (`diff.md`, "Selections and patches").
 - **Whole files**: `git add` to stage; `git reset -q --` to unstage, which works on
   an unborn branch, `git reset -q -- <old> <new>` for a staged rename,
-  `git reset -q HEAD^ --` out of an amend and `git rm --cached -q --` out of a root
-  commit's amend, which has no `HEAD^`; `git restore --worktree --` to discard. A
+  `git reset -q HEAD^ --` out of an amend and `git rm --cached -f -q --` out of a root
+  commit's amend, which has no `HEAD^` — forced, since without `-f` git refuses the
+  very path an amend's staged list shows edited, one whose staged content differs
+  from both the file and `HEAD`, where an unstage drops that content as `git reset`
+  would; `git restore --worktree --` to discard. A
   submodule is never discarded: `git restore` exits 0 and leaves its commit where
   it was, only `git submodule update` moves it back, and no prompt can count what
   is dirty inside it. A conflicted path is staged with `git add`, which marks it
   resolved, and takes neither a patch of lines nor a discard; resolving its content
   is the conflict view's (`conflicts.md`).
-- **Untracked files**: `git clean -f --` with the exact paths status listed —
+- **Untracked files**: `git clean -f -q --` with the exact paths status listed —
   never a pattern, and never the list `git clean -n` prints, which is localised
-  and quoted — adding `-d` only for a collapsed directory; a nested repository is
-  refused, because deleting it deletes history the prompt cannot count. `git
+  and quoted — and never `-d`: status lists untracked files one per file, and the
+  one directory it lists whole, a nested repository, is refused, because deleting
+  it deletes history the prompt cannot count. `-q` because a `git clean` left
+  running unwatched by a second close dies at the first line it writes to a pipe
+  nobody reads (`processes.md`, "Lifecycle"). `git
   clean` takes no pathspec file, so its paths go on `argv`, split across several
   invocations under one re-check of what was confirmed when the list is long.
-- **Commits**: `git commit -F -` and `git commit --amend -F -`, the message on
-  stdin so it is never on `argv` or in the command log. No `--cleanup` is passed,
-  so the user's `commit.cleanup` decides exactly as it does for their own
+- **Commits**: `git commit -q -F -` and `git commit -q --amend -F -`, the message
+  on stdin so it is never on `argv` or in the command log, and no
+  `--literal-pathspecs`, which git would export to every hook. No `--cleanup` is
+  passed, so the user's `commit.cleanup` decides exactly as it does for their own
   `git commit -F`; `--no-verify` is passed only from the hook failure's skip
   (`ui.md`, "The commit box"); the author is git's own identity — the one the
   user's terminal would commit with, since the identity variables are inherited
   (`processes.md`, "The environment") — and git's own error is shown when it has
   none. With a merge in progress the commit is the merge commit; during a rebase,
-  cherry-pick or revert Cairn does not commit, since continuing one is that
-  operation's own. A non-UTF-8 `i18n.commitEncoding` is refused with its reason,
+  `git am`, a cherry-pick or a revert Cairn does not commit, since continuing one
+  is that operation's own — each read from the files git's own status reads,
+  the sequencer's included. A non-UTF-8 `i18n.commitEncoding` is refused with its reason,
   since transcoding the message would need a dependency.
 - **Recovering a lost commit**: `git branch -- <name> <oid>`.
 - **A stale lock**: no verb exists, so `Remove index.lock…` deletes exactly

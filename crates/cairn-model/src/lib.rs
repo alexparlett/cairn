@@ -37,6 +37,7 @@ mod repo_path;
 mod row_labels;
 mod row_selection;
 mod rows_page;
+mod scrub;
 mod secret;
 mod sidebar_rows;
 mod status;
@@ -88,6 +89,7 @@ pub use repo_path::RepoPath;
 pub use row_labels::{Label, RowLabels};
 pub use row_selection::SideColumn;
 pub use rows_page::{PagedCommit, PagedStash, RowsPage};
+pub use scrub::{Scrubber, scrub_userinfo};
 pub use secret::Secret;
 pub use sidebar_rows::{
     Disclosure, SidebarRow, SidebarSection, folder_name, folder_path, natural_order,

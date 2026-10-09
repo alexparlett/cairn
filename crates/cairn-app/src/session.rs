@@ -165,7 +165,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                 crate::commit_box_pane::refs_arrived(view, worker.submit);
             }
             if reopen && !worker.closing {
-                reopen_history(rows, progress, worker);
+                reopen_history(rows, progress, *view.show_lost.peek(), worker.submit);
                 // A find looking in the history it replaced looks in the new one.
                 crate::ref_find::reopened(view, Some(worker.submit));
             }
@@ -344,11 +344,13 @@ fn refresh_after_an_operation(worker: &Worker<'_>) {
 /// it held are handed to a worker to free rather than freed here (#52, R11.3), the new
 /// history is sized for as many authors as the old named so its first pages do not rehash
 /// their way back up, and the selection is left as it is — it is drawn again when its row
-/// arrives (R10.5).
-fn reopen_history(
+/// arrives (R10.5). With `lost`, the walk is Show Lost Commits' (staging-and-commit R11.4): a
+/// reopen like any other, off the UI thread.
+pub fn reopen_history(
     mut rows: State<cairn_model::History>,
     mut progress: State<Progress>,
-    worker: &Worker<'_>,
+    lost: bool,
+    submit: &dyn Fn(Request),
 ) {
     let replaced = {
         let mut history = rows.write();
@@ -358,8 +360,11 @@ fn reopen_history(
     progress.set(Progress::opening());
     // The new history asked first, so its first page is not queued behind the free of the
     // old one on the repository thread (phase 06 QA, RR4).
-    (worker.submit)(Request::OpenHistory { rows: PAGE_ROWS });
-    (worker.submit)(Request::Retire(Retired::history(replaced)));
+    submit(Request::OpenHistory {
+        rows: PAGE_ROWS,
+        lost,
+    });
+    submit(Request::Retire(Retired::history(replaced)));
 }
 
 /// Takes down a dialog whose fetch or write has ended, refusing the prompt so the
@@ -455,6 +460,7 @@ mod tests {
                         local: crate::local_changes_state::LocalChangesView::created(),
                         writes: State::create(crate::local_writes::LocalWrites::default()),
                         confirming: State::create(None),
+                        show_lost: State::create(false),
                     }
                 })
             },
@@ -1323,7 +1329,7 @@ mod tests {
         match submitted.as_slice() {
             [
                 Request::FilterRefs { .. },
-                Request::OpenHistory { rows },
+                Request::OpenHistory { rows, lost: false },
                 Request::Retire(retired),
             ] => {
                 assert_eq!(retired.replaced_rows(), Some(3), "not the old rows");

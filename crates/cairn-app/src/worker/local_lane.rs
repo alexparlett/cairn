@@ -148,6 +148,17 @@ pub enum LocalWrite {
         message: String,
         skip_hooks: bool,
     },
+    /// The branch `name` put on `at`: `Create Branch Here…` on a commit Show Lost Commits draws
+    /// (staging-and-commit R11.3). The view that asks it awaits the user's sign-off on its
+    /// flow (phase 10), so only tests construct it yet.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Create Branch Here…'s view awaits the user's sign-off"
+        )
+    )]
+    CreateBranch { name: String, at: Oid },
 }
 
 /// A test's copy of a write it asked for, to compare with what was sent. A destructive write
@@ -186,6 +197,10 @@ impl Clone for LocalWrite {
             } => Self::Commit {
                 message: message.clone(),
                 skip_hooks: *skip_hooks,
+            },
+            Self::CreateBranch { name, at } => Self::CreateBranch {
+                name: name.clone(),
+                at: *at,
             },
             Self::DiscardLines(_) | Self::DiscardFiles(_) | Self::Amend { .. } => {
                 panic!("a destructive write's confirmation is spent once; a test may not copy it")
@@ -228,7 +243,8 @@ impl LocalWrite {
             | Self::StageAll { .. }
             | Self::UnstageAll { .. }
             | Self::DiscardLines(_)
-            | Self::DiscardFiles(_) => false,
+            | Self::DiscardFiles(_)
+            | Self::CreateBranch { .. } => false,
             Self::Commit { .. } | Self::Amend { .. } => true,
         }
     }
@@ -245,7 +261,11 @@ impl LocalWrite {
             | Self::UnstageAll { .. }
             | Self::DiscardLines(_)
             | Self::DiscardFiles(_) => ReadAgain::Status,
-            Self::Commit { .. } | Self::Amend { .. } => ReadAgain::Everything,
+            // A branch made moves the refs: the history is read again, and a commit it puts a
+            // branch on is no longer lost.
+            Self::Commit { .. } | Self::Amend { .. } | Self::CreateBranch { .. } => {
+                ReadAgain::Everything
+            }
         }
     }
 
@@ -286,6 +306,7 @@ impl LocalWrite {
             Self::DiscardFiles(_) => "discarding files".to_owned(),
             Self::Commit { .. } => "commit".to_owned(),
             Self::Amend { .. } => "amend".to_owned(),
+            Self::CreateBranch { name, .. } => format!("creating branch {name}"),
         }
     }
 
@@ -342,6 +363,7 @@ impl LocalWrite {
                     commit,
                 )
             }),
+            Self::CreateBranch { name, at } => ops::create_branch(git, repo, &name, at, token),
         }
     }
 }

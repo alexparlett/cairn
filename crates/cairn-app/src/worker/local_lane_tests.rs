@@ -1732,3 +1732,87 @@ fn a_chunk_drawn_at_context_ten_stages_exactly_as_drawn() {
     );
     drop(handle);
 }
+
+/// `HEAD`'s commit in `repository`, as the engine reads its refs.
+fn head_commit(repository: &Path) -> cairn_model::Oid {
+    let repo = Repository::discover(repository).unwrap_or_else(|error| panic!("{error}"));
+    let read = repo
+        .refs(&CancelSignal::new())
+        .unwrap_or_else(|error| panic!("reading the refs: {error}"));
+    match &read.snapshot.head {
+        cairn_model::HeadState::Branch(name) => read
+            .snapshot
+            .find(name)
+            .and_then(cairn_model::Ref::commit_id)
+            .unwrap_or_else(|| panic!("{name:?} names no commit")),
+        other => panic!("HEAD is {other:?}"),
+    }
+}
+
+/// staging-and-commit R11.3 through the lane: `Create Branch Here…` runs as a local write,
+/// in order, its ending saying to read everything again — the refs moved, and the history
+/// with them — and a name git refuses ends failed with git's command and its reason, nothing
+/// written. Caught by: a branch write that reads only the status after it (the history keeps
+/// drawing the commit as lost), or a refusal that loses git's words.
+#[test]
+fn a_branch_made_through_the_lane_reads_everything_again_and_a_refusal_says_gits_reason() {
+    let fixture = to_commit("cairn-lane-branch", &["a"]);
+    let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let (handle, mut updates, _reply) = real_boundary(&fixture.path, (&home, &runtime));
+    staged(&handle, &mut updates, &["a"]);
+    let committed = ask(&handle, commit());
+    let seen = until_ended(&mut updates, committed);
+    assert!(
+        matches!(ending_of(&seen, committed).0, WriteEnding::Done(_)),
+        "{seen:?}"
+    );
+    let at = head_commit(&fixture.path);
+
+    let made = ask(
+        &handle,
+        LocalWrite::CreateBranch {
+            name: "recovered".to_owned(),
+            at,
+        },
+    );
+    let seen = until_ended(&mut updates, made);
+    match ending_of(&seen, made) {
+        (WriteEnding::Done(done), ReadAgain::Everything) => {
+            assert!(done.description.contains("recovered"), "{done:?}");
+        }
+        other => panic!("the branch write ended {other:?}"),
+    }
+    let repo = Repository::discover(&fixture.path).unwrap_or_else(|error| panic!("{error}"));
+    let read = repo
+        .refs(&CancelSignal::new())
+        .unwrap_or_else(|error| panic!("reading the refs: {error}"));
+    let recovered = read
+        .snapshot
+        .find(&cairn_model::RefName::new("refs/heads/recovered"))
+        .and_then(cairn_model::Ref::commit_id);
+    assert_eq!(recovered, Some(at), "the branch is on the commit asked");
+
+    let taken = ask(
+        &handle,
+        LocalWrite::CreateBranch {
+            name: "recovered".to_owned(),
+            at,
+        },
+    );
+    let seen = until_ended(&mut updates, taken);
+    match ending_of(&seen, taken) {
+        (
+            WriteEnding::Failed {
+                command, output, ..
+            },
+            ReadAgain::Everything,
+        ) => {
+            assert_eq!(
+                command.as_deref(),
+                Some(format!("git --literal-pathspecs branch -- recovered {at}").as_str())
+            );
+            assert!(output.contains("recovered"), "git's reason: {output:?}");
+        }
+        other => panic!("a taken name ended {other:?}"),
+    }
+}

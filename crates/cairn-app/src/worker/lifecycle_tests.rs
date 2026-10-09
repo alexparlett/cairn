@@ -266,7 +266,10 @@ fn git_is_found_once_per_application_not_once_per_repository() {
     for _ in 0..3 {
         let (handle, mut updates) = opened(&fixture.path, &discovery);
         super::fetch_tests::opened_as(&mut updates);
-        handle.submit(Request::OpenHistory { rows: 1 });
+        handle.submit(Request::OpenHistory {
+            rows: 1,
+            lost: false,
+        });
         // The open's own refs, then its page.
         match next(&mut updates) {
             Some(Update::Refs { .. }) => {}

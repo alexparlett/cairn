@@ -358,8 +358,11 @@ pub enum Request {
     /// been read, or the walk from it fails because one of its commits has gone since — from
     /// one read now, which is answered as [`Update::Refs`] in the history lane before the
     /// first page. Numbered in the walk lane too: every page of the walk it opens is answered
-    /// under that number, so the pages of the walk it replaces are never drawn.
-    OpenHistory { rows: usize },
+    /// under that number, so the pages of the walk it replaces are never drawn. With `lost`,
+    /// Show Lost Commits: the walk starts from every reflog entry of `HEAD` and each local
+    /// branch too, and draws the commits no ref reaches as lost (staging-and-commit R11.1,
+    /// R11.4).
+    OpenHistory { rows: usize, lost: bool },
     /// The next `rows` rows; falls back to the cold cursor when no walk is open.
     MoreHistory { rows: usize },
     /// Finds the row of `target` — a commit's, or a stash's by its stash commit — by paging
@@ -1001,7 +1004,11 @@ mod tests {
         // An open is numbered in the history lane, superseding a scroll or a find, and in the
         // walk lane, so the pages of the walk it replaces are dropped.
         assert_eq!(
-            Request::OpenHistory { rows: 1 }.lanes(),
+            Request::OpenHistory {
+                rows: 1,
+                lost: false
+            }
+            .lanes(),
             [QueryLane::History, QueryLane::Walk]
         );
         // A refresh is numbered in the refs and ahead/behind lanes and nothing else: no page,

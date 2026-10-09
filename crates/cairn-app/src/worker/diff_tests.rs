@@ -43,7 +43,10 @@ pub(crate) fn checkout() -> (RepositoryHandle, Updates) {
 
 /// The first `count` commits of the history `HEAD` reaches, newest first.
 pub(crate) fn commits(handle: &RepositoryHandle, updates: &mut Updates, count: usize) -> Vec<Oid> {
-    handle.submit(Request::OpenHistory { rows: count });
+    handle.submit(Request::OpenHistory {
+        rows: count,
+        lost: false,
+    });
     let seen = collect_until(updates, |u| matches!(u, Update::Rows { .. }));
     match seen.last() {
         Some(Update::Rows { rows, .. }) if rows.len() == count => rows.ids().collect(),
@@ -59,7 +62,10 @@ pub(crate) fn recent_commits(
     updates: &mut Updates,
     at_most: usize,
 ) -> Vec<Oid> {
-    handle.submit(Request::OpenHistory { rows: at_most });
+    handle.submit(Request::OpenHistory {
+        rows: at_most,
+        lost: false,
+    });
     let seen = collect_until(updates, |u| matches!(u, Update::Rows { .. }));
     match seen.last() {
         Some(Update::Rows { rows, complete })
@@ -147,7 +153,10 @@ fn a_scroll_does_not_cancel_a_diff() {
     let of = Comparison::Commit(ids[1]);
 
     handle.submit(Request::Changes { of });
-    handle.submit(Request::OpenHistory { rows: 40 });
+    handle.submit(Request::OpenHistory {
+        rows: 40,
+        lost: false,
+    });
 
     let (mut pages, mut answered) = (0, false);
     let seen = collect_until(&mut updates, |u| {
@@ -177,7 +186,10 @@ fn a_diff_does_not_cancel_a_scroll() {
         panic!("{of:?} changed no file");
     };
 
-    handle.submit(Request::OpenHistory { rows: 60 });
+    handle.submit(Request::OpenHistory {
+        rows: 60,
+        lost: false,
+    });
     handle.submit(Request::Changes {
         of: Comparison::Commit(ids[1]),
     });
@@ -447,7 +459,10 @@ fn a_fetch_still_supersedes_nothing() {
     let (handle, mut updates) = opened(&fixture.fixture.path);
     let of = Comparison::Commit(ids[0]);
 
-    handle.submit(Request::OpenHistory { rows: 1 });
+    handle.submit(Request::OpenHistory {
+        rows: 1,
+        lost: false,
+    });
     handle.submit(Request::Changes { of });
     handle.submit(Request::Fetch {
         remote: "/nonexistent/cairn-remote.git".to_owned(),

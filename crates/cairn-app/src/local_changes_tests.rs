@@ -85,6 +85,7 @@ pub(crate) fn launch() -> (TestingRunner, View, Submitted) {
                 local: crate::local_changes_state::LocalChangesView::created(),
                 writes: State::create(crate::local_writes::LocalWrites::default()),
                 confirming: State::create(None),
+                show_lost: State::create(false),
             })
         },
         1.,

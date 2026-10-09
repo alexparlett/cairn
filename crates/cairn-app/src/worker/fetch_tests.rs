@@ -570,7 +570,10 @@ fn a_fetch_reports_progress_finishes_and_the_refresh_after_it_reopens_from_the_n
         [true],
         "the first refresh did not open: {first:?}"
     );
-    handle.submit(Request::OpenHistory { rows: 8 });
+    handle.submit(Request::OpenHistory {
+        rows: 8,
+        lost: false,
+    });
     let (rows, complete) = rows_answer(&mut updates);
     assert!(
         rows.is_empty() && complete,
@@ -621,7 +624,10 @@ fn a_fetch_reports_progress_finishes_and_the_refresh_after_it_reopens_from_the_n
             .is_some(),
         "the refresh did not see the fetched ref: {snapshot:?}"
     );
-    handle.submit(Request::OpenHistory { rows: 3 });
+    handle.submit(Request::OpenHistory {
+        rows: 3,
+        lost: false,
+    });
     assert_eq!(
         rows_answer(&mut updates).0.len(),
         3,
@@ -753,7 +759,10 @@ fn refusing_a_prompt_fails_the_fetch_once_and_the_worker_carries_on() {
     );
 
     // Still serving: a query is answered, and a second fetch asks afresh.
-    handle.submit(Request::OpenHistory { rows: 8 });
+    handle.submit(Request::OpenHistory {
+        rows: 8,
+        lost: false,
+    });
     match rows_answer_or_failure(&mut updates) {
         Some(Update::Rows { .. }) => {}
         other => panic!("the worker stopped serving after a refused fetch: {other:?}"),
@@ -829,7 +838,10 @@ fn cancelling_a_fetch_that_waits_on_a_prompt_ends_it_as_cancelled() {
     // What closing the dialog does; the helper it frees belongs to a git that is gone.
     answer(Reply::Refuse { prompt: id });
 
-    handle.submit(Request::OpenHistory { rows: 8 });
+    handle.submit(Request::OpenHistory {
+        rows: 8,
+        lost: false,
+    });
     match rows_answer_or_failure(&mut updates) {
         Some(Update::Rows { .. }) => {}
         other => panic!("the worker stopped serving after a cancelled fetch: {other:?}"),
@@ -844,7 +856,10 @@ fn letting_go_of_the_repository_ends_the_acceptor_and_removes_its_socket() {
     let fixture = UnbornRepository::new("cairn-shutdown-acceptor");
     let (home, runtime) = (Home::new(), RuntimeDir::new());
     let (handle, mut updates, answer) = boundary(&fixture.path, &home.path, &runtime);
-    handle.submit(Request::OpenHistory { rows: 1 });
+    handle.submit(Request::OpenHistory {
+        rows: 1,
+        lost: false,
+    });
     match rows_answer_or_failure(&mut updates) {
         Some(Update::Rows { .. }) => {}
         other => panic!("{other:?}"),

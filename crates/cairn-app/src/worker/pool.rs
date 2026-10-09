@@ -654,11 +654,11 @@ impl RepositoryHandle {
                     let _ = self.refresh.send(RefreshJob::Status { epoch: status });
                 }
             }
-            Routed::OpenHistory { rows } => {
+            Routed::OpenHistory { rows, lost } => {
                 if let (Some(epoch), Some(walk)) = (epoch, epoch_of(QueryLane::Walk)) {
                     let _ = self.jobs.send((
                         Some(epoch),
-                        RepositoryJob::History(Page::Open { rows, walk }),
+                        RepositoryJob::History(Page::Open { rows, walk, lost }),
                     ));
                 }
             }
@@ -1023,10 +1023,10 @@ fn serve(
             // An open whose walk is still the window's, superseded in the history lane by a
             // find or a stop asked straight after it: the walk it replaces is let go of all
             // the same, so what is asked next pages the new walk, never the old one.
-            RepositoryJob::History(Page::Open { walk, .. })
+            RepositoryJob::History(Page::Open { walk, lost, .. })
                 if epochs.is_current(walk) && !epoch.is_some_and(|e| epochs.is_current(e)) =>
             {
-                history.replace_walk(walk);
+                history.replace_walk(walk, lost);
             }
             RepositoryJob::History(page) => match epoch {
                 Some(epoch) if epochs.is_current(epoch) => {
@@ -1374,7 +1374,10 @@ mod tests {
             Err(error) => panic!("starting the worker: {error}"),
         };
         crate::worker::fetch_tests::opened_as(&mut updates);
-        handle.submit(Request::OpenHistory { rows: 8 });
+        handle.submit(Request::OpenHistory {
+            rows: 8,
+            lost: false,
+        });
         match after_refs(&mut updates) {
             Some(Update::Rows { rows, complete }) => assert!(rows.is_empty() && complete),
             other => panic!("without the setting the repository opens, got {other:?}"),
@@ -1455,7 +1458,10 @@ mod tests {
             Err(error) => panic!("starting the worker: {error}"),
         };
         crate::worker::fetch_tests::opened_as(&mut updates);
-        handle.submit(Request::OpenHistory { rows: 8 });
+        handle.submit(Request::OpenHistory {
+            rows: 8,
+            lost: false,
+        });
         match after_refs(&mut updates) {
             Some(Update::Rows { rows, complete }) => assert!(rows.is_empty() && complete),
             other => panic!("with safe.directory = * the repository opens, got {other:?}"),
@@ -1489,7 +1495,10 @@ mod tests {
             crate::worker::fetch_tests::opened_as(&mut updates),
             "cairn-unborn-head"
         );
-        handle.submit(Request::OpenHistory { rows: 8 });
+        handle.submit(Request::OpenHistory {
+            rows: 8,
+            lost: false,
+        });
 
         match block_on(updates.next()) {
             Some(Update::Refs { snapshot, reopen }) => {
@@ -1517,7 +1526,10 @@ mod tests {
         let (handle, mut updates) = cairn();
         let before = updates.epochs.current(QueryLane::History);
         let submit = handle.into_submitter();
-        submit(Request::OpenHistory { rows: 2 });
+        submit(Request::OpenHistory {
+            rows: 2,
+            lost: false,
+        });
         // Checked first: waiting for rows that were never asked for would hang.
         assert!(
             updates.epochs.current(QueryLane::History) > before,
@@ -1533,7 +1545,10 @@ mod tests {
     #[test]
     fn a_request_is_answered_with_rows() {
         let (handle, mut updates) = cairn();
-        handle.submit(Request::OpenHistory { rows: 3 });
+        handle.submit(Request::OpenHistory {
+            rows: 3,
+            lost: false,
+        });
         match after_refs(&mut updates) {
             Some(Update::Rows { rows, .. }) => assert_eq!(rows.len(), 3),
             other => panic!("expected rows, got {other:?}"),
@@ -1547,7 +1562,10 @@ mod tests {
     #[test]
     fn a_failed_request_is_answered_when_it_is_asked_again() {
         let (checkout, mut checkout_updates) = cairn();
-        checkout.submit(Request::OpenHistory { rows: 1 });
+        checkout.submit(Request::OpenHistory {
+            rows: 1,
+            lost: false,
+        });
         let tip = match after_refs(&mut checkout_updates) {
             Some(Update::Rows { rows, .. }) if rows.len() == 1 => rows.ids().next(),
             other => panic!("expected a row of this checkout, got {other:?}"),
@@ -1578,7 +1596,10 @@ mod tests {
             };
         crate::worker::fetch_tests::opened_as(&mut updates);
 
-        handle.submit(Request::OpenHistory { rows: 3 });
+        handle.submit(Request::OpenHistory {
+            rows: 3,
+            lost: false,
+        });
         match after_refs(&mut updates) {
             Some(Update::Failed { .. }) => {}
             other => panic!("expected a walk that cannot open to fail, got {other:?}"),
@@ -1601,7 +1622,10 @@ mod tests {
     #[test]
     fn paging_continues_the_same_walk_rather_than_replaying_it() {
         let (handle, mut updates) = cairn();
-        handle.submit(Request::OpenHistory { rows: 4 });
+        handle.submit(Request::OpenHistory {
+            rows: 4,
+            lost: false,
+        });
         let first = match after_refs(&mut updates) {
             Some(Update::Rows { rows, .. }) => rows,
             other => panic!("expected rows, got {other:?}"),
@@ -1657,7 +1681,10 @@ mod tests {
         };
 
         // Unsuperseded, for how long walking the rest takes on this machine.
-        handle.submit(Request::OpenHistory { rows: 2 });
+        handle.submit(Request::OpenHistory {
+            rows: 2,
+            lost: false,
+        });
         assert_eq!(first_page(&mut updates), line.commits[..2]);
         let started = Instant::now();
         queue_the_rest(&handle);
@@ -1673,7 +1700,10 @@ mod tests {
 
         let mut ran_on = 0usize;
         for _ in 0..20 {
-            handle.submit(Request::OpenHistory { rows: 2 });
+            handle.submit(Request::OpenHistory {
+                rows: 2,
+                lost: false,
+            });
             assert_eq!(first_page(&mut updates), line.commits[..2]);
             queue_the_rest(&handle);
             std::thread::sleep(wait);
@@ -2142,7 +2172,10 @@ mod tests {
                         break Err(format!("{asked} answers arrived without ever waking"));
                     }
                     asked += 1;
-                    asking.submit(Request::OpenHistory { rows: 1 });
+                    asking.submit(Request::OpenHistory {
+                        rows: 1,
+                        lost: false,
+                    });
                 }
                 match woken_by(&waker, updates.next()) {
                     Some(Update::Rows { .. } | Update::Refs { .. }) => {}
@@ -2364,7 +2397,10 @@ mod tests {
             control: FetchControl::default(),
         };
         let started = Instant::now();
-        let epoch = handle.submit(Request::OpenHistory { rows: 1_000_000 });
+        let epoch = handle.submit(Request::OpenHistory {
+            rows: 1_000_000,
+            lost: false,
+        });
         let changes = handle.submit(Request::Changes {
             of: crate::worker::Comparison::Commit(cairn_model::Oid::from_bytes(&[3; 20]).unwrap()),
         });

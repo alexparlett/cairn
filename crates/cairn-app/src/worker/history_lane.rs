@@ -44,6 +44,9 @@ pub(super) struct HistoryLane<'repo> {
     latest: Option<Arc<RefsSnapshot>>,
     /// The walk lane's number for the walk open: what its pages are answered under.
     walk: Option<Epoch>,
+    /// Whether the walk open — and the next one opened, should it fail — is Show Lost
+    /// Commits' (staging-and-commit R11.1): the open that began it said so.
+    lost: bool,
 }
 
 /// What a page answered: whether it held the row a find looks for, and whether the walk
@@ -125,9 +128,9 @@ impl<'repo> HistoryLane<'repo> {
         answering: &Answering<'_>,
     ) {
         let rows = match page {
-            Page::Open { rows, walk } => {
+            Page::Open { rows, walk, lost } => {
                 // A different scroll: drop the open walk first.
-                self.replace_walk(walk);
+                self.replace_walk(walk, lost);
                 rows
             }
             Page::More { rows } => rows,
@@ -137,14 +140,15 @@ impl<'repo> HistoryLane<'repo> {
         self.answer(repo, rows, None, epoch, answering);
     }
 
-    /// Lets go of the walk open for the one an open numbered `walk` begins, without walking
-    /// it: the open was superseded before it started, and what superseded it pages the new
-    /// walk from its start.
-    pub(super) fn replace_walk(&mut self, walk: Epoch) {
+    /// Lets go of the walk open for the one an open numbered `walk` begins — Show Lost
+    /// Commits' when `lost` — without walking it: the open was superseded before it started,
+    /// and what superseded it pages the new walk from its start.
+    pub(super) fn replace_walk(&mut self, walk: Epoch, lost: bool) {
         self.session = None;
         self.cursor = None;
         self.walked_from = None;
         self.walk = Some(walk);
+        self.lost = lost;
     }
 
     /// One page of `find`, under the history lane's `epoch`, which also cancels it: answered
@@ -296,7 +300,13 @@ impl<'repo> HistoryLane<'repo> {
         rows: usize,
         cancel: &Superseded,
     ) -> Result<(RowsPage, bool), Error> {
-        self.session = Some(repo.history_session(&HistoryRequest::from_refs(snapshot, rows))?);
+        let request = HistoryRequest::from_refs(snapshot, rows);
+        let request = if self.lost {
+            request.with_lost_commits()
+        } else {
+            request
+        };
+        self.session = Some(repo.history_session(&request)?);
         self.walked_from = Some(Arc::clone(snapshot));
         self.next_page(rows, cancel)
     }
@@ -373,7 +383,16 @@ mod tests {
         let mut lane = HistoryLane::default();
         let opened = epochs.bump(QueryLane::History);
         let walk = epochs.bump(QueryLane::Walk);
-        lane.page(&repo, Page::Open { rows: 2, walk }, opened, &answering);
+        lane.page(
+            &repo,
+            Page::Open {
+                rows: 2,
+                walk,
+                lost: false,
+            },
+            opened,
+            &answering,
+        );
         let first: Vec<Update> = sent.try_iter().map(|sent| sent.opened().1).collect();
         let first_rows: Vec<Oid> = first
             .iter()
@@ -414,6 +433,73 @@ mod tests {
             }
             other => panic!("expected the next two rows, got {other:?}"),
         }
+    }
+
+    /// staging-and-commit R11.1, R11.4: an open asked as Show Lost Commits' walks from the
+    /// reflog too and carries the commits only it reaches as lost; and the open after it,
+    /// asked plainly, walks from the refs alone. `main` moved back two commits, `HEAD`'s log
+    /// naming the newest as an entry's old id only. Caught by: the open's `lost` dropped
+    /// between the window and the walk, or kept for the plain open after it.
+    #[test]
+    fn an_open_asked_as_show_lost_commits_walks_the_reflog_and_the_next_plain_open_does_not() {
+        let line =
+            crate::worker::written_repository::WrittenRepository::linear("cairn-lost-open", 6);
+        let [newest, second, kept, ..] = line.commits[..] else {
+            panic!("six commits: {:?}", line.commits);
+        };
+        let git_dir = line.path().join(".git");
+        let write = |path: std::path::PathBuf, text: String| {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap_or_else(|e| panic!("{e}"));
+            }
+            std::fs::write(&path, text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        };
+        write(git_dir.join("refs/heads/main"), format!("{kept}\n"));
+        write(
+            git_dir.join("logs/HEAD"),
+            format!(
+                "{newest} {kept} Ada <ada@example.com> 1600000100 +0000\treset: moving to HEAD~2\n"
+            ),
+        );
+        let repo = Repository::discover(line.path())
+            .unwrap_or_else(|error| panic!("opening the line: {error}"));
+        let epochs = Epochs::new();
+        let (outbox, sent) = Outbox::watched();
+        let answering = Answering {
+            epochs: &epochs,
+            outbox: &outbox,
+        };
+        let mut lane = HistoryLane::default();
+        let mut open = |lost: bool| -> Vec<(Oid, bool)> {
+            let opened = epochs.bump(QueryLane::History);
+            let walk = epochs.bump(QueryLane::Walk);
+            lane.page(
+                &repo,
+                Page::Open {
+                    rows: 64,
+                    walk,
+                    lost,
+                },
+                opened,
+                &answering,
+            );
+            sent.try_iter()
+                .filter_map(|sent| match sent.opened().1 {
+                    Update::Rows { rows, .. } => Some(
+                        rows.ids()
+                            .enumerate()
+                            .map(|(at, id)| (id, rows.is_lost(at)))
+                            .collect::<Vec<_>>(),
+                    ),
+                    _ => None,
+                })
+                .flatten()
+                .collect()
+        };
+        let mut expected: Vec<(Oid, bool)> = vec![(newest, true), (second, true)];
+        expected.extend(line.commits[2..].iter().map(|id| (*id, false)));
+        assert_eq!(open(true), expected, "Show Lost Commits' walk");
+        assert_eq!(open(false), expected[2..], "the plain walk after it");
     }
 
     /// A stale tip: a ref whose commit has gone since the refresh read
@@ -457,7 +543,16 @@ mod tests {
         };
         let epoch = epochs.bump(QueryLane::History);
         let walk = epochs.bump(QueryLane::Walk);
-        lane.page(&repo, Page::Open { rows: 3, walk }, epoch, &answering);
+        lane.page(
+            &repo,
+            Page::Open {
+                rows: 3,
+                walk,
+                lost: false,
+            },
+            epoch,
+            &answering,
+        );
         drop(outbox);
 
         let answers: Vec<Update> = sent.try_iter().map(|sent| sent.opened().1).collect();

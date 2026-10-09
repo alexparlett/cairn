@@ -23,6 +23,7 @@ mod local_changes_state;
 #[cfg(test)]
 mod local_changes_tests;
 mod local_writes;
+mod lost_commits;
 mod ref_find;
 mod refresh;
 mod refresh_state;
@@ -120,6 +121,8 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let writes = use_state(local_writes::LocalWrites::default);
     // A destructive operation's confirmation, while one is open (staging-and-commit R7.4).
     let confirming = use_state(|| None::<confirming::Confirming>);
+    // Show Lost Commits, off as the window opens (staging-and-commit R11).
+    let show_lost = use_state(|| false);
     let view = View {
         rows,
         progress,
@@ -147,6 +150,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         local,
         writes,
         confirming,
+        show_lost,
     };
 
     let opened = use_hook(|| {

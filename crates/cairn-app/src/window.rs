@@ -91,6 +91,10 @@ pub struct View {
     /// A destructive operation's confirmation, while one is open: drawn over everything, the
     /// window's chords inert until it is answered (staging-and-commit R7.4).
     pub confirming: State<Option<Confirming>>,
+    /// Show Lost Commits (staging-and-commit R11): whether the history walks from every
+    /// reflog entry too and draws what no ref reaches dimmed. Off as the window opens, kept
+    /// for the session.
+    pub show_lost: State<bool>,
 }
 
 impl std::fmt::Debug for View {
@@ -349,6 +353,7 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     let mut progress = view.progress;
     let choosing = submit.clone();
     let extending = submit.clone();
+    let acting = submit.clone();
     let second = view
         .pair
         .read()
@@ -361,6 +366,7 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
             RowContent::Commit(commit) => CommitRow::new(commit, render.graph, render.lanes)
                 .chips(render.chips)
                 .head(render.head)
+                .lost(render.lost)
                 .selected(render.selected)
                 .into(),
             // A stash's row: its `stash@{n}` chip and its message as the subject (R5.4).
@@ -390,6 +396,8 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
         ref_find::row_chosen(view, extending.as_deref());
         selection::extend(id, index, view, extending.as_deref());
     })
+    // The history's own chord, Show Lost Commits (staging-and-commit R7.3, R11.1).
+    .on_action(move |action| crate::lost_commits::history_action(action, view, acting.as_deref()))
     .on_reach_end(move |()| {
         // A find pages the walk itself; a page asked here would supersede it.
         if view.sidebar.finding.peek().is_some() {
@@ -734,6 +742,7 @@ pub(crate) mod tests {
             local: crate::local_changes_state::LocalChangesView::created(),
             writes: State::create(crate::local_writes::LocalWrites::default()),
             confirming: State::create(None),
+            show_lost: State::create(false),
         }
     }
 
@@ -1121,7 +1130,10 @@ pub(crate) mod tests {
             .iter()
             .map(|&(hex, ..)| RowId::Commit(Oid::parse(hex).unwrap()))
             .collect();
-        handle.submit(Request::OpenHistory { rows: PAGE_ROWS });
+        handle.submit(Request::OpenHistory {
+            rows: PAGE_ROWS,
+            lost: false,
+        });
         loop {
             let (page, complete) = match crate::worker::next_update(&mut updates) {
                 update @ crate::worker::Update::Rows { complete, .. } => (update, complete),
@@ -1840,6 +1852,47 @@ pub(crate) mod tests {
         });
         test.sync_and_update();
         test.sync_and_update();
+    }
+
+    /// staging-and-commit R11.1, R11.4, R7.3: Show Lost Commits' chord, heard on the history
+    /// list, turns it on and reopens the history from every reflog entry — the old rows handed
+    /// to a worker to free, after the open is asked — and again turns it off and reopens the
+    /// plain walk. Caught by: the chord left unheard, a toggle that asks no reopen (the list
+    /// keeps drawing the walk it had), or a reopen that keeps walking as before.
+    #[test]
+    fn the_show_lost_commits_chord_reopens_the_history_with_the_toggle_flipped() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        click_row(&mut test, 2);
+        submitted.borrow_mut().clear();
+        assert!(!*view.show_lost.read(), "off as the window opens");
+
+        for turned in [true, false] {
+            press_chord(&mut test, Action::ShowLostCommits);
+            assert_eq!(*view.show_lost.read(), turned);
+            let asked: Vec<Request> = submitted.borrow_mut().drain(..).collect();
+            match asked.as_slice() {
+                [Request::OpenHistory { lost, .. }, Request::Retire(retired)] => {
+                    assert_eq!(*lost, turned, "the reopen walks as the toggle says");
+                    assert_eq!(retired.replaced_rows(), Some(10), "the rows replaced");
+                }
+                other => panic!("the toggle asked {other:?}"),
+            }
+            assert_eq!(
+                view.rows.read().len(),
+                0,
+                "the old rows are no longer drawn"
+            );
+            // The reopened walk's first page arrives, and the list is drawn again.
+            let (mut rows, mut progress) = (view.rows, view.progress);
+            test.run_in(|| {
+                hold(&mut rows.write(), (0..10).map(row).collect());
+                progress.set(received(10, true));
+            });
+            test.sync_and_update();
+            test.sync_and_update();
+            click_row(&mut test, 0);
+            submitted.borrow_mut().clear();
+        }
     }
 
     /// R4.4 at the place it is drawn, through the window: choosing a row asks what it changed

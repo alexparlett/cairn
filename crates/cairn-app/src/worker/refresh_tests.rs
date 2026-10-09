@@ -181,7 +181,10 @@ fn a_refresh_answers_the_refs_ahead_behind_and_status_each_once() {
     assert_eq!(first.refs, [true], "{first:?}");
     assert_eq!((first.ahead_behind, first.status), (1, 1), "{first:?}");
 
-    handle.submit(Request::OpenHistory { rows: 8 });
+    handle.submit(Request::OpenHistory {
+        rows: 8,
+        lost: false,
+    });
     let seen = collect_until(&mut updates, |update| matches!(update, Update::Rows { .. }));
     assert!(
         !seen
@@ -252,7 +255,10 @@ fn a_refresh_cancels_neither_a_page_being_walked_nor_a_diff_being_read() {
     let (handle, mut updates) = fixture.open();
     handle.submit(Request::Refresh);
     one_refresh(&mut updates);
-    handle.submit(Request::OpenHistory { rows: 2 });
+    handle.submit(Request::OpenHistory {
+        rows: 2,
+        lost: false,
+    });
     collect_until(&mut updates, |update| matches!(update, Update::Rows { .. }));
 
     let of = Comparison::Commit(fixture.commits[0]);
@@ -343,7 +349,10 @@ fn a_slow_status_delays_neither_a_page_nor_a_diff() {
         };
         match &update {
             Update::Refs { reopen: true, .. } if !opened => {
-                handle.submit(Request::OpenHistory { rows: 8 });
+                handle.submit(Request::OpenHistory {
+                    rows: 8,
+                    lost: false,
+                });
                 opened = true;
             }
             Update::Rows { rows: page, .. } => rows = !page.is_empty(),

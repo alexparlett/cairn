@@ -27,7 +27,10 @@ fn nowhere() -> Oid {
 
 /// Every row of the walk from every ref, in order: one page as large as any history here.
 fn whole_walk(handle: &RepositoryHandle, updates: &mut Updates) -> Vec<Oid> {
-    handle.submit(Request::OpenHistory { rows: 1_000_000 });
+    handle.submit(Request::OpenHistory {
+        rows: 1_000_000,
+        lost: false,
+    });
     let seen = collect_until(updates, |u| matches!(u, Update::Rows { .. }));
     let walk = rows_of(&seen);
     assert!(
@@ -66,7 +69,10 @@ fn a_find_pages_the_walk_until_a_page_holds_the_row_and_no_further() {
     let at = (walk.len() - 3).min(40);
     let target = walk[at];
 
-    handle.submit(Request::OpenHistory { rows: 1 });
+    handle.submit(Request::OpenHistory {
+        rows: 1,
+        lost: false,
+    });
     handle.submit(Request::FindRow { target, rows: 2 });
     let seen = collect_until(&mut updates, |u| holds(u, target));
     let found = rows_of(&seen);
@@ -101,7 +107,10 @@ fn a_second_find_supersedes_the_first_and_no_page_is_lost() {
     let at = (walk.len() - 3).min(40);
     let target = walk[at];
 
-    handle.submit(Request::OpenHistory { rows: 1 });
+    handle.submit(Request::OpenHistory {
+        rows: 1,
+        lost: false,
+    });
     handle.submit(Request::FindRow {
         target: nowhere(),
         rows: 1,
@@ -130,7 +139,10 @@ fn a_stopped_find_leaves_the_walk_for_the_next_page() {
     let (handle, mut updates) = checkout();
     let walk = whole_walk(&handle, &mut updates);
 
-    handle.submit(Request::OpenHistory { rows: 1 });
+    handle.submit(Request::OpenHistory {
+        rows: 1,
+        lost: false,
+    });
     handle.submit(Request::FindRow {
         target: nowhere(),
         rows: 1,
@@ -160,7 +172,10 @@ fn the_pages_a_find_laid_out_before_it_was_stopped_still_arrive() {
     let (handle, mut updates) = checkout();
     let walk = whole_walk(&handle, &mut updates);
 
-    handle.submit(Request::OpenHistory { rows: 1 });
+    handle.submit(Request::OpenHistory {
+        rows: 1,
+        lost: false,
+    });
     handle.submit(Request::FindRow {
         target: nowhere(),
         rows: 1,
@@ -200,7 +215,10 @@ fn a_stop_alone_ends_the_find_and_leaves_the_walk_where_it_stood() {
     );
     let (handle, mut updates) = super::diff_tests::opened(line.path());
     super::fetch_tests::opened_as(&mut updates);
-    handle.submit(Request::OpenHistory { rows: 1 });
+    handle.submit(Request::OpenHistory {
+        rows: 1,
+        lost: false,
+    });
     let mut seen = collect_until(&mut updates, |u| matches!(u, Update::Rows { .. }));
     handle.submit(Request::FindRow {
         target: nowhere(),
@@ -257,7 +275,10 @@ fn a_find_for_a_row_the_walk_never_reaches_ends_with_the_walk() {
     let (handle, mut updates) = checkout();
     let walk = whole_walk(&handle, &mut updates);
 
-    handle.submit(Request::OpenHistory { rows: 1 });
+    handle.submit(Request::OpenHistory {
+        rows: 1,
+        lost: false,
+    });
     handle.submit(Request::FindRow {
         target: nowhere(),
         rows: 5,
@@ -438,6 +459,7 @@ fn find_through_the_boundary(
     let mut history = cairn_model::History::new();
     handle.submit(Request::OpenHistory {
         rows: crate::PAGE_ROWS,
+        lost: false,
     });
     let first = collect_until(updates, |u| matches!(u, Update::Rows { .. }));
     for update in first {
@@ -489,6 +511,7 @@ fn measures_a_find_through_the_boundary() {
     let started = Instant::now();
     handle.submit(Request::OpenHistory {
         rows: usize::MAX / 2,
+        lost: false,
     });
     let opened = collect_until(&mut updates, |u| matches!(u, Update::Rows { .. }));
     let whole = rows_of(&opened);
@@ -584,6 +607,7 @@ fn measures_a_find_through_the_boundary() {
     let mut history = cairn_model::History::new();
     handle.submit(Request::OpenHistory {
         rows: crate::PAGE_ROWS,
+        lost: false,
     });
     for update in collect_until(&mut updates, |u| matches!(u, Update::Rows { .. })) {
         if let Update::Rows { rows, .. } = update {

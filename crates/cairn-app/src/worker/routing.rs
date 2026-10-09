@@ -75,9 +75,14 @@ pub(super) const fn thread_of(lane: QueryLane) -> Thread {
 /// Which page of the history walk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Page {
-    /// A new walk from every ref, dropping any walk open; `walk` is the walk lane's number
-    /// the open was given, which every page of the walk is answered under.
-    Open { rows: usize, walk: Epoch },
+    /// A new walk from every ref — and, when `lost`, from every reflog entry Show Lost
+    /// Commits reads — dropping any walk open; `walk` is the walk lane's number the open was
+    /// given, which every page of the walk is answered under.
+    Open {
+        rows: usize,
+        walk: Epoch,
+        lost: bool,
+    },
     /// The next rows of the walk open, or a cold restart from the last good page.
     More { rows: usize },
     /// Pages of the walk open until one holds `target`'s row, or the walk ends.
@@ -140,6 +145,7 @@ pub(super) enum Routed {
     /// `submit` gave it.
     OpenHistory {
         rows: usize,
+        lost: bool,
     },
     /// A local write, straight to the local lane.
     Write {
@@ -211,7 +217,7 @@ impl Routed {
 /// until it is given a thread.
 pub(super) fn route(request: Request) -> Routed {
     match request {
-        Request::OpenHistory { rows } => Routed::OpenHistory { rows },
+        Request::OpenHistory { rows, lost } => Routed::OpenHistory { rows, lost },
         Request::MoreHistory { rows } => {
             Routed::Repository(RepositoryJob::History(Page::More { rows }))
         }
@@ -273,8 +279,8 @@ pub(super) fn route(request: Request) -> Routed {
 #[cfg(test)]
 pub(super) fn unroute(routed: Routed) -> Request {
     match routed {
-        Routed::Repository(RepositoryJob::History(Page::Open { rows, .. }))
-        | Routed::OpenHistory { rows } => Request::OpenHistory { rows },
+        Routed::Repository(RepositoryJob::History(Page::Open { rows, lost, .. }))
+        | Routed::OpenHistory { rows, lost } => Request::OpenHistory { rows, lost },
         Routed::Repository(RepositoryJob::History(Page::More { rows })) => {
             Request::MoreHistory { rows }
         }
@@ -337,7 +343,10 @@ mod tests {
     fn every_request() -> Vec<Request> {
         let commit = Comparison::Commit(cairn_model::Oid::from_bytes(&[7; 20]).unwrap());
         vec![
-            Request::OpenHistory { rows: 3 },
+            Request::OpenHistory {
+                rows: 3,
+                lost: true,
+            },
             Request::MoreHistory { rows: 3 },
             Request::FindRow {
                 target: cairn_model::Oid::from_bytes(&[8; 20]).unwrap(),

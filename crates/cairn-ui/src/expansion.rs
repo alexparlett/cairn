@@ -147,6 +147,16 @@ impl Expansion {
         closed
     }
 
+    /// Closes every file; returns what each drew, by its place.
+    pub fn take_all(&mut self) -> Vec<(usize, Opened)> {
+        self.placed.clear();
+        self.stopped_at_budget = false;
+        std::mem::take(&mut self.opened)
+            .into_iter()
+            .map(|(index, (opened, _))| (index, opened))
+            .collect()
+    }
+
     /// Closes every file; returns what each drew.
     pub fn close_all(&mut self) -> Vec<Opened> {
         self.placed.clear();

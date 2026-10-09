@@ -176,19 +176,49 @@ impl DiffState {
             // Kept, and their number with them, until a page replaces one.
             (true, Some(kept)) => (kept.shown, kept.drawn, kept.unread),
             (_, replaced) => {
+                // A path drawn before, in the same lists under the same options, keeps its diff
+                // until its new answer comes — a path added to or taken from the selection
+                // redraws nothing of the others (phase 08's QA item 4', the user's decision);
+                // the rest is let go of.
+                let mut carried: std::collections::HashMap<RepoPath, Opened> =
+                    std::collections::HashMap::new();
                 if let Some(mut replaced) = replaced {
-                    freed.extend(shown_of(replaced.shown.close_all()));
+                    let comparable = replaced.list == wanted.list
+                        && replaced.lists == wanted.lists
+                        && replaced.query.options == wanted.options;
+                    for (index, opened) in replaced.shown.take_all() {
+                        let entry = replaced.entries.get(index);
+                        let carry = comparable
+                            && matches!(opened, Opened::Shown(_))
+                            && !replaced.unread.contains(&index)
+                            && entry.is_some_and(|(path, side)| {
+                                wanted.entries.contains(&(path.clone(), *side))
+                            });
+                        match entry {
+                            Some((path, _)) if carry => {
+                                carried.insert(path.clone(), opened);
+                            }
+                            _ => freed.extend(shown_of([opened])),
+                        }
+                    }
                 }
                 let mut shown = Expansion::new();
-                shown.set(wanted.entries.iter().enumerate().map(|(index, (_, side))| {
-                    (
-                        index,
-                        match side {
-                            Some(_) => Opened::Reading,
-                            None => Opened::Failed(CONFLICTED_TOGETHER.to_owned()),
-                        },
-                    )
-                }));
+                shown.set(
+                    wanted
+                        .entries
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (path, side))| {
+                            (
+                                index,
+                                match side {
+                                    Some(_) => carried.remove(path).unwrap_or(Opened::Reading),
+                                    None => Opened::Failed(CONFLICTED_TOGETHER.to_owned()),
+                                },
+                            )
+                        }),
+                );
+                freed.extend(shown_of(carried.into_values()));
                 (shown, self.next_drawn(), Vec::new())
             }
         };
@@ -510,6 +540,64 @@ mod tests {
             Some(&Opened::Failed(not_read_notice()))
         );
         assert!(!state.together_needs_asking());
+    }
+
+    /// Phase 08's QA item 4' (the user's decision): a path added to the selection, or one taken
+    /// from it, redraws nothing of the others — each path drawn before keeps its diff, at its
+    /// new place, until its new answer comes, under a new number; a path let go of is freed; and
+    /// over other lists nothing is carried. Caught by: every path blanked on each selection
+    /// change, a diff kept at its old place, or one carried across a status that moved.
+    #[test]
+    fn a_selection_that_changes_keeps_each_paths_diff_meanwhile() {
+        let mut state = DiffState::default();
+        let first = asked(&state.show_together(wanted(&["a.rs", "c.rs"], 1))).expect("an ask");
+        state.together_arrived(
+            first.asked,
+            vec![(0, Ok(Some(shown("a.rs")))), (1, Ok(Some(shown("c.rs"))))],
+            Some(TogetherEnded::Every),
+        );
+        let drawn = state.together_drawn();
+        let grown = state.show_together(wanted(&["a.rs", "b.rs", "c.rs"], 1));
+        assert!(asked(&grown).is_some());
+        assert!(
+            grown
+                .iter()
+                .all(|request| !matches!(request, Request::Retire(_))),
+            "a diff kept was freed"
+        );
+        let new_path = |state: &DiffState, at: usize| {
+            state
+                .together_diff(at)
+                .map(|shown| shown.diff().file.new_path.to_string())
+        };
+        assert_eq!(new_path(&state, 0).as_deref(), Some("a.rs"));
+        assert_eq!(answered_together(&state).get(1), Some(&Opened::Reading));
+        assert_eq!(
+            new_path(&state, 2).as_deref(),
+            Some("c.rs"),
+            "c.rs's diff not moved"
+        );
+        assert_ne!(
+            state.together_drawn(),
+            drawn,
+            "a selection over the old rows outlived them"
+        );
+        let shrunk = state.show_together(wanted(&["c.rs", "d.rs"], 1));
+        assert!(
+            shrunk.iter().any(
+                |request| matches!(request, Request::Retire(retired) if retired.shown().len() == 1)
+            ),
+            "a.rs's diff was not freed: {shrunk:?}"
+        );
+        assert_eq!(new_path(&state, 0).as_deref(), Some("c.rs"));
+        // Over other lists, nothing is carried.
+        let moved = state.show_together(wanted(&["c.rs", "d.rs", "e.rs"], 2));
+        assert!(
+            moved
+                .iter()
+                .any(|request| matches!(request, Request::Retire(_)))
+        );
+        assert_eq!(answered_together(&state).get(0), Some(&Opened::Reading));
     }
 
     /// The same paths asked again keep what they draw until their answers come, under a new

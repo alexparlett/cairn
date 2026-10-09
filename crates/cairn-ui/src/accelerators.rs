@@ -86,11 +86,13 @@ pub enum Action {
     Commit,
     /// Shows or hides the commits only a reflog reaches (R11.1).
     ShowLostCommits,
+    /// Opens Create Branch at `HEAD`'s commit (R11.3; Fork's "New branch").
+    NewBranch,
 }
 
 impl Action {
     /// Every action, in the order the table lists them.
-    pub const ALL: [Action; 19] = [
+    pub const ALL: [Action; 20] = [
         Action::PreviousChange,
         Action::NextChange,
         Action::ToggleSideBySide,
@@ -110,6 +112,7 @@ impl Action {
         Action::Discard,
         Action::Commit,
         Action::ShowLostCommits,
+        Action::NewBranch,
     ];
 }
 
@@ -323,6 +326,9 @@ pub fn chords(action: Action, platform: Os) -> Chords {
         // ⌘⇧. on macOS, Ctrl+Shift+. on Windows: the full stop matched where it sits, since
         // Shift makes it `>`.
         Action::ShowLostCommits => Chords::of([(command | shift, at(Code::Period))]),
+        // ⇧⌘B on macOS, Ctrl+Shift+B on Windows: Fork's "New branch", from `HEAD`, heard
+        // wherever focus is, as its menu's is.
+        Action::NewBranch => Chords::of([(command | shift, at(Code::KeyB))]),
         Action::ToggleSideBySide
         | Action::ToggleIgnoreWhitespace
         | Action::MoreLines
@@ -348,7 +354,8 @@ pub fn heard_in(action: Action) -> Scope {
         | Action::EntireFile
         | Action::ShowCommitTab
         | Action::ShowChangesTab
-        | Action::Refresh => Scope::Window,
+        | Action::Refresh
+        | Action::NewBranch => Scope::Window,
     }
 }
 
@@ -771,7 +778,7 @@ mod tests {
         let (alt, shift, none) = (M::ALT, M::SHIFT, M::empty());
         let unbound = |action| (action, Vec::new(), Scope::Window);
         for (platform, command) in [(Os::Linux, M::CONTROL), (Os::MacOs, M::META)] {
-            let expected: [(Action, Vec<Chord>, Scope); 19] = [
+            let expected: [(Action, Vec<Chord>, Scope); 20] = [
                 (
                     Action::PreviousChange,
                     vec![keyed(command, NamedKey::ArrowUp)],
@@ -863,6 +870,11 @@ mod tests {
                     Action::ShowLostCommits,
                     vec![placed(command | shift, Code::Period)],
                     Scope::History,
+                ),
+                (
+                    Action::NewBranch,
+                    vec![placed(command | shift, Code::KeyB)],
+                    Scope::Window,
                 ),
             ];
             assert_eq!(
@@ -1307,7 +1319,12 @@ mod tests {
             };
             KeyboardEventData::new(key, code, held)
         };
-        for action in [Action::NextChange, Action::ShowCommitTab, Action::Refresh] {
+        for action in [
+            Action::NextChange,
+            Action::ShowCommitTab,
+            Action::Refresh,
+            Action::NewBranch,
+        ] {
             assert!(is_chord(&event(action), &[]), "{action:?}");
         }
         for (action, own) in [

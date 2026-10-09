@@ -2201,6 +2201,7 @@ The chords are Fork's and only Fork's — the user's decision of 2026-10-03, fro
 | discard the selection | Backspace, Delete, Ctrl+Shift+D | ⌫, ⇧⌘D | in Local Changes' lists and diff |
 | commit | Ctrl+Enter | ⌘Return | in the commit box |
 | Show Lost Commits | Ctrl+Shift+. | ⌘⇧. | in the history list |
+| New Branch, Create Branch at `HEAD` (staging-and-commit R11.3) | Ctrl+Shift+B | ⇧⌘B | anywhere |
 | toggle side-by-side, toggle ignore whitespace, more lines, fewer lines, entire file | none | none | — |
 
 Change navigation is scoped so a text field elsewhere keeps those keys (⌘↑ is the start of

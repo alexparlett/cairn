@@ -529,7 +529,8 @@ fn act(
         | Action::ShowChangesTab
         | Action::Refresh
         | Action::Commit
-        | Action::ShowLostCommits => {}
+        | Action::ShowLostCommits
+        | Action::NewBranch => {}
     }
 }
 

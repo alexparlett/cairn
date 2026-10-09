@@ -1,5 +1,6 @@
 //! Create Branch as the window keeps it (`docs/prd/staging-and-commit.md` R11.3; the user's
-//! decisions, 2026-10-09): Fork's dialog, opened by "New Branch…" on any commit row.
+//! decisions, 2026-10-09): Fork's dialog, opened by "New Branch…" on any commit row, or at
+//! `HEAD` by Fork's New Branch chord (`Action::NewBranch`).
 //!
 //! - **The name** is the window's text; each change asks the engine whether git takes it and
 //!   whether a branch has it (`Request::CheckBranchName`, the branch-name lane, the latest ask
@@ -19,7 +20,9 @@
 
 use std::rc::Rc;
 
-use cairn_model::{BranchName, Consequence, Oid, StatusEntry, WorkingTreeStatus};
+use cairn_model::{
+    BranchName, Consequence, HeadState, Oid, Ref, RowContent, StatusEntry, WorkingTreeStatus,
+};
 use cairn_ui::{CreateBranchDialog, GitErrorDialog, LocalChoice};
 use freya::prelude::*;
 
@@ -131,6 +134,46 @@ pub fn open(view: View, at: Oid, subject: String, submit: Option<&dyn Fn(Request
     };
     name.set(kept.clone());
     ask_name(&kept, submit);
+}
+
+/// Fork's New Branch chord: the dialog opens at `HEAD`'s commit as the last refresh read it —
+/// a branch's tip or a detached `HEAD` — its subject the loaded row's, found among the rows
+/// refs label (`History::labelled_position`, never every row), or none where it is not loaded.
+/// Nothing opens before the refs are read, on an unborn `HEAD`, or while the dialog or a
+/// create's Git Error dialog is up: a second press would reset the name typed.
+pub fn open_at_head(view: View, submit: Option<&dyn Fn(Request)>) {
+    {
+        let state = view.branch.state.peek();
+        if state.open.is_some() || state.error.is_some() {
+            return;
+        }
+    }
+    let at = {
+        let refreshed = view.refreshed.peek();
+        let Some(refs) = refreshed.refs() else {
+            return;
+        };
+        match &refs.head {
+            HeadState::Branch(name) => refs.find(name).and_then(Ref::commit_id),
+            HeadState::Detached(at) => Some(*at),
+            HeadState::Unborn(_) => None,
+        }
+    };
+    let Some(at) = at else {
+        return;
+    };
+    let subject = {
+        let rows = view.rows.peek();
+        rows.labelled_position(at)
+            .and_then(|index| rows.row(index))
+            // No wildcard arm: `HEAD`'s row is a commit's, but every kind is named.
+            .map(|row| match row.content() {
+                RowContent::Commit(commit) => commit.summary,
+                RowContent::Stash(stash) => stash.message,
+            })
+            .unwrap_or_default()
+    };
+    open(view, at, subject, submit);
 }
 
 /// The name's text changed: what the engine said of the old text no longer stands, and the new

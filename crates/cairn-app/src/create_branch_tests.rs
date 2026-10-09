@@ -6,10 +6,14 @@
 //! name kept for the next opening. Updates are applied through `session::apply`, as the
 //! worker's stream applies them, and requests read back from the window's submit.
 
+use std::sync::Arc;
+
 use cairn_model::{
-    BranchName, ChangeLoss, ChangedKind, Consequence, GraphRow, Lane, LostChange, Oid, PagedCommit,
-    RepoPath, RowsPage, StagedChange, UnstagedChange,
+    BranchName, ChangeLoss, ChangedKind, Consequence, GraphRow, HeadState, Lane, LostChange, Oid,
+    PagedCommit, Ref, RefKind, RefName, RefTarget, RefsSnapshot, RepoPath, RowsPage, StagedChange,
+    UnstagedChange,
 };
+use cairn_ui::accelerators::Action;
 use cairn_ui::{
     CHECK_OUT_AFTER_CREATE, CREATE_AND_CHECKOUT_CAPTION, CREATE_BRANCH_TITLE, CREATE_CAPTION,
     DISCARD_LOCAL_CAPTION, GIT_ERROR_TITLE, LOCAL_CHANGES_LABEL, NEW_BRANCH_CAPTION,
@@ -20,6 +24,7 @@ use freya_testing::prelude::{MouseEventName, PlatformEvent};
 
 use crate::local_changes_tests::{Submitted, apply, changed, labels, launch, status, untracked};
 use crate::window::View;
+use crate::window::tests::press_chord;
 use crate::worker::{LocalWrite, OperationId, Request, Update, WriteEnding};
 
 fn settle(test: &mut TestingRunner) {
@@ -300,6 +305,113 @@ fn click_check_out(
     apply(test, view, submitted, status(entries));
     new_branch(test);
     click(test, CHECK_OUT_AFTER_CREATE);
+}
+
+/// The last refresh's refs, `refs/heads/main` at `main` and `HEAD` as `head` says.
+fn refs_read(test: &mut TestingRunner, view: View, head: HeadState, main: Oid) {
+    let mut refreshed = view.refreshed;
+    let _ = refreshed.write().refs_arrived(Arc::new(RefsSnapshot {
+        refs: vec![Ref {
+            name: RefName::new("refs/heads/main"),
+            kind: RefKind::LocalBranch,
+            target: RefTarget::Commit(main),
+            symbolic: None,
+            upstream: None,
+        }],
+        head,
+        stashes: Vec::new(),
+        unreadable: 0,
+    }));
+    settle(test);
+}
+
+/// Fork's New Branch chord (Ctrl+Shift+B, ⇧⌘B; phase 10's QA, item 19): Create Branch opens at
+/// `HEAD`'s commit as the last refresh read it — a branch's or a detached `HEAD`'s — with the
+/// loaded row's subject, or none where the row is not loaded; and the chord does nothing before
+/// the refs are read, on an unborn `HEAD`, or while the dialog is open. Caught by: the chord
+/// unheard, the dialog opened at another commit, or an open dialog reset by the chord (its
+/// name lost).
+#[test]
+fn the_new_branch_chord_opens_create_branch_at_head() {
+    let (mut test, view, submitted) = launch();
+    // `HEAD`'s row, labelled `main`, as a walk from the refs lays it out.
+    let mut page = RowsPage::new();
+    page.push_labelled(
+        GraphRow::new(oid(0xab), Lane::new(0), Vec::new()),
+        PagedCommit {
+            parents: 1,
+            subject: "Fix the parser",
+            author: "Ada",
+            author_time: 0,
+        },
+        true,
+        &[cairn_model::Label {
+            name: "refs/heads/main",
+            kind: RefKind::LocalBranch,
+            current: true,
+        }],
+    );
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::Rows {
+            rows: page,
+            complete: true,
+        },
+    );
+    press_chord(&mut test, Action::NewBranch);
+    settle(&mut test);
+    assert!(
+        !drawn(&test, CREATE_BRANCH_TITLE),
+        "opened before the refs were read"
+    );
+    refs_read(
+        &mut test,
+        view,
+        HeadState::Unborn(RefName::new("refs/heads/main")),
+        oid(0xab),
+    );
+    press_chord(&mut test, Action::NewBranch);
+    settle(&mut test);
+    assert!(
+        !drawn(&test, CREATE_BRANCH_TITLE),
+        "opened on an unborn HEAD"
+    );
+
+    refs_read(
+        &mut test,
+        view,
+        HeadState::Branch(RefName::new("refs/heads/main")),
+        oid(0xab),
+    );
+    press_chord(&mut test, Action::NewBranch);
+    settle(&mut test);
+    assert!(drawn(&test, CREATE_BRANCH_TITLE), "the chord was not heard");
+    assert!(
+        drawn(&test, "abababa Fix the parser"),
+        "not at HEAD's commit: {:?}",
+        labels(&test)
+    );
+    type_name(&mut test, view, "topic");
+    press_chord(&mut test, Action::NewBranch);
+    settle(&mut test);
+    assert_eq!(
+        *view.branch.name.peek(),
+        "topic",
+        "the open dialog was reset"
+    );
+    test.press_key(Key::Named(NamedKey::Escape));
+    settle(&mut test);
+
+    refs_read(&mut test, view, HeadState::Detached(oid(0xcd)), oid(0xab));
+    press_chord(&mut test, Action::NewBranch);
+    settle(&mut test);
+    assert!(
+        drawn(&test, "cdcdcdc "),
+        "not at the detached HEAD: {:?}",
+        labels(&test)
+    );
 }
 
 /// What Create Branch's discard would lose at `at` for `branch`.

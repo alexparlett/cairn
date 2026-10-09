@@ -77,6 +77,8 @@ pub fn act(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
         | Action::Discard
         | Action::Commit
         | Action::ShowLostCommits => {}
+        // Fork's New Branch, at `HEAD`, wherever focus is (R11.3).
+        Action::NewBranch => crate::create_branch::open_at_head(view, submit),
         // Read again on the worker; the window only asks (R10.1).
         Action::Refresh => {
             if let Some(submit) = submit {

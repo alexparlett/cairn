@@ -672,6 +672,30 @@ pub fn spells_a_chord(source: &str) -> Vec<usize> {
     lines.into_iter().collect()
 }
 
+/// The held keys a chord is spelled with for a person, each alone (the user's decision,
+/// 2026-10-09): the only literal the one rostered chord-name module may hold that spells a
+/// chord, so a name there is put together from the table's data and never typed out whole.
+pub const MODIFIER_NAMES: &[&str] = &["Ctrl", "Alt", "Shift", "Super", "⌘", "⌥", "⇧", "⌃"];
+
+/// 1-based lines where a production literal of `source` spells a chord ([`spells_a_chord`])
+/// and is not exactly one held key's name ([`MODIFIER_NAMES`]): a chord typed out whole —
+/// `"Ctrl+Shift+."`, `"⌘⇧"`, `"Shift+"` — rather than rendered from the accelerator table.
+pub fn hand_typed_chords(source: &str) -> Vec<usize> {
+    let mut lines = BTreeSet::new();
+    let literals = production_string_literals(source)
+        .into_iter()
+        .map(|(line, text)| (line, narrowed(&text)))
+        .chain(production_char_literals(source));
+    for (line, text) in literals {
+        let text = unescaped(&text);
+        let spells = MODIFIER_TEXT.iter().any(|spelling| text.contains(spelling));
+        if spells && !MODIFIER_NAMES.contains(&text.as_str()) {
+            lines.insert(line);
+        }
+    }
+    lines.into_iter().collect()
+}
+
 /// `text` whose every `char` is one byte widened, as `code_only` copies a string, read back
 /// as the UTF-8 it was.
 fn narrowed(text: &str) -> String {

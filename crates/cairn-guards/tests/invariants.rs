@@ -11,11 +11,11 @@ use cairn_guards::{
     constructs_process_command, constructs_struct, declared_dependencies, declares_publicly,
     derives_or_implements, embedded_font_violations, gate_command_assignments, gate_dispatch_arms,
     gate_full_sequence, gate_function_body, gate_function_calls, gate_function_commands,
-    implements_type, job_env_entries, mentions_crate, names_a_literal_modifier, names_an_element,
-    names_gitoxide_mutation, production_char_literals, production_string_literals,
-    reads_enum_partially, reads_row_content_partially, renames_type, renders_in_a_macro, repo_root,
-    required_skip_violations, rust_sources, spawns_git, spells_a_chord,
-    structs_with_a_field_naming, types_containing, waits_on_work,
+    hand_typed_chords, implements_type, job_env_entries, mentions_crate, names_a_literal_modifier,
+    names_an_element, names_gitoxide_mutation, production_char_literals,
+    production_string_literals, reads_enum_partially, reads_row_content_partially, renames_type,
+    renders_in_a_macro, repo_root, required_skip_violations, rust_sources, spawns_git,
+    spells_a_chord, structs_with_a_field_naming, types_containing, waits_on_work,
 };
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
@@ -4341,19 +4341,56 @@ fn the_unbounded_view_matcher_catches_the_shapes_it_claims() {
 /// because it is where every chord is written down.
 const ACCELERATOR_TABLE: &str = "crates/cairn-ui/src/accelerators.rs";
 
+/// The one render file that may spell a chord for a person to read (the user's decision,
+/// 2026-10-09): a tooltip names an action's chord, rendered there from the accelerator table's
+/// data. A row whose file no longer spells a chord fails, so the exemption cannot outlive its
+/// need.
+const CHORD_NAMES: &[&str] = &["crates/cairn-ui/src/accelerators/chord_names.rs"];
+
+/// Whether `path` is a row of [`CHORD_NAMES`]: exactly, never by a name or a directory.
+fn spells_chords_for_people(path: &Path) -> bool {
+    CHORD_NAMES.iter().any(|row| path == Path::new(row))
+}
+
 /// PRD R8.3, decision D5: a component asks the accelerator table which action a key press
 /// is, and never names a modifier itself — not the held-keys type, not the event's field,
 /// not a modifier key, and not a chord spelled out for a person to read. A `Ctrl` written
-/// into a component is a shortcut that is wrong on macOS.
+/// into a component is a shortcut that is wrong on macOS. The one exception is
+/// [`CHORD_NAMES`]: a chord spelled for a tooltip, from the table's data — each literal there
+/// one held key's name alone, never a chord typed out whole, and no element built there.
 #[test]
 fn no_component_names_a_literal_modifier() {
     let table = Path::new(ACCELERATOR_TABLE);
     let mut table_seen = false;
+    let mut chord_names_seen = BTreeSet::new();
     for dir in RENDER_SOURCE_DIRS {
         let mut scanned = 0usize;
         for (path, source) in rust_sources(dir) {
             scanned += 1;
             let hits = names_a_literal_modifier(&source);
+            if spells_chords_for_people(&path) {
+                chord_names_seen.insert(path.clone());
+                assert!(
+                    !spells_a_chord(&source).is_empty(),
+                    "{} spells no chord, so its CHORD_NAMES row is no longer needed: remove it",
+                    path.display()
+                );
+                let typed = hand_typed_chords(&source);
+                assert!(
+                    typed.is_empty(),
+                    "{}:{} types a chord out whole. A chord's name is put together from the                      accelerator table's data; a literal here names one held key alone.",
+                    path.display(),
+                    typed[0]
+                );
+                let elements = names_an_element(&source);
+                assert!(
+                    elements.is_empty(),
+                    "{}:{} builds or names an element; it spells chords, and a component                      draws them.",
+                    path.display(),
+                    elements[0]
+                );
+                continue;
+            }
             if path == table {
                 table_seen = true;
                 // The matcher has to see the modifiers the table really names, or it is
@@ -4387,6 +4424,70 @@ fn no_component_names_a_literal_modifier() {
         "{ACCELERATOR_TABLE} does not exist, so no render file is the table and the guard \
          exempts a file nobody can see. If the table moved, move the roster with it."
     );
+    for row in CHORD_NAMES {
+        assert!(
+            chord_names_seen.contains(Path::new(row)),
+            "{row} is a CHORD_NAMES row the scan never read: it moved or was deleted, and the \
+             row exempts nothing — move or remove it"
+        );
+    }
+}
+
+/// The chord-name exemption is exact, and narrow: its own file and no other path — not the
+/// table, not a sibling, not a file of the same name elsewhere, not a copy beside it — and,
+/// inside it, a literal naming one held key passes while a chord typed out whole fails.
+#[test]
+fn the_chord_name_roster_and_its_matcher_catch_the_shapes_they_claim() {
+    for row in CHORD_NAMES {
+        assert!(spells_chords_for_people(Path::new(row)), "{row}");
+    }
+    for other in [
+        ACCELERATOR_TABLE,
+        "crates/cairn-ui/src/chord_names.rs",
+        "crates/cairn-app/src/accelerators/chord_names.rs",
+        "crates/cairn-ui/src/accelerators/chord_names.rs.orig",
+        "crates/cairn-ui/src/accelerators/chord_names_copy.rs",
+        "crates/cairn-ui/src/accelerators",
+        "crates/cairn-ui/src/history_list.rs",
+    ] {
+        assert!(
+            !spells_chords_for_people(Path::new(other)),
+            "the roster exempts {other}"
+        );
+    }
+    // A component elsewhere spelling a chord is still caught by the modifier matcher.
+    assert!(!names_a_literal_modifier("fn f() { let t = \"Ctrl+Shift+.\"; }").is_empty());
+    let typed = [
+        "fn f() { let t = \"Ctrl+Shift+.\"; }",
+        "fn f() { let t = \"⌘⇧\"; }",
+        "fn f() { let t = \"Shift+\"; }",
+        "fn f() { let t = \"Ctrl+\"; }",
+        "fn f() { let t = \"\\u{2318}R\"; }",
+        "fn f() { let t = \"Cmd\"; }",
+        "fn f() { let t = format!(\"{}+{}\", \"Ctrl\", \"Shift+.\"); }",
+    ];
+    for source in typed {
+        assert!(
+            !hand_typed_chords(source).is_empty(),
+            "the hand-typed chord matcher missed {source:?}"
+        );
+    }
+    let named = [
+        "fn f() { let t = \"Ctrl\"; }",
+        "fn f() { let t = \"⌘\"; }",
+        "fn f() { let t = '⇧'; }",
+        "fn f() { let t = \"Shift\"; }",
+        "fn f() { let t = \"+\"; }",
+        "fn f() { let t = \"Return\"; }",
+        "#[cfg(test)]\nmod tests {\n    fn f() { let t = \"Ctrl+Shift+.\"; }\n}",
+    ];
+    for source in named {
+        assert_eq!(
+            hand_typed_chords(source),
+            Vec::<usize>::new(),
+            "the hand-typed chord matcher fired on {source:?}"
+        );
+    }
 }
 
 #[test]

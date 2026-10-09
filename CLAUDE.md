@@ -978,8 +978,18 @@ Project invariants:
   — the table's production code names none of `ELEMENT_BUILDERS` (`rect`,
   `label`, `Element`, `Component`, `Button`, ...; matcher `names_an_element`,
   self-test `the_element_matcher_catches_the_shapes_it_claims`) and no literal of
-  it spells a chord. Residual review obligations, `qa-checklist`'s (its item
-  11): the matchers read spellings, so a modifier reached through a `type` alias
+  it spells a chord. **One module spells a chord for a person, from the table's data**
+  (the user's decision, 2026-10-09): `crates/cairn-ui/src/accelerators/chord_names.rs`
+  (`accelerators::chord_name`, a tooltip's text — Linux `Ctrl+Shift+.`, macOS `⌘⇧.`, as
+  Fork's own lists write them) renders an action's first chord from the table, and is the
+  one row of `CHORD_NAMES` that `no_component_names_a_literal_modifier` exempts: exactly that
+  path, the row failing when its file spells no chord or is not read, each literal there one
+  held key's name alone (`MODIFIER_NAMES`; matcher `hand_typed_chords` — a chord typed out
+  whole fails), and no element built there (self-test
+  `the_chord_name_roster_and_its_matcher_catch_the_shapes_they_claim`). Residual review
+  obligations, `qa-checklist`'s (its item
+  11): a name put together there from single-key literals rather than from the chord the
+  table lists is not seen; the matchers read spellings, so a modifier reached through a `type` alias
   declared outside the render crates, a macro, or a raw bit pattern compared
   without naming the type is not seen, nor is an element the table builds
   through a helper named otherwise; the table's

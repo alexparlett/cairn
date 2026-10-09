@@ -4,7 +4,8 @@
 //!
 //! This is the one file of a render path that names a modifier, and it holds data and the
 //! resolution of a press against it — never an element, and never a chord spelled out for a
-//! person to read (`the_accelerator_table_holds_data_and_resolution_only`). A component that
+//! person to read (`the_accelerator_table_holds_data_and_resolution_only`); its one child,
+//! `chord_names`, spells a chord for a tooltip from this data ([`chord_name`]). A component that
 //! wants a shortcut asks [`resolve_key`] which action a key press is, and never looks at the
 //! held keys itself — the cheap half of keeping macOS reachable, since the platform's
 //! command key is a row of this table rather than a literal scattered through components.
@@ -35,6 +36,10 @@
 
 use freya::prelude::{Code, Key, KeyboardEventData, Modifiers, NamedKey};
 use freya::text_edit::EditBindings;
+
+mod chord_names;
+
+pub use chord_names::chord_name;
 
 /// Something a shortcut does, named for what it does rather than for its keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

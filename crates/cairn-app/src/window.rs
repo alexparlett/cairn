@@ -1857,8 +1857,10 @@ pub(crate) mod tests {
     /// staging-and-commit R11.1, R11.4, R7.3: Show Lost Commits' chord, heard on the history
     /// list, turns it on and reopens the history from every reflog entry — the old rows handed
     /// to a worker to free, after the open is asked — and again turns it off and reopens the
-    /// plain walk. Caught by: the chord left unheard, a toggle that asks no reopen (the list
-    /// keeps drawing the walk it had), or a reopen that keeps walking as before.
+    /// plain walk — the list keeping the keyboard through each reopen, so the chord is heard
+    /// again with no click. Caught by: the chord left unheard, a toggle that asks no reopen (the
+    /// list keeps drawing the walk it had), a reopen that keeps walking as before, or a list that
+    /// loses the keyboard while the reopened walk's first page is on its way.
     #[test]
     fn the_show_lost_commits_chord_reopens_the_history_with_the_toggle_flipped() {
         let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
@@ -1890,7 +1892,8 @@ pub(crate) mod tests {
             });
             test.sync_and_update();
             test.sync_and_update();
-            click_row(&mut test, 0);
+            // No click: the list keeps the keyboard through the reopen, so the next press of
+            // the chord is heard (the user's decision, 2026-10-09).
             submitted.borrow_mut().clear();
         }
     }

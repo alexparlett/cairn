@@ -188,3 +188,54 @@ fn the_date_and_the_short_id_fit_their_columns() {
         );
     }
 }
+
+const LOST_HEX: &str = "fedcba9876543210fedcba9876543210fedcba98";
+
+/// A lost row beside a reached one: the four texts of each, by the subject they lead.
+fn lost_app() -> impl IntoElement {
+    let (commit, graph) = commit();
+    let mut lost = commit.clone();
+    lost.summary = format!("lost {SUBJECT}");
+    lost.author_name = "Lost Author".to_owned();
+    lost.author_time = WHEN + 86_400;
+    lost.id = Oid::parse(LOST_HEX).unwrap_or_else(|_| unreachable!("40 hex digits is a SHA-1"));
+    rect()
+        .width(Size::fill())
+        .child(CommitRow::new(commit, graph.clone(), 3))
+        .child(CommitRow::new(lost, graph, 3).lost(true))
+}
+
+/// staging-and-commit R11.1, as Fork draws a lost commit (the user's decision, 2026-10-09):
+/// its subject, author, short id and date in the placeholder grey — about half — and nothing
+/// else dimmed: no element of the row is drawn translucent, so the graph's lanes, edges and
+/// node and its chips keep their own colours; a reached row's subject is the primary text.
+/// Caught by: the whole row drawn at an opacity, a text left undimmed, or a reached row dimmed.
+#[test]
+fn a_lost_rows_text_alone_is_dimmed() {
+    let (mut test, ()) = TestingRunner::new(lost_app, (WIDTH, 200.).into(), |_| {}, 1.);
+    test.sync_and_update();
+    let colour = |text: &str| {
+        test.find(|_, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == text)
+                .map(|label| label.text_style_data.color)
+        })
+        .unwrap_or_else(|| panic!("no label reads {text:?}"))
+    };
+    let placeholder = Some(Fill::from(LIGHT_COLORS.text_placeholder));
+    for text in [
+        &format!("lost {SUBJECT}"),
+        "Lost Author",
+        &LOST_HEX[..7],
+        "2024-03-10 16:05",
+    ] {
+        assert_eq!(colour(text), placeholder, "{text:?} is not dimmed");
+    }
+    assert_eq!(colour(SUBJECT), Some(Fill::from(LIGHT_COLORS.text_primary)));
+    let translucent = test.find_many(|_, element| {
+        Rect::try_downcast(element)
+            .and_then(|rect| rect.effect)
+            .and_then(|effect| effect.opacity)
+    });
+    assert!(translucent.is_empty(), "drawn translucent: {translucent:?}");
+}

@@ -726,7 +726,8 @@ fn reflog_of_an_amend(repo: &Repo) -> (Reflog, bool) {
 /// R6.4 as amended, each arm against real git: the default writes the entry; `false` with no
 /// log does not; `false` with a log that exists does (git appends); `always` does; a linked
 /// worktree of a bare repository does (git does not count it bare); and the same worktree
-/// with `false` and no log does not. Caught by: the setting read as git does not read it, or
+/// with `false` and no log does not; and under `false`, `HEAD`'s log alone (detached) and the
+/// branch's alone each do. Caught by: the setting read as git does not read it, or
 /// an existing log ignored.
 #[test]
 fn whether_the_reflog_is_written_is_what_git_then_does() {
@@ -762,6 +763,29 @@ fn whether_the_reflog_is_written_is_what_git_then_does() {
     assert_eq!(
         reflog_of_an_amend(&made("reflog-always", Some("always"), false)),
         (Reflog::Written, true)
+    );
+
+    // One log at a time under `false` (phase 05's QA item 7): a detached `HEAD` with only
+    // its own log, and a branch with only the branch's — each enough for git to append.
+    let detached = made("reflog-false-head-only", Some("false"), true);
+    detached.git(&["checkout", "-q", "--detach"]);
+    std::fs::remove_file(detached.path().join(".git/logs/refs/heads/main"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        reflog_of_an_amend(&detached),
+        (Reflog::Written, true),
+        "a detached HEAD's own log"
+    );
+    let branch = made("reflog-false-branch-only", Some("false"), true);
+    std::fs::remove_file(branch.path().join(".git/logs/HEAD")).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        reflog_of_an_amend(&branch),
+        (Reflog::Written, true),
+        "the branch's own log"
+    );
+    assert!(
+        !branch.path().join(".git/logs/HEAD").exists(),
+        "git made HEAD's log under false"
     );
 
     // A bare repository, amended through a linked worktree.

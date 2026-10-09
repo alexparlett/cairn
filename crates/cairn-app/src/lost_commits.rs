@@ -11,6 +11,9 @@ use crate::worker::Request;
 
 /// What a chord of the history's own scope does (R7.3): Show Lost Commits toggles it.
 pub fn history_action(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
+    if crate::shortcuts::keys_inert(view) {
+        return;
+    }
     // Every other action is heard in a scope of its own, never the history's.
     if action == Action::ShowLostCommits {
         toggle(view, submit);

@@ -153,6 +153,8 @@ pub fn window(
     });
     // Coming back to the window reads the refs and the working tree again (R10.1).
     crate::refresh::on_focus_gained(submit.clone());
+    // `Remove index.lock…`'s answer, read at its press, opens its confirmation (R12.4).
+    crate::activity::use_lock_confirmation(view, submit.clone());
     // A scroll of the list supersedes a find in the sidebar (R8.5): subscribed to the list's
     // scroll alone, and acting only while a find looks.
     let stopping = submit.clone();
@@ -206,11 +208,19 @@ pub fn window(
             held.write().heard(&e, false);
         })
         .child(title_bar(
-            // Fork's: the status box opens the activity popover (R12.1).
+            // Fork's: the status box opens the activity popover (R12.1), which hangs from where
+            // the box is laid out (the user's decision A, 2026-10-09).
             rect()
                 .on_press(move |_| {
                     let mut activity = view.activity;
                     activity.write().open();
+                })
+                .on_sized(move |e: Event<SizedEventData>| {
+                    let anchor = (e.area.min_x(), e.area.max_y());
+                    let mut activity = view.activity;
+                    if activity.peek().anchor_moved(anchor) {
+                        activity.write().set_anchor(anchor);
+                    }
                 })
                 .child(status_box(
                     view.repository.read().clone(),
@@ -419,11 +429,18 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     // Choosing a row asks what it changed; the pane draws the answer for that row alone. It
     // supersedes a find in the sidebar, and the entry pressed there is let go of.
     .on_select(move |id: RowId| {
+        // A key heard behind the activity popover moves nothing (the user's decision I).
+        if crate::shortcuts::keys_inert(view) {
+            return;
+        }
         ref_find::row_chosen(view, choosing.as_deref());
         selection::choose(id, view, choosing.as_deref());
     })
     // A row pressed with the table's extending chord is the second commit of a comparison.
     .on_extend(move |(id, index): (RowId, usize)| {
+        if crate::shortcuts::keys_inert(view) {
+            return;
+        }
         ref_find::row_chosen(view, extending.as_deref());
         selection::extend(id, index, view, extending.as_deref());
     })

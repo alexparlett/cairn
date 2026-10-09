@@ -17,6 +17,7 @@
 //! | `Write` | `cairn-local`, the local write lane, reached directly, so a write never waits behind a page or a find (staging-and-commit R4.1) |
 //! | discard count (`DiscardConsequence`, `DiscardLinesConsequence`) | `cairn-local`, in the lane's order, so what a discard would lose is counted after the writes asked before it; `StopCounting` only numbers the lane |
 //! | commit box (`CommitReads`) and amending (`Amending`, `StopAmending`) | `cairn-local`, in the lane's order, so what the box reads is read after the writes asked before it — a commit's message among the recent ones once it has ended, an amend's `HEAD` the one the writes left; `StopAmending` only numbers the lane |
+//! | `LockConsequence` | `cairn-local`, in the lane's order, so the lock is read after the writes asked before it |
 //! | `CancelWrite` | none: the local lane's state, from the caller's thread |
 //! | `RefreshStatus` | `cairn-refresh`, as a refresh's status |
 //!
@@ -188,6 +189,11 @@ pub(super) enum Routed {
         name: String,
         at: cairn_model::Oid,
     },
+    /// What removing the stale lock would destroy, to the local lane behind the writes asked
+    /// before it.
+    LockConsequence {
+        asked: OperationId,
+    },
     /// Never queued: it reaches the local lane's state directly.
     CancelWrite(OperationId),
     /// A status alone, to the refresh thread under the status lane's number.
@@ -210,7 +216,8 @@ impl Routed {
             | Self::Amending { .. }
             | Self::StopAmending
             | Self::CheckBranchName { .. }
-            | Self::CheckoutConsequence { .. } => Some(Thread::Local),
+            | Self::CheckoutConsequence { .. }
+            | Self::LockConsequence { .. } => Some(Thread::Local),
             Self::RefreshStatus => Some(Thread::Refresh),
             Self::CancelFetch | Self::CancelWrite(_) => None,
             // Its refs': see `lane_thread` for its ahead/behind. Its status, numbered in no
@@ -289,6 +296,7 @@ pub(super) fn route(request: Request) -> Routed {
         Request::CheckoutConsequence { asked, name, at } => {
             Routed::CheckoutConsequence { asked, name, at }
         }
+        Request::LockConsequence { asked } => Routed::LockConsequence { asked },
         Request::CancelWrite { id } => Routed::CancelWrite(id),
         Request::RefreshStatus => Routed::RefreshStatus,
     }
@@ -354,6 +362,7 @@ pub(super) fn unroute(routed: Routed) -> Request {
         Routed::CheckoutConsequence { asked, name, at } => {
             Request::CheckoutConsequence { asked, name, at }
         }
+        Routed::LockConsequence { asked } => Request::LockConsequence { asked },
         Routed::CancelWrite(id) => Request::CancelWrite { id },
         Routed::RefreshStatus => Request::RefreshStatus,
     }

@@ -109,6 +109,7 @@ fn kind(update: &Update) -> &'static str {
         Update::Amending { .. } => "amend read",
         Update::Failed { .. }
         | Update::LocksAtOpen { .. }
+        | Update::LockConsequence { .. }
         | Update::WriteOutput { .. }
         | Update::OperationRan { .. }
         | Update::WorkerLost { .. }

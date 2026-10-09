@@ -548,7 +548,7 @@ fn a_failed_fetch_naming_a_stale_index_lock_offers_its_removal() {
         });
         let seen = collect_until(&mut updates, |u| matches!(u, Update::FetchFailed { .. }));
         let offered = seen.iter().find_map(|update| match update {
-            Update::OperationRan { lock, .. } => Some(lock.is_some()),
+            Update::OperationRan { lock_named, .. } => Some(*lock_named),
             _ => None,
         });
         assert_eq!(offered, Some(stale), "stale={stale}: {seen:?}");

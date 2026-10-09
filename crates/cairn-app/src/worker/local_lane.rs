@@ -50,8 +50,8 @@ use cairn_askpass::Channel;
 use cairn_git::ops::{self, CommitWatch, GitBinary, Hooks, Invalidated, Performed, UnstageTo};
 use cairn_git::{Error, Repository, SharedRepository};
 use cairn_model::{
-    AskpassToken, ChangeList, CommandRecord, Confirmed, Consequence, FileDiff, LocalChanges, Oid,
-    RepoPath, Selection,
+    AskpassToken, ChangeList, CommandRecord, Confirmed, FileDiff, LocalChanges, Oid, RepoPath,
+    Selection,
 };
 
 use super::epoch::{Epoch, Superseded};
@@ -402,22 +402,26 @@ impl LocalWrite {
         }
     }
 
-    /// What a wait behind it calls it — "Waiting for the commit to finish…" (the user's
-    /// decision D, 2026-10-09): a plain noun, or a gerund where the write has none.
-    pub fn noun(&self) -> &'static str {
+    /// What a wait behind it waits for — "Waiting for the commit to finish…" (the user's
+    /// decision D, 2026-10-09), and "Waiting for the branch to be created…" (the user's decision
+    /// of 2026-10-09 on phase 11's popover): a plain noun, or a gerund where the write has none,
+    /// and what it is waited on to do.
+    pub fn awaited(&self) -> &'static str {
         match self {
-            Self::StageLines { .. } | Self::StageFiles { .. } | Self::StageAll { .. } => "staging",
+            Self::StageLines { .. } | Self::StageFiles { .. } | Self::StageAll { .. } => {
+                "staging to finish"
+            }
             Self::UnstageLines { .. } | Self::UnstageFiles { .. } | Self::UnstageAll { .. } => {
-                "unstaging"
+                "unstaging to finish"
             }
-            Self::DiscardLines(_) | Self::DiscardFiles(_) => "the discard",
-            Self::Commit { .. } => "the commit",
-            Self::Amend { .. } => "the amend",
-            Self::CreateBranch { .. } => "the branch",
+            Self::DiscardLines(_) | Self::DiscardFiles(_) => "the discard to finish",
+            Self::Commit { .. } => "the commit to finish",
+            Self::Amend { .. } => "the amend to finish",
+            Self::CreateBranch { .. } => "the branch to be created",
             Self::CreateBranchAndCheckout { .. } | Self::CreateBranchDiscarding(_) => {
-                "the checkout"
+                "the checkout to finish"
             }
-            Self::RemoveLock(_) => "the lock's removal",
+            Self::RemoveLock(_) => "the lock's removal to finish",
         }
     }
 
@@ -749,6 +753,9 @@ pub(super) enum LocalJob {
         at: Oid,
         cancel: Superseded,
     },
+    /// What removing the stale lock would destroy, read as `Remove index.lock…` is pressed, in
+    /// the lane's order.
+    LockConsequence { asked: OperationId },
     /// The repository is closing: end once the write running, if any, has.
     Stop,
 }
@@ -931,12 +938,15 @@ pub(super) struct Local<'a> {
 /// ref's directory, here rather than ahead of the repository's first answer, and stopped by a
 /// close.
 pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
+    let repo = shared.to_worker();
     if let Some(locks) = shared.lock_files(&Closing(serving.lane))
         && !locks.is_empty()
     {
-        serving.outbox.send(None, Update::LocksAtOpen { locks });
+        let index_lock = names_index_lock(&repo, &locks);
+        serving
+            .outbox
+            .send(None, Update::LocksAtOpen { locks, index_lock });
     }
-    let repo = shared.to_worker();
     let budget = Arc::new(AtomicUsize::new(0));
     while let Ok(job) = serving.jobs.recv() {
         match job {
@@ -1028,6 +1038,18 @@ pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                 serving
                     .outbox
                     .send(Some(epoch), Update::BranchName { name, outcome });
+            }
+            LocalJob::LockConsequence { asked } => {
+                // Read now, at the press (the user's decision H): its age is current, and a git
+                // of Cairn's running is said rather than the offer lost.
+                let outcome = match ops::remove_lock_consequence(&repo) {
+                    Ok(consequence) => Ok(consequence),
+                    Err(Error::LockRefused { why }) => Err(why.to_string()),
+                    Err(error) => Err(error.to_string()),
+                };
+                serving
+                    .outbox
+                    .send(None, Update::LockConsequence { asked, outcome });
             }
             LocalJob::CheckoutConsequence {
                 asked,
@@ -1202,15 +1224,11 @@ pub(super) fn ran_since(repo: &Repository, mark: cairn_git::CommandMark) -> Vec<
         .collect()
 }
 
-/// `Remove index.lock…`'s offer (R12.4): the cost of removing `repo`'s `index.lock` when `locks`
-/// — an ending's — name it, and the engine finds it there and no `git` of Cairn's running in
-/// the repository; `None` otherwise.
-pub(super) fn removable_lock(repo: &Repository, locks: &[PathBuf]) -> Option<Consequence> {
-    let index_lock = repo.git_dir().join("index.lock");
-    if !locks.contains(&index_lock) {
-        return None;
-    }
-    ops::remove_lock_consequence(repo).ok()
+/// `Remove index.lock…`'s offer (R12.4): whether `locks` — an ending's, or the repository's
+/// as it opened — name `repo`'s own `index.lock`. What removing it would cost, and whether a git
+/// of Cairn's runs, is read when the offer is pressed (the user's decision H, 2026-10-09).
+pub(super) fn names_index_lock(repo: &Repository, locks: &[PathBuf]) -> bool {
+    locks.contains(&repo.git_dir().join("index.lock"))
 }
 
 /// The write's askpass operation, if one began, and what its ending says of prompting: the
@@ -1276,7 +1294,7 @@ fn run(
         Update::OperationRan {
             by: RanBy::Write(id),
             commands: ran_since(repo, mark),
-            lock: removable_lock(repo, ending.locks()),
+            lock_named: names_index_lock(repo, ending.locks()),
         },
     );
     serving.lane.end(|| {
@@ -1325,6 +1343,7 @@ mod tests {
     /// phrase ("staging 1 file") drawn as an operation's name.
     #[test]
     fn each_write_is_named_in_forks_imperative_form() {
+        use cairn_model::Consequence;
         let paths = |n: usize| (0..n).map(|i| RepoPath::new(format!("{i}.rs"))).collect();
         assert_eq!(
             LocalWrite::StageFiles { paths: paths(1) }.name(),
@@ -1392,14 +1411,14 @@ mod tests {
         std::fs::write(&index_lock, b"").unwrap();
         let head_lock = repo.git_dir().join("HEAD.lock");
         assert!(
-            removable_lock(&repo, &[]).is_none(),
+            !names_index_lock(&repo, &[]),
             "offered for an ending naming no lock"
         );
         assert!(
-            removable_lock(&repo, &[head_lock]).is_none(),
+            !names_index_lock(&repo, &[head_lock]),
             "offered for an ending naming another lock"
         );
-        assert!(removable_lock(&repo, &[index_lock]).is_some());
+        assert!(names_index_lock(&repo, &[index_lock]));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

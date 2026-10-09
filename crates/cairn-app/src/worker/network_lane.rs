@@ -226,13 +226,13 @@ pub(super) fn serve_network_lane(
                     Err(Error::GitFailed { present_locks, .. }) => present_locks,
                     Ok(_) | Err(_) => &[],
                 };
-                let lock = super::local_lane::removable_lock(&repo, locks);
+                let lock_named = super::local_lane::names_index_lock(&repo, locks);
                 outbox.send(
                     None,
                     Update::OperationRan {
                         by: super::request::RanBy::Fetch,
                         commands: super::local_lane::ran_since(&repo, mark),
-                        lock,
+                        lock_named,
                     },
                 );
                 outbox.send(None, fetch_outcome(remote, outcome.map(|_| ()), prompting));

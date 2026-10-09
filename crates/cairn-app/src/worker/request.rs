@@ -509,6 +509,11 @@ pub enum Request {
         name: String,
         at: Oid,
     },
+    /// What removing the stale `index.lock` would destroy, asked as `Remove index.lock…` is
+    /// pressed (`ops::remove_lock_consequence`; the user's decision H of 2026-10-09: the offer and
+    /// its age are read at the press, never once as a write ends), on the local lane after the
+    /// writes asked before it, and answered by [`Update::LockConsequence`] under `asked`.
+    LockConsequence { asked: OperationId },
     /// Cancels the write `id` names, if it is a commit and running; nothing otherwise (R4.3).
     /// Never queued: it reaches the lane's state directly, ahead of any write.
     CancelWrite { id: OperationId },
@@ -567,6 +572,7 @@ impl Request {
             | Self::CancelFetch
             | Self::Write { .. }
             | Self::CancelWrite { .. }
+            | Self::LockConsequence { .. }
             // Status is numbered in its lane, which nothing moves (R10.3 as amended).
             | Self::RefreshStatus
             | Self::CommandLog
@@ -730,13 +736,20 @@ pub enum Update {
     },
     /// What an operation ran, sent just before its ending (staging-and-commit R12.1): the
     /// command log's records of every `git` it ran itself — never another lane's run meanwhile —
-    /// their arguments and stderr scrubbed of a URL's userinfo (R12.2), and, where its ending
-    /// names a stranded `<gitdir>/index.lock` and Cairn runs no `git` in the repository, what
-    /// removing it would cost: `Remove index.lock…`'s offer (R12.4).
+    /// their arguments and stderr scrubbed of a URL's userinfo (R12.2) — and whether its ending
+    /// names the repository's `<gitdir>/index.lock`: `Remove index.lock…`'s offer (R12.4), whose
+    /// cost is read when it is pressed (the user's decision H, 2026-10-09).
     OperationRan {
         by: RanBy,
         commands: Vec<CommandRecord>,
-        lock: Option<Consequence>,
+        lock_named: bool,
+    },
+    /// What removing the stale `index.lock` would destroy, asked under `asked` as `Remove
+    /// index.lock…` was pressed — or why it cannot be removed now (display text: no lock, not a
+    /// file, a `git` of Cairn's running).
+    LockConsequence {
+        asked: OperationId,
+        outcome: Result<Consequence, String>,
     },
     /// What discarding the paths asked under `asked` would lose: the `Consequence` the
     /// confirmation draws, or why the engine refused before any prompt (display text).
@@ -770,6 +783,9 @@ pub enum Update {
     /// lane before it runs any write, and sent only when there are some.
     LocksAtOpen {
         locks: Vec<PathBuf>,
+        /// The repository's own `<gitdir>/index.lock` is among them: the activity popover's
+        /// entry for them offers its removal (the user's decision H, 2026-10-09).
+        index_lock: bool,
     },
     /// The repository's command log, oldest first, as far back as it keeps.
     CommandLog {
@@ -870,6 +886,7 @@ impl Update {
             | Self::WriteStarted { .. }
             | Self::WriteOutput { .. }
             | Self::OperationRan { .. }
+            | Self::LockConsequence { .. }
             | Self::WriteEnded { .. }
             | Self::DiscardConsequence { .. }
             | Self::BranchName { .. }

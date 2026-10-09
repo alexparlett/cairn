@@ -232,7 +232,7 @@ fn waiting(opened: &Opened, typed: &str, writes: &LocalWrites) -> Option<String>
     writes
         .running()
         .or_else(|| writes.queued().next())
-        .map(|asked| format!("Waiting for {} to finish…", asked.noun))
+        .map(|asked| format!("Waiting for {}…", asked.awaited))
 }
 
 /// Whether the working tree has a staged, an unstaged or a conflicted change: `git status`

@@ -448,7 +448,7 @@ fn a_name_check_waiting_behind_a_write_says_which_write() {
     settle(&mut test);
     assert_eq!(
         waiting(&test),
-        vec!["Waiting for the branch to finish…".to_owned()]
+        vec!["Waiting for the branch to be created…".to_owned()]
     );
     // Each write named by a plain noun, as the user's mockup read (decision D).
     for (write, line) in [

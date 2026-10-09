@@ -28,6 +28,16 @@ pub fn of_header(pressed: HeaderAction) -> Action {
     }
 }
 
+/// Whether the window's chords and the views' keys do nothing now: while a credential prompt,
+/// a confirmation or the Git Error dialog is up, and while the activity popover is open, which
+/// Escape alone closes (the user's decision I, 2026-10-09).
+pub fn keys_inert(view: View) -> bool {
+    view.prompt.peek().is_some()
+        || view.confirming.peek().is_some()
+        || view.local.commit.state.peek().error().is_some()
+        || view.activity.peek().is_open()
+}
+
 /// Does `action` to `view`, asking through `submit` what it must — nothing while a
 /// credential prompt is up, which owns the keys until it is answered (Q3), nor while a
 /// destructive operation's confirmation is open (staging-and-commit R7.4): the window hears
@@ -38,14 +48,9 @@ pub fn act(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
     let View {
         mut detail_tab,
         mut pane_collapsed,
-        prompt,
-        confirming,
         ..
     } = view;
-    if prompt.peek().is_some()
-        || confirming.peek().is_some()
-        || view.local.commit.state.peek().error().is_some()
-    {
+    if keys_inert(view) {
         return;
     }
     match action {

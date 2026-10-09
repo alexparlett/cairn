@@ -975,13 +975,19 @@ fn a_lock_left_behind_is_named_as_the_repository_opens_and_by_the_write_it_fails
     let (home, runtime) = (Home::new(), RuntimeDir::new());
     let (handle, mut updates, _reply) = real_boundary(&fixture.path, (&home, &runtime));
     match next_by(&mut updates, Instant::now() + WAIT, &[]) {
-        Some(Update::LocksAtOpen { locks }) => assert_eq!(
-            locks
-                .iter()
-                .map(|path| path.ends_with(".git/index.lock"))
-                .collect::<Vec<_>>(),
-            [true]
-        ),
+        Some(Update::LocksAtOpen { locks, index_lock }) => {
+            assert_eq!(
+                locks
+                    .iter()
+                    .map(|path| path.ends_with(".git/index.lock"))
+                    .collect::<Vec<_>>(),
+                [true]
+            );
+            assert!(
+                index_lock,
+                "the repository's own index.lock not named as such"
+            );
+        }
         other => panic!("{other:?}"),
     }
     let id = ask(&handle, stage(&["a"]));
@@ -994,19 +1000,33 @@ fn a_lock_left_behind_is_named_as_the_repository_opens_and_by_the_write_it_fails
         other => panic!("a stage over index.lock ended {other:?}"),
     }
     // R12.1 and R12.4: before its ending, what the write ran — its own `git add`, and nothing
-    // the refresh ran meanwhile — and, since no git of Cairn's runs, the lock's removal
-    // offered; confirmed, the lane removes exactly that file, and nothing else.
+    // the refresh ran meanwhile — and that its ending names the lock, which offers its removal;
+    // what that would cost is read when the offer is pressed (the user's decision H), and
+    // confirmed, the lane removes exactly that file, and nothing else.
     let ran = seen.iter().find_map(|update| match update {
         Update::OperationRan {
             by: RanBy::Write(ran),
             commands,
-            lock,
-        } if *ran == id => Some((commands.clone(), lock.clone())),
+            lock_named,
+        } if *ran == id => Some((commands.clone(), *lock_named)),
         _ => None,
     });
-    let Some((commands, Some(offered))) = ran else {
+    let Some((commands, true)) = ran else {
         panic!("no offer: {seen:?}");
     };
+    let asked = OperationId::next();
+    handle.submit(Request::LockConsequence { asked });
+    let answered = collect_until(&mut updates, |update| {
+        matches!(update, Update::LockConsequence { .. })
+    });
+    let Some(Update::LockConsequence {
+        asked: answered_for,
+        outcome: Ok(offered),
+    }) = answered.last().cloned()
+    else {
+        panic!("the press read no consequence: {answered:?}");
+    };
+    assert_eq!(answered_for, asked);
     assert_eq!(commands.len(), 1, "{commands:?}");
     assert!(
         commands[0]

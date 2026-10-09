@@ -215,9 +215,7 @@ pub fn acting_line(acting: &Acting, writes: &LocalWrites) -> Option<(String, boo
 /// Git Error dialog. The window's chords are inert then (`shortcuts::act`), and so is
 /// everything here.
 fn dialog_open(view: View) -> bool {
-    view.confirming.peek().is_some()
-        || view.prompt.peek().is_some()
-        || view.local.commit.state.peek().error().is_some()
+    crate::shortcuts::keys_inert(view)
 }
 
 /// The rows of `list` the selection names that `lists` still lists, in the lists' order of

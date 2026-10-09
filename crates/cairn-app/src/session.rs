@@ -69,7 +69,15 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         }
         Update::Remotes { remotes: listed } => remotes.set(listed),
         Update::Opened { name } => repository.set(Some(name)),
-        Update::LocksAtOpen { locks } => writes.write().locks_at_open(locks),
+        Update::LocksAtOpen { locks, index_lock } => {
+            // An entry of their own in the activity popover (the user's decision H).
+            activity.write().locks_at_open(&locks, index_lock);
+            writes.write().locks_at_open(locks);
+        }
+        // What removing the stale lock would cost, read at the press (the user's decision H).
+        Update::LockConsequence { asked, outcome } => {
+            activity.write().lock_answered(asked, outcome);
+        }
         // What a discard would lose, for the confirmation Local Changes opens (R8.4): kept only
         // for the discard asked last, and only while the view that asked it is shown — one
         // that arrives once the person has moved on is dropped rather than popped up later.
@@ -107,13 +115,17 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             fetch.write().progressed(line);
         }
         // What an operation ran, for the activity popover (R12.1).
-        Update::OperationRan { by, commands, lock } => {
+        Update::OperationRan {
+            by,
+            commands,
+            lock_named,
+        } => {
             let key = match by {
                 crate::worker::RanBy::Write(id) => Some(crate::activity::ActivityKey::Write(id)),
                 crate::worker::RanBy::Fetch => activity.peek().fetch_key(),
             };
             if let Some(key) = key {
-                activity.write().ran(key, &commands, lock);
+                activity.write().ran(key, &commands, lock_named);
             }
         }
         Update::FetchFinished { remote } => {
@@ -183,7 +195,16 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             let ending = crate::shown_output::shown_ending(ending);
             crate::commit_box_pane::write_ended(id, &ending, view, asking);
             crate::create_branch::write_ended(view, id, &ending);
-            activity.write().write_ended(id, &ending);
+            // A write that never started is named as it was asked (the user's decision N).
+            let name = {
+                let writes = writes.peek();
+                writes
+                    .queued()
+                    .chain(writes.running())
+                    .find(|asked| asked.id == id)
+                    .map(|asked| asked.name.clone())
+            };
+            activity.write().write_ended(id, &ending, name);
             writes.write().ended(id, ending);
             if !fetch.peek().is_in_flight() {
                 withdraw(&mut prompt, worker);
@@ -1084,6 +1105,7 @@ mod tests {
             &asked,
             Update::LocksAtOpen {
                 locks: vec![lock.clone()],
+                index_lock: true,
             },
         );
         assert_eq!(view.writes.read().locks(), [lock]);

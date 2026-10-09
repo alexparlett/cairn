@@ -696,6 +696,9 @@ impl RepositoryHandle {
                     });
                 }
             }
+            Routed::LockConsequence { asked } => {
+                let _ = self.local.send(LocalJob::LockConsequence { asked });
+            }
             // Numbered above: the count in flight is superseded, and nothing is sent.
             Routed::StopCounting => {}
             Routed::CommitReads => {
@@ -834,6 +837,7 @@ pub fn idle_handle() -> (RepositoryHandle, impl Fn() -> Vec<Request>) {
             LocalJob::CheckoutConsequence {
                 asked, name, at, ..
             } => Some(unroute(Routed::CheckoutConsequence { asked, name, at })),
+            LocalJob::LockConsequence { asked } => Some(unroute(Routed::LockConsequence { asked })),
             LocalJob::Stop => None,
         });
         asked.into_iter().chain(alone).chain(writes).collect()

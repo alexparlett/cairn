@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use crate::worker::{LocalWrite, OperationId, Request, WriteEnding};
 
 /// What a wait calls a write the window did not see asked.
-const UNKNOWN_WRITE: &str = "another write";
+const UNKNOWN_WRITE: &str = "another write to finish";
 
 /// A write the window asked for: its id, and what it is called while it waits and runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,8 +20,9 @@ pub struct Asked {
     pub what: String,
     /// What the activity popover calls it, in Fork's imperative form (`LocalWrite::name`).
     pub name: String,
-    /// What a wait behind it calls it: "the commit", "staging" (`LocalWrite::noun`).
-    pub noun: &'static str,
+    /// What a wait behind it waits for: "the commit to finish", "the branch to be created"
+    /// (`LocalWrite::awaited`).
+    pub awaited: &'static str,
     /// The commit it replaces — an amend's — which the activity popover points back to.
     pub replaces: Option<cairn_model::Oid>,
     /// Whether it can be cancelled while it runs: a commit or an amend (R4.3).
@@ -50,7 +51,7 @@ impl LocalWrites {
             id,
             what: write.what(),
             name: write.name(),
-            noun: write.noun(),
+            awaited: write.awaited(),
             replaces: write.replaces(),
             cancellable: write.is_cancellable(),
         });
@@ -63,7 +64,7 @@ impl LocalWrites {
             id,
             what: "a write".to_owned(),
             name: "A write".to_owned(),
-            noun: UNKNOWN_WRITE,
+            awaited: UNKNOWN_WRITE,
             replaces: None,
             cancellable: false,
         });
@@ -81,7 +82,7 @@ impl LocalWrites {
                     id,
                     what: "a write".to_owned(),
                     name: "A write".to_owned(),
-                    noun: UNKNOWN_WRITE,
+                    awaited: UNKNOWN_WRITE,
                     replaces: None,
                     cancellable: false,
                 })

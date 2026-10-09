@@ -8,15 +8,19 @@
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
-use cairn_model::{CommandExit, CommandRecord, Consequence, Oid};
+use cairn_model::{CommandExit, CommandRecord, Consequence, Oid, UnstagedChange};
 use cairn_ui::{
     ACTIVITY_TITLE, CANCEL_CAPTION, MainView, NO_ACTIVITY, REMOVE_LOCK_CAPTION,
     SHOW_REPLACED_CAPTION,
 };
+
+use crate::activity::{GIT_RUNNING_NOTE, LOCKS_AT_OPEN_NAME, REMOVE_LOCK_TITLE};
 use freya::prelude::*;
 use freya_testing::TestingRunner;
 
-use crate::local_changes_tests::{Submitted, apply, labels, launch};
+use crate::local_changes_tests::{
+    Submitted, apply, changed, labels, launch, open_local_changes, press_row, status,
+};
 use crate::local_writes::Asked;
 use crate::window::View;
 use crate::worker::{Done, LocalWrite, OperationId, RanBy, Request, Update, WriteEnding};
@@ -152,7 +156,7 @@ fn the_status_box_opens_the_operations_with_their_git_and_no_token() {
                 "hint: https://ada:ghp_TOKEN@example.com/r refused",
                 1,
             )],
-            lock: None,
+            lock_named: false,
         },
     );
     apply(
@@ -187,75 +191,25 @@ fn the_status_box_opens_the_operations_with_their_git_and_no_token() {
     assert!(!drawn(&test, REMOVE_LOCK_CAPTION), "offered with no lock");
 }
 
-/// R12.4 and C20: `Remove index.lock…` appears exactly where the lane offered it — an ending
-/// that names the lock with no `git` of Cairn's running — and its press opens the confirmation,
-/// whose button asks the local lane for the removal with the token built from that consequence.
-/// An ending naming the lock that the lane did not offer (a `git` was running) offers nothing.
-/// Caught by: an offer drawn on the lock alone, or the removal asked without its confirmation.
-#[test]
-fn remove_index_lock_is_offered_where_the_lane_offered_it_and_asks_through_its_confirmation() {
-    let (mut test, view, submitted) = launch();
-    let write = LocalWrite::StageFiles {
-        paths: vec!["a.rs".into()],
-    };
-    // The lock named, a git running: the lane offers nothing.
-    let held = started(&mut test, view, &submitted, &write);
-    for update in [
-        Update::OperationRan {
-            by: RanBy::Write(held),
-            commands: vec![record(&["add"], "fatal: Unable to create index.lock", 128)],
-            lock: None,
-        },
-        Update::WriteEnded {
-            id: held,
-            ending: failed_on_the_lock(),
-            read_again: crate::worker::ReadAgain::Status,
-        },
-    ] {
-        apply(&mut test, view, &submitted, update);
-    }
-    open(&mut test);
-    assert!(!drawn(&test, REMOVE_LOCK_CAPTION), "{:?}", labels(&test));
-    test.press_key(Key::Named(NamedKey::Escape));
-    settle(&mut test);
-
-    // The lock named, nothing running: offered.
-    let stranded = started(&mut test, view, &submitted, &write);
-    for update in [
-        Update::OperationRan {
-            by: RanBy::Write(stranded),
-            commands: vec![record(&["add"], "fatal: Unable to create index.lock", 128)],
-            lock: Some(index_lock()),
-        },
-        Update::WriteEnded {
-            id: stranded,
-            ending: failed_on_the_lock(),
-            read_again: crate::worker::ReadAgain::Status,
-        },
-    ] {
-        apply(&mut test, view, &submitted, update);
-    }
-    open(&mut test);
-    assert!(drawn(&test, REMOVE_LOCK_CAPTION), "{:?}", labels(&test));
-    // The older entry, selected, offers nothing; opened again, the newest is drawn.
-    click_lowest(&mut test, "Stage 1 file");
-    assert!(
-        !drawn(&test, REMOVE_LOCK_CAPTION),
-        "the older entry offered it"
-    );
-    test.press_key(Key::Named(NamedKey::Escape));
-    settle(&mut test);
+/// The press of `Remove index.lock…` on `test`'s newest entry: the consequence asked of the local
+/// lane, under the number the request carries.
+fn press_remove_lock(test: &mut TestingRunner, submitted: &Submitted) -> OperationId {
     submitted.borrow_mut().clear();
-    open(&mut test);
-    click(&mut test, REMOVE_LOCK_CAPTION);
-    let prompt = index_lock().prompt();
-    assert!(drawn(&test, &prompt), "{:?}", labels(&test));
-    assert!(
-        submitted.borrow().is_empty(),
-        "asked before it was confirmed"
-    );
-    click_lowest(&mut test, &index_lock().action());
-    let asked: Vec<_> = submitted
+    click(test, REMOVE_LOCK_CAPTION);
+    let asked: Vec<OperationId> = submitted
+        .borrow()
+        .iter()
+        .filter_map(|request| match request {
+            Request::LockConsequence { asked } => Some(*asked),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(asked.len(), 1, "{:?}", submitted.borrow());
+    asked[0]
+}
+
+fn removals(submitted: &Submitted) -> Vec<String> {
+    submitted
         .borrow()
         .iter()
         .filter_map(|request| match request {
@@ -265,12 +219,223 @@ fn remove_index_lock_is_offered_where_the_lane_offered_it_and_asks_through_its_c
             } => Some(confirmed.prompt().to_owned()),
             _ => None,
         })
-        .collect();
-    assert_eq!(asked, [prompt]);
+        .collect()
+}
+
+/// R12.4 and C20, with the user's decisions G and H of 2026-10-09: `Remove index.lock…` is
+/// offered on an ending that names the lock; while a `git` of Cairn's runs it is drawn
+/// unpressable, saying why, rather than vanishing; pressed, it asks the local lane what the
+/// removal would cost NOW, and only that answer opens the "Remove stale lock" confirmation, whose
+/// button asks the removal with the token built from it; a refusal at the press is said beside
+/// the button, which stays. Caught by: an offer lost because a `git` ran as the write ended, a
+/// consequence read once at the ending (a stale age), the removal asked without its
+/// confirmation, or a refusal that says nothing.
+#[test]
+fn remove_index_lock_asks_its_consequence_at_the_press_and_asks_through_its_confirmation() {
+    let (mut test, view, submitted) = launch();
+    let write = LocalWrite::StageFiles {
+        paths: vec!["a.rs".into()],
+    };
+    let stranded = started(&mut test, view, &submitted, &write);
+    for update in [
+        Update::OperationRan {
+            by: RanBy::Write(stranded),
+            commands: vec![record(&["add"], "fatal: Unable to create index.lock", 128)],
+            lock_named: true,
+        },
+        Update::WriteEnded {
+            id: stranded,
+            ending: failed_on_the_lock(),
+            read_again: crate::worker::ReadAgain::Status,
+        },
+    ] {
+        apply(&mut test, view, &submitted, update);
+    }
+
+    // A git of Cairn's running: drawn, saying why, and its press asks nothing.
+    let running = started(&mut test, view, &submitted, &write);
+    open(&mut test);
+    click_lowest(&mut test, "Stage 1 file");
+    assert!(drawn(&test, REMOVE_LOCK_CAPTION), "{:?}", labels(&test));
+    assert!(drawn(&test, GIT_RUNNING_NOTE), "{:?}", labels(&test));
+    submitted.borrow_mut().clear();
+    click(&mut test, REMOVE_LOCK_CAPTION);
+    assert!(
+        !submitted
+            .borrow()
+            .iter()
+            .any(|request| matches!(request, Request::LockConsequence { .. })),
+        "asked while a git ran: {:?}",
+        submitted.borrow()
+    );
+    test.press_key(Key::Named(NamedKey::Escape));
+    settle(&mut test);
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::WriteEnded {
+            id: running,
+            ending: WriteEnding::Done(Done {
+                description: "staged".to_owned(),
+                acknowledged: None,
+                locks_before: Vec::new(),
+                locks_after: Vec::new(),
+            }),
+            read_again: crate::worker::ReadAgain::Status,
+        },
+    );
+
+    // Nothing running: pressable. The older entry, selected, offers nothing.
+    open(&mut test);
+    click_lowest(&mut test, "Stage 1 file");
+    assert!(drawn(&test, REMOVE_LOCK_CAPTION), "{:?}", labels(&test));
+    assert!(!drawn(&test, GIT_RUNNING_NOTE), "{:?}", labels(&test));
+    click(&mut test, "Stage 1 file");
+    assert!(
+        !drawn(&test, REMOVE_LOCK_CAPTION),
+        "the newer entry offered it"
+    );
+    test.press_key(Key::Named(NamedKey::Escape));
+    settle(&mut test);
+
+    // Refused at the press: said beside the button, which stays; no confirmation.
+    open(&mut test);
+    click_lowest(&mut test, "Stage 1 file");
+    let asked = press_remove_lock(&mut test, &submitted);
+    let refusal = "index.lock is no longer there".to_owned();
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::LockConsequence {
+            asked,
+            outcome: Err(refusal.clone()),
+        },
+    );
+    assert!(drawn(&test, &refusal), "{:?}", labels(&test));
+    assert!(drawn(&test, REMOVE_LOCK_CAPTION));
+    assert!(!drawn(&test, REMOVE_LOCK_TITLE), "{:?}", labels(&test));
+
+    // Read at the press: the confirmation opens over that answer, and only its button asks.
+    let asked = press_remove_lock(&mut test, &submitted);
+    assert!(!drawn(&test, &refusal), "the old refusal stayed");
+    // An answer to an older press is let go of.
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::LockConsequence {
+            asked: OperationId::next(),
+            outcome: Ok(index_lock()),
+        },
+    );
+    assert!(
+        !drawn(&test, REMOVE_LOCK_TITLE),
+        "an older answer opened it"
+    );
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::LockConsequence {
+            asked,
+            outcome: Ok(index_lock()),
+        },
+    );
+    let prompt = index_lock().prompt();
+    assert!(drawn(&test, REMOVE_LOCK_TITLE), "{:?}", labels(&test));
+    assert!(drawn(&test, &prompt), "{:?}", labels(&test));
+    assert!(
+        removals(&submitted).is_empty(),
+        "asked before it was confirmed"
+    );
+    click_lowest(&mut test, &index_lock().action());
+    assert_eq!(removals(&submitted), [prompt]);
     assert!(
         !drawn(&test, CANCEL_CAPTION),
         "the confirmation stayed open"
     );
+}
+
+/// The user's decision H of 2026-10-09: a lock found as the repository opened is an entry of its
+/// own, naming each lock, with `Remove index.lock…` where the repository's own index lock is
+/// among them; a lock file that is not the index's is named and offers nothing. Caught by: a lock
+/// at open said only under the lists, or an offer for a lock Cairn would not remove.
+#[test]
+fn a_lock_found_at_open_is_an_entry_offering_its_removal() {
+    let (mut test, view, submitted) = launch();
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::LocksAtOpen {
+            locks: vec![PathBuf::from("/home/ada/engine/.git/HEAD.lock")],
+            index_lock: false,
+        },
+    );
+    open(&mut test);
+    assert!(drawn(&test, LOCKS_AT_OPEN_NAME), "{:?}", labels(&test));
+    assert!(drawn(&test, "/home/ada/engine/.git/HEAD.lock"));
+    assert!(!drawn(&test, REMOVE_LOCK_CAPTION), "offered for HEAD.lock");
+    test.press_key(Key::Named(NamedKey::Escape));
+    settle(&mut test);
+
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::LocksAtOpen {
+            locks: vec![PathBuf::from("/home/ada/engine/.git/index.lock")],
+            index_lock: true,
+        },
+    );
+    open(&mut test);
+    assert!(drawn(&test, "/home/ada/engine/.git/index.lock"));
+    assert!(drawn(&test, REMOVE_LOCK_CAPTION), "{:?}", labels(&test));
+    let asked = press_remove_lock(&mut test, &submitted);
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::LockConsequence {
+            asked,
+            outcome: Ok(index_lock()),
+        },
+    );
+    assert!(drawn(&test, REMOVE_LOCK_TITLE), "{:?}", labels(&test));
+}
+
+/// The user's decision N of 2026-10-09: a write refused before it started keeps its own name.
+/// Caught by: "A write" drawn for a write the window asked by name.
+#[test]
+fn a_write_refused_before_it_started_keeps_its_name() {
+    let (mut test, view, submitted) = launch();
+    let id = OperationId::next();
+    let mut writes = view.writes;
+    test.run_in(|| {
+        writes.write().asked(
+            id,
+            &LocalWrite::StageFiles {
+                paths: vec!["a.rs".into(), "b.rs".into()],
+            },
+        )
+    });
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::WriteEnded {
+            id,
+            ending: WriteEnding::NotRun {
+                message: "Not run: the repository was closing.".to_owned(),
+            },
+            read_again: crate::worker::ReadAgain::Status,
+        },
+    );
+    open(&mut test);
+    assert!(drawn(&test, "Stage 2 files"), "{:?}", labels(&test));
+    assert!(!drawn(&test, "A write"), "{:?}", labels(&test));
 }
 
 /// R12.1's way back: an amend that succeeded draws the prompt it confirmed and offers its
@@ -301,7 +466,7 @@ fn an_amends_way_back_finds_the_replaced_commit_in_show_lost_commits() {
             id,
             what: "amend".to_owned(),
             name: "Amend".to_owned(),
-            noun: "the amend",
+            awaited: "the amend to finish",
             replaces: Some(replaced),
             cancellable: true,
         });
@@ -343,6 +508,104 @@ fn an_amends_way_back_finds_the_replaced_commit_in_show_lost_commits() {
         asked.iter().any(
             |request| matches!(request, Request::FindRow { target, .. } if *target == replaced)
         ),
+        "{asked:?}"
+    );
+}
+
+fn area(test: &TestingRunner, text: &str) -> Area {
+    test.find(|node, element| {
+        Label::try_downcast(element)
+            .filter(|label| label.text == text)
+            .map(|_| node.layout().area)
+    })
+    .unwrap_or_else(|| panic!("nothing reads {text:?}: {:?}", labels(test)))
+}
+
+/// The user's decision A of 2026-10-09: the popover hangs from the status box as the window
+/// lays it out — its title just under the box, at the box's left edge — never centred. Caught
+/// by: a popover placed without the box's laid-out position.
+#[test]
+fn the_popover_hangs_under_the_status_box() {
+    let (mut test, _, _) = launch();
+    let status_box = area(&test, "engine");
+    open(&mut test);
+    let title = area(&test, ACTIVITY_TITLE);
+    assert!(
+        title.min_y() > status_box.max_y() && title.min_y() < status_box.max_y() + 40.,
+        "the title at {}, the box ending at {}",
+        title.min_y(),
+        status_box.max_y()
+    );
+    assert!(
+        (title.min_x() - status_box.min_x()).abs() < 40.,
+        "the title at {}, the box at {}",
+        title.min_x(),
+        status_box.min_x()
+    );
+}
+
+/// Whether a write — or a refresh — was asked.
+fn acted(submitted: &Submitted) -> bool {
+    submitted
+        .borrow()
+        .iter()
+        .any(|request| matches!(request, Request::Write { .. } | Request::Refresh))
+}
+
+/// The user's decision I of 2026-10-09: while the popover is open the window's chords and the
+/// focused list's keys do nothing, as under a dialog — Enter stages nothing, F5 refreshes
+/// nothing — and Escape closes it, after which they act again. Caught by: a chord heard through
+/// the popover, or a list acting on a key pressed while it is open.
+#[test]
+fn while_the_popover_is_open_the_keys_do_nothing_but_close_it() {
+    let (mut test, view, submitted) = launch();
+    open_local_changes(&mut test);
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        status(vec![changed("a.rs", None, Some(UnstagedChange::Modified))]),
+    );
+    press_row(&mut test, "a.rs", 0);
+    // The repository's name, starred: status lists a change.
+    click(&mut test, "engine*");
+    submitted.borrow_mut().clear();
+    for key in [
+        NamedKey::Enter,
+        NamedKey::F5,
+        NamedKey::ArrowDown,
+        NamedKey::Delete,
+    ] {
+        test.press_key(Key::Named(key));
+        settle(&mut test);
+    }
+    assert!(!acted(&submitted), "{:?}", submitted.borrow());
+    assert!(view.confirming.peek().is_none(), "a discard was opened");
+    assert!(drawn(&test, ACTIVITY_TITLE), "a key closed it");
+    test.press_key(Key::Named(NamedKey::Escape));
+    settle(&mut test);
+    assert!(!drawn(&test, ACTIVITY_TITLE));
+    // Closed, they act again.
+    test.press_key(Key::Named(NamedKey::F5));
+    settle(&mut test);
+    press_row(&mut test, "a.rs", 0);
+    test.press_key(Key::Named(NamedKey::Enter));
+    settle(&mut test);
+    let asked = submitted.borrow();
+    assert!(
+        asked
+            .iter()
+            .any(|request| matches!(request, Request::Refresh)),
+        "{asked:?}"
+    );
+    assert!(
+        asked.iter().any(|request| matches!(
+            request,
+            Request::Write {
+                write: LocalWrite::StageFiles { .. },
+                ..
+            }
+        )),
         "{asked:?}"
     );
 }

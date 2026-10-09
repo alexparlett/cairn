@@ -11,12 +11,15 @@
 //! the last; the lists that answer are drawn as a status's are, and unticking Amend draws the
 //! status's own lists again. Nothing here waits: each is a submit.
 //!
-//! **The seal.** An amend is destructive (R1.5): its token is built only by the confirmation
-//! surface, never here. An amend no remote has is confirmed by the box's amend button, which is
-//! the confirmation dialog's own `ConfirmButton` (its token handed to [`amend_confirmed`]); an
-//! amend a remote has, an amend asked by the commit chord, and an amend's hook-failure skip open
-//! the confirmation dialog (`Confirming`) over the window — so a chord never confirms an amend
-//! by itself, and what the token records is what the person read.
+//! **The seal.** An amend is destructive (R1.5): its token is built only by a confirmation
+//! surface (R1.1), never here. An amend no remote has is confirmed by the box's amend button or
+//! the commit chord — the commit box itself, `cairn_ui::AmendButton`, which draws the line it
+//! confirms and hands its token to [`amend_confirmed`]; an amend a remote has opens the
+//! confirmation dialog (`Confirming`) over the window first, by button or chord; and the skip of
+//! a hook that failed an amend is `cairn_ui::AmendSkip` in the Git Error dialog, which draws the
+//! prompt the amend was confirmed with and builds its token from that consequence — one press,
+//! no second dialog (the user's decision, 2026-10-09). The engine re-checks every token's
+//! consequence before git runs.
 
 use std::rc::Rc;
 
@@ -240,8 +243,8 @@ pub fn toggle_amend(on: bool, view: View, submit: Option<&dyn Fn(Request)>) {
 }
 
 /// The commit button, or the commit chord heard in a field (R10.1, R7.3): commits what is
-/// staged; amending, opens the confirmation dialog — the amend button confirmed in place comes
-/// through [`amend_confirmed`] instead.
+/// staged; amending a commit a remote has, opens the confirmation dialog. An amend no remote has
+/// is confirmed by the box itself and comes through [`amend_confirmed`].
 pub fn pressed(view: View, submit: Option<Rc<dyn Fn(Request)>>) {
     let commit = view.local.commit;
     let (amending, consequence) = {
@@ -258,7 +261,7 @@ pub fn pressed(view: View, submit: Option<Rc<dyn Fn(Request)>>) {
     };
     let message = compose_message(&commit.subject.peek(), &commit.description.peek());
     if amending {
-        if let Some(consequence) = consequence {
+        if let Some(consequence) = consequence.filter(|c| c.needs_force_push()) {
             open_amend_dialog(view, submit, &consequence, message, false);
         }
         return;
@@ -284,6 +287,7 @@ fn ask_commit(view: View, submit: &dyn Fn(Request), message: String, skip_hooks:
         amend: false,
         message,
         skip_hooks,
+        confirmed_with: None,
     });
 }
 
@@ -307,6 +311,7 @@ fn ask_amend(
     message: String,
     skip_hooks: bool,
 ) -> OperationId {
+    let confirmed_with = Some(Rc::new(confirmed.consequence().clone()));
     let mut writes = view.writes;
     let id = local_writes::ask(
         &mut writes.write(),
@@ -323,6 +328,7 @@ fn ask_amend(
         amend: true,
         message,
         skip_hooks,
+        confirmed_with,
     });
     id
 }
@@ -529,7 +535,13 @@ pub fn write_ended(id: OperationId, ending: &WriteEnding, view: View, submit: &d
         WriteEnding::Done(_) => {
             let was_amending = state.peek().is_amending();
             state.write().made();
-            fill(view, "");
+            // Only the draft the commit took: one typed while it ran is the next message.
+            let commit = view.local.commit;
+            let taken = compose_message(&commit.subject.peek(), &commit.description.peek())
+                == asked.message;
+            if taken {
+                fill(view, "");
+            }
             if was_amending {
                 submit(Request::StopAmending);
             }
@@ -551,43 +563,53 @@ pub fn write_ended(id: OperationId, ending: &WriteEnding, view: View, submit: &d
     }
 }
 
-/// The Git Error dialog, while one is open (R10.5).
+/// The Git Error dialog, while one is open (R10.5): a failed amend's skip is the commit box's
+/// `AmendSkip`, confirming the amend's own consequence again; a commit's asks the same message
+/// with its hooks skipped.
 pub fn git_error(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Option<Element> {
     let error = view.local.commit.state.read().error().cloned()?;
-    let skipping = submit;
-    Some(
-        GitErrorDialog::new(error.serial, error.command.clone(), error.lines.clone())
-            .key(DiffKey::U64(error.serial))
-            .skip(error.skip)
-            .on_skip(move |()| skip_hooks(view, skipping.clone()))
-            .on_close(move |()| {
-                let mut state = view.local.commit.state;
-                let _ = state.write().close_error();
+    let dialog = GitErrorDialog::new(error.serial, error.command.clone(), error.lines.clone())
+        .key(DiffKey::U64(error.serial))
+        .skip(error.skip)
+        .on_close(move |()| {
+            let mut state = view.local.commit.state;
+            let _ = state.write().close_error();
+        });
+    let dialog = match error.failed.confirmed_with.clone().filter(|_| error.skip) {
+        Some(consequence) => {
+            let message = error.failed.message.clone();
+            dialog.skip_amend(consequence, move |token: Confirmed| {
+                skip_amend_hooks(token, message.clone(), view, submit.as_deref());
             })
-            .into(),
-    )
+        }
+        None => dialog.on_skip(move |()| skip_hooks(view, submit.clone())),
+    };
+    Some(dialog.into())
 }
 
-/// The skip (R10.5): the commit that failed asked again with the same message and its hooks
-/// skipped — `--no-verify` for that one commit alone. An amend's asks its confirmation again
-/// first, as every amend's token is built by the person.
+/// A failed commit's skip (R10.5): the same message asked again with its hooks skipped —
+/// `--no-verify` for that one commit alone.
 pub fn skip_hooks(view: View, submit: Option<Rc<dyn Fn(Request)>>) {
     let mut state = view.local.commit.state;
     let Some(error) = state.write().close_error() else {
         return;
     };
-    let failed = error.failed;
-    if failed.amend {
-        let consequence = state
-            .peek()
-            .amendable()
-            .and_then(|amendable| amendable.consequence.as_ref().ok().cloned());
-        if let Some(consequence) = consequence {
-            open_amend_dialog(view, submit, &consequence, failed.message, true);
-        }
-        return;
+    if let (false, Some(submit)) = (error.failed.amend, submit.as_deref()) {
+        ask_commit(view, submit, error.failed.message, true);
     }
-    if let Some(submit) = submit.as_deref() {
-        ask_commit(view, submit, failed.message, true);
+}
+
+/// A failed amend's skip (the user's decision, 2026-10-09): one press amends at once without
+/// hooks, under the token `AmendSkip` built from the consequence the amend was confirmed with.
+fn skip_amend_hooks(
+    token: Confirmed,
+    message: String,
+    view: View,
+    submit: Option<&dyn Fn(Request)>,
+) {
+    let mut state = view.local.commit.state;
+    let _ = state.write().close_error();
+    if let Some(submit) = submit {
+        ask_amend(view, submit, token, message, true);
     }
 }

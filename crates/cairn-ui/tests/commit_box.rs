@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use cairn_model::{Confirmed, Consequence, Oid, Publication, Reflog};
 use cairn_ui::{
-    AMEND_CAPTION, CLOSE_CAPTION, CommitBox, CommitButton, ConfirmButton, GIT_ERROR_TITLE,
+    AMEND_CAPTION, AmendButton, CLOSE_CAPTION, CommitBox, CommitButton, GIT_ERROR_TITLE,
     GitErrorDialog, OUTPUT_ROW_HEIGHT, SKIP_HOOKS_CAPTION,
 };
 use freya::prelude::*;
@@ -190,19 +190,74 @@ fn a_published_amends_button_asks_rather_than_confirms() {
     assert_eq!(*reports.commits.borrow(), 1);
 }
 
-/// A disabled confirming button builds nothing. Caught by: a press handled while disabled.
+/// R1.1 and the user's decision (2026-10-09): the amend button confirmed in place is one
+/// component drawing the button and the line it confirms; it refuses a consequence a remote has
+/// — that amend goes through the dialog — and builds nothing while not ready. Caught by: a
+/// pushed commit amended by the box's button, or a press heard while the box is not ready.
 #[test]
-fn a_disabled_confirm_button_builds_no_token() {
+fn the_amend_button_refuses_a_pushed_consequence_and_builds_nothing_unready() {
+    let published = Consequence::Amend {
+        commit: Oid::from_bytes(&[0xab; 20]).unwrap_or_else(|e| panic!("{e}")),
+        subject: "Fix the parser".to_owned(),
+        published: Publication::SomeRemote,
+        reflog: Reflog::Written,
+    };
+    for (consequence, ready) in [(published, true), (amend(), false)] {
+        let tokens: Rc<RefCell<Vec<Confirmed>>> = Rc::default();
+        let drawn = consequence.replaces().unwrap_or_default();
+        let (mut test, _) = TestingRunner::new(
+            {
+                let tokens = tokens.clone();
+                move || {
+                    let tokens = tokens.clone();
+                    let confirmed = use_state(|| None::<u64>);
+                    rect().expanded().child(
+                        AmendButton::new(1, Rc::new(consequence.clone()), confirmed)
+                            .ready(ready)
+                            .on_confirmed(move |token: Confirmed| tokens.borrow_mut().push(token)),
+                    )
+                }
+            },
+            (WIDTH, HEIGHT).into(),
+            |_| {},
+            1.,
+        );
+        settle(&mut test);
+        assert!(
+            labels(&test).contains(&drawn),
+            "the line it confirms is not drawn: {:?}",
+            labels(&test)
+        );
+        click(&mut test, "Amend abababa");
+        assert!(
+            tokens.borrow().is_empty(),
+            "ready {ready}: a token was built"
+        );
+    }
+}
+
+/// The user's decision (2026-10-09): a failed amend's skip is drawn in the Git Error dialog
+/// with the prompt the amend was confirmed with, and one press builds one token from that
+/// consequence, the dialog closing as it does; the commit's own skip is not drawn beside it.
+/// Caught by: a skip confirming other words, or two tokens from one press.
+#[test]
+fn a_failed_amends_skip_confirms_the_prompt_it_draws_once() {
     let tokens: Rc<RefCell<Vec<Confirmed>>> = Rc::default();
+    let closed: Rc<RefCell<usize>> = Rc::default();
+    let consequence = Rc::new(amend());
     let (mut test, _) = TestingRunner::new(
         {
-            let tokens = tokens.clone();
+            let (tokens, closed, consequence) =
+                (tokens.clone(), closed.clone(), consequence.clone());
             move || {
-                let tokens = tokens.clone();
+                let (tokens, closed) = (tokens.clone(), closed.clone());
                 rect().expanded().child(
-                    ConfirmButton::new(1, Rc::new(amend()))
-                        .enabled(false)
-                        .on_confirm(move |token: Confirmed| tokens.borrow_mut().push(token)),
+                    GitErrorDialog::new(1, "git commit -q --amend -F -", Rc::new(Vec::new()))
+                        .skip(true)
+                        .skip_amend(consequence.clone(), move |token: Confirmed| {
+                            tokens.borrow_mut().push(token)
+                        })
+                        .on_close(move |()| *closed.borrow_mut() += 1),
                 )
             }
         },
@@ -211,8 +266,22 @@ fn a_disabled_confirm_button_builds_no_token() {
         1.,
     );
     settle(&mut test);
-    click(&mut test, "Amend abababa");
-    assert!(tokens.borrow().is_empty());
+    assert!(
+        labels(&test).iter().any(|l| *l == consequence.prompt()),
+        "{:?}",
+        labels(&test)
+    );
+    let skips = labels(&test)
+        .iter()
+        .filter(|l| *l == SKIP_HOOKS_CAPTION)
+        .count();
+    assert_eq!(skips, 1, "the commit's skip drawn beside the amend's");
+    click(&mut test, SKIP_HOOKS_CAPTION);
+    click(&mut test, SKIP_HOOKS_CAPTION);
+    let tokens = tokens.borrow();
+    assert_eq!(tokens.len(), 1);
+    assert_eq!(tokens[0].prompt(), consequence.prompt());
+    assert_eq!(*closed.borrow(), 1);
 }
 
 /// R10.1: Fork's counter beside the subject, and its button naming the files; R10.8: a box an

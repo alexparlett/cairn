@@ -60,9 +60,13 @@ impl CommitBoxView {
 pub struct AskedCommit {
     pub id: OperationId,
     pub amend: bool,
-    /// The message it was asked with: what the skip commits again (R10.5).
+    /// The message it was asked with: what the skip commits again (R10.5), and what a commit
+    /// made clears from the draft — only that.
     pub message: String,
     pub skip_hooks: bool,
+    /// An amend's: the consequence its token was built from, which the skip of a hook that
+    /// failed it confirms again (the user's decision, 2026-10-09).
+    pub confirmed_with: Option<Rc<Consequence>>,
 }
 
 /// What amending would replace, as last read while Amend is ticked.
@@ -357,7 +361,11 @@ impl CommitBox {
             serial,
             command,
             lines: Rc::new(lines),
-            skip: self.hooks().skippable() && !failed.skip_hooks,
+            // Offered only where it can act: a hook to skip, not skipped already, and — for an
+            // amend — the consequence it was confirmed with, to confirm again.
+            skip: self.hooks().skippable()
+                && !failed.skip_hooks
+                && (!failed.amend || failed.confirmed_with.is_some()),
             failed,
         });
     }
@@ -597,6 +605,7 @@ mod tests {
             amend: false,
             message: "m".to_owned(),
             skip_hooks,
+            confirmed_with: None,
         };
         let mut state = CommitBox::default();
         state.commit_asked(asked(false));

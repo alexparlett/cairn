@@ -16,11 +16,16 @@
 //! recent message while the subject is empty or holds the one last recalled (R10.2).
 //!
 //! **The button.** `Commit N Files` — plain `Commit` with none staged — or, amending,
-//! `Amend <short id>` above the line its `Consequence` renders ("Replaces …", R10.6). An amend no
-//! remote has is confirmed by that button itself: it is the confirmation dialog's own
-//! [`ConfirmButton`], which builds the token from the consequence it draws, so this file builds
-//! none. An amend a remote has asks the confirmation dialog first (L12): its button only
-//! reports the press. While the consequence is read the button says so and does nothing.
+//! `Amend <short id>` above the line its `Consequence` renders ("Replaces …", R10.6). This file
+//! is the second confirmation surface (staging-and-commit R1.1, `CONFIRMATION_SURFACES`): an
+//! amend no remote has is confirmed by that button — or by the commit chord from either field,
+//! which does exactly what the button does — and [`AmendButton`], one component drawing the
+//! button and the line it confirms, builds the token from the consequence it draws, once per
+//! consequence. It refuses a consequence a remote has (`needs_force_push`): that amend's button
+//! only reports the press, and the window asks the confirmation dialog first (L12). A hook that
+//! fails an amend is skipped by [`AmendSkip`], which draws the line the person confirmed and
+//! builds the skipped amend's token from it, in the Git Error dialog. While the consequence is
+//! read the button says so and does nothing.
 //!
 //! **Amend reports its state.** The toggle is a check box to assistive technology whose toggled
 //! state is set ([`AMEND_CAPTION`]), which Freya's own `Checkbox` does not set
@@ -34,7 +39,6 @@ use cairn_model::{Confirmed, Consequence};
 use freya::prelude::*;
 
 use crate::accelerators::{Action, FieldScope, RecallStep};
-use crate::confirm_dialog::ConfirmButton;
 use crate::diff_palette::{DIFF_FONT_FAMILY, MONO_ADVANCE_EM};
 use crate::text_field::{text_field_in, text_field_recalling};
 
@@ -50,6 +54,8 @@ pub const RECENT_MESSAGES_CAPTION: &str = "Recent Commit Messages";
 pub const CANCEL_COMMIT_CAPTION: &str = "Cancel";
 /// Said in place of the amend button while what it would replace is read.
 pub const READING_AMEND: &str = "Reading what Amend would replace…";
+/// The Git Error dialog's skip (R10.5), Fork's words.
+pub const SKIP_HOOKS_CAPTION: &str = "Skip pre-commit hooks and commit";
 
 /// Fork's soft limit on a subject's length: the counter says how many characters are left
 /// before it, and goes negative past it (R10.1).
@@ -311,14 +317,34 @@ impl Component for CommitBox {
         let open = self.stopped.is_none();
         let subject = self.subject;
         let count = subject_count(&subject.read());
+        // The consequence last confirmed in place, by its serial: one consequence, one token,
+        // whether the button or the chord confirmed it.
+        let confirmed = use_state(|| None::<u64>);
 
-        // The commit chord heard in either field.
+        // The commit chord heard in either field: exactly what the button does.
         let chord = {
             let on_commit = self.on_commit.clone();
+            let on_confirmed = self.on_confirmed.clone();
             let ready = self.ready && open;
+            let in_place = match &self.button {
+                CommitButton::AmendInPlace {
+                    serial,
+                    consequence,
+                } => Some((*serial, consequence.clone())),
+                CommitButton::Commit { .. }
+                | CommitButton::AmendAsking { .. }
+                | CommitButton::ReadingAmend
+                | CommitButton::AmendUnreadable(_) => None,
+            };
             EventHandler::new(move |action: Action| {
-                if action == Action::Commit && ready {
-                    on_commit.call(());
+                if action != Action::Commit || !ready {
+                    return;
+                }
+                match &in_place {
+                    Some((serial, consequence)) => {
+                        confirm_in_place(*serial, consequence, confirmed, &on_confirmed);
+                    }
+                    None => on_commit.call(()),
                 }
             })
         };
@@ -386,28 +412,39 @@ impl Component for CommitBox {
             .busy
             .clone()
             .map(|busy| busy_line(busy, self.on_cancel.clone()));
-        let button = commit_button(
-            &self.button,
-            self.ready && open,
-            self.on_commit.clone(),
-            self.on_confirmed.clone(),
-        );
+        let ready = self.ready && open;
         let actions = rect()
             .width(Size::fill())
             .horizontal()
             .content(Content::Flex)
-            .cross_align(Alignment::Center)
+            .cross_align(Alignment::Start)
             .spacing(8.)
             .child(toggle)
-            .child(rect().width(Size::flex(1.)))
-            .maybe_child(busy)
-            .child(button);
-        // R10.6's line under the amend button: what it replaces, rendered from the consequence
-        // the button confirms.
-        let replaces = match &self.button {
-            CommitButton::AmendInPlace { consequence, .. }
-            | CommitButton::AmendAsking { consequence, .. } => consequence.replaces(),
+            .maybe_child(busy);
+        // The amend confirmed in place: its button and the line it confirms, one component,
+        // taking the room left of the toggle.
+        let actions = match &self.button {
+            CommitButton::AmendInPlace {
+                serial,
+                consequence,
+            } => actions.child(
+                AmendButton::new(*serial, consequence.clone(), confirmed)
+                    .ready(ready)
+                    .on_confirmed(self.on_confirmed.clone()),
+            ),
             CommitButton::Commit { .. }
+            | CommitButton::AmendAsking { .. }
+            | CommitButton::ReadingAmend
+            | CommitButton::AmendUnreadable(_) => actions
+                .child(rect().width(Size::flex(1.)))
+                .child(commit_button(&self.button, ready, self.on_commit.clone())),
+        };
+        // An amend the dialog confirms: the line it replaces, said under the box; the dialog
+        // draws it again with the force push and builds the token.
+        let replaces = match &self.button {
+            CommitButton::AmendAsking { consequence, .. } => consequence.replaces(),
+            CommitButton::AmendInPlace { .. }
+            | CommitButton::Commit { .. }
             | CommitButton::ReadingAmend
             | CommitButton::AmendUnreadable(_) => None,
         };
@@ -503,26 +540,16 @@ fn control(caption: String, name: String, enabled: bool, pressed: impl Fn() + 's
     }
 }
 
-/// The commit button: commit, amend in place, amend through the dialog, or what stands in its
-/// place while an amend cannot be pressed.
-fn commit_button(
-    button: &CommitButton,
-    ready: bool,
-    on_commit: EventHandler<()>,
-    on_confirmed: EventHandler<Confirmed>,
-) -> Element {
+/// The commit button but an amend confirmed in place: commit, amend through the dialog, or what
+/// stands in its place while an amend cannot be pressed.
+fn commit_button(button: &CommitButton, ready: bool, on_commit: EventHandler<()>) -> Element {
     match button {
         CommitButton::Commit { files } => {
             let caption = commit_caption(*files);
             control(caption.clone(), caption, ready, move || on_commit.call(()))
         }
-        CommitButton::AmendInPlace {
-            serial,
-            consequence,
-        } => ConfirmButton::new(*serial, consequence.clone())
-            .enabled(ready)
-            .on_confirm(on_confirmed)
-            .into(),
+        // Drawn by `AmendButton`; never reached.
+        CommitButton::AmendInPlace { .. } => rect().into(),
         CommitButton::AmendAsking {
             serial: _,
             consequence,
@@ -539,6 +566,221 @@ fn commit_button(
         CommitButton::AmendUnreadable(why) => {
             control(AMEND_CAPTION.to_owned(), why.clone(), false, || {})
         }
+    }
+}
+
+/// The one place this surface makes a token: from the consequence it drew.
+fn token(consequence: &Consequence) -> Confirmed {
+    Confirmed::by_user(consequence.clone())
+}
+
+/// Confirms `consequence` in place — the amend button pressed, or the commit chord heard — once
+/// per consequence: `serial` names it, and `confirmed` keeps the serial last confirmed. A
+/// consequence a remote has is refused: the dialog confirms it (L12). `true` when a token was
+/// built and handed on.
+fn confirm_in_place(
+    serial: u64,
+    consequence: &Consequence,
+    mut confirmed: State<Option<u64>>,
+    on_confirmed: &EventHandler<Confirmed>,
+) -> bool {
+    if consequence.needs_force_push() || *confirmed.peek() == Some(serial) {
+        return false;
+    }
+    confirmed.set(Some(serial));
+    on_confirmed.call(token(consequence));
+    true
+}
+
+/// The amend button confirmed in place (R10.6): `Amend <short id>` above the line its
+/// `Consequence` renders — "Replaces <short id> '<subject>'.", then whether the old commit can
+/// be found again — and, pressed, the token built from that same consequence, once. It refuses
+/// a consequence a remote has, drawing it disabled and building nothing.
+pub struct AmendButton {
+    serial: u64,
+    consequence: Rc<Consequence>,
+    confirmed: State<Option<u64>>,
+    ready: bool,
+    on_confirmed: EventHandler<Confirmed>,
+    key: DiffKey,
+}
+
+impl AmendButton {
+    /// The button for `consequence`, numbered `serial` — another consequence is another serial
+    /// — `confirmed` keeping the serial last confirmed, shared with the commit chord.
+    pub fn new(serial: u64, consequence: Rc<Consequence>, confirmed: State<Option<u64>>) -> Self {
+        Self {
+            serial,
+            consequence,
+            confirmed,
+            ready: true,
+            on_confirmed: EventHandler::new(|_| {}),
+            key: DiffKey::None,
+        }
+    }
+
+    /// Whether a press confirms now.
+    pub fn ready(mut self, ready: bool) -> Self {
+        self.ready = ready;
+        self
+    }
+
+    /// The token, built from the consequence drawn.
+    pub fn on_confirmed(mut self, on_confirmed: impl Into<EventHandler<Confirmed>>) -> Self {
+        self.on_confirmed = on_confirmed.into();
+        self
+    }
+}
+
+impl PartialEq for AmendButton {
+    fn eq(&self, other: &Self) -> bool {
+        self.serial == other.serial
+            && self.ready == other.ready
+            && self.confirmed == other.confirmed
+            && self.key == other.key
+    }
+}
+
+impl std::fmt::Debug for AmendButton {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AmendButton")
+            .field("serial", &self.serial)
+            .field("ready", &self.ready)
+            .finish_non_exhaustive()
+    }
+}
+
+impl KeyExt for AmendButton {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for AmendButton {
+    fn render(&self) -> impl IntoElement {
+        let colours = get_theme_or_default().read().colors().clone();
+        // Rendered once, as the button mounts: one serial's words never change.
+        let (action, line) = use_hook(|| {
+            (
+                self.consequence.action(),
+                self.consequence.replaces().unwrap_or_default(),
+            )
+        });
+        let enabled = self.ready
+            && !self.consequence.needs_force_push()
+            && *self.confirmed.read() != Some(self.serial);
+        let (serial, consequence, confirmed, on_confirmed) = (
+            self.serial,
+            self.consequence.clone(),
+            self.confirmed,
+            self.on_confirmed.clone(),
+        );
+        rect()
+            .width(Size::flex(1.))
+            .cross_align(Alignment::End)
+            .spacing(4.)
+            .child(control(action.clone(), action, enabled, move || {
+                confirm_in_place(serial, &consequence, confirmed, &on_confirmed);
+            }))
+            .child(
+                label()
+                    .text(line)
+                    .width(Size::fill())
+                    .text_align(TextAlign::End)
+                    .max_lines(3)
+                    .text_overflow(TextOverflow::Ellipsis)
+                    .font_size(12.)
+                    .color(colours.text_secondary),
+            )
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(DiffKey::U64(self.serial))
+    }
+}
+
+/// The skip of a hook that failed an amend (R10.5, the user's decision of 2026-10-09), drawn in
+/// the Git Error dialog: the prompt the person confirmed the amend with — the line, and a
+/// remote's force push before it where there was one — and `Skip pre-commit hooks and commit`,
+/// whose press builds the skipped amend's token from that same consequence, once. The engine
+/// re-checks it before git runs, so an amend whose `HEAD` moved or was pushed since is refused.
+pub struct AmendSkip {
+    serial: u64,
+    consequence: Rc<Consequence>,
+    on_confirmed: EventHandler<Confirmed>,
+    key: DiffKey,
+}
+
+impl AmendSkip {
+    /// The skip of the failure numbered `serial`, re-confirming `consequence`.
+    pub fn new(serial: u64, consequence: Rc<Consequence>) -> Self {
+        Self {
+            serial,
+            consequence,
+            on_confirmed: EventHandler::new(|_| {}),
+            key: DiffKey::None,
+        }
+    }
+
+    /// The token, built from the consequence drawn.
+    pub fn on_confirmed(mut self, on_confirmed: impl Into<EventHandler<Confirmed>>) -> Self {
+        self.on_confirmed = on_confirmed.into();
+        self
+    }
+}
+
+impl PartialEq for AmendSkip {
+    fn eq(&self, other: &Self) -> bool {
+        self.serial == other.serial && self.key == other.key
+    }
+}
+
+impl std::fmt::Debug for AmendSkip {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AmendSkip")
+            .field("serial", &self.serial)
+            .finish_non_exhaustive()
+    }
+}
+
+impl KeyExt for AmendSkip {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for AmendSkip {
+    fn render(&self) -> impl IntoElement {
+        let colours = get_theme_or_default().read().colors().clone();
+        let prompt = use_hook(|| self.consequence.prompt());
+        let answered = use_state(|| false);
+        let (consequence, on_confirmed) = (self.consequence.clone(), self.on_confirmed.clone());
+        rect()
+            .width(Size::fill())
+            .spacing(6.)
+            .child(
+                label()
+                    .text(prompt)
+                    .width(Size::fill())
+                    .font_size(12.)
+                    .color(colours.text_secondary),
+            )
+            .child(control(
+                SKIP_HOOKS_CAPTION.to_owned(),
+                SKIP_HOOKS_CAPTION.to_owned(),
+                !*answered.read(),
+                move || {
+                    let mut answered = answered;
+                    if !*answered.peek() {
+                        answered.set(true);
+                        on_confirmed.call(token(&consequence));
+                    }
+                },
+            ))
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(DiffKey::U64(self.serial))
     }
 }
 

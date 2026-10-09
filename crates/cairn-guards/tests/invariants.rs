@@ -4925,10 +4925,14 @@ const CONSEQUENCE_FORBIDDEN_TRAITS: &[&str] = &[
 
 /// Production files outside `cairn-model` allowed to name [`CONFIRMED_CONSTRUCTOR`]: the
 /// confirmation surfaces, each a place a person reads a prompt rendered from a `Consequence`
-/// and presses the button that accepts it. Empty until the confirmation dialog
-/// (staging-and-commit phase 06) and the commit box (phase 09) exist, so today nothing may
-/// build the token; a row whose file no longer names the constructor fails.
-const CONFIRMATION_SURFACES: &[&str] = &["crates/cairn-ui/src/confirm_dialog.rs"];
+/// and presses the button that accepts it (staging-and-commit R1.1): the confirmation dialog,
+/// and the commit box — its amend button drawn with the line it confirms, and the skip of a
+/// hook that failed an amend, drawn with the prompt the amend was confirmed with. A row whose
+/// file no longer names the constructor fails.
+const CONFIRMATION_SURFACES: &[&str] = &[
+    "crates/cairn-ui/src/confirm_dialog.rs",
+    "crates/cairn-ui/src/commit_box.rs",
+];
 
 /// Every destructive operation, by file and function: each takes `Confirmed` by value, and
 /// every function in `crates/cairn-git/src` that names `Confirmed` is one of these or

@@ -664,6 +664,10 @@ impl RepositoryHandle {
             }
             Routed::CancelFetch => self.control.cancel(),
             Routed::Write { id, write } => {
+                // A write ends the amend read in flight or queued (staging-and-commit R10.3): it
+                // is read again over the status the write's ending reads, and a stage queued
+                // behind a stale one would wait on its walk for nothing.
+                self.epochs.bump(QueryLane::Amending);
                 let _ = self.local.send(LocalJob::Write {
                     id,
                     write: Box::new(write),
@@ -1160,7 +1164,7 @@ pub(super) fn filter_local_changes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worker::Retired;
+    use crate::worker::{LocalWrite, OperationId, Retired};
     use std::ffi::OsString;
     use std::path::PathBuf;
     use std::task::{Context, Poll, Waker};
@@ -2300,6 +2304,37 @@ mod tests {
     /// it again as it closes, is still busy with what was queued before. Caught by: marking
     /// the lane only in `Threads::drop`, which leaves an idle lane to start a write asked
     /// between the close and the repository thread reaching it.
+    /// Phase 09's QA item 9: asking a write supersedes the amend read in flight or queued, so
+    /// a stage never waits on a stale amend's walk — its ending reads status, over which the
+    /// window asks again; nothing else a write is asked beside is superseded. Caught by: a
+    /// write that leaves the amend read current.
+    #[test]
+    fn a_write_supersedes_the_amend_read_and_nothing_else() {
+        let (handle, _asked) = idle_handle();
+        let status = Arc::new(cairn_model::LocalChanges::new(
+            cairn_model::WorkingTreeStatus::Listed(Vec::new()),
+        ));
+        let amending = handle.submit(Request::Amending { status });
+        let reads = handle.submit(Request::CommitReads);
+        let (Some(amending), Some(reads)) = (amending, reads) else {
+            panic!("the reads were numbered in no lane");
+        };
+        handle.submit(Request::Write {
+            id: OperationId::next(),
+            write: LocalWrite::StageFiles {
+                paths: vec![cairn_model::RepoPath::from("a")],
+            },
+        });
+        assert!(
+            !handle.epochs.is_current(amending),
+            "a stage left the amend read current"
+        );
+        assert!(
+            handle.epochs.is_current(reads),
+            "a stage superseded the box's reads"
+        );
+    }
+
     #[test]
     fn a_close_marks_the_local_lane_closing_as_it_is_submitted() {
         let (handle, _asked) = idle_handle();

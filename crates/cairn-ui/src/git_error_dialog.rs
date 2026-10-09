@@ -1,7 +1,9 @@
 //! Fork's `Git Error` dialog for a commit that failed (staging-and-commit R10.5): the command
 //! and git's output — a hook's lines among it, ANSI sequences already stripped by the window —
 //! with `Skip pre-commit hooks and commit` offered only where git would run a `pre-commit` or
-//! `commit-msg` hook (R6.6), and `Close`. Escape and a press outside close it; nothing is the
+//! `commit-msg` hook (R6.6), and `Close`. For an amend the skip is the commit box's
+//! `AmendSkip`, which draws the prompt the amend was confirmed with and builds the skipped
+//! amend's token from it; this file builds none. Escape and a press outside close it; nothing is the
 //! default, as in Fork (Tracker #2173). The draft is the window's, untouched by either answer.
 //!
 //! The output can be as long as a hook makes it, so it is drawn through a virtualizing view —
@@ -12,13 +14,15 @@ use std::rc::Rc;
 
 use freya::prelude::*;
 
+use cairn_model::{Confirmed, Consequence};
+
+use crate::commit_box::{AmendSkip, SKIP_HOOKS_CAPTION};
 use crate::diff_palette::DIFF_FONT_FAMILY;
 
 /// Fork's words.
 pub const GIT_ERROR_TITLE: &str = "Git Error";
 pub const GIT_ERROR_TEXT: &str = "An unexpected error occurred while performing the git request.";
 pub const ERROR_DETAILS: &str = "Error Details:";
-pub const SKIP_HOOKS_CAPTION: &str = "Skip pre-commit hooks and commit";
 pub const CLOSE_CAPTION: &str = "Close";
 
 const DIALOG_WIDTH: f32 = 680.;
@@ -33,6 +37,8 @@ pub struct GitErrorDialog {
     lines: Rc<Vec<String>>,
     skip: bool,
     on_skip: EventHandler<()>,
+    /// A failed amend's skip: the consequence it was confirmed with, and where the token goes.
+    skip_amend: Option<(Rc<Consequence>, EventHandler<Confirmed>)>,
     on_close: EventHandler<()>,
     key: DiffKey,
 }
@@ -47,6 +53,7 @@ impl GitErrorDialog {
             lines,
             skip: false,
             on_skip: EventHandler::new(|()| {}),
+            skip_amend: None,
             on_close: EventHandler::new(|()| {}),
             key: DiffKey::None,
         }
@@ -64,6 +71,19 @@ impl GitErrorDialog {
         self
     }
 
+    /// A failed amend's skip, in place of the commit's (the user's decision of 2026-10-09):
+    /// one press amends at once without hooks, under a token built from `consequence` — the one
+    /// the amend was confirmed with — by the commit box's `AmendSkip`, which draws its prompt.
+    /// Offered whatever [`Self::skip`] says.
+    pub fn skip_amend(
+        mut self,
+        consequence: Rc<Consequence>,
+        on_confirmed: impl Into<EventHandler<Confirmed>>,
+    ) -> Self {
+        self.skip_amend = Some((consequence, on_confirmed.into()));
+        self
+    }
+
     /// Close, Escape, or a press outside.
     pub fn on_close(mut self, on_close: impl Into<EventHandler<()>>) -> Self {
         self.on_close = on_close.into();
@@ -73,7 +93,10 @@ impl GitErrorDialog {
 
 impl PartialEq for GitErrorDialog {
     fn eq(&self, other: &Self) -> bool {
-        self.serial == other.serial && self.skip == other.skip && self.key == other.key
+        self.serial == other.serial
+            && self.skip == other.skip
+            && self.skip_amend.is_some() == other.skip_amend.is_some()
+            && self.key == other.key
     }
 }
 
@@ -127,7 +150,17 @@ impl Component for GitErrorDialog {
         .height(Size::px(OUTPUT_HEIGHT));
 
         let mut buttons = PopupButtons::new();
-        if self.skip {
+        let amend_skip = self.skip_amend.as_ref().map(|(consequence, on_confirmed)| {
+            let close = self.on_close.clone();
+            let on_confirmed = on_confirmed.clone();
+            AmendSkip::new(self.serial, consequence.clone()).on_confirmed(
+                move |token: Confirmed| {
+                    on_confirmed.call(token);
+                    close.call(());
+                },
+            )
+        });
+        if self.skip && amend_skip.is_none() {
             buttons = buttons.child(
                 Button::new()
                     .on_press(move |_| skip())
@@ -173,7 +206,8 @@ impl Component for GitErrorDialog {
                                     .font_family(DIFF_FONT_FAMILY)
                                     .font_size(12.)
                                     .child(output),
-                            ),
+                            )
+                            .maybe_child(amend_skip),
                     )
                     .child(buttons),
             )

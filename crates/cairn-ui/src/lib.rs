@@ -28,7 +28,7 @@ mod file_filter;
 mod git_error_dialog;
 pub use git_error_dialog::{
     CLOSE_CAPTION, ERROR_DETAILS, GIT_ERROR_TEXT, GIT_ERROR_TITLE, GitErrorDialog,
-    OUTPUT_ROW_HEIGHT, SKIP_HOOKS_CAPTION,
+    OUTPUT_ROW_HEIGHT,
 };
 mod graph_cell;
 pub mod graph_geometry;
@@ -62,9 +62,10 @@ pub use changes_list::{
     summary_parts,
 };
 pub use commit_box::{
-    AMEND_CAPTION, Busy, CANCEL_COMMIT_CAPTION, CommitBox, CommitButton, DESCRIPTION_PLACEHOLDER,
-    READING_AMEND, RECENT_MESSAGES_CAPTION, RULER_COLUMN, SUBJECT_HARD_LIMIT, SUBJECT_PLACEHOLDER,
-    SUBJECT_SOFT_LIMIT, SubjectCount, commit_caption, subject_count,
+    AMEND_CAPTION, AmendButton, AmendSkip, Busy, CANCEL_COMMIT_CAPTION, CommitBox, CommitButton,
+    DESCRIPTION_PLACEHOLDER, READING_AMEND, RECENT_MESSAGES_CAPTION, RULER_COLUMN,
+    SKIP_HOOKS_CAPTION, SUBJECT_HARD_LIMIT, SUBJECT_PLACEHOLDER, SUBJECT_SOFT_LIMIT, SubjectCount,
+    commit_caption, subject_count,
 };
 pub use commit_row::{
     AUTHOR_WIDTH, COLUMN_GAP, CommitRow, DATE_WIDTH, HistoryHeader, ID_WIDTH, ROW_FONT_SIZE,
@@ -75,7 +76,7 @@ pub use commit_tab::{
     EXPAND_ALL_CAPTION, ID_CAPTION, NO_FILES, PARENTS_CAPTION, READING_DIFF, REFS_CAPTION, Refs,
     budget_notice, cut_short_notice, file_text, status_letter,
 };
-pub use confirm_dialog::{CANCEL_CAPTION, ConfirmButton, ConfirmDialog};
+pub use confirm_dialog::{CANCEL_CAPTION, ConfirmDialog};
 pub use credential_prompt::CredentialPrompt;
 pub use detail_tabs::{
     COLLAPSE_CAPTION, DETAIL_STRIP_HEIGHT, DetailTab, DetailTabs, EXPAND_CAPTION,

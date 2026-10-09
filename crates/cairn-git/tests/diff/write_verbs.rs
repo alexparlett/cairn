@@ -1256,6 +1256,43 @@ fn a_symlinked_parent_is_never_followed_out_of_the_working_tree() {
     );
 }
 
+/// The same link made AFTER the confirmation: `d/a` changed in a real directory and its
+/// discard confirmed, then `d` replaced by a symlink to a directory outside the working tree
+/// whose `a` holds exactly the confirmed bytes, so a re-check that hashed through the link
+/// would find nothing changed. The run refuses the path as changed since it was confirmed,
+/// the file outside is untouched and `d` is still the link.
+#[test]
+fn a_parent_symlinked_after_the_confirmation_is_never_followed() {
+    let repo = Repo::new("parent-link-late");
+    repo.write("d/a", b"tracked\n");
+    repo.commit("base");
+    repo.write("d/a", b"changed\n");
+    let consequence = ok(
+        ops::discard_files_consequence(
+            git(),
+            &engine(&repo),
+            &[RepoPath::new("d/a")],
+            &CancelSignal::new(),
+        ),
+        "the consequence, while d is a directory",
+    );
+    let outside = Repo::new("parent-link-late-outside");
+    outside.write("a", b"changed\n");
+    std::fs::remove_dir_all(repo.path().join("d")).unwrap_or_else(|e| panic!("{e}"));
+    std::os::unix::fs::symlink(outside.path(), repo.path().join("d"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let outcome = ops::discard_files(git(), &engine(&repo), Confirmed::by_user(consequence), None);
+    assert!(
+        matches!(&outcome, Err(Error::ChangedSinceConfirmed { path }) if path == "d/a"),
+        "{outcome:?}"
+    );
+    assert_eq!(on_disk(&outside, "a"), Some(b"changed\n".to_vec()));
+    assert!(
+        std::fs::symlink_metadata(repo.path().join("d"))
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    );
+}
+
 /// QA item 5: a discard applies the patch built from the diff the user confirmed, never one
 /// rebuilt from a diff handed in later. A diff of the same two blobs can align their lines
 /// otherwise (`x` then `y x` added, or `x y` added before `x`), and the same selection then

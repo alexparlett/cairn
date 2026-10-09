@@ -272,11 +272,12 @@ roster. Its `Consequence::Amend` is computed by `ops::amend_consequence`
 - **Whether a remote already has it** (`Publication`, R6.4). With an upstream that
   is a remote-tracking ref and exists, whether it reaches `HEAD` — its ahead count
   is zero — answered by the walk `HEAD --not <upstream>`, which stops at the first
-  commit it yields; with none — a detached `HEAD`, no upstream, a gone one, one that
-  is a local branch — the same walk hidden by every remote-tracking ref, `HEAD --not
-  --remotes`. Each is cancellable at every object read
+  commit it yields; when it does not, or with none — a detached `HEAD`, no upstream,
+  a gone one, one that is a local branch — the same walk hidden by every
+  remote-tracking ref, `HEAD --not --remotes`, so `Unpublished` means no
+  remote-tracking ref reaches it. Each is cancellable at every object read
   (`the_dialog_is_asked_exactly_when_a_remote_has_head`: an upstream at, ahead of
-  and behind `HEAD`, a branch with no upstream at a remote's commit and past it, a
+  and behind `HEAD`, behind it with another remote branch holding it, a branch with no upstream at a remote's commit and past it, a
   fork whose remote branch was deleted, a local upstream, a detached `HEAD`).
 - **Whether git will write the reflog entry** (`Reflog`, R6.4 and R10.6 as amended):
   when `core.logAllRefUpdates` is `true` or `always` — or, unset, unless the
@@ -327,9 +328,7 @@ graph, which the walk does not read so it can be cancelled at every object).
 - Between an amend's re-check and git's run is the same window; `git commit
   --amend` amends whatever `HEAD` is when it runs.
 - The pushed check knows only what was last fetched, as `git branch -r --contains`
-  does; with an upstream, only the upstream is asked, so a commit another remote
-  branch holds while the upstream is behind it reads as unpublished (R6.4 as
-  written).
+  does.
 - `Reflog::Written` says git will append the amend's entry, whose old id is the
   replaced commit. Show Lost Commits as C20 words it seeds from each entry's new id
   (`git reflog show --format=%H`), so a replaced commit no entry names as its new id

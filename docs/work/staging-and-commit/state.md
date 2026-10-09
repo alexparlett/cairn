@@ -247,8 +247,8 @@ local write lane"):
   `Error::AmendChangedSinceConfirmed` when it differs. Invalidates refs, index and objects.
 - **`ops::amend_consequence(repo, cancel) -> Result<Consequence, Error>`**
   (`crates/cairn-git/src/ops/amend.rs`): `Consequence::Amend { commit, subject, published,
-  reflog }` — the publication from the upstream (a remote-tracking ref that exists) or, with
-  none, every remote-tracking ref (`walk::hiding`, now many hidden tips), the reflog as
+  reflog }` — the publication from the upstream (a remote-tracking ref that exists) or, when
+  it does not hold `HEAD` or there is none, every remote-tracking ref (`walk::hiding`, now many hidden tips), the reflog as
   R6.4/R10.6 say. Rostered in `DESTRUCTIVE_OPERATIONS`.
 - **Reads** (each `Repository` method): `operation_in_progress() -> Option<OperationInProgress>`
   (git's `wt_status` files, not gix's `state()`); `commit_hooks(git, cancel) -> CommitHooks`
@@ -298,8 +298,7 @@ local write lane"):
   the commit-graph's generation numbers, keeping the walk cancellable.
 - **Residual, stated in `docs/systems/staging.md`**: a hook owned by another user counts on the
   group's bit without reading this user's groups; a commit left orphaned by a second close can
-  still die at a line its hook writes; with an upstream behind `HEAD`, another remote branch
-  holding `HEAD` reads as unpublished (R6.4 as written; batched for the user).
+  still die at a line its hook writes.
 
 ## Carried forward from phase 04 (owned by the phase named)
 

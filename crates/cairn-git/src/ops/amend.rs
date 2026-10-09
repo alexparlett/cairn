@@ -6,11 +6,13 @@
 //! - **Whether a remote already has it.** With an upstream — the current branch's, a
 //!   remote-tracking ref that exists — whether that upstream reaches `HEAD`: its ahead
 //!   count is zero (the walk `HEAD --not <upstream>` yields nothing), and the walk stops at
-//!   the first commit it yields, since one is enough to say no. With none — a detached
-//!   `HEAD`, a branch with no upstream, one whose upstream is gone or is a local branch —
-//!   the same walk hidden by every remote-tracking ref, `HEAD --not --remotes`. Each walk is
-//!   cancellable at every object it reads (`crate::history::walk::hiding`). It knows only
-//!   what was last fetched, as `git branch -r --contains` does.
+//!   the first commit it yields, since one is enough to say no. When it does not — or with
+//!   none: a detached `HEAD`, a branch with no upstream, one whose upstream is gone or is a
+//!   local branch — the same walk hidden by every remote-tracking ref, `HEAD --not
+//!   --remotes`, so `Publication::Unpublished` means what it says: no remote-tracking ref
+//!   reaches it. Each walk is cancellable at every object it reads
+//!   (`crate::history::walk::hiding`). It knows only what was last fetched, as `git branch
+//!   -r --contains` does.
 //! - **Whether git will write the reflog entry** that keeps the replaced commit findable
 //!   ([`Reflog`]): git appends an entry for `HEAD`, and for the branch it names, when
 //!   `core.logAllRefUpdates` is `true` or `always` — or, unset, unless the repository is bare
@@ -66,14 +68,14 @@ pub fn amend_consequence(repo: &Repository, cancel: &impl Cancel) -> Result<Cons
         }) if name.as_str().starts_with("refs/remotes/") => Some((name.clone(), *upstream)),
         Some(Upstream::Exists { .. } | Upstream::Gone { .. }) | None => None,
     });
-    let published = match upstream {
+    let held_by_upstream = match &upstream {
         Some((name, upstream)) => {
-            if reaches(repo, &commit, [upstream], cancel)? {
-                Publication::Upstream(name)
-            } else {
-                Publication::Unpublished
-            }
+            reaches(repo, &commit, [*upstream], cancel)?.then(|| name.clone())
         }
+        None => None,
+    };
+    let published = match held_by_upstream {
+        Some(name) => Publication::Upstream(name),
         None => {
             let remotes: Vec<Oid> = snapshot
                 .of_kind(RefKind::RemoteTracking)

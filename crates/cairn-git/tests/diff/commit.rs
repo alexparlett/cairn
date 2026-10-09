@@ -583,7 +583,9 @@ fn published(repo: &Repo) -> Publication {
 }
 
 /// C14 and the QA brief: the dialog appears exactly when a remote has `HEAD` — an upstream at
-/// `HEAD` or ahead of it has it; one behind it does not; with no upstream, another remote
+/// `HEAD` or ahead of it has it; one behind it does not, unless another remote branch holds
+/// it (phase 05's QA item 1: `Unpublished` means no remote-tracking ref reaches it); with no
+/// upstream, another remote
 /// branch holding it does, and none at all does not; a fork whose remote branch was deleted
 /// (its upstream gone) falls back to every remote; an upstream that is a local branch is no
 /// remote; a detached `HEAD` on a remote's commit is published. Caught by: the ahead count
@@ -605,6 +607,19 @@ fn the_dialog_is_asked_exactly_when_a_remote_has_head() {
         Publication::Unpublished,
         "an upstream behind HEAD"
     );
+    // The same, with another remote branch holding HEAD — `git push origin main:feature` —
+    // which `git branch -r --contains` names: a remote has it, though the upstream does not.
+    clone.git(&["update-ref", "refs/remotes/origin/feature", "HEAD"]);
+    assert_eq!(
+        clone.git(&["branch", "-r", "--contains", "HEAD"]).trim(),
+        "origin/feature"
+    );
+    assert_eq!(
+        published(&clone),
+        Publication::SomeRemote,
+        "an upstream behind HEAD, another remote branch holding it"
+    );
+    clone.git(&["update-ref", "-d", "refs/remotes/origin/feature"]);
 
     // No upstream: a branch of its own, at a commit another remote branch holds, then not.
     clone.git(&["checkout", "-q", "-b", "topic", "origin/main"]);

@@ -250,8 +250,11 @@ literally.
 - R6.4 Amend is destructive (R1.5): its `Consequence` is `HEAD`'s id, subject,
   whether git will write the reflog entry R10.6's text depends on, and
   whether a remote already has it — from the upstream's ahead count, or, with no
-  upstream, a hidden walk of `HEAD --not --remotes`. (Reflog state added
-  2026-10-08 with R10.6, the user's decision.)
+  upstream or one that does not hold `HEAD`, a hidden walk of `HEAD --not --remotes`.
+  (Reflog state added 2026-10-08 with R10.6, the user's decision. "Or one that does
+  not hold `HEAD`" amended 2026-10-09 by phase 05, for the user's ratification:
+  phase 05's QA item 1 found that asking the upstream alone answered "unpublished"
+  for a commit another remote branch holds.)
 - R6.5 Commit and amend carry an askpass token (R5.1) and stream their stderr to
   the operation log (R12.1).
 - R6.6 Whether a `pre-commit` or `commit-msg` hook exists is answered from the

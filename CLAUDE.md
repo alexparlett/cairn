@@ -802,7 +802,12 @@ Project invariants:
   refresh thread (staging-and-commit R4); `LaneState`'s mutex is otherwise
   held by worker threads only for an assignment and one unbounded send —
   the lane announcing a write's start and end, the refresh thread sending a
-  status it read — so the UI thread waits behind it no longer than that;
+  status it read — for a commit's cancel installed as its `git` starts
+  (`LaneState::install`), which calls that cancel under the lock when one
+  came first — `KillHandle::kill`, an atomic mark, a `try_lock` and a
+  `killpg`, never a wait — and for a read of whether a cancel came, which an
+  amend's checks make once per object their walk reads (`BeforeRunning`); so
+  the UI thread waits behind it no longer than one of those;
   `OperationId::next`, an atomic increment the window asks a write under
   (`local_writes::ask`), and `LocalWrite::what`, which formats a path or a
   count; the `Retired` constructors the window builds a

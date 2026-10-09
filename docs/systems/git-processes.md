@@ -1212,9 +1212,27 @@ which is a length of time, is waited out.
   `a_cancel_before_git_runs_is_kept_for_the_commit_it_names`).
 - **A commit's output** (R6.5). Each line a running commit's `git` or one of its
   hooks writes, stdout's and stderr's alike, reaches the window as
-  `Update::WriteOutput { id, line }` as it arrives; no view draws it yet (the Git
-  Error dialog, phase 09; the activity popover, phase 11), and a failure carries
-  git's words in its ending.
+  `Update::WriteOutput { id, line }` as it arrives. The commit box keeps its own
+  commit's lines, a bounded tail, for the Git Error dialog a failure opens
+  (`docs/systems/local-changes.md`, "The commit box"); a failure git reports carries
+  the command that ran and git's own words beside its message
+  (`WriteEnding::Failed`'s `command` and `output`), which the dialog shows when
+  nothing streamed.
+- **What the commit box reads, in the lane's order** (staging-and-commit R6.6, R6.7,
+  R6.3, R6.4, R10). `Request::CommitReads` — asked as the box is shown and as each
+  refresh's refs arrive — is a job of the lane's (`LocalJob::CommitReads`), read after
+  the writes asked before it, so a commit's message is among the recent ones once it has
+  ended: the operation in progress, the hooks git would run and the last ten messages,
+  each answer or its failure, as `Update::CommitReads`. `Request::Amending { status }` —
+  asked while Amend is ticked, over each status that arrives — reads what an amend would
+  replace (`ops::amend_consequence`), the message of the commit it names, and amend's
+  staged list laid out with the status's unstaged one (`LocalChanges::amending`), as
+  `Update::Amending`. Each is numbered in a lane of its own (`QueryLane::CommitBox`,
+  `QueryLane::Amending`) and answered under that number, so a newer ask — or, for an
+  amend's read, `Request::StopAmending`, Amend unticked — ends the one before, its walk
+  and its `git` read, and an answer superseded is never drawn. Pinned by
+  `the_commit_boxs_reads_and_an_amends_read_come_through_the_lane`
+  (`worker/local_lane_tests.rs`).
 - **Prompts during a write** (R5.1, L11). Every write begins a channel operation
   of its own, under the name the window gives it (`Channel::begin_for`, "Commit",
   "Staging 1 file"; a fetch's under its remote), and runs with its token, retired

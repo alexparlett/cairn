@@ -3,16 +3,17 @@
 How the window's Local Changes view is built: the two lists it draws over the working
 tree's status, how a path is chosen and its diff asked, what keeps a diff from being drawn
 for any path but the one chosen, how several paths selected draw their diffs together, how the
-view stages, unstages and discards files, and the diff's staging gesture over lines.
-Spec: `docs/prd/refs-and-status.md` R9 (criterion C9) for the view, and
+view stages, unstages and discards files, the diff's staging gesture over lines, and the commit
+box under the diff. Spec: `docs/prd/refs-and-status.md` R9 (criterion C9) for the view, and
 `docs/prd/staging-and-commit.md` R8 (criteria C8's view half, C18 and C24's conflicted rows)
-for its actions and R9 (criterion C19) for the gesture. Fork is the standard (`docs/research/refs-and-status/fork-refs-and-status-ui.md`,
+for its actions, R9 (criterion C19) for the gesture and R10 (C13, C14 and C24's view halves)
+for the commit box. Fork is the standard (`docs/research/refs-and-status/fork-refs-and-status-ui.md`,
 section 6, and `docs/research/staging-and-commit/fork-staging-and-commit.md`, sections 1-2);
 every place Cairn's view is not Fork's is named under "Where it is not Fork's". The status
 itself — what `git status` lists and how it is read — is `status.md`; the working-tree query
 that answers a path's diff is `diff.md`, "The working-tree query"; the verbs the actions run
-are `staging.md`, on the local write lane of `git-processes.md`. The commit box under the diff
-is not built yet (staging-and-commit phase 09).
+are `staging.md`, on the local write lane of `git-processes.md`, and so are commit and amend,
+which the commit box asks.
 
 ## What it draws
 
@@ -353,8 +354,137 @@ row of its own over its diff — over the notice, for a change of the mode alone
 actions while hovered (`Stage Mode Change`, `Discard Mode Change…`, `Unstage Mode Change`), each
 taking the mode change alone (`Selection::select_mode`), never a line (`cairn_ui::ModeRow`).
 
+## The commit box
+
+Under the diff, the width of the diff's side (R10.1), Fork's box (`fork-staging-and-commit.md`
+§5), drawn by `cairn_ui::CommitBox` (`crates/cairn-ui/src/commit_box.rs`) from the window's
+state (`crates/cairn-app/src/commit_box_state.rs`) by `commit_box_pane::CommitBoxPane`, which
+also holds what each press does: a one-line subject with Fork's counter — the characters left
+before 50, negative past it, red past 70 (`subject_count`) — and the `≡` that opens Recent
+Commit Messages; a description in IBM Plex Mono with a ruler at column 72; `Amend` at the left;
+and the button at the right, `Commit N Files` (`commit_caption`: plain `Commit` with none).
+
+**The draft is the window's** (R10.7). The subject and the description are two `State<String>`s
+kept by `LocalChangesView::commit` for the window's life, bound two ways to the fields — so a
+refresh, Local Changes hidden and shown again, a failed hook and Amend's toggling leave it as it
+was, and what the window writes into it (a recalled message, `HEAD`'s, `MERGE_MSG`) is what the
+fields show. Both fields are built by the one key policy heard in the commit box's scope
+(`text_field_in`, and for the subject `text_field_recalling`, `FieldScope::CommitBox`): the
+commit chord (⌘Return, Ctrl+Enter) commits without a new line, the window's chords reach the
+window, and no list or staging chord fires (R7.3 as amended). Tab moves from the subject to the
+description. A commit made clears the draft; one that fails keeps it.
+
+**What is asked, and where** (`docs/systems/git-processes.md`, "The local write lane"). As the box
+is shown, and as each refresh's refs arrive while Local Changes is shown, the box asks its reads
+(`Request::CommitReads`, answered by `Update::CommitReads`): the operation in progress, the hooks
+git would run and the last ten messages — on the local lane, after the writes asked before them,
+numbered in the commit-box lane so the next ask supersedes the last. Nothing is read on the UI
+thread.
+
+**Commit** asks `LocalWrite::Commit` with the draft composed as typed — the subject, then a blank
+line and the description when there is one (`compose_message`; git's own cleanup is git's,
+R6.1). The button needs a subject (Fork's rule) and something staged, or a merge in progress.
+While it waits its turn the box says `Committing (waiting)…`; once git runs it says
+`Committing…` with the time it has run, redrawn each second by a task of its own line's
+(`Elapsed`, on `async-io`'s timer), and a Cancel that asks `Request::CancelWrite` for that
+commit's id — never for one still queued (R4.3, R10.4).
+
+**A failure** of git's own (`WriteEnding::Failed` with the command that ran) opens Fork's Git Error
+dialog (`cairn_ui::GitErrorDialog`, R10.5) over the window: the command, and the commit's output
+as it streamed (`Update::WriteOutput`) — or, if nothing streamed, the output the engine kept —
+with ANSI sequences and control characters stripped (`strip_ansi`), the latest 10,000 lines or
+1 MiB kept (`OutputTail`), drawn one row per line through a virtualizing view opened at its end.
+`Skip pre-commit hooks and commit` is offered only where the last read found a `pre-commit` or
+`commit-msg` hook git would run, and never for a commit whose hooks were already skipped: it
+asks the same message again with `skip_hooks`, `--no-verify` for that one commit; the next
+commit runs its hooks. Close, Escape or a press outside closes it. The window's chords and Local
+Changes' actions are inert while it is open, as under a confirmation. A refusal, a stale amend,
+a cancel or a commit not run is said under the lists, as any write's ending is.
+
+**Amend** (R10.3, R10.6, L12). Ticking it sets the draft aside and asks what an amend would
+replace (`Request::Amending`, on the local lane, numbered in the amending lane): the
+`Consequence` (`ops::amend_consequence`), `HEAD`'s message — of the commit the consequence names
+— and amend's lists over the status the window drew, Unstaged as the status lists it and Staged
+as amend's staged list against `HEAD`'s parent (`LocalChanges::amending`, laid out on the lane).
+The lists that answer are drawn as a status's are; each status that arrives while Amend is
+ticked asks again over it, superseding the read before; and the box shows `Reading what Amend
+would replace…` until the first answer, the button waiting for each newer one. An empty draft is
+filled with `HEAD`'s message once it arrives; a draft with text is kept as the amend's message.
+Unticking puts the draft set aside back exactly as typed, ends the read in flight
+(`Request::StopAmending`) and draws the status's own lists again. Amend is disabled on an
+unborn branch and while any operation is in progress (R10.1).
+
+While amending, a path chosen in Staged asks its diff against `HEAD`'s parent
+(`WorkingSide::Amending`, `WorkingTreeDiff::Amending`: `git diff --cached HEAD^`'s answer), and an
+unstage of whole files from Staged — each route, Unstage All among them — puts the entries back
+to the parent's (`UnstageTarget::Commit`, `git reset -q <parent> --`) or, for a root commit's
+amend, removes them (`UnstageTarget::Nothing`, `git rm --cached -f -q --`): the file leaves the
+amended commit (`local_changes_actions::unstage_target`). Lines unstaged by the gesture are
+applied against the index as from any staged diff. Where amend's staged list cannot be read —
+a partial clone's missing blob on git 2.44 and later — the box says so and why, the lists stay
+the status's against `HEAD`, and the amend itself is still offered.
+
+The button reads the consequence's own words: `Amend <short id>` above the line it renders,
+"Replaces <short id> '<subject>'." and whether the old commit stays in Show Lost Commits or
+cannot be recovered (`Consequence::replaces`). **The token is built only by the confirmation
+surface** (`crates/cairn-ui/src/confirm_dialog.rs`, the one row of `CONFIRMATION_SURFACES`):
+an amend no remote has is confirmed by the box's button itself, which is that file's
+`ConfirmButton` — it builds the token from the consequence it draws, once per consequence — and
+hands it to the window to ask `LocalWrite::Amend`; an amend a remote has
+(`Consequence::needs_force_push`) reads `Amend <short id>…` and opens the confirmation dialog
+first, its words the whole prompt — the force push (`Consequence::force_push_warning`) and the
+line — and its own button the one that builds the token. The commit chord heard while amending,
+and an amend's hook-failure skip, open that dialog too: no chord confirms an amend by itself.
+After the amend, Amend unticks itself and the draft is cleared.
+
+**An operation in progress** (R10.8, L25): with a merge, an empty draft is filled once per merge
+with git's `MERGE_MSG` as git wrote it — its `# Conflicts:` lines kept visible, which a commit
+under `-F` keeps unless the person deletes them (the user's decision E) — and the commit is the
+merge commit; Amend is disabled. During a rebase, `git am`, a cherry-pick or a revert the fields
+and the buttons are disabled and the box says "Committing is unavailable while a rebase is in
+progress."
+
+**Recent Commit Messages** (R10.2): the `≡` opens a menu of the last ten messages' subjects,
+newest first; choosing one fills both fields (`split_message`: the first line, and the rest after
+its blank line). In an empty subject, or one holding the message last recalled, a bare ↑ recalls
+the next older and ↓ the next newer, ↓ from the newest emptying the draft
+(`accelerators::recall_step`, offered first by `text_field_recalling`); in a subject the person
+typed, the arrows are the editor's.
+
 ## What enforces this
 
+- The commit box, at the component (`crates/cairn-ui/tests/commit_box.rs`):
+  `the_amend_toggle_reports_its_toggled_state_to_assistive_technology`,
+  `the_amend_button_in_place_builds_one_token_from_the_consequence_it_draws`,
+  `a_published_amends_button_asks_rather_than_confirms`,
+  `a_disabled_confirm_button_builds_no_token`,
+  `the_counter_is_drawn_and_a_stopped_box_asks_nothing`,
+  `the_git_error_draws_one_viewport_of_output_and_the_skip_only_where_offered`; in the window
+  (`crates/cairn-app/src/commit_box_tests.rs`):
+  `a_draft_typed_then_amend_ticked_and_unticked_is_back_exactly`,
+  `the_amend_button_its_line_and_its_token_name_one_head`,
+  `a_published_amend_and_the_commit_chord_ask_the_dialog_first`,
+  `a_failed_hooks_skip_commits_once_without_hooks_and_the_next_runs_them`,
+  `with_no_hook_the_git_error_offers_no_skip`, `cancel_reaches_only_the_running_commit`,
+  `a_merge_fills_the_draft_with_merge_msg_as_git_wrote_it_and_disables_amend`,
+  `during_a_rebase_am_cherry_pick_or_revert_the_box_is_disabled_and_names_it`,
+  `amend_is_disabled_on_an_unborn_branch`,
+  `amends_staged_list_is_drawn_diffed_against_heads_parent_and_unstaged_to_it`,
+  `amends_staged_list_unread_is_said_and_the_status_lists_stay`,
+  `recent_messages_fill_both_fields_from_the_menu_and_the_arrows`; the window's state
+  (`commit_box_state.rs`): `a_message_split_into_the_fields_composes_back_unchanged`,
+  `ansi_sequences_and_control_characters_are_stripped`,
+  `the_output_kept_is_its_latest_bounded_tail`,
+  `amend_sets_the_draft_aside_and_fills_only_an_empty_one`, `a_merge_fills_an_empty_draft_once`,
+  `a_failure_offers_the_skip_only_where_a_hook_exists`; through the real boundary
+  (`worker/local_lane_tests.rs`): `the_commit_boxs_reads_and_an_amends_read_come_through_the_lane`,
+  `a_failing_hook_fails_a_commit_and_the_skip_commits_past_it` (its command and output),
+  `a_chunk_drawn_at_context_ten_stages_exactly_as_drawn`; the model:
+  `amending_lists_amends_staged_list_beside_the_status_unstaged_one`,
+  `an_amends_parts_are_its_prompt_and_only_a_published_one_needs_the_dialog`; the engine:
+  `a_file_of_amends_staged_list_reads_as_git_diff_cached_against_heads_parent`
+  (`crates/cairn-git/tests/diff/working_tree.rs`); the table:
+  `only_a_bare_arrow_steps_through_the_recent_messages`.
 - Layout (`crates/cairn-model/src/local_changes.rs`):
   `each_path_is_in_the_lists_its_changes_put_it_in_ordered_by_name`,
   `each_list_is_in_natural_order_and_found_in_it`,
@@ -502,7 +632,17 @@ taking the mode change alone (`Selection::select_mode`), never a line (`cairn_ui
   the lists (the user's decision, 2026-10-07): the layout menu and its
   collapse-all chevron (#71), Hide Untracked Files (#70), Show Ignored Files (#62) and the eye
   (Fork's side-by-side quick look, #35) are not drawn.
-- The commit box under the diff is not built yet (staging-and-commit phase 09).
+- The commit box: the subject is required, as Fork's is, and a merge in progress commits with
+  nothing staged; Fork's limit setting, monospace toggle, Wrap paragraph at ruler, spell
+  checking, autocomplete, commit template, `prepare-commit-msg` and AI drafts, sign-off, Commit
+  and Push and the ⌘⇧A amend chord are not built (Commit and Push waits on push, L9). The ruler
+  stands at column 72 of IBM Plex Mono's advance after the field's margin. Fork shows a commit's
+  output live in its Activity Manager; Cairn shows it in the Git Error dialog when the commit
+  fails, and the activity popover is phase 11's.
+- The amend button confirms in place only where no remote has `HEAD`; the commit chord while
+  amending, and an amend's hook-failure skip, open the confirmation dialog — the token is built by
+  the person's press on a confirmation surface, never by a chord (for the user's ratification,
+  phase 09).
 - A double press acts on its row alone, since its first press makes the row the selection (the
   user's decision, 2026-10-09).
 - Paths drawn together are read under Expand All's line budget, and past it are not drawn — Fork's

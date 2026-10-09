@@ -3,6 +3,69 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 09, the commit box (packet mode)
+
+Built on `feature/staging-and-commit`; QA is the coordinator's. Commits 4f25cf4 (model: an
+amend's two texts apart, `needs_force_push`, `amended`; `LocalChanges::amending`,
+`StagedAgainst`), a4ca81d (git: `WorkingTreeDiff::Amending`, `Repository::amend_parent`),
+2c49c61 (ui: `CommitBox`, `GitErrorDialog`, `ConfirmButton`, `text_field_recalling`,
+`accelerators::recall_step`), a7f5734 (app: the box's state and pane, its reads and an amend's
+on the local lane, `WriteEnding::Failed`'s `command` and `output`, amend's lists drawn, the
+window's tests) and the docs commit after them.
+
+- **The box (R10.1, R10.2, R10.7)**: under the diff; the draft two `State<String>`s kept by
+  `LocalChangesView::commit` for the window's life, bound to fields built by the one key policy
+  (`text_field_in` / `text_field_recalling`, `FieldScope::CommitBox`); Fork's counter, the ruler at
+  72, `Commit N Files`; Recent Commit Messages from the `≡` menu and a bare ↑/↓ in an empty or
+  recalled subject. No stopping rule: the linked `Input` keeps the draft across Amend — the value
+  is the window's `State`, and a value written underneath it syncs into the editor
+  (`input.rs`, the `committed_text` check) — and Fork's thresholds are a label beside the field.
+- **Amend (R10.3, R10.6)**: ticking it sets the draft aside and asks `Request::Amending` over the
+  status drawn; the answer (`Update::Amending`) carries the consequence, `HEAD`'s message and
+  amend's lists, drawn as a status's are; each status arriving while ticked asks again; unticking
+  restores the draft exactly and asks `StopAmending`. Staged's paths diff against `HEAD`'s parent
+  and unstage back to it (`UnstageTarget::Commit`/`Nothing`). Amend is disabled on an unborn
+  branch and while an operation is in progress.
+- **Running and failing (R10.4, R10.5)**: `Committing (waiting)…`, then `Committing…` with its
+  elapsed time and a Cancel for the running commit only; a git failure opens the Git Error dialog
+  over the streamed output (ANSI stripped, bounded, virtualized), the skip only where a hook
+  exists and never twice; `Request::CancelWrite`'s and `LocalWrites::running`'s `expect(dead_code)`
+  are gone, and so is `LocalWrite`'s.
+- **An operation in progress (R10.8)**: `MERGE_MSG` fills an empty draft once per merge, as git
+  wrote it; a rebase, `git am`, a cherry-pick or a revert disables the box and names it.
+- **Phase 08's #7**: `a_chunk_drawn_at_context_ten_stages_exactly_as_drawn` (real git, through the
+  lane). Local Changes' window tests run 860 px high: the box takes some 150 px under the diff, and
+  `several_paths_selected_draw_their_diffs_together` needs the second file in view.
+- Gate: `scripts/gate.sh --fast` green after each step; the full gate before the docs commit.
+
+Decisions, and items batched for the user's ratification (none is a stopping rule):
+
+1. **For the user's ratification — where the amend's token is built.** The carry (phase 06's QA:
+   "the commit box hands the window a `Confirming`, never calls `by_user`; `CONFIRMATION_SURFACES`
+   stays one row") and L12/R10.6 (an unpublished amend confirmed by its own button, no dialog) are
+   both kept: the amend button drawn in place is `cairn_ui::ConfirmButton`, which lives in
+   `confirm_dialog.rs` beside the dialog and shares its one `token` function, so the one roster
+   row covers both and the commit box files never name `by_user`; a published amend's press hands
+   the window a `Confirming` (the dialog). Alternative: roster `commit_box.rs` as a second surface
+   (R1's original wording). Recommendation: ratify — one file builds every token. PRD R1.2/L12's
+   "the commit box is the second confirmation surface" wording is the user's to amend.
+2. **For the user's ratification — no chord confirms an amend.** The commit chord heard while
+   amending, and an amend's hook-failure skip, open the confirmation dialog rather than amending
+   (a token is built only by a press on a confirmation surface). Alternative: the chord amends in
+   place as the button does. Recommendation: keep.
+3. **For the user's ratification — Fork's rules the PRD does not state**: the subject is required
+   (Fork, Tracker #1490); a merge in progress commits with nothing staged; `MERGE_MSG` fills an
+   empty draft once per merge (a draft emptied by hand is not filled again).
+4. **For the user's ratification — amend's staged list unread** (phase 05's QA item 6): the box
+   says why, the lists stay the status's against `HEAD`, and the amend is still offered. Alternative:
+   disable the amend. Recommendation: keep (the list is the box's to show, not the amend's to need).
+5. Decision — the amend button waits while a newer amend read is on its way (each stage while
+   ticked re-reads), so a press confirms only the latest consequence; the old one stays drawn.
+6. Decision — the Git Error dialog opens for a failure git reported (`Failed` with its command);
+   a refusal, a stale amend, a cancel or a commit not run is said under the lists, as before.
+7. Not done (optional in the carry): skipping the amend re-check's walk when the tips it read have
+   not moved — re-carried to phase 11 with the pushed check's measurement.
+
 ## 2026-10-09 — phase 08 QA, adjudicated and fixed; the user's decisions applied
 
 Four fresh reviewers and a fresh qa-confirm adjudicated phase 08; the user decided the batched

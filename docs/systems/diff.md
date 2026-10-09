@@ -662,8 +662,10 @@ does instead (see the known limits).
 &impl Cancel)` (and `DiffSession::working_tree_diff`, on a session's repository) in
 `crates/cairn-git/src/diff/working_tree.rs`, over the read
 `crate::reads::working_tree_patch` in `crates/cairn-git/src/reads/working_tree.rs`.
-`WorkingTreeDiff` is `Staged` (`HEAD` against the index), `Unstaged` (the index
-against the working tree) or `Untracked` (nothing against the working tree). The
+`WorkingTreeDiff` is `Staged` (`HEAD` against the index), `Amending` (`HEAD`'s parent
+against the index — the empty tree for a root commit — one file of amend's staged list, read
+as `Staged` is, with the parent in `HEAD`'s place), `Unstaged` (the index against the working
+tree) or `Untracked` (nothing against the working tree). The
 answer is `Option<FileDiff>`: `None` exactly where the user's `git diff --cached
 -- <path>`, `git diff -- <path>` or `git diff --no-index /dev/null <path>` prints
 nothing — a clean path, one whose stat alone moved, a CRLF checkout of an LF file

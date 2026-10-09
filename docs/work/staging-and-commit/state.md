@@ -17,7 +17,8 @@ user's decisions 6, 12, 13 and 14 (2026-10-09) applied, full gate green. Phase 0
 Changes acts on files) done in packet mode: QA adjudicated, fixes and the user's decisions of
 2026-10-09 applied, full gate green. Phase 08 (the diff's staging gesture, and a
 multi-selection's diffs drawn together) done in packet mode: QA adjudicated, fixes and the
-user's decisions (2026-10-09) applied, full gate green. Phases 09-12 not started.**
+user's decisions (2026-10-09) applied, full gate green. Phase 09 (the commit box) built in
+packet mode, gate green, QA pending. Phases 10-12 not started.**
 
 ## Locked decisions
 
@@ -377,6 +378,45 @@ staging gesture"):
   `Request::DiscardLinesConsequence` carry `Arc<FileDiff>`; a discard of several files' prompt
   names the first three and how many more.
 
+Phase 09 (`docs/systems/local-changes.md`, "The commit box"):
+
+- **`cairn_model`**: `Consequence::force_push_warning`, `replaces`, `needs_force_push`, `amended`
+  (the prompt is `force_push_warning` then `replaces`, joined); `LocalChanges::amending(status,
+  staged, parent)` and `LocalChanges::staged_against() -> StagedAgainst { Head, HeadParent(Option<Oid>) }`.
+- **`cairn_git`**: `Repository::amend_parent() -> Result<Option<Oid>, Error>`;
+  `WorkingTreeDiff::Amending` (the index against `HEAD`'s parent, the empty tree for a root).
+- **`cairn_ui`**: `CommitBox::new(subject, description).amend(..).button(CommitButton, ready)
+  .busy(Option<Busy>).stopped(..).note(..).recent(..)` with `on_amend`, `on_commit`,
+  `on_confirmed` (`EventHandler<Confirmed>`), `on_cancel`, `on_recall`, `recall`;
+  `CommitButton::{Commit, AmendInPlace, AmendAsking, ReadingAmend, AmendUnreadable}`;
+  `ConfirmButton::new(serial, Rc<Consequence>)` (in `confirm_dialog.rs`); `GitErrorDialog::new(serial,
+  command, lines)`; `text_field_recalling(.., recall: Callback<RecallStep, bool>)`;
+  `accelerators::{RecallStep, recall_step, recall_step_on}`; `commit_caption`, `subject_count`.
+- **Worker**: `Request::CommitReads` (`Update::CommitReads(Box<CommitReads>)`: `operation`,
+  `hooks`, `recent`), `Request::Amending { status }` (`Update::Amending { status, read:
+  Box<AmendRead> }`: `consequence`, `message`, `lists`), `Request::StopAmending`;
+  `QueryLane::CommitBox`, `QueryLane::Amending` (both on the local lane);
+  `WorkingSide::Amending`; `WriteEnding::Failed { message, locks, command, output }`;
+  `Retired::amending(status, lists)`.
+- **Window**: `LocalChangesView::commit: CommitBoxView { subject, description, state }`
+  (`commit_box_state.rs`: `CommitBox`, `AskedCommit`, `Amendable`, `GitError`, `OutputTail`,
+  `split_message`, `compose_message`, `strip_ansi`); `commit_box_pane.rs` (`CommitBoxPane`,
+  `toggle_amend`, `pressed`, `amend_confirmed`, `cancel`, `recall`, `recall_step`, `skip_hooks`, the
+  `*_arrived` and `write_*` hooks `session::apply` calls, `git_error`, `AMEND_TITLE`);
+  `local_changes_actions::unstage_target`; `local_changes_tests::{in_lists_reads, click_heading}`.
+
+## Carried forward from phase 09 (owned by the phase named)
+
+- **Phase 11**: measure on the bench what the box asks of the local lane — its reads on every
+  refresh's refs while Local Changes is shown (a `git rev-parse` and a ten-commit walk), and an
+  amend's read per status while Amend is ticked (the pushed check's walk and a `git diff-index
+  --cached` against `HEAD`'s parent, per stage) — and, from phase 05's QA item 4 (optional, not
+  done here), skip the re-check's walk when the tips it read have not moved.
+- **Phase 11**: the activity popover draws every write's `Update::WriteOutput`; the commit box
+  keeps only its own commit's, for the Git Error dialog.
+- **The user, at the merge bar**: progress.md's phase 09 items 1-4 (where the amend's token is
+  built; no chord confirms an amend; Fork's unstated rules; amend's staged list unread).
+
 ## Carried forward from phase 08 (owned by the phase named)
 
 - **Phase 11**: measure the gesture on the bench in `window_check` — hover and drag over a large
@@ -388,8 +428,7 @@ staging gesture"):
   bound if it shows; #4' (the user's decision) — adding a path to a selection drawn together
   re-reads every path: keep each file's answer across selection changes, with measurements (the
   flash is documented as interim in `local-changes.md`).
-- **Phase 09, from phase 08's QA** (#7): one real-git end-to-end test at context 10 — stage a
-  chunk drawn at context 10 through the lane and read back `git diff --cached`.
+- **Phase 09 — done** (#7): `a_chunk_drawn_at_context_ten_stages_exactly_as_drawn`.
 - **Phase 12 / the user, at the merge bar** (#15): Escape is matched as a literal
   `NamedKey::Escape` (`diff_view.rs`, `stacked_diff.rs`, `local_changes_drag.rs`) rather than as
   an accelerator-table `Action` — a convention note, not a guard breach.
@@ -409,10 +448,9 @@ staging gesture"):
   (`local_changes_actions::on_the_diff`); phase 08 narrows them to a drag-selection's lines.
   The drag selection over the diff begins its `EdgeScroll` on the diff's container (unchanged
   from phase 06's carry); `EdgeScroll` now ends on a lost release itself.
-- **Phase 09**: no engine query diffs one file of amend's staged list against `HEAD^` (phase
-  05's carry, "07 or 09"): Local Changes does not draw an amend's files, so it stays the commit
-  box's; and an unstage out of an amend (`UnstageTarget::Commit`) — Local Changes asks
-  `UnstageTarget::Head` today, and the commit box's amend mode switches it.
+- **Phase 09 — done**: `WorkingTreeDiff::Amending` and amend's lists drawn in Local Changes while
+  Amend is ticked; an unstage from them asks `UnstageTarget::Commit`/`Nothing`
+  (`amends_staged_list_is_drawn_diffed_against_heads_parent_and_unstaged_to_it`).
 - **Phase 11, from phase 07's QA**: batch the discard count's per-path reads into one
   multi-path `git diff-files` read in `reads/` — measure first; and the argv size of stage,
   unstage and restore at 50,000 paths (`destructive-ops-reviewer`; `git clean` is already
@@ -451,24 +489,22 @@ progress.md's phase 07 entry).
     and nothing discards.
 - **Phase 08 — done**: the drag selection over the diff's rows begins with `EdgeScroll::begin` on
   the diff's container (`EdgeScroll::on`), never on a row.
-- **Phase 09**: build the subject and description with `text_field_in(..,
-  FieldScope::CommitBox, on_action)` (the description `.multiline(true)`, no `on_submit`), so
-  ⌘Return/Ctrl+Enter commits without a new line and Backspace/Enter never reach Local Changes;
-  the window's chords still reach the window from the box (decision 13).
-- **Phase 09, from phase 06's QA** (adjudicated 2026-10-09): amend builds its token through
-  `ConfirmDialog` — the commit box hands the window a `Confirming`, and never calls `by_user`
-  itself; the force-push warning, if it is informational only, is a separate token-less
-  component, never a mode of `ConfirmDialog`; the widened text-field guard (item 8) already
-  covers the multi-line commit box.
+- **Phase 09 — done**: the subject and description built with `text_field_in` /
+  `text_field_recalling` (`FieldScope::CommitBox`, the description multiline, no `on_submit`).
+- **Phase 09 — done, item 1 for the user's ratification** (progress.md, phase 09): the commit box
+  never calls `by_user`; a published amend hands the window a `Confirming`; the unpublished amend's
+  in-place button is `ConfirmButton` in `confirm_dialog.rs`, so `CONFIRMATION_SURFACES` stays one
+  row; the force push is a part of the dialog's prompt, never an informational component.
 - **Phase 10**: hear `Scope::History` in the history list's `on_key_down` for Show Lost Commits.
 
 ## Carried forward from phase 05 (owned by the phase named)
 
-- **Phase 09** (phase 07 re-carried it: Local Changes draws no amend's files): no engine query diffs one file of amend's staged list against `HEAD^`
-  (`WorkingTreeDiff::Staged` diffs against `HEAD`); the view that shows an amend's file needs
-  one (a `staged_since`-based side in `diff/working_tree.rs`), with a test.
-- **Phase 09**: `Request::CancelWrite`'s `expect(dead_code)` stays until the commit box cancels;
-  `LocalWrites::running` is `expect(dead_code)` until a view draws the write running. Draw
+- **Phase 09 — done**: `WorkingTreeDiff::Amending`
+  (`a_file_of_amends_staged_list_reads_as_git_diff_cached_against_heads_parent`).
+- **Phase 09 — done**: `Request::CancelWrite`'s and `LocalWrite`'s `expect(dead_code)` are gone, the
+  Git Error dialog draws the output, the `MERGE_MSG` prefill is tested
+  (`a_merge_fills_the_draft_with_merge_msg_as_git_wrote_it_and_disables_amend`),
+  `Consequence::needs_force_push` and the amend prompt's parts exist. As carried: Draw
   `Update::WriteOutput` (the Git Error dialog: the command and git's output, ANSI stripped, from
   the failure's `GitFailed` — stdout's tail then stderr's). R10.8's `MERGE_MSG` prefill:
   `OperationInProgress::Merge.message` is git's file as it stands, with git's own `# Conflicts:`
@@ -498,13 +534,11 @@ progress.md's phase 07 entry).
 
 From phase 05's QA (adjudicated 2026-10-09):
 
-- **Phase 09** (item 4): run `amend_consequence` on an epoch-numbered lane with a loading
-  state in the commit box; optionally skip the re-check's walk when the tips it read have not
-  moved.
-- **Phase 09** (item 6): what the amend box shows when amend's staged list fails (a partial
-  clone's missing blob on git 2.44+: `Error::GitFailed`).
-- **Phase 09** (item 8): a window test that the commit after a skipped-hooks commit runs the
-  hooks again (the skip is per commit, never kept).
+- **Phase 09 — done** (item 4): the amending lane and `Reading what Amend would replace…`; the
+  optional walk skip re-carried to phase 11.
+- **Phase 09 — done** (item 6): `amends_staged_list_unread_is_said_and_the_status_lists_stay`.
+- **Phase 09 — done** (item 8):
+  `a_failed_hooks_skip_commits_once_without_hooks_and_the_next_runs_them`.
 - **Phase 10** (item 12, = D, decided by the user 2026-10-09): the reflog seed above.
 - **Phase 11** (item 3): `Update::WriteOutput` is one unbounded update per line
   (`worker/local_lane.rs`'s `Watch::commit`; `session.rs` discards it; `pool.rs`'s
@@ -549,8 +583,7 @@ From phase 05's QA (adjudicated 2026-10-09):
   through `local_writes::ask`; draw a write queued and its outcome (`LocalWrites::queued`,
   `last`); decide where `discard_*_consequence` is asked (a worker's call; the local lane
   orders it after the writes ahead of it).
-- **Phase 09**: a Cancel the commit box draws is for the running commit (`CancelWrite` of a
-  queued one does nothing, R4.3).
+- **Phase 09 — done**: `cancel_reaches_only_the_running_commit`.
 - **Phase 11**: the activity popover reads `WriteEnding`/`Done`; measure the open's lock
   listing (`SharedRepository::lock_files`, a walk of `refs/`, now on the local lane) on the
   bench repository, and the two walks every local write makes (#87).
@@ -634,10 +667,10 @@ From phase 02's QA (adjudicated 2026-10-08):
   through clean filters, so an edit that changes only line endings after the
   confirmation matches and is lost. Decide the deletion re-check's hashing
   (consider `git hash-object --no-filters` for it) and test it.
-- **Phase 09** (QA item 21): the amend prompt joins two texts (the force-push
-  warning and the "Replaces" line) that phases 06 and 09 may draw on two surfaces;
-  render each part separately, and make the recorded prompt exactly what the
-  surface drew.
+- **Phase 09 — done** (QA item 21): `Consequence::force_push_warning` and `replaces`
+  (`an_amends_parts_are_its_prompt_and_only_a_published_one_needs_the_dialog`); the box draws
+  `replaces` under an in-place amend button whose token records exactly it, and the dialog the
+  whole prompt.
 - **Phase 11** (QA item 23): the remove-lock prompt does not say whether removing
   the lock can be undone, and says "corrupt the repository" where the index is
   what is at risk; settle the wording there.
@@ -674,7 +707,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 06 render foundations | done — QA adjudicated, fixes and the user's decisions 6, 12, 13 and 14 (2026-10-09) applied, full gate green |
 | 07 Local Changes actions | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green |
 | 08 diff gesture | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green |
-| 09 commit box | not started |
+| 09 commit box | built, gate green, QA pending |
 | 10 lost commits | not started |
 | 11 activity and measured | not started |
 | 12 QA | not started |

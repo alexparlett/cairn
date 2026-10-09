@@ -258,7 +258,13 @@ commits `HEAD` reaches in `git log`'s order, each as written
 staged list (R6.3): the index against `HEAD`'s parent — the empty tree for a root
 commit — through `reads::staged_since`, `git diff-index --cached --raw` over the
 whole index with the user's rename detection, what `git diff --cached
---name-status HEAD^` lists (`amends_staged_list_is_the_index_against_heads_parent`).
+--name-status HEAD^` lists (`amends_staged_list_is_the_index_against_heads_parent`);
+`Repository::amend_parent`, the commit that list is against — `None` for a root commit or a
+shallow clone's boundary — which an unstage out of the amend puts entries back to; and one
+file of that list's diff, `WorkingTreeDiff::Amending`, the staged side's own plumbing asked
+against the parent, as `git diff --cached HEAD^ -- <path>` shows it
+(`a_file_of_amends_staged_list_reads_as_git_diff_cached_against_heads_parent`). How the box
+uses them is `docs/systems/local-changes.md`, "The commit box".
 Amend is unavailable on an unborn branch (`amend_is_unavailable_on_an_unborn_branch`);
 a root commit amends (`a_root_commits_amend_works_and_unstages_with_rm_cached`).
 

@@ -121,7 +121,7 @@ impl CreateBranchDialog {
     }
 
     /// What the name's check waits behind, said beside the buttons where nothing is refused
-    /// (the user's decision D, 2026-10-09): "Waiting for commit to finish…".
+    /// (the user's decision D, 2026-10-09): "Waiting for the commit to finish…".
     pub fn waiting(mut self, waiting: Option<String>) -> Self {
         self.waiting = waiting;
         self

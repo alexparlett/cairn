@@ -415,7 +415,8 @@ fn the_new_branch_chord_opens_create_branch_at_head() {
 }
 
 /// The user's decision D (2026-10-09): while the name's check waits behind a running write on
-/// the local lane, the dialog names that write beside its buttons, and says nothing more once
+/// the local lane, the dialog names that write beside its buttons by a plain noun ("Waiting for
+/// the commit to finish…"), and says nothing more once
 /// the answer for the text shown arrives, or while no write runs. Caught by: the wait left
 /// unsaid, another write named, or the line kept after the answer.
 #[test]
@@ -447,8 +448,40 @@ fn a_name_check_waiting_behind_a_write_says_which_write() {
     settle(&mut test);
     assert_eq!(
         waiting(&test),
-        vec!["Waiting for creating branch first to finish…".to_owned()]
+        vec!["Waiting for the branch to finish…".to_owned()]
     );
+    // Each write named by a plain noun, as the user's mockup read (decision D).
+    for (write, line) in [
+        (
+            LocalWrite::Commit {
+                message: "m".to_owned(),
+                skip_hooks: false,
+            },
+            "Waiting for the commit to finish…",
+        ),
+        (
+            LocalWrite::StageFiles {
+                paths: vec![RepoPath::from("a.rs")],
+            },
+            "Waiting for staging to finish…",
+        ),
+        (
+            LocalWrite::CreateBranchAndCheckout {
+                name: "x".to_owned(),
+                at: oid(0xab),
+            },
+            "Waiting for the checkout to finish…",
+        ),
+    ] {
+        let next = OperationId::next();
+        test.run_in(|| {
+            let mut writes = writes.write();
+            writes.asked(next, &write);
+            writes.started(next);
+        });
+        settle(&mut test);
+        assert_eq!(waiting(&test), vec![line.to_owned()]);
+    }
     apply(
         &mut test,
         view,

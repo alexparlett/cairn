@@ -463,7 +463,7 @@ literally.
     dialog beside the buttons behind Fork's warning triangle, never in the Git Error dialog
     (decision B) — Fork's words for a name taken ("Branch test already exists"), git's for a
     name it refuses. While the check waits behind a running write, the same place says which
-    ("Waiting for commit to finish…", decision D). Under the title, Fork's "Use '/' as a path
+    ("Waiting for the commit to finish…", decision D). Under the title, Fork's "Use '/' as a path
     separator to create folders"; Fork's chord, Ctrl+Shift+B (⇧⌘B), opens the dialog at
     `HEAD` (Fork-settled at phase 10's QA).
   - "Check out after create" is sticky for the session (decision 1); across restarts once

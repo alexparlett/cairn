@@ -275,7 +275,7 @@ by git's own rules, because a branch has it or a branch's folder holds it, or be
 `@{` ("A branch name can't contain '@{'", the user's decision F) — the reason said inside the
 dialog beside the buttons behind Fork's warning triangle, never in the Git Error dialog (the
 user's decision B), and, while the check waits behind a running write, which write it waits
-for ("Waiting for commit to finish…", decision D); "Check out after create" remembered; and —
+for ("Waiting for the commit to finish…", decision D); "Check out after create" remembered; and —
 while it is ticked and the working tree has changes — "Local changes": "Don't change", which
 checks out over them or shows git's refusal of the checkout in the Git Error dialog with the
 name kept for the next try, and "Discard", which names what it loses in Cairn's confirmation

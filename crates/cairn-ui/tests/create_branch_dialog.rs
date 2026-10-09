@@ -328,7 +328,7 @@ fn a_refusal_is_said_beside_the_buttons_behind_the_warning_glyph() {
 /// waiting line drawn elsewhere or behind the triangle, or drawn over a refusal.
 #[test]
 fn a_check_waiting_behind_a_write_is_said_beside_the_buttons() {
-    let waiting = "Waiting for commit to finish…";
+    let waiting = "Waiting for the commit to finish…";
     let (test, _) = launch(
         Shown {
             ready: false,

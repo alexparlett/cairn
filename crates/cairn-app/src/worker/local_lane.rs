@@ -321,6 +321,24 @@ impl LocalWrite {
         }
     }
 
+    /// What a wait behind it calls it — "Waiting for the commit to finish…" (the user's
+    /// decision D, 2026-10-09): a plain noun, or a gerund where the write has none.
+    pub fn noun(&self) -> &'static str {
+        match self {
+            Self::StageLines { .. } | Self::StageFiles { .. } | Self::StageAll { .. } => "staging",
+            Self::UnstageLines { .. } | Self::UnstageFiles { .. } | Self::UnstageAll { .. } => {
+                "unstaging"
+            }
+            Self::DiscardLines(_) | Self::DiscardFiles(_) => "the discard",
+            Self::Commit { .. } => "the commit",
+            Self::Amend { .. } => "the amend",
+            Self::CreateBranch { .. } => "the branch",
+            Self::CreateBranchAndCheckout { .. } | Self::CreateBranchDiscarding(_) => {
+                "the checkout"
+            }
+        }
+    }
+
     /// Runs the write, with `token` as its askpass authorisation. A commit's cancel is handed
     /// to the lane once git is running, under its id, and its output to the window.
     fn perform(

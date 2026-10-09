@@ -10,11 +10,16 @@ use std::path::PathBuf;
 
 use crate::worker::{LocalWrite, OperationId, Request, WriteEnding};
 
+/// What a wait calls a write the window did not see asked.
+const UNKNOWN_WRITE: &str = "another write";
+
 /// A write the window asked for: its id, and what it is called while it waits and runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Asked {
     pub id: OperationId,
     pub what: String,
+    /// What a wait behind it calls it: "the commit", "staging" (`LocalWrite::noun`).
+    pub noun: &'static str,
 }
 
 /// The local writes of this session, as the window draws them.
@@ -38,6 +43,7 @@ impl LocalWrites {
         self.queued.push_back(Asked {
             id,
             what: write.what(),
+            noun: write.noun(),
         });
     }
 
@@ -47,6 +53,7 @@ impl LocalWrites {
         let asked = at.and_then(|at| self.queued.remove(at)).unwrap_or(Asked {
             id,
             what: "a write".to_owned(),
+            noun: UNKNOWN_WRITE,
         });
         self.running = Some(asked);
     }
@@ -61,6 +68,7 @@ impl LocalWrites {
                 at.and_then(|at| self.queued.remove(at)).unwrap_or(Asked {
                     id,
                     what: "a write".to_owned(),
+                    noun: UNKNOWN_WRITE,
                 })
             }
         };

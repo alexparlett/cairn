@@ -975,8 +975,8 @@ before the refs are read, on an unborn `HEAD`, or over a dialog already up
   (`'refs/heads/foo/bar' exists; cannot create 'refs/heads/foo'`, either way round), or "A
   branch name can't contain '@{'", said before git is asked (decision F;
   `a_name_holding_at_brace_is_refused_in_cairns_words`). While the check waits behind a write
-  on the local lane, the same place names it — "Waiting for commit to finish…", the running
-  write's or else the first queued (decision D;
+  on the local lane, the same place names it by a plain noun (`LocalWrite::noun`) — "Waiting
+  for the commit to finish…", the running write's or else the first queued (decision D;
   `a_check_waiting_behind_a_write_is_said_beside_the_buttons`,
   `a_name_check_waiting_behind_a_write_says_which_write`)
   (`a_refusal_is_said_beside_the_buttons_behind_the_warning_glyph`,

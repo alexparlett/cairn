@@ -488,7 +488,7 @@ verb table):
   first three named and the rest counted (`cairn_model::consequence`); (B) a name's refusal
   inside the dialog beside the buttons behind ⚠, never the Git Error dialog; (C) a right-click
   selects its row, keeping a selection it lands in — the history's list (Local Changes' lists
-  already did); (D) "Waiting for <write> to finish…" beside the buttons while the name's check
+  already did); (D) "Waiting for the <noun> to finish…" beside the buttons while the name's check
   waits behind a write; (E) every dialog's buttons in the platform's order, the primary first
   on Linux and last on macOS, focus on Cancel for a confirmation on both
   (`cairn_ui::button_order`); (F) a name holding `@{` refused before git is asked, "A branch

@@ -310,3 +310,211 @@ fn write_baseline() {
         );
     }
 }
+
+/// What Cairn's own verbs cost on the same clone and hunk (staging-and-commit phase 11, C21's
+/// engine half and #87): each through `cairn_git::ops` as the local lane calls it — the stale
+/// check, the lock listings before and after, git — and the lock listing alone, a walk of
+/// `refs/`, which every local write makes twice. The repository is opened before each run,
+/// untimed, as the lane holds its handle. C21's bar is the window's (press to the refreshed
+/// lists drawn), measured by `window_check`; this says where the engine's share goes.
+#[test]
+#[ignore = "a reporter: needs CAIRN_BENCH_SCRATCH_CLONE, a writable clone of the bench"]
+fn cairn_write_costs() {
+    use cairn_git::{CancelSignal, ContentOptions, Repository, SharedRepository, WorkingTreeDiff};
+    use cairn_model::{Confirmed, RepoPath, Selection};
+
+    let Some(clone) = scratch_clone() else {
+        eprintln!("SKIPPED cairn_write_costs: CAIRN_BENCH_SCRATCH_CLONE is not set");
+        return;
+    };
+    let git = super::git();
+    let open = || -> Repository {
+        SharedRepository::discover(&clone.path)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .to_worker()
+    };
+    let original = read(&clone.file());
+    let clean_index = read(&clone.index());
+    let mut edited = Vec::with_capacity(original.len() + 64);
+    for (n, line) in original.split_inclusive(|byte| *byte == b'\n').enumerate() {
+        if n == LINE {
+            edited.extend_from_slice(b"// a line Cairn's baseline stages, unstages and discards\n");
+        }
+        edited.extend_from_slice(line);
+    }
+    write(&clone.file(), &edited);
+    let path = RepoPath::new(FILE);
+    let diff_of = |which| {
+        open()
+            .working_tree_diff(
+                git,
+                &path,
+                which,
+                &ContentOptions::default(),
+                &CancelSignal::new(),
+            )
+            .unwrap_or_else(|e| panic!("{e}"))
+            .unwrap_or_else(|| panic!("no diff"))
+    };
+    let every = |diff: &cairn_model::FileDiff| {
+        let mut selection = Selection::empty();
+        if let Some(text) = diff.text() {
+            for change in text.changes() {
+                selection.select_change(change);
+            }
+        }
+        selection
+    };
+    eprintln!(
+        "Cairn's verbs on {}, {RUNS} runs after one to warm, median:",
+        clone.path.display()
+    );
+
+    let shared = SharedRepository::discover(&clone.path).unwrap_or_else(|e| panic!("{e}"));
+    let locks = time(
+        "the lock listing (SharedRepository::lock_files: the git directory, refs/ walked whole)",
+        || {},
+        || {
+            let started = Instant::now();
+            let listed = shared.lock_files(&CancelSignal::new());
+            assert_eq!(listed.map(|locks| locks.len()), Some(0));
+            started.elapsed()
+        },
+    );
+
+    let unstaged = diff_of(WorkingTreeDiff::Unstaged);
+    let selection = every(&unstaged);
+    let repo = std::cell::RefCell::new(open());
+    let stage = time(
+        "ops::stage_lines (stale check, locks before and after, git apply --cached)",
+        || {
+            write(&clone.index(), &clean_index);
+            *repo.borrow_mut() = open();
+        },
+        || {
+            let started = Instant::now();
+            cairn_git::ops::stage_lines(git, &repo.borrow(), &unstaged, &selection, None)
+                .unwrap_or_else(|e| panic!("{e}"));
+            started.elapsed()
+        },
+    );
+    let staged_index = read(&clone.index());
+
+    let staged = diff_of(WorkingTreeDiff::Staged);
+    let staged_selection = every(&staged);
+    let unstage = time(
+        "ops::unstage_lines",
+        || {
+            write(&clone.index(), &staged_index);
+            *repo.borrow_mut() = open();
+        },
+        || {
+            let started = Instant::now();
+            cairn_git::ops::unstage_lines(git, &repo.borrow(), &staged, &staged_selection, None)
+                .unwrap_or_else(|e| panic!("{e}"));
+            started.elapsed()
+        },
+    );
+
+    write(&clone.index(), &clean_index);
+    let consequence = time(
+        "ops::discard_lines_consequence (asked before the dialog, not in C21's press)",
+        || *repo.borrow_mut() = open(),
+        || {
+            let started = Instant::now();
+            cairn_git::ops::discard_lines_consequence(
+                git,
+                &repo.borrow(),
+                &unstaged,
+                selection.clone(),
+            )
+            .unwrap_or_else(|e| panic!("{e}"));
+            started.elapsed()
+        },
+    );
+    let confirmed = std::cell::RefCell::new(None);
+    let discard = time(
+        "ops::discard_lines (re-check, locks before and after, git apply)",
+        || {
+            write(&clone.file(), &edited);
+            *repo.borrow_mut() = open();
+            *confirmed.borrow_mut() = Some(Confirmed::by_user(
+                cairn_git::ops::discard_lines_consequence(
+                    git,
+                    &repo.borrow(),
+                    &unstaged,
+                    selection.clone(),
+                )
+                .unwrap_or_else(|e| panic!("{e}")),
+            ));
+        },
+        || {
+            let token = confirmed
+                .borrow_mut()
+                .take()
+                .unwrap_or_else(|| panic!("no confirmation"));
+            let started = Instant::now();
+            cairn_git::ops::discard_lines(git, &repo.borrow(), token, None)
+                .unwrap_or_else(|e| panic!("{e}"));
+            started.elapsed()
+        },
+    );
+
+    write(&clone.file(), &edited);
+    write(&clone.index(), &staged_index);
+    clone.git(&["config", "user.name", "C O Mitter"], None, false);
+    clone.git(
+        &["config", "user.email", "committer@example.com"],
+        None,
+        false,
+    );
+    let committed = std::cell::Cell::new(false);
+    let commit = time(
+        "ops::commit (checks, locks before and after, git commit -q -F -, no hooks)",
+        || {
+            if committed.get() {
+                clone.git(&["reset", "--soft", "-q", "HEAD^"], None, false);
+            }
+            *repo.borrow_mut() = open();
+        },
+        || {
+            committed.set(true);
+            let cancel = CancelSignal::new();
+            let (mut running, mut output) = (|_| {}, |_: &[&str]| {});
+            let started = Instant::now();
+            cairn_git::ops::commit(
+                git,
+                &repo.borrow(),
+                "A commit Cairn's reporter makes",
+                cairn_git::ops::Hooks::Run,
+                None,
+                cairn_git::ops::CommitWatch {
+                    cancel: &cancel,
+                    running: &mut running,
+                    output: &mut output,
+                },
+            )
+            .unwrap_or_else(|e| panic!("{e}"));
+            started.elapsed()
+        },
+    );
+
+    clone.git(&["reset", "--soft", "-q", "HEAD^"], None, false);
+    clone.git(&["config", "--unset", "user.name"], None, false);
+    clone.git(&["config", "--unset", "user.email"], None, false);
+    write(&clone.file(), &original);
+    write(&clone.index(), &clean_index);
+    let (_, head) = clone.git(&["rev-parse", "HEAD"], None, true);
+    assert_eq!(String::from_utf8_lossy(&head).trim(), SUBJECT);
+    let _ = std::fs::remove_dir_all(&clone.home);
+    eprintln!(
+        "two lock listings a write: {:.2} ms of stage {:.2}, unstage {:.2}, discard {:.2} \
+         (its consequence {:.2} before the dialog), commit {:.2}",
+        ms(locks * 2),
+        ms(stage),
+        ms(unstage),
+        ms(discard),
+        ms(consequence),
+        ms(commit)
+    );
+}

@@ -594,3 +594,61 @@ fn a_press_heard_mid_drag_or_focus_lost_ends_the_drag_without_a_drop() {
         heard(&log)
     );
 }
+
+/// The user's decision C (2026-10-09), Fork for Windows, in Local Changes' lists: a right-click
+/// outside the selection chooses its row before the menu opens, so the menu's Stage stages that
+/// row; one inside the selection chooses nothing and the menu acts on the whole selection.
+/// Caught by: a right-click that leaves the selection where it was, so the menu acts on paths
+/// the press never landed on, or one inside the selection that collapses it.
+#[test]
+fn a_right_click_outside_the_selection_chooses_its_row_before_the_menu_opens() {
+    let (mut test, fixture, log) = launch(lists());
+    let mut selection = fixture.selection;
+    test.run_in(|| {
+        let two = ListSelection::default()
+            .toggled(ChangeList::Unstaged, RepoPath::from("b.rs"))
+            .toggled(ChangeList::Unstaged, RepoPath::from("c.rs"));
+        selection.set(two);
+    });
+    test.sync_and_update();
+
+    let inside = at(&test, "c.rs");
+    right_click(&mut test, inside);
+    assert!(
+        texts(&test).iter().any(|t| t == STAGE_CAPTION),
+        "no menu inside the selection"
+    );
+    assert_eq!(
+        heard(&log),
+        Vec::<Heard>::new(),
+        "a press inside chose a row"
+    );
+    test.press_key(Key::Named(NamedKey::Escape));
+    test.sync_and_update();
+
+    let outside = at(&test, "a.rs");
+    right_click(&mut test, outside);
+    assert_eq!(
+        heard(&log),
+        [Heard::Chose(ChangeList::Unstaged, 0)],
+        "a press outside did not choose its row first"
+    );
+    let stage = labels(&test)
+        .into_iter()
+        .rfind(|(text, ..)| text == STAGE_CAPTION)
+        .map(|(_, x, y)| (f64::from(x) + 5., f64::from(y)))
+        .expect("Stage in the menu");
+    test.click_cursor(stage);
+    test.sync_and_update();
+    assert_eq!(
+        heard(&log),
+        [
+            Heard::Chose(ChangeList::Unstaged, 0),
+            Heard::Intent(ListIntent::Act(
+                ChangeList::Unstaged,
+                Action::StageOrUnstage
+            )),
+        ],
+        "the menu did not act after the row was chosen"
+    );
+}

@@ -912,10 +912,12 @@ fn a_close_during_a_commit_waits_for_it_and_ends_nothing() {
 
 /// R6.1 and R10.5 through the lane (phase 05's QA item 8): a commit whose `pre-commit` hook
 /// fails ends `Failed` with the hook's words and commits nothing; asked again with
-/// `skip_hooks`, it commits past the hook. Caught by: the skip dropped, or passed when not
-/// asked for, between the window's write and the engine's `Hooks`.
+/// `skip_hooks`, it commits past the hook; and the next commit, hooks on, runs the hook again
+/// and fails on it, leaving the branch where the skip put it. Caught by: the skip dropped, or
+/// passed when not asked for, between the window's write and the engine's `Hooks`, or kept
+/// for the commits after the one it was asked for.
 #[test]
-fn a_failing_hook_fails_a_commit_and_the_skip_commits_past_it() {
+fn a_failing_hook_fails_a_commit_the_skip_commits_past_it_and_the_next_runs_it_again() {
     let fixture = to_commit("cairn-lane-hook-skip", &["a"]);
     let (home, runtime) = (Home::new(), RuntimeDir::new());
     let (handle, mut updates, _reply) = real_boundary(&fixture.path, (&home, &runtime));
@@ -961,6 +963,23 @@ fn a_failing_hook_fails_a_commit_and_the_skip_commits_past_it() {
         "the skip did not commit: {seen:?}"
     );
     assert!(head.is_file(), "the skip committed nothing");
+    let skipped_to = std::fs::read_to_string(&head).unwrap_or_else(|error| panic!("{error}"));
+
+    write_files(&fixture.path, &["b"]);
+    staged(&handle, &mut updates, &["b"]);
+    let again = ask(&handle, commit());
+    let seen = until_ended(&mut updates, again);
+    match ending_of(&seen, again).0 {
+        WriteEnding::Failed { message, .. } => {
+            assert!(message.contains("lint failed"), "{message}");
+        }
+        other => panic!("the commit after the skip ended {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read_to_string(&head).unwrap_or_else(|error| panic!("{error}")),
+        skipped_to,
+        "the commit after the skip was made past the failing hook"
+    );
     drop(handle);
 }
 

@@ -2576,6 +2576,86 @@ pub(crate) mod tests {
         );
     }
 
+    /// The centre of the visible diff row reading `text`, if one is drawn.
+    fn visible_row(test: &TestingRunner, text: &str) -> Option<(f64, f64)> {
+        test.find(|node, element| {
+            Paragraph::try_downcast(element)
+                .filter(|paragraph| {
+                    node.is_visible()
+                        && paragraph
+                            .spans
+                            .iter()
+                            .map(|span| span.text.as_ref())
+                            .collect::<String>()
+                            == text
+                })
+                .map(|_| node.layout().area.center())
+        })
+        .map(|centre| (f64::from(centre.x), f64::from(centre.y)))
+    }
+
+    /// Whether any of the staging gesture's actions is drawn.
+    fn draws_a_staging_action(test: &TestingRunner) -> bool {
+        texts(test).iter().any(|text| {
+            [
+                cairn_ui::STAGE_CHUNK_CAPTION,
+                cairn_ui::UNSTAGE_CHUNK_CAPTION,
+                cairn_ui::DISCARD_CHUNK_CAPTION,
+            ]
+            .contains(&text.as_str())
+        })
+    }
+
+    /// C19's window half for the commit's tabs: a changed row hovered in the Changes tab's
+    /// diff, and in a file opened in place in the Commit tab, floats no Stage, Unstage or
+    /// Discard — a commit's change is not the working tree's. Caught by: either tab handed the
+    /// gesture Local Changes' diff carries.
+    #[test]
+    fn a_commits_diff_hovered_in_either_tab_draws_no_staging_action() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        choose_the_file(&mut test, view);
+        let query = last_file_query(&submitted);
+        answer_file(&mut test, view, &query, 40);
+        let at = visible_row(&test, "LINE 5")
+            .unwrap_or_else(|| panic!("no changed row drawn: {:?}", pane_rows(&test)));
+        test.move_cursor(at);
+        test.sync_and_update();
+        test.sync_and_update();
+        assert!(
+            !draws_a_staging_action(&test),
+            "the Changes tab offered staging: {:?}",
+            texts(&test)
+        );
+
+        click_tab(&mut test, DetailTab::Commit);
+        click_label(&mut test, "file-of-2.rs");
+        test.sync_and_update();
+        let mut diff = view.diff;
+        test.run_in(|| {
+            diff.write()
+                .expansion_arrived(vec![opened_file(0, text_answer(2, 40), false)], None)
+        });
+        test.sync_and_update();
+        test.sync_and_update();
+        assert_eq!(*view.detail_tab.read(), DetailTab::Commit);
+        // The pane is short: the tab's list scrolled until the changed row is in view.
+        let header = visible_row(&test, "@@ -3,7 +3,7 @@")
+            .unwrap_or_else(|| panic!("the file did not open: {:?}", pane_rows(&test)));
+        test.scroll(header, (0., -200.));
+        test.sync_and_update();
+        test.sync_and_update();
+        let at = visible_row(&test, "LINE 5")
+            .unwrap_or_else(|| panic!("no changed row drawn: {:?}", pane_rows(&test)));
+        test.move_cursor(at);
+        test.sync_and_update();
+        test.sync_and_update();
+        assert!(
+            !draws_a_staging_action(&test),
+            "the Commit tab offered staging: {:?}",
+            texts(&test)
+        );
+    }
+
     /// C10, R5.3 through the window: Expand All asks from the first file; each page opens its
     /// files under their rows; when Expand All stops with its budget spent the tab says how
     /// many files stay collapsed, and the button is Collapse All, which closes every file and

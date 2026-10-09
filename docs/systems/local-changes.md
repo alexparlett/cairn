@@ -496,7 +496,8 @@ typed, the arrows are the editor's.
   (`worker/local_lane_tests.rs`): `the_commit_boxs_reads_and_an_amends_read_come_through_the_lane`,
   and a write superseding the amend read (`a_write_supersedes_the_amend_read_and_nothing_else`,
   `worker/pool.rs`),
-  `a_failing_hook_fails_a_commit_and_the_skip_commits_past_it` (its command and output),
+  `a_failing_hook_fails_a_commit_the_skip_commits_past_it_and_the_next_runs_it_again` (its
+  command and output, and the hook run again on the next commit),
   `a_chunk_drawn_at_context_ten_stages_exactly_as_drawn`; the model:
   `amending_lists_amends_staged_list_beside_the_status_unstaged_one`,
   `an_amends_parts_are_its_prompt_and_only_a_published_one_needs_the_dialog`; the engine:

@@ -27,7 +27,7 @@
 //! ([`Refusal::WholeFileOnly`]; phase 02's carry-forward).
 //!
 //! **Files.** Tracked files go by `git restore --worktree` from a pathspec file, untracked
-//! ones by `git clean -f -- <paths>` — exactly the paths `git status` listed, each a file:
+//! ones by `git clean -f -q -- <paths>` — exactly the paths `git status` listed, each a file:
 //! git lists untracked files one per file (`crate::reads::status`), the one directory it
 //! still lists whole is a nested repository, which is refused, so `-d` is never passed and
 //! a file added beside a deleted one is never taken. `git clean` reads no pathspec file, so
@@ -315,7 +315,7 @@ pub fn discard_files_consequence(
 
 /// Discards the changes in the files `confirmed` names (R3.5): each tracked file restored
 /// from the index with `git restore --worktree`, from a pathspec file, then each untracked
-/// file deleted with `git clean -f --`, its paths split past [`CLEAN_ARGUMENT_BYTES`].
+/// file deleted with `git clean -f -q --`, its paths split past [`CLEAN_ARGUMENT_BYTES`].
 ///
 /// Re-reads every file and its index entry first — all of them, before the first write —
 /// and refuses with [`Error::ChangedSinceConfirmed`], writing nothing, when any differs from
@@ -416,7 +416,10 @@ fn write_the_discard(
         )?;
     }
     for batch in clean_batches(untracked) {
-        let mut arguments: Vec<OsString> = ["clean", "-f", "--"].map(OsString::from).into();
+        // `-q`: git prints a line per file it deletes, and a `git clean` whose reader has gone —
+        // left running by a second close (R4.9) — dies of `SIGPIPE` at that line, part way
+        // through its batch. Quiet, it has nothing to write and finishes.
+        let mut arguments: Vec<OsString> = ["clean", "-f", "-q", "--"].map(OsString::from).into();
         arguments.extend(batch.iter().map(|path| {
             use std::os::unix::ffi::OsStringExt as _;
             OsString::from_vec(path.as_bytes().to_vec())
@@ -666,7 +669,7 @@ mod tests {
                     "--pathspec-from-file=-",
                     "--pathspec-file-nul"
                 ],
-                vec!["--literal-pathspecs", "clean", "-f", "--", "new.txt"],
+                vec!["--literal-pathspecs", "clean", "-f", "-q", "--", "new.txt"],
             ]
         );
         assert_eq!(recorded[0].stdin, b"file.txt\0");

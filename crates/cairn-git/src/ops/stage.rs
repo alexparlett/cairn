@@ -27,8 +27,11 @@
 //! deletion and marks a conflicted path resolved (R3.11); unstage with `git reset -q`, which
 //! works on an unborn branch where `git restore --staged` does not ([`UnstageTo::Head`]);
 //! out of an amend, against `HEAD`'s parent ([`UnstageTo::Commit`]); and out of a root
-//! commit's amend, which has no parent to reset to, with `git rm --cached -q`
-//! ([`UnstageTo::Nothing`]). A staged rename is unstaged whole by naming both its paths;
+//! commit's amend, which has no parent to reset to, with `git rm --cached -f -q`
+//! ([`UnstageTo::Nothing`]): `-f` because `git rm --cached` alone refuses a path whose staged
+//! content differs from both the file and `HEAD` — exactly the path an amend's staged list
+//! shows edited — where an unstage of it, as `git reset` would make one, drops the staged
+//! content and keeps the file. `--cached` leaves the working tree alone either way. A staged rename is unstaged whole by naming both its paths;
 //! one path alone unstages that side alone, as `git reset -- <path>` does.
 //!
 //! Every verb runs with git's global `--literal-pathspecs` (`super::local_write`), and its
@@ -200,8 +203,8 @@ pub enum UnstageTo {
     /// `git reset -q <commit>`, the commit given by its id, which is never an option.
     Commit(Oid),
     /// No entry at all: a file unstaged out of the amend of a root commit, which has no
-    /// parent to reset to — `git rm --cached -q`, which git refuses where the staged
-    /// content differs from both the file and `HEAD`.
+    /// parent to reset to — `git rm --cached -f -q`, forced past git's refusal of a path
+    /// whose staged content differs from both the file and `HEAD` (module docs).
     Nothing,
 }
 
@@ -227,7 +230,7 @@ pub fn unstage_files(
 fn unstage_arguments(to: &UnstageTo) -> Vec<OsString> {
     let mut arguments: Vec<OsString> = match to {
         UnstageTo::Head | UnstageTo::Commit(_) => vec!["reset".into(), "-q".into()],
-        UnstageTo::Nothing => vec!["rm".into(), "--cached".into(), "-q".into()],
+        UnstageTo::Nothing => vec!["rm".into(), "--cached".into(), "-f".into(), "-q".into()],
     };
     arguments.extend(PATHSPEC_FILE.map(OsString::from));
     if let UnstageTo::Commit(commit) = to {
@@ -274,7 +277,8 @@ mod tests {
     }
 
     /// Caught by: `restore --staged` (which fails on an unborn branch), `-R`, a pathspec on
-    /// argv, or the commit spelled as a revision expression rather than its id.
+    /// argv, the commit spelled as a revision expression rather than its id, or `rm --cached`
+    /// without `-f`, which refuses an amend's edited path.
     #[test]
     fn unstaging_resets_or_removes_from_a_pathspec_file() {
         assert_eq!(
@@ -302,6 +306,7 @@ mod tests {
             [
                 "rm",
                 "--cached",
+                "-f",
                 "-q",
                 "--pathspec-from-file=-",
                 "--pathspec-file-nul"
@@ -343,6 +348,7 @@ mod tests {
             "--literal-pathspecs",
             "rm",
             "--cached",
+            "-f",
             "-q",
             "--pathspec-from-file=-",
             "--pathspec-file-nul",

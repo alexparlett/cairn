@@ -545,8 +545,9 @@ fn unstaging_on_an_unborn_branch_leaves_the_file_untracked() {
     assert_eq!(status(&repo), ["A  b.txt", "?? a.txt"]);
 }
 
-/// C8: out of an amend, a file unstages back to `HEAD`'s parent's entry (R6.3); out of the
-/// amend of a root commit, which has no parent, its entry is removed (`git rm --cached`).
+/// C8 and C13: out of an amend, a file unstages back to `HEAD`'s parent's entry (R6.3); out of
+/// the amend of a root commit, which has no parent, its entry is removed (`git rm --cached
+/// -f`), an edited one's too.
 #[test]
 fn unstaging_out_of_an_amend_puts_back_the_parents_entry_or_none() {
     let repo = Repo::new("c8-amend");
@@ -583,6 +584,28 @@ fn unstaging_out_of_an_amend_puts_back_the_parents_entry_or_none() {
     );
     assert_eq!(staged(&root, "file.txt"), None);
     assert_eq!(on_disk(&root, "file.txt"), Some(b"root\n".to_vec()));
+
+    // The path an amend's staged list shows edited: staged content that is neither `HEAD`'s
+    // nor the file's, which `git rm --cached` without `-f` refuses. Unstaged, its entry goes
+    // and the file stays as it is, as `git reset` would leave it.
+    let edited = Repo::new("c8-root-amend-edited");
+    edited.write("file.txt", b"root\n");
+    edited.commit("root");
+    edited.write("file.txt", b"staged\n");
+    edited.git(&["add", "file.txt"]);
+    edited.write("file.txt", b"working\n");
+    ok(
+        ops::unstage_files(
+            git(),
+            &engine(&edited),
+            &[RepoPath::new("file.txt")],
+            &ops::UnstageTo::Nothing,
+            None,
+        ),
+        "the unstage of an edited path out of a root commit's amend",
+    );
+    assert_eq!(staged(&edited, "file.txt"), None);
+    assert_eq!(on_disk(&edited, "file.txt"), Some(b"working\n".to_vec()));
 }
 
 /// C8 and R3.4: a staged rename unstages whole when both its paths are named, and one path
@@ -728,6 +751,7 @@ fn a_discard_of_files_restores_the_tracked_and_deletes_exactly_the_untracked() {
             "--literal-pathspecs",
             "clean",
             "-f",
+            "-q",
             "--",
             "dir/u1.txt"
         ]]
@@ -791,8 +815,11 @@ fn a_long_list_is_deleted_in_batches_after_one_recheck() {
     let mut named: Vec<String> = cleaned
         .iter()
         .flat_map(|arguments| {
-            assert_eq!(arguments[..4], ["--literal-pathspecs", "clean", "-f", "--"]);
-            arguments[4..].to_vec()
+            assert_eq!(
+                arguments[..5],
+                ["--literal-pathspecs", "clean", "-f", "-q", "--"]
+            );
+            arguments[5..].to_vec()
         })
         .collect();
     named.sort();
@@ -1316,4 +1343,59 @@ fn a_whole_files_mode_change_is_named_and_put_back() {
         assert_eq!(on_disk(&repo, "run.sh"), Some(lines(base).into_bytes()));
         assert_eq!(status(&repo), Vec::<String>::new());
     }
+}
+
+/// The user's decision 12 (phase 04's QA): a second close leaves a write running with nobody
+/// reading its pipes, and git dies of `SIGPIPE` at its next line of output. So every local
+/// verb, as the engine passes it, writes nothing on success: `git clean` only with `-q`, which
+/// is why it is passed (without it, a line per file), and `git restore --worktree` and `git
+/// apply` with nothing to say — on the host's git and the floors. Caught by: `-q` dropped
+/// from the clean, or a git that starts talking on success.
+#[test]
+fn the_destructive_verbs_say_nothing_on_success_so_an_orphan_finishes() {
+    let repo = Repo::new("orphan-quiet");
+    repo.write("tracked.txt", b"one\n");
+    repo.commit("base");
+    repo.write("tracked.txt", b"two\n");
+    repo.write("u1.txt", b"u\n");
+    repo.write("u2.txt", b"u\n");
+    let quiet = |args: &[&str], stdin: Option<&[u8]>| {
+        let (status, stdout, stderr) = repo.run(args, &[], stdin);
+        assert!(status.success(), "git {args:?}: {stderr}");
+        assert_eq!((stdout.as_str(), stderr.as_str()), ("", ""), "git {args:?}");
+    };
+    let (_, loud, _) = repo.run(&["clean", "-n", "--", "u1.txt"], &[], None);
+    assert!(
+        loud.contains("u1.txt"),
+        "without -q, git clean names each file: {loud:?}"
+    );
+    quiet(
+        &[
+            "--literal-pathspecs",
+            "restore",
+            "--worktree",
+            "--pathspec-from-file=-",
+            "--pathspec-file-nul",
+        ],
+        Some(b"tracked.txt\0"),
+    );
+    quiet(
+        &[
+            "--literal-pathspecs",
+            "clean",
+            "-f",
+            "-q",
+            "--",
+            "u1.txt",
+            "u2.txt",
+        ],
+        None,
+    );
+    assert_eq!(on_disk(&repo, "u1.txt"), None);
+    repo.write("tracked.txt", b"one\ntwo\n");
+    quiet(
+        &["--literal-pathspecs", "apply", "--whitespace=nowarn", "-"],
+        Some(b"diff --git a/tracked.txt b/tracked.txt\n--- a/tracked.txt\n+++ b/tracked.txt\n@@ -1,2 +1 @@\n one\n-two\n"),
+    );
+    assert_eq!(on_disk(&repo, "tracked.txt"), Some(b"one\n".to_vec()));
 }

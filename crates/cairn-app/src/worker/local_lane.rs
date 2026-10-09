@@ -105,9 +105,8 @@ impl From<UnstageTarget> for UnstageTo {
     not(test),
     expect(
         dead_code,
-        reason = "the diff's gesture (staging-and-commit phase 08) asks for lines and the \
-                  commit box (phase 09) for a commit and an amend; the lane serves each, and \
-                  its tests ask"
+        reason = "the commit box (staging-and-commit phase 09) asks for a commit and an amend; \
+                  the lane serves each, and its tests ask"
     )
 )]
 pub enum LocalWrite {
@@ -564,6 +563,15 @@ pub(super) enum LocalJob {
         /// close ends the count, between paths or by ending its `git` read.
         cancel: Superseded,
     },
+    /// What discarding `selection` of `diff` would lose (`ops::discard_lines_consequence`),
+    /// in the lane's order, as [`LocalJob::Consequence`] is; one superseded before it runs is
+    /// not read.
+    LinesConsequence {
+        asked: OperationId,
+        diff: Box<FileDiff>,
+        selection: Selection,
+        cancel: Superseded,
+    },
     /// The repository is closing: end once the write running, if any, has.
     Stop,
 }
@@ -788,6 +796,23 @@ pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                     Ok(consequence) => Ok(consequence),
                     Err(error) => Err(error.to_string()),
                 };
+                serving
+                    .outbox
+                    .send(None, Update::DiscardConsequence { asked, outcome });
+            }
+            LocalJob::LinesConsequence {
+                asked,
+                diff,
+                selection,
+                cancel,
+            } => {
+                // One path's reads, short: asked only while it is still the newest.
+                if cairn_git::Cancel::is_cancelled(&cancel) || serving.lane.is_closing() {
+                    continue;
+                }
+                let outcome = ops::discard_lines_consequence(serving.git, &repo, &diff, selection)
+                    .map_err(|error| error.to_string());
+                drop(diff);
                 serving
                     .outbox
                     .send(None, Update::DiscardConsequence { asked, outcome });

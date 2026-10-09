@@ -87,6 +87,7 @@ fn kind(update: &Update) -> &'static str {
         Update::Changes { .. } => "changes",
         Update::FileDiff { .. } => "file diff",
         Update::Expanded { .. } => "expanded page",
+        Update::Together { .. } => "together page",
         Update::FilteredFiles { .. } => "filter",
         Update::Superseded(_) => "superseded",
         Update::DiffFailed { .. } => "diff failed",

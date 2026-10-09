@@ -40,6 +40,10 @@ pub(super) struct Working {
     /// The diff drawn for the same path and side before other lists asked it again: drawn
     /// while the new one is on its way, so a refresh does not blank the view.
     previous: Option<ShownDiff>,
+    /// The numbers of the answer kept and of `previous`, as [`DiffState::working_drawn`]
+    /// names what is drawn: the staging gesture's selection belongs to one (R9.2).
+    answered: u64,
+    previous_answered: u64,
 }
 
 impl Working {
@@ -78,13 +82,18 @@ impl DiffState {
             query: query.clone(),
             answer: Answer::Waiting,
             previous: None,
+            answered: 0,
+            previous_answered: 0,
         });
         let mut requests = Vec::new();
-        if let Some(query) = query {
-            self.took_lane_for_working();
-            requests.push(Request::FileDiff(query));
-        } else {
-            self.working_in_lane = false;
+        match query {
+            // Paths drawn together hold the lane: the path chosen is asked once they go.
+            Some(_) if self.together.is_some() => self.working_in_lane = false,
+            Some(query) => {
+                self.took_lane_for_working();
+                requests.push(Request::FileDiff(query));
+            }
+            None => self.working_in_lane = false,
         }
         requests.extend(replaced.and_then(|working| retire(working.diffs())));
         requests
@@ -103,15 +112,19 @@ impl DiffState {
         };
         let same = working.query == query;
         let Working {
-            answer, previous, ..
+            answer,
+            previous,
+            answered,
+            previous_answered,
+            ..
         } = working;
         let mut freed: Vec<ShownDiff> = Vec::new();
         let previous = match (same, answer, previous) {
             (true, Answer::Ready(Some(shown)), previous) => {
                 freed.extend(previous);
-                Some(shown)
+                Some((shown, answered))
             }
-            (true, Answer::Waiting, Some(previous)) => Some(previous),
+            (true, Answer::Waiting, Some(previous)) => Some((previous, previous_answered)),
             (_, answer, previous) => {
                 freed.extend(previous);
                 if let Answer::Ready(Some(shown)) = answer {
@@ -121,8 +134,11 @@ impl DiffState {
             }
         };
         let mut requests = self.choose_working(choice, query);
-        if let Some(working) = &mut self.working {
-            working.previous = previous;
+        if let Some(working) = &mut self.working
+            && let Some((previous, answered)) = previous
+        {
+            working.previous = Some(previous);
+            working.previous_answered = answered;
         }
         requests.extend(retire(freed));
         requests
@@ -144,6 +160,7 @@ impl DiffState {
     fn took_lane_for_working(&mut self) {
         self.working_in_lane = true;
         self.file_in_lane = false;
+        self.together_lost_lane();
         if let Some(opening) = &mut self.opening {
             opening.in_lane = false;
         }
@@ -176,6 +193,19 @@ impl DiffState {
         })
     }
 
+    /// The number of the answer drawn for the path chosen — another each time an answer is
+    /// kept — or 0 while none is drawn: what a selection of its rows belongs to (R9.2).
+    pub fn working_drawn(&self) -> u64 {
+        let Some(working) = &self.working else {
+            return 0;
+        };
+        match (&working.answer, &working.previous) {
+            (Answer::Ready(Some(_)), _) => working.answered,
+            (Answer::Waiting, Some(_)) => working.previous_answered,
+            (Answer::Ready(None) | Answer::Failed(_) | Answer::Waiting, _) => 0,
+        }
+    }
+
     /// The diff drawn for the path chosen, when there is one.
     pub fn shown_working(&self) -> Option<&ShownDiff> {
         match self.working_shown()? {
@@ -190,7 +220,8 @@ impl DiffState {
     /// Whether the path chosen is awaited and its request lost the lane: what the view checks,
     /// reading only, before it asks again as it is shown.
     pub fn working_needs_asking(&self) -> bool {
-        !self.working_in_lane
+        self.together.is_none()
+            && !self.working_in_lane
             && self.working.as_ref().is_some_and(|working| {
                 working.query.is_some() && matches!(working.answer, Answer::Waiting)
             })
@@ -219,6 +250,8 @@ impl DiffState {
         query: &FileQuery,
         diff: Option<ShownDiff>,
     ) -> (bool, Option<Request>) {
+        self.answers = self.answers.wrapping_add(1).max(1);
+        let answered = self.answers;
         let Some(working) = self
             .working
             .as_mut()
@@ -226,6 +259,7 @@ impl DiffState {
         else {
             return (false, retire(diff.into_iter().collect()));
         };
+        working.answered = answered;
         let mut freed: Vec<ShownDiff> = working.previous.take().into_iter().collect();
         if let Answer::Ready(Some(shown)) =
             std::mem::replace(&mut working.answer, Answer::Ready(diff))

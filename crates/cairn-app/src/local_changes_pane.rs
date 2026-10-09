@@ -22,30 +22,41 @@
 //! (staging-and-commit R8.5) — and, under the lists, what the writes asked from here are doing
 //! (R8.6).
 //!
-//! **What it does** (staging-and-commit R8): the lists' selection, Fork's routes to stage and
-//! unstage, and the discard through its confirmation are `local_changes_actions`'; this view
-//! hands them what the lists and the diff report, and opens the confirmation once the engine
-//! has said what the discard would lose. The diff hears the stage and discard chords
-//! (`Scope::LocalChanges`) and acts on the file it shows, whole.
+//! **What it does** (staging-and-commit R8, R9): the lists' selection, Fork's routes to stage
+//! and unstage, and the discard through its confirmation are `local_changes_actions`'; this
+//! view hands them what the lists and the diff report, and opens the confirmation once the
+//! engine has said what the discard would lose. The diff draws the staging gesture
+//! (`cairn_ui::Gesture`): a hovered chunk's actions, a drag-selection's, and the mode change's
+//! own row; it hears the stage and discard chords (`Scope::LocalChanges`) and acts on the lines
+//! a drag selected, or with none on the file it shows, whole.
+//!
+//! **Several paths selected** (R8.1, the user's decision of 2026-10-09) draw their diffs
+//! together, as Fork does: asked of the diff thread in one ask (`Request::Together`) whenever
+//! the selection, the lists or the settings move what it asks, each drawn under its own row
+//! (`cairn_ui::StackedDiff`), the gesture over each file's rows; the path chosen stays chosen
+//! meanwhile, unasked, and is asked again once one path, or none, is selected.
 
 use std::rc::Rc;
 
 use cairn_model::{
-    ChangeList, ChangeStatus, ChangedFile, LocalChanges, ShownDiff, UnreadableIndex,
+    ChangeList, ChangeStatus, ChangedFile, DiffContent, LocalChanges, ShownDiff, UnreadableIndex,
     WorkingTreeStatus,
 };
 use cairn_ui::accelerators::{self, Scope};
 use cairn_ui::{
-    DiffHeader, DiffNotice, DiffNoticeView, DiffSettings, DiffView, ListIntent, ListSelection,
-    LocalChangesList, ShownFiles,
+    DiffHeader, DiffNotice, DiffNoticeView, DiffSettings, DiffView, Gesture, GestureAct,
+    GestureSide, ListIntent, ListSelection, LocalChangesList, ModeRow, ShownFiles, StackedDiff,
 };
 use freya::prelude::*;
 
 use crate::detail_pane::notice;
-use crate::diff_state::{WorkingChoice, WorkingShown, answered_working};
-use crate::local_changes_state::{drawn_changes, shown_paths, shown_rows};
+use crate::diff_state::{
+    TogetherWanted, WorkingChoice, WorkingShown, answered_together, answered_together_paths,
+    answered_working,
+};
+use crate::local_changes_state::{LocalChangesState, drawn_changes, shown_paths, shown_rows};
 use crate::window::View;
-use crate::worker::{FileQuery, Refreshed, Request};
+use crate::worker::{FileQuery, FileTarget, Refreshed, Request};
 use crate::{diff_actions, local_changes_actions, shortcuts};
 
 /// Said in place of the lists before the first status is read.
@@ -119,6 +130,95 @@ fn first_shown(
             .flatten()
             .map(|row| (list, row))
     })
+}
+
+/// What a selection of several paths in one list asks to be drawn together (R8.1, the user's
+/// decision of 2026-10-09): those the lists drawn still list, in the order the lists show them,
+/// each with the side it is asked as — `None` when a selection holds fewer than two. Each path
+/// is found by a binary search, so this costs the selection, never the lists.
+fn together_wanted(
+    local: &LocalChangesState,
+    selection: &ListSelection,
+    settings: DiffSettings,
+) -> Option<TogetherWanted> {
+    let list = selection.list()?;
+    if selection.paths().len() < 2 {
+        return None;
+    }
+    let lists = drawn_changes(local);
+    let mut rows: Vec<usize> = selection
+        .paths()
+        .iter()
+        .filter_map(|path| lists.row_of(list, path))
+        .collect();
+    rows.sort_unstable();
+    rows.dedup();
+    if rows.len() < 2 {
+        return None;
+    }
+    let entries =
+        rows.into_iter()
+            .filter_map(|row| {
+                let change = lists.get(list, row)?;
+                let side = diff_actions::working_query(list, &change, settings).and_then(|query| {
+                    match query.target {
+                        FileTarget::WorkingTree { side, .. } => Some(side),
+                        FileTarget::Committed { .. } => None,
+                    }
+                });
+                Some((change.path.clone(), side))
+            })
+            .collect();
+    Some(TogetherWanted {
+        list,
+        lists: local.serial(),
+        entries,
+        options: diff_actions::working_options(settings),
+    })
+}
+
+/// Draws together what the selection asks, or lets go of what is drawn together once it asks
+/// nothing — asking nothing when what is drawn is what is asked.
+fn draw_together(view: View, submit: Option<&dyn Fn(Request)>) {
+    let wanted = {
+        let local = view.local.state.peek();
+        if !local.has_lists() {
+            return;
+        }
+        together_wanted(
+            &local,
+            &view.local.selection.peek(),
+            *view.diff_settings.peek(),
+        )
+    };
+    let mut diff = view.diff;
+    let other_paths = {
+        let state = diff.peek();
+        match &wanted {
+            Some(wanted) if state.draws_together(wanted) => return,
+            None if state.together().is_none() => return,
+            Some(wanted) => state.together().is_none_or(|(list, paths)| {
+                list != wanted.list
+                    || paths.len() != wanted.entries.len()
+                    || paths
+                        .iter()
+                        .zip(&wanted.entries)
+                        .any(|(drawn, (path, _))| drawn != path)
+            }),
+            None => true,
+        }
+    };
+    let requests = match wanted {
+        Some(wanted) => diff.write().show_together(wanted),
+        None => diff.write().let_go_of_together(),
+    };
+    // Other paths start at the top of the diff, as another path does.
+    if other_paths {
+        let mut scroll = view.local.scroll;
+        scroll.scroll_to_x(0);
+        scroll.scroll_to_y(0);
+    }
+    submit_all(requests, submit);
 }
 
 /// What following the lists does to the path chosen.
@@ -253,6 +353,18 @@ impl Component for LocalChangesPane {
                 follow_the_lists(view, following.as_deref());
             }
         });
+        // The paths selected are drawn together while there are several (R8.1): subscribed to
+        // the lists, the selection and the settings, asking only when what they ask moved.
+        let togethering = self.submit.clone();
+        use_side_effect(move || {
+            let _ = (
+                view.local.state.read().serial(),
+                view.local.selection.read().paths().len(),
+                *view.diff_settings.read(),
+            );
+            let _ = view.local.selection.read().list();
+            draw_together(view, togethering.as_deref());
+        });
         // What a discard would lose has arrived: the confirmation opens over the window, its
         // token asking the discard (R8.4).
         let confirming = self.submit.clone();
@@ -277,13 +389,19 @@ impl Component for LocalChangesPane {
         // in place is asked again as the view is shown.
         let reasking = self.submit.clone();
         use_side_effect(move || {
-            if !view.diff.read().working_needs_asking() {
-                return;
-            }
+            let (working, together) = {
+                let diff = view.diff.read();
+                (diff.working_needs_asking(), diff.together_needs_asking())
+            };
             let mut diff = view.diff;
-            let asked = diff.write().reask_working();
-            if let (Some(request), Some(submit)) = (asked, reasking.as_deref()) {
-                submit(request);
+            if together {
+                let asked = diff.write().reask_together();
+                submit_all(asked, reasking.as_deref());
+            } else if working {
+                let asked = diff.write().reask_working();
+                if let (Some(request), Some(submit)) = (asked, reasking.as_deref()) {
+                    submit(request);
+                }
             }
         });
 
@@ -456,8 +574,12 @@ fn header_file(shown: Option<&ShownDiff>, path: &cairn_model::RepoPath) -> Chang
     )
 }
 
-/// The diff side: the chosen path's bar and its diff, or its notice.
+/// The diff side: the chosen path's bar and its diff, or its notice — or, with several paths
+/// selected, their diffs drawn together under a bar naming how many (R8.1).
 fn diff_side(view: View, submit: Option<Rc<dyn Fn(Request)>>, empty: bool) -> Element {
+    if let Some(together) = together_side(view, submit.clone()) {
+        return together;
+    }
     let state = view.diff.read();
     let (Some(choice), Some(shown)) = (state.working_choice(), state.working_shown()) else {
         return notice(
@@ -487,13 +609,20 @@ fn diff_side(view: View, submit: Option<Rc<dyn Fn(Request)>>, empty: bool) -> El
             hides_changes: false,
         })
         .into(),
-        WorkingShown::Diff(shown) => diff_body(shown, view, submit, settings.side_by_side()),
+        WorkingShown::Diff(shown) => diff_body(
+            shown,
+            choice.list,
+            state.working_drawn(),
+            view,
+            submit,
+            settings.side_by_side(),
+        ),
     };
     rect()
         .expanded()
         .content(Content::Flex)
-        // The stage and discard chords heard on the diff act on the file it shows (R7.3): the
-        // gesture's lines are phase 08's.
+        // The stage and discard chords heard on the diff act on the lines a drag selected, or
+        // with none on the file it shows (R7.3, R9.2).
         .on_key_down(move |e: Event<KeyboardEventData>| {
             if let Some(action) = accelerators::resolve_key(&e, Scope::LocalChanges) {
                 e.stop_propagation();
@@ -510,30 +639,133 @@ fn diff_side(view: View, submit: Option<Rc<dyn Fn(Request)>>, empty: bool) -> El
         .into()
 }
 
-/// The chosen path's diff: its rows, or the notice that stands in their place (R6.8).
+/// The paths drawn together, under a bar naming how many, with the staging gesture over each
+/// one's rows; `None` while one path, or none, is selected.
+fn together_side(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> Option<Element> {
+    let (list, count, drawn) = {
+        let state = view.diff.read();
+        let (list, paths) = state.together()?;
+        (list, paths.len(), state.together_drawn().unwrap_or(0))
+    };
+    let settings = *view.diff_settings.read();
+    let acting = submit.clone();
+    let hearing = submit.clone();
+    let named = cairn_model::RepoPath::from(format!("{count} files").as_str());
+    let header = DiffHeader::new(header_file(None, &named), settings)
+        .exact(true)
+        .on_action(move |pressed| {
+            shortcuts::act(shortcuts::of_header(pressed), view, acting.as_deref());
+        });
+    let readable = view.diff.into_readable();
+    let body = StackedDiff::new(
+        readable.clone().map(answered_together, |_| true),
+        readable.map(answered_together_paths, |_| true),
+        view.local.scroll,
+    )
+    .side_by_side(settings.side_by_side())
+    .gesture(Some(Gesture::new(
+        gesture_side(list),
+        drawn,
+        view.local.lines,
+        gesture_acts(view, submit),
+    )));
+    Some(
+        rect()
+            .expanded()
+            .content(Content::Flex)
+            .on_key_down(move |e: Event<KeyboardEventData>| {
+                if let Some(action) = accelerators::resolve_key(&e, Scope::LocalChanges) {
+                    e.stop_propagation();
+                    local_changes_actions::on_the_diff(action, view, hearing.as_deref());
+                }
+            })
+            .child(header)
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::flex(1.))
+                    .child(body),
+            )
+            .into(),
+    )
+}
+
+/// Which of the gesture's sides a path chosen from `list` is drawn under (R9.1).
+fn gesture_side(list: ChangeList) -> GestureSide {
+    match list {
+        ChangeList::Unstaged => GestureSide::Unstaged,
+        ChangeList::Staged => GestureSide::Staged,
+    }
+}
+
+/// What the gesture asks, done: the gesture's own actions and the mode row's alike.
+fn gesture_acts(view: View, submit: Option<Rc<dyn Fn(Request)>>) -> EventHandler<GestureAct> {
+    EventHandler::new(move |act: GestureAct| {
+        local_changes_actions::on_gesture(act, view, submit.as_deref());
+    })
+}
+
+/// The chosen path's diff: its rows under the staging gesture (R9), or the notice that stands
+/// in their place (R6.8) — no gesture over a notice, so a conflicted path (R8.7), a submodule
+/// (R8.8) and every state that is not text draw none — with the mode change's row over either
+/// when the file's mode changed (R9.4).
 fn diff_body(
     shown: &ShownDiff,
+    list: ChangeList,
+    drawn: u64,
     view: View,
     submit: Option<Rc<dyn Fn(Request)>>,
     side_by_side: bool,
 ) -> Element {
-    if let Some(stands_in) = DiffNotice::of(shown) {
-        return DiffNoticeView::new(stands_in)
-            .on_load(move |()| diff_actions::load_working_anyway(view, submit.as_deref()))
-            .into();
-    }
-    let current = view.local.cursor.read().and_then(|cursor| {
-        shown
-            .stops(side_by_side)
-            .and_then(|stops| stops.rows(cursor.change))
-    });
-    DiffView::new(
-        view.diff.into_readable().map(answered_working, |_| true),
-        view.local.scroll,
-    )
-    .side_by_side(side_by_side)
-    .current(current)
-    .into()
+    let side = gesture_side(list);
+    let mode_row = match &shown.diff().content {
+        // The mode change's own row: over text, and over a change of the mode alone.
+        DiffContent::Text { .. } | DiffContent::ModeChangeOnly => {
+            ModeRow::of(&shown.diff().file, side, gesture_acts(view, submit.clone()))
+        }
+        DiffContent::Binary { .. }
+        | DiffContent::TooLarge { .. }
+        | DiffContent::LfsPointer { .. }
+        | DiffContent::Submodule { .. }
+        | DiffContent::Conflicted
+        | DiffContent::Unsupported { .. } => None,
+    };
+    let body: Element = if let Some(stands_in) = DiffNotice::of(shown) {
+        let loading = submit.clone();
+        DiffNoticeView::new(stands_in)
+            .on_load(move |()| diff_actions::load_working_anyway(view, loading.as_deref()))
+            .into()
+    } else {
+        let current = view.local.cursor.read().and_then(|cursor| {
+            shown
+                .stops(side_by_side)
+                .and_then(|stops| stops.rows(cursor.change))
+        });
+        DiffView::new(
+            view.diff.into_readable().map(answered_working, |_| true),
+            view.local.scroll,
+        )
+        .side_by_side(side_by_side)
+        .current(current)
+        .gesture(Some(Gesture::new(
+            side,
+            drawn,
+            view.local.lines,
+            gesture_acts(view, submit),
+        )))
+        .into()
+    };
+    rect()
+        .expanded()
+        .content(Content::Flex)
+        .maybe_child(mode_row)
+        .child(
+            rect()
+                .width(Size::fill())
+                .height(Size::flex(1.))
+                .child(body),
+        )
+        .into()
 }
 
 #[cfg(test)]

@@ -12,6 +12,8 @@ mod history_state;
 mod local_changes_actions;
 #[cfg(test)]
 mod local_changes_actions_tests;
+#[cfg(test)]
+mod local_changes_gesture_tests;
 mod local_changes_pane;
 mod local_changes_state;
 #[cfg(test)]

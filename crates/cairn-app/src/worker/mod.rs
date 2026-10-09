@@ -51,8 +51,8 @@ pub use pool::{CLOSE_PATIENCE, Replier, RepositoryHandle, open};
 pub(crate) use refresh_tests::Refreshable;
 pub use request::{
     AllEnded, AllFrom, AllProgress, Comparison, DiffOptions, DiffQuery, ExpandQuery, ExpandedFile,
-    FileQuery, FileTarget, OpenedFile, Refreshed, Request, Retired, Update, WorkingSide,
-    expanded_diffs,
+    FileQuery, FileTarget, OpenedFile, Refreshed, Request, Retired, TogetherEnded, TogetherFile,
+    TogetherOutcome, TogetherQuery, Update, WorkingSide, expanded_diffs, together_diffs,
 };
 #[cfg(test)]
 pub(crate) use window_check_updates::update_within;

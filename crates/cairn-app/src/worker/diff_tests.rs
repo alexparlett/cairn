@@ -1454,3 +1454,91 @@ fn a_filter_is_answered_on_a_worker_and_a_newer_one_supersedes_it() {
     // supersedes it.
     assert!(changes.is_some());
 }
+
+/// The paths drawn together (staging-and-commit R8.1) through the boundary: each path's
+/// working-tree diff, by its place, in pages under the ask's number, the last page saying the
+/// read ended at the last path; and a path past the line budget left unread, the last page
+/// naming where the read stopped. Caught by: a path answered under another's place, pages of
+/// one ask sent under another number, or a budget that never stops the read.
+#[test]
+fn paths_drawn_together_are_answered_by_place_under_their_budget() {
+    use super::request::{TogetherEnded, TogetherFile, TogetherQuery};
+    let ids = {
+        let (handle, mut updates) = checkout();
+        commits(&handle, &mut updates, 1)
+    };
+    let fixture = BorrowedRepository::new(&format!("cairn-diff-together-{}", std::process::id()));
+    fixture.point_main_at(&ids[0].to_string());
+    write(&fixture.fixture.path.join("one.txt"), "one\n");
+    write(&fixture.fixture.path.join("two.txt"), "two\n");
+    // Two files of thirty thousand lines: each under R2.6's ceilings, both past the budget.
+    let long: String = (0..30_000).map(|n| format!("{n}\n")).collect();
+    write(&fixture.fixture.path.join("long.txt"), &long);
+    write(&fixture.fixture.path.join("longer.txt"), &long);
+    let (handle, mut updates) = opened(&fixture.fixture.path);
+    let ask = |asked: u64, paths: &[&str]| TogetherQuery {
+        asked,
+        files: std::sync::Arc::new(
+            paths
+                .iter()
+                .enumerate()
+                .map(|(index, path)| TogetherFile {
+                    index: index * 2,
+                    path: RepoPath::from(*path),
+                    side: WorkingSide::Untracked,
+                })
+                .collect(),
+        ),
+        options: DiffOptions::default(),
+    };
+    let answered = |updates: &mut Updates| {
+        let seen = collect_until(updates, |u| {
+            matches!(u, Update::Together { ended: Some(_), .. })
+        });
+        let mut files = Vec::new();
+        let mut ended = None;
+        for update in seen {
+            if let Update::Together {
+                asked,
+                files: page,
+                ended: end,
+            } = update
+            {
+                for (index, outcome) in page {
+                    let text = outcome
+                        .ok()
+                        .flatten()
+                        .and_then(|shown| shown.diff().text().map(|t| t.new_content()));
+                    files.push((asked, index, text));
+                }
+                ended = end;
+            }
+        }
+        (files, ended)
+    };
+
+    handle.submit(Request::Together(ask(7, &["one.txt", "two.txt"])));
+    let (files, ended) = answered(&mut updates);
+    assert_eq!(
+        files,
+        [
+            (7, 0, Some(b"one\n".to_vec())),
+            (7, 2, Some(b"two\n".to_vec()))
+        ]
+    );
+    assert_eq!(ended, Some(TogetherEnded::Every));
+
+    // Sixty thousand lines spend the budget: the path after them is not read.
+    handle.submit(Request::Together(ask(
+        8,
+        &["long.txt", "longer.txt", "one.txt"],
+    )));
+    let (files, ended) = answered(&mut updates);
+    let indices: Vec<(u64, usize, bool)> = files
+        .iter()
+        .map(|(asked, index, text)| (*asked, *index, text.is_some()))
+        .collect();
+    assert_eq!(indices, [(8, 0, true), (8, 2, true)]);
+    assert_eq!(ended, Some(TogetherEnded::Budget { next: 2 }));
+    drop(handle);
+}

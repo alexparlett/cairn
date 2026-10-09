@@ -30,6 +30,14 @@ use crate::window::{PANE_HEIGHT, View, window};
 use crate::worker::{FileQuery, FileTarget, Request, Update, WorkingSide};
 
 const WIDTH: f32 = 1200.;
+
+/// Whether `x` is left of where the diff side begins: in the lists, the filter or a menu opened
+/// over them — never one of the files drawn together, whose rows name paths too.
+pub(crate) fn in_lists(x: f32) -> bool {
+    x > SIDEBAR_WIDTH
+        && x < SIDEBAR_WIDTH
+            + (WIDTH - SIDEBAR_WIDTH) * crate::local_changes_state::LIST_WIDTH / 100.
+}
 const HEIGHT: f32 = 700.;
 
 pub(crate) type Submitted = Rc<RefCell<Vec<Request>>>;
@@ -245,7 +253,7 @@ pub(crate) fn press_row(test: &mut TestingRunner, text: &str, nth: usize) {
     let mut found: Vec<(f32, f32)> = test.find_many(|node, element| {
         Label::try_downcast(element)
             .filter(|label| label.text == text)
-            .filter(|_| node.layout().area.min_x() > SIDEBAR_WIDTH)
+            .filter(|_| in_lists(node.layout().area.min_x()))
             .map(|_| {
                 let area = node.layout().area;
                 (area.center().y, area.min_x())

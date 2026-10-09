@@ -44,6 +44,9 @@ pub struct LocalChangesView {
     pub selection: State<ListSelection>,
     /// What the view's actions are waiting on and what it says of them (R8.4, R8.6).
     pub acting: State<crate::local_changes_actions::Acting>,
+    /// A drag across the diff's lines, and the lines it selected (staging-and-commit R9.2):
+    /// written by the diff view, read by the chords heard on the diff.
+    pub lines: State<cairn_ui::LineDrag>,
 }
 
 impl LocalChangesView {
@@ -58,6 +61,7 @@ impl LocalChangesView {
             cursor: use_state(|| None),
             selection: use_state(ListSelection::default),
             acting: use_state(crate::local_changes_actions::Acting::default),
+            lines: use_state(cairn_ui::LineDrag::default),
         }
     }
 
@@ -73,6 +77,7 @@ impl LocalChangesView {
             cursor: State::create(None),
             selection: State::create(ListSelection::default()),
             acting: State::create(crate::local_changes_actions::Acting::default()),
+            lines: State::create(cairn_ui::LineDrag::default()),
         }
     }
 }

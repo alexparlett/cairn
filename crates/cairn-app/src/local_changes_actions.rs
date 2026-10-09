@@ -9,7 +9,8 @@
 //! (`LocalChanges::whole_file_paths`). Stage All and Unstage All take every row of the list,
 //! gathered on the local lane from the lists drawn, never here. A drop takes the selection the
 //! drag began in, or the path it began on alone; a double press, its row; a chord heard on the
-//! diff, the path the diff shows. Every path is one `git status` listed: the window never asks
+//! diff, the lines a drag across it selected, or with none the path the diff shows — or the
+//! paths drawn together. Every path is one `git status` listed: the window never asks
 //! a write, or a discard's consequence, for a path the lists drawn do not hold.
 //!
 //! **After a stage or an unstage** the selection moves to the nearest path left in the list it
@@ -24,14 +25,26 @@
 //! nested repository, and anything else it cannot count, before any dialog, and the view says
 //! why.
 //!
+//! **The diff's gesture** (R9) acts on lines of the diff drawn, copied as the lane will apply
+//! it: staged or unstaged by patch (`LocalWrite::StageLines`, `UnstageLines`), discarded through
+//! the confirmation of what the engine says the lines' discard would lose
+//! (`Request::DiscardLinesConsequence`) — but every line of a new file is the file, whose
+//! discard deletes it, and is confirmed as the files' route confirms it (phase 03's
+//! `Refusal::WholeFileOnly`).
+//!
 //! On the UI thread: an action asks and returns. While a confirmation or a credential prompt
 //! is open, nothing here acts.
 
 use std::rc::Rc;
 
-use cairn_model::{ChangeList, Consequence, LocalChanges, RepoPath};
+use cairn_model::{
+    ChangeList, ChangeStatus, Consequence, FileDiff, LocalChanges, RepoPath, Selection,
+};
 use cairn_ui::accelerators::Action;
-use cairn_ui::{ListIntent, ListSelection, ShownFiles, nearest_remaining, no_discard};
+use cairn_ui::{
+    GestureAct, GestureVerb, LineDrag, ListIntent, ListSelection, ShownFiles, nearest_remaining,
+    no_discard,
+};
 use freya::prelude::*;
 
 use crate::confirming::Confirming;
@@ -46,13 +59,21 @@ pub const DISCARD_TITLE: &str = "Discard changes";
 /// Said under the lists while the engine counts what a discard would lose.
 pub const READING_DISCARD: &str = "Reading what the discard would lose…";
 
+/// What a discard asked of the engine takes: files — rows of the Unstaged list, an untracked
+/// one deleted — or the lines of one diff the gesture selected (R9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Discarding {
+    Files(Vec<RepoPath>),
+    Lines,
+}
+
 /// What the view's actions wait on, and what it says of them.
 #[derive(Debug, Default)]
 pub struct Acting {
-    /// The discard asked of the local lane, newest, and the paths it names.
-    asked: Option<(OperationId, Vec<RepoPath>)>,
+    /// The discard asked of the local lane, newest, and what it takes.
+    asked: Option<(OperationId, Discarding)>,
     /// What it would lose, arrived and waiting for the view to open the confirmation.
-    arrived: Option<(Consequence, Vec<RepoPath>)>,
+    arrived: Option<(Consequence, Discarding)>,
     /// Why the last action asked nothing, said under the lists until the next action.
     said: Option<String>,
 }
@@ -60,7 +81,15 @@ pub struct Acting {
 impl Acting {
     /// A discard of `paths` was asked under `asked`: any answer for an earlier one is dropped.
     pub fn discard_asked(&mut self, asked: OperationId, paths: Vec<RepoPath>) {
-        self.asked = Some((asked, paths));
+        self.asked = Some((asked, Discarding::Files(paths)));
+        self.arrived = None;
+        self.said = None;
+    }
+
+    /// A discard of a diff's lines was asked under `asked`: any answer for an earlier one is
+    /// dropped.
+    pub fn lines_discard_asked(&mut self, asked: OperationId) {
+        self.asked = Some((asked, Discarding::Lines));
         self.arrived = None;
         self.said = None;
     }
@@ -73,18 +102,18 @@ impl Acting {
         asked: OperationId,
         outcome: Result<Consequence, String>,
     ) -> bool {
-        let Some((_, paths)) = self.asked.take_if(|(id, _)| *id == asked) else {
+        let Some((_, discarding)) = self.asked.take_if(|(id, _)| *id == asked) else {
             return false;
         };
         match outcome {
-            Ok(consequence) => self.arrived = Some((consequence, paths)),
+            Ok(consequence) => self.arrived = Some((consequence, discarding)),
             Err(why) => self.said = Some(format!("Nothing was discarded: {why}")),
         }
         true
     }
 
     /// The consequence waiting to be confirmed, taken.
-    pub fn take_arrived(&mut self) -> Option<(Consequence, Vec<RepoPath>)> {
+    pub fn take_arrived(&mut self) -> Option<(Consequence, Discarding)> {
         self.arrived.take()
     }
 
@@ -269,10 +298,50 @@ pub fn intent(intent: ListIntent, view: View, submit: Option<Rc<dyn Fn(Request)>
     }
 }
 
-/// An action of the table heard on Local Changes' diff (R7.3): on the path the diff shows,
-/// whole, in the list it was chosen from — the gesture's lines are phase 08's.
+/// An action of the table heard on Local Changes' diff (R7.3): on the lines a drag across the
+/// diff selected (R9.2), or, with none selected, on the path the diff shows, whole, in the list
+/// it was chosen from — hovering is not selecting (Fork, Tracker #103).
 pub fn on_the_diff(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
     if dialog_open(view) {
+        return;
+    }
+    let (drawn, together) = {
+        let diff = view.diff.peek();
+        match diff.together() {
+            Some((list, _)) => (diff.together_drawn().unwrap_or(0), Some(list)),
+            None => (diff.working_drawn(), None),
+        }
+    };
+    let selected = view
+        .local
+        .lines
+        .peek()
+        .selected(drawn)
+        .map(|(file, selection)| (file, selection.clone()));
+    if let Some((file, selection)) = selected {
+        let list = together.or_else(|| view.diff.peek().working_choice().map(|choice| choice.list));
+        let verb = match (action, list) {
+            (Action::StageOrUnstage, Some(ChangeList::Unstaged)) => Some(GestureVerb::Stage),
+            (Action::StageOrUnstage, Some(ChangeList::Staged)) => Some(GestureVerb::Unstage),
+            (Action::Discard, Some(_)) => Some(GestureVerb::Discard),
+            (_, _) => None,
+        };
+        if let Some(verb) = verb {
+            on_gesture(
+                GestureAct {
+                    file,
+                    verb,
+                    selection,
+                },
+                view,
+                submit,
+            );
+            return;
+        }
+    }
+    // The paths drawn together, whole: the selection they are drawn for.
+    if let Some(list) = together {
+        act(list, Acted::Selection, action, view, submit);
         return;
     }
     let Some((list, path)) = view
@@ -284,6 +353,119 @@ pub fn on_the_diff(action: Action, view: View, submit: Option<&dyn Fn(Request)>)
         return;
     };
     act(list, Acted::Path(path), action, view, submit);
+}
+
+/// What the diff's staging gesture asked (R9): `verb` on the lines it names of the diff drawn,
+/// in the list the diff was chosen from — staged into the index from the unstaged diff,
+/// unstaged out of it from the staged one, or discarded from the working tree through the
+/// confirmation. The selection the gesture or the chord acted on goes.
+pub fn on_gesture(act: GestureAct, view: View, submit: Option<&dyn Fn(Request)>) {
+    if dialog_open(view) {
+        return;
+    }
+    let mut lines = view.local.lines;
+    if *lines.peek() != LineDrag::default() {
+        lines.set(LineDrag::default());
+    }
+    quiet(view);
+    // The diff the act was over: one of the paths drawn together, by its place, or the path
+    // chosen — copied, since the lane applies exactly what was drawn.
+    let drawn = {
+        let diff = view.diff.peek();
+        match diff.together() {
+            Some((list, _)) => diff
+                .together_diff(act.file)
+                .map(|shown| (list, shown.diff().clone())),
+            None => {
+                let list = diff.working_choice().map(|choice| choice.list);
+                let shown = diff.shown_working().filter(|_| act.file == 0);
+                list.zip(shown.map(|shown| shown.diff().clone()))
+            }
+        }
+    };
+    let Some((list, diff)) = drawn else {
+        return;
+    };
+    act_on_lines(list, diff, act.verb, act.selection, view, submit);
+}
+
+/// `verb` on `selection` of `diff`, the diff of a path in `list`.
+fn act_on_lines(
+    list: ChangeList,
+    diff: FileDiff,
+    verb: GestureVerb,
+    selection: Selection,
+    view: View,
+    submit: Option<&dyn Fn(Request)>,
+) {
+    match (verb, list) {
+        (GestureVerb::Stage, ChangeList::Unstaged) => ask(
+            view,
+            submit,
+            LocalWrite::StageLines {
+                diff: Box::new(diff),
+                selection,
+            },
+        ),
+        (GestureVerb::Unstage, ChangeList::Staged) => ask(
+            view,
+            submit,
+            LocalWrite::UnstageLines {
+                diff: Box::new(diff),
+                selection,
+            },
+        ),
+        (GestureVerb::Discard, _) => discard_lines(list, diff, selection, view, submit),
+        // Not offered: a stage of what is staged, an unstage of what is not.
+        (GestureVerb::Stage, ChangeList::Staged) | (GestureVerb::Unstage, ChangeList::Unstaged) => {
+        }
+    }
+}
+
+/// A discard of `selection` of `diff` (R9.1, R8.4): refused in the view for the staged side, a
+/// submodule or a conflict; every line of a new file is the file, whose discard deletes it and
+/// is confirmed as a deletion by the files' route (phase 03's `WholeFileOnly`); otherwise what
+/// it would lose asked of the engine, whose answer opens the confirmation.
+fn discard_lines(
+    list: ChangeList,
+    diff: FileDiff,
+    selection: Selection,
+    view: View,
+    submit: Option<&dyn Fn(Request)>,
+) {
+    let path = diff.file.new_path.clone();
+    let refused = {
+        let local = view.local.state.peek();
+        no_discard(drawn_changes(&local), list, [&path])
+    };
+    if let Some(refused) = refused {
+        let mut acting = view.local.acting;
+        acting.write().say(refused.text());
+        return;
+    }
+    let Some(submit) = submit else {
+        return;
+    };
+    let asked = OperationId::next();
+    let mut acting = view.local.acting;
+    let whole_new_file = diff.file.status == ChangeStatus::Added
+        && diff
+            .text()
+            .is_some_and(|text| selection.holds_every_change(text));
+    if whole_new_file {
+        acting.write().discard_asked(asked, vec![path.clone()]);
+        submit(Request::DiscardConsequence {
+            asked,
+            paths: vec![path],
+        });
+    } else {
+        acting.write().lines_discard_asked(asked);
+        submit(Request::DiscardLinesConsequence {
+            asked,
+            diff: Box::new(diff),
+            selection,
+        });
+    }
 }
 
 /// Which rows an action takes.
@@ -588,10 +770,22 @@ fn discard(list: ChangeList, acted: Acted, view: View, submit: Option<&dyn Fn(Re
 /// shown.
 pub fn confirm_arrived(view: View, submit: Option<Rc<dyn Fn(Request)>>) {
     let mut acting = view.local.acting;
-    let Some((consequence, paths)) = acting.write().take_arrived() else {
+    let Some((consequence, discarding)) = acting.write().take_arrived() else {
         return;
     };
     let mut confirming = view.confirming;
+    let paths = match discarding {
+        Discarding::Files(paths) => paths,
+        // The lines' confirmation asks their discard; the selection stays on the path.
+        Discarding::Lines => {
+            confirming.set(Some(Confirming::new(
+                DISCARD_TITLE,
+                consequence,
+                move |token| ask(view, submit.as_deref(), LocalWrite::DiscardLines(token)),
+            )));
+            return;
+        }
+    };
     confirming.set(Some(Confirming::new(
         DISCARD_TITLE,
         consequence,

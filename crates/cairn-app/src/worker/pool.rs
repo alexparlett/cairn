@@ -678,6 +678,20 @@ impl RepositoryHandle {
                     });
                 }
             }
+            Routed::DiscardLinesConsequence {
+                asked,
+                diff,
+                selection,
+            } => {
+                if let Some(epoch) = epoch {
+                    let _ = self.local.send(LocalJob::LinesConsequence {
+                        asked,
+                        diff,
+                        selection,
+                        cancel: self.epochs.watch(epoch),
+                    });
+                }
+            }
             // Numbered above: the count in flight is superseded, and nothing is sent.
             Routed::StopCounting => {}
             Routed::CancelWrite(id) => self.lane.cancel(id),
@@ -762,6 +776,16 @@ pub fn idle_handle() -> (RepositoryHandle, impl Fn() -> Vec<Request>) {
             LocalJob::Consequence { asked, paths, .. } => {
                 Some(unroute(Routed::DiscardConsequence { asked, paths }))
             }
+            LocalJob::LinesConsequence {
+                asked,
+                diff,
+                selection,
+                ..
+            } => Some(unroute(Routed::DiscardLinesConsequence {
+                asked,
+                diff,
+                selection,
+            })),
             LocalJob::Stop => None,
         });
         asked.into_iter().chain(alone).chain(writes).collect()

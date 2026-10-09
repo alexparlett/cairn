@@ -23,8 +23,10 @@ use crate::worker::{
     FileQuery, FileTarget, OpenedFile, Request, Retired,
 };
 
+mod together;
 mod working;
 
+pub use together::{TogetherWanted, answered_together, answered_together_paths};
 pub use working::{WorkingChoice, WorkingShown};
 
 /// An answer the window is waiting for, has, or was told failed.
@@ -113,6 +115,12 @@ pub struct DiffState {
     working: Option<working::Working>,
     /// The path chosen's request is the one in the file-diff lane now.
     working_in_lane: bool,
+    /// How many working-tree answers have been kept: each one kept is numbered by it.
+    answers: u64,
+    /// The paths selected in one of Local Changes' lists, drawn together (R8.1).
+    together: Option<together::Together>,
+    /// How many times paths have been asked together: each ask is numbered by it.
+    together_asks: u64,
 }
 
 impl DiffState {
@@ -131,6 +139,7 @@ impl DiffState {
         self.file_in_lane = false;
         // The changes query supersedes the file-diff lane, whoever's request is in it.
         self.working_in_lane = false;
+        self.together_lost_lane();
         self.filter.changes_selected();
         let mut shown_diffs: Vec<ShownDiff> = Vec::new();
         if let Some((_, Answer::Ready(Some(shown)))) = file {
@@ -169,6 +178,7 @@ impl DiffState {
     fn took_lane_for_file(&mut self) {
         self.file_in_lane = true;
         self.working_in_lane = false;
+        self.together_lost_lane();
         if let Some(opening) = &mut self.opening {
             opening.in_lane = false;
         }
@@ -384,6 +394,9 @@ impl DiffState {
         opening.in_lane = true;
         self.file_in_lane = false;
         self.working_in_lane = false;
+        if let Some(together) = &mut self.together {
+            together.in_lane = false;
+        }
         Some(Request::Expand(ExpandQuery {
             of: opening.of,
             changes,
@@ -444,6 +457,11 @@ impl DiffState {
         let (working_asked, freed) =
             self.working_settings_changed(working, asking == Asking::Working);
         requests.extend(retire(freed));
+        // The paths drawn together likewise, and before the path chosen, which is not asked
+        // while they are drawn.
+        let (together_asked, freed) =
+            self.together_settings_changed(working, asking == Asking::Working);
+        requests.extend(retire(freed));
         let asked = match asking {
             Asking::File if file_asked => self.reask_file(),
             Asking::Expansion if expansion_asked => self.reask_expansion(),
@@ -451,6 +469,7 @@ impl DiffState {
             Asking::File | Asking::Expansion => None,
         };
         let mut ordered: Vec<Request> = asked.into_iter().collect();
+        ordered.extend(together_asked);
         ordered.extend(requests);
         ordered
     }
@@ -622,6 +641,7 @@ impl DiffState {
             DiffQuery::Changes(of) => self.wants_changes(*of),
             DiffQuery::File(query) => self.wants_file(query),
             DiffQuery::Expand(asked) => self.wants_expansion(asked.of, asked.options),
+            DiffQuery::Together(asked) => self.wants_together(asked.asked),
         }
     }
 
@@ -712,6 +732,7 @@ impl DiffState {
                     opening.in_lane = false;
                 }
             }
+            DiffQuery::Together(_) => self.together_failed(&message),
         }
         true
     }

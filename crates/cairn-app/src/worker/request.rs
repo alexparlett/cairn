@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use cairn_model::ShownDiff;
 use cairn_model::{
-    AheadBehind, ChangeSet, ChangedFile, CommandRecord, Consequence, Context, Disclosure, History,
-    LocalChanges, MatchedRows, Oid, RefName, RefsSnapshot, RemoteSummary, RepoPath, RowsPage,
-    SidebarRow,
+    AheadBehind, ChangeSet, ChangedFile, CommandRecord, Consequence, Context, Disclosure, FileDiff,
+    History, LocalChanges, MatchedRows, Oid, RefName, RefsSnapshot, RemoteSummary, RepoPath,
+    RowsPage, Selection, SidebarRow,
 };
 
 use super::askpass::PromptId;
@@ -83,7 +83,39 @@ pub enum DiffQuery {
     /// Files of `of`'s change set opened in place: some by name, and Expand All's from where it
     /// stands.
     Expand(ExpandQuery),
+    /// Several paths of Local Changes' lists, their diffs drawn together.
+    Together(TogetherQuery),
 }
+
+/// Several paths selected in one of Local Changes' lists, whose diffs the view draws together
+/// (staging-and-commit R8.1, the user's decision of 2026-10-09: as Fork does): each path's
+/// working-tree diff, in the order the lists show them, read on the diff thread one after
+/// another under Expand All's line budget and answered a page at a time
+/// ([`Update::Together`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TogetherQuery {
+    /// The window's number for this ask: every page answering it names it.
+    pub asked: u64,
+    /// The paths to read, each by its place among the paths drawn and the side it is asked
+    /// as; a conflicted path, which has no diff, is not among them. Shared, not copied.
+    pub files: Arc<Vec<TogetherFile>>,
+    /// What every path is asked at: always the exact diff (R8.5).
+    pub options: DiffOptions,
+}
+
+/// One path of a [`TogetherQuery`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TogetherFile {
+    /// Its place among the paths drawn together.
+    pub index: usize,
+    pub path: RepoPath,
+    pub side: WorkingSide,
+}
+
+/// One path's answer in an [`Update::Together`] page: its diff prepared for the views, `None`
+/// where git prints nothing for it, or why it could not be read, as display text — that path's
+/// alone.
+pub type TogetherOutcome = Result<Option<Box<ShownDiff>>, String>;
 
 /// Files of a change set to open in place in the Commit tab (PRD R5.3): the ones opened one at
 /// a time, by name, and — when Expand All is on its way — the rest of the change set from the
@@ -159,7 +191,7 @@ impl DiffQuery {
     pub fn lane(&self) -> QueryLane {
         match self {
             Self::Changes(_) => QueryLane::Changes,
-            Self::File(_) | Self::Expand(_) => QueryLane::FileDiff,
+            Self::File(_) | Self::Expand(_) | Self::Together(_) => QueryLane::FileDiff,
         }
     }
 }
@@ -337,6 +369,10 @@ pub enum Request {
     /// ends it between files or kills its read. One that names nothing to read asks nothing:
     /// what it is for is to supersede the one in flight (Collapse All).
     Expand(ExpandQuery),
+    /// The paths selected in one of Local Changes' lists, their diffs read to be drawn
+    /// together, answered a page at a time by [`Update::Together`]. File-diff lane work: it
+    /// supersedes the path chosen's diff and the files opened in place, and they it.
+    Together(TogetherQuery),
     /// Which of `files`' files hold `text` in a path (the Changes tab's filter, R5.4),
     /// answered by [`Update::FilteredFiles`]: a pass over every path, so run on a worker and
     /// never on the UI thread. Numbered in the file-filter lane, so the next keystroke
@@ -411,6 +447,17 @@ pub enum Request {
         asked: OperationId,
         paths: Vec<RepoPath>,
     },
+    /// What discarding `selection` of `diff` — a path's unstaged or untracked diff as Local
+    /// Changes drew it — would lose (`ops::discard_lines_consequence`), computed on the local
+    /// lane in the order asked and answered by [`Update::DiscardConsequence`] under `asked`, as
+    /// a discard of files is: the diff's staging gesture's discard (staging-and-commit R9.1,
+    /// R9.2). Numbered in the discard-count lane with it; one superseded before it runs answers
+    /// nothing. Boxed: it carries a whole diff.
+    DiscardLinesConsequence {
+        asked: OperationId,
+        diff: Box<FileDiff>,
+        selection: Selection,
+    },
     /// Ends the count of a discard's loss in flight, and asks nothing: what Local Changes asks
     /// when it is no longer shown, so a count nobody will confirm stops holding the local lane.
     StopCounting,
@@ -461,13 +508,15 @@ impl Request {
                 &[QueryLane::History]
             }
             Self::Changes { .. } => &[QueryLane::Changes],
-            Self::FileDiff(_) | Self::Expand(_) => &[QueryLane::FileDiff],
+            Self::FileDiff(_) | Self::Expand(_) | Self::Together(_) => &[QueryLane::FileDiff],
             Self::FilterFiles { .. } => &[QueryLane::FileFilter],
             // Not the status lane: a refresh never supersedes a status (R10.3 as amended).
             Self::Refresh => &[QueryLane::Refs, QueryLane::AheadBehind],
             Self::FilterRefs { .. } => &[QueryLane::RefFilter],
             Self::FilterLocalChanges { .. } => &[QueryLane::LocalChangesFilter],
-            Self::DiscardConsequence { .. } | Self::StopCounting => &[QueryLane::DiscardCount],
+            Self::DiscardConsequence { .. }
+            | Self::DiscardLinesConsequence { .. }
+            | Self::StopCounting => &[QueryLane::DiscardCount],
             Self::ListRemotes
             | Self::ConfiguredContext
             | Self::Fetch { .. }
@@ -678,6 +727,14 @@ pub enum Update {
         files: Vec<ExpandedFile>,
         all: Option<AllProgress>,
     },
+    /// A page of the paths drawn together, answering the ask numbered `asked`: each path read,
+    /// by its place, and — on the last page — where the read ended: at the last path, or with
+    /// Expand All's line budget spent before the path at `next`, which is not read.
+    Together {
+        asked: u64,
+        files: Vec<(usize, TogetherOutcome)>,
+        ended: Option<TogetherEnded>,
+    },
     /// A diff query failed: `query` is what was asked, so the window shows the failure
     /// only for the selection it names, and `message` is display text. A query that was
     /// superseded is not a failure and sends nothing.
@@ -707,6 +764,7 @@ impl Update {
                 Retired::of(None, diff.map(|shown| *shown).into_iter().collect())
             }
             Self::Expanded { files, .. } => Retired::of(None, expanded_diffs(files)),
+            Self::Together { files, .. } => Retired::of(None, together_diffs(files)),
             Self::Refs { snapshot, .. } => Some(Retired::refs(snapshot)),
             Self::AheadBehind { counts } => Retired::ahead_behind(Arc::new(counts)),
             Self::Status { changes } => Some(Retired::status(changes)),
@@ -739,6 +797,24 @@ impl Update {
             | Self::DiffFailed { .. } => None,
         }
     }
+}
+
+/// Why the paths drawn together stopped being read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TogetherEnded {
+    /// Every path was read.
+    Every,
+    /// The line budget was spent: the paths from `next` on are not read.
+    Budget { next: usize },
+}
+
+/// The diffs a page of paths drawn together holds, for a worker to free.
+pub fn together_diffs(files: Vec<(usize, TogetherOutcome)>) -> Vec<ShownDiff> {
+    files
+        .into_iter()
+        .filter_map(|(_, outcome)| outcome.ok().flatten())
+        .map(|shown| *shown)
+        .collect()
 }
 
 /// The diffs a page of files opened in place holds, for a worker to free.
@@ -832,6 +908,25 @@ mod tests {
                 Request::DiscardConsequence {
                     asked: OperationId::next(),
                     paths: vec![RepoPath::from("a")],
+                },
+                QueryLane::DiscardCount,
+            ),
+            (
+                Request::DiscardLinesConsequence {
+                    asked: OperationId::next(),
+                    diff: Box::new(FileDiff {
+                        file: cairn_model::ChangedFile {
+                            status: cairn_model::ChangeStatus::Modified,
+                            old_path: RepoPath::from("a"),
+                            new_path: RepoPath::from("a"),
+                            old_mode: None,
+                            new_mode: None,
+                            old_id: None,
+                            new_id: None,
+                        },
+                        content: cairn_model::DiffContent::ModeChangeOnly,
+                    }),
+                    selection: Selection::empty(),
                 },
                 QueryLane::DiscardCount,
             ),

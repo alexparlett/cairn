@@ -163,17 +163,25 @@ fn press_key(test: &mut TestingRunner, key: NamedKey) {
     settle(test);
 }
 
-/// Where the label reading `text` right of the sidebar is drawn, the `nth` from the top.
+/// Where the label reading `text` in the lists — or a menu over them — is drawn, the `nth` from
+/// the top.
+/// Anywhere right of the sidebar — a dialog's button — when nothing in the lists reads it.
 fn at(test: &TestingRunner, text: &str, nth: usize) -> (f64, f64) {
-    let mut found: Vec<(f32, f32)> = test.find_many(|node, element| {
-        Label::try_downcast(element)
-            .filter(|label| label.text == text)
-            .filter(|_| node.layout().area.min_x() > crate::sidebar_state::SIDEBAR_WIDTH)
-            .map(|_| {
-                let area = node.layout().area;
-                (area.center().y, area.min_x())
-            })
-    });
+    let reading = |within: &dyn Fn(f32) -> bool| -> Vec<(f32, f32)> {
+        test.find_many(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == text)
+                .filter(|_| within(node.layout().area.min_x()))
+                .map(|_| {
+                    let area = node.layout().area;
+                    (area.center().y, area.min_x())
+                })
+        })
+    };
+    let mut found = reading(&crate::local_changes_tests::in_lists);
+    if found.is_empty() {
+        found = reading(&|x| x > crate::sidebar_state::SIDEBAR_WIDTH);
+    }
     found.sort_by(|a, b| a.0.total_cmp(&b.0));
     let (y, x) = *found
         .get(nth)

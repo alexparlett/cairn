@@ -4,7 +4,7 @@
 //! | --- | --- |
 //! | history (`OpenHistory`, `MoreHistory`, `FindRow`, `StopFinding`) | `cairn-repository`, which owns the live walk |
 //! | changes (`Changes`) | `cairn-diff` |
-//! | file diff (`FileDiff`, `Expand`) | `cairn-diff` |
+//! | file diff (`FileDiff`, `Expand`, `Together`) | `cairn-diff` |
 //! | `ConfiguredContext` | `cairn-diff`, whose handle is opened again when the configuration moves, and which sends the context again each time |
 //! | `ListRemotes`, `CommandLog`, `Close`, `Fetch` | `cairn-repository` (a fetch is forwarded on to the network lane) |
 //! | `Retire` | `cairn-repository`, which frees what it is handed |
@@ -15,7 +15,7 @@
 //! | Local Changes' filter (`FilterLocalChanges`) | `cairn-repository`, as the file filter |
 //! | `CancelFetch` | none: the fetch's control, from the caller's thread |
 //! | `Write` | `cairn-local`, the local write lane, reached directly, so a write never waits behind a page or a find (staging-and-commit R4.1) |
-//! | discard count (`DiscardConsequence`) | `cairn-local`, in the lane's order, so what a discard would lose is counted after the writes asked before it; `StopCounting` only numbers the lane |
+//! | discard count (`DiscardConsequence`, `DiscardLinesConsequence`) | `cairn-local`, in the lane's order, so what a discard would lose is counted after the writes asked before it; `StopCounting` only numbers the lane |
 //! | `CancelWrite` | none: the local lane's state, from the caller's thread |
 //! | `RefreshStatus` | `cairn-refresh`, as a refresh's status |
 //!
@@ -151,6 +151,12 @@ pub(super) enum Routed {
         asked: OperationId,
         paths: Vec<cairn_model::RepoPath>,
     },
+    /// What a discard of lines would lose, to the local lane as a discard of files is.
+    DiscardLinesConsequence {
+        asked: OperationId,
+        diff: Box<cairn_model::FileDiff>,
+        selection: cairn_model::Selection,
+    },
     /// Nothing sent: numbering the discard-count lane is all it is for.
     StopCounting,
     /// Never queued: it reaches the local lane's state directly.
@@ -167,9 +173,10 @@ impl Routed {
             Self::Repository(_) | Self::OpenHistory { .. } => Some(Thread::Repository),
             Self::Diff(_) | Self::ConfiguredContext => Some(Thread::Diff),
             // `StopCounting` queues nowhere, but what it supersedes is the local lane's.
-            Self::Write { .. } | Self::DiscardConsequence { .. } | Self::StopCounting => {
-                Some(Thread::Local)
-            }
+            Self::Write { .. }
+            | Self::DiscardConsequence { .. }
+            | Self::DiscardLinesConsequence { .. }
+            | Self::StopCounting => Some(Thread::Local),
             Self::RefreshStatus => Some(Thread::Refresh),
             Self::CancelFetch | Self::CancelWrite(_) => None,
             // Its refs': see `lane_thread` for its ahead/behind. Its status, numbered in no
@@ -205,6 +212,7 @@ pub(super) fn route(request: Request) -> Routed {
             Routed::Diff(DiffQuery::File(FileQuery { target, options }))
         }
         Request::Expand(asked) => Routed::Diff(DiffQuery::Expand(asked)),
+        Request::Together(asked) => Routed::Diff(DiffQuery::Together(asked)),
         Request::FilterFiles { of, files, text } => {
             Routed::Repository(RepositoryJob::Filter { of, files, text })
         }
@@ -230,6 +238,15 @@ pub(super) fn route(request: Request) -> Routed {
         Request::CancelFetch => Routed::CancelFetch,
         Request::Write { id, write } => Routed::Write { id, write },
         Request::DiscardConsequence { asked, paths } => Routed::DiscardConsequence { asked, paths },
+        Request::DiscardLinesConsequence {
+            asked,
+            diff,
+            selection,
+        } => Routed::DiscardLinesConsequence {
+            asked,
+            diff,
+            selection,
+        },
         Request::StopCounting => Routed::StopCounting,
         Request::CancelWrite { id } => Routed::CancelWrite(id),
         Request::RefreshStatus => Routed::RefreshStatus,
@@ -274,10 +291,20 @@ pub(super) fn unroute(routed: Routed) -> Request {
         Routed::Diff(DiffQuery::Changes(of)) => Request::Changes { of },
         Routed::Diff(DiffQuery::File(query)) => Request::FileDiff(query),
         Routed::Diff(DiffQuery::Expand(asked)) => Request::Expand(asked),
+        Routed::Diff(DiffQuery::Together(asked)) => Request::Together(asked),
         Routed::ConfiguredContext => Request::ConfiguredContext,
         Routed::CancelFetch => Request::CancelFetch,
         Routed::Write { id, write } => Request::Write { id, write },
         Routed::DiscardConsequence { asked, paths } => Request::DiscardConsequence { asked, paths },
+        Routed::DiscardLinesConsequence {
+            asked,
+            diff,
+            selection,
+        } => Request::DiscardLinesConsequence {
+            asked,
+            diff,
+            selection,
+        },
         Routed::StopCounting => Request::StopCounting,
         Routed::CancelWrite(id) => Request::CancelWrite { id },
         Routed::RefreshStatus => Request::RefreshStatus,

@@ -276,6 +276,17 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                 retire(Retired::of(None, expanded_diffs(files)), worker);
             }
         }
+        // A page of the paths drawn together: kept only for the ask drawn now.
+        Update::Together {
+            asked,
+            files,
+            ended,
+        } => {
+            let freeing = diff.write().together_arrived(asked, files, ended);
+            if let Some(request) = freeing {
+                (worker.submit)(request);
+            }
+        }
         Update::DiffFailed { query, message } => {
             if diff.peek().wants(&query) {
                 diff.write().failed(&query, message);

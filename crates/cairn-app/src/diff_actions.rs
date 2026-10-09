@@ -318,6 +318,10 @@ pub fn configured(context: Context, view: View, submit: &dyn Fn(Request)) {
 /// shown, in its diff.
 pub fn step(view: View, forward: bool) {
     if local_changes_shown(view) {
+        // Paths drawn together have no one file's changes to step through.
+        if view.diff.peek().together().is_some() {
+            return;
+        }
         let mut scroll = view.local.scroll;
         let mut cursor = view.local.cursor;
         let side_by_side = view.diff_settings.peek().side_by_side();

@@ -53,7 +53,8 @@ use super::epoch::{Epoch, Epochs, Superseded};
 use super::pool::Outbox;
 use super::request::{
     AllEnded, AllFrom, AllProgress, Comparison, DiffOptions, DiffQuery, ExpandQuery, ExpandedFile,
-    FileQuery, FileTarget, OpenedFile, Update, WorkingSide,
+    FileQuery, FileTarget, OpenedFile, TogetherEnded, TogetherOutcome, TogetherQuery, Update,
+    WorkingSide,
 };
 use super::startup::Startup;
 
@@ -308,7 +309,7 @@ impl Waiting {
             }
             DiffJob::Query { epoch, query } => match *query {
                 query @ DiffQuery::Changes(_) => self.changes = Some((epoch, query)),
-                query @ (DiffQuery::File(_) | DiffQuery::Expand(_)) => {
+                query @ (DiffQuery::File(_) | DiffQuery::Expand(_) | DiffQuery::Together(_)) => {
                     self.file = Some((epoch, query));
                 }
             },
@@ -362,6 +363,11 @@ impl<'a> Served<'a, '_> {
             }),
             // Answered a page at a time as it is read, so its pages are sent from inside.
             DiffQuery::Expand(asked) => self.expand(asked, kept).map(|()| None),
+            // Answered a page at a time too, as each path is read.
+            DiffQuery::Together(asked) => {
+                self.together(asked);
+                Ok(None)
+            }
         };
         match outcome {
             Ok(Some(update)) => self.send(update),
@@ -558,6 +564,87 @@ impl<'a> Served<'a, '_> {
         }
     }
 }
+
+impl Served<'_, '_> {
+    /// The paths drawn together (staging-and-commit R8.1), read one after another as a single
+    /// path's diff is — git's form of each, asked again while two reads of it disagree — each
+    /// prepared for the views here and sent a page at a time, so the memory held is a page's.
+    /// A path's failure is that path's outcome. Reading stops once Expand All's line budget
+    /// ([`EXPAND_ALL_LINES`]) is spent — a path costing one and every line of both its sides
+    /// — so the most held is the budget and the one path that crossed it, which R2.6's
+    /// ceilings bound; the paths after it are not read, and the last page says where it
+    /// stopped. Superseded — another selection, a single path's diff, a commit's — it stops at
+    /// the next path, or kills its read, and sends nothing more.
+    fn together(&mut self, asked: &TogetherQuery) {
+        let content = content_options(&asked.options);
+        let mut spent: u64 = 0;
+        let mut page: Vec<(usize, TogetherOutcome)> = Vec::new();
+        let mut page_lines: u64 = 0;
+        for (at, file) in asked.files.iter().enumerate() {
+            if self.cancel.is_cancelled() {
+                return;
+            }
+            if spent >= EXPAND_ALL_LINES {
+                self.send(Update::Together {
+                    asked: asked.asked,
+                    files: page,
+                    ended: Some(TogetherEnded::Budget { next: at }),
+                });
+                return;
+            }
+            let outcome = asking_again(&self.cancel, || {
+                self.repo.working_tree_diff(
+                    self.git,
+                    &file.path,
+                    which(file.side),
+                    &content,
+                    &self.cancel,
+                )
+            });
+            let outcome = match outcome {
+                Err(error) if was_cancelled(&error) || !self.epochs.is_current(self.epoch) => {
+                    return;
+                }
+                Err(error) => Err(error.to_string()),
+                Ok(diff) => Ok(diff),
+            };
+            let lines = 1 + outcome
+                .as_ref()
+                .ok()
+                .and_then(Option::as_ref)
+                .map_or(0, |diff| {
+                    diff.text().map_or(0, |text| {
+                        (text.old_lines().len() + text.new_lines().len()) as u64
+                    })
+                });
+            spent = spent.saturating_add(lines);
+            page_lines = page_lines.saturating_add(lines);
+            page.push((
+                file.index,
+                outcome.map(|diff| {
+                    diff.map(|diff| Box::new(ShownDiff::new(diff, asked.options.context)))
+                }),
+            ));
+            if page_lines >= cairn_git::PAGE_LINES || page.len() >= TOGETHER_PAGE_FILES {
+                self.send(Update::Together {
+                    asked: asked.asked,
+                    files: std::mem::take(&mut page),
+                    ended: None,
+                });
+                page_lines = 0;
+            }
+        }
+        self.send(Update::Together {
+            asked: asked.asked,
+            files: page,
+            ended: Some(TogetherEnded::Every),
+        });
+    }
+}
+
+/// The most paths one page of paths drawn together holds, whatever their lines: each is a
+/// `git` read, so a page of small files is still sent while the next are read.
+const TOGETHER_PAGE_FILES: usize = 16;
 
 /// A page's files prepared for the views on this thread, as a single file's diff is: each
 /// outcome a [`ShownDiff`] at the context asked, or its failure as display text.

@@ -223,9 +223,13 @@ pub fn window(
 /// The confirmation a destructive operation waits on (R7.4): its token handed where the
 /// asking view said, and the dialog let go of on either answer.
 fn confirmation(asking: Confirming, mut showing: State<Option<Confirming>>) -> Element {
+    let serial = asking.serial();
     let title = asking.title().to_owned();
     let consequence = asking.consequence().clone();
-    ConfirmDialog::new(title, consequence)
+    // Keyed by its serial: another confirmation is another dialog, never this one's handlers
+    // and answered state under new words.
+    ConfirmDialog::new(serial, title, consequence)
+        .key(DiffKey::U64(serial))
         .on_confirm(move |token| {
             showing.set(None);
             asking.confirmed(token);
@@ -4128,10 +4132,15 @@ pub(crate) mod tests {
 
     /// What a discard of one modified file would cost, for a confirmation to draw.
     fn one_file_discard() -> cairn_model::Consequence {
+        discard_of("src/lib.rs")
+    }
+
+    /// What a discard of the one modified file at `path` would cost.
+    fn discard_of(path: &str) -> cairn_model::Consequence {
         use cairn_model::{Consequence, DiscardedFile, FileLoss};
         Consequence::DiscardFiles {
             files: vec![DiscardedFile {
-                path: RepoPath::from("src/lib.rs"),
+                path: RepoPath::from(path),
                 loss: FileLoss::Modified {
                     index: oid(1),
                     working_tree: Some(oid(2)),
@@ -4160,6 +4169,141 @@ pub(crate) mod tests {
             test.sync_and_update();
         }
         tokens
+    }
+
+    /// A confirmation of a discard at `path` whose token goes to `kept`.
+    fn asking(path: &str, kept: &Rc<RefCell<Vec<cairn_model::Confirmed>>>) -> Confirming {
+        let kept = kept.clone();
+        Confirming::new("Discard changes", discard_of(path), move |token| {
+            kept.borrow_mut().push(token)
+        })
+    }
+
+    fn settle(test: &mut TestingRunner) {
+        for _ in 0..4 {
+            test.sync_and_update();
+        }
+    }
+
+    /// QA P1, R7.4, L3: a confirmation replaced in place by another — B set while A is open —
+    /// draws B and hands B's token, built from B's consequence, to B's continuation; A's gets
+    /// nothing. Caught by: a dialog whose buttons keep the first confirmation's handlers (the
+    /// toolkit keeps a component's old props when they compare equal), which spends a token
+    /// naming A's paths under B's words.
+    #[test]
+    fn a_confirmation_replaced_in_place_hands_its_own_token_to_its_own_continuation() {
+        let (mut test, view, _) = launch((0..10).map(row).collect(), received(10, true));
+        let (first, second) = (
+            Rc::<RefCell<Vec<cairn_model::Confirmed>>>::default(),
+            Rc::<RefCell<Vec<cairn_model::Confirmed>>>::default(),
+        );
+        let mut confirming = view.confirming;
+        confirming.set(Some(asking("src/lib.rs", &first)));
+        settle(&mut test);
+        confirming.set(Some(asking("src/other.rs", &second)));
+        settle(&mut test);
+        assert!(
+            texts(&test)
+                .iter()
+                .any(|t| t == &discard_of("src/other.rs").prompt()),
+            "{:?}",
+            texts(&test)
+        );
+        click_label(&mut test, "Discard Changes in 1 File");
+        assert!(
+            first.borrow().is_empty(),
+            "the replaced confirmation got a token"
+        );
+        assert_eq!(second.borrow().len(), 1, "the confirmation drawn got none");
+        assert_eq!(
+            second.borrow()[0].prompt(),
+            discard_of("src/other.rs").prompt(),
+            "the token names what was drawn"
+        );
+    }
+
+    /// QA P2, R7.4: a confirmation opened by the previous one's answer — its continuation asks
+    /// for the next — answers afresh: Escape dismisses it, and so does Cancel, pressed twice
+    /// harmlessly; confirming builds exactly one token for it. Caught by: an answered flag that
+    /// outlives the confirmation it guarded, leaving the next one deaf while the window's chords
+    /// are inert — the window stuck.
+    #[test]
+    fn a_confirmation_opened_by_the_last_ones_answer_answers_afresh() {
+        let (mut test, view, _) = launch((0..10).map(row).collect(), received(10, true));
+        let (first, second) = (
+            Rc::<RefCell<Vec<cairn_model::Confirmed>>>::default(),
+            Rc::<RefCell<Vec<cairn_model::Confirmed>>>::default(),
+        );
+        let mut confirming = view.confirming;
+        let next = Rc::new(RefCell::new(Some(asking("src/other.rs", &second))));
+        let opener = view.confirming;
+        let chain = move |first: &Rc<RefCell<Vec<cairn_model::Confirmed>>>,
+                          next: &Rc<RefCell<Option<Confirming>>>| {
+            let (first, next) = (first.clone(), next.clone());
+            Confirming::new("Discard changes", discard_of("src/lib.rs"), move |token| {
+                first.borrow_mut().push(token);
+                let mut confirming = opener;
+                if let Some(next) = next.borrow_mut().take() {
+                    confirming.set(Some(next));
+                }
+            })
+        };
+
+        // Escape dismisses the second.
+        confirming.set(Some(chain(&first, &next)));
+        settle(&mut test);
+        click_label(&mut test, "Discard Changes in 1 File");
+        settle(&mut test);
+        assert_eq!(first.borrow().len(), 1);
+        assert!(
+            view.confirming.peek().is_some(),
+            "the next confirmation did not open"
+        );
+        test.press_key(Key::Named(NamedKey::Escape));
+        settle(&mut test);
+        assert!(view.confirming.peek().is_none(), "Escape did nothing");
+
+        // Cancel dismisses the second, and a second press of it is harmless.
+        *next.borrow_mut() = Some(asking("src/other.rs", &second));
+        confirming.set(Some(chain(&first, &next)));
+        settle(&mut test);
+        click_label(&mut test, "Discard Changes in 1 File");
+        settle(&mut test);
+        assert!(view.confirming.peek().is_some());
+        let cancel = test
+            .find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == cairn_ui::CANCEL_CAPTION)
+                    .map(|_| node.layout().area.center())
+            })
+            .unwrap_or_else(|| panic!("no Cancel"));
+        let at = (f64::from(cancel.x), f64::from(cancel.y));
+        test.click_cursor(at);
+        settle(&mut test);
+        assert!(view.confirming.peek().is_none(), "Cancel did nothing");
+        test.click_cursor(at);
+        settle(&mut test);
+
+        // Confirming the second builds exactly one token, for the second.
+        *next.borrow_mut() = Some(asking("src/other.rs", &second));
+        confirming.set(Some(chain(&first, &next)));
+        settle(&mut test);
+        click_label(&mut test, "Discard Changes in 1 File");
+        settle(&mut test);
+        click_label(&mut test, "Discard Changes in 1 File");
+        settle(&mut test);
+        assert!(view.confirming.peek().is_none(), "the second did not close");
+        assert_eq!(
+            second.borrow().len(),
+            1,
+            "the second built {} tokens",
+            second.borrow().len()
+        );
+        assert_eq!(
+            second.borrow()[0].prompt(),
+            discard_of("src/other.rs").prompt()
+        );
+        assert_eq!(first.borrow().len(), 3);
     }
 
     /// C17, R7.4 through the window: while a confirmation is open the window's chords do

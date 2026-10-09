@@ -293,8 +293,10 @@ literally.
   the pinned rule is amended to say so; nowhere else is a bare chord other than a
   function key.
 - R7.3 New actions, each with Fork's chords per platform (Linux as Fork for
-  Windows) and heard in its own scope only, so no chord but commit's fires while
-  the commit box holds focus: in Local Changes' list-and-diff scope, stage/unstage
+  Windows) and heard in its own scope only, so no list or staging chord fires while
+  the commit box has focus; the window's chords still do, as from the filter fields
+  (amended 2026-10-09, the user's decision on phase 06's QA item 13: it read "no chord
+  but commit's fires"): in Local Changes' list-and-diff scope, stage/unstage
   the selection (Return or ⌘S; Enter or Ctrl+Shift+S), stage all / unstage all
   (⌥⇧⌘S; Ctrl+Alt+Shift+S) and discard the selection (⌫ or ⇧⌘D; Backspace, Delete
   or Ctrl+Shift+D); in the commit box, commit (⌘Return; Ctrl+Enter); in the

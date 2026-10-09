@@ -8,6 +8,7 @@ use cairn_model::{
     ChangeSet, ChangeStatus, ChangedFile, CommitDetails, FileMode, Oid, RenameDetection, RepoPath,
     Signature, Timestamp,
 };
+use cairn_ui::accelerators::{self, Action, Os};
 use cairn_ui::{
     ChangesList, ChangesSummary, DETAIL_ROW_HEIGHT, DIFF_HEADER_HEIGHT, FILTER_PLACEHOLDER,
     FILTERING, NO_FILE_MATCHES, SCROLLBAR_THICKNESS, SUMMARY_HEIGHT, ShownFiles, summary_parts,
@@ -196,6 +197,34 @@ fn the_arrows_move_through_the_files_the_list_shows() {
         test.sync_and_update();
     }
     assert_eq!(chosen.borrow().as_slice(), [7, 20, 20, 7, 3, 3]);
+}
+
+/// QA item 14, the user's decision (2026-10-09): Shift+↓ and Shift+↑ — Local Changes' list
+/// extension, a scope this list is not in — move through the files as ↓ and ↑ do. Caught by:
+/// a list that leaves alone every scope's chords.
+#[test]
+fn another_views_chord_is_the_file_lists_arrow() {
+    let (mut test, _, chosen) = launch(change_set(40), ShownFiles::Filtered(vec![3, 7, 20]));
+    let centre = test
+        .find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == file(7).new_path.display())
+                .map(|_| node.layout().area.center())
+        })
+        .expect("file 7 is shown");
+    test.click_cursor((f64::from(centre.x), f64::from(centre.y)));
+    test.sync_and_update();
+    for action in [
+        Action::ExtendSelectionDown,
+        Action::ExtendSelectionUp,
+        Action::ExtendSelectionUp,
+    ] {
+        let chord = accelerators::chords(action, Os::current()).first().unwrap();
+        let (key, _, held) = chord.key_press().unwrap();
+        test.press_key_with_modifiers(key, held);
+        test.sync_and_update();
+    }
+    assert_eq!(chosen.borrow().as_slice(), [7, 20, 7, 3]);
 }
 
 /// The filter field is the list's, and what is typed is the filter's text — the caller's to

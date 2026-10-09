@@ -277,7 +277,7 @@ fn keyboard(
     mut controller: ScrollController,
 ) -> impl FnMut(Event<KeyboardEventData>) + 'static {
     move |e: Event<KeyboardEventData>| {
-        if accelerators::is_chord(&e) {
+        if accelerators::is_chord(&e, &[]) {
             return;
         }
         let shown = shown.peek();

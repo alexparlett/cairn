@@ -1699,6 +1699,123 @@ fn runner_violations(path: &Path, source: &str) -> Vec<String> {
 /// fails if any of that visibility is widened, which would compile quietly. Over `cairn-git`
 /// alone, because the runner's names are crate-private: another crate cannot name them, which
 /// the visibility pins below keep true.
+/// Where a pin must sit to run: `function` declared once in `code` (comments and strings
+/// blanked), directly inside exactly one module, that module's attributes exactly
+/// `#[cfg(test)]` — no `cfg(any())` beside it, no nested module between it and the pin, no
+/// `impl` or function around the pin — the pin's own attributes exactly `own`, and its body
+/// still holding each of `required`. A pin compiled away, nested out of reach or emptied
+/// decides nothing while it still reads as there.
+fn pin_placement_violations(
+    code: &str,
+    file: &str,
+    function: &str,
+    own: &str,
+    required: &[&str],
+) -> Vec<String> {
+    let squeezed = |text: &str| {
+        text.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+    };
+    let declaration = format!("fn {function}(");
+    let found: Vec<usize> = code
+        .match_indices(&declaration)
+        .map(|(at, _)| at)
+        .filter(|at| {
+            code[..*at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+        })
+        .collect();
+    let [at] = found[..] else {
+        return vec![format!(
+            "{file} declares `{function}` {} times; its pin must be declared once",
+            found.len()
+        )];
+    };
+    let mut violations = Vec::new();
+    let since = |end: usize| code[..end].rfind(['}', ';', '{']).map_or(0, |b| b + 1);
+    let attributes = squeezed(&code[since(at)..at]);
+    if attributes != squeezed(own) {
+        violations.push(format!(
+            "{file} gives `{function}` the attributes `{attributes}`, where only `{own}` lets              it run"
+        ));
+    }
+    // Every block the pin sits in, outermost first, by matching braces.
+    let bytes = code.as_bytes();
+    let mut open = Vec::new();
+    for (i, b) in bytes.iter().enumerate().take(at) {
+        match b {
+            b'{' => open.push(i),
+            b'}' => {
+                open.pop();
+            }
+            _ => {}
+        }
+    }
+    let headed_module = |brace: usize| {
+        let head = code[since(brace)..brace].trim();
+        let words: Vec<&str> = head.split_whitespace().collect();
+        let mod_at = words.iter().rposition(|w| *w == "mod");
+        mod_at.map(|n| (n, words.len()))
+    };
+    match open[..] {
+        [brace] if headed_module(brace).is_some_and(|(n, len)| n + 2 == len) => {
+            let head = &code[since(brace)..brace];
+            let module_attributes = squeezed(&head[..head.rfind("mod").unwrap_or(0)]);
+            if module_attributes != "#[cfg(test)]" {
+                violations.push(format!(
+                    "{file} puts `{function}` in a module whose attributes are                      `{module_attributes}`, not exactly `#[cfg(test)]`: a module compiled away                      takes the pin with it"
+                ));
+            }
+        }
+        _ => violations.push(format!(
+            "{file} puts `{function}` inside {} blocks; the pin must sit directly in the one              `#[cfg(test)]` module, never in a nested module, an `impl` or a function, where a              `cfg` could take it away unseen",
+            open.len()
+        )),
+    }
+    // The pin's body, by matching braces from its own.
+    let body = code[at..].find('{').map(|start| {
+        let start = at + start;
+        let mut depth = 0usize;
+        let mut end = start;
+        for (i, b) in bytes.iter().enumerate().skip(start) {
+            match b {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        &code[start..=end]
+    });
+    for line in required {
+        if !body.is_some_and(|body| squeezed(body).contains(&squeezed(line))) {
+            violations.push(format!(
+                "{file}'s pin `{function}` no longer reads `{line}`: an emptied pin decides nothing"
+            ));
+        }
+    }
+    violations
+}
+
+/// What the accelerator table's pin must still do, as code: check the table, and show the rule
+/// failing on each shape it refuses.
+const ACCELERATOR_PIN_BODY: &[&str] = &[
+    "pin_violations(&rows)",
+    "pin_violations(&moved)",
+    "pin_violations(&letter)",
+    "pin_violations(&press)",
+    "pin_violations(&twice)",
+    "pin_violations(&shared)",
+];
+
 /// What R4.8 rests on, in `process/runner.rs` and `process/cli.rs`: the bounded-output
 /// helpers declared once each, inside `impl Invocation<Read>`; the ceiling `drive` takes typed
 /// by the invocation's kind, a write's ceiling type `Infallible`, so no generic helper can hand a
@@ -1767,31 +1884,32 @@ fn bounded_helper_violations(runner: &str, cli: &str) -> Vec<String> {
             ][..],
         ),
     ] {
-        let declaration = format!("fn {function}(");
-        let Some(at) = runner_code.find(&declaration) else {
+        if !runner_code.contains(&format!("fn {function}(")) {
             found.push(format!(
                 "runner.rs lost `{function}`, the pin that stops compiling when a \
                  bounded-output helper is given to a write"
             ));
             continue;
+        }
+        // Where it sits and what it holds: one `#[cfg(test)]` module, nothing between, its
+        // own attributes exactly what lets it run, and its calls still in its body.
+        let own = if function == "helpers_by_kind" {
+            ""
+        } else {
+            "#[test]"
         };
-        // The attributes on it: everything since the item before it ended.
-        let since = runner_code[..at].rfind(['}', ';']).map_or(0, |end| end + 1);
-        let attributes: String = runner_code[since..at]
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect();
-        if attributes.contains("#[cfg") || attributes.contains("#[ignore") {
-            found.push(format!(
-                "runner.rs puts `{function}` under a `cfg` or `ignore`: a pin compiled away \
-                 decides nothing"
-            ));
-        }
-        for line in lines {
-            if !runner_code.contains(line) {
-                found.push(format!("runner.rs's pin no longer reads `{line}`"));
-            }
-        }
+        let required: Vec<&str> = if function == "helpers_by_kind" {
+            lines.to_vec()
+        } else {
+            vec!["helpers_by_kind"]
+        };
+        found.extend(pin_placement_violations(
+            &runner_code,
+            "runner.rs",
+            function,
+            own,
+            &required,
+        ));
     }
     found
 }
@@ -1857,6 +1975,21 @@ fn the_bounded_output_helper_check_catches_the_shapes_it_claims() {
             "the pin renamed",
             "fn the_bounded_output_helpers_exist_on_a_read_alone()",
             "fn some_other_test()",
+        ),
+        (
+            "the test module compiled away beside cfg(test)",
+            "#[cfg(test)]\nmod tests {",
+            "#[cfg(test)]\n#[cfg(any())]\nmod tests {",
+        ),
+        (
+            "the pin nested in a module compiled away",
+            "    #[test]\n    fn the_bounded_output_helpers_exist_on_a_read_alone()",
+            "    #[cfg(any())]\n    mod out_of_reach {\n    #[test]\n    fn the_bounded_output_helpers_exist_on_a_read_alone()",
+        ),
+        (
+            "the pin no longer naming the pinned function",
+            "            helpers_by_kind;\n",
+            "            |_, _, _, _| {};\n",
         ),
     ];
     for (shape, from, to) in runner_shapes {
@@ -4441,22 +4574,92 @@ fn the_accelerator_table_holds_data_and_resolution_only() {
         !code.contains("pub fn chord("),
         "{ACCELERATOR_TABLE} answers a single chord again; Fork's alternates need the list"
     );
-    let pin = format!("fn {ACCELERATOR_PIN}()");
-    let at = code
-        .find(&pin)
-        .unwrap_or_else(|| panic!("{ACCELERATOR_TABLE} lost its pin `{ACCELERATOR_PIN}`"));
-    let attributes: Vec<&str> = code[..at]
-        .lines()
-        .rev()
-        .skip(1)
-        .take_while(|line| line.trim_start().starts_with("#["))
-        .map(str::trim)
-        .collect();
-    assert!(
-        attributes == ["#[test]"],
-        "`{ACCELERATOR_PIN}` must be a plain `#[test]`, never ignored or compiled out: \
-         {attributes:?}"
+    let placed = pin_placement_violations(
+        &code,
+        ACCELERATOR_TABLE,
+        ACCELERATOR_PIN,
+        "#[test]",
+        ACCELERATOR_PIN_BODY,
     );
+    assert!(
+        placed.is_empty(),
+        "the accelerator table's pin no longer runs as it must: {placed:?}"
+    );
+}
+
+/// The pin-placement check over the table's real pin, and over each way of putting it out of
+/// reach: the module compiled away beside `#[cfg(test)]`, the pin nested in a module of its
+/// own under `cfg(any())`, the pin ignored, its body emptied, a rule example dropped, the pin
+/// moved into an `impl`, and the pin renamed.
+#[test]
+fn the_pin_placement_check_catches_the_shapes_it_claims() {
+    let (_, table) = rust_sources("crates/cairn-ui/src")
+        .into_iter()
+        .find(|(path, _)| path == Path::new(ACCELERATOR_TABLE))
+        .unwrap_or_else(|| panic!("{ACCELERATOR_TABLE} does not exist"));
+    let check = |source: &str| {
+        pin_placement_violations(
+            &code_without_strings(source),
+            ACCELERATOR_TABLE,
+            ACCELERATOR_PIN,
+            "#[test]",
+            ACCELERATOR_PIN_BODY,
+        )
+    };
+    assert_eq!(check(&table), Vec::<String>::new());
+    let pin = format!("    #[test]\n    fn {ACCELERATOR_PIN}() {{");
+    assert!(table.contains(&pin), "the pin fixture no longer applies");
+    let module = "#[cfg(test)]\nmod tests {";
+    assert!(
+        table.contains(module),
+        "the module fixture no longer applies"
+    );
+    // Built at run time so the debris hook, which reads added lines, does not take the fixtures
+    // for tests left ignored.
+    let ignored = format!(
+        "    #[test]\n    #[{}]\n    fn {ACCELERATOR_PIN}() {{",
+        "ignore"
+    );
+    let nested = format!("    #[cfg(any())]\n    mod out_of_reach {{\n    use super::*;\n{pin}");
+    let emptied = {
+        let at = table.find(&pin).unwrap_or_default() + pin.len();
+        let end = at + table[at..].find("\n    }\n").unwrap_or_default();
+        format!("{}\n{}", &table[..at], &table[end..])
+    };
+    let shapes: Vec<(&str, String)> = vec![
+        (
+            "the module compiled away beside cfg(test)",
+            table.replacen(module, "#[cfg(test)]\n#[cfg(any())]\nmod tests {", 1),
+        ),
+        (
+            "the module made something other than a test module",
+            table.replacen(module, "#[cfg(not(test))]\nmod tests {", 1),
+        ),
+        ("the pin ignored", table.replacen(&pin, &ignored, 1)),
+        (
+            "the pin nested in a module compiled away",
+            format!("{}\n    }}", table.replacen(&pin, &nested, 1)),
+        ),
+        ("the pin's body emptied", emptied),
+        (
+            "a rule example dropped",
+            table.replacen("pin_violations(&twice)", "Vec::<String>::new()", 1),
+        ),
+        (
+            "the pin moved into an impl",
+            table.replacen(&pin, &format!("    impl Row {{\n{pin}"), 1),
+        ),
+        (
+            "the pin renamed",
+            table.replacen(&format!("fn {ACCELERATOR_PIN}("), "fn another_test(", 1),
+        ),
+    ];
+    for (shape, changed) in shapes {
+        assert!(
+            !check(&changed).is_empty(),
+            "the pin-placement check missed {shape}"
+        );
+    }
 }
 
 /// The accelerator table's pin (staging-and-commit R7.2): no chord listed twice on a platform,
@@ -4516,10 +4719,21 @@ const TEXT_FIELD_POLICY: &str = "crates/cairn-ui/src/text_field.rs";
 /// built anywhere else — Freya's `Input` named, or its key handler swapped — would claim every
 /// key again, hiding F5 and the held ⌘ or Ctrl from the window (the hole
 /// `docs/research/staging-and-commit/freya-ui-apis.md` §2 found in every filter field).
+/// What the one key policy must be seen naming, so a blind matcher fails: the field it builds
+/// and the handler it installs.
+const TEXT_FIELD_POLICY_NAMES: &[&str] = &["Input", "on_pre_key_down"];
+
+/// Render files allowed one name of [`TEXT_FIELD_IDENTS`](cairn_guards::TEXT_FIELD_IDENTS)
+/// that builds no field, each row required to still name it: the accelerator table reads the
+/// toolkit editor's own bindings (`freya::text_edit::EditBindings`) to know which
+/// primary+letter presses a field keeps.
+const TEXT_FIELD_EXCEPTIONS: &[(&str, &str)] = &[(ACCELERATOR_TABLE, "text_edit")];
+
 #[test]
 fn every_text_field_takes_the_shared_key_policy() {
     let policy = Path::new(TEXT_FIELD_POLICY);
     let mut policy_seen = false;
+    let mut exceptions_seen = BTreeSet::new();
     for dir in RENDER_SOURCE_DIRS {
         let mut scanned = 0usize;
         for (path, source) in rust_sources(dir) {
@@ -4529,27 +4743,38 @@ fn every_text_field_takes_the_shared_key_policy() {
                 policy_seen = true;
                 // The policy must be seen building the field and installing its handler, or
                 // the matcher reads nothing anywhere.
-                for ident in cairn_guards::TEXT_FIELD_IDENTS {
+                for ident in TEXT_FIELD_POLICY_NAMES {
                     assert!(
-                        !mentions_crate(
-                            &code_without_test_modules(&code_without_strings(&source)),
-                            ident
-                        )
-                        .is_empty(),
+                        hits.iter().any(|(_, named)| named == ident),
                         "{TEXT_FIELD_POLICY} does not name `{ident}`. Either the policy moved — \
                          move this guard with it — or the matcher has gone blind."
                     );
                 }
                 continue;
             }
+            let excused: Vec<&str> = TEXT_FIELD_EXCEPTIONS
+                .iter()
+                .filter(|(file, _)| Path::new(file) == path)
+                .map(|(_, ident)| *ident)
+                .collect();
+            for (_, ident) in &hits {
+                if excused.contains(ident) {
+                    exceptions_seen.insert((path.clone(), *ident));
+                }
+            }
+            let unexcused: Vec<&(usize, &str)> = hits
+                .iter()
+                .filter(|(_, ident)| !excused.contains(ident))
+                .collect();
             assert!(
-                hits.is_empty(),
-                "{}:{} builds a text field, or swaps its key handler, outside the one key policy. \
-                 Build it with `cairn_ui::text_field` or `text_field_in` ({TEXT_FIELD_POLICY}), \
-                 which hand the window's chords and held keys on (CLAUDE.md, Invariants; \
-                 staging-and-commit R7.1).",
+                unexcused.is_empty(),
+                "{}:{} names `{}`, building a text field or swapping its key handler outside the \
+                 one key policy. Build it with `cairn_ui::text_field` or `text_field_in` \
+                 ({TEXT_FIELD_POLICY}), which hand the window's chords and held keys on \
+                 (CLAUDE.md, Invariants; staging-and-commit R7.1).",
                 path.display(),
-                hits[0]
+                unexcused[0].0,
+                unexcused[0].1
             );
         }
         assert!(
@@ -4561,25 +4786,75 @@ fn every_text_field_takes_the_shared_key_policy() {
         policy_seen,
         "{TEXT_FIELD_POLICY} does not exist, so the guard exempts a file nobody can see"
     );
+    for (file, ident) in TEXT_FIELD_EXCEPTIONS {
+        assert!(
+            exceptions_seen.contains(&(Path::new(file).to_path_buf(), *ident)),
+            "TEXT_FIELD_EXCEPTIONS excuses `{ident}` in {file}, which no longer names it: remove \
+             the row"
+        );
+    }
 }
 
 #[test]
 fn the_text_field_matcher_catches_the_shapes_it_claims() {
-    for (shape, source) in [
-        ("the constructor", "let field = Input::new(value);"),
-        ("spaced", "let field = Input :: new(value);"),
-        ("an aliased import", "use freya::prelude::Input as Field;"),
-        ("a type alias", "type Field = Input;"),
-        ("the default handler", "Input::key_down_default(e)"),
-        ("a swapped handler", "field.on_pre_key_down(keys)"),
+    for (shape, source, ident) in [
+        ("the constructor", "let field = Input::new(value);", "Input"),
+        ("spaced", "let field = Input :: new(value);", "Input"),
+        (
+            "an aliased import",
+            "use freya::prelude::Input as Field;",
+            "Input",
+        ),
+        ("a type alias", "type Field = Input;", "Input"),
+        ("the default handler", "Input::key_down_default(e)", "Input"),
+        (
+            "a swapped handler",
+            "field.on_pre_key_down(keys)",
+            "on_pre_key_down",
+        ),
         (
             "wrapped",
             "field\n    .on_pre_key_down(\n        keys,\n    )",
+            "on_pre_key_down",
         ),
+        (
+            "the editor hook",
+            "let editable = use_editable(content, config);",
+            "use_editable",
+        ),
+        (
+            "the editor's handle",
+            "fn draw(editable: UseEditable) {}",
+            "UseEditable",
+        ),
+        (
+            "the editor's configuration",
+            "let config = EditableConfig::new();",
+            "EditableConfig",
+        ),
+        (
+            "the editor's module",
+            "use freya::text_edit::*;",
+            "text_edit",
+        ),
+        (
+            "selectable text",
+            "SelectableText::new(value)",
+            "SelectableText",
+        ),
+        ("the code editor", "CodeEditor::new(data)", "CodeEditor"),
     ] {
         assert!(
-            !builds_a_text_field(source).is_empty(),
+            builds_a_text_field(source)
+                .iter()
+                .any(|(_, named)| *named == ident),
             "the text-field matcher missed {shape}: {source:?}"
+        );
+    }
+    for ident in cairn_guards::TEXT_FIELD_IDENTS {
+        assert!(
+            !builds_a_text_field(&format!("let x = {ident};")).is_empty(),
+            "`{ident}` is on the roster but the matcher does not read it"
         );
     }
     for (shape, source) in [
@@ -4589,13 +4864,17 @@ fn the_text_field_matcher_catches_the_shapes_it_claims() {
         ("a string", "const WHAT: &str = \"Input::new\";"),
         ("a longer name", "let inputs = my_input();"),
         (
+            "a longer editor name",
+            "let editable_area = use_editable_thing();",
+        ),
+        (
             "a test module",
-            "#[cfg(test)]\nmod tests {\n    fn f() { Input::new(v); }\n}",
+            "#[cfg(test)]\nmod tests {\n    fn f() { Input::new(v); use_editable(c, k); }\n}",
         ),
     ] {
         assert_eq!(
             builds_a_text_field(source),
-            Vec::<usize>::new(),
+            Vec::<(usize, &str)>::new(),
             "the text-field matcher fired on {shape}: {source:?}"
         );
     }
@@ -4915,6 +5194,43 @@ const TOKEN_CALLBACKS: &[&str] = &[
     "dyn FnMut(Confirmed)",
     "dyn FnOnce(Confirmed)",
 ];
+
+/// The names [`TOKEN_CALLBACKS`] trusts to mean the toolkit's handler and the language's
+/// closure traits.
+const TOKEN_CALLBACK_NAMES: &[&str] = &["EventHandler", "Fn", "FnMut", "FnOnce"];
+
+/// What would make a [`TOKEN_CALLBACKS`] spelling mean something else: a type, trait or alias
+/// declared under one of [`TOKEN_CALLBACK_NAMES`], or another item imported as one — so an
+/// `EventHandler<Confirmed>` that keeps its token cannot pass for the toolkit's handler.
+fn token_callback_shadow_violations(files: &[(&Path, &str)]) -> Vec<String> {
+    let mut found = Vec::new();
+    for (path, code) in files {
+        let words: Vec<(usize, &str)> = code
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .scan(0usize, |offset, word| {
+                let at = *offset;
+                *offset += word.len() + 1;
+                Some((at, word))
+            })
+            .filter(|(_, word)| !word.is_empty())
+            .collect();
+        for pair in words.windows(2) {
+            let [(at, first), (_, second)] = pair else {
+                continue;
+            };
+            let declares = ["struct", "enum", "union", "type", "trait", "as"].contains(first);
+            if declares && TOKEN_CALLBACK_NAMES.contains(second) {
+                let line = code[..*at].matches('\n').count() + 1;
+                found.push(format!(
+                    "{}:{line} `{first} {second}`: a callback name the token-holder check trusts \
+                     is given to something else",
+                    path.display()
+                ));
+            }
+        }
+    }
+    found
+}
 
 /// `body` with every [`TOKEN_CALLBACKS`] spelling blanked, where it starts a word.
 fn without_token_callbacks(body: &str) -> String {
@@ -5268,6 +5584,11 @@ fn destructive_operations_are_sealed_behind_the_confirmation_token() {
     );
     let found = confirmed_holder_violations(&production, CONFIRMED_HOLDERS);
     assert!(found.is_empty(), "a type keeps a token: {found:?}");
+    let found = token_callback_shadow_violations(&production);
+    assert!(
+        found.is_empty(),
+        "a name the token-holder check trusts is shadowed: {found:?}"
+    );
 
     for render in RENDER_SOURCE_DIRS {
         assert!(
@@ -5685,6 +6006,46 @@ fn the_confirmation_seal_matchers_catch_the_shapes_they_claim() {
         !confirmed_holder_violations(&[], &[pending.as_str()]).is_empty(),
         "a listed holder that does not exist was not refused"
     );
+    // The names the exemption trusts cannot be given to anything else in production code.
+    for (shape, source) in [
+        (
+            "a local handler",
+            "pub struct EventHandler<T> {\n    kept: Option<T>,\n}",
+        ),
+        ("an aliased one", "type EventHandler<T> = Vec<T>;"),
+        (
+            "an import renamed to it",
+            "use crate::keeper::Keeper as EventHandler;",
+        ),
+        ("a trait named for a closure", "pub trait FnOnce<T> {}"),
+        (
+            "an import renamed to a closure",
+            "use crate::keeper::Keeper as Fn;",
+        ),
+    ] {
+        assert_eq!(
+            token_callback_shadow_violations(&[(Path::new(&pending), source)]).len(),
+            1,
+            "the shadow check missed {shape}"
+        );
+    }
+    for (shape, source) in [
+        (
+            "the toolkit's handler imported",
+            "use freya::prelude::EventHandler;\nstruct D { on: EventHandler<Confirmed> }",
+        ),
+        (
+            "a closure bound",
+            "fn f(then: impl Fn(Confirmed) + 'static) {}",
+        ),
+        ("a longer name", "struct EventHandlerSet;"),
+    ] {
+        assert_eq!(
+            token_callback_shadow_violations(&[(Path::new(&pending), source)]),
+            Vec::<String>::new(),
+            "the shadow check fired on {shape}"
+        );
+    }
     // A callback handed a token to spend keeps none; any other shape of one still holds it.
     for (shape, source) in [
         (

@@ -28,9 +28,14 @@ pub const MOST_PER_TICK: f32 = 32.0;
 
 /// How far one tick scrolls for a pointer at `y` over a list whose viewport spans `top` to
 /// `bottom`: negative toward the list's start, positive toward its end, zero away from both
-/// edges. It grows with how near the edge — then how far past it — the pointer is, up to
+/// edges and for a viewport with no height. It grows with how near the edge — then how far past it — the pointer is, up to
 /// [`MOST_PER_TICK`].
 pub fn edge_step(y: f32, top: f32, bottom: f32) -> f32 {
+    // A viewport not yet laid out (`(0, 0)` before the list's first size), collapsed or
+    // inverted has no edges: nothing scrolls.
+    if bottom <= top {
+        return 0.0;
+    }
     // A viewport too short for two bands scrolls toward whichever edge is nearer.
     let band = EDGE_BAND.min((bottom - top) / 2.0).max(0.0);
     let pace = |depth: f32| ((depth + 1.0) * MOST_PER_TICK / (2.0 * EDGE_BAND + 1.0)).max(1.0);

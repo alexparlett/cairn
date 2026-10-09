@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use cairn_ui::accelerators::{self, Action, HeldKeys, Os, Scope};
+use cairn_ui::accelerators::{self, Action, FieldScope, HeldKeys, Os, Scope};
 use cairn_ui::{text_field, text_field_in};
 use freya::prelude::*;
 use freya_testing::TestingRunner;
@@ -20,8 +20,12 @@ const HEIGHT: f32 = 400.;
 struct Heard {
     /// The window's actions, resolved by a global listener as the window's root resolves them.
     window: Rc<RefCell<Vec<Action>>>,
-    /// Local Changes' actions, resolved by the view around the field, as a list or a pane
-    /// around a field would resolve them.
+    /// Every key the window's global listener heard, raw: a key the field claims never reaches
+    /// it.
+    raw: Rc<RefCell<Vec<Key>>>,
+    /// Every action, in every scope, resolved by the view around the field — as a list, a pane
+    /// or the window's root around a field would resolve them, the window's own chords
+    /// included: a key the field keeps or hands to the window never bubbles to it.
     around: Rc<RefCell<Vec<Action>>>,
     /// The field's own actions.
     own: Rc<RefCell<Vec<Action>>>,
@@ -40,13 +44,14 @@ fn launch(commit_box: bool) -> (TestingRunner, Heard, State<String>) {
                 let value = use_consume::<State<String>>();
                 let Heard {
                     window,
+                    raw,
                     around,
                     own,
                     held,
                 } = heard.clone();
                 let holding = held.clone();
                 let field = if commit_box {
-                    text_field_in(value, Scope::CommitBox, move |action: Action| {
+                    text_field_in(value, FieldScope::CommitBox, move |action: Action| {
                         own.borrow_mut().push(action)
                     })
                     .multiline(true)
@@ -58,6 +63,7 @@ fn launch(commit_box: bool) -> (TestingRunner, Heard, State<String>) {
                     .expanded()
                     .on_global_key_down(move |e: Event<KeyboardEventData>| {
                         held.borrow_mut().heard(&e, true);
+                        raw.borrow_mut().push(e.key.clone());
                         if let Some(action) = accelerators::resolve_key(&e, Scope::Window) {
                             window.borrow_mut().push(action);
                         }
@@ -69,9 +75,10 @@ fn launch(commit_box: bool) -> (TestingRunner, Heard, State<String>) {
                         rect()
                             .expanded()
                             .on_key_down(move |e: Event<KeyboardEventData>| {
-                                if let Some(action) =
-                                    accelerators::resolve_key(&e, Scope::LocalChanges)
-                                {
+                                let heard = Scope::ALL
+                                    .into_iter()
+                                    .find_map(|scope| accelerators::resolve_key(&e, scope));
+                                if let Some(action) = heard {
                                     around.borrow_mut().push(action);
                                 }
                             })
@@ -115,7 +122,9 @@ fn key_down(test: &mut TestingRunner, key: Key, code: Code, modifiers: Modifiers
 /// C15, R7.1: with a filter focused, the window's chord reaches the window untyped, and the
 /// extending press's held key reaches the window's `HeldKeys`; what is typed is the field's,
 /// and Enter, Backspace and Delete never reach Local Changes' stage or discard around it.
-/// Caught by: a field that claims every key, or one that hands its keys to the views around.
+/// Caught by: a field that claims every key, one that hands its keys to the views around, or
+/// one that lets a chord it hands to the window bubble through the views between (QA
+/// mutation K).
 #[test]
 fn a_filter_hands_the_windows_chords_and_held_keys_on_and_keeps_its_own() {
     let (mut test, heard, value) = launch(false);
@@ -134,6 +143,18 @@ fn a_filter_hands_the_windows_chords_and_held_keys_on_and_keeps_its_own() {
             .all(|action| *action == Action::Refresh)
     );
     assert_eq!(value.peek().as_str(), "", "the window's chord typed");
+    // Show Lost Commits, the history list's, is no chord of the field's either.
+    for nth in 0..accelerators::chords(Action::ShowLostCommits, Os::current())
+        .iter()
+        .count()
+    {
+        press_chord(&mut test, Action::ShowLostCommits, nth);
+    }
+    assert_eq!(
+        heard.around.borrow().as_slice(),
+        [],
+        "a chord handed to the window, or kept, bubbled to the view around the field"
+    );
 
     let (key, code, modifiers) = accelerators::chords(Action::ExtendSelection, Os::current())
         .first()
@@ -164,7 +185,8 @@ fn a_filter_hands_the_windows_chords_and_held_keys_on_and_keeps_its_own() {
 /// never discards, Enter makes a new line and never stages, and the commit chord commits
 /// without a new line — claimed, so neither the view around nor the window acts on it; no
 /// staging chord is the box's. Caught by: a description whose commit chord inserts a line
-/// (Freya's multiline Enter ignores modifiers), or bare keys handed to Local Changes.
+/// (Freya's multiline Enter ignores modifiers), bare keys handed to Local Changes, or a
+/// claimed chord the window's global listener still hears (QA mutation L).
 #[test]
 fn in_the_commit_box_backspace_and_enter_edit_and_the_commit_chord_commits() {
     let (mut test, heard, value) = launch(true);
@@ -176,8 +198,14 @@ fn in_the_commit_box_backspace_and_enter_edit_and_the_commit_chord_commits() {
     test.write_text("body");
     assert_eq!(value.peek().as_str(), "subjec\nbody");
 
+    let raw_before = heard.raw.borrow().len();
     press_chord(&mut test, Action::Commit, 0);
     assert_eq!(heard.own.borrow().as_slice(), [Action::Commit]);
+    assert_eq!(
+        heard.raw.borrow().len(),
+        raw_before,
+        "the commit chord the field claimed still reached the window's global listener"
+    );
     assert_eq!(
         value.peek().as_str(),
         "subjec\nbody",

@@ -16,7 +16,7 @@
 
 use freya::prelude::*;
 
-use crate::accelerators::{self, Action, FieldKey, Scope};
+use crate::accelerators::{self, Action, FieldKey, FieldScope};
 
 /// A text field with no chord of its own, such as a filter: the window's chords pass through
 /// it, and it keeps every other key.
@@ -28,7 +28,7 @@ pub fn text_field(value: impl Into<Writable<String>>) -> Input {
 /// through `on_action` rather than typing them.
 pub fn text_field_in(
     value: impl Into<Writable<String>>,
-    own: Scope,
+    own: FieldScope,
     on_action: impl Into<EventHandler<Action>>,
 ) -> Input {
     Input::new(value).on_pre_key_down(field_keys(Some(own), Some(on_action.into())))
@@ -36,7 +36,7 @@ pub fn text_field_in(
 
 /// The pre-key handler: `true` lets the field's editor read the key.
 fn field_keys(
-    own: Option<Scope>,
+    own: Option<FieldScope>,
     on_action: Option<EventHandler<Action>>,
 ) -> Callback<Event<KeyboardEventData>, bool> {
     Callback::new(move |e: Event<KeyboardEventData>| {

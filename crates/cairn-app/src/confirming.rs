@@ -9,14 +9,21 @@
 //! builds it to the write that takes it.
 
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use cairn_model::{Confirmed, Consequence};
 
-/// A confirmation waiting on the person.
+/// The serial the next confirmation takes: each is a different dialog, however the window
+/// gets from one to the next.
+static NEXT_SERIAL: AtomicU64 = AtomicU64::new(1);
+
+/// A confirmation waiting on the person. Cheap to clone — the window reads it on every render
+/// — since its consequence, which may name every file of a large selection, is shared.
 #[derive(Clone)]
 pub struct Confirming {
-    title: String,
-    consequence: Consequence,
+    serial: u64,
+    title: Rc<str>,
+    consequence: Rc<Consequence>,
     then: Rc<dyn Fn(Confirmed)>,
 }
 
@@ -36,17 +43,23 @@ impl Confirming {
         then: impl Fn(Confirmed) + 'static,
     ) -> Self {
         Self {
-            title: title.into(),
-            consequence,
+            serial: NEXT_SERIAL.fetch_add(1, Ordering::Relaxed),
+            title: Rc::from(title.into()),
+            consequence: Rc::new(consequence),
             then: Rc::new(then),
         }
+    }
+
+    /// Which confirmation this is; no other has the same.
+    pub fn serial(&self) -> u64 {
+        self.serial
     }
 
     pub fn title(&self) -> &str {
         &self.title
     }
 
-    pub fn consequence(&self) -> &Consequence {
+    pub fn consequence(&self) -> &Rc<Consequence> {
         &self.consequence
     }
 
@@ -59,8 +72,8 @@ impl Confirming {
 impl std::fmt::Debug for Confirming {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Confirming")
+            .field("serial", &self.serial)
             .field("title", &self.title)
-            .field("consequence", &self.consequence)
             .finish_non_exhaustive()
     }
 }

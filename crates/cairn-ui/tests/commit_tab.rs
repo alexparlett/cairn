@@ -502,6 +502,19 @@ fn the_focused_file_list_moves_the_current_file_with_the_arrows() {
     );
 }
 
+/// QA item 14, the user's decision (2026-10-09): Shift+↓ and Shift+↑ — Local Changes' list
+/// extension, a scope the Commit tab is not in — move the current file as ↓ and ↑ do. Caught
+/// by: a list that leaves alone every scope's chords.
+#[test]
+fn another_views_chord_is_the_commit_tabs_arrow() {
+    let (mut test, heard) = launch_focus(change_set(5));
+    click_label(&mut test, "src/file-000001.rs");
+    press_action(&mut test, Action::ExtendSelectionDown);
+    press_action(&mut test, Action::ExtendSelectionDown);
+    press_action(&mut test, Action::ExtendSelectionUp);
+    assert_eq!(heard.files.borrow().as_slice(), [1, 2, 3, 2]);
+}
+
 /// User decision 6: previous and next change are heard only while the detail pane has
 /// focus, and pressing one moves no file; Tab moves focus into the file list and Shift-Tab
 /// out of it again, after which its arrows are not the list's. Caught by: change chords

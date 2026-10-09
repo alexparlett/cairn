@@ -355,7 +355,7 @@ fn scroll_by_key(
     mut scroll: ScrollController,
     limits: Limits,
 ) -> bool {
-    if accelerators::is_chord(e) {
+    if accelerators::is_chord(e, &[]) {
         return false;
     }
     let (x, y): (i32, i32) = scroll.into();

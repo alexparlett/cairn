@@ -303,6 +303,32 @@ fn an_accelerators_chord_does_not_move_the_selection() {
     );
 }
 
+/// QA item 14, the user's decision (2026-10-09): Shift+↓ — Local Changes' list extension,
+/// a chord of a scope the history list is not in — moves the commit selection as ↓ does, and
+/// Shift+↑ as ↑. Caught by: a list that leaves alone every scope's chords, which swallowed
+/// Shift+arrows here once Local Changes' lists had them.
+#[test]
+fn another_views_chord_is_the_history_lists_arrow() {
+    let reports = Reports::default();
+    let (mut test, _) = launch(rows(0..100), &reports);
+    press(&mut test, NamedKey::ArrowDown);
+    for (action, expected) in [
+        (Action::ExtendSelectionDown, 1),
+        (Action::ExtendSelectionDown, 2),
+        (Action::ExtendSelectionUp, 1),
+    ] {
+        let chord = accelerators::chords(action, Os::current()).first().unwrap();
+        let (key, _, held) = chord.key_press().unwrap();
+        test.press_key_with_modifiers(key, held);
+        test.sync_and_update();
+        assert_eq!(
+            reports.selected.borrow().last(),
+            Some(&RowId::Commit(oid(expected))),
+            "{action:?} did not move the commit selection as its arrow does"
+        );
+    }
+}
+
 #[test]
 fn a_click_selects_that_row_and_reports_its_identity() {
     let reports = Reports::default();

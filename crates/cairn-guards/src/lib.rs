@@ -821,19 +821,32 @@ pub fn names_an_element(source: &str) -> Vec<usize> {
 
 /// What builds a text field, or replaces the key handler a field was built with
 /// (staging-and-commit R7.1): Freya's `Input` — however it is reached, by its constructor, an
-/// import, an alias or its default key handler — and the builder method that swaps the
-/// handler. Every render file but the one key policy's (`cairn_ui::text_field`) leaves both
-/// alone, so a field that claims the window's chords cannot be written by accident.
-pub const TEXT_FIELD_IDENTS: &[&str] = &["Input", "on_pre_key_down"];
+/// import, an alias or its default key handler — the builder method that swaps the handler,
+/// and every other way the toolkit offers to edit text: the editor hook and its handle and
+/// configuration (`use_editable`, `UseEditable`, `EditableConfig`, reached through
+/// `freya::text_edit`, the module re-exporting the editor), the selectable text that runs the
+/// same editor, and the code editor. Every render file but the one key policy's
+/// (`cairn_ui::text_field`) leaves them alone, so a field that claims the window's chords
+/// cannot be written by accident.
+pub const TEXT_FIELD_IDENTS: &[&str] = &[
+    "Input",
+    "on_pre_key_down",
+    "use_editable",
+    "UseEditable",
+    "EditableConfig",
+    "text_edit",
+    "SelectableText",
+    "CodeEditor",
+];
 
-/// 1-based lines where the production code of `source` (strings, comments and test modules
-/// blanked) names one of [`TEXT_FIELD_IDENTS`].
-pub fn builds_a_text_field(source: &str) -> Vec<usize> {
+/// The 1-based lines where the production code of `source` (strings, comments and test modules
+/// blanked) names one of [`TEXT_FIELD_IDENTS`], each with the name it read.
+pub fn builds_a_text_field(source: &str) -> Vec<(usize, &'static str)> {
     let code = code_without_test_modules(&code_without_strings(source));
     let mut lines = BTreeSet::new();
     for ident in TEXT_FIELD_IDENTS {
         for offset in ident_offsets(&code, ident) {
-            lines.insert(line_at(&code, offset));
+            lines.insert((line_at(&code, offset), *ident));
         }
     }
     lines.into_iter().collect()

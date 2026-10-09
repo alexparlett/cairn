@@ -491,7 +491,7 @@ fn keyboard(
     let mut cursor = data.cursor;
     let on_file = data.content.on_file.clone();
     move |e: Event<KeyboardEventData>| {
-        if accelerators::is_chord(&e) {
+        if accelerators::is_chord(&e, &[]) {
             return;
         }
         let Some(last) = files.checked_sub(1) else {

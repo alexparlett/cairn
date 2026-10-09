@@ -95,7 +95,7 @@ fn launch(consequence: Consequence) -> (TestingRunner, Reports) {
                             .on_key_down(move |_| *behind.borrow_mut() += 1),
                     )
                     .child(
-                        ConfirmDialog::new(TITLE, consequence.clone())
+                        ConfirmDialog::new(1, TITLE, Rc::new(consequence.clone()))
                             .on_confirm(move |token: Confirmed| confirmed.borrow_mut().push(token))
                             .on_cancel(move |()| *cancelled.borrow_mut() += 1),
                     )

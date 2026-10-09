@@ -14,6 +14,8 @@
 //! dialog's (`shortcuts::act`). One acknowledgement builds one token: once answered, the
 //! dialog ignores every later press until it is closed.
 
+use std::rc::Rc;
+
 use cairn_model::{Confirmed, Consequence};
 use freya::prelude::*;
 
@@ -24,8 +26,12 @@ const DIALOG_WIDTH: f32 = 520.0;
 pub const CANCEL_CAPTION: &str = "Cancel";
 
 pub struct ConfirmDialog {
+    /// Which confirmation this is: the dialog's identity, and its key, so a different
+    /// confirmation is a new dialog — its answers, its focus on Cancel and its one token
+    /// afresh — however the window got from one to the next.
+    serial: u64,
     title: String,
-    consequence: Consequence,
+    consequence: Rc<Consequence>,
     on_confirm: EventHandler<Confirmed>,
     on_cancel: EventHandler<()>,
     key: DiffKey,
@@ -33,9 +39,10 @@ pub struct ConfirmDialog {
 
 impl ConfirmDialog {
     /// A dialog titled `title` (Fork's "Discard changes") asking whether to accept
-    /// `consequence`.
-    pub fn new(title: impl Into<String>, consequence: Consequence) -> Self {
+    /// `consequence`; `serial` names this confirmation, and must differ for every other.
+    pub fn new(serial: u64, title: impl Into<String>, consequence: Rc<Consequence>) -> Self {
         Self {
+            serial,
             title: title.into(),
             consequence,
             on_confirm: EventHandler::new(|_| {}),
@@ -57,18 +64,21 @@ impl ConfirmDialog {
     }
 }
 
-// Hand-written: `EventHandler` never compares equal, and its identity is stable.
+// By the serial alone: one confirmation is one serial, whose title, consequence and handlers
+// never change, so a window's render compares two numbers rather than every file of a
+// consequence; and a different confirmation is also a different key (`render_key`), so the
+// toolkit mounts a new dialog rather than keeping this one's handlers under its words.
 impl PartialEq for ConfirmDialog {
     fn eq(&self, other: &Self) -> bool {
-        self.title == other.title && self.consequence == other.consequence && self.key == other.key
+        self.serial == other.serial && self.key == other.key
     }
 }
 
 impl std::fmt::Debug for ConfirmDialog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ConfirmDialog")
+            .field("serial", &self.serial)
             .field("title", &self.title)
-            .field("consequence", &self.consequence)
             .finish_non_exhaustive()
     }
 }
@@ -83,6 +93,9 @@ impl Component for ConfirmDialog {
     fn render(&self) -> impl IntoElement {
         let cancel_id = use_a11y();
         let confirm_id = use_a11y();
+        // Rendered once, as the dialog mounts: a confirmation's words never change, and a
+        // consequence of many files is not rendered again on every frame.
+        let (prompt, action) = use_hook(|| (self.consequence.prompt(), self.consequence.action()));
         // Set by the first answer; every later press is ignored, so one acknowledgement is one
         // token however fast the button is pressed again.
         let answered = use_state(|| false);
@@ -114,13 +127,14 @@ impl Component for ConfirmDialog {
                 let mut answered = answered;
                 if !*answered.peek() {
                     answered.set(true);
-                    on_confirm.call(Confirmed::by_user(consequence.clone()));
+                    on_confirm.call(Confirmed::by_user((*consequence).clone()));
                 }
             }
         };
 
         let buttons = PopupButtons::new()
             .child(choice(
+                self.serial,
                 cancel_id,
                 CANCEL_CAPTION.to_owned(),
                 true,
@@ -131,8 +145,9 @@ impl Component for ConfirmDialog {
                 },
             ))
             .child(choice(
+                self.serial,
                 confirm_id,
-                self.consequence.action(),
+                action,
                 false,
                 &colours,
                 confirm,
@@ -148,25 +163,22 @@ impl Component for ConfirmDialog {
                     .a11y_role(AccessibilityRole::AlertDialog)
                     .child(PopupTitle::new(self.title.clone()))
                     .child(
-                        PopupContent::new().child(
-                            label()
-                                .text(self.consequence.prompt())
-                                .width(Size::fill())
-                                .font_size(14.),
-                        ),
+                        PopupContent::new()
+                            .child(label().text(prompt).width(Size::fill()).font_size(14.)),
                     )
                     .child(buttons),
             )
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.key.clone().or(DiffKey::U64(self.serial))
     }
 }
 
 /// One of the dialog's two answers: focusable, pressed by the pointer, Return or Space while
 /// it has focus. Not Freya's `Button`, whose focus cannot be given to it as the dialog opens.
 fn choice(
+    serial: u64,
     id: AccessibilityId,
     caption: String,
     focused_first: bool,
@@ -174,6 +186,7 @@ fn choice(
     pressed: impl Fn() + 'static,
 ) -> Element {
     ChoiceButton {
+        serial,
         id,
         caption,
         focused_first,
@@ -193,6 +206,9 @@ struct Colours {
 
 /// A button whose accessibility id the dialog owns, so it can hold focus as it opens.
 struct ChoiceButton {
+    /// The dialog's confirmation: its handler is that confirmation's, so a button of another
+    /// one never compares equal and keeps no stale handler.
+    serial: u64,
     id: AccessibilityId,
     caption: String,
     focused_first: bool,
@@ -202,7 +218,8 @@ struct ChoiceButton {
 
 impl PartialEq for ChoiceButton {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
+        self.serial == other.serial
+            && self.id == other.id
             && self.caption == other.caption
             && self.focused_first == other.focused_first
             && self.colours == other.colours

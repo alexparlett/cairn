@@ -123,8 +123,10 @@ pub enum Scope {
     LocalChanges,
     /// Only while Local Changes' Unstaged or Staged list has focus.
     LocalChangesLists,
-    /// Only while the commit box's subject or description has focus: no chord but commit's
-    /// is heard there, so Backspace deletes a character and Enter makes a new line.
+    /// Only while the commit box's subject or description has focus: commit's chord is heard
+    /// there, and no list or staging chord fires — Backspace deletes a character and Enter
+    /// makes a new line — while the window's chords still do, as from any field (R7.3, as
+    /// amended by the user on 2026-10-09).
     CommitBox,
     /// Only while the history list has focus.
     History,
@@ -140,6 +142,28 @@ impl Scope {
         Scope::CommitBox,
         Scope::History,
     ];
+}
+
+/// The scopes a text field can be heard in as its own ([`field_key`]), each a scope whose every
+/// chord holds a modifier: a field claims its own scope's chords before typing, so a scope
+/// with a bare chord — Local Changes' Backspace — would turn a typed key into an action. One
+/// today, the commit box (`a_fields_own_scope_holds_no_bare_chord`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldScope {
+    /// The commit box's subject and description.
+    CommitBox,
+}
+
+impl FieldScope {
+    /// Every scope a field can be heard in.
+    pub const ALL: [FieldScope; 1] = [FieldScope::CommitBox];
+
+    /// The table's scope it is.
+    pub fn heard_as(self) -> Scope {
+        match self {
+            FieldScope::CommitBox => Scope::CommitBox,
+        }
+    }
 }
 
 /// The platforms whose chords differ. Every platform but macOS takes the Linux row: Linux is
@@ -379,13 +403,16 @@ pub fn resolve_key(event: &KeyboardEventData, heard: Scope) -> Option<Action> {
     )
 }
 
-/// Whether a key press is any action's chord on this platform, in any scope: what a view
-/// leaves alone rather than reading as its own key (Ctrl+↓ is "next change", never "next
-/// commit", whether or not the pane that hears it has focus).
-pub fn is_chord(event: &KeyboardEventData) -> bool {
-    Scope::ALL
-        .into_iter()
-        .any(|heard| resolve_key(event, heard).is_some())
+/// Whether a key press is a chord a view must leave alone rather than read as its own key: a
+/// chord of the window, of the detail pane — Ctrl+↓ is "next change", never "next commit",
+/// whether or not the pane that hears it has focus — or of a scope the view is in (`own`).
+/// Another view's scope is not the view's concern: Shift+↓, the extension of Local Changes'
+/// list selection, moves the history list as ↓ does.
+pub fn is_chord(event: &KeyboardEventData, own: &[Scope]) -> bool {
+    [Scope::Window, Scope::Detail]
+        .iter()
+        .chain(own)
+        .any(|heard| resolve_key(event, *heard).is_some())
 }
 
 /// The action a key press is on `platform`, if it is one heard in `heard`.
@@ -434,7 +461,7 @@ pub enum FieldKey {
 }
 
 /// [`field_key_on`] on this platform.
-pub fn field_key(event: &KeyboardEventData, own: Option<Scope>) -> FieldKey {
+pub fn field_key(event: &KeyboardEventData, own: Option<FieldScope>) -> FieldKey {
     field_key_on(Os::current(), own, &event.key, event.code, event.modifiers)
 }
 
@@ -442,12 +469,14 @@ pub fn field_key(event: &KeyboardEventData, own: Option<Scope>) -> FieldKey {
 /// filter) does with a key press on `platform`.
 pub fn field_key_on(
     platform: Os,
-    own: Option<Scope>,
+    own: Option<FieldScope>,
     key: &Key,
     code: Code,
     held: Modifiers,
 ) -> FieldKey {
-    if let Some(action) = own.and_then(|own| resolve_key_on(platform, own, key, code, held)) {
+    if let Some(action) =
+        own.and_then(|own| resolve_key_on(platform, own.heard_as(), key, code, held))
+    {
         return FieldKey::Own(action);
     }
     if resolve_key_on(platform, Scope::Window, key, code, held).is_some() {
@@ -1162,34 +1191,67 @@ mod tests {
         }
     }
 
-    /// A view asks [`is_chord`] to leave a press alone, whichever scope hears it. Caught by:
-    /// asking one scope only, which hands "next change" to the history list as "next commit".
+    /// A view asks [`is_chord`] to leave a press alone when the window, the detail pane or a
+    /// scope it is in hears it — and only then (QA item 14, the user's decision of
+    /// 2026-10-09). Caught by: asking one scope only, which hands "next change" to the history
+    /// list as "next commit"; or asking every scope, which swallows Local Changes' Shift+↓ in
+    /// every other list.
     #[test]
-    fn a_chord_of_any_scope_is_a_chord() {
+    fn a_chord_of_the_window_the_pane_or_the_views_own_scope_is_a_chord() {
         let platform = Os::current();
-        for action in [
-            Action::NextChange,
-            Action::ShowCommitTab,
-            Action::Discard,
-            Action::Commit,
-            Action::ShowLostCommits,
-            Action::ExtendSelectionDown,
-        ] {
+        let event = |action: Action| {
             let Some((key, code, held)) =
                 chords(action, platform).first().and_then(|c| c.key_press())
             else {
                 panic!("{action:?} has a key chord");
             };
+            KeyboardEventData::new(key, code, held)
+        };
+        for action in [Action::NextChange, Action::ShowCommitTab, Action::Refresh] {
+            assert!(is_chord(&event(action), &[]), "{action:?}");
+        }
+        for (action, own) in [
+            (Action::Discard, Scope::LocalChanges),
+            (Action::Commit, Scope::CommitBox),
+            (Action::ShowLostCommits, Scope::History),
+            (Action::ExtendSelectionDown, Scope::LocalChangesLists),
+        ] {
+            assert!(is_chord(&event(action), &[own]), "{action:?} in {own:?}");
             assert!(
-                is_chord(&KeyboardEventData::new(key, code, held)),
-                "{action:?}"
+                !is_chord(&event(action), &[]),
+                "{action:?} is left alone by a view outside {own:?}"
             );
         }
-        assert!(!is_chord(&KeyboardEventData::new(
-            Key::Named(NamedKey::ArrowDown),
-            Code::ArrowDown,
-            Modifiers::empty()
-        )));
+        assert!(!is_chord(
+            &KeyboardEventData::new(
+                Key::Named(NamedKey::ArrowDown),
+                Code::ArrowDown,
+                Modifiers::empty()
+            ),
+            &Scope::ALL
+        ));
+    }
+
+    /// QA item 11: a field claims its own scope's chords before it types, so no scope a field
+    /// can be heard in may hold a bare chord on any platform — or a Backspace typed there would
+    /// be Local Changes' discard. Caught by: a `FieldScope` added for a scope with a bare key.
+    #[test]
+    fn a_fields_own_scope_holds_no_bare_chord() {
+        for platform in PLATFORMS {
+            for own in FieldScope::ALL {
+                for action in Action::ALL
+                    .into_iter()
+                    .filter(|action| heard_in(*action) == own.heard_as())
+                {
+                    for chord in chords(action, platform).iter() {
+                        assert!(
+                            !chord_modifiers(chord.held).is_empty(),
+                            "{action:?}'s {chord:?} is bare in {own:?} on {platform:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// R7.1, C15: what a focused text field does with each kind of key. A window chord and a
@@ -1217,7 +1279,7 @@ mod tests {
             {
                 for chord in chords(action, platform).iter() {
                     if let Some((key, code, held)) = chord.key_press() {
-                        for own in [None, Some(Scope::CommitBox)] {
+                        for own in [None, Some(FieldScope::CommitBox)] {
                             assert_eq!(
                                 field(own, key.clone(), code, held),
                                 FieldKey::Unclaimed,
@@ -1270,7 +1332,7 @@ mod tests {
             );
             // Enter, Backspace and Delete are the field's, never Local Changes' stage or
             // discard — and the commit box's commit is its own.
-            for own in [None, Some(Scope::CommitBox)] {
+            for own in [None, Some(FieldScope::CommitBox)] {
                 for named in [NamedKey::Enter, NamedKey::Backspace, NamedKey::Delete] {
                     assert_eq!(
                         field(own, Key::Named(named), Code::Unidentified, none),
@@ -1284,7 +1346,7 @@ mod tests {
                 .and_then(|c| c.key_press())
                 .unwrap();
             assert_eq!(
-                field(Some(Scope::CommitBox), key.clone(), code, held),
+                field(Some(FieldScope::CommitBox), key.clone(), code, held),
                 FieldKey::Own(Action::Commit)
             );
             assert_eq!(
@@ -1303,7 +1365,7 @@ mod tests {
                     let (key, code, held) = chord.key_press().unwrap();
                     assert!(
                         !matches!(
-                            field(Some(Scope::CommitBox), key, code, held),
+                            field(Some(FieldScope::CommitBox), key, code, held),
                             FieldKey::Own(_)
                         ),
                         "{action:?} acts from the commit box on {platform:?}"

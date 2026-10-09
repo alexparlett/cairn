@@ -96,6 +96,22 @@ fn a_step_points_at_the_edge_the_pointer_is_at() {
     assert!(edge_step(top + 11.0, top, top + 10.0) > 0.0);
 }
 
+/// QA item 15: a viewport not yet laid out (`(0, 0)`, before the list's first `on_sized`), a
+/// collapsed one and an inverted one scroll nothing wherever the pointer is. Caught by: a band
+/// of zero that reads every pointer as past an edge.
+#[test]
+fn a_viewport_with_no_height_scrolls_nothing() {
+    for (top, bottom) in [(0.0, 0.0), (TOP, TOP), (BOTTOM, TOP)] {
+        for y in [-1_000.0, -1.0, 0.0, TOP, BOTTOM, 1_000.0] {
+            assert_eq!(
+                edge_step(y, top, bottom),
+                0.0,
+                "a pointer at {y} over a viewport {top}..{bottom} scrolled"
+            );
+        }
+    }
+}
+
 /// R7.6: a drag begun on a row and moved past the list's bottom keeps the list scrolling while
 /// the pointer stands still there — the row it began on long unmounted — and stops once the
 /// pointer is back inside; past the top it scrolls back; released, it stops. A pointer at the

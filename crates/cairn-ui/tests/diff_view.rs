@@ -120,6 +120,53 @@ fn built_rows(test: &TestingRunner) -> Vec<(String, bool)> {
     })
 }
 
+/// The first visible row's text.
+fn first_shown(test: &TestingRunner) -> String {
+    built_rows(test)
+        .into_iter()
+        .find(|(_, visible)| *visible)
+        .map(|(text, _)| text)
+        .unwrap_or_default()
+}
+
+/// QA item 14, the user's decision (2026-10-09): with the diff focused, Shift+↓ — Local
+/// Changes' list extension, a scope the diff view is not in — scrolls a row as ↓ does, and
+/// Shift+↑ back as ↑ does. Caught by: a view that leaves alone every scope's chords.
+#[test]
+fn another_views_chord_is_the_diff_views_arrow() {
+    use cairn_ui::accelerators::{self, Action, Os};
+    let shown = |test: &mut TestingRunner, action: Option<Action>, times: usize| {
+        for _ in 0..times {
+            match action {
+                Some(action) => {
+                    let chord = accelerators::chords(action, Os::current()).first().unwrap();
+                    let (key, _, held) = chord.key_press().unwrap();
+                    test.press_key_with_modifiers(key, held);
+                }
+                None => test.press_key(Key::Named(NamedKey::ArrowDown)),
+            }
+            test.sync_and_update();
+        }
+        first_shown(test)
+    };
+    let focus = |test: &mut TestingRunner| {
+        test.click_cursor((f64::from(WIDTH) / 2., f64::from(HEIGHT) / 2.));
+        test.sync_and_update();
+    };
+    let mut arrows = launch(ShownDiff::new(long_file(1_000), Context::EntireFile));
+    focus(&mut arrows);
+    let top = first_shown(&arrows);
+    let by_arrow = shown(&mut arrows, None, 5);
+    assert_ne!(by_arrow, top, "the arrow did not scroll the focused diff");
+
+    let mut chords = launch(ShownDiff::new(long_file(1_000), Context::EntireFile));
+    focus(&mut chords);
+    let by_chord = shown(&mut chords, Some(Action::ExtendSelectionDown), 5);
+    assert_eq!(by_chord, by_arrow, "Shift+↓ did not scroll as ↓ does");
+    let back = shown(&mut chords, Some(Action::ExtendSelectionUp), 5);
+    assert_eq!(back, top, "Shift+↑ did not scroll back as ↑ does");
+}
+
 /// C9 for unified rows, the twin of `only_a_viewport_of_rows_is_built_however_long_the_history`:
 /// over a 1,000-line and a 100,000-line file drawn whole, the view builds one viewport of
 /// rows at the top, scrolled deep and scrolled to the end — the same number at each — and

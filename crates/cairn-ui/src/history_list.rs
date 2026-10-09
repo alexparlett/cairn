@@ -5,7 +5,7 @@ use std::sync::Arc;
 use cairn_model::{History, HistoryRow, RefsSnapshot, RowContent, RowEdges, RowId};
 use freya::prelude::*;
 
-use crate::accelerators::{self, Action, HeldKeys};
+use crate::accelerators::{self, Action, HeldKeys, Scope};
 use crate::commit_row::label_room;
 use crate::graph_geometry::ROW_HEIGHT;
 use crate::ref_chips::{Chip, chips_of_row};
@@ -280,7 +280,7 @@ impl HistoryList {
         move |e: Event<KeyboardEventData>| {
             // A chord is an accelerator's, whoever hears it: Ctrl+↓ is "next change", not
             // "next commit", even while the pane that hears it does not have focus.
-            if accelerators::is_chord(&e) {
+            if accelerators::is_chord(&e, &[Scope::History]) {
                 return;
             }
             // Drop the read guard before calling out: a handler that reloads the list would panic.

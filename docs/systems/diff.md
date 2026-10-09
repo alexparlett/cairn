@@ -2208,8 +2208,10 @@ shows a bare Enter in any other scope, a bare letter, a bare press, a chord list
 one action and one shared by two actions each failing it).
 
 **The contract.** A component asks `accelerators::resolve_key(event, scope)` which
-action a key press is in a scope, or `accelerators::is_chord(event)` whether it is any
-action's chord in any scope, and never reads the held keys itself; the module's public
+action a key press is in a scope, or `accelerators::is_chord(event, own)` whether it is a
+chord the view must leave alone — the window's, the detail pane's, or one of a scope the
+view is in (`own`: the history list's `History`, Local Changes' lists' `LocalChanges` and
+`LocalChangesLists`) — and never reads the held keys itself; the module's public
 surface speaks actions, scopes and chords, never a modifier a caller could branch on — but
 for `Chord::key_press` and `Chord::press_hold`, which hand a chord's keys to a headless test
 so it presses a chord, or holds a pointer chord's modifier key down, through the table rather
@@ -2235,14 +2237,18 @@ hear those scopes; until a view hears a scope, its chords resolve and do nothing
 no view hears `LocalChanges`, `LocalChangesLists`, `CommitBox` or `History`, and no list
 reads the range press, so a Local Changes list does not yet toggle a path on the extending
 press. The history
-list and the file lists leave a chord alone whichever scope hears it, so Ctrl+↓ is "next
-change", never "next commit" (`an_accelerators_chord_does_not_move_the_selection`), and
-Shift+↓, the list selection's extension in Local Changes, moves nothing in the other lists.
+list and the file lists leave the window's and the detail pane's chords alone, so Ctrl+↓ is
+"next change", never "next commit" (`an_accelerators_chord_does_not_move_the_selection`);
+another view's chord is theirs to read, so Shift+↓, the list selection's extension in Local
+Changes, moves the history list, the Changes tab's files, the Commit tab and the diff as ↓
+does (`another_views_chord_is_the_history_lists_arrow` and its siblings in
+`crates/cairn-ui/tests/`, the user's decision of 2026-10-09).
 Pinned by `the_table_is_forks_chords_and_no_others` (the whole table, every list spelled out
 per platform), `every_chord_resolves_to_its_action_in_its_scope_only` (every chord of every
 list), the pin above, `the_command_key_is_the_platforms_own`,
 `a_chord_needs_exactly_its_modifiers_and_ignores_the_locks`,
-`a_physical_chord_is_matched_by_where_the_key_sits`, `a_chord_of_any_scope_is_a_chord`,
+`a_physical_chord_is_matched_by_where_the_key_sits`,
+`a_chord_of_the_window_the_pane_or_the_views_own_scope_is_a_chord`,
 `the_change_chords_and_the_arrows_belong_to_the_focused_pane` (a pane hearing
 `Scope::Detail` as the window's does), and `the_tab_chords_resolve_through_the_table`
 through the window; that the window's detail pane hears them and moves the diff is
@@ -2258,7 +2264,9 @@ bubbling and cancels the window's global key event, so a focused field hid F5 an
 or Ctrl from the window (staging-and-commit R7.1,
 `docs/research/staging-and-commit/freya-ui-apis.md` §2). Every field is built by
 `cairn_ui::text_field` (a filter, the credential prompt's field) or `text_field_in` (a field
-heard in a scope of its own, the commit box), whose one pre-key handler asks the table what
+heard in a scope of its own: `FieldScope`, whose one value is the commit box — a scope with no
+bare chord, so a typed Backspace is never claimed as an action,
+`a_fields_own_scope_holds_no_bare_chord`), whose one pre-key handler asks the table what
 each key is (`accelerators::field_key`, `FieldKey`): a window chord, and a lone Control, Alt
 or Command, is neither typed nor kept from the window — so Refresh refreshes and `HeldKeys`
 sees the extending key go down while a filter has focus
@@ -2272,8 +2280,10 @@ still reaching them, since a scroll view behind a field reads it
 (`a_text_field_hands_on_the_windows_chords_and_keeps_its_own_keys`,
 `a_filter_hands_the_windows_chords_and_held_keys_on_and_keeps_its_own`,
 `in_the_commit_box_backspace_and_enter_edit_and_the_commit_chord_commits`). No render file
-but `crates/cairn-ui/src/text_field.rs` names `Input` or `on_pre_key_down`
-(`every_text_field_takes_the_shared_key_policy`).
+but `crates/cairn-ui/src/text_field.rs` names `Input`, `on_pre_key_down` or another way the
+toolkit edits text (`use_editable`, `UseEditable`, `EditableConfig`, `text_edit`,
+`SelectableText`, `CodeEditor`), the accelerator table excused `text_edit` alone, for the
+editor's own bindings (`every_text_field_takes_the_shared_key_policy`).
 
 ### Confirmations, menus and edge auto-scroll
 
@@ -2285,7 +2295,13 @@ and to assistive technology (`a11y_modal`: Tab and Shift-Tab move between its tw
 only), focus starts on Cancel — a deliberate deviation from Fork, which styles Discard the
 default (L8) — Escape and a press outside it cancel, and once answered it ignores every
 later press, so one acknowledgement builds one token
-(`crates/cairn-ui/tests/confirm_dialog.rs`). The window keeps the confirmation open
+(`crates/cairn-ui/tests/confirm_dialog.rs`). Each confirmation has a serial
+(`Confirming::serial`), which is the dialog's identity and its key: a confirmation replaced
+by another, or opened by the last one's answer, is a new dialog — its own handlers, focus on
+Cancel and one token afresh — and its words are rendered once, as it mounts, the consequence
+shared rather than copied on every frame
+(`a_confirmation_replaced_in_place_hands_its_own_token_to_its_own_continuation`,
+`a_confirmation_opened_by_the_last_ones_answer_answers_afresh`). The window keeps the confirmation open
 (`View::confirming`, `crates/cairn-app/src/confirming.rs`: the consequence and where the
 token goes, never a token), draws the dialog over everything, makes its own chords inert
 while it is open — its key listener runs before any dialog's, so the dialog could not — and
@@ -2300,7 +2316,9 @@ the rows under the pointer come and go — tracks the drag through global pointe
 (`EdgeScroll::on`), the view that starts a drag says so (`EdgeScroll::begin`), and while the
 pointer is within `EDGE_BAND` of an edge or past it the list scrolls one step each
 `EDGE_TICK`, faster the deeper, up to `MOST_PER_TICK` (`edge_step`), until the pointer
-leaves the edge or the drag ends. The pace is `async-io`'s `Timer`, a future on the
+leaves the edge or the drag ends; a viewport not yet laid out, or collapsed, scrolls nothing
+(`a_viewport_with_no_height_scrolls_nothing`). A drag released outside the window is not
+heard ending yet: the first list to wire a drag handles it. The pace is `async-io`'s `Timer`, a future on the
 toolkit's executor, so the UI thread never sleeps: a pointer held still at an edge keeps the
 list scrolling, which pointer moves alone could not
 (`a_drag_held_at_an_edge_keeps_the_list_scrolling_until_it_leaves_or_ends`).

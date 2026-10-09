@@ -18,7 +18,7 @@
 use cairn_model::{ChangeKind, ChangeList, LocalChange, LocalChanges};
 use freya::prelude::*;
 
-use crate::accelerators;
+use crate::accelerators::{self, Scope};
 use crate::changes_list::{FILTER_PLACEHOLDER, FILTERING, filter_count};
 use crate::commit_tab::DETAIL_ROW_HEIGHT;
 use crate::diff_palette::DIFF_FONT_FAMILY;
@@ -417,7 +417,7 @@ fn keyboard(
         data.on_choose.clone(),
     );
     move |e: Event<KeyboardEventData>| {
-        if accelerators::is_chord(&e) {
+        if accelerators::is_chord(&e, &[Scope::LocalChanges, Scope::LocalChangesLists]) {
             return;
         }
         let shown = shown.peek();

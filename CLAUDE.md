@@ -377,10 +377,12 @@ Project invariants:
   `[target.*]` forms, renames seen through — and a dev-dependency beyond the
   crate's row needs its own `TEST_ONLY_ALLOWLIST` row (`freya-testing` in
   `cairn-ui` and `cairn-app`; `cairn-askpass` in `cairn-git`, whose fetch tests
-  answer a real channel). The allowlist reads names, never features, so the one
-  dependency whose features matter — `nix`, whose `process` feature compiles the
-  exec family — is pinned in `deny.toml` (`[[bans.features]]`, `exact`: `process`
-  and `signal`), which `gate.sh --step deps` enforces.
+  answer a real channel). The allowlist reads names, never features, so the
+  dependencies whose features matter are pinned in `deny.toml`
+  (`[[bans.features]]`, `exact`), which `gate.sh --step deps` enforces: `nix`, whose
+  `process` feature compiles the exec family (`process` and `signal` only), and
+  `async-io`, the edge auto-scroll's timer (none, so its optional `tracing` stays
+  off).
 - **Every embedded font is a user decision, and ships beside its licence.** A font
   file is a dependency `cargo deny` cannot see, so the roster is the guard's:
   `crates/cairn-app/assets/fonts/` holds exactly the files `EMBEDDED_FONTS` names
@@ -694,8 +696,14 @@ Project invariants:
   argument of a callback it holds, spelled exactly as one of `TOKEN_CALLBACKS`,
   `EventHandler<Confirmed>` and `dyn Fn(Confirmed)` (or `FnMut`, `FnOnce`), the
   confirmation dialog's handler and the window's continuation, which are handed a
-  token to spend and keep none; a callback that returns one or takes it beside
-  other arguments still counts as a holder); and the roster is never empty, asserted (the user's decision,
+  token to spend and keep none — ratified by the user on 2026-10-09; a callback
+  that returns one or takes it beside other arguments still counts as a holder,
+  and no production file declares a type, trait or alias named `EventHandler`,
+  `Fn`, `FnMut` or `FnOnce` or imports another item under one of those names
+  (`token_callback_shadow_violations`), so the trusted spellings mean the toolkit's
+  handler and the language's closures; residual, `destructive-ops-reviewer`'s: a
+  callback that stashes the token it is handed in a cell it captured keeps one
+  unseen); and the roster is never empty, asserted (the user's decision,
   2026-10-08), its rows today `ops::discard_lines` and `ops::discard_files`
   (`crates/cairn-git/src/ops/discard.rs`), which replaced the placeholder, and
   `ops::amend` (`crates/cairn-git/src/ops/commit.rs`);
@@ -850,7 +858,11 @@ Project invariants:
   render path — `for update in rx {}`, `rx.into_iter()`, or a blocking method
   with a project-specific name — names no rostered spelling and is not caught.
   `crates/cairn-app/src/main.rs` holds exactly such a value today; that it is
-  awaited rather than iterated is a review judgement, not a guarded fact. Also
+  awaited rather than iterated is a review judgement, not a guarded fact. So is
+  `cairn-ui`'s edge auto-scroll (`src/edge_scroll.rs`): a task spawned on the
+  toolkit's executor that awaits `async_io::Timer` each tick and scrolls a list
+  one step, never a sleep, ending when the drag ends or the pointer leaves the
+  edge — the guard's partition covers `cairn-app` alone. Also
   the reviewer's: whether a page is small enough that the work between yields is
   short, and whether a list is virtualized.
 
@@ -873,8 +885,16 @@ Project invariants:
   Changes, a bare press, a chord listed twice for one action, one shared by two
   actions); that the table answers a list (`pub fn chords(..) -> Chords`, no single
   `chord`) and that the pin stays a plain `#[test]` are held by
-  `the_accelerator_table_holds_data_and_resolution_only`. **Every text field takes
-  the one key policy** (staging-and-commit R7.1): Freya's `Input` claims every key
+  `the_accelerator_table_holds_data_and_resolution_only`, which also holds the pin
+  where it runs (`pin_placement_violations`, self-test
+  `the_pin_placement_check_catches_the_shapes_it_claims`: declared once, directly
+  in the one module whose attributes are exactly `#[cfg(test)]`, its own exactly
+  `#[test]`, its body still showing the rule failing — the same check holds R4.8's
+  `the_bounded_output_helpers_exist_on_a_read_alone`). A view leaves alone only the
+  chords of the window, the detail pane and the scopes it is in
+  (`accelerators::is_chord(event, own)`), so another view's chord — Local Changes'
+  Shift+↓ — is its arrow. **Every text field takes the one key policy**
+  (staging-and-commit R7.1; ratified by the user on 2026-10-09): Freya's `Input` claims every key
   but four, which cancels the window's global key event, so a focused field hid the
   window's chords and the held modifiers a press is resolved against; every field
   is built by `cairn_ui::text_field` or `text_field_in`
@@ -882,11 +902,18 @@ Project invariants:
   (`accelerators::field_key`) and hands a window chord and a lone modifier key to
   the window untyped, types nothing for a primary+letter press that is no editing
   binding, claims its own scope's chord (the commit box's commit) without a new
-  line, and keeps every other key from the views around it. Twin:
+  line, and keeps every other key from the views around it; a field's own scope is a
+  `FieldScope` — the commit box alone — none with a bare chord
+  (`a_fields_own_scope_holds_no_bare_chord`). Twin:
   `every_text_field_takes_the_shared_key_policy` — no file of `crates/cairn-ui/src`
-  or `crates/cairn-app/src` but that one names `Input` or `on_pre_key_down` in
-  production code, and that one must name both (matcher `builds_a_text_field`,
-  self-test `the_text_field_matcher_catches_the_shapes_it_claims`). Twin of the
+  or `crates/cairn-app/src` but that one names, in production code, any of
+  `TEXT_FIELD_IDENTS`: `Input`, `on_pre_key_down` and every other way the toolkit
+  edits text (`use_editable`, `UseEditable`, `EditableConfig`, `text_edit`,
+  `SelectableText`, `CodeEditor`), save the rows of `TEXT_FIELD_EXCEPTIONS` (the
+  accelerator table's `text_edit`, for the editor's own bindings), each required to
+  still match; and that one must name `Input` and `on_pre_key_down` (matcher
+  `builds_a_text_field`, self-test
+  `the_text_field_matcher_catches_the_shapes_it_claims`). Twin of the
   modifier rule:
   `no_component_names_a_literal_modifier`, over every file of `crates/cairn-ui/src`
   and `crates/cairn-app/src` (test modules blanked) but the table, which must exist

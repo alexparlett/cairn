@@ -2,6 +2,7 @@
 
 pub mod accelerators;
 mod changes_list;
+mod check_box;
 mod columns;
 mod commit_box;
 mod commit_row;
@@ -69,7 +70,7 @@ pub use commit_box::{
 };
 pub use commit_row::{
     AUTHOR_WIDTH, COLUMN_GAP, CommitRow, DATE_WIDTH, HistoryHeader, ID_WIDTH, ROW_FONT_SIZE,
-    ROW_PADDING, label_room,
+    ROW_PADDING, SHOW_LOST_COMMITS_CAPTION, label_room,
 };
 pub use commit_tab::{
     AUTHOR_CAPTION, COLLAPSE_ALL_CAPTION, COMMITTER_CAPTION, CommitTab, DETAIL_ROW_HEIGHT,

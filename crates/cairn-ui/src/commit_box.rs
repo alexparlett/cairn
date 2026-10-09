@@ -787,59 +787,7 @@ impl Component for AmendSkip {
 /// The Amend toggle: a check box to assistive technology, its toggled state set, pressed by
 /// the pointer or, focused, by Space or Return.
 fn amend_toggle(ticked: bool, enabled: bool, on_amend: EventHandler<bool>) -> Element {
-    let colours = get_theme_or_default().read().colors().clone();
-    let mark = rect()
-        .width(Size::px(14.))
-        .height(Size::px(14.))
-        .corner_radius(3.)
-        .main_align(Alignment::Center)
-        .cross_align(Alignment::Center)
-        .border(
-            Border::new()
-                .fill(if enabled {
-                    colours.border
-                } else {
-                    colours.disabled
-                })
-                .width(1.)
-                .alignment(BorderAlignment::Inner),
-        )
-        .background(if ticked {
-            colours.primary
-        } else {
-            colours.surface_primary
-        })
-        .maybe_child(ticked.then(|| label().text("✓").font_size(11.).color(colours.text_inverse)));
-    let toggle = rect()
-        .horizontal()
-        .cross_align(Alignment::Center)
-        .spacing(6.)
-        .a11y_role(AccessibilityRole::CheckBox)
-        .a11y_alt(AMEND_CAPTION)
-        .a11y_focusable(enabled)
-        .a11y_builder(move |node| node.set_toggled(Toggled::from(ticked)))
-        .child(mark)
-        .child(
-            label()
-                .text(AMEND_CAPTION)
-                .font_size(13.)
-                .color(if enabled {
-                    colours.text_primary
-                } else {
-                    colours.text_secondary
-                }),
-        );
-    if enabled {
-        toggle
-            .cursor(CursorIcon::Pointer)
-            .on_press(move |e: Event<PressEventData>| {
-                e.stop_propagation();
-                on_amend.call(!ticked);
-            })
-            .into()
-    } else {
-        toggle.into()
-    }
+    crate::check_box::check_box(AMEND_CAPTION, ticked, enabled, on_amend)
 }
 
 /// The `≡` that opens Recent Commit Messages: each message's subject, newest first.

@@ -164,7 +164,14 @@ pub fn window(
     let list = rect()
         .width(Size::fill())
         .height(Size::fill())
-        .child(HistoryHeader::new())
+        .child({
+            // Show Lost Commits' check box flips the toggle exactly as its chord does (the
+            // user's decision B, 2026-10-09).
+            let toggling = submit.clone();
+            HistoryHeader::new().show_lost_commits(*view.show_lost.read(), move |_: bool| {
+                crate::lost_commits::toggle(view, toggling.as_deref());
+            })
+        })
         .child(match status_text::placeholder(&status, has_rows) {
             Some(message) => notice(message, opened),
             None => history(view, lanes, submit.clone()),
@@ -1896,6 +1903,48 @@ pub(crate) mod tests {
             // the chord is heard (the user's decision, 2026-10-09).
             submitted.borrow_mut().clear();
         }
+    }
+
+    /// The user's decision B (2026-10-09): Show Lost Commits' check box flips the toggle as the
+    /// chord does — a reopen walking from the reflogs, then, once the reopened walk's first
+    /// page draws the list, the chord heard again with no click (the list takes the keyboard
+    /// back from the box). Caught by: a box that asks nothing, one that walks otherwise than
+    /// the chord would, or a list left without the keyboard after a press on the box.
+    #[test]
+    fn the_show_lost_commits_box_flips_the_toggle_as_its_chord_does() {
+        let (mut test, view, submitted) = launch((0..10).map(row).collect(), received(10, true));
+        click_row(&mut test, 2);
+        submitted.borrow_mut().clear();
+        click_label(&mut test, cairn_ui::SHOW_LOST_COMMITS_CAPTION);
+        assert!(*view.show_lost.read(), "the box turned it on");
+        let asked: Vec<Request> = submitted.borrow_mut().drain(..).collect();
+        assert!(
+            matches!(
+                asked.as_slice(),
+                [Request::OpenHistory { lost: true, .. }, Request::Retire(_)]
+            ),
+            "{asked:?}"
+        );
+        let (mut rows, mut progress) = (view.rows, view.progress);
+        test.run_in(|| {
+            hold(&mut rows.write(), (0..10).map(row).collect());
+            progress.set(received(10, true));
+        });
+        test.sync_and_update();
+        test.sync_and_update();
+        press_chord(&mut test, Action::ShowLostCommits);
+        assert!(
+            !*view.show_lost.read(),
+            "the chord, heard with no click, turned it off"
+        );
+        assert!(
+            matches!(
+                submitted.borrow().as_slice(),
+                [Request::OpenHistory { lost: false, .. }, Request::Retire(_)]
+            ),
+            "{:?}",
+            submitted.borrow()
+        );
     }
 
     /// R4.4 at the place it is drawn, through the window: choosing a row asks what it changed

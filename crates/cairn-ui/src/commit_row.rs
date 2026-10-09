@@ -196,14 +196,51 @@ impl ComponentOwned for CommitRow {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+/// Show Lost Commits' check box's caption, drawn beside it and read by assistive technology.
+pub const SHOW_LOST_COMMITS_CAPTION: &str = "Show Lost Commits";
+
+/// The history's column headings, and — at the right end of the "Graph and subject" cell, just
+/// left of "Author" — Show Lost Commits' check box (staging-and-commit R11.1; the user's
+/// decision B, 2026-10-09), so every heading stays over its column and no row loses width.
+#[derive(Clone)]
 pub struct HistoryHeader {
+    /// Show Lost Commits' state, when the header draws its check box.
+    lost: Option<bool>,
+    on_lost: EventHandler<bool>,
     key: DiffKey,
 }
 
 impl HistoryHeader {
     pub fn new() -> Self {
-        Self { key: DiffKey::None }
+        Self {
+            lost: None,
+            on_lost: EventHandler::new(|_: bool| {}),
+            key: DiffKey::None,
+        }
+    }
+
+    /// Draws Show Lost Commits' check box, ticked while `on`; a press reports the state it
+    /// turns to through `on_toggle`, which flips it exactly as the chord does. Its tooltip is
+    /// the chord the accelerator table lists for this platform.
+    pub fn show_lost_commits(mut self, on: bool, on_toggle: impl Into<EventHandler<bool>>) -> Self {
+        self.lost = Some(on);
+        self.on_lost = on_toggle.into();
+        self
+    }
+}
+
+// Hand-written: an `EventHandler` never compares equal, and its identity is stable.
+impl PartialEq for HistoryHeader {
+    fn eq(&self, other: &Self) -> bool {
+        self.lost == other.lost && self.key == other.key
+    }
+}
+
+impl std::fmt::Debug for HistoryHeader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HistoryHeader")
+            .field("lost", &self.lost)
+            .finish_non_exhaustive()
     }
 }
 
@@ -248,7 +285,34 @@ impl ComponentOwned for HistoryHeader {
                 bottom: 1.,
                 left: 0.,
             }))
-            .child(heading("Graph and subject", Size::flex(1.)))
+            .child(
+                // The check box laid over the cell's right end, so the heading still spans
+                // the column it names.
+                rect()
+                    .width(Size::flex(1.))
+                    .height(Size::px(ROW_HEIGHT))
+                    .cross_align(Alignment::center())
+                    .child(heading("Graph and subject", Size::fill()))
+                    .maybe_child(self.lost.map(|on| {
+                        let chord = crate::accelerators::chord_name(
+                            crate::accelerators::Action::ShowLostCommits,
+                            crate::accelerators::Os::current(),
+                        )
+                        .unwrap_or_default();
+                        rect()
+                            .position(Position::new_absolute().top(0.).right(0.))
+                            .height(Size::px(ROW_HEIGHT))
+                            .cross_align(Alignment::center())
+                            .child(TooltipContainer::new(Tooltip::new_text(chord)).child(
+                                crate::check_box::check_box(
+                                    SHOW_LOST_COMMITS_CAPTION,
+                                    on,
+                                    true,
+                                    self.on_lost.clone(),
+                                ),
+                            ))
+                    })),
+            )
             .child(heading("Author", Size::px(AUTHOR_WIDTH)))
             .child(heading("Commit", Size::px(ID_WIDTH)))
             .child(heading("Date (UTC)", Size::px(DATE_WIDTH)))

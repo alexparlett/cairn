@@ -55,6 +55,7 @@ Kept, and why:
 | The amend button names the commit it replaces and where the old one stays; Fork's reads `Amend`. | `engine.md`, "The confirmation seal"; `feature-inventory.md`, "Recovery" |
 | A stale `index.lock` a write left behind can be removed, confirmed, from the activity popover while Cairn runs no `git` in that repository. | `processes.md`, "Cancellation"; `engine.md`, D1's one deletion made without `git` |
 | A nested repository among the untracked rows is refused before any dialog, since deleting it deletes history no prompt can count. | `engine.md`, the write verbs |
+| A discard asked on the staged side — Backspace in Staged, or on a staged diff — says "Staged changes can't be discarded: unstage them first." where Fork does nothing; staged changes are never discarded. | `engine.md`, the write verbs |
 | A submodule row offers no discard and says why; Fork offers `Discard Submodule Changes`. `git restore` leaves a submodule's commit where it was, and no prompt can count what is dirty inside it. | `engine.md`, the write verbs |
 | During a rebase, `git am`, a cherry-pick or a revert the commit box is disabled and names the operation; Fork pre-fills git's message for a cherry-pick or revert and commits it. Continuing those operations is their own design. | `cairn.md`, the milestone — rewrites are the second lap |
 | **Show Lost Commits has a control in the history's toolbar area** as well as its chord; Fork has only the View menu item and the chord, and refused a toolbar button (TrackerWin #378). | `feature-inventory.md`, "Recovery" — the reflog must be visible to be usable |
@@ -88,7 +89,7 @@ status box does.
 Pressing Local Changes puts the staging screen in the main region, as Fork lays it
 out: a filter over Unstaged above Staged, each a list of paths with Fork's badges
 under a header carrying its list's `Stage` or `Unstage` button, Fork's
-double-chevron Stage All above them, and beside them, on the right, the diff of the
+double-chevron Stage All in Unstaged's header, as Fork for Windows draws it, and beside them, on the right, the diff of the
 chosen path with the staging gesture on it and the commit box under it ("Staging",
 "The commit box", below). As built: `docs/systems/local-changes.md`.
 
@@ -107,19 +108,29 @@ lock (`engine.md`).
 Fork's five routes, each a toggle between the two lists: double-click a row;
 Return or ⌘S on macOS, Enter or Ctrl+Shift+S on Linux, as Fork for Windows; drag
 from one list to the other; the list header's `Stage` or `Unstage` button, with ⌥
-held for Stage All or Unstage All, and the double-chevron Stage All, which Fork
-keeps small on purpose because changes are meant to be read before they are
-staged; and the context menu, which carries Stage or Unstage, Discard Changes…,
+held — Alt on Linux — for Stage All or Unstage All, and the double-chevron Stage All
+in Unstaged's header, which Fork keeps small on purpose because changes are meant to
+be read before they are staged; and the context menu, which carries Stage or Unstage, Discard Changes…,
 Stage All and Copy Path. Each list is one drop zone, never a zone per row: the
 virtualized list unmounts rows mid-drag, and a row-held drag would be left holding
 a stale payload; a drag near an edge scrolls the list. Discard is ⌫ or ⇧⌘D on
-macOS, Backspace, Delete or Ctrl+Shift+D on Linux.
+macOS, Backspace, Delete or Ctrl+Shift+D on Linux. Some Linux window managers —
+xfwm, openbox, Plasma 5 — take Alt with the first button to move a window, so there
+the held press never reaches Cairn and the button stays Stage or Unstage: it fails
+safe, and the chevron, the menu and the chord still reach Stage All and Unstage All.
+With a filter on, Stage All and Unstage All take the rows the filter shows and no
+others, so a change the filter hides is never staged or unstaged unseen.
+
+A double press acts on its own row: its first press makes the row the selection.
+With several files selected the diff draws the selected files' diffs together, one
+under another, as Fork does — the Commit tab's layout of files opened in place.
 
 Both lists take a multi-selection — ⌘- or Ctrl-click, Shift-click, Shift+↑/↓ —
 and where status lists an untracked directory collapsed, its row acts on
 everything under it. After a stage or an unstage the selection moves to the
 nearest path left in the list it left, as Fork's does (Tracker #514), so a run of
-presses walks down the list. An action answers every chord Fork gives it — Return
+presses walks down the list: the row that slides into the first acted row's place,
+else the nearest above it — for a selection with gaps, measured from where it began. An action answers every chord Fork gives it — Return
 and ⌘S both stage — and each is heard only in its own scope: stage, unstage and
 discard while a file list or the diff in Local Changes has focus, commit in the
 commit box, Show Lost Commits in the history, so typing in the commit box fires

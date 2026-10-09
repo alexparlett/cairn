@@ -1051,11 +1051,13 @@ Project invariants:
     is never dropped on the UI thread. Local Changes' actions
     (`local_changes_actions.rs`) work on the UI thread in proportion to what the person
     selected, never to the lists: an action finds each selected path by a binary search
-    (`LocalChanges::row_of`), a range press clones the paths of the rows it spans, the row the
-    selection moves to after a stage is found by stepping past the acted rows, and the menu
-    asks of each selected path whether it is a submodule or a conflict (`cairn_ui::no_discard`)
-    — so a Shift-press across fifty thousand rows costs fifty thousand clones once, and each
-    action on that selection fifty thousand searches; Stage All and Unstage All gather their
+    (`LocalChanges::row_of`), a range press clones the paths of the rows it spans — and
+    Shift+↑/↓ spans them afresh on every key and key repeat — a ⌘- or Ctrl-press clones the
+    selection twice and inserts into it (a shift of the paths after it), the row the selection
+    moves to after a stage is found by stepping past the acted rows, and the menu asks of each
+    selected path whether it is a submodule or a conflict (`cairn_ui::no_discard`) — so with
+    fifty thousand rows selected each such press, key repeat or action costs some 5-15 ms, once
+    per press and never per frame; Stage All and Unstage All gather their
     paths on the local lane, never here. Off the UI thread but in its way: what a discard would
     lose is counted per path on the local lane (`ops::discard_files_consequence`: a gix index
     read, two reads of each file and a `git diff-files` per tracked path), so it holds that

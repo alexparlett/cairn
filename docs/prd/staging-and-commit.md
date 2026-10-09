@@ -315,18 +315,35 @@ literally.
 
 - R8.1 Both lists take a multi-selection. The lists stay flat (a tree view is
   #36, not built here); a collapsed untracked-directory row, where status lists
-  one, acts on everything under it.
+  one, acts on everything under it. (Added 2026-10-09, the user's decision on phase
+  07's QA item 4(e): with several files selected the diff draws the selected files'
+  diffs together, as Fork does — built in phase 08, reusing the Commit tab's layout of
+  files opened in place; until then it draws the path last pressed in.)
 - R8.2 Files stage and unstage by double-click, R7.3's chords, a drag from one
   list to the other (one drop zone per list), the header's `Stage` / `Unstage`
   (⌥-held: Stage All / Unstage All) and the double-chevron Stage All, and the
   context menu (Stage or Unstage, Discard Changes…, Stage All, Copy Path).
+  (Added 2026-10-09, the user's decisions on phase 07's QA: item 11 — with a filter on,
+  Stage All and Unstage All take the rows the filter shows and no others, and every row
+  with none on; item 4(d) — the double chevron sits in Unstaged's header, as Fork for
+  Windows draws it, and the ⌥-held press is Alt on Linux, where xfwm, openbox and Plasma 5
+  take Alt with the first button to move a window, so the press fails safe there and the
+  chevron, the menu and the chord still reach Stage All and Unstage All; item 4(b) — a
+  double-click acts on its own row, since its first press makes the row the selection.)
 - R8.3 After a stage or unstage, the selection moves to the nearest remaining path
   in the list it left (Fork, Tracker #514).
+  (Added 2026-10-09, the user's ratification on phase 07's QA item 4(a): for a selection
+  with gaps, the nearest remaining path is the one that slides into the first acted
+  row's place, else the nearest above it.)
 - R8.4 Discard on the unstaged side only, through R7.4's dialog: Fork's words with
   counts (L8), the button naming the count. The confirmation cannot be skipped
   (L8): no modifier, setting or other route reaches a discard without the dialog.
   A selection of untracked rows deletes them; a nested repository among them
   refuses with its reason before any dialog.
+  (Added 2026-10-09, the user's ratification on phase 07's QA item 4(c): a discard asked
+  on the staged side — the chord on the Staged list or a staged diff — asks nothing and
+  says "Staged changes can't be discarded: unstage them first.", where Fork does nothing;
+  a deviation from Fork named in `docs/design/ui.md`.)
 - R8.5 Ignore Whitespace is disabled in Local Changes, and the diff drawn there is
   always the exact one; the shared setting is untouched (L6).
 - R8.6 A queued, running or failed write is drawn where the user acted; a stale
@@ -510,7 +527,7 @@ points here and does not restate them.
 | C15 | Every text field hands accelerator chords and held modifiers to the window: with a filter field focused, F5 refreshes and a Ctrl/⌘-click extends the selection (failing first on today's code); ⌘Return / Ctrl+Enter in the description commits without a newline | headless tests |
 | C16 | The accelerator table maps each action to a list of distinct chords per platform, and every chord of R7.3's lists resolves per platform; each new action resolves only in its R7.3 scope — with the commit box focused, the stage, unstage, discard and Show Lost Commits chords resolve to nothing and the commit chord commits; the pin admits bare Enter, Backspace and Delete only in Local Changes' list-and-diff scope; the root `CLAUDE.md` modifier invariant and its twin, amended in phase 06, hold a list per action | the table's tests, the modifier guard |
 | C17 | The discard dialog: modal (Tab stays inside, a window chord does nothing), focus on Cancel, Escape cancels, its text and button from the `Consequence` (`Discard Changes in 3 Files`, `Discard 2 Lines`) | headless tests |
-| C18 | Local Changes: each of R8.2's routes stages and unstages a multi-selection; a drag between the lists auto-scrolls and survives rows unmounting mid-drag; the selection moves to the nearest remaining path; Ignore Whitespace is disabled and the diff exact | headless tests |
+| C18 | Local Changes: each of R8.2's routes stages and unstages a multi-selection — but a double-click, which acts on its own row (amended 2026-10-09, the user's decision on phase 07's QA item 4(b)); a drag between the lists auto-scrolls and survives rows unmounting mid-drag; the selection moves to the nearest remaining path; Ignore Whitespace is disabled and the diff exact | headless tests |
 | C19 | The gesture: a hovered chunk's actions stage, unstage and discard exactly that chunk; a drag-selection narrows them to its lines, across rows the virtual list unmounted; side by side keeps a selection in one column; the Commit and Changes tabs draw no action; a 10,000-line diff with the gesture builds one viewport | headless tests, and a viewport twin |
 | C20 | Show Lost Commits: the commits it adds equal `git rev-list <every old and new id of every entry of HEAD's and each local branch's reflog, read from the log files> --not --branches --remotes --tags HEAD` (amended 2026-10-09, the user's decision D: old ids too, as `git rev-list --reflog` reads them), on a fixture with an amended, a reset-away and a 4 KiB-message entry, and an amend whose log it created itself (the replaced commit only an entry's old id); those rows are dimmed; `Create Branch Here…` creates the branch git would; the activity popover lists each operation with its prompt, its `git`, its scrubbed stderr and its recovery pointer, and `Remove index.lock…` appears exactly when R12.4 says and removes exactly `<gitdir>/index.lock` and nothing else; the filesystem-mutation guard (R12.5) fails on a removal, write or rename outside `ops/` | integration and headless tests |
 | C21 | On R13.1's clone and machine (the one `docs/research/diff-engine/measured-baseline.md` records): stage, unstage and discard a hunk and commit within git's own time plus one status read plus a flat 50 ms (the user's decision, 2026-10-08, at R13.2's amendment): about 93 ms to stage, 93 ms to unstage, 76 ms to discard and 87 ms to commit, from `docs/research/staging-and-commit/measured-baseline.md`'s highest sums (42.9, 42.8, 25.8 and 37.4 ms); Show Lost Commits' first frame recorded; `window_check` keeps every frame under 16.7 ms of UI-thread work while a hook runs and a stage lands | `#[ignore]`d reporters driven by `CAIRN_BENCH_REPO`, numbers in `progress.md` and, at teardown, in `docs/research/staging-and-commit/` |

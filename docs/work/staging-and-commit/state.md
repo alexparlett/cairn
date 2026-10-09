@@ -14,8 +14,8 @@ lane) done in packet mode: QA adjudicated, confirmed fixes and the user's decisi
 mode: QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green
 at c07c076. Phase 06 (render foundations) done in packet mode: QA adjudicated, fixes and the
 user's decisions 6, 12, 13 and 14 (2026-10-09) applied, full gate green. Phase 07 (Local
-Changes acts on files) built in packet mode, gate green, QA pending (the coordinator's); six
-items batched for the user in progress.md. Phases 08-12 not started.**
+Changes acts on files) done in packet mode: QA adjudicated, fixes and the user's decisions of
+2026-10-09 applied, full gate green. Phases 08-12 not started.**
 
 ## Locked decisions
 
@@ -339,9 +339,22 @@ Phase 07 (`docs/systems/local-changes.md`, "Acting on files"):
   (always exact); `DiffState::settings_changed(options, in_place, working, asking)`.
 - **The window** draws a credential prompt in place of an open confirmation, which it keeps.
 - **`EdgeScroll`** ends on a press heard while dragging and on focus lost.
+- From phase 07's QA: **`ops::discard_files_consequence(git, repo, paths, cancel: &impl Cancel)`**
+  (phase 08 passes its own cancel), `Error::ConsequenceCancelled`; `QueryLane::DiscardCount`,
+  `Request::StopCounting` (asked as Local Changes unmounts); `LocalWrite::StageAll { changes,
+  shown }` / `UnstageAll { changes, shown, to }` — `shown` the filter's row indices, `None` with
+  no filter (the user's decision, 2026-10-09); an emptied `ListSelection` keeps its list
+  (`list()` is `Some`), so nothing is acted on; the follow resets the selection when it moves or
+  lets go of the path chosen.
 
 ## Carried forward from phase 07 (owned by the phase named)
 
+- **Phase 08 — a requirement (the user's decision on phase 07's QA item 4(e), 2026-10-09)**:
+  with several files selected in Local Changes, the diff draws the selected files' diffs
+  together, as Fork does, reusing the Commit tab's layout of files opened in place
+  (`cairn_ui::Expansion`, `CommitTab`'s list); phase 07 draws the path last pressed in
+  meanwhile (PRD R8.1's note; `docs/design/ui.md`; `local-changes.md`, "Where it is not
+  Fork's"). Phase 08's gesture then acts on the file under it.
 - **Phase 08**: a discard of every line of a new file goes to `discard_files` (phase 03's
   `Refusal::WholeFileOnly`): the line gesture is the only route that selects lines, so the
   gesture routes it — `local_changes_actions` asks `Request::DiscardConsequence` for the path,
@@ -353,6 +366,10 @@ Phase 07 (`docs/systems/local-changes.md`, "Acting on files"):
   05's carry, "07 or 09"): Local Changes does not draw an amend's files, so it stays the commit
   box's; and an unstage out of an amend (`UnstageTarget::Commit`) — Local Changes asks
   `UnstageTarget::Head` today, and the commit box's amend mode switches it.
+- **Phase 11, from phase 07's QA**: batch the discard count's per-path reads into one
+  multi-path `git diff-files` read in `reads/` — measure first; and the argv size of stage,
+  unstage and restore at 50,000 paths (`destructive-ops-reviewer`; `git clean` is already
+  batched by `CLEAN_ARGUMENT_BYTES`, the others take a pathspec file).
 - **Phase 11**: the activity popover reads the same `LocalWrites` the line under the lists does;
   the cost of a 50,000-path selection's actions on the UI thread (a clone per path on a range
   press, a search per path on an action) is named in root `CLAUDE.md` and is the window check's
@@ -608,7 +625,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 04 local lane | done — QA adjudicated, fixes and the user's decisions 12 and 14 applied, full gate green |
 | 05 commit engine | done — QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green at c07c076 |
 | 06 render foundations | done — QA adjudicated, fixes and the user's decisions 6, 12, 13 and 14 (2026-10-09) applied, full gate green |
-| 07 Local Changes actions | built, gate green, QA pending |
+| 07 Local Changes actions | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green |
 | 08 diff gesture | not started |
 | 09 commit box | not started |
 | 10 lost commits | not started |

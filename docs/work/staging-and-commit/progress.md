@@ -3,6 +3,89 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 07 QA, adjudicated and fixed; the user's decisions applied
+
+Four fresh reviewers and a fresh qa-confirm adjudicated phase 07; the user decided the open
+items (2026-10-09, relayed by the coordinator). Commits b49d4b4, a918810, be847b8, 4c1c891,
+01942eb and this one.
+
+Fixed:
+
+1. **(CRITICAL) A discard's count held the local lane and the close, uncancellable.**
+   `ops::discard_files_consequence` now takes a `cancel`, polled before each path and handed to
+   each path's `git diff-files` read (which it ends); a cancelled count is
+   `Error::ConsequenceCancelled` and answers nothing. The count is numbered in a lane of its own
+   (`QueryLane::DiscardCount`): a newer ask, `Request::StopCounting` (asked as Local Changes
+   unmounts, `use_drop`) and a close end it. Each path is counted once by a set rather than a
+   quadratic scan. Tests: `a_cancelled_count_stops_between_paths_and_runs_no_further_read`,
+   `a_path_named_twice_is_counted_once` (ops, same commit),
+   `a_newer_ask_or_a_stop_ends_a_discards_count_and_its_read` (lane: the superseded count's held
+   read ended), `leaving_local_changes_ends_a_discards_count`; root `CLAUDE.md`'s residuals say
+   the count is per path, holds the lane, and what ends it.
+2. 50,000 paths ALL selected, with `.held` set, still build one viewport
+   (`a_status_of_50000_paths_all_selected_builds_one_viewport`).
+3. Root `CLAUDE.md`'s cost of a large selection corrected: Shift+↑/↓ re-spans on every key repeat,
+   a ⌘/Ctrl-press clones twice and inserts; 5-15 ms at 50,000, per press, never per frame.
+5. **A refresh left the selection holding gone paths.** The follow now moves the selection with
+   the path it chooses (`Follow::ChooseFirst`) or lets go (`Follow::LetGo`); a toggle that empties
+   the selection keeps it its list's, so nothing is acted on (`acted_rows` falls back to the path
+   chosen only with no selection made there). `a_refresh_or_an_emptying_toggle_leaves_nothing_selected_unseen`
+   failed first on both halves.
+6. **(CRITICAL) The behind-the-modal test could not fail.** Rewritten with the recording
+   submitter, driving every intent, `choose` and `on_the_diff` behind the open confirmation;
+   checked against M7 (`dialog_open` → `false && ..`): it now fails, five writes asked.
+7. **R8.3's call site.** `the_selection_moves_to_the_row_that_takes_the_acted_rows_place`: c of
+   a, b, c, d leaves d; cx of the filter's cx, dx, ex leaves dx. Checked against M6
+   (`nearest_remaining(len, 0 * first, ..)`): it now fails (a.rs).
+8. The drag's other ends: `a_press_heard_mid_drag_or_focus_lost_ends_the_drag_without_a_drop`.
+   **It found a gap**: a press on the filter field after a lost release did not end the drag —
+   Freya's `Input` cancels the global pointer-down (and its own release) as it takes a press —
+   so the next release over the other list dropped. The lists' root now also hears the
+   platform's mouse-down, which fires before any pointer-down handler and which a field does
+   not cancel. Residual, stated in `local-changes.md`: a press on another view's text field (the
+   sidebar's filter) after a lost release is still not heard.
+9. The release-outside case now crosses Staged before it is released over the filter.
+11. **The user's decision: Stage All / Unstage All take the rows a filter shows** (every row
+   with none on): `LocalWrite::StageAll`/`UnstageAll` carry `shown: Option<Vec<u32>>`, the
+   filter's indices, and the lane gathers those rows; nothing is asked while the filter's rows
+   are on their way. `stage_all_and_unstage_all_take_the_rows_the_filter_shows` failed first (a
+   hidden row and a hidden conflicted row were staged); lane unit test
+   `an_all_gathers_the_rows_the_filter_shows_or_every_row`. PRD R8.2 noted.
+
+The user's decisions recorded (2026-10-09, the user's):
+
+- 4(a) R8.3's rule for a selection with gaps (the row in the first acted row's place, else the
+  nearest above) RATIFIED — PRD R8.3 note, `local-changes.md`, `docs/design/ui.md`.
+- 4(b) a double press acts on its own row RATIFIED — C18 amended, PRD R8.2 note.
+- 4(c) "Staged changes can't be discarded: unstage them first." RATIFIED — PRD R8.4 note, a
+  deviation row in `docs/design/ui.md`'s "What changes, and why", `local-changes.md`.
+- 4(d) Stage All stays in Unstaged's heading with the Alt press; xfwm, openbox and Plasma 5 grab
+  Alt+button-1, where the press fails safe — `docs/design/ui.md`, PRD R8.2 note, `local-changes.md`.
+- 4(e) the multi-selection diff MATCHES FORK (the selected files' diffs drawn together), built in
+  phase 08 on the Commit tab's layout of files opened in place (`cairn_ui::Expansion`); phase 07
+  draws the path last pressed in meanwhile — PRD R8.1 note, `docs/design/ui.md`,
+  `local-changes.md`, `state.md` (a phase 08 requirement).
+- 10 conflicted-row staging LEFT AS FORK: no extra wording before a conflicted row is staged; the
+  one-way resolution inside Cairn is a stated residual in `local-changes.md`.
+- 11 above.
+
+Dismissed, with reasons:
+
+- 12 "no test of `whole_file_paths`": it is in ed168c2,
+  `a_whole_file_action_names_each_rows_path_and_a_renames_source`.
+- 13 `Err(String)` across the worker boundary: the engine's errors stay typed
+  (`Error::Refused` and the rest, `ops/discard.rs`); the application formats one only to draw it
+  and branches on nothing but the cancelled count, which it matches typed.
+- 14 a rename row's discard counts two files: the prompt names both honestly, and that is
+  `whole_file_paths`' intended rule (the rename moves back whole).
+- 15 no end-to-end gesture → git test: each link is tested against its real boundary (the
+  component's intents, the window's requests, the lane through the real worker, the engine
+  against real git); recording requests at the application is the seam's design.
+
+Carried: to phase 08 the Fork-matching multi-selection diff (4e); to phase 11 batching the
+count's per-path reads into one multi-path `git diff-files` read in `reads/` (measure first), and
+the argv size of stage, unstage and restore at 50,000 paths (destructive-ops).
+
 ## 2026-10-09 — phase 07, Local Changes acts on files (packet mode)
 
 Built on `feature/staging-and-commit`; QA is the coordinator's. Commits ed168c2 (model:

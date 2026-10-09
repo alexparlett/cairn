@@ -3519,7 +3519,7 @@ fn every_git_invocation_disables_the_terminal_prompt() {
     );
     // The inherited roster (staging-and-commit R5.2, C12): read with its comments, since each
     // pinned entry must carry its reason beside it.
-    let inherited = const_table(&source, "INHERITED").unwrap_or_else(|| {
+    let inherited = commented_table(&source, "INHERITED").unwrap_or_else(|| {
         panic!(
             "{PROCESS_ENVIRONMENT_FILE} no longer declares a `const INHERITED` roster; what git \
              sees of the user's environment would be unenumerated"
@@ -3673,6 +3673,28 @@ fn inherited_roster_problems(table: &str) -> Vec<String> {
     problems
 }
 
+/// The text of the table `const <name>: ..` declares in `source`, comments KEPT, from its
+/// declaration to the `];` that closes it in code — found in [`code_without_strings`]'s
+/// reading, so a `];` inside a comment or a string closes nothing and the entries after it
+/// are still read; `None` when there is no such table. That reading writes one char per byte
+/// of `source` (outside a char literal), so its char offsets are `source`'s byte offsets; the
+/// declaration found there is checked against `source` at that offset, and a mismatch is
+/// `None` rather than a wrong slice.
+fn commented_table<'a>(source: &'a str, name: &str) -> Option<&'a str> {
+    let code: Vec<char> = code_without_strings(source).chars().collect();
+    let declaration: Vec<char> = format!("const {name}:").chars().collect();
+    let closing = [']', ';'];
+    let start = code
+        .windows(declaration.len())
+        .position(|window| window == declaration.as_slice())?;
+    let end = start
+        + code[start..]
+            .windows(2)
+            .position(|window| window == closing)?;
+    let declared = source.get(start..start + declaration.len())?;
+    (declared == declaration.iter().collect::<String>()).then(|| source.get(start..end))?
+}
+
 /// The text of the table `const <name>: ..` declares in `source` (strings kept, comments
 /// blanked), from its declaration to its closing `];`; `None` when there is no such table. The
 /// name is matched whole, so `READ_ONLY_EXTRA` is not `READ_ONLY`.
@@ -3731,7 +3753,7 @@ fn the_process_environment_matcher_catches_the_shapes_it_claims() {
         table
     };
     let whole = every_pin("");
-    let table = const_table(&whole, "INHERITED")
+    let table = commented_table(&whole, "INHERITED")
         .unwrap_or_else(|| panic!("the table matcher missed an INHERITED roster"));
     assert_eq!(
         inherited_roster_problems(table),
@@ -3770,8 +3792,18 @@ fn the_process_environment_matcher_catches_the_shapes_it_claims() {
             every_pin("    \"SOURCE_DATE\", // a date\n"),
             "SOURCE_DATE is inherited",
         ),
+        (
+            "a date after a comment that seems to close the roster",
+            every_pin("    // a comment that closes nothing ];\n    \"GIT_AUTHOR_DATE\",\n"),
+            "GIT_AUTHOR_DATE is inherited",
+        ),
+        (
+            "a date after a string that seems to close the roster",
+            every_pin("    \"];\",\n    \"GIT_COMMITTER_DATE\",\n"),
+            "GIT_COMMITTER_DATE is inherited",
+        ),
     ] {
-        let table = const_table(&source, "INHERITED")
+        let table = commented_table(&source, "INHERITED")
             .unwrap_or_else(|| panic!("the table matcher missed the roster in {shape}"));
         let problems = inherited_roster_problems(table);
         assert!(

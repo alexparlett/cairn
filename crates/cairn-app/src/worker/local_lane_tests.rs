@@ -3,12 +3,12 @@
 //! that keeps refreshes back and a stage queued behind it, a cancel that reaches only the
 //! commit it names, a close that waits on a commit and ends nothing, the lock files named as
 //! a repository opens and by the write they fail, and a prompt a write's child raises answered
-//! through the window.
+//! through the window, titled by its own operation.
 //!
-//! Commit is phase 05's, so a commit here is [`LocalWrite::HeldCommit`]: a long-running,
-//! cancellable write the lane treats as a commit, a stub `git`'s `fetch` that is held, asks or
-//! ends as each test says. Phase 05 runs the commit-dependent halves again against `git
-//! commit` with a slow hook.
+//! Every commit here is a real `git commit`, held in its `pre-commit` hook for as long as a
+//! test says ([`held_hook`]) — the slow hook the commit-dependent halves of C10-C12 name.
+//! Nothing waits a fixed time to see that nothing happened: a test waits on the answer to a
+//! later request instead ([`after_the_repository_thread`]), or on what a held process wrote.
 //!
 //! No `Command` here — the guards scan this crate's tests — so fixtures are built with
 //! `std::fs`, every write goes through the lane, and a stub `git` is a `/bin/sh` script.
@@ -76,6 +76,51 @@ fn held(name: &str) -> String {
          while [ ! -e \"$DIR/release\" ] && [ ! -e \"$DIR/release.$$\" ] && [ $n -lt 1200 ]; \
          do /bin/sleep 0.05; n=$((n+1)); done\n  echo $$ >> \"$DIR/finished\"\n  exit 0"
     )
+}
+
+/// A `pre-commit` hook in `repository` held as [`held`] holds, its pid on a line of
+/// `<directory>/commits`: the slow hook a real `git commit` runs while a test does what it
+/// says. `directory` is a stub's, whose release and finish files it shares.
+fn held_hook(repository: &Path, directory: &Path) {
+    hook(
+        repository,
+        "pre-commit",
+        &format!("DIR='{}'\n{}\n", directory.display(), held("commits")),
+    );
+}
+
+/// An executable hook named `name` in `repository`, `body` after its `#!/bin/sh`.
+fn hook(repository: &Path, name: &str, body: &str) {
+    let hooks = repository.join(".git/hooks");
+    std::fs::create_dir_all(&hooks).unwrap_or_else(|error| panic!("{error}"));
+    let path = hooks.join(name);
+    std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap_or_else(|error| panic!("{error}"));
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
+/// Names who commits in `repository`'s own configuration, as a user's does.
+fn identify(repository: &Path) {
+    let config = repository.join(".git/config");
+    let mut text = std::fs::read_to_string(&config).unwrap_or_else(|error| panic!("{error}"));
+    text.push_str("[user]\n\tname = Commit Ter\n\temail = committer@example.com\n");
+    std::fs::write(&config, text).unwrap_or_else(|error| panic!("{error}"));
+}
+
+/// The process group `pid` is in, read from `/proc`: a hook's is its `git commit`'s.
+#[cfg(target_os = "linux")]
+fn group_of(pid: i32) -> i32 {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .unwrap_or_else(|error| panic!("/proc/{pid}/stat: {error}"));
+    let Some((_, after)) = stat.rsplit_once(')') else {
+        panic!("{stat}");
+    };
+    after
+        .split_whitespace()
+        .nth(2)
+        .and_then(|group| group.parse().ok())
+        .unwrap_or_else(|| panic!("{stat}"))
 }
 
 /// A status that reads the repository as it is when it begins, then is held as [`held`] is,
@@ -221,8 +266,9 @@ fn stage(paths: &[&str]) -> LocalWrite {
 }
 
 fn commit() -> LocalWrite {
-    LocalWrite::HeldCommit {
-        remote: "origin".to_owned(),
+    LocalWrite::Commit {
+        message: "the subject\n\nthe body\n".to_owned(),
+        skip_hooks: false,
     }
 }
 
@@ -272,7 +318,33 @@ fn until_ended(updates: &mut Updates, id: OperationId) -> Vec<Update> {
     )
 }
 
-/// Every update that arrives within `quiet`.
+/// Every update sent before the repository thread answered a request asked now: the command
+/// log, which that thread answers in turn, so whatever it — or any thread, earlier — sent
+/// before is ahead of it on the one stream. What a test waits on instead of a fixed time.
+fn after_the_repository_thread(handle: &RepositoryHandle, updates: &mut Updates) -> Vec<Update> {
+    handle.submit(Request::CommandLog);
+    let mut seen = collect_until(updates, |update| {
+        matches!(update, Update::CommandLog { .. })
+    });
+    seen.pop();
+    seen
+}
+
+/// Every update already on the stream, waiting for none: what was sent before a process the
+/// test watched wrote its mark.
+fn already_sent(updates: &mut Updates) -> Vec<Update> {
+    let mut seen = Vec::new();
+    while let Some(next) = next_by_or_quiet(updates, Duration::ZERO) {
+        match next {
+            Some(update) => seen.push(update),
+            None => panic!("the stream ended: {seen:?}"),
+        }
+    }
+    seen
+}
+
+/// Every update that arrives within `quiet`: only where the wait itself is what is tested —
+/// a close's patience run out.
 fn arriving_within(updates: &mut Updates, quiet: Duration) -> Vec<Update> {
     let deadline = Instant::now() + quiet;
     let mut seen = Vec::new();
@@ -349,25 +421,32 @@ fn staged_and_untracked(status: &WorkingTreeStatus) -> (Vec<String>, Vec<String>
     (staged, untracked)
 }
 
-/// C10 and the QA brief: five stages asked far faster than they run — each `git add` held a
-/// third of a second — all run, one at a time, in the order asked, each with its own ending;
+/// C10 and the QA brief: five stages asked while the first is still held in its `git add` —
+/// every one asked before it has finished — all run, one at a time, in the order asked, each
+/// with its own ending;
 /// the stale one (a second stage of lines built from the same diff as the first, which the
 /// first made stale) is dropped naming its path and the ones behind it still run; each says to
 /// read status again, and status alone; and the status read after them lists what they did.
-/// Caught by: writes refused or run beside each other for being second, an ending under the
-/// wrong id, a stale patch that stalls the lane or is applied, or a stage that reads more than
-/// status again.
+/// Caught by: asking that waits for a write, writes refused or run beside each other for being
+/// second, an ending under the wrong id, a stale patch that stalls the lane or is applied, or a
+/// stage that reads more than status again.
 #[test]
 fn writes_asked_faster_than_they_run_run_in_order_each_with_its_own_ending() {
     let fixture = with_files("cairn-lane-in-order", &["a", "b", "c", "d"]);
-    let stub = stub(&[("add", "  /bin/sleep 0.3\n  exec \"$REAL\" \"$@\"")]);
+    let body = format!(
+        "{}\n",
+        held("adds").replace("  exit 0", "  exec \"$REAL\" \"$@\"")
+    );
+    let stub = stub(&[("add", &body)]);
+    let _released = ReleaseAll(&stub);
     let (home, runtime) = (Home::new(), RuntimeDir::new());
     let (handle, mut updates, _reply) = boundary(&fixture.path, &stub, (&home, &runtime));
     let (diff, selection) = untracked(&fixture.path, "b");
 
-    let asked = Instant::now();
+    let first = ask(&handle, stage(&["a"]));
+    until_pids(&stub, "adds", 1);
     let ids = [
-        ask(&handle, stage(&["a"])),
+        first,
         ask(
             &handle,
             LocalWrite::StageLines {
@@ -385,11 +464,12 @@ fn writes_asked_faster_than_they_run_run_in_order_each_with_its_own_ending() {
         ask(&handle, stage(&["c"])),
         ask(&handle, stage(&["d"])),
     ];
-    assert!(
-        asked.elapsed() < Duration::from_millis(100),
-        "asking waited for the writes: {:?}",
-        asked.elapsed()
+    assert_eq!(
+        (pids(&stub, "adds").len(), pids(&stub, "finished")),
+        (1, Vec::new()),
+        "asking waited for the write running"
     );
+    let _ = std::fs::write(stub.directory.join("release"), "");
     let seen = until_ended(&mut updates, ids[4]);
     let expected: Vec<Lane> = ids
         .iter()
@@ -460,10 +540,12 @@ fn a_status_begun_before_a_write_ended_is_never_drawn() {
     assert!(matches!(ending_of(&seen, id).0, WriteEnding::Done(_)));
 
     release(&stub, before);
-    // What the window asks once the write has ended.
+    // What the window asks once the write has ended. The refresh thread starts it only once it
+    // has done with the status before it, so by the time it has begun, that status's answer
+    // was sent or dropped: whatever was sent is already on the stream.
     handle.submit(Request::RefreshStatus);
     let after = until_pids(&stub, "statuses", 2)[1];
-    seen.extend(arriving_within(&mut updates, Duration::from_millis(500)));
+    seen.extend(already_sent(&mut updates));
     assert_eq!(
         statuses(&seen),
         [],
@@ -483,31 +565,53 @@ fn a_status_begun_before_a_write_ended_is_never_drawn() {
     drop(handle);
 }
 
-/// C10 and the QA brief, against a stub's long-running write the lane treats as a commit
-/// (phase 05 runs it again against `git commit`): while it runs no refresh of Cairn's own
-/// starts — three asked of the handle start no status and answer nothing — and a stage asked
-/// meanwhile waits for it; its ending says to read everything again, and once the window asks,
-/// one refresh is answered, after the stage behind it. Caught by: a refresh read during a
-/// commit, a stage run beside it, or a refresh kept back and lost.
-#[test]
-fn a_commit_keeps_refreshes_back_and_a_stage_asked_meanwhile_waits_for_it() {
+/// A repository named `name` with `files` untracked, an `origin` remote that is never
+/// reached, and an identity: ready for a commit once something is staged.
+fn to_commit(name: &str, files: &[&str]) -> UnbornRepository {
     let fixture = with_origin(
-        &format!("cairn-lane-quiet-commit-{}", std::process::id()),
+        &format!("{name}-{}", std::process::id()),
         "/nonexistent/origin",
     );
-    write_files(&fixture.path, &["a"]);
-    let stub = stub(&[("fetch", &held("commits")), ("status", STATUS_COUNTED)]);
+    identify(&fixture.path);
+    write_files(&fixture.path, files);
+    fixture
+}
+
+/// Stages `paths` through the lane and waits for it, as the window would before a commit.
+fn staged(handle: &RepositoryHandle, updates: &mut Updates, paths: &[&str]) {
+    let id = ask(handle, stage(paths));
+    let seen = until_ended(updates, id);
+    assert!(
+        matches!(ending_of(&seen, id).0, WriteEnding::Done(_)),
+        "{seen:?}"
+    );
+}
+
+/// C10 and the QA brief against a real `git commit` held in its `pre-commit` hook: while it
+/// runs no refresh of Cairn's own starts — three asked of the handle start no status and
+/// answer nothing, by the time the repository thread has answered a request asked after them
+/// — and a stage asked meanwhile waits for it; its ending says to read everything again, and
+/// once the window asks, one refresh is answered, after the stage behind it. Caught by: a
+/// refresh read during a commit, a stage run beside it, or a commit's ending that reads less
+/// than everything.
+#[test]
+fn a_commit_keeps_refreshes_back_and_a_stage_asked_meanwhile_waits_for_it() {
+    let fixture = to_commit("cairn-lane-quiet-commit", &["a", "b"]);
+    let stub = stub(&[("status", STATUS_COUNTED)]);
     let _released = ReleaseAll(&stub);
     let (home, runtime) = (Home::new(), RuntimeDir::new());
     let (handle, mut updates, _reply) = boundary(&fixture.path, &stub, (&home, &runtime));
+    staged(&handle, &mut updates, &["a"]);
+    held_hook(&fixture.path, &stub.directory);
+    let statuses_before = pids(&stub, "statuses").len();
 
     let commit = ask(&handle, commit());
     let pid = until_pids(&stub, "commits", 1)[0];
-    let staged = ask(&handle, stage(&["a"]));
+    let staged_b = ask(&handle, stage(&["b"]));
     handle.submit(Request::Refresh);
     handle.submit(Request::RefreshStatus);
     handle.submit(Request::Refresh);
-    let meanwhile = arriving_within(&mut updates, Duration::from_millis(700));
+    let meanwhile = after_the_repository_thread(&handle, &mut updates);
     assert_eq!(
         lane_news(&meanwhile),
         [Lane::Started(commit)],
@@ -521,23 +625,25 @@ fn a_commit_keeps_refreshes_back_and_a_stage_asked_meanwhile_waits_for_it() {
         "a refresh was answered while the commit ran: {meanwhile:?}"
     );
     assert_eq!(
-        pids(&stub, "statuses"),
-        [],
+        pids(&stub, "statuses").len(),
+        statuses_before,
         "a status started while the commit ran"
     );
 
     release(&stub, pid);
     let seen = until_ended(&mut updates, commit);
-    assert_eq!(ending_of(&seen, commit).1, ReadAgain::Everything);
+    let (ending, read_again) = ending_of(&seen, commit);
+    assert!(matches!(ending, WriteEnding::Done(_)), "{ending:?}");
+    assert_eq!(read_again, ReadAgain::Everything);
     // What the window asks as the commit ends.
     handle.submit(Request::Refresh);
-    let mut seen = until_ended(&mut updates, staged);
-    assert_eq!(ending_of(&seen, staged).1, ReadAgain::Status);
+    let mut seen = until_ended(&mut updates, staged_b);
+    assert_eq!(ending_of(&seen, staged_b).1, ReadAgain::Status);
     handle.submit(Request::RefreshStatus);
     seen.extend(collect_until(&mut updates, |update| {
         matches!(update, Update::Status { .. })
     }));
-    seen.extend(arriving_within(&mut updates, Duration::from_millis(500)));
+    seen.extend(after_the_repository_thread(&handle, &mut updates));
     let refs = seen
         .iter()
         .filter(|update| matches!(update, Update::Refs { .. }))
@@ -547,31 +653,38 @@ fn a_commit_keeps_refreshes_back_and_a_stage_asked_meanwhile_waits_for_it() {
         "not the one refresh asked once the commit ended: {seen:?}"
     );
     // The refresh's own status may be drawn too, if it was read once the stage had ended;
-    // never one read across it, and the last is the stage's.
+    // never one read across it, and the last is the stage's: `a` committed, `b` staged.
     let drawn = statuses(&seen);
     let Some(last) = drawn.last() else {
         panic!("no status was drawn after the writes: {seen:?}");
     };
-    assert_eq!(staged_and_untracked(last).0, ["a"]);
+    assert_eq!(
+        staged_and_untracked(last),
+        (vec!["b".to_owned()], Vec::new())
+    );
     drop(handle);
 }
 
-/// R4.6 on the threads' side: a refresh asked BEFORE a commit, whose reads are still queued
-/// on the refresh thread — its status held, its ahead/behind waiting behind it — when the
-/// commit starts, draws nothing while the commit runs: the status, released, was read across
-/// a write and is dropped, and the ahead/behind is kept back as it is taken up. Once the
-/// commit has ended and the window asks, one refresh is answered. Caught by: the refresh
-/// thread counting ahead/behind while a commit runs (only the handle's gate kept back).
+/// R4.6 on the threads' side, against a real commit: a refresh asked BEFORE the commit, whose
+/// reads are still queued on the refresh thread — its status held, its ahead/behind waiting
+/// behind it — when the commit starts, draws nothing while the commit runs: the status,
+/// released, was read across a write and is dropped, and the ahead/behind is kept back as it
+/// is taken up. The commit is held until the status's process has ended and the repository
+/// thread has answered a later request, so the refresh thread takes the ahead/behind up while
+/// it runs. Once the commit has ended and the window asks, one refresh is answered. Caught by:
+/// the refresh thread counting ahead/behind while a commit runs (only the handle's gate kept
+/// back).
 #[test]
 fn a_refresh_asked_before_a_commit_draws_nothing_while_it_runs() {
-    let fixture = with_origin(
-        &format!("cairn-lane-refresh-before-commit-{}", std::process::id()),
-        "/nonexistent/origin",
-    );
-    let stub = stub(&[("fetch", &held("commits")), ("status", &held("statuses"))]);
+    let fixture = to_commit("cairn-lane-refresh-before-commit", &["a"]);
+    let stub = stub(&[("status", &held("statuses"))]);
     let _released = ReleaseAll(&stub);
     let (home, runtime) = (Home::new(), RuntimeDir::new());
     let (handle, mut updates, _reply) = boundary(&fixture.path, &stub, (&home, &runtime));
+    // Staged with the status held: released here, so nothing of it is left to answer.
+    let id = ask(&handle, stage(&["a"]));
+    until_ended(&mut updates, id);
+    held_hook(&fixture.path, &stub.directory);
 
     handle.submit(Request::Refresh);
     let status = until_pids(&stub, "statuses", 1)[0];
@@ -585,65 +698,77 @@ fn a_refresh_asked_before_a_commit_draws_nothing_while_it_runs() {
     let commit = ask(&handle, commit());
     let pid = until_pids(&stub, "commits", 1)[0];
     release(&stub, status);
-    let seen = arriving_within(&mut updates, Duration::from_millis(700));
-    // What arrived once the commit had started.
-    let meanwhile: Vec<&Update> = seen
+    let deadline = Instant::now() + WAIT;
+    while !pids(&stub, "finished").contains(&status) {
+        assert!(Instant::now() < deadline, "the status never ended");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let mut seen = after_the_repository_thread(&handle, &mut updates);
+    release(&stub, pid);
+    seen.extend(until_ended(&mut updates, commit));
+    let during: Vec<&Update> = seen
         .iter()
         .skip_while(|update| !matches!(update, Update::WriteStarted { id } if *id == commit))
+        .take_while(|update| !matches!(update, Update::WriteEnded { id, .. } if *id == commit))
         .collect();
-    assert!(!meanwhile.is_empty(), "the commit never started: {seen:?}");
+    assert!(!during.is_empty(), "the commit never started: {seen:?}");
     assert!(
-        !meanwhile.iter().any(|update| matches!(
+        !during.iter().any(|update| matches!(
             update,
             Update::Refs { .. } | Update::Status { .. } | Update::AheadBehind { .. }
         )),
-        "a refresh asked before the commit drew while it ran: {meanwhile:?}"
+        "a refresh asked before the commit drew while it ran: {during:?}"
     );
     assert_eq!(
         pids(&stub, "statuses"),
         [status],
         "a status started while the commit ran"
     );
-
-    release(&stub, pid);
-    let seen = until_ended(&mut updates, commit);
     assert_eq!(ending_of(&seen, commit).1, ReadAgain::Everything);
+
     // What the window asks as the commit ends: answered once, its status released.
     handle.submit(Request::Refresh);
     let follow_up = until_pids(&stub, "statuses", 2)[1];
     release(&stub, follow_up);
-    let mut seen = collect_until(&mut updates, |update| {
+    let mut after = collect_until(&mut updates, |update| {
         matches!(update, Update::Status { .. })
     });
-    seen.extend(arriving_within(&mut updates, Duration::from_millis(500)));
-    let count = |kind: fn(&Update) -> bool| seen.iter().filter(|update| kind(update)).count();
+    while !after
+        .iter()
+        .any(|update| matches!(update, Update::AheadBehind { .. }))
+    {
+        after.extend(collect_until(&mut updates, |update| {
+            matches!(update, Update::AheadBehind { .. })
+        }));
+    }
+    after.extend(after_the_repository_thread(&handle, &mut updates));
+    let count = |kind: fn(&Update) -> bool| after.iter().filter(|update| kind(update)).count();
     assert_eq!(
         (
             count(|update| matches!(update, Update::Refs { .. })),
-            count(|update| matches!(update, Update::AheadBehind { .. })),
             count(|update| matches!(update, Update::Status { .. })),
         ),
-        (1, 1, 1),
-        "not one read of each after the commit: {seen:?}"
+        (1, 1),
+        "not one read of each after the commit: {after:?}"
     );
     drop(handle);
 }
 
-/// C10, R4.3 and the QA brief: a cancel names its write and reaches only that one — a cancel
-/// for a commit still queued does nothing, the running commit's ends it as one that may have
-/// taken effect, and that same cancel sent again once the next commit runs leaves the next
-/// one to finish. Caught by: a cancel that reaches whatever runs (#47's shape), or one kept
-/// for a write it was not for.
+/// C10, R4.3 and the QA brief, against real commits held in their hooks: a cancel names its
+/// write and reaches only that one — a cancel for a commit still queued does nothing, the
+/// running commit's ends it as one that may have taken effect (its hook killed, nothing
+/// committed), and that same cancel sent again once the next commit runs leaves the next one
+/// to finish and commit what is staged. Caught by: a cancel that reaches whatever runs (#47's
+/// shape), or one kept for a write it was not for.
 #[test]
 fn a_cancel_names_its_commit_and_never_reaches_the_one_queued_behind_it() {
-    let fixture = with_origin(
-        &format!("cairn-lane-cancel-by-id-{}", std::process::id()),
-        "/nonexistent/origin",
-    );
-    let stub = stub(&[("fetch", &held("commits"))]);
+    let fixture = to_commit("cairn-lane-cancel-by-id", &["a"]);
+    let stub = stub(&[]);
     let _released = ReleaseAll(&stub);
     let (home, runtime) = (Home::new(), RuntimeDir::new());
     let (handle, mut updates, _reply) = boundary(&fixture.path, &stub, (&home, &runtime));
+    staged(&handle, &mut updates, &["a"]);
+    held_hook(&fixture.path, &stub.directory);
 
     let first = ask(&handle, commit());
     let second = ask(&handle, commit());
@@ -651,68 +776,49 @@ fn a_cancel_names_its_commit_and_never_reaches_the_one_queued_behind_it() {
     handle.submit(Request::CancelWrite { id: second });
     handle.submit(Request::CancelWrite { id: first });
     let seen = until_ended(&mut updates, first);
-    match ending_of(&seen, first).0 {
-        WriteEnding::MayHaveTakenEffect { message, .. } => {
+    match ending_of(&seen, first) {
+        (WriteEnding::MayHaveTakenEffect { message, .. }, ReadAgain::Everything) => {
             assert!(message.contains("cancelled"), "{message}");
         }
         other => panic!("the cancelled commit ended {other:?}"),
     }
     let next = until_pids(&stub, "commits", 2)[1];
+    // Reaches the lane's state as it is submitted; a cancel that ended the second commit would
+    // make its ending a cancel's rather than a commit's.
     handle.submit(Request::CancelWrite { id: first });
-    let after = arriving_within(&mut updates, Duration::from_millis(500));
-    assert!(
-        !lane_news(&after).contains(&Lane::Ended(second)),
-        "a late cancel of the first commit ended the second: {after:?}"
-    );
     release(&stub, next);
     let seen = until_ended(&mut updates, second);
     assert!(
         matches!(ending_of(&seen, second).0, WriteEnding::Done(_)),
-        "{seen:?}"
+        "a late cancel of the first commit reached the second: {seen:?}"
+    );
+    assert!(
+        fixture.path.join(".git/refs/heads/main").is_file(),
+        "the second commit committed nothing"
     );
     drop(handle);
 }
 
-/// R4.9 beside a fetch: a close asked while a fetch and a commit both run ends the fetch at
-/// once, as it ends every read and network operation, and waits on the commit alone — the
-/// fetch's ending arrives while the commit is still held. Caught by: a close that ends the
-/// fetch only once the local lane has been waited for, which leaves a fetch reaching the
-/// network for as long as a commit's hooks run.
+/// R4.9 beside a fetch: a close asked while a fetch and a real commit both run ends the fetch
+/// at once, as it ends every read and network operation, and waits on the commit alone — the
+/// fetch's ending arrives while the commit is still held in its hook. Caught by: a close that
+/// ends the fetch only once the local lane has been waited for, which leaves a fetch reaching
+/// the network for as long as a commit's hooks run.
 #[test]
 fn a_close_ends_a_fetch_at_once_while_it_waits_on_a_commit() {
-    let fixture = with_origin(
-        &format!("cairn-lane-close-fetch-{}", std::process::id()),
-        "/nonexistent/origin",
-    );
-    let config = fixture.path.join(".git/config");
-    let mut text = std::fs::read_to_string(&config).unwrap_or_else(|error| panic!("{error}"));
-    text.push_str(
-        "[remote \"upstream\"]\n\turl = /nonexistent/upstream\n\t\
-         fetch = +refs/heads/*:refs/remotes/upstream/*\n",
-    );
-    std::fs::write(&config, text).unwrap_or_else(|error| panic!("{error}"));
-    // The network lane's fetch is of `origin`, the commit's of `upstream`: each held, each
-    // writing its pid where the test reads it.
-    let body = format!(
-        "  case \"$*\" in\n  *upstream*)\n{}\n  ;;\n  *)\n{}\n  ;;\n  esac",
-        held("commits"),
-        held("fetches")
-    );
-    let stub = stub(&[("fetch", &body)]);
+    let fixture = to_commit("cairn-lane-close-fetch", &["a"]);
+    let stub = stub(&[("fetch", &held("fetches"))]);
     let _released = ReleaseAll(&stub);
     let (home, runtime) = (Home::new(), RuntimeDir::new());
     let (handle, mut updates, _reply) = boundary(&fixture.path, &stub, (&home, &runtime));
+    staged(&handle, &mut updates, &["a"]);
+    held_hook(&fixture.path, &stub.directory);
 
     handle.submit(Request::Fetch {
         remote: "origin".to_owned(),
     });
     until_pids(&stub, "fetches", 1);
-    let commit = ask(
-        &handle,
-        LocalWrite::HeldCommit {
-            remote: "upstream".to_owned(),
-        },
-    );
+    let commit = ask(&handle, commit());
     let pid = until_pids(&stub, "commits", 1)[0];
     handle.submit(Request::Close);
     let seen = collect_until(&mut updates, |update| {
@@ -742,28 +848,30 @@ fn a_close_ends_a_fetch_at_once_while_it_waits_on_a_commit() {
     );
 }
 
-/// C11 and R4.9, against a stub's long-running write the lane treats as a commit: a close
-/// asked while it runs waits for it — the stream stays open and the commit's process alive —
-/// and ends nothing; once it finishes, its ending arrives, a write queued behind it is not
-/// run, and the stream ends. Caught by: a close that ends the commit's `git` (the registry's
-/// close-everything), or one that runs the queued write.
+/// C11 and R4.9, against a real commit held in its hook: a close asked while it runs waits for
+/// it — the stream stays open and the commit's `git` and its hook alive, past `CLOSE_BOUND`,
+/// when a close that ended what runs would have given up on it — and ends nothing; once it
+/// finishes, its ending arrives, a write queued behind it is not run, and the stream ends.
+/// Caught by: a close that ends the commit's `git` (the registry's close-everything), or one
+/// that runs the queued write.
 #[test]
 fn a_close_during_a_commit_waits_for_it_and_ends_nothing() {
-    let fixture = with_origin(
-        &format!("cairn-lane-close-waits-{}", std::process::id()),
-        "/nonexistent/origin",
-    );
-    write_files(&fixture.path, &["a"]);
-    let stub = stub(&[("fetch", &held("commits"))]);
+    let fixture = to_commit("cairn-lane-close-waits", &["a", "b"]);
+    let stub = stub(&[]);
     let _released = ReleaseAll(&stub);
     let (home, runtime) = (Home::new(), RuntimeDir::new());
     let (handle, mut updates, _reply) = boundary(&fixture.path, &stub, (&home, &runtime));
+    staged(&handle, &mut updates, &["a"]);
+    held_hook(&fixture.path, &stub.directory);
 
     let commit = ask(&handle, commit());
     let pid = until_pids(&stub, "commits", 1)[0];
-    let queued = ask(&handle, stage(&["a"]));
+    #[cfg(target_os = "linux")]
+    let group = group_of(pid);
+    let queued = ask(&handle, stage(&["b"]));
     handle.submit(Request::Close);
-    // Past CLOSE_BOUND, when a close that ends what runs has given up waiting on it.
+    // Past CLOSE_BOUND, when a close that ends what runs has given up waiting on it: the one
+    // wait here that is a length of time, since the patience running out is what is tested.
     let waited = arriving_within(
         &mut updates,
         cairn_git::CLOSE_BOUND + Duration::from_secs(1),
@@ -774,8 +882,8 @@ fn a_close_during_a_commit_waits_for_it_and_ends_nothing() {
     );
     #[cfg(target_os = "linux")]
     assert!(
-        !super::lifecycle_tests::alive_in_group(pid).is_empty(),
-        "the commit's git is gone"
+        super::lifecycle_tests::alive_in_group(group).len() >= 2,
+        "the commit's git or its hook is gone"
     );
     release(&stub, pid);
     let mut seen = waited;
@@ -794,7 +902,11 @@ fn a_close_during_a_commit_waits_for_it_and_ends_nothing() {
         !lane_news(&seen).contains(&Lane::Started(queued)),
         "a write queued behind the close was run"
     );
-    assert_eq!(pids(&stub, "finished"), [pid], "the commit did not finish");
+    assert_eq!(
+        pids(&stub, "finished"),
+        [pid],
+        "the commit's hook did not finish"
+    );
 }
 
 /// C11 and R4.9: a lock file left in the git directory — by a write a close gave up on, say
@@ -829,13 +941,29 @@ fn a_lock_left_behind_is_named_as_the_repository_opens_and_by_the_write_it_fails
     drop(handle);
 }
 
-/// Answers the next prompt among the updates with `secret`, returning what came before it.
-fn answer_next_prompt(updates: &mut Updates, reply: &Replier, secret: &str) -> Vec<Update> {
+/// Answers the next prompt among the updates with `secret`, returning what came before it,
+/// the prompt last. It must be titled `asking`.
+fn answer_next_prompt(
+    updates: &mut Updates,
+    reply: &Replier,
+    secret: &str,
+    asking: &str,
+) -> Vec<Update> {
     let seen = collect_until(updates, |update| matches!(update, Update::Prompt { .. }));
-    let Some(Update::Prompt { id, text }) = seen.last() else {
+    let Some(Update::Prompt {
+        id,
+        text,
+        asking: titled,
+    }) = seen.last()
+    else {
         unreachable!("collected until a prompt");
     };
     assert!(text.contains("passphrase"), "{text}");
+    assert_eq!(
+        titled.as_deref(),
+        Some(asking),
+        "the prompt is not titled by its own operation"
+    );
     reply(Reply::Provide {
         prompt: *id,
         secret: Secret::from_string(secret.to_owned()),
@@ -878,7 +1006,7 @@ fn a_prompt_a_stages_hook_raises_is_shown_and_answered() {
     let (handle, mut updates, reply) = real_boundary(&fixture.path, (&home, &runtime));
 
     let id = ask(&handle, stage(&["a"]));
-    let seen = answer_next_prompt(&mut updates, &reply, "correct horse");
+    let seen = answer_next_prompt(&mut updates, &reply, "correct horse", "Staging 1 file");
     assert!(
         lane_news(&seen).contains(&Lane::Started(id)),
         "the prompt came before the write started: {seen:?}"
@@ -896,21 +1024,67 @@ fn a_prompt_a_stages_hook_raises_is_shown_and_answered() {
     drop(handle);
 }
 
-/// C12's commit half, against a stub's long-running write the lane treats as a commit (phase 05
-/// signs a real `git commit` with an SSH key): what it runs asks for a passphrase through the
-/// helper, the window is asked, and the answer reaches it.
-#[test]
-fn a_prompt_a_commit_raises_is_shown_and_answered() {
-    let fixture = with_origin(
-        &format!("cairn-lane-commit-asks-{}", std::process::id()),
-        "/nonexistent/origin",
+/// A stand-in `ssh-keygen` for `gpg.ssh.program`: for `-Y sign`, it asks for the key's
+/// passphrase through `SSH_ASKPASS` as ssh-keygen does with an encrypted key and no agent,
+/// writes what it heard to `<directory>/heard`, and writes a signature beside the buffer git
+/// gave it — the last argument — as `<buffer>.sig`; any other use prints a fingerprint.
+fn signing_program(directory: &Path) -> PathBuf {
+    let program = directory.join("ssh-keygen");
+    let script = format!(
+        "#!/bin/sh\n\
+         for last in \"$@\"; do :; done\n\
+         case \"$*\" in\n\
+         *-Y\\ sign*)\n\
+           {asks}\
+           printf -- '-----BEGIN SSH SIGNATURE-----\\nsigned after asking\\n-----END SSH SIGNATURE-----\\n' \
+             > \"$last.sig\"\n\
+           ;;\n\
+         *)\n\
+           echo '256 SHA256:stand-in key (ED25519)'\n\
+           ;;\n\
+         esac\n",
+        asks = asks(&directory.display().to_string())
     );
-    let stub = stub(&[("fetch", &format!("{}  exit 0", asks("$DIR")))]);
+    std::fs::write(&program, script).unwrap_or_else(|error| panic!("{error}"));
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+        .unwrap_or_else(|error| panic!("{error}"));
+    program
+}
+
+/// C12's commit half and phase 04's QA item 13, against a real signed `git commit` (git
+/// 2.34's `gpg.format=ssh`): the signing program it runs asks for the key's passphrase
+/// through the helper while a fetch is also in flight, the prompt reaches the window titled by
+/// the commit — not the fetch — and the answer reaches the program, whose signature is the
+/// commit's. Caught by: a commit run without an askpass token (the helper refuses it), a
+/// prompt titled by whatever else is in flight, or an answer that never arrives.
+#[test]
+fn a_signed_commits_prompt_is_titled_by_the_commit_while_a_fetch_runs() {
+    let fixture = to_commit("cairn-lane-commit-asks", &["a"]);
+    let stub = stub(&[("fetch", &held("fetches"))]);
+    let _released = ReleaseAll(&stub);
+    let program = signing_program(&stub.directory);
+    let key = stub.directory.join("id_ed25519");
+    std::fs::write(&key, "a stand-in key\n").unwrap_or_else(|error| panic!("{error}"));
+    let config = fixture.path.join(".git/config");
+    let mut text = std::fs::read_to_string(&config).unwrap_or_else(|error| panic!("{error}"));
+    text.push_str(&format!(
+        "[commit]\n\tgpgSign = true\n[gpg]\n\tformat = ssh\n[gpg \"ssh\"]\n\tprogram = {}\n\
+         [user]\n\tsigningKey = {}\n",
+        program.display(),
+        key.display()
+    ));
+    std::fs::write(&config, text).unwrap_or_else(|error| panic!("{error}"));
     let (home, runtime) = (Home::new(), RuntimeDir::new());
     let (handle, mut updates, reply) = boundary(&fixture.path, &stub, (&home, &runtime));
+    staged(&handle, &mut updates, &["a"]);
 
+    handle.submit(Request::Fetch {
+        remote: "origin".to_owned(),
+    });
+    until_pids(&stub, "fetches", 1);
     let id = ask(&handle, commit());
-    answer_next_prompt(&mut updates, &reply, "battery staple");
+    answer_next_prompt(&mut updates, &reply, "battery staple", "Commit");
     let seen = until_ended(&mut updates, id);
     assert!(
         matches!(ending_of(&seen, id).0, WriteEnding::Done(_)),
@@ -920,6 +1094,71 @@ fn a_prompt_a_commit_raises_is_shown_and_answered() {
         std::fs::read_to_string(stub.directory.join("heard")).unwrap_or_default(),
         "battery staple"
     );
+    // The commit object carries the signature the program wrote once it was answered.
+    let head = std::fs::read_to_string(fixture.path.join(".git/refs/heads/main"))
+        .unwrap_or_else(|error| panic!("{error}"));
+    let repo = Repository::discover(&fixture.path).unwrap_or_else(|error| panic!("{error}"));
+    let details = repo
+        .commit_details(&cairn_model::Oid::parse(head.trim()).unwrap_or_else(|e| panic!("{e}")))
+        .unwrap_or_else(|error| panic!("{error}"));
+    // git writes the commit only once the program has signed it, so a commit made is signed.
+    assert_eq!(details.message, "the subject\n\nthe body\n");
+    drop(handle);
+}
+
+/// R6.2, R1.6 and phase 04's QA item 7, through the lane: an amend held in its hook keeps a
+/// refresh back like a commit, runs under the confirmation of the `Consequence` the engine
+/// computed, and ends quoting the prompt it confirmed and reading everything again. Caught
+/// by: an amend run as a plain commit, its prompt lost, or a refresh read while it ran.
+#[test]
+fn an_amend_through_the_lane_quotes_its_prompt_and_keeps_refreshes_back() {
+    let fixture = to_commit("cairn-lane-amend", &["a", "b"]);
+    let stub = stub(&[]);
+    let _released = ReleaseAll(&stub);
+    let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let (handle, mut updates, _reply) = boundary(&fixture.path, &stub, (&home, &runtime));
+    staged(&handle, &mut updates, &["a"]);
+    let first = ask(&handle, commit());
+    until_ended(&mut updates, first);
+    staged(&handle, &mut updates, &["b"]);
+    held_hook(&fixture.path, &stub.directory);
+
+    let repo = Repository::discover(&fixture.path).unwrap_or_else(|error| panic!("{error}"));
+    let consequence = cairn_git::ops::amend_consequence(&repo, &CancelSignal::new())
+        .unwrap_or_else(|error| panic!("{error}"));
+    let prompt = consequence.prompt();
+    let amend = ask(
+        &handle,
+        LocalWrite::Amend {
+            confirmed: Confirmed::by_user(consequence),
+            message: "amended".to_owned(),
+            skip_hooks: false,
+        },
+    );
+    let pid = until_pids(&stub, "commits", 1)[0];
+    handle.submit(Request::Refresh);
+    let meanwhile = after_the_repository_thread(&handle, &mut updates);
+    assert!(
+        !meanwhile
+            .iter()
+            .any(|update| matches!(update, Update::Refs { .. })),
+        "a refresh was read while the amend ran: {meanwhile:?}"
+    );
+    release(&stub, pid);
+    let seen = until_ended(&mut updates, amend);
+    match ending_of(&seen, amend) {
+        (WriteEnding::Done(done), ReadAgain::Everything) => {
+            assert_eq!(done.acknowledged.as_deref(), Some(prompt.as_str()));
+        }
+        other => panic!("{other:?}"),
+    }
+    let head = std::fs::read_to_string(fixture.path.join(".git/refs/heads/main"))
+        .unwrap_or_else(|error| panic!("{error}"));
+    let details = repo
+        .commit_details(&cairn_model::Oid::parse(head.trim()).unwrap_or_else(|e| panic!("{e}")))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(details.message, "amended\n");
+    assert!(details.parents.is_empty(), "the amend made a second commit");
     drop(handle);
 }
 

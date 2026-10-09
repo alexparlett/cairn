@@ -49,11 +49,17 @@ pub fn fetch_line(fetch: &FetchStatus) -> Option<String> {
 }
 
 /// What the window says while it waits on a local write to close (staging-and-commit R4.9):
-/// "Finishing commit…". `None` when it is not closing, or no write runs.
+/// "Finishing commit… Closing again leaves it unfinished." — which write it waits on, and what
+/// a second close past the window's patience does: closes the window with the write still
+/// running, unwatched (the user's decision 12). `None` when it is not closing, or no write
+/// runs.
 pub fn closing_line(writes: &LocalWrites) -> Option<String> {
-    writes
-        .closing_on()
-        .map(|asked| format!("Finishing {}…", asked.what))
+    writes.closing_on().map(|asked| {
+        format!(
+            "Finishing {}… Closing again leaves it unfinished.",
+            asked.what
+        )
+    })
 }
 
 /// What the window says about the lock files last listed — as the repository opened, or

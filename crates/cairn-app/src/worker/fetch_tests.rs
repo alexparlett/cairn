@@ -486,7 +486,7 @@ pub(super) fn collect_until(
 
 fn prompt_in(seen: &[Update]) -> Option<(PromptId, String)> {
     seen.iter().find_map(|update| match update {
-        Update::Prompt { id, text } => Some((*id, text.clone())),
+        Update::Prompt { id, text, .. } => Some((*id, text.clone())),
         _ => None,
     })
 }

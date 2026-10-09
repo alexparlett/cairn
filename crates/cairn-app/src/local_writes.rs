@@ -78,6 +78,14 @@ impl LocalWrites {
         self.closing = true;
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "phase 07 draws the write running where the user acted, and phase 09 the \
+                      commit box's busy state"
+        )
+    )]
     pub fn running(&self) -> Option<&Asked> {
         self.running.as_ref()
     }

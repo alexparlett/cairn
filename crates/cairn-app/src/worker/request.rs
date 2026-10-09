@@ -403,7 +403,11 @@ pub enum Request {
     /// Never queued: it reaches the lane's state directly, ahead of any write.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "commit, phase 05, is the first write to cancel")
+        expect(
+            dead_code,
+            reason = "the commit box (staging-and-commit phase 09) is the first view to cancel \
+                      a commit; the lane serves it, and its tests ask"
+        )
     )]
     CancelWrite { id: OperationId },
     /// Every `git` invocation this repository has run that is over, oldest
@@ -543,10 +547,15 @@ pub enum Update {
         reason: String,
     },
     /// git or ssh is asking, through the helper: `text` is the prompt as
-    /// given, and `id` is what the answer must name.
+    /// given, `id` is what the answer must name, and `asking` is the operation
+    /// whose askpass token the helper presented — the remote a fetch is of, or a
+    /// local write as the window names it ("Commit") — so a prompt raised while a
+    /// fetch and a write both run is titled by its own; `None` for a token issued
+    /// with no name.
     Prompt {
         id: PromptId,
         text: String,
+        asking: Option<String>,
     },
     /// The refs as they stand, read on the history thread (refs-and-status R1, R11.2): by a
     /// refresh, in the refs lane, with `reopen` saying whether what the history draws differs
@@ -592,8 +601,16 @@ pub enum Update {
     WriteStarted {
         id: OperationId,
     },
+    /// A line a running commit or amend's `git` — or a hook it runs — wrote, stdout's and
+    /// stderr's alike, as it arrived (staging-and-commit R6.5): what the Git Error dialog
+    /// (phase 09) and the activity popover (phase 11) draw.
+    WriteOutput {
+        id: OperationId,
+        line: String,
+    },
     /// A local write has ended, how, and what the window reads again after it (R4.5): what
-    /// its `Invalidated` names, or everything when a commit kept a refresh back (R4.6).
+    /// its `Invalidated` names — everything, for a commit, whatever its ending, so a refresh
+    /// kept back while it ran (R4.6) is never lost.
     WriteEnded {
         id: OperationId,
         ending: WriteEnding,
@@ -691,6 +708,7 @@ impl Update {
             | Self::FetchRefused { .. }
             | Self::Prompt { .. }
             | Self::WriteStarted { .. }
+            | Self::WriteOutput { .. }
             | Self::WriteEnded { .. }
             | Self::LocksAtOpen { .. }
             | Self::CommandLog { .. }

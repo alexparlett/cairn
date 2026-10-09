@@ -102,6 +102,10 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             refresh_after_an_operation(worker);
         }
         Update::WriteStarted { id } => writes.write().started(id),
+        // No view draws a commit's output yet: the Git Error dialog (staging-and-commit phase
+        // 09) and the activity popover (phase 11) will; a failure carries git's words in its
+        // ending meanwhile.
+        Update::WriteOutput { .. } => {}
         Update::WriteEnded {
             id,
             ending,
@@ -187,9 +191,9 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         // Answered for whoever asks; no view draws the log in this packet (PRD R8.3).
         Update::CommandLog { .. } => {}
         // A fetch's, or a local write's — a hook, a signing key, an LFS filter (R5.1).
-        Update::Prompt { id, text } => {
+        Update::Prompt { id, text, asking } => {
             if fetch.peek().is_in_flight() || writes.peek().is_running() {
-                prompt.set(Some(PromptView { id, text }));
+                prompt.set(Some(PromptView { id, text, asking }));
             } else {
                 (worker.refuse)(id);
             }
@@ -842,6 +846,7 @@ mod tests {
                 Update::Prompt {
                     id,
                     text: "Password for 'https://h/x': ".to_owned(),
+                    asking: Some("origin".to_owned()),
                 },
             );
             assert!(view.prompt.read().is_some(), "the prompt was not shown");
@@ -864,6 +869,7 @@ mod tests {
             Update::Prompt {
                 id,
                 text: "Password for 'https://h/x': ".to_owned(),
+                asking: Some("origin".to_owned()),
             },
         );
         assert_eq!(*view.prompt.read(), None);
@@ -925,6 +931,7 @@ mod tests {
         let prompt = || Update::Prompt {
             id: PromptId::for_tests(8),
             text: "Enter passphrase for key '/k': ".to_owned(),
+            asking: Some("Commit".to_owned()),
         };
         let [started, ended] = write_news(id, ReadAgain::Status);
 

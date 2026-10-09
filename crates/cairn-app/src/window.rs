@@ -114,12 +114,11 @@ pub fn window(
     let prompt = view.prompt.read().clone();
     // What the window says about the local writes: which it waits on to close (R4.9), and the
     // lock files last listed (R3.8, R4.9).
-    let (closing_on, locks, asker) = {
+    let (closing_on, locks) = {
         let writes = view.writes.read();
         (
             status_text::closing_line(&writes),
             status_text::locks_line(writes.locks()),
-            writes.running().map(|asked| asked.what.clone()),
         )
     };
     let refused = view.refused.read().clone();
@@ -208,7 +207,7 @@ pub fn window(
             },
             view,
         ))
-        .maybe_child(prompt.map(|prompt| dialog(prompt, &fetch, asker, view.prompt, answer)))
+        .maybe_child(prompt.map(|prompt| dialog(prompt, view.prompt, answer)))
         .into()
 }
 
@@ -278,23 +277,17 @@ fn split(list: Rect, pane: Element, view: View) -> Element {
 /// The credential dialog for `prompt`, answering through `answer` exactly once.
 fn dialog(
     prompt: PromptView,
-    fetch: &FetchStatus,
-    writing: Option<String>,
     mut showing: State<Option<PromptView>>,
     answer: Option<Replier>,
 ) -> Element {
-    // A prompt is only shown while a fetch or a local write is in flight (`session::apply`
-    // refuses one otherwise): the fetch's remote names what asked, or else the write — "Commit
-    // is asking for a credential" — and the fallback names git when neither holds a name.
-    let remote = fetch
-        .remote_in_flight()
-        .map(str::to_owned)
-        .or_else(|| writing.map(|what| status_text::capitalised(&what)))
-        .unwrap_or_else(|| "git".to_owned());
+    // Titled by the operation whose token the helper presented — the fetch's remote, or the
+    // local write ("Commit is asking for a credential") — whatever else runs beside it, and
+    // by git when the token named none.
+    let asking = prompt.asking.clone().unwrap_or_else(|| "git".to_owned());
     let id = prompt.id;
     let on_submit = answer.clone();
     let on_cancel = answer;
-    CredentialPrompt::new(remote, prompt.text)
+    CredentialPrompt::new(asking, prompt.text)
         .on_submit(move |typed: String| {
             // The first Cairn-owned type the characters reach; the buffer moves, no copy.
             let secret = Secret::from_string(typed);
@@ -1375,8 +1368,9 @@ pub(crate) mod tests {
     }
 
     /// Staging-and-commit R4.9, R5.1 and C11 drawn: a prompt raised while a local write runs is
-    /// titled by the write; the first close asked while it runs says which write the window
-    /// waits on; and the lock files a write's ending or the open named are said, by path.
+    /// titled by the write its token names; the first close asked while it runs says which
+    /// write the window waits on and that closing again leaves it unfinished (the user's
+    /// decision 12); and the lock files a write's ending or the open named are said, by path.
     /// Caught by: a close that waits in silence, a prompt titled "git", or lock files dropped
     /// between the state and the window.
     #[test]
@@ -1388,6 +1382,7 @@ pub(crate) mod tests {
             Some(PromptView {
                 id: crate::worker::PromptId::for_tests(2),
                 text: "Enter passphrase for key '/k': ".to_owned(),
+                asking: Some("Staging 1 file".to_owned()),
             }),
         );
         let id = crate::worker::OperationId::for_tests(11);
@@ -1419,7 +1414,9 @@ pub(crate) mod tests {
         test.sync_and_update();
         let shown = texts(&test);
         assert!(
-            shown.iter().any(|t| t == "Finishing staging 1 file…"),
+            shown
+                .iter()
+                .any(|t| t == "Finishing staging 1 file… Closing again leaves it unfinished."),
             "the close does not say which write it waits on: {shown:?}"
         );
         assert!(
@@ -1446,6 +1443,7 @@ pub(crate) mod tests {
             Some(PromptView {
                 id,
                 text: "Password for 'https://git.example.com/ada/engine': ".to_owned(),
+                asking: Some("origin".to_owned()),
             }),
         );
         let shown = texts(&test);
@@ -1482,6 +1480,50 @@ pub(crate) mod tests {
         );
     }
 
+    /// Staging-and-commit R5.1 and phase 04's QA item 13: with a fetch and a commit both in
+    /// flight, a prompt is titled by the operation whose token asked — the commit's hook's,
+    /// here — never by whichever is in flight. Caught by: a title read from the fetch in
+    /// flight (the guess it replaced named "origin").
+    #[test]
+    fn a_prompt_is_titled_by_its_own_operation_with_a_fetch_and_a_write_in_flight() {
+        let (mut test, view, _, _) = launch_with(
+            Vec::new(),
+            received(0, true),
+            FetchStatus::Running {
+                remote: "origin".to_owned(),
+                line: None,
+            },
+            Some(PromptView {
+                id: crate::worker::PromptId::for_tests(5),
+                text: "Enter passphrase for key '/k': ".to_owned(),
+                asking: Some("Commit".to_owned()),
+            }),
+        );
+        let id = crate::worker::OperationId::for_tests(12);
+        let mut writes = view.writes;
+        writes.write().asked(
+            id,
+            &crate::worker::LocalWrite::StageFiles {
+                paths: vec![cairn_model::RepoPath::from("a")],
+            },
+        );
+        writes.write().started(id);
+        test.sync_and_update();
+        let shown = texts(&test);
+        assert!(
+            shown
+                .iter()
+                .any(|t| t == "Commit is asking for a credential"),
+            "the prompt is not titled by its own operation: {shown:?}"
+        );
+        assert!(
+            !shown
+                .iter()
+                .any(|t| t == "origin is asking for a credential"),
+            "{shown:?}"
+        );
+    }
+
     #[test]
     fn cancelling_the_dialog_refuses_that_prompt() {
         let id = crate::worker::PromptId::for_tests(3);
@@ -1495,6 +1537,7 @@ pub(crate) mod tests {
             Some(PromptView {
                 id,
                 text: "Username for 'https://git.example.com/x': ".to_owned(),
+                asking: Some("origin".to_owned()),
             }),
         );
         click_label(&mut test, "Cancel");
@@ -1645,10 +1688,10 @@ pub(crate) mod tests {
         );
     }
 
-    /// The dialog's fallback when the view state holds a prompt with no fetch in flight
-    /// (which `session::apply` prevents): it still names what asked.
+    /// The dialog's fallback for a prompt whose token named no operation: it still names what
+    /// asked.
     #[test]
-    fn a_prompt_with_no_fetch_in_flight_is_attributed_to_git() {
+    fn a_prompt_naming_no_operation_is_attributed_to_git() {
         let (test, _, _, _) = launch_with(
             Vec::new(),
             received(0, true),
@@ -1656,6 +1699,7 @@ pub(crate) mod tests {
             Some(PromptView {
                 id: crate::worker::PromptId::for_tests(2),
                 text: "Username for 'https://git.example.com/x': ".to_owned(),
+                asking: None,
             }),
         );
         assert!(
@@ -1878,6 +1922,7 @@ pub(crate) mod tests {
         let prompt = PromptView {
             id: crate::worker::PromptId::for_tests(1),
             text: "Password for 'https://ada@git.example.com': ".to_owned(),
+            asking: None,
         };
         let (mut test, view, _, _) = launch_with(
             (0..10).map(row).collect(),

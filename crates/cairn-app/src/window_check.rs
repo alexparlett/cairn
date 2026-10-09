@@ -103,6 +103,7 @@ fn kind(update: &Update) -> &'static str {
         Update::WriteEnded { .. } => "write ended",
         Update::Failed { .. }
         | Update::LocksAtOpen { .. }
+        | Update::WriteOutput { .. }
         | Update::WorkerLost { .. }
         | Update::FetchStarted { .. }
         | Update::FetchProgress { .. }

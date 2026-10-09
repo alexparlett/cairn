@@ -54,18 +54,6 @@ impl FetchStatus {
         matches!(self, Self::Starting { .. } | Self::Running { .. })
     }
 
-    /// The remote the fetch in flight is for, which is who a prompt is asking on behalf of.
-    pub fn remote_in_flight(&self) -> Option<&str> {
-        match self {
-            Self::Starting { remote }
-            | Self::Running { remote, .. }
-            | Self::Cancelling { remote } => Some(remote),
-            Self::Idle | Self::Finished { .. } | Self::Cancelled { .. } | Self::Failed { .. } => {
-                None
-            }
-        }
-    }
-
     /// The window asked; set on the press, before the worker answers.
     pub fn starting(&mut self, remote: String) {
         *self = Self::Starting { remote };
@@ -114,6 +102,9 @@ pub struct PromptView {
     pub id: PromptId,
     /// The prompt exactly as git or ssh gave it to the helper.
     pub text: String,
+    /// What is asking, as the dialog's title names it: the remote a fetch is of, or the
+    /// local write ("Commit"); `None` when the token named no operation.
+    pub asking: Option<String>,
 }
 
 #[cfg(test)]
@@ -142,7 +133,6 @@ mod tests {
             "a cancelling fetch is still in flight"
         );
         assert!(!status.can_be_cancelled(), "a second cancel was offered");
-        assert_eq!(status.remote_in_flight(), Some("origin"));
 
         status.started("origin".to_owned());
         assert_eq!(
@@ -196,7 +186,6 @@ mod tests {
         );
         status.started("origin".to_owned());
         assert!(status.is_in_flight());
-        assert_eq!(status.remote_in_flight(), Some("origin"));
         status.progressed("Receiving objects: 40%".to_owned());
         assert_eq!(
             status,
@@ -208,7 +197,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_fetch_in_flight_has_a_remote_to_name() {
+    fn only_a_fetch_in_flight_can_be_cancelled() {
         for done in [
             FetchStatus::Idle,
             FetchStatus::Finished {
@@ -225,14 +214,6 @@ mod tests {
         ] {
             assert!(!done.is_in_flight(), "{done:?}");
             assert!(!done.can_be_cancelled(), "{done:?}");
-            assert_eq!(done.remote_in_flight(), None, "{done:?}");
         }
-        assert_eq!(
-            FetchStatus::Starting {
-                remote: "upstream".to_owned()
-            }
-            .remote_in_flight(),
-            Some("upstream")
-        );
     }
 }

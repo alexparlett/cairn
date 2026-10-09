@@ -149,6 +149,7 @@ pub(super) fn serve_prompts(
             Update::Prompt {
                 id,
                 text: prompt.text().to_owned(),
+                asking: prompt.operation().map(str::to_owned),
             },
         );
         // Blocks on the user: this thread has nothing else to do until they decide.

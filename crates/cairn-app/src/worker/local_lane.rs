@@ -1,14 +1,18 @@
 //! The local write lane, `cairn-local`: the thread where every write to the index, the
-//! working tree and a local ref runs — staging, unstaging and discarding today, commit and
-//! amend from phase 05 — one at a time, in the order asked (staging-and-commit R4,
+//! working tree and a local ref runs — staging, unstaging, discarding, commit and amend —
+//! one at a time, in the order asked (staging-and-commit R4,
 //! `docs/design/concurrency.md`, "Operations").
 //!
 //! A write reaches this thread straight from `RepositoryHandle::submit`, never through the
 //! repository thread, where it would wait behind a deep find (R4.1). It is queued behind the
 //! write running, never refused for being second (R4.2), and carries an [`OperationId`] the
 //! window chose as it asked, so the window draws it queued, then running, then ended, and a
-//! cancel names it (R4.3): only a commit is cancellable, and only while it runs, so a cancel
-//! that arrives late never reaches the write queued behind the one it named.
+//! cancel names it (R4.3): only a commit or an amend is cancellable, and only while it runs,
+//! so a cancel that arrives late never reaches the write queued behind the one it named. A
+//! cancel that comes while an amend's checks still read stops it before git starts; once git
+//! runs, the commit's [`ops::CommitCancel`] is installed under the write's id, and a cancel
+//! calls it under the lane's lock — `KillHandle::kill`, an atomic mark, a `try_lock` and a
+//! `killpg`, which never waits on the process (`cairn-git`'s `process/group.rs`).
 //!
 //! What the lane shares with the other threads is [`LaneState`], one mutex held for an
 //! assignment and a send:
@@ -20,12 +24,15 @@
 //!   before the next write's start. One that began before a write ended is dropped, never
 //!   drawn: the window reads status again after every write's ending, which shows it.
 //! - **Quiet while a commit runs** (R4.6). A refresh asked of the handle, or reaching the
-//!   repository or refresh thread, while a commit runs starts nothing; it is remembered, and
-//!   the commit's ending says to read everything again, so none is lost.
+//!   repository or refresh thread, while a commit runs starts nothing, and is dropped: a
+//!   commit's ending always says to read everything again — whatever it did, since a hook may
+//!   have moved anything — so nothing a refresh would have shown is lost.
 //! - **The running write**, its id and its cancel.
 //!
-//! Every write carries an askpass token of its own (R5.1, L11): a hook, a signing program or
-//! an LFS filter it runs may ask, and the window shows the prompt while a write runs.
+//! Every write carries an askpass token of its own (R5.1, L11), issued under the name the
+//! window gives the write ("Commit"): a hook, a signing program or an LFS filter it runs may
+//! ask, and the window shows the prompt titled by that name while the write runs. A commit's
+//! output — its hooks' lines — reaches the window as it arrives (`Update::WriteOutput`, R6.5).
 //!
 //! Closing the window during a write waits for it (R4.9): the repository thread, closing,
 //! marks the lane closing, which runs nothing more it is sent, and waits for the write
@@ -40,7 +47,7 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use cairn_askpass::Channel;
-use cairn_git::ops::{self, GitBinary, Invalidated, Performed, UnstageTo};
+use cairn_git::ops::{self, CommitWatch, GitBinary, Hooks, Invalidated, Performed, UnstageTo};
 use cairn_git::{Error, Repository, SharedRepository};
 use cairn_model::{AskpassToken, Confirmed, FileDiff, Oid, RepoPath, Selection};
 
@@ -129,12 +136,16 @@ pub enum LocalWrite {
     DiscardLines(Confirmed),
     /// The files the confirmation names, discarded, untracked ones deleted.
     DiscardFiles(Confirmed),
-    /// A long-running, cancellable write the lane treats as a commit, for the tests of what
-    /// a commit does to the lane before commit exists (phase 05 runs them again against
-    /// `git commit`): `git fetch` of `remote`, through a stub `git` that holds it, asks or
-    /// ends as the test says.
-    #[cfg(test)]
-    HeldCommit { remote: String },
+    /// What is staged, committed with `message` (R6.1); `skip_hooks` only from the hook
+    /// failure's skip (R10.5).
+    Commit { message: String, skip_hooks: bool },
+    /// `HEAD` amended with `message` and what is staged (R6.2), under the confirmation of the
+    /// `Consequence` the commit box drew.
+    Amend {
+        confirmed: Confirmed,
+        message: String,
+        skip_hooks: bool,
+    },
 }
 
 /// A test's copy of a write it asked for, to compare with what was sent. A destructive write
@@ -158,12 +169,16 @@ impl Clone for LocalWrite {
                 paths: paths.clone(),
                 to: to.clone(),
             },
-            Self::DiscardLines(_) | Self::DiscardFiles(_) => {
+            Self::Commit {
+                message,
+                skip_hooks,
+            } => Self::Commit {
+                message: message.clone(),
+                skip_hooks: *skip_hooks,
+            },
+            Self::DiscardLines(_) | Self::DiscardFiles(_) | Self::Amend { .. } => {
                 panic!("a destructive write's confirmation is spent once; a test may not copy it")
             }
-            Self::HeldCommit { remote } => Self::HeldCommit {
-                remote: remote.clone(),
-            },
         }
     }
 }
@@ -173,7 +188,8 @@ impl Clone for LocalWrite {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadAgain {
     /// The refs, ahead/behind and status — and the history, if the refs it draws moved: a
-    /// write that moved a ref (a commit), or the refresh a commit kept back while it ran.
+    /// write that moved a ref, and every commit or amend however it ended, which also covers
+    /// a refresh kept back while it ran.
     Everything,
     /// The working tree's status alone: a write to the index or the working tree.
     Status,
@@ -190,7 +206,8 @@ impl ReadAgain {
 }
 
 impl LocalWrite {
-    /// Whether this is a commit: cancellable while it runs, and the lane is quiet behind it.
+    /// Whether this is a commit or an amend: cancellable while it runs, and the lane is quiet
+    /// behind it.
     fn is_commit(&self) -> bool {
         match self {
             Self::StageLines { .. }
@@ -199,8 +216,7 @@ impl LocalWrite {
             | Self::UnstageFiles { .. }
             | Self::DiscardLines(_)
             | Self::DiscardFiles(_) => false,
-            #[cfg(test)]
-            Self::HeldCommit { .. } => true,
+            Self::Commit { .. } | Self::Amend { .. } => true,
         }
     }
 
@@ -214,8 +230,7 @@ impl LocalWrite {
             | Self::UnstageFiles { .. }
             | Self::DiscardLines(_)
             | Self::DiscardFiles(_) => ReadAgain::Status,
-            #[cfg(test)]
-            Self::HeldCommit { .. } => ReadAgain::Everything,
+            Self::Commit { .. } | Self::Amend { .. } => ReadAgain::Everything,
         }
     }
 
@@ -238,26 +253,19 @@ impl LocalWrite {
             Self::UnstageFiles { paths, .. } => format!("unstaging {}", files(paths.len())),
             Self::DiscardLines(_) => "discarding lines".to_owned(),
             Self::DiscardFiles(_) => "discarding files".to_owned(),
-            #[cfg(test)]
-            Self::HeldCommit { .. } => "commit".to_owned(),
+            Self::Commit { .. } => "commit".to_owned(),
+            Self::Amend { .. } => "amend".to_owned(),
         }
     }
 
     /// Runs the write, with `token` as its askpass authorisation. A commit's cancel is handed
-    /// to `lane` once git is running, under `id`.
+    /// to the lane once git is running, under its id, and its output to the window.
     fn perform(
         self,
         git: &GitBinary,
         repo: &Repository,
         token: Option<&AskpassToken>,
-        #[cfg_attr(
-            not(test),
-            expect(
-                unused_variables,
-                reason = "commit, phase 05, is the first write to cancel"
-            )
-        )]
-        (lane, id): (&LaneState, OperationId),
+        watch: &Watch<'_>,
     ) -> Result<Performed, Error> {
         match self {
             Self::StageLines { diff, selection } => {
@@ -272,14 +280,78 @@ impl LocalWrite {
             }
             Self::DiscardLines(confirmed) => ops::discard_lines(git, repo, confirmed, token),
             Self::DiscardFiles(confirmed) => ops::discard_files(git, repo, confirmed, token),
-            #[cfg(test)]
-            Self::HeldCommit { remote } => {
-                let started = ops::fetch(git, repo, &remote, token)?;
-                let cancel = started.canceller();
-                lane.install(id, Box::new(move || cancel.cancel()));
-                started.finish(|_| {})
-            }
+            Self::Commit {
+                message,
+                skip_hooks,
+            } => watch.commit(|commit| {
+                ops::commit(git, repo, &message, hooks(skip_hooks), token, commit)
+            }),
+            Self::Amend {
+                confirmed,
+                message,
+                skip_hooks,
+            } => watch.commit(|commit| {
+                ops::amend(
+                    git,
+                    repo,
+                    confirmed,
+                    &message,
+                    hooks(skip_hooks),
+                    token,
+                    commit,
+                )
+            }),
         }
+    }
+}
+
+fn hooks(skip: bool) -> Hooks {
+    if skip { Hooks::Skip } else { Hooks::Run }
+}
+
+/// What a running write reports through, and how a commit is cancelled: its id, the lane it
+/// installs its cancel on, and the outbox its output goes to.
+struct Watch<'a> {
+    lane: &'a LaneState,
+    id: OperationId,
+    outbox: &'a Outbox,
+}
+
+impl Watch<'_> {
+    /// Runs `commit` with a [`CommitWatch`]: cancelled before git starts by a cancel the lane
+    /// kept for this id, its cancel installed as git starts, each line it writes sent on.
+    fn commit<R>(&self, commit: impl FnOnce(CommitWatch<'_>) -> R) -> R {
+        let (lane, id, outbox) = (self.lane, self.id, self.outbox);
+        let before = BeforeRunning { lane, id };
+        let mut running = |cancel: ops::CommitCancel| {
+            lane.install(id, Box::new(move || cancel.cancel()));
+        };
+        let mut output = |line: &str| {
+            outbox.send(
+                None,
+                Update::WriteOutput {
+                    id,
+                    line: line.to_owned(),
+                },
+            );
+        };
+        commit(CommitWatch {
+            cancel: &before,
+            running: &mut running,
+            output: &mut output,
+        })
+    }
+}
+
+/// A cancel the lane holds for a commit that has not started its `git`, as its checks poll.
+struct BeforeRunning<'a> {
+    lane: &'a LaneState,
+    id: OperationId,
+}
+
+impl cairn_git::Cancel for BeforeRunning<'_> {
+    fn is_cancelled(&self) -> bool {
+        self.lane.cancel_kept(self.id)
     }
 }
 
@@ -294,7 +366,8 @@ pub enum WriteEnding {
     /// ahead of it made stale, or a file edited since its discard was confirmed: dropped,
     /// naming its path (R3.7, R1.4).
     Stale { path: String, message: String },
-    /// Nothing was written: refused before git ran (nothing selected, a conflicted path, …).
+    /// Nothing was written: refused before git ran (nothing selected, a conflicted path, a
+    /// commit during a rebase, …).
     Refused { message: String },
     /// git ran and failed: its message, and the lock files present once it had — the one it
     /// failed on among them, when that was it.
@@ -315,7 +388,8 @@ pub enum WriteEnding {
         kept: Vec<String>,
         message: String,
     },
-    /// Not run: the repository was closing when its turn came.
+    /// Not run: the repository was closing when its turn came, or a commit was cancelled
+    /// before its `git` started.
     NotRun { message: String },
 }
 
@@ -375,7 +449,14 @@ impl WriteEnding {
             Error::ChangedSinceRead { path } | Error::ChangedSinceConfirmed { path } => {
                 Self::Stale { path, message }
             }
-            Error::Refused { .. } | Error::NoPaths => Self::Refused { message },
+            Error::AmendChangedSinceConfirmed => Self::Stale {
+                path: "HEAD".to_owned(),
+                message,
+            },
+            Error::Refused { .. } | Error::NoPaths | Error::CommitRefused { .. } => {
+                Self::Refused { message }
+            }
+            Error::CommitCancelledBeforeRunning => Self::NotRun { message },
             Error::GitCancelled { stranded_locks, .. }
             | Error::GitUnwatched { stranded_locks, .. } => Self::MayHaveTakenEffect {
                 message,
@@ -428,8 +509,6 @@ struct Lane {
     /// Ticks as a write starts and as it ends: odd while one runs.
     ticks: u64,
     running: Option<Running>,
-    /// A refresh was kept back while a commit ran.
-    deferred: bool,
     /// The repository is closing: run nothing more.
     closing: bool,
 }
@@ -449,7 +528,6 @@ impl fmt::Debug for LaneState {
         f.debug_struct("LaneState")
             .field("ticks", &lane.ticks)
             .field("running", &lane.running.as_ref().map(|running| running.id))
-            .field("deferred", &lane.deferred)
             .field("closing", &lane.closing)
             .finish()
     }
@@ -480,19 +558,18 @@ impl LaneState {
         unchanged
     }
 
-    /// `true` when a commit is running, and remembers that a refresh was kept back for it
-    /// (R4.6): the commit's ending reads everything again.
+    /// `true` when a commit is running, so a refresh is kept back (R4.6): dropped, since the
+    /// commit's ending reads everything again whatever it did.
     pub(super) fn defer_refresh(&self) -> bool {
-        let mut lane = self.lock();
-        let commit = lane.running.as_ref().is_some_and(|running| running.commit);
-        if commit {
-            lane.deferred = true;
-        }
-        commit
+        self.lock()
+            .running
+            .as_ref()
+            .is_some_and(|running| running.commit)
     }
 
     /// Cancels the write `id` names, if it is a commit and running; anything else — a write
-    /// that is not a commit, one queued, one that has ended — is left alone (R4.3).
+    /// that is not a commit, one queued, one that has ended — is left alone (R4.3). Called on
+    /// the UI thread; the cancel it calls under the lock never waits (module docs).
     pub(super) fn cancel(&self, id: OperationId) {
         let mut lane = self.lock();
         if let Some(running) = lane.running.as_mut()
@@ -506,12 +583,17 @@ impl LaneState {
         }
     }
 
+    /// Whether a cancel came for `id` before its `git` was running: what a commit's checks
+    /// poll before git starts.
+    fn cancel_kept(&self, id: OperationId) -> bool {
+        self.lock()
+            .running
+            .as_ref()
+            .is_some_and(|running| running.id == id && running.cancelled)
+    }
+
     /// `id` is running, and from now on `cancel` ends it; a cancel that came before ends it
-    /// now.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "commit, phase 05, is the first write to cancel")
-    )]
+    /// now, under the lock — a kill that never waits (module docs).
     fn install(&self, id: OperationId, cancel: Box<dyn Fn() + Send>) {
         let mut lane = self.lock();
         if let Some(running) = lane.running.as_mut()
@@ -537,14 +619,13 @@ impl LaneState {
         announce();
     }
 
-    /// The write running has ended: the clock ticks and `announce` tells the window, given
-    /// whether a refresh was kept back meanwhile, under one lock.
-    fn end(&self, announce: impl FnOnce(bool)) {
+    /// The write running has ended: the clock ticks and `announce` tells the window, under
+    /// one lock.
+    fn end(&self, announce: impl FnOnce()) {
         let mut lane = self.lock();
         lane.ticks += 1;
         lane.running = None;
-        let deferred = std::mem::take(&mut lane.deferred);
-        announce(deferred);
+        announce();
     }
 
     /// The repository is closing: no write is started from now on.
@@ -612,6 +693,17 @@ pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
     }
 }
 
+/// What the window reads again after a write (R4.5): what its `Invalidated` names when it ran,
+/// what it could have changed otherwise — and everything after a commit, whatever its ending,
+/// which covers a refresh kept back while it ran (R4.6).
+fn after(commit: bool, asked: ReadAgain, invalidated: Option<Invalidated>) -> ReadAgain {
+    if commit {
+        ReadAgain::Everything
+    } else {
+        invalidated.map_or(asked, ReadAgain::after)
+    }
+}
+
 /// Runs one write: announced, given its own askpass token, ended with what it did.
 fn run(repo: &Repository, id: OperationId, write: LocalWrite, serving: &Local<'_>) {
     let commit = write.is_commit();
@@ -621,27 +713,32 @@ fn run(repo: &Repository, id: OperationId, write: LocalWrite, serving: &Local<'_
     });
     // One token for the whole write, retired before its ending goes out, so no helper of a
     // git that is gone is accepted afterwards (L11).
-    let authorised = serving.channel.and_then(|channel| channel.begin().ok());
+    // Named as the window names the write, so a prompt it raises is titled by it (R5.1).
+    let authorised = serving.channel.and_then(|channel| {
+        channel
+            .begin_for(crate::status_text::capitalised(&write.what()))
+            .ok()
+    });
     let outcome = write.perform(
         serving.git,
         repo,
         authorised.as_ref().map(cairn_askpass::Operation::token),
-        (serving.lane, id),
+        &Watch {
+            lane: serving.lane,
+            id,
+            outbox: serving.outbox,
+        },
     );
     drop(authorised);
     let (ending, invalidated) = WriteEnding::of(outcome, serving.prompting);
-    let read_again = invalidated.map_or(asked, ReadAgain::after);
-    serving.lane.end(|deferred| {
+    let read_again = after(commit, asked, invalidated);
+    serving.lane.end(|| {
         serving.outbox.send(
             None,
             Update::WriteEnded {
                 id,
                 ending,
-                read_again: if deferred {
-                    ReadAgain::Everything
-                } else {
-                    read_again
-                },
+                read_again,
             },
         );
     });
@@ -703,7 +800,7 @@ mod tests {
         // Nor is one after it has ended.
         let lane = running(first, true);
         lane.install(first, ending());
-        lane.end(|_| {});
+        lane.end(|| {});
         lane.cancel(first);
         assert_eq!(
             ended.load(Ordering::SeqCst),
@@ -732,7 +829,7 @@ mod tests {
         let mut sent = false;
         assert!(!lane.if_unchanged(stamp, || sent = true));
         assert!(!sent, "a read that began before a write started was sent");
-        lane.end(|_| {});
+        lane.end(|| {});
         assert!(
             !lane.if_unchanged(stamp, || sent = true),
             "a read that began before a write ended was sent"
@@ -745,35 +842,68 @@ mod tests {
         assert!(sent, "a read begun after the write was dropped");
     }
 
-    /// R4.6: a refresh is kept back while a commit runs, and only then, and the commit's
-    /// ending is told so, once. Caught by: deferring behind a stage (a refresh lost while
-    /// staging), or a deferral that outlives the commit.
+    /// R4.6: a refresh is kept back while a commit runs, and only then. Caught by: deferring
+    /// behind a stage (a refresh lost while staging), or a deferral that outlives the commit.
     #[test]
-    fn a_refresh_is_kept_back_only_while_a_commit_runs_and_its_ending_says_so() {
+    fn a_refresh_is_kept_back_only_while_a_commit_runs() {
         let lane = running(OperationId::next(), false);
         assert!(
             !lane.defer_refresh(),
             "a refresh was kept back behind a stage"
         );
-        lane.end(|deferred| assert!(!deferred));
-
+        lane.end(|| {});
         lane.begin(OperationId::next(), true, || {});
         assert!(lane.defer_refresh());
-        assert!(lane.defer_refresh());
-        let mut told = None;
-        lane.end(|deferred| told = Some(deferred));
-        assert_eq!(told, Some(true), "the commit's ending was not told");
+        lane.end(|| {});
         assert!(
             !lane.defer_refresh(),
             "a refresh is kept back with no commit running"
         );
-        lane.begin(OperationId::next(), true, || {});
-        lane.end(|deferred| told = Some(deferred));
+    }
+
+    /// R4.6 and phase 04's QA item 7: a refresh kept back is dropped, not remembered, so a
+    /// commit's ending must read everything again whatever it did — done, refused, failed,
+    /// cancelled — and a stage's only what it names. Caught by: a commit that ran reading only
+    /// what its `Invalidated` names (a hook may have moved more), or one that failed reading
+    /// status alone, which would lose the refresh kept back for it.
+    #[test]
+    fn a_commits_ending_reads_everything_whatever_it_did() {
+        let commit = LocalWrite::Commit {
+            message: "x".to_owned(),
+            skip_hooks: false,
+        };
+        assert!(commit.is_commit());
+        assert_eq!(commit.read_again(), ReadAgain::Everything);
+        for invalidated in [None, Some(Invalidated::index()), Some(Invalidated::NOTHING)] {
+            assert_eq!(
+                after(true, ReadAgain::Everything, invalidated),
+                ReadAgain::Everything,
+                "{invalidated:?}"
+            );
+        }
         assert_eq!(
-            told,
-            Some(false),
-            "a deferral outlived the commit it was for"
+            after(false, ReadAgain::Status, Some(Invalidated::index())),
+            ReadAgain::Status
         );
+        assert_eq!(after(false, ReadAgain::Status, None), ReadAgain::Status);
+    }
+
+    /// R4.3: a cancel that comes before a commit's `git` runs is what its checks poll, and only
+    /// for the commit it names. Caught by: a cancel kept for another id, or one lost before
+    /// git starts.
+    #[test]
+    fn a_cancel_before_git_runs_is_kept_for_the_commit_it_names() {
+        let id = OperationId::next();
+        let lane = running(id, true);
+        assert!(!lane.cancel_kept(id));
+        lane.cancel(OperationId::next());
+        assert!(!lane.cancel_kept(id), "another id's cancel was kept for it");
+        lane.cancel(id);
+        assert!(lane.cancel_kept(id));
+        let stage = OperationId::next();
+        let lane = running(stage, false);
+        lane.cancel(stage);
+        assert!(!lane.cancel_kept(stage), "a stage was cancelled");
     }
 
     /// R4.5, R4.7: a write that ran reads again what its `Invalidated` names; one that failed
@@ -816,6 +946,26 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+        let (refused, _) = WriteEnding::of(
+            Err(Error::CommitRefused {
+                why: cairn_git::CommitRefusal::InProgress(cairn_model::OperationInProgress::Rebase),
+            }),
+            &Ok(()),
+        );
+        assert!(
+            matches!(&refused, WriteEnding::Refused { message } if message.contains("a rebase")),
+            "{refused:?}"
+        );
+        let (moved, _) = WriteEnding::of(Err(Error::AmendChangedSinceConfirmed), &Ok(()));
+        assert!(
+            matches!(&moved, WriteEnding::Stale { path, .. } if path == "HEAD"),
+            "{moved:?}"
+        );
+        let (early, _) = WriteEnding::of(Err(Error::CommitCancelledBeforeRunning), &Ok(()));
+        assert!(
+            matches!(&early, WriteEnding::NotRun { message } if message.contains("before git ran")),
+            "a commit cancelled before git ran may have taken effect: {early:?}"
+        );
         assert_eq!(
             ReadAgain::after(Invalidated::index()),
             ReadAgain::Status,

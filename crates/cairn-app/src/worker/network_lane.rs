@@ -187,7 +187,7 @@ pub(super) fn serve_network_lane(
                 // every outcome (refs-and-status R10.1), and the refresh decides.
                 // One token for the whole invocation, retired below before the outcome
                 // goes out, so no helper of a dead git is accepted afterwards.
-                let authorised = channel.and_then(|channel| channel.begin().ok());
+                let authorised = channel.and_then(|channel| channel.begin_for(remote.clone()).ok());
                 let outcome = fetch(
                     git,
                     &repo,

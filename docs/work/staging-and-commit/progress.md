@@ -3,6 +3,39 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 10, the review of the decisions' round (packet mode)
+
+A fresh review of 1eba929..32b64cb found it ready but for one safety item. Each fix was built
+test-first.
+
+- **Focus on open** (decision E's safety half): with the primary first on Linux, the order no
+  longer kept a risky answer off the first place, so focus is now set, never left to the
+  toolkit. What Freya does, read in the vendored fork (`freya-components/src/popup.rs`,
+  `freya-core/src/accessibility/tree.rs`): `Popup` gives focus to nothing as it opens; a
+  frame marked `a11y_modal` pulls focus onto the frame itself, not a button, only when focus
+  is outside it, and keeps Tab inside it — so Tab's first stop in a modal is its first
+  focusable button; and Freya's `Button` cannot take focus as a dialog opens. Before the fix a
+  Return on opening the host-key prompt or the Git Error dialog did nothing at all, on Linux
+  (checked against the old code: focus behind the prompt, which is not modal, or on the Git
+  Error dialog's frame), so neither accepted nor skipped, but neither was on the safe answer,
+  and a Tab's first stop was the risky one on Linux. Now the confirmation's
+  focusable answer is shared (`cairn_ui::answer_button`): ssh's host-key question opens on
+  Cancel, the Git Error dialog on Close, the confirmation on Cancel as before, and Create
+  Branch and a credential field's prompt in their field; Return or Space on opening answers
+  safely on both platforms (`a_risky_dialog_opens_on_its_safe_answer_on_both_platforms`,
+  which failed first; dropping Close's focus fails it again).
+- **The wait's words** (decision D, as the user's mockup read): each write has a plain noun
+  for the line (`LocalWrite::noun`): "Waiting for staging to finish…" (lines, files or all),
+  "Waiting for unstaging to finish…" (lines, files or all), "Waiting for the discard to
+  finish…" (lines or files), "Waiting for the commit to finish…", "Waiting for the amend to
+  finish…", "Waiting for the branch to finish…" (a branch created), "Waiting for the checkout
+  to finish…" (a branch created and checked out, keeping or discarding the changes), and,
+  for a write the window never saw asked, "Waiting for another write to finish…". A fetch
+  runs on the network lane and never holds the name's check, so it has no line.
+- **Optional, done**: Local Changes' right-click order pinned
+  (`a_right_click_outside_the_selection_chooses_its_row_before_the_menu_opens`; dropping the
+  choice fails it).
+
 ## 2026-10-09 — phase 10, the user's decisions on QA's six held items (packet mode)
 
 The user decided the six items QA held, accepting the recommendations in the coordinator's
@@ -31,9 +64,8 @@ failed on the code before it.
   `a_drag_the_menu_and_a_double_press_stage_what_is_selected`).
 - **D — the wait said** (the user's decision): while the name's check waits behind a write on
   the local lane, the dialog says "Waiting for <write> to finish…" beside the buttons, naming
-  the running write (or the first queued) in the words the window already uses for it
-  (`LocalWrite::what`: "commit", "staging 2 files", "creating branch x"), so the commit's reads
-  "Waiting for commit to finish…" where the mockup read "the commit"; nothing otherwise
+  the running write (or the first queued) — first in the status line's words, then, after
+  the review, by a plain noun as the mockup read (above); nothing otherwise
   (`a_check_waiting_behind_a_write_is_said_beside_the_buttons`,
   `a_name_check_waiting_behind_a_write_says_which_write`).
 - **E — button order per platform** (the user's decision): on Linux the primary first and

@@ -414,6 +414,57 @@ fn the_new_branch_chord_opens_create_branch_at_head() {
     );
 }
 
+/// The user's decision D (2026-10-09): while the name's check waits behind a running write on
+/// the local lane, the dialog names that write beside its buttons, and says nothing more once
+/// the answer for the text shown arrives, or while no write runs. Caught by: the wait left
+/// unsaid, another write named, or the line kept after the answer.
+#[test]
+fn a_name_check_waiting_behind_a_write_says_which_write() {
+    let (mut test, view, submitted) = launch();
+    with_a_commit(&mut test, view, &submitted);
+    new_branch(&mut test);
+    type_name(&mut test, view, "topic");
+    let waiting = |test: &TestingRunner| {
+        labels(test)
+            .into_iter()
+            .filter(|label| label.starts_with("Waiting for"))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(waiting(&test), Vec::<String>::new(), "no write runs");
+    let id = OperationId::next();
+    let mut writes = view.writes;
+    test.run_in(|| {
+        let mut writes = writes.write();
+        writes.asked(
+            id,
+            &LocalWrite::CreateBranch {
+                name: "first".to_owned(),
+                at: oid(0xab),
+            },
+        );
+        writes.started(id);
+    });
+    settle(&mut test);
+    assert_eq!(
+        waiting(&test),
+        vec!["Waiting for creating branch first to finish…".to_owned()]
+    );
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        Update::BranchName {
+            name: "topic".to_owned(),
+            outcome: Ok(BranchName::Free),
+        },
+    );
+    assert_eq!(
+        waiting(&test),
+        Vec::<String>::new(),
+        "the line outlived the answer"
+    );
+}
+
 /// What Create Branch's discard would lose at `at` for `branch`.
 fn discarding(branch: &str) -> Consequence {
     Consequence::CheckoutDiscarding {

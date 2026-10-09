@@ -27,7 +27,7 @@ use cairn_ui::{CreateBranchDialog, GitErrorDialog, LocalChoice};
 use freya::prelude::*;
 
 use crate::confirming::Confirming;
-use crate::local_writes;
+use crate::local_writes::{self, LocalWrites};
 use crate::window::View;
 use crate::worker::{LocalWrite, OperationId, Request, WriteEnding};
 
@@ -218,6 +218,21 @@ fn refusal(opened: &Opened, typed: &str) -> Option<String> {
         Some(_) | None => None,
     }
     .or_else(|| opened.refused.clone())
+}
+
+/// What the check of `typed` waits behind, said beside the buttons (the user's decision D,
+/// 2026-10-09): the local lane runs one thing at a time, so a name asked and not yet answered
+/// waits for the write running, or the first queued. `None` once the answer for `typed` is in,
+/// for an empty name, or while no write is asked.
+fn waiting(opened: &Opened, typed: &str, writes: &LocalWrites) -> Option<String> {
+    let answered = matches!(&opened.checked, Some((name, _)) if name == typed);
+    if typed.is_empty() || answered {
+        return None;
+    }
+    writes
+        .running()
+        .or_else(|| writes.queued().next())
+        .map(|asked| format!("Waiting for {} to finish…", asked.what))
 }
 
 /// Whether the working tree has a staged, an unstaged or a conflicted change: `git status`
@@ -492,6 +507,7 @@ impl Component for CreateBranchPane {
         )
         .ready(ready(opened, &typed))
         .refusal(refusal(opened, &typed))
+        .waiting(waiting(opened, &typed, &view.writes.read()))
         .checkout(checkout)
         .local_changes((checkout && shows_local).then_some(opened.local))
         .on_checkout(move |to: bool| checkout_toggled(view, to))

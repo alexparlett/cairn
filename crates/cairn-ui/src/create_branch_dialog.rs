@@ -70,6 +70,7 @@ pub struct CreateBranchDialog {
     name: State<String>,
     ready: bool,
     refusal: Option<String>,
+    waiting: Option<String>,
     checkout: bool,
     local: Option<LocalChoice>,
     on_checkout: EventHandler<bool>,
@@ -90,6 +91,7 @@ impl CreateBranchDialog {
             name,
             ready: false,
             refusal: None,
+            waiting: None,
             checkout: false,
             local: None,
             on_checkout: EventHandler::new(|_: bool| {}),
@@ -110,6 +112,13 @@ impl CreateBranchDialog {
     /// Why the name typed cannot be created, said beside the buttons.
     pub fn refusal(mut self, refusal: Option<String>) -> Self {
         self.refusal = refusal;
+        self
+    }
+
+    /// What the name's check waits behind, said beside the buttons where nothing is refused
+    /// (the user's decision D, 2026-10-09): "Waiting for commit to finish…".
+    pub fn waiting(mut self, waiting: Option<String>) -> Self {
+        self.waiting = waiting;
         self
     }
 
@@ -158,6 +167,7 @@ impl PartialEq for CreateBranchDialog {
             && self.name == other.name
             && self.ready == other.ready
             && self.refusal == other.refusal
+            && self.waiting == other.waiting
             && self.checkout == other.checkout
             && self.local == other.local
             && self.key == other.key
@@ -284,15 +294,21 @@ impl Component for CreateBranchDialog {
                         .child(RefGlyph::Gone.draw(colours.warning)),
                 )
             })
-            .maybe_child(self.refusal.clone().map(|reason| {
-                label()
-                    .text(reason)
-                    .width(Size::flex(1.))
-                    .max_lines(2)
-                    .text_overflow(TextOverflow::Ellipsis)
-                    .font_size(12.)
-                    .color(colours.text_secondary)
-            }));
+            // A refusal, or else what the name's check waits behind (the user's decision D).
+            .maybe_child(
+                self.refusal
+                    .clone()
+                    .or_else(|| self.waiting.clone())
+                    .map(|reason| {
+                        label()
+                            .text(reason)
+                            .width(Size::flex(1.))
+                            .max_lines(2)
+                            .text_overflow(TextOverflow::Ellipsis)
+                            .font_size(12.)
+                            .color(colours.text_secondary)
+                    }),
+            );
         let buttons = rect()
             .horizontal()
             .content(Content::Flex)

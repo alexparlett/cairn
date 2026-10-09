@@ -53,6 +53,7 @@ struct Shown {
     ready: bool,
     checkout: bool,
     local: Option<LocalChoice>,
+    waiting: Option<&'static str>,
 }
 
 /// What it reported.
@@ -82,6 +83,7 @@ fn launch(shown: Shown, refusal: Option<&str>) -> (TestingRunner, Reports) {
                 CreateBranchDialog::new(1, at(), "Fix the parser", name)
                     .ready(shown.ready)
                     .refusal(refusal.clone())
+                    .waiting(shown.waiting.map(str::to_owned))
                     .checkout(shown.checkout)
                     .local_changes(shown.local)
                     .on_checkout(move |to: bool| checkout.borrow_mut().push(to))
@@ -111,6 +113,7 @@ fn the_dialog_is_forks_its_button_following_the_box() {
             ready: true,
             checkout: false,
             local: None,
+            waiting: None,
         },
         None,
     );
@@ -143,6 +146,7 @@ fn the_dialog_is_forks_its_button_following_the_box() {
             ready: true,
             checkout: true,
             local: Some(LocalChoice::Keep),
+            waiting: None,
         },
         None,
     );
@@ -172,6 +176,7 @@ fn only_a_ready_name_is_created_and_every_change_is_reported() {
             ready: false,
             checkout: true,
             local: Some(LocalChoice::Keep),
+            waiting: None,
         },
         Some("Branch topic already exists"),
     );
@@ -197,6 +202,7 @@ fn only_a_ready_name_is_created_and_every_change_is_reported() {
             ready: true,
             checkout: false,
             local: None,
+            waiting: None,
         },
         None,
     );
@@ -276,6 +282,7 @@ fn a_refusal_is_said_beside_the_buttons_behind_the_warning_glyph() {
             ready: false,
             checkout: false,
             local: None,
+            waiting: None,
         },
         Some(refused),
     );
@@ -305,6 +312,7 @@ fn a_refusal_is_said_beside_the_buttons_behind_the_warning_glyph() {
             ready: true,
             checkout: false,
             local: None,
+            waiting: None,
         },
         None,
     );
@@ -312,4 +320,47 @@ fn a_refusal_is_said_beside_the_buttons_behind_the_warning_glyph() {
         !glyphs(&test).iter().any(|(_, mask)| *mask == warning()),
         "a warning glyph with nothing refused"
     );
+}
+
+/// The user's decision D (2026-10-09): while the name's check waits behind a running write, the
+/// dialog says so where a refusal goes, beside the buttons — with no warning glyph, since
+/// nothing is refused — and a refusal, when there is one, is said instead. Caught by: the
+/// waiting line drawn elsewhere or behind the triangle, or drawn over a refusal.
+#[test]
+fn a_check_waiting_behind_a_write_is_said_beside_the_buttons() {
+    let waiting = "Waiting for commit to finish…";
+    let (test, _) = launch(
+        Shown {
+            ready: false,
+            checkout: false,
+            local: None,
+            waiting: Some(waiting),
+        },
+        None,
+    );
+    let (said, cancel) = (
+        area_of(&test, waiting),
+        area_of(&test, CANCEL_BRANCH_CAPTION),
+    );
+    assert!(
+        (said.center().y - cancel.center().y).abs() < 4. && said.max_x() < cancel.min_x(),
+        "the waiting line at {said:?} is not beside the buttons, at {cancel:?}"
+    );
+    assert!(
+        !glyphs(&test).iter().any(|(_, mask)| *mask == warning()),
+        "a warning glyph with nothing refused"
+    );
+
+    let (test, _) = launch(
+        Shown {
+            ready: false,
+            checkout: false,
+            local: None,
+            waiting: Some(waiting),
+        },
+        Some("Branch topic already exists"),
+    );
+    let drawn = labels(&test);
+    assert!(drawn.iter().any(|l| l == "Branch topic already exists"));
+    assert!(!drawn.iter().any(|l| l == waiting), "{drawn:?}");
 }

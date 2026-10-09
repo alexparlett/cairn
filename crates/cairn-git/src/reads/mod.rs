@@ -31,7 +31,11 @@
 //! `process/` (the refs-and-status packet's L1); and one for a stash's changes,
 //! [`stash_changes`], `git stash show --raw`, because with `stash.showIncludeUntracked` set
 //! git pairs a stash's untracked files with its tracked changes in one diff, which no
-//! plumbing can ask without writing a tree (refs-and-status R6.2).
+//! plumbing can ask without writing a tree (refs-and-status R6.2); and one for Create
+//! Branch's name, [`branch_name`], `git check-ref-format --branch`, because whether git takes a
+//! name as a branch's is git's rule to apply (staging-and-commit R11.3), with
+//! [`change_lines`] beside it, `git diff-index --cached --numstat` and `git diff-files
+//! --numstat`, the lines Create Branch's discard counts.
 //!
 //! # What a read may run
 //!
@@ -209,6 +213,8 @@
 //! scan cannot tell `diff-tree` from `update-index` by what it does.
 
 mod attributes;
+mod branch_name;
+mod change_lines;
 mod changes;
 mod fetch_settings;
 mod hash_object;
@@ -219,6 +225,8 @@ mod status;
 mod working_tree;
 
 pub(crate) use attributes::{DiffAttribute, diff_attributes};
+pub(crate) use branch_name::branch_name;
+pub(crate) use change_lines::change_lines;
 pub(crate) use changes::{Detection, Submodules, changes};
 pub(crate) use fetch_settings::{FetchSettings, fetch_settings};
 pub(crate) use hash_object::hash_object;

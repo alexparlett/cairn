@@ -401,6 +401,12 @@ pub enum Error {
         failure: Option<Box<Error>>,
     },
 
+    /// Create Branch's discard before its checkout was refused before any confirmation or any
+    /// `git` ran (`docs/prd/staging-and-commit.md` R11.3): `why` says what, for the caller to
+    /// show. Nothing was written.
+    #[error("{why}; nothing was written")]
+    CheckoutRefused { why: CheckoutRefusal },
+
     /// A commit or an amend was refused before any `git` ran (`docs/prd/staging-and-commit.md`
     /// R6.1, R6.3, R6.9): `why` says what, for the caller to show. Nothing was written.
     #[error("{why}; nothing was committed")]
@@ -538,6 +544,34 @@ impl std::fmt::Display for Refusal {
                 "what the discard was handed is not what its confirmation names"
             }
         })
+    }
+}
+
+/// Why Create Branch's discard refused before any `git` ran; see [`Error::CheckoutRefused`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CheckoutRefusal {
+    /// git is in the middle of an operation — a merge, a rebase, `git am`, a cherry-pick or a
+    /// revert — whose state a forced checkout would leave behind or lose.
+    InProgress(cairn_model::OperationInProgress),
+    /// No tracked file has a staged or an unstaged change: there is nothing to discard.
+    NothingToDiscard,
+    /// The discard was handed a confirmation of another operation.
+    NotWhatWasConfirmed,
+}
+
+impl std::fmt::Display for CheckoutRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InProgress(operation) => write!(
+                f,
+                "{} is in progress: continue or abort it first",
+                operation.name()
+            ),
+            Self::NothingToDiscard => f.write_str("there are no changes to discard"),
+            Self::NotWhatWasConfirmed => {
+                f.write_str("what the discard was handed is not what its confirmation names")
+            }
+        }
     }
 }
 

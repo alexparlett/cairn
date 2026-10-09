@@ -3,6 +3,7 @@
 
 mod action_patch;
 mod askpass;
+mod branch_name;
 mod c_quote;
 mod change_set;
 mod changed_file;
@@ -43,6 +44,7 @@ mod text_filter;
 
 pub use action_patch::{PatchAction, action_patch};
 pub use askpass::{AskpassToken, HELPER_PROGRAM, SOCKET_VARIABLE, TOKEN_VARIABLE};
+pub use branch_name::BranchName;
 pub use change_set::{ChangeSet, RenameDetection};
 pub use changed_file::{ChangeStatus, ChangedFile, FileMode, Similarity};
 pub use command_log::{CommandExit, CommandRecord};

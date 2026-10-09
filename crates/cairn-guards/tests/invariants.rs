@@ -5050,6 +5050,12 @@ const DESTRUCTIVE_OPERATIONS: &[(&str, &str)] = &[
     ("crates/cairn-git/src/ops/discard.rs", "discard_lines"),
     ("crates/cairn-git/src/ops/discard.rs", "discard_files"),
     ("crates/cairn-git/src/ops/commit.rs", "amend"),
+    // Create Branch's Discard: the checkout that discards staged and unstaged changes (the
+    // user's decision 3, 2026-10-09).
+    (
+        "crates/cairn-git/src/ops/checkout.rs",
+        "create_branch_discarding",
+    ),
 ];
 
 /// The one function naming `Confirmed` that is not an operation: the record that spends the

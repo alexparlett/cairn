@@ -753,7 +753,9 @@ mod tests {
             | QueryLane::LocalChangesFilter
             | QueryLane::DiscardCount
             | QueryLane::CommitBox
-            | QueryLane::Amending => DiffQuery::File(committed(n, DiffOptions::default())),
+            | QueryLane::Amending
+            | QueryLane::BranchName
+            | QueryLane::CheckoutCount => DiffQuery::File(committed(n, DiffOptions::default())),
         };
         DiffJob::Query {
             epoch: epochs.bump(lane),

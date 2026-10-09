@@ -1816,3 +1816,66 @@ fn a_branch_made_through_the_lane_reads_everything_again_and_a_refusal_says_gits
         other => panic!("a taken name ended {other:?}"),
     }
 }
+
+/// Create Branch's reads through the lane (staging-and-commit R11.3): a name is answered for
+/// the text asked — taken, free, or refused in git's words — and Discard's count is answered
+/// under the id asked with the engine's `Consequence`. Caught by: an answer under another
+/// name or id, or a query routed where no `git` runs it.
+#[test]
+fn create_branchs_reads_are_answered_on_the_lane() {
+    let fixture = to_commit("cairn-lane-branch-reads", &["a"]);
+    let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let (handle, mut updates, _reply) = real_boundary(&fixture.path, (&home, &runtime));
+    staged(&handle, &mut updates, &["a"]);
+    let committed = ask(&handle, commit());
+    until_ended(&mut updates, committed);
+    let at = head_commit(&fixture.path);
+    for (name, expected) in [
+        ("main", Some(cairn_model::BranchName::Taken)),
+        ("topic", Some(cairn_model::BranchName::Free)),
+        ("bad..name", None),
+    ] {
+        handle.submit(Request::CheckBranchName {
+            name: name.to_owned(),
+        });
+        let seen = collect_until(&mut updates, |update| {
+            matches!(update, Update::BranchName { .. })
+        });
+        match seen.last() {
+            Some(Update::BranchName {
+                name: answered,
+                outcome: Ok(answer),
+            }) => {
+                assert_eq!(answered, name);
+                match expected {
+                    Some(expected) => assert_eq!(answer, &expected, "{name}"),
+                    None => assert!(
+                        matches!(answer, cairn_model::BranchName::Refused { .. }),
+                        "{name}: {answer:?}"
+                    ),
+                }
+            }
+            other => panic!("{name}: {other:?}"),
+        }
+    }
+    std::fs::write(fixture.path.join("a"), "edited\n").unwrap_or_else(|e| panic!("{e}"));
+    let asked = OperationId::next();
+    handle.submit(Request::CheckoutConsequence {
+        asked,
+        name: "rescue".to_owned(),
+        at,
+    });
+    let seen = collect_until(&mut updates, |update| {
+        matches!(update, Update::CheckoutConsequence { .. })
+    });
+    match seen.last() {
+        Some(Update::CheckoutConsequence {
+            asked: answered,
+            outcome: Ok(consequence),
+        }) => {
+            assert_eq!(*answered, asked);
+            assert!(consequence.prompt().contains("rescue"), "{consequence:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+}

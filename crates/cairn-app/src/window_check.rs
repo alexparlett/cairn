@@ -103,6 +103,8 @@ fn kind(update: &Update) -> &'static str {
         Update::WriteStarted { .. } => "write started",
         Update::WriteEnded { .. } => "write ended",
         Update::DiscardConsequence { .. } => "discard consequence",
+        Update::BranchName { .. } => "branch name",
+        Update::CheckoutConsequence { .. } => "checkout consequence",
         Update::CommitReads(_) => "commit box reads",
         Update::Amending { .. } => "amend read",
         Update::Failed { .. }
@@ -412,6 +414,7 @@ fn launch(path: &str) -> Harness {
                 writes: State::create(crate::local_writes::LocalWrites::default()),
                 confirming: State::create(None),
                 show_lost: State::create(false),
+                branch: crate::create_branch::CreateBranchView::created(),
             })
         },
         1.,

@@ -7,6 +7,9 @@ mod commit_box_state;
 #[cfg(test)]
 mod commit_box_tests;
 mod confirming;
+mod create_branch;
+#[cfg(test)]
+mod create_branch_tests;
 mod detail_pane;
 mod diff_actions;
 mod diff_state;
@@ -123,6 +126,8 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
     let confirming = use_state(|| None::<confirming::Confirming>);
     // Show Lost Commits, off as the window opens (staging-and-commit R11).
     let show_lost = use_state(|| false);
+    // Create Branch, for the session (staging-and-commit R11.3).
+    let branch = create_branch::CreateBranchView::used();
     let view = View {
         rows,
         progress,
@@ -151,6 +156,7 @@ fn app(git: worker::Discovery, closing: Closing) -> impl IntoElement {
         writes,
         confirming,
         show_lost,
+        branch,
     };
 
     let opened = use_hook(|| {

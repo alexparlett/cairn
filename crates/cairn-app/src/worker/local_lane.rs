@@ -148,17 +148,14 @@ pub enum LocalWrite {
         message: String,
         skip_hooks: bool,
     },
-    /// The branch `name` put on `at`: `Create Branch Here…` on a commit Show Lost Commits draws
-    /// (staging-and-commit R11.3). The view that asks it awaits the user's sign-off on its
-    /// flow (phase 10), so only tests construct it yet.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Create Branch Here…'s view awaits the user's sign-off"
-        )
-    )]
+    /// The branch `name` put on `at`: Create Branch, unticked (staging-and-commit R11.3).
     CreateBranch { name: String, at: Oid },
+    /// The branch `name` put on `at` and checked out, the working tree's changes carried over
+    /// or git refusing: Create Branch's "Don't change".
+    CreateBranchAndCheckout { name: String, at: Oid },
+    /// The branch and the commit the confirmation names, checked out with every change it
+    /// names discarded: Create Branch's "Discard" (the user's decision 3, 2026-10-09).
+    CreateBranchDiscarding(Confirmed),
 }
 
 /// A test's copy of a write it asked for, to compare with what was sent. A destructive write
@@ -202,7 +199,14 @@ impl Clone for LocalWrite {
                 name: name.clone(),
                 at: *at,
             },
-            Self::DiscardLines(_) | Self::DiscardFiles(_) | Self::Amend { .. } => {
+            Self::CreateBranchAndCheckout { name, at } => Self::CreateBranchAndCheckout {
+                name: name.clone(),
+                at: *at,
+            },
+            Self::DiscardLines(_)
+            | Self::DiscardFiles(_)
+            | Self::Amend { .. }
+            | Self::CreateBranchDiscarding(_) => {
                 panic!("a destructive write's confirmation is spent once; a test may not copy it")
             }
         }
@@ -244,7 +248,9 @@ impl LocalWrite {
             | Self::UnstageAll { .. }
             | Self::DiscardLines(_)
             | Self::DiscardFiles(_)
-            | Self::CreateBranch { .. } => false,
+            | Self::CreateBranch { .. }
+            | Self::CreateBranchAndCheckout { .. }
+            | Self::CreateBranchDiscarding(_) => false,
             Self::Commit { .. } | Self::Amend { .. } => true,
         }
     }
@@ -263,9 +269,11 @@ impl LocalWrite {
             | Self::DiscardFiles(_) => ReadAgain::Status,
             // A branch made moves the refs: the history is read again, and a commit it puts a
             // branch on is no longer lost.
-            Self::Commit { .. } | Self::Amend { .. } | Self::CreateBranch { .. } => {
-                ReadAgain::Everything
-            }
+            Self::Commit { .. }
+            | Self::Amend { .. }
+            | Self::CreateBranch { .. }
+            | Self::CreateBranchAndCheckout { .. }
+            | Self::CreateBranchDiscarding(_) => ReadAgain::Everything,
         }
     }
 
@@ -306,7 +314,10 @@ impl LocalWrite {
             Self::DiscardFiles(_) => "discarding files".to_owned(),
             Self::Commit { .. } => "commit".to_owned(),
             Self::Amend { .. } => "amend".to_owned(),
-            Self::CreateBranch { name, .. } => format!("creating branch {name}"),
+            Self::CreateBranch { name, .. } | Self::CreateBranchAndCheckout { name, .. } => {
+                format!("creating branch {name}")
+            }
+            Self::CreateBranchDiscarding(_) => "creating a branch, discarding changes".to_owned(),
         }
     }
 
@@ -364,6 +375,12 @@ impl LocalWrite {
                 )
             }),
             Self::CreateBranch { name, at } => ops::create_branch(git, repo, &name, at, token),
+            Self::CreateBranchAndCheckout { name, at } => {
+                ops::create_branch_and_checkout(git, repo, &name, at, token)
+            }
+            Self::CreateBranchDiscarding(confirmed) => {
+                ops::create_branch_discarding(git, repo, confirmed, token)
+            }
         }
     }
 }
@@ -529,9 +546,10 @@ impl WriteEnding {
                 path: "HEAD".to_owned(),
                 message,
             },
-            Error::Refused { .. } | Error::NoPaths | Error::CommitRefused { .. } => {
-                Self::Refused { message }
-            }
+            Error::Refused { .. }
+            | Error::NoPaths
+            | Error::CommitRefused { .. }
+            | Error::CheckoutRefused { .. } => Self::Refused { message },
             Error::CommitCancelledBeforeRunning => Self::NotRun { message },
             Error::GitCancelled { stranded_locks, .. }
             | Error::GitUnwatched { stranded_locks, .. } => Self::MayHaveTakenEffect {
@@ -607,6 +625,21 @@ pub(super) enum LocalJob {
     Amending {
         status: Arc<LocalChanges>,
         epoch: Epoch,
+        cancel: Superseded,
+    },
+    /// Whether `name` can be a new branch's (R11.3), in the lane's order, answered under its
+    /// number in the branch-name lane; one superseded is not sent.
+    BranchName {
+        name: String,
+        epoch: Epoch,
+        cancel: Superseded,
+    },
+    /// What Create Branch's Discard would lose (`ops::checkout_discarding_consequence`), in the
+    /// lane's order, after every write asked before it; a newer ask ends it.
+    CheckoutConsequence {
+        asked: OperationId,
+        name: String,
+        at: Oid,
         cancel: Superseded,
     },
     /// The repository is closing: end once the write running, if any, has.
@@ -864,6 +897,46 @@ pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                         .outbox
                         .send(Some(epoch), Update::CommitReads(Box::new(reads)));
                 }
+            }
+            LocalJob::BranchName {
+                name,
+                epoch,
+                cancel,
+            } => {
+                let reading = Counting {
+                    superseded: &cancel,
+                    lane: serving.lane,
+                };
+                let outcome = match repo.branch_name(serving.git, &name, &reading) {
+                    Ok(answer) => Ok(answer),
+                    // Superseded by the next keystroke, or closing: nobody waits on it.
+                    Err(Error::GitReadCancelled { .. }) => continue,
+                    Err(error) => Err(error.to_string()),
+                };
+                serving
+                    .outbox
+                    .send(Some(epoch), Update::BranchName { name, outcome });
+            }
+            LocalJob::CheckoutConsequence {
+                asked,
+                name,
+                at,
+                cancel,
+            } => {
+                let counting = Counting {
+                    superseded: &cancel,
+                    lane: serving.lane,
+                };
+                let outcome =
+                    ops::checkout_discarding_consequence(serving.git, &repo, &name, at, &counting);
+                let outcome = match outcome {
+                    Err(Error::ConsequenceCancelled | Error::GitReadCancelled { .. }) => continue,
+                    Ok(consequence) => Ok(consequence),
+                    Err(error) => Err(error.to_string()),
+                };
+                serving
+                    .outbox
+                    .send(None, Update::CheckoutConsequence { asked, outcome });
             }
             LocalJob::Amending {
                 status,

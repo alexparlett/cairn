@@ -73,6 +73,12 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         // for the discard asked last, and only while the view that asked it is shown — one
         // that arrives once the person has moved on is dropped rather than popped up later.
         Update::CommitReads(reads) => crate::commit_box_pane::reads_arrived(*reads, view),
+        Update::BranchName { name, outcome } => {
+            crate::create_branch::name_checked(view, name, outcome);
+        }
+        Update::CheckoutConsequence { asked, outcome } => {
+            crate::create_branch::consequence_arrived(view, asked, outcome);
+        }
         Update::Amending { status, read } => {
             crate::commit_box_pane::amend_arrived(status, *read, view, worker.submit);
         }
@@ -135,6 +141,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
                 worker.submit
             };
             crate::commit_box_pane::write_ended(id, &ending, view, asking);
+            crate::create_branch::write_ended(view, id, &ending);
             writes.write().ended(id, ending);
             if !fetch.peek().is_in_flight() {
                 withdraw(&mut prompt, worker);
@@ -461,6 +468,7 @@ mod tests {
                         writes: State::create(crate::local_writes::LocalWrites::default()),
                         confirming: State::create(None),
                         show_lost: State::create(false),
+                        branch: crate::create_branch::CreateBranchView::created(),
                     }
                 })
             },

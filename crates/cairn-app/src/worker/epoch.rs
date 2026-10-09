@@ -65,6 +65,12 @@ pub enum QueryLane {
     /// local lane while Amend is ticked (R6.3, R6.4, R10.3, R10.6): numbered so each status
     /// arriving, or Amend unticked, ends the read before — its walk and its `git` read.
     Amending,
+    /// Whether a name typed in Create Branch can be a new branch's (staging-and-commit R11.3):
+    /// numbered so each keystroke's ask supersedes the one before.
+    BranchName,
+    /// What Create Branch's Discard would lose, counted on the local lane before its
+    /// confirmation (R11.3, the user's decision 3): numbered so a newer ask ends the one before.
+    CheckoutCount,
 }
 
 impl QueryLane {
@@ -84,6 +90,8 @@ impl QueryLane {
         Self::DiscardCount,
         Self::CommitBox,
         Self::Amending,
+        Self::BranchName,
+        Self::CheckoutCount,
     ];
 
     fn index(self) -> usize {
@@ -101,6 +109,8 @@ impl QueryLane {
             Self::DiscardCount => 10,
             Self::CommitBox => 11,
             Self::Amending => 12,
+            Self::BranchName => 13,
+            Self::CheckoutCount => 14,
         }
     }
 
@@ -121,12 +131,14 @@ impl QueryLane {
             Self::DiscardCount => &[Self::DiscardCount],
             Self::CommitBox => &[Self::CommitBox],
             Self::Amending => &[Self::Amending],
+            Self::BranchName => &[Self::BranchName],
+            Self::CheckoutCount => &[Self::CheckoutCount],
         }
     }
 }
 
 /// How many lanes there are: one counter each.
-const LANES: usize = 13;
+const LANES: usize = 15;
 
 /// Which request a value belongs to: its lane, and its number there. Monotonic within a
 /// lane, and never reused.
@@ -300,6 +312,8 @@ mod tests {
             QueryLane::DiscardCount,
             QueryLane::CommitBox,
             QueryLane::Amending,
+            QueryLane::BranchName,
+            QueryLane::CheckoutCount,
         ] {
             assert_eq!(
                 lane.supersedes(),

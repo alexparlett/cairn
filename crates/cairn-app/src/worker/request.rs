@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use cairn_model::ShownDiff;
 use cairn_model::{
-    AheadBehind, ChangeSet, ChangedFile, CommandRecord, CommitHooks, Consequence, Context,
-    Disclosure, FileDiff, History, LocalChanges, MatchedRows, Oid, OperationInProgress, RefName,
-    RefsSnapshot, RemoteSummary, RepoPath, RowsPage, Selection, SidebarRow,
+    AheadBehind, BranchName, ChangeSet, ChangedFile, CommandRecord, CommitHooks, Consequence,
+    Context, Disclosure, FileDiff, History, LocalChanges, MatchedRows, Oid, OperationInProgress,
+    RefName, RefsSnapshot, RemoteSummary, RepoPath, RowsPage, Selection, SidebarRow,
 };
 
 use super::askpass::PromptId;
@@ -495,6 +495,20 @@ pub enum Request {
     Amending { status: Arc<LocalChanges> },
     /// Ends the amend read in flight, and asks nothing: Amend unticked.
     StopAmending,
+    /// Whether `name`, typed in Create Branch, can be a new branch's: git's `check-ref-format
+    /// --branch`, then the ref looked up (staging-and-commit R11.3), read on the local lane and
+    /// answered by [`Update::BranchName`]. Numbered in the branch-name lane: the next keystroke's
+    /// ask supersedes it, its `git` read ended.
+    CheckBranchName { name: String },
+    /// What creating the branch `name` at `at` and checking it out with its changes discarded
+    /// would lose (`ops::checkout_discarding_consequence`), counted on the local lane after the
+    /// writes asked before it and answered by [`Update::CheckoutConsequence`] under `asked`
+    /// (R11.3, the user's decision 3). Numbered in the checkout-count lane.
+    CheckoutConsequence {
+        asked: OperationId,
+        name: String,
+        at: Oid,
+    },
     /// Cancels the write `id` names, if it is a commit and running; nothing otherwise (R4.3).
     /// Never queued: it reaches the lane's state directly, ahead of any write.
     CancelWrite { id: OperationId },
@@ -545,6 +559,8 @@ impl Request {
             | Self::StopCounting => &[QueryLane::DiscardCount],
             Self::CommitReads => &[QueryLane::CommitBox],
             Self::Amending { .. } | Self::StopAmending => &[QueryLane::Amending],
+            Self::CheckBranchName { .. } => &[QueryLane::BranchName],
+            Self::CheckoutConsequence { .. } => &[QueryLane::CheckoutCount],
             Self::ListRemotes
             | Self::ConfiguredContext
             | Self::Fetch { .. }
@@ -715,6 +731,19 @@ pub enum Update {
         asked: OperationId,
         outcome: Result<Consequence, String>,
     },
+    /// What the engine says of `name` as a new branch's name, or why it could not say
+    /// (display text): the latest ask's.
+    BranchName {
+        name: String,
+        outcome: Result<BranchName, String>,
+    },
+    /// What creating a branch and checking it out with its changes discarded would lose, asked
+    /// under `asked`: the `Consequence` the confirmation draws, or why the engine refused
+    /// before any prompt (display text).
+    CheckoutConsequence {
+        asked: OperationId,
+        outcome: Result<Consequence, String>,
+    },
     /// What the commit box reads beside a commit, as the latest ask read it.
     CommitReads(Box<CommitReads>),
     /// What amending `HEAD` would replace and amend's lists, read for `status`: the latest
@@ -829,6 +858,8 @@ impl Update {
             | Self::WriteOutput { .. }
             | Self::WriteEnded { .. }
             | Self::DiscardConsequence { .. }
+            | Self::BranchName { .. }
+            | Self::CheckoutConsequence { .. }
             | Self::CommitReads(_)
             | Self::LocksAtOpen { .. }
             | Self::CommandLog { .. }

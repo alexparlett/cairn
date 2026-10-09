@@ -67,7 +67,11 @@ pub(super) const fn thread_of(lane: QueryLane) -> Thread {
         | QueryLane::RefFilter
         | QueryLane::LocalChangesFilter => Thread::Repository,
         QueryLane::Changes | QueryLane::FileDiff => Thread::Diff,
-        QueryLane::DiscardCount | QueryLane::CommitBox | QueryLane::Amending => Thread::Local,
+        QueryLane::DiscardCount
+        | QueryLane::CommitBox
+        | QueryLane::Amending
+        | QueryLane::BranchName
+        | QueryLane::CheckoutCount => Thread::Local,
         QueryLane::AheadBehind | QueryLane::Status => Thread::Refresh,
     }
 }
@@ -174,6 +178,16 @@ pub(super) enum Routed {
     },
     /// Nothing sent: numbering the amending lane is all it is for.
     StopAmending,
+    /// A name's check, to the local lane under the branch-name lane's number.
+    CheckBranchName {
+        name: String,
+    },
+    /// Create Branch's discard count, to the local lane under the checkout-count lane's number.
+    CheckoutConsequence {
+        asked: OperationId,
+        name: String,
+        at: cairn_model::Oid,
+    },
     /// Never queued: it reaches the local lane's state directly.
     CancelWrite(OperationId),
     /// A status alone, to the refresh thread under the status lane's number.
@@ -194,7 +208,9 @@ impl Routed {
             | Self::StopCounting
             | Self::CommitReads
             | Self::Amending { .. }
-            | Self::StopAmending => Some(Thread::Local),
+            | Self::StopAmending
+            | Self::CheckBranchName { .. }
+            | Self::CheckoutConsequence { .. } => Some(Thread::Local),
             Self::RefreshStatus => Some(Thread::Refresh),
             Self::CancelFetch | Self::CancelWrite(_) => None,
             // Its refs': see `lane_thread` for its ahead/behind. Its status, numbered in no
@@ -269,6 +285,10 @@ pub(super) fn route(request: Request) -> Routed {
         Request::CommitReads => Routed::CommitReads,
         Request::Amending { status } => Routed::Amending { status },
         Request::StopAmending => Routed::StopAmending,
+        Request::CheckBranchName { name } => Routed::CheckBranchName { name },
+        Request::CheckoutConsequence { asked, name, at } => {
+            Routed::CheckoutConsequence { asked, name, at }
+        }
         Request::CancelWrite { id } => Routed::CancelWrite(id),
         Request::RefreshStatus => Routed::RefreshStatus,
     }
@@ -330,6 +350,10 @@ pub(super) fn unroute(routed: Routed) -> Request {
         Routed::CommitReads => Request::CommitReads,
         Routed::Amending { status } => Request::Amending { status },
         Routed::StopAmending => Request::StopAmending,
+        Routed::CheckBranchName { name } => Request::CheckBranchName { name },
+        Routed::CheckoutConsequence { asked, name, at } => {
+            Request::CheckoutConsequence { asked, name, at }
+        }
         Routed::CancelWrite(id) => Request::CancelWrite { id },
         Routed::RefreshStatus => Request::RefreshStatus,
     }

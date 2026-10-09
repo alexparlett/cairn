@@ -715,6 +715,25 @@ impl RepositoryHandle {
                     });
                 }
             }
+            Routed::CheckBranchName { name } => {
+                if let Some(epoch) = epoch {
+                    let _ = self.local.send(LocalJob::BranchName {
+                        name,
+                        epoch,
+                        cancel: self.epochs.watch(epoch),
+                    });
+                }
+            }
+            Routed::CheckoutConsequence { asked, name, at } => {
+                if let Some(epoch) = epoch {
+                    let _ = self.local.send(LocalJob::CheckoutConsequence {
+                        asked,
+                        name,
+                        at,
+                        cancel: self.epochs.watch(epoch),
+                    });
+                }
+            }
             // Numbered above: the amend read in flight is superseded, and nothing is sent.
             Routed::StopAmending => {}
             Routed::CancelWrite(id) => self.lane.cancel(id),
@@ -811,6 +830,10 @@ pub fn idle_handle() -> (RepositoryHandle, impl Fn() -> Vec<Request>) {
             })),
             LocalJob::CommitReads { .. } => Some(unroute(Routed::CommitReads)),
             LocalJob::Amending { status, .. } => Some(unroute(Routed::Amending { status })),
+            LocalJob::BranchName { name, .. } => Some(unroute(Routed::CheckBranchName { name })),
+            LocalJob::CheckoutConsequence {
+                asked, name, at, ..
+            } => Some(unroute(Routed::CheckoutConsequence { asked, name, at })),
             LocalJob::Stop => None,
         });
         asked.into_iter().chain(alone).chain(writes).collect()

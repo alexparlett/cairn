@@ -59,7 +59,7 @@ struct Reports {
     selected: Rc<RefCell<Vec<RowId>>>,
     reached_end: Rc<RefCell<usize>>,
     actions: Rc<RefCell<Vec<Action>>>,
-    new_branch: Rc<RefCell<Vec<Oid>>>,
+    new_branch: Rc<RefCell<Vec<(Oid, String)>>>,
 }
 
 #[derive(Clone)]
@@ -92,7 +92,7 @@ fn list(reports: Reports) -> impl Fn() -> Element + 'static {
                 .into()
         })
         .on_action(move |action| actions.borrow_mut().push(action))
-        .on_new_branch(move |at: Oid| new_branch.borrow_mut().push(at))
+        .on_new_branch(move |at: (Oid, String)| new_branch.borrow_mut().push(at))
         .selected(*selected.read())
         .on_select(move |id: RowId| {
             on_select.borrow_mut().push(id);
@@ -969,7 +969,11 @@ fn every_commit_rows_menu_offers_new_branch_at_its_commit() {
             .unwrap_or_else(|| panic!("no item"));
         test.click_cursor((f64::from(item.x), f64::from(item.y)));
         test.sync_and_update();
-        assert_eq!(reports.new_branch.borrow().last(), Some(&oid(n)), "row {n}");
+        assert_eq!(
+            reports.new_branch.borrow().last(),
+            Some(&(oid(n), format!("commit {n}"))),
+            "row {n}"
+        );
         assert!(!menu_offered(&test), "the menu stayed open");
     }
     right_click(&mut test, row_at(4));

@@ -95,6 +95,9 @@ pub struct View {
     /// reflog entry too and draws what no ref reaches dimmed. Off as the window opens, kept
     /// for the session.
     pub show_lost: State<bool>,
+    /// Create Branch: its dialog, its name, its sticky check box and a create's failure
+    /// (staging-and-commit R11.3).
+    pub branch: crate::create_branch::CreateBranchView,
 }
 
 impl std::fmt::Debug for View {
@@ -134,6 +137,7 @@ pub fn window(
     let refused = view.refused.read().clone();
     let hearing = submit.clone();
     let erring = submit.clone();
+    let branching = submit.clone();
     // The keys held are let go of when the window loses focus: a release made while another
     // window has it is never heard here, and a press after coming back must not be read as a
     // chord still held (the user's decision, 2026-10-04).
@@ -233,6 +237,8 @@ pub fn window(
         // A commit's Git Error dialog (staging-and-commit R10.5): its skip may open the amend's
         // confirmation in its place.
         .maybe_child(crate::commit_box_pane::git_error(view, erring).filter(|_| prompt.is_none()))
+        // Create Branch's dialog, or a create's Git Error dialog (R11.3).
+        .maybe_child(crate::create_branch::dialogs(view, branching).filter(|_| prompt.is_none()))
         .maybe_child(
             confirming
                 .filter(|_| prompt.is_none())
@@ -361,6 +367,7 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     let choosing = submit.clone();
     let extending = submit.clone();
     let acting = submit.clone();
+    let branching = submit.clone();
     let second = view
         .pair
         .read()
@@ -402,6 +409,10 @@ fn history(view: View, lanes: usize, submit: Option<Rc<dyn Fn(Request)>>) -> Ele
     .on_extend(move |(id, index): (RowId, usize)| {
         ref_find::row_chosen(view, extending.as_deref());
         selection::extend(id, index, view, extending.as_deref());
+    })
+    // "New Branch…" on a commit row opens Create Branch (R11.3, the user's decision).
+    .on_new_branch(move |(at, subject): (cairn_model::Oid, String)| {
+        crate::create_branch::open(view, at, subject, branching.as_deref());
     })
     // The history's own chord, Show Lost Commits (staging-and-commit R7.3, R11.1).
     .on_action(move |action| crate::lost_commits::history_action(action, view, acting.as_deref()))
@@ -750,6 +761,7 @@ pub(crate) mod tests {
             writes: State::create(crate::local_writes::LocalWrites::default()),
             confirming: State::create(None),
             show_lost: State::create(false),
+            branch: crate::create_branch::CreateBranchView::created(),
         }
     }
 

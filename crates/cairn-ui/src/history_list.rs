@@ -54,7 +54,7 @@ pub struct HistoryList {
     on_extend: EventHandler<(RowId, usize)>,
     on_reach_end: EventHandler<()>,
     on_action: EventHandler<Action>,
-    on_new_branch: EventHandler<Oid>,
+    on_new_branch: EventHandler<(Oid, String)>,
     row: Callback<RowRender, Element>,
     controller: Option<ScrollController>,
     cursor: Option<State<usize>>,
@@ -74,7 +74,7 @@ impl HistoryList {
             on_extend: EventHandler::new(|_| {}),
             on_reach_end: EventHandler::new(|()| {}),
             on_action: EventHandler::new(|_: Action| {}),
-            on_new_branch: EventHandler::new(|_: Oid| {}),
+            on_new_branch: EventHandler::new(|_: (Oid, String)| {}),
             row: Callback::new(row),
             controller: None,
             cursor: None,
@@ -159,9 +159,10 @@ impl HistoryList {
     }
 
     /// "New Branch…" chosen from a commit row's context menu — every commit's row, a lost
-    /// one's too; a stash's row has no menu — reporting that commit (staging-and-commit R11.3,
-    /// the user's decision, 2026-10-09). What it opens is the caller's.
-    pub fn on_new_branch(mut self, on_new_branch: impl Into<EventHandler<Oid>>) -> Self {
+    /// one's too; a stash's row has no menu — reporting that commit and its subject
+    /// (staging-and-commit R11.3, the user's decision, 2026-10-09). What it opens is the
+    /// caller's.
+    pub fn on_new_branch(mut self, on_new_branch: impl Into<EventHandler<(Oid, String)>>) -> Self {
         self.on_new_branch = on_new_branch.into();
         self
     }
@@ -212,7 +213,7 @@ struct ListData {
     on_select: EventHandler<RowId>,
     on_extend: EventHandler<(RowId, usize)>,
     on_reach_end: EventHandler<()>,
-    on_new_branch: EventHandler<Oid>,
+    on_new_branch: EventHandler<(Oid, String)>,
     list_id: AccessibilityId,
     cursor: State<usize>,
 }
@@ -383,6 +384,7 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
     let held = data.held.clone();
     let on_reach_end = data.on_reach_end.clone();
     let on_new_branch = data.on_new_branch.clone();
+    let rows = data.rows;
     let asks_for_more = asks_for_more(index, data.length);
 
     let drawn = data.row.call(render_of(row, data));
@@ -415,12 +417,21 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
             };
             if e.button() == Some(MouseButton::Right) {
                 let on_new_branch = on_new_branch.clone();
+                // Read by index as the menu opens, never per frame. No wildcard arm.
+                let subject = rows
+                    .peek()
+                    .row(index)
+                    .map(|row| match row.content() {
+                        RowContent::Commit(commit) => commit.summary,
+                        RowContent::Stash(stash) => stash.message,
+                    })
+                    .unwrap_or_default();
                 ContextMenu::open_from_down(
                     Menu::new().child(
                         MenuButton::new()
                             .on_press(move |_: Event<PressEventData>| {
                                 ContextMenu::close();
-                                on_new_branch.call(commit);
+                                on_new_branch.call((commit, subject.clone()));
                             })
                             .child(NEW_BRANCH_CAPTION),
                     ),

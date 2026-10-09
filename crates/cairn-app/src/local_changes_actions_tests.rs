@@ -7,12 +7,14 @@
 //! where it was asked. Updates are applied through `session::apply`, as the worker's stream
 //! applies them, and requests read back from the window's submit.
 
+use std::rc::Rc;
+
 use cairn_model::{
     ChangeList, ChangedEntry, Consequence, DiscardedFile, FileLoss, Oid, RepoPath, Similarity,
     StagedChange, StatusEntry, SubmoduleState, UnstagedChange,
 };
 use cairn_ui::accelerators::{self, Action, Os};
-use cairn_ui::{IGNORE_WHITESPACE_LABEL, STAGE_CAPTION, STAGED_CAPTION};
+use cairn_ui::{IGNORE_WHITESPACE_LABEL, ListIntent, STAGE_CAPTION, STAGED_CAPTION};
 use freya::prelude::*;
 use freya_testing::TestingRunner;
 use freya_testing::prelude::{MouseEventName, PlatformEvent};
@@ -494,37 +496,66 @@ fn no_discard_reaches_a_staged_change_a_submodule_or_a_conflict_and_each_says_wh
     );
 }
 
-/// Phase 06's QA item 4, R7.4: with a confirmation open, Enter, Backspace and Delete pressed in
-/// Local Changes stage and discard nothing — the dialog holds the keys, and the view acts on
-/// nothing a list reports meanwhile. Caught by: the lists' chords heard behind the modal.
+/// Phase 06's QA item 4, R7.4, and phase 07's QA item 6: with a confirmation open, Enter,
+/// Backspace and Delete pressed in Local Changes stage and discard nothing — the dialog holds
+/// the keys — and every gesture a list or the diff still reports behind the modal (a press, a
+/// double press, a drop, a chord's action, the diff's chord) is acted on not at all, though the
+/// view is handed the window's own submitter. Caught by: the lists' chords heard behind the
+/// modal, or the view's dialog check gone (`dialog_open`), which asks a stage, a discard's count
+/// and Stage All here.
 #[test]
 fn local_changes_acts_on_nothing_while_a_confirmation_is_open() {
     let (mut test, view, submitted) = opened(several());
     press_row(&mut test, "a.rs", 0);
+    let asked_before = submitted.borrow().len();
     let mut confirming = view.confirming;
     confirming.set(Some(Confirming::new(DISCARD_TITLE, mixed_loss(), |_| {})));
     settle(&mut test);
-    for key in [NamedKey::Backspace, NamedKey::Delete, NamedKey::Enter] {
+    for key in [NamedKey::Backspace, NamedKey::Delete] {
         press_key(&mut test, key);
     }
-    // And whatever a list reports while one is open does nothing.
-    confirming.set(Some(Confirming::new(DISCARD_TITLE, mixed_loss(), |_| {})));
-    settle(&mut test);
+    assert!(
+        view.confirming.peek().is_some(),
+        "a key behind the modal closed it"
+    );
+    let recording = Rc::clone(&submitted);
+    let submit: Rc<dyn Fn(Request)> = Rc::new(move |request| recording.borrow_mut().push(request));
+    let selection_before = selected(view);
     test.run_in(|| {
-        for action in [
-            Action::StageOrUnstage,
-            Action::Discard,
-            Action::StageOrUnstageAll,
+        for intent in [
+            ListIntent::Double(ChangeList::Unstaged, 1),
+            ListIntent::Drop {
+                from: ChangeList::Unstaged,
+                path: RepoPath::from("b.rs"),
+            },
+            ListIntent::Act(ChangeList::Unstaged, Action::StageOrUnstage),
+            ListIntent::Act(ChangeList::Unstaged, Action::Discard),
+            ListIntent::Act(ChangeList::Unstaged, Action::StageOrUnstageAll),
+            ListIntent::Toggle(ChangeList::Unstaged, 2),
+            ListIntent::Range(ChangeList::Unstaged, 3),
         ] {
-            local_changes_actions::intent(
-                cairn_ui::ListIntent::Act(ChangeList::Unstaged, action),
-                view,
-                None,
-            );
+            local_changes_actions::intent(intent, view, Some(Rc::clone(&submit)));
         }
+        local_changes_actions::choose(ChangeList::Unstaged, 3, view, Some(&*submit));
+        local_changes_actions::on_the_diff(Action::StageOrUnstage, view, Some(&*submit));
+        local_changes_actions::on_the_diff(Action::Discard, view, Some(&*submit));
     });
+    settle(&mut test);
+    // Enter, last: the modal's Cancel takes it, closing the dialog and asking nothing.
+    press_key(&mut test, NamedKey::Enter);
     assert_eq!(writes(&submitted), []);
     assert_eq!(consequences_asked(&submitted), []);
+    assert_eq!(
+        submitted.borrow().len(),
+        asked_before,
+        "something was asked behind the modal: {:?}",
+        &submitted.borrow()[asked_before..]
+    );
+    assert_eq!(
+        selected(view),
+        selection_before,
+        "the selection moved behind the modal"
+    );
 }
 
 /// Phase 06's QA item 21: Backspace and Delete typed into the filter field while Local Changes

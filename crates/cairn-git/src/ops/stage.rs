@@ -1,7 +1,12 @@
 //! Staging and unstaging: lines and a mode change by patch, and whole files
-//! (`docs/prd/staging-and-commit.md` R3.1, R3.2, R3.4). Not destructive (R1.5): what they
-//! move between the index and `HEAD` is in the object store either way, and a wrong one is
-//! undone by its opposite, so none takes a [`cairn_model::Confirmed`].
+//! (`docs/prd/staging-and-commit.md` R3.1, R3.2, R3.4). Not destructive (R1.5, the user's
+//! classification, as git and Fork classify them), so none takes a [`cairn_model::Confirmed`]:
+//! a stage leaves the working tree as it was, and an unstage puts the index back to `HEAD`
+//! while the working tree keeps the file as it is. A wrong stage is undone by its opposite.
+//! A wrong unstage is too while the file still holds what was staged; once the file has been
+//! edited since, staging again stages the edit, and what was staged survives only as a
+//! dangling blob in the object store — found by `git fsck --lost-found`, never by Cairn —
+//! until git prunes it.
 //!
 //! **Lines** are a patch the model emits from the exact diff the user selected in
 //! ([`cairn_model::action_patch`]) — the unstaged or untracked diff for a stage, the staged

@@ -1,13 +1,17 @@
 # Local Changes
 
 How the window's Local Changes view is built: the two lists it draws over the working
-tree's status, how a path is chosen and its diff asked, and what keeps a diff from being drawn
-for any path but the one chosen. Read only: nothing in it stages, unstages, discards or commits
-(refs-and-status R9.6). Spec: `docs/prd/refs-and-status.md` R9 (criterion
-C9). Fork is the standard (`docs/research/refs-and-status/fork-refs-and-status-ui.md`, section
-6); every place Cairn's view is not Fork's is named under "Where it is not Fork's". The status
+tree's status, how a path is chosen and its diff asked, what keeps a diff from being drawn
+for any path but the one chosen, and how the view stages, unstages and discards files.
+Spec: `docs/prd/refs-and-status.md` R9 (criterion C9) for the view, and
+`docs/prd/staging-and-commit.md` R8 (criteria C8's view half, C18 and C24's conflicted rows)
+for its actions. Fork is the standard (`docs/research/refs-and-status/fork-refs-and-status-ui.md`,
+section 6, and `docs/research/staging-and-commit/fork-staging-and-commit.md`, sections 1-2);
+every place Cairn's view is not Fork's is named under "Where it is not Fork's". The status
 itself — what `git status` lists and how it is read — is `status.md`; the working-tree query
-that answers a path's diff is `diff.md`, "The working-tree query".
+that answers a path's diff is `diff.md`, "The working-tree query"; the verbs the actions run
+are `staging.md`, on the local write lane of `git-processes.md`. The chunk and line gesture
+in the diff is not built yet (staging-and-commit phase 08), nor the commit box (phase 09).
 
 ## What it draws
 
@@ -17,7 +21,8 @@ place of the history and its detail pane (`window::window`, `MainView::LocalChan
 
 - **Left**, behind a draggable splitter (its share kept for the session,
   `LocalChangesView::list_width`): a filter field — the only control above the lists — then
-  **Unstaged** above **Staged**, each under its heading and each one flat, virtualised list
+  **Unstaged** above **Staged**, each under its heading — its name, its Stage or Unstage
+  button, and over Unstaged Fork's double chevron, Stage All — and each one flat, virtualised list
   (`cairn_ui::LocalChangesList`, `crates/cairn-ui/src/local_changes.rs`), with a draggable
   splitter between the two (the user's decision, 2026-10-07; its share kept for the session and
   never beyond it, `LocalChangesView::lists_split`, `LocalChangesList::split`). A row is a badge
@@ -28,9 +33,14 @@ place of the history and its detail pane (`window::window`, `MainView::LocalChan
   rather than set in a font, a submodule's box (`RefGlyph::Submodule`) whatever changed in it
   and Fork's warning triangle for a conflicted path (`RefGlyph::Gone`). Colour only reinforces
   the shape. The Commit tab keeps its own letters.
+- **Under the lists**: one line saying what the writes asked from the view are doing — the
+  write running and how many wait behind it, or the first queued — or why the last action
+  asked nothing, or how the last write ended when it did not do what was asked
+  (`local_changes_actions::acting_line`, staging-and-commit R8.6).
 - **Right**: the chosen path's diff under the diff view's bar — previous and next change,
-  ignore whitespace, context, entire file, side by side, the shared settings — unified or side
-  by side; or the notice of a state that is not text, with Load Diff for a file past the
+  ignore whitespace (drawn off and disabled here: the diff is always the exact one,
+  staging-and-commit R8.5), context, entire file, side by side, the shared settings — unified
+  or side by side; or the notice of a state that is not text, with Load Diff for a file past the
   limits; or, for a conflicted path, the conflict's notice in place of a diff (R9.4,
   `DiffNotice::Conflicted`). Previous and next change are heard from inside the view and move
   its own diff (`diff_actions::step`), whose scroll and change cursor are the view's
@@ -128,6 +138,89 @@ Every status, diff and set of lists the window lets go of is handed to a worker 
 (`Request::Retire`): the refresh's answers and the lists drawn each hand their own hold over,
 so the last hold on a status of tens of thousands of paths is never dropped on the UI thread.
 
+## Acting on files
+
+What a person does to the lists is reported by the component as a choice or a
+`cairn_ui::ListIntent`, and decided by `crates/cairn-app/src/local_changes_actions.rs`; the
+component decides nothing about what is staged.
+
+**The selection** (R8.1, `cairn_ui::ListSelection`): the paths selected in one list, sorted by
+their bytes, with the path a range extends from. A plain press, or ↑ or ↓, selects one path and
+chooses it; a press with the table's extending press held (⌘- or Ctrl-click,
+`Action::ExtendSelection`, resolved from `HeldKeys` since a pointer event carries no modifiers
+here) toggles a path — a selection made of the path chosen when none is made yet — and a press
+with the range press held (Shift-click), or Shift+↑/↓ on the focused list, selects every row the
+list shows from the anchor to it. The diff shows the path last pressed in, or, once it is
+toggled out, another the selection holds. A row is drawn selected by a binary search as it is
+built; the path chosen is drawn selected only while nothing is selected in its list. Selecting
+in the other list starts a selection there. A refresh costs the selection nothing: a path it
+names that the lists no longer list is left out where it is acted on.
+
+**Which paths an action takes**: the selection's paths the lists drawn still list — each found
+by a binary search — or, with nothing selected in that list, the path chosen; a whole-file
+action names a rename's source beside its path (`LocalChanges::whole_file_paths`), so a staged
+rename unstages whole (`git reset -q -- <old> <new>`) while a rename's source listed as a row of
+its own resets alone. Every path is one `git status` listed: the engine trusts its caller with
+that (`staging.md`, Residuals). A collapsed untracked-directory row — the only one status lists
+whole, a nested repository — stages as `git add` takes it, a gitlink at its commit, and nothing
+under it (`a_nested_repositorys_row_stages_exactly_what_git_add_adds_for_it`).
+
+**Fork's five routes** (R8.2), each asking `LocalWrite::StageFiles` from Unstaged or
+`LocalWrite::UnstageFiles` (back to `HEAD`) from Staged through `local_writes::ask`:
+
+- a double press on a row — the first press makes the row the selection, so it stages that row;
+- the table's chords on a focused list (`Scope::LocalChanges`): Enter or Ctrl+Shift+S (Return
+  or ⌘S), and, for the whole list, Ctrl+Alt+Shift+S (⌥⇧⌘S) — heard by the list's own key
+  handler, so nowhere else, and never from a text field, which keeps Enter and Backspace;
+- a drag from one list released over the other (`cairn_ui`'s `local_changes_drag`): tracked
+  by the two lists together, never a row, with the path it began on, so it survives its row
+  unmounting or a status replacing the lists; a release over the same list, outside both, or
+  after Escape drops nothing; a press heard while a drag is on (its release made where the
+  window could not hear it) or the window losing focus ends it; while it is on, the list it
+  would drop on scrolls at its edges (`EdgeScroll`); it drops the selection it began in, or
+  the path it began on alone;
+- each list's button — Stage or Unstage, dimmed with nothing to act on, and Stage All or
+  Unstage All while the table's Stage All press is held (⌥, Alt on Linux) — and the double
+  chevron's Stage All over Unstaged;
+- the context menu (`local_changes_menu`): Stage or Unstage, Discard Changes… on the unstaged
+  side, Stage All or Unstage All, Copy Path; a right-press on a row outside the selection
+  chooses it first; each item closes the menu as it is chosen.
+
+Stage All and Unstage All ask `LocalWrite::StageAll` or `LocalWrite::UnstageAll` with the
+lists drawn, shared: their paths are gathered on the local lane, never on the UI thread.
+
+**After a stage or an unstage** (R8.3) the selection moves to the nearest path left in the list
+it left — the row that slides into the first acted row's place, else the nearest above it
+(`cairn_ui::nearest_remaining`) — and its diff is asked at once; with none left, nothing is
+selected. The same holds after a confirmed discard.
+
+**A discard** (R8.4) is offered on the unstaged side only. A selection holding a submodule
+(R8.8) or a conflicted path (R8.7), and any discard on the Staged list or a staged diff, asks
+nothing: the view says why (`cairn_ui::NoDiscard`), and the menu draws its Discard disabled with
+the reason beside it. Otherwise the discard chord (Backspace, Delete or Ctrl+Shift+D; ⌫ or ⇧⌘D)
+or the menu asks the engine what it would lose — `Request::DiscardConsequence`, computed by
+`ops::discard_files_consequence` on the local lane, in the order asked, so after every write
+asked before it — and the view says it is counting. The answer for the discard asked last opens
+the confirmation (`Confirming::new`, `cairn_ui::ConfirmDialog`: the prompt and the button drawn
+from the `Consequence`, Cancel focused), and its token asks `LocalWrite::DiscardFiles`; an
+answer for an earlier ask, or one arriving once the view is no longer shown, is dropped. A
+refusal the engine makes before any dialog — a nested repository among untracked rows, a path
+that is not a file — is said. No modifier, setting or route reaches a discard without the
+dialog.
+
+**A conflicted row** (R8.7, C24) stages whole by every route — `git add`, which marks it
+resolved — and is never discarded.
+
+**While a dialog is open** — a confirmation or a credential prompt — nothing the lists or the
+diff report is acted on, and the window's chords are inert (`shortcuts::act`). A credential
+prompt that arrives while a confirmation is open (a write running behind it asked for a secret)
+sets the confirmation aside, kept unanswered, and the confirmation is drawn again once the
+prompt is answered or refused (`window::window`).
+
+**The diff hears the same chords** (`Scope::LocalChanges`) and acts on the file it shows, whole,
+in the list it was chosen from (`local_changes_actions::on_the_diff`); the gesture's lines are
+phase 08's.
+
 ## What enforces this
 
 - Layout (`crates/cairn-model/src/local_changes.rs`):
@@ -137,6 +230,40 @@ so the last hold on a status of tens of thousands of paths is never dropped on t
   `a_path_is_found_by_its_list_and_name`, `a_filter_leaves_each_lists_rows_that_hold_its_text`,
   `what_a_filter_leaves_is_counted_in_distinct_paths`,
   `fifty_thousand_paths_are_laid_out_in_order`.
+- Acting, at the component (`crates/cairn-ui/tests/local_changes_actions.rs`):
+  `a_held_press_toggles_or_ranges_and_shift_arrows_range`,
+  `every_chord_of_the_lists_actions_is_reported_on_its_list`,
+  `a_double_press_stages_or_unstages_its_row`,
+  `the_buttons_stage_and_unstage_the_selection_or_with_the_press_held_everything`,
+  `a_drag_drops_on_the_other_list_only_and_survives_its_row`,
+  `a_drag_between_the_lists_scrolls_the_one_it_would_drop_on`,
+  `each_rows_menu_offers_forks_items_and_no_discard_where_none_is_allowed`; the pure parts
+  (`a_selection_toggles_spans_and_holds_paths_of_one_list`,
+  `the_nearest_row_left_is_the_one_that_takes_the_first_acted_rows_place`,
+  `a_press_becomes_a_drag_past_the_threshold_and_drops_on_the_other_list_only`,
+  `a_discard_is_refused_for_staged_changes_submodules_and_conflicts_only`), and the edge
+  scroll's lost release (`a_release_the_window_never_heard_ends_the_drag_at_the_next_press_or_focus_lost`).
+- Acting, in the window (`crates/cairn-app/src/local_changes_actions_tests.rs`):
+  `the_chord_and_the_button_stage_a_selection_and_the_selection_moves_on`,
+  `a_drag_the_menu_and_a_double_press_stage_what_is_selected`,
+  `a_staged_selection_unstages_with_its_renames_source_and_all_takes_the_list`,
+  `a_discard_asks_what_it_would_lose_and_confirms_exactly_that`,
+  `no_discard_reaches_a_staged_change_a_submodule_or_a_conflict_and_each_says_why`,
+  `a_conflicted_row_stages_whole_by_every_route`,
+  `local_changes_acts_on_nothing_while_a_confirmation_is_open`,
+  `backspace_in_the_filter_edits_the_filter_and_discards_nothing`,
+  `a_credential_prompt_sets_an_open_confirmation_aside_until_it_is_answered`,
+  `local_changes_diff_is_always_exact_and_leaves_the_setting_alone`,
+  `a_write_is_drawn_queued_running_and_stale_where_it_was_asked`,
+  `a_discard_names_only_paths_the_lists_drawn_still_list`,
+  `the_extending_press_toggles_out_and_the_diff_follows_the_selection`; through the real
+  boundary (`worker/local_lane_tests.rs`):
+  `a_discards_consequence_is_counted_after_the_writes_asked_before_it` and
+  `the_dialogs_count_is_what_the_discard_then_does_to_a_mixed_selection`; the paths a
+  whole-file action names, `a_whole_file_action_names_each_rows_path_and_a_renames_source`
+  (`cairn-model`); and against real git,
+  `a_nested_repositorys_row_stages_exactly_what_git_add_adds_for_it`
+  (`crates/cairn-git/tests/diff/write_verbs.rs`).
 - Drawing (`crates/cairn-ui/tests/local_changes.rs`):
   `both_lists_draw_their_paths_with_their_badges`, `each_list_is_in_its_paths_order`,
   `a_press_and_the_arrows_choose_a_row_of_its_list`, `the_filter_says_what_it_leaves`,
@@ -196,8 +323,27 @@ so the last hold on a status of tens of thousands of paths is never dropped on t
   the lists (the user's decision, 2026-10-07): the layout menu and its
   collapse-all chevron (#71), Hide Untracked Files (#70), Show Ignored Files (#62) and the eye
   (Fork's side-by-side quick look, #35) are not drawn.
-- Fork's Stage and Unstage buttons on the headings, and the commit box under the diff, are
-  not built (R9.6).
+- The commit box under the diff, and the chunk and line gesture, are not built yet
+  (staging-and-commit phases 08 and 09).
+- With several paths selected, the diff shows the one last pressed in, where Fork draws the
+  selection's files; a double press acts on its row alone, since its first press makes the row
+  the selection.
+- Stage All's double chevron sits in Unstaged's heading, as Fork for Windows draws it (Linux
+  follows Fork's Windows rows); Fork for Mac draws it above the lists and flips it to Unstage
+  All once nothing is left to stage. Unstage All is the Staged button with the press held, the
+  menu's item and the chord.
+- The Stage All press is ⌥ on macOS and Alt on Linux — Fork for Windows' own is not recorded —
+  and some Linux window managers take an Alt-press to move the window; the chevron, the menu
+  and the chord stay.
+- The menu offers Stage or Unstage, Discard Changes…, Stage All or Unstage All and Copy Path:
+  Fork's Open, External Diff, Show in Files, Blame, History, Ignore, LFS, Stash and Save as
+  Patch are not built; its items name no chord, since a chord spelled in a label is a modifier
+  named in a component; nothing opens the menu from the keyboard.
+- A submodule's row offers no discard (Fork's Discard Submodule Changes) and says why; a
+  nested repository among untracked rows is refused before any dialog; the confirmation's
+  default is Cancel (staging-and-commit L8, L24).
+- Ignore Whitespace is disabled in Local Changes and the diff drawn is always the exact one,
+  where Fork lets it hide changes it then stages (L6).
 - The submodule's badge is a shape of Cairn's drawing (a box in a box); Fork's own submodule
   icon is not recorded.
 - The count beside Local Changes is the distinct paths status lists (R9.2's wording), where

@@ -17,7 +17,7 @@
 use std::sync::{Arc, LazyLock};
 
 use cairn_model::{ChangeList, LocalChanges, MatchedRows, WorkingTreeStatus};
-use cairn_ui::{ChangeCursor, ShownFiles};
+use cairn_ui::{ChangeCursor, ListSelection, ShownFiles};
 use freya::prelude::*;
 
 use crate::worker::{Request, Retired};
@@ -40,6 +40,10 @@ pub struct LocalChangesView {
     pub scroll: ScrollController,
     /// The change previous or next change last moved to in the view's diff.
     pub cursor: State<Option<ChangeCursor>>,
+    /// The paths selected in one of the lists (staging-and-commit R8.1).
+    pub selection: State<ListSelection>,
+    /// What the view's actions are waiting on and what it says of them (R8.4, R8.6).
+    pub acting: State<crate::local_changes_actions::Acting>,
 }
 
 impl LocalChangesView {
@@ -52,6 +56,8 @@ impl LocalChangesView {
             lists_split: use_state(|| cairn_ui::LISTS_SPLIT),
             scroll: use_scroll_controller(ScrollConfig::default),
             cursor: use_state(|| None),
+            selection: use_state(ListSelection::default),
+            acting: use_state(crate::local_changes_actions::Acting::default),
         }
     }
 
@@ -65,6 +71,8 @@ impl LocalChangesView {
             lists_split: State::create(cairn_ui::LISTS_SPLIT),
             scroll: ScrollController::new(0, 0, Vec::new()),
             cursor: State::create(None),
+            selection: State::create(ListSelection::default()),
+            acting: State::create(crate::local_changes_actions::Acting::default()),
         }
     }
 }
@@ -130,6 +138,12 @@ impl LocalChangesState {
     /// Whether any lists are drawn.
     pub fn has_lists(&self) -> bool {
         self.drawn.is_some()
+    }
+
+    /// The lists drawn, shared: what Stage All and Unstage All hand the local lane to gather
+    /// their paths from, so the UI thread never walks a list.
+    pub fn drawn_shared(&self) -> Option<Arc<LocalChanges>> {
+        self.drawn.as_ref().map(|drawn| Arc::clone(&drawn.changes))
     }
 
     /// The lists drawn, shared.

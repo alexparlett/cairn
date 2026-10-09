@@ -101,7 +101,7 @@ pub fn refusal_line(refusal: &FetchRefusal) -> String {
 /// had got through rather than why it stopped. git prefixes its diagnostics, so prefer
 /// the first `fatal:` and then the first `error:`; a message with neither (a refusal
 /// raised by Cairn itself, say) is already one sentence and its first line is right.
-fn why_it_failed(message: &str) -> &str {
+pub fn why_it_failed(message: &str) -> &str {
     let diagnostic = |marker| {
         message
             .lines()

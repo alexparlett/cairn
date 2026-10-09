@@ -101,6 +101,7 @@ fn kind(update: &Update) -> &'static str {
         Update::RefreshFailed { .. } => "refresh failed",
         Update::WriteStarted { .. } => "write started",
         Update::WriteEnded { .. } => "write ended",
+        Update::DiscardConsequence { .. } => "discard consequence",
         Update::Failed { .. }
         | Update::LocksAtOpen { .. }
         | Update::WriteOutput { .. }

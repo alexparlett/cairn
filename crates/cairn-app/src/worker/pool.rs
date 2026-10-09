@@ -669,6 +669,9 @@ impl RepositoryHandle {
                     write: Box::new(write),
                 });
             }
+            Routed::DiscardConsequence { asked, paths } => {
+                let _ = self.local.send(LocalJob::Consequence { asked, paths });
+            }
             Routed::CancelWrite(id) => self.lane.cancel(id),
             Routed::RefreshStatus => {
                 let status = self.epochs.current(QueryLane::Status);
@@ -748,6 +751,9 @@ pub fn idle_handle() -> (RepositoryHandle, impl Fn() -> Vec<Request>) {
             .take(statuses.saturating_sub(refreshes));
         let writes = local_incoming.try_iter().filter_map(|job| match job {
             LocalJob::Write { id, write } => Some(unroute(Routed::Write { id, write: *write })),
+            LocalJob::Consequence { asked, paths } => {
+                Some(unroute(Routed::DiscardConsequence { asked, paths }))
+            }
             LocalJob::Stop => None,
         });
         asked.into_iter().chain(alone).chain(writes).collect()

@@ -39,7 +39,9 @@ pub(crate) use diff_tests::{Configurable, changes_answer, checkout, commits, nex
 pub use discovery::Discovery;
 #[cfg(test)]
 pub(crate) use expand_all::EXPAND_ALL_LINES;
-pub use local_lane::{LocalWrite, OperationId, ReadAgain, WriteEnding};
+#[cfg(test)]
+pub use local_lane::Done;
+pub use local_lane::{LocalWrite, OperationId, ReadAgain, UnstageTarget, WriteEnding};
 #[cfg(test)]
 pub use pool::Updates;
 #[cfg(test)]

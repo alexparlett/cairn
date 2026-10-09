@@ -32,9 +32,9 @@ use crate::worker::{FileQuery, FileTarget, Request, Update, WorkingSide};
 const WIDTH: f32 = 1200.;
 const HEIGHT: f32 = 700.;
 
-type Submitted = Rc<RefCell<Vec<Request>>>;
+pub(crate) type Submitted = Rc<RefCell<Vec<Request>>>;
 
-fn launch() -> (TestingRunner, View, Submitted) {
+pub(crate) fn launch() -> (TestingRunner, View, Submitted) {
     let submitted = Submitted::default();
     let app = {
         let submitted = submitted.clone();
@@ -85,7 +85,7 @@ fn launch() -> (TestingRunner, View, Submitted) {
     (test, view, submitted)
 }
 
-fn apply(test: &mut TestingRunner, view: View, submitted: &Submitted, update: Update) {
+pub(crate) fn apply(test: &mut TestingRunner, view: View, submitted: &Submitted, update: Update) {
     let submit = {
         let submitted = Rc::clone(submitted);
         move |request| submitted.borrow_mut().push(request)
@@ -106,7 +106,7 @@ fn apply(test: &mut TestingRunner, view: View, submitted: &Submitted, update: Up
     }
 }
 
-fn changed(
+pub(crate) fn changed(
     path: &str,
     staged: Option<StagedChange>,
     unstaged: Option<UnstagedChange>,
@@ -119,7 +119,7 @@ fn changed(
     })
 }
 
-fn conflicted(path: &str) -> StatusEntry {
+pub(crate) fn conflicted(path: &str) -> StatusEntry {
     StatusEntry::Conflicted(ConflictedEntry {
         path: RepoPath::from(path),
         kind: ConflictKind::BothModified,
@@ -127,11 +127,11 @@ fn conflicted(path: &str) -> StatusEntry {
     })
 }
 
-fn untracked(path: &str) -> StatusEntry {
+pub(crate) fn untracked(path: &str) -> StatusEntry {
     StatusEntry::Untracked(RepoPath::from(path))
 }
 
-fn status(entries: Vec<StatusEntry>) -> Update {
+pub(crate) fn status(entries: Vec<StatusEntry>) -> Update {
     Update::Status {
         changes: Arc::new(LocalChanges::new(WorkingTreeStatus::Listed(entries))),
     }
@@ -163,7 +163,7 @@ fn diff_of(path: &str, line: &str, context: Context) -> Box<ShownDiff> {
     ))
 }
 
-fn answer(
+pub(crate) fn answer(
     test: &mut TestingRunner,
     view: View,
     submitted: &Submitted,
@@ -181,7 +181,7 @@ fn answer(
     );
 }
 
-fn labels(test: &TestingRunner) -> Vec<String> {
+pub(crate) fn labels(test: &TestingRunner) -> Vec<String> {
     test.find_many(|_, element| Label::try_downcast(element).map(|l| l.text.to_string()))
 }
 
@@ -198,7 +198,7 @@ fn paragraphs(test: &TestingRunner) -> Vec<String> {
     })
 }
 
-fn path_of(query: &FileQuery) -> String {
+pub(crate) fn path_of(query: &FileQuery) -> String {
     match &query.target {
         FileTarget::WorkingTree { path, .. } => path.display().into_owned(),
         FileTarget::Committed { file, .. } => file.new_path.display().into_owned(),
@@ -213,7 +213,7 @@ fn side_of(query: &FileQuery) -> Option<WorkingSide> {
 }
 
 /// The working-tree diffs asked, oldest first.
-fn asked(submitted: &Submitted) -> Vec<FileQuery> {
+pub(crate) fn asked(submitted: &Submitted) -> Vec<FileQuery> {
     submitted
         .borrow()
         .iter()
@@ -225,7 +225,7 @@ fn asked(submitted: &Submitted) -> Vec<FileQuery> {
 }
 
 /// Presses the sidebar's Local Changes entry, whatever its count.
-fn open_local_changes(test: &mut TestingRunner) {
+pub(crate) fn open_local_changes(test: &mut TestingRunner) {
     let centre = test
         .find(|node, element| {
             Label::try_downcast(element)
@@ -241,7 +241,7 @@ fn open_local_changes(test: &mut TestingRunner) {
 }
 
 /// Presses the row of the list reading `text`, the `nth` drawn from the top.
-fn press_row(test: &mut TestingRunner, text: &str, nth: usize) {
+pub(crate) fn press_row(test: &mut TestingRunner, text: &str, nth: usize) {
     let mut found: Vec<(f32, f32)> = test.find_many(|node, element| {
         Label::try_downcast(element)
             .filter(|label| label.text == text)

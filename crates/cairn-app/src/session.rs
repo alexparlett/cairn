@@ -69,6 +69,17 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         Update::Remotes { remotes: listed } => remotes.set(listed),
         Update::Opened { name } => repository.set(Some(name)),
         Update::LocksAtOpen { locks } => writes.write().locks_at_open(locks),
+        // What a discard would lose, for the confirmation Local Changes opens (R8.4): kept only
+        // for the discard asked last, and only while the view that asked it is shown — one
+        // that arrives once the person has moved on is dropped rather than popped up later.
+        Update::DiscardConsequence { asked, outcome } => {
+            let mut acting = view.local.acting;
+            if *view.sidebar.main.peek() == cairn_ui::MainView::LocalChanges {
+                acting.write().consequence_arrived(asked, outcome);
+            } else {
+                acting.write().forget_discard();
+            }
+        }
         Update::ConfiguredContext { context } => {
             crate::diff_actions::configured(context, view, worker.submit);
         }

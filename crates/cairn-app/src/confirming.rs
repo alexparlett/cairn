@@ -30,13 +30,6 @@ pub struct Confirming {
 impl Confirming {
     /// Ask whether to accept `consequence` under `title`, and hand the token to `then` when
     /// the dialog's button builds it.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "phase 07's discard and phase 09's amend ask for one"
-        )
-    )]
     pub fn new(
         title: impl Into<String>,
         consequence: Consequence,

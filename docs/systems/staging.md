@@ -317,8 +317,14 @@ graph, which the walk does not read so it can be cancelled at every object).
   the confirmed paths still exactly as they were — found by reading each again, never
   by parsing git's prose. That also names a file `git clean -f` leaves alone, an
   ignored one (`a_discard_that_fails_part_way_says_what_it_did_and_what_is_left`,
-  `a_file_git_clean_leaves_is_named_as_kept`). Whether a path `git status` never
-  listed is refused before any prompt is phase 07's.
+  `a_file_git_clean_leaves_is_named_as_kept`).
+- `discard_files_consequence` counts any path absent from the index as untracked
+  (`IndexSide::Absent`), so an ignored file, or a path git never listed, is offered as
+  one. The engine trusts its caller here, and the caller owns it: Local Changes asks only
+  for paths of rows `git status` listed in the lists it draws, each found again there by a
+  search, so a selection naming a path a refresh took away asks nothing for it
+  (`local_changes_actions`; `a_discard_names_only_paths_the_lists_drawn_still_list` in
+  `cairn-app`, and the engine's arm by `a_file_git_clean_leaves_is_named_as_kept`).
 - A discard of files counts each tracked file's lines by reading its unstaged diff
   as the diff view does, one read per file: exact, and proportional to the files
   selected.

@@ -15,6 +15,7 @@
 //! | Local Changes' filter (`FilterLocalChanges`) | `cairn-repository`, as the file filter |
 //! | `CancelFetch` | none: the fetch's control, from the caller's thread |
 //! | `Write` | `cairn-local`, the local write lane, reached directly, so a write never waits behind a page or a find (staging-and-commit R4.1) |
+//! | `DiscardConsequence` | `cairn-local`, in the lane's order, so what a discard would lose is counted after the writes asked before it |
 //! | `CancelWrite` | none: the local lane's state, from the caller's thread |
 //! | `RefreshStatus` | `cairn-refresh`, as a refresh's status |
 //!
@@ -143,6 +144,11 @@ pub(super) enum Routed {
         id: OperationId,
         write: LocalWrite,
     },
+    /// What a discard would lose, to the local lane behind the writes asked before it.
+    DiscardConsequence {
+        asked: OperationId,
+        paths: Vec<cairn_model::RepoPath>,
+    },
     /// Never queued: it reaches the local lane's state directly.
     CancelWrite(OperationId),
     /// A status alone, to the refresh thread under the status lane's number.
@@ -156,7 +162,7 @@ impl Routed {
         match self {
             Self::Repository(_) | Self::OpenHistory { .. } => Some(Thread::Repository),
             Self::Diff(_) | Self::ConfiguredContext => Some(Thread::Diff),
-            Self::Write { .. } => Some(Thread::Local),
+            Self::Write { .. } | Self::DiscardConsequence { .. } => Some(Thread::Local),
             Self::RefreshStatus => Some(Thread::Refresh),
             Self::CancelFetch | Self::CancelWrite(_) => None,
             // Its refs': see `lane_thread` for its ahead/behind. Its status, numbered in no
@@ -216,6 +222,7 @@ pub(super) fn route(request: Request) -> Routed {
         Request::Close => Routed::Repository(RepositoryJob::Close),
         Request::CancelFetch => Routed::CancelFetch,
         Request::Write { id, write } => Routed::Write { id, write },
+        Request::DiscardConsequence { asked, paths } => Routed::DiscardConsequence { asked, paths },
         Request::CancelWrite { id } => Routed::CancelWrite(id),
         Request::RefreshStatus => Routed::RefreshStatus,
     }
@@ -262,6 +269,7 @@ pub(super) fn unroute(routed: Routed) -> Request {
         Routed::ConfiguredContext => Request::ConfiguredContext,
         Routed::CancelFetch => Request::CancelFetch,
         Routed::Write { id, write } => Request::Write { id, write },
+        Routed::DiscardConsequence { asked, paths } => Request::DiscardConsequence { asked, paths },
         Routed::CancelWrite(id) => Request::CancelWrite { id },
         Routed::RefreshStatus => Request::RefreshStatus,
     }
@@ -348,6 +356,10 @@ mod tests {
                     paths: vec![cairn_model::RepoPath::from("a")],
                 },
             },
+            Request::DiscardConsequence {
+                asked: OperationId::for_tests(3),
+                paths: vec![cairn_model::RepoPath::from("a")],
+            },
             Request::CancelWrite {
                 id: OperationId::for_tests(1),
             },
@@ -394,6 +406,12 @@ mod tests {
             write: crate::worker::LocalWrite::StageFiles { paths: Vec::new() },
         };
         assert_eq!(route(write).thread(), Some(Thread::Local));
+        // What a discard would lose is counted on the local lane, after the writes ahead of it.
+        let consequence = Request::DiscardConsequence {
+            asked: OperationId::for_tests(2),
+            paths: Vec::new(),
+        };
+        assert_eq!(route(consequence).thread(), Some(Thread::Local));
         assert_eq!(
             route(Request::RefreshStatus).thread(),
             Some(Thread::Refresh)

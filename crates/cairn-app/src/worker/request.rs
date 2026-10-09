@@ -9,8 +9,9 @@ use std::sync::Arc;
 
 use cairn_model::ShownDiff;
 use cairn_model::{
-    AheadBehind, ChangeSet, ChangedFile, CommandRecord, Context, Disclosure, History, LocalChanges,
-    MatchedRows, Oid, RefName, RefsSnapshot, RemoteSummary, RepoPath, RowsPage, SidebarRow,
+    AheadBehind, ChangeSet, ChangedFile, CommandRecord, Consequence, Context, Disclosure, History,
+    LocalChanges, MatchedRows, Oid, RefName, RefsSnapshot, RemoteSummary, RepoPath, RowsPage,
+    SidebarRow,
 };
 
 use super::askpass::PromptId;
@@ -399,6 +400,16 @@ pub enum Request {
     /// [`Update::WriteStarted`] and [`Update::WriteEnded`] under `id`, which the window
     /// chose ([`OperationId::next`]) so it can draw the write queued from the moment it asks.
     Write { id: OperationId, write: LocalWrite },
+    /// What discarding `paths` — rows of Local Changes' Unstaged list — would lose, computed on
+    /// the local lane in the order asked, after every write asked before it, and answered by
+    /// [`Update::DiscardConsequence`] under `asked`: the `Consequence` the confirmation draws,
+    /// or why no discard is offered (a nested repository, a submodule, a conflict, …), before
+    /// any dialog (staging-and-commit R8.4). A read: it writes nothing, and the window may ask
+    /// again.
+    DiscardConsequence {
+        asked: OperationId,
+        paths: Vec<RepoPath>,
+    },
     /// Cancels the write `id` names, if it is a commit and running; nothing otherwise (R4.3).
     /// Never queued: it reaches the lane's state directly, ahead of any write.
     #[cfg_attr(
@@ -457,6 +468,7 @@ impl Request {
             | Self::Fetch { .. }
             | Self::CancelFetch
             | Self::Write { .. }
+            | Self::DiscardConsequence { .. }
             | Self::CancelWrite { .. }
             // Status is numbered in its lane, which nothing moves (R10.3 as amended).
             | Self::RefreshStatus
@@ -616,6 +628,12 @@ pub enum Update {
         ending: WriteEnding,
         read_again: ReadAgain,
     },
+    /// What discarding the paths asked under `asked` would lose: the `Consequence` the
+    /// confirmation draws, or why the engine refused before any prompt (display text).
+    DiscardConsequence {
+        asked: OperationId,
+        outcome: Result<Consequence, String>,
+    },
     /// The lock files under the git directories as the repository opened — one a write left
     /// when a close gave up on it among them (staging-and-commit R4.9) — listed by the local
     /// lane before it runs any write, and sent only when there are some.
@@ -710,6 +728,7 @@ impl Update {
             | Self::WriteStarted { .. }
             | Self::WriteOutput { .. }
             | Self::WriteEnded { .. }
+            | Self::DiscardConsequence { .. }
             | Self::LocksAtOpen { .. }
             | Self::CommandLog { .. }
             | Self::FilteredFiles { .. }

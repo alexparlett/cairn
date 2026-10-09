@@ -17,8 +17,16 @@
 //! chosen, its diff drawn and no row highlighted, and is asked again on each refresh.
 //!
 //! **What it draws.** The lists only for the status they are laid out over; the diff only for
-//! the answer naming the path chosen, its side and the settings now. Nothing stages, unstages
-//! or discards (R9.6).
+//! the answer naming the path chosen, its side and the settings now — always the exact diff,
+//! ignore whitespace drawn off and disabled whatever the shared setting says
+//! (staging-and-commit R8.5) — and, under the lists, what the writes asked from here are doing
+//! (R8.6).
+//!
+//! **What it does** (staging-and-commit R8): the lists' selection, Fork's routes to stage and
+//! unstage, and the discard through its confirmation are `local_changes_actions`'; this view
+//! hands them what the lists and the diff report, and opens the confirmation once the engine
+//! has said what the discard would lose. The diff hears the stage and discard chords
+//! (`Scope::LocalChanges`) and acts on the file it shows, whole.
 
 use std::rc::Rc;
 
@@ -28,7 +36,8 @@ use cairn_model::{
 };
 use cairn_ui::accelerators::{self, Scope};
 use cairn_ui::{
-    DiffHeader, DiffNotice, DiffNoticeView, DiffSettings, DiffView, LocalChangesList, ShownFiles,
+    DiffHeader, DiffNotice, DiffNoticeView, DiffSettings, DiffView, ListIntent, LocalChangesList,
+    ShownFiles,
 };
 use freya::prelude::*;
 
@@ -37,7 +46,7 @@ use crate::diff_state::{WorkingChoice, WorkingShown, answered_working};
 use crate::local_changes_state::{drawn_changes, shown_paths, shown_rows};
 use crate::window::View;
 use crate::worker::{FileQuery, Refreshed, Request};
-use crate::{diff_actions, shortcuts};
+use crate::{diff_actions, local_changes_actions, shortcuts};
 
 /// Said in place of the lists before the first status is read.
 pub const READING_STATUS: &str = "Reading the working tree's status…";
@@ -233,6 +242,14 @@ impl Component for LocalChangesPane {
                 follow_the_lists(view, following.as_deref());
             }
         });
+        // What a discard would lose has arrived: the confirmation opens over the window, its
+        // token asking the discard (R8.4).
+        let confirming = self.submit.clone();
+        use_side_effect(move || {
+            if view.local.acting.read().has_arrived() {
+                local_changes_actions::confirm_arrived(view, confirming.clone());
+            }
+        });
         // A path whose request lost the file-diff lane to the commit's file or the files opened
         // in place is asked again as the view is shown.
         let reasking = self.submit.clone();
@@ -276,6 +293,7 @@ impl Component for LocalChangesPane {
         drop(local);
 
         let choosing = self.submit.clone();
+        let intending = self.submit.clone();
         let readable = view.local.state.into_readable();
         let list = LocalChangesList::new(
             readable.map(drawn_changes, |_| true),
@@ -286,9 +304,26 @@ impl Component for LocalChangesPane {
         .shown_paths(shown_paths)
         .split(view.local.lists_split)
         .chosen(chosen)
+        .selection(view.local.selection)
+        .held(view.held_keys)
         .on_choose(move |(list, row): (ChangeList, usize)| {
-            diff_actions::choose_working(list, row, view, choosing.as_deref());
+            local_changes_actions::choose(list, row, view, choosing.as_deref());
+        })
+        .on_intent(move |intent: ListIntent| {
+            local_changes_actions::intent(intent, view, intending.clone());
         });
+        let said =
+            local_changes_actions::acting_line(&view.local.acting.read(), &view.writes.read());
+        let list = rect()
+            .expanded()
+            .content(Content::Flex)
+            .child(
+                rect()
+                    .width(Size::fill())
+                    .height(Size::flex(1.))
+                    .child(list),
+            )
+            .maybe_child(said.map(|(line, failed)| acting(line, failed)));
 
         let mut width = view.local.list_width;
         // Peeked: the share only matters when the split is laid out anew.
@@ -338,6 +373,29 @@ impl Component for LocalChangesPane {
             )
             .into()
     }
+}
+
+/// One line under the lists: what the writes asked from here are doing, or why the last did
+/// not do what was asked (R8.6).
+fn acting(line: String, failed: bool) -> Element {
+    let colours = get_theme_or_default().read().colors().clone();
+    rect()
+        .width(Size::fill())
+        .padding(Gaps::new(4., 8., 4., 8.))
+        .background(colours.surface_tertiary)
+        .child(
+            label()
+                .text(line)
+                .max_lines(3)
+                .text_overflow(TextOverflow::Ellipsis)
+                .font_size(12.)
+                .color(if failed {
+                    colours.error
+                } else {
+                    colours.text_secondary
+                }),
+        )
+        .into()
 }
 
 /// One line over the lists: why the last status read failed, the lists before it still drawn.
@@ -390,10 +448,11 @@ fn diff_side(view: View, submit: Option<Rc<dyn Fn(Request)>>, empty: bool) -> El
     };
     let settings = *view.diff_settings.read();
     let drawn = state.shown_working();
-    let hiding = drawn.is_some_and(ShownDiff::hides_changes);
     let acting = submit.clone();
+    let hearing = submit.clone();
+    // The exact diff, always (R8.5): what is staged from here is what is drawn.
     let header = DiffHeader::new(header_file(drawn, &choice.path), settings)
-        .hiding(hiding)
+        .exact(true)
         .on_action(move |pressed| {
             shortcuts::act(shortcuts::of_header(pressed), view, acting.as_deref());
         });
@@ -410,6 +469,14 @@ fn diff_side(view: View, submit: Option<Rc<dyn Fn(Request)>>, empty: bool) -> El
     rect()
         .expanded()
         .content(Content::Flex)
+        // The stage and discard chords heard on the diff act on the file it shows (R7.3): the
+        // gesture's lines are phase 08's.
+        .on_key_down(move |e: Event<KeyboardEventData>| {
+            if let Some(action) = accelerators::resolve_key(&e, Scope::LocalChanges) {
+                e.stop_propagation();
+                local_changes_actions::on_the_diff(action, view, hearing.as_deref());
+            }
+        })
         .child(header)
         .child(
             rect()

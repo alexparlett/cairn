@@ -528,7 +528,7 @@ mod tests {
             context: Context::Lines(9),
             ..DiffOptions::default()
         };
-        let requests = state.settings_changed(wider, wider, Asking::Working);
+        let requests = state.settings_changed(wider, wider, wider, Asking::Working);
         match requests.first() {
             Some(Request::FileDiff(asked)) => assert_eq!(asked.options, wider),
             other => panic!("the path was not asked again: {other:?}"),
@@ -539,7 +539,7 @@ mod tests {
             context: Context::Lines(12),
             ..DiffOptions::default()
         };
-        let requests = state.settings_changed(wider_still, wider_still, Asking::File);
+        let requests = state.settings_changed(wider_still, wider_still, wider_still, Asking::File);
         assert!(
             !requests.iter().any(|r| matches!(r, Request::FileDiff(_))),
             "{requests:?}"

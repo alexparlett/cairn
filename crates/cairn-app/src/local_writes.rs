@@ -78,14 +78,6 @@ impl LocalWrites {
         self.closing = true;
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "phase 07 draws the write running where the user acted, and phase 09 the \
-                      commit box's busy state"
-        )
-    )]
     pub fn running(&self) -> Option<&Asked> {
         self.running.as_ref()
     }
@@ -95,22 +87,11 @@ impl LocalWrites {
     }
 
     /// The writes asked and not yet started, in the order they will run.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "phase 07 draws a write queued where the user acted"
-        )
-    )]
     pub fn queued(&self) -> impl Iterator<Item = &Asked> {
         self.queued.iter()
     }
 
     /// The latest write to end, and how.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "phase 07 draws a write's outcome")
-    )]
     pub fn last(&self) -> Option<&(Asked, WriteEnding)> {
         self.last.as_ref()
     }
@@ -127,13 +108,6 @@ impl LocalWrites {
 
 /// Asks for `write`: a fresh id, the write kept as queued, and the request submitted — one
 /// atomic increment and one send, so nothing here waits.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "phase 07's routes are the first to ask for a write"
-    )
-)]
 pub fn ask(writes: &mut LocalWrites, submit: &dyn Fn(Request), write: LocalWrite) -> OperationId {
     let id = OperationId::next();
     writes.asked(id, &write);

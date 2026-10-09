@@ -132,9 +132,20 @@ fn local_changes_shown(view: View) -> bool {
     *view.sidebar.main.peek() == MainView::LocalChanges
 }
 
+/// What a path of Local Changes is asked with: the Changes tab's options, but always the exact
+/// diff — whitespace never ignored, whatever the shared setting says (staging-and-commit R8.5,
+/// L6), since what is staged from the view is what it draws.
+pub fn working_options(settings: DiffSettings) -> DiffOptions {
+    DiffOptions {
+        ignore_whitespace: false,
+        ..options(settings)
+    }
+}
+
 /// What a path of Local Changes is asked as (R9.3): its staged diff from Staged, its unstaged
-/// or — for a path git does not track — untracked diff from Unstaged, at the Changes tab's
-/// options; `None` for a conflicted path, which has a notice in place of a diff (R9.4).
+/// or — for a path git does not track — untracked diff from Unstaged, at the view's options
+/// ([`working_options`]); `None` for a conflicted path, which has a notice in place of a diff
+/// (R9.4).
 pub fn working_query(
     list: ChangeList,
     change: &LocalChange<'_>,
@@ -151,7 +162,7 @@ pub fn working_query(
             path: change.path.clone(),
             side,
         },
-        options: options(settings),
+        options: working_options(settings),
     })
 }
 
@@ -229,9 +240,12 @@ fn ask_again(view: View, submit: Option<&dyn Fn(Request)>) {
         }
     };
     let settings = *diff_settings.peek();
-    let requests =
-        diff.write()
-            .settings_changed(options(settings), in_place_options(settings), asking);
+    let requests = diff.write().settings_changed(
+        options(settings),
+        in_place_options(settings),
+        working_options(settings),
+        asking,
+    );
     if !requests.is_empty() {
         change_cursor.set(None);
         local_cursor.set(None);

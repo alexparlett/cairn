@@ -403,6 +403,7 @@ impl DiffState {
         &mut self,
         options: DiffOptions,
         in_place: DiffOptions,
+        working: DiffOptions,
         asking: Asking,
     ) -> Vec<Request> {
         let mut requests = Vec::new();
@@ -438,10 +439,10 @@ impl DiffState {
                 expansion_asked = true;
             }
         }
-        // The path chosen in Local Changes is asked at the Changes tab's options: its view is
-        // one file's diff under the same bar.
+        // The path chosen in Local Changes is asked at the Changes tab's options but always
+        // exact (staging-and-commit R8.5): its view is one file's diff under the same bar.
         let (working_asked, freed) =
-            self.working_settings_changed(options, asking == Asking::Working);
+            self.working_settings_changed(working, asking == Asking::Working);
         requests.extend(retire(freed));
         let asked = match asking {
             Asking::File if file_asked => self.reask_file(),
@@ -1175,7 +1176,7 @@ mod tests {
 
         let mut wider = options;
         wider.context = Context::Lines(7);
-        let requests = state.settings_changed(wider, wider, Asking::Expansion);
+        let requests = state.settings_changed(wider, wider, wider, Asking::Expansion);
         let asked = expand_query(&requests);
         assert_eq!(asked.options, wider);
         assert_eq!(retired_count(&requests), 1);
@@ -1210,7 +1211,7 @@ mod tests {
             context: Context::EntireFile,
             ..options
         };
-        let requests = state.settings_changed(entire, options, Asking::File);
+        let requests = state.settings_changed(entire, options, entire, Asking::File);
         match requests.as_slice() {
             [Request::FileDiff(query)] => assert_eq!(query.options, entire),
             other => panic!("expected the file alone, asked: {other:?}"),
@@ -1250,7 +1251,7 @@ mod tests {
 
         let mut wider = options;
         wider.context = Context::Lines(7);
-        let requests = state.settings_changed(wider, wider, Asking::File);
+        let requests = state.settings_changed(wider, wider, wider, Asking::File);
         match requests.first() {
             Some(Request::FileDiff(query)) => assert_eq!(query.options, wider),
             other => panic!("the file was not asked first: {other:?}"),

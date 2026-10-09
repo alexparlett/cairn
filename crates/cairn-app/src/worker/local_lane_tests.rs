@@ -1259,3 +1259,132 @@ fn confirmed_discards_run_through_the_lane_and_quote_their_prompts() {
     assert!(!fixture.path.join("b").exists(), "the file was not deleted");
     drop(handle);
 }
+
+/// What the lane answered for the discard asked under `asked`.
+fn consequence_of(seen: &[Update], asked: OperationId) -> Result<cairn_model::Consequence, String> {
+    seen.iter()
+        .find_map(|update| match update {
+            Update::DiscardConsequence { asked: id, outcome } if *id == asked => {
+                Some(outcome.clone())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no consequence for {asked:?}: {seen:?}"))
+}
+
+/// R8.4 and phase 04's carry: what a discard would lose is counted on the local lane in the
+/// order asked — after a stage asked before it, held in its `git add` meanwhile — so it counts
+/// what that stage left: the path staged whole has no unstaged change, and the discard is
+/// refused before any dialog. Caught by: the consequence computed on another thread, or ahead
+/// of the write asked before it (it would count the file as untracked and offer to delete it).
+#[test]
+fn a_discards_consequence_is_counted_after_the_writes_asked_before_it() {
+    let fixture = with_files("cairn-lane-consequence-order", &["a", "b"]);
+    let body = format!(
+        "{}\n",
+        held("adds").replace("  exit 0", "  exec \"$REAL\" \"$@\"")
+    );
+    let stub = stub(&[("add", &body)]);
+    let _released = ReleaseAll(&stub);
+    let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let (handle, mut updates, _reply) = boundary(&fixture.path, &stub, (&home, &runtime));
+    let staging = ask(&handle, stage(&["a"]));
+    let pid = until_pids(&stub, "adds", 1)[0];
+    let asked = OperationId::next();
+    handle.submit(Request::DiscardConsequence {
+        asked,
+        paths: vec![RepoPath::from("a"), RepoPath::from("b")],
+    });
+    let meanwhile = after_the_repository_thread(&handle, &mut updates);
+    assert!(
+        !meanwhile
+            .iter()
+            .any(|update| matches!(update, Update::DiscardConsequence { .. })),
+        "the consequence was counted while the stage ahead of it ran: {meanwhile:?}"
+    );
+    release(&stub, pid);
+    let seen = collect_until(&mut updates, |update| {
+        matches!(update, Update::DiscardConsequence { .. })
+    });
+    assert!(
+        seen.iter()
+            .any(|update| matches!(update, Update::WriteEnded { id, .. } if *id == staging)),
+        "the consequence came before the stage ended: {seen:?}"
+    );
+    match consequence_of(&seen, asked) {
+        Err(why) => assert!(why.contains('a'), "{why}"),
+        Ok(consequence) => panic!("a staged path was offered for discard: {consequence:?}"),
+    }
+    drop(handle);
+}
+
+/// The QA brief, R8.4, R1.2: a selection mixing a modified file and an untracked one — what the
+/// window asks — is counted by the lane, and the discard confirmed from exactly that count
+/// restores the one and deletes the other, its ending quoting the prompt the dialog drew.
+/// Caught by: a count that is not what the discard then does, or a discard that takes a file
+/// the prompt did not name.
+#[test]
+fn the_dialogs_count_is_what_the_discard_then_does_to_a_mixed_selection() {
+    let fixture = to_commit("cairn-lane-mixed-discard", &["kept", "modified"]);
+    let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let (handle, mut updates, _reply) = real_boundary(&fixture.path, (&home, &runtime));
+    staged(&handle, &mut updates, &["kept", "modified"]);
+    let committing = ask(&handle, commit());
+    let seen = until_ended(&mut updates, committing);
+    assert!(
+        matches!(ending_of(&seen, committing).0, WriteEnding::Done(_)),
+        "{seen:?}"
+    );
+    std::fs::write(
+        fixture.path.join("modified"),
+        "modified\nedited\nline three\n",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    std::fs::write(fixture.path.join("new.txt"), "twelve bytes")
+        .unwrap_or_else(|error| panic!("{error}"));
+    std::fs::write(fixture.path.join("beside.txt"), "not selected\n")
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    let asked = OperationId::next();
+    handle.submit(Request::DiscardConsequence {
+        asked,
+        paths: vec![RepoPath::from("modified"), RepoPath::from("new.txt")],
+    });
+    let seen = collect_until(&mut updates, |update| {
+        matches!(update, Update::DiscardConsequence { .. })
+    });
+    let consequence = consequence_of(&seen, asked).unwrap_or_else(|why| panic!("{why}"));
+    let prompt = consequence.prompt();
+    assert_eq!(
+        prompt,
+        "Do you want to discard the changes in 2 files? 1 modified (3 lines), 1 untracked file \
+         deleted (12 bytes). You can't undo this action."
+    );
+    assert_eq!(consequence.action(), "Discard Changes in 2 Files");
+    let discarding = ask(
+        &handle,
+        LocalWrite::DiscardFiles(Confirmed::by_user(consequence)),
+    );
+    let seen = until_ended(&mut updates, discarding);
+    match ending_of(&seen, discarding) {
+        (WriteEnding::Done(done), ReadAgain::Status) => {
+            assert_eq!(done.acknowledged.as_deref(), Some(prompt.as_str()));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        std::fs::read_to_string(fixture.path.join("modified")).unwrap_or_default(),
+        "modified\nline two\n"
+    );
+    assert!(
+        !fixture.path.join("new.txt").exists(),
+        "the untracked file is still there"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.path.join("beside.txt")).unwrap_or_default(),
+        "not selected\n",
+        "a file the prompt did not name was taken"
+    );
+    assert!(fixture.path.join("kept").exists());
+    drop(handle);
+}

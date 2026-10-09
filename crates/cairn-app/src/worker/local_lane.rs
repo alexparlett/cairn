@@ -49,7 +49,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use cairn_askpass::Channel;
 use cairn_git::ops::{self, CommitWatch, GitBinary, Hooks, Invalidated, Performed, UnstageTo};
 use cairn_git::{Error, Repository, SharedRepository};
-use cairn_model::{AskpassToken, Confirmed, FileDiff, Oid, RepoPath, Selection};
+use cairn_model::{
+    AskpassToken, ChangeList, Confirmed, FileDiff, LocalChanges, Oid, RepoPath, Selection,
+};
 
 use super::pool::Outbox;
 use super::request::Update;
@@ -61,14 +63,6 @@ pub struct OperationId(u64);
 
 impl OperationId {
     /// A fresh id: an atomic increment, so the window can call it as it asks.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no view asks for a write until phase 07; the lane serves them, and its \
-                      tests ask"
-        )
-    )]
     pub fn next() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         Self(NEXT.fetch_add(1, Ordering::Relaxed))
@@ -110,8 +104,9 @@ impl From<UnstageTarget> for UnstageTo {
     not(test),
     expect(
         dead_code,
-        reason = "no view asks for a write until phase 07; the lane serves each, and its tests \
-                  ask"
+        reason = "the diff's gesture (staging-and-commit phase 08) asks for lines and the \
+                  commit box (phase 09) for a commit and an amend; the lane serves each, and \
+                  its tests ask"
     )
 )]
 pub enum LocalWrite {
@@ -130,6 +125,16 @@ pub enum LocalWrite {
     /// Every one of `paths`, whole, out of the index, back to `to`.
     UnstageFiles {
         paths: Vec<RepoPath>,
+        to: UnstageTarget,
+    },
+    /// Every path of `changes`' Unstaged list, whole, into the index: Stage All (R8.2). The
+    /// paths are gathered here, on the lane, never on the UI thread — a status can list tens
+    /// of thousands.
+    StageAll { changes: Arc<LocalChanges> },
+    /// Every path of `changes`' Staged list, whole, out of the index, back to `to`: Unstage
+    /// All.
+    UnstageAll {
+        changes: Arc<LocalChanges>,
         to: UnstageTarget,
     },
     /// The lines the confirmation names, discarded from the working tree.
@@ -167,6 +172,13 @@ impl Clone for LocalWrite {
             },
             Self::UnstageFiles { paths, to } => Self::UnstageFiles {
                 paths: paths.clone(),
+                to: to.clone(),
+            },
+            Self::StageAll { changes } => Self::StageAll {
+                changes: Arc::clone(changes),
+            },
+            Self::UnstageAll { changes, to } => Self::UnstageAll {
+                changes: Arc::clone(changes),
                 to: to.clone(),
             },
             Self::Commit {
@@ -214,6 +226,8 @@ impl LocalWrite {
             | Self::UnstageLines { .. }
             | Self::StageFiles { .. }
             | Self::UnstageFiles { .. }
+            | Self::StageAll { .. }
+            | Self::UnstageAll { .. }
             | Self::DiscardLines(_)
             | Self::DiscardFiles(_) => false,
             Self::Commit { .. } | Self::Amend { .. } => true,
@@ -228,6 +242,8 @@ impl LocalWrite {
             | Self::UnstageLines { .. }
             | Self::StageFiles { .. }
             | Self::UnstageFiles { .. }
+            | Self::StageAll { .. }
+            | Self::UnstageAll { .. }
             | Self::DiscardLines(_)
             | Self::DiscardFiles(_) => ReadAgain::Status,
             Self::Commit { .. } | Self::Amend { .. } => ReadAgain::Everything,
@@ -251,6 +267,12 @@ impl LocalWrite {
             }
             Self::StageFiles { paths } => format!("staging {}", files(paths.len())),
             Self::UnstageFiles { paths, .. } => format!("unstaging {}", files(paths.len())),
+            Self::StageAll { changes } => {
+                format!("staging {}", files(changes.len(ChangeList::Unstaged)))
+            }
+            Self::UnstageAll { changes, .. } => {
+                format!("unstaging {}", files(changes.len(ChangeList::Staged)))
+            }
             Self::DiscardLines(_) => "discarding lines".to_owned(),
             Self::DiscardFiles(_) => "discarding files".to_owned(),
             Self::Commit { .. } => "commit".to_owned(),
@@ -278,6 +300,16 @@ impl LocalWrite {
             Self::UnstageFiles { paths, to } => {
                 ops::unstage_files(git, repo, &paths, &to.into(), token)
             }
+            Self::StageAll { changes } => {
+                let paths = every_path(&changes, ChangeList::Unstaged);
+                drop(changes);
+                ops::stage_files(git, repo, &paths, token)
+            }
+            Self::UnstageAll { changes, to } => {
+                let paths = every_path(&changes, ChangeList::Staged);
+                drop(changes);
+                ops::unstage_files(git, repo, &paths, &to.into(), token)
+            }
             Self::DiscardLines(confirmed) => ops::discard_lines(git, repo, confirmed, token),
             Self::DiscardFiles(confirmed) => ops::discard_files(git, repo, confirmed, token),
             Self::Commit {
@@ -303,6 +335,11 @@ impl LocalWrite {
             }),
         }
     }
+}
+
+/// Every path `list` lists, and each rename's source, as a whole-file action names them.
+fn every_path(changes: &LocalChanges, list: ChangeList) -> Vec<RepoPath> {
+    changes.whole_file_paths(list, 0..changes.len(list))
 }
 
 fn hooks(skip: bool) -> Hooks {
@@ -494,6 +531,13 @@ pub(super) enum LocalJob {
     Write {
         id: OperationId,
         write: Box<LocalWrite>,
+    },
+    /// What discarding `paths` would lose, computed for the window's confirmation
+    /// (`ops::discard_files_consequence`), in the lane's order: after every write asked before
+    /// it, so it counts what they left (staging-and-commit R8.4).
+    Consequence {
+        asked: OperationId,
+        paths: Vec<RepoPath>,
     },
     /// The repository is closing: end once the write running, if any, has.
     Stop,
@@ -689,6 +733,18 @@ pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                 );
             }
             LocalJob::Write { id, write } => run(&repo, id, *write, serving),
+            LocalJob::Consequence { asked, paths } => {
+                let outcome = if serving.lane.is_closing() {
+                    Err("the repository is closing".to_owned())
+                } else {
+                    ops::discard_files_consequence(serving.git, &repo, &paths)
+                        .map_err(|error| error.to_string())
+                };
+                drop(paths);
+                serving
+                    .outbox
+                    .send(None, Update::DiscardConsequence { asked, outcome });
+            }
         }
     }
 }

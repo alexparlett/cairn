@@ -213,7 +213,16 @@ pub fn window(
             },
             view,
         ))
-        .maybe_child(confirming.map(|asking| confirmation(asking, view.confirming)))
+        // A credential prompt stacks over an open confirmation by setting it aside: a write
+        // running behind the dialog asked for a secret and waits on it, and the confirmation's
+        // modal would keep every key from the prompt. The confirmation stays kept, unanswered,
+        // and is drawn again — focus on Cancel — once the prompt is answered or refused
+        // (phase 06's QA item 5).
+        .maybe_child(
+            confirming
+                .filter(|_| prompt.is_none())
+                .map(|asking| confirmation(asking, view.confirming)),
+        )
         .maybe_child(prompt.map(|prompt| dialog(prompt, view.prompt, answer)))
         // Every context menu opens here, so none panics for want of a host (R7.5).
         .child(ContextMenuViewer::new())

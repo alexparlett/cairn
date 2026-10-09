@@ -31,6 +31,9 @@ use crate::diff_row_parts::{
     ADVANCE, SEPARATOR_WIDTH, TEXT_END_PADDING, TEXT_PADDING, number_width,
 };
 use crate::side_by_side_rows::Columns;
+use crate::staging_gesture::{
+    Gesture, GestureLayer, Host, Source, use_drag_ends_on_focus_lost, use_pointer,
+};
 use crate::{side_by_side_rows, unified_rows};
 
 /// Every row of the diff is this tall: Fork's, measured — a 17 pt pitch for Menlo at 11 pt
@@ -129,12 +132,15 @@ pub fn step_change(
 
 /// One file's diff, unified or side by side. `shown` is a handle, not a copy: rows are read
 /// from it as they are built. `scroll` is the application's, so previous and next change can
-/// move the view; `current` is the change they last moved to, marked in the gutter.
+/// move the view; `current` is the change they last moved to, marked in the gutter. Handed a
+/// [`Gesture`] — Local Changes' diff alone — it draws the staging gesture over its rows
+/// (`staging_gesture`); without one it draws none (R9.5).
 pub struct DiffView {
     shown: Readable<ShownDiff>,
     scroll: ScrollController,
     current: Option<Range<usize>>,
     side_by_side: bool,
+    gesture: Option<Gesture>,
     key: DiffKey,
 }
 
@@ -145,8 +151,15 @@ impl DiffView {
             scroll,
             current: None,
             side_by_side: false,
+            gesture: None,
             key: DiffKey::None,
         }
+    }
+
+    /// The staging gesture over the rows (staging-and-commit R9): Local Changes' alone.
+    pub fn gesture(mut self, gesture: Option<Gesture>) -> Self {
+        self.gesture = gesture;
+        self
     }
 
     /// The rows of the change last moved to.
@@ -168,6 +181,7 @@ impl PartialEq for DiffView {
             && self.scroll == other.scroll
             && self.current == other.current
             && self.side_by_side == other.side_by_side
+            && self.gesture == other.gesture
             && self.key == other.key
     }
 }
@@ -273,6 +287,11 @@ impl Component for DiffView {
         let focus_id = use_a11y();
         let mut viewport = use_state(|| (0.0f32, 0.0f32));
         let view_width = viewport.read().0;
+        // The gesture's state, made whether or not a gesture is drawn: a view's hooks are the
+        // same on every render.
+        let pointer = use_pointer();
+        let edge = crate::edge_scroll::use_edge_scroll(self.scroll);
+        use_drag_ends_on_focus_lost(self.gesture.as_ref().map(|gesture| gesture.lines()));
         // Reading subscribes the view to the answer it draws.
         let data = {
             let shown = self.shown.read();
@@ -300,8 +319,23 @@ impl Component for DiffView {
             geometry.width
         };
         let scroll = self.scroll;
+        let host = self.gesture.clone().map(|gesture| Host {
+            gesture,
+            pointer,
+            source: Source::One(self.shown.clone()),
+            side_by_side: self.side_by_side,
+            scroll,
+            edge,
+        });
 
-        rect()
+        let list = VirtualScrollView::new_with_data_controlled(data, build_row, scroll)
+            .length(rows)
+            .item_size(DIFF_ROW_HEIGHT)
+            // The view's own key handling is the focused rect's, above.
+            .scroll_with_arrows(false)
+            .expanded();
+        let (sizing, escaping) = (host.clone(), host.clone());
+        let root = rect()
             .expanded()
             .background(GROUND)
             .a11y_id(focus_id)
@@ -310,8 +344,17 @@ impl Component for DiffView {
             .on_press(move |_| focus_id.request_focus())
             .on_sized(move |e: Event<SizedEventData>| {
                 viewport.set_if_modified((e.area.width(), e.area.height()));
+                if let Some(host) = &sizing {
+                    host.sized(e.area);
+                }
             })
             .on_key_down(move |e: Event<KeyboardEventData>| {
+                if e.key == Key::Named(NamedKey::Escape)
+                    && escaping.as_ref().is_some_and(Host::escaped)
+                {
+                    e.stop_propagation();
+                    return;
+                }
                 let (shown_width, shown_height) = *viewport.peek();
                 let limits = Limits {
                     rows,
@@ -322,15 +365,16 @@ impl Component for DiffView {
                 if scroll_by_key(&e, scroll, limits) {
                     e.stop_propagation();
                 }
-            })
-            .child(
-                VirtualScrollView::new_with_data_controlled(data, build_row, scroll)
-                    .length(rows)
-                    .item_size(DIFF_ROW_HEIGHT)
-                    // The view's own key handling is the focused rect's, above.
-                    .scroll_with_arrows(false)
-                    .expanded(),
-            )
+            });
+        match host {
+            // The rows inside a container the drag begins on and scrolls at its edges, and the
+            // gesture's layer over them, outside the rows the list recycles.
+            Some(host) => host
+                .on_root(root)
+                .child(edge.on(host.on_rows(rect().expanded())).child(list))
+                .child(GestureLayer { host }),
+            None => root.child(list),
+        }
     }
 
     fn render_key(&self) -> DiffKey {
@@ -340,17 +384,17 @@ impl Component for DiffView {
 
 /// How far the view can scroll.
 #[derive(Debug, Clone, Copy)]
-struct Limits {
-    rows: usize,
-    width: f32,
-    shown_width: f32,
-    shown_height: f32,
+pub(crate) struct Limits {
+    pub(crate) rows: usize,
+    pub(crate) width: f32,
+    pub(crate) shown_width: f32,
+    pub(crate) shown_height: f32,
 }
 
 /// The keys of a focused list: the arrows by a row or a few columns, Page Up and Page Down by
 /// a view, Home and End. A chord is left for whoever hears it — previous and next change
 /// are the detail pane's.
-fn scroll_by_key(
+pub(crate) fn scroll_by_key(
     e: &Event<KeyboardEventData>,
     mut scroll: ScrollController,
     limits: Limits,

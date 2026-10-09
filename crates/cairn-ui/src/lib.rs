@@ -43,6 +43,8 @@ mod ref_chips;
 mod ref_glyphs;
 mod side_by_side_rows;
 mod sidebar;
+mod stacked_diff;
+mod staging_gesture;
 mod status_box;
 mod text_field;
 mod toggle_glyphs;
@@ -103,6 +105,11 @@ pub use sidebar::{
     ALL_COMMITS_CAPTION, BranchCounts, DETACHED_HEAD_CAPTION, DrawnRow, LOCAL_CHANGES_CAPTION,
     MainView, SIDEBAR_FILTER_PLACEHOLDER, SIDEBAR_INDENT, SIDEBAR_ROW_HEIGHT, Sidebar, SidebarRefs,
     SidebarTarget, drawn_row, local_changes_text, section_caption,
+};
+pub use stacked_diff::{READING_FILE_DIFF, StackedDiff};
+pub use staging_gesture::{
+    DISCARD_CHUNK_CAPTION, Gesture, GestureAct, GestureSide, GestureVerb, LineDrag, ModeRow,
+    STAGE_CHUNK_CAPTION, UNSTAGE_CHUNK_CAPTION, chunk_caption, lines_caption, mode_caption,
 };
 pub use status_box::{
     NO_COMMITS_YET, StatusBox, Tracking, UPSTREAM_GONE, counts_text, current_branch, head_text,

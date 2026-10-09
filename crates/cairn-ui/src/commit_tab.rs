@@ -689,7 +689,7 @@ fn under_row(item: VirtualItem, file: usize, under: usize, data: &TabData) -> El
 
 /// One row of a notice standing in place of an opened file's rows: the words the Changes tab's
 /// notice draws, a line each.
-fn notice_line(row: &NoticeRow) -> Label {
+pub(crate) fn notice_line(row: &NoticeRow) -> Label {
     let tone = |tone: &NoticeTone| match tone {
         NoticeTone::Old => REMOVED_EMPHASIS,
         NoticeTone::New => ADDED_EMPHASIS,

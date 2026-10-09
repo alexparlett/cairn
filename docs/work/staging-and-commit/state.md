@@ -16,9 +16,8 @@ at c07c076. Phase 06 (render foundations) done in packet mode: QA adjudicated, f
 user's decisions 6, 12, 13 and 14 (2026-10-09) applied, full gate green. Phase 07 (Local
 Changes acts on files) done in packet mode: QA adjudicated, fixes and the user's decisions of
 2026-10-09 applied, full gate green. Phase 08 (the diff's staging gesture, and a
-multi-selection's diffs drawn together) built in packet mode, full gate green, QA pending (the
-coordinator's); six items for the user's ratification in progress.md. Phases 09-12 not
-started.**
+multi-selection's diffs drawn together) done in packet mode: QA adjudicated, fixes and the
+user's decisions (2026-10-09) applied, full gate green. Phases 09-12 not started.**
 
 ## Locked decisions
 
@@ -372,13 +371,28 @@ staging gesture"):
   `together_needs_asking`, `reask_together` (`diff_state/together.rs`);
   `local_changes_actions::on_gesture`, `Discarding::{Files, Lines}`; `local_changes_pane::
   together_wanted`, `draw_together`.
+- From phase 08's QA: `GestureAct::drawn` (an act refused once its answer is no longer drawn);
+  `ModeRow::of(file, side, drawn, on_act)`; `DiffState::together_read_paths`;
+  `ShownDiff::shared_diff() -> Arc<FileDiff>`, and `LocalWrite::{StageLines, UnstageLines}` and
+  `Request::DiscardLinesConsequence` carry `Arc<FileDiff>`; a discard of several files' prompt
+  names the first three and how many more.
 
 ## Carried forward from phase 08 (owned by the phase named)
 
 - **Phase 11**: measure the gesture on the bench in `window_check` — hover and drag over a large
   diff (the layer re-renders per pointer move and scroll), and a selection of many paths drawn
   together (one pass over the files per render of `StackedDiff`, `widest`); C21's frame budget.
-- **Phase 12 / the user**: the six items for ratification in progress.md's phase 08 entry.
+- **Phase 11, from phase 08's QA** (adjudicated 2026-10-09): #3 — each page of the files drawn
+  together rebuilds their `Expansion` from the page's first file to the end (O(paths × pages),
+  bounded by the selection), and `widest` runs every frame of a sideways resize: measure, and
+  bound if it shows; #4' (the user's decision) — adding a path to a selection drawn together
+  re-reads every path: keep each file's answer across selection changes, with measurements (the
+  flash is documented as interim in `local-changes.md`).
+- **Phase 09, from phase 08's QA** (#7): one real-git end-to-end test at context 10 — stage a
+  chunk drawn at context 10 through the lane and read back `git diff --cached`.
+- **Phase 12 / the user, at the merge bar** (#15): Escape is matched as a literal
+  `NamedKey::Escape` (`diff_view.rs`, `stacked_diff.rs`, `local_changes_drag.rs`) rather than as
+  an accelerator-table `Action` — a convention note, not a guard breach.
 
 ## Carried forward from phase 07 (owned by the phase named)
 
@@ -659,7 +673,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 05 commit engine | done — QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green at c07c076 |
 | 06 render foundations | done — QA adjudicated, fixes and the user's decisions 6, 12, 13 and 14 (2026-10-09) applied, full gate green |
 | 07 Local Changes actions | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green |
-| 08 diff gesture | built, gate green, QA pending |
+| 08 diff gesture | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green |
 | 09 commit box | not started |
 | 10 lost commits | not started |
 | 11 activity and measured | not started |

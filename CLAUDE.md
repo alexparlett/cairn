@@ -1078,9 +1078,13 @@ Project invariants:
     drawn together, of the files; a drag's selection is read from the layout once, when it
     ends (`selection_in`, costing the changed lines selected), and copied once per action,
     never per frame — the layer reads it in place. The files drawn together cost a pass over
-    the files per render of their view (`StackedDiff`'s widest row) and what the selection
-    asks a binary search per path selected (`local_changes_pane::together_wanted`), each run
-    as the selection, the lists or the settings move, never per frame. A press in
+    the files per render of their view (`StackedDiff`'s widest row) — every frame while the
+    window is resized sideways — and what the selection asks a binary search per path
+    selected (`local_changes_pane::together_wanted`), run as the selection, the lists or the
+    settings move; and each page of them that arrives rebuilds their `Expansion` table from
+    the page's first file to the last (`DiffState::together_arrived`), so reading them costs
+    the paths times the pages, bounded by the selection a list holds, on the UI thread
+    (a residual for `window_check` to measure). A press in
     the sidebar looks for its row among the labelled, stash and `HEAD` rows alone
     (`History::labelled_position`), never every loaded row, and a find then looks
     through each page as it arrives (`ref_find::pages_arrived`), never a page twice. A refresh asks the UI thread for

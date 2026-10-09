@@ -269,6 +269,12 @@ table of files opened in place (`cairn_ui::Expansion`), so a row is placed by a 
 over the files. The bar over them names how many files are drawn; previous and next change are
 inert there.
 
+With no lines selected the chords act on the files read and drawn — a diff, its notice or its
+failure — never one still being read or one the line budget left unread
+(`DiffState::together_read_paths`; the user's decision, 2026-10-09,
+`the_chords_over_files_drawn_together_take_only_the_files_drawn`); a discard of several files
+names them in its dialog, the first three and how many more (`Consequence::prompt`).
+
 The same paths asked again — a refresh, the settings moved — keep what they draw until their
 answers arrive, under a new number; other paths are drawn afresh, from the top. While paths are
 drawn together the path chosen stays chosen but is not asked (`choose_working` asks nothing then,
@@ -312,9 +318,19 @@ rows spanned and no others, found from the change stops, so its cost is the line
 never the rows spanned, and a selection reaching thousands of rows below is whole. A press
 without a drag selects nothing and lets a selection go, as does Escape. A release the window
 never hears ends the drag at the next press; losing focus lets it go. The selection's actions
-are drawn at its top right, counted (`Stage 2 Lines`, `Unstage 1 Line`, `Discard 2 Lines`), and
+are drawn at its top right, counted (`Stage 2 Lines`, `Unstage 1 Line`, `Discard 2 Lines…` —
+whose confirmation's button reads `Discard 2 Lines`; the user's decision, 2026-10-09), and
 the chords act on it too. A selection belongs to the answer it was made under: another answer
-drawn — a refresh, a write's re-read — makes it nothing.
+drawn — a refresh, a write's re-read — makes it nothing. The number is the answer's: a working-tree
+answer kept is numbered afresh (`DiffState::working_drawn`), and the files drawn together are
+renumbered whenever a page replaces a diff that was drawn (`together_drawn`) — never by a page
+filling a path still being read — so a selection made over a re-ask's old diffs is nothing once
+its new ones arrive. Every act carries the number it was made under (`GestureAct::drawn`), and
+`local_changes_actions::on_gesture` refuses one whose number is no longer drawn, so an action
+built before a redraw never sends old rows' lines against a new diff
+(`a_selection_over_files_drawn_together_is_nothing_once_a_page_replaces_its_diff`,
+`an_act_made_under_an_answer_no_longer_drawn_asks_nothing`). The diff handed to a write is the
+answer drawn, shared (`ShownDiff::shared_diff`), never copied on the UI thread.
 
 **After an action** the actions hide until the diff is drawn again or the pointer moves, so a
 second press cannot act twice on rows the first already took (Fork, Tracker #480); then they
@@ -375,6 +391,7 @@ taking the mode change alone (`Selection::select_mode`), never a line (`cairn_ui
   `a_drag_across_unmounted_rows_selects_every_line_between_its_ends`,
   `side_by_side_a_drag_keeps_to_its_column`,
   `after_an_action_the_actions_follow_the_new_rows_or_none`,
+  `after_an_action_a_moved_pointer_brings_the_actions_back`,
   `files_drawn_together_each_take_their_own_gesture`, and the viewport twins
   `the_gesture_builds_one_viewport_over_a_10000_line_diff` and
   `files_drawn_together_build_one_viewport`, named in the root `CLAUDE.md`'s virtualization
@@ -383,12 +400,21 @@ taking the mode change alone (`Selection::select_mode`), never a line (`cairn_ui
   `the_chords_act_on_the_selection_and_on_the_whole_file_without_one`,
   `a_chunks_discard_confirms_its_lines_and_a_new_files_every_line_is_its_file`,
   `the_mode_row_stages_the_mode_alone`, `nothing_acts_on_lines_while_a_confirmation_is_open`,
+  `a_selection_over_files_drawn_together_is_nothing_once_a_page_replaces_its_diff`,
+  `an_act_made_under_an_answer_no_longer_drawn_asks_nothing`,
+  `part_of_a_new_files_lines_is_discarded_as_lines`,
+  `the_chords_over_files_drawn_together_take_only_the_files_drawn`,
   `several_paths_selected_draw_their_diffs_together`,
   `a_renames_source_row_unstages_its_lines_at_the_new_path`; the paths drawn together as kept
   (`crates/cairn-app/src/diff_state/together.rs`):
   `the_paths_drawn_together_keep_only_their_own_asks_pages`,
   `the_same_paths_asked_again_keep_their_diffs_meanwhile`; and through the real boundary,
-  `paths_drawn_together_are_answered_by_place_under_their_budget` (`worker/diff_tests.rs`).
+  `paths_drawn_together_are_answered_by_place_under_their_budget` (`worker/diff_tests.rs`, a path
+  costing exactly the budget among its cases) and
+  `paths_drawn_together_are_each_read_as_their_own_side` (`worker/local_lane_tests.rs`: an
+  unstaged, a staged and an untracked path, against real `git`); the prompt naming the files,
+  `a_discard_of_several_files_names_the_first_three_and_counts_the_rest`
+  (`crates/cairn-model/src/consequence.rs`).
 - Acting, in the window (`crates/cairn-app/src/local_changes_actions_tests.rs`):
   `the_chord_and_the_button_stage_a_selection_and_the_selection_moves_on`,
   `a_drag_the_menu_and_a_double_press_stage_what_is_selected`,
@@ -483,10 +509,17 @@ taking the mode change alone (`Selection::select_mode`), never a line (`cairn_ui
   own bound, if it has one, is not recorded. Drawn together, a file past R2.6's limits offers no
   Load Diff and a file whose mode changed no mode row: either is reached by choosing the path
   alone. Previous and next change step through one file's changes, so they are inert over paths
-  drawn together.
+  drawn together. (Each ratified by the user, 2026-10-09.)
+- Adding a path to a selection drawn together asks every path again, so the files already drawn
+  are read afresh and flash as they arrive: interim, until each file's answer is kept across a
+  change of the selection (carried to phase 11, with measurements).
 - Fork's floating actions sit at the chunk's top right; Cairn's also stand at the list's top while
   the chunk's top is scrolled above it, so a tall chunk's actions stay in reach. A selection's
-  actions are drawn at its top, not at the chunk's.
+  actions are drawn at its top, not at the chunk's. A press without a drag, or Escape, lets a
+  selection go, and the window losing focus cancels a drag. (Each ratified by the user,
+  2026-10-09.)
+- The discard dialog names the files of a discard of several — the first three and how many
+  more — where Fork's counts them (the user's decision, 2026-10-09).
 - Stage All's double chevron sits in Unstaged's heading, as Fork for Windows draws it (Linux
   follows Fork's Windows rows); Fork for Mac draws it above the lists and flips it to Unstage
   All once nothing is left to stage. Unstage All is the Staged button with the press held, the

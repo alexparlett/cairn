@@ -498,6 +498,22 @@ literally.
   `HEAD`'s and the local branches' reflogs, where Fork's mode reaches every reflog
   (`git log --all --reflog`, TrackerWin #1307); and no Commit and Push until push
   exists (L9).
+- **A line selection acts only on the answer it was made over** (phase 08's QA, item 1): a
+  selection names rows of one diff, and once another answer is drawn under it — a refresh, a
+  re-read's page — it is nothing, and no act made under the old answer reaches a write.
+- **Files drawn together, as ratified by the user (2026-10-09, phase 08's QA):** they are read
+  under Expand All's 50,000-line budget, the files past it not drawn, each saying to choose it
+  alone; drawn together, a file offers no Load Diff, no mode row and no previous or next change
+  — choosing it alone offers each; with no lines selected the chords act only on the files read
+  and drawn, never one past the budget or still being read; and a discard of several files
+  names them in its dialog, the first three and how many more (the user's decision,
+  2026-10-09).
+- **The gesture's floating actions, as ratified by the user (2026-10-09, phase 08's QA):** they
+  stand at the list's top while the chunk's top is scrolled above it, where Fork's sit at the
+  chunk's top right; a press without a drag, or Escape, lets a line selection go, and the window
+  losing focus cancels a drag; and a selection's discard reads `Discard 2 Lines…`, its
+  ellipsis saying it confirms, the confirmation's own button `Discard 2 Lines` (the user's
+  decision, 2026-10-09).
 - **Writes go through `git`; only `ops/` writes.** The one exception is removing a
   stale `index.lock`, which git has no verb for, done in `ops/` (R12.4). Every read
   this packet adds is a named function in `reads/`.

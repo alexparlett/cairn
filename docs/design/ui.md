@@ -52,6 +52,11 @@ Kept, and why:
 | The **activity popover**, Fork's, also quotes the prompt the user confirmed for each destructive operation and points at the way back where there is one. Fork's quotes nothing. | `engine.md`, "The confirmation seal" |
 | **Ignore Whitespace is disabled in Local Changes**, so every change drawn there is one a gesture can stage. Fork offers it there. | `diff.md`, "Selections and patches" |
 | The discard dialog counts what is lost by kind and size — modified files with their lines, untracked files deleted with their bytes — where Fork's names a count of files. | `engine.md`, "The confirmation seal" |
+| The discard dialog for several files **names them** — the first three and how many more — where Fork's counts them, so the dialog says which files go. | `engine.md`, "The confirmation seal" |
+| Several files selected in Local Changes are drawn together **under a line budget** — Expand All's — and the files past it are not drawn, each saying to choose it alone; with no lines selected the stage and discard keys act only on the files drawn. Fork's own bound is not recorded. | `concurrency.md` — every query is assumed slow; a selection can be however wide |
+| Drawn together, a file offers **no Load Diff, no mode row and no previous or next change**; choosing it alone offers each. | `diff.md`, one file's diff per bar |
+| The floating actions **stay at the list's top** while the chunk's top is scrolled above it, so a tall chunk's actions stay in reach; Fork's sit at the chunk's top right. | `cairn.md`, what Cairn is |
+| A press without a drag, or Escape, **lets a line selection go**, and the window losing focus cancels a drag; the selection's discard reads `Discard 2 Lines…`, its ellipsis saying it confirms. | `diff.md`, "Selections and patches" |
 | The amend button names the commit it replaces and where the old one stays; Fork's reads `Amend`. | `engine.md`, "The confirmation seal"; `feature-inventory.md`, "Recovery" |
 | A stale `index.lock` a write left behind can be removed, confirmed, from the activity popover while Cairn runs no `git` in that repository. | `processes.md`, "Cancellation"; `engine.md`, D1's one deletion made without `git` |
 | A nested repository among the untracked rows is refused before any dialog, since deleting it deletes history no prompt can count. | `engine.md`, the write verbs |
@@ -150,7 +155,7 @@ Fork puts no actions on the hunk header, and neither does Cairn. Hovering a chun
 outlines it and floats its actions over it: `Stage` and `Discard Changes…` in the
 unstaged diff, `Unstage` in the staged one, which offers no discard. A
 drag-selection narrows the floating actions, and the stage and discard keys, to the
-selected changed lines (`Stage 2 Lines`, `Discard 2 Lines`); with nothing selected
+selected changed lines (`Stage 2 Lines`, `Discard 2 Lines…`); with nothing selected
 the keys act on the whole file. The drag carries on across rows the virtual list
 has unmounted, and scrolls the diff when it reaches an edge. Side by side, a
 selection stays in the column it began in. A mode change is a row of its own with
@@ -170,10 +175,11 @@ R9.
 ### Discard
 
 Discard always asks, and the question cannot be skipped. The dialog is Fork's, in
-Fork's words with the counts the engine computed — "Do you want to discard the
-changes in 3 files? 2 modified (14 lines), 1 untracked file deleted (2.1 KiB). You
-can't undo this action." — and its button names the count (`Discard Changes in 3
-Files`, `Discard 2 Lines`). Its words are rendered from the operation's consequence
+Fork's words with the counts the engine computed and the files named — "Do you want
+to discard the changes in 3 files (a.rs, b.rs and notes.txt)? 2 modified (14 lines), 1
+untracked file deleted (2.1 KiB). You can't undo this action." — the first three named and
+how many more past them, and its button names the count (`Discard Changes in 3 Files`,
+`Discard 2 Lines`). Its words are rendered from the operation's consequence
 and are the `Confirmed` prompt (`engine.md`, "The confirmation seal"). Focus starts
 on Cancel; Escape cancels; Tab stays inside the dialog, and the window's chords do
 nothing while it is open.

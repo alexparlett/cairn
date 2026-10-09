@@ -3,6 +3,60 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 08 QA, adjudicated and fixed; the user's decisions applied
+
+Four fresh reviewers and a fresh qa-confirm adjudicated phase 08; the user decided the batched
+items (2026-10-09, relayed by the coordinator). Commits after b442dc6 below.
+
+Fixed:
+
+- **1 (critical) — a stale line selection applied to a re-read diff.** The files drawn together
+  kept one number per ask, so a selection made over a re-ask's old diffs named the new diffs'
+  lines once their page arrived; and an act built before a redraw trusted the number it was
+  drawn under. Now the files drawn together are renumbered whenever a page replaces a diff that
+  was drawn, every `GestureAct` carries its number, and `on_gesture` refuses one no longer drawn
+  — single path and stacked alike. Test-first:
+  `a_selection_over_files_drawn_together_is_nothing_once_a_page_replaces_its_diff` failed on the
+  old code (a `DiscardLinesConsequence` sent against the re-read diff), and
+  `an_act_made_under_an_answer_no_longer_drawn_asks_nothing` fails with the check removed.
+- **2** — `ShownDiff` holds `Arc<FileDiff>` (`shared_diff`; `the_answer_drawn_is_shared_not_copied`),
+  and the lines writes and the lines discard carry the shared answer: no copy per action.
+- **8** — a release and a press read the drag in place, copying three fields, never the phase.
+- **11** — `part_of_a_new_files_lines_is_discarded_as_lines`. **12** —
+  `after_an_action_a_moved_pointer_brings_the_actions_back`.
+- **13 (probe)** — flipping the budget's `>=` to `>` survived the real-git test; it gained a path
+  costing exactly the budget, which now catches the flip. **14 (probe)** — the real-git test read
+  untracked paths only; `paths_drawn_together_are_each_read_as_their_own_side` reads an unstaged,
+  a staged and an untracked path through the lane's own stage and commit.
+- **#3 residual** written into the root `CLAUDE.md`'s virtualization obligations.
+
+The user's decisions (2026-10-09):
+
+- **5** — with no lines selected, the chords over files drawn together act only on the files
+  read and drawn (`together_read_paths`;
+  `the_chords_over_files_drawn_together_take_only_the_files_drawn`); and a discard of several
+  files names them — the first three and how many more — in `Consequence::prompt`, for every
+  caller (the lists' route too), the token's text the dialog's
+  (`a_discard_of_several_files_names_the_first_three_and_counts_the_rest`; the engine's and the
+  lane's literal prompts updated).
+- **6** — the floating discard reads `Discard 2 Lines…`; the dialog's button stays `Discard 2
+  Lines`.
+- **Ratified** — the line budget for files drawn together; no Load Diff, mode row or previous and
+  next change when drawn together; actions pinned at the list's top; a press without a drag or
+  Escape clears a selection and focus loss cancels a drag. Recorded as PRD product rules and
+  `ui.md` "What changes, and why" rows. **4'** (keep each file's answer across selection changes)
+  carried to phase 11; the flash documented as interim.
+
+Dismissed:
+
+- **9** — the floating count and the dialog's count differ: both are `Selection::len()` over the
+  same `Selection` (`staging_gesture.rs`, `consequence.rs`, `discard.rs`); a mode change is counted
+  apart, and git's end-of-file marker is no line number.
+- **16** — a `refresh_tests` flake: 5/5 alone and 3/3 with the whole `worker::` module, unmutated;
+  the failure was a `WAIT` deadline under the mutation run's load.
+
+Carried: see `state.md` (phase 11: #3 and #4'; phase 09: #7; phase 12, for the user: #15).
+
 ## 2026-10-09 — phase 08, the diff's staging gesture (packet mode)
 
 Built on `feature/staging-and-commit`; QA is the coordinator's. Commits 3bfb9e9 (model: which

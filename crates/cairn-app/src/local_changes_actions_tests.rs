@@ -205,7 +205,7 @@ fn chosen(view: View) -> Option<String> {
         .map(|choice| choice.path.display().into_owned())
 }
 
-/// Selects `rows` of Unstaged: the first pressed plainly, each other with the extending press.
+/// Selects `rows` of one list: the first pressed plainly, each other with the extending press.
 fn choose_rows(test: &mut TestingRunner, view: View, rows: &[&str]) {
     let Some((first, rest)) = rows.split_first() else {
         return;
@@ -791,4 +791,39 @@ fn a_conflicted_row_stages_whole_by_every_route() {
     settle(&mut test);
     assert_eq!(writes(&submitted), vec![write("stage", &["clash.rs"]); 4]);
     assert_eq!(consequences_asked(&submitted), []);
+}
+
+/// C18, R8.2: a staged selection unstages by every route but the double press (which takes its
+/// row): dragged from Staged and dropped on Unstaged, Staged's Unstage button, and the menu's
+/// Unstage — each one write naming exactly the selection. Caught by: a route that unstages the
+/// row it began on alone, or stages instead.
+#[test]
+fn a_staged_selection_unstages_by_the_drag_the_button_and_the_menu() {
+    let (mut test, view, submitted) = opened(several());
+    choose_rows(&mut test, view, &["s.rs", "u.rs"]);
+    let from = at(&test, "s.rs", 0);
+    let into = at(&test, "a.rs", 0);
+    test.press_cursor(from);
+    test.move_cursor((from.0, from.1 - 10.));
+    test.sync_and_update();
+    test.move_cursor(into);
+    test.sync_and_update();
+    test.release_cursor(into);
+    settle(&mut test);
+    choose_rows(&mut test, view, &["s.rs", "u.rs"]);
+    click(&mut test, cairn_ui::UNSTAGE_CAPTION);
+    choose_rows(&mut test, view, &["s.rs", "u.rs"]);
+    right_click(&mut test, "u.rs");
+    let unstage = at(&test, cairn_ui::UNSTAGE_CAPTION, 1);
+    test.click_cursor(unstage);
+    settle(&mut test);
+    assert_eq!(
+        writes(&submitted),
+        vec![write("unstage", &["s.rs", "u.rs"]); 3]
+    );
+    let row = at(&test, "s.rs", 0);
+    test.click_cursor(row);
+    test.click_cursor(row);
+    settle(&mut test);
+    assert_eq!(writes(&submitted)[3..], [write("unstage", &["s.rs"])]);
 }

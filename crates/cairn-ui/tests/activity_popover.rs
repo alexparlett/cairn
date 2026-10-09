@@ -201,6 +201,33 @@ fn area(test: &TestingRunner, text: &str) -> freya::prelude::Area {
     .unwrap_or_else(|| panic!("nothing reads {text:?}: {:?}", labels(test)))
 }
 
+/// The merge bar's probe of decision K's Show All: the prompt's row is first sized by an
+/// estimate from its characters, then by the height the prompt lays out at — here a prompt of
+/// narrow glyphs, which lays out in far fewer lines than its characters estimate, so its row
+/// would leave a band of nothing between the prompt and git's first line were the measure
+/// never read back. Caught by: the measured height read without subscribing the list to it
+/// (`peek`), or left out of what decides whether the lines' list is drawn again.
+#[test]
+fn a_prompt_shown_whole_sits_on_its_measured_height_not_its_estimate() {
+    let prompt = "ill lil il ".repeat(60);
+    let lines: Rc<Vec<ActivityLine>> =
+        Rc::new(vec![ActivityLine::Ran("$ git commit -q -F -".to_owned())]);
+    let (mut test, _) = launch(Rc::new(vec![ActivityEntry {
+        prompt: Some(prompt.clone()),
+        ..entry(0, lines)
+    }]));
+    click(&mut test, SHOW_ALL_CAPTION);
+    settle(&mut test);
+    let whole = area(&test, &prompt);
+    let ran = area(&test, "$ git commit -q -F -");
+    let gap = ran.min_y() - whole.max_y();
+    assert!(
+        (0. ..=8.).contains(&gap),
+        "git's first line {gap} px below a prompt {} px tall",
+        whole.height()
+    );
+}
+
 /// The user's decision A (2026-10-09): the popover hangs from the status box — its left edge
 /// under the box's and just below it — and stays inside the window when the box is near its
 /// right edge or the window is narrower than the panel. Caught by: a centred popover, or one

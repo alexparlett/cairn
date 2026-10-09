@@ -382,6 +382,55 @@ fn cairn_write_costs() {
         },
     );
 
+    // What the commit box asks of the lane while Amend is ticked, per status today (phase 09's
+    // QA item 9): what an amend would replace — the pushed check among it — and amend's staged
+    // list, `git diff-index --cached` against `HEAD`'s parent.
+    let reading = open();
+    let consequence_read = time(
+        "ops::amend_consequence (HEAD, the pushed check, the reflog)",
+        || {},
+        || {
+            let started = Instant::now();
+            cairn_git::ops::amend_consequence(&reading, &CancelSignal::new())
+                .unwrap_or_else(|e| panic!("{e}"));
+            started.elapsed()
+        },
+    );
+    let staged_read = time(
+        "Repository::amend_staged (git diff-index --cached against HEAD's parent)",
+        || {},
+        || {
+            let started = Instant::now();
+            reading
+                .amend_staged(git, &CancelSignal::new())
+                .unwrap_or_else(|e| panic!("{e}"));
+            started.elapsed()
+        },
+    );
+    let box_reads = time(
+        "the commit box's reads (hooks path, recent messages, operation in progress)",
+        || {},
+        || {
+            let started = Instant::now();
+            let _ = reading.operation_in_progress();
+            reading
+                .commit_hooks(git, &CancelSignal::new())
+                .unwrap_or_else(|e| panic!("{e}"));
+            reading
+                .recent_messages(&CancelSignal::new())
+                .unwrap_or_else(|e| panic!("{e}"));
+            started.elapsed()
+        },
+    );
+    eprintln!(
+        "  per status while Amend is ticked {:.2} ms (consequence {:.2}, staged list {:.2}); \
+         the box's reads per refresh {:.2} ms",
+        ms(consequence_read + staged_read),
+        ms(consequence_read),
+        ms(staged_read),
+        ms(box_reads)
+    );
+
     let unstaged = diff_of(WorkingTreeDiff::Unstaged);
     let selection = every(&unstaged);
     let repo = std::cell::RefCell::new(open());

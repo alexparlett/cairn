@@ -43,7 +43,7 @@ use cairn_ui::diff_palette::DIFF_FONT_FAMILY;
 use cairn_ui::{DetailTab, DiffSettings, MainView};
 use freya::prelude::*;
 use freya_testing::TestingRunner;
-use freya_testing::prelude::{PlatformEvent, WheelEventName};
+use freya_testing::prelude::{MouseEventName, PlatformEvent, WheelEventName};
 
 use crate::diff_state::{AllState, Answer, DiffState, answered_expansion};
 use crate::fetch_state::FetchStatus;
@@ -211,9 +211,28 @@ impl Harness {
     }
 
     /// Frames until `done` holds of the view, then `settle` more, sending `input` with each.
-    fn pump(
+    fn pump(&mut self, input: Stimulus, settle: usize, done: impl FnMut(View) -> bool) -> Phase {
+        self.pump_driven(
+            move |_| match input {
+                Stimulus::Nothing => Vec::new(),
+                Stimulus::Scroll { x, y, dy } => vec![PlatformEvent::Wheel {
+                    name: WheelEventName::Wheel,
+                    scroll: (0., dy).into(),
+                    cursor: (x, y).into(),
+                    source: WheelSource::Device,
+                    granularity: WheelGranularity::Pixel,
+                    timestamp: Instant::now(),
+                }],
+            },
+            settle,
+            done,
+        )
+    }
+
+    /// [`Harness::pump`], the events each frame sends — its number given — from `input`.
+    fn pump_driven(
         &mut self,
-        input: Stimulus,
+        mut input: impl FnMut(usize) -> Vec<PlatformEvent>,
         settle: usize,
         mut done: impl FnMut(View) -> bool,
     ) -> Phase {
@@ -259,15 +278,8 @@ impl Harness {
             // The input is sent, and the frame that handles it timed: the runner's own scroll
             // would handle it inside an untimed update of its own.
             let framing = Instant::now();
-            if let Stimulus::Scroll { x, y, dy } = input {
-                self.test.send_event(PlatformEvent::Wheel {
-                    name: WheelEventName::Wheel,
-                    scroll: (0., dy).into(),
-                    cursor: (x, y).into(),
-                    source: WheelSource::Device,
-                    granularity: WheelGranularity::Pixel,
-                    timestamp: Instant::now(),
-                });
+            for event in input(phase.frames.len()) {
+                self.test.send_event(event);
             }
             self.test.sync_and_update();
             let framed = applied_in_frame + framing.elapsed();
@@ -976,4 +988,432 @@ fn the_scratch_guard_refuses_whatever_shares_the_benchs_git_directory() {
         );
     }
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// R13.1's subject: rust-lang/rust at this commit, which the scratch clone of the writes check
+/// is checked out at.
+const SUBJECT: &str = "c999cef531ea9059e189e82fe0e82c5daf249bc9";
+/// The file a hunk is staged, unstaged and discarded in — the baseline's (`write_baseline`).
+const HUNK_FILE: &str = "library/core/src/option.rs";
+const HUNK_LINE: usize = 1_500;
+/// Runs a verb is timed over, after one to warm (R13.1: the median of seven).
+const RUNS: usize = 7;
+
+/// staging-and-commit C21, measured (R13.1): in the real window over the real worker and
+/// engine, on a plain clone of the bench at `c999cef531e` (`CAIRN_SCRATCH_REPO`, refused when it
+/// shares the bench's git directory, `CAIRN_BENCH_REPO`), warm, the median of seven — stage,
+/// unstage and discard a hunk and commit, each from the press until the refreshed lists are
+/// drawn; Show Lost Commits from the toggle to its first frame; every frame's UI-thread work
+/// while a hook runs and while a stage lands; the staging gesture hovered and dragged over a
+/// 10,000-line diff; and a thousand files selected and drawn together. It WRITES the clone —
+/// every change put back with `std::fs` as it goes, so it runs no `git` of its own — and must
+/// start clean at the subject, with no hooks.
+///
+/// ```text
+/// GIT_OPTIONAL_LOCKS=0 git clone --no-hardlinks --no-checkout ~/Development/bench/rust "$S/rust"
+/// git -C "$S/rust" checkout --detach c999cef531e
+/// CAIRN_BENCH_REPO=~/Development/bench/rust CAIRN_SCRATCH_REPO="$S/rust" \
+///   cargo test -p cairn-app --release -- --ignored --nocapture writes_check
+/// ```
+#[test]
+#[ignore = "needs a writable clone of the bench named by CAIRN_SCRATCH_REPO, and a release build"]
+fn writes_check() {
+    let bench = std::env::var("CAIRN_BENCH_REPO").expect("set CAIRN_BENCH_REPO");
+    let scratch = std::env::var("CAIRN_SCRATCH_REPO").expect("set CAIRN_SCRATCH_REPO");
+    if let Some(refused) = scratch_refusal(Path::new(&bench), Path::new(&scratch)) {
+        panic!("{refused}");
+    }
+    let root = PathBuf::from(&scratch);
+    let read = |path: &Path| std::fs::read(path).unwrap_or_else(|e| panic!("{e}"));
+    let write = |path: &Path, bytes: &[u8]| {
+        std::fs::write(path, bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    };
+    let head_file = root.join(".git/HEAD");
+    assert_eq!(
+        String::from_utf8_lossy(&read(&head_file)).trim(),
+        SUBJECT,
+        "the scratch clone is not detached at R13.1's commit"
+    );
+    let index = root.join(".git/index");
+    let file = root.join(HUNK_FILE);
+    let (clean_index, original) = (read(&index), read(&file));
+    let mut edited = Vec::with_capacity(original.len() + 64);
+    for (n, line) in original.split_inclusive(|byte| *byte == b'\n').enumerate() {
+        if n == HUNK_LINE {
+            edited.extend_from_slice(b"// a line Cairn's window check stages and discards\n");
+        }
+        edited.extend_from_slice(line);
+    }
+    // Who commits: the clone's own configuration, as a user's would be.
+    let config = root.join(".git/config");
+    let original_config = read(&config);
+    let mut identified = original_config.clone();
+    identified.extend_from_slice(b"[user]\n\tname = C O Mitter\n\temail = c@example.com\n");
+    write(&config, &identified);
+
+    eprintln!(
+        "writes check over {scratch}: {WIDTH}x{HEIGHT}, release build: {}\n",
+        !cfg!(debug_assertions)
+    );
+    let mut harness = launch(&scratch);
+    let opened = harness.pump(Stimulus::Nothing, 10, landed);
+    opened.report("scratch clone: opened");
+    let mut main = harness.view.sidebar.main;
+    harness.test.run_in(|| main.set(MainView::LocalChanges));
+
+    let path = cairn_model::RepoPath::new(HUNK_FILE);
+    let unstaged = cairn_model::ChangeList::Unstaged;
+    let staged = cairn_model::ChangeList::Staged;
+    let rows = move |view: View, list| {
+        let state = view.local.state.peek();
+        crate::local_changes_state::drawn_changes(&state).len(list)
+    };
+    let holds = {
+        let path = path.clone();
+        move |view: View, list| {
+            let state = view.local.state.peek();
+            crate::local_changes_state::drawn_changes(&state)
+                .row_of(list, &path)
+                .is_some()
+        }
+    };
+    // The working tree and index put as `index` and `on_disk` say, the lists read again, and
+    // the path chosen in `list` with its diff drawn.
+    let set_up = |harness: &mut Harness, index_bytes: &[u8], on_disk: &[u8], list| {
+        write(&index, index_bytes);
+        write(&file, on_disk);
+        harness.handle.submit(Request::RefreshStatus);
+        let holds = holds.clone();
+        let _ = harness.pump(Stimulus::Nothing, 2, move |view| {
+            holds(view, list) && !view.writes.peek().is_running()
+        });
+        let submit = harness.submit();
+        let view = harness.view;
+        harness
+            .test
+            .run_in(|| crate::local_changes_actions::choose(list, 0, view, Some(&submit)));
+        let _ = harness.pump(Stimulus::Nothing, 2, |view| {
+            let diff = view.diff.peek();
+            diff.shown_working().is_some()
+                && !matches!(
+                    diff.working_shown(),
+                    Some(crate::diff_state::WorkingShown::Waiting) | None
+                )
+        });
+    };
+    // The gesture's act over every line of the diff drawn: what a press of its action asks.
+    let act = |harness: &mut Harness, verb: cairn_ui::GestureVerb| {
+        let submit = harness.submit();
+        let view = harness.view;
+        harness.test.run_in(|| {
+            let (selection, drawn) = {
+                let diff = view.diff.peek();
+                let shown = diff
+                    .shown_working()
+                    .unwrap_or_else(|| panic!("no diff drawn"));
+                let text = shown
+                    .diff()
+                    .text()
+                    .unwrap_or_else(|| panic!("the diff is no text"));
+                (
+                    cairn_model::Selection::with_every_change(text),
+                    diff.working_drawn(),
+                )
+            };
+            crate::local_changes_actions::on_gesture(
+                cairn_ui::GestureAct {
+                    file: 0,
+                    verb,
+                    selection,
+                    drawn,
+                },
+                view,
+                Some(&submit),
+            );
+        });
+    };
+    let median = |mut taken: Vec<Duration>| {
+        taken.sort_unstable();
+        taken[taken.len() / 2]
+    };
+    let mut slowest_landing = Duration::ZERO;
+
+    // Stage a hunk: from the press to the lists drawn with the path staged.
+    let mut taken = Vec::new();
+    let mut staged_index = Vec::new();
+    for run in 0..=RUNS {
+        set_up(&mut harness, &clean_index, &edited, unstaged);
+        let pressed = Instant::now();
+        act(&mut harness, cairn_ui::GestureVerb::Stage);
+        let lead = pressed.elapsed();
+        let holds = holds.clone();
+        let phase = harness.pump(Stimulus::Nothing, 0, move |view| {
+            holds(view, staged) && !holds(view, unstaged) && !view.writes.peek().is_running()
+        });
+        if run > 0 {
+            taken.push(lead + phase.done.unwrap_or_default());
+            slowest_landing = slowest_landing.max(phase.slowest.0);
+        } else {
+            staged_index = read(&index);
+        }
+    }
+    let stage = median(taken);
+
+    // Unstage it.
+    let mut taken = Vec::new();
+    for run in 0..=RUNS {
+        set_up(&mut harness, &staged_index, &edited, staged);
+        let pressed = Instant::now();
+        act(&mut harness, cairn_ui::GestureVerb::Unstage);
+        let lead = pressed.elapsed();
+        let holds = holds.clone();
+        let phase = harness.pump(Stimulus::Nothing, 0, move |view| {
+            holds(view, unstaged) && !holds(view, staged) && !view.writes.peek().is_running()
+        });
+        if run > 0 {
+            taken.push(lead + phase.done.unwrap_or_default());
+            slowest_landing = slowest_landing.max(phase.slowest.0);
+        }
+    }
+    let unstage = median(taken);
+
+    // Discard it: from the confirmation's press — the dialog drawn from what the engine said
+    // it would lose — to the lists drawn without the path.
+    let mut taken = Vec::new();
+    for run in 0..=RUNS {
+        set_up(&mut harness, &clean_index, &edited, unstaged);
+        act(&mut harness, cairn_ui::GestureVerb::Discard);
+        let _ = harness.pump(Stimulus::Nothing, 0, |view| {
+            view.confirming.peek().is_some()
+        });
+        let mut confirming = harness.view.confirming;
+        let pressed = Instant::now();
+        harness.test.run_in(|| {
+            let asking = confirming.peek().clone();
+            if let Some(asking) = asking {
+                confirming.set(None);
+                let token = cairn_model::Confirmed::by_user((**asking.consequence()).clone());
+                asking.confirmed(token);
+            }
+        });
+        let lead = pressed.elapsed();
+        let phase = harness.pump(Stimulus::Nothing, 0, move |view| {
+            rows(view, unstaged) == 0 && !view.writes.peek().is_running()
+        });
+        if run > 0 {
+            taken.push(lead + phase.done.unwrap_or_default());
+            slowest_landing = slowest_landing.max(phase.slowest.0);
+        }
+    }
+    let discard = median(taken);
+
+    // Commit what is staged: from the button's press to the lists drawn empty.
+    let mut taken = Vec::new();
+    let mut subject = harness.view.local.commit.subject;
+    for run in 0..=RUNS {
+        write(&head_file, format!("{SUBJECT}\n").as_bytes());
+        set_up(&mut harness, &staged_index, &edited, staged);
+        harness
+            .test
+            .run_in(|| subject.set("A commit Cairn's window check makes".to_owned()));
+        let _ = harness.pump(Stimulus::Nothing, 1, |_| true);
+        let submit: Rc<dyn Fn(Request)> = Rc::new(harness.submit());
+        let view = harness.view;
+        let pressed = Instant::now();
+        harness
+            .test
+            .run_in(|| crate::commit_box_pane::pressed(view, Some(submit)));
+        let lead = pressed.elapsed();
+        let phase = harness.pump(Stimulus::Nothing, 0, move |view| {
+            rows(view, staged) == 0 && rows(view, unstaged) == 0 && !view.writes.peek().is_running()
+        });
+        if run > 0 {
+            taken.push(lead + phase.done.unwrap_or_default());
+            slowest_landing = slowest_landing.max(phase.slowest.0);
+        }
+    }
+    let commit = median(taken);
+    write(&head_file, format!("{SUBJECT}\n").as_bytes());
+    eprintln!(
+        "C21, press to the refreshed lists drawn, median of {RUNS} after one to warm: stage \
+         {:.1} ms (bar 93), unstage {:.1} ms (bar 93), discard {:.1} ms (bar 76), commit {:.1} ms \
+         (bar 87); slowest frame while they landed {:.2} ms\n",
+        ms(stage),
+        ms(unstage),
+        ms(discard),
+        ms(commit),
+        ms(slowest_landing)
+    );
+
+    // A hook running: a commit whose `pre-commit` writes a line every 50 ms for two seconds,
+    // every frame timed while it runs and as its ending lands.
+    let hook = root.join(".git/hooks/pre-commit");
+    write(
+        &hook,
+        b"#!/bin/sh\ni=0\nwhile [ $i -lt 40 ]; do echo \"hook line $i\"; i=$((i+1)); sleep 0.05; done\n",
+    );
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+    set_up(&mut harness, &staged_index, &edited, staged);
+    harness.handle.submit(Request::CommitReads);
+    let _ = harness.pump(Stimulus::Nothing, 3, |_| true);
+    harness
+        .test
+        .run_in(|| subject.set("A commit past a running hook".to_owned()));
+    let submit: Rc<dyn Fn(Request)> = Rc::new(harness.submit());
+    let view = harness.view;
+    harness
+        .test
+        .run_in(|| crate::commit_box_pane::pressed(view, Some(submit)));
+    let running = harness.pump(Stimulus::Nothing, 5, move |view| {
+        rows(view, staged) == 0 && !view.writes.peek().is_running()
+    });
+    running.report("a commit while its pre-commit hook writes a line every 50 ms for 2 s");
+    std::fs::remove_file(&hook).unwrap_or_else(|e| panic!("{e}"));
+    write(&head_file, format!("{SUBJECT}\n").as_bytes());
+
+    // The staging gesture over a 10,000-line diff: hovered across its rows, then dragged down
+    // past the list's bottom edge, which scrolls it.
+    let mut long = original.clone();
+    for n in 0..10_000 {
+        long.extend_from_slice(format!("// line {n} the window check appends\n").as_bytes());
+    }
+    set_up(&mut harness, &clean_index, &long, unstaged);
+    let diff_x = f64::from(crate::sidebar_state::SIDEBAR_WIDTH)
+        + f64::from(WIDTH - crate::sidebar_state::SIDEBAR_WIDTH)
+            * f64::from(crate::local_changes_state::LIST_WIDTH)
+            / 100.
+        + 300.;
+    let mut hovered = 0;
+    let hovering = harness.pump_driven(
+        move |frame| {
+            vec![PlatformEvent::Mouse {
+                name: MouseEventName::MouseMove,
+                cursor: (diff_x, 120. + (frame % 40) as f64 * 10.).into(),
+                button: None,
+            }]
+        },
+        0,
+        move |_| {
+            hovered += 1;
+            hovered > 120
+        },
+    );
+    hovering.report("the gesture hovered across a 10,000-line diff, a row a frame");
+    let mut dragged = 0;
+    let dragging = harness.pump_driven(
+        move |frame| {
+            let y = 140. + frame as f64 * 12.;
+            let mut events = Vec::new();
+            if frame == 0 {
+                events.push(PlatformEvent::Mouse {
+                    name: MouseEventName::MouseDown,
+                    cursor: (diff_x, y).into(),
+                    button: Some(MouseButton::Left),
+                });
+            }
+            events.push(PlatformEvent::Mouse {
+                name: MouseEventName::MouseMove,
+                cursor: (diff_x, y.min(f64::from(HEIGHT) - 2.)).into(),
+                button: Some(MouseButton::Left),
+            });
+            events
+        },
+        0,
+        move |_| {
+            dragged += 1;
+            dragged > 90
+        },
+    );
+    dragging.report("the gesture dragged down a 10,000-line diff and past its edge");
+    harness.test.send_event(PlatformEvent::Mouse {
+        name: MouseEventName::MouseUp,
+        cursor: (diff_x, f64::from(HEIGHT) - 2.).into(),
+        button: Some(MouseButton::Left),
+    });
+    harness.test.press_key(Key::Named(NamedKey::Escape));
+
+    // A thousand files selected and drawn together.
+    let files: Vec<PathBuf> = {
+        let mut found = Vec::new();
+        let mut stack = vec![root.join("library")];
+        while let Some(dir) = stack.pop() {
+            let mut entries: Vec<PathBuf> = std::fs::read_dir(&dir)
+                .unwrap_or_else(|e| panic!("{e}"))
+                .flatten()
+                .map(|entry| entry.path())
+                .collect();
+            entries.sort();
+            for entry in entries {
+                if entry.is_dir() {
+                    stack.push(entry);
+                } else if entry.extension().is_some_and(|ext| ext == "rs") && entry != file {
+                    found.push(entry);
+                }
+            }
+        }
+        found.truncate(1_000);
+        found
+    };
+    let originals: Vec<Vec<u8>> = files.iter().map(|path| read(path)).collect();
+    for (path, bytes) in files.iter().zip(&originals) {
+        let mut changed = bytes.clone();
+        changed.extend_from_slice(b"// changed for the window check\n");
+        write(path, &changed);
+    }
+    set_up(&mut harness, &clean_index, &original, unstaged);
+    let last = harness.test.run_in(|| rows(harness.view, unstaged)) - 1;
+    let submit = harness.submit();
+    let view = harness.view;
+    let selecting = Instant::now();
+    harness.test.run_in(|| {
+        crate::local_changes_actions::intent(
+            cairn_ui::ListIntent::Range(unstaged, last),
+            view,
+            Some(Rc::new(submit)),
+        );
+    });
+    let lead = selecting.elapsed();
+    let together = harness.pump(Stimulus::Nothing, 10, |view| {
+        let diff = view.diff.peek();
+        diff.together().is_some_and(|(_, paths)| paths.len() > 1) && diff.together_drawn().is_some()
+    });
+    together.report(&format!(
+        "{} files selected and drawn together ({:.1} ms from the selection)",
+        last + 1,
+        ms(lead + together.done.unwrap_or_default())
+    ));
+
+    // Show Lost Commits: from the toggle to its first page drawn.
+    harness.test.run_in(|| main.set(MainView::AllCommits));
+    let _ = harness.pump(Stimulus::Nothing, 3, |_| true);
+    let before = harness.test.run_in(|| harness.view.rows.peek().serial());
+    let submit = harness.submit();
+    let view = harness.view;
+    let toggled = Instant::now();
+    harness
+        .test
+        .run_in(|| crate::lost_commits::toggle(view, Some(&submit)));
+    let lead = toggled.elapsed();
+    let lost = harness.pump(Stimulus::Nothing, 3, move |view| {
+        let rows = view.rows.peek();
+        rows.serial() != before && !rows.is_empty()
+    });
+    lost.report(&format!(
+        "Show Lost Commits toggled on: its first page drawn ({:.1} ms from the toggle)",
+        ms(lead + lost.done.unwrap_or_default())
+    ));
+    drop(harness);
+
+    // Put the clone back as it was found.
+    for (path, bytes) in files.iter().zip(&originals) {
+        write(path, bytes);
+    }
+    write(&file, &original);
+    write(&index, &clean_index);
+    write(&head_file, format!("{SUBJECT}\n").as_bytes());
+    write(&config, &original_config);
 }

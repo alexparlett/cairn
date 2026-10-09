@@ -21,7 +21,8 @@ use std::cmp::Ordering;
 
 use crate::text_filter::{BETWEEN_CHECKS, Folded};
 use crate::{
-    RepoPath, StagedChange, StatusEntry, UnstagedChange, WorkingTreeStatus, natural_order,
+    ChangeStatus, ChangedEntry, ChangedFile, FileMode, Oid, RepoPath, StagedChange, StatusEntry,
+    SubmoduleState, UnstagedChange, WorkingTreeStatus, natural_order,
 };
 
 /// The order a list's paths are in: Fork's natural order of the paths as text
@@ -109,6 +110,18 @@ impl MatchedRows {
     }
 }
 
+/// What the Staged list's rows are changes against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StagedAgainst {
+    /// `HEAD`: what `git diff --cached` shows, as `git status` lists it.
+    Head,
+    /// `HEAD`'s parent — `None` for a root commit, whose amend compares with the empty tree:
+    /// amend's staged list (staging-and-commit R6.3, R10.3), what the amended commit will hold
+    /// that the parent does not, so a file of the commit being amended can be unstaged out
+    /// of it.
+    HeadParent(Option<Oid>),
+}
+
 /// A status and its two lists, each an index into the status's entries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalChanges {
@@ -117,6 +130,7 @@ pub struct LocalChanges {
     staged: Vec<u32>,
     /// How many distinct paths the status lists (R9.2).
     paths: usize,
+    staged_against: StagedAgainst,
 }
 
 impl LocalChanges {
@@ -154,7 +168,39 @@ impl LocalChanges {
             unstaged,
             staged,
             paths,
+            staged_against: StagedAgainst::Head,
         }
+    }
+
+    /// The lists while Amend is ticked (staging-and-commit R10.3, as Fork lists an amend's
+    /// files among the staged changes): Unstaged as `status` lists it, and Staged as amend's
+    /// staged list — `staged`, the index against `HEAD`'s `parent` (`None` for a root
+    /// commit), which `cairn_git`'s `Repository::amend_staged` reads — so the commit being
+    /// amended shows what it will hold, and a file of it can be unstaged out of it. A
+    /// path's staged change is the one `staged` names, or none; a path neither list then
+    /// holds is not listed. Laid out where the status is, never on the UI thread.
+    pub fn amending(
+        status: WorkingTreeStatus,
+        staged: Vec<ChangedFile>,
+        parent: Option<Oid>,
+    ) -> Self {
+        let status = match status {
+            WorkingTreeStatus::Listed(entries) => {
+                WorkingTreeStatus::Listed(amended_entries(entries, staged))
+            }
+            unlisted @ (WorkingTreeStatus::IndexUnreadable(_)
+            | WorkingTreeStatus::NoWorkingTree) => unlisted,
+        };
+        Self {
+            staged_against: StagedAgainst::HeadParent(parent),
+            ..Self::new(status)
+        }
+    }
+
+    /// What the Staged list's rows are changes against: `HEAD`, or its parent while Amend is
+    /// ticked ([`LocalChanges::amending`]).
+    pub fn staged_against(&self) -> StagedAgainst {
+        self.staged_against
     }
 
     /// What the status read answered: a list, or a state git gives none in.
@@ -296,6 +342,68 @@ impl LocalChanges {
         );
         Some(matched)
     }
+}
+
+/// `entries` with each tracked path's staged change replaced by the one `staged` names for it,
+/// and every path `staged` names that `entries` does not added — a path git's status listed for
+/// a staged change alone and `staged` does not hold dropped, since it is in neither list.
+fn amended_entries(entries: Vec<StatusEntry>, staged: Vec<ChangedFile>) -> Vec<StatusEntry> {
+    let mut changes: std::collections::BTreeMap<RepoPath, (StagedChange, bool)> = staged
+        .into_iter()
+        .map(|file| {
+            let submodule = file.old_mode == Some(FileMode::Submodule)
+                || file.new_mode == Some(FileMode::Submodule);
+            let change = match file.status {
+                ChangeStatus::Added => StagedChange::Added,
+                ChangeStatus::Deleted => StagedChange::Deleted,
+                ChangeStatus::Modified => StagedChange::Modified,
+                ChangeStatus::TypeChanged => StagedChange::TypeChanged,
+                ChangeStatus::Renamed(similarity) => StagedChange::Renamed {
+                    from: file.old_path,
+                    similarity,
+                },
+                ChangeStatus::Copied(similarity) => StagedChange::Copied {
+                    from: file.old_path,
+                    similarity,
+                },
+            };
+            (file.new_path, (change, submodule))
+        })
+        .collect();
+    let mut amended = Vec::with_capacity(entries.len() + changes.len());
+    for entry in entries {
+        match entry {
+            StatusEntry::Changed(mut changed) => {
+                changed.staged = changes.remove(&changed.path).map(|(change, _)| change);
+                if changed.staged.is_some()
+                    || changed.unstaged.is_some()
+                    || changed.submodule.is_some()
+                {
+                    amended.push(StatusEntry::Changed(changed));
+                }
+            }
+            kept @ (StatusEntry::Conflicted(_) | StatusEntry::Untracked(_)) => {
+                // A conflicted path's staged side is its conflict, as git's status lists it.
+                if let StatusEntry::Conflicted(conflicted) = &kept {
+                    changes.remove(&conflicted.path);
+                }
+                amended.push(kept);
+            }
+        }
+    }
+    amended.extend(changes.into_iter().map(|(path, (change, submodule))| {
+        StatusEntry::Changed(ChangedEntry {
+            path,
+            staged: Some(change),
+            unstaged: None,
+            submodule: submodule.then_some(SubmoduleState {
+                new_commits: false,
+                modified_content: false,
+                untracked_content: false,
+            }),
+        })
+    }));
+    amended
 }
 
 /// Which lists an entry is in: (Unstaged, Staged).
@@ -443,6 +551,91 @@ mod tests {
                 (change.path.display().into_owned(), change.kind)
             })
             .collect()
+    }
+
+    fn file(status: ChangeStatus, old: &str, new: &str) -> ChangedFile {
+        ChangedFile {
+            status,
+            old_path: RepoPath::from(old),
+            new_path: RepoPath::from(new),
+            old_mode: Some(FileMode::Regular),
+            new_mode: Some(FileMode::Regular),
+            old_id: None,
+            new_id: None,
+        }
+    }
+
+    /// Staging-and-commit R10.3: while Amend is ticked, Staged lists amend's staged list —
+    /// a file of the commit being amended that the index still holds as it committed it
+    /// among them, with its kind against `HEAD`'s parent and a rename's source — and Unstaged
+    /// is the status's, unchanged; a path status listed for a staged change alone that the
+    /// amend does not hold is in neither list; the lists say what Staged is against. Caught
+    /// by: the status's staged changes kept (a file of the amended commit missing, so it can
+    /// never be unstaged out of it), an unstaged change lost, or a path left in Unstaged for
+    /// want of a change.
+    #[test]
+    fn amending_lists_amends_staged_list_beside_the_status_unstaged_one() {
+        let parent = Oid::from_bytes(&[3; 20]).ok();
+        let status = WorkingTreeStatus::Listed(vec![
+            // Edited in HEAD and again in the index and the working tree.
+            changed(
+                "a.rs",
+                Some(StagedChange::Modified),
+                Some(UnstagedChange::Modified),
+            ),
+            // Staged back to HEAD's parent's content: the amend drops it.
+            changed("back.rs", Some(StagedChange::Modified), None),
+            // Edited in the working tree only, a file HEAD added.
+            changed("c.rs", None, Some(UnstagedChange::Modified)),
+            conflicted("clash.rs"),
+            untracked("new.txt"),
+        ]);
+        let staged = vec![
+            file(ChangeStatus::Modified, "a.rs", "a.rs"),
+            file(ChangeStatus::Added, "c.rs", "c.rs"),
+            file(
+                ChangeStatus::Renamed(crate::Similarity::from_percent(90)),
+                "old.rs",
+                "moved.rs",
+            ),
+        ];
+        let lists = LocalChanges::amending(status, staged, parent);
+        assert_eq!(lists.staged_against(), StagedAgainst::HeadParent(parent));
+        assert_eq!(
+            rows(&lists, ChangeList::Staged),
+            [
+                ("a.rs".to_owned(), ChangeKind::Modified),
+                ("c.rs".to_owned(), ChangeKind::Added),
+                ("moved.rs".to_owned(), ChangeKind::Renamed),
+            ]
+        );
+        let moved = lists
+            .row_of(ChangeList::Staged, &RepoPath::from("moved.rs"))
+            .and_then(|row| lists.get(ChangeList::Staged, row));
+        assert_eq!(
+            moved.and_then(|change| change.from),
+            Some(&RepoPath::from("old.rs"))
+        );
+        assert_eq!(
+            rows(&lists, ChangeList::Unstaged),
+            [
+                ("a.rs".to_owned(), ChangeKind::Modified),
+                ("c.rs".to_owned(), ChangeKind::Modified),
+                ("clash.rs".to_owned(), ChangeKind::Conflicted),
+                ("new.txt".to_owned(), ChangeKind::Added),
+            ]
+        );
+        assert_eq!(
+            lists.row_of(ChangeList::Unstaged, &RepoPath::from("back.rs")),
+            None
+        );
+        assert_eq!(
+            LocalChanges::new(WorkingTreeStatus::Listed(Vec::new())).staged_against(),
+            StagedAgainst::Head
+        );
+        // A root commit's amend is against nothing.
+        let root = LocalChanges::amending(WorkingTreeStatus::NoWorkingTree, Vec::new(), None);
+        assert_eq!(root.staged_against(), StagedAgainst::HeadParent(None));
     }
 
     /// R9.1: a path with a staged and an unstaged change is in both lists; one with only a

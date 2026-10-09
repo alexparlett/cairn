@@ -66,7 +66,8 @@ pub use history::{History, HistoryFull, HistoryRow, RetainedBytes, RowContent, R
 pub use lane_assignment::LaneAssigner;
 pub use line_selection::Selection;
 pub use local_changes::{
-    ChangeKind, ChangeList, LocalChange, LocalChanges, MatchedRows, PathState, path_order,
+    ChangeKind, ChangeList, LocalChange, LocalChanges, MatchedRows, PathState, StagedAgainst,
+    path_order,
 };
 pub use oid::{Oid, OidHex, OidParseError};
 pub use operation_in_progress::OperationInProgress;

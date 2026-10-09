@@ -215,28 +215,10 @@ impl Consequence {
                 published,
                 reflog,
             } => {
-                let short = commit.short();
-                let short = short.as_str();
-                let subject = escaped(subject.as_bytes());
-                let afterwards = match reflog {
-                    Reflog::Written => "The old commit stays in Show Lost Commits.",
-                    Reflog::NotWritten => {
-                        "The old commit can't be recovered afterwards: this repository keeps no \
-                         reflog."
-                    }
-                };
-                let replaces = format!("Replaces {short} '{subject}'. {afterwards}");
-                match published {
-                    Publication::Unpublished => replaces,
-                    Publication::Upstream(upstream) => format!(
-                        "{short} is already on {}. Sharing the amended commit needs a force \
-                         push. {replaces}",
-                        quoted(upstream.shorthand().as_bytes())
-                    ),
-                    Publication::SomeRemote => format!(
-                        "{short} is already on a remote. Sharing the amended commit needs a \
-                         force push. {replaces}"
-                    ),
+                let replaces = amend_replaces(*commit, subject, *reflog);
+                match amend_force_push(*commit, published) {
+                    Some(warning) => format!("{warning} {replaces}"),
+                    None => replaces,
                 }
             }
             Self::RemoveLock {
@@ -253,6 +235,59 @@ impl Consequence {
                 elapsed(read_at.duration_since(*modified).unwrap_or(Duration::ZERO)),
                 size(*bytes)
             ),
+        }
+    }
+
+    /// An amend's first sentences, when a remote already has the commit it replaces (R10.6):
+    /// "<short id> is already on <remote ref>. Sharing the amended commit needs a force push."
+    /// — what the dialog asks first. `None` for an amend no remote has, and for every other
+    /// operation. [`Consequence::prompt`] is this, then [`Consequence::replaces`], so a
+    /// surface that draws the two apart draws exactly the words the token records
+    /// (staging-and-commit phase 01's QA item 21).
+    pub fn force_push_warning(&self) -> Option<String> {
+        match self {
+            Self::Amend {
+                commit,
+                subject: _,
+                published,
+                reflog: _,
+            } => amend_force_push(*commit, published),
+            Self::DiscardLines { .. } | Self::DiscardFiles { .. } | Self::RemoveLock { .. } => None,
+        }
+    }
+
+    /// The commit an amend replaces: what its prompt names and its re-check holds `HEAD` to.
+    /// `None` for every other operation.
+    pub fn amended(&self) -> Option<Oid> {
+        match self {
+            Self::Amend {
+                commit,
+                subject: _,
+                published: _,
+                reflog: _,
+            } => Some(*commit),
+            Self::DiscardLines { .. } | Self::DiscardFiles { .. } | Self::RemoveLock { .. } => None,
+        }
+    }
+
+    /// Whether confirming this needs the dialog first: an amend a remote already has, whose
+    /// replacement needs a force push to share (R10.6, L12). Nothing else asks a dialog by
+    /// this rule.
+    pub fn needs_force_push(&self) -> bool {
+        self.force_push_warning().is_some()
+    }
+
+    /// An amend's line under its button (R10.6): "Replaces <short id> '<subject>'.", then
+    /// whether the old commit can be found again. `None` for every other operation.
+    pub fn replaces(&self) -> Option<String> {
+        match self {
+            Self::Amend {
+                commit,
+                subject,
+                published: _,
+                reflog,
+            } => Some(amend_replaces(*commit, subject, *reflog)),
+            Self::DiscardLines { .. } | Self::DiscardFiles { .. } | Self::RemoveLock { .. } => None,
         }
     }
 
@@ -306,6 +341,36 @@ impl Consequence {
                 )
             ),
         }
+    }
+}
+
+/// R10.6's line under the amend button: the commit replaced and whether it can be found
+/// again afterwards.
+fn amend_replaces(commit: Oid, subject: &str, reflog: Reflog) -> String {
+    let short = commit.short();
+    let subject = escaped(subject.as_bytes());
+    let afterwards = match reflog {
+        Reflog::Written => "The old commit stays in Show Lost Commits.",
+        Reflog::NotWritten => {
+            "The old commit can't be recovered afterwards: this repository keeps no reflog."
+        }
+    };
+    format!("Replaces {} '{subject}'. {afterwards}", short.as_str())
+}
+
+/// R10.6's dialog text, when a remote already has the commit an amend replaces.
+fn amend_force_push(commit: Oid, published: &Publication) -> Option<String> {
+    let short = commit.short();
+    let short = short.as_str();
+    match published {
+        Publication::Unpublished => None,
+        Publication::Upstream(upstream) => Some(format!(
+            "{short} is already on {}. Sharing the amended commit needs a force push.",
+            quoted(upstream.shorthand().as_bytes())
+        )),
+        Publication::SomeRemote => Some(format!(
+            "{short} is already on a remote. Sharing the amended commit needs a force push."
+        )),
     }
 }
 
@@ -1092,6 +1157,52 @@ mod tests {
         assert_eq!(
             amend(Publication::Unpublished, Reflog::NotWritten).action(),
             "Amend abababa"
+        );
+    }
+
+    /// Phase 01's QA item 21: the amend's two texts are rendered apart — the force push the
+    /// dialog asks first, the line under the button — and the prompt a token records is
+    /// exactly the two joined, so what a surface draws of either is what the token quotes.
+    /// The dialog is needed exactly when a remote has the commit, and for nothing else.
+    /// Caught by: a part that drifts from the prompt, or a dialog asked for an unpublished
+    /// amend or a discard.
+    #[test]
+    fn an_amends_parts_are_its_prompt_and_only_a_published_one_needs_the_dialog() {
+        let amend = |published, reflog| Consequence::Amend {
+            commit: oid(0xab),
+            subject: "Fix the parser".to_owned(),
+            published,
+            reflog,
+        };
+        for reflog in [Reflog::Written, Reflog::NotWritten] {
+            let unpublished = amend(Publication::Unpublished, reflog);
+            assert_eq!(unpublished.amended(), Some(oid(0xab)));
+            assert_eq!(unpublished.force_push_warning(), None);
+            assert!(!unpublished.needs_force_push());
+            assert_eq!(unpublished.replaces(), Some(unpublished.prompt()));
+            for published in [
+                Publication::Upstream(RefName::new("refs/remotes/origin/main")),
+                Publication::SomeRemote,
+            ] {
+                let consequence = amend(published, reflog);
+                assert!(consequence.needs_force_push());
+                let (Some(warning), Some(replaces)) =
+                    (consequence.force_push_warning(), consequence.replaces())
+                else {
+                    panic!("a published amend lost a part: {consequence:?}");
+                };
+                assert!(warning.ends_with("needs a force push."), "{warning}");
+                assert!(replaces.starts_with("Replaces abababa"), "{replaces}");
+                assert_eq!(consequence.prompt(), format!("{warning} {replaces}"));
+            }
+        }
+        let discard = lines("a.rs", selection(1, 0));
+        assert!(!discard.needs_force_push());
+        assert_eq!(discard.replaces(), None);
+        assert_eq!(discard.amended(), None);
+        assert_eq!(
+            lock("/r/.git/index.lock", Duration::from_secs(1), 0).replaces(),
+            None
         );
     }
 

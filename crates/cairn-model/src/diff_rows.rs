@@ -69,6 +69,9 @@ struct RowIndex {
     /// The rows of each change drawn, in order: what previous and next change move between,
     /// found by search.
     stops: ChangeStops,
+    /// The first row of each hunk, its header's, in order: which hunk a row falls in, found by
+    /// search (staging-and-commit R9.1).
+    hunk_starts: Vec<usize>,
 }
 
 impl RowIndex {
@@ -77,6 +80,7 @@ impl RowIndex {
             pieces: Vec::new(),
             rows: 0,
             stops: ChangeStops(Vec::new()),
+            hunk_starts: Vec::with_capacity(hunks.len()),
         };
         let new_len = u32::try_from(text.new_lines().len()).unwrap_or(u32::MAX);
 
@@ -85,6 +89,7 @@ impl RowIndex {
                 // Unreachable: `hunk_index` is below the length just read.
                 break;
             };
+            index.hunk_starts.push(index.rows);
             index.push(
                 Piece::Header {
                     hunk: u32::try_from(hunk_index).unwrap_or(u32::MAX),
@@ -175,6 +180,23 @@ impl RowIndex {
     /// counts changes rather than rows.
     fn piece_count(&self) -> usize {
         self.pieces.len()
+    }
+
+    /// The hunk row `row` falls in — its header, its context or its changes — by search.
+    fn hunk_at(&self, row: usize) -> Option<usize> {
+        if row >= self.rows {
+            return None;
+        }
+        self.hunk_starts
+            .partition_point(|start| *start <= row)
+            .checked_sub(1)
+    }
+
+    /// The rows hunk `hunk` takes, its header first.
+    fn hunk_rows(&self, hunk: usize) -> Option<Range<usize>> {
+        let start = *self.hunk_starts.get(hunk)?;
+        let end = self.hunk_starts.get(hunk + 1).copied().unwrap_or(self.rows);
+        Some(start..end)
     }
 }
 
@@ -407,6 +429,17 @@ impl UnifiedLayout {
         self.index.stops.rows(change)
     }
 
+    /// The hunk row `row` falls in — its header, its context or its changes. A search, never a
+    /// scan.
+    pub fn hunk_at(&self, row: usize) -> Option<usize> {
+        self.index.hunk_at(row)
+    }
+
+    /// The rows hunk `hunk` takes, from its header to its last row.
+    pub fn hunk_rows(&self, hunk: usize) -> Option<Range<usize>> {
+        self.index.hunk_rows(hunk)
+    }
+
     /// The first change that starts at `row` or below it. A search, never a scan.
     pub fn first_change_from(&self, row: usize) -> Option<usize> {
         self.index.stops.first_from(row)
@@ -434,7 +467,7 @@ impl UnifiedLayout {
         self.row_over(text, drawn_changes(text, overlay, self.ranges)?, row)
     }
 
-    fn row_over<'a>(
+    pub(crate) fn row_over<'a>(
         &self,
         text: &'a TextDiff,
         changes: &[ChangedRange],
@@ -639,6 +672,16 @@ impl SideBySideLayout {
         &self.index.stops
     }
 
+    /// The hunk row `row` falls in; see [`UnifiedLayout::hunk_at`].
+    pub fn hunk_at(&self, row: usize) -> Option<usize> {
+        self.index.hunk_at(row)
+    }
+
+    /// The rows hunk `hunk` takes, from its header to its last row.
+    pub fn hunk_rows(&self, hunk: usize) -> Option<Range<usize>> {
+        self.index.hunk_rows(hunk)
+    }
+
     /// Row `row`, its lines borrowed from `text` — the diff this layout was built from, with
     /// `overlay` its overlay. Another diff answers rows of no meaning, or none; it never
     /// panics.
@@ -651,7 +694,7 @@ impl SideBySideLayout {
         self.row_over(text, drawn_changes(text, overlay, self.ranges)?, row)
     }
 
-    fn row_over<'a>(
+    pub(crate) fn row_over<'a>(
         &self,
         text: &'a TextDiff,
         changes: &[ChangedRange],

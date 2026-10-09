@@ -34,6 +34,7 @@ mod refs;
 mod remote;
 mod repo_path;
 mod row_labels;
+mod row_selection;
 mod rows_page;
 mod secret;
 mod sidebar_rows;
@@ -79,6 +80,7 @@ pub use refs::{
 pub use remote::RemoteSummary;
 pub use repo_path::RepoPath;
 pub use row_labels::{Label, RowLabels};
+pub use row_selection::SideColumn;
 pub use rows_page::{PagedCommit, PagedStash, RowsPage};
 pub use secret::Secret;
 pub use sidebar_rows::{

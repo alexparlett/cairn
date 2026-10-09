@@ -540,26 +540,33 @@ impl Threads {
 
 impl Drop for Threads {
     /// Closes the repository (PRD R6.3): the diff thread is told to stop and
-    /// the network lane's queue is closed;
-    /// then every `git` running in the repository — a fetch in flight, one
-    /// mid-spawn, one dropped to a reaper — is ended the way a cancel ends
-    /// it, and this waits up to `CLOSE_BOUND` for their reaps, here on the
-    /// repository thread. One that enters the registry afterwards — a fetch
-    /// already forwarded to the lane's queue when the close came, which the
-    /// lane takes up after it — is ended as it enters. (A fetch still on this
-    /// thread's own queue is never forwarded: `serve` stopped with the
-    /// epochs.) The registry is the one authority here: a fetch
-    /// is ended by it, not by its cancel, so nothing it misses is ended by
-    /// accident. Last, the acceptor is woken to see it should stop. Runs once
-    /// the window has asked to close or let go (the acceptor's answering end
-    /// may still be held then: a prompt still waiting is withdrawn by the
-    /// window when its fetch's outcome arrives) and on unwinding alike.
+    /// the network lane's queue is closed; the fetch in flight, if any, is
+    /// cancelled at once (`FetchControl`, as `CancelFetch` does), since the
+    /// local lane is waited for next and a fetch must not run on for as long
+    /// as a commit's hooks do; then the local lane is marked closing and
+    /// joined, so the write it is running finishes and is never ended by a
+    /// close (staging-and-commit R4.9); then every `git` still running in the
+    /// repository — a fetch mid-spawn, one dropped to a reaper, a read — is
+    /// ended the way a cancel ends it, and this waits up to `CLOSE_BOUND` for
+    /// their reaps, here on the repository thread. One that enters the
+    /// registry afterwards — a fetch already forwarded to the lane's queue when
+    /// the close came, which the lane takes up after it — is ended as it
+    /// enters. (A fetch still on this thread's own queue is never forwarded:
+    /// `serve` stopped with the epochs.) Past the fetch's cancel, the registry
+    /// is the one authority: what the cancel misses is ended by it. Last, the
+    /// acceptor is woken to see it should stop. Runs once the window has asked
+    /// to close or let go (the acceptor's answering end may still be held then:
+    /// a prompt still waiting is withdrawn by the window when its fetch's or
+    /// write's outcome arrives) and on unwinding alike.
     fn drop(&mut self) {
         // First, so the diff thread takes up nothing more; what it is running is
         // ended with the rest below, or by its epoch if the close stopped them.
         let _ = self.diff.send(DiffJob::Stop);
         let _ = self.refresh.send(RefreshJob::Stop);
         self.network = None;
+        // Ended now, not after the local lane is waited for below: a fetch is ended by a
+        // close as soon as it is asked, whatever write is still running.
+        self.control.cancel();
         // The local lane starts nothing more, and the write it is running — a commit in its
         // hooks, say — is waited for, never ended (staging-and-commit R4.9): the window says
         // which, and a second close after its patience closes it anyway. Waited for here, on

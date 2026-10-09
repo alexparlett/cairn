@@ -1201,18 +1201,24 @@ runs on the UI thread:
    queues the close, which `serve` breaks on.
 2. On the repository thread, `Threads::drop` tells the diff thread to stop
    (the window's handles hold its queue open, so it is told rather than left
-   to see the queue close), closes the network lane's queue, marks the local
-   lane closing — it starts no write it is sent from then on, ending each
-   `NotRun` — tells it to stop, and joins it, so a write running — a commit in
+   to see the queue close), closes the network lane's queue, cancels the fetch
+   in flight at once through `FetchControl`, as `CancelFetch` does — so a fetch
+   never runs on while a commit's hooks do
+   (`a_close_ends_a_fetch_at_once_while_it_waits_on_a_commit`) — marks the local
+   lane closing (the close's arm of `submit` has already marked it, so a write
+   asked after the close is never started:
+   `a_close_marks_the_local_lane_closing_as_it_is_submitted`) — it starts no
+   write it is sent from then on, ending each `NotRun` — tells it to stop, and
+   joins it, so a write running — a commit in
    its hooks — runs to its end, however long, and is never ended by the close
    (staging-and-commit R4.9; the acceptor still answers a prompt it waits on).
    The window, told as the first close is asked (`Closing::when_requested`),
    says which write it waits on: "Finishing commit…" (`status_text::closing_line`).
    Then it calls `SharedRepository::end_invocations(CLOSE_BOUND)`: every `git` in
    the registry is ended the way a cancel ends it, and the thread waits up to
-   `CLOSE_BOUND` for their reaps. The registry is the one authority here — a
-   fetch in flight is ended by it, not by its cancel. Then it stops the
-   acceptor, and the thread exits.
+   `CLOSE_BOUND` for their reaps. Past the fetch's cancel the registry is the
+   one authority: what the cancel missed — a fetch mid-spawn, a read — is ended
+   by it. Then it stops the acceptor, and the thread exits.
 3. A fetch asked for just before the close goes one of two ways. If it is
    still on the repository thread's queue, `serve` has stopped (the epochs
    were stopped as the close was submitted) and it is never forwarded or

@@ -600,6 +600,75 @@ fn a_cancel_names_its_commit_and_never_reaches_the_one_queued_behind_it() {
     drop(handle);
 }
 
+/// R4.9 beside a fetch: a close asked while a fetch and a commit both run ends the fetch at
+/// once, as it ends every read and network operation, and waits on the commit alone — the
+/// fetch's ending arrives while the commit is still held. Caught by: a close that ends the
+/// fetch only once the local lane has been waited for, which leaves a fetch reaching the
+/// network for as long as a commit's hooks run.
+#[test]
+fn a_close_ends_a_fetch_at_once_while_it_waits_on_a_commit() {
+    let fixture = with_origin(
+        &format!("cairn-lane-close-fetch-{}", std::process::id()),
+        "/nonexistent/origin",
+    );
+    let config = fixture.path.join(".git/config");
+    let mut text = std::fs::read_to_string(&config).unwrap_or_else(|error| panic!("{error}"));
+    text.push_str(
+        "[remote \"upstream\"]\n\turl = /nonexistent/upstream\n\t\
+         fetch = +refs/heads/*:refs/remotes/upstream/*\n",
+    );
+    std::fs::write(&config, text).unwrap_or_else(|error| panic!("{error}"));
+    // The network lane's fetch is of `origin`, the commit's of `upstream`: each held, each
+    // writing its pid where the test reads it.
+    let body = format!(
+        "  case \"$*\" in\n  *upstream*)\n{}\n  ;;\n  *)\n{}\n  ;;\n  esac",
+        held("commits"),
+        held("fetches")
+    );
+    let stub = stub(&[("fetch", &body)]);
+    let _released = ReleaseAll(&stub);
+    let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let (handle, mut updates, _reply) = boundary(&fixture.path, &stub, (&home, &runtime));
+
+    handle.submit(Request::Fetch {
+        remote: "origin".to_owned(),
+    });
+    until_pids(&stub, "fetches", 1);
+    let commit = ask(
+        &handle,
+        LocalWrite::HeldCommit {
+            remote: "upstream".to_owned(),
+        },
+    );
+    let pid = until_pids(&stub, "commits", 1)[0];
+    handle.submit(Request::Close);
+    let seen = collect_until(&mut updates, |update| {
+        matches!(
+            update,
+            Update::FetchCancelled { .. }
+                | Update::FetchFailed { .. }
+                | Update::FetchFinished { .. }
+        )
+    });
+    assert!(
+        !lane_news(&seen).contains(&Lane::Ended(commit)),
+        "the commit ended before the fetch: {seen:?}"
+    );
+    assert!(
+        matches!(seen.last(), Some(Update::FetchCancelled { .. })),
+        "the close did not end the fetch: {seen:?}"
+    );
+    release(&stub, pid);
+    let mut seen = seen;
+    while let Some(update) = next_by(&mut updates, Instant::now() + WAIT, &seen) {
+        seen.push(update);
+    }
+    assert!(
+        matches!(ending_of(&seen, commit).0, WriteEnding::Done(_)),
+        "{seen:?}"
+    );
+}
+
 /// C11 and R4.9, against a stub's long-running write the lane treats as a commit: a close
 /// asked while it runs waits for it — the stream stays open and the commit's process alive —
 /// and ends nothing; once it finishes, its ending arrives, a write queued behind it is not

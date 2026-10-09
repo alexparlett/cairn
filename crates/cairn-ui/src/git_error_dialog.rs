@@ -15,6 +15,7 @@ use std::rc::Rc;
 use freya::prelude::*;
 
 use crate::accelerators::Os;
+use crate::answer_button::{AnswerColours, answer};
 use crate::button_order::ordered;
 
 use cairn_model::{Confirmed, Consequence};
@@ -133,6 +134,7 @@ impl KeyExt for GitErrorDialog {
 impl Component for GitErrorDialog {
     fn render(&self) -> impl IntoElement {
         let colours = get_theme_or_default().read().colors().clone();
+        let close_id = use_a11y();
         // Opened at the end of the output, where a failing hook says why.
         let controller = use_scroll_controller(|| ScrollConfig {
             default_vertical_position: ScrollPosition::End,
@@ -186,10 +188,16 @@ impl Component for GitErrorDialog {
         let buttons = PopupButtons::new().children(ordered(
             self.platform,
             actions,
-            Button::new()
-                .on_press(move |_| closing())
-                .child(CLOSE_CAPTION)
-                .into(),
+            // Opened on Close, so a Return or Space pressed by habit never skips the hooks (the
+            // user's decision E keeps focus on the safe answer).
+            answer(
+                self.serial,
+                close_id,
+                CLOSE_CAPTION.to_owned(),
+                true,
+                &AnswerColours::of_theme(),
+                closing,
+            ),
         ));
 
         Popup::new()

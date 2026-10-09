@@ -17,6 +17,7 @@ use cairn_model::{PromptKind, prompt_subject};
 use freya::prelude::*;
 
 use crate::accelerators::Os;
+use crate::answer_button::{AnswerColours, answer};
 use crate::button_order::ordered;
 
 use crate::text_field::text_field;
@@ -95,6 +96,7 @@ impl KeyExt for CredentialPrompt {
 impl Component for CredentialPrompt {
     fn render(&self) -> impl IntoElement {
         let mut typed = use_state(String::new);
+        let cancel_id = use_a11y();
         let kind = PromptKind::of(&self.text);
         let colours = get_theme_or_default();
         let secondary = colours.read().colors().text_secondary;
@@ -111,13 +113,26 @@ impl Component for CredentialPrompt {
         let on_accept = self.on_submit.clone();
         let accept = move |_| on_accept.call(PromptKind::ACCEPTED.to_owned());
 
-        let cancel_button: Element = Button::new()
-            .on_press({
+        // ssh's host-key question opens on Cancel, so a Return or Space pressed by habit
+        // declines (the user's decision E keeps focus on the safe answer); a field's prompt
+        // opens in its field.
+        let identity = {
+            use std::hash::{DefaultHasher, Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            (&self.remote, &self.text).hash(&mut hasher);
+            hasher.finish()
+        };
+        let cancel_button = answer(
+            identity,
+            cancel_id,
+            "Cancel".to_owned(),
+            kind == PromptKind::Confirmation,
+            &AnswerColours::of_theme(),
+            {
                 let on_cancel = self.on_cancel.clone();
-                move |_| on_cancel.call(())
-            })
-            .child("Cancel")
-            .into();
+                move || on_cancel.call(())
+            },
+        );
         let primary: Element;
         let mut content = PopupContent::new().child(
             label()

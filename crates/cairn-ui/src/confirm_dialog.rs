@@ -20,6 +20,7 @@ use cairn_model::{Confirmed, Consequence};
 use freya::prelude::*;
 
 use crate::accelerators::Os;
+use crate::answer_button::{AnswerColours, answer};
 use crate::button_order::ordered;
 
 /// Width of the dialog: room for a prompt naming a long path.
@@ -111,16 +112,7 @@ impl Component for ConfirmDialog {
         // Set by the first answer; every later press is ignored, so one acknowledgement is one
         // token however fast the button is pressed again.
         let answered = use_state(|| false);
-        let theme = get_theme_or_default();
-        let colours = {
-            let theme = theme.read();
-            let sheet = theme.colors();
-            Colours {
-                border: sheet.border,
-                focus_ring: sheet.border_focus,
-                background: sheet.surface_primary,
-            }
-        };
+        let colours = AnswerColours::of_theme();
 
         let cancel = {
             let on_cancel = self.on_cancel.clone();
@@ -147,7 +139,7 @@ impl Component for ConfirmDialog {
         // In the platform's order (the user's decision E); focus starts on Cancel either way.
         let buttons = PopupButtons::new().children(ordered(
             self.platform,
-            vec![choice(
+            vec![answer(
                 self.serial,
                 confirm_id,
                 action,
@@ -155,7 +147,7 @@ impl Component for ConfirmDialog {
                 &colours,
                 confirm,
             )],
-            choice(
+            answer(
                 self.serial,
                 cancel_id,
                 CANCEL_CAPTION.to_owned(),
@@ -187,83 +179,5 @@ impl Component for ConfirmDialog {
 
     fn render_key(&self) -> DiffKey {
         self.key.clone().or(DiffKey::U64(self.serial))
-    }
-}
-
-/// One of the dialog's two answers: focusable, pressed by the pointer, Return or Space while
-/// it has focus. Not Freya's `Button`, whose focus cannot be given to it as the dialog opens.
-fn choice(
-    serial: u64,
-    id: AccessibilityId,
-    caption: String,
-    focused_first: bool,
-    colours: &Colours,
-    pressed: impl Fn() + 'static,
-) -> Element {
-    ChoiceButton {
-        serial,
-        id,
-        caption,
-        focused_first,
-        colours: *colours,
-        pressed: EventHandler::new(move |()| pressed()),
-    }
-    .into()
-}
-
-/// The theme's colours an answer is drawn in.
-#[derive(Clone, Copy, PartialEq)]
-struct Colours {
-    border: Color,
-    focus_ring: Color,
-    background: Color,
-}
-
-/// A button whose accessibility id the dialog owns, so it can hold focus as it opens.
-struct ChoiceButton {
-    /// The dialog's confirmation: its handler is that confirmation's, so a button of another
-    /// one never compares equal and keeps no stale handler.
-    serial: u64,
-    id: AccessibilityId,
-    caption: String,
-    focused_first: bool,
-    colours: Colours,
-    pressed: EventHandler<()>,
-}
-
-impl PartialEq for ChoiceButton {
-    fn eq(&self, other: &Self) -> bool {
-        self.serial == other.serial
-            && self.id == other.id
-            && self.caption == other.caption
-            && self.focused_first == other.focused_first
-            && self.colours == other.colours
-    }
-}
-
-impl Component for ChoiceButton {
-    fn render(&self) -> impl IntoElement {
-        let focus = use_focus(self.id);
-        let ring = if focus() == Focus::Not {
-            Border::new().fill(self.colours.border).width(1.)
-        } else {
-            Border::new().fill(self.colours.focus_ring).width(2.)
-        };
-        let pressed = self.pressed.clone();
-        rect()
-            .a11y_id(self.id)
-            .a11y_focusable(true)
-            .a11y_auto_focus(self.focused_first)
-            .a11y_role(AccessibilityRole::Button)
-            .a11y_alt(self.caption.clone())
-            .padding(Gaps::new(6., 14., 6., 14.))
-            .corner_radius(6.)
-            .border(ring.alignment(BorderAlignment::Inner))
-            .background(self.colours.background)
-            .on_press(move |e: Event<PressEventData>| {
-                e.stop_propagation();
-                pressed.call(());
-            })
-            .child(label().text(self.caption.clone()).font_size(14.))
     }
 }

@@ -2318,7 +2318,14 @@ first and Cancel or Close last, as Fork for Windows; on macOS Cancel first and t
 last, as Fork for macOS; each dialog draws in this build's platform unless a test names
 another (`.platform(Os)`), and a confirmation's focus is on Cancel on both
 (`every_dialogs_buttons_follow_the_platforms_order`,
-`a_confirmation_starts_on_cancel_on_both_platforms`, `crates/cairn-ui/tests/dialog_buttons.rs`). Each confirmation has a serial
+`a_confirmation_starts_on_cancel_on_both_platforms`, `crates/cairn-ui/tests/dialog_buttons.rs`).
+The order never decides focus: Freya's `Popup` gives focus to nothing as it opens, and a modal
+frame (`a11y_modal`) only pulls focus onto itself when it is outside, so each risky dialog names
+its safe answer as it opens through `answer_button::answer` (`a11y_auto_focus`; Freya's
+`Button` cannot take focus as a dialog opens) — the confirmation's Cancel, ssh's host-key
+question's Cancel, the Git Error dialog's Close — and Create Branch and a credential field's
+prompt open in their field; a Return or Space pressed on opening answers safely on both
+platforms (`a_risky_dialog_opens_on_its_safe_answer_on_both_platforms`). Each confirmation has a serial
 (`Confirming::serial`), which is the dialog's identity and its key: a confirmation replaced
 by another, or opened by the last one's answer, is a new dialog — its own handlers, focus on
 Cancel and one token afresh — and its words are rendered once, as it mounts, the consequence

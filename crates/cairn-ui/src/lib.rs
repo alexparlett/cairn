@@ -1,6 +1,7 @@
 //! Cairn's component library.
 
 pub mod accelerators;
+mod answer_button;
 mod button_order;
 mod changes_list;
 mod check_box;

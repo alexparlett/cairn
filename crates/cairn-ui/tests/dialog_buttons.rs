@@ -150,3 +150,95 @@ fn a_confirmation_starts_on_cancel_on_both_platforms() {
         );
     }
 }
+
+/// ssh's host-key question, which the prompt asks as a yes or no.
+const HOST_KEY: &str = "The authenticity of host 'git.example.com (203.0.113.7)' can't be \
+                        established.\nED25519 key fingerprint is SHA256:abcdefg.\nAre you sure \
+                        you want to continue connecting (yes/no/[fingerprint])? ";
+
+/// Presses `key` once the dialog has settled, and lets the press land.
+fn press_on_open(test: &mut TestingRunner, key: Key) {
+    test.press_key(key);
+    for _ in 0..2 {
+        test.sync_and_update();
+    }
+}
+
+/// The user's decision E keeps focus on the safe answer of anything risky, whatever the order
+/// (phase 10's review): a freshly opened host-key prompt and a Git Error dialog offering the
+/// hooks' skip start on Cancel and Close, so Return or Space answers safely on both platforms;
+/// Create Branch starts in its name field, so Space types. Caught by: focus left to the
+/// toolkit — behind a dialog that is not modal, on a modal's frame, or on the first button,
+/// the primary on Linux — or on the risky answer.
+#[test]
+fn a_risky_dialog_opens_on_its_safe_answer_on_both_platforms() {
+    for platform in [Os::Linux, Os::MacOs] {
+        for key in [Key::Named(NamedKey::Enter), Key::Character(" ".into())] {
+            let (accepted, cancelled) = (Rc::new(RefCell::new(0)), Rc::new(RefCell::new(0)));
+            let mut test = render({
+                let (accepted, cancelled) = (accepted.clone(), cancelled.clone());
+                move || {
+                    let (accepted, cancelled) = (accepted.clone(), cancelled.clone());
+                    CredentialPrompt::new("origin", HOST_KEY)
+                        .platform(platform)
+                        .on_submit(move |_: String| *accepted.borrow_mut() += 1)
+                        .on_cancel(move |()| *cancelled.borrow_mut() += 1)
+                        .into_element()
+                }
+            });
+            press_on_open(&mut test, key.clone());
+            assert_eq!(
+                (*accepted.borrow(), *cancelled.borrow()),
+                (0, 1),
+                "the host-key prompt on {platform:?}, {key:?}"
+            );
+
+            let (skipped, closed) = (Rc::new(RefCell::new(0)), Rc::new(RefCell::new(0)));
+            let mut test = render({
+                let (skipped, closed) = (skipped.clone(), closed.clone());
+                move || {
+                    let (skipped, closed) = (skipped.clone(), closed.clone());
+                    GitErrorDialog::new(1, "git commit -q -F -", Rc::new(vec!["no".to_owned()]))
+                        .skip(true)
+                        .platform(platform)
+                        .on_skip(move |()| *skipped.borrow_mut() += 1)
+                        .on_close(move |()| *closed.borrow_mut() += 1)
+                        .into_element()
+                }
+            });
+            press_on_open(&mut test, key.clone());
+            assert_eq!(
+                (*skipped.borrow(), *closed.borrow()),
+                (0, 1),
+                "the Git Error dialog on {platform:?}, {key:?}"
+            );
+        }
+
+        let created = Rc::new(RefCell::new(0));
+        let typed = Rc::new(RefCell::new(String::new()));
+        let mut test = render({
+            let (created, typed) = (created.clone(), typed.clone());
+            move || {
+                let name = use_state(|| "topic".to_owned());
+                *typed.borrow_mut() = name.read().clone();
+                let created = created.clone();
+                CreateBranchDialog::new(1, oid(0xab), "Fix the parser", name)
+                    .ready(true)
+                    .platform(platform)
+                    .on_create(move |()| *created.borrow_mut() += 1)
+                    .into_element()
+            }
+        });
+        press_on_open(&mut test, Key::Character(" ".into()));
+        assert_eq!(
+            *created.borrow(),
+            0,
+            "Space created a branch on {platform:?}"
+        );
+        assert!(
+            *typed.borrow() != "topic" && typed.borrow().contains(' '),
+            "Space was not typed into the name on {platform:?}: {:?}",
+            typed.borrow()
+        );
+    }
+}

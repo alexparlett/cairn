@@ -158,6 +158,29 @@ WARNING tier:
    what it does on an old git if so, is this check. Evidence: quote the
    argument list.
 
+11. **A token stashed by the callback it is handed.** The token-holder check
+   trusts a type that names `Confirmed` only as the argument of a callback it
+   holds (`EventHandler<Confirmed>`, `dyn Fn(Confirmed)` and its `FnMut` and
+   `FnOnce` forms): the confirmation dialog's handler and the window's
+   continuation are handed a token to spend, and keep none. A closure behind one
+   of those that moves the token it is handed into a cell it captured — a
+   `RefCell<Option<Confirmed>>`, a `State`, a channel — keeps one where no type
+   declaration shows it, and it can then be spent later, behind a reference, or
+   on another write than the one confirmed. On any diff that builds such a
+   callback, follow the token from the closure's parameter to the operation that
+   spends it by value. Evidence: quote the closure.
+
+12. **A type that holds a `LocalWrite`.** `CONFIRMED_HOLDERS` excuses one type,
+   `LocalWrite` in `crates/cairn-app/src/worker/local_lane.rs`, which carries a
+   destructive write's token to the lane that spends it; the guard does not
+   follow a type that holds a `LocalWrite` — `Request::Write`, the lane's
+   `LocalJob::Write` — or one that holds those in turn. Each such holder must
+   move the write on, never keep it past its run, clone it (the test-only
+   `Clone` refuses a destructive write), or hand it out by reference to anything
+   but the lane's `perform`. On any diff that adds or changes a type holding a
+   `LocalWrite`, or a place that keeps one (a queue, a retry, a pending field),
+   check it. Evidence: quote the field and where it is let go of.
+
 Distinguish what the diff CHANGED from what it inherited: pre-existing debt next
 to the change is a note, not a blocking finding. If a check here duplicates a
 guard, drop it and just run the guard.

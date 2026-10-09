@@ -61,6 +61,13 @@ WARNING tier:
     tiers, and nothing compares them. A change to either without the other is a
     finding — the hook going quiet is the dangerous direction, because the gate
     still catches it but minutes later and nobody notices the echo died.
+11. **A pin's examples asserted the right way round.** The pin-placement check
+    holds the accelerator table's rule examples (`pin_violations(&x)`) inside an
+    `assert!`, `assert_eq!` or `assert_ne!` (`unasserted_calls`), but reads where
+    each call sits, not what is asserted of it: an example a change asserts the
+    wrong way round — `assert!(pin_violations(&letter).is_empty())` beside a rule
+    that went blind to it — passes the check. On any diff to that pin, read each
+    assertion's polarity against the shape it claims to refuse.
 
 ## Output format
 

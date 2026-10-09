@@ -779,11 +779,13 @@ Project invariants:
   function in `ops/` takes a `Consequence` without the token; and no type in any
   crate's production code — the application's worker scan asserted — keeps a
   `Confirmed` in a field outside `CONFIRMED_HOLDERS` (a token held in a type
-  reaches an operation behind a reference; its one row,
-  `crates/cairn-app/src/worker/local_lane.rs`, is `LocalWrite`, which carries a
+  reaches an operation behind a reference; each row a file and the one type in it
+  it excuses, failing when that type is gone or no longer holds a token, so a
+  second holder in the same file fails too; its one row,
+  `crates/cairn-app/src/worker/local_lane.rs`'s `LocalWrite`, carries a
   destructive write's token to the local lane that spends it by value — a type
   that holds a `LocalWrite`, such as `Request` or the lane's job, is not
-  followed, and is the review's — and a type may name the token only as the
+  followed, and is the review's (`destructive-ops-reviewer`'s check 12) — and a type may name the token only as the
   argument of a callback it holds, spelled exactly as one of `TOKEN_CALLBACKS`,
   `EventHandler<Confirmed>` and `dyn Fn(Confirmed)` (or `FnMut`, `FnOnce`), the
   confirmation dialog's handler and the window's continuation, which are handed a
@@ -794,7 +796,7 @@ Project invariants:
   (`token_callback_shadow_violations`), so the trusted spellings mean the toolkit's
   handler and the language's closures; residual, `destructive-ops-reviewer`'s: a
   callback that stashes the token it is handed in a cell it captured keeps one
-  unseen); and the roster is never empty, asserted (the user's decision,
+  unseen, its check 11); and the roster is never empty, asserted (the user's decision,
   2026-10-08), its rows today `ops::discard_lines` and `ops::discard_files`
   (`crates/cairn-git/src/ops/discard.rs`), which replaced the placeholder,
   `ops::amend` (`crates/cairn-git/src/ops/commit.rs`) and `ops::create_branch_discarding`
@@ -816,7 +818,7 @@ Project invariants:
   required to have read `cairn-ui`'s and `cairn-app`'s `src/`; no production
   file outside `cairn-model` and `cairn-git` (`CONSEQUENCE_BUILDERS`) spells a
   path into a `Consequence` or names its parts (`DiscardedFile`, `FileLoss`,
-  `Publication`, `Reflog`, `LostChange`, `ChangeLoss`, `ChangedKind`), so the render crates hold one and ask it for its words but never
+  `Publication`, `Reflog`, `LostChange`, `ChangeLoss`, `ChangedKind`, `RemovedKind`), so the render crates hold one and ask it for its words but never
   build one; and nowhere, `src/` or `tests/`, does a file but the type's own open
   an impl naming `Confirmed`, `Consequence` or its parts, or rename one (`use ..
   as`, or a `type` alias wherever it follows another item). Residual review
@@ -914,7 +916,11 @@ Project invariants:
   arm bumps the discard-count lane's counter and sends that lane the paths a discard
   would take (its `Request::DiscardLinesConsequence` arm likewise, the diff and the lines), and its `Request::StopCounting` arm only bumps that counter, whose `Request::CommitReads` and
   `Request::Amending` arms bump the commit-box and amending lanes' counters and send the local lane one job
-  (`Amending` the window's status, shared), and its `Request::StopAmending` arm only bumps the amending counter, whose `Request::CancelWrite` arm
+  (`Amending` the window's status, shared), and its `Request::StopAmending` arm only bumps the amending counter, whose `Request::CheckBranchName` and
+  `Request::CheckoutConsequence` arms (Create Branch's name check and what its "Discard" would lose) each bump
+  their lane's counter, take an atomic watch of that number and send the local lane one job, and whose
+  `Request::LockConsequence` arm (what `Remove index.lock…` would remove, read at its press) only sends it one,
+  whose `Request::CancelWrite` arm
   takes `LaneState`'s mutex (`worker/local_lane.rs`) and, when the write it
   names is a running commit, calls its cancel — a `KillHandle::kill`, through
   `ops::CommitCancel` — and whose `Request::Refresh` and `Request::RefreshStatus` arms
@@ -999,7 +1005,18 @@ Project invariants:
   `the_pin_placement_check_catches_the_shapes_it_claims`: declared once, directly
   in the one module whose attributes are exactly `#[cfg(test)]`, its own exactly
   `#[test]`, its body still showing the rule failing — the same check holds R4.8's
-  `the_bounded_output_helpers_exist_on_a_read_alone`). A view leaves alone only the
+  `the_bounded_output_helpers_exist_on_a_read_alone` — and, for the table's pin
+  (`accelerator_pin_violations`), each rule example's call inside an `assert!`,
+  `assert_eq!` or `assert_ne!`, reached outward through parentheses alone
+  (`unasserted_calls`, self-test `the_unasserted_call_matcher_catches_the_shapes_it_claims`),
+  the rule function `pin_violations` beside it reading `LOCAL_CHANGES_BARE_KEYS`, and
+  that const declared once, exactly as `LOCAL_CHANGES_BARE_KEYS_DECLARATION` reads —
+  Enter, Backspace and Delete — so a fourth key is a failing guard, not a pin that
+  adapts). Residual review obligation, `gate-integrity-reviewer`'s: the assertion
+  check reads where a call sits, not what is asserted of it, so an example asserted
+  the wrong way round (`assert!(pin_violations(&letter).is_empty())`) passes it; and
+  R4.8's pin needs none, since its examples are compile-time — each required line
+  binds the `Absent` pattern that is its assertion. A view leaves alone only the
   chords of the window, the detail pane and the scopes it is in
   (`accelerators::is_chord(event, own)`), so another view's chord — Local Changes'
   Shift+↓ — is its arrow. **Every text field takes the one key policy**
@@ -1272,7 +1289,11 @@ Project invariants:
   operations and the selected one's lines,
   `the_popover_builds_one_viewport_of_operations_and_of_lines` (200 operations, 100,000 lines;
   `crates/cairn-ui/tests/activity_popover.rs`), the window keeping at most `ACTIVITY_ENTRIES`
-  operations and `ACTIVITY_BYTES` of lines (`crate::activity`),
+  operations and `ACTIVITY_BYTES` of lines (`crate::activity`) — while Show All draws a
+  confirmed prompt whole, the lines' rows are sized by a callback (`ItemSize::Dynamic`), which
+  Freya's `VirtualScrollView` asks for every row above the viewport on each layout, so that
+  work grows with how far the pane is scrolled, bounded by `ACTIVITY_LINES` and one prompt row
+  and paid only while Show All is pressed (`responsiveness-reviewer`'s to keep bounded) —
   hold the other lists to the same, and so do the staging gesture's twins
   (staging-and-commit C19, `crates/cairn-ui/tests/staging_gesture.rs`):
   `the_gesture_builds_one_viewport_over_a_10000_line_diff` (a 10,000-line diff with the

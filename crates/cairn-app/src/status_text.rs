@@ -69,7 +69,7 @@ pub fn closing_line(writes: &LocalWrites) -> Option<String> {
 pub fn locks_line(locks: &[PathBuf]) -> Option<String> {
     (!locks.is_empty()).then(|| {
         format!(
-            "Lock files remain under the git directory and will fail later writes while they              are there — stale if no other git is running here, and then safe to remove: {}",
+            "Lock files remain under the git directory and will fail later writes while they are there — stale if no other git is running here, and then safe to remove: {}",
             locks
                 .iter()
                 .map(|path| path.display().to_string())
@@ -198,6 +198,20 @@ mod tests {
             }),
             sentences[0],
             "starting and running-without-progress say different things"
+        );
+    }
+
+    /// R3.8: the lock files last listed are named in one sentence, every path, with no run of
+    /// spaces where a source line was broken. Caught by: a string continued without `\\`.
+    #[test]
+    fn the_lock_files_line_names_every_lock_in_one_sentence() {
+        assert_eq!(locks_line(&[]), None);
+        let line = locks_line(&["/r/.git/index.lock".into(), "/r/.git/HEAD.lock".into()]).unwrap();
+        assert_eq!(
+            line,
+            "Lock files remain under the git directory and will fail later writes while they \
+             are there — stale if no other git is running here, and then safe to remove: \
+             /r/.git/index.lock, /r/.git/HEAD.lock"
         );
     }
 

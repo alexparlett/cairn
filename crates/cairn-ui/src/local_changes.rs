@@ -509,10 +509,12 @@ impl Component for ListSection {
             .as_ref()
             .is_some_and(|held| held.read().press() == Some(Action::StageOrUnstageAll));
         let listed = self.changes.read().len(list) > 0;
-        let selected = self.selection.as_ref().is_some_and(|selection| {
-            let selection = selection.read();
-            selection.list() == Some(list) && !selection.is_empty()
-        }) || self.chosen.is_some();
+        // Something to act on: the selection in this list, or, with none made there, the path
+        // chosen — as the rows draw it.
+        let selected = match self.selection.as_ref().map(|selection| selection.read()) {
+            Some(selection) if selection.list() == Some(list) => !selection.is_empty(),
+            Some(_) | None => self.chosen.is_some(),
+        };
         let caption = button_caption(list, all);
         let acting = self.on_intent.clone();
         let button = heading_control(

@@ -36,8 +36,8 @@ use cairn_model::{
 };
 use cairn_ui::accelerators::{self, Scope};
 use cairn_ui::{
-    DiffHeader, DiffNotice, DiffNoticeView, DiffSettings, DiffView, ListIntent, LocalChangesList,
-    ShownFiles,
+    DiffHeader, DiffNotice, DiffNoticeView, DiffSettings, DiffView, ListIntent, ListSelection,
+    LocalChangesList, ShownFiles,
 };
 use freya::prelude::*;
 
@@ -198,12 +198,23 @@ fn follow_the_lists(view: View, submit: Option<&dyn Fn(Request)>) {
             let requests = diff.write().refresh_working(serial, query);
             submit_all(requests, submit);
         }
+        // The path chosen moves, and the selection with it (phase 07's QA item 5): a path it
+        // held that the status took away must not come back selected unseen.
         (_, Follow::ChooseFirst(list, row)) => {
+            let first = drawn_changes(&view.local.state.peek())
+                .get(list, row)
+                .map(|change| change.path.clone());
+            let mut selection = view.local.selection;
+            selection.set(
+                first.map_or_else(ListSelection::default, |path| ListSelection::of(list, path)),
+            );
             diff_actions::choose_working(list, row, view, submit);
         }
         // Written only when there is a path to let go of: a write wakes the effect again, so a
         // decision gone wrong here must cost one more look, never a loop.
         (_, Follow::LetGo) if diff.peek().working_choice().is_some() => {
+            let mut selection = view.local.selection;
+            selection.set(ListSelection::default());
             let requests = diff.write().let_go_of_working();
             submit_all(requests, submit);
         }

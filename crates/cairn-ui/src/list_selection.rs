@@ -52,7 +52,8 @@ impl ListSelection {
 
     /// This selection with `path` of `list` toggled in or out (a ⌘- or Ctrl-press); a path of
     /// the other list starts a selection there. The path toggled is where a range extends
-    /// from next.
+    /// from next. The last path toggled out leaves the list's selection empty, and still the
+    /// list's: nothing is selected there, so nothing is acted on and nothing drawn selected.
     pub fn toggled(&self, list: ChangeList, path: RepoPath) -> Self {
         if self.list != Some(list) {
             return Self::of(list, path);
@@ -65,13 +66,14 @@ impl ListSelection {
             Err(at) => paths.insert(at, path.clone()),
         }
         Self {
-            list: (!paths.is_empty()).then_some(list),
+            list: Some(list),
             paths,
             anchor: Some(path),
         }
     }
 
-    /// The list the selection is in, if anything is selected.
+    /// The list the selection is in: `None` until something is selected, and the list still
+    /// once a toggle has emptied it.
     pub fn list(&self) -> Option<ChangeList> {
         self.list
     }
@@ -135,7 +137,11 @@ mod tests {
         assert_eq!(back.paths(), [path("a")]);
         let empty = back.toggled(ChangeList::Unstaged, path("a"));
         assert!(empty.is_empty());
-        assert_eq!(empty.list(), None);
+        assert_eq!(
+            empty.list(),
+            Some(ChangeList::Unstaged),
+            "an emptied selection is still its list's: nothing selected there"
+        );
         let other = two.toggled(ChangeList::Staged, path("c"));
         assert_eq!(other.paths(), [path("c")]);
         assert_eq!(other.list(), Some(ChangeList::Staged));

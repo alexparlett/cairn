@@ -985,3 +985,44 @@ fn stage_all_and_unstage_all_take_the_rows_the_filter_shows() {
         ]
     );
 }
+
+/// Phase 07's QA item 5: a refresh that takes the selected paths away moves the selection with
+/// the path chosen — so when one of them is listed again it is not selected unseen, and Return
+/// stages only what is drawn selected; and a ⌘- or Ctrl-press that toggles the last path out
+/// leaves nothing selected, so Return stages nothing. Caught by: a selection that keeps paths a
+/// refresh took away, or an emptied selection that falls back to the path toggled out.
+#[test]
+fn a_refresh_or_an_emptying_toggle_leaves_nothing_selected_unseen() {
+    let (mut test, view, submitted) = opened(several());
+    choose_rows(&mut test, view, &["a.rs", "b.rs"]);
+    let without = |gone: &[&str]| {
+        several()
+            .into_iter()
+            .filter(|entry| !gone.contains(&entry.path().to_string().as_str()))
+            .collect::<Vec<_>>()
+    };
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        status(without(&["a.rs", "b.rs"])),
+    );
+    settle(&mut test);
+    apply(&mut test, view, &submitted, status(without(&["b.rs"])));
+    settle(&mut test);
+    assert_eq!(
+        selected(view),
+        ["c.rs"],
+        "the selection kept a path the refresh took away"
+    );
+    press_chord(&mut test, Action::StageOrUnstage);
+    assert_eq!(writes(&submitted), [write("stage", &["c.rs"])]);
+
+    press_row(&mut test, "d.rs", 0);
+    hold(&mut test, view, Action::ExtendSelection);
+    press_row(&mut test, "d.rs", 0);
+    let_go(&mut test, view);
+    assert_eq!(selected(view), Vec::<String>::new());
+    press_chord(&mut test, Action::StageOrUnstage);
+    assert_eq!(writes(&submitted)[1..], [], "a path toggled out was staged");
+}

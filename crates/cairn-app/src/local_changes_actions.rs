@@ -187,7 +187,8 @@ fn dialog_open(view: View) -> bool {
 }
 
 /// The rows of `list` the selection names that `lists` still lists, in the lists' order of
-/// their search; or, with nothing selected in `list`, the path chosen there.
+/// their search; or, with no selection made in `list`, the path chosen there. A selection a
+/// toggle emptied takes nothing: nothing is drawn selected.
 fn acted_rows(view: View, lists: &LocalChanges, list: ChangeList) -> Vec<usize> {
     let selection = view.local.selection.peek();
     let mut rows: Vec<usize> = if selection.list() == Some(list) {
@@ -199,7 +200,7 @@ fn acted_rows(view: View, lists: &LocalChanges, list: ChangeList) -> Vec<usize> 
     } else {
         Vec::new()
     };
-    if rows.is_empty() {
+    if selection.list() != Some(list) {
         let diff = view.diff.peek();
         rows.extend(
             diff.working_choice()

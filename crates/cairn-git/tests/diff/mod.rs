@@ -5,6 +5,7 @@ mod scratch;
 
 mod bare_discovery;
 mod bench;
+mod branch;
 mod changes;
 mod commit;
 mod content;

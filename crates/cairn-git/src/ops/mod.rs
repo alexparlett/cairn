@@ -201,6 +201,7 @@
 
 mod amend;
 mod authority;
+mod branch;
 mod commit;
 mod discard;
 mod fetch;
@@ -218,6 +219,7 @@ use cairn_model::Confirmed;
 
 pub use amend::amend_consequence;
 pub(crate) use authority::WriteAuthority;
+pub use branch::create_branch;
 pub use commit::{CommitCancel, CommitWatch, Hooks, amend, commit};
 pub use discard::{
     CLEAN_ARGUMENT_BYTES, discard_files, discard_files_consequence, discard_lines,

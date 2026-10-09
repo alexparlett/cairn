@@ -3,6 +3,62 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 05 QA, adjudicated and fixed
+
+Four fresh reviewers and a fresh `qa-confirm` (the coordinator's). Fixed, each test-first —
+the new test red on the code before the fix, or the named mutation caught:
+
+1. **An upstream behind `HEAD` answered "unpublished" without asking other remotes** (= batched
+   B, a defect against `Publication::Unpublished`'s "no remote-tracking ref reaches it"): the
+   pushed check now falls through to `HEAD --not --remotes` when the upstream does not hold
+   `HEAD`. `the_dialog_is_asked_exactly_when_a_remote_has_head` gains the case (an upstream
+   behind, another remote branch at `HEAD`, checked against `git branch -r --contains`), red
+   before the fix. R6.4's method sentence amended for the user's ratification. (`fix(git)`.)
+2. **No test checked the argv `git commit` actually ran**: a recording `git` now pins both
+   verbs' argv, stdin, environment and the command log
+   (`commit_and_amend_run_git_commit_with_the_message_on_stdin_and_nowhere_else`); the `-m
+   <message>` mutation of `run` fails it. (`test(git)`.)
+5. **The CLAUDE.md lane-lock residual** omitted `install`'s kill and the amend walk's poll
+   under the lock; both named. (`docs(docs)`.)
+6. **Amend's staged list in a partial clone**: fails closed on git 2.44+, fetches below it —
+   stated as status's residual is, and pinned on the host and both floors
+   (`in_a_partial_clone_amends_staged_list_fails_rather_than_fetching`). (`test(git)`.)
+7. **The reflog rule was never tested one log at a time**: a detached `HEAD` with only its own
+   log, and a branch with only its own, under `false`; dropping either term of the rule fails
+   the test (both mutations run). (`test(git)`.)
+8. **The lane's hook-skip mapping was never exercised**:
+   `a_failing_hook_fails_a_commit_and_the_skip_commits_past_it`; inverting the mapping, or
+   fixing it either way, fails it. (`test(app)`.)
+9. **The re-check was never tested against a reflog change**:
+   `an_amend_refuses_when_the_reflog_it_promised_is_gone_since_it_was_confirmed`; a re-check
+   comparing `HEAD` alone fails it. (`test(git)`.)
+10. **R6.1's amendment** now says "for the user's ratification" and reads `-q` as by analogy
+    with decision 12; batched as F below. (`docs(docs)`.)
+
+Carried (state.md): 3 and 11 to phase 11; 4 to phases 09 and 11; 6's and 8's view halves to
+phase 09; 12 (= D) to phase 10, pending the user.
+
+Dismissed, with its reason:
+
+- 13 — **a fetch's askpass title could carry a URL with credentials**: the network lane names
+  the token after `Operation::Fetch { remote }`, the default remote's NAME; fetch never takes a
+  URL.
+
+The bench repository: its `.git` directory's mtime moved at 2026-10-08 20:35:34 — an entry
+created and removed inside it, most likely a lock from a `git` run there without
+`GIT_OPTIONAL_LOCKS=0`; no file inside changed, and the agent is unknown. The coordinator's
+earlier "untouched" check had used a time format `bfs` rejects, with its stderr hidden. (This
+phase's own reads of the bench, on 2026-10-09, ran with `GIT_OPTIONAL_LOCKS=0`; its
+`find -newer <marker>` checks were empty.)
+
+Batched for the user, added to A-E below:
+
+- **F.** Ratify R6.1's amendment: `git commit -q`, by analogy with decision 12, and no
+  `--literal-pathspecs` on a commit.
+
+B is no longer batched: QA found it a defect, fixed above (item 1), and R6.4 is amended for
+ratification.
+
 ## 2026-10-09 — phase 05, the commit engine (packet mode)
 
 Built on `feature/staging-and-commit`; full gate green; QA pending (the coordinator dispatches

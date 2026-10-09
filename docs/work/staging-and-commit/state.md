@@ -11,8 +11,8 @@ mode: QA adjudicated, confirmed fixes and the user's four decisions (2, 3, 5, 6)
 C21's margin decided (a flat 50 ms) and amended, full gate green. Phase 04 (the local
 lane) done in packet mode: QA adjudicated, confirmed fixes and the user's decisions 12 and
 14 (2026-10-09) applied, full gate green. Phase 05 (the commit engine) built in packet
-mode, full gate green, QA pending (the coordinator runs it); items batched for the user in
-progress.md's phase 05 entry. Phases 06-12 not started.**
+mode; QA adjudicated and its fixes landed, full gate green; awaiting the user's decisions A, C,
+D, E and F (progress.md's phase 05 entries). Phases 06-12 not started.**
 
 ## Locked decisions
 
@@ -298,7 +298,28 @@ local write lane"):
   the commit-graph's generation numbers, keeping the walk cancellable.
 - **Residual, stated in `docs/systems/staging.md`**: a hook owned by another user counts on the
   group's bit without reading this user's groups; a commit left orphaned by a second close can
-  still die at a line its hook writes.
+  still die at a line its hook writes; in a partial clone amend's staged list fails closed on
+  git 2.44+ (fetches below it) over a staged inexact rename of a blob only the promisor holds.
+
+From phase 05's QA (adjudicated 2026-10-09):
+
+- **Phase 09** (item 4): run `amend_consequence` on an epoch-numbered lane with a loading
+  state in the commit box; optionally skip the re-check's walk when the tips it read have not
+  moved.
+- **Phase 09** (item 6): what the amend box shows when amend's staged list fails (a partial
+  clone's missing blob on git 2.44+: `Error::GitFailed`).
+- **Phase 09** (item 8): a window test that the commit after a skipped-hooks commit runs the
+  hooks again (the skip is per commit, never kept).
+- **Phase 10** (item 12, = batched D, pending the user's decision): the reflog seed above.
+- **Phase 11** (item 3): `Update::WriteOutput` is one unbounded update per line
+  (`worker/local_lane.rs`'s `Watch::commit`; `session.rs` discards it; `pool.rs`'s
+  `Updates::next` drains the whole backlog in one poll) — send one update per pipe chunk
+  (`Vec<String>`) with a bound on what is queued; touches `process/runner.rs`'s per-line stderr
+  callback.
+- **Phase 11** (item 4): measure the pushed check on the bench; decide a commit-graph
+  generation cutoff (gix-commitgraph lookup and generation, the cancel polled per step).
+- **Phase 11** (item 11): `ops/commit.rs`'s `Lines::push`/`finish` cut at `STDOUT_TAIL` bytes
+  and lossily decode, so a multibyte character at a cut reads as U+FFFD.
 
 ## Carried forward from phase 04 (owned by the phase named)
 
@@ -450,7 +471,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 02 patch engine | done — QA adjudicated, confirmed fixes applied, full gate green; items 10-11 batched for the user |
 | 03 write verbs | done — QA adjudicated, fixes and the user's decisions applied, full gate green |
 | 04 local lane | done — QA adjudicated, fixes and the user's decisions 12 and 14 applied, full gate green |
-| 05 commit engine | built — full gate green, QA pending (coordinator) |
+| 05 commit engine | QA fixes landed, awaiting user decisions A/C/D/E/F |
 | 06 render foundations | not started |
 | 07 Local Changes actions | not started |
 | 08 diff gesture | not started |

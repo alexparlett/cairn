@@ -236,10 +236,11 @@ literally.
   passed, so `commit.cleanup` and git's `-F` default decide; `--no-verify` is
   passed only from the hook failure's skip (R10.5). A non-UTF-8
   `i18n.commitEncoding` is refused before git runs, with its reason. (Amended
-  2026-10-09 by phase 05: `-q` beside it, which leaves out only the summary git
-  prints once the commit is made, as `-q` keeps `git clean` quiet for the user's
-  decision 12 of 2026-10-09; and no `--literal-pathspecs`, which git would export
-  to the hooks.)
+  2026-10-09 by phase 05, for the user's ratification: `-q` beside it, which leaves
+  out only the summary git prints once the commit is made — by analogy with the
+  user's decision 12 of 2026-10-09, which gave `git clean` `-q` so an orphaned write
+  has nothing to print; and no `--literal-pathspecs`, which git would export to the
+  hooks.)
 - R6.2 Amend is `git commit --amend -F -` with the same rules.
 - R6.3 In amend mode the staged list is the index against `HEAD^` (the plumbing
   the working-tree query already runs, `git diff-index --cached`), and unstaging

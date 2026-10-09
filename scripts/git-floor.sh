@@ -66,7 +66,7 @@ if [ -z "$floor_minor" ] || [ "2.$floor_minor" != "${first_version%.*}" ]; then
 fi
 
 # The filtered runs, as `<cargo target>|<test filters>|<floor>`. Each floor sits one under
-# the run's count when it was set (133, 185 and 17), so a filter that silently matches less
+# the run's count when it was set (134, 187 and 18), so a filter that silently matches less
 # fails; raise a floor as its run gains tests. `ops::` is the write verbs' argv tests, whose
 # recording `git` runs the git in use (staging-and-commit phase 03), beside fetch's stubs;
 # `--test diff_engine` holds the write verbs' effects too (`tests/diff/write_verbs.rs`, and
@@ -77,9 +77,9 @@ fi
 # `git stash show` (C7, `tests/diff/stash.rs`), whose untracked half git 2.30.9 does not read
 # and 2.32.7 does.
 RUNS=(
-  "--lib|diff:: reads:: ops::|132"
-  "--test diff_engine||184"
-  "--test status||16"
+  "--lib|diff:: reads:: ops::|133"
+  "--test diff_engine||186"
+  "--test status||17"
 )
 
 CACHE="${CAIRN_GIT_FLOOR_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/cairn/git-floor}"

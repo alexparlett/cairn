@@ -865,6 +865,28 @@ fn an_amend_refuses_when_head_moved_or_was_published_since_it_was_confirmed() {
     assert_eq!(repo.rev("HEAD"), moved);
 }
 
+/// C2 and R1.4 for the reflog (phase 05's QA item 9): confirmed while git would log the
+/// amend — "the old commit stays in Show Lost Commits" — then the logs removed and the
+/// setting turned off, so git no longer would: the amend refuses, writing nothing, rather than
+/// replace a commit under a promise that is no longer true. Caught by: a re-check that compares
+/// `HEAD` alone.
+#[test]
+fn an_amend_refuses_when_the_reflog_it_promised_is_gone_since_it_was_confirmed() {
+    let repo = identified("c2-amend-reflog");
+    repo.write("a.txt", b"a\n");
+    let head = repo.commit("one");
+    let confirmed = Confirmed::by_user(ok(consequence(&repo), "the consequence"));
+    assert!(confirmed.prompt().contains("stays in Show Lost Commits"));
+    repo.config("core.logAllRefUpdates", "false");
+    std::fs::remove_dir_all(repo.path().join(".git/logs")).unwrap_or_else(|e| panic!("{e}"));
+    assert!(matches!(
+        amend_with(&repo, confirmed, "amended"),
+        Err(Error::AmendChangedSinceConfirmed)
+    ));
+    assert_eq!(repo.rev("HEAD"), head);
+    assert_eq!(repo.git(&["log", "--format=%s"]), "one\n");
+}
+
 // --- C24: operations in progress ---
 
 /// The text `git status` says of the operation in progress, in the C locale.

@@ -1059,6 +1059,11 @@ fn after(commit: bool, asked: ReadAgain, invalidated: Option<Invalidated>) -> Re
     }
 }
 
+/// Why a write had no askpass token, as its ending says it.
+fn no_token(why: &impl std::fmt::Display) -> String {
+    format!("no askpass token could be made for this write ({why})")
+}
+
 /// Runs one write: announced, given its own askpass token, ended with what it did.
 fn run(repo: &Repository, id: OperationId, write: LocalWrite, serving: &Local<'_>) {
     let commit = write.is_commit();
@@ -1069,11 +1074,16 @@ fn run(repo: &Repository, id: OperationId, write: LocalWrite, serving: &Local<'_
     // One token for the whole write, retired before its ending goes out, so no helper of a
     // git that is gone is accepted afterwards (L11).
     // Named as the window names the write, so a prompt it raises is titled by it (R5.1).
-    let authorised = serving.channel.and_then(|channel| {
-        channel
-            .begin_for(crate::status_text::capitalised(&write.what()))
-            .ok()
-    });
+    // A token that could not be had is said in the ending, as a channel never opened is
+    // (phase 04's QA item 11): a write that then fails for want of a prompt says why.
+    let (authorised, prompting) = match serving
+        .channel
+        .map(|channel| channel.begin_for(crate::status_text::capitalised(&write.what())))
+    {
+        Some(Ok(operation)) => (Some(operation), serving.prompting.clone()),
+        Some(Err(why)) => (None, Err(no_token(&why))),
+        None => (None, serving.prompting.clone()),
+    };
     let outcome = write.perform(
         serving.git,
         repo,
@@ -1085,7 +1095,7 @@ fn run(repo: &Repository, id: OperationId, write: LocalWrite, serving: &Local<'_
         },
     );
     drop(authorised);
-    let (ending, invalidated) = WriteEnding::of(outcome, serving.prompting);
+    let (ending, invalidated) = WriteEnding::of(outcome, &prompting);
     let read_again = after(commit, asked, invalidated);
     serving.lane.end(|| {
         serving.outbox.send(
@@ -1102,6 +1112,25 @@ fn run(repo: &Repository, id: OperationId, write: LocalWrite, serving: &Local<'_
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Phase 04's QA item 11: a write whose askpass token could not be made says why in its
+    /// ending, as one under a channel never opened does. Caught by: the failure dropped with
+    /// `.ok()`, the write failing with no word of the token.
+    #[test]
+    fn a_token_that_could_not_be_made_is_said_in_the_ending() {
+        let (ending, _) = WriteEnding::of(
+            Err(Error::NoPaths),
+            &Err(no_token(&"could not generate an askpass token")),
+        );
+        let WriteEnding::Refused { message } = ending else {
+            panic!("{ending:?}");
+        };
+        assert!(
+            message.contains("no askpass token could be made for this write")
+                && message.contains("could not generate an askpass token"),
+            "{message}"
+        );
+    }
 
     /// The user's decision (2026-10-09): Stage All and Unstage All take the rows a filter shows
     /// — a hidden row, a conflicted one among them, left as it is — and every row with none

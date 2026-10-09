@@ -24,7 +24,79 @@ box, and Fork's Create Branch dialog with its sealed Discard, as the user decide
 QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green.
 Phase 11 (the activity popover and the measured bar) done in packet mode: QA adjudicated, every
 fix-now item fixed, and the user's decisions A-N on the popover (2026-10-09) applied — DO3+DO5
-resolved by H; full gate green. Phase 12 not started.**
+resolved by H; full gate green. Phase 12 (the merge bar): QA adjudicated, every fix-now item and
+the probe's verdict applied, C21 re-measured on the tip; four user decisions pending (W1, W3, F2,
+F7), listed under "Phase 12, the merge bar" below; everything to file at teardown gathered in one
+list there.**
+
+## Phase 12, the merge bar (2026-10-09)
+
+- **Fixed, each pinned** (progress.md, phase 12): C22 (`docs/design/engine.md` D1 names Create
+  Branch's writes and three reads; `docs/systems/git-processes.md`'s tree lists them); C14's carried
+  item; C2's symlink half; C19's tabs half; W2 (the prompt kept for every ending); gate-integrity 1
+  (`CONFIRMED_HOLDERS` by file and type), 2 (the reviewer's checks 11 and 12, the qa-gate row), 3
+  (the pin's examples inside assertions, the bare keys pinned exactly; the polarity residual
+  stated), 4 (`RemovedKind`); responsiveness 1 (the three submit arms named) and 2 (stated in
+  CLAUDE.md's residuals); W4 (`ops/stage.rs`'s comment); F1; F5.
+- **Probe 7** (Show All's measured height): the probe passed, but its controls show the measure
+  does reach the list in both directions — dismissed, and the other direction pinned
+  (`a_prompt_shown_whole_sits_on_its_measured_height_not_its_estimate`).
+- **The user's decisions pending** (the coordinator relays them; nothing here is built for them):
+  W1 — the amend button's three-line cap can cut "can't be recovered" off a long subject; W3 —
+  Create Branch's Discard prompt gives no size for a folder or nested repository and says nothing
+  of ignored files; F2 — PRD R2.1's "spans swapped" against `TextDiff::inverted`'s
+  insertion-then-removal split, and whether C21 gains a staged-rename row (phase 02's QA items 10
+  and 11); F7 — Escape matched as a literal `NamedKey::Escape` (`diff_view.rs`, `stacked_diff.rs`,
+  `local_changes_drag.rs`, `activity_popover.rs`).
+
+### To file at teardown — the one list
+
+Gathered from phase 11's carry, the PRD's "Not done" paragraph, the phase carries below and the
+merge bar's QA; each is filed with the `file-issue` skill at teardown. An existing issue is
+commented, not filed again.
+
+- **From the PRD's "Not done"** (`docs/prd/staging-and-commit.md`): a backup before discard (L2);
+  Fork's per-repository sign-off setting and the commit box showing author and signing;
+  pre-filling an empty draft from `commit.template`; wrapping a paragraph at the ruler; a
+  configurable subject limit; transcoding to a non-UTF-8 `i18n.commitEncoding`; a hook reading
+  `/dev/tty` (L11's residual, R5.3); discarding a submodule's changes (L24); pinning
+  `apply.ignoreWhitespace` on every `apply`; a persisted operation log; a Commit-tab "restore this
+  file" from a lost commit; the reflog as a list of entries. Comment, not file: a forced close
+  orphaning a process that holds `index.lock` (#48 item 2); the index refresh (#66); fetch's cancel
+  tied to its operation (#47's remainder).
+- **Local time** (the user's decision D, 2026-10-09): the popover's start times and the history's
+  date column in UTC; local time needs a timezone dependency, the user's — one issue for both.
+- **DO1**: the commit-graph reach treats generation 0 as a level, where git reads it as "not
+  computed"; harden by answering `None` when the floor or a visited generation is 0.
+- **DO2** (pre-existing): neither the graph route nor the object walk honours `refs/replace` or
+  `info/grafts`, where git turns the commit-graph off when they are present.
+- **DO6**: `reflogs::reflog_tips` takes an id the commit-graph holds as present without an object
+  lookup, so a commit pruned after the graph was written is listed as lost and fails to open.
+- **GI7** (pre-existing): `code_without_test_modules` blanks the block after a `#[cfg(test)]` on a
+  field, variant or arm, which would hide production code from every guard using it.
+- **F3**: skipping the amend re-check's walk when the tips it read have not moved (phase 05's QA
+  item 4, optional, carried to phases 09 and 11 and dropped there unrecorded); without a
+  commit-graph the walk runs twice per amend. Performance.
+- **Batching the discard count's per-path reads** (15.4 ms a path on the bench clone); a batched
+  `numstat` would change what a prompt counts for an LFS pointer, a file past the limits and under
+  `diff.algorithm`.
+- **The engine's half of #46** (comment): the command log and `Error::GitFailed` keep git's stderr
+  unscrubbed; every drawn line is scrubbed.
+- **Responsiveness 2**: while Show All is pressed, Freya's `VirtualScrollView` asks the size
+  callback for every row above the viewport on each layout — bounded by `ACTIVITY_LINES` + 1, and
+  stated in CLAUDE.md; laying the whole prompt out above the list would keep `ItemSize::Fixed`.
+- **Responsiveness 3**: `activity::popover` reads the activity log on every window render, the
+  popover closed included, so each streamed line re-renders the window's root; reading `is_open`
+  in a child component would leave a closed popover unsubscribed. Within budget (C21, phase 12).
+- **F7, Escape as a literal**, unless the user's decision makes it an action or a written
+  convention (pending).
+- **W3's residuals**, unless the user's decision changes them (pending): `checkout -f` deletes
+  ignored files at paths the commit holds, unsaid; a deleted folder's re-check compares only its
+  count and bytes.
+- **N3** (not adjudicated): discarding an intent-to-add file is prompted as "emptied"; check
+  against real git (`add -N`, then discard) whether the prompt over- or understates.
+- **GitHub, by the coordinator**: close #41; comment #46 and #87.
+
 
 ## Locked decisions
 
@@ -531,26 +603,10 @@ Phase 11 (`docs/systems/git-processes.md`, "The registry" and "The activity popo
   layout); the blocked note "Cairn is running git in this repository"; a refusal at the press said
   beside the still-pressable button; the arrow a square turned 45°; the panel narrowed for a window
   narrower than it; a successful removal taking the offer from every entry.
-- **To file at teardown** (phase 11's QA, file-as-issue; not filed on GitHub in the packet):
-  - Local time (the user's decision D, 2026-10-09): the popover's start times and the history's
-    date column are drawn in UTC; showing local time needs a timezone dependency, which is the
-    user's decision — one issue for both.
-  - DO1: the commit-graph reach (`history::walk::reaches_through_graph`) treats generation 0 as a
-    level, where git reads 0 as "not computed"; a mixed chain needs a pre-2.19 graph under a newer
-    layer, which no supported git writes, so no fixture can be built — and the failure is
-    unsafe (Unpublished). Hardening: answer `None` when the floor or any visited generation is 0.
-  - DO2 (pre-existing): neither the graph route nor the object walk honours `refs/replace` or
-    `info/grafts`, where git turns the commit-graph off when they are present; the pushed check can
-    then differ from `git branch -r --contains`.
-  - DO6: `history::reflogs::reflog_tips` takes an id the commit-graph holds as present without an
-    object lookup, so a commit pruned after the graph was written is listed as lost and fails to
-    open; parity with git (which trusts the graph unless `core.commitGraph` paranoia is on) is
-    undecided. Needs a fixture.
-  - GI7 (pre-existing): `code_without_test_modules` (`crates/cairn-guards/src/lib.rs`) blanks the
-    block after a `#[cfg(test)]` on a field, variant or arm, which would hide production code from
-    every guard using it; no such site exists in product `src/` today.
+- **To file at teardown** (phase 11's QA): local time, DO1, DO2, DO6 and GI7 — moved into the one
+  list under "Phase 12, the merge bar" above.
 
-- **Phase 12 / the user**: batching the discard count's per-path reads (measured 15.4 ms a path
+- **Phase 12 / the user** (the issues among these are in the one list above): batching the discard count's per-path reads (measured 15.4 ms a path
   on the bench clone; a batched `numstat` read would change what a prompt counts for an LFS
   pointer, a file past the limits and under `diff.algorithm`); the amend read's split (measured:
   0.14 ms consequence, 2.6 ms staged list per status at a remote tip; 1.2 s only for a detached
@@ -602,7 +658,9 @@ Phase 11 (`docs/systems/git-processes.md`, "The registry" and "The activity popo
   every refresh that moves a ref while the toggle is on (each reopen reads every log again);
   the tips are de-duplicated against the refs' through a hash set (QA item 11), so the merge is
   linear. Carried to phase 11's measurements: a bench run with many local branches' logs, and the
-  repeat per ref-moving refresh.
+  repeat per ref-moving refresh — done: measured in phase 11 (200 branches each with a 50-entry
+  log, 50.6 ms with no commit-graph and 8.9 ms with one; each reopen pays it again), and
+  `docs/systems/history-graph.md`'s known limit brought up to it at the merge bar (F1).
 
 ## Carried forward from phase 09 (owned by the phase named)
 
@@ -610,7 +668,8 @@ Phase 11 (`docs/systems/git-processes.md`, "The registry" and "The activity popo
   refresh's refs while Local Changes is shown (a `git rev-parse` and a ten-commit walk), and an
   amend's read per status while Amend is ticked (the pushed check's walk and a `git diff-index
   --cached` against `HEAD`'s parent, per stage) — and, from phase 05's QA item 4 (optional, not
-  done here), skip the re-check's walk when the tips it read have not moved.
+  done here), skip the re-check's walk when the tips it read have not moved (not done in phase
+  11; to file at teardown, F3, in the one list above).
 - **Phase 11**: the activity popover draws every write's `Update::WriteOutput`; the commit box
   keeps only its own commit's, for the Git Error dialog.
 - **Phase 11, from phase 09's QA** (adjudicated 2026-10-09): item 11 — the Git Error dialog draws
@@ -620,9 +679,9 @@ Phase 11 (`docs/systems/git-processes.md`, "The registry" and "The activity popo
   split the amend's read (the `Consequence` on refs arrival and on the tick; `amend_staged` per
   status) and measure both; item 11 — `Update::WriteOutput` is one update per line, and
   `OutputTail` keeps one oversized line whole (bound it).
-- **Phase 12, from phase 09's QA** (item 8): a real-git end-to-end test of a commit a hook fails,
-  its skip, and the next commit running its hooks, on the merge bar's C14 checklist (written into
-  phase 12's step 2).
+- **Phase 12 — done, from phase 09's QA** (item 8): a real-git end-to-end test of a commit a hook
+  fails, its skip, and the next commit running its hooks
+  (`a_failing_hook_fails_a_commit_the_skip_commits_past_it_and_the_next_runs_it_again`).
 - **Decided by the user (2026-10-09), each kept as built** (progress.md, phase 09 closed): the
   subject required; a merge committing with nothing staged; `MERGE_MSG` filling an empty draft
   once per merge; amend offered when amend's staged list cannot be read — PRD R10.1, R10.3 and
@@ -643,7 +702,8 @@ Phase 11 (`docs/systems/git-processes.md`, "The registry" and "The activity popo
   re-reads every path: keep each file's answer across selection changes, with measurements (the
   flash is documented as interim in `local-changes.md`).
 - **Phase 09 — done** (#7): `a_chunk_drawn_at_context_ten_stages_exactly_as_drawn`.
-- **Phase 12 / the user, at the merge bar** (#15): Escape is matched as a literal
+- **Phase 12 / the user, at the merge bar** (#15; the user's decision F7 pending, and in the one
+  list above): Escape is matched as a literal
   `NamedKey::Escape` (`diff_view.rs`, `stacked_diff.rs`, `local_changes_drag.rs`) rather than as
   an accelerator-table `Action` — a convention note, not a guard breach.
 
@@ -931,4 +991,4 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 09 commit box | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green at 18fea48 |
 | 10 lost commits | done — QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green |
 | 11 activity and measured | done — QA adjudicated, every fix-now item fixed, the user's decisions A-N (2026-10-09) applied (DO3+DO5 resolved by H), full gate green |
-| 12 QA | not started |
+| 12 QA | merge-bar QA adjudicated, fixes applied, user decisions pending (W1, W3, F2, F7) |

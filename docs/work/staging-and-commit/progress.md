@@ -3,6 +3,136 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 12, the merge bar: QA adjudicated, fixes applied (packet mode)
+
+The merge-bar QA's two adjudications (engine half and app half, at 8002e2f) listed nine items to
+fix now, one probe, four user decisions and three items to file. Every fix-now item is fixed, each
+pinned; the four decisions (W1, W3, F2, F7) wait on the user and nothing is built for them.
+
+- **C22**: `docs/design/engine.md`'s D1 names Create Branch's writes (`git checkout -q -b`, `git
+  checkout -q -f -b`, beside `git branch`) and its three reads (`git check-ref-format --branch`,
+  the `--numstat` pair, `git ls-files --others --exclude-standard -z`), each citing R11.3 (and R1.2
+  for the count); `docs/systems/git-processes.md`'s tree lists `ops/branch.rs`, `ops/checkout.rs`,
+  `ops/remove_lock.rs` and the three `reads/` files.
+- **C14's carried item** (phase 09's QA item 8):
+  `a_failing_hook_fails_a_commit_the_skip_commits_past_it_and_the_next_runs_it_again` — a third
+  commit, hooks on, fails with the hook's words and leaves `main` where the skip put it.
+- **C2's symlink half**: `a_parent_symlinked_after_the_confirmation_is_never_followed` — `d`
+  replaced by a link to an outside directory whose `a` holds the confirmed bytes after the
+  confirmation; the run ends `ChangedSinceConfirmed { "d/a" }`, the outside file and the link
+  intact. It passed first time: no bug.
+- **C19's tabs half**: `a_commits_diff_hovered_in_either_tab_draws_no_staging_action` (window
+  tests) — a changed row hovered in the Changes tab, and in a file opened in place in the Commit
+  tab, floats no Stage, Unstage or Discard; handing the Changes tab a gesture fails it.
+- **W2**: a destructive write's prompt is copied as the window asks it (`LocalWrite::prompt`, kept on
+  `local_writes::Asked`) and the popover quotes it however the write ended
+  (`a_destructive_write_that_did_not_succeed_still_quotes_its_prompt`: an amend that may have
+  taken effect, a discarding checkout git failed, a removal never run; fails with the asked prompt
+  dropped).
+- **Gate-integrity 1**: `CONFIRMED_HOLDERS` is keyed by file and type, `LocalWrite` alone excused;
+  a second holder in the file, a row whose type holds no token, and a renamed type each fail
+  (self-test cases in `the_confirmation_seal_matchers_catch_the_shapes_they_claim`).
+- **Gate-integrity 3**: `accelerator_pin_violations` — each `pin_violations(&x)` in the table's pin
+  inside an `assert!`/`assert_eq!`/`assert_ne!` (`unasserted_calls`, self-test
+  `the_unasserted_call_matcher_catches_the_shapes_it_claims`), `pin_violations` reading
+  `LOCAL_CHANGES_BARE_KEYS`, and that const declared once, exactly Enter, Backspace and Delete
+  (`the_pin_placement_check_catches_the_shapes_it_claims` gains six shapes). Not expressible, so
+  stated in CLAUDE.md and the gate-integrity reviewer's check 11: an example asserted the wrong way
+  round. R4.8's pin needs no assertion check — its required lines bind the `Absent` pattern.
+- **Gate-integrity 2 and 4**: the destructive-ops reviewer's checks 11 (a callback stashing its
+  token) and 12 (a type holding a `LocalWrite`), linked from CLAUDE.md; `docs/qa-gate.md`'s row
+  names `only_the_ops_module_changes_the_filesystem` and the bounded-helper check; `RemovedKind`
+  in CLAUDE.md's list of a `Consequence`'s parts.
+- **Responsiveness 1 and 2**: CLAUDE.md's UI-thread-exempt arms name `CheckBranchName`,
+  `CheckoutConsequence` and `LockConsequence`; the Show All size callback's scroll-depth work is
+  stated in CLAUDE.md's virtualization residuals and listed to file.
+- **W4**: `ops/stage.rs`'s header says what a wrong unstage leaves once the file was edited since
+  (a dangling blob), behaviour unchanged.
+- **F1**: `docs/systems/history-graph.md`'s long-reflog limit rewritten to the phase-11
+  measurements; the phase-10 carry ticked. **F4**: one "To file at teardown" list in state.md.
+  **F5**: phase 11's QA dismissals, below.
+
+**Probe 7** (Show All's measured height read with `peek` and ignored by `Lines::eq`): with the
+estimate forced to 8 px, `show_all_makes_the_whole_confirmed_prompt_reachable` still passed — the
+adjudication's sign for CONFIRMED — but the control, the measured height forced to 8 px too, fails
+it ("a line at 165 drawn over the prompt ending at 296"), so the measure does reach the list: the
+lines' `VirtualScrollView` lays out again after the prompt measures (instrumented: the size
+callback is asked again with the measured height, the popover not rendered again). A prompt of
+narrow glyphs, whose estimate runs long, sits on its measured height too, and now pins that
+direction (`a_prompt_shown_whole_sits_on_its_measured_height_not_its_estimate`, failing with the
+estimate alone, "git's first line 72 px below a prompt 60 px tall"). Dismissed; no code change. The
+probe's edit was reverted.
+
+**C21, measured on the tip** (`writes_check`, release, warm; each run on a fresh `--no-hardlinks`
+tmpfs clone of the bench at `c999cef531e`, `maintenance.auto=false`, `gc.auto=0`, no commit-graph,
+no alternates, deleted after; the bench untouched — `find .git -newer <marker>` empty and `.git`'s
+mtime still 2026-10-08 20:35:34). The first run measured everything, then died of SIGBUS as it put
+the clone back: the check rewrote the index in place while a worker still had it mapped. The check
+now replaces each file as git does — a sibling written with the file's mode and renamed over it —
+and three clean runs follow. Press to the refreshed lists drawn, median of seven:
+
+| Verb | Bar (ms) | Run 2 | Run 3 | Run 4 |
+|---|---|---|---|---|
+| Stage | 93 | 68.9 | 69.0 | 69.5 |
+| Unstage | 93 | 69.0 | 68.8 | 68.9 |
+| Discard | 76 | 51.3 | 51.4 | 51.4 |
+| Commit | 87 | 52.3 | 69.4 | 69.3 |
+
+Every bar met. The commit's median moved by one status read between runs (52.3 against 69.4 ms,
+52.5 in phase 11), still under its bar. Every frame of every phase under 16.7 ms of UI-thread work;
+the slowest while a hook ran, popover closed / open:
+
+| Hook | Run 2 | Run 3 | Run 4 |
+|---|---|---|---|
+| A line every 50 ms for 2 s | 1.08 / 1.84 | 0.99 / 1.79 | 1.28 / 2.10 |
+| 20,000 lines, each flushed | 4.02 / 4.96 | 6.06 / 5.26 | 4.02 / 5.23 |
+| Five lines of 200 KiB | 4.42 / 1.64 | 4.85 / 2.21 | 4.29 / 1.74 |
+
+The gesture hovered over a 10,000-line diff, slowest frame 0.33-0.46 ms; dragged, 1.15-1.38 ms;
+1,000 files drawn together in 26.4-28.5 ms, slowest frame 9.6-11.8 ms; Show Lost Commits' first
+page 17.5-17.9 ms after the toggle. Responsiveness 3 (the closed popover still subscribing the
+window's root) is within budget on these numbers and listed to file.
+
+**Dismissed at the merge bar** (the adjudications' DISMISSED sections):
+
+- F6, `staging_gesture.rs`'s `format!("Discard {count} {lines}…")`: the floating action's caption,
+  ratified by the user on 2026-10-09; the dialog's text and button come from the `Consequence`.
+- The destructive-ops notes N1 and N2 (git add drops conflict stages; no-verify only from the Git
+  Error dialog): they match git or lose nothing, by the reviewer's own account.
+- The gate-integrity notes (the filesystem matcher reads spellings; `Drop for OutputReceipt`'s
+  responsiveness row): already stated residuals.
+- The dismissal audit: no earlier dismissal failed; #33's reason has narrowed (numstat counts use
+  `+=`) and still holds.
+- Responsiveness 4 (`LockConsequence` queued behind a slow write): the button is drawn blocked
+  while a `git` of Cairn's runs, so the press never waits behind a hook.
+- C11's gap (`main.rs`'s wiring untested): the residual CLAUDE.md already states and accepts.
+- C15's gaps: "failing first" is a history fact, recorded in this log; the three filters are one constructor,
+  pinned by `tests/text_field.rs`.
+- C17's Tab order: the criterion asks that Tab stays inside, which `tab_stays_inside_the_dialog`
+  proves.
+- C24's conflicted diff: drawn as a notice alone, which has no gesture, and
+  `a_conflicted_path_draws_its_notice_and_asks_nothing` fails any route that drew a diff.
+- Probe 7, above.
+
+Not adjudicated: N3 (an intent-to-add file's discard prompted as "emptied"), listed to check.
+
+**Phase 11's QA, dismissed** (recorded here at the merge bar, F5; from that phase's two
+adjudications):
+
+- qa-checklist #2, a fetch progress line's token tail in the title bar: the network lane scrubs
+  every progress line with one `Scrubber` across the whole fetch, so a URL cut across two reads is
+  scrubbed before it leaves the lane; the window's pass is a second.
+- responsiveness #6, the root re-rendered per activity write: bounded by `ACTIVITY_ENTRIES`, only
+  while the popover is open, and not new — the commit box's Git Error dialog read the same state.
+- qa-checklist #5, the popover's deep `PartialEq`: required, since `shown()` builds a new `Rc` each
+  render; bounded by 200 entries, the lines compared by pointer first.
+- responsiveness #7, finished records scrubbed again on the UI thread: a deliberate second pass,
+  once per operation's end over its own records, linear.
+- TC13, no test that command lines are scrubbed: a commit's arguments are fixed literals and a
+  branch's carry no `://`, so the scrub is defence in depth a test decides nothing reachable for.
+- TC14, the commit-graph date route: decided by the fixture's distinct dates; the route deleted is a
+  cost only, measured.
+
 ## 2026-10-09 — phase 11, the user's decisions on the popover (packet mode)
 
 The user took every recommendation (A-N); each is applied and recorded in the PRD (R12.1, R12.4),

@@ -1,13 +1,15 @@
 //! Fork's Create Branch dialog (`docs/prd/staging-and-commit.md` R11.3; the user's decision,
 //! 2026-10-09; evidence `docs/research/staging-and-commit/fork-create-branch-evidence.md`),
-//! opened by "New Branch…" on any commit row: "Create branch at:" the commit — its short id and
-//! subject, read only — a "Branch name:" field, "Check out after create", and, while that is
-//! ticked and the working tree has changes, "Local changes:" with "Don't change" and
-//! "Discard". Its button reads "Create", or "Create and Checkout" while the box is ticked.
+//! opened by "New Branch…" on any commit row, or at `HEAD` by its chord: under the title Fork's
+//! line on folders, then "Create branch at:" the commit — its short id and subject, read only —
+//! a "Branch name:" field, "Check out after create", and, while that is ticked and the working
+//! tree has changes, "Local changes:" with "Don't change" and "Discard". Its button reads
+//! "Create", or "Create and Checkout" while the box is ticked.
 //!
 //! A name is refused inline, before git runs: the button stays disabled until the engine has
-//! answered that git takes the name and no branch has it, and a refusal is said beside the
-//! buttons — Fork's words for a name taken, git's for one it does not take. Return in the name
+//! answered that git takes the name and no branch has it, and a refusal is said in the buttons'
+//! row, left of them, behind Fork's warning triangle — Fork's words for a name taken, git's for
+//! one it does not take. Return in the name
 //! field presses the button when it is enabled; Escape, Cancel and a press outside cancel.
 //!
 //! What the dialog holds is the window's: the name, the box, the choice and the engine's answer
@@ -19,10 +21,13 @@ use cairn_model::Oid;
 use freya::prelude::*;
 
 use crate::check_box::check_box;
+use crate::ref_glyphs::{GLYPH_SIZE, RefGlyph};
 use crate::text_field::text_field;
 
 /// The dialog's title, Fork's.
 pub const CREATE_BRANCH_TITLE: &str = "Create Branch";
+/// The line under the title, Fork's (VSHOT TrackerWin #1394).
+pub const CREATE_BRANCH_SUBTITLE: &str = "Use '/' as a path separator to create folders";
 /// The commit row's caption, Fork's.
 pub const CREATE_BRANCH_AT: &str = "Create branch at:";
 /// The name field's caption, Fork's.
@@ -262,7 +267,40 @@ impl Component for CreateBranchDialog {
         } else {
             CREATE_CAPTION
         };
-        let buttons = PopupButtons::new()
+        // Fork's refusal sits in the buttons' row, left of them, behind its warning triangle
+        // (USHOT TrackerWin #2472, Tracker #1911); the buttons keep PopupButtons' spacing.
+        let said = rect()
+            .horizontal()
+            .content(Content::Flex)
+            .width(Size::flex(1.))
+            .cross_align(Alignment::Center)
+            .spacing(6.)
+            .maybe(self.refusal.is_some(), |said| {
+                said.child(
+                    rect()
+                        .key(RefGlyph::Gone)
+                        .width(Size::px(GLYPH_SIZE))
+                        .height(Size::px(GLYPH_SIZE))
+                        .child(RefGlyph::Gone.draw(colours.warning)),
+                )
+            })
+            .maybe_child(self.refusal.clone().map(|reason| {
+                label()
+                    .text(reason)
+                    .width(Size::flex(1.))
+                    .max_lines(2)
+                    .text_overflow(TextOverflow::Ellipsis)
+                    .font_size(12.)
+                    .color(colours.text_secondary)
+            }));
+        let buttons = rect()
+            .horizontal()
+            .content(Content::Flex)
+            .width(Size::fill())
+            .cross_align(Alignment::Center)
+            .padding(8.)
+            .spacing(4.)
+            .child(said)
             .child(
                 Button::new()
                     .on_press({
@@ -288,15 +326,15 @@ impl Component for CreateBranchDialog {
                     .a11y_modal(true)
                     .a11y_role(AccessibilityRole::Dialog)
                     .child(PopupTitle::new(CREATE_BRANCH_TITLE.to_owned()))
-                    .child(content)
-                    .maybe_child(self.refusal.clone().map(|reason| {
+                    .child(
                         label()
-                            .text(reason)
+                            .text(CREATE_BRANCH_SUBTITLE)
                             .width(Size::fill())
-                            .padding(Gaps::new(0., 16., 0., 16.))
+                            .padding(Gaps::new(0., 8., 4., 8.))
                             .font_size(12.)
-                            .color(colours.text_secondary)
-                    }))
+                            .color(colours.text_secondary),
+                    )
+                    .child(content)
                     .child(buttons),
             )
     }

@@ -14,6 +14,7 @@ use cairn_ui::accelerators::{self, Action, Os};
 use cairn_ui::{HistoryList, PREFETCH_ROWS, ROW_HEIGHT, RowRender};
 use freya::prelude::*;
 use freya_testing::TestingRunner;
+use freya_testing::prelude::{KeyboardEventName, PlatformEvent};
 use layout_before_compaction::AssignerBeforeCompaction;
 
 const WIDTH: f32 = 600.;
@@ -57,6 +58,7 @@ fn rows(range: impl IntoIterator<Item = usize>) -> History {
 struct Reports {
     selected: Rc<RefCell<Vec<RowId>>>,
     reached_end: Rc<RefCell<usize>>,
+    actions: Rc<RefCell<Vec<Action>>>,
 }
 
 #[derive(Clone)]
@@ -65,13 +67,15 @@ struct Fixture {
     selected: State<Option<RowId>>,
 }
 
-/// Each row draws as one label: its subject, prefixed `> ` when the list says it is selected.
+/// Each row draws as one label: its subject, prefixed `> ` when the list says it is selected
+/// and `~ ` when it says the row is lost.
 fn list(reports: Reports) -> impl Fn() -> Element + 'static {
     move || {
         let fixture = use_consume::<Fixture>();
         let mut selected = fixture.selected;
         let on_select = reports.selected.clone();
         let reached_end = reports.reached_end.clone();
+        let actions = reports.actions.clone();
 
         HistoryList::new(fixture.rows, |render: RowRender| {
             let subject = match render.content {
@@ -79,11 +83,13 @@ fn list(reports: Reports) -> impl Fn() -> Element + 'static {
                 RowContent::Stash(stash) => stash.message,
             };
             let marker = if render.selected { "> " } else { "" };
+            let lost = if render.lost { "~ " } else { "" };
             label()
                 .height(Size::px(ROW_HEIGHT))
-                .text(format!("{marker}{subject}"))
+                .text(format!("{marker}{lost}{subject}"))
                 .into()
         })
+        .on_action(move |action| actions.borrow_mut().push(action))
         .selected(*selected.read())
         .on_select(move |id: RowId| {
             on_select.borrow_mut().push(id);
@@ -300,6 +306,97 @@ fn an_accelerators_chord_does_not_move_the_selection() {
         reports.selected.borrow().last(),
         Some(&RowId::Commit(oid(1))),
         "the plain arrow stopped moving the selection"
+    );
+}
+
+/// staging-and-commit R7.3: the history's own chord, Show Lost Commits, is reported to the
+/// list's caller as its action, and moves no selection; a chord of the detail pane's scope is
+/// left alone and reported as nothing. Caught by: the chord left unheard (the phase 06 carry),
+/// heard as an arrow, or another scope's chord reported as the history's.
+#[test]
+fn the_show_lost_commits_chord_is_reported_and_moves_nothing() {
+    let reports = Reports::default();
+    let (mut test, _) = launch(rows(0..100), &reports);
+    press(&mut test, NamedKey::ArrowDown);
+    for action in [
+        Action::ShowLostCommits,
+        Action::NextChange,
+        Action::ShowLostCommits,
+    ] {
+        let chord = accelerators::chords(action, Os::current()).first().unwrap();
+        let (key, code, modifiers) = chord.key_press().unwrap();
+        test.send_event(PlatformEvent::Keyboard {
+            name: KeyboardEventName::KeyDown,
+            key,
+            code,
+            modifiers,
+        });
+        test.sync_and_update();
+    }
+    assert_eq!(
+        reports.actions.borrow().as_slice(),
+        &[Action::ShowLostCommits, Action::ShowLostCommits]
+    );
+    assert_eq!(
+        reports.selected.borrow().as_slice(),
+        &[RowId::Commit(oid(0))],
+        "a chord moved the commit selection"
+    );
+}
+
+/// staging-and-commit R11.1: a row of a commit no ref reaches is drawn lost, and only that row,
+/// from the history's own flag — and drawn as any other once a later page says a ref reaches
+/// it after all. Caught by: the flag not handed to the row, handed to its neighbours, or read
+/// from a stale copy.
+#[test]
+fn a_lost_row_is_drawn_lost_and_no_other() {
+    let mut history = History::new();
+    let mut first = page(0..2);
+    for n in 2..4 {
+        first.push_lost(
+            GraphRow::new(oid(n), Lane::new(1), Vec::new()),
+            PagedCommit {
+                parents: 1,
+                subject: &format!("commit {n}"),
+                author: "A",
+                author_time: 0,
+            },
+        );
+    }
+    hold(&mut history, first);
+    hold(&mut history, page(4..6));
+    let reports = Reports::default();
+    let (mut test, fixture) = launch(history, &reports);
+    let texts = |test: &TestingRunner| -> Vec<String> {
+        built_rows(test).into_iter().map(|(text, _)| text).collect()
+    };
+    assert_eq!(
+        texts(&test),
+        [
+            "commit 0",
+            "commit 1",
+            "~ commit 2",
+            "~ commit 3",
+            "commit 4",
+            "commit 5"
+        ]
+    );
+    let mut rows = fixture.rows;
+    let mut reached = RowsPage::new();
+    reached.reached(3, oid(3));
+    test.run_in(|| hold(&mut rows.write(), reached));
+    test.sync_and_update();
+    test.sync_and_update();
+    assert_eq!(
+        texts(&test),
+        [
+            "commit 0",
+            "commit 1",
+            "~ commit 2",
+            "commit 3",
+            "commit 4",
+            "commit 5"
+        ]
     );
 }
 

@@ -19,6 +19,10 @@ pub const ROW_PADDING: f32 = 10.0;
 
 pub const ROW_FONT_SIZE: f32 = 13.0;
 
+/// How opaque a lost commit's row is drawn: dimmed, as Fork draws a commit Show Lost Commits
+/// adds (staging-and-commit R11.1). Its selection's background is not dimmed.
+pub const LOST_OPACITY: f32 = 0.5;
+
 /// The room a row's chips and subject share in a list `list_width` wide whose graph column
 /// is `lanes` wide: what is left of the row past its padding, the graph and the fixed
 /// columns. What [`crate::ref_chips::row_chips`] lays chips out in.
@@ -40,6 +44,7 @@ pub struct CommitRow {
     selected: bool,
     chips: Vec<Chip>,
     head: bool,
+    lost: bool,
     key: DiffKey,
 }
 
@@ -55,6 +60,7 @@ impl CommitRow {
             selected: false,
             chips: Vec::new(),
             head: false,
+            lost: false,
             key: DiffKey::None,
         }
     }
@@ -76,6 +82,13 @@ impl CommitRow {
         self.head = head;
         self
     }
+
+    /// Whether no ref reaches this commit — Show Lost Commits drew it from a reflog — so the
+    /// row is drawn dimmed ([`LOST_OPACITY`]; staging-and-commit R11.1).
+    pub fn lost(mut self, lost: bool) -> Self {
+        self.lost = lost;
+        self
+    }
 }
 
 impl KeyExt for CommitRow {
@@ -91,7 +104,7 @@ impl ComponentOwned for CommitRow {
         let secondary = colours.read().colors().text_secondary;
         let highlight = colours.read().colors().surface_secondary;
 
-        rect()
+        let row = rect()
             .horizontal()
             // `Size::flex` only shares out leftover space under `Content::Flex`.
             .content(Content::Flex)
@@ -100,7 +113,7 @@ impl ComponentOwned for CommitRow {
             .cross_align(Alignment::center())
             .padding(Gaps::new(0., ROW_PADDING, 0., ROW_PADDING))
             .spacing(COLUMN_GAP)
-            .maybe(self.selected, |el| el.background(highlight))
+            .maybe(self.lost, |el| el.opacity(LOST_OPACITY))
             .child(
                 rect()
                     .horizontal()
@@ -165,7 +178,13 @@ impl ComponentOwned for CommitRow {
                     .max_lines(1)
                     .font_size(ROW_FONT_SIZE)
                     .color(secondary),
-            )
+            );
+        // The selection's background behind the row, so a lost row's dimming leaves it whole.
+        rect()
+            .width(Size::fill())
+            .height(Size::px(ROW_HEIGHT))
+            .maybe(self.selected, |el| el.background(highlight))
+            .child(row)
     }
 
     fn render_key(&self) -> DiffKey {

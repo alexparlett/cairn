@@ -32,6 +32,9 @@ pub struct RowRender {
     pub chips: Vec<Chip>,
     /// Whether this is `HEAD`'s commit, drawn bold.
     pub head: bool,
+    /// Whether no ref reaches the row's commit: Show Lost Commits draws it dimmed
+    /// (staging-and-commit R11.1).
+    pub lost: bool,
     pub selected: bool,
     /// Width of the graph column for the whole list, in lanes.
     pub lanes: usize,
@@ -47,6 +50,7 @@ pub struct HistoryList {
     on_select: EventHandler<RowId>,
     on_extend: EventHandler<(RowId, usize)>,
     on_reach_end: EventHandler<()>,
+    on_action: EventHandler<Action>,
     row: Callback<RowRender, Element>,
     controller: Option<ScrollController>,
     cursor: Option<State<usize>>,
@@ -65,6 +69,7 @@ impl HistoryList {
             on_select: EventHandler::new(|_| {}),
             on_extend: EventHandler::new(|_| {}),
             on_reach_end: EventHandler::new(|()| {}),
+            on_action: EventHandler::new(|_: Action| {}),
             row: Callback::new(row),
             controller: None,
             cursor: None,
@@ -137,6 +142,14 @@ impl HistoryList {
     /// more than once for the same end.
     pub fn on_reach_end(mut self, on_reach_end: impl Into<EventHandler<()>>) -> Self {
         self.on_reach_end = on_reach_end.into();
+        self
+    }
+
+    /// A chord of the history's own scope pressed while the list has focus
+    /// ([`Scope::History`]: Show Lost Commits, staging-and-commit R7.3), resolved through the
+    /// accelerator table. What it does is the caller's.
+    pub fn on_action(mut self, on_action: impl Into<EventHandler<Action>>) -> Self {
+        self.on_action = on_action.into();
         self
     }
 }
@@ -276,8 +289,15 @@ impl HistoryList {
         let rows = self.rows;
         let selected = self.selected;
         let on_select = self.on_select.clone();
+        let on_action = self.on_action.clone();
 
         move |e: Event<KeyboardEventData>| {
+            // The history's own chords: heard here, where its scope is.
+            if let Some(action) = accelerators::resolve_key(&e, Scope::History) {
+                e.stop_propagation();
+                on_action.call(action);
+                return;
+            }
             // A chord is an accelerator's, whoever hears it: Ctrl+↓ is "next change", not
             // "next commit", even while the pane that hears it does not have focus.
             if accelerators::is_chord(&e, &[Scope::History]) {
@@ -392,6 +412,7 @@ fn render_of(row: HistoryRow<'_>, data: &ListData) -> RowRender {
         }),
         chips,
         head: row.labels().is_head(),
+        lost: row.is_lost(),
         selected: data.selected == Some(id) || data.also_selected == Some(id),
         lanes: data.lanes,
     }

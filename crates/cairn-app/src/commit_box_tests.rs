@@ -604,7 +604,8 @@ fn a_failed_hooks_skip_commits_once_without_hooks_and_the_next_runs_them() {
             &submitted,
             Update::WriteOutput {
                 id,
-                line: line.to_owned(),
+                lines: vec![line.to_owned()],
+                receipt: crate::worker::OutputReceipt::none(),
             },
         );
     }
@@ -658,6 +659,60 @@ fn a_failed_hooks_skip_commits_once_without_hooks_and_the_next_runs_them() {
         asked[2].1, "commit \"Next\" skip=false",
         "the skip outlived its commit"
     );
+}
+
+/// R12.2 and phase 09's QA item 11, at the dialog: a hook that prints a remote URL with a token
+/// — whole in one read, split over two reads, and in the output the engine kept — opens the Git
+/// Error dialog with the URLs drawn and no token anywhere in it. Caught by: the streamed lines
+/// or the kept output drawn as git wrote them.
+#[test]
+fn the_git_error_draws_no_token_a_hook_printed() {
+    for streamed in [true, false] {
+        let (mut test, view, submitted) = opened();
+        set(&mut test, view.local.commit.subject, "Push it");
+        click(&mut test, "Commit 1 File");
+        let id = writes(&submitted)[0].0;
+        apply(&mut test, view, &submitted, Update::WriteStarted { id });
+        let kept = "fatal: https://deploy:ghp_SECRET1@example.com/r.git denied\n\
+                    retry at https://deploy:ghp_SEC\nRET2@example.com/again";
+        if streamed {
+            for read in [
+                vec!["fatal: https://deploy:ghp_SECRET1@example.com/r.git denied".to_owned()],
+                vec!["retry at https://deploy:ghp_SEC".to_owned()],
+                vec!["RET2@example.com/again".to_owned()],
+            ] {
+                apply(
+                    &mut test,
+                    view,
+                    &submitted,
+                    Update::WriteOutput {
+                        id,
+                        lines: read,
+                        receipt: crate::worker::OutputReceipt::none(),
+                    },
+                );
+            }
+        }
+        apply(
+            &mut test,
+            view,
+            &submitted,
+            failed(id, "git commit -q -F -", kept),
+        );
+        assert!(drawn(&test, GIT_ERROR_TITLE), "{:?}", labels(&test));
+        assert!(
+            drawn(&test, "fatal: https://example.com/r.git denied"),
+            "streamed={streamed}: {:?}",
+            labels(&test)
+        );
+        let texts = labels(&test);
+        assert!(
+            texts.iter().all(|text| !text.contains("SECRET")
+                && !text.contains("SEC")
+                && !text.contains("RET2")),
+            "streamed={streamed}: a token was drawn: {texts:?}"
+        );
+    }
 }
 
 /// R10.5: the skip is offered only where git would run a hook it skips; with none, the dialog

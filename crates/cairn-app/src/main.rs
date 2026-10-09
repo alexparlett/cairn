@@ -35,6 +35,7 @@ mod row_finder;
 mod selection;
 mod session;
 mod shortcuts;
+mod shown_output;
 mod sidebar_pane;
 mod sidebar_state;
 #[cfg(test)]

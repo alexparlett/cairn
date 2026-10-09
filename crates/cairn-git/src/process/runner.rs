@@ -341,6 +341,26 @@ impl<K: Kind> Invocation<K> {
                 stdout(chunk);
                 Flow::Continue
             },
+            &mut |lines| lines.iter().for_each(|line| progress(line)),
+            None,
+        )
+        .map(|stderr| Output::new(Vec::new(), stderr))
+    }
+
+    /// As [`Invocation::finish`], with the stderr lines each read of the pipe completed handed
+    /// to `progress` together — at most one call a read — rather than one call a line.
+    pub(crate) fn finish_by_read(
+        self,
+        cancel: &impl Cancel,
+        mut stdout: impl FnMut(&[u8]),
+        mut progress: impl FnMut(&[&str]),
+    ) -> Result<Output, Error> {
+        self.drive(
+            cancel,
+            &mut |chunk| {
+                stdout(chunk);
+                Flow::Continue
+            },
             &mut progress,
             None,
         )
@@ -366,7 +386,7 @@ impl<K: Kind> Invocation<K> {
                 splitter.push(chunk, &mut record);
                 Flow::Continue
             },
-            &mut progress,
+            &mut |lines| lines.iter().for_each(|line| progress(line)),
             None,
         );
         if outcome.is_ok() {
@@ -400,7 +420,7 @@ impl<K: Kind> Invocation<K> {
         mut self,
         cancel: &impl Cancel,
         stdout: &mut dyn FnMut(&[u8]) -> Flow,
-        progress: &mut dyn FnMut(&str),
+        progress: &mut dyn FnMut(&[&str]),
         ceiling: Option<K::Ceiling>,
     ) -> Result<String, Error> {
         // A write's ceiling type has no value, so only a read reaches the arm below.
@@ -479,7 +499,7 @@ impl Invocation<Read> {
                 stdout(chunk);
                 Flow::Continue
             },
-            &mut progress,
+            &mut |lines| lines.iter().for_each(|line| progress(line)),
             Some(ceiling),
         )
         .map(|stderr| Output::new(Vec::new(), stderr))
@@ -504,7 +524,7 @@ impl Invocation<Read> {
                 collected.extend_from_slice(chunk);
                 Flow::Continue
             },
-            &mut progress,
+            &mut |lines| lines.iter().for_each(|line| progress(line)),
             Some(ceiling),
         )?;
         Ok(Output::new(collected, stderr))
@@ -551,7 +571,7 @@ impl Driver {
         &mut self,
         cancel: &dyn Fn() -> bool,
         stdout: &mut dyn FnMut(&[u8]) -> Flow,
-        progress: &mut dyn FnMut(&str),
+        progress: &mut dyn FnMut(&[&str]),
     ) -> Ended {
         let group = Arc::clone(&self.group);
         let Some(events) = self.events.as_ref() else {
@@ -583,12 +603,18 @@ impl Driver {
                 }
             }
             Event::Lines(lines) => {
+                // The lines one read completed, handed on together (staging-and-commit phase
+                // 05's QA item 3): a caller that sends them on sends one message a read.
+                let mut said = Vec::new();
                 for line in lines.split('\n') {
                     let text = line.trim_end();
                     if !text.is_empty() {
-                        progress(text);
+                        said.push(text);
                     }
                     tail.push(line);
+                }
+                if !said.is_empty() {
+                    progress(&said);
                 }
             }
         };
@@ -1794,6 +1820,48 @@ mod tests {
             seen,
             ["hanging", "terminated"],
             "the driver never sent the SIGTERM"
+        );
+    }
+
+    /// Phase 05's QA item 3: `finish_by_read` hands on the lines one read completed together —
+    /// a burst of lines written at once is far fewer calls than lines — and every line, in
+    /// order, blank ones left out. Caught by: one call a line, or a line lost between reads.
+    #[test]
+    fn the_lines_of_one_read_are_handed_on_together() {
+        const LINES: usize = 5_000;
+        let stub = stub(&format!(
+            "PATH=/usr/bin:/bin; command -v seq >/dev/null || exit 99; \
+             seq -f 'line %g' 1 {LINES} >&2; echo >&2; echo last >&2"
+        ));
+        let calls = within(DEADLINE, move || {
+            let mut calls = Vec::new();
+            started(&stub)
+                .finish_by_read(
+                    &never(),
+                    |_| {},
+                    |lines| {
+                        calls.push(
+                            lines
+                                .iter()
+                                .map(|line| (*line).to_owned())
+                                .collect::<Vec<_>>(),
+                        );
+                    },
+                )
+                .unwrap();
+            calls
+        });
+        let lines: Vec<String> = calls.iter().flatten().cloned().collect();
+        let expected: Vec<String> = (1..=LINES)
+            .map(|n| format!("line {n}"))
+            .chain(["last".to_owned()])
+            .collect();
+        assert_eq!(lines, expected);
+        assert!(calls.iter().all(|call| !call.is_empty()));
+        assert!(
+            calls.len() < LINES / 10,
+            "{} calls for {LINES} lines",
+            calls.len()
         );
     }
 

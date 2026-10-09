@@ -515,11 +515,11 @@ pub fn write_started(id: OperationId, view: View) {
     state.write().started_now(id);
 }
 
-/// A line of a write's output: kept when it is this box's commit's.
-pub fn write_output(id: OperationId, line: &str, view: View) {
+/// Lines of a write's output: kept when they are this box's commit's.
+pub fn write_output(id: OperationId, lines: &[String], view: View) {
     let mut state = view.local.commit.state;
     if state.peek().asked().is_some_and(|asked| asked.id == id) {
-        state.write().output_arrived(id, line);
+        state.write().output_arrived(id, lines);
     }
 }
 

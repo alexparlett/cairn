@@ -395,16 +395,16 @@ pub fn write_ended(view: View, id: OperationId, ending: &WriteEnding) {
             output,
             ..
         } => {
-            let lines: Vec<String> = output
-                .lines()
-                .map(crate::commit_box_state::strip_ansi)
-                .collect();
+            let lines = crate::shown_output::shown_lines(output);
             let lines = if lines.is_empty() {
                 vec![message.clone()]
             } else {
                 lines
             };
-            (command.clone().unwrap_or_default(), lines)
+            (
+                crate::shown_output::shown_line(&command.clone().unwrap_or_default()),
+                lines,
+            )
         }
         WriteEnding::Stale { message, .. }
         | WriteEnding::Refused { message }

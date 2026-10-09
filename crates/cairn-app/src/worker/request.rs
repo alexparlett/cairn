@@ -710,12 +710,15 @@ pub enum Update {
     WriteStarted {
         id: OperationId,
     },
-    /// A line a running commit or amend's `git` — or a hook it runs — wrote, stdout's and
-    /// stderr's alike, as it arrived (staging-and-commit R6.5): what the Git Error dialog
-    /// (phase 09) and the activity popover (phase 11) draw.
+    /// The lines a running commit or amend's `git` — or a hook it runs — wrote, stdout's and
+    /// stderr's alike, as they arrived (staging-and-commit R6.5): one read of a pipe's, or what
+    /// the lane held while the window was behind (`output_flow`). What the Git Error dialog and
+    /// the activity popover draw; the receipt gives the lines' bytes back to the lane's budget
+    /// as the update is dropped.
     WriteOutput {
         id: OperationId,
-        line: String,
+        lines: Vec<String>,
+        receipt: super::OutputReceipt,
     },
     /// A local write has ended, how, and what the window reads again after it (R4.5): what
     /// its `Invalidated` names — everything, for a commit, whatever its ending, so a refresh

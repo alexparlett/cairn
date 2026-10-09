@@ -94,7 +94,11 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             crate::diff_actions::configured(context, view, worker.submit);
         }
         Update::FetchStarted { remote } => fetch.write().started(remote),
-        Update::FetchProgress { line } => fetch.write().progressed(line),
+        Update::FetchProgress { line } => {
+            fetch
+                .write()
+                .progressed(crate::shown_output::scrubbed(&line));
+        }
         Update::FetchFinished { remote } => {
             if !writes.peek().is_running() {
                 withdraw(&mut prompt, worker);
@@ -116,6 +120,7 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             refresh_after_an_operation(worker);
         }
         Update::FetchFailed { remote, message } => {
+            let message = crate::shown_output::scrubbed(&message);
             if !writes.peek().is_running() {
                 withdraw(&mut prompt, worker);
             }
@@ -128,7 +133,9 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         }
         // The commit box's commit's output, kept for the Git Error dialog (R10.5); the activity
         // popover (phase 11) will draw every write's.
-        Update::WriteOutput { id, line } => crate::commit_box_pane::write_output(id, &line, view),
+        Update::WriteOutput { id, lines, .. } => {
+            crate::commit_box_pane::write_output(id, &lines, view);
+        }
         Update::WriteEnded {
             id,
             ending,
@@ -140,6 +147,8 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             } else {
                 worker.submit
             };
+            // git's words in it scrubbed before anything keeps or draws them (R12.2).
+            let ending = crate::shown_output::shown_ending(ending);
             crate::commit_box_pane::write_ended(id, &ending, view, asking);
             crate::create_branch::write_ended(view, id, &ending);
             writes.write().ended(id, ending);

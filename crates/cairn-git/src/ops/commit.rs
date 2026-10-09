@@ -65,8 +65,10 @@ pub struct CommitWatch<'a> {
     pub cancel: &'a dyn Cancel,
     /// Called once, as git starts, with what ends it from another thread.
     pub running: &'a mut dyn FnMut(CommitCancel),
-    /// Each line git or a hook writes, stdout's and stderr's alike, as it arrives.
-    pub output: &'a mut dyn FnMut(&str),
+    /// The lines git or a hook writes, stdout's and stderr's alike, as they arrive: each call
+    /// the lines one read of one pipe completed, never empty (staging-and-commit phase 05's QA
+    /// item 3 — a caller that sends each call on sends one message a read, not a line).
+    pub output: &'a mut dyn FnMut(&[&str]),
 }
 
 /// Ends a running commit and everything it started — its hooks, a signing program — with
@@ -235,12 +237,25 @@ fn run(
     // Both pipes' lines go to the one output, each on the thread that drives the runner.
     let output = std::cell::RefCell::new(watch.output);
     let mut stdout = Lines::default();
-    let outcome = invocation.finish(
+    // stdout's lines a chunk completed, handed on together.
+    let together = |lines: Vec<String>| {
+        if !lines.is_empty() {
+            let said: Vec<&str> = lines.iter().map(String::as_str).collect();
+            (output.borrow_mut())(&said);
+        }
+    };
+    let outcome = invocation.finish_by_read(
         &CancelSignal::new(),
-        |chunk| stdout.push(chunk, &mut |line| (output.borrow_mut())(line)),
-        |line| (output.borrow_mut())(line),
+        |chunk| {
+            let mut lines = Vec::new();
+            stdout.push(chunk, &mut |line| lines.push(line.to_owned()));
+            together(lines);
+        },
+        |lines| (output.borrow_mut())(lines),
     );
-    stdout.finish(&mut |line| (output.borrow_mut())(line));
+    let mut lines = Vec::new();
+    stdout.finish(&mut |line| lines.push(line.to_owned()));
+    together(lines);
     match outcome {
         Ok(_) => Ok(()),
         Err(Error::GitFailed {
@@ -389,7 +404,7 @@ mod tests {
         let (git, repo) = (stub.git_binary(), stub.repository());
         let message = "a subject never on argv\n\nand a body\n";
         let cancel = CancelSignal::new();
-        let (mut running, mut output) = (|_: CommitCancel| {}, |_: &str| {});
+        let (mut running, mut output) = (|_: CommitCancel| {}, |_: &[&str]| {});
         stub.forget();
         commit(
             &git,

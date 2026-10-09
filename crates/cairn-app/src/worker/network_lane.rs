@@ -204,11 +204,14 @@ pub(super) fn serve_network_lane(
                             remote: remote.clone(),
                         },
                     );
+                    // Scrubbed before it leaves the lane (R12.2): a remote URL with a token
+                    // in it is never drawn.
+                    let mut shown = cairn_model::Scrubber::new();
                     started.finish(|line| {
                         outbox.send(
                             None,
                             Update::FetchProgress {
-                                line: line.to_owned(),
+                                line: shown.line(line),
                             },
                         );
                     })
@@ -237,12 +240,12 @@ fn fetch_outcome(
         },
         Err(error) => Update::FetchFailed {
             remote,
-            message: match prompting {
+            message: crate::shown_output::scrubbed(&match prompting {
                 Ok(()) => error.to_string(),
                 Err(why) => format!(
                     "{error}. Cairn could not have asked for a credential in this session: {why}"
                 ),
-            },
+            }),
         },
     }
 }

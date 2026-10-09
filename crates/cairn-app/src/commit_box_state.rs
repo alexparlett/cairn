@@ -17,6 +17,7 @@ use std::time::Instant;
 use cairn_model::{CommitHooks, Consequence, OperationInProgress};
 use freya::prelude::*;
 
+use crate::shown_output::{ShownLines, shown_line, shown_lines};
 use crate::worker::{CommitReads, OperationId};
 
 /// The most lines of a commit's output the window keeps for the Git Error dialog: the latest,
@@ -101,12 +102,15 @@ pub struct GitError {
 pub struct OutputTail {
     lines: VecDeque<String>,
     bytes: usize,
+    /// Each line as it is drawn, a URL cut at a line's end carried to the next (R12.2).
+    shown: ShownLines,
 }
 
 impl OutputTail {
-    /// One line more, ANSI sequences stripped; the oldest let go of past the bounds.
+    /// One line more, ANSI sequences stripped and every URL's userinfo removed (R12.2); the
+    /// oldest let go of past the bounds.
     pub fn push(&mut self, line: &str) {
-        let line = strip_ansi(line);
+        let line = self.shown.line(line);
         self.bytes += line.len();
         self.lines.push_back(line);
         while self.lines.len() > OUTPUT_LINES || (self.bytes > OUTPUT_BYTES && self.lines.len() > 1)
@@ -120,6 +124,7 @@ impl OutputTail {
     pub fn clear(&mut self) {
         self.lines.clear();
         self.bytes = 0;
+        self.shown = ShownLines::default();
     }
 
     pub fn is_empty(&self) -> bool {
@@ -321,9 +326,11 @@ impl CommitBox {
     }
 
     /// A line of the write `id`'s output: kept when it is this box's commit.
-    pub fn output_arrived(&mut self, id: OperationId, line: &str) {
+    pub fn output_arrived(&mut self, id: OperationId, lines: &[String]) {
         if self.asked.as_ref().is_some_and(|asked| asked.id == id) {
-            self.output.push(line);
+            for line in lines {
+                self.output.push(line);
+            }
         }
     }
 
@@ -351,10 +358,11 @@ impl CommitBox {
     /// exists and it was not already skipped (R10.5).
     pub fn failed(&mut self, failed: AskedCommit, command: String, kept: &str) {
         let lines = if self.output.is_empty() {
-            kept.lines().map(strip_ansi).collect()
+            shown_lines(kept)
         } else {
             self.output.lines()
         };
+        let command = shown_line(&command);
         self.output.clear();
         let serial = self.next_serial();
         self.error = Some(GitError {
@@ -609,8 +617,14 @@ mod tests {
         };
         let mut state = CommitBox::default();
         state.commit_asked(asked(false));
-        state.output_arrived(OperationId::for_tests(3), "\u{1b}[31mlint\u{1b}[0m failed");
-        state.output_arrived(OperationId::for_tests(4), "another write's line");
+        state.output_arrived(
+            OperationId::for_tests(3),
+            &["\u{1b}[31mlint\u{1b}[0m failed".to_owned()],
+        );
+        state.output_arrived(
+            OperationId::for_tests(4),
+            &["another write's line".to_owned()],
+        );
         let failed = state.ended(OperationId::for_tests(3));
         assert_eq!(failed, Some(asked(false)));
         state.failed(asked(false), "git commit -q -F -".to_owned(), "kept");

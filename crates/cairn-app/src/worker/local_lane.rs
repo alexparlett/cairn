@@ -42,7 +42,7 @@
 
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -54,6 +54,7 @@ use cairn_model::{
 };
 
 use super::epoch::{Epoch, Superseded};
+use super::output_flow::{OutputFlow, OutputReceipt};
 use super::pool::Outbox;
 use super::request::{AmendRead, CommitReads, Update};
 
@@ -422,6 +423,8 @@ struct Watch<'a> {
     lane: &'a LaneState,
     id: OperationId,
     outbox: &'a Outbox,
+    /// What the lane's output waiting for the window counts against.
+    budget: &'a Arc<AtomicUsize>,
 }
 
 impl Watch<'_> {
@@ -433,20 +436,20 @@ impl Watch<'_> {
         let mut running = |cancel: ops::CommitCancel| {
             lane.install(id, Box::new(move || cancel.cancel()));
         };
-        let mut output = |line: &str| {
-            outbox.send(
-                None,
-                Update::WriteOutput {
-                    id,
-                    line: line.to_owned(),
-                },
-            );
+        let mut send = |lines: Vec<String>, receipt: OutputReceipt| {
+            outbox.send(None, Update::WriteOutput { id, lines, receipt });
         };
-        commit(CommitWatch {
+        let flow = std::cell::RefCell::new(OutputFlow::new(Arc::clone(self.budget)));
+        let mut output = |said: &[&str]| flow.borrow_mut().read(said, &mut send);
+        let outcome = commit(CommitWatch {
             cancel: &before,
             running: &mut running,
             output: &mut output,
-        })
+        });
+        flow.borrow_mut().flush(&mut |lines, receipt| {
+            outbox.send(None, Update::WriteOutput { id, lines, receipt });
+        });
+        outcome
     }
 }
 
@@ -550,12 +553,14 @@ impl WriteEnding {
             }
             Err(error) => error,
         };
-        let message = match prompting {
+        // Scrubbed before it leaves the lane (R12.2): git's stderr is in the message, and a
+        // remote URL with a token in it is never drawn.
+        let message = crate::shown_output::scrubbed(&match prompting {
             Ok(()) => error.to_string(),
             Err(why) => format!(
                 "{error}. Cairn could not have asked for a credential in this session: {why}"
             ),
-        };
+        });
         let ending = match error {
             Error::ChangedSinceRead { path } | Error::ChangedSinceConfirmed { path } => {
                 Self::Stale { path, message }
@@ -582,8 +587,8 @@ impl WriteEnding {
             } => Self::Failed {
                 message,
                 locks: present_locks,
-                command: Some(format!("git {arguments}")),
-                output: stderr,
+                command: Some(crate::shown_output::scrubbed(&format!("git {arguments}"))),
+                output: crate::shown_output::scrubbed(&stderr),
             },
             Error::DiscardIncomplete {
                 performed, kept, ..
@@ -848,6 +853,7 @@ pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
         serving.outbox.send(None, Update::LocksAtOpen { locks });
     }
     let repo = shared.to_worker();
+    let budget = Arc::new(AtomicUsize::new(0));
     while let Ok(job) = serving.jobs.recv() {
         match job {
             LocalJob::Stop => break,
@@ -866,7 +872,7 @@ pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                     },
                 );
             }
-            LocalJob::Write { id, write } => run(&repo, id, *write, serving),
+            LocalJob::Write { id, write } => run(&repo, id, *write, serving, &budget),
             LocalJob::Consequence {
                 asked,
                 paths,
@@ -1065,7 +1071,13 @@ fn no_token(why: &impl std::fmt::Display) -> String {
 }
 
 /// Runs one write: announced, given its own askpass token, ended with what it did.
-fn run(repo: &Repository, id: OperationId, write: LocalWrite, serving: &Local<'_>) {
+fn run(
+    repo: &Repository,
+    id: OperationId,
+    write: LocalWrite,
+    serving: &Local<'_>,
+    budget: &Arc<AtomicUsize>,
+) {
     let commit = write.is_commit();
     let asked = write.read_again();
     serving.lane.begin(id, commit, || {
@@ -1092,6 +1104,7 @@ fn run(repo: &Repository, id: OperationId, write: LocalWrite, serving: &Local<'_
             lane: serving.lane,
             id,
             outbox: serving.outbox,
+            budget,
         },
     );
     drop(authorised);

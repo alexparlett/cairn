@@ -285,12 +285,22 @@ impl Lines {
             self.tail.drain(..excess);
         }
         self.partial.extend_from_slice(chunk);
-        while let Some(end) = self.partial.iter().position(|byte| *byte == b'\n') {
-            let line: Vec<u8> = self.partial.drain(..=end).collect();
-            let text = String::from_utf8_lossy(&line[..end]);
+        // Each line handed on where it lies, the consumed prefix dropped once per chunk: a
+        // chunk of many short lines costs its length, not its length per line.
+        let mut start = 0;
+        while let Some(offset) = self.partial[start..].iter().position(|byte| *byte == b'\n') {
+            let end = start + offset;
+            let text = String::from_utf8_lossy(&self.partial[start..end]);
             if !text.trim().is_empty() {
                 output(&text);
             }
+            start = end + 1;
+        }
+        self.partial.drain(..start);
+        // A line that never ends is handed on in pieces of the tail's size, so what is kept
+        // of it stays bounded.
+        if self.partial.len() > STDOUT_TAIL {
+            self.finish(output);
         }
     }
 
@@ -351,8 +361,9 @@ mod tests {
     }
 
     /// stdout's lines reach the output as they complete, a last line without its newline
-    /// on finish, blank ones dropped; the tail keeps the end of a long answer. Caught by: a
-    /// line split at a chunk's edge, or the tail growing without bound.
+    /// on finish, blank ones dropped; the tail keeps the end of a long answer, and a line with
+    /// no end is handed on rather than kept. Caught by: a line split at a chunk's edge, or the
+    /// tail or the line in progress growing without bound.
     #[test]
     fn stdout_is_handed_on_by_line_and_its_tail_is_bounded() {
         let mut seen = Vec::new();
@@ -364,7 +375,10 @@ mod tests {
         lines.finish(&mut output);
         assert_eq!(seen, ["On branch main", "nothing to commit", "last"]);
         let mut lines = Lines::default();
-        lines.push(&vec![b'x'; STDOUT_TAIL * 2], &mut |_| {});
+        let mut pieces = 0;
+        lines.push(&vec![b'x'; STDOUT_TAIL * 2], &mut |_| pieces += 1);
+        assert_eq!(pieces, 1, "a line with no end was kept whole");
+        assert!(lines.partial.is_empty());
         lines.push(b"\nend\n", &mut |_| {});
         assert_eq!(lines.tail().len(), STDOUT_TAIL);
         assert!(lines.tail().ends_with("\nend\n"));

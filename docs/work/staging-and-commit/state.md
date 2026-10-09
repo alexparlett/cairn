@@ -19,7 +19,10 @@ Changes acts on files) done in packet mode: QA adjudicated, fixes and the user's
 multi-selection's diffs drawn together) done in packet mode: QA adjudicated, fixes and the
 user's decisions (2026-10-09) applied, full gate green. Phase 09 (the commit box) done in
 packet mode: QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green
-at 18fea48. Phases 10-12 not started.**
+at 18fea48. Phase 10 (Show Lost Commits) built in packet mode, full gate green, QA pending (the
+coordinator runs it); its two views the PRD does not settle — the history's toolbar control and
+`Create Branch Here…`'s menu and name entry — await the user's sign-off, everything under them
+built. Phases 11-12 not started.**
 
 ## Locked decisions
 
@@ -409,6 +412,53 @@ Phase 09 (`docs/systems/local-changes.md`, "The commit box"):
   `*_arrived` and `write_*` hooks `session::apply` calls, `git_error`, `AMEND_TITLE`);
   `local_changes_actions::unstage_target`; `local_changes_tests::{in_lists_reads, click_heading}`.
 
+Phase 10 (`docs/systems/history-graph.md`, "Show Lost Commits"; `docs/systems/staging.md`, the
+verb table):
+
+- **`cairn_git::HistoryRequest::with_lost_commits()`**: a walk from refs also starts from the old
+  and new id of every entry of `HEAD`'s reflog and each local branch's (the snapshot's
+  `RefKind::LocalBranch` refs), read as the walk opens under its first page's cancel
+  (`src/history/reflogs.rs`, git's `show_one_reflog_ent` rules, each log read whole); the
+  commits no ref reaches are marked as the walk goes (`src/history/reach.rs`, `Reach`). A cursor
+  carries the tips read and which the refs named (`Marking`).
+- **`cairn_model`**: `RowsPage::push_lost(graph, commit)`, `RowsPage::reached(row, id)` (a row an
+  earlier page carried as lost, reached after all — clock skew), `RowsPage::is_lost(index)`,
+  `HistoryRow::is_lost()`; the `LOST` bit in `StoredRow::flags` (rows stay 72 bytes);
+  `Chunks::get_mut`.
+- **`cairn_git::ops::create_branch(git, repo, name: &str, commit: Oid, token) -> Result<Performed,
+  Error>`** (`src/ops/branch.rs`): `git --literal-pathspecs branch -- <name> <id>`, invalidates the
+  refs, not destructive; git's refusal is `Error::GitFailed` with its stderr. Reusable by
+  branch-ops' create branch (roadmap section 7).
+- **`cairn_ui`**: `HistoryList::on_action(EventHandler<Action>)` — the history's own scope's chords
+  (`Scope::History`), resolved before anything else in its key handler; `RowRender::lost`;
+  `CommitRow::lost(bool)`, drawn at `LOST_OPACITY` (0.5) with the selection's background behind it.
+- **Worker**: `Request::OpenHistory { rows, lost }`, `Routed::OpenHistory { rows, lost }`,
+  `Page::Open { rows, walk, lost }`, `HistoryLane::replace_walk(walk, lost)` (the lane keeps
+  `lost` for the walk it opens); `LocalWrite::CreateBranch { name, at }` (`what()` "creating branch
+  <name>", reads everything again) — `expect(dead_code)` outside tests until its view lands.
+- **Window**: `View::show_lost: State<bool>` (off as the window opens, kept for the session);
+  `crate::lost_commits::{history_action, toggle}`; `session::reopen_history(rows, progress, lost,
+  submit)` is now `pub` and takes the toggle — a refresh's reopen passes `*view.show_lost.peek()`.
+
+## Carried forward from phase 10 (owned by the phase named)
+
+- **The user, before phase 10's QA closes**: the history's toolbar control for Show Lost Commits
+  (R11.1: "a control in the history's toolbar area" — its place, form, wording and how it shows
+  on) and `Create Branch Here…`'s flow (R11.3: "a name, then" — the menu on a dimmed row, the name
+  entry, its buttons, where git's refusal is drawn, what is selected after) are UI the PRD and
+  Fork's evidence do not settle: phase 10 stopped with NEEDS USER SIGN-OFF, everything under them
+  built (`lost_commits::toggle`, `LocalWrite::CreateBranch`, `ops::create_branch`).
+- **Phase 11**: C21's "Show Lost Commits' first frame recorded" in `window_check`; phase 10
+  measured the engine's first page (`measures_the_first_page_with_show_lost_commits`): +0.2-0.3 ms
+  on the bench clone with three lost commits; 7.95 ms with a 1,000-entry `HEAD` reflog; 49.8 ms
+  with 10,000 entries (git's own `rev-list --reflog`: 57-80 ms) — past twice refs-and-status's
+  first page (7.27 ms) only there, raised with the user as a stopping-rule item.
+- **Residuals, stated in `docs/systems/history-graph.md`'s known limits**: a reflog that changes
+  while no drawn ref moves (`git reflog expire`) is not read again until the next reopen; only
+  `HEAD`'s and the local branches' logs (no remote-tracking, leftover or other worktrees' logs);
+  the toggle's reopen drops the list for the opening sentence, so it must be focused again before
+  the chord is heard again.
+
 ## Carried forward from phase 09 (owned by the phase named)
 
 - **Phase 11**: measure on the bench what the box asks of the local lane — its reads on every
@@ -515,7 +565,9 @@ progress.md's phase 07 entry).
   window a `Confirming`; the force push is a part of the dialog's prompt, never an informational
   component. (The phase 06 carry's "never calls `by_user`, one row" was the coordinator's
   instruction, withdrawn.)
-- **Phase 10**: hear `Scope::History` in the history list's `on_key_down` for Show Lost Commits.
+- **Phase 10 — done**: `Scope::History` heard in the history list's `on_key_down`
+  (`HistoryList::on_action`; `the_show_lost_commits_chord_is_reported_and_moves_nothing`,
+  `the_show_lost_commits_chord_reopens_the_history_with_the_toggle_flipped`).
 
 ## Carried forward from phase 05 (owned by the phase named)
 
@@ -534,7 +586,9 @@ progress.md's phase 07 entry).
   included, and the user deletes them by hand; under `-F` they are committed if left (R10.8 as
   amended). Test that the prefill is the file's text unchanged. Still: `Consequence::needs_force_push()` (phase
   01's note) and rendering the amend prompt's parts separately (phase 01 QA item 21).
-- **Phase 10 — a requirement that blocks phase 10's QA** (the user's decision D, 2026-10-09):
+- **Phase 10 — done** (`show_lost_commits_draws_what_git_reads_from_every_reflog_entry_and_dims_what_no_ref_reaches`,
+  its fixture's amend whose log it created; `with_lost_commits`): a requirement that blocks phase
+  10's QA (the user's decision D, 2026-10-09):
   seed Show Lost Commits' walk from every reflog entry's OLD and NEW ids, for `HEAD` and each
   local branch, as `git rev-list --reflog` and `git fsck` read a reflog (R11.1 and C20 as
   amended). `Reflog::Written` means git appends the amend's entry, whose old id is the replaced
@@ -559,7 +613,7 @@ From phase 05's QA (adjudicated 2026-10-09):
 - **Phase 09 — done** (item 6): `amends_staged_list_unread_is_said_and_the_status_lists_stay`.
 - **Phase 09 — done** (item 8):
   `a_failed_hooks_skip_commits_once_without_hooks_and_the_next_runs_them`.
-- **Phase 10** (item 12, = D, decided by the user 2026-10-09): the reflog seed above.
+- **Phase 10 — done** (item 12, = D, decided by the user 2026-10-09): the reflog seed above.
 - **Phase 11** (item 3): `Update::WriteOutput` is one unbounded update per line
   (`worker/local_lane.rs`'s `Watch::commit`; `session.rs` discards it; `pool.rs`'s
   `Updates::next` drains the whole backlog in one poll) — send one update per pipe chunk
@@ -710,7 +764,9 @@ From phase 02's QA (adjudicated 2026-10-08):
   arm against real git, including a bare repository and a log that exists under
   `false` (done in phase 05: `whether_the_reflog_is_written_is_what_git_then_does`, a bare
   repository through its linked worktree, since a bare one has no work tree to amend in;
-  see phase 05's carry to phase 10). Phase 10 should confirm that what Show Lost Commits walks (C20: the
+  see phase 05's carry to phase 10). Phase 10 — done: `whether_the_reflog_is_written_is_what_git_then_does`
+  now holds every arm to Show Lost Commits' walk (the replaced commit drawn when git logged the
+  amend or a ref reaches it, dimmed exactly when none does). Phase 10 should confirm that what Show Lost Commits walks (C20: the
   reflogs of `HEAD` and each local branch) is the entry this decides.
 - **Item 34a**: R1.2 amended to Fork's wording, lines per modified path and bytes
   per untracked file (L8); no code change.
@@ -728,6 +784,6 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 07 Local Changes actions | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green |
 | 08 diff gesture | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green |
 | 09 commit box | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green at 18fea48 |
-| 10 lost commits | not started |
+| 10 lost commits | built, gate green, QA pending — the toolbar control and `Create Branch Here…`'s view await the user's sign-off |
 | 11 activity and measured | not started |
 | 12 QA | not started |

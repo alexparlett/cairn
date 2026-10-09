@@ -864,6 +864,78 @@ one refresh behind (R10.3 as amended). An unreadable index or no working tree dr
 and an unborn `HEAD`), `a_branchs_counts_are_found_by_its_name`
 (`crates/cairn-app/src/refresh_state.rs`) and the status box's own tests.
 
+### Show Lost Commits
+
+`HistoryRequest::with_lost_commits` (staging-and-commit R11) widens a walk from refs: the
+old and the new id of every entry of `HEAD`'s reflog and of each local branch the snapshot
+lists join the tips, as `git rev-list --reflog` and `git fsck` read a reflog — so the commit
+an amend replaced is found even where the only entry naming it is the amend's own, as its
+old id, in a log the amend created. Each log is read whole (`gix`'s store reads the file
+into a buffer) and parsed by git's own rules (`show_one_reflog_ent`):
+`crates/cairn-git/src/history/reflogs.rs` never uses gix's newest-first reader, which stops
+for good at a line over 4 KiB, nor gix's line parser, which refuses lines git reads; a line
+git skips — a zero time, no `>` before the time, a time zone that is not a sign and four
+digits, a last line with no newline — gives no id, and the lines after it are still read
+(`every_line_git_reads_is_an_entry_and_no_other`). The null id names nothing; an id whose
+object is gone or is not a commit is skipped, as git's walk skips it; the rest join the tips
+after the refs' own, each once. The reflogs are read as the walk opens, under the first
+page's cancel (polled before each log and each id's lookup), and a cursor carries the tips
+read and which of them the refs named, so a cold page resumes the same walk.
+
+Which commits no ref reaches is decided as the walk goes, never by a walk of its own before
+the first page (`crates/cairn-git/src/history/reach.rs`, `Reach`): a commit pulled off the
+walk is reached when a ref names it or a reached commit pulled before it names it as a
+parent; otherwise it is lost so far. The walk yields the newest committed first, so a
+commit's children come off before it — except where a child is dated older than its parent.
+There the parent can come off first, through a lost commit, and be taken for lost; when the
+reached child comes off, the parent and every commit lost only through it are reached after
+all. A row reads whether it is lost when it is carried (`RowsPage::push_lost`), so a row laid
+out meanwhile is carried right; a row a page already carried is named reached by the next
+page (`RowsPage::reached`, its number and its commit), and `History::append` clears it
+(`a_parent_dated_after_its_reached_child_is_not_drawn_as_lost`). What is kept is the walk's
+reached frontier and the commits taken for lost; once every reflog tip not known to be
+reached has come off the walk and none is lost, nothing more can be, and the tracking stops.
+A stash's row is never lost: `refs/stash` reaches it.
+
+The expectations are git's (`crates/cairn-git/tests/lost_commits.rs`), over the whole walk,
+held and cold, at pages of 1, 2, 5 and 64 and windows of 1, 3 and 1,024:
+`show_lost_commits_draws_what_git_reads_from_every_reflog_entry_and_dims_what_no_ref_reaches`
+— the rows are `git rev-list --reflog --branches --remotes --tags HEAD`, and the rows drawn
+lost are `git rev-list <every id the log files hold> --not --branches --remotes --tags HEAD`
+(the ids read from the files by the test, and again by git, `--reflog`), on a fixture with an
+amend whose log it created (the replaced commit an old id only), an amend, a reset-away
+commit, a subject past 4 KiB in the middle of the log, a deleted branch's tip, a commit only
+a lost commit reaches and a tagged commit in the log, never lost; and
+`where_every_reflog_entry_is_reached_the_toggle_draws_the_same_rows` — on a braided history
+every reflog entry of which a ref reaches, every row's identity, lane and edges are the walk's
+without the toggle, so the compact and slim rows' equivalences pinned on that walk hold with
+it on.
+
+**Measured** (`measures_the_first_page_with_show_lost_commits`, `#[ignore]`d; release, warm,
+median of seven, a plain tmpfs clone of rust-lang/rust at `c999cef531e`, no commit-graph):
+with the clone's own reflog and an amend and a reset-away commit made in it, the first page
+of 64 rows from every ref takes 0.2-0.3 ms more with the toggle than without (three rows
+lost; 1,088 commits pulled either way). The open reads one commit per distinct reflog id, as
+git's own `--reflog` does: with 1,000 entries naming commits spread across the history,
+7.95 ms against 2.72 ms without the toggle; with 10,000, 49.8 ms against 2.14 ms, of which
+reading the logs and looking up each id is 8.4 ms and the walk's open, reading each tip's
+date, 39 ms (git's `rev-list --max-count=64 --reflog --branches --remotes --tags HEAD` on
+the same clone: 57-80 ms, against 3-5 ms without `--reflog`). The whole walk, 345,449 rows
+with a deep reflog tip keeping the tracking on to the end: 2,184 ms against 2,079 ms.
+
+Turning it on or off is a reopen (`Request::OpenHistory`'s `lost`, the window's
+`View::show_lost`, kept for the session and off as the window opens): the history lane opens
+the walk as the open asked, and a later reopen — a refresh that finds the refs moved —
+asks as the toggle stands (`an_open_asked_as_show_lost_commits_walks_the_reflog_and_the_next_plain_open_does_not`,
+`the_show_lost_commits_chord_reopens_the_history_with_the_toggle_flipped`). Its chord is
+heard in the history list's scope alone (`HistoryList::on_action`,
+`the_show_lost_commits_chord_is_reported_and_moves_nothing`), and a lost row is drawn at
+half opacity, its selection's background left whole (`CommitRow::lost`, `LOST_OPACITY`;
+`a_lost_row_is_drawn_lost_and_no_other`). The way back to a lost commit is a branch put on
+it — `cairn_git::ops::create_branch`, `git branch -- <name> <commit>` as a local write
+(`docs/systems/staging.md`), whose ending reads everything again, so the reopened history
+draws the commit reached (`a_branch_made_through_the_lane_reads_everything_again_and_a_refusal_says_gits_reason`).
+
 ## What enforces this
 
 | Rule | Twin |
@@ -881,6 +953,7 @@ and an unborn `HEAD`), `a_branchs_counts_are_found_by_its_name`
 | No kept row owns a heap allocation; a history's stores grow in chunks | the `Copy` assertion beside `StoredRow` in `crates/cairn-model/src/history.rs`, `a_kept_row_is_seventy_two_bytes` (`crates/cairn-model/src/history.rs`), `appending_ten_thousand_rows_allocates_per_chunk_never_per_row` and `reading_a_rows_identity_lane_and_changes_allocates_nothing` (`crates/cairn-model/tests/history_allocations.rs`), and the store tests in `crates/cairn-model/src/chunked_store.rs` |
 | Each author is named once; a subject reads back exactly | `a_page_of_new_authors_and_a_page_of_known_ones_both_draw_and_each_is_named_once`, `authors_whose_keys_collide_are_told_apart_by_name`, `an_empty_a_non_ascii_and_a_very_long_subject_read_back_exactly` (`crates/cairn-model/src/history.rs`) |
 | What a history retains counts every store, chunks whole | `what_a_history_retains_counts_every_chunk_whole`, `the_author_index_is_estimated_by_its_buckets` (`crates/cairn-model/src/history.rs`), `a_run_exactly_a_chunk_long_leaves_the_chunk_being_filled_alone` (`crates/cairn-model/src/chunked_store.rs`) |
+| Show Lost Commits draws git's reflog walk, and dims exactly what no ref reaches | `show_lost_commits_draws_what_git_reads_from_every_reflog_entry_and_dims_what_no_ref_reaches`, `a_parent_dated_after_its_reached_child_is_not_drawn_as_lost`, `where_every_reflog_entry_is_reached_the_toggle_draws_the_same_rows` (`crates/cairn-git/tests/lost_commits.rs`), `every_line_git_reads_is_an_entry_and_no_other` (`crates/cairn-git/src/history/reflogs.rs`), `a_lost_row_reads_back_lost_until_a_page_says_a_ref_reaches_it` (`crates/cairn-model/src/history.rs`) |
 | A full history keeps the rows it held and ends the scroll | `a_page_past_the_historys_limit_keeps_the_rows_before_it_and_says_so` (`crates/cairn-model/src/history.rs`), `a_full_history_stops_asking_and_keeps_saying_so` (`crates/cairn-app/src/history_state.rs`) |
 
 The first five live in `crates/cairn-guards/tests/invariants.rs`; the sixth is a
@@ -1008,6 +1081,17 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
   only after the stash's row was placed — the stash commit beyond the look-ahead, or
   past a skewed date — would have a stash's row and a commit's. Neither is measured
   on a real repository with stashes.
+- **Show Lost Commits reads the reflogs when the walk opens, and a reopen is what reads
+  them again.** A reflog that changes while no ref the graph draws moves — `git reflog
+  expire`, an entry pruned — leaves the history drawing what it read until the next reopen.
+  git expires an unreachable commit's entry after `gc.reflogExpireUnreachable` (30 days by
+  default), and from then on the walk no longer has it. Only `HEAD`'s and the local
+  branches' logs are read, where Fork's mode reads every reflog (`git log --all --reflog`):
+  a remote-tracking ref's log, a deleted branch's leftover log and another worktree's
+  `HEAD` are not. The open reads one commit per distinct reflog id, about 4 µs each on
+  rust-lang/rust without a commit-graph (measured above). The toggle replaces the list with
+  the opening sentence until the reopened walk's first page arrives, so the list must be
+  focused again before its chord is heard again.
 - **The first page of a scroll walks `window + limit` commits** before a single
   row can be delivered, because rows leave the assigner only once evicted. Those
   are walk steps, not object reads. Do not shrink the page to make it feel

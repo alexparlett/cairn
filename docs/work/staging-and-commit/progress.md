@@ -3,6 +3,59 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 10, Show Lost Commits (packet mode; stopped for the user's sign-off)
+
+Built on `feature/staging-and-commit` from daa16ec, in packet mode. Everything R11 and C20 settle
+is built; the two views they do not settle — the history's toolbar control (R11.1) and `Create
+Branch Here…`'s menu and name entry (R11.3) — wait on the user (NEEDS USER SIGN-OFF, relayed by
+the coordinator), with everything under them built.
+
+- **The walk (R11.1, R11.2, as amended by decision D)**: `HistoryRequest::with_lost_commits` seeds
+  from the old and the new id of every entry of `HEAD`'s and each local branch's reflog. Each log
+  is read whole through gix's store into a buffer and parsed by git's own `show_one_reflog_ent`
+  rules (`history/reflogs.rs`) — never gix's newest-first reader (stops at a line over 4 KiB) nor
+  gix's line parser (refuses lines git reads). The null id, a missing object and a non-commit are
+  skipped, as `handle_one_reflog_commit` skips them.
+- **The marking**: decided as the walk goes (`history/reach.rs`), never a walk of its own before the
+  first page. Engineering decision: a parent dated after its reached child can come off the walk
+  first, through a lost commit, and be taken for lost; it is corrected when the child comes off —
+  a row not yet carried reads its state when carried, a row carried already is named reached by
+  the next page (`RowsPage::reached`) and `History::append` clears its bit. git's own `rev-list
+  --not` gives the same answer on that fixture (`a_parent_dated_after_its_reached_child_is_not_drawn_as_lost`).
+  The tracking stops once no reflog tip is left unreached and none is lost.
+- **C20's Show Lost Commits half**: `crates/cairn-git/tests/lost_commits.rs`, against `git
+  rev-list <ids from the files> --not --branches --remotes --tags HEAD` and git's own `--reflog`
+  reading — the two agree, so gix's reading never disagreed with git's on any fixture (the stopping
+  rule). Held and cold, pages 1/2/5/64, windows 1/3/1,024; on git 2.56.0, 2.30.9 and 2.32.7.
+- **The amend's reflog and the walk are one entry** (state.md's carry from phase 01 item 13 and
+  phase 05): `whether_the_reflog_is_written_is_what_git_then_does` holds every arm to Show Lost
+  Commits — drawn when git logged the amend or a ref reaches the replaced commit (a detached amend
+  leaves `main` on it), dimmed exactly when none does.
+- **`Create Branch Here…`'s engine and lane (R11.3)**: `ops::create_branch` (`git branch --
+  <name> <id>`), its argv pinned against the recording stub, its effect and git's refusals against
+  real git on every floor; `LocalWrite::CreateBranch` reads everything again however it ends.
+- **The toggle (R11.4, R7.3)**: `View::show_lost`, off as the window opens and kept for the session
+  (engineering default: nothing in Cairn persists past the window); the chord heard on the history
+  list (`HistoryList::on_action`), a reopen like any other; a refresh's reopen walks as the toggle
+  stands. A lost row is drawn at half opacity (`LOST_OPACITY`), its selection's background whole.
+
+**Measured** (release, warm, median of seven; a plain `--no-hardlinks` clone of the bench at
+`c999cef531e` in `/tmp` (tmpfs), no alternates, no commit-graph; deleted after): the first page of
+64 rows from every ref, snapshot read — the clone's own reflog plus an amend and a reset-away commit
+made in it: 7.24 ms off / 7.49 ms on (3 rows lost), and on a later run 2.15 / 2.37 ms (the machine's
+baseline moved between runs; each pair is back to back). A synthetic `HEAD` log of 1,000 entries
+naming commits spread across the history: 2.72 off / 7.95 ms on; of 10,000: 2.14 off / 49.8 ms on —
+8.4 ms reading the logs and looking up each id, 39 ms the walk's open reading each tip's date. git's
+own `rev-list --max-count=64 --reflog --branches --remotes --tags HEAD` there: 57-80 ms (3-5 ms
+without `--reflog`). The whole walk (345,449 rows) with that log: 2,184 ms on / 2,079 ms off.
+Against the stopping rule's bar (twice refs-and-status's 7.27 ms): within it on the bench and with
+1,000 entries; past it only with 10,000 — raised with the user, not a stop of the build.
+
+**Bench**: `find ~/Development/bench/rust/.git -newer <marker>` (marker made at
+2026-10-09T14:20:12+01:00, before the clone) printed nothing before and after, and `-newermt
+2026-10-09T14:20:00` nothing; `.git`'s own mtime stayed 2026-10-08 20:35:34. The clone was made with
+`GIT_OPTIONAL_LOCKS=0`.
+
 ## 2026-10-09 — phase 09 closed: the user's decisions on the four open items
 
 The user decided the four items still open from phase 09 (2026-10-09, relayed by the

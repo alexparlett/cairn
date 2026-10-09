@@ -10,11 +10,11 @@ are the model's (`docs/systems/diff.md`, "Stage, unstage and discard"); how ever
 `git` process is built and run, and the local write lane each verb runs on, is
 `docs/systems/git-processes.md`.
 
-**What exists:** the engine half and the lane. Eight verbs, three `Consequence`
+**What exists:** the engine half and the lane. Nine verbs, three `Consequence`
 builders and the reads they stand on; the application runs every verb on its local
-write lane (`docs/systems/git-processes.md`, "The local write lane"), and no view
-asks for one yet — the views that act are staging-and-commit phases 07-09. So no
-window stages, unstages, discards or commits today.
+write lane (`docs/systems/git-processes.md`, "The local write lane"). Local Changes and
+the commit box ask for the staging, discarding and committing verbs
+(`docs/systems/local-changes.md`); no view asks for `create_branch` yet.
 
 ## The verbs
 
@@ -36,13 +36,15 @@ askpass token where its caller has one.
 | `unstage_files` (`UnstageTo::Commit(id)`) | `reset -q --pathspec-from-file=- --pathspec-file-nul <id>` | the paths | no |
 | `unstage_files` (`UnstageTo::Nothing`) | `rm --cached -f -q --pathspec-from-file=- --pathspec-file-nul` | the paths | no |
 | `discard_files` | `restore --worktree --pathspec-from-file=- --pathspec-file-nul`, then `clean -f -q -- <paths>` | the tracked paths; nothing | yes |
+| `create_branch` | `branch -- <name> <commit>`, the commit by its full id | nothing | no |
 
 Pinned against a `git` that records its argv, environment and stdin and then
 runs the real one (`ops/recording_stub.rs`):
 `the_patch_verbs_run_as_r3_names_them`, `the_file_verbs_run_as_r3_names_them`,
 `unstaging_resets_or_removes_from_a_pathspec_file` (`ops/stage.rs`),
 `a_discard_of_lines_runs_as_r3_names_it` and
-`a_discard_of_files_runs_as_r3_names_it` (`ops/discard.rs`) — each a write's
+`a_discard_of_files_runs_as_r3_names_it` (`ops/discard.rs`) and
+`a_branch_is_created_by_git_branch_after_a_double_dash` (`ops/branch.rs`) — each a write's
 environment with no read pin and no `GIT_LITERAL_PATHSPECS` (C9). What each does
 is pinned against real git on the host's git and, through
 `scripts/git-floor.sh`, on 2.30.9 and 2.32.7: C3 runs every case of
@@ -80,6 +82,16 @@ is pinned against real git on the host's git and, through
   row's staged diff is the rename, and its lines go back at the new path, the
   source's entry untouched (`a_rename_sources_row_unstages_its_lines_at_the_new_path`).
 - **Staging a conflicted path** is `git add`, which marks it resolved (R3.11).
+- **A branch put on a commit** — `Create Branch Here…` on a commit Show Lost Commits
+  draws (R11.3; `docs/systems/history-graph.md`, "Show Lost Commits") — is `git branch`
+  with the name after `--`, so a name beginning with `-` is a name git judges, never an
+  option. git refuses a name that is taken or not a valid branch name, and its words are
+  the failure's (`Error::GitFailed`'s stderr), first line for first line what the user's own
+  `git branch` says, nothing written; the branch it makes is the one `git branch` makes,
+  logged with the same message (`create_branch_here_makes_the_branch_git_branch_makes`,
+  `a_name_git_refuses_is_refused_with_its_reason_and_nothing_written`,
+  `crates/cairn-git/tests/diff/branch.rs`). It invalidates the refs, so the lane reads
+  everything again after it, however it ended.
 - **Every path is literal**: a file named `*.txt` is staged alone, and `git clean`
   of `st*` leaves `stx` (`every_path_is_read_literally_never_as_a_pattern`).
 - **Every verb is silent on success**, so one left running by a second close, its
@@ -343,11 +355,15 @@ graph, which the walk does not read so it can be cancelled at every object).
   does.
 - `Reflog::Written` says git will append the amend's entry, whose old id is the
   replaced commit; with a log the amend itself created, that old id is the only place
-  the replaced commit is named. Show Lost Commits does not exist yet; it is to seed
-  from every entry's old and new ids, as `git rev-list --reflog` does
-  (`docs/prd/staging-and-commit.md` R11.1), which is what keeps the prompt's "The old
-  commit stays in Show Lost Commits." true. git expires an unreachable commit's entry
-  after `gc.reflogExpireUnreachable` (30 days by default).
+  the replaced commit is named. Show Lost Commits seeds from every entry's old and new
+  ids, as `git rev-list --reflog` does (`docs/systems/history-graph.md`, "Show Lost
+  Commits"), reading the same two logs the check above looks for — `HEAD`'s in the
+  worktree's git directory, the branch's in the common one — so the prompt's "The old
+  commit stays in Show Lost Commits." holds exactly when git logs the amend: on every arm
+  of `whether_the_reflog_is_written_is_what_git_then_does` the replaced commit is drawn
+  when git logged the move or a ref still reaches it, and dimmed exactly when none does. git
+  expires an unreachable commit's entry after `gc.reflogExpireUnreachable` (30 days by
+  default), and from then on Show Lost Commits no longer has it.
 - In a partial clone, amend's staged list pairs a staged inexact rename against
   `HEAD^` by comparing blobs, and a blob only the promisor holds is never fetched by
   the read: on git 2.44 and later the whole list fails (`Error::GitFailed`, nothing

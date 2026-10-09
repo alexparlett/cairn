@@ -1099,8 +1099,12 @@ Every write to the index, the working tree and a local ref runs on the
 `cairn-local` thread (`worker/local_lane.rs`, spawned by `Threads::start`;
 staging-and-commit R4, `docs/design/concurrency.md`, "Operations"): the verbs of
 `docs/systems/staging.md` — `stage_lines`, `unstage_lines`, `stage_files`,
-`unstage_files`, `discard_lines`, `discard_files`, `commit` and `amend`, each a
-`LocalWrite`, a discard and an amend carrying the `Confirmed` the user gave it.
+`unstage_files`, `discard_lines`, `discard_files`, `commit`, `amend` and
+`create_branch`, each a `LocalWrite`, a discard and an amend carrying the `Confirmed` the
+user gave it. A branch made (`LocalWrite::CreateBranch`) reads everything again however it
+ends, as a commit does, since it moves the refs
+(`a_branch_made_through_the_lane_reads_everything_again_and_a_refusal_says_gits_reason`);
+no view asks it yet.
 The tests below drive real `git commit`s, held in their `pre-commit` hook for as
 long as a test says, and wait on the answer to a later request — the repository
 thread's to `Request::CommandLog` — or on a mark a held process wrote, never on a

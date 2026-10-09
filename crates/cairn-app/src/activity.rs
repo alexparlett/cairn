@@ -8,9 +8,16 @@
 //! streams (R10.4: a hook's lines while it runs), what it ran (`Update::OperationRan`, the
 //! command log's records of its own `git`, scrubbed on the lane), and its ending; a fetch's the
 //! same. Every text of git's kept here is scrubbed of a URL's userinfo (R12.2) — on the lane,
-//! and again as it is kept, so no entry can draw a token whoever built the update. On the UI
-//! thread: each update costs what it carries, and the popover's entries are built only while it
-//! is open, from lines kept shared.
+//! and again as it is kept, so no entry can draw a token whoever built the update. Each line is
+//! cut, as the diff view cuts one, at `cairn_model::LINE_CUT_BYTES` on a character with the diff
+//! view's marker after it (`cairn_ui::cut_marker`), so no row holds or shapes a 256 KiB piece.
+//!
+//! On the UI thread, each update costs what it carries: an entry counts its bytes as lines go in
+//! and out, the log keeps their total, and the bound lets go of the oldest entries' lines — and,
+//! for the newest alone over the budget, its oldest lines — without walking any line; an
+//! entry's drawn lines are built only when the open popover asks for the entry selected, and
+//! kept until a line changes. What a running operation wrote is let go of once its commands'
+//! records arrive, since those are drawn in its place.
 
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -99,12 +106,14 @@ pub struct Activity {
     /// `Remove index.lock…`'s offer, from what the operation ran.
     pub lock: Option<Rc<Consequence>>,
     /// Its `git` commands and what they said, once they are over.
-    commands: Vec<ActivityLine>,
-    /// What it wrote as it ran, while it runs.
+    commands: VecDeque<ActivityLine>,
+    /// What it wrote as it ran, while it runs: let go of once `commands` arrive.
     streamed: VecDeque<String>,
     shown: ShownLines,
-    /// The lines drawn, built once each time they change.
-    lines: Rc<Vec<ActivityLine>>,
+    /// The bytes of `commands` and `streamed`, counted as lines go in and out.
+    bytes: usize,
+    /// The lines drawn, built when the open popover asks and kept until a line changes.
+    drawn: std::cell::RefCell<Option<Rc<Vec<ActivityLine>>>>,
 }
 
 impl Activity {
@@ -120,27 +129,59 @@ impl Activity {
             replaces,
             cancellable,
             lock: None,
-            commands: Vec::new(),
+            commands: VecDeque::new(),
             streamed: VecDeque::new(),
             shown: ShownLines::default(),
-            lines: Rc::new(Vec::new()),
+            bytes: 0,
+            drawn: std::cell::RefCell::new(None),
         }
     }
 
-    /// The bytes its lines hold.
-    fn bytes(&self) -> usize {
-        self.lines.iter().map(line_bytes).sum()
+    /// The lines drawn: its commands once they are in, what it wrote while it runs. Built once
+    /// each time a line changes, when the open popover asks.
+    pub fn lines(&self) -> Rc<Vec<ActivityLine>> {
+        let mut drawn = self.drawn.borrow_mut();
+        if let Some(lines) = drawn.as_ref() {
+            return Rc::clone(lines);
+        }
+        let lines: Vec<ActivityLine> = if self.commands.is_empty() {
+            self.streamed
+                .iter()
+                .cloned()
+                .map(ActivityLine::Output)
+                .collect()
+        } else {
+            self.commands.iter().cloned().collect()
+        };
+        let lines = Rc::new(lines);
+        *drawn = Some(Rc::clone(&lines));
+        lines
     }
 
-    fn redraw(&mut self) {
-        let mut lines: Vec<ActivityLine> = self.commands.clone();
-        // While it runs, what it has written so far; once its commands are in, theirs.
-        if self.commands.is_empty() {
-            lines.extend(self.streamed.iter().cloned().map(ActivityLine::Output));
-        }
-        let over = lines.len().saturating_sub(ACTIVITY_LINES);
-        lines.drain(..over);
-        self.lines = Rc::new(lines);
+    /// A line changed: what is drawn is built again when next asked.
+    fn changed(&mut self) {
+        *self.drawn.get_mut() = None;
+    }
+
+    /// Lets go of its oldest line — what it wrote while it runs, else its commands' — and
+    /// answers the bytes freed, or `None` when it holds none.
+    fn let_go_of_oldest(&mut self) -> Option<usize> {
+        let freed = match self.streamed.pop_front() {
+            Some(line) => line.len(),
+            None => line_bytes(&self.commands.pop_front()?),
+        };
+        self.bytes -= freed;
+        self.changed();
+        Some(freed)
+    }
+
+    /// Lets go of every line, answering the bytes freed.
+    fn let_go_of_lines(&mut self) -> usize {
+        let freed = std::mem::take(&mut self.bytes);
+        self.commands.clear();
+        self.streamed.clear();
+        self.changed();
+        freed
     }
 
     fn end(&mut self, outcome: Outcome) {
@@ -162,10 +203,27 @@ fn line_bytes(line: &ActivityLine) -> usize {
     }
 }
 
+/// `line` as an entry keeps it: at most `cairn_model::LINE_CUT_BYTES`, ending on a character,
+/// with the diff view's marker saying how much more there was.
+fn cut_line(line: String) -> String {
+    let (drawn, cut) = cairn_model::drawn_bytes(line.as_bytes());
+    if !cut {
+        return line;
+    }
+    let kept = drawn.len();
+    let not_drawn = line.len() - kept;
+    let mut shown = line;
+    shown.truncate(kept);
+    shown.push_str(&cairn_ui::cut_marker(not_drawn));
+    shown
+}
+
 /// The session's operations, oldest first, and the popover's own state.
 #[derive(Debug, Default)]
 pub struct ActivityLog {
     entries: VecDeque<Activity>,
+    /// The bytes every entry's lines hold together.
+    bytes: usize,
     fetches: u64,
     /// The fetch running, if any.
     fetching: Option<u64>,
@@ -209,22 +267,30 @@ impl ActivityLog {
     fn push(&mut self, entry: Activity) {
         self.entries.push_back(entry);
         while self.entries.len() > ACTIVITY_ENTRIES {
-            self.entries.pop_front();
+            if let Some(oldest) = self.entries.pop_front() {
+                self.bytes -= oldest.bytes;
+            }
         }
     }
 
-    /// Keeps every entry's lines together under [`ACTIVITY_BYTES`]: the oldest entries' lines
-    /// let go of first.
+    /// Keeps every entry's lines together under [`ACTIVITY_BYTES`], reading counts alone: the
+    /// oldest entries' lines let go of first, and — when the newest alone is over — its oldest
+    /// lines, so a running operation keeps its latest output.
     fn bound(&mut self) {
-        let mut total: usize = self.entries.iter().map(Activity::bytes).sum();
-        for entry in &mut self.entries {
-            if total <= ACTIVITY_BYTES {
-                break;
+        let newest = self.entries.len().saturating_sub(1);
+        for entry in self.entries.iter_mut().take(newest) {
+            if self.bytes <= ACTIVITY_BYTES {
+                return;
             }
-            total -= entry.bytes();
-            entry.commands.clear();
-            entry.streamed.clear();
-            entry.lines = Rc::new(Vec::new());
+            self.bytes -= entry.let_go_of_lines();
+        }
+        if let Some(entry) = self.entries.back_mut() {
+            while self.bytes > ACTIVITY_BYTES {
+                let Some(freed) = entry.let_go_of_oldest() else {
+                    break;
+                };
+                self.bytes -= freed;
+            }
         }
     }
 
@@ -232,7 +298,7 @@ impl ActivityLog {
     pub fn write_started(&mut self, asked: &Asked) {
         self.push(Activity::new(
             ActivityKey::Write(asked.id),
-            crate::status_text::capitalised(&asked.what),
+            asked.name.clone(),
             asked.replaces,
             asked.cancellable,
         ));
@@ -244,14 +310,24 @@ impl ActivityLog {
         let Some(entry) = self.find(key) else {
             return;
         };
+        // Once its commands are in they are drawn, and a late line is not.
+        if !entry.commands.is_empty() {
+            return;
+        }
+        let before = entry.bytes;
         for line in lines {
-            let line = entry.shown.line(line);
+            let line = cut_line(entry.shown.line(line));
+            entry.bytes += line.len();
             entry.streamed.push_back(line);
         }
         while entry.streamed.len() > ACTIVITY_LINES {
-            entry.streamed.pop_front();
+            if let Some(dropped) = entry.streamed.pop_front() {
+                entry.bytes -= dropped.len();
+            }
         }
-        entry.redraw();
+        entry.changed();
+        let after = entry.bytes;
+        self.bytes = self.bytes + after - before;
         self.bound();
     }
 
@@ -260,9 +336,17 @@ impl ActivityLog {
         let Some(entry) = self.find(key) else {
             return;
         };
-        entry.commands = commands.iter().flat_map(command_lines).collect();
+        let freed = entry.let_go_of_lines();
+        let mut kept: VecDeque<ActivityLine> = commands.iter().flat_map(command_lines).collect();
+        while kept.len() > ACTIVITY_LINES {
+            kept.pop_front();
+        }
+        entry.bytes = kept.iter().map(line_bytes).sum();
+        entry.commands = kept;
         entry.lock = lock.map(Rc::new);
-        entry.redraw();
+        entry.changed();
+        let added = entry.bytes;
+        self.bytes = self.bytes + added - freed;
         self.bound();
     }
 
@@ -331,11 +415,24 @@ impl ActivityLog {
     /// What the window's popover draws: every entry, newest first, and the place of the one
     /// selected — the newest when none is.
     pub fn shown(&self) -> (Rc<Vec<ActivityEntry>>, usize) {
-        let entries: Vec<ActivityEntry> = self.newest_first().map(entry_of).collect();
         let selected = self
             .selected
             .and_then(|key| self.newest_first().position(|entry| entry.key == key))
             .unwrap_or(0);
+        // The selected entry's lines alone: the rest are drawn by name and status.
+        let none: Rc<Vec<ActivityLine>> = Rc::new(Vec::new());
+        let entries: Vec<ActivityEntry> = self
+            .newest_first()
+            .enumerate()
+            .map(|(place, activity)| {
+                let lines = if place == selected {
+                    activity.lines()
+                } else {
+                    Rc::clone(&none)
+                };
+                entry_of(activity, lines)
+            })
+            .collect();
         (Rc::new(entries), selected)
     }
 
@@ -348,14 +445,14 @@ impl ActivityLog {
 /// A record of the command log as the popover draws it: `$ git <arguments>`, then what it
 /// wrote to stderr, and how it ended when that was not a clean exit.
 fn command_lines(record: &CommandRecord) -> Vec<ActivityLine> {
-    let mut lines = vec![ActivityLine::Ran(shown_line(&format!(
+    let mut lines = vec![ActivityLine::Ran(cut_line(shown_line(&format!(
         "$ git {}",
         record.arguments.join(" ")
-    )))];
+    ))))];
     lines.extend(
         shown_lines(&record.stderr)
             .into_iter()
-            .map(ActivityLine::Output),
+            .map(|line| ActivityLine::Output(cut_line(line))),
     );
     let ended = match record.exit {
         CommandExit::Code(0) if !record.cancelled => None,
@@ -401,7 +498,7 @@ pub fn took_text(took: Duration) -> String {
     }
 }
 
-fn entry_of(activity: &Activity) -> ActivityEntry {
+fn entry_of(activity: &Activity, lines: Rc<Vec<ActivityLine>>) -> ActivityEntry {
     ActivityEntry {
         name: activity.name.clone(),
         status: activity.outcome.status().to_owned(),
@@ -412,7 +509,7 @@ fn entry_of(activity: &Activity) -> ActivityEntry {
         replaced: activity.replaced(),
         lock: activity.lock.clone(),
         cancellable: activity.cancellable,
-        lines: activity.lines.clone(),
+        lines,
     }
 }
 
@@ -510,6 +607,7 @@ mod tests {
         Asked {
             id,
             what: what.to_owned(),
+            name: crate::status_text::capitalised(what),
             noun: "the commit",
             replaces,
             cancellable: true,
@@ -691,20 +789,130 @@ mod tests {
                 ACTIVITY_LINES + 6
             )))
         );
-        let wide = "x".repeat(300 * 1024);
-        for n in 0..20 {
-            let id = OperationId::for_tests(20_000 + n);
+    }
+
+    fn held(log: &ActivityLog) -> usize {
+        log.newest_first()
+            .map(|entry| entry.lines().iter().map(line_bytes).sum::<usize>())
+            .sum()
+    }
+
+    /// Phase 11's QA (app item 1): what is held stays under [`ACTIVITY_BYTES`] across many
+    /// operations — their streamed output let go of once their commands arrive, never held
+    /// uncounted beside them — and the count the log keeps is what its entries hold. Caught by:
+    /// `streamed` kept after `ran`, or a count that drifts from the lines.
+    #[test]
+    fn what_is_held_stays_under_the_bound_across_many_operations() {
+        let mut log = ActivityLog::default();
+        let wide: Vec<String> = (0..1_000)
+            .map(|n| format!("{n:05}{}", "w".repeat(1_500)))
+            .collect();
+        for n in 0..40 {
+            let id = OperationId::for_tests(n);
             log.write_started(&asked(id, "commit", None));
-            log.output(ActivityKey::Write(id), std::slice::from_ref(&wide));
+            log.output(ActivityKey::Write(id), &wide);
+            log.ran(
+                ActivityKey::Write(id),
+                &[record(
+                    &["commit"],
+                    &wide[..200].join("\n"),
+                    CommandExit::Code(1),
+                )],
+                None,
+            );
+            log.write_ended(id, &done(None));
+            assert!(
+                log.newest_first().all(|entry| entry.streamed.is_empty()),
+                "what a finished operation wrote was kept beside its commands"
+            );
         }
-        let held: usize = log.newest_first().map(Activity::bytes).sum();
-        assert!(held <= ACTIVITY_BYTES, "{held} bytes held");
-        let (entries, _) = log.shown();
+        assert!(log.bytes <= ACTIVITY_BYTES, "{} bytes held", log.bytes);
         assert_eq!(
-            entries[0].lines.len(),
-            1,
-            "the newest operation's lines were let go of"
+            log.bytes,
+            held(&log),
+            "the count drifted from the lines held"
         );
+        assert_eq!(
+            log.newest_first().map(|entry| entry.bytes).sum::<usize>(),
+            log.bytes
+        );
+    }
+
+    /// Phase 11's QA (app item 1): a running operation alone over the budget keeps its latest
+    /// lines, its oldest let go of — never its whole output. Caught by: a bound that clears the
+    /// newest entry as it clears the old ones.
+    #[test]
+    fn a_running_operation_over_the_budget_keeps_its_latest_lines() {
+        let mut log = ActivityLog::default();
+        let id = OperationId::for_tests(1);
+        log.write_started(&asked(id, "commit", None));
+        for n in 0..4_000 {
+            let line = format!("{n:05}{}", "x".repeat(1_500));
+            log.output(ActivityKey::Write(id), std::slice::from_ref(&line));
+        }
+        assert!(log.bytes <= ACTIVITY_BYTES, "{}", log.bytes);
+        let (entries, _) = log.shown();
+        let lines = &entries[0].lines;
+        assert!(lines.len() > 1_000, "{} lines kept", lines.len());
+        assert!(
+            matches!(lines.last(), Some(ActivityLine::Output(last)) if last.starts_with("03999")),
+            "the latest line was let go of"
+        );
+    }
+
+    /// Phase 11's QA (app item 1): with the popover closed, thirty thousand one-line outputs
+    /// build no drawn lines — each costs the line it carries — and the open popover builds the
+    /// selected entry's alone, once, until a line changes. Caught by: lines rebuilt per update.
+    #[test]
+    fn closed_the_popover_builds_no_lines() {
+        let mut log = ActivityLog::default();
+        let (older, newer) = (OperationId::for_tests(1), OperationId::for_tests(2));
+        log.write_started(&asked(older, "commit", None));
+        log.write_started(&asked(newer, "commit", None));
+        for n in 0..30_000 {
+            log.output(ActivityKey::Write(newer), &[format!("line {n}")]);
+        }
+        assert!(
+            log.newest_first()
+                .all(|entry| entry.drawn.borrow().is_none())
+        );
+        let (entries, _) = log.shown();
+        assert_eq!(entries[0].lines.len(), ACTIVITY_LINES);
+        assert!(
+            entries[1].lines.is_empty(),
+            "an entry not selected built its lines"
+        );
+        let built = log
+            .newest_first()
+            .next()
+            .and_then(|entry| entry.drawn.borrow().clone());
+        let (again, _) = log.shown();
+        assert!(
+            built.is_some_and(|built| Rc::ptr_eq(&built, &again[0].lines)),
+            "the lines were built again with nothing changed"
+        );
+    }
+
+    /// Phase 11's QA (app item 3): a line past the long-line limit is kept cut on a character,
+    /// with the diff view's marker saying how much more there was. Caught by: a 256 KiB piece
+    /// kept, or cut inside a character.
+    #[test]
+    fn a_long_line_is_kept_cut_with_the_diff_views_marker() {
+        let mut log = ActivityLog::default();
+        let id = OperationId::for_tests(1);
+        log.write_started(&asked(id, "commit", None));
+        let long = format!("x{}", "é".repeat(128 * 1024));
+        log.output(ActivityKey::Write(id), std::slice::from_ref(&long));
+        let (entries, _) = log.shown();
+        let Some(ActivityLine::Output(kept)) = entries[0].lines.first() else {
+            panic!("{:?}", entries[0].lines);
+        };
+        let (drawn, _) = cairn_model::drawn_bytes(long.as_bytes());
+        let marker = cairn_ui::cut_marker(long.len() - drawn.len());
+        assert!(kept.ends_with(&marker), "{}", &kept[kept.len() - 40..]);
+        assert_eq!(kept.len(), drawn.len() + marker.len());
+        assert!(kept.len() <= cairn_model::LINE_CUT_BYTES + marker.len());
+        assert_eq!(cut_line("short".to_owned()), "short");
     }
 
     /// R12.4's offer is kept with what the operation ran, and a command that did not exit

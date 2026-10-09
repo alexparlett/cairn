@@ -172,7 +172,7 @@ fn the_status_box_opens_the_operations_with_their_git_and_no_token() {
     );
     open(&mut test);
     for text in [
-        "Staging 1 file",
+        "Stage 1 file",
         "$ git --literal-pathspecs add https://example.com/r",
         "hint: https://example.com/r refused",
         "(exit status 1)",
@@ -238,7 +238,7 @@ fn remove_index_lock_is_offered_where_the_lane_offered_it_and_asks_through_its_c
     open(&mut test);
     assert!(drawn(&test, REMOVE_LOCK_CAPTION), "{:?}", labels(&test));
     // The older entry, selected, offers nothing; opened again, the newest is drawn.
-    click_lowest(&mut test, "Staging 1 file");
+    click_lowest(&mut test, "Stage 1 file");
     assert!(
         !drawn(&test, REMOVE_LOCK_CAPTION),
         "the older entry offered it"
@@ -300,6 +300,7 @@ fn an_amends_way_back_finds_the_replaced_commit_in_show_lost_commits() {
         activity.write().write_started(&Asked {
             id,
             what: "amend".to_owned(),
+            name: "Amend".to_owned(),
             noun: "the amend",
             replaces: Some(replaced),
             cancellable: true,

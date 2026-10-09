@@ -18,6 +18,8 @@ const UNKNOWN_WRITE: &str = "another write";
 pub struct Asked {
     pub id: OperationId,
     pub what: String,
+    /// What the activity popover calls it, in Fork's imperative form (`LocalWrite::name`).
+    pub name: String,
     /// What a wait behind it calls it: "the commit", "staging" (`LocalWrite::noun`).
     pub noun: &'static str,
     /// The commit it replaces — an amend's — which the activity popover points back to.
@@ -47,6 +49,7 @@ impl LocalWrites {
         self.queued.push_back(Asked {
             id,
             what: write.what(),
+            name: write.name(),
             noun: write.noun(),
             replaces: write.replaces(),
             cancellable: write.is_cancellable(),
@@ -59,6 +62,7 @@ impl LocalWrites {
         let asked = at.and_then(|at| self.queued.remove(at)).unwrap_or(Asked {
             id,
             what: "a write".to_owned(),
+            name: "A write".to_owned(),
             noun: UNKNOWN_WRITE,
             replaces: None,
             cancellable: false,
@@ -76,6 +80,7 @@ impl LocalWrites {
                 at.and_then(|at| self.queued.remove(at)).unwrap_or(Asked {
                     id,
                     what: "a write".to_owned(),
+                    name: "A write".to_owned(),
                     noun: UNKNOWN_WRITE,
                     replaces: None,
                     cancellable: false,

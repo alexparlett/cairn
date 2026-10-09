@@ -186,13 +186,29 @@ impl DiffState {
                     let comparable = replaced.list == wanted.list
                         && replaced.lists == wanted.lists
                         && replaced.query.options == wanted.options;
+                    // Each looked up once, in proportion to the selection, never per path
+                    // shown (phase 11's QA, app item 2).
+                    let wanted_entries: std::collections::HashSet<(
+                        &RepoPath,
+                        Option<WorkingSide>,
+                    )> = if comparable {
+                        wanted
+                            .entries
+                            .iter()
+                            .map(|(path, side)| (path, *side))
+                            .collect()
+                    } else {
+                        std::collections::HashSet::new()
+                    };
+                    let unread: std::collections::HashSet<usize> =
+                        replaced.unread.iter().copied().collect();
                     for (index, opened) in replaced.shown.take_all() {
                         let entry = replaced.entries.get(index);
                         let carry = comparable
                             && matches!(opened, Opened::Shown(_))
-                            && !replaced.unread.contains(&index)
+                            && !unread.contains(&index)
                             && entry.is_some_and(|(path, side)| {
-                                wanted.entries.contains(&(path.clone(), *side))
+                                wanted_entries.contains(&(path, *side))
                             });
                         match entry {
                             Some((path, _)) if carry => {
@@ -598,6 +614,49 @@ mod tests {
                 .any(|request| matches!(request, Request::Retire(_)))
         );
         assert_eq!(answered_together(&state).get(0), Some(&Opened::Reading));
+    }
+
+    /// Phase 11's QA (app item 2): at 50,000 paths selected and 5,000 diffs drawn, a path added
+    /// at the front carries every diff drawn to its new place, in one pass with each lookup a
+    /// hash. Caught by: a carry lost or misplaced at this size (the linear scans it replaced cost
+    /// some 38 ms a selection change here).
+    #[test]
+    fn fifty_thousand_selected_carry_each_drawn_diff_to_its_new_place() {
+        let names: Vec<String> = (0..50_000).map(|n| format!("p{n:05}.rs")).collect();
+        let paths: Vec<&str> = names.iter().map(String::as_str).collect();
+        let mut state = DiffState::default();
+        let first = asked(&state.show_together(wanted(&paths, 1))).expect("an ask");
+        state.together_arrived(
+            first.asked,
+            (0..5_000)
+                .map(|index| (index, Ok(Some(shown(&names[index])))))
+                .collect(),
+            None,
+        );
+        let mut grown = vec!["a-first.rs"];
+        grown.extend(paths.iter().copied());
+        let started = std::time::Instant::now();
+        let freed = state.show_together(wanted(&grown, 1));
+        let took = started.elapsed();
+        assert!(
+            freed
+                .iter()
+                .all(|request| !matches!(request, Request::Retire(_)))
+        );
+        for index in [0, 1, 2_500, 4_999] {
+            assert_eq!(
+                state
+                    .together_diff(index + 1)
+                    .map(|shown| shown.diff().file.new_path.to_string()),
+                Some(names[index].clone()),
+                "the diff of {} not at {}",
+                names[index],
+                index + 1
+            );
+        }
+        assert_eq!(answered_together(&state).get(0), Some(&Opened::Reading));
+        assert_eq!(answered_together(&state).get(5_001), Some(&Opened::Reading));
+        eprintln!("carried 5,000 diffs among 50,001 paths in {took:?}");
     }
 
     /// The same paths asked again keep what they draw until their answers come, under a new

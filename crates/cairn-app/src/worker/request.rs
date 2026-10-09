@@ -33,7 +33,7 @@ pub enum Comparison {
 
 /// Which of a path's working-tree diffs (R3.1): what a path chosen in Local Changes is asked
 /// as, by the list it was chosen in (refs-and-status R9.3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WorkingSide {
     /// `HEAD` against the index: `git diff --cached`.
     Staged,

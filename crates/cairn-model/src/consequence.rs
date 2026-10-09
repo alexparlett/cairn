@@ -440,6 +440,51 @@ impl Consequence {
             ),
         }
     }
+
+    /// What the operation is called where its run is listed — the activity popover — in Fork's
+    /// imperative form, as its Activity Manager names one ("Fetch origin", "Create branch
+    /// 'develop'"; `fork-staging-and-commit.md` §7): "Discard lines of a.rs", "Discard 3
+    /// files", "Amend", "Create branch 'topic'", "Remove index.lock".
+    pub fn name(&self) -> String {
+        match self {
+            Self::DiscardLines {
+                path,
+                index: _,
+                working_tree: _,
+                on_disk: _,
+                executable: _,
+                selection: _,
+                mode: _,
+                patch: _,
+            } => format!("Discard lines of {}", quoted(path.as_bytes())),
+            Self::DiscardFiles { files } => {
+                format!("Discard {}", counted(files.len(), "file", "files"))
+            }
+            Self::Amend { .. } => "Amend".to_owned(),
+            Self::CheckoutDiscarding {
+                branch,
+                at: _,
+                head: _,
+                changes: _,
+                kept_untracked: _,
+            } => format!("Create branch '{}'", escaped(branch.as_bytes())),
+            Self::RemoveLock {
+                path,
+                modified: _,
+                read_at: _,
+                bytes: _,
+                device: _,
+                inode: _,
+            } => format!(
+                "Remove {}",
+                quoted(
+                    path.file_name()
+                        .unwrap_or(path.as_os_str())
+                        .as_encoded_bytes()
+                )
+            ),
+        }
+    }
 }
 
 /// R10.6's line under the amend button: the commit replaced and whether it can be found
@@ -1594,6 +1639,40 @@ mod tests {
             lock("/r/.git/index.lock", Duration::from_secs(1), 0).replaces(),
             None
         );
+    }
+
+    /// Phase 11's QA: each operation's name, in Fork's imperative form, as the activity
+    /// popover lists it; a path quoted as git quotes it, so a name cannot rewrite the list.
+    #[test]
+    fn each_operation_is_named_in_forks_imperative_form() {
+        assert_eq!(
+            lines("src/a.rs", selection(2, 0)).name(),
+            "Discard lines of src/a.rs"
+        );
+        assert_eq!(
+            lines("a\nb", selection(1, 0)).name(),
+            "Discard lines of \"a\\nb\""
+        );
+        let one = Consequence::DiscardFiles {
+            files: vec![modified("a.rs", Some(1))],
+        };
+        assert_eq!(one.name(), "Discard 1 file");
+        let two = Consequence::DiscardFiles {
+            files: vec![modified("a.rs", Some(1)), modified("b.rs", None)],
+        };
+        assert_eq!(two.name(), "Discard 2 files");
+        assert_eq!(checkout(Vec::new(), 0).name(), "Create branch 'topic'");
+        assert_eq!(
+            lock("/r/.git/index.lock", Duration::ZERO, 0).name(),
+            "Remove index.lock"
+        );
+        let amend = Consequence::Amend {
+            commit: oid(0xab),
+            subject: "s".to_owned(),
+            published: Publication::Unpublished,
+            reflog: Reflog::Written,
+        };
+        assert_eq!(amend.name(), "Amend");
     }
 
     #[test]

@@ -330,6 +330,52 @@ impl LocalWrite {
         }
     }
 
+    /// What the activity popover calls it, in Fork's imperative form as its Activity Manager
+    /// names an operation ("Fetch origin", "Create branch 'develop'"; `fork-staging-and-commit.md`
+    /// §7): "Stage 1 file", "Stage lines of a.rs", "Unstage 2 files", "Discard 3 files",
+    /// "Commit", "Amend", "Create branch 'topic'", "Remove index.lock". A destructive write's
+    /// is its confirmation's (`Consequence::name`).
+    pub fn name(&self) -> String {
+        let files = |count: usize| {
+            if count == 1 {
+                "1 file".to_owned()
+            } else {
+                format!("{count} files")
+            }
+        };
+        match self {
+            Self::StageLines { diff, .. } => format!("Stage lines of {}", diff.file.new_path),
+            Self::UnstageLines { diff, .. } => format!("Unstage lines of {}", diff.file.new_path),
+            Self::StageFiles { paths } => format!("Stage {}", files(paths.len())),
+            Self::UnstageFiles { paths, .. } => format!("Unstage {}", files(paths.len())),
+            Self::StageAll { changes, shown } => format!(
+                "Stage {}",
+                files(
+                    shown
+                        .as_ref()
+                        .map_or(changes.len(ChangeList::Unstaged), Vec::len)
+                )
+            ),
+            Self::UnstageAll { changes, shown, .. } => format!(
+                "Unstage {}",
+                files(
+                    shown
+                        .as_ref()
+                        .map_or(changes.len(ChangeList::Staged), Vec::len)
+                )
+            ),
+            Self::Commit { .. } => "Commit".to_owned(),
+            Self::CreateBranch { name, .. } | Self::CreateBranchAndCheckout { name, .. } => {
+                format!("Create branch '{name}'")
+            }
+            Self::DiscardLines(confirmed)
+            | Self::DiscardFiles(confirmed)
+            | Self::CreateBranchDiscarding(confirmed)
+            | Self::RemoveLock(confirmed)
+            | Self::Amend { confirmed, .. } => confirmed.consequence().name(),
+        }
+    }
+
     /// Whether it can be cancelled while it runs: a commit or an amend (R4.3).
     pub fn is_cancellable(&self) -> bool {
         self.is_commit()
@@ -1270,6 +1316,55 @@ mod tests {
             message.contains("no askpass token could be made for this write")
                 && message.contains("could not generate an askpass token"),
             "{message}"
+        );
+    }
+
+    /// Phase 11's QA (Fork-settled): each write is named in the activity popover in Fork's
+    /// imperative form, as its Activity Manager names an operation ("Fetch origin", "Create
+    /// branch 'develop'"), a destructive one by its confirmation. Caught by: the progress
+    /// phrase ("staging 1 file") drawn as an operation's name.
+    #[test]
+    fn each_write_is_named_in_forks_imperative_form() {
+        let paths = |n: usize| (0..n).map(|i| RepoPath::new(format!("{i}.rs"))).collect();
+        assert_eq!(
+            LocalWrite::StageFiles { paths: paths(1) }.name(),
+            "Stage 1 file"
+        );
+        assert_eq!(
+            LocalWrite::UnstageFiles {
+                paths: paths(2),
+                to: UnstageTarget::Head,
+            }
+            .name(),
+            "Unstage 2 files"
+        );
+        assert_eq!(
+            LocalWrite::Commit {
+                message: "m".to_owned(),
+                skip_hooks: false,
+            }
+            .name(),
+            "Commit"
+        );
+        assert_eq!(
+            LocalWrite::CreateBranch {
+                name: "develop".to_owned(),
+                at: Oid::from_bytes(&[1; 20]).unwrap(),
+            }
+            .name(),
+            "Create branch 'develop'"
+        );
+        let lock = Consequence::RemoveLock {
+            path: PathBuf::from("/r/.git/index.lock"),
+            modified: std::time::SystemTime::UNIX_EPOCH,
+            read_at: std::time::SystemTime::UNIX_EPOCH,
+            bytes: 0,
+            device: 0,
+            inode: 0,
+        };
+        assert_eq!(
+            LocalWrite::RemoveLock(Confirmed::by_user(lock)).name(),
+            "Remove index.lock"
         );
     }
 

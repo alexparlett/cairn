@@ -1008,7 +1008,7 @@ fn a_commit_cancelled_before_git_runs_writes_nothing() {
     );
 }
 
-/// The pushed check's cost where history is long (the phase's stopping rule): an `#[ignore]`d
+/// The pushed check's cost where history is long (the phase's stopping rule): an ignored
 /// reporter that times [`ops::amend_consequence`] on the repository `CAIRN_BENCH_REPO` names,
 /// in whatever state its `HEAD` is, and prints what it found. It only reads.
 ///

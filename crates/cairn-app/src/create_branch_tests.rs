@@ -18,7 +18,7 @@ use freya::prelude::*;
 use freya_testing::TestingRunner;
 use freya_testing::prelude::{MouseEventName, PlatformEvent};
 
-use crate::local_changes_tests::{Submitted, apply, changed, labels, launch, status};
+use crate::local_changes_tests::{Submitted, apply, changed, labels, launch, status, untracked};
 use crate::window::View;
 use crate::worker::{LocalWrite, OperationId, Request, Update, WriteEnding};
 
@@ -248,6 +248,58 @@ fn check_out_after_create_is_sticky_and_local_changes_appear_only_over_changes()
         matches!(asked.as_slice(), [LocalWrite::CreateBranchAndCheckout { name, .. }] if name == "kept"),
         "Discard was remembered, or the checkout not asked: {asked:?}"
     );
+}
+
+/// "Local changes:" over a tree of untracked files alone, and over one whose untracked file
+/// sorts before its changed one by name (phase 10's QA, item 17). `git status` lists changed
+/// and conflicted entries before untracked ones whatever their names, so the first entry
+/// decides. Caught by: the choices drawn over untracked files alone (a checkout keeps them),
+/// or the entries searched in path order (the untracked `a.txt` first).
+#[test]
+fn local_changes_are_offered_over_a_change_and_never_over_untracked_files_alone() {
+    let (mut test, view, submitted) = launch();
+    with_a_commit(&mut test, view, &submitted);
+    click_check_out(
+        &mut test,
+        view,
+        &submitted,
+        vec![untracked("a.txt"), untracked("z.txt")],
+    );
+    assert!(drawn(&test, CREATE_AND_CHECKOUT_CAPTION));
+    assert!(
+        !drawn(&test, LOCAL_CHANGES_LABEL),
+        "untracked files alone are not local changes a checkout touches"
+    );
+    test.press_key(Key::Named(NamedKey::Escape));
+    settle(&mut test);
+
+    apply(
+        &mut test,
+        view,
+        &submitted,
+        status(vec![
+            changed("b.rs", None, Some(UnstagedChange::Modified)),
+            untracked("a.txt"),
+        ]),
+    );
+    new_branch(&mut test);
+    assert!(
+        drawn(&test, LOCAL_CHANGES_LABEL),
+        "a changed file was missed behind an untracked one that sorts first"
+    );
+}
+
+/// Applies `entries` as the refreshed status, opens the dialog and ticks "Check out after
+/// create".
+fn click_check_out(
+    test: &mut TestingRunner,
+    view: View,
+    submitted: &Submitted,
+    entries: Vec<cairn_model::StatusEntry>,
+) {
+    apply(test, view, submitted, status(entries));
+    new_branch(test);
+    click(test, CHECK_OUT_AFTER_CREATE);
 }
 
 /// What Create Branch's discard would lose at `at` for `branch`.

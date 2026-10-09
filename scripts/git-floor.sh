@@ -66,7 +66,7 @@ if [ -z "$floor_minor" ] || [ "2.$floor_minor" != "${first_version%.*}" ]; then
 fi
 
 # The filtered runs, as `<cargo target>|<test filters>|<floor>`. Each floor sits one under
-# the run's count when it was set (134, 187 and 18), so a filter that silently matches less
+# the run's count when it was set (141, 200, 18 and 4), so a filter that silently matches less
 # fails; raise a floor as its run gains tests. `ops::` is the write verbs' argv tests, whose
 # recording `git` runs the git in use (staging-and-commit phase 03), beside fetch's stubs;
 # `--test diff_engine` holds the write verbs' effects too (`tests/diff/write_verbs.rs`, and
@@ -75,11 +75,14 @@ fi
 # against its oracles (C4 of the refs-and-status packet), which owes its answer to the git
 # in use as much as the diff tests do; `--test diff_engine` holds a stash's list against
 # `git stash show` (C7, `tests/diff/stash.rs`), whose untracked half git 2.30.9 does not read
-# and 2.32.7 does.
+# and 2.32.7 does. `--test lost_commits` is Show Lost Commits against `git rev-list --reflog`
+# (C20, staging-and-commit phase 10), whose fixtures write their reflogs with the git in use,
+# and whose oracle that git reads.
 RUNS=(
-  "--lib|diff:: reads:: ops::|133"
-  "--test diff_engine||186"
+  "--lib|diff:: reads:: ops::|140"
+  "--test diff_engine||199"
   "--test status||17"
+  "--test lost_commits||3"
 )
 
 CACHE="${CAIRN_GIT_FLOOR_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/cairn/git-floor}"

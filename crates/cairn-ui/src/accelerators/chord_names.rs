@@ -10,7 +10,7 @@
 //! once, alone, and nothing else may spell one. The guards hold both
 //! (`no_component_names_a_literal_modifier`, `the_accelerator_table_holds_data_and_resolution_only`).
 
-use freya::prelude::{Code, Modifiers, NamedKey};
+use freya::prelude::{Code, NamedKey};
 
 use super::{Action, Chord, Os, Trigger, chord_modifiers, chords};
 
@@ -22,29 +22,26 @@ pub fn chord_name(action: Action, platform: Os) -> Option<String> {
         .and_then(|chord| spelled(chord, platform))
 }
 
-/// The held keys a chord names, in the order Fork writes them on `platform`, each with its
-/// name there.
-fn held_names(platform: Os) -> [(Modifiers, &'static str); 4] {
-    match platform {
-        Os::Linux => [
-            (Modifiers::CONTROL, "Ctrl"),
-            (Modifiers::ALT, "Alt"),
-            (Modifiers::SHIFT, "Shift"),
-            (Modifiers::META, "Super"),
-        ],
-        Os::MacOs => [
-            (Modifiers::META, "⌘"),
-            (Modifiers::ALT, "⌥"),
-            (Modifiers::SHIFT, "⇧"),
-            (Modifiers::CONTROL, "⌃"),
-        ],
-    }
-}
-
 fn spelled(chord: Chord, platform: Os) -> Option<String> {
     let key = key_name(chord.trigger, platform)?;
     let held = chord_modifiers(chord.held);
-    let names = held_names(platform)
+    // The held keys a chord names, in the order Fork writes them on the platform, each with its
+    // name there: the table's own constants, written out.
+    let order = match platform {
+        Os::Linux => [
+            (freya::prelude::Modifiers::CONTROL, "Ctrl"),
+            (freya::prelude::Modifiers::ALT, "Alt"),
+            (freya::prelude::Modifiers::SHIFT, "Shift"),
+            (freya::prelude::Modifiers::META, "Super"),
+        ],
+        Os::MacOs => [
+            (freya::prelude::Modifiers::META, "⌘"),
+            (freya::prelude::Modifiers::ALT, "⌥"),
+            (freya::prelude::Modifiers::SHIFT, "⇧"),
+            (freya::prelude::Modifiers::CONTROL, "⌃"),
+        ],
+    };
+    let names = order
         .into_iter()
         .filter(|(modifier, _)| held.contains(*modifier))
         .map(|(_, name)| name);

@@ -161,7 +161,7 @@ there.
 
 - `scripts/gate.sh` — the pre-merge gate: format, lint, typecheck, guards,
   dependency policy, full test suite, doctests, and `git-floor` (`cairn-git`'s
-  real-git diff and status tests against git 2.30.9 and 2.32.7, built from source by
+  real-git diff, status and lost-commits tests against git 2.30.9 and 2.32.7, built from source by
   `scripts/git-floor.sh` into `~/.cache/cairn/git-floor` on the first run, which
   needs the network, a C compiler, make and zlib's headers, and fails naming what
   is missing rather than skipping). Every `--step` but `test-fast` runs in it

@@ -11,7 +11,8 @@ use cairn_guards::{
     constructs_process_command, constructs_struct, declared_dependencies, declares_publicly,
     derives_or_implements, embedded_font_violations, gate_command_assignments, gate_dispatch_arms,
     gate_full_sequence, gate_function_body, gate_function_calls, gate_function_commands,
-    hand_typed_chords, implements_type, job_env_entries, mentions_crate, names_a_literal_modifier,
+    hand_typed_chords, implements_type, job_env_entries, mentions_crate,
+    modifier_constants_blanked, names_a_literal_modifier, names_a_modifier_in_code,
     names_an_element, names_gitoxide_mutation, production_char_literals,
     production_string_literals, reads_enum_partially, reads_row_content_partially, renames_type,
     renders_in_a_macro, repo_root, required_skip_violations, rust_sources, spawns_git,
@@ -4378,14 +4379,27 @@ fn no_component_names_a_literal_modifier() {
                 let typed = hand_typed_chords(&source);
                 assert!(
                     typed.is_empty(),
-                    "{}:{} types a chord out whole. A chord's name is put together from the                      accelerator table's data; a literal here names one held key alone.",
+                    "{}:{} types a chord out whole. A chord's name is put together from the \
+                     accelerator table's data; a literal here names one held key alone.",
                     path.display(),
                     typed[0]
+                );
+                // The table's data it may name: `Modifiers::<CONSTANT>`, written out. Anything
+                // else of a modifier — the event's field, a predicate, a modifier key — fails.
+                let named = names_a_modifier_in_code(&modifier_constants_blanked(&source));
+                assert!(
+                    named.is_empty(),
+                    "{}:{} names a keyboard modifier other than the table's constants \
+                     (`Modifiers::CONTROL` and the like, written out). It spells chords from \
+                     the table's data and reads no press.",
+                    path.display(),
+                    named[0]
                 );
                 let elements = names_an_element(&source);
                 assert!(
                     elements.is_empty(),
-                    "{}:{} builds or names an element; it spells chords, and a component                      draws them.",
+                    "{}:{} builds or names an element; it spells chords, and a component \
+                     draws them.",
                     path.display(),
                     elements[0]
                 );
@@ -4481,6 +4495,32 @@ fn the_chord_name_roster_and_its_matcher_catch_the_shapes_they_claim() {
         "fn f() { let t = \"Return\"; }",
         "#[cfg(test)]\nmod tests {\n    fn f() { let t = \"Ctrl+Shift+.\"; }\n}",
     ];
+    // Phase 10's QA, item 6: the code of the chord-name module names no modifier but the
+    // table's constants written out.
+    let in_code = |source: &str| names_a_modifier_in_code(&modifier_constants_blanked(source));
+    for source in [
+        "fn f(e: &KeyboardEventData) { let held = e.modifiers; }",
+        "fn f(m: M) -> bool { m.ctrl() }",
+        "fn f(m: M) -> bool { m.shift() && m.alt() }",
+        "fn f() { let k = NamedKey::Control; }",
+        "fn f() { let k = Code::ShiftLeft; }",
+        "use freya::prelude::Modifiers;",
+        "fn f() -> Modifiers { todo() }",
+        "fn f() { let m = Modifiers::CAPS_LOCK; }",
+        "fn f() { let m = Modifiers::CONTROLS; }",
+    ] {
+        assert!(
+            !in_code(source).is_empty(),
+            "the chord-name check missed {source:?}"
+        );
+    }
+    for source in [
+        "fn f() { let m = [(freya::prelude::Modifiers::CONTROL, \"Ctrl\")]; }",
+        "fn f() { let m = Modifiers::SHIFT | Modifiers::META | Modifiers::ALT; }",
+        "fn f() { let k = NamedKey::Enter; let c = Code::Period; }",
+    ] {
+        assert_eq!(in_code(source), Vec::<usize>::new(), "fired on {source:?}");
+    }
     for source in named {
         assert_eq!(
             hand_typed_chords(source),
@@ -4576,6 +4616,12 @@ fn the_modifier_matcher_catches_the_shapes_it_claims() {
             "if e.key == Key::Named(NamedKey::NumLock) {}",
         ),
         ("scroll lock as a code", "if e.code == Code::ScrollLock {}"),
+        // Phase 10's QA, item 7: a held key's name alone, with no `+` or `-` beside it.
+        ("Alt alone", "label().text(\"Alt\")"),
+        ("Shift alone", "let k = \"Shift\";"),
+        ("Super alone", "let k = \"Super\";"),
+        ("Meta alone", "let k = \" Meta \";"),
+        ("Option alone", "let k = \"Option\";"),
     ];
     for (shape, source) in caught {
         assert!(
@@ -4626,6 +4672,14 @@ fn the_modifier_matcher_catches_the_shapes_it_claims() {
         (
             "a hyphen in a word",
             "label().text(\"Alternative-text and Metadata\")",
+        ),
+        (
+            "a word starting as a key's name",
+            "label().text(\"Shifted\")",
+        ),
+        (
+            "a key's name inside a sentence",
+            "label().text(\"Options\")",
         ),
     ];
     for (shape, source) in ignored {

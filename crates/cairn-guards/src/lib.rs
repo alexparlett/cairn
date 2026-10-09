@@ -628,6 +628,16 @@ pub const MODIFIER_TEXT: &[&str] = &[
 /// keyboard modifier: an identifier of [`MODIFIER_IDENTS`], `::Fn`, a nullary call of one of
 /// [`MODIFIER_METHODS`], or a literal spelling a chord ([`spells_a_chord`]).
 pub fn names_a_literal_modifier(source: &str) -> Vec<usize> {
+    let mut lines: BTreeSet<usize> = names_a_modifier_in_code(source).into_iter().collect();
+    lines.extend(spells_a_chord(source));
+    lines.into_iter().collect()
+}
+
+/// [`names_a_literal_modifier`] without its literals: 1-based lines where the production code
+/// of `source` names a modifier by an identifier of [`MODIFIER_IDENTS`], `::Fn` or a nullary
+/// call of one of [`MODIFIER_METHODS`] — what the one chord-name module is held to once its
+/// table constants are blanked ([`modifier_constants_blanked`]).
+pub fn names_a_modifier_in_code(source: &str) -> Vec<usize> {
     let code = code_without_test_modules(&code_without_strings(source));
     let mut lines = BTreeSet::new();
     for ident in MODIFIER_IDENTS {
@@ -649,12 +659,49 @@ pub fn names_a_literal_modifier(source: &str) -> Vec<usize> {
             }
         }
     }
-    lines.extend(spells_a_chord(source));
     lines.into_iter().collect()
 }
 
+/// The held keys the chord-name module may name, by the table's own constants and only as
+/// `Modifiers::<CONSTANT>` written out.
+pub const CHORD_NAME_CONSTANTS: &[&str] = &["CONTROL", "ALT", "SHIFT", "META"];
+
+/// `source` with every `Modifiers::<CONSTANT>` of [`CHORD_NAME_CONSTANTS`] — and a
+/// `freya::prelude::` path in front of it — blanked to spaces, lines kept: what is left must
+/// name no modifier at all ([`names_a_modifier_in_code`]), so the event's `modifiers` field, a
+/// predicate, a modifier key of `Code` or `NamedKey`, the type imported or named alone, and
+/// every other constant still fail there.
+pub fn modifier_constants_blanked(source: &str) -> String {
+    let mut out = source.to_owned();
+    for constant in CHORD_NAME_CONSTANTS {
+        for prefix in ["freya::prelude::Modifiers::", "Modifiers::"] {
+            let spelled = format!("{prefix}{constant}");
+            let mut from = 0;
+            while let Some(found) = out[from..].find(&spelled) {
+                let at = from + found;
+                let end = at + spelled.len();
+                let follows = out[end..].chars().next();
+                if follows.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                    from = end;
+                    continue;
+                }
+                out.replace_range(at..end, &" ".repeat(spelled.len()));
+                from = end;
+            }
+        }
+    }
+    out
+}
+
+/// A held key's name that a literal is a chord's when it is all the literal holds: `"Alt"`
+/// alone is a person's key name where `"Alternative"` is not (phase 10's QA, item 7: the
+/// spellings [`MODIFIER_TEXT`] matches only beside a `+` or a `-`).
+pub const MODIFIER_WORDS: &[&str] = &[
+    "Alt", "Shift", "Super", "Meta", "Option", "Opt", "Control", "Command", "Cmd", "Ctrl",
+];
+
 /// 1-based lines where a production string or char literal of `source` holds one of
-/// [`MODIFIER_TEXT`] once its escapes are read — `'⌘'`, `"\u{2318}1"` and `"\x41lt+1"`
+/// [`MODIFIER_TEXT`], or is exactly one of [`MODIFIER_WORDS`], once its escapes are read — `'⌘'`, `"\u{2318}1"` and `"\x41lt+1"`
 /// spell a chord as surely as `"⌘1"` does.
 pub fn spells_a_chord(source: &str) -> Vec<usize> {
     let mut lines = BTreeSet::new();
@@ -665,7 +712,9 @@ pub fn spells_a_chord(source: &str) -> Vec<usize> {
         .chain(production_char_literals(source));
     for (line, text) in literals {
         let text = unescaped(&text);
-        if MODIFIER_TEXT.iter().any(|spelling| text.contains(spelling)) {
+        if MODIFIER_TEXT.iter().any(|spelling| text.contains(spelling))
+            || MODIFIER_WORDS.contains(&text.trim())
+        {
             lines.insert(line);
         }
     }

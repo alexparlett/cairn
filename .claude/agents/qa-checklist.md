@@ -126,7 +126,8 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
     lets an `unwrap`/`expect` through on a path that holds one, since the panic
     message would print the value.
 11. **Keyboard modifiers** (any diff in `crates/cairn-ui/` or `crates/cairn-app/`
-    touching a key or pointer handler, or `crates/cairn-ui/src/accelerators.rs`):
+    touching a key or pointer handler, `crates/cairn-ui/src/accelerators.rs` or
+    `crates/cairn-ui/src/accelerators/chord_names.rs`):
     the guard `no_component_names_a_literal_modifier` reads spellings, so what it
     cannot see is yours — a modifier reached through a `type` alias declared
     outside the render crates, a macro, or a raw bit pattern compared without
@@ -140,7 +141,10 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
     and `Chord::press_hold` are for headless tests, and a render path calling
     either is a finding; `HeldKeys` answers which action a pointer press is, and a
     method of it that answered which key is held would be one); a key event
-    handled in `crates/cairn-ui/tests/` (unscanned); and whether a new chord is
+    handled in `crates/cairn-ui/tests/` (unscanned); in the one chord-name module
+    (`CHORD_NAMES`), a name put together there from single-key literals rather than
+    from the chord the table lists — the guard sees each literal is one held key's
+    name, not that the name follows the table's chord; and whether a new chord is
     right for each platform and clear of the desktop's and Fork's.
 
 ## Review dispatch

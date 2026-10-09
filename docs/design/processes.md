@@ -215,10 +215,15 @@ runs `git` holds a copy of that answer. Each open repository keeps a registry of
 its running invocations. Closing a repository, or the window, ends every read and
 network operation the way a cancel does and waits a bounded time for their reaps.
 A local write is let finish instead, since ending one mid-write is what strands a
-lock: the first close waits for it and says which ("Finishing commit…"); a second
-close after the window's patience ends it as a cancel would, and a lock that
-leaves behind is named the next time the repository opens (`concurrency.md`,
-"Operations").
+lock: the first close waits for it and says which ("Finishing commit…"), and that
+closing again leaves it unfinished. A second close after the window's patience
+closes the window anyway and still never ends the write: its `git` runs on,
+orphaned, with nobody reading its pipes. So every local write is run quietly — a
+verb that would print as it works, `git clean` listing each file it removes, is
+given `-q` — and an orphan finishes its work rather than dying of `SIGPIPE` at
+its next line of output; what it cannot help printing, an error or a hook's
+output, can still end it there, and a lock that leaves behind is named the next
+time the repository opens (`concurrency.md`, "Operations").
 
 ## The command log
 

@@ -121,6 +121,13 @@ const READ_ONLY: &[(&str, &str)] = &[
 /// this environment too (staging-and-commit R5), so it is what a `pre-commit`
 /// hook and `gpg` see; each entry is a deliberate leak of the user's
 /// environment, `destructive-ops-reviewer`'s check 9.
+///
+/// One roster for every invocation, a read's as a write's: a read's clean
+/// filter or fsmonitor hook sees the display, signing and identity variables
+/// too. Decided by the user on 2026-10-09: that is what the user's own `git`
+/// gives those programs from a shell, so a filter or hook behaves under Cairn
+/// as it does there, and a second roster for reads would be a second list to
+/// keep right for no program that needs less.
 const INHERITED: &[&str] = &[
     // Credential helpers, `ssh`, LFS filters and hooks are found on it.
     "PATH",

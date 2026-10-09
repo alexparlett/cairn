@@ -1275,9 +1275,15 @@ registry, and its reap is bounded by `CLOSE_BOUND` with the rest
 A close ends any read and any fetch in flight without asking. A local write it
 waits for instead, saying so; a second close request after
 `worker::CLOSE_PATIENCE` closes the window anyway, as for a worker that has
-stopped answering, and the write's `git` is left to run on, orphaned — it
-finishes, or its next write to a pipe nobody reads ends it — and a lock it
-leaves is named the next time the repository opens (`Update::LocksAtOpen`). Pinned by `a_close_during_a_commit_waits_for_it_and_ends_nothing`
+stopped answering, and never ends the write (the user's decision of 2026-10-09,
+keeping R4.9): the write's `git` is left to run on, orphaned, with nobody
+reading its pipes — it finishes, or its next write to a pipe ends it with
+`SIGPIPE` — and a lock it leaves is named the next time the repository opens
+(`Update::LocksAtOpen`). That residual is wider today than it will stay: `git clean -f` lists each file
+it removes on stdout, so an orphaned discard of untracked files dies at its next
+line, part way through its batch (`-q`, and a check of `restore` and `apply`
+for the same, are carried to the commit engine's phase), and the closing banner
+does not yet say that closing again leaves the write unfinished. Pinned by `a_close_during_a_commit_waits_for_it_and_ends_nothing`
 (the stream stays open past `CLOSE_BOUND`, the commit's group alive, until
 the test releases it; then its ending, the queued write `NotRun`, and the
 stream's end), `the_window_is_told_once_as_the_first_close_is_asked`

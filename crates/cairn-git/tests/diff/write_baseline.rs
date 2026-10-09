@@ -518,3 +518,68 @@ fn cairn_write_costs() {
         ms(commit)
     );
 }
+
+/// What a discard's count costs per path on the bench clone (staging-and-commit phase 07's QA,
+/// carried to phase 11: "batch the discard count's per-path reads — measure first"):
+/// `ops::discard_files_consequence` over 10, 100 and 1,000 modified files, each one line
+/// appended, every file put back afterwards. Each tracked path is a working-tree diff of its
+/// own — a `git diff-files -p` read and the line diff — so this says what that costs per path.
+#[test]
+#[ignore = "a reporter: needs CAIRN_BENCH_SCRATCH_CLONE, a writable clone of the bench"]
+fn discard_count_costs() {
+    use cairn_git::{CancelSignal, SharedRepository};
+    use cairn_model::RepoPath;
+
+    let Some(clone) = scratch_clone() else {
+        eprintln!("SKIPPED discard_count_costs: CAIRN_BENCH_SCRATCH_CLONE is not set");
+        return;
+    };
+    let git = super::git();
+    let (_, listed) = clone.git(&["ls-files", "-z", "--", "library/*.rs"], None, true);
+    let files: Vec<String> = listed
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .take(1_000)
+        .map(|path| String::from_utf8_lossy(path).into_owned())
+        .collect();
+    assert_eq!(files.len(), 1_000);
+    let originals: Vec<Vec<u8>> = files
+        .iter()
+        .map(|path| read(&clone.path.join(path)))
+        .collect();
+    for (path, original) in files.iter().zip(&originals) {
+        let mut edited = original.clone();
+        edited.extend_from_slice(b"// appended for the discard count\n");
+        write(&clone.path.join(path), &edited);
+    }
+    let repo = SharedRepository::discover(&clone.path)
+        .unwrap_or_else(|e| panic!("{e}"))
+        .to_worker();
+    for count in [10, 100, 1_000] {
+        let paths: Vec<RepoPath> = files[..count]
+            .iter()
+            .map(|path| RepoPath::new(path.as_str()))
+            .collect();
+        let runs = if count == 1_000 { 1 } else { RUNS };
+        let mut taken = Vec::new();
+        for _ in 0..=runs {
+            let started = Instant::now();
+            cairn_git::ops::discard_files_consequence(git, &repo, &paths, &CancelSignal::new())
+                .unwrap_or_else(|e| panic!("{e}"));
+            taken.push(started.elapsed());
+        }
+        taken.remove(0);
+        let middle = median(taken);
+        eprintln!(
+            "  discard count over {count} files: median {:.1} ms, {:.2} ms a path",
+            ms(middle),
+            ms(middle) / count as f64
+        );
+    }
+    for (path, original) in files.iter().zip(&originals) {
+        write(&clone.path.join(path), original);
+    }
+    let (_, status) = clone.git(&["status", "--porcelain=v2", "-z"], None, true);
+    assert!(status.is_empty(), "the clone was not put back");
+    let _ = std::fs::remove_dir_all(&clone.home);
+}

@@ -375,6 +375,34 @@ mod tests {
         }
     }
 
+    /// Phase 07's QA, carried to phase 11: a stage or an unstage of 50,000 paths runs one
+    /// `git` whose argv is the same handful of words as one path's — the paths go on stdin, as
+    /// a pathspec file — so no selection is too wide for `ARG_MAX`. (`git restore` reads its
+    /// paths the same way, `discard.rs`; `git clean`, which reads no pathspec file, is batched
+    /// by `CLEAN_ARGUMENT_BYTES`.) Caught by: paths put on argv.
+    #[test]
+    fn fifty_thousand_paths_go_on_stdin_and_never_on_argv() {
+        let stub = RecordingStub::new();
+        let (git, repo) = (stub.git_binary(), stub.repository());
+        let paths: Vec<RepoPath> = (0..50_000)
+            .map(|n| RepoPath::new(format!("deep/p{n:05}.txt")))
+            .collect();
+        stub.forget();
+        let _ = stage_files(&git, &repo, &paths, None);
+        let _ = unstage_files(&git, &repo, &paths, &UnstageTo::Head, None);
+        let recorded = stub.recorded();
+        assert_eq!(recorded.len(), 2, "{} invocations", recorded.len());
+        for record in &recorded {
+            let argv = record.arguments_after_location();
+            assert!(argv.len() <= 6, "{argv:?}");
+            assert!(
+                argv.iter().all(|argument| !argument.contains("deep/")),
+                "{argv:?}"
+            );
+            assert_eq!(record.stdin, pathspec_file(&paths), "the paths on stdin");
+        }
+    }
+
     /// C9 for the patch verbs: `git --literal-pathspecs apply --cached --whitespace=nowarn -`,
     /// never `-R`, `--recount`, `--3way` or `--unidiff-zero`, the model's patch on stdin, run
     /// as a write; and the stale check reads the index with gix, so no read runs beside it.

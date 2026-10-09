@@ -3,6 +3,79 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 06, render foundations (packet mode)
+
+Built on `feature/staging-and-commit`; QA is the coordinator's. Commits f044c95 (the table's
+lists and scopes, the text-field key policy, the confirmation dialog and the context-menu host)
+and the edge auto-scroll with `async-io` after it.
+
+- **C15 failed first, as the stopping rule requires**:
+  `a_focused_filter_field_hands_the_windows_chords_and_held_keys_to_the_window` was written
+  before any fix and was red on 2112f18 on both halves — the Refresh chord unheard with the
+  sidebar's filter focused (0 refreshes asked), and the extending chord held while the filter
+  had focus never reaching `HeldKeys` (a plain selection). Green after the policy.
+- **The accelerator table (R7.2, R7.3, L22)**: `chords(action, os) -> Chords`, a list in the
+  table's order, replaced `chord(..) -> Option<Chord>`; every caller and test moved. New
+  actions and scopes: `StageOrUnstage`, `StageOrUnstageAll`, `Discard` in `LocalChanges`;
+  `ExtendSelectionUp/Down` (Shift+↑/↓) in `LocalChangesLists`; `Commit` in `CommitBox`;
+  `ShowLostCommits` in `History`; `SelectRange` (Shift+press) beside `ExtendSelection`, which
+  now also names a path toggled in Local Changes' lists. No new chord collides with an
+  existing Cairn chord (no stopping rule). The pin, renamed
+  `chords_are_distinct_and_every_bare_one_is_a_function_key_or_local_changes_own`, checks every
+  chord of every list and then shows its rule failing on a bare Enter, Backspace or Delete moved
+  to each other scope, a bare letter in Local Changes, a bare press, a chord listed twice for one
+  action and a chord shared by two actions. `the_accelerator_table_holds_data_and_resolution_only`
+  now also requires the list signature, no single `chord`, and the pin as a plain `#[test]`.
+- **The key policy (R7.1)**: `accelerators::field_key` resolves a key for a focused field
+  (`FieldKey::Own`, `Unclaimed`, `Edit { bubbles }`); `cairn_ui::text_field` and
+  `text_field_in` build every field with it (the three filters and the credential prompt).
+  A window chord and a lone Control/Alt/Command pass to the window untyped; a primary+letter
+  that is no `EditBindings` binding types nothing; the field's own scope's chord is claimed;
+  every other key is kept from the views around (Shift alone still bubbles). New guard
+  `every_text_field_takes_the_shared_key_policy` (matcher `builds_a_text_field`, self-test).
+  `Chord::press_hold` now sends the modifier's own key, as a keyboard does.
+- **The dialog (R7.4)**: `cairn_ui::ConfirmDialog`, on `CONFIRMATION_SURFACES`; the window keeps
+  `View::confirming: State<Option<Confirming>>` (`crates/cairn-app/src/confirming.rs`) and
+  `shortcuts::act` is inert while it is open. **The context-menu host (R7.5)**:
+  `ContextMenuViewer` at the window's root. **Edge auto-scroll (R7.6)**:
+  `cairn_ui::{use_edge_scroll, EdgeScroll, edge_step}`, paced by `async_io::Timer`.
+- **Dependency**: `async-io = "2.6.0"` in `cairn-ui` (L5, the user's decision): the allowlist
+  row, the workspace manifest's reason, and `deny.toml`'s reason with a `[[bans.features]]`
+  pin of no features (`exact`, `allow = []`); `Cargo.lock` gained only the edge from `cairn-ui`
+  — no crate, no feature (no stopping rule).
+- Each new test was checked against the mutation it claims (the dialog without `a11y_modal`,
+  without its Cancel focus; the window without the confirmation check or the menu host; the
+  field policy replaced by Freya's default; the timer looping once).
+
+Decisions, and items batched for the user's ratification (none is a stopping rule):
+
+1. **For the user's ratification — the token-holder guard excuses a callback's argument.**
+   `CONFIRMED_HOLDERS`' rule refused `ConfirmDialog`'s `EventHandler<Confirmed>` and the
+   window's `Rc<dyn Fn(Confirmed)>`, which hand a token on and keep none. Rather than roster
+   both files (which would excuse any later field there), the matcher blanks exactly the four
+   `TOKEN_CALLBACKS` spellings first; a callback that returns a token, takes it beside other
+   arguments, or is named otherwise still fails (self-tested). Root `CLAUDE.md` states it.
+2. **For the user's ratification — a new invariant line and twin**: "every text field takes
+   the one key policy" in root `CLAUDE.md`'s modifier invariant, with
+   `every_text_field_takes_the_shared_key_policy`. Its one cost: `window_check.rs`'s private
+   test enum `Input` was renamed `Stimulus`, since the guard reads the name.
+3. **For the user's ratification — window chords still pass from the commit box.** R7.3 says
+   "no chord but commit's fires while the commit box holds focus"; C16 names the stage, unstage,
+   discard and Show Lost Commits chords. Built as C16 and R7.1 read together: none of R7.3's
+   other actions resolves in `CommitBox`, but a window chord (F5, the tab chords) still reaches
+   the window from the box as from any field. If R7.3 means every chord, the box's
+   `text_field_in` would claim window chords too — a one-line change in `field_key_on`.
+4. **Shift+↑/↓ no longer move the selection in the history, the Changes tab's files, the Commit
+   tab or the diff**: they are a chord now (`is_chord`), and those views leave chords alone, as
+   they do Ctrl+↓. Before, Shift was ignored and Shift+↓ moved as ↓ did.
+5. **`deny.toml` pins async-io's features** (none) beyond the phase's ask, so a later crate
+   turning on `tracing` is a decision.
+6. The dialog's title is the caller's (`Confirming::new("Discard changes", ..)`, Fork's Windows
+   title); `Consequence` renders no title. Its answers are focusable `rect`s, not Freya's
+   `Button`, whose focus cannot be given on open.
+7. Dismissed: `NamedKey::Super` in the lone-modifier list — deprecated in keyboard-types; Meta
+   covers it.
+
 ## 2026-10-09 — phase 05, the user's decisions A-F applied
 
 The user decided the six batched items (relayed by the coordinator, 2026-10-09):

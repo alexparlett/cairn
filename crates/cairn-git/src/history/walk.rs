@@ -49,6 +49,21 @@ pub(crate) fn open<'repo>(
     order: HistoryOrder,
     cancel: &impl Cancel,
 ) -> Result<Option<CommitWalk<'repo>>, Error> {
+    open_dated(repo, tips, order, HashMap::new(), cancel)
+}
+
+/// [`open`], with the committer dates of some tips known already — read with their ids, as
+/// Show Lost Commits' reflog tips are (`reflogs::reflog_tips`), so no tip is read twice. A
+/// tip whose date is not known is taken from the commit-graph where the graph holds it, as
+/// git's own walk takes it (`fill_commit_in_graph`), and read from its object otherwise
+/// (staging-and-commit phase 10's decision A).
+pub(crate) fn open_dated<'repo>(
+    repo: &'repo gix::Repository,
+    tips: &[gix::hash::ObjectId],
+    order: HistoryOrder,
+    known: HashMap<gix::hash::ObjectId, i64>,
+    cancel: &impl Cancel,
+) -> Result<Option<CommitWalk<'repo>>, Error> {
     let walk_error = |source: Box<dyn std::error::Error + Send + Sync>| Error::Walk { source };
     let boundary = ShallowBoundary::read(repo).map_err(|e| walk_error(Box::new(e)))?;
     // As gix's own walk decides it: an invalid `core.commitGraph` is an error, and a graph
@@ -66,7 +81,7 @@ pub(crate) fn open<'repo>(
         objects: &repo.objects,
         boundary,
     };
-    let mut dates = HashMap::new();
+    let mut dates = known;
     if matches!(order, HistoryOrder::CommitTime) {
         dates.reserve(tips.len());
         let mut buffer = Vec::new();
@@ -75,6 +90,10 @@ pub(crate) fn open<'repo>(
                 return Ok(None);
             }
             if dates.contains_key(tip) {
+                continue;
+            }
+            if let Some(date) = graph.as_ref().and_then(|graph| graph_date(graph, tip)) {
+                dates.insert(*tip, date);
                 continue;
             }
             let commit = objects
@@ -95,6 +114,12 @@ pub(crate) fn open<'repo>(
     // Every later read is the object's own.
     drop(dates.take());
     Ok(Some(walk.commit_graph(graph)))
+}
+
+/// `id`'s committer date as the commit-graph holds it, when it holds `id`.
+pub(crate) fn graph_date(graph: &gix::commitgraph::Graph, id: &gix::hash::oid) -> Option<i64> {
+    let commit = graph.commit_by_id(id)?;
+    i64::try_from(commit.committer_timestamp()).ok()
 }
 
 /// [`Grafted`] reads, except that while a walk opens, a tip whose committer date [`open`]
@@ -170,6 +195,69 @@ pub(crate) fn hiding<'a, C: Cancel>(
     gix::traverse::commit::Simple::new([tip], objects)
         .hide(hidden)
         .map_err(|e| walk_error(Box::new(e)))
+}
+
+/// Whether any of `hidden` reaches `tip`, answered from the commit-graph alone, as git's
+/// `repo_is_descendant_of` answers it with generation numbers (staging-and-commit phase 05's QA
+/// item 4): a walk down from the hidden tips through the graph's parents that never descends
+/// below `tip`'s generation, since a commit of a lower generation cannot reach it. No object is
+/// read, `cancel` is polled before each commit the walk visits, and what it visited is counted
+/// in `visited`. `None` — answer by the object walk ([`hiding`]) instead — where the repository
+/// is shallow, no graph is enabled or opens, or the graph does not hold `tip` and every hidden
+/// tip. `Some(Err(..))` once cancelled, or on a graph that does not parse.
+pub(crate) fn reaches_through_graph<C: Cancel>(
+    repo: &gix::Repository,
+    tip: gix::hash::ObjectId,
+    hidden: &[gix::hash::ObjectId],
+    cancel: &C,
+    visited: &Cell<usize>,
+) -> Option<Result<bool, Error>> {
+    if repo.is_shallow() {
+        return None;
+    }
+    let graph = repo.commit_graph_if_enabled().ok().flatten()?;
+    let target = graph.lookup(tip)?;
+    let floor = graph.commit_at(target).generation();
+    let starts: Vec<gix::commitgraph::Position> = hidden
+        .iter()
+        .map(|id| graph.lookup(id))
+        .collect::<Option<_>>()?;
+    let mut seen = vec![false; graph.num_commits() as usize];
+    let mut stack = starts;
+    while let Some(at) = stack.pop() {
+        let Some(mark) = seen.get_mut(at.0 as usize) else {
+            continue;
+        };
+        if std::mem::replace(mark, true) {
+            continue;
+        }
+        if cancel.is_cancelled() {
+            return Some(Err(Error::Cancelled {
+                walked: visited.get(),
+            }));
+        }
+        visited.set(visited.get() + 1);
+        if at == target {
+            return Some(Ok(true));
+        }
+        let commit = graph.commit_at(at);
+        // A commit below the tip's generation cannot reach it (generations only fall along a
+        // parent edge), so nothing under it is walked.
+        if commit.generation() < floor {
+            continue;
+        }
+        for parent in commit.iter_parents() {
+            match parent {
+                Ok(parent) => stack.push(parent),
+                Err(source) => {
+                    return Some(Err(Error::Walk {
+                        source: Box::new(source),
+                    }));
+                }
+            }
+        }
+    }
+    Some(Ok(false))
 }
 
 /// See [`hiding`].

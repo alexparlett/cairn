@@ -494,6 +494,63 @@ fn where_every_reflog_entry_is_reached_the_toggle_draws_the_same_rows() {
     assert!(head.is_subset(&drawn(&held(&repo, &request(&repo, 64, 1024), 64)).0));
 }
 
+/// Phase 10's decision A: with a commit-graph holding some of the tips — the reachable ones
+/// and some reflog-only ones, not all — Show Lost Commits draws the same rows, lanes, edges and
+/// lost marks in the same order as from the objects alone, on both routes: a date taken from
+/// the graph is the commit's own, as git's walk takes it. Caught by: a graph date read wrong (a
+/// tip ordered elsewhere), or a reflog tip the graph does not hold left undated or dropped.
+#[test]
+fn a_commit_graph_dates_the_tips_as_the_objects_do() {
+    let lost = lost_commits_fixture();
+    let fixture = &lost.fixture;
+    let read = |fixture: &Fixture| {
+        let repo = ok(Repository::discover(fixture.path()), "opening the fixture");
+        let mut drawn = Vec::new();
+        for page in [1, 3, 64] {
+            let request = request(&repo, page, 3);
+            drawn.push(laid_out_lost(&held(&repo, &request, page)));
+            drawn.push(laid_out_lost(&cold(&repo, request, page)));
+        }
+        drawn
+    };
+    let without = read(fixture);
+    // The reachable commits, and two of the reflog's lost ones: not every tip is in the graph.
+    let some_lost = format!("{}\n{}\n", lost.amended, lost.reset_away);
+    fixture.git(&["commit-graph", "write", "--reachable"]);
+    let graph = fixture.path().join(".git/objects/info/commit-graph");
+    assert!(graph.exists(), "git wrote no commit-graph");
+    let mut writer = std::process::Command::new("git")
+        .args(["commit-graph", "write", "--stdin-commits", "--append"])
+        .current_dir(fixture.path())
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write as _;
+    writer
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(some_lost.as_bytes())
+        .unwrap();
+    assert!(writer.wait().unwrap().success());
+    assert_eq!(read(fixture), without, "the graph changed what is drawn");
+}
+
+/// [`laid_out`], with each row's lost mark.
+fn laid_out_lost(rows: &History) -> Vec<String> {
+    rows.rows()
+        .map(|row| {
+            format!(
+                "{:?} {:?} {:?} lost={}",
+                row.id(),
+                row.lane(),
+                row.edges(),
+                row.is_lost()
+            )
+        })
+        .collect()
+}
+
 // --- The reporter: Show Lost Commits' first page (phase 10's stopping rule, C21) ---
 
 /// The first page of 64 rows from every ref — the snapshot already read, each run a fresh

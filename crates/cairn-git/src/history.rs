@@ -95,6 +95,8 @@ fn open_stream<'repo>(
     lookahead: usize,
     cancel: &impl Cancel,
 ) -> Result<Option<Stream<'repo>>, Error> {
+    // The reflog tips' dates, read with their ids: the walk reads none of them again.
+    let mut known = std::collections::HashMap::new();
     if let Marking::Unread(branches) = marking {
         let Some(reflog_tips) = reflogs::reflog_tips(repo, branches, cancel)? else {
             return Ok(None);
@@ -104,12 +106,18 @@ fn open_stream<'repo>(
         // A set, not a scan of the tips per reflog id: thousands of each on a long reflog.
         let mut seen: std::collections::HashSet<gix::hash::ObjectId> =
             tips.iter().copied().collect();
-        all.extend(reflog_tips.into_iter().filter(|id| seen.insert(*id)));
+        known.reserve(reflog_tips.len());
+        for (id, date) in reflog_tips {
+            if seen.insert(id) {
+                all.push(id);
+                known.insert(id, date);
+            }
+        }
         *tips = all.into();
         *marking = Marking::Read { refs };
     }
     let reach = marking.reach(tips)?;
-    let Some(walk) = walk::open(repo, tips, order, cancel)? else {
+    let Some(walk) = walk::open_dated(repo, tips, order, known, cancel)? else {
         return Ok(None);
     };
     Ok(Some(Stream::new(

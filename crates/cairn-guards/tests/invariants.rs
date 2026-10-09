@@ -30,7 +30,12 @@ const DEPENDENCY_ALLOWLIST: &[(&str, &[&str])] = &[
     ),
     // `unicode-width`: a tab stops where a terminal stops it, after wide and combining
     // characters (user-approved 2026-10-03, choosing "terminal widths").
-    ("cairn-ui", &["cairn-model", "freya", "unicode-width"]),
+    // `async-io`: the timer a drag held still at a list's edge scrolls by, a future on the
+    // toolkit's executor rather than a sleep (staging-and-commit L5, user-approved 2026-10-07).
+    (
+        "cairn-ui",
+        &["async-io", "cairn-model", "freya", "unicode-width"],
+    ),
     (
         "cairn-app",
         &[

@@ -16,6 +16,10 @@ pub mod diff_palette;
 mod diff_row_parts;
 mod diff_settings;
 mod diff_view;
+mod edge_scroll;
+pub use edge_scroll::{
+    EDGE_BAND, EDGE_TICK, EdgeScroll, MOST_PER_TICK, edge_step, use_edge_scroll,
+};
 mod end_room;
 pub use end_room::{END_ROOM, SCROLLBAR_THICKNESS, with_end_room};
 mod expansion;

@@ -35,6 +35,17 @@ crate = "nix"
 exact = true
 allow = ["process", "signal"]
 
+# async-io is a direct dependency of cairn-ui (staging-and-commit decision L5, approved by the
+# user 2026-10-07): its `Timer` paces the auto-scroll of a drag held still at a list's edge,
+# as a future on Freya's executor, since the UI thread may never sleep. It adds no crate: the
+# lockfile already held it at this version through Freya, which times its own tooltips and
+# animations with it. It has no default feature and Cairn names none; its one optional
+# dependency, `tracing`, stays off, which this pins.
+[[bans.features]]
+crate = "async-io"
+exact = true
+allow = []
+
 [licenses]
 # Not a crate, so not checked here: the diff's typeface, IBM Plex Mono Regular from IBM's
 # release `@ibm/plex-mono@2.5.0`, is a file embedded in the binary

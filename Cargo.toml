@@ -37,6 +37,12 @@ encoding_rs = "0.8.41"
 # "terminal widths"). Character widths only: `cjk` (ambiguous characters as two) is off,
 # as a terminal outside an East Asian locale counts them. No dependencies of its own.
 unicode-width = { version = "0.2.2", default-features = false }
+# The timer a drag held still at a list's edge scrolls by (staging-and-commit L5, the user's
+# decision 2026-10-07): `async_io::Timer`, a future on the toolkit's own executor, so the UI
+# thread never sleeps. Already in the build at this version through Freya, whose own tooltip,
+# cache and animations time themselves with it; no feature named, and it has none on by
+# default (`tracing` is optional and stays off).
+async-io = "2.6.0"
 # Sends SIGTERM to a git child on cancel, from safe code: `std` can only
 # SIGKILL, and git removes its lock files on SIGTERM alone (issue #19).
 # `signal` is the `kill(2)` wrapper, `process` the `Pid` it takes. `process`

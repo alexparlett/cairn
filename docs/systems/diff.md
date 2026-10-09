@@ -2275,7 +2275,7 @@ still reaching them, since a scroll view behind a field reads it
 but `crates/cairn-ui/src/text_field.rs` names `Input` or `on_pre_key_down`
 (`every_text_field_takes_the_shared_key_policy`).
 
-### Confirmations and menus
+### Confirmations, menus and edge auto-scroll
 
 A destructive operation waits on `cairn_ui::ConfirmDialog` (staging-and-commit R7.4): it
 draws a `Consequence`'s prompt and button (`Discard Changes in 3 Files`, `Discard 2 Lines`),
@@ -2293,6 +2293,17 @@ lets go of it on either answer
 (`no_chord_acts_under_a_confirmation_and_its_token_goes_where_it_was_asked`). The window's
 root also mounts Freya's `ContextMenuViewer`, which every context menu needs or the toolkit
 panics (R7.5, `a_context_menu_opens_from_inside_the_window`).
+
+A drag over a virtualized list scrolls it at its edges (R7.6,
+`crates/cairn-ui/src/edge_scroll.rs`): the list's container — which stays mounted however
+the rows under the pointer come and go — tracks the drag through global pointer listeners
+(`EdgeScroll::on`), the view that starts a drag says so (`EdgeScroll::begin`), and while the
+pointer is within `EDGE_BAND` of an edge or past it the list scrolls one step each
+`EDGE_TICK`, faster the deeper, up to `MOST_PER_TICK` (`edge_step`), until the pointer
+leaves the edge or the drag ends. The pace is `async-io`'s `Timer`, a future on the
+toolkit's executor, so the UI thread never sleeps: a pointer held still at an edge keeps the
+list scrolling, which pointer moves alone could not
+(`a_drag_held_at_an_edge_keeps_the_list_scrolling_until_it_leaves_or_ends`).
 
 ## What a commit's details carry
 

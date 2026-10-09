@@ -16,6 +16,8 @@ cairn-model.workspace = true
 freya = { workspace = true, features = ["engine"] }
 # Terminal column widths for tab stops (`src/columns.rs`; user-approved 2026-10-03).
 unicode-width.workspace = true
+# The edge auto-scroll's timer (`src/edge_scroll.rs`; user-approved 2026-10-07, L5).
+async-io.workspace = true
 
 [dev-dependencies]
 freya-testing.workspace = true

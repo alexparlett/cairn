@@ -720,7 +720,42 @@ fn reflog_of_an_amend(repo: &Repo) -> (Reflog, bool) {
         amend_with(repo, Confirmed::by_user(consequence), "amended"),
         "the amend",
     );
-    (said, logged_a_move_from(repo, &replaced))
+    let logged = logged_a_move_from(repo, &replaced);
+    // The amend's entry and Show Lost Commits' walk are one (staging-and-commit R11.1): the
+    // replaced commit is drawn when git logged the amend or a ref still reaches it (a branch
+    // left on it by a detached amend), and drawn lost exactly when no ref does.
+    let reached = repo
+        .git(&["rev-list", "--branches", "--remotes", "--tags", "HEAD"])
+        .lines()
+        .any(|line| line == replaced.to_string());
+    let shown = shown_by_show_lost_commits(repo, &replaced);
+    assert_eq!(
+        shown,
+        (logged || reached).then_some(!reached),
+        "what Show Lost Commits draws of the replaced commit: drawn, and whether lost"
+    );
+    (said, logged)
+}
+
+/// Whether Show Lost Commits — the walk from every ref and every reflog entry of `HEAD` and
+/// each local branch (staging-and-commit R11.1) — draws `commit`, and if so whether as lost,
+/// the whole walk paged.
+fn shown_by_show_lost_commits(repo: &Repo, commit: &cairn_model::Oid) -> Option<bool> {
+    let engine = engine(repo);
+    let read = ok(engine.refs(&CancelSignal::new()), "reading the refs");
+    let request = cairn_git::HistoryRequest::from_refs(&read.snapshot, 64).with_lost_commits();
+    let mut session = ok(engine.history_session(&request), "opening the walk");
+    let mut rows = cairn_model::History::new();
+    loop {
+        let page = ok(session.next_page(64, &CancelSignal::new()), "a page");
+        ok(rows.append(page.rows), "holding a page");
+        if page.cursor.is_none() {
+            break;
+        }
+    }
+    rows.rows()
+        .find(|row| row.id() == cairn_model::RowId::Commit(*commit))
+        .map(|row| row.is_lost())
 }
 
 /// R6.4 as amended, each arm against real git: the default writes the entry; `false` with no

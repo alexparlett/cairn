@@ -95,15 +95,16 @@ pub fn chunk_caption(verb: GestureVerb) -> &'static str {
     }
 }
 
-/// A selection's caption for `verb` over `count` lines (R9.2): `Stage 2 Lines`,
-/// `Unstage 1 Line`, and `Discard 2 Lines…`, whose ellipsis says it confirms.
+/// A selection's caption for `verb` over `count` lines, R9.2's words: `Stage 2 Lines`,
+/// `Unstage 1 Line`, `Discard 2 Lines` — the discard's confirmation button's words too.
 pub fn lines_caption(verb: GestureVerb, count: usize) -> String {
     let lines = if count == 1 { "Line" } else { "Lines" };
-    match verb {
-        GestureVerb::Stage => format!("Stage {count} {lines}"),
-        GestureVerb::Unstage => format!("Unstage {count} {lines}"),
-        GestureVerb::Discard => format!("Discard {count} {lines}…"),
-    }
+    let verb = match verb {
+        GestureVerb::Stage => "Stage",
+        GestureVerb::Unstage => "Unstage",
+        GestureVerb::Discard => "Discard",
+    };
+    format!("{verb} {count} {lines}")
 }
 
 /// The mode row's caption for `verb` (R9.4).
@@ -1098,7 +1099,7 @@ mod tests {
         assert_eq!(GestureSide::Staged.verbs(), &[GestureVerb::Unstage]);
         assert_eq!(lines_caption(GestureVerb::Stage, 2), "Stage 2 Lines");
         assert_eq!(lines_caption(GestureVerb::Unstage, 1), "Unstage 1 Line");
-        assert_eq!(lines_caption(GestureVerb::Discard, 2), "Discard 2 Lines…");
+        assert_eq!(lines_caption(GestureVerb::Discard, 2), "Discard 2 Lines");
         assert_eq!(chunk_caption(GestureVerb::Discard), "Discard Changes…");
         assert_eq!(mode_caption(GestureVerb::Stage), "Stage Mode Change");
     }

@@ -31,7 +31,7 @@ use crate::{Cancel, Error};
 use super::HistoryOrder;
 
 /// gitoxide's traversal over [`Grafted`] reads, yielding detached walk entries.
-pub(super) type CommitWalk<'repo> =
+pub(crate) type CommitWalk<'repo> =
     gix::traverse::commit::Simple<Seeded<'repo>, fn(&gix::oid) -> bool>;
 
 /// A walk from `tips` in `order`, with the repository's commit-graph where git would use one;
@@ -43,7 +43,7 @@ pub(super) type CommitWalk<'repo> =
 /// `cancel` polled before each but the first (a walk from one tip polls as it always did,
 /// once per commit laid out), and gitoxide's own read of each tip is then answered from
 /// the dates read ([`Seeded`]), costing no object read. Graph order reads no tip to open.
-pub(super) fn open<'repo>(
+pub(crate) fn open<'repo>(
     repo: &'repo gix::Repository,
     tips: &[gix::hash::ObjectId],
     order: HistoryOrder,
@@ -102,7 +102,7 @@ pub(super) fn open<'repo>(
 /// reads of a tip to order it (`add_to_queue`). Its every later read — its parents, when
 /// the walk reaches it — is the stored object, the dates being cleared once the walk is
 /// open.
-pub(super) struct Seeded<'repo> {
+pub(crate) struct Seeded<'repo> {
     objects: Grafted<'repo>,
     dates: Rc<RefCell<HashMap<gix::hash::ObjectId, i64>>>,
 }
@@ -143,8 +143,8 @@ impl gix::objs::Find for Seeded<'_> {
     }
 }
 
-/// A walk from `tip` that leaves out every commit `hidden` reaches — `git rev-list
-/// <tip> ^<hidden>` — over the commits git's walk sees ([`Grafted`]). Every read goes
+/// A walk from `tip` that leaves out every commit any of `hidden` reaches — `git rev-list
+/// <tip> ^<hidden>...` — over the commits git's walk sees ([`Grafted`]). Every read goes
 /// through [`Polled`], which fails once `cancel` says so: the frontier gix paints before a
 /// hiding walk's first commit is one long call, and a read that fails is what stops it.
 /// So no commit-graph is used here, though git would use one: a commit read from the
@@ -153,7 +153,7 @@ impl gix::objs::Find for Seeded<'_> {
 pub(crate) fn hiding<'a, C: Cancel>(
     repo: &'a gix::Repository,
     tip: gix::hash::ObjectId,
-    hidden: gix::hash::ObjectId,
+    hidden: impl IntoIterator<Item = gix::hash::ObjectId>,
     cancel: &'a C,
     reads: &'a Cell<usize>,
 ) -> Result<HidingWalk<'a, C>, Error> {
@@ -168,7 +168,7 @@ pub(crate) fn hiding<'a, C: Cancel>(
         reads,
     };
     gix::traverse::commit::Simple::new([tip], objects)
-        .hide([hidden])
+        .hide(hidden)
         .map_err(|e| walk_error(Box::new(e)))
 }
 
@@ -204,7 +204,7 @@ impl<C: Cancel> gix::objs::Find for Polled<'_, C> {
 
 /// The object database as git's walk sees it in a shallow clone: a boundary commit reads
 /// with no parents. Every other object, and every other commit, is the stored bytes.
-pub(super) struct Grafted<'repo> {
+pub(crate) struct Grafted<'repo> {
     objects: &'repo gix::OdbHandle,
     boundary: ShallowBoundary,
 }

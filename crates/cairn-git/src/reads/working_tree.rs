@@ -382,20 +382,62 @@ fn names(file: &ChangedFile, path: &RepoPath) -> bool {
 }
 
 fn pairing_arguments(commit: &Oid, detection: Detection) -> Vec<OsString> {
+    index_against_arguments(commit, detection, Some("--diff-filter=RC"))
+}
+
+/// `git diff-index --cached -z --raw --no-abbrev`, the user's rename detection, `filter` when
+/// one is given, intent-to-add entries left out as `git diff --cached` leaves them, and
+/// `commit` after `--end-of-options`.
+fn index_against_arguments(
+    commit: &Oid,
+    detection: Detection,
+    filter: Option<&str>,
+) -> Vec<OsString> {
     let mut arguments: Vec<OsString> = ["diff-index", "--cached", "-z", "--raw", "--no-abbrev"]
         .map(OsString::from)
         .into();
     arguments.extend(detection.arguments().into_iter().map(OsString::from));
-    arguments.extend(
-        [
-            "--diff-filter=RC",
-            "--ita-invisible-in-index",
-            "--end-of-options",
-        ]
-        .map(OsString::from),
-    );
+    arguments.extend(filter.map(OsString::from));
+    arguments.extend(["--ita-invisible-in-index", "--end-of-options"].map(OsString::from));
     arguments.push(commit.to_string().into());
     arguments
+}
+
+/// Every path whose index entry differs from `base` — a commit, or the empty tree — as the
+/// user's `git diff --cached <base>` lists them, a rename or a copy paired under
+/// `detection` (the user's `diff.renames` and `diff.renameLimit`), in git's order: amend's
+/// staged list, the index against `HEAD`'s parent (`docs/prd/staging-and-commit.md` R6.3).
+/// The same plumbing [`staged_pairing`] runs, over the whole index, every record kept.
+/// `cancel` is polled while git runs and a superseded read is [`Error::ContentCancelled`].
+pub(crate) fn staged_since(
+    git: &GitBinary,
+    repo: &Repository,
+    base: &Oid,
+    detection: Detection,
+    cancel: &impl Cancel,
+) -> Result<Vec<ChangedFile>, Error> {
+    if cancel.is_cancelled() {
+        return Err(Error::ContentCancelled);
+    }
+    let arguments = index_against_arguments(base, detection, None);
+    let mut records = RawRecords::default();
+    let outcome = git
+        .read_invocation()
+        .in_repository(repo)
+        .args(&arguments)
+        .start()?
+        .records(cancel, |record| records.push(record), |_| {});
+    match outcome {
+        Ok(_) => {}
+        Err(Error::GitReadCancelled { .. }) => return Err(Error::ContentCancelled),
+        Err(other) => return Err(other),
+    }
+    let described = arguments
+        .iter()
+        .map(|argument| argument.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join(" ");
+    records.finish(&described)
 }
 
 /// `Ok` for a path as git holds one in a working tree: relative to its top, with no `.` or

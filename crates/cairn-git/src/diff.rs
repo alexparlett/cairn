@@ -14,9 +14,10 @@
 //! highlights, which git has no equivalent of, and no gix type reaches a public signature.
 
 mod algorithm;
+mod amend;
 mod changes;
 mod content;
-mod git_config;
+pub(crate) mod git_config;
 mod hunk_grouping;
 mod inputs;
 mod intraline;

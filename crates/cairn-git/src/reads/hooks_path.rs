@@ -27,14 +27,6 @@ const CEILING: usize = 64 * 1024;
 
 /// The hooks directory git uses for `repo`, absolute. Cancelled through `cancel` as any read
 /// is; an empty answer is [`Error::UnexpectedGitOutput`].
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the commit engine (staging-and-commit phase 05) offers to skip hooks only \
-                  where this says one can run; the two reads of R3.9 land together"
-    )
-)]
 pub(crate) fn hooks_path(
     git: &GitBinary,
     repo: &Repository,

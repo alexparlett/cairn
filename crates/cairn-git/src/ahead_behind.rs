@@ -94,7 +94,7 @@ fn reachable_only_from(
     let walk = walk::hiding(
         repo.inner(),
         object_id(from)?,
-        object_id(hiding)?,
+        [object_id(hiding)?],
         cancel,
         reads,
     )?;

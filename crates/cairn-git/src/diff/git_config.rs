@@ -12,7 +12,7 @@ use gix::bstr::BString;
 
 use crate::Error;
 
-pub(super) fn invalid(key: &str, value: Option<BString>) -> Error {
+pub(crate) fn invalid(key: &str, value: Option<BString>) -> Error {
     Error::InvalidConfig {
         key: key.to_owned(),
         value: value.map_or_else(
@@ -26,7 +26,7 @@ pub(super) fn invalid(key: &str, value: Option<BString>) -> Error {
 /// order: `Some(None)` for the bare key, and `None` when it is not set at all. Section and
 /// key match whatever their case, as git's do; a subsection matches exactly, and a key in
 /// another subsection (`[diff "x"]` for `diff.<key>`) is a different key.
-pub(super) fn last_value(
+pub(crate) fn last_value(
     file: &gix::config::File,
     section: &str,
     subsection: Option<&[u8]>,
@@ -41,7 +41,7 @@ pub(super) fn last_value(
 /// `git_config_bool`: the bare key is true; a value is `git_parse_maybe_bool` — empty is
 /// false, then the words, then any integer git accepts, non-zero meaning true. `None` for
 /// anything git refuses.
-pub(super) fn parse_bool(value: Option<&[u8]>) -> Option<bool> {
+pub(crate) fn parse_bool(value: Option<&[u8]>) -> Option<bool> {
     let Some(value) = value else {
         return Some(true);
     };
@@ -64,7 +64,7 @@ pub(super) fn parse_bool(value: Option<&[u8]>) -> Option<bool> {
 /// `git_parse_int`: C's `strtoimax` in base 0 — leading whitespace, a sign, `0x` for hex
 /// and a leading `0` for octal — then nothing, or one of the unit suffixes `k`, `m`, `g`,
 /// and the result within an `int`, whose smallest accepted value is `-INT_MAX`.
-pub(super) fn parse_int(value: &[u8]) -> Option<i64> {
+pub(crate) fn parse_int(value: &[u8]) -> Option<i64> {
     let max = i64::from(i32::MAX);
     let mut rest = value;
     while let [first, tail @ ..] = rest

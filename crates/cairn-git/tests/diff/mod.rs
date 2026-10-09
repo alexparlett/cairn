@@ -6,6 +6,7 @@ mod scratch;
 mod bare_discovery;
 mod bench;
 mod changes;
+mod commit;
 mod content;
 mod expansion;
 mod fsmonitor;

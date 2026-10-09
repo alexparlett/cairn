@@ -4520,13 +4520,14 @@ const CONFIRMATION_SURFACES: &[&str] = &[];
 /// every function in `crates/cairn-git/src` that names `Confirmed` is one of these or
 /// [`CONFIRMED_RECORD`]. Discarding lines (R3.3) and discarding files — a tracked file's
 /// unstaged change restored, an untracked file deleted (R3.5) — replaced the placeholder
-/// `describe_destructive` in staging-and-commit phase 03; phase 05 adds amend and phase 11
-/// removing `index.lock`. The roster is never empty (the user's decision, 2026-10-08): an
+/// `describe_destructive` in staging-and-commit phase 03; amend (R6.4), which replaces `HEAD`,
+/// joined in phase 05; phase 11 adds removing `index.lock`. The roster is never empty (the user's decision, 2026-10-08): an
 /// empty one would check every token-taking function against nothing, so the guard asserts
 /// a row.
 const DESTRUCTIVE_OPERATIONS: &[(&str, &str)] = &[
     ("crates/cairn-git/src/ops/discard.rs", "discard_lines"),
     ("crates/cairn-git/src/ops/discard.rs", "discard_files"),
+    ("crates/cairn-git/src/ops/commit.rs", "amend"),
 ];
 
 /// The one function naming `Confirmed` that is not an operation: the record that spends the

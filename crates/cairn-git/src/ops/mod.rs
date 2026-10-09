@@ -199,7 +199,9 @@
 //! repository thread answers by dropping its open walk — so the graph stops
 //! showing the pre-fetch refs.
 
+mod amend;
 mod authority;
+mod commit;
 mod discard;
 mod fetch;
 mod fresh_state;
@@ -214,7 +216,9 @@ use std::path::PathBuf;
 
 use cairn_model::Confirmed;
 
+pub use amend::amend_consequence;
 pub(crate) use authority::WriteAuthority;
+pub use commit::{CommitCancel, CommitWatch, Hooks, amend, commit};
 pub use discard::{
     CLEAN_ARGUMENT_BYTES, discard_files, discard_files_consequence, discard_lines,
     discard_lines_consequence,

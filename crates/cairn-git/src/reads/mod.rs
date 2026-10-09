@@ -222,14 +222,15 @@ pub(crate) use attributes::{DiffAttribute, diff_attributes};
 pub(crate) use changes::{Detection, Submodules, changes};
 pub(crate) use fetch_settings::{FetchSettings, fetch_settings};
 pub(crate) use hash_object::hash_object;
+pub(crate) use hooks_path::hooks_path;
 #[cfg(test)]
 pub(crate) use patches::parse as parse_patches;
 pub(crate) use patches::{Algorithm, FilePatch, PatchQuery, PatchText, Reading, Scope, patches};
 pub(crate) use stash_changes::stash_changes;
 pub(crate) use status::status;
 pub(crate) use working_tree::{
-    Paired, Side, WorkingTreeAnswer, WorkingTreeQuery, staged_pairing, work_tree_relative,
-    working_tree_patch,
+    Paired, Side, WorkingTreeAnswer, WorkingTreeQuery, staged_pairing, staged_since,
+    work_tree_relative, working_tree_patch,
 };
 
 /// The read as the diff thread will run it: built here from a `GitBinary` copy

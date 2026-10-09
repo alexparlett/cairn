@@ -394,6 +394,22 @@ pub enum Error {
         failure: Option<Box<Error>>,
     },
 
+    /// A commit or an amend was refused before any `git` ran (`docs/prd/staging-and-commit.md`
+    /// R6.1, R6.3, R6.9): `why` says what, for the caller to show. Nothing was written.
+    #[error("{why}; nothing was committed")]
+    CommitRefused { why: CommitRefusal },
+
+    /// What an amend's `Consequence` names moved between the confirmation and the run
+    /// (R1.4): `HEAD` is another commit, a remote has it now, or the reflog setting changed.
+    /// The amend refused, writing nothing — an outcome of its own, never git's failure.
+    #[error("HEAD changed since you confirmed the amend; nothing was amended")]
+    AmendChangedSinceConfirmed,
+
+    /// A commit or an amend was cancelled before its `git` started — while what it checks
+    /// first was still being read. Nothing was written.
+    #[error("the commit was cancelled before git ran; nothing was written")]
+    CommitCancelledBeforeRunning,
+
     /// The remote's configuration could not be read — `git config` failed, was
     /// cancelled or answered what it never prints, or a configured refspec does
     /// not parse — so the fetch could not be checked and did not run.
@@ -515,6 +531,43 @@ impl std::fmt::Display for Refusal {
                 "what the discard was handed is not what its confirmation names"
             }
         })
+    }
+}
+
+/// Why a commit or an amend refused before any `git` ran; see [`Error::CommitRefused`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitRefusal {
+    /// git is in the middle of an operation a commit or an amend is refused during (L25): a
+    /// rebase, `git am`, a cherry-pick or a revert — or, for an amend, a merge, which git
+    /// itself refuses to amend in.
+    InProgress(cairn_model::OperationInProgress),
+    /// The branch has no commit yet, so there is nothing to amend (R6.3).
+    NothingToAmend,
+    /// `i18n.commitEncoding` names an encoding other than UTF-8 (R6.1): git stores the
+    /// message's bytes as they are under that encoding's name, so a UTF-8 draft would be
+    /// read back as other characters (git-write-verbs.md §5). The value as configured.
+    CommitEncoding { encoding: String },
+    /// An amend was handed a confirmation of another operation.
+    NotWhatWasConfirmed,
+}
+
+impl std::fmt::Display for CommitRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InProgress(operation) => write!(
+                f,
+                "{} is in progress: continue or abort it first",
+                operation.name()
+            ),
+            Self::NothingToAmend => f.write_str("the branch has no commit to amend yet"),
+            Self::CommitEncoding { encoding } => write!(
+                f,
+                "i18n.commitEncoding is {encoding:?}, and Cairn writes a message only as UTF-8"
+            ),
+            Self::NotWhatWasConfirmed => {
+                f.write_str("what the amend was handed is not what its confirmation names")
+            }
+        }
     }
 }
 

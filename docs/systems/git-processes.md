@@ -1092,8 +1092,12 @@ runs, `Update::WriteOutput`), and is replaced by its commands' records once they
 record's arguments and stderr, a fetch's progress lines and every ending's message and output
 before they leave it, and the window scrubs them again as it keeps them
 (`crate::shown_output`), so no entry, no Git Error dialog and no line under the lists can draw a
-token whoever built the update. A URL whose authority a line's end cuts — a line git's reader
-sent in pieces, a tail cut from the front — loses its userinfo on both sides of the cut. An
+token whoever built the update. A URL a line's end cuts anywhere — inside its scheme, its `://`,
+its userinfo or its host — loses its userinfo on both sides of the cut, and a quote inside a
+userinfo does not end it. Where a text was cut from its front is the engine's to say, never
+guessed from its length: a record's `stderr_cut`, and an `Error::GitFailed`'s `stderr_cut`
+offsets — its tail's front, and in a commit's output where its stderr's cut tail follows
+stdout's — by which the lanes scrub each part (`shown_output::scrubbed_at`). An
 scp-like address (`git@host:path`) is no URL and is left. Pinned by `scrub.rs`'s tests,
 `the_git_error_draws_no_token_a_hook_printed` (the dialog, streamed and kept),
 `no_line_of_an_entry_carries_a_token` and
@@ -1121,18 +1125,32 @@ running refuses the offer and the removal),
 and the confirmed removal through the worker) and
 `remove_index_lock_is_offered_where_the_lane_offered_it_and_asks_through_its_confirmation`.
 
-**Bounded, and session only** (R12.3, L14): at most `ACTIVITY_ENTRIES` (200) operations, each
-at most `ACTIVITY_LINES` (10,000) lines, all of them at most `ACTIVITY_BYTES` (4 MiB) of lines,
-the oldest let go of first; nothing is written anywhere. Both lists — the operations and the
+**Bounded, and session only** (R12.3, L14): at most `ACTIVITY_ENTRIES` operations, each at most
+`ACTIVITY_LINES` lines, all their lines together at most `ACTIVITY_BYTES` — counted as lines go
+in and out, the oldest operations' lines let go of first and, for the newest alone over the
+budget, its oldest lines, so a running operation keeps its latest output; what a running
+operation wrote is let go of once its commands' records arrive, which are drawn in its place
+(`what_is_held_stays_under_the_bound_across_many_operations`,
+`a_running_operation_over_the_budget_keeps_its_latest_lines`). Nothing is written anywhere.
+Each line is cut, as the diff view cuts one, at `cairn_model::LINE_CUT_BYTES` on a character,
+with the diff view's marker after it (`cairn_ui::cut_marker`;
+`a_long_line_is_kept_cut_with_the_diff_views_marker`). Both lists — the operations and the
 selected one's lines — are drawn through a virtualizing view
-(`the_popover_builds_one_viewport_of_operations_and_of_lines`). An operation's entry is built
-only while the popover is open, from lines kept shared.
+(`the_popover_builds_one_viewport_of_operations_and_of_lines`), and the selected entry's lines
+alone are built, when the open popover asks, and kept until a line changes; with it closed an
+update costs the lines it carries (`closed_the_popover_builds_no_lines`).
+
+**An operation's name** is Fork's imperative form, as its Activity Manager names one ("Fetch
+origin", "Create branch 'develop'"; `fork-staging-and-commit.md` §7): `LocalWrite::name` — "Stage
+1 file", "Stage lines of a.rs", "Unstage 2 files", "Commit", "Create branch 'topic'" — and, for a
+destructive write, its confirmation's (`Consequence::name`: "Discard 3 files", "Discard lines of
+a.rs", "Amend", "Remove index.lock").
 
 **A commit's output, bounded on its way** (phase 05's QA item 3): the runner hands a write's
 stderr on a read of the pipe at a time (`Invocation::finish_by_read`), the commit's `CommitWatch`
 hands those lines on together, and the lane sends each read as one `Update::WriteOutput` whose
 `OutputReceipt` counts its bytes in a budget shared with the window. Past
-`output_flow::IN_FLIGHT_BYTES` (1 MiB) waiting for the window, the lane holds the newest lines
+`output_flow::IN_FLIGHT_BYTES` waiting for the window, the lane holds the newest lines
 itself, at most the window's own tail's bounds, and sends them once the window has given bytes
 back or as the write ends; the receipt's drop — on the UI thread — is one atomic subtraction.
 Pinned by `the_lines_of_one_read_are_handed_on_together` and

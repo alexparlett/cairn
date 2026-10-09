@@ -3,6 +3,48 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 11 QA, the adjudicated fixes (packet mode)
+
+The two adjudications (engine and app halves) listed 22 items to fix now. Every one is fixed
+but DO3+DO5 (the lock offer computed once at the write's end, its age stale), which the
+coordinator holds for the user's decisions G and H. Four are carried to file at teardown (state.md).
+
+- **Engine**: the pushed check's graph route pinned to hand over for a tip the graph lacks (TC1,
+  a `filter_map` mutation now fails both new tests); the lock re-check's time-only and
+  directory arms (TC2, a comparison without the time now fails); the scrubber carries a cut at or
+  inside `://` and reads a quote as part of a userinfo, every byte of a line tried as the cut
+  (TC3, TC4); where kept output was cut is said by the engine — the runner's `Retained`, a
+  record's `stderr_cut`, `Error::GitFailed`'s `stderr_cut` offsets, a commit's joined output —
+  and the lanes scrub by it, the length guess gone (TC5); the filesystem matcher sees
+  `File::options`, `File::create_buffered`, `fs::{self as f}`, braced globs and `File` renamed,
+  every roster entry has a case spelled out, and `ops/` and each exception are pinned to their
+  kinds of write (GI1-GI6, TC6); `LockRefusal::Unreadable` (QC4); the registry's limit stated
+  (DO4); the missing tests TC8-TC12; and the reviewer files' gaps (GI8, GI9).
+- **App**: the activity log counts bytes as lines go in and out, lets go of a finished entry's
+  streamed output, trims a running entry's oldest lines rather than clearing it, and builds
+  the selected entry's lines only for the open popover (item 1); the carry of diffs drawn together
+  looks each path up by hash — 9.6 ms at 50,000 selected and 5,000 drawn, release (item 2);
+  popover lines cut at `LINE_CUT_BYTES` with the diff view's marker (item 3); window_check's hook
+  phases (item 4); the docs cite constants (item 5); and each operation is named in Fork's
+  imperative form (`LocalWrite::name`, `Consequence::name`), Fork-settled.
+
+**Measured** (`writes_check`, release, warm, a fresh `--no-hardlinks` tmpfs clone of the bench at
+`c999cef531e`, `maintenance.auto=false`, `gc.auto=0`, no commit-graph; three runs; deleted after).
+C21, press to the refreshed lists drawn, median of seven: stage 68.8 / 69.3 / 69.6 ms (bar 93),
+unstage 69.1 / 69.3 / 69.0 (bar 93), discard 51.5 / 51.6 / 51.4 (bar 76), commit 52.5 / 52.5 /
+52.5 (bar 87). Every frame under 16.7 ms of UI-thread work. The slowest frame while a hook ran,
+across the three hooks, each with the popover closed and open:
+
+| Hook | Popover closed (ms) | Popover open (ms) |
+|---|---|---|
+| A line every 50 ms for 2 s | 1.12 / 1.57 / 0.98 | 2.08 / 1.96 / 1.66 |
+| 20,000 lines, each flushed (14,500-19,900 updates applied) | 4.46 / 4.33 / 5.37 | 5.40 / 5.39 / 5.09 |
+| Five lines of 200 KiB | 4.17 / 4.32 / 4.15 | 1.47 / 1.67 / 1.71 |
+
+1,000 files drawn together in 28.7 ms, the slowest frame 12.2 ms; Show Lost Commits' first page
+17.5-18.2 ms after the toggle. C21's frame claim holds for these three hooks; a hook that writes
+faster than one pipe read per line, or for longer, is not measured.
+
 ## 2026-10-09 — phase 11, the activity popover and the measured bar (packet mode; built, QA pending)
 
 Built on `feature/staging-and-commit` from 4794754, in packet mode. Everything R12, R13, C2's lock

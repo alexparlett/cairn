@@ -22,8 +22,9 @@ packet mode: QA adjudicated, fixes and the user's decisions (2026-10-09) applied
 at 18fea48. Phase 10 (Show Lost Commits) done in packet mode: Show Lost Commits with its check
 box, and Fork's Create Branch dialog with its sealed Discard, as the user decided (2026-10-09);
 QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green.
-Phase 11 (the activity popover and the measured bar) built in packet mode, gate green, QA
-pending; its unsettled placements and words held for the user's sign-off. Phase 12 not
+Phase 11 (the activity popover and the measured bar) built in packet mode; QA adjudicated and
+every fix-now item fixed but DO3+DO5, held for the user's decisions G and H; gate green; its
+unsettled placements and words held for the user's sign-off. Phase 12 not
 started.**
 
 ## Locked decisions
@@ -497,6 +498,27 @@ Phase 11 (`docs/systems/git-processes.md`, "The registry" and "The activity popo
 
 ## Carried forward from phase 11 (owned by the phase named)
 
+- **Held for the user's decisions G and H (the coordinator's)**: DO3+DO5 — `Remove index.lock…`'s
+  offer is computed once, as the write ends (`local_lane::removable_lock`): refused, and so absent,
+  while any Cairn git runs then (a focus-gained status read, a fetch), and its age stated as of
+  that moment when pressed later. Both err safe (the removal re-checks); the fix — the ending's
+  naming of the lock as the offer, the `Consequence` built on the press — waits on G and H.
+- **To file at teardown** (phase 11's QA, file-as-issue; not filed on GitHub in the packet):
+  - DO1: the commit-graph reach (`history::walk::reaches_through_graph`) treats generation 0 as a
+    level, where git reads 0 as "not computed"; a mixed chain needs a pre-2.19 graph under a newer
+    layer, which no supported git writes, so no fixture can be built — and the failure is
+    unsafe (Unpublished). Hardening: answer `None` when the floor or any visited generation is 0.
+  - DO2 (pre-existing): neither the graph route nor the object walk honours `refs/replace` or
+    `info/grafts`, where git turns the commit-graph off when they are present; the pushed check can
+    then differ from `git branch -r --contains`.
+  - DO6: `history::reflogs::reflog_tips` takes an id the commit-graph holds as present without an
+    object lookup, so a commit pruned after the graph was written is listed as lost and fails to
+    open; parity with git (which trusts the graph unless `core.commitGraph` paranoia is on) is
+    undecided. Needs a fixture.
+  - GI7 (pre-existing): `code_without_test_modules` (`crates/cairn-guards/src/lib.rs`) blanks the
+    block after a `#[cfg(test)]` on a field, variant or arm, which would hide production code from
+    every guard using it; no such site exists in product `src/` today.
+
 - **The user (NEEDS USER SIGN-OFF, relayed by the coordinator)**: the popover's placements and
   words the PRD and Fork's evidence leave open — built provisionally, listed in the phase's
   report.
@@ -880,5 +902,5 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 08 diff gesture | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green |
 | 09 commit box | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green at 18fea48 |
 | 10 lost commits | done — QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green |
-| 11 activity and measured | built, gate green, QA pending; NEEDS USER SIGN-OFF on the popover's unsettled placements and words |
+| 11 activity and measured | built, QA adjudicated, every fix-now item fixed but DO3+DO5 (held for the user's G and H), gate green; NEEDS USER SIGN-OFF on the popover's unsettled placements and words |
 | 12 QA | not started |

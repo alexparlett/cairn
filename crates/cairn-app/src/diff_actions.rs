@@ -8,7 +8,7 @@
 //! through [`DiffState`](crate::diff_state::DiffState) and the file-diff lane, superseding
 //! what is in flight; the answer kept is then the one naming the new options, and no other.
 
-use cairn_model::{ChangeList, Context, LocalChange, PathState};
+use cairn_model::{ChangeList, Context, LocalChange, PathState, StagedAgainst};
 use cairn_ui::{DetailTab, DiffSettings, MainView, step_change};
 use freya::prelude::*;
 
@@ -149,13 +149,18 @@ pub fn working_options(settings: DiffSettings) -> DiffOptions {
 pub fn working_query(
     list: ChangeList,
     change: &LocalChange<'_>,
+    against: StagedAgainst,
     settings: DiffSettings,
 ) -> Option<FileQuery> {
-    let side = match (change.state, list) {
-        (PathState::Conflicted, _) => return None,
-        (PathState::Untracked, _) => WorkingSide::Untracked,
-        (PathState::Tracked, ChangeList::Staged) => WorkingSide::Staged,
-        (PathState::Tracked, ChangeList::Unstaged) => WorkingSide::Unstaged,
+    let side = match (change.state, list, against) {
+        (PathState::Conflicted, _, _) => return None,
+        (PathState::Untracked, _, _) => WorkingSide::Untracked,
+        (PathState::Tracked, ChangeList::Staged, StagedAgainst::Head) => WorkingSide::Staged,
+        // A file of amend's staged list: against `HEAD`'s parent (staging-and-commit R10.3).
+        (PathState::Tracked, ChangeList::Staged, StagedAgainst::HeadParent(_)) => {
+            WorkingSide::Amending
+        }
+        (PathState::Tracked, ChangeList::Unstaged, _) => WorkingSide::Unstaged,
     };
     Some(FileQuery {
         target: FileTarget::WorkingTree {
@@ -191,7 +196,12 @@ pub fn choose_working(list: ChangeList, row: usize, view: View, submit: Option<&
                 path: change.path.clone(),
                 lists: local.serial(),
             },
-            working_query(list, &change, *view.diff_settings.peek()),
+            working_query(
+                list,
+                &change,
+                lists.staged_against(),
+                *view.diff_settings.peek(),
+            ),
         )
     };
     let mut diff = view.diff;

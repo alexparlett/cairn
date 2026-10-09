@@ -53,9 +53,9 @@ use cairn_model::{
     AskpassToken, ChangeList, Confirmed, FileDiff, LocalChanges, Oid, RepoPath, Selection,
 };
 
-use super::epoch::Superseded;
+use super::epoch::{Epoch, Superseded};
 use super::pool::Outbox;
-use super::request::Update;
+use super::request::{AmendRead, CommitReads, Update};
 
 /// Names one local write from the moment the window asks for it: what its start, its
 /// ending and a cancel of it name. Never reused within the application.
@@ -101,14 +101,6 @@ impl From<UnstageTarget> for UnstageTo {
 /// A write the local lane runs: one of `cairn_git::ops`' local verbs and what it is given. A
 /// destructive one carries the `Confirmed` the user gave it, spent by the verb.
 #[derive(Debug, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the commit box (staging-and-commit phase 09) asks for a commit and an amend; \
-                  the lane serves each, and its tests ask"
-    )
-)]
 pub enum LocalWrite {
     /// `selection` of `diff` — the path's unstaged or untracked diff — into the index.
     StageLines {
@@ -428,10 +420,14 @@ pub enum WriteEnding {
     /// commit during a rebase, …).
     Refused { message: String },
     /// git ran and failed: its message, and the lock files present once it had — the one it
-    /// failed on among them, when that was it.
+    /// failed on among them, when that was it. When it was git that failed, `command` is what
+    /// ran (`git commit -q -F -`) and `output` git's words as the engine kept them — stdout's
+    /// tail, then stderr's — for the Git Error dialog (R10.5); both empty otherwise.
     Failed {
         message: String,
         locks: Vec<PathBuf>,
+        command: Option<String>,
+        output: String,
     },
     /// Cancelled, or Cairn lost hold of its git: it may have taken effect, in part or whole,
     /// and the read after it shows what did (R4.7). With the lock files left.
@@ -520,9 +516,16 @@ impl WriteEnding {
                 message,
                 locks: stranded_locks,
             },
-            Error::GitFailed { present_locks, .. } => Self::Failed {
+            Error::GitFailed {
+                arguments,
+                stderr,
+                present_locks,
+                ..
+            } => Self::Failed {
                 message,
                 locks: present_locks,
+                command: Some(format!("git {arguments}")),
+                output: stderr,
             },
             Error::DiscardIncomplete {
                 performed, kept, ..
@@ -539,6 +542,8 @@ impl WriteEnding {
             _ => Self::Failed {
                 message,
                 locks: Vec::new(),
+                command: None,
+                output: String::new(),
             },
         };
         (ending, None)
@@ -570,6 +575,16 @@ pub(super) enum LocalJob {
         asked: OperationId,
         diff: Arc<FileDiff>,
         selection: Selection,
+        cancel: Superseded,
+    },
+    /// What the commit box reads (staging-and-commit R10), in the lane's order, answered under
+    /// its number in the commit-box lane; one superseded before it is answered is not sent.
+    CommitReads { epoch: Epoch, cancel: Superseded },
+    /// What amending `HEAD` would replace and amend's lists over `status`, in the lane's order
+    /// (R6.3, R6.4, R10.3); a newer ask or `StopAmending` ends its walk and its `git` read.
+    Amending {
+        status: Arc<LocalChanges>,
+        epoch: Epoch,
         cancel: Superseded,
     },
     /// The repository is closing: end once the write running, if any, has.
@@ -817,8 +832,103 @@ pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
                     .outbox
                     .send(None, Update::DiscardConsequence { asked, outcome });
             }
+            LocalJob::CommitReads { epoch, cancel } => {
+                let reading = Counting {
+                    superseded: &cancel,
+                    lane: serving.lane,
+                };
+                if let Some(reads) = commit_reads(serving.git, &repo, &reading) {
+                    serving
+                        .outbox
+                        .send(Some(epoch), Update::CommitReads(Box::new(reads)));
+                }
+            }
+            LocalJob::Amending {
+                status,
+                epoch,
+                cancel,
+            } => {
+                let reading = Counting {
+                    superseded: &cancel,
+                    lane: serving.lane,
+                };
+                if let Some(read) = amend_read(serving.git, &repo, &status, &reading) {
+                    serving.outbox.send(
+                        Some(epoch),
+                        Update::Amending {
+                            status,
+                            read: Box::new(read),
+                        },
+                    );
+                }
+            }
         }
     }
+}
+
+/// What the commit box reads (R6.6, R6.7, R6.9): each read's answer or its failure, or `None`
+/// once `reading` is cancelled — nobody waits on it.
+fn commit_reads(git: &GitBinary, repo: &Repository, reading: &Counting<'_>) -> Option<CommitReads> {
+    use cairn_git::Cancel as _;
+    if reading.is_cancelled() {
+        return None;
+    }
+    let operation = repo.operation_in_progress();
+    let hooks = repo
+        .commit_hooks(git, reading)
+        .map_err(|error| error.to_string());
+    let recent = repo
+        .recent_messages(reading)
+        .map_err(|error| error.to_string());
+    (!reading.is_cancelled()).then_some(CommitReads {
+        operation,
+        hooks,
+        recent,
+    })
+}
+
+/// What amending `HEAD` would replace, its message and amend's lists over `status` (R6.3,
+/// R6.4, R10.3), each part or its failure; `None` once `reading` is cancelled. The message is
+/// the commit the `Consequence` names, so the draft an amend fills is of the commit it
+/// replaces.
+fn amend_read(
+    git: &GitBinary,
+    repo: &Repository,
+    status: &LocalChanges,
+    reading: &Counting<'_>,
+) -> Option<AmendRead> {
+    use cairn_git::Cancel as _;
+    if reading.is_cancelled() {
+        return None;
+    }
+    let consequence = ops::amend_consequence(repo, reading);
+    let message = match &consequence {
+        Ok(consequence) => match consequence.amended() {
+            Some(commit) => repo
+                .commit_details(&commit)
+                .map(|details| details.message)
+                .map_err(|error| error.to_string()),
+            None => Err("there is no commit to amend".to_owned()),
+        },
+        Err(error) => Err(error.to_string()),
+    };
+    let lists = repo
+        .amend_parent()
+        .and_then(|parent| {
+            let staged = repo.amend_staged(git, reading)?;
+            Ok(LocalChanges::amending(
+                status.status().clone(),
+                staged,
+                parent,
+            ))
+        })
+        .map(Arc::new)
+        .map_err(|error| error.to_string());
+    (!reading.is_cancelled()).then_some(AmendRead {
+        consequence: consequence.map_err(|error| error.to_string()),
+        message,
+        lists,
+    })
 }
 
 /// What the window reads again after a write (R4.5): what its `Invalidated` names when it ran,

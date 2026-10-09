@@ -694,6 +694,25 @@ impl RepositoryHandle {
             }
             // Numbered above: the count in flight is superseded, and nothing is sent.
             Routed::StopCounting => {}
+            Routed::CommitReads => {
+                if let Some(epoch) = epoch {
+                    let _ = self.local.send(LocalJob::CommitReads {
+                        epoch,
+                        cancel: self.epochs.watch(epoch),
+                    });
+                }
+            }
+            Routed::Amending { status } => {
+                if let Some(epoch) = epoch {
+                    let _ = self.local.send(LocalJob::Amending {
+                        status,
+                        epoch,
+                        cancel: self.epochs.watch(epoch),
+                    });
+                }
+            }
+            // Numbered above: the amend read in flight is superseded, and nothing is sent.
+            Routed::StopAmending => {}
             Routed::CancelWrite(id) => self.lane.cancel(id),
             Routed::RefreshStatus => {
                 let status = self.epochs.current(QueryLane::Status);
@@ -786,6 +805,8 @@ pub fn idle_handle() -> (RepositoryHandle, impl Fn() -> Vec<Request>) {
                 diff,
                 selection,
             })),
+            LocalJob::CommitReads { .. } => Some(unroute(Routed::CommitReads)),
+            LocalJob::Amending { status, .. } => Some(unroute(Routed::Amending { status })),
             LocalJob::Stop => None,
         });
         asked.into_iter().chain(alone).chain(writes).collect()

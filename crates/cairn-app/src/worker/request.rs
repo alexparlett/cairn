@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use cairn_model::ShownDiff;
 use cairn_model::{
-    AheadBehind, ChangeSet, ChangedFile, CommandRecord, Consequence, Context, Disclosure, FileDiff,
-    History, LocalChanges, MatchedRows, Oid, RefName, RefsSnapshot, RemoteSummary, RepoPath,
-    RowsPage, Selection, SidebarRow,
+    AheadBehind, ChangeSet, ChangedFile, CommandRecord, CommitHooks, Consequence, Context,
+    Disclosure, FileDiff, History, LocalChanges, MatchedRows, Oid, OperationInProgress, RefName,
+    RefsSnapshot, RemoteSummary, RepoPath, RowsPage, Selection, SidebarRow,
 };
 
 use super::askpass::PromptId;
@@ -37,6 +37,9 @@ pub enum Comparison {
 pub enum WorkingSide {
     /// `HEAD` against the index: `git diff --cached`.
     Staged,
+    /// `HEAD`'s parent against the index, `git diff --cached HEAD^`: a file of amend's staged
+    /// list, chosen in the Staged list while Amend is ticked (staging-and-commit R10.3).
+    Amending,
     /// The index against the working tree: `git diff`.
     Unstaged,
     /// Nothing against the working tree, for a path git does not track.
@@ -213,6 +216,9 @@ struct RetiredAnswers {
     refs: Option<Arc<RefsSnapshot>>,
     ahead_behind: Option<Arc<Vec<(RefName, AheadBehind)>>>,
     status: Option<Arc<LocalChanges>>,
+    /// Lists laid out for an amend over `status`, or the status itself when it is let go of
+    /// with them.
+    amended: Option<Arc<LocalChanges>>,
     sidebar: Option<Arc<Vec<SidebarRow>>>,
 }
 
@@ -284,6 +290,16 @@ impl Retired {
     pub fn status(status: Arc<LocalChanges>) -> Self {
         Self(Box::new(RetiredAnswers {
             status: Some(status),
+            ..RetiredAnswers::default()
+        }))
+    }
+
+    /// A status and the lists laid out over it for an amend (`LocalChanges::amending`), let go
+    /// of together: either may be the last hold on what it lays out.
+    pub fn amending(status: Arc<LocalChanges>, lists: Option<Arc<LocalChanges>>) -> Self {
+        Self(Box::new(RetiredAnswers {
+            status: Some(status),
+            amended: lists,
             ..RetiredAnswers::default()
         }))
     }
@@ -461,16 +477,23 @@ pub enum Request {
     /// Ends the count of a discard's loss in flight, and asks nothing: what Local Changes asks
     /// when it is no longer shown, so a count nobody will confirm stops holding the local lane.
     StopCounting,
+    /// What the commit box reads beside a commit (staging-and-commit R6.6, R6.7, R6.9, R10):
+    /// the operation in progress, the hooks git would run and the recent messages, read on the
+    /// local lane after the writes asked before it — so a commit's own message is among them
+    /// once it has ended — and answered by [`Update::CommitReads`]. Numbered in the commit-box
+    /// lane: the next ask supersedes it, and an answer superseded is never drawn.
+    CommitReads,
+    /// What amending `HEAD` would replace (`ops::amend_consequence`), its message and amend's
+    /// staged list laid out with `status`'s unstaged one (`LocalChanges::amending`), read on
+    /// the local lane after the writes asked before it while Amend is ticked (R6.3, R6.4,
+    /// R10.3), answered by [`Update::Amending`]. Numbered in the amending lane, so the next
+    /// status asking again, or [`Request::StopAmending`], ends the read before — its walk and
+    /// its `git` read. `status` is the window's own, shared.
+    Amending { status: Arc<LocalChanges> },
+    /// Ends the amend read in flight, and asks nothing: Amend unticked.
+    StopAmending,
     /// Cancels the write `id` names, if it is a commit and running; nothing otherwise (R4.3).
     /// Never queued: it reaches the lane's state directly, ahead of any write.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the commit box (staging-and-commit phase 09) is the first view to cancel \
-                      a commit; the lane serves it, and its tests ask"
-        )
-    )]
     CancelWrite { id: OperationId },
     /// Every `git` invocation this repository has run that is over, oldest
     /// first, answered by [`Update::CommandLog`].
@@ -517,6 +540,8 @@ impl Request {
             Self::DiscardConsequence { .. }
             | Self::DiscardLinesConsequence { .. }
             | Self::StopCounting => &[QueryLane::DiscardCount],
+            Self::CommitReads => &[QueryLane::CommitBox],
+            Self::Amending { .. } | Self::StopAmending => &[QueryLane::Amending],
             Self::ListRemotes
             | Self::ConfiguredContext
             | Self::Fetch { .. }
@@ -687,6 +712,14 @@ pub enum Update {
         asked: OperationId,
         outcome: Result<Consequence, String>,
     },
+    /// What the commit box reads beside a commit, as the latest ask read it.
+    CommitReads(Box<CommitReads>),
+    /// What amending `HEAD` would replace and amend's lists, read for `status`: the latest
+    /// ask's, while Amend is ticked.
+    Amending {
+        status: Arc<LocalChanges>,
+        read: Box<AmendRead>,
+    },
     /// The lock files under the git directories as the repository opened — one a write left
     /// when a close gave up on it among them (staging-and-commit R4.9) — listed by the local
     /// lane before it runs any write, and sent only when there are some.
@@ -768,6 +801,8 @@ impl Update {
             Self::Refs { snapshot, .. } => Some(Retired::refs(snapshot)),
             Self::AheadBehind { counts } => Retired::ahead_behind(Arc::new(counts)),
             Self::Status { changes } => Some(Retired::status(changes)),
+            // Both lists may be the last hold on what they lay out.
+            Self::Amending { status, read } => Some(Retired::amending(status, read.lists.ok())),
             // The lists may be the last hold on a status the window has replaced since.
             Self::FilteredLocalChanges { changes, .. } => Some(Retired::status(changes)),
             // The snapshot may be the last hold on one the window has replaced since.
@@ -791,12 +826,41 @@ impl Update {
             | Self::WriteOutput { .. }
             | Self::WriteEnded { .. }
             | Self::DiscardConsequence { .. }
+            | Self::CommitReads(_)
             | Self::LocksAtOpen { .. }
             | Self::CommandLog { .. }
             | Self::FilteredFiles { .. }
             | Self::DiffFailed { .. } => None,
         }
     }
+}
+
+/// What the commit box reads beside a commit (staging-and-commit R6.6, R6.7, R6.9): each
+/// read's answer, or why it failed as display text — one failing alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitReads {
+    /// What git is in the middle of: a merge fills an empty draft and makes the commit the
+    /// merge commit; a rebase, `git am`, a cherry-pick or a revert disables the box (R10.8).
+    pub operation: Option<OperationInProgress>,
+    /// The hooks git would run, which the failed commit's skip is offered for (R10.5).
+    pub hooks: Result<CommitHooks, String>,
+    /// The latest messages on the current branch, newest first (R10.2).
+    pub recent: Result<Vec<String>, String>,
+}
+
+/// What amending `HEAD` would replace, read for the status it was asked with (R6.3, R6.4,
+/// R10.3, R10.6): each part, or why it failed as display text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AmendRead {
+    /// What the amend button confirms: `HEAD`, whether a remote has it, whether git will log
+    /// the move.
+    pub consequence: Result<Consequence, String>,
+    /// `HEAD`'s message, which ticking Amend fills an empty draft with.
+    pub message: Result<String, String>,
+    /// The lists while amending: Unstaged as the status lists it, Staged as amend's staged
+    /// list against `HEAD`'s parent (`LocalChanges::amending`) — or why amend's staged list
+    /// could not be read (a partial clone's missing blob, on git 2.44 and later).
+    pub lists: Result<Arc<LocalChanges>, String>,
 }
 
 /// Why the paths drawn together stopped being read.

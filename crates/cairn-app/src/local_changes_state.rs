@@ -47,6 +47,9 @@ pub struct LocalChangesView {
     /// A drag across the diff's lines, and the lines it selected (staging-and-commit R9.2):
     /// written by the diff view, read by the chords heard on the diff.
     pub lines: State<cairn_ui::LineDrag>,
+    /// The commit box under the diff: the draft, kept for the window's life (R10.7), and the
+    /// rest of its state.
+    pub commit: crate::commit_box_state::CommitBoxView,
 }
 
 impl LocalChangesView {
@@ -62,6 +65,7 @@ impl LocalChangesView {
             selection: use_state(ListSelection::default),
             acting: use_state(crate::local_changes_actions::Acting::default),
             lines: use_state(cairn_ui::LineDrag::default),
+            commit: crate::commit_box_state::CommitBoxView::used(),
         }
     }
 
@@ -78,6 +82,7 @@ impl LocalChangesView {
             selection: State::create(ListSelection::default()),
             acting: State::create(crate::local_changes_actions::Acting::default()),
             lines: State::create(cairn_ui::LineDrag::default()),
+            commit: crate::commit_box_state::CommitBoxView::created(),
         }
     }
 }

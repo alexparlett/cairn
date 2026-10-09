@@ -78,6 +78,8 @@ impl LocalWrites {
         self.closing = true;
     }
 
+    /// The write running, if any: the commit box draws its commit running, and cancels only it
+    /// (R4.3, R10.4).
     pub fn running(&self) -> Option<&Asked> {
         self.running.as_ref()
     }
@@ -168,6 +170,8 @@ mod tests {
             WriteEnding::Failed {
                 message: "index.lock exists".to_owned(),
                 locks: vec![lock.clone()],
+                command: None,
+                output: String::new(),
             },
         );
         assert!(!writes.is_running());

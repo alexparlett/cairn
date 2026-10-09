@@ -49,6 +49,7 @@ use cairn_ui::{
 };
 use freya::prelude::*;
 
+use crate::commit_box_pane::CommitBoxPane;
 use crate::detail_pane::notice;
 use crate::diff_state::{
     TogetherWanted, WorkingChoice, WorkingShown, answered_together, answered_together_paths,
@@ -156,19 +157,18 @@ fn together_wanted(
     if rows.len() < 2 {
         return None;
     }
-    let entries =
-        rows.into_iter()
-            .filter_map(|row| {
-                let change = lists.get(list, row)?;
-                let side = diff_actions::working_query(list, &change, settings).and_then(|query| {
-                    match query.target {
-                        FileTarget::WorkingTree { side, .. } => Some(side),
-                        FileTarget::Committed { .. } => None,
-                    }
+    let entries = rows
+        .into_iter()
+        .filter_map(|row| {
+            let change = lists.get(list, row)?;
+            let side = diff_actions::working_query(list, &change, lists.staged_against(), settings)
+                .and_then(|query| match query.target {
+                    FileTarget::WorkingTree { side, .. } => Some(side),
+                    FileTarget::Committed { .. } => None,
                 });
-                Some((change.path.clone(), side))
-            })
-            .collect();
+            Some((change.path.clone(), side))
+        })
+        .collect();
     Some(TogetherWanted {
         list,
         lists: local.serial(),
@@ -258,7 +258,12 @@ fn follow(
             .row_of(choice.list, &choice.path)
             .and_then(|row| lists.get(choice.list, row));
         if let Some(change) = found {
-            return Follow::ReAsk(diff_actions::working_query(choice.list, &change, settings));
+            return Follow::ReAsk(diff_actions::working_query(
+                choice.list,
+                &change,
+                lists.staged_against(),
+                settings,
+            ));
         }
     }
     match first_shown(lists, shown[0], shown[1]) {
@@ -508,7 +513,24 @@ impl Component for LocalChangesPane {
                             .panel(
                                 ResizablePanel::new(PanelSize::percent(100. - list_share))
                                     .min_pixels(DIFF_MIN_PIXELS)
-                                    .child(diff_side(view, self.submit.clone(), empty)),
+                                    .child(
+                                        // The commit box under the diff (staging-and-commit
+                                        // R10.1).
+                                        rect()
+                                            .expanded()
+                                            .content(Content::Flex)
+                                            .child(
+                                                rect()
+                                                    .width(Size::fill())
+                                                    .height(Size::flex(1.))
+                                                    .child(diff_side(
+                                                        view,
+                                                        self.submit.clone(),
+                                                        empty,
+                                                    )),
+                                            )
+                                            .child(CommitBoxPane::new(view, self.submit.clone())),
+                                    ),
                             ),
                     ),
             )

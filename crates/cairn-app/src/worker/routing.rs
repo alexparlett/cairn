@@ -16,6 +16,7 @@
 //! | `CancelFetch` | none: the fetch's control, from the caller's thread |
 //! | `Write` | `cairn-local`, the local write lane, reached directly, so a write never waits behind a page or a find (staging-and-commit R4.1) |
 //! | discard count (`DiscardConsequence`, `DiscardLinesConsequence`) | `cairn-local`, in the lane's order, so what a discard would lose is counted after the writes asked before it; `StopCounting` only numbers the lane |
+//! | commit box (`CommitReads`) and amending (`Amending`, `StopAmending`) | `cairn-local`, in the lane's order, so what the box reads is read after the writes asked before it — a commit's message among the recent ones once it has ended, an amend's `HEAD` the one the writes left; `StopAmending` only numbers the lane |
 //! | `CancelWrite` | none: the local lane's state, from the caller's thread |
 //! | `RefreshStatus` | `cairn-refresh`, as a refresh's status |
 //!
@@ -66,7 +67,7 @@ pub(super) const fn thread_of(lane: QueryLane) -> Thread {
         | QueryLane::RefFilter
         | QueryLane::LocalChangesFilter => Thread::Repository,
         QueryLane::Changes | QueryLane::FileDiff => Thread::Diff,
-        QueryLane::DiscardCount => Thread::Local,
+        QueryLane::DiscardCount | QueryLane::CommitBox | QueryLane::Amending => Thread::Local,
         QueryLane::AheadBehind | QueryLane::Status => Thread::Refresh,
     }
 }
@@ -159,6 +160,14 @@ pub(super) enum Routed {
     },
     /// Nothing sent: numbering the discard-count lane is all it is for.
     StopCounting,
+    /// What the commit box reads, to the local lane under the commit-box lane's number.
+    CommitReads,
+    /// What an amend would replace, to the local lane under the amending lane's number.
+    Amending {
+        status: Arc<LocalChanges>,
+    },
+    /// Nothing sent: numbering the amending lane is all it is for.
+    StopAmending,
     /// Never queued: it reaches the local lane's state directly.
     CancelWrite(OperationId),
     /// A status alone, to the refresh thread under the status lane's number.
@@ -176,7 +185,10 @@ impl Routed {
             Self::Write { .. }
             | Self::DiscardConsequence { .. }
             | Self::DiscardLinesConsequence { .. }
-            | Self::StopCounting => Some(Thread::Local),
+            | Self::StopCounting
+            | Self::CommitReads
+            | Self::Amending { .. }
+            | Self::StopAmending => Some(Thread::Local),
             Self::RefreshStatus => Some(Thread::Refresh),
             Self::CancelFetch | Self::CancelWrite(_) => None,
             // Its refs': see `lane_thread` for its ahead/behind. Its status, numbered in no
@@ -248,6 +260,9 @@ pub(super) fn route(request: Request) -> Routed {
             selection,
         },
         Request::StopCounting => Routed::StopCounting,
+        Request::CommitReads => Routed::CommitReads,
+        Request::Amending { status } => Routed::Amending { status },
+        Request::StopAmending => Routed::StopAmending,
         Request::CancelWrite { id } => Routed::CancelWrite(id),
         Request::RefreshStatus => Routed::RefreshStatus,
     }
@@ -306,6 +321,9 @@ pub(super) fn unroute(routed: Routed) -> Request {
             selection,
         },
         Routed::StopCounting => Request::StopCounting,
+        Routed::CommitReads => Request::CommitReads,
+        Routed::Amending { status } => Request::Amending { status },
+        Routed::StopAmending => Request::StopAmending,
         Routed::CancelWrite(id) => Request::CancelWrite { id },
         Routed::RefreshStatus => Request::RefreshStatus,
     }
@@ -397,6 +415,13 @@ mod tests {
                 paths: vec![cairn_model::RepoPath::from("a")],
             },
             Request::StopCounting,
+            Request::CommitReads,
+            Request::Amending {
+                status: Arc::new(cairn_model::LocalChanges::new(
+                    cairn_model::WorkingTreeStatus::Listed(Vec::new()),
+                )),
+            },
+            Request::StopAmending,
             Request::CancelWrite {
                 id: OperationId::for_tests(1),
             },
@@ -436,6 +461,10 @@ mod tests {
         assert_eq!(thread_of(QueryLane::RefFilter), Thread::Repository);
         assert_eq!(thread_of(QueryLane::LocalChangesFilter), Thread::Repository);
         assert_eq!(thread_of(QueryLane::DiscardCount), Thread::Local);
+        // Staging-and-commit R10: what the commit box reads and what an amend would replace
+        // are read on the local lane, after the writes asked before them.
+        assert_eq!(thread_of(QueryLane::CommitBox), Thread::Local);
+        assert_eq!(thread_of(QueryLane::Amending), Thread::Local);
         // Staging-and-commit R4.1: a write goes straight to the local lane, never through the
         // repository thread, where it would wait behind a page or a find; a status asked alone
         // goes where a refresh's does; a write's cancel queues nowhere.

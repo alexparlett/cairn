@@ -42,7 +42,10 @@ pub fn act(action: Action, view: View, submit: Option<&dyn Fn(Request)>) {
         confirming,
         ..
     } = view;
-    if prompt.peek().is_some() || confirming.peek().is_some() {
+    if prompt.peek().is_some()
+        || confirming.peek().is_some()
+        || view.local.commit.state.peek().error().is_some()
+    {
         return;
     }
     match action {

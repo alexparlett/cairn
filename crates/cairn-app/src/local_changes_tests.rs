@@ -38,7 +38,7 @@ pub(crate) fn in_lists(x: f32) -> bool {
         && x < SIDEBAR_WIDTH
             + (WIDTH - SIDEBAR_WIDTH) * crate::local_changes_state::LIST_WIDTH / 100.
 }
-const HEIGHT: f32 = 700.;
+const HEIGHT: f32 = 860.;
 
 pub(crate) type Submitted = Rc<RefCell<Vec<Request>>>;
 
@@ -242,6 +242,33 @@ pub(crate) fn open_local_changes(test: &mut TestingRunner) {
                 .map(|_| node.layout().area.center())
         })
         .unwrap_or_else(|| panic!("the sidebar draws no Local Changes: {:?}", labels(test)));
+    test.click_cursor((f64::from(centre.x), f64::from(centre.y)));
+    for _ in 0..3 {
+        test.sync_and_update();
+    }
+}
+
+/// Whether a label in the lists reads `text`.
+pub(crate) fn in_lists_reads(test: &TestingRunner, text: &str) -> bool {
+    test.find(|node, element| {
+        Label::try_downcast(element)
+            .filter(|label| label.text == text)
+            .filter(|_| in_lists(node.layout().area.min_x()))
+            .map(|_| ())
+    })
+    .is_some()
+}
+
+/// Presses the lists' heading control reading `caption` (Stage, Unstage).
+pub(crate) fn click_heading(test: &mut TestingRunner, caption: &str) {
+    let centre = test
+        .find(|node, element| {
+            Label::try_downcast(element)
+                .filter(|label| label.text == caption)
+                .filter(|_| in_lists(node.layout().area.min_x()))
+                .map(|_| node.layout().area.center())
+        })
+        .unwrap_or_else(|| panic!("no heading control reads {caption}: {:?}", labels(test)));
     test.click_cursor((f64::from(centre.x), f64::from(centre.y)));
     for _ in 0..3 {
         test.sync_and_update();

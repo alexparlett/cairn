@@ -72,6 +72,10 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         // What a discard would lose, for the confirmation Local Changes opens (R8.4): kept only
         // for the discard asked last, and only while the view that asked it is shown — one
         // that arrives once the person has moved on is dropped rather than popped up later.
+        Update::CommitReads(reads) => crate::commit_box_pane::reads_arrived(*reads, view),
+        Update::Amending { status, read } => {
+            crate::commit_box_pane::amend_arrived(status, *read, view, worker.submit);
+        }
         Update::DiscardConsequence { asked, outcome } => {
             let mut acting = view.local.acting;
             if *view.sidebar.main.peek() == cairn_ui::MainView::LocalChanges {
@@ -112,16 +116,25 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             fetch.set(FetchStatus::Failed { remote, message });
             refresh_after_an_operation(worker);
         }
-        Update::WriteStarted { id } => writes.write().started(id),
-        // No view draws a commit's output yet: the Git Error dialog (staging-and-commit phase
-        // 09) and the activity popover (phase 11) will; a failure carries git's words in its
-        // ending meanwhile.
-        Update::WriteOutput { .. } => {}
+        Update::WriteStarted { id } => {
+            writes.write().started(id);
+            crate::commit_box_pane::write_started(id, view);
+        }
+        // The commit box's commit's output, kept for the Git Error dialog (R10.5); the activity
+        // popover (phase 11) will draw every write's.
+        Update::WriteOutput { id, line } => crate::commit_box_pane::write_output(id, &line, view),
         Update::WriteEnded {
             id,
             ending,
             read_again,
         } => {
+            // The window closing asks nothing more of the worker.
+            let asking: &dyn Fn(Request) = if worker.closing {
+                &|_| {}
+            } else {
+                worker.submit
+            };
+            crate::commit_box_pane::write_ended(id, &ending, view, asking);
             writes.write().ended(id, ending);
             if !fetch.peek().is_in_flight() {
                 withdraw(&mut prompt, worker);
@@ -146,6 +159,11 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             }
             let replaced = refreshed.write().refs_arrived(snapshot);
             retire(replaced, worker);
+            // What the commit box reads is asked again: a merge begun, a hook added, a commit
+            // made (R10).
+            if !worker.closing {
+                crate::commit_box_pane::refs_arrived(view, worker.submit);
+            }
             if reopen && !worker.closing {
                 reopen_history(rows, progress, worker);
                 // A find looking in the history it replaced looks in the new one.
@@ -160,8 +178,16 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
         // drawn at once or once a filter's rows are here (R9). What either lets go of is freed
         // on a worker.
         Update::Status { changes } => {
+            // While Amend is ticked, the lists drawn are amend's over this status, asked for it
+            // (R10.3); otherwise the status's own.
+            let amending = !worker.closing
+                && crate::commit_box_pane::status_arrived_amending(&changes, view, worker.submit);
             let mut local = view.local.state;
-            let asked = local.write().status_arrived(Arc::clone(&changes));
+            let asked = if amending {
+                Vec::new()
+            } else {
+                local.write().status_arrived(Arc::clone(&changes))
+            };
             let replaced = refreshed.write().status_arrived(changes);
             for request in asked {
                 if !worker.closing || matches!(request, Request::Retire(_)) {

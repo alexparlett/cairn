@@ -2,6 +2,10 @@
 
 mod changes_tab;
 mod closing;
+mod commit_box_pane;
+mod commit_box_state;
+#[cfg(test)]
+mod commit_box_tests;
 mod confirming;
 mod detail_pane;
 mod diff_actions;

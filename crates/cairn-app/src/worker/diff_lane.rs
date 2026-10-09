@@ -704,6 +704,7 @@ fn request(of: Comparison) -> ChangesRequest {
 fn which(side: WorkingSide) -> WorkingTreeDiff {
     match side {
         WorkingSide::Staged => WorkingTreeDiff::Staged,
+        WorkingSide::Amending => WorkingTreeDiff::Amending,
         WorkingSide::Unstaged => WorkingTreeDiff::Unstaged,
         WorkingSide::Untracked => WorkingTreeDiff::Untracked,
     }
@@ -750,7 +751,9 @@ mod tests {
             | QueryLane::Status
             | QueryLane::RefFilter
             | QueryLane::LocalChangesFilter
-            | QueryLane::DiscardCount => DiffQuery::File(committed(n, DiffOptions::default())),
+            | QueryLane::DiscardCount
+            | QueryLane::CommitBox
+            | QueryLane::Amending => DiffQuery::File(committed(n, DiffOptions::default())),
         };
         DiffJob::Query {
             epoch: epochs.bump(lane),
@@ -994,6 +997,7 @@ mod tests {
     #[test]
     fn each_working_side_asks_the_engine_for_that_side() {
         assert_eq!(which(WorkingSide::Staged), WorkingTreeDiff::Staged);
+        assert_eq!(which(WorkingSide::Amending), WorkingTreeDiff::Amending);
         assert_eq!(which(WorkingSide::Unstaged), WorkingTreeDiff::Unstaged);
         assert_eq!(which(WorkingSide::Untracked), WorkingTreeDiff::Untracked);
     }

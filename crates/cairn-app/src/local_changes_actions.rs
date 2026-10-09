@@ -40,6 +40,7 @@ use std::sync::Arc;
 
 use cairn_model::{
     ChangeList, ChangeStatus, Consequence, FileDiff, LocalChanges, RepoPath, Selection,
+    StagedAgainst,
 };
 use cairn_ui::accelerators::Action;
 use cairn_ui::{
@@ -210,10 +211,13 @@ pub fn acting_line(acting: &Acting, writes: &LocalWrites) -> Option<(String, boo
     }
 }
 
-/// Whether a dialog owns the keys and the pointer: a confirmation or a credential prompt. The
-/// window's chords are inert then (`shortcuts::act`), and so is everything here.
+/// Whether a dialog owns the keys and the pointer: a confirmation, a credential prompt or the
+/// Git Error dialog. The window's chords are inert then (`shortcuts::act`), and so is
+/// everything here.
 fn dialog_open(view: View) -> bool {
-    view.confirming.peek().is_some() || view.prompt.peek().is_some()
+    view.confirming.peek().is_some()
+        || view.prompt.peek().is_some()
+        || view.local.commit.state.peek().error().is_some()
 }
 
 /// The rows of `list` the selection names that `lists` still lists, in the lists' order of
@@ -541,7 +545,7 @@ fn ask(view: View, submit: Option<&dyn Fn(Request)>, write: LocalWrite) {
 /// Stages (from Unstaged) or unstages (from Staged) the rows `acted` names, whole — a
 /// conflicted path by `git add`, which marks it resolved (R8.7) — and moves the selection on.
 fn stage_or_unstage(list: ChangeList, acted: Acted, view: View, submit: Option<&dyn Fn(Request)>) {
-    let (paths, next) = {
+    let (paths, next, to) = {
         let local = view.local.state.peek();
         let lists = drawn_changes(&local);
         let rows = acted.rows(view, lists, list);
@@ -551,14 +555,12 @@ fn stage_or_unstage(list: ChangeList, acted: Acted, view: View, submit: Option<&
         (
             lists.whole_file_paths(list, rows.iter().copied()),
             next_after(&local, list, &rows),
+            unstage_target(lists),
         )
     };
     let write = match list {
         ChangeList::Unstaged => LocalWrite::StageFiles { paths },
-        ChangeList::Staged => LocalWrite::UnstageFiles {
-            paths,
-            to: UnstageTarget::Head,
-        },
+        ChangeList::Staged => LocalWrite::UnstageFiles { paths, to },
     };
     ask(view, submit, write);
     move_to(list, next, view, submit);
@@ -586,15 +588,26 @@ fn everything(list: ChangeList, view: View, submit: Option<&dyn Fn(Request)>) {
     }
     let write = match list {
         ChangeList::Unstaged => LocalWrite::StageAll { changes, shown },
-        ChangeList::Staged => LocalWrite::UnstageAll {
-            changes,
-            shown,
-            to: UnstageTarget::Head,
-        },
+        ChangeList::Staged => {
+            let to = unstage_target(&changes);
+            LocalWrite::UnstageAll { changes, shown, to }
+        }
     };
     ask(view, submit, write);
     let mut selection = view.local.selection;
     selection.set(ListSelection::default());
+}
+
+/// What a whole-file unstage from the lists drawn puts an entry back to (R3.4, R6.3): `HEAD`'s,
+/// or — while Amend is ticked and the Staged list is amend's — `HEAD`'s parent's, so the file
+/// leaves the amended commit (`git reset -q <parent> --`), or none for a root commit's amend
+/// (`git rm --cached -f -q --`).
+pub fn unstage_target(lists: &LocalChanges) -> UnstageTarget {
+    match lists.staged_against() {
+        StagedAgainst::Head => UnstageTarget::Head,
+        StagedAgainst::HeadParent(Some(parent)) => UnstageTarget::Commit(parent),
+        StagedAgainst::HeadParent(None) => UnstageTarget::Nothing,
+    }
 }
 
 /// The row of `list` the selection moves to once `acted` — rows of the lists drawn, sorted —

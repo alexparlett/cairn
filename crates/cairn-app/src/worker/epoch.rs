@@ -1,10 +1,11 @@
 //! Request epochs, numbered per query lane, which double as the engine's cancel signal.
 //!
-//! Eleven lanes (PRD R4.1, packet decision L8, phase 07's file filter, refs-and-status
-//! R11.1 and staging-and-commit R8.4): the history, the walk its pages come from, the changes
-//! query, the file diff, the Changes tab's filter over a change set's files, the refs
+//! Thirteen lanes (PRD R4.1, packet decision L8, phase 07's file filter, refs-and-status
+//! R11.1 and staging-and-commit R8.4 and R10): the history, the walk its pages come from, the
+//! changes query, the file diff, the Changes tab's filter over a change set's files, the refs
 //! snapshot, ahead/behind, the working tree's status, the sidebar's filter over the refs,
-//! Local Changes' filter over the status, and the count of what a discard would lose. A new query supersedes the
+//! Local Changes' filter over the status, the count of what a discard would lose, what the
+//! commit box reads, and what an amend would replace. A new query supersedes the
 //! older ones in its own lane only, with one
 //! exception — a changes query also supersedes the file-diff lane, since a file of the
 //! commit that was selected is no file of the one that is now. So a scroll never cancels a
@@ -56,6 +57,14 @@ pub enum QueryLane {
     /// (staging-and-commit R8.4): numbered so a newer discard asked, or the view letting the
     /// count go (`Request::StopCounting`), ends the one being counted, its `git` reads with it.
     DiscardCount,
+    /// What the commit box reads beside a commit — the operation in progress, the hooks git
+    /// would run, the recent messages (staging-and-commit R6.6, R6.7, R10): numbered so the
+    /// next ask, made as a refresh's refs arrive, supersedes the one before.
+    CommitBox,
+    /// What amending `HEAD` would replace, its message and amend's staged list, read on the
+    /// local lane while Amend is ticked (R6.3, R6.4, R10.3, R10.6): numbered so each status
+    /// arriving, or Amend unticked, ends the read before — its walk and its `git` read.
+    Amending,
 }
 
 impl QueryLane {
@@ -73,6 +82,8 @@ impl QueryLane {
         Self::RefFilter,
         Self::LocalChangesFilter,
         Self::DiscardCount,
+        Self::CommitBox,
+        Self::Amending,
     ];
 
     fn index(self) -> usize {
@@ -88,6 +99,8 @@ impl QueryLane {
             Self::RefFilter => 8,
             Self::LocalChangesFilter => 9,
             Self::DiscardCount => 10,
+            Self::CommitBox => 11,
+            Self::Amending => 12,
         }
     }
 
@@ -106,12 +119,14 @@ impl QueryLane {
             Self::RefFilter => &[Self::RefFilter],
             Self::LocalChangesFilter => &[Self::LocalChangesFilter],
             Self::DiscardCount => &[Self::DiscardCount],
+            Self::CommitBox => &[Self::CommitBox],
+            Self::Amending => &[Self::Amending],
         }
     }
 }
 
 /// How many lanes there are: one counter each.
-const LANES: usize = 11;
+const LANES: usize = 13;
 
 /// Which request a value belongs to: its lane, and its number there. Monotonic within a
 /// lane, and never reused.
@@ -282,6 +297,9 @@ mod tests {
             QueryLane::Status,
             QueryLane::RefFilter,
             QueryLane::LocalChangesFilter,
+            QueryLane::DiscardCount,
+            QueryLane::CommitBox,
+            QueryLane::Amending,
         ] {
             assert_eq!(
                 lane.supersedes(),

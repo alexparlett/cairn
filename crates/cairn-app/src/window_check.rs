@@ -103,6 +103,8 @@ fn kind(update: &Update) -> &'static str {
         Update::WriteStarted { .. } => "write started",
         Update::WriteEnded { .. } => "write ended",
         Update::DiscardConsequence { .. } => "discard consequence",
+        Update::CommitReads(_) => "commit box reads",
+        Update::Amending { .. } => "amend read",
         Update::Failed { .. }
         | Update::LocksAtOpen { .. }
         | Update::WriteOutput { .. }

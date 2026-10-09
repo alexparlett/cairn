@@ -129,6 +129,7 @@ pub fn window(
     };
     let refused = view.refused.read().clone();
     let hearing = submit.clone();
+    let erring = submit.clone();
     // The keys held are let go of when the window loses focus: a release made while another
     // window has it is never heard here, and a press after coming back must not be read as a
     // chord still held (the user's decision, 2026-10-04).
@@ -218,6 +219,9 @@ pub fn window(
         // modal would keep every key from the prompt. The confirmation stays kept, unanswered,
         // and is drawn again — focus on Cancel — once the prompt is answered or refused
         // (phase 06's QA item 5).
+        // A commit's Git Error dialog (staging-and-commit R10.5): its skip may open the amend's
+        // confirmation in its place.
+        .maybe_child(crate::commit_box_pane::git_error(view, erring).filter(|_| prompt.is_none()))
         .maybe_child(
             confirming
                 .filter(|_| prompt.is_none())

@@ -930,8 +930,19 @@ fn a_failing_hook_fails_a_commit_and_the_skip_commits_past_it() {
     let refused = ask(&handle, commit());
     let seen = until_ended(&mut updates, refused);
     match ending_of(&seen, refused) {
-        (WriteEnding::Failed { message, .. }, ReadAgain::Everything) => {
+        (
+            WriteEnding::Failed {
+                message,
+                command,
+                output,
+                ..
+            },
+            ReadAgain::Everything,
+        ) => {
             assert!(message.contains("lint failed"), "{message}");
+            // The Git Error dialog's command and git's own words (R10.5).
+            assert_eq!(command.as_deref(), Some("git commit -q -F -"));
+            assert!(output.contains("lint failed"), "{output}");
         }
         other => panic!("a failing hook's commit ended {other:?}"),
     }
@@ -1543,4 +1554,181 @@ fn paths_drawn_together_are_each_read_as_their_own_side() {
             (2, Some(b"untracked n\n".to_vec())),
         ]
     );
+}
+
+/// A status read through the lane, as the window keeps it.
+fn status_now(handle: &RepositoryHandle, updates: &mut Updates) -> Arc<cairn_model::LocalChanges> {
+    handle.submit(Request::RefreshStatus);
+    let seen = collect_until(updates, |update| matches!(update, Update::Status { .. }));
+    match seen.into_iter().last() {
+        Some(Update::Status { changes }) => changes,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Staging-and-commit R6.6, R6.7, R6.3, R6.4 and R10 through the real boundary: the commit box's
+/// reads answer the hooks git would run and the branch's messages newest first, the last
+/// commit's among them; and an amend's read answers `HEAD` — the commit the message is read
+/// from — no remote having it, `HEAD`'s message, and amend's lists over the status asked with:
+/// the file `HEAD` added and the one staged since in Staged, the first commit's file in
+/// neither. Caught by: a read run on the UI thread's terms (an answer missing), the message
+/// of another commit than the one the consequence names, or lists against `HEAD`.
+#[test]
+fn the_commit_boxs_reads_and_an_amends_read_come_through_the_lane() {
+    let fixture = to_commit("cairn-lane-box-reads", &["a", "b", "c"]);
+    let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let (handle, mut updates, _reply) = real_boundary(&fixture.path, (&home, &runtime));
+    for (path, message) in [("a", "first\n"), ("b", "second\n\nwith a body\n")] {
+        staged(&handle, &mut updates, &[path]);
+        let id = ask(
+            &handle,
+            LocalWrite::Commit {
+                message: message.to_owned(),
+                skip_hooks: false,
+            },
+        );
+        let seen = until_ended(&mut updates, id);
+        assert!(
+            matches!(ending_of(&seen, id).0, WriteEnding::Done(_)),
+            "{seen:?}"
+        );
+    }
+    hook(&fixture.path, "pre-commit", "exit 0\n");
+    handle.submit(Request::CommitReads);
+    let seen = collect_until(&mut updates, |u| matches!(u, Update::CommitReads(_)));
+    let Some(Update::CommitReads(reads)) = seen.into_iter().last() else {
+        panic!("no reads");
+    };
+    assert_eq!(reads.operation, None);
+    assert_eq!(
+        reads
+            .hooks
+            .as_ref()
+            .map(|hooks| (hooks.pre_commit, hooks.commit_msg)),
+        Ok((true, false))
+    );
+    assert_eq!(
+        reads.recent.as_deref(),
+        Ok(["second\n\nwith a body\n".to_owned(), "first\n".to_owned()].as_slice())
+    );
+
+    staged(&handle, &mut updates, &["c"]);
+    let status = status_now(&handle, &mut updates);
+    handle.submit(Request::Amending { status });
+    let seen = collect_until(&mut updates, |u| matches!(u, Update::Amending { .. }));
+    let Some(Update::Amending { read, .. }) = seen.into_iter().last() else {
+        panic!("no amend read");
+    };
+    let head = std::fs::read_to_string(fixture.path.join(".git/refs/heads/main"))
+        .unwrap_or_else(|error| panic!("{error}"));
+    let consequence = read.consequence.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        consequence.amended().map(|oid| oid.to_string()),
+        Some(head.trim().to_owned())
+    );
+    assert!(!consequence.needs_force_push(), "no remote has HEAD");
+    assert_eq!(read.message.as_deref(), Ok("second\n\nwith a body\n"));
+    let lists = read.lists.unwrap_or_else(|error| panic!("{error}"));
+    let staged: Vec<String> = (0..lists.len(cairn_model::ChangeList::Staged))
+        .filter_map(|row| lists.get(cairn_model::ChangeList::Staged, row))
+        .map(|change| change.path.to_string())
+        .collect();
+    assert_eq!(staged, ["b", "c"]);
+    assert!(matches!(
+        lists.staged_against(),
+        cairn_model::StagedAgainst::HeadParent(Some(_))
+    ));
+    drop(handle);
+}
+
+/// Phase 08's QA item 7, end to end: a chunk drawn at a context of ten lines — two edits
+/// thirteen lines apart, which three lines of context keep apart — staged through the lane is
+/// exactly that chunk, as `git diff --cached` reads it back: both edits staged, nothing else.
+/// Caught by: a patch emitted at another context than the one drawn, which would stage one
+/// edit or misplace the other.
+#[test]
+fn a_chunk_drawn_at_context_ten_stages_exactly_as_drawn() {
+    use super::request::{DiffOptions, FileQuery, FileTarget, WorkingSide};
+    let fixture = to_commit("cairn-lane-context-ten", &[]);
+    let lines: Vec<String> = (0..60).map(|n| format!("line {n}\n")).collect();
+    std::fs::write(fixture.path.join("f"), lines.concat()).unwrap_or_else(|e| panic!("{e}"));
+    let (home, runtime) = (Home::new(), RuntimeDir::new());
+    let (handle, mut updates, _reply) = real_boundary(&fixture.path, (&home, &runtime));
+    staged(&handle, &mut updates, &["f"]);
+    let id = ask(&handle, commit());
+    let seen = until_ended(&mut updates, id);
+    assert!(
+        matches!(ending_of(&seen, id).0, WriteEnding::Done(_)),
+        "{seen:?}"
+    );
+    let mut edited = lines.clone();
+    edited[5] = "EDIT five\n".to_owned();
+    edited[18] = "EDIT eighteen\n".to_owned();
+    edited[50] = "EDIT fifty\n".to_owned();
+    std::fs::write(fixture.path.join("f"), edited.concat()).unwrap_or_else(|e| panic!("{e}"));
+
+    let query = FileQuery {
+        target: FileTarget::WorkingTree {
+            path: RepoPath::from("f"),
+            side: WorkingSide::Unstaged,
+        },
+        options: DiffOptions {
+            context: cairn_model::Context::lines(10),
+            ..DiffOptions::default()
+        },
+    };
+    handle.submit(Request::FileDiff(query));
+    let seen = collect_until(&mut updates, |u| matches!(u, Update::FileDiff { .. }));
+    let Some(Update::FileDiff {
+        diff: Some(shown), ..
+    }) = seen.into_iter().last()
+    else {
+        panic!("no diff of f");
+    };
+    let layout = shown.layout().unwrap_or_else(|| panic!("f drew no rows"));
+    let (text, _) = shown.text().unwrap_or_else(|| panic!("f is not text"));
+    // At ten lines of context the first two edits are one chunk, the third its own.
+    assert_eq!(layout.hunks().len(), 2, "{:?}", layout.hunks());
+    let selection = layout
+        .hunk_selection(text, 0)
+        .unwrap_or_else(|| panic!("the first chunk selects nothing"));
+    let id = ask(
+        &handle,
+        LocalWrite::StageLines {
+            diff: shown.shared_diff(),
+            selection,
+        },
+    );
+    let seen = until_ended(&mut updates, id);
+    assert!(
+        matches!(ending_of(&seen, id).0, WriteEnding::Done(_)),
+        "{seen:?}"
+    );
+
+    let git = GitBinary::discover(&Askpass::new("/nonexistent/cairn-askpass", None))
+        .unwrap_or_else(|error| panic!("finding git: {error}"));
+    let repo = Repository::discover(&fixture.path).unwrap_or_else(|error| panic!("{error}"));
+    let cached = repo
+        .working_tree_diff(
+            &git,
+            &RepoPath::from("f"),
+            WorkingTreeDiff::Staged,
+            &ContentOptions::default(),
+            &CancelSignal::new(),
+        )
+        .unwrap_or_else(|error| panic!("{error}"))
+        .unwrap_or_else(|| panic!("nothing was staged"));
+    let index: Vec<u8> = cached
+        .text()
+        .map(|text| text.new_content())
+        .unwrap_or_else(|| panic!("the staged diff is not text"));
+    let mut expected = lines.clone();
+    expected[5] = edited[5].clone();
+    expected[18] = edited[18].clone();
+    assert_eq!(
+        String::from_utf8_lossy(&index),
+        expected.concat(),
+        "the index is not the file with exactly the chunk drawn staged"
+    );
+    drop(handle);
 }

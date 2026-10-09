@@ -134,7 +134,8 @@ pub fn amend(
         Consequence::Amend { commit, .. } => commit.short().as_str().to_owned(),
         Consequence::DiscardLines { .. }
         | Consequence::DiscardFiles { .. }
-        | Consequence::RemoveLock { .. } => {
+        | Consequence::RemoveLock { .. }
+        | Consequence::CheckoutDiscarding { .. } => {
             return Err(Error::CommitRefused {
                 why: CommitRefusal::NotWhatWasConfirmed,
             });

@@ -49,7 +49,9 @@ pub use command_log::{CommandExit, CommandRecord};
 pub use commit_details::{CommitDetails, Signature, Timestamp};
 pub use commit_hooks::CommitHooks;
 pub use confirm::Confirmed;
-pub use consequence::{Consequence, DiscardedFile, FileLoss, Publication, Reflog};
+pub use consequence::{
+    ChangeLoss, ChangedKind, Consequence, DiscardedFile, FileLoss, LostChange, Publication, Reflog,
+};
 pub use diff_content::{DiffContent, DiffLimits, FileDiff, SizeLimit};
 pub use diff_function_context::FunctionContext;
 pub use diff_hunks::{Context, Hunk, HunkHeader, Hunks};

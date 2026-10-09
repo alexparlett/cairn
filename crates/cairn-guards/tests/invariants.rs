@@ -4998,6 +4998,9 @@ const CONSEQUENCE_TYPES: &[&str] = &[
     "FileLoss",
     "Publication",
     "Reflog",
+    "LostChange",
+    "ChangeLoss",
+    "ChangedKind",
 ];
 
 /// Traits that would duplicate the token or build one without the constructor.

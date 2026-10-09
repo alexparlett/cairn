@@ -97,6 +97,68 @@ pub enum Consequence {
         device: u64,
         inode: u64,
     },
+    /// A branch created at a commit and checked out with git's `checkout -f`: every staged
+    /// and unstaged change to a tracked file discarded, and every untracked file the commit's
+    /// tree holds a file at overwritten (staging-and-commit R11.3; the user's decision 3,
+    /// 2026-10-09 — Create Branch's "Discard", the one exception to "a staged change is never
+    /// discarded"). Never empty when the engine builds it.
+    CheckoutDiscarding {
+        /// The branch created, as typed.
+        branch: String,
+        /// The commit it is created at, and checked out.
+        at: Oid,
+        /// `HEAD`'s commit when this was read: the changes are counted against it, and the
+        /// re-check holds it.
+        head: Option<Oid>,
+        changes: Vec<LostChange>,
+        /// Untracked files the checkout leaves where they are, said so in the prompt.
+        kept_untracked: usize,
+    },
+}
+
+/// One path a [`Consequence::CheckoutDiscarding`] loses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LostChange {
+    pub path: RepoPath,
+    pub loss: ChangeLoss,
+}
+
+/// What a checkout that discards loses at one path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChangeLoss {
+    /// A tracked file's staged and unstaged changes since `HEAD`.
+    Changed {
+        kind: ChangedKind,
+        /// The index entry's blob as read; `None` where the index holds none.
+        index: Option<Oid>,
+        /// The file's bytes on disk, hashed with no filter (a symlink as its target); `None`
+        /// where it is not there.
+        working_tree: Option<Oid>,
+        /// Whether it is executable on disk; compared by the re-check.
+        executable: bool,
+        /// Changed lines of its staged diff and its unstaged diff together; `None` where
+        /// either is not text.
+        lines: Option<usize>,
+    },
+    /// An untracked file at a path the checked-out commit holds a file at: git's `checkout
+    /// -f` writes the commit's file over it.
+    Overwritten {
+        /// The file's bytes on disk, hashed with no filter.
+        working_tree: Oid,
+        executable: bool,
+        bytes: u64,
+    },
+}
+
+/// How a tracked path differs from `HEAD`, for the prompt's words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangedKind {
+    /// In `HEAD` and still there, changed.
+    Modified,
+    /// Not in `HEAD`: staged as a new file, which the checkout deletes.
+    Added,
+    /// In `HEAD`, deleted in the index or the working tree.
+    Deleted,
 }
 
 /// One file a [`Consequence::DiscardFiles`] destroys.
@@ -209,6 +271,13 @@ impl Consequence {
                 quoted(path.as_bytes())
             ),
             Self::DiscardFiles { files } => discard_files_prompt(files),
+            Self::CheckoutDiscarding {
+                branch,
+                at,
+                head: _,
+                changes,
+                kept_untracked,
+            } => checkout_discarding_prompt(branch, *at, changes, *kept_untracked),
             Self::Amend {
                 commit,
                 subject,
@@ -252,7 +321,10 @@ impl Consequence {
                 published,
                 reflog: _,
             } => amend_force_push(*commit, published),
-            Self::DiscardLines { .. } | Self::DiscardFiles { .. } | Self::RemoveLock { .. } => None,
+            Self::DiscardLines { .. }
+            | Self::DiscardFiles { .. }
+            | Self::RemoveLock { .. }
+            | Self::CheckoutDiscarding { .. } => None,
         }
     }
 
@@ -266,7 +338,10 @@ impl Consequence {
                 published: _,
                 reflog: _,
             } => Some(*commit),
-            Self::DiscardLines { .. } | Self::DiscardFiles { .. } | Self::RemoveLock { .. } => None,
+            Self::DiscardLines { .. }
+            | Self::DiscardFiles { .. }
+            | Self::RemoveLock { .. }
+            | Self::CheckoutDiscarding { .. } => None,
         }
     }
 
@@ -287,7 +362,10 @@ impl Consequence {
                 published: _,
                 reflog,
             } => Some(amend_replaces(*commit, subject, *reflog)),
-            Self::DiscardLines { .. } | Self::DiscardFiles { .. } | Self::RemoveLock { .. } => None,
+            Self::DiscardLines { .. }
+            | Self::DiscardFiles { .. }
+            | Self::RemoveLock { .. }
+            | Self::CheckoutDiscarding { .. } => None,
         }
     }
 
@@ -325,6 +403,7 @@ impl Consequence {
                 published: _,
                 reflog: _,
             } => format!("Amend {}", commit.short().as_str()),
+            Self::CheckoutDiscarding { .. } => "Discard Changes and Check Out".to_owned(),
             Self::RemoveLock {
                 path,
                 modified: _,
@@ -475,6 +554,102 @@ fn discard_files_prompt(files: &[DiscardedFile]) -> String {
     )
 }
 
+/// Create Branch's discard (R11.3, the user's decision 3), in the discard prompts' words (L8):
+/// "Do you want to create branch 'topic' at 1a2b3c4, check it out and discard the changes in
+/// 3 files (a.rs, b.rs and c.rs)? 2 modified (14 lines), 1 untracked file overwritten (2.1
+/// KiB). Other untracked files are kept. You can't undo this action."
+fn checkout_discarding_prompt(
+    branch: &str,
+    at: Oid,
+    changes: &[LostChange],
+    kept_untracked: usize,
+) -> String {
+    let paths: Vec<&RepoPath> = changes.iter().map(|change| &change.path).collect();
+    let what = match paths.as_slice() {
+        [only] => quoted(only.as_bytes()),
+        _ => format!(
+            "{} ({})",
+            counted(paths.len(), "file", "files"),
+            named_paths(&paths)
+        ),
+    };
+    let (mut modified, mut added) = (Lines::default(), Lines::default());
+    let mut deleted = 0usize;
+    let (mut overwritten, mut overwritten_bytes) = (0usize, 0u64);
+    for change in changes {
+        match &change.loss {
+            ChangeLoss::Changed {
+                kind: ChangedKind::Modified,
+                index: _,
+                working_tree: _,
+                executable: _,
+                lines,
+            } => add_lines(&mut modified, *lines),
+            ChangeLoss::Changed {
+                kind: ChangedKind::Added,
+                index: _,
+                working_tree: _,
+                executable: _,
+                lines,
+            } => add_lines(&mut added, *lines),
+            ChangeLoss::Changed {
+                kind: ChangedKind::Deleted,
+                ..
+            } => deleted += 1,
+            ChangeLoss::Overwritten {
+                working_tree: _,
+                executable: _,
+                bytes,
+            } => {
+                overwritten += 1;
+                overwritten_bytes = overwritten_bytes.saturating_add(*bytes);
+            }
+        }
+    }
+    let lines_of =
+        |kind: &Lines| line_detail(kind, false).unwrap_or_else(|| counted(0, "line", "lines"));
+    let mut parts = Vec::with_capacity(4);
+    if modified.files > 0 {
+        parts.push(format!(
+            "{} modified ({})",
+            modified.files,
+            lines_of(&modified)
+        ));
+    }
+    if added.files > 0 {
+        parts.push(format!(
+            "{} deleted ({})",
+            counted(added.files, "new file", "new files"),
+            lines_of(&added)
+        ));
+    }
+    if deleted > 0 {
+        parts.push(format!(
+            "{} restored",
+            counted(deleted, "deleted file", "deleted files")
+        ));
+    }
+    if overwritten > 0 {
+        parts.push(format!(
+            "{} overwritten ({})",
+            counted(overwritten, "untracked file", "untracked files"),
+            size(overwritten_bytes)
+        ));
+    }
+    let kept = match (kept_untracked, overwritten) {
+        (0, _) => "",
+        (_, 0) => " Untracked files are kept.",
+        _ => " Other untracked files are kept.",
+    };
+    format!(
+        "Do you want to create branch {} at {}, check it out and discard the changes in {what}? \
+         {}.{kept} You can't undo this action.",
+        quoted(branch.as_bytes()),
+        at.short().as_str(),
+        parts.join(", ")
+    )
+}
+
 /// How many files a discard of several names before it counts the rest.
 const NAMED_FILES: usize = 3;
 
@@ -482,12 +657,18 @@ const NAMED_FILES: usize = 3;
 /// 2026-10-09): the first [`NAMED_FILES`] by their quoted paths, and how many more after them
 /// — "a.rs, b.rs and c.rs", "a.rs, b.rs, c.rs and 2 more".
 fn named(files: &[DiscardedFile]) -> String {
-    let shown: Vec<String> = files
+    let paths: Vec<&RepoPath> = files.iter().map(|file| &file.path).collect();
+    named_paths(&paths)
+}
+
+/// [`named`], over the paths themselves.
+fn named_paths(paths: &[&RepoPath]) -> String {
+    let shown: Vec<String> = paths
         .iter()
         .take(NAMED_FILES)
-        .map(|file| quoted(file.path.as_bytes()))
+        .map(|path| quoted(path.as_bytes()))
         .collect();
-    let rest = files.len().saturating_sub(NAMED_FILES);
+    let rest = paths.len().saturating_sub(NAMED_FILES);
     match (shown.split_last(), rest) {
         (Some((last, before)), 0) if !before.is_empty() => {
             format!("{} and {last}", before.join(", "))
@@ -665,6 +846,78 @@ mod tests {
                 mode: None,
             },
         }
+    }
+
+    fn lost(path: &str, kind: ChangedKind, lines: Option<usize>) -> LostChange {
+        LostChange {
+            path: RepoPath::from(path),
+            loss: ChangeLoss::Changed {
+                kind,
+                index: Some(oid(1)),
+                working_tree: Some(oid(2)),
+                executable: false,
+                lines,
+            },
+        }
+    }
+
+    fn checkout(changes: Vec<LostChange>, kept_untracked: usize) -> Consequence {
+        Consequence::CheckoutDiscarding {
+            branch: "topic".to_owned(),
+            at: oid(0xab),
+            head: Some(oid(7)),
+            changes,
+            kept_untracked,
+        }
+    }
+
+    /// Create Branch's discard (R11.3, the user's decision 3): the prompt names the branch, the
+    /// commit, each kind of loss counted as the discard prompts count — modified lines, new
+    /// files deleted, deleted files restored, untracked files overwritten by size — whether
+    /// other untracked files are kept, and that it can't be undone; one file by its path,
+    /// several by the first three. Caught by: a staged-only or new file left uncounted, an
+    /// overwritten untracked file left unsaid, the kept files claimed when there are none, or
+    /// the branch and commit left out of what is confirmed.
+    #[test]
+    fn a_checkout_that_discards_names_the_branch_and_every_loss() {
+        let all = checkout(
+            vec![
+                lost("a.rs", ChangedKind::Modified, Some(10)),
+                lost("b.rs", ChangedKind::Modified, Some(4)),
+                lost("new.rs", ChangedKind::Added, Some(3)),
+                lost("gone.rs", ChangedKind::Deleted, Some(8)),
+                LostChange {
+                    path: RepoPath::from("in-the-way.txt"),
+                    loss: ChangeLoss::Overwritten {
+                        working_tree: oid(9),
+                        executable: false,
+                        bytes: 2150,
+                    },
+                },
+            ],
+            2,
+        );
+        assert_eq!(
+            all.prompt(),
+            "Do you want to create branch topic at abababa, check it out and discard the \
+             changes in 5 files (a.rs, b.rs, new.rs and 2 more)? 2 modified (14 lines), 1 new \
+             file deleted (3 lines), 1 deleted file restored, 1 untracked file overwritten (2.1 \
+             KiB). Other untracked files are kept. You can't undo this action."
+        );
+        assert_eq!(all.action(), "Discard Changes and Check Out");
+        let one = checkout(vec![lost("a.rs", ChangedKind::Modified, None)], 0);
+        assert_eq!(
+            one.prompt(),
+            "Do you want to create branch topic at abababa, check it out and discard the \
+             changes in a.rs? 1 modified (binary). You can't undo this action."
+        );
+        let kept = checkout(vec![lost("a.rs", ChangedKind::Modified, Some(1))], 4);
+        assert!(
+            kept.prompt()
+                .contains("(1 line). Untracked files are kept. You can't")
+        );
+        assert!(!kept.needs_force_push() && kept.replaces().is_none());
+        assert_eq!(kept.amended(), None);
     }
 
     fn deleted(path: &str) -> DiscardedFile {

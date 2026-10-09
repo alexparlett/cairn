@@ -205,7 +205,8 @@ pub fn discard_lines(
         }
         Consequence::DiscardFiles { .. }
         | Consequence::Amend { .. }
-        | Consequence::RemoveLock { .. } => {
+        | Consequence::RemoveLock { .. }
+        | Consequence::CheckoutDiscarding { .. } => {
             return Err(refused(&RepoPath::new(""), Refusal::NotWhatWasConfirmed));
         }
     };
@@ -363,7 +364,9 @@ pub fn discard_files(
         Consequence::DiscardLines { path, .. } => {
             return Err(refused(path, Refusal::NotWhatWasConfirmed));
         }
-        Consequence::Amend { .. } | Consequence::RemoveLock { .. } => {
+        Consequence::Amend { .. }
+        | Consequence::RemoveLock { .. }
+        | Consequence::CheckoutDiscarding { .. } => {
             return Err(refused(&RepoPath::new(""), Refusal::NotWhatWasConfirmed));
         }
     };

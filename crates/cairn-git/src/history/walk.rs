@@ -373,4 +373,90 @@ parent 3333333333333333333333333333333333333333\n";
         let root = b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor A <a@example.com> 1 +0000\n\nmsg";
         assert_eq!(without_parents(root), root.to_vec(), "a root is untouched");
     }
+
+    /// A repository of its own under the temporary directory, removed when dropped.
+    struct Scratch(std::path::PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn git(dir: &std::path::Path, args: &[&str]) -> String {
+        // The git Cairn would find, so the fixture is made by the binary it runs.
+        let program = crate::ops::GitBinary::discover(&crate::ops::Askpass::new(
+            "/nonexistent/cairn-askpass",
+            None,
+        ))
+        .unwrap();
+        let output = std::process::Command::new(program.path())
+            .args(["-c", "user.name=A", "-c", "user.email=a@example.com"])
+            .args(["-c", "maintenance.auto=false", "-c", "gc.auto=0"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    /// Phase 11's QA (TC1): the graph answers alone exactly when it holds the tip and every
+    /// hidden tip — true where a hidden tip reaches the tip, false where none does — and steps
+    /// aside (`None`) when it holds the tip but not a hidden tip, or not the tip, so the object
+    /// walk answers. Caught by: hidden tips the graph lacks skipped rather than handing over (a
+    /// pushed `HEAD` called unpublished), or the graph route never taken.
+    #[test]
+    fn the_graph_answers_only_for_commits_it_holds_all_of() {
+        let dir = std::env::temp_dir().join(format!("cairn-graph-reach-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let scratch = Scratch(dir);
+        let at = scratch.0.as_path();
+        git(at, &["init", "-q", "-b", "main"]);
+        let mut commits = Vec::new();
+        for n in 0..4 {
+            git(
+                at,
+                &["commit", "-q", "--allow-empty", "-m", &format!("c{n}")],
+            );
+            commits.push(git(at, &["rev-parse", "HEAD"]));
+        }
+        git(at, &["checkout", "-q", "-b", "side", &commits[1]]);
+        git(at, &["commit", "-q", "--allow-empty", "-m", "side"]);
+        let side = git(at, &["rev-parse", "HEAD"]);
+        git(at, &["commit-graph", "write", "--reachable"]);
+        git(
+            at,
+            &["commit", "-q", "--allow-empty", "-m", "outside the graph"],
+        );
+        let outside = git(at, &["rev-parse", "HEAD"]);
+        let repo = crate::SharedRepository::discover(at).unwrap().to_worker();
+        let id = |hex: &str| gix::hash::ObjectId::from_hex(hex.as_bytes()).unwrap();
+        let ask = |tip: &str, hidden: &[&str]| {
+            let hidden: Vec<_> = hidden.iter().map(|hex| id(hex)).collect();
+            reaches_through_graph(
+                repo.inner(),
+                id(tip),
+                &hidden,
+                &crate::CancelSignal::new(),
+                &Cell::new(0),
+            )
+            .map(|answer| answer.unwrap())
+        };
+        assert_eq!(ask(&commits[0], &[&commits[3]]), Some(true));
+        assert_eq!(ask(&commits[3], &[&commits[0]]), Some(false));
+        assert_eq!(ask(&side, &[&commits[3]]), Some(false), "a side branch");
+        assert_eq!(ask(&commits[1], &[&commits[3], &side]), Some(true));
+        assert_eq!(
+            ask(&side, &[&commits[3], &outside]),
+            None,
+            "a hidden tip the graph does not hold"
+        );
+        assert_eq!(
+            ask(&outside, &[&commits[3]]),
+            None,
+            "a tip it does not hold"
+        );
+    }
 }

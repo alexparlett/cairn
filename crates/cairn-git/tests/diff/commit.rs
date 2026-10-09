@@ -716,6 +716,20 @@ fn the_pushed_check_answers_from_a_commit_graph_as_git_does() {
             "git: {what}"
         );
     }
+    // HEAD in the graph, and the one remote tip that reaches it outside the graph: the graph
+    // cannot answer for a tip it does not hold, so the object walk does (phase 11's QA, TC1).
+    clone.git(&["checkout", "-q", "--detach", "side"]);
+    clone.write("pushed.txt", b"pushed\n");
+    clone.commit("pushed on top of side");
+    clone.git(&["update-ref", "refs/remotes/origin/side-pushed", "HEAD"]);
+    clone.git(&["checkout", "-q", "--detach", "side"]);
+    assert_eq!(
+        published(&clone),
+        Publication::SomeRemote,
+        "HEAD in the graph, its remote tip outside it"
+    );
+    assert!(by_git("HEAD"));
+    clone.git(&["update-ref", "-d", "refs/remotes/origin/side-pushed"]);
     // A commit the graph does not hold: the object walk answers.
     clone.git(&["checkout", "-q", "--detach", "origin/far~3"]);
     clone.write("new.txt", b"new\n");

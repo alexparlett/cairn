@@ -652,3 +652,43 @@ fn an_untracked_file_in_the_way_is_named_whatever_status_shows() {
         consequence.prompt()
     );
 }
+
+/// Phase 10's QA, item 15: a name a branch's directory holds (`foo` beside `foo/bar`), or one
+/// under a branch's name (`baz/qux` beside `baz`), is refused before git runs, in the words
+/// git's own refusal uses — git cannot lock such a ref — and a name beside them is free.
+/// Caught by: only `refs/heads/<name>` looked up.
+#[test]
+fn a_name_clashing_with_a_branchs_directory_is_refused_before_git_runs() {
+    let (repo, _) = amended();
+    repo.git(&["branch", "foo/bar"]);
+    repo.git(&["branch", "baz"]);
+    let engine = engine(&repo);
+    let check = |name: &str| ok(engine.branch_name(git(), name, &CancelSignal::new()), name);
+    for (name, clash) in [
+        (
+            "foo",
+            "'refs/heads/foo/bar' exists; cannot create 'refs/heads/foo'",
+        ),
+        (
+            "baz/qux",
+            "'refs/heads/baz' exists; cannot create 'refs/heads/baz/qux'",
+        ),
+        (
+            "baz/qux/deeper",
+            "'refs/heads/baz' exists; cannot create 'refs/heads/baz/qux/deeper'",
+        ),
+    ] {
+        match check(name) {
+            BranchName::Refused { reason } => assert_eq!(reason, clash, "{name}"),
+            other => panic!("{name}: {other:?}"),
+        }
+        assert!(
+            repo.try_git(&["branch", "--", name, "HEAD"], &[], None)
+                .is_err(),
+            "git took {name}"
+        );
+    }
+    for name in ["fo", "foobar", "baz2", "foo-bar/x"] {
+        assert_eq!(check(name), BranchName::Free, "{name}");
+    }
+}

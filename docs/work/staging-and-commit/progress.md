@@ -3,6 +3,73 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 04 QA, adjudicated and fixed; the user's decisions 12 and 14 applied
+
+Five fresh reviewers (`responsiveness-reviewer`, `destructive-ops-reviewer`,
+`gate-integrity-reviewer`, `test-coverage-auditor`, `qa-checklist`) and a fresh
+`qa-confirm`. Fixed, each test-first (the new test, or the guard with the bypass planted,
+red on the code before the fix):
+
+1. **The inherited roster was cut at the first `];` in its raw text**, so a comment or a
+   string holding one hid a following `GIT_AUTHOR_DATE`, and the twin passed (planted, and
+   it did). `commented_table` now finds the closing with comments and strings blanked; the
+   self-test spells both shapes. (`fix(guards)`.)
+2. **A close waited on the local lane before ending a fetch**, so a fetch reached the network
+   for as long as a commit's hooks ran. `Threads::drop` cancels the fetch through
+   `FetchControl` first (`a_close_ends_a_fetch_at_once_while_it_waits_on_a_commit`, which
+   waited the stream out before the fix). (`fix(app)`.)
+3. **The open's lock listing walked `refs/` on the repository thread before its first
+   answer.** The local lane lists them before any write as `Update::LocksAtOpen`, and the
+   walk polls the lane's closing before each directory (`stranded_locks_until`,
+   `a_cancelled_search_answers_nothing_and_an_uncancelled_one_everything`;
+   `SharedRepository::lock_files` takes a `Cancel`). (`fix(app)`.)
+4. **`CONFIRMED_HOLDERS` read the engine alone**, so the application's `LocalWrite` held a
+   `Confirmed` with no row. The scan reads every crate's production code, requires the
+   worker among it, and rosters `crates/cairn-app/src/worker/local_lane.rs`; emptying the
+   roster turns the twin red, and the self-test refuses an unrostered application holder.
+   Root CLAUDE.md updated. (`fix(guards)`.)
+5. **The lane was marked closing only in `Threads::drop`.** `submit`'s close arm marks it too
+   (`a_close_marks_the_local_lane_closing_as_it_is_submitted`); the CLAUDE.md residual for the
+   close arm says so. (`fix(app)`.)
+6. **R4.6's thread-side gates were never reached by a test.**
+   `a_refresh_asked_before_a_commit_draws_nothing_while_it_runs` queues a refresh's
+   ahead/behind behind a held status as the commit starts; dropping the refresh thread's
+   ahead/behind gate turns it red. The repository thread's gate on refs is not driven (its
+   refs are read before a test can start a commit behind them), stated in
+   `docs/systems/git-processes.md`. (`test(app)`.)
+10. **The roster's doc counted four identity variables**; it names all five. (`docs(git)`.)
+
+The user's decisions (2026-10-09, relayed by the coordinator):
+
+- **12 — the second close during a write: keep R4.9 and harden it.** A second close past
+  the patience still closes the window and never ends the write. `docs/design/processes.md`
+  ("Lifecycle") now says so instead of "ends it as a cancel would", with the orphan residual
+  (an orphaned `git` dies of `SIGPIPE` at its next line of output, which `-q` keeps `git
+  clean` from writing), stated as built in `docs/systems/git-processes.md` ("Closing"). The
+  hardening is phase 05's (state.md).
+- **14 — reads inherit the same roster as writes: keep one roster.** No code change; the
+  reason — it is what the user's own `git` gives a filter or hook from a shell — is beside
+  `INHERITED` in `crates/cairn-git/src/process/environment.rs`.
+
+Filed: #87 (every local write walks all of `refs/` twice, `ops/local_write.rs`'s
+`locks_now`/`locks_around`, phase 03 code — for phase 11's measurement) and #88 (`gate.sh
+--fast` does not build the askpass helper though `built_helper`'s comment says the gate
+does).
+
+Dismissed, with reasons:
+
+- 15 — **the identity variables are inherited**: the user's decision (R5.2, L26); the date
+  variables are pinned out twice, in the builder's tests and the twin.
+- 16 — **a write is dropped if `cairn-local` fails to spawn**: fail-closed by design, as for
+  the diff and refresh threads (`Threads::start`); a dropped `Confirmed` means nothing
+  destructive runs.
+- 17 — **the UI thread takes `LaneState`'s mutex**: stated in the root CLAUDE.md residuals;
+  every hold is bounded (an assignment and at most one unbounded send), with no lock taken
+  inside it that the UI thread holds.
+- 18 — **`refs/` walked twice per write**: phase 03's code, unchanged here; filed as #87.
+- 19 — **the gate failed on a missing askpass helper**: a cold target; `--fast` runs `--lib
+  --bins` only; filed as #88.
+
 ## 2026-10-08 — phase 04, the local write lane (packet mode)
 
 Built on `feature/staging-and-commit`; gate green; QA pending (the coordinator dispatches the

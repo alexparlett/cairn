@@ -9,8 +9,8 @@ mode: QA adjudicated, confirmed fixes applied, full gate green; items 10-11 batc
 the user's review at the end of the packet. Phase 03 (the write verbs) built in packet
 mode: QA adjudicated, confirmed fixes and the user's four decisions (2, 3, 5, 6) applied,
 C21's margin decided (a flat 50 ms) and amended, full gate green. Phase 04 (the local
-lane) built in packet mode, gate green, QA pending; two items batched for the user
-(progress.md's phase 04 entry). Phases 05-12 not started.**
+lane) done in packet mode: QA adjudicated, confirmed fixes and the user's decisions 12 and
+14 (2026-10-09) applied, full gate green. Phases 05-12 not started.**
 
 ## Locked decisions
 
@@ -232,16 +232,38 @@ Phase 04 (`docs/systems/git-processes.md`, "The local write lane"):
 - **Phase 05**: `Commit`/`Amend` in `LocalWrite` (above); the `expect(dead_code)` on
   `LaneState::install` and `Request::CancelWrite` go with them; re-run C10/C11/C12's
   commit-dependent tests against `git commit` with a slow hook.
+- **Phase 05, from phase 04's QA** (adjudicated 2026-10-09):
+  - item 7: the `deferred` override in `local_lane.rs`'s `run` (a refresh kept back makes the
+    ending `ReadAgain::Everything`) is unobservable while the only commit already reads
+    everything — pin it against a real commit (an amend that a refresh was kept back for),
+    or delete the plumbing;
+  - item 8: delete `LocalWrite::HeldCommit` and re-run C10-C12's commit halves on `git
+    commit`, the cancel installed with `LaneState::install`;
+  - item 9: replace the tests' fixed quiet windows (500/700 ms in `worker/local_lane_tests.rs`)
+    with waiting on a later request's answer, and the `< 100 ms` asking bound in
+    `writes_asked_faster_than_they_run_run_in_order_each_with_its_own_ending`;
+  - item 13: a prompt names its operation — map token to operation in the acceptor and
+    carry it on `Update::Prompt`, titled by its own operation, before the first real commit
+    (here), no later than phase 07; obligation (`responsiveness-reviewer`): `install()`'s
+    kill under `LaneState`'s lock stays bounded;
+  - the user's decision 12 (2026-10-09), its hardening: add `-q` to `git clean` so an
+    orphaned discard finishes its batch (an `ops/` change, with a test in the same commit),
+    and check `git restore` and `git apply` for the same `SIGPIPE` exposure; the closing
+    banner says closing again leaves the write unfinished.
 - **Phase 07**: ask writes through `local_writes::ask`; draw a write queued and its outcome
   (`LocalWrites::queued`, `last`); decide where `discard_*_consequence` is asked (a worker's
   call; the local lane orders it after the writes ahead of it).
 - **Phase 09**: a Cancel the commit box draws is for the running commit (`CancelWrite` of a
   queued one does nothing, R4.3).
 - **Phase 11**: the activity popover reads `WriteEnding`/`Done`; measure the open's lock
-  listing (`SharedRepository::lock_files`, a walk of `refs/`) on the bench repository.
-- **The user** (batched, progress.md's phase 04 entry): the second close during a write
-  (design says end it as a cancel; built per PRD R4.9, the window closes and the write runs
-  on); a prompt carries no owner when a fetch and a write ask at once.
+  listing (`SharedRepository::lock_files`, a walk of `refs/`, now on the local lane) on the
+  bench repository, and the two walks every local write makes (#87).
+- **Phase 11, from phase 04's QA** (item 11): `channel.begin().ok()` in `local_lane.rs`'s `run`
+  drops why no token could be had; the write's ending should say why no prompt could be
+  answered, as `prompting` does for a channel never opened.
+- **Decided by the user (2026-10-09)**: 12 — a second close keeps R4.9 (never ends the
+  write), hardened in phase 05 (above), the design and as-built docs amended; 14 — reads
+  keep the roster writes have (reason beside `INHERITED`).
 
 ## Carried forward from phase 03 (owned by the phase named)
 
@@ -345,7 +367,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 01 seal | done — QA adjudicated, all confirmed fixes and the user's three decisions (items 6, 13, 34a) applied, full gate green |
 | 02 patch engine | done — QA adjudicated, confirmed fixes applied, full gate green; items 10-11 batched for the user |
 | 03 write verbs | done — QA adjudicated, fixes and the user's decisions applied, full gate green |
-| 04 local lane | built, gate green, QA pending |
+| 04 local lane | done — QA adjudicated, fixes and the user's decisions 12 and 14 applied, full gate green |
 | 05 commit engine | not started |
 | 06 render foundations | not started |
 | 07 Local Changes actions | not started |

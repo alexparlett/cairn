@@ -692,3 +692,29 @@ fn a_name_clashing_with_a_branchs_directory_is_refused_before_git_runs() {
         assert_eq!(check(name), BranchName::Free, "{name}");
     }
 }
+
+/// The user's decision F (2026-10-09): a name holding `@{` is refused in Cairn's words before
+/// git is asked — git's `check-ref-format` refuses it too, in words about a ref, not a branch
+/// name. Caught by: the name handed to git and git's reason shown, or a name with `@` alone
+/// or `{` alone refused.
+#[test]
+fn a_name_holding_at_brace_is_refused_in_cairns_words() {
+    let (repo, _) = amended();
+    let engine = engine(&repo);
+    for name in ["topic@{1}", "@{", "a@{b"] {
+        assert_eq!(
+            ok(engine.branch_name(git(), name, &CancelSignal::new()), name),
+            BranchName::Refused {
+                reason: "A branch name can't contain '@{'".to_owned()
+            },
+            "{name}"
+        );
+    }
+    for name in ["user@host", "a{b}"] {
+        assert_eq!(
+            ok(engine.branch_name(git(), name, &CancelSignal::new()), name),
+            BranchName::Free,
+            "{name}"
+        );
+    }
+}

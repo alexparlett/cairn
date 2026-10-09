@@ -1,13 +1,19 @@
 //! Whether a name can be a new branch's (`docs/prd/staging-and-commit.md` R11.3; the user's
 //! decision, 2026-10-09): Create Branch refuses a name inline, before git runs — one git does
 //! not take as a branch's, by git's own rules (`crate::reads::branch_name`), one a local
-//! branch has already, or one git cannot lock beside a branch: a branch at a directory on the
-//! way to it (`baz` for `baz/qux`), or one under it (`foo/bar` for `foo`).
+//! branch has already, one holding `@{` (refused before git is asked), or one git cannot lock
+//! beside a branch: a branch at a directory on the way to it (`baz` for `baz/qux`), or one
+//! under it (`foo/bar` for `foo`).
 
 use cairn_model::BranchName;
 
 use crate::ops::GitBinary;
 use crate::{Cancel, Error, Repository};
+
+/// Why a name holding `@{` is refused, before git is asked (the user's decision F,
+/// 2026-10-09): git reads `@{` as the start of a reflog selector, and its own refusal names a
+/// ref rather than a branch name.
+const AT_BRACE_REFUSAL: &str = "A branch name can't contain '@{'";
 
 impl Repository {
     /// What git says of `name` as a new branch's name, and whether a local branch has it: one
@@ -19,6 +25,12 @@ impl Repository {
         name: &str,
         cancel: &impl Cancel,
     ) -> Result<BranchName, Error> {
+        // The user's decision F (2026-10-09): refused in Cairn's words before git is asked.
+        if name.contains("@{") {
+            return Ok(BranchName::Refused {
+                reason: AT_BRACE_REFUSAL.to_owned(),
+            });
+        }
         let taken_as = match crate::reads::branch_name(git, self, name, cancel)? {
             Ok(taken_as) => taken_as,
             Err(reason) => return Ok(BranchName::Refused { reason }),

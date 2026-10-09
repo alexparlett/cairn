@@ -97,7 +97,9 @@ is pinned against real git on the host's git and, through
   `crates/cairn-git/tests/diff/branch.rs`). It invalidates the refs, so the lane reads
   everything again after it, however it ended. Whether git takes a name is asked first, by
   `Repository::branch_name` — `git check-ref-format --branch` (`reads::branch_name`), git's
-  reason kept for a name it refuses, then the ref, each proper prefix of it and the namespace
+  reason kept for a name it refuses — a name holding `@{` refused before git is asked, "A
+  branch name can't contain '@{'" (the user's decision F, 2026-10-09;
+  `a_name_holding_at_brace_is_refused_in_cairns_words`) — then the ref, each proper prefix of it and the namespace
   under it looked up by gix, for a name a branch has or one a branch's directory holds, refused
   in git's words (`a_name_clashing_with_a_branchs_directory_is_refused_before_git_runs`) — and
   the read writes nothing

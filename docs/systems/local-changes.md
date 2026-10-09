@@ -2,16 +2,17 @@
 
 How the window's Local Changes view is built: the two lists it draws over the working
 tree's status, how a path is chosen and its diff asked, what keeps a diff from being drawn
-for any path but the one chosen, and how the view stages, unstages and discards files.
+for any path but the one chosen, how several paths selected draw their diffs together, how the
+view stages, unstages and discards files, and the diff's staging gesture over lines.
 Spec: `docs/prd/refs-and-status.md` R9 (criterion C9) for the view, and
 `docs/prd/staging-and-commit.md` R8 (criteria C8's view half, C18 and C24's conflicted rows)
-for its actions. Fork is the standard (`docs/research/refs-and-status/fork-refs-and-status-ui.md`,
+for its actions and R9 (criterion C19) for the gesture. Fork is the standard (`docs/research/refs-and-status/fork-refs-and-status-ui.md`,
 section 6, and `docs/research/staging-and-commit/fork-staging-and-commit.md`, sections 1-2);
 every place Cairn's view is not Fork's is named under "Where it is not Fork's". The status
 itself — what `git status` lists and how it is read — is `status.md`; the working-tree query
 that answers a path's diff is `diff.md`, "The working-tree query"; the verbs the actions run
-are `staging.md`, on the local write lane of `git-processes.md`. The chunk and line gesture
-in the diff is not built yet (staging-and-commit phase 08), nor the commit box (phase 09).
+are `staging.md`, on the local write lane of `git-processes.md`. The commit box under the diff
+is not built yet (staging-and-commit phase 09).
 
 ## What it draws
 
@@ -150,8 +151,10 @@ chooses it; a press with the table's extending press held (⌘- or Ctrl-click,
 `Action::ExtendSelection`, resolved from `HeldKeys` since a pointer event carries no modifiers
 here) toggles a path — a selection made of the path chosen when none is made yet — and a press
 with the range press held (Shift-click), or Shift+↑/↓ on the focused list, selects every row the
-list shows from the anchor to it. The diff shows the path last pressed in, or, once it is
-toggled out, another the selection holds; a toggle that takes out the last path leaves nothing
+list shows from the anchor to it. With one path selected the diff shows it; with several it
+draws their diffs together ("Several paths, drawn together", below), the path last pressed in —
+or, once it is toggled out, another the selection holds — staying the path chosen, the anchor a
+range extends from; a toggle that takes out the last path leaves nothing
 selected in that list, so nothing there is drawn selected or acted on. A row is drawn selected
 by a binary search as it is built; the path chosen is drawn selected only while no selection is
 made in its list. Selecting in the other list starts a selection there. A refresh that keeps
@@ -235,9 +238,104 @@ prompt that arrives while a confirmation is open (a write running behind it aske
 sets the confirmation aside, kept unanswered, and the confirmation is drawn again once the
 prompt is answered or refused (`window::window`).
 
-**The diff hears the same chords** (`Scope::LocalChanges`) and acts on the file it shows, whole,
-in the list it was chosen from (`local_changes_actions::on_the_diff`); the gesture's lines are
-phase 08's.
+**The diff hears the same chords** (`Scope::LocalChanges`): on the lines a drag across it
+selected ("The diff's staging gesture", below), or with none on the file it shows — or the paths
+drawn together — whole, in the list it was chosen from (`local_changes_actions::on_the_diff`).
+Hovering is not selecting (Fork, Tracker #103): a chunk under the pointer changes nothing the
+chords do.
+
+## Several paths, drawn together
+
+With two or more paths selected in one list, the diff draws their diffs together, one under
+another, as Fork does (R8.1, the user's decision of 2026-10-09). What the selection asks is
+worked out as the view renders, whenever the lists, the selection or the settings move
+(`local_changes_pane::together_wanted`, `draw_together`): the paths the lists drawn still list —
+each found by a binary search — in the order the lists show them, each with the side it is
+asked as (`diff_actions::working_query`), a conflicted path asking nothing and drawn as its
+notice. The paths are asked in one ask of the diff thread, in the file-diff lane
+(`Request::Together`, `DiffState::show_together`, `crates/cairn-app/src/diff_state/together.rs`):
+it reads each path's working-tree diff in order, as a single path's is, prepares each for the
+views there, and answers a page at a time (`Update::Together`, at most `TOGETHER_PAGE_FILES`
+paths or `cairn_git::PAGE_LINES` lines a page) under the ask's own number, so a page of another
+ask is never kept. It reads under Expand All's line budget (`EXPAND_ALL_LINES`: each path costs
+one and every line of both its sides): once spent, the paths after are not read, and each says
+so and to choose it alone. A path's failure is that path's line; a whole ask's failure is said
+under every path still awaited.
+
+The files are drawn by `cairn_ui::StackedDiff` (`crates/cairn-ui/src/stacked_diff.rs`): one
+virtualised list of rows of the diff's height — each path's own row, then its diff's rows,
+unified or side by side, or the notice standing in their place — laid out by the Commit tab's
+table of files opened in place (`cairn_ui::Expansion`), so a row is placed by a binary search
+over the files. The bar over them names how many files are drawn; previous and next change are
+inert there.
+
+The same paths asked again — a refresh, the settings moved — keep what they draw until their
+answers arrive, under a new number; other paths are drawn afresh, from the top. While paths are
+drawn together the path chosen stays chosen but is not asked (`choose_working` asks nothing then,
+and `working_needs_asking` is false), so the two never take the lane from each other; once one
+path, or none, is selected, the paths drawn together are let go of — handed to a worker to free —
+and the path chosen is asked again as the view renders. An ask that lost the lane before its
+last page — to the Changes tab's file, the files opened in place or a changes query — is asked
+again as Local Changes is shown (`together_needs_asking`, `reask_together`).
+
+## The diff's staging gesture
+
+In Local Changes' diff alone (R9), Fork's gesture (`fork-detail-and-diff-ui.md`, Finding 23),
+built in `crates/cairn-ui/src/staging_gesture.rs` and handed to the diff view — the single
+file's `DiffView` or the files drawn together's `StackedDiff` — as a `cairn_ui::Gesture`: the
+side it is over (`GestureSide`, from the list the path was chosen in), the number of the answer
+drawn (`DiffState::working_drawn`, or the ask drawn together, `together_drawn`), the drag the
+window keeps (`LocalChangesView::lines`, a `cairn_ui::LineDrag`) and where its actions go
+(`local_changes_actions::on_gesture`). The Commit and Changes tabs hand their diff view none,
+so they draw no action (R9.5); a conflicted path's diff (R8.7) and a submodule's, binary,
+LFS-pointer and too-large changes are notices with no rows, so they draw none either.
+
+**Hover** (R9.1): the chunk under the pointer — the drawn hunk its row is in
+(`UnifiedLayout::hunk_at`, `hunk_rows`) — is outlined and floats `Stage` and `Discard
+Changes…` over the unstaged diff, `Unstage` over the staged one, at its top right (at the
+list's top while its top is scrolled above). Its actions take every changed line the outline
+holds (`hunk_selection`): at any context, every exact change the hunk groups, so at context
+ten one chunk can be several of git's changes, and what is taken is what is outlined. The
+outline, the selection's tint and the actions are one layer laid over the rows, outside the
+rows the virtualising view recycles (`GestureLayer`), lifted above them; the outline and tint
+take no pointer and the actions take no focus, so the diff keeps its chords. The pointer is
+heard by the view's root (global moves, read against the list's frame), so the hover follows
+the rows under a still pointer when they change.
+
+**A drag** (R9.2): a primary press on a line row arms a drag; past `DRAG_THRESHOLD` it selects
+from that row to the row under the pointer, kept to the file it began in, and — side by side —
+to the column it began in (R9.3, `SideColumn`). It is the list's, never a row's: the root hears
+every move and the release, so it carries on across rows the virtual list unmounts, and the
+list scrolls itself at its edges (`EdgeScroll`). What it selects is read from the layout when it
+ends (`UnifiedLayout::selection_in`, `SideBySideLayout::selection_in`): the changed lines in the
+rows spanned and no others, found from the change stops, so its cost is the lines selected and
+never the rows spanned, and a selection reaching thousands of rows below is whole. A press
+without a drag selects nothing and lets a selection go, as does Escape. A release the window
+never hears ends the drag at the next press; losing focus lets it go. The selection's actions
+are drawn at its top right, counted (`Stage 2 Lines`, `Unstage 1 Line`, `Discard 2 Lines`), and
+the chords act on it too. A selection belongs to the answer it was made under: another answer
+drawn — a refresh, a write's re-read — makes it nothing.
+
+**After an action** the actions hide until the diff is drawn again or the pointer moves, so a
+second press cannot act twice on rows the first already took (Fork, Tracker #480); then they
+follow whatever the new rows put under the pointer, or none.
+
+**What each action asks** (`local_changes_actions::on_gesture`): the diff drawn, copied, with
+the selection — `LocalWrite::StageLines` from the unstaged or untracked diff, `UnstageLines` from
+the staged one, applied by the engine's patch (`staging.md`); the selection then goes. A
+discard is refused in the view for a submodule or a conflict (`cairn_ui::no_discard`); every
+line of a new file is the file — its discard deletes it — so it asks what discarding the file
+would lose (`Request::DiscardConsequence`, the files' route, phase 03's `WholeFileOnly`);
+otherwise it asks what discarding the lines would lose (`Request::DiscardLinesConsequence`,
+`ops::discard_lines_consequence` on the local lane, after the writes asked before it, not read
+once a newer ask superseded it), and the answer opens the confirmation, whose token asks
+`LocalWrite::DiscardLines`. A staged rename's source listed as a row of its own draws the
+rename's staged diff, so its lines unstage at the new path.
+
+**The mode row** (R9.4): a file whose mode changed draws git's `old mode` and `new mode` as a
+row of its own over its diff — over the notice, for a change of the mode alone — with its own
+actions while hovered (`Stage Mode Change`, `Discard Mode Change…`, `Unstage Mode Change`), each
+taking the mode change alone (`Selection::select_mode`), never a line (`cairn_ui::ModeRow`).
 
 ## What enforces this
 
@@ -264,6 +362,33 @@ phase 08's.
   `a_press_becomes_a_drag_past_the_threshold_and_drops_on_the_other_list_only`,
   `a_discard_is_refused_for_staged_changes_submodules_and_conflicts_only`), and the edge
   scroll's lost release (`a_release_the_window_never_heard_ends_the_drag_at_the_next_press_or_focus_lost`).
+- The gesture: what a chunk and a drag select, from the layout
+  (`crates/cairn-model/src/row_selection.rs`):
+  `a_chunk_at_context_ten_takes_every_change_it_draws_and_no_other`,
+  `a_drag_selects_the_changed_lines_in_its_rows_alone`,
+  `side_by_side_a_drag_selects_its_own_column`,
+  `rows_drawn_ignoring_whitespace_select_nothing`,
+  `a_long_span_selects_exactly_the_changes_between_its_ends`; at the component
+  (`crates/cairn-ui/tests/staging_gesture.rs`):
+  `a_hovered_chunks_actions_take_exactly_its_changes`,
+  `a_view_handed_no_gesture_draws_no_action`, `a_drag_narrows_the_actions_to_its_lines`,
+  `a_drag_across_unmounted_rows_selects_every_line_between_its_ends`,
+  `side_by_side_a_drag_keeps_to_its_column`,
+  `after_an_action_the_actions_follow_the_new_rows_or_none`,
+  `files_drawn_together_each_take_their_own_gesture`, and the viewport twins
+  `the_gesture_builds_one_viewport_over_a_10000_line_diff` and
+  `files_drawn_together_build_one_viewport`, named in the root `CLAUDE.md`'s virtualization
+  invariant; in the window (`crates/cairn-app/src/local_changes_gesture_tests.rs`):
+  `a_hovered_chunk_stages_and_unstages_exactly_its_lines`,
+  `the_chords_act_on_the_selection_and_on_the_whole_file_without_one`,
+  `a_chunks_discard_confirms_its_lines_and_a_new_files_every_line_is_its_file`,
+  `the_mode_row_stages_the_mode_alone`, `nothing_acts_on_lines_while_a_confirmation_is_open`,
+  `several_paths_selected_draw_their_diffs_together`,
+  `a_renames_source_row_unstages_its_lines_at_the_new_path`; the paths drawn together as kept
+  (`crates/cairn-app/src/diff_state/together.rs`):
+  `the_paths_drawn_together_keep_only_their_own_asks_pages`,
+  `the_same_paths_asked_again_keep_their_diffs_meanwhile`; and through the real boundary,
+  `paths_drawn_together_are_answered_by_place_under_their_budget` (`worker/diff_tests.rs`).
 - Acting, in the window (`crates/cairn-app/src/local_changes_actions_tests.rs`):
   `the_chord_and_the_button_stage_a_selection_and_the_selection_moves_on`,
   `a_drag_the_menu_and_a_double_press_stage_what_is_selected`,
@@ -351,13 +476,17 @@ phase 08's.
   the lists (the user's decision, 2026-10-07): the layout menu and its
   collapse-all chevron (#71), Hide Untracked Files (#70), Show Ignored Files (#62) and the eye
   (Fork's side-by-side quick look, #35) are not drawn.
-- The commit box under the diff, and the chunk and line gesture, are not built yet
-  (staging-and-commit phases 08 and 09).
-- With several paths selected, the diff shows the one last pressed in, where Fork draws the
-  selected files' diffs together: matching Fork is the user's decision (2026-10-09), built with
-  the diff's gesture (staging-and-commit phase 08) on the Commit tab's layout of files opened in
-  place; until then, this. A double press acts on its row alone, since its first press makes the
-  row the selection (the user's decision, 2026-10-09).
+- The commit box under the diff is not built yet (staging-and-commit phase 09).
+- A double press acts on its row alone, since its first press makes the row the selection (the
+  user's decision, 2026-10-09).
+- Paths drawn together are read under Expand All's line budget, and past it are not drawn — Fork's
+  own bound, if it has one, is not recorded. Drawn together, a file past R2.6's limits offers no
+  Load Diff and a file whose mode changed no mode row: either is reached by choosing the path
+  alone. Previous and next change step through one file's changes, so they are inert over paths
+  drawn together.
+- Fork's floating actions sit at the chunk's top right; Cairn's also stand at the list's top while
+  the chunk's top is scrolled above it, so a tall chunk's actions stay in reach. A selection's
+  actions are drawn at its top, not at the chunk's.
 - Stage All's double chevron sits in Unstaged's heading, as Fork for Windows draws it (Linux
   follows Fork's Windows rows); Fork for Mac draws it above the lists and flips it to Unstage
   All once nothing is left to stage. Unstage All is the Staged button with the press held, the

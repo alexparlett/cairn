@@ -3,6 +3,84 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 08, the diff's staging gesture (packet mode)
+
+Built on `feature/staging-and-commit`; QA is the coordinator's. Commits 3bfb9e9 (model: which
+drawn chunk a row is in and which lines a drag selects, `row_selection.rs`), dc8a682 (ui: the
+gesture layer, `LineDrag`, `ModeRow`, and `StackedDiff` for files drawn together), 59fd0ef
+(app: the gesture's acts, the lines' discard consequence on the local lane, the chords narrowed,
+and the paths selected drawn together through `Request::Together`), and the docs commit after.
+
+- **No stopping rule met.** (1) Fork's gesture is built on the linked Freya alone (`caa46f8`,
+  each API read in the vendored fork): global pointer listeners (`on_global_pointer_move`,
+  `_down`, `_press`) on the view's root, `PointerEventData::global_location`,
+  `Position::new_absolute` for the layer, `Interactive::No` for the outline and tint, and
+  `async-io`'s timer through phase 06's `EdgeScroll` — no second dependency. One finding: a
+  node's layer is its parent's plus one (`freya-core/src/data.rs`), so the rows, built deep in
+  the virtualising view, stood above a layer added at the view's root and took its presses;
+  the layer is lifted by `GESTURE_LAYER` (64), well under `Layer::Overlay`. (2) A chunk drawn at
+  a non-default context maps to exactly the exact changes the drawn hunk groups — Fork's chunk
+  is the hunk drawn at the current context (Finding 23: the active chunk is outlined with its
+  header row; Finding 14: in entire-file mode the buttons apply to the whole file, the file
+  being one chunk), so the outline is the selection and no second reading arises
+  (`a_chunk_at_context_ten_takes_every_change_it_draws_and_no_other`, C19's QA risk 1).
+- **Outside the recycled rows** (R9.1): one layer over the list — at most an outline, a tint and
+  three actions — read from the rows' numbers and the scroll, re-rendered on pointer moves and
+  scrolls alone. The selection is read from the layout when the drag ends (`selection_in`,
+  costing the changed lines selected) and never copied per frame; an action copies it once.
+- **A selection belongs to the answer drawn**: the view is handed a number for it
+  (`DiffState::working_drawn`, kept per working-tree answer; `together_drawn`, per ask), and a
+  `LineDrag` made under another number is nothing — so a refresh or a write's re-read never
+  leaves a selection over other lines.
+- **After an action** the actions hide until the diff is drawn again or the pointer moves (Fork's
+  Tracker #480 and its fix), so a second press cannot act on rows already taken (QA risk 3).
+- **The user's decision on phase 07's QA item 4(e) — several paths drawn together — is built**:
+  `Request::Together` reads each selected path's working-tree diff on the diff thread, in the
+  lists' order, a page at a time under the ask's number; `cairn_ui::StackedDiff` draws them on
+  the Commit tab's `Expansion`, the gesture over each file's rows (a drag kept to its file); the
+  path chosen stays chosen, unasked, meanwhile. PRD R8.1's note, `local-changes.md` and the root
+  `CLAUDE.md` amended; `ui.md` already described the end state.
+- **Every line of a new file** (phase 03's `WholeFileOnly`, phase 07's carry) is discarded as the
+  file: the view checks it as the engine does and asks `Request::DiscardConsequence` for the
+  path, whose count already takes its cancel; a lines discard asks
+  `Request::DiscardLinesConsequence` (new, the discard-count lane), read only while still the
+  newest — `discard_lines_consequence` reads one path and takes no cancel.
+- **The mode row** (R9.4) selects through `Selection::select_mode` (phase 02's carry); a
+  mode-only discard is allowed and named by the engine (phase 03's carry).
+- **A staged rename's source row** (phase 02's QA item 8, the lines half): it draws the rename's
+  staged diff, so its lines unstage at the new path
+  (`a_renames_source_row_unstages_its_lines_at_the_new_path`).
+- **Keys and dialogs** (phases 06 and 07): the diff's chords stay focused-only, act on a drag's
+  lines when there is one, and nothing acts while a confirmation or a prompt is open
+  (`nothing_acts_on_lines_while_a_confirmation_is_open`); every lines discard goes through
+  `ConfirmDialog` with the engine's `Consequence::DiscardLines`, which carries its selection and
+  patch.
+- Test helpers that press list rows now look only in the lists' column (`in_lists`), since the
+  files drawn together draw their paths too.
+- `LocalWrite`'s `expect(dead_code)` names phase 09 alone.
+
+Items for the user's ratification (none was a stopping rule; each is built as stated):
+
+1. **The files drawn together are read under Expand All's line budget** (50,000 lines, a path
+   costing one and both its sides' lines); the paths past it are not drawn, each saying to
+   choose it alone. Fork's own bound is not recorded. Alternative: no bound (a 50,000-path
+   selection would read every diff). Recommendation: keep.
+2. **Drawn together, a file offers no Load Diff and no mode row, and previous and next change
+   are inert**; each is reached by choosing the file alone. Alternative: build them over the
+   stacked view (Load Diff per file, the mode row as a row of the list, stepping across files).
+   Recommendation: keep for this packet; file an issue if wanted.
+3. **The floating actions stand at the list's top while the chunk's top is scrolled above it**
+   (Fork places them at the chunk's top right), so a tall chunk's actions stay in reach; a
+   selection's actions stand at its top.
+4. **A press without a drag lets a selection go, and so does Escape**; losing focus mid-drag
+   lets the drag go (as the lists' drag does) rather than selecting to where it was.
+5. **With nothing selected, the chords over files drawn together act on every path drawn**
+   (whole files), as the lists' chords act on the selection.
+6. **The selection's captions are R9.2's words** — `Stage 2 Lines`, `Unstage 1 Line`, `Discard 2
+   Lines` — so the discard's has no ellipsis where the chunk's `Discard Changes…` does.
+
+Carried forward: see `state.md`.
+
 ## 2026-10-09 — phase 07 QA, adjudicated and fixed; the user's decisions applied
 
 Four fresh reviewers and a fresh qa-confirm adjudicated phase 07; the user decided the open

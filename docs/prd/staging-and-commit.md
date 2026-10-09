@@ -317,8 +317,10 @@ literally.
   #36, not built here); a collapsed untracked-directory row, where status lists
   one, acts on everything under it. (Added 2026-10-09, the user's decision on phase
   07's QA item 4(e): with several files selected the diff draws the selected files'
-  diffs together, as Fork does — built in phase 08, reusing the Commit tab's layout of
-  files opened in place; until then it draws the path last pressed in.)
+  diffs together, as Fork does, on the Commit tab's layout of files opened in place, each
+  file under its own row with R9's gesture over its rows; built in phase 08, which reads
+  them under Expand All's line budget — the files past it not drawn, each saying to choose
+  it alone — a bound for the user's ratification.)
 - R8.2 Files stage and unstage by double-click, R7.3's chords, a drag from one
   list to the other (one drop zone per list), the header's `Stage` / `Unstage`
   (⌥-held: Stage All / Unstage All) and the double-chevron Stage All, and the

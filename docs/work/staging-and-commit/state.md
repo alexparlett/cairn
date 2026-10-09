@@ -15,7 +15,10 @@ mode: QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, f
 at c07c076. Phase 06 (render foundations) done in packet mode: QA adjudicated, fixes and the
 user's decisions 6, 12, 13 and 14 (2026-10-09) applied, full gate green. Phase 07 (Local
 Changes acts on files) done in packet mode: QA adjudicated, fixes and the user's decisions of
-2026-10-09 applied, full gate green. Phases 08-12 not started.**
+2026-10-09 applied, full gate green. Phase 08 (the diff's staging gesture, and a
+multi-selection's diffs drawn together) built in packet mode, full gate green, QA pending (the
+coordinator's); six items for the user's ratification in progress.md. Phases 09-12 not
+started.**
 
 ## Locked decisions
 
@@ -347,15 +350,45 @@ Phase 07 (`docs/systems/local-changes.md`, "Acting on files"):
   (`list()` is `Some`), so nothing is acted on; the follow resets the selection when it moves or
   lets go of the path chosen.
 
+Phase 08 (`docs/systems/local-changes.md`, "Several paths, drawn together" and "The diff's
+staging gesture"):
+
+- **`cairn_model`**: `UnifiedLayout::hunk_at`/`hunk_rows`/`hunk_selection`/`selection_in` and the
+  side-by-side twins (`selection_in` taking a `SideColumn`), in `row_selection.rs` and
+  `diff_rows.rs`; exact rows only (`None` for rows drawn ignoring whitespace).
+- **`cairn_ui::Gesture::new(side: GestureSide, drawn: u64, lines: State<LineDrag>, on_act)`**,
+  handed to `DiffView::gesture` or `StackedDiff::gesture`; `GestureAct { file, verb:
+  GestureVerb, selection }` (`file` 0 for one diff, the place among the paths drawn together
+  otherwise); `LineDrag::selected(drawn) -> Option<(usize, &Selection)>`; `ModeRow::of(file,
+  side, on_act)`; captions `STAGE_CHUNK_CAPTION`, `DISCARD_CHUNK_CAPTION`,
+  `UNSTAGE_CHUNK_CAPTION`, `lines_caption`, `mode_caption`. **`cairn_ui::StackedDiff::new(files:
+  Readable<Expansion>, paths: Readable<Vec<RepoPath>>, scroll)`**.
+- **Worker**: `Request::DiscardLinesConsequence { asked, diff, selection }` (discard-count lane,
+  answered by `Update::DiscardConsequence`); `Request::Together(TogetherQuery { asked, files:
+  Arc<Vec<TogetherFile>>, options })` in the file-diff lane, answered by `Update::Together {
+  asked, files: Vec<(usize, TogetherOutcome)>, ended: Option<TogetherEnded> }`.
+- **Window**: `LocalChangesView::lines`; `DiffState::working_drawn`, `together`,
+  `together_drawn`, `together_diff`, `show_together`, `let_go_of_together`,
+  `together_needs_asking`, `reask_together` (`diff_state/together.rs`);
+  `local_changes_actions::on_gesture`, `Discarding::{Files, Lines}`; `local_changes_pane::
+  together_wanted`, `draw_together`.
+
+## Carried forward from phase 08 (owned by the phase named)
+
+- **Phase 11**: measure the gesture on the bench in `window_check` — hover and drag over a large
+  diff (the layer re-renders per pointer move and scroll), and a selection of many paths drawn
+  together (one pass over the files per render of `StackedDiff`, `widest`); C21's frame budget.
+- **Phase 12 / the user**: the six items for ratification in progress.md's phase 08 entry.
+
 ## Carried forward from phase 07 (owned by the phase named)
 
-- **Phase 08 — a requirement (the user's decision on phase 07's QA item 4(e), 2026-10-09)**:
+- **Phase 08 — done (built in phase 08)**: a requirement (the user's decision on phase 07's QA item 4(e), 2026-10-09):
   with several files selected in Local Changes, the diff draws the selected files' diffs
   together, as Fork does, reusing the Commit tab's layout of files opened in place
   (`cairn_ui::Expansion`, `CommitTab`'s list); phase 07 draws the path last pressed in
   meanwhile (PRD R8.1's note; `docs/design/ui.md`; `local-changes.md`, "Where it is not
   Fork's"). Phase 08's gesture then acts on the file under it.
-- **Phase 08**: a discard of every line of a new file goes to `discard_files` (phase 03's
+- **Phase 08 — done**: a discard of every line of a new file goes to `discard_files` (phase 03's
   `Refusal::WholeFileOnly`): the line gesture is the only route that selects lines, so the
   gesture routes it — `local_changes_actions` asks `Request::DiscardConsequence` for the path,
   as the file routes do. The diff's chords act on the whole file today
@@ -402,8 +435,8 @@ progress.md's phase 07 entry).
     release outside it leaves `EdgeScroll` dragging;
   - item 21: a window test pressing Backspace in the filter field while Local Changes is shown,
     and nothing discards.
-- **Phase 08**: the drag selection over the diff's rows begins with `EdgeScroll::begin` on the
-  diff's container (`EdgeScroll::on`), never on a row.
+- **Phase 08 — done**: the drag selection over the diff's rows begins with `EdgeScroll::begin` on
+  the diff's container (`EdgeScroll::on`), never on a row.
 - **Phase 09**: build the subject and description with `text_field_in(..,
   FieldScope::CommitBox, on_action)` (the description `.multiline(true)`, no `on_submit`), so
   ⌘Return/Ctrl+Enter commits without a new line and Backspace/Enter never reach Local Changes;
@@ -535,7 +568,7 @@ From phase 05's QA (adjudicated 2026-10-09):
   before any dialog); the rename source row's whole-file unstage resets the source alone,
   both paths unstage the rename; an intent-to-add file's discard leaves it empty and says
   so (the user's decision 5).
-- **Phase 08**: `discard_lines_consequence` takes the `Selection` by value; a mode-only
+- **Phase 08 — done**: `discard_lines_consequence` takes the `Selection` by value; a mode-only
   selection where the diff has a mode change is allowed and named.
 - **Phase 11 / C22**: the root `CLAUDE.md` still has to name the one file deletion made
   without `git` (R12.4) when it exists.
@@ -557,11 +590,11 @@ From phase 05's QA (adjudicated 2026-10-09):
   rows, and D1's list of reads) does not yet name `action_patch`, the inversions or
   `reads::staged_pairing`; `docs/design/engine.md` and `docs/systems/diff.md` do. Not
   edited by the phase agent (an instruction file); for the user or C22's update.
-- **Phase 08**: drawing the mode row (R9.4) selects through `Selection::select_mode`.
+- **Phase 08 — done**: drawing the mode row (R9.4) selects through `Selection::select_mode`.
 
 From phase 02's QA (adjudicated 2026-10-08):
 
-- **Phases 03 and 07** (QA item 8; the engine's half done, `a_rename_sources_row_unstages_its_lines_at_the_new_path`; phase 07's whole-file half done, `a_whole_file_action_names_each_rows_path_and_a_renames_source` — the lines half is phase 08's gesture): a rename's SOURCE path is paired too
+- **Phases 03, 07 and 08** (QA item 8; done — the engine's half, `a_rename_sources_row_unstages_its_lines_at_the_new_path`; phase 07's whole-file half, `a_whole_file_action_names_each_rows_path_and_a_renames_source`; phase 08's lines half, `a_renames_source_row_unstages_its_lines_at_the_new_path`): a rename's SOURCE path is paired too
   (`reads::working_tree::names`): where the user's `status.renames` differs from
   `diff.renames`, status lists the deleted source as a row of its own while its staged
   diff is the rename, and an unstage built from it acts at the NEW path. The verb and the
@@ -626,7 +659,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 05 commit engine | done — QA adjudicated, fixes and the user's decisions A-F (2026-10-09) applied, full gate green at c07c076 |
 | 06 render foundations | done — QA adjudicated, fixes and the user's decisions 6, 12, 13 and 14 (2026-10-09) applied, full gate green |
 | 07 Local Changes actions | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green |
-| 08 diff gesture | not started |
+| 08 diff gesture | built, gate green, QA pending |
 | 09 commit box | not started |
 | 10 lost commits | not started |
 | 11 activity and measured | not started |

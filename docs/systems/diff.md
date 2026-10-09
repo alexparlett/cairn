@@ -1807,6 +1807,10 @@ As-built for PRD R6.1-R6.9, unified and side by side (a file opened in place und
 in the Commit tab is drawn by the same row builders, "Files opened in place" above), with
 the user's decisions of phase 06: Fork's chords
 only, git parity for every row, and the user's own `diff.context` as the starting context.
+Handed a `cairn_ui::Gesture` — Local Changes' diff alone — the view draws the staging gesture
+over its rows (staging-and-commit R9), one layer laid over the recycled rows; without one, as
+the Changes tab draws it, it draws no action. The gesture is `local-changes.md`'s, "The diff's
+staging gesture".
 
 **Where it is drawn, and for what** (`crates/cairn-app/src/changes_tab.rs`, `diff_side`).
 A file chosen in the Changes tab — pressed or reached with ↑ or ↓ in its list, or chosen
@@ -2317,8 +2321,9 @@ the rows under the pointer come and go — tracks the drag through global pointe
 pointer is within `EDGE_BAND` of an edge or past it the list scrolls one step each
 `EDGE_TICK`, faster the deeper, up to `MOST_PER_TICK` (`edge_step`), until the pointer
 leaves the edge or the drag ends; a viewport not yet laid out, or collapsed, scrolls nothing
-(`a_viewport_with_no_height_scrolls_nothing`). A drag released outside the window is not
-heard ending yet: the first list to wire a drag handles it. The pace is `async-io`'s `Timer`, a future on the
+(`a_viewport_with_no_height_scrolls_nothing`). A drag released outside the window, which may
+never be heard, ends at the next press heard while it is on, or as the window loses focus. The
+pace is `async-io`'s `Timer`, a future on the
 toolkit's executor, so the UI thread never sleeps: a pointer held still at an edge keeps the
 list scrolling, which pointer moves alone could not
 (`a_drag_held_at_an_edge_keeps_the_list_scrolling_until_it_leaves_or_ends`).

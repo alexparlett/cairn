@@ -10,11 +10,12 @@ are the model's (`docs/systems/diff.md`, "Stage, unstage and discard"); how ever
 `git` process is built and run, and the local write lane each verb runs on, is
 `docs/systems/git-processes.md`.
 
-**What exists:** the engine half and the lane. Nine verbs, three `Consequence`
+**What exists:** the engine half and the lane. Eleven verbs, four `Consequence`
 builders and the reads they stand on; the application runs every verb on its local
 write lane (`docs/systems/git-processes.md`, "The local write lane"). Local Changes and
 the commit box ask for the staging, discarding and committing verbs
-(`docs/systems/local-changes.md`); no view asks for `create_branch` yet.
+(`docs/systems/local-changes.md`), and Create Branch for the branch verbs
+(`docs/systems/history-graph.md`, "Create Branch").
 
 ## The verbs
 
@@ -37,6 +38,8 @@ askpass token where its caller has one.
 | `unstage_files` (`UnstageTo::Nothing`) | `rm --cached -f -q --pathspec-from-file=- --pathspec-file-nul` | the paths | no |
 | `discard_files` | `restore --worktree --pathspec-from-file=- --pathspec-file-nul`, then `clean -f -q -- <paths>` | the tracked paths; nothing | yes |
 | `create_branch` | `branch -- <name> <commit>`, the commit by its full id | nothing | no |
+| `create_branch_and_checkout` | `checkout -q -b <name> <commit> --` | nothing | no |
+| `create_branch_discarding` | `checkout -q -f -b <name> <commit> --`, the name and commit the confirmation names | nothing | yes |
 
 Pinned against a `git` that records its argv, environment and stdin and then
 runs the real one (`ops/recording_stub.rs`):
@@ -44,7 +47,8 @@ runs the real one (`ops/recording_stub.rs`):
 `unstaging_resets_or_removes_from_a_pathspec_file` (`ops/stage.rs`),
 `a_discard_of_lines_runs_as_r3_names_it` and
 `a_discard_of_files_runs_as_r3_names_it` (`ops/discard.rs`) and
-`a_branch_is_created_by_git_branch_after_a_double_dash` (`ops/branch.rs`) — each a write's
+`a_branch_is_created_by_git_branch_after_a_double_dash` (`ops/branch.rs`) and
+`the_checkouts_run_as_r11_names_them` (`ops/checkout.rs`) — each a write's
 environment with no read pin and no `GIT_LITERAL_PATHSPECS` (C9). What each does
 is pinned against real git on the host's git and, through
 `scripts/git-floor.sh`, on 2.30.9 and 2.32.7: C3 runs every case of
@@ -82,8 +86,8 @@ is pinned against real git on the host's git and, through
   row's staged diff is the rename, and its lines go back at the new path, the
   source's entry untouched (`a_rename_sources_row_unstages_its_lines_at_the_new_path`).
 - **Staging a conflicted path** is `git add`, which marks it resolved (R3.11).
-- **A branch put on a commit** — `Create Branch Here…` on a commit Show Lost Commits
-  draws (R11.3; `docs/systems/history-graph.md`, "Show Lost Commits") — is `git branch`
+- **A branch put on a commit** — Create Branch, from `New Branch…` on any commit row
+  (R11.3; `docs/systems/history-graph.md`, "Create Branch") — is `git branch`
   with the name after `--`, so a name beginning with `-` is a name git judges, never an
   option. git refuses a name that is taken or not a valid branch name, and its words are
   the failure's (`Error::GitFailed`'s stderr), first line for first line what the user's own
@@ -91,7 +95,31 @@ is pinned against real git on the host's git and, through
   logged with the same message (`create_branch_here_makes_the_branch_git_branch_makes`,
   `a_name_git_refuses_is_refused_with_its_reason_and_nothing_written`,
   `crates/cairn-git/tests/diff/branch.rs`). It invalidates the refs, so the lane reads
-  everything again after it, however it ended.
+  everything again after it, however it ended. Whether git takes a name is asked first, by
+  `Repository::branch_name` — `git check-ref-format --branch` (`reads::branch_name`), git's
+  reason kept for a name it refuses, then the ref looked up by gix for a name a branch has —
+  and the read writes nothing
+  (`a_branch_name_is_checked_by_gits_rules_and_the_check_writes_nothing`).
+- **A branch checked out as it is created**, keeping the changes ("Don't change"), is `git
+  checkout -q -b <name> <commit> --`: the changes carried over, or git refusing where one would
+  be overwritten — its words the failure's — and then no branch is made
+  (`a_kept_checkout_carries_the_changes_or_is_refused_by_git_writing_nothing`).
+- **A branch checked out discarding the changes** ("Discard", the user's decision 3) is the one
+  operation that discards a staged change — R3.6's stated exception. Its
+  `Consequence::CheckoutDiscarding` (`ops::checkout_discarding_consequence`) names the branch,
+  the commit, `HEAD`, every tracked path with a staged or an unstaged change (a rename's source
+  too), each with its kind, its index entry and its bytes on disk, and its staged and unstaged
+  lines together as git's numstat counts them (`reads::change_lines`: `git diff-index --cached
+  --numstat` and `git diff-files --numstat`); every untracked file at a path the commit's tree
+  holds, which `checkout -f` overwrites, by its size; and how many untracked files stay. It is
+  refused before any prompt during a merge, rebase, `git am`, cherry-pick or revert, for a
+  conflicted path and for a submodule's change (`a_discarding_checkout_is_refused_where_it_cannot_count_the_loss`),
+  computed again and compared before git runs, any difference refusing with the path it moved
+  at (`a_discarding_checkout_refuses_what_changed_since_its_confirmation`), and its run loses
+  exactly what it named (`a_discarding_checkout_names_every_loss_and_then_loses_exactly_those`,
+  `an_untracked_file_in_the_way_is_named_overwritten`). An ignored file at a path the commit
+  holds is overwritten by any checkout, kept or discarding, as the user's own `git checkout`
+  does: not counted.
 - **Every path is literal**: a file named `*.txt` is staged alone, and `git clean`
   of `st*` leaves `stx` (`every_path_is_read_literally_never_as_a_pattern`).
 - **Every verb is silent on success**, so one left running by a second close, its

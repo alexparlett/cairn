@@ -17,7 +17,7 @@ them there, against their pinned tests.
 | 07 | C8 (views), C18, C24 (views: conflicted rows) |
 | 08 | C19; C22 (the gesture's viewport twin) |
 | 09 | C13 (views), C14 (views), C24 (views: the commit box during a merge, rebase, cherry-pick or revert) |
-| 10 | C20 (Show Lost Commits, `Create Branch Here…`) |
+| 10 | C20 (Show Lost Commits, Create Branch: its dialog, its kept checkout and its sealed Discard) |
 | 11 | C2 (lock), C20 (the activity popover, `Remove index.lock…`, the filesystem-mutation guard), C21; C22 (D1's one deletion and the filesystem-mutation guard's twin) |
 | 12 | all of C1-C24, re-verified over the whole packet diff |
 
@@ -35,7 +35,11 @@ Beyond the PRD, phase 12 confirms:
 - [ ] **Each `Consequence` is re-checked against the state it names**, not
       against a copy the window kept: the re-check reads the repository.
 - [ ] **Nothing discards a staged change**, by any route — gesture, chord, menu,
-      dialog.
+      dialog — but the one stated exception (the user's decision 3, 2026-10-09; PRD R3.6,
+      R1.5): Create Branch's "Discard" before its checkout, `ops::create_branch_discarding`,
+      sealed behind its own `Consequence::CheckoutDiscarding`, on `DESTRUCTIVE_OPERATIONS`,
+      re-checked before `git checkout -f` runs, and never the remembered choice. No other
+      route reaches `checkout -f`, `reset --hard` or a staged change's discard.
 - [ ] **Every write is built in `ops/` as a write invocation, every new read in
       `reads/` as a read invocation**; no read writes a byte of the index
       (`hash-object` without `-w`).

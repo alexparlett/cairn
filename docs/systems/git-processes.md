@@ -1099,12 +1099,19 @@ Every write to the index, the working tree and a local ref runs on the
 `cairn-local` thread (`worker/local_lane.rs`, spawned by `Threads::start`;
 staging-and-commit R4, `docs/design/concurrency.md`, "Operations"): the verbs of
 `docs/systems/staging.md` — `stage_lines`, `unstage_lines`, `stage_files`,
-`unstage_files`, `discard_lines`, `discard_files`, `commit`, `amend` and
-`create_branch`, each a `LocalWrite`, a discard and an amend carrying the `Confirmed` the
-user gave it. A branch made (`LocalWrite::CreateBranch`) reads everything again however it
-ends, as a commit does, since it moves the refs
-(`a_branch_made_through_the_lane_reads_everything_again_and_a_refusal_says_gits_reason`);
-no view asks it yet.
+`unstage_files`, `discard_lines`, `discard_files`, `commit`, `amend`, `create_branch`,
+`create_branch_and_checkout` and `create_branch_discarding`, each a `LocalWrite`, a discard,
+an amend and Create Branch's discarding checkout carrying the `Confirmed` the user gave it. A
+branch made (`LocalWrite::CreateBranch`, `CreateBranchAndCheckout`,
+`CreateBranchDiscarding`) reads everything again however it ends, as a commit does, since it
+moves the refs
+(`a_branch_made_through_the_lane_reads_everything_again_and_a_refusal_says_gits_reason`).
+Create Branch's two reads are the lane's too, in its order: a name's check
+(`Request::CheckBranchName`, numbered in the branch-name lane, so the next keystroke's ask ends
+the one before, its `git check-ref-format` with it) and what "Discard" would lose
+(`Request::CheckoutConsequence`, numbered in the checkout-count lane), answered by
+`Update::BranchName` and `Update::CheckoutConsequence`
+(`create_branchs_reads_are_answered_on_the_lane`).
 The tests below drive real `git commit`s, held in their `pre-commit` hook for as
 long as a test says, and wait on the answer to a later request — the repository
 thread's to `Request::CommandLog` — or on a mark a held process wrote, never on a

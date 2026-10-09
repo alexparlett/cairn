@@ -162,7 +162,7 @@ wrong by assuming reflog covers everything.
 **Committed work** — reset `--hard`, branch delete, rebase, amend, squash. The
 reflog holds it, so recovery means *making the reflog visible and usable*: Show
 Lost Commits draws every commit a reflog still reaches into the graph, dimmed, and
-`Create Branch Here…` puts a branch back on one (`ui.md`). That is why the reflog
+`New Branch…` puts a branch back on one (`ui.md`, "Create Branch"). That is why the reflog
 view ships alongside the first commit-level destructive operation and not later,
 and why an amend's confirmation can say where the old commit stays.
 

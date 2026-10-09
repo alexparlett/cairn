@@ -197,7 +197,10 @@ against `stash@{n}` immediately before it runs; `Stash N Files…` from the file
 context menu; and the context menu's `Ignore ›` submenu — `Ignore '<file>'` at
 once, `Ignore All Files in '<folder>'…` and `Custom Pattern…` through Fork's `Add
 Pattern to .gitignore` dialog with a live preview of the files that match — writing
-the root `.gitignore` only, as Fork does.
+the root `.gitignore` only, as Fork does. And, carried from staging-and-commit (the user's
+decision 2, 2026-10-09): Create Branch's "Local changes:" gains Fork's "Stash and reapply"
+(`docs/research/staging-and-commit/fork-create-branch-evidence.md` §3), which packet 5 left out
+until stashing exists.
 
 **Facts the planning research found that it must meet**
 (`docs/research/staging-and-commit/git-write-verbs.md` §7 and §9,
@@ -268,9 +271,11 @@ contradict D2.
 ## 7. branch-ops — brief
 
 **Builds:** create, rename and delete branches. Checkout and switch. Create and
-delete tags. Packet 5's minimal `Create Branch Here…` (a name, then
-`git branch -- <name> <oid>`, on a commit Show Lost Commits draws) exists to reuse:
-create branch grows from it rather than beside it.
+delete tags. Packet 5's Create Branch — Fork's full dialog from `New Branch…` on any commit
+row, with "Check out after create" and "Local changes:" (`ops::create_branch`,
+`create_branch_and_checkout`, the sealed `create_branch_discarding`) — exists to reuse: create
+branch grows from it rather than beside it. Checking out enters packet 5 only through that
+dialog; checkout and switch of a branch are this packet's.
 
 **The non-obvious destructive case:** checkout is destructive exactly when the
 working tree is dirty, which is the moment a user least expects a checkout to
@@ -309,4 +314,7 @@ Not planned, not ordered, and not a commitment. Recorded so the packets above do
 not accidentally foreclose them: merge with structured conflict resolution (D6),
 rebase, cherry-pick, revert, reset, blame, file history, commit search, image
 diffs, submodules, LFS verification, the repository manager, and interactive
-rebase as its own program.
+rebase as its own program; and Cairn's first persisted settings store, whose first user is
+Create Branch's "Check out after create", sticky for the session until then (the user's decision
+1, 2026-10-09; issue #89 — the filesystem-mutation guard will need an exceptions-roster row for
+its file).

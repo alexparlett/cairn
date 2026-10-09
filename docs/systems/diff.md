@@ -2175,6 +2175,15 @@ Enter, Backspace, matched by the key), by a key where it sits (a digit, a letter
 stop, matched by its physical position, since Option turns `1` into `¡` on macOS and Shift
 turns `.` into `>`), or by a primary pointer press.
 
+A chord is spelled for a person in one place, from this data: `accelerators::chord_name(action,
+os)` (`crates/cairn-ui/src/accelerators/chord_names.rs`, the user's decision of 2026-10-09)
+renders an action's first chord as Fork's own lists write it — on Linux Fork's Windows form,
+`Ctrl+Alt+Shift+S`, held keys in that order joined by `+`; on macOS the symbols run together,
+`⌘⌥⇧S`, `⌘Return`, `⌫` — and `None` for a press or an action with none
+(`a_chord_is_named_from_the_table_as_forks_lists_write_it`). Show Lost Commits' check box shows
+it as its tooltip. It is the one render file the modifier guard lets spell a chord, each of its
+literals one held key's name alone (`CHORD_NAMES`, `hand_typed_chords`).
+
 The chords are Fork's and only Fork's — the user's decision of 2026-10-03, from
 `docs/research/diff-engine/fork-shortcuts.md`, and for staging
 `docs/research/staging-and-commit/fork-staging-and-commit.md` §1-2:

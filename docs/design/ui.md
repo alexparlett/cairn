@@ -63,7 +63,8 @@ Kept, and why:
 | A discard asked on the staged side — Backspace in Staged, or on a staged diff — says "Staged changes can't be discarded: unstage them first." where Fork does nothing; staged changes are never discarded. | `engine.md`, the write verbs |
 | A submodule row offers no discard and says why; Fork offers `Discard Submodule Changes`. `git restore` leaves a submodule's commit where it was, and no prompt can count what is dirty inside it. | `engine.md`, the write verbs |
 | During a rebase, `git am`, a cherry-pick or a revert the commit box is disabled and names the operation; Fork pre-fills git's message for a cherry-pick or revert and commits it. Continuing those operations is their own design. | `cairn.md`, the milestone — rewrites are the second lap |
-| **Show Lost Commits has a control in the history's toolbar area** as well as its chord; Fork has only the View menu item and the chord, and refused a toolbar button (TrackerWin #378). | `feature-inventory.md`, "Recovery" — the reflog must be visible to be usable |
+| **Show Lost Commits has a control in the history's toolbar area** — a check box at the right end of the "Graph and subject" heading's cell, its tooltip the chord — as well as its chord; Fork has only the View menu item and the chord, and refused a toolbar button (TrackerWin #378). | `feature-inventory.md`, "Recovery" — the reflog must be visible to be usable |
+| Create Branch's **"Discard" is confirmed**, naming what it loses, where Fork's discards unasked; and its "Local changes" offers no "Stash and reapply" until stashing exists. | `engine.md`, "The confirmation seal" |
 | Show Lost Commits reaches the commits `HEAD`'s and the local branches' reflogs hold; Fork's mode reaches every reflog, as `git log --all --reflog` does (TrackerWin #1307). | `history-graph.md`, "What it walks" |
 | **Worktrees are a sidebar section**, as Fork's are, and a branch checked out in another worktree carries a chip as in Fork — and, unlike Fork, a disabled checkout. | `worktrees.md` |
 | Pressing a ref finds its commit however deep it is; Fork holds only its newest 50,000 or 100,000 commits and does nothing for a ref past them. | `history-graph.md` — a history is however long the repository is |
@@ -245,14 +246,27 @@ Commit and Push belongs with push, and is designed with it. Spec:
 ### Show Lost Commits
 
 Fork's reflog view is a mode of the graph, not a list. Its toggle — ⌘⇧. or
-Ctrl+Shift+., and a control in the history's toolbar area, which Fork does not
-have — adds the old and the new id of every entry of `HEAD`'s reflog and of each
-local branch's to the walk's tips and draws the commits no ref reaches dimmed, in their lanes
-(`history-graph.md`, "What it walks"); Fork's reaches every reflog. An
-amended-away or reset-away commit is found there, until git expires its entry
-(`gc.reflogExpireUnreachable`, 30 days by default). Recovery is a dimmed commit's
-`Create Branch Here…`: a name, then the branch. As in Fork, there is no list of
-reflog entries. Spec: `docs/prd/staging-and-commit.md` R11.
+Ctrl+Shift+., and a check box, "Show Lost Commits", at the right end of the "Graph and
+subject" heading's cell, its tooltip naming the chord, which Fork does not have — adds the old
+and the new id of every entry of `HEAD`'s reflog and of each local branch's to the walk's tips
+and draws the commits no ref reaches dimmed, as Fork dims them: their subject, author, id and
+date in a lighter grey, their lanes, edges and chips in their own colours
+(`history-graph.md`, "What it walks"); Fork's reaches every reflog. An amended-away or
+reset-away commit is found there, until git expires its entry (`gc.reflogExpireUnreachable`,
+30 days by default). As in Fork, there is no list of reflog entries. Spec:
+`docs/prd/staging-and-commit.md` R11.
+
+### Create Branch
+
+Recovery is Fork's: `New Branch…` on any commit row — a dimmed one's too — opens Fork's Create
+Branch dialog: the commit read only, a name refused before git runs by git's own rules or
+because a branch has it (the reason beside the buttons), "Check out after create" remembered,
+and — while it is ticked and the working tree has changes — "Local changes": "Don't change",
+which checks out over them or shows git's refusal in the Git Error dialog with the name kept
+for the next try, and "Discard", which names every change and every overwritten untracked file
+it loses in Cairn's confirmation before it runs, where Fork's asks nothing, and is never the
+remembered choice. Fork's "Stash and reapply" waits for stashing. Checking out a branch is
+otherwise the branch operations' design. Spec: `docs/prd/staging-and-commit.md` R11.3.
 
 ### Activity
 

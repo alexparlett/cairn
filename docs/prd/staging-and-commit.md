@@ -74,8 +74,10 @@ Stash and `.gitignore` are packet 5b's (`stash-and-ignore`, L1).
   refusal is an outcome of its own ("changed since you confirmed"), never a
   failure of git's.
 - R1.5 Destructive here: discard lines (R3.3), discard files and delete untracked
-  files (R3.5), amend (R6.4), remove `index.lock` (R12.4). Not destructive: stage
-  and unstage of files, lines or a mode change, commit, create a branch (R11.3).
+  files (R3.5), amend (R6.4), remove `index.lock` (R12.4), and Create Branch's checkout
+  with "Discard" (R11.3). Not destructive: stage and unstage of files, lines or a mode
+  change, commit, create a branch, and create and check out a branch keeping the changes
+  (R11.3). (Create Branch's discard added 2026-10-09, the user's decision 3.)
 - R1.6 `ops::Performed` records the `Consequence`'s prompt for every destructive
   operation, as today's `Performed::destructive` records the token's text.
 
@@ -152,7 +154,10 @@ literally.
   `Consequence` re-check made before the first (R1.4). The bound is phase 03's to
   measure: `argv`'s limit for a very large selection is unverified
   (`git-write-verbs.md` §11). There is no Clean command and no Discard All. (`-q` added 2026-10-09 in phase 05, the user's decision 12 on phase 04's QA: a `git clean` left running by a second close then finishes its batch rather than dying of `SIGPIPE` at its first line.)
-- R3.6 Staged changes are never discardable (L8): no verb, no gesture.
+- R3.6 Staged changes are never discardable (L8): no verb, no gesture — with one stated
+  exception, Create Branch's "Discard" before its checkout (R11.3), which discards staged and
+  unstaged changes alike behind its own sealed confirmation. (Exception added 2026-10-09, the
+  user's decision 3.)
 - R3.7 Before every apply (R3.1-R3.3) the operation checks the content it was
   built from (L17f): for stage, the index entry's blob is the diff's old id; for
   unstage, its new id; for discard, the index entry is the old id and the working
@@ -438,9 +443,36 @@ literally.
   2026-10-09, the user's decision D.)
 - R11.2 A reflog is read whole, never through gix's newest-first iterator, which
   stops at a line over 4 KiB.
-- R11.3 A dimmed commit's context menu offers `Create Branch Here…`: a name, then
-  `git branch -- <name> <oid>`, a write in `ops/`, refused with git's reason when
-  the name is taken or invalid.
+- R11.3 Every commit row's context menu — a dimmed one's too — offers Fork's `New Branch…`,
+  which opens Fork's Create Branch dialog (the user's decision, 2026-10-09, amending "A
+  dimmed commit's context menu offers `Create Branch Here…`: a name, then `git branch`";
+  evidence `docs/research/staging-and-commit/fork-create-branch-evidence.md`):
+  - Titled "Create Branch": "Create branch at:" the commit's glyph, short id and subject,
+    read only; "Branch name:" a field (placeholder "Enter branch name"); "Check out after
+    create"; Cancel, and "Create" — "Create and Checkout" while the box is ticked. Return
+    presses the button, Escape cancels.
+  - A name is refused inline, before git runs, by git's own rules (`git check-ref-format
+    --branch`, a read) and when a local branch has it: the button disabled, the reason beside
+    it — Fork's words for a name taken ("Branch test already exists"), git's for a name it
+    refuses.
+  - "Check out after create" is sticky for the session (decision 1); across restarts once
+    Cairn has a settings store (issue #89).
+  - Unticked: `git branch -- <name> <oid>`. Ticked, while the working tree has staged,
+    unstaged or conflicted changes, a "Local changes:" group: "Don't change" (the default, and
+    each opening's): `git checkout -q -b <name> <oid> --`, git's refusal ("would be
+    overwritten") shown in Fork's Git Error dialog with git's own words and the name kept for
+    the next opening; "Discard" (decision 3): destructive (R1.5) — an engine-computed
+    `Consequence` naming every staged and unstaged change to a tracked file lost and every
+    untracked file the commit's tree overwrites, counted as the discard prompts count (lines
+    per changed file, bytes per untracked file, untracked files kept said), confirmed through
+    the confirmation dialog, re-checked before `git checkout -q -f -b <name> <oid> --` runs
+    (R1.4), refused before any prompt during an operation in progress, over a conflicted path
+    or a submodule's change; never the remembered choice. Fork's third choice, "Stash and
+    reapply", waits for packet 5b, which builds stashing (decision 2: a temporary, stated
+    deviation).
+  - After it: the refs and the history are read again; the new branch's chip is on the commit,
+    and with the checkout it is `HEAD`. Checking out enters this packet only through this
+    dialog; checking out a branch is branch-ops'.
 - R11.4 The toggle is a reopen of the history like any other (refs-and-status
   R10), cancellable and off the UI thread.
 
@@ -506,7 +538,11 @@ literally.
   disabled during a rebase, cherry-pick or revert, where Fork pre-fills git's
   message for a cherry-pick or revert (L25); a Show Lost Commits control in the
   history's toolbar area, where Fork has only the View menu item and the chord and
-  refused a toolbar button (TrackerWin #378); Show Lost Commits seeded from
+  refused a toolbar button (TrackerWin #378) — a check box at the right end of the "Graph and
+  subject" heading's cell, its tooltip the chord (the user's decision, 2026-10-09); Create
+  Branch's "Local changes" without "Stash and reapply" until packet 5b builds stashing, and
+  its "Discard" confirmed where Fork's is not (the user's decisions 2 and 3, 2026-10-09);
+  Show Lost Commits seeded from
   `HEAD`'s and the local branches' reflogs, where Fork's mode reaches every reflog
   (`git log --all --reflog`, TrackerWin #1307); and no Commit and Push until push
   exists (L9).
@@ -559,7 +595,7 @@ points here and does not restate them.
 | C17 | The discard dialog: modal (Tab stays inside, a window chord does nothing), focus on Cancel, Escape cancels, its text and button from the `Consequence` (`Discard Changes in 3 Files`, `Discard 2 Lines`) | headless tests |
 | C18 | Local Changes: each of R8.2's routes stages and unstages a multi-selection — but a double-click, which acts on its own row (amended 2026-10-09, the user's decision on phase 07's QA item 4(b)); a drag between the lists auto-scrolls and survives rows unmounting mid-drag; the selection moves to the nearest remaining path; Ignore Whitespace is disabled and the diff exact | headless tests |
 | C19 | The gesture: a hovered chunk's actions stage, unstage and discard exactly that chunk; a drag-selection narrows them to its lines, across rows the virtual list unmounted; side by side keeps a selection in one column; the Commit and Changes tabs draw no action; a 10,000-line diff with the gesture builds one viewport | headless tests, and a viewport twin |
-| C20 | Show Lost Commits: the commits it adds equal `git rev-list <every old and new id of every entry of HEAD's and each local branch's reflog, read from the log files> --not --branches --remotes --tags HEAD` (amended 2026-10-09, the user's decision D: old ids too, as `git rev-list --reflog` reads them), on a fixture with an amended, a reset-away and a 4 KiB-message entry, and an amend whose log it created itself (the replaced commit only an entry's old id); those rows are dimmed; `Create Branch Here…` creates the branch git would; the activity popover lists each operation with its prompt, its `git`, its scrubbed stderr and its recovery pointer, and `Remove index.lock…` appears exactly when R12.4 says and removes exactly `<gitdir>/index.lock` and nothing else; the filesystem-mutation guard (R12.5) fails on a removal, write or rename outside `ops/` | integration and headless tests |
+| C20 | Show Lost Commits: the commits it adds equal `git rev-list <every old and new id of every entry of HEAD's and each local branch's reflog, read from the log files> --not --branches --remotes --tags HEAD` (amended 2026-10-09, the user's decision D: old ids too, as `git rev-list --reflog` reads them), on a fixture with an amended, a reset-away and a 4 KiB-message entry, and an amend whose log it created itself (the replaced commit only an entry's old id); those rows are dimmed — their text, the graph in its colours (amended 2026-10-09, the user's decision on Fork's evidence); Create Branch (R11.3, amended 2026-10-09) creates the branch `git branch` would, checks it out keeping the changes as `git checkout -b` would or refuses with git's words, and with "Discard" names every loss in a confirmation and discards exactly those; the activity popover lists each operation with its prompt, its `git`, its scrubbed stderr and its recovery pointer, and `Remove index.lock…` appears exactly when R12.4 says and removes exactly `<gitdir>/index.lock` and nothing else; the filesystem-mutation guard (R12.5) fails on a removal, write or rename outside `ops/` | integration and headless tests |
 | C21 | On R13.1's clone and machine (the one `docs/research/diff-engine/measured-baseline.md` records): stage, unstage and discard a hunk and commit within git's own time plus one status read plus a flat 50 ms (the user's decision, 2026-10-08, at R13.2's amendment): about 93 ms to stage, 93 ms to unstage, 76 ms to discard and 87 ms to commit, from `docs/research/staging-and-commit/measured-baseline.md`'s highest sums (42.9, 42.8, 25.8 and 37.4 ms); Show Lost Commits' first frame recorded; `window_check` keeps every frame under 16.7 ms of UI-thread work while a hook runs and a stage lands | `#[ignore]`d reporters driven by `CAIRN_BENCH_REPO`, numbers in `progress.md` and, at teardown, in `docs/research/staging-and-commit/` |
 | C22 | D1 in `docs/design/engine.md` and the root `CLAUDE.md` names R3.9's two reads, the write verbs and the one file deletion made without `git` (R12.4); the destructive-operation roster, the confirmation-surface roster, the chord lists and the bare-key scope, the gesture's viewport twin (C19) and the filesystem-mutation guard (R12.5) each have their twin named in `CLAUDE.md` | review |
 | C23 | `scripts/gate.sh` passes | the gate |

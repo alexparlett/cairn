@@ -3,6 +3,57 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 10, the check box, its tooltip and Create Branch built (packet mode)
+
+The user decided the check box's place and tooltip and chose Fork's full Create Branch dialog
+(2026-10-09, relayed by the coordinator; evidence filed as
+`docs/research/staging-and-commit/fork-create-branch-evidence.md`). Built test-first:
+
+- **B — the check box**: right-aligned at the end of the "Graph and subject" heading's cell, laid
+  over the cell so every heading stays over its column (`every_heading_sits_over_its_column`
+  unchanged and green) and no row loses width; "Show Lost Commits", ticked while on, a press
+  flipping it as the chord does, the list taking the keyboard back after the reopen
+  (`show_lost_commits_is_a_check_box_at_the_end_of_the_first_headings_cell`,
+  `the_show_lost_commits_box_flips_the_toggle_as_its_chord_does`). The Amend toggle's check box is
+  now `cairn_ui::check_box`, shared three ways.
+- **B — the tooltip**: the chord, rendered from the accelerator table by
+  `accelerators::chord_name` in Fork's own spelling (Linux `Ctrl+Shift+.`, macOS `⌘⇧.`,
+  `keyboard-shortcuts-*.md`). The modifier invariant is amended (root `CLAUDE.md`): one rostered
+  file (`CHORD_NAMES`: `crates/cairn-ui/src/accelerators/chord_names.rs`) may spell chords, every
+  literal there one held key's name alone (`MODIFIER_NAMES`, matcher `hand_typed_chords`), no
+  element built there, the row failing once unneeded; every other render file still fails on a
+  chord spelled (`the_chord_name_roster_and_its_matcher_catch_the_shapes_they_claim`).
+- **Create Branch**, Fork's anatomy (PRD R11.3 amended, dated): `New Branch…` on every commit
+  row, lost ones too (stash rows none); the commit read only; the name asked of the engine as it
+  is typed (`git check-ref-format --branch`, a read in `reads/`, then the ref by gix) and refused
+  inline — Fork's "Branch <name> already exists" or git's reason; "Check out after create" sticky
+  for the session (decision 1; across restarts, issue #89); "Local changes:" over staged,
+  unstaged or conflicted changes, each opening on "Don't change" — `git checkout -q -b <name>
+  <oid> --`, git's refusal in the Git Error dialog with the name kept (Fork RN Win 1.82) — or
+  "Discard" (decision 3): `Consequence::CheckoutDiscarding` (every staged and unstaged change's
+  lines as git's numstat counts them, every untracked file the commit's tree overwrites by its
+  size, untracked files kept said), counted on the local lane, confirmed in the confirmation
+  dialog, re-checked before `git checkout -q -f -b` runs, refused before any prompt during an
+  operation in progress, over a conflict or a submodule's change; on `DESTRUCTIVE_OPERATIONS`; R1.5
+  and R3.6 amended for the exception; the packet qa-checklist's "nothing discards a staged change"
+  names it. No "Stash and reapply" until 5b (decision 2: PRD product rules, `docs/design/ui.md`,
+  5b's brief).
+- **Engineering choices, no user-visible effect**: the name is checked on the local lane in a lane
+  of its own (`QueryLane::BranchName`) and the discard counted in another (`CheckoutCount`), so
+  Local Changes' `StopCounting` never ends it; a stale answer for another text is never trusted
+  (`new_branch_opens_the_dialog_and_creates_only_a_name_the_engine_said_is_free`); the discard
+  refuses an operation in progress outright rather than let `checkout -f` leave its state behind.
+- **Derived, not separately decided — for the user to veto**: the discard confirmation's title is
+  Local Changes' "Discard changes" and its button "Discard Changes and Check Out"; its prompt
+  follows L8's form ("Do you want to create branch 'x' at 1a2b3c4, check it out and discard the
+  changes in …? … You can't undo this action."); an engine refusal of Discard is said in the
+  dialog beside the buttons, where a name's refusal goes; buttons in Cairn's existing order,
+  Cancel then the primary; a right-click on a row opens the menu without selecting the row.
+- **Not built (not decided)**: Fork's New Branch chord (⇧⌘B / Ctrl+Shift+B); Fork's subtitle and
+  warning glyph.
+
+Issue filed: <https://github.com/alexparlett/cairn/issues/89> (the settings store).
+
 ## 2026-10-09 — phase 10, the user's decisions applied (packet mode; stopped again on B)
 
 The user decided phase 10's open choices (2026-10-09, relayed by the coordinator):

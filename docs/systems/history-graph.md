@@ -924,23 +924,61 @@ the same clone: 57-80 ms, against 3-5 ms without `--reflog`). The whole walk, 34
 with a deep reflog tip keeping the tracking on to the end: 2,184 ms against 2,079 ms.
 
 Turning it on or off is a reopen (`Request::OpenHistory`'s `lost`, the window's
-`View::show_lost`, kept for the session and off as the window opens): the history lane opens
-the walk as the open asked, and a later reopen — a refresh that finds the refs moved —
-asks as the toggle stands (`an_open_asked_as_show_lost_commits_walks_the_reflog_and_the_next_plain_open_does_not`,
-`the_show_lost_commits_chord_reopens_the_history_with_the_toggle_flipped`). Its chord is
-heard in the history list's scope alone (`HistoryList::on_action`,
-`the_show_lost_commits_chord_is_reported_and_moves_nothing`). The list keeps the keyboard
-through the reopen: it gives way to the opening sentence until the reopened walk's first page
-arrives, and takes focus again as it is drawn, so the chord is heard again with no click
-(`the_show_lost_commits_chord_reopens_the_history_with_the_toggle_flipped`). A lost row is
-drawn as Fork draws one (Tracker #351's captures): its subject, author, short id and date in
-the theme's placeholder grey, about half, and nothing else dimmed — its graph's lanes, edges
-and node and any chips keep their own colours (`CommitRow::lost`;
+`View::show_lost`, kept for the session and off as the window opens — the user's decision D):
+the history lane opens the walk as the open asked, and a later reopen — a refresh that finds the
+refs moved — asks as the toggle stands
+(`an_open_asked_as_show_lost_commits_walks_the_reflog_and_the_next_plain_open_does_not`,
+`the_show_lost_commits_chord_reopens_the_history_with_the_toggle_flipped`). It is turned by its
+chord, heard in the history list's scope alone (`HistoryList::on_action`,
+`the_show_lost_commits_chord_is_reported_and_moves_nothing`), and by a check box, "Show Lost
+Commits", at the right end of the "Graph and subject" heading's cell — laid over the cell, so
+every heading stays over its column and no row loses width — ticked while on, its tooltip the
+chord the accelerator table lists, spelled for the platform (`HistoryHeader::show_lost_commits`,
+`accelerators::chord_name`; `show_lost_commits_is_a_check_box_at_the_end_of_the_first_headings_cell`,
+`the_show_lost_commits_box_flips_the_toggle_as_its_chord_does`; the user's decision B). The list
+keeps the keyboard through the reopen: it gives way to the opening sentence until the reopened
+walk's first page arrives, and takes focus again as it is drawn, so the chord is heard again
+with no click. A lost row is drawn as Fork draws one (Tracker #351's captures): its subject,
+author, short id and date in the theme's placeholder grey, about half, and nothing else dimmed —
+its graph's lanes, edges and node and any chips keep their own colours (`CommitRow::lost`;
 `a_lost_rows_text_alone_is_dimmed`, `a_lost_row_is_drawn_lost_and_no_other`); a lost commit
-that gains a ref is reached at the reopen that follows and drawn as any other. The way back to a lost commit is a branch put on
-it — `cairn_git::ops::create_branch`, `git branch -- <name> <commit>` as a local write
-(`docs/systems/staging.md`), whose ending reads everything again, so the reopened history
-draws the commit reached (`a_branch_made_through_the_lane_reads_everything_again_and_a_refusal_says_gits_reason`).
+that gains a ref is reached at the reopen that follows and drawn as any other.
+
+### Create Branch
+
+The way back to a lost commit — or to any — is Fork's Create Branch dialog
+(`crates/cairn-ui/src/create_branch_dialog.rs`, `crates/cairn-app/src/create_branch.rs`; the
+user's decisions of 2026-10-09; evidence
+`docs/research/staging-and-commit/fork-create-branch-evidence.md`), opened by `New Branch…` in
+any commit row's context menu, a lost row's too, a stash's row offering none
+(`HistoryList::on_new_branch`, `every_commit_rows_menu_offers_new_branch_at_its_commit`):
+
+- "Create branch at:" the commit's glyph, short id and subject, read only; "Branch name:" (the
+  name a failed create left, or empty); "Check out after create", sticky for the session (issue
+  #89 will keep it across restarts); Cancel and "Create", "Create and Checkout" while ticked
+  (`the_dialog_is_forks_its_button_following_the_box`).
+- Each change of the name asks the engine (`Request::CheckBranchName`, the branch-name lane on
+  the local lane, `Repository::branch_name`): the button is enabled only for an answer of
+  "free" to the text shown, and a refusal is said beside the buttons — "Branch <name> already
+  exists", or git's reason (`only_a_ready_name_is_created_and_every_change_is_reported`,
+  `new_branch_opens_the_dialog_and_creates_only_a_name_the_engine_said_is_free`,
+  `create_branchs_reads_are_answered_on_the_lane`).
+- "Local changes:" is drawn while the box is ticked and the working tree's status lists a
+  staged, unstaged or conflicted change (its first entry, since `git status` lists those before
+  untracked paths); each opening starts on "Don't change"
+  (`check_out_after_create_is_sticky_and_local_changes_appear_only_over_changes`).
+- The writes are the local lane's: `LocalWrite::CreateBranch`,
+  `LocalWrite::CreateBranchAndCheckout`, and — for "Discard" — the count asked first
+  (`Request::CheckoutConsequence`, the checkout-count lane), the dialog closing on its answer
+  and the confirmation opening on it, its token `LocalWrite::CreateBranchDiscarding`'s; an
+  engine refusal before any prompt is said in the dialog, which stays open
+  (`discard_is_counted_and_confirmed_before_its_write`). Each reads everything again however it
+  ends, so the new branch's chip is drawn and a commit it is put on is no longer lost
+  (`a_branch_made_through_the_lane_reads_everything_again_and_a_refusal_says_gits_reason`).
+- A failure — git's refusal, or a discard whose state moved since its confirmation — opens
+  Fork's Git Error dialog with its words, and the name is offered at the next opening
+  (`a_failed_create_opens_the_git_error_and_keeps_its_name`). The engine's verbs are
+  `docs/systems/staging.md`'s.
 
 ## What enforces this
 

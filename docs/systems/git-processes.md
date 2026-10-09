@@ -83,6 +83,12 @@ crates/cairn-git/src/
     commit.rs       commit and amend (`git commit -q [--amend] -F -`, the message on stdin),
                     Hooks, CommitWatch, CommitCancel — amend taking Confirmed
     amend.rs        amend_consequence: HEAD, whether a remote has it, whether git logs it
+    branch.rs       create_branch (`git branch -- <name> <oid>`), Create Branch unticked
+    checkout.rs     create_branch_and_checkout (`git checkout -q -b <name> <oid> --`) and
+                    create_branch_discarding (`git checkout -q -f -b`), taking Confirmed, with
+                    checkout_discarding_consequence (reads/change_lines.rs, reads/untracked.rs)
+    remove_lock.rs  remove_lock_consequence and remove_index_lock, taking Confirmed: the one
+                    mutation made without git, `<gitdir>/index.lock` removed
     fresh_state.rs  the index entry (gix) and the working-tree file (its bytes, and its git form
                     through reads/hash_object.rs) read fresh for a stale check or a re-check
     local_write.rs  how a local write runs: `--literal-pathspecs`, stdin, the locks around it
@@ -113,6 +119,13 @@ crates/cairn-git/src/
                     (docs/systems/staging.md)
     hooks_path.rs   hooks_path — `git rev-parse --git-path hooks`, where git runs hooks from,
                     for `Repository::commit_hooks` (docs/systems/staging.md)
+    branch_name.rs  branch_name — `git check-ref-format --branch <name>`, whether git takes a
+                    name for a new branch, and its reason when it refuses one (Create Branch)
+    change_lines.rs change_lines — `git diff-index --cached --numstat -z <HEAD>` and `git
+                    diff-files --numstat -z`, each tracked path's changed lines, for the
+                    discarding checkout's prompt
+    untracked.rs    untracked_paths — `git ls-files --others --exclude-standard -z`, every
+                    untracked file whatever `status.showUntrackedFiles` says, for the same
     working_tree.rs working_tree_patch, staged_pairing and staged_since — `git diff-index
                     --cached`, `git diff-files`, `git diff --no-index`; staged_since is amend's
                     staged list, the index against HEAD's parent (docs/systems/staging.md)

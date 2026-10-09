@@ -97,7 +97,15 @@ implied.
   is that operation's own — each read from the files git's own status reads,
   the sequencer's included. A non-UTF-8 `i18n.commitEncoding` is refused with its reason,
   since transcoding the message would need a dependency.
-- **Recovering a lost commit**: `git branch -- <name> <oid>`.
+- **Creating a branch**: `git branch -- <name> <oid>`, which also recovers a lost
+  commit; checked out as it is created, `git checkout -q -b <name> <oid> --`, which
+  carries the working tree's changes over or is refused by git, writing nothing,
+  where one would be overwritten; or, the user choosing to discard them, `git
+  checkout -q -f -b <name> <oid> --` — destructive, sealed behind a `Consequence`
+  naming every change and untracked file it loses, and the one write that discards
+  a staged change. The name is `-b`'s value, which git reads as the name whatever
+  it begins with, and the commit its full id, the `--` after it saying it is no
+  path. Spec: `docs/prd/staging-and-commit.md` R11.3.
 - **A stale lock**: no verb exists, so `Remove index.lock…` deletes exactly
   `<gitdir>/index.lock` through the filesystem, in `ops/`, once the lock is
   re-checked as the one whose age the user confirmed — the single mutation not
@@ -238,12 +246,25 @@ refuses it (`docs/prd/staging-and-commit.md`
 R3.9). `git rev-parse
 --git-path hooks` says where git looks for hooks, `core.hooksPath` included, so a
 failed commit offers to skip its hooks only where a `pre-commit` or `commit-msg`
-hook exists and is executable. Neither is argued from a measured disagreement with
-gix: each is a question only git can answer — git's form of a working-tree file
-through the user's filters, and git's resolution of the hooks path — so asking git
-is the only way to ask it. They run inside the operation that needs them, on the
-local lane, and end with it rather than by a query's epoch. Spec:
-`docs/prd/staging-and-commit.md` R3.9.
+hook exists and is executable. Creating a branch asks three more. `git
+check-ref-format --branch <name>` says whether git takes a name for a new branch,
+and when it refuses one, why — the reason the dialog shows before anything runs,
+as the user's own `git branch` would give it (R11.3). And the discard that checks
+the branch out counts what it loses as the discard prompts count it: `git
+diff-index --cached --numstat -z <HEAD>` and `git diff-files --numstat -z`, each
+tracked path's changed lines staged and unstaged, by git's line diff and through
+the paths' clean filters (R11.3, R1.2); and `git ls-files --others
+--exclude-standard -z`, every untracked file whatever `status.showUntrackedFiles`
+says, and a repository nested in the working tree as its directory, so the prompt
+names every untracked file the checkout overwrites or deletes (R11.3). None is
+argued from a measured disagreement with gix: each is a question only git can
+answer — git's form of a working-tree file through the user's filters, git's
+resolution of the hooks path, git's own rules for a branch's name, and git's count
+of the lines and its list of the untracked files a forced checkout of its own
+loses — so asking git is the only way to ask it. Those inside an operation run on
+the local lane and end with it rather than by a query's epoch; a branch name's
+check is a query of its own, superseded by the next name typed. Spec:
+`docs/prd/staging-and-commit.md` R3.9, R11.3.
 
 Each read git answers is a named function in `reads/` and runs under a read's
 environment — no optional locks, no askpass token. One a query asks is cancelled by

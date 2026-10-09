@@ -1169,17 +1169,15 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
   `HEAD` are not. While the reopened walk's first page is on its way the list is not drawn,
   so a press of the chord in that moment is not heard.
 - **A long reflog slows Show Lost Commits' first page** (accepted by the user as a stated
-  residual): the open reads each distinct reflog id twice — once to look it up, once for the
-  walk's date — about 4 µs an id on rust-lang/rust without a commit-graph. Measured above: a
-  `HEAD` log of 10,000 entries makes the first page 49.8 ms, past twice the first page
-  without it (7.27 ms), where git's own `rev-list --reflog` takes 57-80 ms; 1,000 entries
-  make it 7.95 ms. The cost is the ids across every log read — `HEAD`'s and each local
-  branch's, so it grows with the count of local branches as well as with any one log's length,
-  which only `HEAD`'s has been measured for — and it is paid again on every refresh that moves
-  a ref while the toggle is on, since each reopen reads every log again. Merging the logs' ids
-  with the refs' tips is linear (a hash set, `history::open_stream`). Reading each id once,
-  taking its date from a commit-graph where one is present, and measuring many branches' logs
-  and the repeat per ref-moving refresh are phase 11's.
+  residual): the open reads each distinct reflog id once, its date with it — from a
+  commit-graph where one holds it — and without a commit-graph that read from the pack is the
+  cost, about 5 µs an id on rust-lang/rust. Measured above: a `HEAD` log of 10,000 entries
+  makes the first page 50.8 ms with no commit-graph and 8.8 ms with one, where git's own
+  `rev-list --reflog` takes 57-80 ms; 200 local branches each with a 50-entry log, the same
+  10,000 ids, 50.6 ms and 8.9 ms. The cost is the ids across every log read — `HEAD`'s and each
+  local branch's — and it is paid again on every refresh that moves a ref while the toggle is
+  on, since each reopen reads every log again. Merging the logs' ids with the refs' tips is
+  linear (a hash set, `history::open_stream`).
 - **The first page of a scroll walks `window + limit` commits** before a single
   row can be delivered, because rows leave the assigner only once evicted. Those
   are walk steps, not object reads. Do not shrink the page to make it feel

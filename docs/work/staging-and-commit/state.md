@@ -215,13 +215,15 @@ Phase 04 (`docs/systems/git-processes.md`, "The local write lane"):
   `Clone` refuses a destructive write). Ask a write with `local_writes::ask(&mut writes,
   submit, write)`, which takes the id and keeps it queued.
 - **Updates**: `WriteStarted { id }`, `WriteEnded { id, ending: WriteEnding, read_again:
-  ReadAgain }`; `Opened { name, locks }` (the lock files as the repository opened).
+  ReadAgain }`; `LocksAtOpen { locks }` (the lock files as the repository opened, listed by the lane before
+  any write).
   `WriteEnding::{Done(Done), Stale { path, message }, Refused, Failed { message, locks },
   MayHaveTakenEffect { message, locks }, Incomplete { done, kept, message }, NotRun }`;
   `Done { description, acknowledged, locks_before, locks_after }`.
 - **Window state**: `View::writes: State<LocalWrites>` (`crates/cairn-app/src/local_writes.rs`):
   `queued()`, `running()`, `last()`, `locks()`, `closing_on()`; `Closing::when_requested`.
-- **`cairn_git::SharedRepository::lock_files`**: every `*.lock` under the git directories.
+- **`cairn_git::SharedRepository::lock_files(&impl Cancel) -> Option<Vec<PathBuf>>`**: every
+  `*.lock` under the git directories, `None` once cancelled.
 - **The environment twin** reads `INHERITED`: `INHERITED_PINS` (R5.2's nine, each with a
   comment of its own) and `INHERITED_NEVER` (no `*_DATE`).
 

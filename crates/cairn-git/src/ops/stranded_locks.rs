@@ -30,6 +30,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::Cancel;
+
 /// Every `*.lock` a cancel could have stranded, sorted, each once: the search
 /// over the two directories a repository's locks live in — its own git
 /// directory and, for a linked worktree, the common one it shares (the same
@@ -37,17 +39,28 @@ use std::path::{Path, PathBuf};
 /// fails: a directory that cannot be read contributes nothing, since this
 /// runs after a cancel to add to a report, not to decide one.
 pub(crate) fn stranded_locks(git_dir: &Path, common_dir: &Path) -> Vec<PathBuf> {
+    stranded_locks_until(git_dir, common_dir, &crate::CancelSignal::new()).unwrap_or_default()
+}
+
+/// [`stranded_locks`], polling `cancel` before each directory it reads: `None` once it is
+/// set, so a search of a large `refs/` tree — what a repository's open runs, before anything
+/// asks for it — stops for a window that is closing.
+pub(crate) fn stranded_locks_until(
+    git_dir: &Path,
+    common_dir: &Path,
+    cancel: &impl Cancel,
+) -> Option<Vec<PathBuf>> {
     let mut found = Vec::new();
     for directory in directories(git_dir, common_dir) {
         top_level(directory, &mut found);
-        walk(&directory.join("refs"), &mut found);
+        walk(&directory.join("refs"), &mut found, cancel)?;
         for objects in ["objects/pack", "objects/info", "objects/info/commit-graphs"] {
             top_level(&directory.join(objects), &mut found);
         }
     }
     found.sort();
     found.dedup();
-    found
+    (!cancel.is_cancelled()).then_some(found)
 }
 
 /// The distinct directories to search; one when the repository is not a
@@ -73,11 +86,15 @@ fn top_level(directory: &Path, found: &mut Vec<PathBuf>) {
     }
 }
 
-/// Every lock file under `directory`, at any depth. Iterative, since a
-/// `refs/` tree is as deep as the longest ref name has slashes.
-fn walk(directory: &Path, found: &mut Vec<PathBuf>) {
+/// Every lock file under `directory`, at any depth, or `None` once `cancel` is set — polled
+/// before each directory. Iterative, since a `refs/` tree is as deep as the longest ref name
+/// has slashes.
+fn walk(directory: &Path, found: &mut Vec<PathBuf>, cancel: &impl Cancel) -> Option<()> {
     let mut pending = vec![directory.to_owned()];
     while let Some(directory) = pending.pop() {
+        if cancel.is_cancelled() {
+            return None;
+        }
         let Ok(entries) = std::fs::read_dir(&directory) else {
             continue;
         };
@@ -90,6 +107,7 @@ fn walk(directory: &Path, found: &mut Vec<PathBuf>) {
             }
         }
     }
+    Some(())
 }
 
 fn is_lock(path: &Path) -> bool {
@@ -170,6 +188,25 @@ mod tests {
         let mut expected = vec![head, packed, index, main, deep, midx, chain, graph];
         expected.sort();
         assert_eq!(stranded_locks(&git_dir, &git_dir), expected);
+    }
+
+    /// Staging-and-commit R4.9's listing as a repository opens can be stopped: a walk
+    /// whose cancel is set answers nothing, rather than walking every ref of a large
+    /// repository for a window that is closing; one never cancelled answers what the plain
+    /// search does. Caught by: a walk that never polls its cancel.
+    #[test]
+    fn a_cancelled_search_answers_nothing_and_an_uncancelled_one_everything() {
+        let layout = Layout::new("cancelled");
+        let git_dir = layout.dir(".git");
+        layout.file(".git/index.lock");
+        layout.file(".git/refs/heads/a/b.lock");
+        let signal = crate::CancelSignal::new();
+        assert_eq!(
+            stranded_locks_until(&git_dir, &git_dir, &signal),
+            Some(stranded_locks(&git_dir, &git_dir))
+        );
+        signal.cancel();
+        assert_eq!(stranded_locks_until(&git_dir, &git_dir, &signal), None);
     }
 
     /// A linked worktree keeps `HEAD` and the index of its own and shares the

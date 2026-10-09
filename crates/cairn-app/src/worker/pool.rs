@@ -198,8 +198,6 @@ pub fn open(
                 None,
                 Update::Opened {
                     name: repository_name(&shared),
-                    // A lock a write left when a close gave up on it among them (R4.9).
-                    locks: shared.lock_files(),
                 },
             );
             // This repository's channel, and git pointed at it.

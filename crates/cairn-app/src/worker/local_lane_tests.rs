@@ -733,9 +733,9 @@ fn a_lock_left_behind_is_named_as_the_repository_opens_and_by_the_write_it_fails
     let lock = fixture.path.join(".git/index.lock");
     std::fs::write(&lock, "").unwrap_or_else(|error| panic!("{error}"));
     let (home, runtime) = (Home::new(), RuntimeDir::new());
-    let (handle, mut updates, _reply) = real_open(&fixture.path, (&home, &runtime));
+    let (handle, mut updates, _reply) = real_boundary(&fixture.path, (&home, &runtime));
     match next_by(&mut updates, Instant::now() + WAIT, &[]) {
-        Some(Update::Opened { locks, .. }) => assert_eq!(
+        Some(Update::LocksAtOpen { locks }) => assert_eq!(
             locks
                 .iter()
                 .map(|path| path.ends_with(".git/index.lock"))

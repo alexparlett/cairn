@@ -493,12 +493,9 @@ pub enum Update {
     /// The repository is open: `name` is what the title bar calls it — the last component of
     /// its working tree, or of its git directory when it is bare, as Fork names a
     /// repository's folder — whatever path it was opened at (`.`, a subdirectory, its `.git`).
-    /// Sent once, first, tied to no request. `locks` is every lock file under its git
-    /// directories as it opened — one a write left when a close gave up on it among them
-    /// (staging-and-commit R4.9) — for the window to name.
+    /// Sent once, first, tied to no request.
     Opened {
         name: String,
-        locks: Vec<PathBuf>,
     },
     /// The default remote first, when there is one.
     Remotes {
@@ -602,6 +599,12 @@ pub enum Update {
         ending: WriteEnding,
         read_again: ReadAgain,
     },
+    /// The lock files under the git directories as the repository opened — one a write left
+    /// when a close gave up on it among them (staging-and-commit R4.9) — listed by the local
+    /// lane before it runs any write, and sent only when there are some.
+    LocksAtOpen {
+        locks: Vec<PathBuf>,
+    },
     /// The repository's command log, oldest first, as far back as it keeps.
     CommandLog {
         records: Vec<CommandRecord>,
@@ -689,6 +692,7 @@ impl Update {
             | Self::Prompt { .. }
             | Self::WriteStarted { .. }
             | Self::WriteEnded { .. }
+            | Self::LocksAtOpen { .. }
             | Self::CommandLog { .. }
             | Self::FilteredFiles { .. }
             | Self::DiffFailed { .. } => None,

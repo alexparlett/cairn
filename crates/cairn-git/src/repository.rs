@@ -271,11 +271,12 @@ impl SharedRepository {
     /// that file fails on (staging-and-commit R4.9, #44): its git directory and, for a linked
     /// worktree, the common one. Listed as the repository opens, so a lock a write stranded
     /// when the window closed under it is named the next time. A finding, not a verdict: a
-    /// lock a git in a terminal holds this instant is listed too. A directory listing, so a
-    /// worker's call: everything under `refs/` is walked.
-    pub fn lock_files(&self) -> Vec<std::path::PathBuf> {
+    /// lock a git in a terminal holds this instant is listed too. Everything under `refs/` is
+    /// walked, so it is a worker's call, and `cancel` is polled before each directory: `None`
+    /// once it is set.
+    pub fn lock_files(&self, cancel: &impl crate::Cancel) -> Option<Vec<std::path::PathBuf>> {
         let common = self.inner.common_dir.as_deref().unwrap_or(&self.git_dir);
-        crate::ops::stranded_locks::stranded_locks(&self.git_dir, common)
+        crate::ops::stranded_locks::stranded_locks_until(&self.git_dir, common, cancel)
     }
 
     /// The working tree root, or `None` for a bare repository.
@@ -354,10 +355,13 @@ mod tests {
             .unwrap();
         assert!(initialised.status.success(), "{initialised:?}");
         let repo = SharedRepository::discover(&directory).unwrap();
-        assert_eq!(repo.lock_files(), Vec::<std::path::PathBuf>::new());
+        let open = crate::CancelSignal::new();
+        assert_eq!(repo.lock_files(&open), Some(Vec::new()));
         let lock = repo.git_dir().join("index.lock");
         std::fs::write(&lock, "").unwrap();
-        assert_eq!(repo.lock_files(), [lock]);
+        assert_eq!(repo.lock_files(&open), Some(vec![lock]));
+        open.cancel();
+        assert_eq!(repo.lock_files(&open), None, "a cancelled listing answered");
         let _ = std::fs::remove_dir_all(&directory);
     }
 

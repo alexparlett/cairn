@@ -67,10 +67,8 @@ pub fn apply(update: Update, view: View, worker: &Worker<'_>) {
             crate::ref_find::failed(view);
         }
         Update::Remotes { remotes: listed } => remotes.set(listed),
-        Update::Opened { name, locks } => {
-            repository.set(Some(name));
-            writes.write().locks_at_open(locks);
-        }
+        Update::Opened { name } => repository.set(Some(name)),
+        Update::LocksAtOpen { locks } => writes.write().locks_at_open(locks),
         Update::ConfiguredContext { context } => {
             crate::diff_actions::configured(context, view, worker.submit);
         }
@@ -971,8 +969,7 @@ mod tests {
             &test,
             view,
             &asked,
-            Update::Opened {
-                name: "engine".to_owned(),
+            Update::LocksAtOpen {
                 locks: vec![lock.clone()],
             },
         );

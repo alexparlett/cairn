@@ -1175,9 +1175,13 @@ the same tests against `git commit`.
   carries no owner, so where a fetch and a write run at once and one ends, a
   prompt the ended one raised stays up until it is answered or cancelled, and
   the acceptor serves nothing else meanwhile.
-- **Lock files** (R3.8, R4.9). `Update::Opened` carries every lock file under the
-  git directories as the repository opens (`SharedRepository::lock_files`, the
-  listing a cancel uses), and each ending the ones it found; the window keeps
+- **Lock files** (R3.8, R4.9). Before it runs any write, the lane lists every lock
+  file under the git directories as the repository opened
+  (`SharedRepository::lock_files`, the listing a cancel uses, which walks every
+  ref's directory and polls the lane's closing before each, so a close stops it)
+  and sends them as `Update::LocksAtOpen` when there are any — off the repository
+  thread, so the walk never delays the history's first page — and each ending
+  carries the ones it found; the window keeps
   the last listed and draws them by path, hedged as a cancelled fetch's are
   (`a_lock_left_behind_is_named_as_the_repository_opens_and_by_the_write_it_fails`,
   `the_window_names_the_write_it_waits_on_its_prompt_and_the_locks_found`).
@@ -1269,8 +1273,7 @@ waits for instead, saying so; a second close request after
 `worker::CLOSE_PATIENCE` closes the window anyway, as for a worker that has
 stopped answering, and the write's `git` is left to run on, orphaned — it
 finishes, or its next write to a pipe nobody reads ends it — and a lock it
-leaves is named the next time the repository opens (`Update::Opened`'s
-`locks`). Pinned by `a_close_during_a_commit_waits_for_it_and_ends_nothing`
+leaves is named the next time the repository opens (`Update::LocksAtOpen`). Pinned by `a_close_during_a_commit_waits_for_it_and_ends_nothing`
 (the stream stays open past `CLOSE_BOUND`, the commit's group alive, until
 the test releases it; then its ending, the queued write `NotRun`, and the
 stream's end), `the_window_is_told_once_as_the_first_close_is_asked`

@@ -31,7 +31,7 @@
 //! marks the lane closing, which runs nothing more it is sent, and waits for the write
 //! running to end before it ends what else `git` runs. The window says which write it is
 //! waiting for, and a second close after `CLOSE_PATIENCE` closes it anyway; a lock the write
-//! leaves then is listed as the repository next opens (`Update::Opened`'s `locks`).
+//! leaves then is listed as the repository next opens (`Update::LocksAtOpen`).
 
 use std::fmt;
 use std::path::PathBuf;
@@ -557,6 +557,15 @@ impl LaneState {
     }
 }
 
+/// The repository closing, as a walk polls it.
+struct Closing<'a>(&'a LaneState);
+
+impl cairn_git::Cancel for Closing<'_> {
+    fn is_cancelled(&self) -> bool {
+        self.0.is_closing()
+    }
+}
+
 /// What the local lane serves with.
 pub(super) struct Local<'a> {
     pub git: &'a GitBinary,
@@ -568,8 +577,17 @@ pub(super) struct Local<'a> {
     pub outbox: &'a Outbox,
 }
 
-/// The local lane's loop: until it is told to stop or every handle is gone.
+/// The local lane's loop: until it is told to stop or every handle is gone. First, before
+/// any write it is sent, the lock files present as the repository opened — one a write left
+/// when a close gave up on it among them (R4.9) — so the window names them: a walk of every
+/// ref's directory, here rather than ahead of the repository's first answer, and stopped by a
+/// close.
 pub(super) fn serve_local_lane(shared: &SharedRepository, serving: &Local<'_>) {
+    if let Some(locks) = shared.lock_files(&Closing(serving.lane))
+        && !locks.is_empty()
+    {
+        serving.outbox.send(None, Update::LocksAtOpen { locks });
+    }
     let repo = shared.to_worker();
     while let Ok(job) = serving.jobs.recv() {
         match job {

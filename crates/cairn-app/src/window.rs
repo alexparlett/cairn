@@ -2624,7 +2624,6 @@ pub(crate) mod tests {
             crate::session::apply(
                 crate::worker::Update::Opened {
                     name: "folder".to_owned(),
-                    locks: Vec::new(),
                 },
                 view,
                 &crate::session::Worker {

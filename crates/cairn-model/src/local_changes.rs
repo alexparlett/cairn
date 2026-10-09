@@ -213,6 +213,42 @@ impl LocalChanges {
             .ok()
     }
 
+    /// The paths a whole-file stage or unstage of `rows` of `list` names
+    /// (staging-and-commit R3.4, R8.2): each row's path, and a rename's source beside it, so a
+    /// rename moves whole — `git reset -q -- <old> <new>` unstages a staged rename, `git add
+    /// -- <old> <new>` stages one the working tree pairs. A copy's source is unchanged and is
+    /// left out, and so is a row past the list's end; each path is named once, in the order
+    /// first met.
+    pub fn whole_file_paths(
+        &self,
+        list: ChangeList,
+        rows: impl IntoIterator<Item = usize>,
+    ) -> Vec<RepoPath> {
+        let mut paths: Vec<RepoPath> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for row in rows {
+            let Some(change) = self.get(list, row) else {
+                continue;
+            };
+            let source = match change.kind {
+                ChangeKind::Renamed => change.from,
+                ChangeKind::Modified
+                | ChangeKind::Added
+                | ChangeKind::Deleted
+                | ChangeKind::Copied
+                | ChangeKind::TypeChanged
+                | ChangeKind::Submodule
+                | ChangeKind::Conflicted => None,
+            };
+            for path in std::iter::once(change.path).chain(source) {
+                if seen.insert(path) {
+                    paths.push(path.clone());
+                }
+            }
+        }
+        paths
+    }
+
     /// Which rows of each list hold `text` in their path, or in a rename's or a copy's source —
     /// the rule of the Changes tab's filter (`ChangeSet::files_matching`), case ignored. A pass
     /// over every row: run on a worker. `keep_going` is asked every few thousand rows, and a
@@ -770,5 +806,59 @@ mod tests {
                 .unwrap_or_else(|| panic!("row {row}"));
             assert_eq!(change.path.display(), format!("dir/{row:05}.txt"));
         }
+    }
+
+    /// R3.4, R8.2: a whole-file stage or unstage names each row's path, and a rename's source
+    /// beside it in either list, so the rename moves whole; a copy's source is left alone; a
+    /// path met twice is named once; a row past the end names nothing. Caught by: an unstaged
+    /// rename leaving its source staged, a copy's source reset, or a path named twice.
+    #[test]
+    fn a_whole_file_action_names_each_rows_path_and_a_renames_source() {
+        let renamed = |from: &str| StagedChange::Renamed {
+            from: RepoPath::from(from),
+            similarity: Similarity::from_percent(90),
+        };
+        let changes = LocalChanges::new(WorkingTreeStatus::Listed(vec![
+            changed("new.rs", Some(renamed("old.rs")), None),
+            changed(
+                "copy.rs",
+                Some(StagedChange::Copied {
+                    from: RepoPath::from("orig.rs"),
+                    similarity: Similarity::from_percent(100),
+                }),
+                None,
+            ),
+            changed("plain.rs", Some(StagedChange::Modified), None),
+            // A rename's source listed apart, where `status.renames` does not pair it: its row
+            // names itself alone, so its unstage resets the source and leaves the new path.
+            changed("source.rs", Some(StagedChange::Deleted), None),
+            changed(
+                "moved.rs",
+                None,
+                Some(UnstagedChange::Renamed {
+                    from: RepoPath::from("was.rs"),
+                    similarity: Similarity::from_percent(80),
+                }),
+            ),
+        ]));
+        let names = |paths: Vec<RepoPath>| -> Vec<String> {
+            paths
+                .iter()
+                .map(|path| path.display().into_owned())
+                .collect()
+        };
+        // Staged, in its order: copy.rs, new.rs, plain.rs, source.rs.
+        assert_eq!(
+            names(changes.whole_file_paths(ChangeList::Staged, [0, 1, 2, 1, 9])),
+            ["copy.rs", "new.rs", "old.rs", "plain.rs"]
+        );
+        assert_eq!(
+            names(changes.whole_file_paths(ChangeList::Staged, [3])),
+            ["source.rs"]
+        );
+        assert_eq!(
+            names(changes.whole_file_paths(ChangeList::Unstaged, [0])),
+            ["moved.rs", "was.rs"]
+        );
     }
 }

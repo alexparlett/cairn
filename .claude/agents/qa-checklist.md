@@ -101,7 +101,15 @@ cannot verify from code or a command you actually ran, mark `[VERIFY]`, never
    reads string literals only, so a verb or option assembled at run time (a `format!`, a
    concatenation, a constant from elsewhere) is yours, and so is whether a
    read's verb really is plumbing or `status` — no twin tells a querying verb
-   from a mutating one built with `GitBinary::read_invocation`.
+   from a mutating one built with `GitBinary::read_invocation`. And the
+   filesystem-mutation twin (`only_the_ops_module_changes_the_filesystem`,
+   staging-and-commit R12.5) reads spellings too, so these are yours: a write
+   through a dependency's API (a crate that writes files, `nix`'s unistd), a
+   `File` or `OpenOptions` reached through a type alias declared in another
+   crate, a macro, a method call that writes on a `File` opened by a name the
+   matcher does not hold, and a kind of write its rosters do not name; and
+   whether each `FILESYSTEM_MUTATION_EXCEPTIONS` row really writes only outside
+   any repository, and its reason is still true.
    Dispatch pointer: `destructive-ops-reviewer`.
 8. **Responsiveness** (any diff in `crates/cairn-ui/` or `crates/cairn-app/`, or
    anything changing what runs per frame or per query): no repository work on the

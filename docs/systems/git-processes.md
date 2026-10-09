@@ -1110,7 +1110,10 @@ which re-checks the registry, the lock's time, size, device and inode against th
 (`ops::remove_index_lock`, on `DESTRUCTIVE_OPERATIONS`), the one mutation Cairn makes without
 git. Residual: another program — a `git` in a terminal — may take the lock between the re-check
 and the removal; nothing in `std` removes a file only if it is still the inode it was, and the
-prompt says another program may own it. Pinned by `ops/remove_lock.rs`'s tests (the exact file
+prompt says another program may own it. Nor does the registry count every process Cairn
+started: a hook's child left running in the background, its pipes closed, is no longer counted
+once its `git` is reaped, and a `git` it starts can hold the lock. A lock that cannot be looked at
+(permission denied, an I/O error) is refused as unreadable (`LockRefusal::Unreadable`). Pinned by `ops/remove_lock.rs`'s tests (the exact file
 removed and nothing beside it; a lock made again, rewritten or gone refused; no lock, a
 directory, a link and another repository's lock refused; a stub `git` holding the lock and
 running refuses the offer and the removal),

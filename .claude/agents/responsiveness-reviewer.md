@@ -36,7 +36,9 @@ the closure `RepositoryHandle::into_submitter` wraps it in, and the window's
 close hook `Closing::requested`, in `closing.rs`, which calls it with
 `Request::Close`), whose `CancelFetch` arm takes `FetchControl`'s mutex and
 calls `KillHandle::kill`; `worker::open` and the `Replier` closure it returns;
-`Updates::next`, `Wake::poll`; and `Discovery::start`, which `main` calls before
+`Updates::next`, `Wake::poll`, `Drop for Updates` (an atomic store) and `Drop for
+OutputReceipt` (`worker/output_flow.rs`, an atomic subtraction as the window drops an
+`Update::WriteOutput`); and `Discovery::start`, which `main` calls before
 the window exists — are exempt from the guard's matcher by
 construction, so whether they block is a judgement you must actually make rather
 than assume from a green guard. So is the close's shape: that the hook only

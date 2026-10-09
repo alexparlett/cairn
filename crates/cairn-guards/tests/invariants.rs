@@ -9,14 +9,15 @@ use cairn_guards::{
     calls_associated_function, calls_method, calls_nullary_method, code_only, code_without_strings,
     code_without_test_modules, configures_process_environment, constructs_named_struct,
     constructs_process_command, constructs_struct, declared_dependencies, declares_publicly,
-    derives_or_implements, embedded_font_violations, gate_command_assignments, gate_dispatch_arms,
-    gate_full_sequence, gate_function_body, gate_function_calls, gate_function_commands,
-    hand_typed_chords, implements_type, job_env_entries, mentions_crate,
-    modifier_constants_blanked, mutates_the_filesystem, names_a_literal_modifier,
-    names_a_modifier_in_code, names_an_element, names_gitoxide_mutation, production_char_literals,
-    production_string_literals, reads_enum_partially, reads_row_content_partially, renames_type,
-    renders_in_a_macro, repo_root, required_skip_violations, rust_sources, spawns_git,
-    spells_a_chord, structs_with_a_field_naming, types_containing, waits_on_work,
+    derives_or_implements, embedded_font_violations, filesystem_mutation_kinds,
+    gate_command_assignments, gate_dispatch_arms, gate_full_sequence, gate_function_body,
+    gate_function_calls, gate_function_commands, hand_typed_chords, implements_type,
+    job_env_entries, mentions_crate, modifier_constants_blanked, mutates_the_filesystem,
+    names_a_literal_modifier, names_a_modifier_in_code, names_an_element, names_gitoxide_mutation,
+    production_char_literals, production_string_literals, reads_enum_partially,
+    reads_row_content_partially, renames_type, renders_in_a_macro, repo_root,
+    required_skip_violations, rust_sources, spawns_git, spells_a_chord,
+    structs_with_a_field_naming, types_containing, waits_on_work,
 };
 
 /// Crates whose dependency list is pinned; a crate with no row here fails.
@@ -1072,22 +1073,39 @@ fn only_the_ops_module_mutates_a_repository() {
     );
 }
 
-/// Production files outside `ops/` that change the filesystem, each with what it writes and why
-/// that is outside any repository (staging-and-commit R12.5). A row whose file no longer
-/// matches fails the guard, so the roster cannot outlive its reason. A later write outside any
-/// repository — a settings store (#89) — adds a row of its own, with its reason.
-const FILESYSTEM_MUTATION_EXCEPTIONS: &[(&str, &str)] = &[
+/// Production files outside `ops/` that change the filesystem, each with exactly the kinds of
+/// write the matcher may find there and why that is outside any repository (staging-and-commit
+/// R12.5). A row whose file shows another kind — or no longer shows one of its own — fails the
+/// guard (phase 11's QA, GI5), so a row excuses only what it names and cannot outlive its
+/// reason. A later write outside any repository — a settings store (#89) — adds a row of its
+/// own, with its reason.
+const FILESYSTEM_MUTATION_EXCEPTIONS: &[(&str, &[&str], &str)] = &[
     (
         "crates/cairn-askpass/src/channel.rs",
+        &[
+            "DirBuilder",
+            "UnixListener",
+            "remove_dir",
+            "remove_file",
+            "set_permissions",
+        ],
         "the askpass channel's socket directory under the user's runtime directory: created \
          0700, the socket bound in it, both removed when the channel goes",
     ),
     (
         "crates/cairn-git/src/ownership.rs",
+        &["create_new", "remove_file"],
         "a probe file created and removed in the temporary directory, to learn which uid owns a \
          file this process creates, as git's ownership check compares",
     ),
 ];
+
+/// The filesystem writes `ops/` makes, by file and kind: the one mutation Cairn makes without
+/// `git`, `Remove index.lock…`'s removal (R12.4, L23). Any other kind in `ops/`, or in another
+/// file of it, fails the guard (phase 11's QA, GI6): the exception cannot widen unseen, and a
+/// second git-less write is a reviewed row.
+const OPS_FILESYSTEM_WRITES: &[(&str, &[&str])] =
+    &[("crates/cairn-git/src/ops/remove_lock.rs", &["remove_file"])];
 
 /// Where a test module is declared under a `cfg` that needs `test` and something more: compiled
 /// into no build that ships, so as much test code as `#[cfg(test)]`.
@@ -1136,24 +1154,49 @@ fn only_the_ops_module_changes_the_filesystem() {
             if test_only.contains(path) {
                 continue;
             }
-            let found = mutates_the_filesystem(&production_of(source));
-            if path.starts_with(ops) {
-                ops_mutates |= !found.is_empty();
-                continue;
-            }
-            scanned += 1;
+            let production = production_of(source);
+            let found = mutates_the_filesystem(&production);
+            let kinds = filesystem_mutation_kinds(&production);
             let relative = path
                 .strip_prefix(repo_root())
                 .unwrap_or(path)
                 .to_string_lossy()
                 .into_owned();
-            if let Some((file, _)) = FILESYSTEM_MUTATION_EXCEPTIONS
-                .iter()
-                .find(|(file, _)| *file == relative)
-            {
-                if !found.is_empty() {
-                    excused.insert(*file);
+            let allowed = |roster: &[(&str, &[&str])]| -> BTreeSet<String> {
+                roster
+                    .iter()
+                    .filter(|(file, _)| *file == relative)
+                    .flat_map(|(_, kinds)| kinds.iter().map(|kind| (*kind).to_owned()))
+                    .collect()
+            };
+            if path.starts_with(ops) {
+                ops_mutates |= !found.is_empty();
+                let rows = allowed(OPS_FILESYSTEM_WRITES);
+                assert_eq!(
+                    kinds, rows,
+                    "{relative} shows the filesystem writes {kinds:?}, where OPS_FILESYSTEM_WRITES \
+                     names {rows:?}: the one write ops/ makes without git is Remove index.lock's, \
+                     and another is a reviewed row ({found:?})"
+                );
+                if !rows.is_empty() {
+                    excused.insert(relative.clone());
                 }
+                continue;
+            }
+            scanned += 1;
+            let exception: Vec<(&str, &[&str])> = FILESYSTEM_MUTATION_EXCEPTIONS
+                .iter()
+                .map(|(file, kinds, _)| (*file, *kinds))
+                .collect();
+            if exception.iter().any(|(file, _)| *file == relative) {
+                let rows = allowed(&exception);
+                assert_eq!(
+                    kinds, rows,
+                    "{relative} shows the filesystem writes {kinds:?}, where its \
+                     FILESYSTEM_MUTATION_EXCEPTIONS row excuses exactly {rows:?}: a new kind of \
+                     write is a review of the row, and one no longer made leaves it ({found:?})"
+                );
+                excused.insert(relative.clone());
                 continue;
             }
             assert!(
@@ -1175,11 +1218,15 @@ fn only_the_ops_module_changes_the_filesystem() {
         "{OPS_DIR} shows the filesystem matcher no mutation, though Remove index.lock removes a \
          file there: the matcher stopped reading real code, or the removal moved"
     );
-    for (file, _) in FILESYSTEM_MUTATION_EXCEPTIONS {
+    for file in FILESYSTEM_MUTATION_EXCEPTIONS
+        .iter()
+        .map(|(file, _, _)| *file)
+        .chain(OPS_FILESYSTEM_WRITES.iter().map(|(file, _)| *file))
+    {
         assert!(
             excused.contains(file),
-            "FILESYSTEM_MUTATION_EXCEPTIONS excuses {file}, whose production code no longer \
-             changes the filesystem (or is no longer read); remove the row"
+            "{file} has a row excusing its filesystem writes, but was not read, or no longer \
+             makes them; remove the row"
         );
     }
 }
@@ -1190,12 +1237,107 @@ fn only_the_ops_module_changes_the_filesystem() {
 /// matching, or one that matches what only reads.
 #[test]
 fn the_filesystem_mutation_matcher_catches_the_shapes_it_claims() {
-    for ident in cairn_guards::FILESYSTEM_MUTATION_IDENTS {
-        let src = format!("fn f() {{ let _ = std::fs::{ident}(p); }}");
-        assert!(!mutates_the_filesystem(&src).is_empty(), "{ident}");
+    // One case spelled out for every roster entry, apart from the roster (phase 11's QA, TC6):
+    // an entry deleted from it fails here.
+    let spelled: &[(&str, &str)] = &[
+        ("remove_file", "fn f() { std::fs::remove_file(p).ok(); }"),
+        ("remove_dir", "fn f() { std::fs::remove_dir(p).ok(); }"),
+        (
+            "remove_dir_all",
+            "fn f() { let _ = fs::remove_dir_all(&dir); }",
+        ),
+        ("create_dir", "fn f() { std::fs::create_dir(p).ok(); }"),
+        ("create_dir_all", "fn f() { std::fs::create_dir_all(p)?; }"),
+        ("create_new", "fn f() { let _ = File::create_new(p); }"),
+        (
+            "OpenOptions",
+            "fn f() { OpenOptions::new().write(true).open(p); }",
+        ),
+        ("DirBuilder", "fn f() { fs::DirBuilder::new().create(p); }"),
+        ("hard_link", "fn f() { std::fs::hard_link(a, b)?; }"),
+        ("soft_link", "fn f() { std::fs::soft_link(a, b)?; }"),
+        ("symlink", "fn f() { std::os::unix::fs::symlink(a, b); }"),
+        (
+            "set_permissions",
+            "fn f() { fs::set_permissions(p, mode)?; }",
+        ),
+        (
+            "chown",
+            "fn f() { std::os::unix::fs::chown(p, Some(0), None)?; }",
+        ),
+        (
+            "fchown",
+            "fn f() { std::os::unix::fs::fchown(&file, None, None)?; }",
+        ),
+        (
+            "lchown",
+            "fn f() { std::os::unix::fs::lchown(p, None, None)?; }",
+        ),
+        ("set_len", "fn f() { file.set_len(0); }"),
+        ("set_modified", "fn f() { file.set_modified(when)?; }"),
+        ("set_times", "fn f() { file.set_times(times)?; }"),
+        ("UnixListener", "fn f() { let l = UnixListener::bind(p); }"),
+        ("UnixDatagram", "fn f() { let d = UnixDatagram::bind(p); }"),
+        (
+            "fs::write",
+            "use std::fs;\nfn f() { fs::write(p, b\"x\"); }",
+        ),
+        ("fs::rename", "fn f() { std :: fs :: rename(a, b); }"),
+        ("fs::copy", "fn f() { std::fs::copy(a, b); }"),
+        (
+            "File::create",
+            "fn f() { let _ = std::fs::File::create(p); }",
+        ),
+        (
+            "File::create_buffered",
+            "fn f() { let _ = File::create_buffered(p); }",
+        ),
+        (
+            "File::options",
+            "fn f() { File::options().append(true).open(p); }",
+        ),
+    ];
+    let roster: Vec<String> = cairn_guards::FILESYSTEM_MUTATION_IDENTS
+        .iter()
+        .map(|ident| (*ident).to_owned())
+        .chain(
+            cairn_guards::FILESYSTEM_MUTATION_FS_FUNCTIONS
+                .iter()
+                .map(|function| format!("fs::{function}")),
+        )
+        .chain(
+            cairn_guards::FILESYSTEM_MUTATION_FILE_FUNCTIONS
+                .iter()
+                .map(|function| format!("File::{function}")),
+        )
+        .collect();
+    for entry in &roster {
+        let Some((_, src)) = spelled.iter().find(|(kind, _)| kind == entry) else {
+            panic!("{entry} is on a filesystem roster with no case spelled out for it");
+        };
+        assert!(
+            cairn_guards::filesystem_mutation_kinds(src).contains(entry),
+            "{entry} not found in {src}: {:?}",
+            mutates_the_filesystem(src)
+        );
+    }
+    for (kind, _) in spelled {
+        assert!(
+            roster.iter().any(|entry| entry == kind),
+            "{kind} is on no roster"
+        );
     }
     let caught = [
         "fn f() { std::fs::remove_file(p).ok(); }",
+        // Phase 11's QA (GI1-GI4): the ways a `use` or a `type` hid a spelling.
+        "use std::fs::{self as f};\nfn g() { f::write(p, b); }",
+        "use std::fs::{*};",
+        "use std::fs::{self, *};",
+        "use std::{fs::*, io};",
+        "use std::{io::Read, fs::{*}};",
+        "use std::fs::File as Out;\nfn f() { Out::create(p); }",
+        "use std::fs::{File as Out};",
+        "type Out = std::fs::File;\nfn f() { Out::create(p); }",
         "use std::fs::remove_file as gone;\nfn f() { gone(p); }",
         "use std::fs;\nfn f() { fs::write(p, b\"x\"); }",
         "fn f() { std :: fs :: rename(a, b); }",
@@ -1220,6 +1362,9 @@ fn the_filesystem_mutation_matcher_catches_the_shapes_it_claims() {
         "fn f() { let _ = std::fs::read_to_string(p); }",
         "fn f() { let _ = std::fs::symlink_metadata(p); }",
         "fn f() { let _ = File::open(p); }",
+        "use std::fs::File;\nfn f() { File::open(p); }",
+        "use std::{fs, io::*};",
+        "use std::fs::{self, File};",
         "use std::io::Write;\nfn f() { out.write_all(b); out.write(b); }",
         "fn f() { writer.rename_column(); let copy = x.clone(); }",
         "// std::fs::remove_file(p) in a comment\nfn f() {}",

@@ -587,29 +587,35 @@ Project invariants:
 - **Only `cairn-git/src/ops/` changes the filesystem** (staging-and-commit R12.5, L23): no
   production file outside it removes, writes, renames, creates, links or changes the
   permissions, ownership, length or times of a file or directory, beyond an exceptions roster
-  for what writes outside any repository. Twin: `only_the_ops_module_changes_the_filesystem`
-  (matcher `mutates_the_filesystem` in `crates/cairn-guards/src/lib.rs`, self-test
-  `the_filesystem_mutation_matcher_catches_the_shapes_it_claims`), over every product crate's
-  production code — test modules and files a parent declares under `#[cfg(test)]` or
-  `#[cfg(all(test, unix))]` left out — with a nonzero-files assertion, and `ops/` itself
-  required to show the matcher a mutation (`Remove index.lock…`'s removal), so a blind matcher
-  fails. What it matches: every identifier of `FILESYSTEM_MUTATION_IDENTS` (`remove_file`,
-  `remove_dir`, `remove_dir_all`, `create_dir`, `create_dir_all`, `create_new`, `OpenOptions`,
-  `DirBuilder`, `hard_link`, `soft_link`, `symlink`, `set_permissions`, `chown`, `fchown`,
-  `lchown`, `set_len`, `set_modified`, `set_times`, `UnixListener`, `UnixDatagram`), so an
-  alias is caught on its import line; `fs::write`, `fs::rename` and `fs::copy` by path and as
-  names a `use` of `fs` imports, aliased or not; `File::create`; a glob import of `fs`; and
-  `fs` renamed (`use std::fs as f`). Its exceptions roster, `FILESYSTEM_MUTATION_EXCEPTIONS`,
-  each row failing when its file no longer matches: the askpass channel's socket directory
-  (`crates/cairn-askpass/src/channel.rs`) and the ownership check's probe file in the temporary
-  directory (`crates/cairn-git/src/ownership.rs`); a future settings store (issue #89) will
-  need a row of its own, with its reason. Residual review obligations, `qa-checklist`'s: the
-  matcher reads spellings, so a write through a dependency's API (a crate that writes files,
-  `nix`'s unistd), a method on an `OpenOptions` reached through a type alias declared in
-  another crate, a macro, or a `File` opened for writing by a name it does not hold is not
-  seen; and the one deletion it allows, in `ops/`, removes a file another program may take
-  between the re-check and the removal (stated in `docs/systems/git-processes.md`, "The
-  activity popover").
+  for what writes outside any repository, and `ops/` itself makes exactly one such write.
+  Twin: `only_the_ops_module_changes_the_filesystem` (matchers `mutates_the_filesystem` and
+  `filesystem_mutation_kinds` in `crates/cairn-guards/src/lib.rs`, self-test
+  `the_filesystem_mutation_matcher_catches_the_shapes_it_claims`, one case spelled out apart
+  from the rosters for every roster entry, each entry required to have one), over every product
+  crate's production code — test modules and files a parent declares under `#[cfg(test)]` or
+  `#[cfg(all(test, unix))]` left out — with a nonzero-files assertion. What it matches: every
+  identifier of `FILESYSTEM_MUTATION_IDENTS` (`remove_file`, `remove_dir`, `remove_dir_all`,
+  `create_dir`, `create_dir_all`, `create_new`, `OpenOptions`, `DirBuilder`, `hard_link`,
+  `soft_link`, `symlink`, `set_permissions`, `chown`, `fchown`, `lchown`, `set_len`,
+  `set_modified`, `set_times`, `UnixListener`, `UnixDatagram`), so an alias is caught on its
+  import line; `fs::write`, `fs::rename` and `fs::copy` by path and as names a `use` of `fs`
+  imports, aliased or not; `File::create`, `File::create_buffered` and `File::options`; and the
+  ways a `use` or a `type` hides those — a glob of `fs` (`fs::*`, or a `*` in a braced list
+  after `fs::`), `fs` renamed (`fs as f`, `fs::{self as f}`), and `File` renamed (`File as F`,
+  or a `type` alias naming `File`). Each file allowed a write is pinned to exactly the kinds
+  of write it shows, a new kind or one no longer made failing its row: `ops/` to
+  `OPS_FILESYSTEM_WRITES` (`ops/remove_lock.rs`'s `remove_file`, `Remove index.lock…`), so
+  the one git-less mutation cannot widen unseen; and `FILESYSTEM_MUTATION_EXCEPTIONS` — the
+  askpass channel's socket directory (`crates/cairn-askpass/src/channel.rs`) and the
+  ownership check's probe file in the temporary directory (`crates/cairn-git/src/ownership.rs`)
+  — with a future settings store (issue #89) a row of its own, with its reason. Residual
+  review obligations, `qa-checklist`'s (its item 7): the matchers read spellings, so a write
+  through a dependency's API (a crate that writes files, `nix`'s unistd), a `File` or
+  `OpenOptions` reached through a type alias declared in another crate, a macro, a method
+  call on a `File` that writes (`write_all` on one opened by a name it does not hold), or a
+  kind of write the rosters do not name is not seen; and the one deletion `ops/` makes removes
+  a file another program may take between the re-check and the removal (stated in
+  `docs/systems/git-processes.md`, "The activity popover").
 - **Every `git` subprocess runs with an environment Cairn built, and that
   environment always sets `GIT_TERMINAL_PROMPT=0`, `SSH_ASKPASS_REQUIRE=force`,
   `GIT_EDITOR=false` and `GIT_SEQUENCE_EDITOR=false` and points `GIT_ASKPASS`

@@ -2270,12 +2270,11 @@ fn path_offsets(code: &str, segments: &[&str]) -> Vec<(usize, usize)> {
 /// What changes a file or directory on disk, by the names `std` gives it (staging-and-commit
 /// R12.5), matched wherever they appear as an identifier, since nothing that only reads has
 /// their name: removing (`fs::remove_file`, `remove_dir`, `remove_dir_all`), creating
-/// (`create_dir`, `create_dir_all`, `File::create_new`, `OpenOptions` — the one way to open a
-/// file for writing short of `File::create` — and `DirBuilder`), linking (`hard_link`,
-/// `soft_link`, unix's `symlink`), changing permissions, ownership, length or times
-/// (`set_permissions`, `chown`, `fchown`, `lchown`, `set_len`, `set_modified`, `set_times`),
-/// and binding a socket, which creates its file (`UnixListener`, `UnixDatagram`). An alias is
-/// caught on its import line.
+/// (`create_dir`, `create_dir_all`, `File::create_new`, and `OpenOptions` and `DirBuilder`,
+/// the builders that open or make one for writing), linking (`hard_link`, `soft_link`, unix's
+/// `symlink`), changing permissions, ownership, length or times (`set_permissions`, `chown`,
+/// `fchown`, `lchown`, `set_len`, `set_modified`, `set_times`), and binding a socket, which
+/// creates its file (`UnixListener`, `UnixDatagram`). An alias is caught on its import line.
 pub const FILESYSTEM_MUTATION_IDENTS: &[&str] = &[
     "remove_file",
     "remove_dir",
@@ -2304,9 +2303,18 @@ pub const FILESYSTEM_MUTATION_IDENTS: &[&str] = &[
 /// `std::fs::rename(..)` — and as a name a `use` of `fs` imports, aliased or not.
 pub const FILESYSTEM_MUTATION_FS_FUNCTIONS: &[&str] = &["write", "rename", "copy"];
 
-/// 1-based lines where `source` mutates the filesystem by one of the spellings above, or by
-/// `File::create`, or imports everything of a `fs` module (`use std::fs::*`), over its code
-/// with comments and strings blanked, as `line: what`.
+/// `File`'s associated functions that open a file for writing, matched as `File::<name>`:
+/// `create`, `create_buffered` and `options` (the `OpenOptions` builder by another door).
+/// `File::create_new` is on [`FILESYSTEM_MUTATION_IDENTS`] already.
+pub const FILESYSTEM_MUTATION_FILE_FUNCTIONS: &[&str] = &["create", "create_buffered", "options"];
+
+/// 1-based lines where `source` mutates the filesystem, as `line: what`, over its code with
+/// comments and strings blanked: every identifier of [`FILESYSTEM_MUTATION_IDENTS`]; a path
+/// through `fs` to one of [`FILESYSTEM_MUTATION_FS_FUNCTIONS`]; `File::` and one of
+/// [`FILESYSTEM_MUTATION_FILE_FUNCTIONS`]; and the ways a `use` or a `type` hides those
+/// spellings — importing one of those functions from `fs`, a glob of `fs` (`fs::*`, or a `*` in
+/// a braced list after `fs::`), `fs` renamed (`fs as f`, or `{self as f}` after `fs::`), and
+/// `File` renamed (`File as F` in a `use`, or a `type` alias naming `File`).
 pub fn mutates_the_filesystem(source: &str) -> Vec<String> {
     let code = code_without_strings(source);
     let mut found = BTreeSet::new();
@@ -2320,41 +2328,88 @@ pub fn mutates_the_filesystem(source: &str) -> Vec<String> {
             found.insert((line_at(&code, start), format!("fs::{function}")));
         }
     }
-    for line in calls_associated_function(&code, "File", "create") {
-        found.insert((line, "File::create".to_owned()));
+    for function in FILESYSTEM_MUTATION_FILE_FUNCTIONS {
+        for line in calls_associated_function(&code, "File", function) {
+            found.insert((line, format!("File::{function}")));
+        }
     }
-    // Imports from a `fs` module: each `use` statement, to its `;`.
-    for start in ident_offsets(&code, "use") {
-        let end = code[start..].find(';').map_or(code.len(), |at| start + at);
-        let statement = &code[start..end];
-        if ident_offsets(statement, "fs").is_empty() {
-            continue;
-        }
-        let glob = statement.find("fs").is_some_and(|at| {
-            statement[at..]
-                .replace(char::is_whitespace, "")
-                .starts_with("fs::*")
-        });
-        if glob {
-            found.insert((line_at(&code, start), "use fs::*".to_owned()));
-        }
-        // The module renamed (`use std::fs as f;`): its functions would be `f::write`.
-        let renamed = ident_offsets(statement, "fs").into_iter().any(|at| {
-            let after = statement[at + 2..].trim_start();
-            after.starts_with("as") && after[2..].starts_with(char::is_whitespace)
-        });
-        if renamed {
-            found.insert((line_at(&code, start), "use fs as ..".to_owned()));
-        }
-        for function in FILESYSTEM_MUTATION_FS_FUNCTIONS {
-            if !ident_offsets(statement, function).is_empty() {
-                found.insert((line_at(&code, start), format!("use fs::{function}")));
+    let is_word = |text: &str, word: &str| {
+        text.starts_with(word) && !text[word.len()..].starts_with(|c: char| is_ident_char(c))
+    };
+    // Imports and aliases: each `use` or `type` statement, to its `;`.
+    for keyword in ["use", "type"] {
+        for start in ident_offsets(&code, keyword) {
+            let end = code[start..].find(';').map_or(code.len(), |at| start + at);
+            let statement = &code[start..end];
+            let line = line_at(&code, start);
+            if keyword == "type" {
+                if !ident_offsets(statement, "File").is_empty() {
+                    found.insert((line, "type .. = File".to_owned()));
+                }
+                continue;
+            }
+            for at in ident_offsets(statement, "File") {
+                if is_word(statement[at + 4..].trim_start(), "as") {
+                    found.insert((line, "use File as ..".to_owned()));
+                }
+            }
+            for at in ident_offsets(statement, "fs") {
+                let rest = statement[at + 2..].trim_start();
+                if is_word(rest, "as") {
+                    found.insert((line, "use fs as ..".to_owned()));
+                    continue;
+                }
+                let Some(after) = rest.strip_prefix("::") else {
+                    continue;
+                };
+                let after = after.trim_start();
+                if after.starts_with('*') {
+                    found.insert((line, "use fs::*".to_owned()));
+                } else if let Some(inner) = after.strip_prefix('{') {
+                    // The braced list after `fs::`, to its matching brace.
+                    let mut depth = 1usize;
+                    let close = inner
+                        .char_indices()
+                        .find(|(_, c)| {
+                            match c {
+                                '{' => depth += 1,
+                                '}' => depth -= 1,
+                                _ => {}
+                            }
+                            depth == 0
+                        })
+                        .map_or(inner.len(), |(at, _)| at);
+                    let list = &inner[..close];
+                    if list.contains('*') {
+                        found.insert((line, "use fs::{*}".to_owned()));
+                    }
+                    for at in ident_offsets(list, "self") {
+                        if is_word(list[at + 4..].trim_start(), "as") {
+                            found.insert((line, "use fs::{self as ..}".to_owned()));
+                        }
+                    }
+                }
+            }
+            for function in FILESYSTEM_MUTATION_FS_FUNCTIONS {
+                if !ident_offsets(statement, "fs").is_empty()
+                    && !ident_offsets(statement, function).is_empty()
+                {
+                    found.insert((line, format!("use fs::{function}")));
+                }
             }
         }
     }
     found
         .into_iter()
         .map(|(line, what)| format!("{line}: {what}"))
+        .collect()
+}
+
+/// What [`mutates_the_filesystem`] found, by kind alone (the part after `line: `), each once.
+pub fn filesystem_mutation_kinds(source: &str) -> BTreeSet<String> {
+    mutates_the_filesystem(source)
+        .into_iter()
+        .filter_map(|hit| hit.split_once(": ").map(|(_, what)| what.to_owned()))
         .collect()
 }
 

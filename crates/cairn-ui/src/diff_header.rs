@@ -65,6 +65,7 @@ pub struct DiffHeader {
     file: ChangedFile,
     settings: DiffSettings,
     hiding: bool,
+    exact: bool,
     on_action: EventHandler<HeaderAction>,
     key: DiffKey,
 }
@@ -75,6 +76,7 @@ impl DiffHeader {
             file,
             settings,
             hiding: false,
+            exact: false,
             on_action: EventHandler::new(|_| {}),
             key: DiffKey::None,
         }
@@ -84,6 +86,15 @@ impl DiffHeader {
     /// only when it does, never just because the toggle is on.
     pub fn hiding(mut self, hiding: bool) -> Self {
         self.hiding = hiding;
+        self
+    }
+
+    /// The diff under the bar is always the exact one, whatever the shared setting says —
+    /// Local Changes', where what is staged is what is drawn (staging-and-commit R8.5, L6):
+    /// ignore whitespace is drawn off and disabled, the shared setting left as it was, and no
+    /// notice says whitespace hides a change.
+    pub fn exact(mut self, exact: bool) -> Self {
+        self.exact = exact;
         self
     }
 
@@ -101,6 +112,7 @@ impl PartialEq for DiffHeader {
         self.file == other.file
             && self.settings == other.settings
             && self.hiding == other.hiding
+            && self.exact == other.exact
             && self.key == other.key
     }
 }
@@ -229,7 +241,7 @@ impl Component for DiffHeader {
                 Some(HeaderAction::NextChange),
             ))
             .child(shown_path)
-            .maybe_child(self.hiding.then(|| {
+            .maybe_child((self.hiding && !self.exact).then(|| {
                 label()
                     .text(HIDDEN_CHANGES_NOTICE)
                     .max_lines(1)
@@ -239,8 +251,8 @@ impl Component for DiffHeader {
             .child(button(
                 Glyph::IgnoreWhitespace,
                 IGNORE_WHITESPACE_LABEL,
-                settings.ignore_whitespace(),
-                true,
+                settings.ignore_whitespace() && !self.exact,
+                !self.exact,
                 Some(HeaderAction::IgnoreWhitespace),
             ))
             .child(button(

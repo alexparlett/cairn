@@ -13,18 +13,57 @@
 //! **What it asks.** Nothing: a row pressed, or reached with ↑ or ↓ in its focused list, is
 //! reported by its list and its place there, and the caller decides what that shows. Each list
 //! reads its rows by index, through the filter's answer (`ShownFiles`), as they are built; it
-//! walks no path. Nothing here stages, unstages or discards (R9.6).
+//! walks no path.
+//!
+//! **What it reports** (staging-and-commit R8.1, R8.2), each as a [`ListIntent`] the caller
+//! acts on: a row pressed with the table's extending or range press (the keys the window
+//! heard held, `HeldKeys`), or reached with Shift+↑/↓; a row double-pressed; Fork's five
+//! routes to stage and unstage — the double press, the table's chords heard on a focused list
+//! (`Scope::LocalChanges`), a drag from one list dropped on the other (`ListDrag`, one drop
+//! zone per list, the target list scrolling at its edges), each list's Stage or Unstage
+//! button (Stage All or Unstage All with the table's press held) and the double chevron's
+//! Stage All, and the context menu (`local_changes_menu`); and the discard chord and menu
+//! item, on the unstaged side only. The selection it draws is the caller's
+//! ([`ListSelection`]), read by a binary search per row built.
 
-use cairn_model::{ChangeKind, ChangeList, LocalChange, LocalChanges};
+use cairn_model::{ChangeKind, ChangeList, LocalChange, LocalChanges, RepoPath};
 use freya::prelude::*;
 
-use crate::accelerators::{self, Scope};
+use crate::accelerators::{self, Action, HeldKeys, Scope};
 use crate::changes_list::{FILTER_PLACEHOLDER, FILTERING, filter_count};
 use crate::commit_tab::DETAIL_ROW_HEIGHT;
 use crate::diff_palette::DIFF_FONT_FAMILY;
 use crate::file_filter::ShownFiles;
+use crate::list_selection::ListSelection;
+use crate::local_changes_drag::ListDrag;
+use crate::local_changes_menu::{
+    MenuChoice, STAGE_ALL_CAPTION, STAGE_CAPTION, UNSTAGE_ALL_CAPTION, UNSTAGE_CAPTION, menu,
+    no_discard,
+};
 use crate::ref_glyphs::RefGlyph;
 use crate::text_field::text_field;
+use crate::toggle_glyphs::Glyph;
+
+/// What a person did to the lists, beyond choosing a row (`LocalChangesList::on_choose`): the
+/// caller decides what each does to its selection and what it asks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListIntent {
+    /// A row pressed with the table's extending press (⌘- or Ctrl-click): toggled in or out
+    /// of the selection.
+    Toggle(ChangeList, usize),
+    /// A row pressed with the range press (Shift-click), or reached with Shift+↑/↓: the
+    /// selection spans from its anchor to it.
+    Range(ChangeList, usize),
+    /// A row double-pressed: it alone staged or unstaged (Fork's double-click).
+    Double(ChangeList, usize),
+    /// An action of the table — stage or unstage, all of them, discard — on `list`'s selection
+    /// (or, for all, every row of it): from a chord on the focused list, a button, a menu item.
+    Act(ChangeList, Action),
+    /// A drag from `from`, begun on `path`, released over the other list.
+    Drop { from: ChangeList, path: RepoPath },
+    /// Copy Path: the selection's paths of `list`.
+    CopyPaths(ChangeList),
+}
 
 /// The heading over the upper list.
 pub const UNSTAGED_CAPTION: &str = "Unstaged";
@@ -101,7 +140,10 @@ pub struct LocalChangesList {
     /// Unstaged's share of the two lists' height, in percent: the caller's to keep.
     split: Option<Writable<f32>>,
     chosen: Option<(ChangeList, usize)>,
+    selection: Option<Readable<ListSelection>>,
+    held: Option<Readable<HeldKeys>>,
     on_choose: EventHandler<(ChangeList, usize)>,
+    on_intent: EventHandler<ListIntent>,
     key: DiffKey,
 }
 
@@ -123,7 +165,10 @@ impl LocalChangesList {
             shown_paths: None,
             split: None,
             chosen: None,
+            selection: None,
+            held: None,
             on_choose: EventHandler::new(|_| {}),
+            on_intent: EventHandler::new(|_| {}),
             key: DiffKey::None,
         }
     }
@@ -158,6 +203,26 @@ impl LocalChangesList {
         self.on_choose = on_choose.into();
         self
     }
+
+    /// The paths selected, drawn highlighted beside the path chosen; read by a binary search
+    /// per row built.
+    pub fn selection(mut self, selection: impl Into<Readable<ListSelection>>) -> Self {
+        self.selection = Some(selection.into());
+        self
+    }
+
+    /// The keys the window hears held, which a press on a row or a list's button is resolved
+    /// against: this toolkit build carries no modifiers on a pointer event.
+    pub fn held(mut self, held: impl Into<Readable<HeldKeys>>) -> Self {
+        self.held = Some(held.into());
+        self
+    }
+
+    /// Everything else a person did to the lists ([`ListIntent`]).
+    pub fn on_intent(mut self, on_intent: impl Into<EventHandler<ListIntent>>) -> Self {
+        self.on_intent = on_intent.into();
+        self
+    }
 }
 
 impl PartialEq for LocalChangesList {
@@ -167,6 +232,8 @@ impl PartialEq for LocalChangesList {
             && self.staged == other.staged
             && self.shown_paths == other.shown_paths
             && self.chosen == other.chosen
+            && self.selection == other.selection
+            && self.held == other.held
             && self.key == other.key
     }
 }
@@ -217,6 +284,7 @@ impl Component for LocalChangesList {
                 .font_size(12.)
                 .color(colours.text_secondary)
         });
+        let drag = ListDrag::used();
         let section = |list: ChangeList, shown: &Readable<ShownFiles>, rows: usize| ListSection {
             list,
             changes: self.changes.clone(),
@@ -225,7 +293,11 @@ impl Component for LocalChangesList {
             chosen: self
                 .chosen
                 .and_then(|(chosen, row)| (chosen == list).then_some(row)),
+            selection: self.selection.clone(),
+            held: self.held.clone(),
+            drag,
             on_choose: self.on_choose.clone(),
+            on_intent: self.on_intent.clone(),
         };
         let lists: Element = if filtering && !waiting && unstaged + staged == 0 {
             rect()
@@ -269,7 +341,7 @@ impl Component for LocalChangesList {
                 )
                 .into()
         };
-        rect()
+        drag.on(rect())
             .expanded()
             .content(Content::Flex)
             .child(
@@ -300,7 +372,11 @@ struct ListSection {
     shown: Readable<ShownFiles>,
     rows: usize,
     chosen: Option<usize>,
+    selection: Option<Readable<ListSelection>>,
+    held: Option<Readable<HeldKeys>>,
+    drag: ListDrag,
     on_choose: EventHandler<(ChangeList, usize)>,
+    on_intent: EventHandler<ListIntent>,
 }
 
 impl PartialEq for ListSection {
@@ -310,6 +386,9 @@ impl PartialEq for ListSection {
             && self.shown == other.shown
             && self.rows == other.rows
             && self.chosen == other.chosen
+            && self.selection == other.selection
+            && self.held == other.held
+            && self.drag == other.drag
     }
 }
 
@@ -321,7 +400,13 @@ struct ListData {
     shown: Readable<ShownFiles>,
     rows: usize,
     chosen: Option<usize>,
+    selection: Option<Readable<ListSelection>>,
+    held: Option<Readable<HeldKeys>>,
+    drag: ListDrag,
+    /// Set by the second press of a double press, so its release chooses nothing.
+    doubled: State<bool>,
     on_choose: EventHandler<(ChangeList, usize)>,
+    on_intent: EventHandler<ListIntent>,
     list_id: AccessibilityId,
 }
 
@@ -334,52 +419,189 @@ impl PartialEq for ListData {
     }
 }
 
+/// What a press with `held` held does: the table's extending or range press, or a plain one.
+fn press_of(held: Option<&Readable<HeldKeys>>) -> Option<Action> {
+    held.and_then(|held| held.peek().press())
+}
+
+/// The caption of a list's button: Stage or Unstage, or — with the table's Stage All press
+/// held — Stage All or Unstage All (Fork's ⌥ over the button).
+fn button_caption(list: ChangeList, all: bool) -> &'static str {
+    match (list, all) {
+        (ChangeList::Unstaged, false) => STAGE_CAPTION,
+        (ChangeList::Unstaged, true) => STAGE_ALL_CAPTION,
+        (ChangeList::Staged, false) => UNSTAGE_CAPTION,
+        (ChangeList::Staged, true) => UNSTAGE_ALL_CAPTION,
+    }
+}
+
+/// A small control of a list's heading: pressable without taking focus from the list, as
+/// Freya's `Button` would. Disabled, it reports nothing and draws dimmed.
+fn heading_control(
+    child: Element,
+    name: &str,
+    enabled: bool,
+    pressed: impl Fn() + 'static,
+) -> Rect {
+    let colours = get_theme_or_default().read().colors().clone();
+    let control = rect()
+        .padding(Gaps::new(1., 6., 1., 6.))
+        .corner_radius(4.)
+        .border(
+            Border::new()
+                .fill(if enabled {
+                    colours.border
+                } else {
+                    colours.disabled
+                })
+                .width(1.),
+        )
+        .a11y_role(AccessibilityRole::Button)
+        .a11y_alt(name.to_owned())
+        .child(child);
+    if enabled {
+        control
+            .cursor(CursorIcon::Pointer)
+            .on_press(move |_: Event<PressEventData>| pressed())
+    } else {
+        control
+    }
+}
+
 impl Component for ListSection {
     fn render(&self) -> impl IntoElement {
         let list_id = use_a11y();
         let focus = use_focus(list_id);
         let controller = use_scroll_controller(ScrollConfig::default);
+        let mut edge = crate::edge_scroll::use_edge_scroll(controller);
+        let doubled = use_state(|| false);
         let colours = get_theme_or_default().read().colors().clone();
+        let (list, drag) = (self.list, self.drag);
+        // A drag from the other list scrolls this one at its edges while it is on (R7.6): the
+        // list it would drop on, never the one it came from.
+        let targeted = drag.read().targets(list);
+        use_side_effect(move || {
+            let wanted = drag.read().targets(list);
+            if wanted && !edge.is_dragging() {
+                edge.begin();
+            } else if !wanted && edge.is_dragging() {
+                edge.end();
+            }
+        });
         let data = ListData {
-            list: self.list,
+            list,
             changes: self.changes.clone(),
             shown: self.shown.clone(),
             rows: self.rows,
             chosen: self.chosen,
+            selection: self.selection.clone(),
+            held: self.held.clone(),
+            drag,
+            doubled,
             on_choose: self.on_choose.clone(),
+            on_intent: self.on_intent.clone(),
             list_id,
         };
+        // The heading's button acts on the selection in this list — or, with the Stage All
+        // press held, on every row of it — and is dimmed when there is nothing to act on.
+        let all = self
+            .held
+            .as_ref()
+            .is_some_and(|held| held.read().press() == Some(Action::StageOrUnstageAll));
+        let listed = self.changes.read().len(list) > 0;
+        let selected = self.selection.as_ref().is_some_and(|selection| {
+            let selection = selection.read();
+            selection.list() == Some(list) && !selection.is_empty()
+        }) || self.chosen.is_some();
+        let caption = button_caption(list, all);
+        let acting = self.on_intent.clone();
+        let button = heading_control(
+            label()
+                .text(caption)
+                .font_size(12.)
+                .color(colours.text_primary)
+                .into(),
+            caption,
+            if all { listed } else { selected },
+            move || {
+                let action = if all {
+                    Action::StageOrUnstageAll
+                } else {
+                    Action::StageOrUnstage
+                };
+                acting.call(ListIntent::Act(list, action));
+            },
+        );
+        // Fork's double chevron over Unstaged: Stage All, kept deliberately small.
+        let staging_all = self.on_intent.clone();
+        let chevron = (list == ChangeList::Unstaged).then(|| {
+            TooltipContainer::new(Tooltip::new_text(STAGE_ALL_CAPTION)).child(heading_control(
+                Glyph::StageAll
+                    .draw(if listed {
+                        colours.text_primary
+                    } else {
+                        colours.disabled
+                    })
+                    .into(),
+                STAGE_ALL_CAPTION,
+                listed,
+                move || {
+                    staging_all.call(ListIntent::Act(
+                        ChangeList::Unstaged,
+                        Action::StageOrUnstageAll,
+                    ))
+                },
+            ))
+        });
+        let dropping = self.on_intent.clone();
         rect()
             .expanded()
             .content(Content::Flex)
+            // One drop zone per list: a drag from the other list released anywhere over this
+            // one drops here; the lists' root then lets the drag go. The release, not a press:
+            // Freya reports a press only on the element the button went down on, as its own
+            // `DropZone` does.
+            .on_mouse_up(move |e: Event<MouseEventData>| {
+                if e.button != Some(MouseButton::Left) {
+                    return;
+                }
+                if let Some((from, path)) = drag.peek().dropped_on(list) {
+                    dropping.call(ListIntent::Drop { from, path });
+                }
+            })
             .child(
                 rect()
                     .horizontal()
+                    .content(Content::Flex)
                     .width(Size::fill())
                     .height(Size::px(LIST_HEADER_HEIGHT))
                     .cross_align(Alignment::Center)
                     .padding(Gaps::new(0., 8., 0., 8.))
+                    .spacing(6.)
                     .background(colours.surface_tertiary)
                     .child(
                         label()
-                            .text(list_caption(self.list))
+                            .text(list_caption(list))
+                            .width(Size::flex(1.))
                             .max_lines(1)
                             .font_size(12.)
                             .font_weight(FontWeight::BOLD)
                             .color(colours.text_secondary),
-                    ),
+                    )
+                    .maybe_child(chevron)
+                    .child(button),
             )
             .child(
-                rect()
+                edge.on(rect()
                     .width(Size::fill())
                     .height(Size::flex(1.))
                     .a11y_id(list_id)
                     .a11y_focusable(true)
                     .a11y_role(AccessibilityRole::List)
-                    .maybe(focus() == Focus::Keyboard, |el| {
+                    .maybe(focus() == Focus::Keyboard || targeted, |el| {
                         el.border(Border::new().fill(colours.border_focus).width(1.))
                     })
-                    .on_key_down(keyboard(&data, controller))
+                    .on_key_down(keyboard(&data, controller)))
                     .child(
                         VirtualScrollView::new_with_data_controlled(data, build_row, controller)
                             // Room for the horizontal scrollbar after the last row
@@ -403,21 +625,33 @@ impl Component for ListSection {
     }
 }
 
-/// ↑ and ↓ over the rows `data`'s list shows; every other key, and every chord, is left
-/// unhandled. Nothing chosen in the list yet: either arrow starts at its first row.
+/// The keys of a focused list (R7.3): the table's stage, stage-all and discard chords on its
+/// selection (`Scope::LocalChanges`); Shift+↑/↓ extending the selection from its anchor
+/// (`Scope::LocalChangesLists`); ↑ and ↓ over the rows `data`'s list shows. Every other key,
+/// and every chord of the window or the detail pane, is left unhandled. Nothing chosen in the
+/// list yet: either arrow starts at its first row.
 fn keyboard(
     data: &ListData,
     mut controller: ScrollController,
 ) -> impl FnMut(Event<KeyboardEventData>) + 'static {
-    let (list, shown, changes, chosen, on_choose) = (
+    let (list, shown, changes, chosen, on_choose, on_intent) = (
         data.list,
         data.shown.clone(),
         data.changes.clone(),
         data.chosen,
         data.on_choose.clone(),
+        data.on_intent.clone(),
     );
     move |e: Event<KeyboardEventData>| {
-        if accelerators::is_chord(&e, &[Scope::LocalChanges, Scope::LocalChangesLists]) {
+        if let Some(action) = accelerators::resolve_key(&e, Scope::LocalChanges) {
+            e.stop_propagation();
+            on_intent.call(ListIntent::Act(list, action));
+            return;
+        }
+        let extending = accelerators::resolve_key(&e, Scope::LocalChangesLists);
+        if extending.is_none()
+            && accelerators::is_chord(&e, &[Scope::LocalChanges, Scope::LocalChangesLists])
+        {
             return;
         }
         let shown = shown.peek();
@@ -426,16 +660,23 @@ fn keyboard(
             return;
         };
         let at = chosen.and_then(|row| shown.row_of(row));
-        let drawn = match e.key {
-            Key::Named(NamedKey::ArrowDown) => at.map_or(0, |at| (at + 1).min(last)),
-            Key::Named(NamedKey::ArrowUp) => at.map_or(0, |at| at.saturating_sub(1)),
+        let drawn = match (extending, &e.key) {
+            (Some(Action::ExtendSelectionDown), _) | (None, Key::Named(NamedKey::ArrowDown)) => {
+                at.map_or(0, |at| (at + 1).min(last))
+            }
+            (Some(Action::ExtendSelectionUp), _) | (None, Key::Named(NamedKey::ArrowUp)) => {
+                at.map_or(0, |at| at.saturating_sub(1))
+            }
             _ => return,
         };
         e.stop_propagation();
         let Some(row) = shown.file_at(drawn) else {
             return;
         };
-        on_choose.call((list, row));
+        match extending {
+            Some(_) => on_intent.call(ListIntent::Range(list, row)),
+            None => on_choose.call((list, row)),
+        }
         controller.scroll_to_offset(
             drawn as f32 * DETAIL_ROW_HEIGHT,
             DETAIL_ROW_HEIGHT,
@@ -455,21 +696,85 @@ fn build_row(item: VirtualItem, data: &ListData) -> Element {
     let Some(at) = data.shown.read().file_at(item.index) else {
         return row.into();
     };
-    let Some(drawn) = data
-        .changes
-        .read()
-        .get(data.list, at)
-        .map(|change| change_row(&change))
-    else {
-        // The count and the rows can disagree for one frame.
-        return row.into();
+    let (drawn, path) = {
+        let changes = data.changes.read();
+        let Some(change) = changes.get(data.list, at) else {
+            // The count and the rows can disagree for one frame.
+            return row.into();
+        };
+        (change_row(&change), change.path.clone())
     };
-    let (list, list_id, on_choose) = (data.list, data.list_id, data.on_choose.clone());
+    let list = data.list;
+    // Read, not peeked: the rows redraw when the selection changes. The path chosen is drawn
+    // selected only while nothing is selected in its list, so a path toggled out is drawn out.
+    let selected = match data.selection.as_ref().map(|selection| selection.read()) {
+        Some(selection) if selection.list() == Some(list) => selection.holds(list, &path),
+        Some(_) | None => data.chosen == Some(at),
+    };
     let highlight = get_theme_or_default().read().colors().surface_secondary;
-    row.maybe(data.chosen == Some(at), |el| el.background(highlight))
+    let (list_id, on_choose, on_intent) =
+        (data.list_id, data.on_choose.clone(), data.on_intent.clone());
+    let (held, mut drag, mut doubled) = (data.held.clone(), data.drag, data.doubled);
+    let held_down = data.held.clone();
+    let downing = (data.on_intent.clone(), data.on_choose.clone());
+    let (changes, selection) = (data.changes.clone(), data.selection.clone());
+    let menu_path = path.clone();
+    row.maybe(selected, |el| el.background(highlight))
+        .on_pointer_down(move |e: Event<PointerEventData>| {
+            match e.button() {
+                Some(MouseButton::Right) => {
+                    // Fork's menu acts on the selection the row is in, or on the row alone,
+                    // which becomes the selection.
+                    let in_selection = selection
+                        .as_ref()
+                        .is_some_and(|selection| selection.peek().holds(list, &menu_path));
+                    if !in_selection {
+                        list_id.request_focus();
+                        downing.1.call((list, at));
+                    }
+                    let refusal = {
+                        let changes = changes.peek();
+                        match selection.as_ref().filter(|_| in_selection) {
+                            Some(selection) => no_discard(&changes, list, selection.peek().paths()),
+                            None => no_discard(&changes, list, [&menu_path]),
+                        }
+                    };
+                    let choosing = downing.0.clone();
+                    ContextMenu::open_from_down(menu(
+                        list,
+                        refusal.as_ref(),
+                        EventHandler::new(move |choice: MenuChoice| {
+                            choosing.call(match choice {
+                                MenuChoice::Act(action) => ListIntent::Act(list, action),
+                                MenuChoice::CopyPaths => ListIntent::CopyPaths(list),
+                            })
+                        }),
+                    ));
+                }
+                Some(_) | None if e.is_primary() => {
+                    drag.arm(list, path.clone(), e.global_location());
+                    // A double press is a plain one's: two extending presses on one row toggle
+                    // it in and out again.
+                    let double = EventsCombos::pressed(e.global_location()).is_double();
+                    if double && press_of(held_down.as_ref()).is_none() {
+                        doubled.set(true);
+                        downing.0.call(ListIntent::Double(list, at));
+                    }
+                }
+                Some(_) | None => {}
+            }
+        })
         .on_press(move |_| {
+            // The release of a drag, or of a double press's second press, chooses nothing.
+            if drag.peek().is_dragging() || std::mem::take(&mut *doubled.write()) {
+                return;
+            }
             list_id.request_focus();
-            on_choose.call((list, at));
+            match press_of(held.as_ref()) {
+                Some(Action::ExtendSelection) => on_intent.call(ListIntent::Toggle(list, at)),
+                Some(Action::SelectRange) => on_intent.call(ListIntent::Range(list, at)),
+                Some(_) | None => on_choose.call((list, at)),
+            }
         })
         .child(drawn)
         .into()

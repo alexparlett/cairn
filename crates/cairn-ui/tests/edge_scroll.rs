@@ -171,3 +171,52 @@ fn a_drag_held_at_an_edge_keeps_the_list_scrolling_until_it_leaves_or_ends() {
     wait(&mut test, 150);
     assert_eq!(shown(&test).0, released, "the scroll outlived the drag");
 }
+
+/// Phase 06's QA item 16: a drag carried out of the window and released there may never be
+/// heard, since the toolkit forgets the button as the pointer leaves. The next press — which
+/// can only come once that release was made — ends the drag; so does the window losing focus.
+/// A drag begun by a press is not ended by that same press. Caught by: a drag that keeps
+/// scrolling after a release the window never heard, or one ended by the press that began it.
+#[test]
+fn a_release_the_window_never_heard_ends_the_drag_at_the_next_press_or_focus_lost() {
+    let mut test = launch();
+    // Begun by the press itself, held below the list: the press that began it does not end it.
+    test.press_cursor((50., f64::from(TOP) + 5.));
+    test.move_cursor((50., f64::from(BOTTOM) + 20.));
+    wait(&mut test, 120);
+    let scrolling = shown(&test).0;
+    assert!(
+        scrolling > 0,
+        "the drag begun by its own press ended at once"
+    );
+
+    // The release made outside the window is never heard; the next press, above the list
+    // where nothing begins a drag, ends it.
+    test.press_cursor((50., f64::from(TOP) - 50.));
+    wait(&mut test, 60);
+    let ended = shown(&test).0;
+    test.move_cursor((50., f64::from(BOTTOM) + 20.));
+    wait(&mut test, 150);
+    assert_eq!(
+        shown(&test).0,
+        ended,
+        "a drag whose release was lost kept scrolling after the next press"
+    );
+    test.release_cursor((50., f64::from(TOP) - 50.));
+    test.sync_and_update();
+
+    // A drag the window loses focus during ends.
+    test.press_cursor((50., f64::from(TOP) + 5.));
+    test.move_cursor((50., f64::from(BOTTOM) + 20.));
+    wait(&mut test, 60);
+    test.run_in(|| Platform::get().is_app_focused.set(false));
+    test.sync_and_update();
+    wait(&mut test, 30);
+    let unfocused = shown(&test).0;
+    wait(&mut test, 150);
+    assert_eq!(
+        shown(&test).0,
+        unfocused,
+        "a drag kept scrolling after the window lost focus"
+    );
+}

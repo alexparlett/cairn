@@ -217,8 +217,14 @@ fn in_the_commit_box_backspace_and_enter_edit_and_the_commit_chord_commits() {
         Action::StageOrUnstageAll,
         Action::Discard,
     ] {
-        for nth in 0..accelerators::chords(action, Os::current()).iter().count() {
-            press_chord(&mut test, action, nth);
+        // Each key chord: Stage All's press (⌥ over a list's button) is no key.
+        for (nth, chord) in accelerators::chords(action, Os::current())
+            .iter()
+            .enumerate()
+        {
+            if chord.key_press().is_some() {
+                press_chord(&mut test, action, nth);
+            }
         }
     }
     assert_eq!(

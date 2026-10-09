@@ -28,7 +28,16 @@ mod graph_cell;
 pub mod graph_geometry;
 mod history_list;
 pub mod lane_palette;
+mod list_selection;
+pub use list_selection::{ListSelection, nearest_remaining};
 mod local_changes;
+mod local_changes_drag;
+pub use local_changes_drag::DRAG_THRESHOLD;
+mod local_changes_menu;
+pub use local_changes_menu::{
+    COPY_PATH_CAPTION, DISCARD_CAPTION, MenuChoice, NoDiscard, STAGE_ALL_CAPTION, STAGE_CAPTION,
+    UNSTAGE_ALL_CAPTION, UNSTAGE_CAPTION, no_discard,
+};
 mod message_lines;
 mod ref_chips;
 mod ref_glyphs;
@@ -82,7 +91,7 @@ pub use file_filter::ShownFiles;
 pub use graph_geometry::{LANE_WIDTH, MAX_DRAWN_LANES, ROW_HEIGHT, graph_width};
 pub use history_list::{HistoryList, PREFETCH_ROWS, RowRender, reveal_row};
 pub use local_changes::{
-    ChangeBadge, LIST_HEADER_HEIGHT, LISTS_SPLIT, LocalChangesList, NO_PATH_MATCHES,
+    ChangeBadge, LIST_HEADER_HEIGHT, LISTS_SPLIT, ListIntent, LocalChangesList, NO_PATH_MATCHES,
     STAGED_CAPTION, UNSTAGED_CAPTION, change_badge, change_text, list_caption,
 };
 pub use ref_chips::{

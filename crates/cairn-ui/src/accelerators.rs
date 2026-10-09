@@ -72,7 +72,8 @@ pub enum Action {
     /// Stages what is selected in the Unstaged list or its diff, or unstages what is selected
     /// in the Staged list or its diff (staging-and-commit R8.2, R9.2).
     StageOrUnstage,
-    /// Stages every unstaged path, or unstages every staged one, by the list that has focus.
+    /// Stages every unstaged path, or unstages every staged one, by the list that has focus —
+    /// or, a press, by the list whose Stage or Unstage button is pressed with it held.
     StageOrUnstageAll,
     /// Discards what is selected on the unstaged side, through the confirmation (R8.4).
     Discard,
@@ -294,7 +295,12 @@ pub fn chords(action: Action, platform: Os) -> Chords {
             ]),
             Os::MacOs => Chords::of([(bare, key(NamedKey::Enter)), (command, at(Code::KeyS))]),
         },
-        Action::StageOrUnstageAll => Chords::of([(command | option | shift, at(Code::KeyS))]),
+        // ⌥⇧⌘S / Ctrl+Alt+Shift+S on a focused list or diff; and Fork's ⌥ held over a list's
+        // Stage or Unstage button, which makes it Stage All or Unstage All — a press.
+        Action::StageOrUnstageAll => Chords::of([
+            (command | option | shift, at(Code::KeyS)),
+            (option, Trigger::Press),
+        ]),
         // ⌫ or ⇧⌘D on macOS; Backspace, Delete or Ctrl+Shift+D on Windows.
         Action::Discard => match platform {
             Os::Linux => Chords::of([
@@ -620,6 +626,25 @@ mod tests {
                 assert_eq!(held.press_on(platform), None);
             }
         }
+        // ⌥ held over a list's Stage or Unstage button: Stage All or Unstage All (R8.2), on
+        // both platforms, and with nothing else held only.
+        for platform in PLATFORMS {
+            let Some((key, code, modifiers)) = chords(Action::StageOrUnstageAll, platform)
+                .iter()
+                .find_map(|c| c.press_hold())
+            else {
+                panic!("Stage All has no press on {platform:?}");
+            };
+            let mut held = HeldKeys::default();
+            held.heard(&KeyboardEventData::new(key, code, modifiers), true);
+            assert_eq!(held.press_on(platform), Some(Action::StageOrUnstageAll));
+            held.heard(&key_of(NamedKey::Shift, Modifiers::ALT), true);
+            assert_eq!(
+                held.press_on(platform),
+                None,
+                "⌥⇧ is no press of the table's"
+            );
+        }
         assert_eq!(
             chords(Action::NextChange, Os::Linux)
                 .first()
@@ -636,6 +661,11 @@ mod tests {
     }
 
     const PLATFORMS: [Os; 2] = [Os::Linux, Os::MacOs];
+
+    /// A named key going down with `modifiers` already held.
+    fn key_of(named: NamedKey, modifiers: Modifiers) -> KeyboardEventData {
+        KeyboardEventData::new(Key::Named(named), Code::Unidentified, modifiers)
+    }
 
     fn keyed(held: Modifiers, named: NamedKey) -> Chord {
         Chord {
@@ -736,7 +766,7 @@ mod tests {
                 ),
                 (
                     Action::StageOrUnstageAll,
-                    vec![placed(command | alt | shift, Code::KeyS)],
+                    vec![placed(command | alt | shift, Code::KeyS), pressed(alt)],
                     Scope::LocalChanges,
                 ),
                 (
@@ -1361,8 +1391,11 @@ mod tests {
                 Action::Discard,
                 Action::ShowLostCommits,
             ] {
-                for chord in chords(action, platform).iter() {
-                    let (key, code, held) = chord.key_press().unwrap();
+                // Stage All's press, ⌥ over a list's button, is no key a field hears.
+                for (key, code, held) in chords(action, platform)
+                    .iter()
+                    .filter_map(|c| c.key_press())
+                {
                     assert!(
                         !matches!(
                             field(Some(FieldScope::CommitBox), key, code, held),

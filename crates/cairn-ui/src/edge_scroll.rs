@@ -11,6 +11,13 @@
 //! it scrolls out, and its listeners with it, so the list's container — which stays mounted —
 //! hears every move and the release through global pointer listeners ([`EdgeScroll::on`]),
 //! and the view that starts a drag says so ([`EdgeScroll::begin`]).
+//!
+//! **A release the window never hears.** A drag carried out of the window and released there
+//! may never be reported: the toolkit forgets the button as the pointer leaves the window
+//! (`freya-winit`'s `CursorLeft`), and whether the release arrives depends on the platform's
+//! pointer grab. So a drag also ends when the button goes down again while it is still held —
+//! a press can only start once the last one was released, wherever that was — and when the
+//! window loses focus (phase 06's QA item 16).
 
 use std::time::Duration;
 
@@ -61,6 +68,8 @@ pub struct EdgeScroll {
     viewport: State<(f32, f32)>,
     /// The ticking task, while one runs.
     ticking: State<Option<TaskHandle>>,
+    /// Whether the button is down, as the window last heard it.
+    held: State<bool>,
 }
 
 impl std::fmt::Debug for EdgeScroll {
@@ -77,13 +86,23 @@ pub fn use_edge_scroll(controller: ScrollController) -> EdgeScroll {
     let pointer = use_state(|| 0.0_f32);
     let viewport = use_state(|| (0.0_f32, 0.0_f32));
     let ticking = use_state(|| None::<TaskHandle>);
-    EdgeScroll {
+    let held = use_state(|| false);
+    let edge = EdgeScroll {
         controller,
         dragging,
         pointer,
         viewport,
         ticking,
-    }
+        held,
+    };
+    // A window that loses focus ends the drag: its release may be heard by another window.
+    use_side_effect(move || {
+        if !*Platform::get().is_app_focused.read() && *dragging.peek() {
+            let mut edge = edge;
+            edge.end();
+        }
+    });
+    edge
 }
 
 impl EdgeScroll {
@@ -120,7 +139,17 @@ impl EdgeScroll {
                 edge.moved(e.global_location().y as f32);
             }
         })
+        .on_global_pointer_down(move |_: Event<PointerEventData>| {
+            // Down while still held: the last release was made where the window could not hear
+            // it, so the drag it would have ended is over. A drag begun by this press itself —
+            // a row's down, heard before this global one — is not, since the button was up.
+            if *edge.held.peek() && edge.is_dragging() {
+                edge.end();
+            }
+            edge.held.set(true);
+        })
         .on_global_pointer_press(move |_: Event<PointerEventData>| {
+            edge.held.set(false);
             if edge.is_dragging() {
                 edge.end();
             }

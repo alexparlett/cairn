@@ -39,6 +39,9 @@ pub(crate) enum Glyph {
     Open,
     /// The comparison's base and tip swapped (Fork's swap-direction control, Finding 7).
     Swap,
+    /// Fork's Stage All in Local Changes' Unstaged heading: a double chevron pointing down,
+    /// into Staged (staging-and-commit R8.2).
+    StageAll,
 }
 
 impl Glyph {
@@ -56,6 +59,7 @@ impl Glyph {
                 .color(colour)
                 .into(),
             Self::Open => chevron(colour, Pointing::Down).into(),
+            Self::StageAll => doubled(colour, Pointing::Down).into(),
             Self::IgnoreWhitespace => rect()
                 .width(Size::px(12.))
                 .height(Size::px(5.))
@@ -139,6 +143,15 @@ enum Pointing {
     Up,
     Down,
     Right,
+}
+
+/// Two chevrons, one over the other.
+fn doubled(colour: Color, pointing: Pointing) -> Rect {
+    rect()
+        .cross_align(Alignment::Center)
+        .spacing(-2.)
+        .child(chevron(colour, pointing))
+        .child(chevron(colour, pointing))
 }
 
 /// A chevron: a square's two sides, turned an eighth of the way round.

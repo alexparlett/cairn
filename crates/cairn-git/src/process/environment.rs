@@ -108,8 +108,10 @@ const READ_ONLY: &[(&str, &str)] = &[
 /// those in a shell rather than in `core.sshCommand` will find Cairn ignores
 /// them, and that is the cost of never inheriting a git override. The
 /// exceptions are named one by one: `GIT_SSL_CAINFO` and `GIT_SSL_CAPATH`,
-/// which name a CA bundle and nothing else (issue #18), and the four identity
-/// variables of staging-and-commit L26, which name who a commit is by. Never
+/// which name a CA bundle and nothing else (issue #18), and `GIT_AUTHOR_NAME`,
+/// `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` — with
+/// `EMAIL`, which is no `GIT_*` name, the five identity variables of
+/// staging-and-commit L26, which name who a commit is by. Never
 /// the date variables (`GIT_AUTHOR_DATE`, `GIT_COMMITTER_DATE`): a stale one
 /// left in a shell would stamp every commit Cairn makes with it (R5.2).
 /// `GIT_EDITOR` and `EDITOR` are not inherited either: [`ALWAYS`] pins the

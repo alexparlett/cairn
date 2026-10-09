@@ -118,8 +118,12 @@ is pinned against real git on the host's git and, through
   commit's tree: a file at the same path is overwritten, by its size; a directory where the
   commit holds a file is removed with every untracked file under it, and a nested repository
   where the commit holds anything is removed whole (`ChangeLoss::Removed`, its files and bytes
-  counted on disk); and how many untracked files stay. The words for a removed directory or
-  repository are interim, with the user (phase 10's QA, held item A). It is
+  counted on disk); and how many untracked files stay. The prompt (the user's decision A,
+  2026-10-09) names the changed files as the files prompt does, then, in a sentence of its own,
+  each directory and nested repository deleted by its path — "Deleted because the branch has a
+  file there: folder d/ (4 untracked files) and repository vendor/lib/ with its history" — the
+  first three named and the rest counted; its title is "Discard changes", its button "Discard
+  Changes and Check Out" (`a_directory_or_a_nested_repository_in_the_way_is_named_lost`). It is
   refused before any prompt during a merge, rebase, `git am`, cherry-pick or revert, for a
   conflicted path and for a submodule's change (`a_discarding_checkout_is_refused_where_it_cannot_count_the_loss`),
   computed again and compared before git runs, any difference refusing with the path it moved

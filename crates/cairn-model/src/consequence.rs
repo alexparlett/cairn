@@ -318,7 +318,8 @@ impl Consequence {
                 inode: _,
             } => format!(
                 "Remove {}? It was last changed {} ago and holds {}. Another program may still \
-                 own it: removing a lock a running git holds can corrupt the repository.",
+                 own it: removing a lock a running git holds can corrupt the index. You can't \
+                 undo this action.",
                 quoted(path.as_os_str().as_encoded_bytes()),
                 elapsed(read_at.duration_since(*modified).unwrap_or(Duration::ZERO)),
                 size(*bytes)
@@ -1686,7 +1687,7 @@ mod tests {
             consequence.prompt(),
             "Remove /work/repo/.git/index.lock? It was last changed 3 minutes ago and holds 0 \
              bytes. Another program may still own it: removing a lock a running git holds can \
-             corrupt the repository."
+             corrupt the index. You can't undo this action."
         );
         assert_eq!(consequence.action(), "Remove index.lock");
         assert_eq!(lock("/", Duration::ZERO, 0).action(), "Remove /");

@@ -3,6 +3,29 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 09 closed: the user's decisions on the four open items
+
+The user decided the four items still open from phase 09 (2026-10-09, relayed by the
+coordinator), each kept as built. Fork's evidence, gathered for the decisions, is a new record:
+`docs/research/staging-and-commit/fork-merge-and-amend-evidence.md`, with two open questions the
+owner can check on Fork.
+
+1. **The subject is required** (Fork: Tracker #1490; VENDOR TrackerWin #637). PRD R10.1 amended
+   with a dated note.
+2. **A merge in progress commits with nothing staged, concluding the merge** (Fork: Tracker #90,
+   fixed in 1.0.57, October 2017). PRD R10.1's "disabled while nothing is staged" amended with
+   the merge exception and a dated note.
+3. **`MERGE_MSG` fills an empty draft once per merge; a cleared message stays empty** (Fork does
+   not document a cleared message; the vendor's rule in Tracker #61 — an auto-filled message is
+   replaced only "until you edited the message" — points this way, inferred). PRD R10.8 amended
+   with a dated note.
+4. **Amend is still offered when amend's staged list cannot be read**, the box saying the lists
+   show what is staged against `HEAD` (Fork: no evidence; Fork would likely lazy-fetch, which
+   Cairn's reads never do). Recorded in PRD R10.3 and `docs/systems/local-changes.md`.
+
+`docs/design/ui.md` "The commit box" states all four. No code changed: each is as built at
+18fea48, whose full gate is green. Phase 09 is done.
+
 ## 2026-10-09 — phase 09 QA, adjudicated and fixed; the user's decision on the Amend button
 
 The coordinator's QA adjudication and the user's decision (2026-10-09, relayed by the

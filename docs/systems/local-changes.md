@@ -650,8 +650,11 @@ typed, the arrows are the editor's.
   the lists (the user's decision, 2026-10-07): the layout menu and its
   collapse-all chevron (#71), Hide Untracked Files (#70), Show Ignored Files (#62) and the eye
   (Fork's side-by-side quick look, #35) are not drawn.
-- The commit box: the subject is required, as Fork's is, and a merge in progress commits with
-  nothing staged; Fork's limit setting, monospace toggle, Wrap paragraph at ruler, spell
+- The commit box: the subject is required, as Fork's is, a merge in progress commits with nothing
+  staged, concluding the merge, as Fork's does, `MERGE_MSG` fills an empty draft once per merge so a
+  message cleared stays empty, and an amend whose staged list cannot be read is still offered (each
+  the user's decision, 2026-10-09; evidence in
+  `docs/research/staging-and-commit/fork-merge-and-amend-evidence.md`); Fork's limit setting, monospace toggle, Wrap paragraph at ruler, spell
   checking, autocomplete, commit template, `prepare-commit-msg` and AI drafts, sign-off, Commit
   and Push and the ⌘⇧A amend chord are not built (Commit and Push waits on push, L9). The ruler
   stands at column 72 of IBM Plex Mono's advance after the field's margin. Fork shows a commit's

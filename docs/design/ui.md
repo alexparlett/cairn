@@ -200,8 +200,9 @@ Fork's, under the diff: a subject field with a characters-left counter — grey 
 to Fork's soft limit of 50, then negative, red past 70 — and a Recent Commit
 Messages menu at its right; a multi-line description with a ruler at column 72;
 `Amend` at the left; and `Commit N Files` at the right, which ⌘Return or Ctrl+Enter
-presses from either field without typing a newline, disabled while nothing is
-staged unless amending. The limits are Fork's defaults; a configurable limit is
+presses from either field without typing a newline, disabled with an empty
+subject, as Fork's is, and while nothing is staged unless amending or concluding a
+merge. The limits are Fork's defaults; a configurable limit is
 filed. Recent messages are the latest 10 commits on the current branch, read from
 history, as Fork's are (Tracker #720), newest first, and never stored; ↑/↓ in an
 empty or recalled subject walks them, and a recalled message fills both fields.
@@ -210,8 +211,9 @@ Amend's toggle.
 
 With a merge in progress the box fills an empty draft with git's merge message as
 git wrote it — its `# Conflicts:` comment lines left visible for the user to
-delete, since a message given with `-F` keeps them — and commits the merge, as
-Fork's does. During a rebase, `git am`, a cherry-pick or a revert the box is
+delete, since a message given with `-F` keeps them — once per merge, so a message
+the user clears stays empty, and commits the merge, as Fork's does, even with
+nothing staged. During a rebase, `git am`, a cherry-pick or a revert the box is
 disabled and names the operation in progress, since continuing one is that
 operation's own design.
 
@@ -219,8 +221,11 @@ Ticking Amend fills an empty draft with `HEAD`'s message and lists `HEAD`'s file
 among the staged, the staged list then taken against `HEAD`'s parent; the draft the
 user had returns when Amend is unticked, and Amend unticks itself after the commit.
 Amend is disabled where there is nothing to amend — an unborn branch — and while a
-merge is in progress.
-An amend is confirmed by its button, which reads `Amend <short id>` above
+merge is in progress. Where amend's staged list cannot be read — a partial clone's
+missing blob, which Cairn's reads never fetch — the amend is still offered, and the
+box says the lists show what is staged against `HEAD`.
+An amend is confirmed by its button, or by the commit chord, which presses it; the
+button reads `Amend <short id>` above
 "Replaces <short id> '<subject>'. The old commit stays in Show Lost Commits." —
 that visible text is the `Confirmed` prompt. A dialog asks first only when a remote
 already has `HEAD`: "<short id> is already on origin/main. Sharing the amended

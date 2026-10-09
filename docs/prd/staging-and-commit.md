@@ -373,14 +373,22 @@ literally.
 
 - R10.1 Under Local Changes' diff: a subject field with a characters-left counter
   (soft at 50, red past 70), a multi-line description with a ruler at column 72,
-  `Amend`, and `Commit N Files`, disabled while nothing is staged and not
-  amending. `Amend` is disabled with no `HEAD` and while a merge is in progress
-  (R6.3).
+  `Amend`, and `Commit N Files`, disabled with an empty subject, and while nothing
+  is staged unless amending or concluding a merge in progress (R10.8). `Amend` is
+  disabled with no `HEAD` and while a merge is in progress (R6.3). (Amended
+  2026-10-09, the user's decisions on phase 09's QA: the subject is required, as
+  Fork's is — Tracker #1490, TrackerWin #637 — and a merge in progress commits with
+  nothing staged, concluding the merge, as Fork's has since 1.0.57 — Tracker #90;
+  evidence in `docs/research/staging-and-commit/fork-merge-and-amend-evidence.md`.)
 - R10.2 Recent Commit Messages (R6.7) as a menu beside the subject and ↑/↓ in an
   empty or recalled subject; a recalled message fills both fields.
 - R10.3 Ticking `Amend` fills an empty draft with `HEAD`'s message and shows
   R6.3's staged list; the draft the user had is kept and returns when Amend is
-  unticked; Amend unticks itself after the commit.
+  unticked; Amend unticks itself after the commit. Where amend's staged list cannot
+  be read — a partial clone's missing blob, which Cairn's reads never fetch — the
+  amend is still offered, and the box says the lists show what is staged against
+  `HEAD`. (Added 2026-10-09, the user's decision on phase 09's QA; Fork has no
+  evidence here and would likely lazy-fetch.)
 - R10.4 A running commit is drawn as busy with its elapsed time and a Cancel; the
   hooks' output streams into the operation log (R12).
 - R10.5 A failed commit opens Fork's `Git Error` dialog — the command and git's
@@ -404,13 +412,17 @@ literally.
   reflog, never promised unconditionally.)
 - R10.7 The draft survives refreshes, a failed hook and Amend's toggling, for the
   life of the window.
-- R10.8 With a merge in progress (R6.9) the box fills an empty draft with git's
+- R10.8 With a merge in progress (R6.9) the box fills an empty draft, once per
+  merge — a message the user clears stays empty — with git's
   `MERGE_MSG` as git wrote it — its `# Conflicts:` comment lines included, left
   visible for the user to delete by hand, since under `-F` and the default cleanup
   they are committed if left — and its commit is the merge commit, as Fork's is
   (L25). During a rebase, `git am`, a cherry-pick or a revert the box is disabled and
   names the operation in progress. (Comment lines kept visible and `git am` added
-  2026-10-09, the user's decisions E and C.)
+  2026-10-09, the user's decisions E and C. Once per merge added 2026-10-09, the
+  user's decision on phase 09's QA: Fork does not document a cleared message; its
+  vendor's rule that an auto-filled message is replaced only until the user edits
+  it, Tracker #61, points this way — inferred.)
 
 ### R11 — Show Lost Commits (L13)
 

@@ -17,9 +17,9 @@ user's decisions 6, 12, 13 and 14 (2026-10-09) applied, full gate green. Phase 0
 Changes acts on files) done in packet mode: QA adjudicated, fixes and the user's decisions of
 2026-10-09 applied, full gate green. Phase 08 (the diff's staging gesture, and a
 multi-selection's diffs drawn together) done in packet mode: QA adjudicated, fixes and the
-user's decisions (2026-10-09) applied, full gate green. Phase 09 (the commit box) built in
-packet mode: QA adjudicated, its fixes and the user's decision on the Amend button (2026-10-09)
-landed, four items still with the user. Phases 10-12 not started.**
+user's decisions (2026-10-09) applied, full gate green. Phase 09 (the commit box) done in
+packet mode: QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green
+at 18fea48. Phases 10-12 not started.**
 
 ## Locked decisions
 
@@ -428,10 +428,13 @@ Phase 09 (`docs/systems/local-changes.md`, "The commit box"):
 - **Phase 12, from phase 09's QA** (item 8): a real-git end-to-end test of a commit a hook fails,
   its skip, and the next commit running its hooks, on the merge bar's C14 checklist (written into
   phase 12's step 2).
-- **Still with the user** (progress.md, phase 09; unchanged, as built): amend offered when amend's
-  staged list cannot be read; the subject required; a merge commits with nothing staged;
-  `MERGE_MSG` fills an empty draft once per merge. Items 1-2 (where the amend's token is built; no
-  chord confirms an amend) are settled by the user's decision of 2026-10-09.
+- **Decided by the user (2026-10-09), each kept as built** (progress.md, phase 09 closed): the
+  subject required; a merge committing with nothing staged; `MERGE_MSG` filling an empty draft
+  once per merge; amend offered when amend's staged list cannot be read — PRD R10.1, R10.3 and
+  R10.8 amended, `docs/design/ui.md` and `local-changes.md` updated, evidence in
+  `docs/research/staging-and-commit/fork-merge-and-amend-evidence.md`. Items 1-2 (where the
+  amend's token is built; no chord confirms an amend) were settled by the user's decision on the
+  Amend button the same day.
 
 ## Carried forward from phase 08 (owned by the phase named)
 
@@ -724,7 +727,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 06 render foundations | done — QA adjudicated, fixes and the user's decisions 6, 12, 13 and 14 (2026-10-09) applied, full gate green |
 | 07 Local Changes actions | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green |
 | 08 diff gesture | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green |
-| 09 commit box | QA fixes landed; four items still with the user |
+| 09 commit box | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green at 18fea48 |
 | 10 lost commits | not started |
 | 11 activity and measured | not started |
 | 12 QA | not started |

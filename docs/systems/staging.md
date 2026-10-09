@@ -97,8 +97,10 @@ is pinned against real git on the host's git and, through
   `crates/cairn-git/tests/diff/branch.rs`). It invalidates the refs, so the lane reads
   everything again after it, however it ended. Whether git takes a name is asked first, by
   `Repository::branch_name` — `git check-ref-format --branch` (`reads::branch_name`), git's
-  reason kept for a name it refuses, then the ref looked up by gix for a name a branch has —
-  and the read writes nothing
+  reason kept for a name it refuses, then the ref, each proper prefix of it and the namespace
+  under it looked up by gix, for a name a branch has or one a branch's directory holds, refused
+  in git's words (`a_name_clashing_with_a_branchs_directory_is_refused_before_git_runs`) — and
+  the read writes nothing
   (`a_branch_name_is_checked_by_gits_rules_and_the_check_writes_nothing`).
 - **A branch checked out as it is created**, keeping the changes ("Don't change"), is `git
   checkout -q -b <name> <commit> --`: the changes carried over, or git refusing where one would
@@ -110,16 +112,25 @@ is pinned against real git on the host's git and, through
   the commit, `HEAD`, every tracked path with a staged or an unstaged change (a rename's source
   too), each with its kind, its index entry and its bytes on disk, and its staged and unstaged
   lines together as git's numstat counts them (`reads::change_lines`: `git diff-index --cached
-  --numstat` and `git diff-files --numstat`); every untracked file at a path the commit's tree
-  holds, which `checkout -f` overwrites, by its size; and how many untracked files stay. It is
+  --numstat` and `git diff-files --numstat`); what `checkout -f` does to the untracked files,
+  read from `git ls-files --others --exclude-standard` (`reads::untracked`, so
+  `status.showUntrackedFiles=no` hides nothing) and each path's every prefix looked up in the
+  commit's tree: a file at the same path is overwritten, by its size; a directory where the
+  commit holds a file is removed with every untracked file under it, and a nested repository
+  where the commit holds anything is removed whole (`ChangeLoss::Removed`, its files and bytes
+  counted on disk); and how many untracked files stay. The words for a removed directory or
+  repository are interim, with the user (phase 10's QA, held item A). It is
   refused before any prompt during a merge, rebase, `git am`, cherry-pick or revert, for a
   conflicted path and for a submodule's change (`a_discarding_checkout_is_refused_where_it_cannot_count_the_loss`),
   computed again and compared before git runs, any difference refusing with the path it moved
   at (`a_discarding_checkout_refuses_what_changed_since_its_confirmation`), and its run loses
   exactly what it named (`a_discarding_checkout_names_every_loss_and_then_loses_exactly_those`,
-  `an_untracked_file_in_the_way_is_named_overwritten`). An ignored file at a path the commit
-  holds is overwritten by any checkout, kept or discarding, as the user's own `git checkout`
-  does: not counted.
+  `an_untracked_file_in_the_way_is_named_overwritten`,
+  `an_untracked_file_in_the_way_is_named_whatever_status_shows`,
+  `untracked_files_under_a_directory_the_commit_holds_as_a_file_are_named_lost`,
+  `a_nested_repository_the_commit_holds_a_file_at_is_named_lost`). An ignored file at a path
+  the commit holds, and an ignored directory where it holds a file, are overwritten or removed
+  by any checkout, kept or discarding, as the user's own `git checkout` does: not counted.
 - **Every path is literal**: a file named `*.txt` is staged alone, and `git clean`
   of `st*` leaves `stx` (`every_path_is_read_literally_never_as_a_pattern`).
 - **Every verb is silent on success**, so one left running by a second close, its

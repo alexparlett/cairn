@@ -951,22 +951,34 @@ The way back to a lost commit — or to any — is Fork's Create Branch dialog
 user's decisions of 2026-10-09; evidence
 `docs/research/staging-and-commit/fork-create-branch-evidence.md`), opened by `New Branch…` in
 any commit row's context menu, a lost row's too, a stash's row offering none
-(`HistoryList::on_new_branch`, `every_commit_rows_menu_offers_new_branch_at_its_commit`):
+(`HistoryList::on_new_branch`, `every_commit_rows_menu_offers_new_branch_at_its_commit`), or at
+`HEAD` by Fork's New Branch chord, Ctrl+Shift+B (⇧⌘B on macOS), heard anywhere
+(`Action::NewBranch`, `create_branch::open_at_head`): `HEAD`'s commit as the last refresh read
+it, its subject the row's where `History::labelled_position` finds it loaded, nothing opened
+before the refs are read, on an unborn `HEAD`, or over a dialog already up
+(`the_new_branch_chord_opens_create_branch_at_head`):
 
-- "Create branch at:" the commit's glyph, short id and subject, read only; "Branch name:" (the
+- Under the title, Fork's line "Use '/' as a path separator to create folders"; "Create branch
+  at:" the commit's glyph, short id and subject, read only; "Branch name:" (the
   name a failed create left, or empty); "Check out after create", sticky for the session (issue
   #89 will keep it across restarts); Cancel and "Create", "Create and Checkout" while ticked
   (`the_dialog_is_forks_its_button_following_the_box`).
 - Each change of the name asks the engine (`Request::CheckBranchName`, the branch-name lane on
   the local lane, `Repository::branch_name`): the button is enabled only for an answer of
-  "free" to the text shown, and a refusal is said beside the buttons — "Branch <name> already
-  exists", or git's reason (`only_a_ready_name_is_created_and_every_change_is_reported`,
+  "free" to the text shown, and a refusal is said in the buttons' row, left of them, behind
+  the warning triangle (`RefGlyph::Gone`) — "Branch <name> already exists", git's reason for a
+  name it does not take, or git's words for a name a branch's directory holds (`'refs/heads/foo/bar'
+  exists; cannot create 'refs/heads/foo'`, either way round)
+  (`a_refusal_is_said_beside_the_buttons_behind_the_warning_glyph`,
+  `a_name_clashing_with_a_branchs_directory_is_refused_before_git_runs`,
+  `only_a_ready_name_is_created_and_every_change_is_reported`,
   `new_branch_opens_the_dialog_and_creates_only_a_name_the_engine_said_is_free`,
   `create_branchs_reads_are_answered_on_the_lane`).
 - "Local changes:" is drawn while the box is ticked and the working tree's status lists a
   staged, unstaged or conflicted change (its first entry, since `git status` lists those before
-  untracked paths); each opening starts on "Don't change"
-  (`check_out_after_create_is_sticky_and_local_changes_appear_only_over_changes`).
+  untracked paths, whatever their names); each opening starts on "Don't change"
+  (`check_out_after_create_is_sticky_and_local_changes_appear_only_over_changes`,
+  `local_changes_are_offered_over_a_change_and_never_over_untracked_files_alone`).
 - The writes are the local lane's: `LocalWrite::CreateBranch`,
   `LocalWrite::CreateBranchAndCheckout`, and — for "Discard" — the count asked first
   (`Request::CheckoutConsequence`, the checkout-count lane), the dialog closing on its answer

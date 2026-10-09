@@ -34,4 +34,4 @@ pub use error::{CheckoutRefusal, CommitRefusal, Error, Refusal, RefusedWrite};
 pub use history::{HistoryCursor, HistoryOrder, HistoryPage, HistoryRequest, HistorySession};
 pub use recent_messages::RECENT_MESSAGES;
 pub use refs::{RefsCost, RefsRead};
-pub use repository::{CLOSE_BOUND, Repository, SharedRepository};
+pub use repository::{CLOSE_BOUND, CommandMark, Repository, SharedRepository};

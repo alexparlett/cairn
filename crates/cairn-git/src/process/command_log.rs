@@ -8,6 +8,7 @@
 //! the askpass token an invocation carried cannot reach it.
 
 use std::collections::VecDeque;
+use std::thread::ThreadId;
 
 use cairn_model::CommandRecord;
 
@@ -32,10 +33,20 @@ pub(crate) const LOG_ENTRIES: usize = 1000;
 /// defaults ([`CommandLog::push`]).
 pub(crate) const LOG_BYTES: usize = 4 * 1024 * 1024;
 
-/// The records, oldest first, and the bytes they hold.
+/// Where an invocation was asked from: the thread that built it, and its place in the order
+/// invocations were built in, in its repository. Kept beside a record, never in it, so the
+/// record stays exactly what R8.1 lists; it is what lets an operation name the `git` it ran
+/// itself among what other threads ran meanwhile (staging-and-commit R12.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Origin {
+    pub(crate) thread: ThreadId,
+    pub(crate) order: u64,
+}
+
+/// The records, oldest first, each with its origin, and the bytes they hold.
 #[derive(Debug, Default)]
 pub(crate) struct CommandLog {
-    records: VecDeque<CommandRecord>,
+    records: VecDeque<(Origin, CommandRecord)>,
     bytes: usize,
 }
 
@@ -45,12 +56,12 @@ impl CommandLog {
     /// fit before it is kept: its stderr keeps its end, then its arguments
     /// keep their start, with one last argument saying how many were not
     /// kept — never cut silently.
-    pub(crate) fn push(&mut self, mut record: CommandRecord) {
+    pub(crate) fn push(&mut self, origin: Origin, mut record: CommandRecord) {
         fit(&mut record, LOG_BYTES);
         self.bytes += record.held_bytes();
-        self.records.push_back(record);
+        self.records.push_back((origin, record));
         while self.records.len() > LOG_ENTRIES || self.bytes > LOG_BYTES {
-            let Some(oldest) = self.records.pop_front() else {
+            let Some((_, oldest)) = self.records.pop_front() else {
                 break;
             };
             self.bytes -= oldest.held_bytes();
@@ -59,7 +70,20 @@ impl CommandLog {
 
     /// Every record kept, oldest first.
     pub(crate) fn records(&self) -> Vec<CommandRecord> {
-        self.records.iter().cloned().collect()
+        self.records
+            .iter()
+            .map(|(_, record)| record.clone())
+            .collect()
+    }
+
+    /// The records kept of invocations `thread` built at or after `order`, oldest first by
+    /// when they were over.
+    pub(crate) fn built_on_since(&self, thread: ThreadId, order: u64) -> Vec<CommandRecord> {
+        self.records
+            .iter()
+            .filter(|(origin, _)| origin.thread == thread && origin.order >= order)
+            .map(|(_, record)| record.clone())
+            .collect()
     }
 }
 
@@ -119,6 +143,13 @@ mod tests {
         }
     }
 
+    fn origin(n: usize) -> Origin {
+        Origin {
+            thread: std::thread::current().id(),
+            order: n as u64,
+        }
+    }
+
     fn held(log: &CommandLog) -> usize {
         log.records().iter().map(CommandRecord::held_bytes).sum()
     }
@@ -130,7 +161,7 @@ mod tests {
     fn the_log_keeps_the_newest_log_entries_records() {
         let mut log = CommandLog::default();
         for n in 0..LOG_ENTRIES + 7 {
-            log.push(record(n, String::new()));
+            log.push(origin(n), record(n, String::new()));
         }
         let records = log.records();
         assert_eq!(records.len(), LOG_ENTRIES);
@@ -151,7 +182,7 @@ mod tests {
         let tail = "x".repeat(256 * 1024);
         let mut log = CommandLog::default();
         for n in 0..40 {
-            log.push(record(n, tail.clone()));
+            log.push(origin(n), record(n, tail.clone()));
             assert!(log.bytes <= LOG_BYTES, "{} bytes held", log.bytes);
         }
         let records = log.records();
@@ -182,7 +213,7 @@ mod tests {
             1,
             "the overage is even, so the cut lands on a boundary and this decides nothing"
         );
-        log.push(loud);
+        log.push(origin(0), loud);
         let kept = &log.records()[0];
         assert!(kept.held_bytes() <= LOG_BYTES);
         assert!(kept.stderr.ends_with("the end."));
@@ -192,7 +223,7 @@ mod tests {
         long.arguments = (0..LOG_BYTES / 1000 + 10)
             .map(|n| format!("{n:01000}"))
             .collect();
-        log.push(long);
+        log.push(origin(1), long);
         let records = log.records();
         let kept = records.last().unwrap();
         assert!(kept.held_bytes() <= LOG_BYTES, "{}", kept.held_bytes());

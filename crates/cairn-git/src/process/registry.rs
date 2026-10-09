@@ -35,7 +35,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use cairn_model::{CommandExit, CommandRecord};
 
-use super::command_log::CommandLog;
+use super::command_log::{CommandLog, Origin};
 use super::group::{Group, TERMINATION_GRACE};
 use super::runner::DRAIN_BOUND;
 
@@ -68,7 +68,14 @@ pub(crate) struct Processes {
     /// end the moment it enters.
     closing: AtomicBool,
     log: Mutex<CommandLog>,
+    /// The next invocation's place in the order invocations are built in.
+    built: AtomicU64,
 }
+
+/// A place in a repository's order of invocations: every invocation built after it was taken
+/// is at or after it ([`crate::Repository::command_mark`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommandMark(u64);
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -81,9 +88,19 @@ impl Processes {
     }
 
     /// How many invocations are running now.
-    #[cfg(test)]
     pub(crate) fn running(&self) -> usize {
         lock(&self.running).len()
+    }
+
+    /// Where the order of invocations stands now.
+    pub(crate) fn mark(&self) -> CommandMark {
+        CommandMark(self.built.load(Ordering::Acquire))
+    }
+
+    /// The records of the invocations this thread built since `mark` that are over, oldest
+    /// first by when they ended.
+    pub(crate) fn built_here_since(&self, mark: CommandMark) -> Vec<CommandRecord> {
+        lock(&self.log).built_on_since(std::thread::current().id(), mark.0)
     }
 
     /// Asks every running invocation to end — `SIGTERM` to its group now, and
@@ -122,9 +139,9 @@ impl Processes {
     /// has it, and whoever sees the registry empty sees the log complete. The
     /// lock order is the registry's, then the log's; nothing takes them the
     /// other way round.
-    fn leave(&self, id: Option<u64>, record: CommandRecord) {
+    fn leave(&self, id: Option<u64>, origin: Origin, record: CommandRecord) {
         let mut running = lock(&self.running);
-        lock(&self.log).push(record);
+        lock(&self.log).push(origin, record);
         if let Some(id) = id {
             running.remove(&id);
             drop(running);
@@ -144,6 +161,7 @@ pub(super) struct Registration {
     started: SystemTime,
     clock: Instant,
     finished: bool,
+    origin: Origin,
 }
 
 impl Registration {
@@ -162,6 +180,10 @@ impl Registration {
             started: SystemTime::now(),
             clock: Instant::now(),
             finished: false,
+            origin: Origin {
+                thread: std::thread::current().id(),
+                order: processes.built.fetch_add(1, Ordering::AcqRel),
+            },
         }
     }
 
@@ -196,7 +218,7 @@ impl Registration {
             cancelled,
             stderr,
         };
-        self.processes.leave(self.id.take(), record);
+        self.processes.leave(self.id.take(), self.origin, record);
     }
 }
 
@@ -644,6 +666,56 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(shared.command_log().len(), 2);
+    }
+
+    /// staging-and-commit R12.1: what one thread ran since its mark is its own invocations,
+    /// not another thread's run meanwhile, nor its own from before the mark; and the registry
+    /// counts what runs on any thread. Caught by: the log's tail handed out whole, a filter by
+    /// time alone, or a running count of one thread's.
+    #[test]
+    fn an_operations_commands_are_what_its_thread_built_since_its_mark() {
+        let quick = stub("echo \"ran $1\" >&2; exit 0");
+        let shared = SharedRepository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let git = discover_retrying(quick.environment()).unwrap();
+        let run = |worker: &Repository, name: &str| {
+            git.read_invocation()
+                .in_repository(worker)
+                .arg(name)
+                .start()
+                .unwrap()
+                .finish(&CancelSignal::new(), |_| {}, |_| {})
+                .unwrap();
+        };
+        let lane = shared.to_worker();
+        run(&lane, "before");
+        let mark = lane.command_mark();
+        run(&lane, "mine");
+        std::thread::scope(|threads| {
+            threads.spawn(|| run(&shared.to_worker(), "theirs"));
+        });
+        run(&lane, "mine-too");
+        let mine: Vec<_> = lane
+            .commands_since(mark)
+            .into_iter()
+            .map(|record| record.arguments.concat())
+            .collect();
+        assert_eq!(mine, ["mine", "mine-too"]);
+        assert_eq!(shared.command_log().len(), 4);
+
+        let hanging = stub(HANGING);
+        let hung = discover_retrying(hanging.environment()).unwrap();
+        assert_eq!(lane.running_invocations(), 0);
+        let invocation = hung
+            .read_invocation()
+            .in_repository(&lane)
+            .arg("hang")
+            .start()
+            .unwrap();
+        std::thread::scope(|threads| {
+            threads.spawn(|| assert_eq!(shared.to_worker().running_invocations(), 1));
+        });
+        drop(invocation);
+        assert!(eventually(|| lane.running_invocations() == 0));
     }
 
     /// R6.3, the engine half: ending every invocation reaches those being

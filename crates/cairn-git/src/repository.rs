@@ -8,8 +8,8 @@ use cairn_model::CommandRecord;
 use crate::Error;
 use crate::ops::{GitBinary, GitVersion};
 use crate::ownership::{Asked, Identity};
-pub use crate::process::CLOSE_BOUND;
 use crate::process::Processes;
+pub use crate::process::{CLOSE_BOUND, CommandMark};
 
 /// The rule [`SharedRepository::discover`] applies: git 2.45's, the newest band of
 /// `safe.bareRepository`'s rule, whose default is `all`.
@@ -324,6 +324,27 @@ impl Repository {
     /// The registry and log every handle on this repository shares.
     pub(crate) fn processes(&self) -> &Arc<Processes> {
         &self.processes
+    }
+
+    /// Where the order of `git` invocations in this repository stands now: what
+    /// [`Repository::commands_since`] counts from.
+    pub fn command_mark(&self) -> CommandMark {
+        self.processes.mark()
+    }
+
+    /// The command log's records of the `git` invocations this thread built since `mark` that
+    /// are over, oldest first: what one operation run on this thread ran, whatever other
+    /// threads ran in the repository meanwhile (staging-and-commit R12.1). As far back as the
+    /// log keeps.
+    pub fn commands_since(&self, mark: CommandMark) -> Vec<CommandRecord> {
+        self.processes.built_here_since(mark)
+    }
+
+    /// How many `git` invocations Cairn is running in this repository now, on any thread —
+    /// reads and writes alike. A process git itself detached from its group (auto-maintenance,
+    /// the fsmonitor daemon) is not Cairn's and is not counted.
+    pub fn running_invocations(&self) -> usize {
+        self.processes.running()
     }
 }
 

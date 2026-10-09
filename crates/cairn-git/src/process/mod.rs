@@ -55,6 +55,6 @@ pub use binary::{GitBinary, GitVersion};
 pub(crate) use cli::Write;
 pub use environment::GitEnvironment;
 pub(crate) use group::KillHandle;
-pub use registry::CLOSE_BOUND;
 pub(crate) use registry::Processes;
+pub use registry::{CLOSE_BOUND, CommandMark};
 pub(crate) use runner::Invocation;

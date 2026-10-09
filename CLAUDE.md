@@ -675,10 +675,14 @@ Project invariants:
   impl in `ops/mod.rs`, excused by that place and not by its name), and takes it
   as exactly one by-value parameter, never behind a reference, an `Option`, a
   bound or in the return; every row names a function that exists; no `pub`
-  function in `ops/` takes a `Consequence` without the token; and no type of the
-  engine's production code keeps a `Confirmed` in a field outside
-  `CONFIRMED_HOLDERS` (empty: a token held in a type reaches an operation behind
-  a reference); and the roster is never empty, asserted (the user's decision,
+  function in `ops/` takes a `Consequence` without the token; and no type in any
+  crate's production code — the application's worker scan asserted — keeps a
+  `Confirmed` in a field outside `CONFIRMED_HOLDERS` (a token held in a type
+  reaches an operation behind a reference; its one row,
+  `crates/cairn-app/src/worker/local_lane.rs`, is `LocalWrite`, which carries a
+  destructive write's token to the local lane that spends it by value — a type
+  that holds a `LocalWrite`, such as `Request` or the lane's job, is not
+  followed, and is the review's); and the roster is never empty, asserted (the user's decision,
   2026-10-08), its rows today `ops::discard_lines` and `ops::discard_files`
   (`crates/cairn-git/src/ops/discard.rs`), which replaced the placeholder;
   the **confirmation-surface roster** (`CONFIRMATION_SURFACES`, empty until the

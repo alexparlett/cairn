@@ -4539,11 +4539,15 @@ const CONFIRMED_RECORD: (&str, &str, &str) = (
     "destructive",
 );
 
-/// Files of `crates/cairn-git/src` whose types may hold a `Confirmed` in a field. Empty on
-/// purpose: a token held in a type (`struct Pending { confirmed: Option<Confirmed> }`) can be
-/// handed to an operation behind a reference, where the by-value roster cannot see it. A row
-/// here is a review.
-const CONFIRMED_HOLDERS: &[&str] = &[];
+/// Production files of any crate whose types may hold a `Confirmed` in a field: a token held in
+/// a type (`struct Pending { confirmed: Option<Confirmed> }`) can be handed to an operation
+/// behind a reference, where the by-value roster cannot see it, or kept and spent twice in
+/// spirit by a caller that clones what holds it. A row here is a review. The one row: the
+/// local write lane's `LocalWrite`, which carries a destructive write's token from the
+/// confirmation surface to the lane that spends it by value on the operation
+/// (staging-and-commit R4), and is neither `Clone` (but for a test-only impl that refuses a
+/// destructive write) nor kept once run.
+const CONFIRMED_HOLDERS: &[&str] = &["crates/cairn-app/src/worker/local_lane.rs"];
 
 /// Crates whose production code may spell a path into a `Consequence` (a variant, a part):
 /// the model that defines and renders it, and the engine that computes it.
@@ -4764,7 +4768,7 @@ fn consequence_type_violations(source: &str) -> Vec<String> {
     found
 }
 
-/// No type in the engine's production code keeps a token in a field, outside `holders`.
+/// No type in the production code of `files` keeps a token in a field, outside `holders`.
 fn confirmed_holder_violations(files: &[(&Path, &str)], holders: &[&str]) -> Vec<String> {
     let mut found = Vec::new();
     for (path, code) in files {
@@ -4786,7 +4790,7 @@ fn confirmed_holder_violations(files: &[(&Path, &str)], holders: &[&str]) -> Vec
     for holder in holders {
         if !files.iter().any(|(path, _)| *path == Path::new(holder)) {
             found.push(format!(
-                "CONFIRMED_HOLDERS lists `{holder}`, which is not a production file of the engine"
+                "CONFIRMED_HOLDERS lists `{holder}`, which is not a production file"
             ));
         }
     }
@@ -5086,11 +5090,16 @@ fn destructive_operations_are_sealed_behind_the_confirmation_token() {
         found.is_empty(),
         "the destructive-operation roster is broken: {found:?}"
     );
-    let found = confirmed_holder_violations(&engine, CONFIRMED_HOLDERS);
+    // Every crate's production code, the application's above all: it carries a token from the
+    // surface that built it to the lane that spends it.
     assert!(
-        found.is_empty(),
-        "the engine keeps a token in a type: {found:?}"
+        production
+            .iter()
+            .any(|(path, _)| path.starts_with("crates/cairn-app/src/worker")),
+        "the token-holder check scanned no production file of the application's worker"
     );
+    let found = confirmed_holder_violations(&production, CONFIRMED_HOLDERS);
+    assert!(found.is_empty(), "a type keeps a token: {found:?}");
 
     for render in RENDER_SOURCE_DIRS {
         assert!(
@@ -5507,6 +5516,27 @@ fn the_confirmation_seal_matchers_catch_the_shapes_they_claim() {
     assert!(
         !confirmed_holder_violations(&[], &[pending.as_str()]).is_empty(),
         "a listed holder that does not exist was not refused"
+    );
+    // In the application, as in the engine: only the rostered file may hold one.
+    let lane = "crates/cairn-app/src/worker/local_lane.rs";
+    let queued = "crates/cairn-app/src/worker/queued.rs";
+    let held = "pub enum LocalWrite {\n    DiscardFiles(Confirmed),\n}";
+    assert_eq!(
+        confirmed_holder_violations(&[(Path::new(lane), held)], &[lane]),
+        Vec::<String>::new(),
+        "the rostered lane was refused"
+    );
+    assert_eq!(
+        confirmed_holder_violations(
+            &[
+                (Path::new(lane), held),
+                (Path::new(queued), "pub struct Queued(pub Confirmed);")
+            ],
+            &[lane]
+        )
+        .len(),
+        1,
+        "an unrostered application file holding a token was not refused"
     );
 
     // The consequence's own file.

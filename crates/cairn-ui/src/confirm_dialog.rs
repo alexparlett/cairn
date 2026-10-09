@@ -13,6 +13,12 @@
 //! made inert while it is open by the window itself, whose key listener runs before any
 //! dialog's (`shortcuts::act`). One acknowledgement builds one token: once answered, the
 //! dialog ignores every later press until it is closed.
+//!
+//! [`ConfirmButton`] is the same confirming button drawn in place rather than in a dialog: the
+//! commit box's amend button (staging-and-commit R10.6, L12), which confirms an amend no remote
+//! has by its own press, above the line its `Consequence` renders. It is here, beside the
+//! dialog, so the one file that builds a token stays the one row of `CONFIRMATION_SURFACES` —
+//! a view that draws it hands the token on and never builds one.
 
 use std::rc::Rc;
 
@@ -127,7 +133,7 @@ impl Component for ConfirmDialog {
                 let mut answered = answered;
                 if !*answered.peek() {
                     answered.set(true);
-                    on_confirm.call(Confirmed::by_user((*consequence).clone()));
+                    on_confirm.call(token(&consequence));
                 }
             }
         };
@@ -168,6 +174,122 @@ impl Component for ConfirmDialog {
                     )
                     .child(buttons),
             )
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(DiffKey::U64(self.serial))
+    }
+}
+
+/// The one place a token is made: from the consequence the surface drew, once per press it
+/// accepts.
+fn token(consequence: &Consequence) -> Confirmed {
+    Confirmed::by_user(consequence.clone())
+}
+
+/// A confirming button drawn in place (module docs): labelled by its consequence's `action`
+/// ("Amend 1a2b3c4"), and building the token from that consequence when pressed — once per
+/// consequence, whatever presses follow, since `serial` names one consequence and a button of
+/// another serial is another button. Disabled, it builds nothing.
+pub struct ConfirmButton {
+    serial: u64,
+    consequence: Rc<Consequence>,
+    enabled: bool,
+    on_confirm: EventHandler<Confirmed>,
+    key: DiffKey,
+}
+
+impl ConfirmButton {
+    /// A button confirming `consequence`; `serial` names this consequence, and must differ
+    /// for every other.
+    pub fn new(serial: u64, consequence: Rc<Consequence>) -> Self {
+        Self {
+            serial,
+            consequence,
+            enabled: true,
+            on_confirm: EventHandler::new(|_| {}),
+            key: DiffKey::None,
+        }
+    }
+
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// The button was pressed: the token, built from the consequence drawn, once.
+    pub fn on_confirm(mut self, on_confirm: impl Into<EventHandler<Confirmed>>) -> Self {
+        self.on_confirm = on_confirm.into();
+        self
+    }
+}
+
+// By the serial and whether it is enabled: one serial is one consequence and its handler.
+impl PartialEq for ConfirmButton {
+    fn eq(&self, other: &Self) -> bool {
+        self.serial == other.serial && self.enabled == other.enabled && self.key == other.key
+    }
+}
+
+impl std::fmt::Debug for ConfirmButton {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConfirmButton")
+            .field("serial", &self.serial)
+            .field("enabled", &self.enabled)
+            .finish_non_exhaustive()
+    }
+}
+
+impl KeyExt for ConfirmButton {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for ConfirmButton {
+    fn render(&self) -> impl IntoElement {
+        // Rendered once, as the button mounts: one serial's words never change.
+        let action = use_hook(|| self.consequence.action());
+        let answered = use_state(|| false);
+        let colours = get_theme_or_default().read().colors().clone();
+        let enabled = self.enabled && !*answered.read();
+        let on_confirm = self.on_confirm.clone();
+        let consequence = self.consequence.clone();
+        let button = rect()
+            .a11y_role(AccessibilityRole::Button)
+            .a11y_alt(action.clone())
+            .a11y_focusable(enabled)
+            .padding(Gaps::new(5., 14., 5., 14.))
+            .corner_radius(6.)
+            .border(
+                Border::new()
+                    .fill(if enabled {
+                        colours.border
+                    } else {
+                        colours.disabled
+                    })
+                    .width(1.)
+                    .alignment(BorderAlignment::Inner),
+            )
+            .background(colours.surface_primary)
+            .child(label().text(action).font_size(13.).color(if enabled {
+                colours.text_primary
+            } else {
+                colours.text_secondary
+            }));
+        if !enabled {
+            return button;
+        }
+        button
+            .cursor(CursorIcon::Pointer)
+            .on_press(move |e: Event<PressEventData>| {
+                e.stop_propagation();
+                let mut answered = answered;
+                if !*answered.peek() {
+                    answered.set(true);
+                    on_confirm.call(token(&consequence));
+                }
+            })
     }
 
     fn render_key(&self) -> DiffKey {

@@ -505,6 +505,35 @@ pub fn field_key_on(
     }
 }
 
+/// A step through Recent Commit Messages from the commit box's subject (staging-and-commit
+/// R10.2): ↑ to an older message, ↓ to a newer one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecallStep {
+    Older,
+    Newer,
+}
+
+/// [`recall_step_on`] for a key press.
+pub fn recall_step(event: &KeyboardEventData) -> Option<RecallStep> {
+    recall_step_on(&event.key, event.modifiers)
+}
+
+/// The subject's ↑ and ↓ (R10.2, Fork Tracker #587): a bare arrow, never one held with a
+/// modifier — Shift+↑ selects in the field — and nothing for any other key. Not a chord of the
+/// table: a field's own scope holds no bare key (`a_fields_own_scope_holds_no_bare_chord`), and
+/// the subject takes the step only while it is empty or holds the message last recalled, which
+/// the box decides; any other press of an arrow is the editor's.
+pub fn recall_step_on(key: &Key, held: Modifiers) -> Option<RecallStep> {
+    if !chord_modifiers(held).is_empty() {
+        return None;
+    }
+    match key {
+        Key::Named(NamedKey::ArrowUp) => Some(RecallStep::Older),
+        Key::Named(NamedKey::ArrowDown) => Some(RecallStep::Newer),
+        _ => None,
+    }
+}
+
 /// What the keyboard says is held, kept from the key presses and releases the window hears,
 /// so a pointer press can be resolved against the table: a press carries no modifiers in this
 /// build of the toolkit, so ⌘-click and Ctrl-click (`Action::ExtendSelection`) and Shift-click
@@ -551,6 +580,42 @@ impl HeldKeys {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R10.2: a bare ↑ or ↓ in the subject is a step through the recent messages, and an arrow
+    /// held with any modifier — Shift selecting, the command key's previous and next change —
+    /// or any other key is none. Caught by: a step taken on Shift+↑, which would recall over a
+    /// selection the person was making.
+    #[test]
+    fn only_a_bare_arrow_steps_through_the_recent_messages() {
+        let up = Key::Named(NamedKey::ArrowUp);
+        let down = Key::Named(NamedKey::ArrowDown);
+        assert_eq!(
+            recall_step_on(&up, Modifiers::empty()),
+            Some(RecallStep::Older)
+        );
+        assert_eq!(
+            recall_step_on(&down, Modifiers::empty()),
+            Some(RecallStep::Newer)
+        );
+        // A lock left on is no modifier.
+        assert_eq!(
+            recall_step_on(&up, Modifiers::CAPS_LOCK),
+            Some(RecallStep::Older)
+        );
+        for held in [
+            Modifiers::SHIFT,
+            Modifiers::CONTROL,
+            Modifiers::META,
+            Modifiers::ALT,
+        ] {
+            assert_eq!(recall_step_on(&up, held), None, "{held:?}");
+            assert_eq!(recall_step_on(&down, held), None, "{held:?}");
+        }
+        assert_eq!(
+            recall_step_on(&Key::Named(NamedKey::Enter), Modifiers::empty()),
+            None
+        );
+    }
 
     /// Phase 05's obligation to phase 08: a pointer press carries no modifiers, so the second
     /// commit of a comparison is resolved from the keys the window heard — the command key

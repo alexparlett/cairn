@@ -3,6 +3,7 @@
 pub mod accelerators;
 mod changes_list;
 mod columns;
+mod commit_box;
 mod commit_row;
 mod commit_tab;
 mod confirm_dialog;
@@ -24,6 +25,11 @@ mod end_room;
 pub use end_room::{END_ROOM, SCROLLBAR_THICKNESS, with_end_room};
 mod expansion;
 mod file_filter;
+mod git_error_dialog;
+pub use git_error_dialog::{
+    CLOSE_CAPTION, ERROR_DETAILS, GIT_ERROR_TEXT, GIT_ERROR_TITLE, GitErrorDialog,
+    OUTPUT_ROW_HEIGHT, SKIP_HOOKS_CAPTION,
+};
 mod graph_cell;
 pub mod graph_geometry;
 mod history_list;
@@ -55,6 +61,11 @@ pub use changes_list::{
     NO_FILE_MATCHES, SUMMARY_HEIGHT, SWAP_LABEL, TIP_CAPTION, comparison_parts, filter_count,
     summary_parts,
 };
+pub use commit_box::{
+    AMEND_CAPTION, Busy, CANCEL_COMMIT_CAPTION, CommitBox, CommitButton, DESCRIPTION_PLACEHOLDER,
+    READING_AMEND, RECENT_MESSAGES_CAPTION, RULER_COLUMN, SUBJECT_HARD_LIMIT, SUBJECT_PLACEHOLDER,
+    SUBJECT_SOFT_LIMIT, SubjectCount, commit_caption, subject_count,
+};
 pub use commit_row::{
     AUTHOR_WIDTH, COLUMN_GAP, CommitRow, DATE_WIDTH, HistoryHeader, ID_WIDTH, ROW_FONT_SIZE,
     ROW_PADDING, label_room,
@@ -64,7 +75,7 @@ pub use commit_tab::{
     EXPAND_ALL_CAPTION, ID_CAPTION, NO_FILES, PARENTS_CAPTION, READING_DIFF, REFS_CAPTION, Refs,
     budget_notice, cut_short_notice, file_text, status_letter,
 };
-pub use confirm_dialog::{CANCEL_CAPTION, ConfirmDialog};
+pub use confirm_dialog::{CANCEL_CAPTION, ConfirmButton, ConfirmDialog};
 pub use credential_prompt::CredentialPrompt;
 pub use detail_tabs::{
     COLLAPSE_CAPTION, DETAIL_STRIP_HEIGHT, DetailTab, DetailTabs, EXPAND_CAPTION,
@@ -115,4 +126,4 @@ pub use status_box::{
     NO_COMMITS_YET, StatusBox, Tracking, UPSTREAM_GONE, counts_text, current_branch, head_text,
     name_text,
 };
-pub use text_field::{text_field, text_field_in};
+pub use text_field::{text_field, text_field_in, text_field_recalling};

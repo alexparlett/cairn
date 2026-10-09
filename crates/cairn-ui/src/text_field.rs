@@ -16,12 +16,12 @@
 
 use freya::prelude::*;
 
-use crate::accelerators::{self, Action, FieldKey, FieldScope};
+use crate::accelerators::{self, Action, FieldKey, FieldScope, RecallStep};
 
 /// A text field with no chord of its own, such as a filter: the window's chords pass through
 /// it, and it keeps every other key.
 pub fn text_field(value: impl Into<Writable<String>>) -> Input {
-    Input::new(value).on_pre_key_down(field_keys(None, None))
+    Input::new(value).on_pre_key_down(field_keys(None, None, None))
 }
 
 /// A text field heard in `own` — the commit box — whose chords there it claims and reports
@@ -31,15 +31,37 @@ pub fn text_field_in(
     own: FieldScope,
     on_action: impl Into<EventHandler<Action>>,
 ) -> Input {
-    Input::new(value).on_pre_key_down(field_keys(Some(own), Some(on_action.into())))
+    Input::new(value).on_pre_key_down(field_keys(Some(own), Some(on_action.into()), None))
+}
+
+/// The commit box's subject (staging-and-commit R10.2): [`text_field_in`], with a bare ↑ or ↓
+/// ([`accelerators::recall_step`]) offered first to `recall`, which answers whether it took the
+/// step — recalling a recent message — and claims the key when it did; a step it does not take
+/// is the editor's, as every other key goes through the one policy.
+pub fn text_field_recalling(
+    value: impl Into<Writable<String>>,
+    own: FieldScope,
+    on_action: impl Into<EventHandler<Action>>,
+    recall: Callback<RecallStep, bool>,
+) -> Input {
+    Input::new(value).on_pre_key_down(field_keys(Some(own), Some(on_action.into()), Some(recall)))
 }
 
 /// The pre-key handler: `true` lets the field's editor read the key.
 fn field_keys(
     own: Option<FieldScope>,
     on_action: Option<EventHandler<Action>>,
+    recall: Option<Callback<RecallStep, bool>>,
 ) -> Callback<Event<KeyboardEventData>, bool> {
     Callback::new(move |e: Event<KeyboardEventData>| {
+        if let (Some(recall), Some(step)) = (&recall, accelerators::recall_step(&e))
+            && recall.call(step)
+        {
+            // Taken: the subject now holds a recalled message, and the arrow moves nothing.
+            e.stop_propagation();
+            e.prevent_default();
+            return false;
+        }
         match accelerators::field_key(&e, own) {
             FieldKey::Own(action) => {
                 // Claimed: nothing behind the field, the window included, acts on it too.

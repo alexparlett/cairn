@@ -7,6 +7,11 @@
 //! user's `diff.renames` and `diff.renameLimit`. `HEAD`'s parent is the one git shows: a
 //! shallow clone's boundary commit has none (`crate::commit::details_of`), and is compared
 //! with the empty tree as a root commit is. A merge commit's is its first parent.
+//!
+//! A read never lazily fetches (`crate::reads`): in a partial clone, a staged inexact rename
+//! whose old blob only the promisor holds fails the whole list on git 2.44 and later, and is
+//! fetched by git before 2.44, which ignores `GIT_NO_LAZY_FETCH`
+//! (`in_a_partial_clone_amends_staged_list_fails_rather_than_fetching`).
 
 use cairn_model::ChangedFile;
 

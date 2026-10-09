@@ -334,6 +334,14 @@ graph, which the walk does not read so it can be cancelled at every object).
   (`git reflog show --format=%H`), so a replaced commit no entry names as its new id
   — a log created by the amend itself — would not be found unless its seed reads
   old ids too, as `git rev-list --reflog` does: phase 10's to settle.
+- In a partial clone, amend's staged list pairs a staged inexact rename against
+  `HEAD^` by comparing blobs, and a blob only the promisor holds is never fetched by
+  the read: on git 2.44 and later the whole list fails (`Error::GitFailed`, nothing
+  listed) where the user's own `git diff --cached HEAD^` would fetch and answer; git
+  before 2.44 ignores `GIT_NO_LAZY_FETCH` and fetches, writing a pack — the same
+  residual as status's
+  (`in_a_partial_clone_amends_staged_list_fails_rather_than_fetching`,
+  `crates/cairn-git/tests/status.rs`).
 - A commit or amend left running by a second close can still die of `SIGPIPE` at a
   line its hook writes.
 - A hook owned by another user counts when the group's or others' execute bit is

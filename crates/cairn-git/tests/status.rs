@@ -1330,6 +1330,90 @@ fn in_a_partial_clone_a_status_read_fails_rather_than_fetching() {
     }
 }
 
+/// Amend's staged list (`Repository::amend_staged`, `reads::staged_since`) in the same
+/// blob-less partial clone, `HEAD`'s parent holding the excluded file: the index against
+/// `HEAD^` pairs a staged inexact rename of it, so git compares a blob only the promisor has.
+/// The read never fetches it on git 2.44 and later — it fails, `Error::GitFailed`, and no
+/// pack is written — and on an older git it fetches and answers the rename, the floor's
+/// residual as for status (phase 05's QA item 6). Caught by: the list read with a write's
+/// environment, which fetches on every git.
+#[test]
+fn in_a_partial_clone_amends_staged_list_fails_rather_than_fetching() {
+    let repo = Repo::new("partial-amend-source");
+    repo.git(&["config", "uploadpack.allowFilter", "true"]);
+    repo.write("in/i.txt", "i\n");
+    let big: String = (1..=200).map(|n| format!("{n}\n")).collect();
+    repo.write("out/big", &big);
+    repo.commit("base");
+    repo.write("in/i.txt", "i, again\n");
+    repo.commit("head");
+    repo.git(&["branch", "-M", "main"]);
+    let url = format!("file://{}", repo.path().display());
+    repo.build_in(
+        Path::new("git"),
+        &repo.root,
+        &[
+            "clone",
+            "-q",
+            "--filter=blob:none",
+            "--no-checkout",
+            &url,
+            "clone",
+        ],
+    );
+    let clone = repo.root.join("clone");
+    let git = |args: &[&str]| repo.build_in(Path::new("git"), &clone, args);
+    git(&["sparse-checkout", "init", "--cone"]);
+    git(&["sparse-checkout", "set", "in"]);
+    git(&["checkout", "-q", "main"]);
+    let missing = |clone: &Path| {
+        let listed = repo.ask(clone, &["rev-list", "--objects", "--missing=print", "HEAD"]);
+        listed
+            .split(|byte| *byte == b'\n')
+            .any(|line| line.starts_with(b"?"))
+    };
+    assert!(
+        missing(&clone),
+        "the clone holds every blob, so nothing is lazy here"
+    );
+    git(&["update-index", "--force-remove", "out/big"]);
+    let renamed: String = (1..=199).map(|n| format!("{n}\n")).collect();
+    std::fs::write(clone.join("in/big2"), renamed).unwrap_or_else(|e| panic!("{e}"));
+    git(&["add", "in/big2"]);
+    assert!(missing(&clone), "building the fixture fetched the blob");
+    let before = packs(&clone.join(".git"));
+
+    let shared = SharedRepository::discover(&clone).unwrap_or_else(|e| panic!("{e}"));
+    let outcome = shared
+        .to_worker()
+        .amend_staged(&repo.cairns_git(), &CancelSignal::new());
+    if the_git_in_use() >= since(44) {
+        assert!(
+            matches!(outcome, Err(Error::GitFailed { .. })),
+            "git {}: a rename over a blob the clone lacks did not fail: {outcome:?}",
+            the_git_in_use()
+        );
+        assert_eq!(packs(&clone.join(".git")), before, "the read fetched");
+        assert!(missing(&clone), "the read fetched the blob");
+    } else {
+        let Ok(files) = outcome else {
+            panic!("git {}: {outcome:?}", the_git_in_use());
+        };
+        assert!(
+            files
+                .iter()
+                .any(|file| matches!(file.status, cairn_model::ChangeStatus::Renamed(_))),
+            "{files:?}"
+        );
+        assert_ne!(
+            packs(&clone.join(".git")),
+            before,
+            "git {} did not fetch, so the residual stated is wrong",
+            the_git_in_use()
+        );
+    }
+}
+
 /// Every file under a git directory with its bytes and its mtime, `objects` included.
 fn snapshot(git_dir: &Path) -> Vec<(PathBuf, Vec<u8>, std::time::SystemTime)> {
     let mut found = Vec::new();

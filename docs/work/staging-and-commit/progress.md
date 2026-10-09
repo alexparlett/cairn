@@ -3,6 +3,48 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 10, the user's decisions applied (packet mode; stopped again on B)
+
+The user decided phase 10's open choices (2026-10-09, relayed by the coordinator):
+
+- **B — the Show Lost Commits control**: a checkbox at the right end of the history's
+  column-heading strip ("Graph and subject | Author | Commit | Date (UTC)"), labelled "Show Lost
+  Commits", ticked while on, its tooltip naming the chord from the accelerator table (never a
+  literal), a click flipping it exactly as the chord does. This is R11.1's "a control in the
+  history's toolbar area"; no PRD change. Fork has only a View-menu item, and Cairn has no menu
+  bar. **Not built: stopped with NEEDS USER SIGN-OFF on two points the decision leaves open.**
+  (1) The strip's headings sit over their columns, pinned by `every_heading_sits_over_its_column`.
+  A control after "Date (UTC)" either pushes the Author, Commit and Date headings left of their
+  columns or needs a matching empty column in every row. (2) No text a person reads names a chord
+  today: the accelerator table holds data and resolution only, and the modifier guard refuses a
+  chord spelled in any render file. A tooltip naming the chord needs a renderer of chord names for
+  people, and the invariant and its twins amended to admit it.
+- **A — the long reflog's first page**: accepted as a stated residual
+  (`docs/systems/history-graph.md`, known limits, with the measurements), and carried to phase 11:
+  read each tip id once (~41 ms) and use commit-graph dates where a graph is present, measured on
+  the bench.
+- **D**: the toggle is off at launch and kept for the session only (Fork's persistence is
+  unrecorded). Already as built.
+- **Create Branch view: on hold.** The user chose Fork's full Create Branch dialog. Its checkout,
+  stash and discard semantics are being researched for mockups. Nothing built; `ops::create_branch`
+  and `LocalWrite::CreateBranch` stay.
+
+Fork-settled, applied the same day:
+
+- **A lost row's text alone is dimmed**: subject, author, short id and date in the theme's
+  `text_placeholder` (about 50% grey), the graph's lanes, edges and node and the chips in their own
+  colours (Fork: VSHOT Tracker #351 GIF, 2018; USHOT Tracker #351 screenshot). This replaces the
+  whole-row opacity of 0.5 (`LOST_OPACITY` removed). Test-first:
+  `a_lost_rows_text_alone_is_dimmed` (`crates/cairn-ui/tests/commit_row.rs`) was red on the
+  opacity build.
+- **Focus through the toggle**: the history list takes the keyboard again as the reopened walk's
+  first page draws it, so the chord works again with no click. The window test
+  `the_show_lost_commits_chord_reopens_the_history_with_the_toggle_flipped` now presses the chord
+  twice with no click between. It passed as soon as the click was removed: the list's
+  `a11y_auto_focus` already takes focus when it is drawn again. Earlier the test pressed the
+  chord before the page arrived, while the list was not drawn, which looked like lost focus. It
+  now pins the behaviour, and the moment before the page arrives is stated as a residual.
+
 ## 2026-10-09 — phase 10, Show Lost Commits (packet mode; stopped for the user's sign-off)
 
 Built on `feature/staging-and-commit` from daa16ec, in packet mode. Everything R11 and C20 settle
@@ -37,7 +79,8 @@ the coordinator), with everything under them built.
 - **The toggle (R11.4, R7.3)**: `View::show_lost`, off as the window opens and kept for the session
   (engineering default: nothing in Cairn persists past the window); the chord heard on the history
   list (`HistoryList::on_action`), a reopen like any other; a refresh's reopen walks as the toggle
-  stands. A lost row is drawn at half opacity (`LOST_OPACITY`), its selection's background whole.
+  stands. A lost row was first drawn at half opacity; replaced the same day by Fork's dimming
+  (below).
 
 **Measured** (release, warm, median of seven; a plain `--no-hardlinks` clone of the bench at
 `c999cef531e` in `/tmp` (tmpfs), no alternates, no commit-graph; deleted after): the first page of
@@ -49,7 +92,8 @@ naming commits spread across the history: 2.72 off / 7.95 ms on; of 10,000: 2.14
 own `rev-list --max-count=64 --reflog --branches --remotes --tags HEAD` there: 57-80 ms (3-5 ms
 without `--reflog`). The whole walk (345,449 rows) with that log: 2,184 ms on / 2,079 ms off.
 Against the stopping rule's bar (twice refs-and-status's 7.27 ms): within it on the bench and with
-1,000 entries; past it only with 10,000 — raised with the user, not a stop of the build.
+1,000 entries; past it only with 10,000 — raised with the user, who accepted it as a residual
+(decision A, below).
 
 **Bench**: `find ~/Development/bench/rust/.git -newer <marker>` (marker made at
 2026-10-09T14:20:12+01:00, before the clone) printed nothing before and after, and `-newermt

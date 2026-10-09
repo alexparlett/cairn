@@ -929,9 +929,15 @@ the walk as the open asked, and a later reopen — a refresh that finds the refs
 asks as the toggle stands (`an_open_asked_as_show_lost_commits_walks_the_reflog_and_the_next_plain_open_does_not`,
 `the_show_lost_commits_chord_reopens_the_history_with_the_toggle_flipped`). Its chord is
 heard in the history list's scope alone (`HistoryList::on_action`,
-`the_show_lost_commits_chord_is_reported_and_moves_nothing`), and a lost row is drawn at
-half opacity, its selection's background left whole (`CommitRow::lost`, `LOST_OPACITY`;
-`a_lost_row_is_drawn_lost_and_no_other`). The way back to a lost commit is a branch put on
+`the_show_lost_commits_chord_is_reported_and_moves_nothing`). The list keeps the keyboard
+through the reopen: it gives way to the opening sentence until the reopened walk's first page
+arrives, and takes focus again as it is drawn, so the chord is heard again with no click
+(`the_show_lost_commits_chord_reopens_the_history_with_the_toggle_flipped`). A lost row is
+drawn as Fork draws one (Tracker #351's captures): its subject, author, short id and date in
+the theme's placeholder grey, about half, and nothing else dimmed — its graph's lanes, edges
+and node and any chips keep their own colours (`CommitRow::lost`;
+`a_lost_rows_text_alone_is_dimmed`, `a_lost_row_is_drawn_lost_and_no_other`); a lost commit
+that gains a ref is reached at the reopen that follows and drawn as any other. The way back to a lost commit is a branch put on
 it — `cairn_git::ops::create_branch`, `git branch -- <name> <commit>` as a local write
 (`docs/systems/staging.md`), whose ending reads everything again, so the reopened history
 draws the commit reached (`a_branch_made_through_the_lane_reads_everything_again_and_a_refusal_says_gits_reason`).
@@ -1088,10 +1094,15 @@ app, is tested against the real worker in `crates/cairn-app/src/worker/pool.rs`.
   default), and from then on the walk no longer has it. Only `HEAD`'s and the local
   branches' logs are read, where Fork's mode reads every reflog (`git log --all --reflog`):
   a remote-tracking ref's log, a deleted branch's leftover log and another worktree's
-  `HEAD` are not. The open reads one commit per distinct reflog id, about 4 µs each on
-  rust-lang/rust without a commit-graph (measured above). The toggle replaces the list with
-  the opening sentence until the reopened walk's first page arrives, so the list must be
-  focused again before its chord is heard again.
+  `HEAD` are not. While the reopened walk's first page is on its way the list is not drawn,
+  so a press of the chord in that moment is not heard.
+- **A long reflog slows Show Lost Commits' first page** (accepted by the user as a stated
+  residual): the open reads each distinct reflog id twice — once to look it up, once for the
+  walk's date — about 4 µs an id on rust-lang/rust without a commit-graph. Measured above: a
+  `HEAD` log of 10,000 entries makes the first page 49.8 ms, past twice the first page
+  without it (7.27 ms), where git's own `rev-list --reflog` takes 57-80 ms; 1,000 entries
+  make it 7.95 ms. Reading each id once, and taking its date from a commit-graph where one
+  is present, is still to be done.
 - **The first page of a scroll walks `window + limit` commits** before a single
   row can be delivered, because rows leave the assigner only once evicted. Those
   are walk steps, not object reads. Do not shrink the page to make it feel

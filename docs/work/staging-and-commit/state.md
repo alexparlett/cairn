@@ -20,9 +20,8 @@ multi-selection's diffs drawn together) done in packet mode: QA adjudicated, fix
 user's decisions (2026-10-09) applied, full gate green. Phase 09 (the commit box) done in
 packet mode: QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green
 at 18fea48. Phase 10 (Show Lost Commits) built in packet mode, full gate green, QA pending (the
-coordinator runs it); its two views the PRD does not settle — the history's toolbar control and
-`Create Branch Here…`'s menu and name entry — await the user's sign-off, everything under them
-built. Phases 11-12 not started.**
+coordinator runs it); the Create Branch view is on hold for the user, and the toolbar checkbox
+the user decided waits on two points the decision leaves open, everything under both built. Phases 11-12 not started.**
 
 ## Locked decisions
 
@@ -431,7 +430,8 @@ verb table):
   branch-ops' create branch (roadmap section 7).
 - **`cairn_ui`**: `HistoryList::on_action(EventHandler<Action>)` — the history's own scope's chords
   (`Scope::History`), resolved before anything else in its key handler; `RowRender::lost`;
-  `CommitRow::lost(bool)`, drawn at `LOST_OPACITY` (0.5) with the selection's background behind it.
+  `CommitRow::lost(bool)`: its four texts in the theme's `text_placeholder`, graph and chips in
+  their own colours (the user's decision on Fork's evidence, 2026-10-09).
 - **Worker**: `Request::OpenHistory { rows, lost }`, `Routed::OpenHistory { rows, lost }`,
   `Page::Open { rows, walk, lost }`, `HistoryLane::replace_walk(walk, lost)` (the lane keeps
   `lost` for the walk it opens); `LocalWrite::CreateBranch { name, at }` (`what()` "creating branch
@@ -442,22 +442,30 @@ verb table):
 
 ## Carried forward from phase 10 (owned by the phase named)
 
-- **The user, before phase 10's QA closes**: the history's toolbar control for Show Lost Commits
-  (R11.1: "a control in the history's toolbar area" — its place, form, wording and how it shows
-  on) and `Create Branch Here…`'s flow (R11.3: "a name, then" — the menu on a dimmed row, the name
-  entry, its buttons, where git's refusal is drawn, what is selected after) are UI the PRD and
-  Fork's evidence do not settle: phase 10 stopped with NEEDS USER SIGN-OFF, everything under them
-  built (`lost_commits::toggle`, `LocalWrite::CreateBranch`, `ops::create_branch`).
-- **Phase 11**: C21's "Show Lost Commits' first frame recorded" in `window_check`; phase 10
-  measured the engine's first page (`measures_the_first_page_with_show_lost_commits`): +0.2-0.3 ms
-  on the bench clone with three lost commits; 7.95 ms with a 1,000-entry `HEAD` reflog; 49.8 ms
-  with 10,000 entries (git's own `rev-list --reflog`: 57-80 ms) — past twice refs-and-status's
-  first page (7.27 ms) only there, raised with the user as a stopping-rule item.
+- **Decided by the user (2026-10-09)**: (B) the Show Lost Commits control is a checkbox at the
+  right end of the history's column-heading strip, "Show Lost Commits", ticked while on, its
+  tooltip naming the chord from the accelerator table, a click flipping it as the chord does — no
+  PRD change; (A) the 10,000-entry first page accepted as a stated residual, carried below; (D)
+  off at launch, kept for the session only; Fork-settled: a lost row's text alone dimmed, and the
+  list keeping the keyboard through the toggle's reopen (both built). (B) is not built yet: two
+  points the decision does not settle went back to the user (progress.md, phase 10's decisions).
+- **On hold for the user**: the Create Branch view — the user chose Fork's full Create Branch
+  dialog (New Branch… on every commit row; Create branch at; Branch name; Check out after create;
+  Local changes; Create and Checkout), whose checkout, stash and discard semantics are being
+  researched. `ops::create_branch` and `LocalWrite::CreateBranch` stay as built, the latter
+  `expect(dead_code)` outside tests.
+- **Phase 11 (the user's decision A, 2026-10-09)**: read each Show Lost Commits tip id once
+  (today a lookup and then the walk's date read, ~41 ms of the 49.8 ms at 10,000 entries) and take
+  the dates from a commit-graph where one is present, measured on the bench clone with
+  `measures_the_first_page_with_show_lost_commits`. Also C21's "Show Lost Commits' first frame
+  recorded" in `window_check`. Phase 10's numbers: +0.2-0.3 ms on the bench clone with three lost
+  commits; 7.95 ms with a 1,000-entry `HEAD` reflog; 49.8 ms with 10,000 (git's own `rev-list
+  --reflog`: 57-80 ms) against the bar of twice refs-and-status's 7.27 ms.
 - **Residuals, stated in `docs/systems/history-graph.md`'s known limits**: a reflog that changes
   while no drawn ref moves (`git reflog expire`) is not read again until the next reopen; only
   `HEAD`'s and the local branches' logs (no remote-tracking, leftover or other worktrees' logs);
-  the toggle's reopen drops the list for the opening sentence, so it must be focused again before
-  the chord is heard again.
+  a chord pressed while the reopened walk's first page is on its way is not heard (the list is
+  not drawn then); the long-reflog first page (decision A).
 
 ## Carried forward from phase 09 (owned by the phase named)
 
@@ -784,6 +792,6 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 07 Local Changes actions | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green |
 | 08 diff gesture | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green |
 | 09 commit box | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green at 18fea48 |
-| 10 lost commits | built, gate green, QA pending — the toolbar control and `Create Branch Here…`'s view await the user's sign-off |
+| 10 lost commits | built, gate green, QA pending; Create Branch view awaiting the user |
 | 11 activity and measured | not started |
 | 12 QA | not started |

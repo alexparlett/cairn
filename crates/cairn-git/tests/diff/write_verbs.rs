@@ -856,6 +856,44 @@ fn a_nested_repository_is_refused_before_any_confirmation() {
     assert!(is_refused(&outcome, Refusal::NotAFile), "{outcome:?}");
 }
 
+/// R8.1 and the QA brief: a collapsed untracked-directory row — the one directory `git status`
+/// still lists whole once every untracked file is listed, a nested repository — staged by the
+/// path its row shows (`nested/`) adds what `git add` adds for it and nothing else: the
+/// repository as a gitlink at its own `HEAD`, read back from the index; the untracked file
+/// beside it stays untracked and nothing inside the nested repository is added. Caught by: a
+/// row's stage that globs, recurses into the nested repository's files, or takes its
+/// neighbour.
+#[test]
+fn a_nested_repositorys_row_stages_exactly_what_git_add_adds_for_it() {
+    let repo = Repo::new("r8-nested-stage");
+    repo.write("tracked.txt", b"t\n");
+    repo.commit("base");
+    let nested = Repo::borrowed(&repo.path().join("nested"));
+    std::fs::create_dir_all(nested.path()).unwrap_or_else(|e| panic!("{e}"));
+    nested.git(&["init", "--quiet", "."]);
+    nested.write("history.txt", b"commits only it has\n");
+    let head = nested.commit("only here");
+    repo.write("other/beside.txt", b"untracked\n");
+    assert_eq!(status(&repo), ["?? nested/", "?? other/beside.txt"]);
+    ok(
+        ops::stage_files(git(), &engine(&repo), &[RepoPath::new("nested/")], None),
+        "staging the nested repository's row",
+    );
+    assert_eq!(
+        repo.git(&["ls-files", "--stage"])
+            .lines()
+            .collect::<Vec<_>>(),
+        [
+            format!("160000 {head} 0\tnested"),
+            format!(
+                "100644 {} 0\ttracked.txt",
+                repo.git(&["rev-parse", ":tracked.txt"]).trim()
+            ),
+        ]
+    );
+    assert_eq!(status(&repo), ["A  nested", "?? other/beside.txt"]);
+}
+
 /// C8 and R3.6: staged changes are never discarded — a path whose only change is staged has
 /// nothing a discard takes, and is refused before any prompt.
 #[test]
@@ -1249,9 +1287,12 @@ fn a_discard_that_fails_part_way_says_what_it_did_and_what_is_left() {
     );
 }
 
-/// QA item 4: a path git does not list — an ignored file — reaches `git clean -f`, which
-/// leaves it and exits 0. The discard does not claim it: the outcome names it as kept.
-/// (Whether such a path is refused before any prompt is phase 07's.)
+/// QA item 4 (phase 03), the `IndexSide::Absent` arm: the engine counts any path absent from
+/// the index as untracked, so a path git does not list — an ignored file — is offered and
+/// reaches `git clean -f`, which leaves it and exits 0; the discard does not claim it, and the
+/// outcome names it as kept. The engine trusts its caller here: the window asks only for paths
+/// of rows `git status` listed (phase 07's decision; `local_changes_actions`, pinned by
+/// `a_discard_names_only_paths_the_lists_drawn_still_list` in `cairn-app`).
 #[test]
 fn a_file_git_clean_leaves_is_named_as_kept() {
     let repo = Repo::new("ignored");

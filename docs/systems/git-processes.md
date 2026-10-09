@@ -1229,8 +1229,10 @@ which is a length of time, is waited out.
   staged list laid out with the status's unstaged one (`LocalChanges::amending`), as
   `Update::Amending`. Each is numbered in a lane of its own (`QueryLane::CommitBox`,
   `QueryLane::Amending`) and answered under that number, so a newer ask — or, for an
-  amend's read, `Request::StopAmending`, Amend unticked — ends the one before, its walk
-  and its `git` read, and an answer superseded is never drawn. Pinned by
+  amend's read, `Request::StopAmending`, Amend unticked, or any write asked, which
+  `submit` numbers the amending lane for so a stage never waits on a stale amend's walk —
+  ends the one before, its walk and its `git` read, and an answer superseded is never
+  drawn (`a_write_supersedes_the_amend_read_and_nothing_else`). Pinned by
   `the_commit_boxs_reads_and_an_amends_read_come_through_the_lane`
   (`worker/local_lane_tests.rs`).
 - **Prompts during a write** (R5.1, L11). Every write begins a channel operation

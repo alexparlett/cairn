@@ -17,6 +17,9 @@ STEP 2  Run /qa over the whole packet diff, with every reviewer
         implementation-plan.md names for any phase, spawned fresh. Run the
         ENTIRE qa-checklist.md. Verify every PRD acceptance criterion C1-C24
         against its pinned test (run it; read that it decides what it claims).
+        C14's checklist includes a real-git end-to-end test of a commit a
+        hook fails, its skip, and the next commit running its hooks (phase
+        09's QA item 8, carried here).
         AUDIT the per-phase dismissal log in progress.md: a dismissal whose
         reason no longer holds is a finding. Adjudication goes to qa-confirm
         (fresh); fix confirmed findings in focused commits; disputed findings

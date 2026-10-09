@@ -24,7 +24,12 @@ STEP 2  Implement.
            recovery pointer (an amend's replaced commit opens Show Lost Commits
            on it).
         2. Scrubbing (R12.2): userinfo removed from every URL in drawn stderr,
-           with tests for http(s), ssh-style and a URL split across a line.
+           with tests for http(s), ssh-style and a URL split across a line —
+           the Git Error dialog's lines among it (phase 09's QA item 11): the
+           streamed `Update::WriteOutput` lines and the engine's kept output
+           both scrubbed before `CommitBoxState` keeps them
+           (`commit_box_state.rs`, `OutputTail::push` and `CommitBox::failed`),
+           with a dialog-level test.
         3. `Remove index.lock…` (R12.4, L23): offered exactly when an outcome
            names a stranded lock and the registry holds no running git there; a
            destructive operation in ops/ on phase 01's roster, its Consequence the

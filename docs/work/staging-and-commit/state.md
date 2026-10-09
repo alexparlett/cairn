@@ -18,7 +18,8 @@ Changes acts on files) done in packet mode: QA adjudicated, fixes and the user's
 2026-10-09 applied, full gate green. Phase 08 (the diff's staging gesture, and a
 multi-selection's diffs drawn together) done in packet mode: QA adjudicated, fixes and the
 user's decisions (2026-10-09) applied, full gate green. Phase 09 (the commit box) built in
-packet mode, gate green, QA pending. Phases 10-12 not started.**
+packet mode: QA adjudicated, its fixes and the user's decision on the Amend button (2026-10-09)
+landed, four items still with the user. Phases 10-12 not started.**
 
 ## Locked decisions
 
@@ -389,8 +390,10 @@ Phase 09 (`docs/systems/local-changes.md`, "The commit box"):
   .busy(Option<Busy>).stopped(..).note(..).recent(..)` with `on_amend`, `on_commit`,
   `on_confirmed` (`EventHandler<Confirmed>`), `on_cancel`, `on_recall`, `recall`;
   `CommitButton::{Commit, AmendInPlace, AmendAsking, ReadingAmend, AmendUnreadable}`;
-  `ConfirmButton::new(serial, Rc<Consequence>)` (in `confirm_dialog.rs`); `GitErrorDialog::new(serial,
-  command, lines)`; `text_field_recalling(.., recall: Callback<RecallStep, bool>)`;
+  `AmendButton::new(serial, Rc<Consequence>, confirmed: State<Option<u64>>).ready(..).on_confirmed(..)`
+  and `AmendSkip::new(serial, Rc<Consequence>).on_confirmed(..)` — `commit_box.rs` is on
+  `CONFIRMATION_SURFACES` (R1.1); `GitErrorDialog::new(serial, command, lines).skip(..).on_skip(..)
+  .skip_amend(Rc<Consequence>, EventHandler<Confirmed>)`; `SKIP_HOOKS_CAPTION` (in `commit_box.rs`); `text_field_recalling(.., recall: Callback<RecallStep, bool>)`;
   `accelerators::{RecallStep, recall_step, recall_step_on}`; `commit_caption`, `subject_count`.
 - **Worker**: `Request::CommitReads` (`Update::CommitReads(Box<CommitReads>)`: `operation`,
   `hooks`, `recent`), `Request::Amending { status }` (`Update::Amending { status, read:
@@ -400,7 +403,8 @@ Phase 09 (`docs/systems/local-changes.md`, "The commit box"):
   `Retired::amending(status, lists)`.
 - **Window**: `LocalChangesView::commit: CommitBoxView { subject, description, state }`
   (`commit_box_state.rs`: `CommitBox`, `AskedCommit`, `Amendable`, `GitError`, `OutputTail`,
-  `split_message`, `compose_message`, `strip_ansi`); `commit_box_pane.rs` (`CommitBoxPane`,
+  `split_message`, `compose_message`, `strip_ansi`; `AskedCommit::confirmed_with`, the consequence an
+  amend's token was built from, which its skip confirms again); `commit_box_pane.rs` (`CommitBoxPane`,
   `toggle_amend`, `pressed`, `amend_confirmed`, `cancel`, `recall`, `recall_step`, `skip_hooks`, the
   `*_arrived` and `write_*` hooks `session::apply` calls, `git_error`, `AMEND_TITLE`);
   `local_changes_actions::unstage_target`; `local_changes_tests::{in_lists_reads, click_heading}`.
@@ -414,8 +418,20 @@ Phase 09 (`docs/systems/local-changes.md`, "The commit box"):
   done here), skip the re-check's walk when the tips it read have not moved.
 - **Phase 11**: the activity popover draws every write's `Update::WriteOutput`; the commit box
   keeps only its own commit's, for the Git Error dialog.
-- **The user, at the merge bar**: progress.md's phase 09 items 1-4 (where the amend's token is
-  built; no chord confirms an amend; Fork's unstated rules; amend's staged list unread).
+- **Phase 11, from phase 09's QA** (adjudicated 2026-10-09): item 11 — the Git Error dialog draws
+  hook and git stderr unscrubbed (`commit_box_state.rs`, `OutputTail::push` and
+  `CommitBox::failed`): scrub the streamed `WriteOutput` lines and the engine's kept output before
+  `CommitBoxState` keeps them, with a dialog-level test (written into phase 11's step 2); item 9 —
+  split the amend's read (the `Consequence` on refs arrival and on the tick; `amend_staged` per
+  status) and measure both; item 11 — `Update::WriteOutput` is one update per line, and
+  `OutputTail` keeps one oversized line whole (bound it).
+- **Phase 12, from phase 09's QA** (item 8): a real-git end-to-end test of a commit a hook fails,
+  its skip, and the next commit running its hooks, on the merge bar's C14 checklist (written into
+  phase 12's step 2).
+- **Still with the user** (progress.md, phase 09; unchanged, as built): amend offered when amend's
+  staged list cannot be read; the subject required; a merge commits with nothing staged;
+  `MERGE_MSG` fills an empty draft once per merge. Items 1-2 (where the amend's token is built; no
+  chord confirms an amend) are settled by the user's decision of 2026-10-09.
 
 ## Carried forward from phase 08 (owned by the phase named)
 
@@ -491,10 +507,11 @@ progress.md's phase 07 entry).
   the diff's container (`EdgeScroll::on`), never on a row.
 - **Phase 09 — done**: the subject and description built with `text_field_in` /
   `text_field_recalling` (`FieldScope::CommitBox`, the description multiline, no `on_submit`).
-- **Phase 09 — done, item 1 for the user's ratification** (progress.md, phase 09): the commit box
-  never calls `by_user`; a published amend hands the window a `Confirming`; the unpublished amend's
-  in-place button is `ConfirmButton` in `confirm_dialog.rs`, so `CONFIRMATION_SURFACES` stays one
-  row; the force push is a part of the dialog's prompt, never an informational component.
+- **Phase 09 — done, as the user decided (2026-10-09) and R1.1 says**: the commit box is the second
+  confirmation surface (`AmendButton`, `AmendSkip` in `commit_box.rs`); a published amend hands the
+  window a `Confirming`; the force push is a part of the dialog's prompt, never an informational
+  component. (The phase 06 carry's "never calls `by_user`, one row" was the coordinator's
+  instruction, withdrawn.)
 - **Phase 10**: hear `Scope::History` in the history list's `on_key_down` for Show Lost Commits.
 
 ## Carried forward from phase 05 (owned by the phase named)
@@ -707,7 +724,7 @@ From phase 02's QA (adjudicated 2026-10-08):
 | 06 render foundations | done — QA adjudicated, fixes and the user's decisions 6, 12, 13 and 14 (2026-10-09) applied, full gate green |
 | 07 Local Changes actions | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green |
 | 08 diff gesture | done — QA adjudicated, fixes and the user's decisions (2026-10-09) applied, full gate green |
-| 09 commit box | built, gate green, QA pending |
+| 09 commit box | QA fixes landed; four items still with the user |
 | 10 lost commits | not started |
 | 11 activity and measured | not started |
 | 12 QA | not started |

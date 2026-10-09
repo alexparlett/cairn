@@ -395,9 +395,13 @@ as it streamed (`Update::WriteOutput`) — or, if nothing streamed, the output t
 with ANSI sequences and control characters stripped (`strip_ansi`), the latest 10,000 lines or
 1 MiB kept (`OutputTail`), drawn one row per line through a virtualizing view opened at its end.
 `Skip pre-commit hooks and commit` is offered only where the last read found a `pre-commit` or
-`commit-msg` hook git would run, and never for a commit whose hooks were already skipped: it
-asks the same message again with `skip_hooks`, `--no-verify` for that one commit; the next
-commit runs its hooks. Close, Escape or a press outside closes it. The window's chords and Local
+`commit-msg` hook git would run, and never for a commit whose hooks were already skipped — for
+any failure git reports while such a hook exists, since a hook's failure and git's own cannot
+be told apart without parsing git's localized words. For a commit it asks the same message
+again with `skip_hooks`, `--no-verify` for that one commit; for an amend it is the commit box's
+`cairn_ui::AmendSkip`, drawn in the dialog with the prompt the amend was confirmed with, whose
+one press builds the skipped amend's token from that consequence and asks it at once — no
+second dialog (the user's decision, 2026-10-09). The next commit runs its hooks. Close, Escape or a press outside closes it. The window's chords and Local
 Changes' actions are inert while it is open, as under a confirmation. A refusal, a stale amend,
 a cancel or a commit not run is said under the lists, as any write's ending is.
 
@@ -407,7 +411,8 @@ replace (`Request::Amending`, on the local lane, numbered in the amending lane):
 — and amend's lists over the status the window drew, Unstaged as the status lists it and Staged
 as amend's staged list against `HEAD`'s parent (`LocalChanges::amending`, laid out on the lane).
 The lists that answer are drawn as a status's are; each status that arrives while Amend is
-ticked asks again over it, superseding the read before; and the box shows `Reading what Amend
+ticked asks again over it, superseding the read before, and every write asked supersedes it too,
+so a stage queued behind it never waits on its walk; and the box shows `Reading what Amend
 would replace…` until the first answer, the button waiting for each newer one. An empty draft is
 filled with `HEAD`'s message once it arrives; a draft with text is kept as the amend's message.
 Unticking puts the draft set aside back exactly as typed, ends the read in flight
@@ -426,16 +431,20 @@ the status's against `HEAD`, and the amend itself is still offered.
 
 The button reads the consequence's own words: `Amend <short id>` above the line it renders,
 "Replaces <short id> '<subject>'." and whether the old commit stays in Show Lost Commits or
-cannot be recovered (`Consequence::replaces`). **The token is built only by the confirmation
-surface** (`crates/cairn-ui/src/confirm_dialog.rs`, the one row of `CONFIRMATION_SURFACES`):
-an amend no remote has is confirmed by the box's button itself, which is that file's
-`ConfirmButton` — it builds the token from the consequence it draws, once per consequence — and
-hands it to the window to ask `LocalWrite::Amend`; an amend a remote has
-(`Consequence::needs_force_push`) reads `Amend <short id>…` and opens the confirmation dialog
-first, its words the whole prompt — the force push (`Consequence::force_push_warning`) and the
-line — and its own button the one that builds the token. The commit chord heard while amending,
-and an amend's hook-failure skip, open that dialog too: no chord confirms an amend by itself.
-After the amend, Amend unticks itself and the draft is cleared.
+cannot be recovered (`Consequence::replaces`) — Fork's way, as the user decided it
+(2026-10-09). **The commit box is the second confirmation surface** (R1.1,
+`CONFIRMATION_SURFACES`, beside the dialog): an amend no remote has is confirmed by the box's
+button, or by the commit chord from either field, which does exactly what the button does —
+`cairn_ui::AmendButton`, one component drawing the button and the line it confirms, builds the
+token from the consequence it draws, once per consequence, and hands it to the window to ask
+`LocalWrite::Amend` at once. It refuses a consequence a remote has
+(`Consequence::needs_force_push`): that amend reads `Amend <short id>…` and, by button or chord,
+opens the confirmation dialog first, its words the whole prompt — the force push
+(`Consequence::force_push_warning`) and the line — and its own button the one that builds the
+token. Whichever builds it, the engine re-checks the token's consequence before git runs, and
+refuses an amend whose `HEAD` moved or was pushed since. A commit made — or an amend — clears the
+draft only where it still holds the message the commit took, so a draft typed while it ran is
+kept; an amend unticks Amend.
 
 **An operation in progress** (R10.8, L25): with a merge, an empty draft is filled once per merge
 with git's `MERGE_MSG` as git wrote it — its `# Conflicts:` lines kept visible, which a commit
@@ -457,13 +466,20 @@ typed, the arrows are the editor's.
   `the_amend_toggle_reports_its_toggled_state_to_assistive_technology`,
   `the_amend_button_in_place_builds_one_token_from_the_consequence_it_draws`,
   `a_published_amends_button_asks_rather_than_confirms`,
-  `a_disabled_confirm_button_builds_no_token`,
+  `the_amend_button_refuses_a_pushed_consequence_and_builds_nothing_unready`,
+  `a_failed_amends_skip_confirms_the_prompt_it_draws_once`,
   `the_counter_is_drawn_and_a_stopped_box_asks_nothing`,
   `the_git_error_draws_one_viewport_of_output_and_the_skip_only_where_offered`; in the window
   (`crates/cairn-app/src/commit_box_tests.rs`):
   `a_draft_typed_then_amend_ticked_and_unticked_is_back_exactly`,
   `the_amend_button_its_line_and_its_token_name_one_head`,
   `a_published_amend_and_the_commit_chord_ask_the_dialog_first`,
+  `the_commit_chord_amends_an_unpublished_commit_as_the_button_does`,
+  `the_commit_chord_asks_nothing_while_the_box_is_not_ready`,
+  `a_newer_amend_read_names_its_own_head`,
+  `a_failed_amends_skip_amends_at_once_under_the_line_confirmed`,
+  `a_draft_typed_while_a_commit_runs_outlives_its_ending`,
+  `a_cancel_while_the_commit_is_queued_asks_nothing`,
   `a_failed_hooks_skip_commits_once_without_hooks_and_the_next_runs_them`,
   `with_no_hook_the_git_error_offers_no_skip`, `cancel_reaches_only_the_running_commit`,
   `a_merge_fills_the_draft_with_merge_msg_as_git_wrote_it_and_disables_amend`,
@@ -478,6 +494,8 @@ typed, the arrows are the editor's.
   `amend_sets_the_draft_aside_and_fills_only_an_empty_one`, `a_merge_fills_an_empty_draft_once`,
   `a_failure_offers_the_skip_only_where_a_hook_exists`; through the real boundary
   (`worker/local_lane_tests.rs`): `the_commit_boxs_reads_and_an_amends_read_come_through_the_lane`,
+  and a write superseding the amend read (`a_write_supersedes_the_amend_read_and_nothing_else`,
+  `worker/pool.rs`),
   `a_failing_hook_fails_a_commit_and_the_skip_commits_past_it` (its command and output),
   `a_chunk_drawn_at_context_ten_stages_exactly_as_drawn`; the model:
   `amending_lists_amends_staged_list_beside_the_status_unstaged_one`,
@@ -638,11 +656,10 @@ typed, the arrows are the editor's.
   and Push and the ⌘⇧A amend chord are not built (Commit and Push waits on push, L9). The ruler
   stands at column 72 of IBM Plex Mono's advance after the field's margin. Fork shows a commit's
   output live in its Activity Manager; Cairn shows it in the Git Error dialog when the commit
-  fails, and the activity popover is phase 11's.
-- The amend button confirms in place only where no remote has `HEAD`; the commit chord while
-  amending, and an amend's hook-failure skip, open the confirmation dialog — the token is built by
-  the person's press on a confirmation surface, never by a chord (for the user's ratification,
-  phase 09).
+  fails, and draws no activity log beside the box.
+- The amend button, and the commit chord while amending, confirm in place only where no remote
+  has `HEAD`; a commit a remote has goes through the confirmation dialog first, where Fork for
+  Windows warns that the commit is already pushed (its exact words are not recorded).
 - A double press acts on its row alone, since its first press makes the row the selection (the
   user's decision, 2026-10-09).
 - Paths drawn together are read under Expand All's line budget, and past it are not drawn — Fork's

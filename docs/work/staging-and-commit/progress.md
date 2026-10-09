@@ -3,6 +3,63 @@
 Running log, newest first. Dismissed QA findings are logged here with their
 reasons, per phase.
 
+## 2026-10-09 — phase 09 QA, adjudicated and fixed; the user's decision on the Amend button
+
+The coordinator's QA adjudication and the user's decision (2026-10-09, relayed by the
+coordinator). The coordinator withdrew its phase 09 instruction that the commit box never build a
+token and `CONFIRMATION_SURFACES` stay one row — the coordinator's own, contradicting PRD R1.1 —
+so the box follows R1.1 as written: it is the second confirmation surface.
+
+**The user's decision (2026-10-09): the Amend button works Fork's way**, exactly as R10.6 and
+`docs/design/ui.md` "The commit box" say (no PRD change): ticking Amend fills `HEAD`'s message,
+Staged lists `HEAD`'s files, the button reads `Amend <short>` above "Replaces …", and that visible
+line is the confirmation's prompt; clicking the button amends at once for a commit no remote has,
+and Ctrl+Enter / ⌘Return from either field does exactly what clicking does; a commit a remote has
+asks the confirmation dialog first, by click or chord; a hook that fails an amend is skipped by one
+press, which amends at once without hooks under the line confirmed, with no second dialog; and the
+engine still refuses an amend whose `HEAD` moved or was pushed since.
+
+Built, each test-first (the behaviour tests red on 1f44edc):
+
+- **The confirmation surface (R1.1)**: `crates/cairn-ui/src/commit_box.rs` joins
+  `CONFIRMATION_SURFACES` (the guard's doc rewritten). `AmendButton` is one component drawing the
+  button and the line it confirms; it builds the token from the consequence it draws, once per
+  consequence (`confirm_in_place`, a serial kept in the box), and refuses a consequence a remote
+  has. The commit chord in either field calls the same `confirm_in_place`. `ConfirmButton` is gone
+  from `confirm_dialog.rs`. Tests: `the_commit_chord_amends_an_unpublished_commit_as_the_button_does`
+  (red before: the chord opened the dialog), `the_amend_button_refuses_a_pushed_consequence_and_builds_nothing_unready`.
+- **The skip of a failed amend — the mechanism**: `AskedCommit` keeps the consequence its token
+  was built from (`confirmed_with`, an `Rc` of the token's own `consequence()`), and the Git Error
+  dialog draws the commit box's `AmendSkip` (`GitErrorDialog::skip_amend`) with that
+  consequence's prompt — the line the person confirmed, a remote's force push before it where there
+  was one — whose one press builds the skipped amend's token from that same consequence and asks
+  `LocalWrite::Amend { skip_hooks: true }` at once. The token is built in `commit_box.rs`, a rostered
+  surface; `git_error_dialog.rs` builds none and stays off the roster (it holds the callback as
+  `EventHandler<Confirmed>`, a `TOKEN_CALLBACKS` spelling). Guard change: the one roster row added.
+  Tests: `a_failed_amends_skip_amends_at_once_under_the_line_confirmed` (red before: the skip
+  reopened the dialog), `a_failed_amends_skip_confirms_the_prompt_it_draws_once`.
+- **QA 1**: a commit made clears the draft only where it still holds the message the commit took
+  (`a_draft_typed_while_a_commit_runs_outlives_its_ending`, red before).
+- **QA 4, 5, 6, 7** (coverage): the skip test above; `the_commit_chord_asks_nothing_while_the_box_is_not_ready`;
+  `a_newer_amend_read_names_its_own_head`; `a_cancel_while_the_commit_is_queued_asks_nothing`.
+- **QA 9**: every write asked bumps the amending lane, so a stage never waits behind a stale amend
+  read (`a_write_supersedes_the_amend_read_and_nothing_else`); the read split carried to phase 11.
+- **QA 10**: root `CLAUDE.md`'s "Off the UI thread but in its way" names the box's reads per
+  refresh and the amend's read per status, and `submit`'s Write arm names its bump.
+- **QA 12**: the skip is offered for an amend only when the consequence it was confirmed with is
+  held (always, as asked), so it never offers what it cannot do.
+- **QA 13, 14**: `local-changes.md` says the skip is offered for any git failure while a hook
+  exists, and the activity line is worded as built.
+
+Withdrawn from the items batched for the user (settled by the decision): item 1 (where the
+amend's token is built) and item 2 (no chord confirms an amend). Still open with the user, as
+built and unchanged: amend offered when amend's staged list cannot be read; the subject required;
+a merge commits with nothing staged; `MERGE_MSG` fills an empty draft once per merge.
+
+Carried (state.md): QA 11 — the Git Error dialog's lines scrubbed (phase 11's step 2), the read
+split and its measurements, one `WriteOutput` update per line and one oversized line kept whole;
+QA 8 — a real-git fail, skip and next-commit test on the merge bar's C14 checklist (phase 12).
+
 ## 2026-10-09 — phase 09, the commit box (packet mode)
 
 Built on `feature/staging-and-commit`; QA is the coordinator's. Commits 4f25cf4 (model: an
@@ -40,7 +97,8 @@ window's tests) and the docs commit after them.
 
 Decisions, and items batched for the user's ratification (none is a stopping rule):
 
-1. **For the user's ratification — where the amend's token is built.** The carry (phase 06's QA:
+1. **Withdrawn — settled by the user's decision of 2026-10-09 (see the QA entry above).** Was:
+   **For the user's ratification — where the amend's token is built.** The carry (phase 06's QA:
    "the commit box hands the window a `Confirming`, never calls `by_user`; `CONFIRMATION_SURFACES`
    stays one row") and L12/R10.6 (an unpublished amend confirmed by its own button, no dialog) are
    both kept: the amend button drawn in place is `cairn_ui::ConfirmButton`, which lives in
@@ -49,7 +107,8 @@ Decisions, and items batched for the user's ratification (none is a stopping rul
    the window a `Confirming` (the dialog). Alternative: roster `commit_box.rs` as a second surface
    (R1's original wording). Recommendation: ratify — one file builds every token. PRD R1.2/L12's
    "the commit box is the second confirmation surface" wording is the user's to amend.
-2. **For the user's ratification — no chord confirms an amend.** The commit chord heard while
+2. **Withdrawn — settled by the user's decision of 2026-10-09: the chord amends as the button
+   does.** Was: **For the user's ratification — no chord confirms an amend.** The commit chord heard while
    amending, and an amend's hook-failure skip, open the confirmation dialog rather than amending
    (a token is built only by a press on a confirmation surface). Alternative: the chord amends in
    place as the button does. Recommendation: keep.

@@ -38,6 +38,7 @@ use std::sync::Arc;
 
 use cairn_model::Oid;
 
+use super::reach::Reach;
 use super::seeds::Decoration;
 use super::walk::CommitWalk;
 use crate::{Cancel, Error};
@@ -104,6 +105,11 @@ pub(super) struct Stream<'repo> {
     next_dated: usize,
     /// Commits pulled off the walk.
     pulled: usize,
+    /// Entries handed on: the row the next one is, counted from the walk's first.
+    handed: usize,
+    /// Which commits no ref reaches, when the walk has tips only reflogs name (Show Lost
+    /// Commits); `None` when every commit it walks is reached.
+    reach: Option<Reach>,
 }
 
 impl std::fmt::Debug for Stream<'_> {
@@ -117,10 +123,12 @@ impl std::fmt::Debug for Stream<'_> {
 }
 
 impl<'repo> Stream<'repo> {
+    /// `reach` decides which commits no ref reaches, for a walk with tips only reflogs name.
     pub(super) fn new(
         walk: CommitWalk<'repo>,
         decoration: Arc<Decoration>,
         lookahead: usize,
+        reach: Option<Reach>,
     ) -> Self {
         let stashes = decoration.stashes();
         let mut dated: Vec<usize> = (0..stashes.len()).collect();
@@ -150,7 +158,26 @@ impl<'repo> Stream<'repo> {
             dated,
             next_dated: 0,
             pulled: 0,
+            handed: 0,
+            reach,
         }
+    }
+
+    /// Whether no ref reaches `commit`, as far as the walk has come: read when its row is
+    /// carried, so a row laid out before the walk met a reached child is carried as reached.
+    pub(super) fn is_lost(&self, commit: &Oid) -> bool {
+        self.reach
+            .as_ref()
+            .is_some_and(|reach| reach.is_lost(commit))
+    }
+
+    /// The rows among the first `drawn` — those pages have carried — that were carried as
+    /// lost and a ref reaches after all, each with its commit, each said once.
+    pub(super) fn take_reached(&mut self, drawn: usize) -> Vec<(usize, Oid)> {
+        self.reach
+            .as_mut()
+            .map(|reach| reach.take_reached(drawn))
+            .unwrap_or_default()
     }
 
     /// Commits pulled off the walk so far, those looked ahead at included.
@@ -159,8 +186,21 @@ impl<'repo> Stream<'repo> {
     }
 
     /// The next entry. The caller polls `cancel` before asking for one; the stream polls it
-    /// again before each commit it pulls to look ahead for a stash's base.
+    /// again before each commit it pulls to look ahead for a stash's base. Each entry is the
+    /// next row.
     pub(super) fn next(&mut self, cancel: &impl Cancel) -> Result<Next, Error> {
+        let next = self.next_entry(cancel)?;
+        if let Next::Entry(entry) = &next {
+            let row = self.handed;
+            self.handed += 1;
+            if let (Entry::Commit { id, .. }, Some(reach)) = (entry, self.reach.as_mut()) {
+                reach.handed(id, row);
+            }
+        }
+        Ok(next)
+    }
+
+    fn next_entry(&mut self, cancel: &impl Cancel) -> Result<Next, Error> {
         if self.ahead.is_empty() && !self.exhausted {
             self.pull()?;
         }
@@ -316,6 +356,9 @@ impl<'repo> Stream<'repo> {
             time: info.commit_time,
         };
         self.pulled += 1;
+        if let Some(reach) = self.reach.as_mut() {
+            reach.pulled(walked.id, &walked.parents);
+        }
         self.ahead.push_back(walked);
         Ok(self.ahead.back())
     }

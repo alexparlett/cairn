@@ -8,8 +8,8 @@ use cairn_model::{GraphRow, LaneAssigner, RowsPage};
 use super::seeds::Decoration;
 use super::stream::{Next, Stream};
 use super::{
-    HistoryCursor, HistoryOrder, HistoryPage, HistoryRequest, Laid, Pending, Resolved, lay_out,
-    starting_points,
+    HistoryCursor, HistoryOrder, HistoryPage, HistoryRequest, Laid, Marking, Pending, Resolved,
+    lay_out, open_stream, starting_points,
 };
 use crate::{Cancel, Error, Repository};
 
@@ -26,6 +26,8 @@ pub struct HistorySession<'repo> {
     pending: VecDeque<Pending>,
     tips: super::Tips,
     decoration: Arc<Decoration>,
+    /// Whether the walk marks the commits no ref reaches; its reflogs are read as it opens.
+    marking: Marking,
     order: HistoryOrder,
     window: usize,
     lookahead: usize,
@@ -63,6 +65,7 @@ impl Repository {
         let Resolved {
             tips,
             decoration,
+            marking,
             order,
             window,
             lookahead,
@@ -78,6 +81,7 @@ impl Repository {
             pending: VecDeque::new(),
             tips,
             decoration,
+            marking,
             order,
             window,
             lookahead,
@@ -101,15 +105,20 @@ impl HistorySession<'_> {
         let decoded_before = self.decoded;
 
         if self.stream.is_none() {
-            let Some(walk) = super::walk::open(self.repo, &self.tips, self.order, cancel)? else {
+            let Some(stream) = open_stream(
+                self.repo,
+                &mut self.tips,
+                &mut self.marking,
+                &self.decoration,
+                self.order,
+                self.lookahead,
+                cancel,
+            )?
+            else {
                 // Nothing kept: the next page opens it again.
                 return Err(Error::Cancelled { walked: 0 });
             };
-            self.stream = Some(Stream::new(
-                walk,
-                Arc::clone(&self.decoration),
-                self.lookahead,
-            ));
+            self.stream = Some(stream);
         }
 
         while self.ready.len() < limit && !self.exhausted {
@@ -122,10 +131,15 @@ impl HistorySession<'_> {
 
         let take = limit.min(self.ready.len());
         let mut rows = RowsPage::new();
-        for (graph, laid) in self.ready.drain(..take) {
-            laid.push_to(&mut rows, graph, &self.decoration);
+        if let Some(stream) = self.stream.as_mut() {
+            for (graph, laid) in self.ready.drain(..take) {
+                laid.push_to(&mut rows, graph, &self.decoration, stream);
+            }
+            self.delivered += rows.len();
+            for (row, id) in stream.take_reached(self.skip + self.delivered) {
+                rows.reached(row, id);
+            }
         }
-        self.delivered += rows.len();
         let more = !self.exhausted || !self.ready.is_empty();
 
         Ok(HistoryPage {
@@ -141,6 +155,7 @@ impl HistorySession<'_> {
         HistoryCursor {
             tips: Arc::clone(&self.tips),
             decoration: Arc::clone(&self.decoration),
+            marking: self.marking.clone(),
             order: self.order,
             window: self.window,
             lookahead: self.lookahead,

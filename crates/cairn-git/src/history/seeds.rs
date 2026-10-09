@@ -48,6 +48,9 @@ pub(super) struct RefSeeds {
     /// Shared with the walk's [`Decoration`]: one entry per labelled commit, so never copied.
     labels: Arc<HashMap<Oid, Vec<SeedLabel>>>,
     stashes: Vec<StashEntry>,
+    /// Every local branch the snapshot lists, by full name: whose reflogs Show Lost Commits
+    /// reads, beside `HEAD`'s (staging-and-commit R11.1).
+    branches: Arc<[RefName]>,
 }
 
 impl RefSeeds {
@@ -59,6 +62,12 @@ impl RefSeeds {
         let mut tips = Vec::new();
         let mut seen = HashSet::new();
         let mut labels: HashMap<Oid, Vec<SeedLabel>> = HashMap::new();
+        let branches = snapshot
+            .refs
+            .iter()
+            .filter(|listed| listed.kind == RefKind::LocalBranch)
+            .map(|listed| listed.name.clone())
+            .collect();
         for listed in &snapshot.refs {
             let Some(commit) = listed.commit_id() else {
                 // A tag on a tree or a blob: no seed, and no row to label.
@@ -87,7 +96,13 @@ impl RefSeeds {
             detached,
             labels: Arc::new(labels),
             stashes: snapshot.stashes.clone(),
+            branches,
         }
+    }
+
+    /// Every local branch the snapshot lists, by full name.
+    pub(super) fn branches(&self) -> &Arc<[RefName]> {
+        &self.branches
     }
 }
 

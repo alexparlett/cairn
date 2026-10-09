@@ -4,6 +4,8 @@
 //! remote-tracking ref, tag and `HEAD` (PRD R4.1) — whose rows then carry the refs that
 //! label them (R4.3) and whose stashes are rows of their own (R4.2; `stream`).
 
+mod reach;
+mod reflogs;
 mod seeds;
 mod session;
 mod stream;
@@ -11,10 +13,13 @@ pub(crate) mod walk;
 
 use std::sync::Arc;
 
-use cairn_model::{GraphRow, LaneAssigner, Oid, PagedCommit, PagedStash, RefsSnapshot, RowsPage};
+use cairn_model::{
+    GraphRow, LaneAssigner, Oid, PagedCommit, PagedStash, RefName, RefsSnapshot, RowsPage,
+};
 
 pub use session::HistorySession;
 
+use reach::Reach;
 use seeds::{Decoration, RefSeeds};
 use stream::{Entry, Next, Stream};
 
@@ -51,6 +56,67 @@ impl HistoryOrder {
 /// Shared, so paging clones a pointer rather than the tip set.
 type Tips = Arc<[gix::hash::ObjectId]>;
 
+/// Whether a walk marks the commits no ref reaches — Show Lost Commits
+/// (`docs/prd/staging-and-commit.md` R11.1) — and where it stands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Marking {
+    /// Every commit is reached: the walk's tips are the refs'.
+    Off,
+    /// The reflogs of `HEAD` and of these local branches are read as the walk opens, under
+    /// its cancel, and their ids join the tips.
+    Unread(Arc<[RefName]>),
+    /// The first `refs` tips are the ones refs name; the rest are ids only reflogs name.
+    Read { refs: usize },
+}
+
+impl Marking {
+    /// What a walk from `tips`, resolved under this marking, decides reachability with.
+    fn reach(&self, tips: &[gix::hash::ObjectId]) -> Result<Option<Reach>, Error> {
+        let Self::Read { refs } = self else {
+            return Ok(None);
+        };
+        let (refs, reflogs) = tips.split_at((*refs).min(tips.len()));
+        let ids = |tips: &[gix::hash::ObjectId]| -> Result<Vec<Oid>, Error> {
+            tips.iter().map(|id| model_id(id)).collect()
+        };
+        Ok(Some(Reach::new(&ids(refs)?, &ids(reflogs)?)))
+    }
+}
+
+/// The walk `tips` begin under `marking`: an unread marking has its reflogs read first, under
+/// `cancel`, and the ids they name that are not tips already joined to the tips after the
+/// refs' own. `None` when `cancel` fired; nothing is kept.
+fn open_stream<'repo>(
+    repo: &'repo gix::Repository,
+    tips: &mut Tips,
+    marking: &mut Marking,
+    decoration: &Arc<Decoration>,
+    order: HistoryOrder,
+    lookahead: usize,
+    cancel: &impl Cancel,
+) -> Result<Option<Stream<'repo>>, Error> {
+    if let Marking::Unread(branches) = marking {
+        let Some(reflog_tips) = reflogs::reflog_tips(repo, branches, cancel)? else {
+            return Ok(None);
+        };
+        let refs = tips.len();
+        let mut all = tips.to_vec();
+        all.extend(reflog_tips.into_iter().filter(|id| !tips.contains(id)));
+        *tips = all.into();
+        *marking = Marking::Read { refs };
+    }
+    let reach = marking.reach(tips)?;
+    let Some(walk) = walk::open(repo, tips, order, cancel)? else {
+        return Ok(None);
+    };
+    Ok(Some(Stream::new(
+        walk,
+        Arc::clone(decoration),
+        lookahead,
+        reach,
+    )))
+}
+
 /// Opaque: hand it back to [`HistoryRequest::resume`] and nothing else.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryCursor {
@@ -58,6 +124,8 @@ pub struct HistoryCursor {
     tips: Tips,
     /// The labels and stashes of the snapshot the walk began from, likewise.
     decoration: Arc<Decoration>,
+    /// Which of `tips` refs name, when the walk marks the commits no ref reaches.
+    marking: Marking,
     order: HistoryOrder,
     window: usize,
     lookahead: usize,
@@ -82,6 +150,8 @@ enum Start {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryRequest {
     start: Start,
+    /// Show Lost Commits: the reflogs' ids join the tips (R11.1).
+    lost: bool,
     order: HistoryOrder,
     limit: usize,
     window: usize,
@@ -111,6 +181,7 @@ impl HistoryRequest {
         let (order, window, lookahead) = (cursor.order, cursor.window, cursor.lookahead);
         Self {
             start: Start::Resume(cursor),
+            lost: false,
             order,
             limit,
             window,
@@ -121,6 +192,7 @@ impl HistoryRequest {
     fn starting(start: Start, limit: usize) -> Self {
         Self {
             start,
+            lost: false,
             order: HistoryOrder::default(),
             limit,
             window: LaneAssigner::DEFAULT_WINDOW,
@@ -135,6 +207,19 @@ impl HistoryRequest {
         if !matches!(self.start, Start::Resume(_)) {
             self.lookahead = commits.max(1);
         }
+        self
+    }
+
+    /// Show Lost Commits (`docs/prd/staging-and-commit.md` R11.1): a walk from refs also
+    /// starts from the old and the new id of every entry of `HEAD`'s reflog and of each
+    /// local branch's — as `git rev-list --reflog` reads them, each log read whole — and
+    /// each row of a commit no ref reaches is carried as lost ([`RowsPage::push_lost`]), or,
+    /// when the walk finds a ref reaches it only after its row was carried, named reached by
+    /// a later page ([`RowsPage::reached`]). The reflogs are read when the walk opens, under
+    /// the first page's cancel. Ignored unless the walk starts from refs; a resumed walk
+    /// keeps what its cursor began with.
+    pub fn with_lost_commits(mut self) -> Self {
+        self.lost = true;
         self
     }
 
@@ -189,36 +274,53 @@ fn read_page(
     cancel: &impl Cancel,
 ) -> Result<HistoryPage, Error> {
     let Resolved {
-        tips,
+        mut tips,
         decoration,
+        mut marking,
         order,
         window,
         lookahead,
         skip,
     } = starting_points(repo, request)?;
+    if request.limit == 0 {
+        // `resume` consumed the caller's cursor; hand it back.
+        return Ok(HistoryPage {
+            rows: RowsPage::new(),
+            cursor: Some(HistoryCursor {
+                tips,
+                decoration,
+                marking,
+                order,
+                window,
+                lookahead,
+                walked: skip,
+            }),
+            walked: 0,
+            decoded: 0,
+        });
+    }
+    let Some(mut stream) = open_stream(
+        repo.inner(),
+        &mut tips,
+        &mut marking,
+        &decoration,
+        order,
+        lookahead,
+        cancel,
+    )?
+    else {
+        return Err(Error::Cancelled { walked: 0 });
+    };
     let cursor_at = |walked: usize| HistoryCursor {
         tips: Arc::clone(&tips),
         decoration: Arc::clone(&decoration),
+        marking: marking.clone(),
         order,
         window,
         lookahead,
         walked,
     };
-    if request.limit == 0 {
-        // `resume` consumed the caller's cursor; hand it back.
-        return Ok(HistoryPage {
-            rows: RowsPage::new(),
-            cursor: Some(cursor_at(skip)),
-            walked: 0,
-            decoded: 0,
-        });
-    }
     let target = skip.saturating_add(request.limit);
-
-    let Some(walk) = walk::open(repo.inner(), &tips, order, cancel)? else {
-        return Err(Error::Cancelled { walked: 0 });
-    };
-    let mut stream = Stream::new(walk, Arc::clone(&decoration), lookahead);
 
     // The page's first row carries a snapshot, so it draws without the replayed prefix.
     let mut assigner = LaneAssigner::with_window(window).drawn_from(skip);
@@ -255,11 +357,14 @@ fn read_page(
         walked += 1;
 
         if let Some(finalised) = lay_out(&mut assigner, &decoration, entry) {
-            page.take(finalised);
+            page.take(finalised, &stream);
         }
     }
     for row in assigner.into_rows() {
-        page.take(row);
+        page.take(row, &stream);
+    }
+    for (row, id) in stream.take_reached(skip + page.rows.len()) {
+        page.rows.reached(row, id);
     }
 
     let cursor = if exhausted {
@@ -331,9 +436,19 @@ impl Laid {
         })
     }
 
-    /// Appends the row `graph` lays out for this to `rows`, with its labels.
-    fn push_to(&self, rows: &mut RowsPage, graph: GraphRow, decoration: &Decoration) {
+    /// Appends the row `graph` lays out for this to `rows`, with its labels — or, for a
+    /// commit no ref reaches as `stream` stands now, as lost.
+    fn push_to(
+        &self,
+        rows: &mut RowsPage,
+        graph: GraphRow,
+        decoration: &Decoration,
+        stream: &Stream<'_>,
+    ) {
         match self {
+            Self::Commit { id, commit } if stream.is_lost(id) => {
+                rows.push_lost(graph, commit.paged());
+            }
             Self::Commit { id, commit } => rows.push_labelled(
                 graph,
                 commit.paged(),
@@ -385,7 +500,7 @@ struct Page<'d> {
 }
 
 impl Page<'_> {
-    fn take(&mut self, graph: GraphRow) {
+    fn take(&mut self, graph: GraphRow, stream: &Stream<'_>) {
         let position = self.next_row;
         self.next_row += 1;
         let Some(offset) = position.checked_sub(self.skip) else {
@@ -394,7 +509,7 @@ impl Page<'_> {
         let Some(laid) = self.laid.get(offset) else {
             return; // After it ends: the walk stopped at `target`.
         };
-        laid.push_to(&mut self.rows, graph, self.decoration);
+        laid.push_to(&mut self.rows, graph, self.decoration, stream);
     }
 }
 
@@ -429,6 +544,7 @@ fn parents_of(info: &gix::traverse::commit::Info) -> Result<Vec<Oid>, Error> {
 struct Resolved {
     tips: Tips,
     decoration: Arc<Decoration>,
+    marking: Marking,
     order: HistoryOrder,
     window: usize,
     lookahead: usize,
@@ -437,15 +553,20 @@ struct Resolved {
 
 fn starting_points(repo: &Repository, request: &HistoryRequest) -> Result<Resolved, Error> {
     let mut decoration = None;
+    let mut marking = Marking::Off;
     let tips = match &request.start {
         Start::Resume(cursor) => {
             decoration = Some(Arc::clone(&cursor.decoration));
+            marking = cursor.marking.clone();
             Arc::clone(&cursor.tips)
         }
         Start::Commits(tips) => walk_tips(repo.inner(), tips)?,
         Start::Refs(seeds) => {
             let (tips, resolved) = seeds::resolve(repo.inner(), seeds)?;
             decoration = Some(Arc::new(resolved));
+            if request.lost {
+                marking = Marking::Unread(Arc::clone(seeds.branches()));
+            }
             walk_tips(repo.inner(), &tips)?
         }
         Start::Head => {
@@ -470,6 +591,7 @@ fn starting_points(repo: &Repository, request: &HistoryRequest) -> Result<Resolv
     Ok(Resolved {
         tips,
         decoration: decoration.unwrap_or_default(),
+        marking,
         order: request.order,
         window: request.window,
         lookahead: request.lookahead,

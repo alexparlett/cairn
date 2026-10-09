@@ -211,6 +211,7 @@ mod local_write;
 #[cfg(all(test, unix))]
 mod recording_stub;
 mod refspec_policy;
+mod remove_lock;
 mod stage;
 pub(crate) mod stranded_locks;
 
@@ -230,6 +231,7 @@ pub use discard::{
     discard_lines_consequence,
 };
 pub use fetch::{FetchCancel, FetchInProgress, fetch};
+pub use remove_lock::{remove_index_lock, remove_lock_consequence};
 pub use stage::{UnstageTo, stage_files, stage_lines, unstage_files, unstage_lines};
 
 pub use crate::process::{Askpass, GitBinary, GitEnvironment, GitVersion};

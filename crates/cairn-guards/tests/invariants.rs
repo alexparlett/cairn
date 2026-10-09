@@ -12,8 +12,8 @@ use cairn_guards::{
     derives_or_implements, embedded_font_violations, gate_command_assignments, gate_dispatch_arms,
     gate_full_sequence, gate_function_body, gate_function_calls, gate_function_commands,
     hand_typed_chords, implements_type, job_env_entries, mentions_crate,
-    modifier_constants_blanked, names_a_literal_modifier, names_a_modifier_in_code,
-    names_an_element, names_gitoxide_mutation, production_char_literals,
+    modifier_constants_blanked, mutates_the_filesystem, names_a_literal_modifier,
+    names_a_modifier_in_code, names_an_element, names_gitoxide_mutation, production_char_literals,
     production_string_literals, reads_enum_partially, reads_row_content_partially, renames_type,
     renders_in_a_macro, repo_root, required_skip_violations, rust_sources, spawns_git,
     spells_a_chord, structs_with_a_field_naming, types_containing, waits_on_work,
@@ -1070,6 +1070,173 @@ fn only_the_ops_module_mutates_a_repository() {
         "a crate other than cairn-git may now depend on gix, so the gitoxide half of this guard, \
          which reads {ENGINE_SOURCE_DIR} alone, no longer sees every caller: widen its scope"
     );
+}
+
+/// Production files outside `ops/` that change the filesystem, each with what it writes and why
+/// that is outside any repository (staging-and-commit R12.5). A row whose file no longer
+/// matches fails the guard, so the roster cannot outlive its reason. A later write outside any
+/// repository — a settings store (#89) — adds a row of its own, with its reason.
+const FILESYSTEM_MUTATION_EXCEPTIONS: &[(&str, &str)] = &[
+    (
+        "crates/cairn-askpass/src/channel.rs",
+        "the askpass channel's socket directory under the user's runtime directory: created \
+         0700, the socket bound in it, both removed when the channel goes",
+    ),
+    (
+        "crates/cairn-git/src/ownership.rs",
+        "a probe file created and removed in the temporary directory, to learn which uid owns a \
+         file this process creates, as git's ownership check compares",
+    ),
+];
+
+/// Where a test module is declared under a `cfg` that needs `test` and something more: compiled
+/// into no build that ships, so as much test code as `#[cfg(test)]`.
+const TEST_ONLY_CFGS: &[&str] = &["#[cfg(all(test, unix))]"];
+
+/// `source`'s production code: comments, strings and test modules blanked, a module under one
+/// of [`TEST_ONLY_CFGS`] counted as a test module.
+fn production_of(source: &str) -> String {
+    let mut code = code_without_strings(source);
+    for cfg in TEST_ONLY_CFGS {
+        // Same length, so every offset and line stays where it was.
+        let marker = format!("{:<width$}", "#[cfg(test)]", width = cfg.len());
+        code = code.replace(cfg, &marker);
+    }
+    code_without_test_modules(&code)
+}
+
+/// No production file outside `crates/cairn-git/src/ops/` removes, writes, renames, creates,
+/// links or changes the permissions of a file or directory (staging-and-commit R12.5, L23): the
+/// one mutation Cairn makes without `git` — `Remove index.lock…` — is in `ops/`, behind its
+/// confirmation, and anything else that writes the disk is a row of
+/// `FILESYSTEM_MUTATION_EXCEPTIONS`, outside any repository. Test code — test modules, files a
+/// parent declares under `#[cfg(test)]` or `#[cfg(all(test, unix))]` — may write what it likes.
+#[test]
+fn only_the_ops_module_changes_the_filesystem() {
+    let ops = Path::new(OPS_DIR);
+    let mut scanned = 0usize;
+    let mut excused = BTreeSet::new();
+    let mut ops_mutates = false;
+    for dir in PRODUCT_SOURCE_DIRS {
+        let sources: Vec<_> = rust_sources(dir)
+            .into_iter()
+            .map(|(path, source)| {
+                let normalised = TEST_ONLY_CFGS.iter().fold(source.clone(), |text, cfg| {
+                    text.replace(cfg, &format!("{:<w$}", "#[cfg(test)]", w = cfg.len()))
+                });
+                (path, source, normalised)
+            })
+            .collect();
+        let declared: Vec<_> = sources
+            .iter()
+            .map(|(path, _, normalised)| (path.clone(), normalised.clone()))
+            .collect();
+        let test_only = test_only_module_files(&declared);
+        for (path, source, _) in &sources {
+            if test_only.contains(path) {
+                continue;
+            }
+            let found = mutates_the_filesystem(&production_of(source));
+            if path.starts_with(ops) {
+                ops_mutates |= !found.is_empty();
+                continue;
+            }
+            scanned += 1;
+            let relative = path
+                .strip_prefix(repo_root())
+                .unwrap_or(path)
+                .to_string_lossy()
+                .into_owned();
+            if let Some((file, _)) = FILESYSTEM_MUTATION_EXCEPTIONS
+                .iter()
+                .find(|(file, _)| *file == relative)
+            {
+                if !found.is_empty() {
+                    excused.insert(*file);
+                }
+                continue;
+            }
+            assert!(
+                found.is_empty(),
+                "{} changes the filesystem outside {OPS_DIR}, at {found:?}. Every mutation of \
+                 a repository is in that module, and so is the one Cairn makes without git \
+                 (removing a stale index.lock); a write outside any repository is a row of \
+                 FILESYSTEM_MUTATION_EXCEPTIONS, with its reason.",
+                path.display()
+            );
+        }
+    }
+    assert!(
+        scanned > 0,
+        "the filesystem guard scanned nothing outside {OPS_DIR}; did the crates move?"
+    );
+    assert!(
+        ops_mutates,
+        "{OPS_DIR} shows the filesystem matcher no mutation, though Remove index.lock removes a \
+         file there: the matcher stopped reading real code, or the removal moved"
+    );
+    for (file, _) in FILESYSTEM_MUTATION_EXCEPTIONS {
+        assert!(
+            excused.contains(file),
+            "FILESYSTEM_MUTATION_EXCEPTIONS excuses {file}, whose production code no longer \
+             changes the filesystem (or is no longer read); remove the row"
+        );
+    }
+}
+
+/// The filesystem matcher sees each spelling it claims — every identifier on its roster, the
+/// `fs::` functions by path and by import, aliased, `File::create`, a glob import and a renamed
+/// module — and passes reading and prose. Caught by: a roster entry the matcher stopped
+/// matching, or one that matches what only reads.
+#[test]
+fn the_filesystem_mutation_matcher_catches_the_shapes_it_claims() {
+    for ident in cairn_guards::FILESYSTEM_MUTATION_IDENTS {
+        let src = format!("fn f() {{ let _ = std::fs::{ident}(p); }}");
+        assert!(!mutates_the_filesystem(&src).is_empty(), "{ident}");
+    }
+    let caught = [
+        "fn f() { std::fs::remove_file(p).ok(); }",
+        "use std::fs::remove_file as gone;\nfn f() { gone(p); }",
+        "use std::fs;\nfn f() { fs::write(p, b\"x\"); }",
+        "fn f() { std :: fs :: rename(a, b); }",
+        "fn f() { std::fs::copy(a, b); }",
+        "use std::fs::{write as put};\nfn f() { put(p, b); }",
+        "use std::fs::{self, rename};",
+        "use std::fs::*;",
+        "use std::fs as disk;\nfn f() { disk::write(p, b); }",
+        "fn f() { let _ = File::create(p); }",
+        "fn f() { let _ = std::fs::File::create(p); }",
+        "fn f() { let _ = File::create_new(p); }",
+        "fn f() { OpenOptions::new().write(true).open(p); }",
+        "fn f() { fs::DirBuilder::new().create(p); }",
+        "fn f() { std::os::unix::fs::symlink(a, b); }",
+        "fn f() { file.set_len(0); }",
+        "fn f() { let l = UnixListener::bind(p); }",
+    ];
+    for src in caught {
+        assert!(!mutates_the_filesystem(src).is_empty(), "missed: {src}");
+    }
+    let innocent = [
+        "fn f() { let _ = std::fs::read_to_string(p); }",
+        "fn f() { let _ = std::fs::symlink_metadata(p); }",
+        "fn f() { let _ = File::open(p); }",
+        "use std::io::Write;\nfn f() { out.write_all(b); out.write(b); }",
+        "fn f() { writer.rename_column(); let copy = x.clone(); }",
+        "// std::fs::remove_file(p) in a comment\nfn f() {}",
+        "fn f() { let s = \"fs::write and remove_file in a string\"; }",
+    ];
+    for src in innocent {
+        assert!(
+            mutates_the_filesystem(src).is_empty(),
+            "false hit: {src}: {:?}",
+            mutates_the_filesystem(src)
+        );
+    }
+    // A test module, and one under `cfg(all(test, unix))`, are test code.
+    let tested = "fn f() {}\n#[cfg(all(test, unix))]\nmod tests {\n    fn t() { std::fs::remove_file(p); }\n}\n";
+    assert!(mutates_the_filesystem(&production_of(tested)).is_empty());
+    let shipped = "#[cfg(unix)]\nmod real {\n    fn t() { std::fs::remove_file(p); }\n}\n";
+    assert!(!mutates_the_filesystem(&production_of(shipped)).is_empty());
 }
 
 /// The process half of a file's verdict: every way it builds, spawns, waits on or reads a
@@ -5105,6 +5272,11 @@ const DESTRUCTIVE_OPERATIONS: &[(&str, &str)] = &[
     ("crates/cairn-git/src/ops/discard.rs", "discard_lines"),
     ("crates/cairn-git/src/ops/discard.rs", "discard_files"),
     ("crates/cairn-git/src/ops/commit.rs", "amend"),
+    // `Remove index.lock…`: the one file Cairn deletes without git (staging-and-commit R12.4).
+    (
+        "crates/cairn-git/src/ops/remove_lock.rs",
+        "remove_index_lock",
+    ),
     // Create Branch's Discard: the checkout that discards staged and unstaged changes (the
     // user's decision 3, 2026-10-09).
     (

@@ -2267,6 +2267,97 @@ fn path_offsets(code: &str, segments: &[&str]) -> Vec<(usize, usize)> {
     found
 }
 
+/// What changes a file or directory on disk, by the names `std` gives it (staging-and-commit
+/// R12.5), matched wherever they appear as an identifier, since nothing that only reads has
+/// their name: removing (`fs::remove_file`, `remove_dir`, `remove_dir_all`), creating
+/// (`create_dir`, `create_dir_all`, `File::create_new`, `OpenOptions` — the one way to open a
+/// file for writing short of `File::create` — and `DirBuilder`), linking (`hard_link`,
+/// `soft_link`, unix's `symlink`), changing permissions, ownership, length or times
+/// (`set_permissions`, `chown`, `fchown`, `lchown`, `set_len`, `set_modified`, `set_times`),
+/// and binding a socket, which creates its file (`UnixListener`, `UnixDatagram`). An alias is
+/// caught on its import line.
+pub const FILESYSTEM_MUTATION_IDENTS: &[&str] = &[
+    "remove_file",
+    "remove_dir",
+    "remove_dir_all",
+    "create_dir",
+    "create_dir_all",
+    "create_new",
+    "OpenOptions",
+    "DirBuilder",
+    "hard_link",
+    "soft_link",
+    "symlink",
+    "set_permissions",
+    "chown",
+    "fchown",
+    "lchown",
+    "set_len",
+    "set_modified",
+    "set_times",
+    "UnixListener",
+    "UnixDatagram",
+];
+
+/// `std::fs`'s mutating functions whose names are too common to match alone (`write` is
+/// `io::Write`'s too): matched as the end of a path through `fs` — `fs::write(..)`,
+/// `std::fs::rename(..)` — and as a name a `use` of `fs` imports, aliased or not.
+pub const FILESYSTEM_MUTATION_FS_FUNCTIONS: &[&str] = &["write", "rename", "copy"];
+
+/// 1-based lines where `source` mutates the filesystem by one of the spellings above, or by
+/// `File::create`, or imports everything of a `fs` module (`use std::fs::*`), over its code
+/// with comments and strings blanked, as `line: what`.
+pub fn mutates_the_filesystem(source: &str) -> Vec<String> {
+    let code = code_without_strings(source);
+    let mut found = BTreeSet::new();
+    for ident in FILESYSTEM_MUTATION_IDENTS {
+        for offset in ident_offsets(&code, ident) {
+            found.insert((line_at(&code, offset), (*ident).to_owned()));
+        }
+    }
+    for function in FILESYSTEM_MUTATION_FS_FUNCTIONS {
+        for (start, _) in path_offsets(&code, &["fs", function]) {
+            found.insert((line_at(&code, start), format!("fs::{function}")));
+        }
+    }
+    for line in calls_associated_function(&code, "File", "create") {
+        found.insert((line, "File::create".to_owned()));
+    }
+    // Imports from a `fs` module: each `use` statement, to its `;`.
+    for start in ident_offsets(&code, "use") {
+        let end = code[start..].find(';').map_or(code.len(), |at| start + at);
+        let statement = &code[start..end];
+        if ident_offsets(statement, "fs").is_empty() {
+            continue;
+        }
+        let glob = statement.find("fs").is_some_and(|at| {
+            statement[at..]
+                .replace(char::is_whitespace, "")
+                .starts_with("fs::*")
+        });
+        if glob {
+            found.insert((line_at(&code, start), "use fs::*".to_owned()));
+        }
+        // The module renamed (`use std::fs as f;`): its functions would be `f::write`.
+        let renamed = ident_offsets(statement, "fs").into_iter().any(|at| {
+            let after = statement[at + 2..].trim_start();
+            after.starts_with("as") && after[2..].starts_with(char::is_whitespace)
+        });
+        if renamed {
+            found.insert((line_at(&code, start), "use fs as ..".to_owned()));
+        }
+        for function in FILESYSTEM_MUTATION_FS_FUNCTIONS {
+            if !ident_offsets(statement, function).is_empty() {
+                found.insert((line_at(&code, start), format!("use fs::{function}")));
+            }
+        }
+    }
+    found
+        .into_iter()
+        .map(|(line, what)| format!("{line}: {what}"))
+        .collect()
+}
+
 /// 1-based lines where `source` spawns a `git` subprocess, matched on the literal program name.
 pub fn spawns_git(source: &str) -> Vec<usize> {
     let code = code_only(source);

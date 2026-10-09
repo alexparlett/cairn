@@ -418,6 +418,26 @@ pub enum Error {
     #[error("HEAD changed since you confirmed the amend; nothing was amended")]
     AmendChangedSinceConfirmed,
 
+    /// `Remove index.lock…` refused before touching anything (staging-and-commit R12.4): no
+    /// lock to remove, one that is not a plain file, a `git` Cairn runs in the repository, or
+    /// a confirmation of another operation.
+    #[error("index.lock was not removed: {why}")]
+    LockRefused { why: LockRefusal },
+
+    /// The lock a removal was confirmed for was removed, replaced or written since the
+    /// confirmation — its size, its time or the file itself differs (R1.4, R12.4). Nothing was
+    /// removed: the lock now there may be a running git's.
+    #[error("{path} changed since you confirmed; nothing was removed")]
+    LockChangedSinceConfirmed { path: String },
+
+    /// The lock could not be removed: the filesystem refused.
+    #[error("could not remove {path}: {source}")]
+    LockNotRemoved {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
     /// A commit or an amend was cancelled before its `git` started — while what it checks
     /// first was still being read. Nothing was written.
     #[error("the commit was cancelled before git ran; nothing was written")]
@@ -607,6 +627,37 @@ impl std::fmt::Display for CommitRefusal {
             ),
             Self::NotWhatWasConfirmed => {
                 f.write_str("what the amend was handed is not what its confirmation names")
+            }
+        }
+    }
+}
+
+/// Why `Remove index.lock…` refused; see [`Error::LockRefused`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockRefusal {
+    /// There is no `index.lock` in the repository's git directory.
+    NoLock,
+    /// `index.lock` is not a plain file (a directory, a symbolic link).
+    NotAFile,
+    /// Cairn runs this many `git` invocations in the repository now; the lock may be one of
+    /// theirs.
+    GitRunning(usize),
+    /// The removal was handed a confirmation of another operation, or of another repository's
+    /// lock.
+    NotWhatWasConfirmed,
+}
+
+impl std::fmt::Display for LockRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoLock => f.write_str("there is no index.lock"),
+            Self::NotAFile => f.write_str("index.lock is not a file"),
+            Self::GitRunning(1) => f.write_str("Cairn is running git in this repository"),
+            Self::GitRunning(n) => {
+                write!(f, "Cairn is running {n} git processes in this repository")
+            }
+            Self::NotWhatWasConfirmed => {
+                f.write_str("what the removal was handed is not what its confirmation names")
             }
         }
     }
